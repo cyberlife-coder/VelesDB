@@ -632,6 +632,14 @@ jobs:
       - name: Versioned skills carry no private reference
         run: python3 scripts/check-skill-private-references.py
 
+      # Which skill owns cross-session resumption. The working-context tools
+      # were documented in the COMPRESSION skill and not once in the memory
+      # one, so an agent loading the skill named after memory was never told
+      # a previous session could be read back — and nobody was told to
+      # discover sessions, so a mistyped id read as "no previous work".
+      - name: Resumption is owned by the memory skill
+        run: python3 -m unittest scripts.tests.test_skill_resumption_ownership
+
       # BLOCKING. Verified green on the whole tree (16 pinned surfaces, 20
       # declarations of load_working_context's envelope — including the three
       # agent session hooks and the napi `ts_return_type` shipped as the

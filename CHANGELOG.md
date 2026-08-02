@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Cross-session resumption belongs to the `velesdb-memory` skill.**
+  `list_working_contexts`, `load_working_context` and `save_working_context`
+  were documented in `velesdb-context-optimizer` — the *compression* skill —
+  and not once in the memory one, so an agent loading the skill named after
+  memory was never told a previous session could be read back.
+  `list_working_contexts` was taught nowhere at all, which left a mistyped
+  session id returning `found: false` and reading as "no previous work". The
+  memory skill now walks `list → load → work → save`, ties an empty load to
+  discovery, and warns that `other_sessions` is filled in on a *hit* too — the
+  wrong session resumed is the failure that looks like success. The
+  compression skill keeps an explicit handoff to it and no longer restates the
+  `working` envelope. The `load_working_context` return-shape pins moved with
+  the declaration rather than being dropped, and
+  `crates/velesdb-memory/skill/**` joined the swept surfaces: the bundled npm
+  copy was policed while the source it is generated from was not.
+
 ### Added
 
 - **A third versioned agent skill, `velesdb-learning-loop`.** It ships in

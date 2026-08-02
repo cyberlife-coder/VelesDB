@@ -192,7 +192,16 @@ POLICED_TOOLS: "tuple[PolicedTool, ...]" = (
         ("loadWorkingContext", "LoadedWorkingContext"),
         (
             "crates/velesdb-node/README.md",
-            "crates/velesdb-node/skills/velesdb-context-optimizer/SKILL.md",
+            # The skill that OWNS the working-context tools, and its bundled
+            # npm copy. The pin moved here from the two
+            # `velesdb-context-optimizer` copies when resumption moved with
+            # it: the compression skill now points at this one instead of
+            # restating the envelope, so it no longer declares a shape and
+            # cannot be pinned for one. Coverage did not shrink — the
+            # declaration and its pin travelled together, which is the only
+            # way a moved contract stays policed.
+            "crates/velesdb-memory/skill/velesdb-memory/SKILL.md",
+            "crates/velesdb-node/skills/velesdb-memory/SKILL.md",
             # The `ts_return_type` string is the .d.ts every npm consumer
             # compiles against. binding_parity_bdd.rs reads this region but
             # treats that string as EVIDENCE of a relay, never checks its
@@ -213,7 +222,6 @@ POLICED_TOOLS: "tuple[PolicedTool, ...]" = (
             "integrations/langgraph/README.md",
             "integrations/langgraph/src/langgraph_velesdb/tools.py",
             "sdks/typescript/src/memory.ts",
-            "skills/velesdb-context-optimizer/SKILL.md",
         ),
     ),
     PolicedTool(
@@ -264,6 +272,12 @@ SURFACE_GLOBS: "tuple[str, ...]" = (
     "docs/**/*.md",
     "skills/**/*.md",
     "crates/velesdb-memory/README.md",
+    # The velesdb-memory skill's SOURCE. Its bundled npm copy under
+    # `crates/velesdb-node/skills/` was already swept, which had the polarity
+    # backwards: the copy is generated from this file by
+    # `sync-skills.py --bundle`, so policing only the artefact means the thing
+    # a contributor edits is the one nothing reads.
+    "crates/velesdb-memory/skill/**/*.md",
     "crates/velesdb-node/README.md",
     "crates/velesdb-node/skills/**/*.md",
     # The shipped TypeScript return type of the napi addon.
@@ -340,7 +354,7 @@ ERROR_PAYLOAD_KEYS = frozenset({"error"})
 # skill page shows one, and prose about what a tool `returns` routinely sits a
 # few dozen characters above the example of how to call it, which is enough for
 # the return anchor to claim it (measured at
-# skills/velesdb-context-optimizer/SKILL.md:340, both copies). Exactly two keys
+# skills/velesdb-context-optimizer/SKILL.md:317, both copies). Exactly two keys
 # wide, for the same reason the one above is exactly one: an exemption that can
 # grow can hide a rename.
 CALL_ENVELOPE_KEYS = frozenset({"tool", "arguments"})
