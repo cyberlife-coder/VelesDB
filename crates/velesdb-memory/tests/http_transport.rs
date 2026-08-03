@@ -497,11 +497,29 @@ async fn status_for_session(addr: SocketAddr, session_id: &str) -> u16 {
         .as_u16()
 }
 
+/// A keep-alive no test can outlive, for the cases that need a session ALIVE.
+///
+/// The same value the two-slot test below already relies on, named once so the
+/// intent is visible: "nothing may expire while this test runs".
+const KEEP_ALIVE_OUTLIVES_THE_TEST: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// A keep-alive every test outlives, for the cases that need a session DEAD.
+const KEEP_ALIVE_EXPIRES_PROMPTLY: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// Comfortably past [`KEEP_ALIVE_EXPIRES_PROMPTLY`]. Waiting LONGER than this
+/// can only make the session deader, which is why this direction is safe to
+/// wait on and the other one is not.
+const PAST_EXPIRY: std::time::Duration = std::time::Duration::from_millis(700);
+
 #[tokio::test]
-async fn an_idle_expired_session_returns_its_slot() {
-    // `max_sessions = 1` makes the accounting observable: whether the slot
-    // came back is exactly whether a second session can be created.
-    let server = spawn_http_server_with_keep_alive(1, std::time::Duration::from_millis(150)).await;
+async fn the_session_cap_holds_while_a_slot_is_occupied() {
+    // This assertion needs the session ALIVE, so the keep-alive must outlive
+    // the test — it cannot be the short one. Sharing one short clock with the
+    // expiry test below is what made this flake on loaded CI runners (#1793):
+    // the cap check landed AFTER the 150 ms expiry, the slot was legitimately
+    // free, and the refusal that never came was read as a broken cap.
+    // Reproduced deterministically by sleeping 200 ms before the check.
+    let server = spawn_http_server_with_keep_alive(1, KEEP_ALIVE_OUTLIVES_THE_TEST).await;
 
     let first = try_raw_initialize(server.addr)
         .await
@@ -511,8 +529,40 @@ async fn an_idle_expired_session_returns_its_slot() {
         "the cap must hold while the only slot is genuinely occupied"
     );
 
+    // The positive control. Without it, an `initialize` that refused
+    // unconditionally would satisfy the assertion above while proving nothing
+    // about the cap.
+    assert_eq!(
+        delete_session(server.addr, &first).await,
+        202,
+        "a well-behaved client's DELETE must be ACCEPTED (202) — termination is \
+         acknowledged, not performed synchronously"
+    );
+    assert!(
+        try_raw_initialize(server.addr).await.is_some(),
+        "once the slot is released the cap must let a new session in — a cap \
+         that never admits anyone is not a cap, it is an outage"
+    );
+
+    shutdown(server).await;
+}
+
+#[tokio::test]
+async fn an_idle_expired_session_returns_its_slot() {
+    // `max_sessions = 1` makes the accounting observable: whether the slot
+    // came back is exactly whether a second session can be created.
+    //
+    // Every wait here needs the session DEAD, so a slow runner only ever helps
+    // — the timing pressure is one-sided. The cap-while-alive assertion that
+    // used to sit in this test pulled the other way and is now its own test.
+    let server = spawn_http_server_with_keep_alive(1, KEEP_ALIVE_EXPIRES_PROMPTLY).await;
+
+    let first = try_raw_initialize(server.addr)
+        .await
+        .expect("the first session must be created");
+
     // Let it die of pure inactivity — no DELETE, no close, just silence.
-    tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+    tokio::time::sleep(PAST_EXPIRY).await;
 
     assert_eq!(
         status_for_session(server.addr, &first).await,
@@ -526,6 +576,30 @@ async fn an_idle_expired_session_returns_its_slot() {
          daemon locks itself out after `max_sessions` idle expiries"
     );
     assert_ne!(second, Some(first), "the reused slot must be a NEW session");
+
+    shutdown(server).await;
+}
+
+/// The positive control for the test above, and the reason its 404 means
+/// "expired" rather than "sessions always 404".
+///
+/// Same wait, same request, only the keep-alive differs — so a 404 here would
+/// prove the expiry assertion above is measuring the wrong thing.
+#[tokio::test]
+async fn a_session_under_a_long_keep_alive_survives_the_same_wait() {
+    let server = spawn_http_server_with_keep_alive(1, KEEP_ALIVE_OUTLIVES_THE_TEST).await;
+
+    let first = try_raw_initialize(server.addr)
+        .await
+        .expect("the first session must be created");
+    tokio::time::sleep(PAST_EXPIRY).await;
+
+    assert_ne!(
+        status_for_session(server.addr, &first).await,
+        404,
+        "a session whose keep-alive has NOT elapsed must still be there; if this \
+         404s, the expiry test above proves nothing about expiry"
+    );
 
     shutdown(server).await;
 }
