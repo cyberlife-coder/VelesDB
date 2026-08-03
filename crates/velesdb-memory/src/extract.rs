@@ -120,80 +120,98 @@ pub struct Extraction {
 /// Deliberately NOT here: `"partner"` / `"compagnon"`. "X has a partner, Y" is
 /// a business relation as often as a family one, and a wrong re-point is worse
 /// than none at all.
-const KINSHIP_NOUNS: &[&str] = &[
-    // Blood ties, fr.
-    "pere",
-    "mere",
-    "frere",
-    "soeur",
-    "fils",
-    "fille",
-    "oncle",
-    "tante",
-    "cousin",
-    "cousine",
-    "neveu",
-    "niece",
-    "grand-pere",
-    "grand-mere",
-    "grand-oncle",
-    "grand-tante",
-    "arriere-grand-pere",
-    "arriere-grand-mere",
-    "petit-fils",
-    "petite-fille",
-    // Alliances and step-family, fr.
-    "beau-pere",
-    "belle-mere",
-    "beau-frere",
-    "belle-soeur",
-    "beau-fils",
-    "belle-fille",
-    "gendre",
-    "bru",
-    "demi-frere",
-    "demi-soeur",
-    "parrain",
-    "marraine",
-    "filleul",
-    "filleule",
-    "epoux",
-    "epouse",
-    "mari",
-    "femme",
-    // Blood ties, en.
-    "father",
-    "mother",
-    "brother",
-    "sister",
-    "son",
-    "daughter",
-    "uncle",
-    "aunt",
-    "nephew",
-    "grandfather",
-    "grandmother",
-    "grandson",
-    "granddaughter",
-    // Alliances and step-family, en.
-    "husband",
-    "wife",
-    "father-in-law",
-    "mother-in-law",
-    "brother-in-law",
-    "sister-in-law",
-    "son-in-law",
-    "daughter-in-law",
-    "stepfather",
-    "stepmother",
-    "stepbrother",
-    "stepsister",
-    "half-brother",
-    "half-sister",
-    "godfather",
-    "godmother",
-    "godson",
-    "goddaughter",
+/// Every noun is paired with the CANONICAL noun of the relation it denotes.
+///
+/// The orientation pass decides direction by asking whether the predicate names
+/// the same kinship the passage named. Asking that of the SPELLING made two
+/// words for one relation read as each other's converse, and stored the edge
+/// backwards (#1754) — across languages (`"sister"` vs `"soeur"`), and just as
+/// much within one (`"mari"` vs `"epoux"`, `"gendre"` vs `"beau-fils"`, both
+/// listed here). Comparing canonical forms asks it of the MEANING instead, so a
+/// synonym orients like the word it stands for and only a real converse flips.
+///
+/// Where one French noun covers two English ones — `"beau-pere"` is both the
+/// father-in-law and the stepfather — every spelling folds onto that single
+/// canonical. Deliberate: the pass has no "unrelated" branch, so anything not
+/// judged identical is treated as the converse. Reading two step/in-law words
+/// as ONE relation leaves an edge unturned; reading them as converses points it
+/// the wrong way, and this pass already holds that a missing correction beats a
+/// wrong one.
+const KINSHIP_NOUNS: &[(&str, &str)] = &[
+    // Blood ties, fr. — each its own canonical.
+    ("pere", "pere"),
+    ("mere", "mere"),
+    ("frere", "frere"),
+    ("soeur", "soeur"),
+    ("fils", "fils"),
+    ("fille", "fille"),
+    ("oncle", "oncle"),
+    ("tante", "tante"),
+    ("cousin", "cousin"),
+    ("cousine", "cousine"),
+    ("neveu", "neveu"),
+    ("niece", "niece"),
+    ("grand-pere", "grand-pere"),
+    ("grand-mere", "grand-mere"),
+    ("grand-oncle", "grand-oncle"),
+    ("grand-tante", "grand-tante"),
+    ("arriere-grand-pere", "arriere-grand-pere"),
+    ("arriere-grand-mere", "arriere-grand-mere"),
+    ("petit-fils", "petit-fils"),
+    ("petite-fille", "petite-fille"),
+    // Alliances and step-family, fr. — `gendre`/`bru` and `mari`/`femme` are
+    // synonyms of the nouns they fold onto, not converses of them.
+    ("beau-pere", "beau-pere"),
+    ("belle-mere", "belle-mere"),
+    ("beau-frere", "beau-frere"),
+    ("belle-soeur", "belle-soeur"),
+    ("beau-fils", "beau-fils"),
+    ("belle-fille", "belle-fille"),
+    ("gendre", "beau-fils"),
+    ("bru", "belle-fille"),
+    ("demi-frere", "demi-frere"),
+    ("demi-soeur", "demi-soeur"),
+    ("parrain", "parrain"),
+    ("marraine", "marraine"),
+    ("filleul", "filleul"),
+    ("filleule", "filleule"),
+    ("epoux", "epoux"),
+    ("epouse", "epouse"),
+    ("mari", "epoux"),
+    ("femme", "epouse"),
+    // Blood ties, en. — folded onto their French twin.
+    ("father", "pere"),
+    ("mother", "mere"),
+    ("brother", "frere"),
+    ("sister", "soeur"),
+    ("son", "fils"),
+    ("daughter", "fille"),
+    ("uncle", "oncle"),
+    ("aunt", "tante"),
+    ("nephew", "neveu"),
+    ("grandfather", "grand-pere"),
+    ("grandmother", "grand-mere"),
+    ("grandson", "petit-fils"),
+    ("granddaughter", "petite-fille"),
+    // Alliances and step-family, en. — folded onto their French twin.
+    ("husband", "epoux"),
+    ("wife", "epouse"),
+    ("father-in-law", "beau-pere"),
+    ("mother-in-law", "belle-mere"),
+    ("brother-in-law", "beau-frere"),
+    ("sister-in-law", "belle-soeur"),
+    ("son-in-law", "beau-fils"),
+    ("daughter-in-law", "belle-fille"),
+    ("stepfather", "beau-pere"),
+    ("stepmother", "belle-mere"),
+    ("stepbrother", "beau-frere"),
+    ("stepsister", "belle-soeur"),
+    ("half-brother", "demi-frere"),
+    ("half-sister", "demi-soeur"),
+    ("godfather", "parrain"),
+    ("godmother", "marraine"),
+    ("godson", "filleul"),
+    ("goddaughter", "filleule"),
 ];
 
 /// What precedes the kinship noun when the sentence hangs the relation on the
@@ -324,18 +342,20 @@ fn ends_exactly(head: &str, word: &str) -> bool {
 
 /// The kinship noun written at the start of `text`, and how many bytes it
 /// occupies there.
+/// The length is that of the spelling actually written; the noun returned is
+/// its CANONICAL form, so a caller compares meanings and never spellings.
 fn noun_at(text: &str) -> Option<(&'static str, usize)> {
-    KINSHIP_NOUNS
-        .iter()
-        .find_map(|noun| word_prefix_len(text, noun).map(|len| (*noun, len)))
+    KINSHIP_NOUNS.iter().find_map(|(spelling, canonical)| {
+        word_prefix_len(text, spelling).map(|len| (*canonical, len))
+    })
 }
 
-/// The kinship noun `head` ends on.
+/// The kinship noun `head` ends on, in its canonical form.
 fn noun_before(head: &str) -> Option<&'static str> {
     KINSHIP_NOUNS
         .iter()
-        .copied()
-        .find(|noun| ends_with_word(head, noun))
+        .find(|(spelling, _)| ends_with_word(head, spelling))
+        .map(|(_, canonical)| *canonical)
 }
 
 /// The text left once the first of `prefixes` that `text` starts with is
@@ -578,8 +598,8 @@ fn predicate_noun(predicate: &str) -> Option<&'static str> {
     let stem = predicate_stem(predicate);
     KINSHIP_NOUNS
         .iter()
-        .copied()
-        .find(|noun| word_prefix_len(&stem, noun) == Some(stem.len()))
+        .find(|(spelling, _)| word_prefix_len(&stem, spelling) == Some(stem.len()))
+        .map(|(_, canonical)| *canonical)
 }
 
 /// Whether the triple runs between exactly these two entities, either way round.
@@ -590,12 +610,16 @@ fn joins(relation: &ExtractedRelation, one: &str, other: &str) -> bool {
 
 /// Point one triple the way the passage states it.
 ///
-/// The triple built on the noun the passage used belongs to the person that
-/// noun introduced; any *other* kinship label over the same pair is its
+/// The triple built on the RELATION the passage named belongs to the person
+/// that noun introduced; any *other* kinship relation over the same pair is its
 /// converse and therefore runs the other way. That single rule is also all an
 /// alliance ever needs: list `"beau-frere"` in the table and its converse is
 /// whatever else the extractor labelled the pair with. Anything else is
 /// untouched.
+///
+/// "Same relation" is decided on the CANONICAL noun, never on the spelling —
+/// otherwise `"sister"` and `"soeur"`, or `"mari"` and `"epoux"`, read as each
+/// other's converse and the edge is stored backwards (#1754).
 fn reorient(relation: &mut ExtractedRelation, noun: &str, holder: &str, bearer: &str) {
     let Some(stem) = predicate_noun(&relation.predicate) else {
         return;
