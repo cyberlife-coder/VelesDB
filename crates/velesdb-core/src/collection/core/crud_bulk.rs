@@ -292,13 +292,17 @@ impl Collection {
         }
 
         // Issue #425: BM25 skip — when no point has a payload AND the BM25
-        // index is empty, skip the text index loop entirely. The bulk path
-        // inserts fresh points (no old documents to remove), so the loop
-        // body would be a no-op for every point.
+        // index is empty, skip the text index work entirely. The bulk path
+        // inserts fresh points (no old documents to remove), so it would be a
+        // no-op for every point.
+        //
+        // Issue #1797: this used to call `update_text_index` PER POINT, and
+        // that helper opens the BM25 WAL, writes one frame and `sync_all()`s it
+        // on every call — one durability barrier per document, which capped
+        // bulk insertion of text-bearing points at roughly one fsync each. The
+        // batch below writes every frame under a single open + flush + fsync.
         if !entries.is_empty() || !self.storage.text_index.is_empty() {
-            for point in points {
-                self.update_text_index(point)?;
-            }
+            self.bulk_update_text_index(points)?;
         }
 
         // Issue #486: Update label index for bulk-inserted points.

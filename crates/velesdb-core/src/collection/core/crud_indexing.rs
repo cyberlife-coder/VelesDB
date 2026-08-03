@@ -158,6 +158,97 @@ impl Collection {
         Ok(())
     }
 
+    /// Applies the BM25 side of a whole batch under ONE durability barrier.
+    ///
+    /// The batched counterpart of [`Self::update_text_index`]. Calling that per
+    /// point is what cost one `open` and one `fsync` PER DOCUMENT (#1797); here
+    /// every frame goes into a single `wal_append_batch` call.
+    ///
+    /// # The three cases a mixed batch contains
+    ///
+    /// Classified explicitly rather than folded together, because they are not
+    /// the same operation and the single-point path distinguishes them:
+    ///
+    /// * payload carrying text → an `Add` frame;
+    /// * payload with NO text  → nothing at all, no WAL entry (empty text is
+    ///   not indexed, matching [`Self::update_text_index`]);
+    /// * no payload at all     → a `Remove` frame, preserving delete semantics.
+    ///
+    /// # Ordering
+    ///
+    /// WAL-before-apply, at BATCH granularity: every frame is written and
+    /// fsynced first, and the in-memory index is touched only once that
+    /// succeeded. A WAL failure returns `Err` with the index untouched — never
+    /// partially updated for a batch that was never acknowledged, which matters
+    /// because a lost WAL entry is NOT rebuilt when a BM25 snapshot exists.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any WAL open / write / flush / fsync failure.
+    pub(super) fn bulk_update_text_index(&self, points: &[Point]) -> Result<()> {
+        let (adds, removes) = Self::classify_text_mutations(points);
+        if adds.is_empty() && removes.is_empty() {
+            return Ok(());
+        }
+        self.append_text_batch_to_wal(&adds, &removes)?;
+
+        // Only now is the batch durable, so only now does memory change.
+        for (id, text) in &adds {
+            self.storage.text_index.add_document(*id, text);
+        }
+        for id in &removes {
+            self.storage.text_index.remove_document(*id);
+        }
+        Ok(())
+    }
+
+    /// Splits a batch into the BM25 mutations it implies.
+    ///
+    /// The three cases stay separate here rather than being decided inline, so
+    /// that "a payload with no indexable string writes nothing" is a visible
+    /// decision and not an accident of control flow.
+    fn classify_text_mutations(points: &[Point]) -> (Vec<(u64, String)>, Vec<u64>) {
+        let mut adds: Vec<(u64, String)> = Vec::new();
+        let mut removes: Vec<u64> = Vec::new();
+        for point in points {
+            if let Some(payload) = &point.payload {
+                let text = Self::extract_text_from_payload(payload);
+                if !text.is_empty() {
+                    adds.push((point.id, text));
+                }
+            } else {
+                removes.push(point.id);
+            }
+        }
+        (adds, removes)
+    }
+
+    /// Writes the whole batch to the BM25 WAL under one durability barrier.
+    ///
+    /// Non-persistence builds have no on-disk WAL, so this is a no-op there and
+    /// the caller proceeds straight to the in-memory update.
+    #[allow(clippy::unused_self)] // Reason: needs `self.storage.path` under `persistence`.
+    fn append_text_batch_to_wal(&self, adds: &[(u64, String)], removes: &[u64]) -> Result<()> {
+        #[cfg(feature = "persistence")]
+        {
+            use crate::index::bm25_persistence_wal::{wal_append_batch, wal_path_for_bm25, WalOp};
+            let ops: Vec<WalOp<'_>> = adds
+                .iter()
+                .map(|(id, text)| WalOp::Add {
+                    id: *id,
+                    text: text.as_str(),
+                })
+                .chain(removes.iter().map(|id| WalOp::Remove { id: *id }))
+                .collect();
+            wal_append_batch(&wal_path_for_bm25(&self.storage.path), &ops)?;
+        }
+        #[cfg(not(feature = "persistence"))]
+        {
+            let _ = (adds, removes);
+        }
+        Ok(())
+    }
+
     /// Appends an `add_document` mutation to the BM25 WAL.
     ///
     /// Feature-gated — non-persistence builds have no on-disk WAL.

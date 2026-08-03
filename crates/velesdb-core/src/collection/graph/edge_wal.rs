@@ -74,7 +74,7 @@ pub(crate) fn wal_path_for_edges(dir: &Path) -> PathBuf {
 pub(crate) fn wal_append_add(wal_path: &Path, edge: &GraphEdge) -> Result<()> {
     let mut w = wal_framing::open_wal_writer(wal_path, CTX)?;
     write_add_entry(&mut w, edge)?;
-    wal_framing::flush_wal(&mut w, CTX)
+    wal_framing::flush_wal(&mut w, wal_path, CTX)
 }
 
 /// Appends multiple `add_edge` mutations to the edge WAL with a single
@@ -92,7 +92,7 @@ pub(crate) fn wal_append_add_batch(wal_path: &Path, edges: &[GraphEdge]) -> Resu
     for edge in edges {
         write_add_entry(&mut w, edge)?;
     }
-    wal_framing::flush_wal(&mut w, CTX)
+    wal_framing::flush_wal(&mut w, wal_path, CTX)
 }
 
 /// Serializes `edge` and writes a length-prefixed ADD entry.
@@ -147,7 +147,7 @@ fn append_id_entry(wal_path: &Path, op: u8, id: u64) -> Result<()> {
     wal_framing::wal_write(&mut w, &body_len.to_le_bytes(), CTX)?;
     wal_framing::wal_write(&mut w, &[op], CTX)?;
     wal_framing::wal_write(&mut w, &id.to_le_bytes(), CTX)?;
-    wal_framing::flush_wal(&mut w, CTX)
+    wal_framing::flush_wal(&mut w, wal_path, CTX)
 }
 
 /// Truncates the edge WAL file to zero length.
