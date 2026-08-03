@@ -367,26 +367,14 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         crate::extract::orient_kinship(fact, &mut extraction.relations);
         let mut entity_ids: HashMap<String, u64> = HashMap::new();
         let mut edges: HashSet<(u64, u64, String)> = HashSet::new();
-        let mut seeded: HashSet<u64> = HashSet::new();
         // The caller's fact is the node the topics attach to — the extracted
         // facts are NOT stored as separate memories here, which is what
         // separates autograph from `remember_extracted`: one `remember` call
         // must still produce exactly one caller-visible memory.
         for extracted in &extraction.facts {
-            let _ = self.wire_entities(
-                fact_id,
-                &extracted.entities,
-                &mut entity_ids,
-                &mut edges,
-                &mut seeded,
-            );
+            let _ = self.wire_entities(fact_id, &extracted.entities, &mut entity_ids, &mut edges);
         }
-        let _ = self.wire_relations(
-            &extraction.relations,
-            &mut entity_ids,
-            &mut edges,
-            &mut seeded,
-        );
+        let _ = self.wire_relations(&extraction.relations, &mut entity_ids, &mut edges);
         let _ = self.wire_attributes(&extraction.attributes, &mut entity_ids);
     }
 
@@ -443,20 +431,9 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         crate::extract::orient_kinship(text, &mut extraction.relations);
         let mut entity_ids: HashMap<String, u64> = HashMap::new();
         let mut edges: HashSet<(u64, u64, String)> = HashSet::new();
-        let mut seeded: HashSet<u64> = HashSet::new();
-        let outcome = self.store_extracted_facts(
-            &extraction.facts,
-            metadata,
-            &mut entity_ids,
-            &mut edges,
-            &mut seeded,
-        )?;
-        self.wire_relations(
-            &extraction.relations,
-            &mut entity_ids,
-            &mut edges,
-            &mut seeded,
-        )?;
+        let outcome =
+            self.store_extracted_facts(&extraction.facts, metadata, &mut entity_ids, &mut edges)?;
+        self.wire_relations(&extraction.relations, &mut entity_ids, &mut edges)?;
         self.wire_attributes(&extraction.attributes, &mut entity_ids)?;
         Ok(outcome)
     }
@@ -570,7 +547,6 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         relations: &[ExtractedRelation],
         entity_ids: &mut HashMap<String, u64>,
         edges: &mut HashSet<(u64, u64, String)>,
-        seeded: &mut HashSet<u64>,
     ) -> Result<(), MemoryError> {
         for relation in relations {
             if validate_relation(&relation.predicate).is_err() {
@@ -581,7 +557,6 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             if subject_id == object_id {
                 continue;
             }
-            self.seed_existing_edges(subject_id, edges, seeded)?;
             self.add_edge(subject_id, object_id, &relation.predicate, edges)?;
         }
         Ok(())
@@ -640,7 +615,6 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         metadata: Option<&Metadata>,
         entity_ids: &mut HashMap<String, u64>,
         edges: &mut HashSet<(u64, u64, String)>,
-        seeded: &mut HashSet<u64>,
     ) -> Result<RememberedExtraction, MemoryError> {
         let mut ids = Vec::with_capacity(facts.len());
         let mut skipped_over_cap = 0;
@@ -664,7 +638,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
                 Err(error) => return Err(error),
             };
             ids.push(fact_id);
-            self.wire_entities(fact_id, &fact.entities, entity_ids, edges, seeded)?;
+            self.wire_entities(fact_id, &fact.entities, entity_ids, edges)?;
         }
         Ok(RememberedExtraction {
             ids,
@@ -682,13 +656,12 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         entities: &[String],
         entity_ids: &mut HashMap<String, u64>,
         edges: &mut HashSet<(u64, u64, String)>,
-        seeded: &mut HashSet<u64>,
     ) -> Result<(), MemoryError> {
         for entity in entities {
             // Skip blank or punctuation-only topics: they would persist as junk
             // hubs (`Entity: -`) yet can never carry a meaningful multi-hop link.
             if entity.chars().any(char::is_alphanumeric) {
-                self.wire_entity(fact_id, entity, entity_ids, edges, seeded)?;
+                self.wire_entity(fact_id, entity, entity_ids, edges)?;
             }
         }
         Ok(())
@@ -702,27 +675,24 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         entity: &str,
         entity_ids: &mut HashMap<String, u64>,
         edges: &mut HashSet<(u64, u64, String)>,
-        seeded: &mut HashSet<u64>,
     ) -> Result<(), MemoryError> {
         let entity_id = self.entity_hub(entity, entity_ids)?;
         if entity_id == fact_id {
             return Ok(());
         }
-        // Fold already-persisted edges into the dedup set, which saves the
-        // lookup `relate` would otherwise do per edge. Core IS idempotent per
-        // (from, relation, to) now, so this set is an optimisation — but it
-        // has to key on the label too, or a typed relation extracted between
-        // two facts that already share an edge is dropped before it ever
-        // reaches core.
-        self.seed_existing_edges(fact_id, edges, seeded)?;
-        self.seed_existing_edges(entity_id, edges, seeded)?;
         self.add_edge(fact_id, entity_id, ABOUT_RELATION, edges)?;
         self.add_edge(entity_id, fact_id, MENTIONS_RELATION, edges)?;
         Ok(())
     }
 
     /// Create the edge `from -> to` labelled `label`, unless `edges` already
-    /// records that endpoint pair (in-call and persisted dedup).
+    /// records that triple for this call (in-call dedup only). `relate`
+    /// derives the edge id from `(from, relation, to)`
+    /// ([`crate::wire::hash_edge_id`] upstream in core) and is itself an O(1)
+    /// idempotent no-op against an already-persisted edge, so there is
+    /// nothing left to preload from the store — a prior preload here made
+    /// every write to a hub with `k` existing edges cost O(k), turning `n`
+    /// writes to the same hub into O(n²).
     fn add_edge(
         &self,
         from: u64,
@@ -732,24 +702,6 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     ) -> Result<(), MemoryError> {
         if edges.insert((from, to, label.to_string())) {
             self.relate(from, to, label)?;
-        }
-        Ok(())
-    }
-
-    /// Load `node`'s already-persisted outgoing edges into `edges` once per call
-    /// (tracked by `seeded`), so the dedup set reflects the stored graph and a
-    /// repeated ingest is idempotent rather than edge-duplicating.
-    fn seed_existing_edges(
-        &self,
-        node: u64,
-        edges: &mut HashSet<(u64, u64, String)>,
-        seeded: &mut HashSet<u64>,
-    ) -> Result<(), MemoryError> {
-        if !seeded.insert(node) {
-            return Ok(());
-        }
-        for edge in self.store.relations(node)? {
-            edges.insert((node, edge.to, edge.relation));
         }
         Ok(())
     }
