@@ -12,6 +12,13 @@
 //! carries only reserved keys, so it has none of the caller's columns, so
 //! `status != "archived"` sweeps in every artefact the service ever wrote.
 //!
+//! Since #1759 the adapter also spells a caller's `ne` as
+//! `field IS NOT NULL AND field != $p`, so a fact lacking the column no longer
+//! matches at all — which closes this leak a second time, at its root. The
+//! marker exclusion below is kept regardless: it still relies on `is_none_or`
+//! (that is how it keeps caller facts while dropping marked ones), and it is
+//! what protects the paths where the caller passes no `ne` predicate.
+//!
 //! Categories: Nominal (≥60%), Edge (~20%), Negative (≥20%).
 
 #![cfg(all(feature = "context", feature = "persistence"))]
@@ -183,11 +190,24 @@ fn recall_where_ne_predicate_still_returns_caller_facts() {
         ids.contains(&seed.with_status),
         "a caller fact whose `status` is not \"archived\" must be returned"
     );
+    // This assertion was inverted by #1759, deliberately. It used to require a
+    // caller fact with NO `status` column to survive `status != "archived"`,
+    // because `Condition::Neq` is `is_none_or` and a missing field matched.
+    // That is the very shape that made `ne` mean two different things on the
+    // two backends, and the published contract now says a filter is satisfied
+    // only by a fact that HAS the field with a non-null value.
+    //
+    // The concern the old assertion protected — that excluding scaffolding must
+    // not black out caller facts — is NOT dropped: it is what
+    // `recall_where_without_predicates_returns_no_internal_scaffolding` proves,
+    // by getting both caller facts back when no predicate names `status`. Here,
+    // the fact is excluded by the CALLER'S OWN predicate, which is the contract
+    // working, not a blackout.
     assert!(
-        ids.contains(&seed.without_status),
-        "a caller fact with NO `status` column must still be returned: `!=` \
-         keeps a missing caller field, and excluding scaffolding must not \
-         quietly turn that into a blackout"
+        !ids.contains(&seed.without_status),
+        "a caller fact with NO `status` column must NOT satisfy \
+         `status != \"archived\"`: the published contract requires the field to \
+         be present and non-null (#1759)"
     );
 }
 

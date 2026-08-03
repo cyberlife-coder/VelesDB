@@ -17,7 +17,8 @@ use std::collections::HashMap;
 
 use serde_json::{Map, Value};
 use velesdb_memory::{
-    ColumnFilter, ColumnOp, MemoryEdge, MemoryError, MemoryStore, Metadata, Recollection,
+    column_value_matches, ColumnFilter, MemoryEdge, MemoryError, MemoryStore, Metadata,
+    Recollection,
 };
 
 use crate::graph_store::WasmGraphStore;
@@ -439,44 +440,19 @@ impl WasmStore {
 }
 
 /// True when every filter in `filters` is satisfied by `payload` (AND-combined).
+///
+/// The per-value rule is [`velesdb_memory::column_value_matches`], not a copy
+/// of it: this backend and the `VelesQL`-translating one each carrying their
+/// own is exactly how `ne` came to mean two different things (#1759). A field
+/// this payload does not carry satisfies nothing, which — with the shared
+/// rule's refusal of a stored `null` — is the published contract: present,
+/// non-null, and comparing true.
 fn columnar_matches(payload: &Map<String, Value>, filters: &[ColumnFilter]) -> bool {
     filters.iter().all(|filter| {
         payload
             .get(&filter.field)
-            .is_some_and(|value| compare(value, filter.op, &filter.value))
+            .is_some_and(|value| column_value_matches(value, filter.op, &filter.value))
     })
-}
-
-/// Evaluate one [`ColumnOp`] between a stored payload value and the filter's
-/// value: numeric comparison when both are numbers, lexicographic when both
-/// are strings, equality-only otherwise (matches `VelesQL`'s scalar-comparison
-/// semantics for the types `MemoryService::recall_where` accepts).
-fn compare(stored: &Value, op: ColumnOp, target: &Value) -> bool {
-    if let (Some(a), Some(b)) = (stored.as_f64(), target.as_f64()) {
-        return match op {
-            ColumnOp::Eq => (a - b).abs() < f64::EPSILON,
-            ColumnOp::Ne => (a - b).abs() >= f64::EPSILON,
-            ColumnOp::Lt => a < b,
-            ColumnOp::Le => a <= b,
-            ColumnOp::Gt => a > b,
-            ColumnOp::Ge => a >= b,
-        };
-    }
-    if let (Some(a), Some(b)) = (stored.as_str(), target.as_str()) {
-        return match op {
-            ColumnOp::Eq => a == b,
-            ColumnOp::Ne => a != b,
-            ColumnOp::Lt => a < b,
-            ColumnOp::Le => a <= b,
-            ColumnOp::Gt => a > b,
-            ColumnOp::Ge => a >= b,
-        };
-    }
-    match op {
-        ColumnOp::Eq => stored == target,
-        ColumnOp::Ne => stored != target,
-        _ => false,
-    }
 }
 
 #[cfg(test)]

@@ -30,6 +30,11 @@
 /// context compiler, which stays clock-free and deterministic. Internal:
 /// nothing outside the crate needs to read the clock directly.
 mod clock;
+/// The ONE `ColumnFilter` conformance table both `MemoryStore` backends run,
+/// so the native (`VelesQL`-translating) and WASM (payload-testing) paths
+/// cannot drift apart again (#1759). Deliberately NOT target-gated: the WASM
+/// backend is one of the two that must run it.
+pub mod column_filter_conformance;
 /// The optional TOML configuration file: one place to set every knob, with
 /// `command line > environment > file > default` precedence. Native-only —
 /// it reads the filesystem.
@@ -163,8 +168,9 @@ pub use http_client::{Auth, HttpJsonClient};
 #[cfg(feature = "mcp")]
 pub use mcp::McpServer;
 pub use model::{
-    ColumnFilter, ColumnOp, EntityProfile, EntityRelation, Explanation, FusionOptions, Link,
-    MemoryEdge, MemoryNode, Recollection, RememberedExtraction, UnrelateOutcome,
+    column_value_matches, ColumnFilter, ColumnOp, EntityProfile, EntityRelation, Explanation,
+    FusionOptions, Link, MemoryEdge, MemoryNode, Recollection, RememberedExtraction,
+    UnrelateOutcome,
 };
 pub use rerank::{DynReranker, RerankError, Reranker};
 pub use service::{MemoryService, Metadata};
