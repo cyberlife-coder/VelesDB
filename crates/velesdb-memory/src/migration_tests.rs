@@ -690,10 +690,32 @@ fn the_per_point_write_cost_is_attributed_to_payload_or_vector() {
 /// Does the batched write stay linear as the volume grows?
 ///
 /// This is the question that decides feasibility, and the one the batch-size
-/// grid cannot answer. At a constant ~3.4 ms per point a million-fact rebuild
-/// is slow but finite; if the per-fact cost RISES with the volume, the rebuild
+/// grid cannot answer: if the per-fact cost RISES with the volume, the rebuild
 /// does not scale and `scalable_reconstruction` is `Missing` however good the
 /// chunk size looks at 2 000 facts.
+///
+/// Measured twice, `--release`, batch = 1 024, `upsert_bulk`, distinct vectors,
+/// dimension 4, on an idle machine. The two columns are the SAME code either
+/// side of the BM25 fix (#1797), which removed a per-document fsync from the
+/// bulk text-index path:
+///
+/// | facts  | before #1797 | after #1797 | facts/s after |
+/// |--------|--------------|-------------|---------------|
+/// | 1 000  | 3 555.8 us   | **24.1 us** | 41 475        |
+/// | 2 000  | 3 408.8      | 20.5        | 48 794        |
+/// | 4 000  | 3 341.6      | 17.7        | 56 518        |
+/// | 8 000  | 3 374.0      | 16.7        | 59 720        |
+/// | 16 000 | 3 345.8      | **16.3**    | **61 524**    |
+///
+/// The earlier figures were never the rebuild's cost: they were one fsync per
+/// fact, paid inside `upsert_bulk` by the BM25 WAL. With that gone the same
+/// walk runs ~205x faster, and the per-fact cost now FALLS as the volume grows
+/// (ratios 0.85, 0.86, 0.95, 0.97) because the fixed costs amortise — better
+/// than the linear behaviour this test was written to demand.
+///
+/// What that changes for the migration: a million-fact rebuild moves from
+/// roughly 56 minutes to roughly 16 seconds, so throughput is no longer what
+/// decides whether an offline rebuild is acceptable.
 ///
 /// `#[ignore]`d: writes 31 000 facts in total.
 #[test]
