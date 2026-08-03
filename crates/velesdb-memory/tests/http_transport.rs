@@ -78,6 +78,23 @@ async fn spawn_http_server() -> TestServer {
 /// default, and process-wide env vars are shared mutable state that would
 /// race every other test in this binary reading the same variables.
 async fn spawn_http_server_with_limits(max_body_bytes: usize, max_sessions: usize) -> TestServer {
+    spawn_configured(max_body_bytes, max_sessions, None).await
+}
+
+/// The one place a test server is actually built.
+///
+/// The three spawners above differ in exactly which knob they pin and in
+/// nothing else — same scratch store, same OS-assigned loopback port, same
+/// gracefully-cancellable axum task. Keeping two copies of that body meant a
+/// change to the shutdown path had to be made twice or silently diverge, so
+/// they now all funnel here. `router_with_limits` is itself a delegation to
+/// `router_with_limits_and_keep_alive`, so passing `keep_alive: None` through
+/// is the same call it would have made.
+async fn spawn_configured(
+    max_body_bytes: usize,
+    max_sessions: usize,
+    keep_alive: Option<std::time::Duration>,
+) -> TestServer {
     let store_dir = tempfile::tempdir().expect("create scratch store dir");
     let embedder: DynEmbedder = Box::new(HashEmbedder::new(DEFAULT_DIMENSION));
     let service =
@@ -85,11 +102,12 @@ async fn spawn_http_server_with_limits(max_body_bytes: usize, max_sessions: usiz
     let server = McpServer::new(service);
 
     let ct = CancellationToken::new();
-    let app = velesdb_memory::http::router_with_limits(
+    let app = velesdb_memory::http::router_with_limits_and_keep_alive(
         server,
         ct.child_token(),
         max_body_bytes,
         max_sessions,
+        keep_alive,
     );
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -420,38 +438,12 @@ async fn spawn_http_server_with_keep_alive(
     max_sessions: usize,
     keep_alive: std::time::Duration,
 ) -> TestServer {
-    let store_dir = tempfile::tempdir().expect("create scratch store dir");
-    let embedder: DynEmbedder = Box::new(HashEmbedder::new(DEFAULT_DIMENSION));
-    let service =
-        MemoryService::open(store_dir.path(), embedder).expect("open scratch memory store");
-    let server = McpServer::new(service);
-
-    let ct = CancellationToken::new();
-    let app = velesdb_memory::http::router_with_limits_and_keep_alive(
-        server,
-        ct.child_token(),
+    spawn_configured(
         velesdb_memory::http::DEFAULT_HTTP_MAX_BODY_BYTES,
         max_sessions,
         Some(keep_alive),
-    );
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind ephemeral loopback port");
-    let addr = listener.local_addr().expect("read bound local addr");
-
-    let shutdown_ct = ct.clone();
-    let handle = tokio::spawn(async move {
-        let _ = axum::serve(listener, app)
-            .with_graceful_shutdown(async move { shutdown_ct.cancelled_owned().await })
-            .await;
-    });
-
-    TestServer {
-        addr,
-        handle,
-        ct,
-        _store_dir: store_dir,
-    }
+    )
+    .await
 }
 
 const INITIALIZE_BODY: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"slot-probe","version":"0"}}}"#;
