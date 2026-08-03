@@ -148,9 +148,8 @@ pub fn fixture() -> Vec<FixtureFact> {
     ]
 }
 
-/// Every rule both backends must satisfy, run against [`fixture`].
-#[must_use]
-pub fn cases() -> Vec<Case> {
+/// The equality half of the contract — the rules #1759 changed.
+fn equality_cases() -> Vec<Case> {
     vec![
         Case {
             name: "ne excludes absent, null and equal; keeps only present-and-different",
@@ -167,6 +166,12 @@ pub fn cases() -> Vec<Case> {
             filters: vec![filter("missing", ColumnOp::Eq, Value::from(TARGET))],
             expected: vec![],
         },
+    ]
+}
+
+/// The ordering half — untouched by #1759, and pinned so it stays that way.
+fn ordering_cases() -> Vec<Case> {
+    vec![
         Case {
             name: "lt requires the field and compares below the pivot",
             filters: vec![filter("year", ColumnOp::Lt, Value::from(PIVOT))],
@@ -187,6 +192,13 @@ pub fn cases() -> Vec<Case> {
             filters: vec![filter("year", ColumnOp::Ge, Value::from(PIVOT))],
             expected: vec![DIFFERENT_LATE, YEAR_ONLY],
         },
+    ]
+}
+
+/// How filters compose, and what a caller sees with none — the case that also
+/// proves scaffolding never surfaces.
+fn composition_cases() -> Vec<Case> {
+    vec![
         Case {
             name: "several filters are AND-combined",
             filters: vec![
@@ -209,6 +221,15 @@ pub fn cases() -> Vec<Case> {
             ],
         },
     ]
+}
+
+/// Every rule both backends must satisfy, run against [`fixture`].
+#[must_use]
+pub fn cases() -> Vec<Case> {
+    let mut all = equality_cases();
+    all.extend(ordering_cases());
+    all.extend(composition_cases());
+    all
 }
 
 /// How a backend evaluates `Ne`, for the positive control below.

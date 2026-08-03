@@ -30,14 +30,15 @@
 /// context compiler, which stays clock-free and deterministic. Internal:
 /// nothing outside the crate needs to read the clock directly.
 mod clock;
+/// The ONE `ColumnFilter` conformance table both `MemoryStore` backends run,
+/// so the native (`VelesQL`-translating) and WASM (payload-testing) paths
+/// cannot drift apart again (#1759). Deliberately NOT target-gated: the WASM
+/// backend is one of the two that must run it.
+pub mod column_filter_conformance;
 /// The optional TOML configuration file: one place to set every knob, with
 /// `command line > environment > file > default` precedence. Native-only —
 /// it reads the filesystem.
 #[cfg(not(target_arch = "wasm32"))]
-/// The ONE `ColumnFilter` conformance table both `MemoryStore` backends run,
-/// so the native (`VelesQL`-translating) and WASM (payload-testing) paths
-/// cannot drift apart again (#1759).
-pub mod column_filter_conformance;
 pub mod config;
 /// The deterministic context compiler (EPIC-P-070): classify, dedup, and pack
 /// caller-supplied context fragments under a token budget — no LLM, no cloud,
