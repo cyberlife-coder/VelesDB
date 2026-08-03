@@ -54,8 +54,14 @@ pub enum Reachability {
     },
     /// The server answered and refused the credential.
     Unauthorized,
-    /// The server answered, and the configured model is not in its listing.
-    ModelAbsent {
+    /// The server answered, and the configured name is not among the ids it
+    /// advertises. **Not** a proven absence: a server may route an alias it
+    /// does not list. Measured on 2026-08-02 against a local oMLX server —
+    /// `/v1/models` answered 200 with seven ids, none containing `ornith`,
+    /// while `/v1/chat/completions` accepted `ornith-35b` and echoed it back
+    /// (#1782). The old name for this variant asserted that absence, and the
+    /// line it produced sent an operator to repair a healthy configuration.
+    ModelNotAdvertised {
         /// How many models it did list — `0` reads very differently from `12`.
         listed: usize,
     },
@@ -118,7 +124,7 @@ fn classify_listing(body: &str, model: &str) -> Reachability {
     if ids.iter().any(|id| names_the_same_model(id, model)) {
         Reachability::Reachable
     } else {
-        Reachability::ModelAbsent { listed: ids.len() }
+        Reachability::ModelNotAdvertised { listed: ids.len() }
     }
 }
 
@@ -145,32 +151,63 @@ fn names_the_same_model(listed: &str, configured: &str) -> bool {
 /// works is a warning people filter out. Nothing here interpolates the
 /// credential — not the value, not the header name — because this line's
 /// destination is a log file.
-#[must_use]
-pub fn warning_line(role: &str, url: &str, model: &str, outcome: &Reachability) -> Option<String> {
-    let (what, action) = match outcome {
-        Reachability::Reachable => return None,
-        Reachability::Unreachable { detail } => (
+/// What the probe found, and what an operator can do about it.
+fn finding(outcome: &Reachability) -> Option<(String, &'static str)> {
+    match outcome {
+        Reachability::Reachable => None,
+        Reachability::Unreachable { detail } => Some((
             format!("unreachable ({detail})"),
             "start the server, or correct the URL",
-        ),
-        Reachability::Unauthorized => (
+        )),
+        Reachability::Unauthorized => Some((
             "refused the credential".to_owned(),
             "set the role's _API_TOKEN in the environment (never in the TOML)",
-        ),
-        Reachability::ModelAbsent { listed } => (
-            format!("answered, but does not list this model (it lists {listed})"),
-            "pull the model on that server, or name one it has",
-        ),
-        Reachability::ListingUnsupported => (
+        )),
+        Reachability::ModelNotAdvertised { listed } => Some((
+            format!(
+                "answered, but does not advertise this model alias among the \
+                 {listed} it lists — the alias may still be routable by the server"
+            ),
+            "no action if the server routes this alias; otherwise name one it lists",
+        )),
+        Reachability::ListingUnsupported => Some((
             "answered, but serves no model listing — reachability unconfirmed".to_owned(),
             "no action if this is a gateway; otherwise check the URL's base path",
-        ),
+        )),
+    }
+}
+
+/// Whether the verdict ESTABLISHES that the backend cannot serve writes, or
+/// merely fails to confirm that it can.
+///
+/// The distinction is the whole of #1782. `/v1/models` is a light signal, and
+/// a light signal has limits: it proves a server is up, and it proves nothing
+/// about an alias it does not mention. Stating degradation as a fact on that
+/// basis is what turned a healthy oMLX configuration into a bug report. The
+/// probe stays light either way — confirming an alias would mean asking
+/// `/v1/chat/completions`, which pulls a 35-billion-parameter model at startup.
+fn proves_backend_unusable(outcome: &Reachability) -> bool {
+    match outcome {
+        Reachability::Unreachable { .. } | Reachability::Unauthorized => true,
+        Reachability::Reachable
+        | Reachability::ModelNotAdvertised { .. }
+        | Reachability::ListingUnsupported => false,
+    }
+}
+
+#[must_use]
+pub fn warning_line(role: &str, url: &str, model: &str, outcome: &Reachability) -> Option<String> {
+    let (what, action) = finding(outcome)?;
+    let consequence = if proves_backend_unusable(outcome) {
+        "Graph enrichment will degrade silently for every write until it is fixed"
+    } else {
+        "Whether graph enrichment works is therefore unconfirmed — this is not \
+         proof that it is broken"
     };
     Some(format!(
         "velesdb-memory: the {role} backend at {url} (model {model}) {what}. \
-         Graph enrichment will degrade silently for every write until it is fixed — \
-         {action}, then restart. To run without it, unset VELESDB_MEMORY_EXTRACTOR \
-         or turn autograph off."
+         {consequence} — {action}, then restart. To run without it, unset \
+         VELESDB_MEMORY_EXTRACTOR or turn autograph off."
     ))
 }
 
