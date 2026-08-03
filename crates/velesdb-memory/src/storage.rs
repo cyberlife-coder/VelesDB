@@ -152,6 +152,29 @@ pub trait MemoryStore {
     /// and comparisons, not just equality) — the engine behind
     /// [`crate::service::MemoryService::recall_where`].
     ///
+    /// # Absent and null fields
+    ///
+    /// **A filter is satisfied only by a fact that HAS the field with a
+    /// non-null value.** A fact missing the field, or storing `null` in it, is
+    /// never returned — and `ne` is no exception, exactly as a SQL comparison
+    /// against `NULL` is never true.
+    ///
+    /// | field state | `field != target` | `field == target` | `<` `<=` `>` `>=` |
+    /// |---|---|---|---|
+    /// | absent | no match | no match | no match |
+    /// | present, `null` | no match | no match | no match |
+    /// | present, equal | no match | match | per the comparison |
+    /// | present, different | **match** | no match | per the comparison |
+    ///
+    /// This is stated because it did not hold: `ne` on an absent field matched
+    /// on the native backend and never matched on WASM, for the API's whole
+    /// life, because nothing compared them (#1759). Every backend is now held
+    /// to one shared table —
+    /// [`crate::column_filter_conformance`] — run against both.
+    ///
+    /// Null-ness is not expressible through [`ColumnFilter`]; querying for it
+    /// is what `IsNull`/`IsNotNull` are for at the `VelesQL` layer.
+    ///
     /// # Errors
     /// Returns [`MemoryError::InvalidFilter`] if a filter field is not a
     /// plain identifier or a filter value is non-scalar, or [`MemoryError`]
@@ -419,6 +442,21 @@ impl NativeStore {
         for (index, filter) in filters.iter().enumerate() {
             validate_column_filter(filter)?;
             let key = format!("p{index}");
+            // `ne` is spelled out rather than left to `!=` alone. Core's
+            // `Condition::Neq` is `is_none_or`, so a bare `field != $p` also
+            // matches a fact that HAS no such field — which made `ne` mean two
+            // different things on the two backends (#1759). Requiring the
+            // field first pins the published contract here, at the adapter,
+            // instead of redefining `!=` for all of `VelesQL` — that is a
+            // product-wide semantic break, deliberately out of scope.
+            //
+            // `IS NOT NULL` is false for an absent field AND for an explicit
+            // `null`, which is exactly the contract: a comparison against null
+            // is never true, as in SQL. `IsNull`/`IsNotNull` stay the operators
+            // dedicated to null-ness.
+            if matches!(filter.op, crate::model::ColumnOp::Ne) {
+                let _ = write!(predicate, " AND {} IS NOT NULL", filter.field);
+            }
             let _ = write!(
                 predicate,
                 " AND {} {} ${key}",
@@ -439,6 +477,13 @@ impl NativeStore {
         // so they go straight into the text without passing through
         // `validate_column_filter` — whose job is to reject a CALLER filter
         // naming a reserved key.
+        //
+        // The asymmetry with the caller loop above is DELIBERATE and load-
+        // bearing: a caller's `ne` now carries an `IS NOT NULL`, this exclusion
+        // must NOT. It depends on the absent field matching — that is how it
+        // keeps every caller fact while dropping the marked ones. Giving these
+        // markers the same treatment would exclude every caller fact instead,
+        // since none of them carries a marker column at all.
         for (index, marker) in INTERNAL_MARKER_FIELDS.iter().enumerate() {
             let key = format!("m{index}");
             let _ = write!(predicate, " AND {marker} != ${key}");

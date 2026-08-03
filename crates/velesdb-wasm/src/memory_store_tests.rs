@@ -362,3 +362,54 @@ fn test_expired_fact_is_excluded_from_vector_search() {
     assert!(hits.iter().all(|h| h.0 != 1));
     assert!(hits.iter().any(|h| h.0 == 2));
 }
+
+// ---------------------------------------------------------------------------
+// The WASM half of the shared `ColumnFilter` conformance suite.
+//
+// The table lives in `velesdb_memory::column_filter_conformance` and is run
+// verbatim by the native backend too
+// (`crates/velesdb-memory/tests/column_filter_conformance_bdd.rs`). One table,
+// two evaluators: this side tests the payload directly, the native side
+// translates to `VelesQL`. A case added once is enforced on both, which is
+// what stops the two from drifting apart again (#1759).
+// ---------------------------------------------------------------------------
+
+/// A store preloaded with the shared fixture.
+fn conformance_store() -> WasmStore {
+    let store = WasmStore::new(4);
+    for fact in velesdb_memory::column_filter_conformance::fixture() {
+        store
+            .store_with_metadata(fact.id, fact.content, &[1.0, 0.0, 0.0, 0.0], &fact.metadata)
+            .expect("seed fixture");
+    }
+    store
+}
+
+#[test]
+fn the_wasm_backend_satisfies_every_conformance_case() {
+    let store = conformance_store();
+    for case in velesdb_memory::column_filter_conformance::cases() {
+        let hits = store
+            .query_columnar(&[1.0, 0.0, 0.0, 0.0], 50, &case.filters)
+            .expect("query_columnar");
+        let mut ids: Vec<u64> = hits.iter().map(|hit| hit.id).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, case.expected, "wasm: {}", case.name);
+    }
+}
+
+#[test]
+fn the_wasm_backend_never_returns_internal_scaffolding() {
+    let store = conformance_store();
+    for case in velesdb_memory::column_filter_conformance::cases() {
+        let hits = store
+            .query_columnar(&[1.0, 0.0, 0.0, 0.0], 50, &case.filters)
+            .expect("query_columnar");
+        assert!(
+            hits.iter()
+                .all(|hit| hit.id != velesdb_memory::column_filter_conformance::SCAFFOLDING),
+            "wasm: {} leaked internal scaffolding",
+            case.name
+        );
+    }
+}

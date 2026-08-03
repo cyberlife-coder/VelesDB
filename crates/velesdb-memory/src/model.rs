@@ -119,6 +119,54 @@ impl ColumnOp {
     }
 }
 
+/// Whether a STORED value satisfies `op` against a filter's `target`.
+///
+/// The single definition of what a [`ColumnFilter`] means once its field has
+/// been found, so a backend that evaluates payloads directly and one that
+/// translates to `VelesQL` cannot answer differently. `ne` on an absent field
+/// diverged between the two for the API's whole life precisely because each
+/// carried its own copy of this rule (#1759).
+///
+/// **A `null` satisfies nothing**, whatever the operator — a comparison
+/// against null is not true, as in SQL, and `ne` is no exception. Querying for
+/// null-ness is what `IsNull`/`IsNotNull` are for at the `VelesQL` layer. The
+/// caller is responsible for the *absent* case: no value here means no match.
+///
+/// Comparison is numeric when both sides are numbers, lexicographic when both
+/// are strings, and equality-only otherwise — an ordering over two unrelated
+/// JSON shapes has no meaning, so it is false rather than arbitrary.
+#[must_use]
+pub fn column_value_matches(stored: &Value, op: ColumnOp, target: &Value) -> bool {
+    if stored.is_null() {
+        return false;
+    }
+    if let (Some(left), Some(right)) = (stored.as_f64(), target.as_f64()) {
+        return match op {
+            ColumnOp::Eq => (left - right).abs() < f64::EPSILON,
+            ColumnOp::Ne => (left - right).abs() >= f64::EPSILON,
+            ColumnOp::Lt => left < right,
+            ColumnOp::Le => left <= right,
+            ColumnOp::Gt => left > right,
+            ColumnOp::Ge => left >= right,
+        };
+    }
+    if let (Some(left), Some(right)) = (stored.as_str(), target.as_str()) {
+        return match op {
+            ColumnOp::Eq => left == right,
+            ColumnOp::Ne => left != right,
+            ColumnOp::Lt => left < right,
+            ColumnOp::Le => left <= right,
+            ColumnOp::Gt => left > right,
+            ColumnOp::Ge => left >= right,
+        };
+    }
+    match op {
+        ColumnOp::Eq => stored == target,
+        ColumnOp::Ne => stored != target,
+        ColumnOp::Lt | ColumnOp::Le | ColumnOp::Gt | ColumnOp::Ge => false,
+    }
+}
+
 /// A structured predicate over a memory's metadata column, for the fused
 /// vector+`ColumnStore` recall
 /// [`MemoryService::recall_where`](crate::service::MemoryService::recall_where).
