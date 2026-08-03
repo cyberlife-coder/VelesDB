@@ -35,7 +35,7 @@ use crate::index::bm25::Bm25Index;
 use crate::index::wal_framing;
 
 /// Error-message context prefix for the shared framing helpers.
-const CTX: &str = "BM25 WAL";
+pub(crate) const CTX: &str = "BM25 WAL";
 
 const WAL_OP_ADD: u8 = 0x01;
 const WAL_OP_REMOVE: u8 = 0x02;
@@ -77,7 +77,7 @@ pub(crate) fn wal_append_add_document(wal_path: &Path, id: u64, text: &str) -> R
     let mut w = wal_framing::open_wal_writer(wal_path, CTX)?;
     wal_framing::wal_write(&mut w, &body_len.to_le_bytes(), CTX)?;
     write_add_entry_body(&mut w, id, text_len, text_bytes)?;
-    wal_framing::flush_wal(&mut w, CTX)
+    wal_framing::flush_wal(&mut w, wal_path, CTX)
 }
 
 /// Validates that `text_bytes.len()` fits in a `u32` and returns the cast.
@@ -123,6 +123,88 @@ fn write_add_entry_body(
     wal_framing::wal_write(w, text_bytes, CTX)
 }
 
+/// One BM25 mutation, as a batch carries it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum WalOp<'a> {
+    /// Index `text` under `id`.
+    Add {
+        /// Point the text belongs to.
+        id: u64,
+        /// Text to index. An empty text is not a valid batch entry — callers
+        /// drop those before building the batch, matching the single-document
+        /// path, which does not write a WAL entry for empty text either.
+        text: &'a str,
+    },
+    /// Drop `id` from the index.
+    Remove {
+        /// Point to drop.
+        id: u64,
+    },
+}
+
+/// Appends a whole batch of mutations to the BM25 WAL under ONE fsync.
+///
+/// This is the batched counterpart of [`wal_append_add_document`] /
+/// [`wal_append_remove_document`], and it exists because calling those in a
+/// loop is what made bulk insertion cost one `open` + one `fsync` PER DOCUMENT
+/// (#1797): a batch of N text-bearing points paid N durability barriers where
+/// one is enough.
+///
+/// The on-disk format is untouched. Each entry is written with exactly the same
+/// length-prefixed framing the single-document path produces, so the bytes are
+/// byte-for-byte what N sequential appends would have written, and
+/// [`wal_replay`] needs no change. Only the number of syscalls differs.
+///
+/// # Durability
+///
+/// The single `flush` + `sync_all` happens AFTER every frame is written and
+/// BEFORE this function returns. Callers must therefore keep the WAL-before-
+/// apply ordering at BATCH granularity: write the batch, let this return `Ok`,
+/// and only then mutate the in-memory index. An error here means nothing was
+/// acknowledged, so nothing may be applied — a partially applied index would be
+/// unrecoverable, since a lost WAL entry is not rebuilt when a snapshot exists.
+///
+/// An empty batch does not touch the WAL at all: no file is created.
+///
+/// # Errors
+///
+/// Returns [`Error::Index`] if the WAL cannot be opened, if any frame cannot be
+/// written, or if the final flush/fsync fails.
+pub(crate) fn wal_append_batch(wal_path: &Path, ops: &[WalOp<'_>]) -> Result<()> {
+    if ops.is_empty() {
+        return Ok(());
+    }
+    let mut w = wal_framing::open_wal_writer(wal_path, CTX)?;
+    for op in ops {
+        write_op_frame(&mut w, *op)?;
+    }
+    wal_framing::flush_wal(&mut w, wal_path, CTX)
+}
+
+/// Writes ONE framed entry for `op`, without flushing.
+///
+/// Extracted from [`wal_append_batch`] to keep its cyclomatic complexity under
+/// the repository limit, and because the framing of a single entry is exactly
+/// what must stay identical to the single-document path.
+fn write_op_frame(w: &mut std::io::BufWriter<std::fs::File>, op: WalOp<'_>) -> Result<()> {
+    match op {
+        WalOp::Add { id, text } => {
+            let text_bytes = text.as_bytes();
+            let text_len = encode_text_len(text_bytes)?;
+            let body_len = add_entry_body_len(text_len)?;
+            wal_framing::wal_write(w, &body_len.to_le_bytes(), CTX)?;
+            write_add_entry_body(w, id, text_len, text_bytes)
+        }
+        WalOp::Remove { id } => {
+            let body_len = u32::try_from(REMOVE_ENTRY_HEADER)
+                .map_err(|_| Error::Index("BM25 WAL: remove header too large".to_string()))?;
+            wal_framing::wal_write(w, &body_len.to_le_bytes(), CTX)?;
+            wal_framing::wal_write(w, &[WAL_OP_REMOVE], CTX)?;
+            wal_framing::wal_write(w, &id.to_le_bytes(), CTX)
+        }
+    }
+}
+
 /// Appends a `remove_document(id)` mutation to the BM25 WAL.
 ///
 /// Callers MUST invoke this BEFORE applying the mutation in-memory
@@ -140,7 +222,7 @@ pub(crate) fn wal_append_remove_document(wal_path: &Path, id: u64) -> Result<()>
     wal_framing::wal_write(&mut w, &body_len.to_le_bytes(), CTX)?;
     wal_framing::wal_write(&mut w, &[WAL_OP_REMOVE], CTX)?;
     wal_framing::wal_write(&mut w, &id.to_le_bytes(), CTX)?;
-    wal_framing::flush_wal(&mut w, CTX)
+    wal_framing::flush_wal(&mut w, wal_path, CTX)
 }
 
 /// Truncates the BM25 WAL file to zero length.
