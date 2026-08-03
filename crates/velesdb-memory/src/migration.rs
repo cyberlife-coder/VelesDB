@@ -257,6 +257,71 @@ pub fn enumerate_by_cursor(
 }
 
 // ---------------------------------------------------------------------------
+// PUTTING A FACT BACK
+//
+// Reading every fact out proves half of the feasibility question. The other
+// half is whether it goes back UNCHANGED — same id, same payload, same absolute
+// expiry — into a destination the new embedder sized. That is proven here, on a
+// destination, and never on the source.
+// ---------------------------------------------------------------------------
+
+/// What putting a fact back produced.
+///
+/// A collision is a RESULT, not an error and emphatically not a silent
+/// overwrite: `upsert` would replace whatever sat under that id without a
+/// word, and a rebuild that did so would destroy the very fact it was
+/// preserving. The caller decides; this reports.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum Reinsertion {
+    /// The id was free, and the fact now occupies it.
+    Inserted,
+    /// The id was taken. NOTHING was written.
+    Collision {
+        /// The payload already stored under that id, left exactly as it was.
+        existing: String,
+    },
+}
+
+/// Put `fact` back into `collection` under its ORIGINAL id, with `vector` as
+/// the new embedder computed it.
+///
+/// The old vector is not carried and not written: it belongs to the model being
+/// migrated away from, and re-writing it would produce a store whose vectors
+/// and whose recorded model disagree.
+///
+/// # Errors
+/// Returns [`crate::MemoryError`] if the collection is absent, if the stored
+/// payload is not readable, or if the write fails.
+pub fn reinsert(
+    db: &velesdb_core::Database,
+    collection: &str,
+    fact: &RawFact,
+    vector: &[f32],
+) -> Result<Reinsertion, crate::MemoryError> {
+    let any = db.get_any_collection(collection).ok_or_else(|| {
+        velesdb_core::Error::Query(format!("collection `{collection}` not found"))
+    })?;
+    if let Some(Some(existing)) = any.get(&[fact.id]).into_iter().next() {
+        return Ok(Reinsertion::Collision {
+            existing: existing
+                .payload
+                .as_ref()
+                .map_or_else(|| Value::Null.to_string(), std::string::ToString::to_string),
+        });
+    }
+    let payload: Value = serde_json::from_str(&fact.payload).map_err(|e| {
+        velesdb_core::Error::Query(format!("fact {} carries unreadable payload: {e}", fact.id))
+    })?;
+    any.upsert(vec![velesdb_core::Point::new(
+        fact.id,
+        vector.to_vec(),
+        Some(payload),
+    )])?;
+    Ok(Reinsertion::Inserted)
+}
+
+// ---------------------------------------------------------------------------
 // THE DIAGNOSIS
 // ---------------------------------------------------------------------------
 
