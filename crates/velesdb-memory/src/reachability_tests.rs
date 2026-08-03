@@ -113,8 +113,8 @@ fn a_listing_without_the_model_is_a_different_diagnosis() {
     let (url, _seen, handle) = listening_server("200 OK", MODELS_JSON);
     let outcome = probe_at(&url, "a-model-nobody-pulled");
     assert!(
-        matches!(outcome, Reachability::ModelAbsent { .. }),
-        "a served listing without the model must be ModelAbsent, got {outcome:?}"
+        matches!(outcome, Reachability::ModelNotAdvertised { .. }),
+        "a served listing without the model must be ModelNotAdvertised, got {outcome:?}"
     );
     let line =
         warning_line("extraction", &url, "a-model-nobody-pulled", &outcome).expect("warning");
@@ -126,7 +126,7 @@ fn a_listing_without_the_model_is_a_different_diagnosis() {
 fn ollamas_latest_suffix_is_not_a_missing_model() {
     // Measured against the real Ollama on 2026-08-02: `/v1/models` answers
     // `bge-m3:latest` while the configuration says `bge-m3`. A strict equality
-    // would report ModelAbsent for a model that is loaded and serving — a
+    // would report ModelNotAdvertised for a model that is loaded and serving — a
     // false alarm is worse than no alarm, because it teaches people to ignore
     // the line this whole change exists to make them read.
     let (url, _seen, handle) = listening_server(
@@ -148,7 +148,7 @@ fn a_tag_that_differs_is_still_a_missing_model() {
     assert!(
         matches!(
             probe_at(&url, "bge-m3:v3"),
-            Reachability::ModelAbsent { .. }
+            Reachability::ModelNotAdvertised { .. }
         ),
         "a different explicit tag must stay a miss"
     );
@@ -181,7 +181,7 @@ fn no_warning_ever_echoes_the_credential() {
             detail: "connection refused".to_owned(),
         },
         Reachability::Unauthorized,
-        Reachability::ModelAbsent { listed: 3 },
+        Reachability::ModelNotAdvertised { listed: 3 },
         Reachability::ListingUnsupported,
     ];
     for outcome in &outcomes {
@@ -299,4 +299,63 @@ fn a_server_that_does_not_serve_a_listing_is_not_called_unreachable() {
         "a 404 on the listing must be its own verdict, got {outcome:?}"
     );
     drop(handle);
+}
+
+// --- #1782: an unadvertised alias is not a proven absence ---------------------
+//
+// Measured on 2026-08-02 against a local oMLX server: `GET /v1/models` answers
+// 200 with seven ids, none containing `ornith`; `POST /v1/chat/completions`
+// with `model: "ornith-35b"` answers 200 in 3.55 s and echoes that alias back.
+// The alias is routable WITHOUT being advertised, so a listing that omits it
+// proves nothing about whether writes work. The old line said enrichment
+// "will degrade silently for every write until it is fixed" and told the
+// operator to pull the model — an inference stated as a fact, about a
+// configuration that was healthy.
+
+/// The one word the line must not use about a verdict it has not established.
+fn asserts_degradation(line: &str) -> bool {
+    line.contains("will degrade silently")
+}
+
+#[test]
+fn an_unadvertised_alias_is_not_reported_as_a_proven_absence() {
+    let outcome = Reachability::ModelNotAdvertised { listed: 7 };
+    let line = warning_line(
+        "extraction",
+        "http://127.0.0.1:8080",
+        "ornith-35b",
+        &outcome,
+    )
+    .expect("an unadvertised alias is still worth one line");
+
+    assert!(
+        !asserts_degradation(&line),
+        "the line must not assert that enrichment degrades — a listing that \
+         omits an alias proves nothing about routability:\n{line}"
+    );
+    assert!(
+        line.contains("may still be routable"),
+        "the line must say the alias may still be routable, or the operator \
+         reads an omission as a breakage:\n{line}"
+    );
+}
+
+#[test]
+fn a_verdict_that_does_prove_breakage_still_says_so() {
+    // The positive control. Without it, a "fix" that simply stopped warning
+    // would pass the assertions above while making the guard useless.
+    for outcome in [
+        Reachability::Unreachable {
+            detail: "connection refused".to_owned(),
+        },
+        Reachability::Unauthorized,
+    ] {
+        let line = warning_line("extraction", "http://127.0.0.1:8080", "m", &outcome)
+            .expect("a proven breakage must produce a line");
+        assert!(
+            asserts_degradation(&line),
+            "a verdict that DOES establish the backend is unusable must keep \
+             saying enrichment degrades, got:\n{line}"
+        );
+    }
 }
