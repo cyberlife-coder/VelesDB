@@ -47,6 +47,31 @@ struct TestServer {
     _store_dir: tempfile::TempDir,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TestServerConfig {
+    max_body_bytes: usize,
+    max_sessions: usize,
+    keep_alive: std::time::Duration,
+}
+
+impl TestServerConfig {
+    fn generic(max_body_bytes: usize, max_sessions: usize) -> Self {
+        Self {
+            max_body_bytes,
+            max_sessions,
+            keep_alive: velesdb_memory::http::DEFAULT_HTTP_KEEP_ALIVE,
+        }
+    }
+
+    fn with_keep_alive(max_sessions: usize, keep_alive: std::time::Duration) -> Self {
+        Self {
+            max_body_bytes: velesdb_memory::http::DEFAULT_HTTP_MAX_BODY_BYTES,
+            max_sessions,
+            keep_alive,
+        }
+    }
+}
+
 /// Cancel the server's token and wait for its task to actually finish —
 /// every test must call this before returning so a failed/hung shutdown
 /// surfaces as a test failure instead of a silently leaked task.
@@ -78,7 +103,7 @@ async fn spawn_http_server() -> TestServer {
 /// default, and process-wide env vars are shared mutable state that would
 /// race every other test in this binary reading the same variables.
 async fn spawn_http_server_with_limits(max_body_bytes: usize, max_sessions: usize) -> TestServer {
-    spawn_configured(max_body_bytes, max_sessions, None).await
+    spawn_configured(TestServerConfig::generic(max_body_bytes, max_sessions)).await
 }
 
 /// The one place a test server is actually built.
@@ -87,14 +112,11 @@ async fn spawn_http_server_with_limits(max_body_bytes: usize, max_sessions: usiz
 /// nothing else — same scratch store, same OS-assigned loopback port, same
 /// gracefully-cancellable axum task. Keeping two copies of that body meant a
 /// change to the shutdown path had to be made twice or silently diverge, so
-/// they now all funnel here. `router_with_limits` is itself a delegation to
-/// `router_with_limits_and_keep_alive`, so passing `keep_alive: None` through
-/// is the same call it would have made.
-async fn spawn_configured(
-    max_body_bytes: usize,
-    max_sessions: usize,
-    keep_alive: Option<std::time::Duration>,
-) -> TestServer {
+/// they now all funnel here. `keep_alive` is deliberately mandatory: generic
+/// fixtures pin [`velesdb_memory::http::DEFAULT_HTTP_KEEP_ALIVE`] explicitly,
+/// while expiry tests inject their own duration. No fixture can silently fall
+/// back to rmcp's shorter default.
+async fn spawn_configured(config: TestServerConfig) -> TestServer {
     let store_dir = tempfile::tempdir().expect("create scratch store dir");
     let embedder: DynEmbedder = Box::new(HashEmbedder::new(DEFAULT_DIMENSION));
     let service =
@@ -105,9 +127,9 @@ async fn spawn_configured(
     let app = velesdb_memory::http::router_with_limits_and_keep_alive(
         server,
         ct.child_token(),
-        max_body_bytes,
-        max_sessions,
-        keep_alive,
+        config.max_body_bytes,
+        config.max_sessions,
+        Some(config.keep_alive),
     );
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -438,12 +460,7 @@ async fn spawn_http_server_with_keep_alive(
     max_sessions: usize,
     keep_alive: std::time::Duration,
 ) -> TestServer {
-    spawn_configured(
-        velesdb_memory::http::DEFAULT_HTTP_MAX_BODY_BYTES,
-        max_sessions,
-        Some(keep_alive),
-    )
-    .await
+    spawn_configured(TestServerConfig::with_keep_alive(max_sessions, keep_alive)).await
 }
 
 const INITIALIZE_BODY: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"slot-probe","version":"0"}}}"#;
@@ -475,7 +492,7 @@ async fn try_raw_initialize(addr: SocketAddr) -> Option<String> {
 }
 
 /// Status code the server answers for a `tools/list` carrying `session_id`.
-async fn status_for_session(addr: SocketAddr, session_id: &str) -> u16 {
+async fn status_for_session(addr: SocketAddr, session_id: &str) -> reqwest::StatusCode {
     reqwest::Client::new()
         .post(format!("http://{addr}/mcp"))
         .header("Content-Type", "application/json")
@@ -486,7 +503,10 @@ async fn status_for_session(addr: SocketAddr, session_id: &str) -> u16 {
         .await
         .expect("tools/list POST reaches the server")
         .status()
-        .as_u16()
+}
+
+fn status_proves_session_is_alive(status: reqwest::StatusCode) -> bool {
+    status == reqwest::StatusCode::OK
 }
 
 /// A keep-alive no test can outlive, for the cases that need a session ALIVE.
@@ -502,6 +522,31 @@ const KEEP_ALIVE_EXPIRES_PROMPTLY: std::time::Duration = std::time::Duration::fr
 /// can only make the session deader, which is why this direction is safe to
 /// wait on and the other one is not.
 const PAST_EXPIRY: std::time::Duration = std::time::Duration::from_millis(700);
+
+#[test]
+fn contract_generic_http_fixture_pins_product_keep_alive() {
+    let config = TestServerConfig::generic(1, 1);
+    assert_eq!(
+        config.keep_alive,
+        velesdb_memory::http::DEFAULT_HTTP_KEEP_ALIVE,
+        "generic HTTP fixtures must exercise the product's keep-alive default"
+    );
+}
+
+#[test]
+fn contract_live_session_status_accepts_only_ok() {
+    assert!(status_proves_session_is_alive(reqwest::StatusCode::OK));
+    for status in [
+        reqwest::StatusCode::BAD_REQUEST,
+        reqwest::StatusCode::NOT_FOUND,
+        reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+    ] {
+        assert!(
+            !status_proves_session_is_alive(status),
+            "{status} must not prove that the session is alive"
+        );
+    }
+}
 
 #[tokio::test]
 async fn the_session_cap_holds_while_a_slot_is_occupied() {
@@ -558,7 +603,7 @@ async fn an_idle_expired_session_returns_its_slot() {
 
     assert_eq!(
         status_for_session(server.addr, &first).await,
-        404,
+        reqwest::StatusCode::NOT_FOUND,
         "an expired session must be gone, and say so"
     );
     let second = try_raw_initialize(server.addr).await;
@@ -586,11 +631,10 @@ async fn a_session_under_a_long_keep_alive_survives_the_same_wait() {
         .expect("the first session must be created");
     tokio::time::sleep(PAST_EXPIRY).await;
 
-    assert_ne!(
-        status_for_session(server.addr, &first).await,
-        404,
-        "a session whose keep-alive has NOT elapsed must still be there; if this \
-         404s, the expiry test above proves nothing about expiry"
+    let status = status_for_session(server.addr, &first).await;
+    assert!(
+        status_proves_session_is_alive(status),
+        "a session whose keep-alive has NOT elapsed must answer 200 OK, got {status}"
     );
 
     shutdown(server).await;
