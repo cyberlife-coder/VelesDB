@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Shared helpers for the VelesDB agent-hooks scripts.
-# Sourced by session-start.sh, stop.sh, pre-compact.sh — not meant to be run directly.
+# Sourced by all five event hooks — not meant to be run directly.
 
 # require_jq: fail loudly (not silently) if jq is missing, since every hook
 # builds its JSON output through jq to get escaping right.
@@ -128,8 +128,8 @@ run_with_watchdog() {
   wait "$pid"
 }
 
-# sentinel_path KIND SESSION_ID: path to the once-per-session marker file
-# used by the Stop and PreCompact hooks to fire their reminder exactly once.
+# sentinel_path KIND SESSION_ID: path to a once-per-session marker file used
+# by Stop, PreCompact, and the successful-recall edit gate.
 # Uses $TMPDIR (falling back to /tmp) rather than a hardcoded path so it
 # works unmodified on macOS and Linux, and namespaces under
 # velesdb-agent-hooks/ to avoid colliding with unrelated temp files.

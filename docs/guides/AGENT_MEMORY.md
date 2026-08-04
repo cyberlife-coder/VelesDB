@@ -1050,20 +1050,22 @@ Each recall returns `SearchResult[]` = `{ id, score, payload?, vector? }`:
 
 Wiring an MCP server gives an agent the *tools*; it does not make the agent
 call them. [`integrations/agent-hooks/`](../../integrations/agent-hooks/README.md)
-closes that gap with four real Claude Code hooks:
+ships five real Claude Code hooks:
 
 | Hook | What it does | Mechanism |
 |---|---|---|
 | `SessionStart` | tells the model to call `load_working_context` as its first action | `hookSpecificOutput.additionalContext` — advisory |
 | `Stop` | blocks the **first** stop per session with a reason: call `save_working_context` before stopping | `{"decision":"block","reason":…}` — advisory |
 | `PreCompact` | blocks the **first** compaction per session with a reason: `compile_transcript` + `save_working_context` first | `decision` + `reason` — advisory |
+| `PreToolUse` | refuses `Edit`/`Write` in an opted-in repository until a successful recall has been observed | exit 2 with an actionable reason — binding for the covered edit path |
 | `PostToolUse` | compiles an oversized tool result and **replaces** it | `hookSpecificOutput.updatedToolOutput` |
 
 ### `PostToolUse` — the only hook that replaces content
 
-The first three can only *nudge*: they hand the model a reason string and hope
-it calls the right tool, so whether the context actually shrinks stays the
-model's decision. `PostToolUse` is different — its output schema carries
+The three advisory hooks ask the model to call a tool; whether the context
+actually shrinks stays the model's decision. `PreToolUse` enforces
+recall-before-edit but does not compile content. `PostToolUse` is different —
+its output schema carries
 replacement content, so an oversized tool result is compiled **once**, before
 it ever enters the transcript, and the bulky original is therefore never
 re-sent on any later turn. In one measured run a 10,331-byte tool result was

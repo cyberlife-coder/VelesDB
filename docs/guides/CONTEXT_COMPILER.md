@@ -702,11 +702,11 @@ otherwise it exits with an explicit message.
 ## The `PostToolUse` hook
 
 [`integrations/agent-hooks/`](../../integrations/agent-hooks/README.md) ships
-four Claude Code hooks. Three of them (`SessionStart`, `Stop`, `PreCompact`)
-can only *nudge*: they hand the model a reason string and hope it calls the
-right tool, so whether the context actually shrinks stays the model's
-decision. See [Agent Memory → harness hooks](AGENT_MEMORY.md#agent-harness-hooks-mcp-server-path)
-for the full table.
+five Claude Code hooks. Three (`SessionStart`, `Stop`, `PreCompact`) are
+advisory continuations: they ask the model to call the corresponding memory or
+compiler tool. `PreToolUse` is binding for opted-in repositories, but only for
+recall-before-edit; it does not shrink context. See [Agent Memory → harness
+hooks](AGENT_MEMORY.md#agent-harness-hooks-mcp-server-path) for the full table.
 
 `PostToolUse` is different. Its output schema carries replacement content
 (`hookSpecificOutput.updatedToolOutput`), so an oversized tool result is
@@ -751,9 +751,10 @@ Tuning knobs:
 
 > **`updatedToolOutput` is Claude-Code-specific.** No other agent harness is
 > known to expose an equivalent field — Windsurf's post-hooks cannot alter a
-> result at all, and Codex, which does have lifecycle hooks, documents no
-> replacement field (A VERIFIER). So this hook is a Claude Code *bonus*, not
-> the portable core of velesdb-memory; the portable value stays the MCP tool
+> result at all, and Codex, whose current hook contract was checked and
+> measured on 2026-08-04, exposes no replacement field. So this hook is a
+> Claude Code *bonus*, not the portable core of velesdb-memory; the portable
+> value stays the MCP tool
 > surface itself, and `compile-stdin` stays usable from any script. What each
 > harness has today is tabulated in
 > [`integrations/agent-hooks/README.md`](../../integrations/agent-hooks/README.md#parity-across-harnesses).

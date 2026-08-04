@@ -55,7 +55,7 @@ No Rust toolchain? `npm i @wiscale/velesdb-memory-node`, or grab a prebuilt `.mc
 <details>
 <summary><strong>Other paths — always-on hooks, shared daemon, Rust, Docker, WASM, REST</strong></summary>
 
-**Memory used *continuously*, not just available:** [`integrations/agent-hooks/`](integrations/agent-hooks/README.md) wires four Claude Code hooks — `SessionStart`/`Stop`/`PreCompact` resume and save the working context automatically, and `PostToolUse` compiles an oversized tool result *before* it enters the transcript. One global install covers every project.
+**Memory used *continuously*, not just available:** [`integrations/agent-hooks/`](integrations/agent-hooks/README.md) wires five Claude Code hooks — `SessionStart`/`Stop`/`PreCompact` resume and save the working context, `PreToolUse` requires successful recall before an opted-in repository edit, and `PostToolUse` both records that recall and compiles an oversized tool result *before* it enters the transcript. One global install covers every project without enabling the edit guard outside explicitly configured repositories.
 
 **One memory shared by several clients** (Claude Code, Codex CLI, Claude Desktop, Windsurf, Devin CLI): [`scripts/install-memory-daemon.sh`](crates/velesdb-memory/README.md#http-transport-multi-client) runs `velesdb-memory` as a single local daemon — HTTPS by default, with a natively generated local CA.
 

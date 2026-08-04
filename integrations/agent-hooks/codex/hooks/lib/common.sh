@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
 # Shared helpers for the VelesDB Codex CLI hooks.
-# Sourced by session-start.sh and stop.sh — not meant to be run directly.
+# Sourced by all four event hooks — not meant to be run directly.
 #
-# Kept byte-for-byte compatible with ../../claude-code/hooks/lib/common.sh and
-# ../../windsurf/hooks/lib/common.sh on purpose: the Codex payload documents the
-# same `session_id` and `cwd` field names as Claude Code, so the sentinel and
-# config-resolution logic is genuinely identical rather than accidentally
-# similar. Each harness keeps its own copy so a directory can be installed
-# standalone (the install instructions copy one directory, not the tree).
+# The config, recall-success and sentinel helpers intentionally follow the
+# Claude Code integration: Codex documents the same `session_id` and `cwd`
+# field names. Each harness keeps its own copy so its directory can be
+# installed standalone.
 
 # require_jq: fail loudly (not silently) if jq is missing, since every hook
 # builds its JSON output through jq to get escaping right.
@@ -101,8 +99,8 @@ read_stdin_payload() {
   cat
 }
 
-# sentinel_path KIND SESSION_ID: path to the once-per-session marker file
-# used by the Stop hook to fire its reminder exactly once.
+# sentinel_path KIND SESSION_ID: path to a once-per-session marker file used
+# by Stop and the successful-recall edit gate.
 # Uses $TMPDIR (falling back to /tmp) rather than a hardcoded path so it
 # works unmodified on macOS and Linux, and namespaces under
 # velesdb-agent-hooks/ to avoid colliding with unrelated temp files.

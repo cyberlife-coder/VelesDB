@@ -4,9 +4,9 @@
 ## The defect this closes (#1712)
 
 `scripts/tests/test_skill_copies_are_identical.py` holds the repo's two copies
-of a SKILL.md against each other. It cannot see a THIRD copy — the one an agent
-actually loads, installed under `~/.claude/skills` — because that copy lives
-outside the repository, on one machine.
+of a SKILL.md against each other. It cannot see the copies agents actually
+load, installed under `~/.claude/skills` and `~/.codex/skills`, because those
+live outside the repository, on one machine.
 
 So it drifted, silently and consequentially. Measured on 2026-08-02: the
 installed `velesdb-memory` skill was 67 lines behind, and among them it stated
@@ -57,10 +57,11 @@ list this tool already owns, and the two byte-identity guards stay red until it
 has been run.
 
 Usage:
-    python3 scripts/sync-skills.py --check            # drift fails; absent is reported
-    python3 scripts/sync-skills.py --check --strict   # absent fails too
-    python3 scripts/sync-skills.py --install          # repo -> ~/.claude/skills
-    python3 scripts/sync-skills.py --bundle           # repo -> the npm-bundled copies
+    python3 scripts/sync-skills.py --check                    # Claude; drift fails
+    python3 scripts/sync-skills.py --check --strict           # Claude; absent fails too
+    python3 scripts/sync-skills.py --install --client codex   # repo -> ~/.codex/skills
+    python3 scripts/sync-skills.py --install --client all     # both supported clients
+    python3 scripts/sync-skills.py --bundle                   # repo -> npm copies
 """
 
 from __future__ import annotations
@@ -74,7 +75,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 
-#: `(source directory in the repo, installed name under ~/.claude/skills)`.
+#: `(source directory in the repo, installed name under the client's skills root)`.
 #:
 #: Deliberately an explicit pair list, not a scan: seven other skills live in
 #: that directory and come from elsewhere. Touching one of them — or merely

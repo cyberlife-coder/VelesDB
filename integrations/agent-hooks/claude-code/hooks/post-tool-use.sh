@@ -2,7 +2,7 @@
 # PostToolUse hook: shrink an oversized tool result BEFORE it enters the
 # agent's context, using the deterministic VelesDB context compiler.
 #
-# Why this hook is different from the other three. SessionStart, Stop and
+# Why this hook is different from the three advisory hooks. SessionStart, Stop and
 # PreCompact can only *nudge the model* — they hand it a reason string and
 # hope it calls the right tool. PostToolUse is the one event whose output
 # schema can REPLACE what the model sees

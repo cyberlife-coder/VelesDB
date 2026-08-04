@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Keep the supported agent hooks installed under the user's home in step with this repo.
+"""Keep supported agent hooks installed under the user's home in step with this repo.
 
 ## The defect this closes
 
-The hooks a session actually runs live in `~/.claude/hooks/velesdb-memory/`,
-outside any repository — the same blind spot as the installed skills of #1712,
-and it drifted the same way. Measured on 2026-08-02, in BOTH directions at once:
+The hooks a session actually runs live under `~/.claude/hooks/` or
+`~/.codex/hooks/`, outside any repository — the same blind spot as the
+installed skills of #1712. The Claude install had drifted in BOTH directions
+at once when measured on 2026-08-02:
 
 * the repository was ahead on the text — `session-start.sh` carried the
   corrected `{found, working, other_sessions}` guidance while the installed
@@ -19,11 +20,12 @@ A mirror-the-repo installer would have deleted working code. So the source
 absorbed the local layer first, and this tool exists only because the two
 sides now describe the same thing.
 
-## Two artefacts, not one
+## Two artefacts per client, not one
 
-A hook is *scripts on disk* AND *an entry in `~/.claude/settings.json`*. Either
-alone does nothing: a script nobody registers never runs, an entry pointing at
-a missing script fails every session. Both are reported, per hook.
+A hook is *scripts on disk* AND an entry in the client's registry
+(`~/.claude/settings.json` or `~/.codex/hooks.json`). Either alone does
+nothing: a script nobody registers never runs, an entry pointing at a missing
+script fails every session. Both are reported, per hook and per client.
 
 ## The settings file belongs to its owner
 
@@ -41,11 +43,12 @@ The document is never printed. A hook command carries paths and project names,
 and a report that echoed it is how one ends up in a log.
 
 Usage:
-    python3 scripts/sync-agent-hooks.py --check              # drift fails; absent reported
-    python3 scripts/sync-agent-hooks.py --check --strict     # absent fails too
-    python3 scripts/sync-agent-hooks.py --install            # repo -> ~/.claude
-    python3 scripts/sync-agent-hooks.py --install --dry-run  # say it, write nothing
-    python3 scripts/sync-agent-hooks.py --uninstall          # remove ours, only ours
+    python3 scripts/sync-agent-hooks.py --check                    # Claude; drift fails
+    python3 scripts/sync-agent-hooks.py --check --strict           # Claude; absent fails too
+    python3 scripts/sync-agent-hooks.py --install --client codex   # repo -> ~/.codex
+    python3 scripts/sync-agent-hooks.py --install --client all     # both supported clients
+    python3 scripts/sync-agent-hooks.py --install --dry-run        # say it, write nothing
+    python3 scripts/sync-agent-hooks.py --uninstall --client codex # remove ours, only ours
 """
 
 from __future__ import annotations
@@ -237,8 +240,8 @@ def strip_entries(document: dict, client: str = "claude") -> dict:
 def write_settings(document: dict, client: str = "claude") -> None:
     """Back up, then replace atomically.
 
-    `indent=2` with a trailing newline is what the file already uses, so
-    everything this tool does not touch is rewritten byte for byte.
+    The document is serialized consistently with two-space indentation and a
+    trailing newline. Semantic content outside this tool's entries is kept.
     """
     path = settings_path(client)
     path.parent.mkdir(parents=True, exist_ok=True)
