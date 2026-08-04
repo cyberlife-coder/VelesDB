@@ -20,6 +20,7 @@
 //! `remember`+`recall` mix) must all complete with no panic and no deadlock.
 
 use std::net::SocketAddr;
+use std::time::Duration;
 
 use rmcp::model::{CallToolRequestParams, ClientInfo};
 use rmcp::service::RunningService;
@@ -601,8 +602,14 @@ async fn an_idle_expired_session_returns_its_slot() {
     // Let it die of pure inactivity — no DELETE, no close, just silence.
     tokio::time::sleep(PAST_EXPIRY).await;
 
+    let expired_status = tokio::time::timeout(
+        Duration::from_secs(1),
+        status_for_session(server.addr, &first),
+    )
+    .await
+    .expect("an expired-session POST must be rejected within one second");
     assert_eq!(
-        status_for_session(server.addr, &first).await,
+        expired_status,
         reqwest::StatusCode::NOT_FOUND,
         "an expired session must be gone, and say so"
     );
