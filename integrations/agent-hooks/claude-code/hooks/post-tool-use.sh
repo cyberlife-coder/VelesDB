@@ -117,7 +117,10 @@ if [ ! -f "$probe_marker" ]; then
   probe_out="$(sentinel_path "compile-stdin-probe-out-${probe_key}" "$session_id")"
   if printf 'probe corpus for the capability check\n' \
     | run_with_watchdog "${VELESDB_HOOK_PROBE_TIMEOUT:-10}" "$probe_out" "$bin" compile-stdin --budget 4096 \
-    && jq -e 'has("content")' "$probe_out" >/dev/null 2>&1; then
+    && jq -e '
+      has("content")
+      and (.risk == "low" or .risk == "medium" or .risk == "high")
+    ' "$probe_out" >/dev/null 2>&1; then
     echo "yes" > "$probe_marker"
   else
     echo "no" > "$probe_marker"
@@ -134,6 +137,7 @@ printf '%s' "$text" > "$archive"
 
 budget="${VELESDB_HOOK_TOKEN_BUDGET:-2000}"
 budget_max="${VELESDB_HOOK_TOKEN_BUDGET_MAX:-$((budget * 2))}"
+final_budget="$budget"
 compiled_file="$(sentinel_path "compile-stdin-result" "${session_id}-${tool_use_id}")"
 
 # One compilation attempt at $1 tokens, into $compiled_file.
@@ -169,8 +173,28 @@ if [ "$risk" = "high" ] && [ "$budget_max" -gt "$budget" ]; then
     rm -f "$compiled_file"
     passthrough
   fi
+  final_budget="$budget_max"
   risk="$(field '.risk')"
 fi
+
+# Fail closed on the wire contract. Only the two explicitly shippable verdicts
+# may replace a tool result. A missing field, a renamed enum value, or a value
+# of the wrong JSON type is not evidence that fidelity is acceptable.
+case "$risk" in
+  low|medium) ;;
+  high)
+    rm -f "$compiled_file"
+    printf 'velesdb: declined to compile a %s-byte %s result — risk=high even at budget %s; the original is untouched\n' \
+      "$original_bytes" "$tool_name" "$final_budget" >&2
+    passthrough
+    ;;
+  *)
+    rm -f "$compiled_file"
+    printf 'velesdb: declined to compile a %s-byte %s result — missing or unsupported fidelity risk; the original is untouched\n' \
+      "$original_bytes" "$tool_name" >&2
+    passthrough
+    ;;
+esac
 
 content="$(field '.content')"
 tokens_in="$(jq -r '.tokens_in // 0' "$compiled_file" 2>/dev/null || echo 0)"
@@ -178,22 +202,12 @@ tokens_out="$(jq -r '.tokens_out // 0' "$compiled_file" 2>/dev/null || echo 0)"
 tokens_saved="$(jq -r '.tokens_saved // 0' "$compiled_file" 2>/dev/null || echo 0)"
 rm -f "$compiled_file"
 
-if [ "$risk" = "high" ]; then
-  # The tool result is left BYTE-IDENTICAL rather than annotated. Appending a
-  # sentence would mean re-encoding the whole original through `jq --arg` for
-  # no gain: the model already has the real thing, and the reason belongs to
-  # whoever is debugging the hook, not to the transcript.
-  printf 'velesdb: declined to compile a %s-byte %s result — risk=high even at budget %s; the original is untouched\n' \
-    "$original_bytes" "$tool_name" "$budget_max" >&2
-  passthrough
-fi
-
 # An empty compilation would replace a real result with nothing. compile-stdin
 # already refuses to emit one, but the hook does not take that on trust.
 [ -n "$content" ] || passthrough
 
 footer="$(printf '\n\n--- velesdb: compiled %s tokens down to %s (saved %s, fidelity risk %s). Nothing was deleted — the untouched %s-byte original is at %s; Read it if this view is not enough. ---' \
-  "$tokens_in" "$tokens_out" "$tokens_saved" "${risk:-unknown}" "$original_bytes" "$archive")"
+  "$tokens_in" "$tokens_out" "$tokens_saved" "$risk" "$original_bytes" "$archive")"
 
 jq -n --arg out "${content}${footer}" \
   '{hookSpecificOutput: {hookEventName: "PostToolUse", updatedToolOutput: $out}}'

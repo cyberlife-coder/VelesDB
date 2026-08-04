@@ -472,6 +472,18 @@ class HarnessIsWired(unittest.TestCase):
         for disarm in ("continue-on-error:", "|| true"):
             self.assertNotIn(disarm, directives, f"the job is disarmed by {disarm}")
 
+    def test_real_binary_contract_uses_the_current_checkout_in_ci(self) -> None:
+        body = CI.read_text(encoding="utf-8")
+        job_start = body.index("\n  test:")
+        following = body.find("\n  security:", job_start)
+        job_body = body[job_start : following if following > 0 else len(body)]
+        self.assertIn("cargo build -p velesdb-memory", job_body)
+        self.assertIn(
+            "VELESDB_MEMORY_BIN_REAL: ${{ github.workspace }}/target/debug/velesdb-memory",
+            job_body,
+        )
+        self.assertIn("integrations/agent-hooks/test/hooks.test.sh", job_body)
+
     def test_the_harness_is_executable_and_can_fail(self) -> None:
         self.assertTrue(HARNESS.is_file())
         body = HARNESS.read_text(encoding="utf-8")
@@ -500,6 +512,32 @@ class HarnessIsWired(unittest.TestCase):
             ["bash", str(HARNESS)], capture_output=True, text=True, check=False
         )
         self.assertEqual(result.returncode, 0, result.stdout[-3000:] + result.stderr[-2000:])
+
+    def test_real_binary_contract_cannot_skip_a_missing_risk(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = Path(tmp) / "velesdb-memory-without-risk"
+            fake.write_text(
+                "#!/usr/bin/env bash\n"
+                "cat >/dev/null\n"
+                "printf '{\"content\":\"summary\",\"tokens_in\":4,"
+                "\"tokens_out\":1,\"tokens_saved\":3}\\n'\n",
+                encoding="utf-8",
+            )
+            fake.chmod(0o755)
+            env = os.environ.copy()
+            env["VELESDB_MEMORY_BIN_REAL"] = str(fake)
+            result = subprocess.run(
+                ["bash", str(HARNESS)],
+                capture_output=True,
+                text=True,
+                check=False,
+                env=env,
+            )
+            self.assertEqual(result.returncode, 1, result.stdout[-3000:] + result.stderr[-2000:])
+            self.assertIn(
+                "not ok - PostToolUse/real: the checkout binary exposes an explicit fidelity risk",
+                result.stdout,
+            )
 
 
 if __name__ == "__main__":

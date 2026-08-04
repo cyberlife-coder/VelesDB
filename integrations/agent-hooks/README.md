@@ -346,6 +346,10 @@ the ceiling does not rescue it — a 584 KB thread-stack sample stays `high` at
 2 000, 4 000, 8 000 and 16 000 — the tool result is left byte-identical and the
 reason goes to stderr.
 
+The wire check is fail-closed too: only explicit `risk: low` and
+`risk: medium` results may replace a tool result. A missing field, an unknown
+enum value, or a value of the wrong JSON type leaves the original untouched.
+
 Archiving the original is not a substitute for this. On the `compile-stdin`
 path the compiler runs with no store and no bridge, so the `ctx://source/…`
 handles it mints resolve to **nothing**; the temp file is the only way back,

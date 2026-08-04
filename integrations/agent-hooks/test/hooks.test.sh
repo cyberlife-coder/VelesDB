@@ -397,8 +397,42 @@ else
 fi
 FAKE
 
+# Proves both halves of the fail-closed wire contract. The capability probe
+# gets a valid low-risk response, so these binaries cannot pass merely because
+# the hook disabled them before the real compilation. The queried invocation
+# then returns content whose risk is absent, unknown, or the wrong JSON type.
+cat > "$FAKE_BIN_DIR/fake-risk-contract" <<'FAKE'
+#!/usr/bin/env bash
+cat >/dev/null
+case " $* " in
+  *" --query "*)
+    case "${FAKE_FINAL_RISK_MODE:-missing}" in
+      missing)
+        printf '{"content":"UNVERIFIED SUMMARY","tokens_in":4000,"tokens_out":300,"tokens_saved":3700}\n'
+        ;;
+      unknown)
+        printf '{"content":"UNVERIFIED SUMMARY","tokens_in":4000,"tokens_out":300,"tokens_saved":3700,"risk":"critical"}\n'
+        ;;
+      malformed)
+        printf '{"content":"UNVERIFIED SUMMARY","tokens_in":4000,"tokens_out":300,"tokens_saved":3700,"risk":{"level":"medium"}}\n'
+        ;;
+    esac
+    ;;
+  *)
+    printf '{"content":"PROBE","tokens_in":4,"tokens_out":1,"tokens_saved":3,"risk":"low"}\n'
+    ;;
+esac
+FAKE
+
+cat > "$FAKE_BIN_DIR/fake-low" <<'FAKE'
+#!/usr/bin/env bash
+cat >/dev/null
+printf '{"content":"LOSSLESS SUMMARY","tokens_in":4000,"tokens_out":300,"tokens_saved":3700,"risk":"low"}\n'
+FAKE
+
 chmod +x "$FAKE_BIN_DIR/fake-ok" "$FAKE_BIN_DIR/fake-fail" "$FAKE_BIN_DIR/fake-old" \
-  "$FAKE_BIN_DIR/fake-high" "$FAKE_BIN_DIR/fake-escalate"
+  "$FAKE_BIN_DIR/fake-high" "$FAKE_BIN_DIR/fake-escalate" \
+  "$FAKE_BIN_DIR/fake-risk-contract" "$FAKE_BIN_DIR/fake-low"
 
 big_output="$(head -c 40000 < /dev/zero | tr '\0' 'x')"
 
@@ -443,6 +477,26 @@ if printf '%s' "$big_out" | jq -e '.hookSpecificOutput.updatedToolOutput | conta
 else
   fail "PostToolUse: updatedToolOutput carries the compiled content"
 fi
+
+low_out="$(post_tool_payload "Bash" "low" "$big_output" \
+  | VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-low" bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
+if printf '%s' "$low_out" | jq -e '.hookSpecificOutput.updatedToolOutput | contains("LOSSLESS SUMMARY")' >/dev/null; then
+  pass "PostToolUse: a risk=low compilation IS shipped (second positive control)"
+else
+  fail "PostToolUse: a risk=low compilation IS shipped (second positive control)"
+fi
+
+for bad_risk in missing unknown malformed; do
+  bad_risk_out="$(post_tool_payload "Bash" "risk-$bad_risk" "$big_output" \
+    | FAKE_FINAL_RISK_MODE="$bad_risk" \
+      VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-risk-contract" \
+      bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
+  if [ "$(printf '%s' "$bad_risk_out" | jq -c .)" = "{}" ]; then
+    pass "PostToolUse: risk=$bad_risk is refused instead of shipping unverifiable content"
+  else
+    fail "PostToolUse: risk=$bad_risk is refused instead of shipping unverifiable content"
+  fi
+done
 
 # --- Rule 5: fidelity ------------------------------------------------------
 # `risk: high` is not "the summary reads badly". It is the compiler reporting
@@ -514,40 +568,43 @@ fi
 # expects. A rename on either side would leave every test above green.
 #
 # Two corpora, both generated here so the harness stays hermetic, both measured
-# against the installed binary:
+# against the current-checkout binary supplied explicitly by CI:
 #   * URLs and hex checksums — content the classifier calls CRITICAL. Dropping
 #     any of it is `high`, and stays `high` well past the ceiling.
 #   * identical heartbeat lines — the repetitive case abstraction handles
 #     cleanly, and reports `medium`.
-real_bin="${VELESDB_MEMORY_BIN_REAL:-velesdb-memory}"
-if command -v "$real_bin" >/dev/null 2>&1 \
-  && printf 'probe\n' | "$real_bin" compile-stdin --budget 4096 2>/dev/null | jq -e 'has("risk")' >/dev/null 2>&1; then
-
-  critical_corpus="$(awk 'BEGIN { for (i = 0; i < 200; i++)
-    printf "2026-08-04T00:%02d:00Z ERROR shard=%d url=https://example.invalid/api/v1/resource/%d checksum=0x%08x elapsed=%dms\n", i % 60, i, i, i, i * 7 }')"
-  repetitive_corpus="$(awk 'BEGIN { for (i = 0; i < 400; i++)
-    print "INFO  worker heartbeat ok, queue depth nominal, nothing to report" }')"
-
-  real_high="$(post_tool_payload "Bash" "realhigh" "$critical_corpus" \
-    | VELESDB_MEMORY_BIN="$real_bin" bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
-  if [ "$(printf '%s' "$real_high" | jq -c .)" = "{}" ]; then
-    pass "PostToolUse/real: the real compiler's risk=high verdict is honoured"
+real_bin="${VELESDB_MEMORY_BIN_REAL:-}"
+if [ -n "$real_bin" ]; then
+  if [ ! -x "$real_bin" ]; then
+    fail "PostToolUse/real: VELESDB_MEMORY_BIN_REAL names an executable checkout binary"
+  elif ! printf 'probe\n' | "$real_bin" compile-stdin --budget 4096 2>/dev/null \
+    | jq -e '.risk == "low" or .risk == "medium" or .risk == "high"' >/dev/null 2>&1; then
+    fail "PostToolUse/real: the checkout binary exposes an explicit fidelity risk"
   else
-    fail "PostToolUse/real: the real compiler's risk=high verdict is honoured"
-  fi
 
-  real_ok="$(post_tool_payload "Bash" "realok" "$repetitive_corpus" \
-    | VELESDB_MEMORY_BIN="$real_bin" bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
-  if printf '%s' "$real_ok" | jq -e '.hookSpecificOutput.updatedToolOutput | contains("fidelity risk")' >/dev/null; then
-    pass "PostToolUse/real: a compressible corpus is still compressed by the real compiler"
-  else
-    fail "PostToolUse/real: a compressible corpus is still compressed by the real compiler"
+    critical_corpus="$(awk 'BEGIN { for (i = 0; i < 200; i++)
+      printf "2026-08-04T00:%02d:00Z ERROR shard=%d url=https://example.invalid/api/v1/resource/%d checksum=0x%08x elapsed=%dms\n", i % 60, i, i, i, i * 7 }')"
+    repetitive_corpus="$(awk 'BEGIN { for (i = 0; i < 400; i++)
+      print "INFO  worker heartbeat ok, queue depth nominal, nothing to report" }')"
+
+    real_high="$(post_tool_payload "Bash" "realhigh" "$critical_corpus" \
+      | VELESDB_MEMORY_BIN="$real_bin" bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
+    if [ "$(printf '%s' "$real_high" | jq -c .)" = "{}" ]; then
+      pass "PostToolUse/real: the real compiler's risk=high verdict is honoured"
+    else
+      fail "PostToolUse/real: the real compiler's risk=high verdict is honoured"
+    fi
+
+    real_ok="$(post_tool_payload "Bash" "realok" "$repetitive_corpus" \
+      | VELESDB_MEMORY_BIN="$real_bin" bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
+    if printf '%s' "$real_ok" | jq -e '.hookSpecificOutput.updatedToolOutput | contains("fidelity risk")' >/dev/null; then
+      pass "PostToolUse/real: a compressible corpus is still compressed by the real compiler"
+    else
+      fail "PostToolUse/real: a compressible corpus is still compressed by the real compiler"
+    fi
   fi
 else
-  # Loud on purpose. A silent skip reads exactly like a pass, and the whole
-  # point of this section is that the fakes cannot catch a contract change.
-  printf '# SKIP - real-binary checks: no compile-stdin-capable velesdb-memory on PATH\n'
-  printf '#        (set VELESDB_MEMORY_BIN_REAL to point at one)\n'
+  printf '# INFO - real-binary contract runs in CI against target/debug/velesdb-memory\n'
 fi
 
 # Rule 1 — nothing is deleted: the replacement must point at the untouched
@@ -638,7 +695,7 @@ fi
 cat > "$FAKE_BIN_DIR/fake-record" <<FAKE
 #!/usr/bin/env bash
 cat > "$TMP_TEST_DIR/received.txt"
-printf '{"content":"COMPILED","tokens_in":4000,"tokens_out":300,"tokens_saved":3700}\n'
+printf '{"content":"COMPILED","tokens_in":4000,"tokens_out":300,"tokens_saved":3700,"risk":"medium"}\n'
 FAKE
 chmod +x "$FAKE_BIN_DIR/fake-record"
 

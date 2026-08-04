@@ -746,7 +746,9 @@ Tuning knobs:
 > byte-identical. This matters more here than on the MCP path: `compile-stdin`
 > runs with no store and no bridge, so the `ctx://source/…` handles it mints
 > resolve to nothing, and the archived temp file is the only way back to what
-> was dropped.
+> was dropped. Only explicit `risk: low` and `risk: medium` results may replace
+> a tool result; a missing, unknown, or non-string verdict fails closed to the
+> untouched original.
 
 > **`updatedToolOutput` is Claude-Code-specific.** No other agent harness is
 > known to expose an equivalent field — Windsurf's post-hooks cannot alter a
