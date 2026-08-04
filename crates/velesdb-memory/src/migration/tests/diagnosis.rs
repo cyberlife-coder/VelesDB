@@ -243,6 +243,80 @@ fn a_store_without_provenance_reports_unknown() {
         },
         "a recorded model must come back verbatim"
     );
+    assert!(
+        matches!(
+            known.capabilities.get("source_provenance"),
+            Some(Capability::Proven { .. })
+        ),
+        "a provenance record whose width agrees with the source collections \
+         must be usable evidence, got {:?}",
+        known.capabilities.get("source_provenance")
+    );
+}
+
+#[test]
+fn known_provenance_that_disagrees_with_collection_width_is_a_blocker() {
+    let (dir, _ttl_meta) = seeded();
+    crate::embedding_provenance::write(
+        dir.path(),
+        &crate::embedding_provenance::EmbeddingProvenance::new("all-minilm", DIM + 1),
+    )
+    .expect("write incompatible provenance");
+
+    let report = diagnose(dir.path(), TARGET_MODEL, TARGET_DIM, None).expect("diagnose");
+    let Some(Capability::Missing { blocker }) = report.capabilities.get("source_provenance") else {
+        panic!(
+            "a record that claims a different width from the vectors must block, got {:?}",
+            report.capabilities.get("source_provenance")
+        );
+    };
+    assert!(
+        blocker.contains(&(DIM + 1).to_string()) && blocker.contains(&DIM.to_string()),
+        "the refusal must name both incompatible widths: {blocker}"
+    );
+    assert!(
+        report
+            .blockers
+            .iter()
+            .any(|entry| entry.starts_with("source_provenance:")),
+        "a missing capability must also appear in the report's blocker list"
+    );
+    assert!(!report.is_clear());
+}
+
+#[test]
+fn one_model_identity_cannot_claim_two_dimensions_across_source_and_target() {
+    let (dir, _ttl_meta) = seeded();
+    crate::embedding_provenance::write(
+        dir.path(),
+        &crate::embedding_provenance::EmbeddingProvenance::new("same-model", DIM),
+    )
+    .expect("write provenance");
+
+    let incompatible =
+        diagnose(dir.path(), "same-model", DIM + 1, None).expect("diagnose mismatch");
+    let Some(Capability::Missing { blocker }) = incompatible.capabilities.get("source_provenance")
+    else {
+        panic!(
+            "one model name at two widths must be rejected, got {:?}",
+            incompatible.capabilities.get("source_provenance")
+        );
+    };
+    assert!(
+        blocker.contains("same-model")
+            && blocker.contains(&DIM.to_string())
+            && blocker.contains(&(DIM + 1).to_string()),
+        "the mismatch must name the model and both dimensions: {blocker}"
+    );
+
+    let compatible = diagnose(dir.path(), "same-model", DIM, None).expect("diagnose match");
+    assert!(
+        matches!(
+            compatible.capabilities.get("source_provenance"),
+            Some(Capability::Proven { .. })
+        ),
+        "positive control: the same model at the same width must reconcile"
+    );
 }
 
 #[test]
@@ -322,6 +396,27 @@ fn a_diagnostic_does_not_change_the_directory_tree() {
 }
 
 #[test]
+fn a_relative_source_is_recorded_as_its_canonical_absolute_path() {
+    let working_directory = std::env::current_dir().expect("current directory");
+    let source = tempfile::tempdir_in(&working_directory).expect("source under current directory");
+    {
+        let store = NativeStore::open(source.path(), DIM).expect("open source");
+        store
+            .store(1, "canonical path proof", &EMBEDDING)
+            .expect("seed source");
+    }
+    let relative = source
+        .path()
+        .strip_prefix(&working_directory)
+        .expect("source is below current directory");
+
+    let report = diagnose(relative, TARGET_MODEL, TARGET_DIM, None).expect("diagnose relative");
+    let canonical = std::fs::canonicalize(source.path()).expect("canonical source");
+    assert!(report.source_path.is_absolute());
+    assert_eq!(report.source_path, canonical);
+}
+
+#[test]
 fn a_dry_run_creates_no_destination_or_state() {
     let (dir, _ttl_meta) = seeded();
     let parent = tempfile::tempdir().expect("tempdir");
@@ -342,9 +437,28 @@ fn a_dry_run_creates_no_destination_or_state() {
         0,
         "nothing at all may appear beside the destination either"
     );
+    #[cfg(unix)]
+    {
+        assert_eq!(
+            report.same_filesystem,
+            Some(true),
+            "both temp directories share a filesystem in this fixture"
+        );
+        assert!(
+            matches!(
+                report.capabilities.get("switch_same_filesystem"),
+                Some(Capability::Proven { .. })
+            ),
+            "a measured same-filesystem destination is the positive control for the rename gate"
+        );
+    }
+    #[cfg(not(unix))]
     assert!(
-        report.same_filesystem.is_some() || cfg!(not(unix)),
-        "on unix the device comparison must actually be answered, not skipped"
+        matches!(
+            report.capabilities.get("switch_same_filesystem"),
+            Some(Capability::Missing { .. })
+        ),
+        "unknown topology must block on platforms where it cannot be established"
     );
 
     // No migration state anywhere: not in the source, not beside the
@@ -447,4 +561,220 @@ fn the_embedding_cost_is_declared_unestablished_rather_than_guessed() {
         blocker.contains("Ollama") || blocker.contains("network"),
         "and it must say why a unit test cannot supply it: {blocker}"
     );
+}
+
+#[test]
+fn unknown_or_different_filesystems_are_explicit_switch_blockers() {
+    for topology in [None, Some(false)] {
+        let capability = super::super::diagnosis::switch_filesystem_capability(topology);
+        let Capability::Missing { blocker } = capability else {
+            panic!("topology {topology:?} must not authorize a rename switch");
+        };
+        assert!(
+            blocker.contains("rename"),
+            "the blocker must name the switch primitive whose contract failed: {blocker}"
+        );
+    }
+
+    let (dir, _ttl) = seeded();
+    let report = diagnose(dir.path(), TARGET_MODEL, TARGET_DIM, None).expect("diagnose");
+    assert_eq!(report.same_filesystem, None);
+    assert!(
+        report
+            .blockers
+            .iter()
+            .any(|entry| entry.starts_with("switch_same_filesystem:")),
+        "the missing destination must reach the serialized blocker list, got {:?}",
+        report.blockers
+    );
+}
+
+#[test]
+fn edge_counts_do_not_masquerade_as_a_lossless_edge_export() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    {
+        let store = NativeStore::open(dir.path(), DIM).expect("open store");
+        for id in 1..=2 {
+            store
+                .store_with_metadata(id, &format!("fact {id}"), &EMBEDDING, &meta(&[]))
+                .expect("seed fact");
+        }
+        store.relate(1, 2, "supports").expect("seed edge");
+    }
+
+    let report = diagnose(dir.path(), TARGET_MODEL, TARGET_DIM, None).expect("diagnose");
+    assert_eq!(
+        report.edges, 1,
+        "positive control: the diagnosis really observed the source relation"
+    );
+    assert!(
+        matches!(
+            report.capabilities.get("edge_counts"),
+            Some(Capability::Proven { .. })
+        ),
+        "counting should remain separately evidenced"
+    );
+    let Some(Capability::Missing { blocker }) = report.capabilities.get("edge_export") else {
+        panic!(
+            "a count-only report must not claim complete edge export, got {:?}",
+            report.capabilities.get("edge_export")
+        );
+    };
+    assert!(
+        blocker.contains("edge id") && blocker.contains("properties"),
+        "the blocker must name the fields a lossless export needs: {blocker}"
+    );
+    assert!(
+        report
+            .blockers
+            .iter()
+            .any(|entry| entry.starts_with("edge_export:")),
+        "the missing export must be a blocker, not a footnote"
+    );
+    assert!(!report.is_clear());
+}
+
+#[test]
+fn a_diagnosis_report_round_trips_through_its_versioned_parser() {
+    let (dir, _ttl) = seeded();
+    let report = diagnose(dir.path(), TARGET_MODEL, TARGET_DIM, None).expect("diagnose");
+    let json = serde_json::to_string_pretty(&report).expect("serialize report");
+
+    let parsed = DiagnosisReport::parse(&json).expect("parse current report");
+    assert_eq!(
+        parsed, report,
+        "every reported field must survive round-trip"
+    );
+
+    let directly_deserialized: DiagnosisReport =
+        serde_json::from_str(&json).expect("DiagnosisReport implements Deserialize");
+    assert_eq!(
+        directly_deserialized, report,
+        "the report type itself must be deserializable in addition to the guarded parser"
+    );
+}
+
+#[test]
+fn a_report_from_a_future_format_is_refused_before_its_shape_is_interpreted() {
+    let (dir, _ttl) = seeded();
+    let report = diagnose(dir.path(), TARGET_MODEL, TARGET_DIM, None).expect("diagnose");
+    let mut future = serde_json::to_value(report).expect("serialize report");
+    future["format_version"] = serde_json::json!(DIAGNOSIS_FORMAT_VERSION + 1);
+    future["a_field_from_the_future"] = serde_json::json!({ "shape": "unknown" });
+    let json = serde_json::to_string(&future).expect("serialize future report");
+
+    let refusal = DiagnosisReport::parse(&json).expect_err("future format must be refused");
+    assert!(
+        refusal.contains(&(DIAGNOSIS_FORMAT_VERSION + 1).to_string())
+            && refusal.contains("newer")
+            && refusal.contains("fresh diagnosis"),
+        "the refusal must identify version skew and the recovery action: {refusal}"
+    );
+    assert!(
+        !refusal.contains("a_field_from_the_future"),
+        "the parser must refuse on version before interpreting unknown future shape: {refusal}"
+    );
+
+    let direct = serde_json::from_str::<DiagnosisReport>(&json)
+        .expect_err("Deserialize itself must refuse a future report");
+    assert!(
+        direct.to_string().contains("newer")
+            && direct
+                .to_string()
+                .contains(&(DIAGNOSIS_FORMAT_VERSION + 1).to_string()),
+        "direct Deserialize must enforce the same version gate: {direct}"
+    );
+}
+
+fn direct_deserialization_refusal(report: &DiagnosisReport) -> String {
+    let json = serde_json::to_string(report).expect("serialize forged report");
+    serde_json::from_str::<DiagnosisReport>(&json)
+        .expect_err("forged report must be refused")
+        .to_string()
+}
+
+#[test]
+fn empty_capabilities_cannot_forge_a_vacuously_clear_report() {
+    let (dir, _ttl) = seeded();
+    let mut forged = diagnose(dir.path(), TARGET_MODEL, TARGET_DIM, None).expect("diagnose");
+    forged.capabilities.clear();
+    forged.blockers.clear();
+
+    assert!(
+        !forged.is_clear(),
+        "an object assembled in memory with two empty collections of gates must not be clear"
+    );
+    let refusal = direct_deserialization_refusal(&forged);
+    assert!(
+        refusal.contains("capabilities") && refusal.contains("expected exactly"),
+        "the refusal must identify the incomplete capability vocabulary: {refusal}"
+    );
+}
+
+#[test]
+fn a_removed_blocker_is_refused_even_when_the_capabilities_remain_missing() {
+    let (dir, _ttl) = seeded();
+    let mut forged = diagnose(dir.path(), TARGET_MODEL, TARGET_DIM, None).expect("diagnose");
+    assert!(
+        forged.blockers.len() > 1,
+        "positive control: the generated report has blockers to remove"
+    );
+    forged.blockers.remove(0);
+
+    assert!(!forged.is_clear());
+    let refusal = direct_deserialization_refusal(&forged);
+    assert!(
+        refusal.contains("blockers do not match"),
+        "blockers must be re-derived rather than trusted: {refusal}"
+    );
+}
+
+#[test]
+fn topology_and_provenance_capabilities_cannot_be_forged() {
+    let (dir, _ttl) = seeded();
+    let report = diagnose(dir.path(), TARGET_MODEL, TARGET_DIM, None).expect("diagnose");
+    assert_eq!(
+        report.same_filesystem, None,
+        "this report has no destination, so its canonical switch verdict is Missing"
+    );
+    assert!(matches!(
+        report.source_provenance,
+        SourceProvenance::Unknown { .. }
+    ));
+
+    for capability_name in ["switch_same_filesystem", "source_provenance"] {
+        let mut forged = report.clone();
+        forged.capabilities.insert(
+            capability_name.to_owned(),
+            Capability::Proven {
+                evidence: "operator asserted it".to_owned(),
+            },
+        );
+        let refusal = direct_deserialization_refusal(&forged);
+        assert!(
+            refusal.contains(capability_name) && refusal.contains("inconsistent"),
+            "{capability_name} must be recalculated from report fields: {refusal}"
+        );
+    }
+}
+
+#[test]
+fn permanent_v4_gates_cannot_be_promoted_by_editing_json() {
+    let (dir, _ttl) = seeded();
+    let report = diagnose(dir.path(), TARGET_MODEL, TARGET_DIM, None).expect("diagnose");
+
+    for capability_name in ["edge_export", "disk_headroom", "embedder_cost"] {
+        let mut forged = report.clone();
+        forged.capabilities.insert(
+            capability_name.to_owned(),
+            Capability::Proven {
+                evidence: "claimed outside the diagnosis".to_owned(),
+            },
+        );
+        let refusal = direct_deserialization_refusal(&forged);
+        assert!(
+            refusal.contains(capability_name) && refusal.contains("inconsistent"),
+            "the canonical v4 Missing verdict for {capability_name} must be immutable: {refusal}"
+        );
+    }
 }

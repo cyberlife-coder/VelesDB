@@ -24,7 +24,10 @@ fn diagnosis_works_while_the_original_lock_is_held_and_leaves_source_unchanged()
     )
     .expect("diagnosis must not contend on the live source lock");
 
-    assert_eq!(report.source_path, source.path());
+    assert_eq!(
+        report.source_path,
+        std::fs::canonicalize(source.path()).expect("canonical source")
+    );
     assert_eq!(report.facts, 1, "the verified copy must actually be read");
     assert!(
         matches!(

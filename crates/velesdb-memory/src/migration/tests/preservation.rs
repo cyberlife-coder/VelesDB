@@ -5,10 +5,12 @@ use super::*;
 //
 // Reading every fact out is half the question. The other half is whether it
 // goes back the SAME: same id, same content, same ordinary and RESERVED
-// metadata, the same absolute instant of expiry, the same edges between the
-// same endpoints. Every comparison below is against the SOURCE's own values —
-// never against a constant this file made up, which would only prove the file
-// agrees with itself.
+// metadata and the same absolute instant of expiry. Edges need the same proof,
+// but the current public export carries facts only: the edge test below keeps
+// that limitation visible instead of reconstructing relations from its own
+// fixture and calling the result preservation. Every successful comparison is
+// against the SOURCE's own values — never against a constant this file made
+// up, which would only prove the file agrees with itself.
 // ---------------------------------------------------------------------------
 
 /// The width the new embedder produces — deliberately NOT [`DIM`], because the
@@ -322,45 +324,49 @@ fn rebuild_source_facts(source: &std::path::Path) -> tempfile::TempDir {
     dest
 }
 
-fn rebuild_edges_and_check_endpoints(
-    destination: &std::path::Path,
-    expected: &[StoredEdge],
-) -> Vec<StoredEdge> {
-    let store = NativeStore::open(destination, NEW_DIM).expect("open destination store");
-    let mut rebuilt = Vec::new();
-    for &(from, to, label) in EDGE_TRIPLETS {
-        let edge_id = store.relate(from, to, label).expect("re-relate");
-        rebuilt.push((edge_id, from, to, label.to_owned()));
-    }
-    for (edge_id, from, to, label) in expected {
-        let found = store
-            .relations(*from)
-            .expect("relations")
-            .into_iter()
-            .find(|edge| edge.id == *edge_id)
-            .unwrap_or_else(|| {
-                panic!("edge {edge_id} ({from}->{to} :{label}) is missing from the destination")
-            });
-        assert_eq!(
-            (found.from, found.to, found.relation.as_str()),
-            (*from, *to, label.as_str()),
-            "the edge came back under the right id but the wrong endpoints or label"
-        );
-    }
-    rebuilt
-}
-
 #[test]
-fn edge_ids_and_endpoints_survive_the_round_trip() {
-    // Both directions and two labels prove ids are derived from the complete,
-    // ordered triplet rather than only from the endpoints.
+fn fact_export_cannot_preserve_edges_without_a_complete_edge_export() {
+    // The source deliberately has both directions and two labels. The old
+    // version of this test then re-created those edges from EDGE_TRIPLETS and
+    // compared them with EDGE_TRIPLETS: that proved deterministic edge ids,
+    // not that the public source export carried a single relation.
     let (source, expected) = source_with_edges();
-    let dest = rebuild_source_facts(source.path());
-    let rebuilt = rebuild_edges_and_check_endpoints(dest.path(), &expected);
+    let source_store = NativeStore::open(source.path(), DIM).expect("reopen source");
+    let source_edges: Vec<_> = (1..=3_u64)
+        .flat_map(|id| source_store.relations(id).expect("source relations"))
+        .collect();
     assert_eq!(
-        rebuilt, expected,
-        "re-relating the same triplet must yield the SAME edge id; a different \
-         one severs every reference the store holds to that edge"
+        source_edges.len(),
+        expected.len(),
+        "positive control: every seeded source edge is observable before export"
+    );
+    assert_eq!(
+        source_edges
+            .iter()
+            .map(|edge| edge.id)
+            .collect::<BTreeSet<_>>(),
+        expected
+            .iter()
+            .map(|(edge_id, ..)| *edge_id)
+            .collect::<BTreeSet<_>>(),
+        "the source observation must refer to the actual seeded edges"
+    );
+    drop(source_store);
+
+    let dest = rebuild_source_facts(source.path());
+    let destination_store = NativeStore::open(dest.path(), NEW_DIM).expect("open destination");
+    let destination_edges: Vec<_> = (1..=3_u64)
+        .flat_map(|id| {
+            destination_store
+                .relations(id)
+                .expect("destination relations")
+        })
+        .collect();
+    assert_eq!(
+        destination_edges.len(),
+        0,
+        "the current fact-only export contains no complete edge tuples, so a rebuild cannot \
+         honestly claim relation preservation; this remains a blocking missing capability"
     );
 }
 
