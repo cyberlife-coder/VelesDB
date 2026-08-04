@@ -50,6 +50,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Shared-daemon MCP wiring now separates native clients from bridges.**
+  Codex 0.113+ is configured directly with `codex mcp add velesdb-memory
+  --url …`, so its native Streamable HTTP client can re-initialize after an
+  idle-session `404`; older or unrecognized versions are skipped without
+  mutating their configuration, and the installer no longer removes an entry
+  before attempting the add. Claude Desktop still requires a stdio bridge:
+  both installers now ignore unversioned global copies and write the
+  version-pinned `npx -y mcp-remote@0.1.38 <url> --transport http-only`
+  command. They require Node.js 20.18.1 or newer for the bridge's current
+  dependency tree, preserve strict trust through `NODE_EXTRA_CA_CERTS`, and
+  refuse the unsafe `NODE_TLS_REJECT_UNAUTHORIZED=0` escape hatch. The Desktop
+  bridge's remaining limitation is explicit: it can still hang after its MCP
+  session expires and must be restarted; `http-only` prevents transport
+  fallback but does not fix that lifecycle bug. The daemon-side expiry
+  regression now separately bounds the rejected POST to one second, proving a
+  client timeout is not tool latency.
+
 - **Cross-session resumption belongs to the `velesdb-memory` skill.**
   `list_working_contexts`, `load_working_context` and `save_working_context`
   were documented in `velesdb-context-optimizer` — the *compression* skill —

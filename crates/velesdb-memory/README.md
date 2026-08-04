@@ -254,8 +254,8 @@ in [`BENCHMARK.md`](BENCHMARK.md).
 |---|---|---|
 | Any MCP client | Supported | stdio by default; streamable-HTTP with `--features http`. |
 | Claude Code | Supported | `claude mcp add`, stdio or `--transport http`. Also the only harness with the `PostToolUse` replacing hook. |
-| Claude Desktop | Supported, with a caveat | Its config file accepts stdio only; for the shared daemon the installers wire an `mcp-remote` stdio→HTTPS bridge, which needs Node.js. |
-| Codex CLI | Supported | `codex mcp add`, or a `[mcp_servers.*]` table. Two lifecycle hooks ship: `SessionStart` (resume the rolling working context, and compile what a compaction is about to lose) and `Stop` (save it before finishing). `PreCompact`/`PostCompact` are not wired — they have no documented output channel that reaches the model. |
+| Claude Desktop | Supported, with a caveat | Its config file accepts stdio only; for the shared daemon the installers wire a pinned `mcp-remote` stdio→HTTPS bridge, whose current dependency tree needs Node.js 20.18.1 or newer. That bridge does not yet recover transparently from an idle-expired session; restart Desktop after such a timeout. |
+| Codex CLI | Supported | `codex mcp add`, or a `[mcp_servers.*]` table. The shared-daemon installers require Codex 0.113+ and use its native Streamable HTTP transport so an expired-session `404` is re-initialized instead of hanging behind a bridge. Two lifecycle hooks ship: `SessionStart` (resume the rolling working context, and compile what a compaction is about to lose) and `Stop` (save it before finishing). `PreCompact`/`PostCompact` are not wired — they have no documented output channel that reaches the model. |
 | Windsurf | Supported | stdio (`mcp_config.json`) or `serverUrl` against the daemon. One advisory `pre_user_prompt` hook is wired; it is shown to the user, not injected into the model context. |
 
 Other verified clients: Cursor, Cline, Zed, opencode, Devin CLI.
