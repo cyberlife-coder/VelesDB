@@ -242,13 +242,13 @@ class HostInstallParity(unittest.TestCase):
                 self.assertEqual(installed.read_bytes(), path.read_bytes(), str(installed))
 
     def test_install_copies_every_skill_to_claude_and_codex_byte_for_byte(self) -> None:
-        result = self.sync("--install")
+        result = self.sync("--install", "--client", "all")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_host_matches_sources(self.claude)
         self.assert_host_matches_sources(self.codex)
 
     def test_check_observes_codex_drift(self) -> None:
-        self.assertEqual(self.sync("--install").returncode, 0)
+        self.assertEqual(self.sync("--install", "--client", "all").returncode, 0)
         target = self.codex / "velesdb-learning-loop" / "SKILL.md"
         self.assertTrue(target.is_file(), "the Codex skill copy was never installed")
         target.write_text(
@@ -256,19 +256,19 @@ class HostInstallParity(unittest.TestCase):
             encoding="utf-8",
         )
 
-        result = self.sync("--check", "--strict")
+        result = self.sync("--check", "--strict", "--client", "codex")
 
         self.assertEqual(result.returncode, 1, "Codex skill drift is invisible to --check")
         self.assertIn("velesdb-learning-loop", result.stderr)
         self.assertIn(str(self.codex), result.stderr)
 
     def test_codex_local_layer_survives_a_resync(self) -> None:
-        self.assertEqual(self.sync("--install").returncode, 0)
+        self.assertEqual(self.sync("--install", "--client", "all").returncode, 0)
         local = self.codex / "velesdb-learning-loop" / "LOCAL.md"
         self.assertTrue(local.parent.is_dir(), "the Codex skill copy was never installed")
         local.write_text("# Codex-local guidance\n", encoding="utf-8")
 
-        self.assertEqual(self.sync("--install").returncode, 0)
+        self.assertEqual(self.sync("--install", "--client", "all").returncode, 0)
 
         self.assertEqual(local.read_text(encoding="utf-8"), "# Codex-local guidance\n")
 

@@ -502,7 +502,10 @@ class BindingLoopInstallerContract(unittest.TestCase):
             )
 
     def test_install_wires_both_hosts_and_preserves_codex_foreign_hooks(self) -> None:
-        result = run("--install", home=self.home)
+        # Cross-client mutation is explicit: the backward-compatible default
+        # remains Claude-only so an existing install command never starts
+        # editing a second client's registry by surprise.
+        result = run("--install", "--client", "all", home=self.home)
         self.assertEqual(result.returncode, 0, result.stderr)
 
         codex_document = json.loads(self.codex_settings.read_text(encoding="utf-8"))
@@ -543,12 +546,15 @@ class BindingLoopInstallerContract(unittest.TestCase):
             )
 
     def test_strict_check_observes_codex_drift(self) -> None:
-        self.assertEqual(run("--install", home=self.home).returncode, 0)
+        self.assertEqual(
+            run("--install", "--client", "codex", home=self.home).returncode,
+            0,
+        )
         target = self.codex / "hooks" / "velesdb-memory" / "post-tool-use.sh"
         self.assertTrue(target.is_file(), "the installer left no Codex hook for --check")
         target.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
 
-        result = run("--check", "--strict", home=self.home)
+        result = run("--check", "--strict", "--client", "codex", home=self.home)
 
         self.assertEqual(result.returncode, 1, "Codex drift is invisible to --check")
         self.assertIn("post-tool-use.sh", result.stdout + result.stderr)
