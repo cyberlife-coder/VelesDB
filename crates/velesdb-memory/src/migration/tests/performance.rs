@@ -429,6 +429,118 @@ fn paging_cost_grows_faster_than_the_store() {
     );
 }
 
+/// The cursor's per-fact cost across the SAME sizes, measured beside the walk
+/// above rather than assumed from it.
+///
+/// `paging_cost_grows_faster_than_the_store` measures the `OFFSET` side and
+/// concludes it is quadratic. The cursor side — the walk the rebuild is meant to
+/// use — had no multi-size measurement anywhere: the only cursor timing in this
+/// file is a single size inside a correctness test. So "the cursor scales" was
+/// an expectation, not a result, and this module was measuring one walk while
+/// asserting about the other.
+///
+/// **No threshold is written down here.** The claim is a comparison between two
+/// quantities measured in the same run, on the same stores: the cursor's growth
+/// in per-fact cost must not exceed the `OFFSET` walk's. A constant would age
+/// with the machine and would have to be re-tuned by whoever it eventually
+/// failed for; a comparison between two measurements does not.
+///
+/// The cursor is timed FIRST at each size, so the page cache is warm for the
+/// `OFFSET` walk and not for it. That biases the comparison AGAINST the
+/// conclusion this test expects, which is the direction a measurement should
+/// lean when the person writing it already has an expectation.
+///
+/// Measured 2026-08-05, aarch64-apple-darwin, debug profile, machine at rest:
+///
+/// | facts | cursor   | µs/fact | offset walk | µs/fact |
+/// |-------|----------|---------|-------------|---------|
+/// | 250   | 2.55 ms  | 10.2    | 9.87 ms     | 39.5    |
+/// | 500   | 4.20 ms  | 8.4     | 24.12 ms    | 48.2    |
+/// | 1 000 | 10.04 ms | 10.0    | 66.52 ms    | 66.5    |
+/// | 2 000 | 30.89 ms | 15.4    | 242.21 ms   | 121.1   |
+///
+/// Over an eightfold volume the per-fact cost grew ×1.52 for the cursor and
+/// ×3.07 for the `OFFSET` walk.
+///
+/// The cursor is NOT flat, and this file should not be read as saying it is. At
+/// 2 000 facts a fact costs half again what it cost at 250. What the numbers
+/// support is narrower and enough: the cursor degrades markedly less than the
+/// walk it replaces.
+///
+/// One caveat on the ×1.52, stated because the figure invites over-reading: the
+/// 250-fact point is the most polluted by fixed overhead — it is the only size
+/// whose per-fact cost is HIGHER than the next one up (10.2 against 8.4). Taking
+/// 500 as the baseline instead gives ×1.83. The growth ratio is therefore
+/// sensitive to which end you anchor it on, which is why the assertion below
+/// compares two ratios computed the same way rather than testing either against
+/// a number.
+#[test]
+#[ignore = "seeds thousands of facts; run deliberately, on a machine at rest"]
+fn the_cursor_cost_per_fact_does_not_grow_like_the_offset_walk() {
+    let mut cursor_costs: Vec<f64> = Vec::new();
+    let mut offset_costs: Vec<f64> = Vec::new();
+    for n in [250u64, 500, 1000, 2000] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        {
+            let store = NativeStore::open(dir.path(), DIM).expect("open");
+            for id in 1..=n {
+                store
+                    .store_with_metadata(
+                        id * 7,
+                        &format!("fact {id}"),
+                        &EMBEDDING,
+                        &meta(&[("project", Value::from("veles"))]),
+                    )
+                    .expect("seed");
+            }
+        }
+        let db = database(&dir);
+        let expected = usize::try_from(n).expect("fits");
+
+        let start = std::time::Instant::now();
+        let walked = super::enumerate_by_cursor(&db, "_semantic_memory", 100).expect("cursor walk");
+        let cursor_elapsed = start.elapsed();
+        assert_eq!(
+            walked.len(),
+            expected,
+            "positive control: a cursor walk that returned the wrong count would \
+             make its timing meaningless"
+        );
+
+        let start = std::time::Instant::now();
+        let paged = enumerate_collection(&db, "_semantic_memory", 100).expect("page walk");
+        let offset_elapsed = start.elapsed();
+        assert_eq!(paged.len(), expected, "positive control for the page walk");
+
+        let (cursor, offset) = (per_fact(cursor_elapsed, n), per_fact(offset_elapsed, n));
+        println!(
+            "  n={n:5}  cursor={cursor_elapsed:>9.2?} ({cursor:>7.1} us/fact)  \
+             offset={offset_elapsed:>9.2?} ({offset:>7.1} us/fact)"
+        );
+        cursor_costs.push(cursor);
+        offset_costs.push(offset);
+    }
+
+    let growth = |costs: &[f64]| -> f64 {
+        let first = costs.first().copied().expect("measured");
+        let last = costs.last().copied().expect("measured");
+        last / first
+    };
+    let (cursor_growth, offset_growth) = (growth(&cursor_costs), growth(&offset_costs));
+    println!(
+        "  per-fact cost grew x{cursor_growth:.2} for the cursor, \
+         x{offset_growth:.2} for the offset walk, over an 8x volume"
+    );
+    assert!(
+        cursor_growth <= offset_growth,
+        "the cursor's per-fact cost grew at least as fast as the OFFSET walk's \
+         (cursor x{cursor_growth:.2}, offset x{offset_growth:.2}). The rebuild is \
+         built on the cursor precisely because the other walk is quadratic; if \
+         they now degrade alike, that premise no longer holds and the choice has \
+         to be re-argued rather than inherited"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // GATE 2c — the ceiling, which is a CORRECTNESS bound and not a cost one
 // ---------------------------------------------------------------------------
