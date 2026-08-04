@@ -86,3 +86,12 @@ jobs:
       # a broken copy-paste for whoever follows it.
       - name: Hardcoded doc versions vs Cargo manifests
         run: python3 scripts/check-doc-freshness.py --guard versions --mode strict
+
+      # BLOCKING from the day docs/decisions/ was created, because the two
+      # shapes it refuses were reachable by nobody else: `index` sweeps only the
+      # root of docs/, and it asks doc-to-index without ever asking
+      # index-to-doc, so a row pointing at a missing file was legal everywhere.
+      # Deleting the directory answers 2, not 0 — a guard that could not run is
+      # not a guard that found nothing.
+      - name: Every decision is indexed and every index row resolves
+        run: python3 scripts/check-doc-freshness.py --guard decisions --mode strict

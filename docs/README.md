@@ -157,6 +157,7 @@ the remaining debt is. Read these when you need the *why* behind a behaviour.
 | [ANN state-of-the-art audit](./ANN_SOTA_AUDIT.md) | How the index compares to published ANN work. |
 | [Core wiring debt](./CORE_WIRING_DEBT.md) | Known gaps between what core exposes and what the surfaces use. |
 | [Core / Premium split](./CORE_PREMIUM_SPLIT.md) | Where the open-core boundary sits, and the contract both repos read identically. |
+| [Decisions](./decisions/README.md) | One decision per file: what was decided, why, and the code, PR or CI job that proves it. |
 
 ---
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Documentation freshness guards.
 
-Three independent guards, all runnable separately so a guard that is still
+Five independent guards, all runnable separately so a guard that is still
 red on the current tree can be wired as a warning while the others block:
 
 ``stamp``
@@ -26,6 +26,20 @@ red on the current tree can be wired as a warning while the others block:
     inside doc snippets, and ``velesdb-memory-vX.Y.Z`` git-tag references.
     Dependency pins are allowed to be shorter than the full triple
     (``velesdb-core = "4.0"`` is fine for 4.0.0) but never to disagree.
+
+``tracked``
+    Every document an entry document designates is itself tracked by git. A
+    path that exists and a path a clone receives are not the same path: the
+    guard reads the index, not the filesystem.
+
+``decisions``
+    Every markdown file directly under ``docs/decisions/`` is listed in
+    ``docs/decisions/README.md``, AND every relative row of that index
+    resolves to a file that exists. ``index`` covers neither: it stops at the
+    root of ``docs/``, and it only ever asks doc-to-index, so a row pointing
+    at nothing has always been legal. A missing ``docs/decisions/`` is a
+    precondition (exit 2), never a silent pass — otherwise deleting the
+    directory would disarm the guard while CI stayed green.
 
 This script deliberately does NOT replace ``scripts/check-version-sync.py``:
 that one pins a curated list of files to exact readers for the release bump.
@@ -53,6 +67,12 @@ DOCS_INDEX = "README.md"
 # Keep this list empty unless there is a structural reason: the index itself
 # obviously cannot link to itself.
 ROOT_DOC_EXEMPTIONS: "frozenset[str]" = frozenset({DOCS_INDEX})
+
+# One decision per file, under docs/decisions/, presented by its own index.
+DECISIONS_SUBDIR = "decisions"
+
+# Same structural reason as above: an index cannot be a row of itself.
+DECISION_DOC_EXEMPTIONS: "frozenset[str]" = frozenset({DOCS_INDEX})
 
 # Directories whose docs legitimately pin OLD versions (historical migration
 # notes, archived releases). Paths are relative to the repository root.
@@ -199,6 +219,28 @@ def root_docs(root: Path) -> "list[Path]":
     ]
 
 
+def decision_docs(root: Path) -> "list[Path]":
+    """TRACKED markdown files directly under docs/decisions/, minus the index.
+
+    Non-recursive on purpose. A decision is atomic, so it is one file; a
+    subdirectory is another index's business, and sweeping into it would make
+    this index answer for documents it does not present. Tracked rather than
+    on-disk, for the reason spelled out in `root_docs`.
+    """
+    decisions_dir = root / DOCS_DIRNAME / DECISIONS_SUBDIR
+    on_disk = sorted(
+        path for path in decisions_dir.glob("*.md")
+        if path.name not in DECISION_DOC_EXEMPTIONS
+    )
+    tracked = tracked_files(root)
+    if tracked is None:
+        return on_disk
+    return [
+        path for path in on_disk
+        if path.relative_to(root).as_posix() in tracked
+    ]
+
+
 def scanned_doc_files(root: Path) -> "list[Path]":
     """Every markdown file the version guard sweeps."""
     excluded_dirs = tuple((root / d).resolve() for d in VERSION_SCAN_EXCLUDED_DIRS)
@@ -223,23 +265,34 @@ def scanned_doc_files(root: Path) -> "list[Path]":
     return out
 
 
-def index_link_targets(root: Path) -> "set[Path]":
-    """Resolved filesystem targets of every relative link in docs/README.md."""
-    index = root / DOCS_DIRNAME / DOCS_INDEX
+def index_links(index: Path) -> "list[tuple[str, Path, int]]":
+    """Every relative link of an index, as (raw target, resolved path, line).
+
+    `index_link_targets` only ever needed the resolved set, so that is all it
+    returned. Asking whether a row points at NOTHING needs the raw text to
+    quote back and the line to point at, and a set of paths carries neither.
+    """
     text = index.read_text(encoding="utf-8")
-    targets: "set[Path]" = set()
+    out: "list[tuple[str, Path, int]]" = []
     for match in list(MD_INLINE_LINK_RE.finditer(text)) + list(MD_REF_LINK_RE.finditer(text)):
         raw = match.group(1).strip()
         if not raw or raw.startswith(("#", "mailto:")) or "://" in raw:
             continue
-        raw = raw.split("#", 1)[0].split("?", 1)[0]
-        if not raw:
+        target = raw.split("#", 1)[0].split("?", 1)[0]
+        if not target:
             continue
         try:
-            targets.add((index.parent / raw).resolve())
+            resolved = (index.parent / target).resolve()
         except (OSError, ValueError):  # pragma: no cover - defensive
             continue
-    return targets
+        out.append((target, resolved, line_of(text, match.start())))
+    return out
+
+
+def index_link_targets(root: Path) -> "set[Path]":
+    """Resolved filesystem targets of every relative link in docs/README.md."""
+    index = root / DOCS_DIRNAME / DOCS_INDEX
+    return {resolved for _raw, resolved, _line in index_links(index)}
 
 
 def pin_agrees(pin: str, actual: str) -> bool:
@@ -317,6 +370,57 @@ def guard_index(root: Path) -> "tuple[list[str], list[str]]":
         f"against {len(targets)} relative link target(s) in {DOCS_DIRNAME}/{DOCS_INDEX}.",
     )
     return failures, info
+
+
+def guard_decisions(root: Path) -> "tuple[list[str], list[str]]":
+    """Both directions, because `index` only ever checked one.
+
+    `index` asks doc-to-index: is every document presented? It never asks
+    index-to-doc, so a row pointing at a file that does not exist has always
+    been legal there. Under docs/decisions/ neither question was asked at all,
+    since that guard stops at the root of docs/.
+    """
+    failures: "list[str]" = []
+    info: "list[str]" = []
+    index = root / DOCS_DIRNAME / DECISIONS_SUBDIR / DOCS_INDEX
+    index_name = rel(root, index)
+    links = index_links(index)
+    listed = {resolved for _raw, resolved, _line in links}
+    docs = decision_docs(root)
+
+    for path in docs:
+        name = rel(root, path)
+        if path.resolve() in listed:
+            info.append(f"  ok  {name}")
+            continue
+        failures.append(
+            f"{name}: not listed in {index_name}. Add a row such as "
+            f"`| [Title](./{path.name}) | one-line summary |` to the table."
+        )
+
+    for raw, resolved, line in links:
+        if not _inside(root, resolved) or resolved.exists():
+            continue
+        failures.append(
+            f"{index_name}:{line}: lists `{raw}`, which does not exist. "
+            "Either add the decision file or remove the row."
+        )
+
+    info.insert(
+        0,
+        f"Scanned {len(docs)} decision file(s) in {DOCS_DIRNAME}/{DECISIONS_SUBDIR}/ "
+        f"against {len(links)} relative link(s) in {index_name}.",
+    )
+    return failures, info
+
+
+def _inside(root: Path, path: Path) -> bool:
+    """A link climbing out of the repository is nobody's business here."""
+    try:
+        path.relative_to(root.resolve())
+    except ValueError:
+        return False
+    return True
 
 
 def guard_versions(root: Path) -> "tuple[list[str], list[str]]":
@@ -471,6 +575,10 @@ GUARDS = {
     "index": (guard_index, "every doc at the root of docs/ is linked from docs/README.md"),
     "versions": (guard_versions, "no hardcoded doc version contradicts the Cargo manifests"),
     "tracked": (guard_tracked, "every document an entry document designates is itself tracked"),
+    "decisions": (
+        guard_decisions,
+        "every docs/decisions/ file is listed in its index, and every row of that index resolves",
+    ),
 }
 
 
@@ -535,6 +643,15 @@ def main(argv: "list[str] | None" = None) -> int:
     # exercise one guard without staging the preconditions of the others.
     if {"index", "stamp"} & set(names) and not (root / DOCS_DIRNAME / DOCS_INDEX).is_file():
         print(f"ERROR: {root}/{DOCS_DIRNAME}/{DOCS_INDEX} not found", file=sys.stderr)
+        return 2
+    # Deleting docs/decisions/ must not read as "nothing to report". A silent 0
+    # there would leave CI green, the registry still announcing the subguard and
+    # the workflow step still running while measuring nothing — a disarm one
+    # notch below the one `subguards` was written to catch. `warn` does not
+    # soften it either: a precondition is not a finding.
+    decisions_index = root / DOCS_DIRNAME / DECISIONS_SUBDIR / DOCS_INDEX
+    if "decisions" in names and not decisions_index.is_file():
+        print(f"ERROR: {decisions_index} not found", file=sys.stderr)
         return 2
     try:
         return run(root, names, args.mode, args.verbose)
