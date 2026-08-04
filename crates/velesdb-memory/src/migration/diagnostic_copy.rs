@@ -234,6 +234,13 @@ fn copy_directory(
     destination: &Path,
     after_file_copy: &mut dyn FnMut(&Path) -> Result<(), crate::MemoryError>,
 ) -> Result<(), crate::MemoryError> {
+    for entry in read_sorted_entries(source)? {
+        copy_entry(&entry, destination, after_file_copy)?;
+    }
+    Ok(())
+}
+
+fn read_sorted_entries(source: &Path) -> Result<Vec<std::fs::DirEntry>, crate::MemoryError> {
     let mut entries = std::fs::read_dir(source)
         .map_err(|err| query_error(format!("cannot read {}: {err}", source.display())))?
         .collect::<Result<Vec<_>, _>>()
@@ -244,37 +251,41 @@ fn copy_directory(
             ))
         })?;
     entries.sort_unstable_by_key(std::fs::DirEntry::file_name);
+    Ok(entries)
+}
 
-    for entry in entries {
-        let from = entry.path();
-        let to = destination.join(entry.file_name());
-        let metadata = std::fs::symlink_metadata(&from)
-            .map_err(|err| query_error(format!("cannot inspect {}: {err}", from.display())))?;
-        if metadata.file_type().is_symlink() {
-            return Err(query_error(format!(
-                "migration source contains symlink {}; refusing to follow data outside the tree",
-                from.display()
-            )));
-        }
-        if metadata.is_dir() {
-            create_private_directory(&to).map_err(|err| {
-                query_error(format!(
-                    "cannot create diagnostic directory {}: {err}",
-                    to.display()
-                ))
-            })?;
-            copy_directory(&from, &to, after_file_copy)?;
-        } else if metadata.is_file() {
-            copy_regular_file(&from, &to, metadata.len())?;
-            after_file_copy(&from)?;
-        } else {
-            return Err(query_error(format!(
-                "migration source contains special file {}; only directories and regular files are supported",
-                from.display()
-            )));
-        }
+fn copy_entry(
+    entry: &std::fs::DirEntry,
+    destination: &Path,
+    after_file_copy: &mut dyn FnMut(&Path) -> Result<(), crate::MemoryError>,
+) -> Result<(), crate::MemoryError> {
+    let from = entry.path();
+    let to = destination.join(entry.file_name());
+    let metadata = std::fs::symlink_metadata(&from)
+        .map_err(|err| query_error(format!("cannot inspect {}: {err}", from.display())))?;
+    if metadata.file_type().is_symlink() {
+        return Err(query_error(format!(
+            "migration source contains symlink {}; refusing to follow data outside the tree",
+            from.display()
+        )));
     }
-    Ok(())
+    if metadata.is_dir() {
+        create_private_directory(&to).map_err(|err| {
+            query_error(format!(
+                "cannot create diagnostic directory {}: {err}",
+                to.display()
+            ))
+        })?;
+        return copy_directory(&from, &to, after_file_copy);
+    }
+    if metadata.is_file() {
+        copy_regular_file(&from, &to, metadata.len())?;
+        return after_file_copy(&from);
+    }
+    Err(query_error(format!(
+        "migration source contains special file {}; only directories and regular files are supported",
+        from.display()
+    )))
 }
 
 fn copy_regular_file(
@@ -311,14 +322,18 @@ fn copy_regular_file(
     Ok(())
 }
 
+#[cfg(unix)]
 fn create_private_directory(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+
     let mut builder = std::fs::DirBuilder::new();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
+    builder.mode(0o700);
     builder.create(path)
+}
+
+#[cfg(not(unix))]
+fn create_private_directory(path: &Path) -> std::io::Result<()> {
+    std::fs::DirBuilder::new().create(path)
 }
 
 struct ScratchDirectory {
