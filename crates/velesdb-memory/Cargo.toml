@@ -31,6 +31,8 @@ serde = { workspace = true }
 # capability, it is how the daemon is operated.
 toml = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { version = "0.11", optional = true }
+fs2 = { version = "0.4", optional = true }
 # Pinned to rmcp's schemars (1.2.x) so domain types and MCP DTOs share one
 # JsonSchema derive — no duplicate wire/domain structs.
 schemars = "1"
@@ -94,6 +96,12 @@ hyper-util = { version = "0.1", optional = true, features = ["tokio", "server-au
 # for a single request inside the manual TLS accept loop.
 tower = { workspace = true, optional = true }
 
+[target.'cfg(windows)'.dependencies.atomicwrites]
+# Safe wrapper around MoveFileExW(REPLACE_EXISTING | WRITE_THROUGH), keeping
+# the crate's own code free of unsafe while retaining a durable replacement.
+version = "0.4.4"
+optional = true
+
 [features]
 # The MCP server transport + binary, and the native file-backed store, are on
 # by default so `cargo build` produces the server; library consumers disable
@@ -132,7 +140,12 @@ context = []
 # — tokio/mio/memmap2). On by default; a backend with its own MemoryStore impl
 # (e.g. velesdb-wasm's in-memory one) builds with `default-features = false`
 # and omits this, so those heavy deps never enter its dependency graph.
-persistence = ["velesdb-core/persistence"]
+persistence = [
+    "velesdb-core/persistence",
+    "dep:sha2",
+    "dep:fs2",
+    "dep:atomicwrites",
+]
 # Real on-device semantic recall via a local Ollama embeddings endpoint. Off by
 # default so the shipped binary stays tiny, zero-dependency, and fully offline.
 ollama = ["dep:ureq"]

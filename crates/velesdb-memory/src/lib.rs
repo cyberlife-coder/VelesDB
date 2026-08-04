@@ -84,6 +84,11 @@ pub mod limits;
 /// pulling the `rmcp`/`tokio` server stack.
 #[cfg(feature = "mcp")]
 pub mod mcp;
+/// Read-only diagnosis of a store an embedding-model change made unopenable,
+/// and the feasibility proof the rebuild depends on (#1762). Never writes to
+/// the store it inspects.
+#[cfg(feature = "persistence")]
+pub mod migration;
 /// The domain data model — the value types the memory layer exchanges
 /// (`Link`, `Recollection`, `ColumnFilter`, `Explanation`, …), separate from the
 /// service that computes them.
