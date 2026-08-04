@@ -175,6 +175,96 @@ class IndexGuardTests(FreshnessGuardTestCase):
         self.assertGuardPasses("index")
 
 
+DECISIONS_INDEX = """# Decisions
+
+One decision per file. Back to the [docs index](../README.md).
+
+| Decision | Summary |
+|----------|---------|
+{extra}"""
+
+
+class DecisionsGuardTests(FreshnessGuardTestCase):
+    """docs/decisions/ is swept by nothing else.
+
+    `index` only reaches the root of docs/, and it only asks doc-to-index —
+    never index-to-doc, so a row pointing at nothing has always been legal.
+    """
+
+    STORAGE = "| [Storage engine](./storage-engine.md) | why the LSM tree |\n"
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.write("docs/decisions/README.md", DECISIONS_INDEX.format(extra=self.STORAGE))
+        self.write("docs/decisions/storage-engine.md", "# Storage engine\n\nStatus: accepted\n")
+
+    def index_with(self, extra: str) -> None:
+        self.write("docs/decisions/README.md", DECISIONS_INDEX.format(extra=self.STORAGE + extra))
+
+    def test_baseline_repository_passes(self) -> None:
+        self.assertGuardPasses("decisions")
+
+    def test_unlisted_decision_fails_then_passes_once_listed(self) -> None:
+        self.write("docs/decisions/wal-fsync.md", "# WAL fsync\n\nStatus: accepted\n")
+        self.assertGuardFails(
+            "decisions", "docs/decisions/wal-fsync.md", "not listed in docs/decisions/README.md"
+        )
+
+        self.index_with("| [WAL fsync](./wal-fsync.md) | why fsync on commit |\n")
+        self.assertGuardPasses("decisions")
+
+    def test_dead_link_fails_then_passes_once_the_file_exists(self) -> None:
+        self.index_with("| [Tiered cache](./tiered-cache.md) | why the second tier |\n")
+        self.assertGuardFails("decisions", "docs/decisions/README.md:", "does not exist")
+
+        self.write("docs/decisions/tiered-cache.md", "# Tiered cache\n\nStatus: accepted\n")
+        self.assertGuardPasses("decisions")
+
+    def test_the_index_is_not_required_to_list_itself(self) -> None:
+        self.assertNotIn(
+            self.tmp / "docs" / "decisions" / "README.md", cdf.decision_docs(self.tmp)
+        )
+
+    def test_a_decision_in_a_subdirectory_does_not_satisfy_the_guard(self) -> None:
+        # The row points at an archived namesake. A substring match would call
+        # docs/decisions/wal-fsync.md "listed". It is not.
+        self.write("docs/decisions/wal-fsync.md", "# WAL fsync\n\nStatus: accepted\n")
+        self.write("docs/decisions/archive/wal-fsync.md", "# WAL fsync (superseded)\n")
+        self.index_with("| [WAL fsync](./archive/wal-fsync.md) | superseded |\n")
+        self.assertGuardFails("decisions", "docs/decisions/wal-fsync.md")
+
+    def test_the_back_link_is_checked_but_a_link_leaving_the_tree_is_not(self) -> None:
+        # `../README.md` resolves inside the tree and must be verified; a link
+        # climbing out of the repository is nobody's business here.
+        self.write(
+            "docs/decisions/README.md",
+            DECISIONS_INDEX.format(extra=self.STORAGE)
+            + "\nSee [elsewhere](../../../outside.md).\n",
+        )
+        self.assertGuardPasses("decisions")
+
+    def test_reference_style_link_definition_counts(self) -> None:
+        self.write("docs/decisions/wal-fsync.md", "# WAL fsync\n\nStatus: accepted\n")
+        self.write(
+            "docs/decisions/README.md",
+            DECISIONS_INDEX.format(extra=self.STORAGE) + "\nSee [wal].\n\n[wal]: ./wal-fsync.md\n",
+        )
+        self.assertGuardPasses("decisions")
+
+    def test_a_missing_decisions_directory_is_a_precondition_not_a_pass(self) -> None:
+        # Otherwise `rm -rf docs/decisions/` disarms the guard in silence: CI
+        # green, the registry still announcing the subguard, the workflow step
+        # still running and measuring nothing. `warn` must not soften it either
+        # — a precondition is not a finding.
+        shutil.rmtree(self.tmp / "docs" / "decisions")
+        for mode in ("strict", "warn"):
+            with self.subTest(mode=mode):
+                self.assertEqual(
+                    cdf.main(["--root", str(self.tmp), "--guard", "decisions", "--mode", mode]),
+                    2,
+                )
+
+
 class VersionGuardTests(FreshnessGuardTestCase):
     def test_baseline_repository_passes(self) -> None:
         self.assertGuardPasses("versions")
