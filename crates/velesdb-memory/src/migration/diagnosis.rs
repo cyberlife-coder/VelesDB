@@ -1,5 +1,5 @@
+use super::diagnostic_copy::DiagnosticCopy;
 use super::enumeration::{enumerate_by_cursor, scroll_page, AGENT_COLLECTIONS};
-use super::filesystem::{bytes_on_disk, fingerprint};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -41,7 +41,7 @@ impl Capability {
 /// whether a prepared migration may resume. A report whose version this build
 /// does not understand is refused rather than guessed at, which is only
 /// possible because the number travels with the data.
-pub const DIAGNOSIS_FORMAT_VERSION: u32 = 2;
+pub const DIAGNOSIS_FORMAT_VERSION: u32 = 3;
 
 /// What the store itself records about the embedder that filled it.
 ///
@@ -194,6 +194,10 @@ pub struct DiagnosisReport {
     pub ttl_summary: TtlSummary,
     /// What the store occupies, summed over its files.
     pub bytes_on_disk: u64,
+    /// Space required for the verified ephemeral diagnostic copy.
+    pub diagnostic_staging_required: u64,
+    /// Space observed on the staging volume before any scratch was created.
+    pub diagnostic_staging_available: u64,
     /// Free space at the destination, or `None` when it could not be
     /// established — see the `disk_headroom` blocker.
     pub disk_headroom: Option<u64>,
@@ -209,10 +213,8 @@ pub struct DiagnosisReport {
 impl DiagnosisReport {
     /// Whether a rebuild could proceed with no outstanding question.
     ///
-    /// Expect `false`, and read that as information rather than as a fault: the
-    /// `source_open_is_read_only` blocker stands on every store, because
-    /// opening one rewrites its derived index files. A rebuild in place is
-    /// therefore never clear — which is the finding, not a bug in the check.
+    /// Expect `false` until every environmental question (source provenance,
+    /// destination capacity and real embedder cost included) has evidence.
     #[must_use]
     pub fn is_clear(&self) -> bool {
         self.blockers.is_empty() && self.capabilities.values().all(Capability::is_proven)
@@ -258,24 +260,37 @@ const INVENTORY_BATCH: usize = 1024;
 
 /// Inspect `source` and report what a rebuild onto `target_model` would face.
 ///
-/// Reads. Only reads. It opens the store — which takes the exclusive lock, so
-/// the daemon must be down — walks each collection by cursor, and returns. It
-/// creates no destination, writes no state, and renames nothing; `destination`
-/// is used to ask which filesystem it would sit on, and is not created.
+/// The live source is read only with ordinary file handles and may remain held
+/// by the daemon. Because [`velesdb_core::Database::open`] rewrites derived
+/// files and takes an exclusive lock, it is called only on a verified ephemeral
+/// copy under `scratch_parent`. The source is fingerprinted before and after
+/// capture and once more after inventory; any movement refuses the report.
+/// `destination` is inspected only for filesystem topology and is not created.
 ///
 /// # Errors
 /// Returns [`crate::MemoryError`] if the store cannot be read or walked.
 pub fn diagnose(
     source: &Path,
+    scratch_parent: &Path,
     target_model: &str,
     target_dimension: usize,
     destination: Option<&Path>,
 ) -> Result<DiagnosisReport, crate::MemoryError> {
-    let source_fingerprint = fingerprint(source)?;
-    let bytes = bytes_on_disk(source)?;
-    let source_provenance = read_provenance(source);
+    let copy = DiagnosticCopy::capture(source, scratch_parent)?;
+    let result = diagnose_copy(source, target_model, target_dimension, destination, &copy);
+    copy.finish(result)
+}
 
-    let db = std::sync::Arc::new(velesdb_core::Database::open(source)?);
+pub(super) fn diagnose_copy(
+    source: &Path,
+    target_model: &str,
+    target_dimension: usize,
+    destination: Option<&Path>,
+    copy: &DiagnosticCopy,
+) -> Result<DiagnosisReport, crate::MemoryError> {
+    let source_provenance = read_provenance(copy.store_path());
+
+    let db = std::sync::Arc::new(velesdb_core::Database::open(copy.store_path())?);
     let mut collections: Vec<CollectionInventory> = AGENT_COLLECTIONS
         .iter()
         .map(|name| inventory_collection(&db, name))
@@ -287,13 +302,14 @@ pub fn diagnose(
     for inv in &collections {
         totals.fold(inv);
     }
+    copy.verify_source_unchanged(source)?;
     let (capabilities, blockers) =
-        capabilities_and_blockers(&collections, &source_provenance, edges_capability);
+        capabilities_and_blockers(&collections, &source_provenance, edges_capability, copy);
 
     Ok(DiagnosisReport {
         format_version: DIAGNOSIS_FORMAT_VERSION,
         source_path: source.to_path_buf(),
-        source_fingerprint,
+        source_fingerprint: copy.source_fingerprint().to_owned(),
         source_dimension,
         source_provenance,
         target_model: target_model.to_owned(),
@@ -304,7 +320,9 @@ pub fn diagnose(
         working_contexts: totals.working_contexts,
         reserved_metadata: totals.reserved_metadata,
         ttl_summary: totals.ttl,
-        bytes_on_disk: bytes,
+        bytes_on_disk: copy.source_bytes(),
+        diagnostic_staging_required: copy.staging_required(),
+        diagnostic_staging_available: copy.staging_available(),
         disk_headroom: None,
         same_filesystem: destination.and_then(|dest| same_filesystem(source, dest)),
         capabilities,
@@ -523,23 +541,11 @@ fn edges_of(
     Ok(u64::try_from(edges.len()).unwrap_or(u64::MAX))
 }
 
-/// `Database::open` is not inert, and the rebuild has to be told so.
-const WRITE_ON_OPEN: &str =
-    "`Database::open` REWRITES derived artifacts — the HNSW index, the id mappings, the \
-     collection meta, the vector index and the vector WAL — on the first open that follows a \
-     write session, before a single fact is read. Measured by isolation: the open alone changes \
-     those files, while the cursor walk and `AgentMemory` construction that follow change \
-     nothing, and a second open of the now-normalised store changes nothing either. So a \
-     diagnosis is read-only with respect to the DATA and is not byte-for-byte inert on the \
-     DIRECTORY: it must be run against a controlled copy, never against the store being relied \
-     on. This is a permanent property of the engine, not a per-store finding.";
-
-/// Free space cannot be read, and a rebuild needs it.
+/// Destination capacity is distinct from the staging proof done by diagnosis.
 const NO_HEADROOM: &str =
-    "free space is not established: the standard library exposes no free-space API and this \
-     crate depends on nothing that does. A rebuild into a separate destination needs at least \
-     `bytes_on_disk` free, so without this the shortfall would surface mid-rebuild instead of \
-     before it.";
+    "free space for the future rebuilt destination is not established. Diagnostic staging is \
+     checked separately and does not prove that a different destination volume can hold the \
+     rebuilt vectors. Supply and measure the final destination before reconstruction.";
 
 /// The embedder's cost per fact is the one number a rebuild's duration turns on
 /// and the one this gate cannot produce.
@@ -557,8 +563,9 @@ fn capabilities_and_blockers(
     collections: &[CollectionInventory],
     provenance: &SourceProvenance,
     edges: Capability,
+    copy: &DiagnosticCopy,
 ) -> (BTreeMap<String, Capability>, Vec<String>) {
-    let capabilities = capability_map(provenance, edges);
+    let capabilities = capability_map(provenance, edges, copy);
     let blockers = capabilities
         .iter()
         .filter_map(|(name, cap)| match cap {
@@ -579,6 +586,7 @@ fn capabilities_and_blockers(
 fn capability_map(
     provenance: &SourceProvenance,
     edges: Capability,
+    copy: &DiagnosticCopy,
 ) -> BTreeMap<String, Capability> {
     let missing = |blocker: &str| Capability::Missing {
         blocker: blocker.to_owned(),
@@ -596,8 +604,24 @@ fn capability_map(
         },
     );
     capabilities.insert(
-        "source_open_is_read_only".to_owned(),
-        missing(WRITE_ON_OPEN),
+        "source_access_is_read_only".to_owned(),
+        Capability::Proven {
+            evidence: format!(
+                "the live source was never passed to Database::open; it matched content fingerprint '{}' before capture, after capture, and after inventory of the verified copy",
+                copy.source_fingerprint()
+            ),
+        },
+    );
+    capabilities.insert(
+        "diagnostic_staging".to_owned(),
+        Capability::Proven {
+            evidence: format!(
+                "{} bytes were available on the staging volume before copying; {} bytes were required for the {}-byte source plus fixed and percentage headroom",
+                copy.staging_available(),
+                copy.staging_required(),
+                copy.source_bytes()
+            ),
+        },
     );
     capabilities.insert("disk_headroom".to_owned(), missing(NO_HEADROOM));
     capabilities.insert("embedder_cost".to_owned(), missing(NO_EMBEDDER_COST));

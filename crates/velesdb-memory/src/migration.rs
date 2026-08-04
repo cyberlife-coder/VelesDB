@@ -46,6 +46,7 @@
 // duplicated_attributes` fires on.
 
 mod diagnosis;
+mod diagnostic_copy;
 mod enumeration;
 mod filesystem;
 mod state;

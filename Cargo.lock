@@ -6915,6 +6915,7 @@ version = "0.12.0"
 dependencies = [
  "axum",
  "criterion",
+ "fs2",
  "futures",
  "hyper",
  "hyper-util",

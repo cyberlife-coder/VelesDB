@@ -26,8 +26,27 @@ use crate::{MemoryStore, Metadata};
 use serde_json::Value;
 use std::collections::BTreeSet;
 
+mod diagnostic_copy;
+
 const DIM: usize = 4;
 const EMBEDDING: [f32; 4] = [1.0, 0.0, 0.0, 0.0];
+
+/// Run the public diagnosis with an isolated staging parent.
+fn diagnose(
+    source: &std::path::Path,
+    target_model: &str,
+    target_dimension: usize,
+    destination: Option<&std::path::Path>,
+) -> Result<DiagnosisReport, crate::MemoryError> {
+    let staging = tempfile::tempdir().expect("diagnostic staging");
+    super::diagnose(
+        source,
+        staging.path(),
+        target_model,
+        target_dimension,
+        destination,
+    )
+}
 
 /// Facts enough to cross a page boundary that is not a divisor of the count,
 /// so an off-by-one in the walk shows up as a gap or a repeat.

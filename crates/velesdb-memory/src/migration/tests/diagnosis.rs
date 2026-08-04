@@ -297,99 +297,27 @@ pub(super) fn drift(
     changed.chain(vanished).collect()
 }
 
-/// Copy a store directory, file for file.
-fn copy_tree(src: &std::path::Path, dst: &std::path::Path) {
-    std::fs::create_dir_all(dst).expect("create destination");
-    for entry in std::fs::read_dir(src).expect("read_dir") {
-        let entry = entry.expect("entry");
-        let (from, to) = (entry.path(), dst.join(entry.file_name()));
-        if entry.metadata().expect("metadata").is_dir() {
-            copy_tree(&from, &to);
-        } else {
-            std::fs::copy(&from, &to).expect("copy file");
-        }
-    }
-}
-
-fn diagnose_controlled_copy(
-    original: &std::path::Path,
-    before: &std::collections::BTreeMap<String, (u64, Vec<u8>)>,
-) -> DiagnosisReport {
-    let workspace = tempfile::tempdir().expect("tempdir");
-    let copy = workspace.path().join("copy");
-    copy_tree(original, &copy);
-    assert_eq!(
-        &tree(&copy),
-        before,
-        "the copy must start out identical, or the comparison below compares nothing"
-    );
-
-    let report = diagnose(&copy, TARGET_MODEL, TARGET_DIM, None).expect("diagnose");
-    assert!(report.facts > 0, "the diagnosis must actually have read");
-    let untouched = drift(before, &tree(original));
-    assert!(
-        untouched.is_empty(),
-        "diagnosing a copy must leave the ORIGINAL byte-for-byte as it was; drifted: {untouched:?}"
-    );
-    report
-}
-
-fn assert_direct_diagnosis_writes_only_derived_files(
-    original: &std::path::Path,
-    before: &std::collections::BTreeMap<String, (u64, Vec<u8>)>,
-    expected_facts: u64,
-) {
-    let direct = diagnose(original, TARGET_MODEL, TARGET_DIM, None).expect("diagnose");
-    assert_eq!(
-        direct.facts, expected_facts,
-        "the copy and the original must describe the same store"
-    );
-    let drifted = drift(before, &tree(original));
-    assert!(
-        !drifted.is_empty(),
-        "the copy protocol is load-bearing only if opening the original DOES \
-         write; if this ever comes back empty, the engine changed and this test \
-         is the place that says so"
-    );
-    assert!(
-        drifted
-            .iter()
-            .all(|p| p.contains("native_") || p.contains("vectors.")),
-        "only DERIVED index artifacts may drift — a payload or WAL-of-record file \
-         drifting would mean the data itself moved; drifted: {drifted:?}"
-    );
-
-    // Once normalised, the store is stable: the drift is a one-time cost of the
-    // first open after a write session, not a rewrite on every read.
-    let normalised = tree(original);
-    let _ = diagnose(original, TARGET_MODEL, TARGET_DIM, None).expect("diagnose");
-    assert!(
-        drift(&normalised, &tree(original)).is_empty(),
-        "a second diagnosis of an already-normalised store must drift nothing"
-    );
-}
-
 #[test]
 fn a_diagnostic_does_not_change_the_directory_tree() {
-    // The diagnosis runs against a controlled copy because `Database::open`
-    // rewrites derived artifacts before a single fact is read.
     let (original, _ttl_meta) = seeded();
     let before = tree(original.path());
     assert!(
         !before.is_empty(),
         "positive control: an empty 'before' would make any 'after' equal to it"
     );
-    let report = diagnose_controlled_copy(original.path(), &before);
-    assert_direct_diagnosis_writes_only_derived_files(original.path(), &before, report.facts);
+    let report = diagnose(original.path(), TARGET_MODEL, TARGET_DIM, None).expect("diagnose");
+    assert!(report.facts > 0, "the diagnosis must actually have read");
+    assert!(
+        drift(&before, &tree(original.path())).is_empty(),
+        "the public diagnosis path must leave the source byte-for-byte unchanged"
+    );
 
-    // ...and the report says so itself, so PR B reads the constraint rather
-    // than rediscovering it.
     assert!(
         matches!(
-            report.capabilities.get("source_open_is_read_only"),
-            Some(Capability::Missing { .. })
+            report.capabilities.get("source_access_is_read_only"),
+            Some(Capability::Proven { .. })
         ),
-        "the report must carry the write-on-open hazard as a blocker"
+        "the report must carry evidence that Database::open ran only on a verified copy"
     );
 }
 
