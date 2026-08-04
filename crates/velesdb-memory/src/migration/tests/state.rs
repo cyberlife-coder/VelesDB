@@ -1,6 +1,9 @@
 use super::diagnosis::{drift, tree, TARGET_DIM, TARGET_MODEL};
 use super::*;
 
+const VALID_FINGERPRINT: &str =
+    "sha256-tree-v2:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
 // ---------------------------------------------------------------------------
 // GATE 5 — the lock and the phase journal
 //
@@ -16,7 +19,7 @@ fn resumable_state() -> MigrationState {
         format_version: super::STATE_FORMAT_VERSION,
         phase: Phase::Prepared,
         source_path: std::path::PathBuf::from("/store"),
-        source_fingerprint: "sha256-tree-v2:0123456789abcdef".to_owned(),
+        source_fingerprint: VALID_FINGERPRINT.to_owned(),
         target_model: TARGET_MODEL.to_owned(),
         target_dimension: TARGET_DIM,
     }
@@ -72,8 +75,8 @@ fn two_migrations_cannot_hold_the_lock() {
          lock from a live one: {refusal}"
     );
     assert!(
-        refusal.contains("delete"),
-        "the refusal must say what a human can do about it: {refusal}"
+        refusal.contains("wait") && refusal.contains("NOT stolen"),
+        "the active-guard refusal must say what an operator can safely do: {refusal}"
     );
 
     // (6) and it is REFUSED, not stolen: no pid, no port, no liveness check.
@@ -139,6 +142,13 @@ fn the_lock_never_lives_in_the_source() {
         "the migration lock must never be placed in the source"
     );
     assert!(
+        !source
+            .path()
+            .join(super::super::state::LOCK_GUARD_FILE)
+            .exists(),
+        "the persistent OS guard must never be placed in the source"
+    );
+    assert!(
         drift(&before, &tree(source.path())).is_empty(),
         "taking the lock must not touch the source at all"
     );
@@ -165,7 +175,7 @@ fn a_newer_state_version_is_refused() {
         "format_version": super::STATE_FORMAT_VERSION + 1,
         "phase": "prepared",
         "source_path": "/store",
-        "source_fingerprint": "sha256-tree-v2:0123456789abcdef",
+        "source_fingerprint": VALID_FINGERPRINT,
         "target_model": TARGET_MODEL,
         "target_dimension": TARGET_DIM,
         "a_field_from_the_future": { "that": "this build cannot interpret" },
@@ -196,7 +206,12 @@ fn a_newer_state_version_is_refused() {
     from_future.format_version = super::STATE_FORMAT_VERSION + 1;
     assert!(
         from_future
-            .may_resume(&from_future.source_fingerprint.clone(), TARGET_MODEL)
+            .may_resume(
+                &from_future.source_path,
+                &from_future.source_fingerprint,
+                TARGET_MODEL,
+                TARGET_DIM,
+            )
             .is_err(),
         "may_resume must refuse a newer version too"
     );
@@ -233,7 +248,12 @@ fn an_older_weak_fingerprint_state_requires_a_fresh_diagnosis() {
     in_memory.format_version -= 1;
     in_memory.source_fingerprint = "fnv1a64:0123456789abcdef".to_owned();
     let refusal = in_memory
-        .may_resume(&in_memory.source_fingerprint, TARGET_MODEL)
+        .may_resume(
+            &in_memory.source_path,
+            &in_memory.source_fingerprint,
+            TARGET_MODEL,
+            TARGET_DIM,
+        )
         .expect_err("an in-memory old state must not bypass the version gate");
     assert!(refusal.contains("fresh diagnosis"), "{refusal}");
 }
@@ -244,11 +264,21 @@ fn a_changed_source_fingerprint_refuses_resume() {
 
     // Positive control: the unchanged fingerprint resumes.
     state
-        .may_resume(&state.source_fingerprint, TARGET_MODEL)
+        .may_resume(
+            &state.source_path,
+            &state.source_fingerprint,
+            TARGET_MODEL,
+            TARGET_DIM,
+        )
         .expect("an unchanged source must resume");
 
     let refusal = state
-        .may_resume("fnv1a64:ffffffffffffffff", TARGET_MODEL)
+        .may_resume(
+            &state.source_path,
+            "sha256-tree-v2:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            TARGET_MODEL,
+            TARGET_DIM,
+        )
         .expect_err("a source that changed under a prepared migration must refuse");
     assert!(
         refusal.contains(&state.source_fingerprint) && refusal.contains("ffffffffffffffff"),
@@ -297,11 +327,21 @@ fn a_changed_target_model_refuses_resume() {
 
     // Positive control.
     state
-        .may_resume(&state.source_fingerprint, TARGET_MODEL)
+        .may_resume(
+            &state.source_path,
+            &state.source_fingerprint,
+            TARGET_MODEL,
+            TARGET_DIM,
+        )
         .expect("the prepared model must resume");
 
     let refusal = state
-        .may_resume(&state.source_fingerprint, "some-other-model")
+        .may_resume(
+            &state.source_path,
+            &state.source_fingerprint,
+            "some-other-model",
+            TARGET_DIM,
+        )
         .expect_err("a migration prepared for one model must not resume against another");
     assert!(
         refusal.contains(TARGET_MODEL) && refusal.contains("some-other-model"),
@@ -311,6 +351,39 @@ fn a_changed_target_model_refuses_resume() {
         refusal.contains("not searchable") || refusal.contains("Half"),
         "the refusal must say WHY — half a store embedded by one model and half \
          by another is the failure, and it is invisible at read time: {refusal}"
+    );
+}
+
+#[test]
+fn changed_source_path_and_target_dimension_refuse_resume() {
+    let state = resumable_state();
+
+    let path_refusal = state
+        .may_resume(
+            std::path::Path::new("/another-store"),
+            &state.source_fingerprint,
+            TARGET_MODEL,
+            TARGET_DIM,
+        )
+        .expect_err("a journal must not transfer to another source path");
+    assert!(path_refusal.contains("/store"), "{path_refusal}");
+    assert!(path_refusal.contains("/another-store"), "{path_refusal}");
+
+    let dimension_refusal = state
+        .may_resume(
+            &state.source_path,
+            &state.source_fingerprint,
+            TARGET_MODEL,
+            TARGET_DIM + 1,
+        )
+        .expect_err("a journal must not change vector width");
+    assert!(
+        dimension_refusal.contains(&TARGET_DIM.to_string()),
+        "{dimension_refusal}"
+    );
+    assert!(
+        dimension_refusal.contains(&(TARGET_DIM + 1).to_string()),
+        "{dimension_refusal}"
     );
 }
 
