@@ -47,8 +47,24 @@ def load_script():
     return module
 
 
-def run(*args: str, root: Path, bundle: Path | None = None) -> subprocess.CompletedProcess[str]:
-    env = dict(os.environ, CLAUDE_SKILLS_DIR=str(root))
+def run(
+    *args: str,
+    root: Path,
+    bundle: Path | None = None,
+    codex_root: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    # Always override BOTH host destinations.  When Codex parity is added,
+    # older tests must remain hermetic instead of suddenly writing to the
+    # developer's ~/.codex/skills.  The default lives inside the same temp
+    # tree and is deliberately not dot-prefixed (the atomic-staging test below
+    # treats dot-directories as leaked staging state).
+    if codex_root is None:
+        codex_root = root / "__codex_skills__"
+    env = dict(
+        os.environ,
+        CLAUDE_SKILLS_DIR=str(root),
+        CODEX_SKILLS_DIR=str(codex_root),
+    )
     if bundle is not None:
         env["VELESDB_BUNDLE_DIR"] = str(bundle)
     return subprocess.run(
@@ -200,6 +216,62 @@ class SyncSkills(unittest.TestCase):
 
         source = (REPO / SOURCE_OF[EXPECTED[1]] / "SKILL.md").read_bytes()
         self.assertEqual(target.read_bytes(), source)
+
+class HostInstallParity(unittest.TestCase):
+    """Claude and Codex must load the exact same versioned skill bytes."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        private = Path(self._tmp.name)
+        self.claude = private / "claude-skills"
+        self.codex = private / "codex-skills"
+
+    def sync(self, *args: str) -> subprocess.CompletedProcess[str]:
+        return run(*args, root=self.claude, codex_root=self.codex)
+
+    def assert_host_matches_sources(self, host: Path) -> None:
+        for source_rel, name in EXPECTED_PAIRS:
+            source = REPO / source_rel
+            for path in sorted(p for p in source.rglob("*") if p.is_file()):
+                installed = host / name / path.relative_to(source)
+                self.assertTrue(
+                    installed.is_file(),
+                    f"{host.name}/{name}: {path.relative_to(source)} was not installed",
+                )
+                self.assertEqual(installed.read_bytes(), path.read_bytes(), str(installed))
+
+    def test_install_copies_every_skill_to_claude_and_codex_byte_for_byte(self) -> None:
+        result = self.sync("--install")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_host_matches_sources(self.claude)
+        self.assert_host_matches_sources(self.codex)
+
+    def test_check_observes_codex_drift(self) -> None:
+        self.assertEqual(self.sync("--install").returncode, 0)
+        target = self.codex / "velesdb-learning-loop" / "SKILL.md"
+        self.assertTrue(target.is_file(), "the Codex skill copy was never installed")
+        target.write_text(
+            target.read_text(encoding="utf-8") + "\nCodex-only drift\n",
+            encoding="utf-8",
+        )
+
+        result = self.sync("--check", "--strict")
+
+        self.assertEqual(result.returncode, 1, "Codex skill drift is invisible to --check")
+        self.assertIn("velesdb-learning-loop", result.stderr)
+        self.assertIn(str(self.codex), result.stderr)
+
+    def test_codex_local_layer_survives_a_resync(self) -> None:
+        self.assertEqual(self.sync("--install").returncode, 0)
+        local = self.codex / "velesdb-learning-loop" / "LOCAL.md"
+        self.assertTrue(local.parent.is_dir(), "the Codex skill copy was never installed")
+        local.write_text("# Codex-local guidance\n", encoding="utf-8")
+
+        self.assertEqual(self.sync("--install").returncode, 0)
+
+        self.assertEqual(local.read_text(encoding="utf-8"), "# Codex-local guidance\n")
+
 
 class LocalLayer(unittest.TestCase):
     """`LOCAL.md` — the one file an installed skill may hold that the repo does not.

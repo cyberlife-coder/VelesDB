@@ -43,15 +43,17 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "sync-agent-hooks.py"
 SOURCE = REPO / "integrations" / "agent-hooks" / "claude-code" / "hooks"
+CODEX_SOURCE = REPO / "integrations" / "agent-hooks" / "codex" / "hooks"
 HARNESS = REPO / "integrations" / "agent-hooks" / "test" / "hooks.test.sh"
 CI = REPO / ".github" / "workflows" / "ci.yml"
 
-#: `(settings.json event, script file)` for the four VelesDB hooks. Held
+#: `(settings.json event, script file)` for the VelesDB hooks. Held
 #: against the script's own registry below rather than trusted.
 EXPECTED_HOOKS = (
     ("SessionStart", "session-start.sh"),
     ("Stop", "stop.sh"),
     ("PreCompact", "pre-compact.sh"),
+    ("PreToolUse", "pre-tool-use.sh"),
     ("PostToolUse", "post-tool-use.sh"),
 )
 
@@ -65,6 +67,20 @@ EXPECTED_FILES = (
     "lib/common.sh",
     "lib/freshness.sh",
     "update-daemon.sh",
+)
+
+#: Phase 1 extends the existing installer rather than introducing a second
+#: hand-maintained path.  This alias names the binding subset so failures can
+#: point at the new capability rather than the pre-existing hook set.
+BINDING_CLAUDE_HOOKS = (EXPECTED_HOOKS[3],)
+BINDING_CODEX_HOOKS = (
+    ("SessionStart", "session-start.sh"),
+    ("Stop", "stop.sh"),
+    ("PreToolUse", "pre-tool-use.sh"),
+    ("PostToolUse", "post-tool-use.sh"),
+)
+BINDING_CODEX_FILES = tuple(script for _event, script in BINDING_CODEX_HOOKS) + (
+    "lib/common.sh",
 )
 
 #: A settings.json with foreign hooks arranged the way a real one is — note
@@ -223,8 +239,8 @@ class InstallerBehaviour(unittest.TestCase):
     def test_the_registry_matches_the_scripts_own(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         for event, script in EXPECTED_HOOKS:
-            self.assertIn(f'"{event}"', source)
-            self.assertIn(script, source)
+            self.assertTrue(f'"{event}"' in source, f"installer registry omits {event}")
+            self.assertTrue(script in source, f"installer registry omits {script}")
 
     def test_absent_is_reported_and_forgiven_then_refused_under_strict(self) -> None:
         """Three states, never two — the same rule the skill installer keeps."""
@@ -361,7 +377,14 @@ class InstallerBehaviour(unittest.TestCase):
         self.settings.unlink()
         self.assertEqual(run("--install", home=self.home).returncode, 0)
         document = json.loads(self.settings.read_text(encoding="utf-8"))
-        self.assertEqual(len(document["hooks"]), len(EXPECTED_HOOKS))
+        ours = [
+            hook
+            for groups in document["hooks"].values()
+            for group in groups
+            for hook in group.get("hooks", [])
+            if "velesdb-memory/" in hook.get("command", "")
+        ]
+        self.assertEqual(len(ours), len(EXPECTED_HOOKS))
 
     def test_the_installed_commands_carry_no_hard_coded_home(self) -> None:
         """The command must be built from the running HOME, not from a string
@@ -398,6 +421,140 @@ class InstallerBehaviour(unittest.TestCase):
         self.assertIn("VELESDB_REPO", result.stdout + result.stderr)
 
 
+class BindingLoopInstallerContract(unittest.TestCase):
+    """The edit gate is inert until both its files and host registries ship.
+
+    As with the older installer tests, every path is rooted in a fake HOME.
+    The Codex document contains a foreign hook in the same event as ours so
+    host parity cannot be achieved by replacing somebody else's registry.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+
+        self.claude = self.home / ".claude"
+        self.claude.mkdir()
+        self.claude_settings = self.claude / "settings.json"
+        self.claude_settings.write_text(
+            json.dumps(FOREIGN_SETTINGS, indent=2) + "\n", encoding="utf-8"
+        )
+
+        self.codex = self.home / ".codex"
+        self.codex.mkdir()
+        self.codex_settings = self.codex / "hooks.json"
+        self.foreign_codex_command = "bash /opt/acme/foreign-pre-tool.sh"
+        self.codex_settings.write_text(
+            json.dumps(
+                {
+                    "theme": "dark",
+                    "hooks": {
+                        "PreToolUse": [
+                            {
+                                "matcher": "Bash",
+                                "hooks": [
+                                    {
+                                        "type": "command",
+                                        "command": self.foreign_codex_command,
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    def test_claude_pretooluse_is_versioned_and_declared_by_the_installer(self) -> None:
+        event, script = BINDING_CLAUDE_HOOKS[0]
+        self.assertTrue(
+            (SOURCE / script).is_file(),
+            "Claude Edit/Write cannot be gated: pre-tool-use.sh is not versioned",
+        )
+        installer = SCRIPT.read_text(encoding="utf-8")
+        self.assertTrue(
+            f'("{event}", "{script}")' in installer,
+            f"the Claude registry omits {event} -> {script}",
+        )
+
+    def test_codex_binding_hooks_are_all_versioned(self) -> None:
+        for name in BINDING_CODEX_FILES:
+            with self.subTest(name=name):
+                self.assertTrue(
+                    (CODEX_SOURCE / name).is_file(),
+                    f"Codex hook source is incomplete: {name} is missing",
+                )
+
+    def test_installer_declares_a_codex_registry_not_only_claude(self) -> None:
+        installer = SCRIPT.read_text(encoding="utf-8")
+        self.assertTrue(".codex" in installer, "the hook installer has no Codex destination")
+        self.assertTrue(
+            "hooks.json" in installer, "the Codex hook registry is never reconciled"
+        )
+        for event, script in BINDING_CODEX_HOOKS:
+            self.assertTrue(
+                f'("{event}", "{script}")' in installer,
+                f"the Codex registry omits {event} -> {script}",
+            )
+
+    def test_install_wires_both_hosts_and_preserves_codex_foreign_hooks(self) -> None:
+        result = run("--install", home=self.home)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        codex_document = json.loads(self.codex_settings.read_text(encoding="utf-8"))
+        all_codex_commands = [
+            hook.get("command", "")
+            for groups in codex_document.get("hooks", {}).values()
+            for group in groups
+            for hook in group.get("hooks", [])
+        ]
+        self.assertEqual(codex_document.get("theme"), "dark")
+        self.assertIn(self.foreign_codex_command, all_codex_commands)
+
+        claude_target = self.claude / "hooks" / "velesdb-memory"
+        self.assertTrue(
+            (claude_target / "pre-tool-use.sh").is_file(),
+            "--install omitted Claude's edit gate",
+        )
+
+        codex_target = self.codex / "hooks" / "velesdb-memory"
+        for name in BINDING_CODEX_FILES:
+            self.assertTrue((codex_target / name).is_file(), f"--install omitted Codex {name}")
+
+        installed_by_event = {}
+        for event, groups in codex_document.get("hooks", {}).items():
+            ours = [
+                hook.get("command", "")
+                for group in groups
+                for hook in group.get("hooks", [])
+                if ".codex/hooks/velesdb-memory/" in hook.get("command", "")
+            ]
+            if ours:
+                installed_by_event[event] = ours
+        self.assertEqual(set(installed_by_event), {event for event, _ in BINDING_CODEX_HOOKS})
+        for event, script in BINDING_CODEX_HOOKS:
+            self.assertTrue(
+                any(command.endswith(f'/{script}"') for command in installed_by_event[event]),
+                f"{event} does not invoke {script}: {installed_by_event[event]}",
+            )
+
+    def test_strict_check_observes_codex_drift(self) -> None:
+        self.assertEqual(run("--install", home=self.home).returncode, 0)
+        target = self.codex / "hooks" / "velesdb-memory" / "post-tool-use.sh"
+        self.assertTrue(target.is_file(), "the installer left no Codex hook for --check")
+        target.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+
+        result = run("--check", "--strict", home=self.home)
+
+        self.assertEqual(result.returncode, 1, "Codex drift is invisible to --check")
+        self.assertIn("post-tool-use.sh", result.stdout + result.stderr)
+        self.assertIn("drifted", result.stdout + result.stderr)
+
+
 class ManualInstructionsAgree(unittest.TestCase):
     """The README's hand-install JSON and what the tool writes must match.
 
@@ -429,7 +586,9 @@ class ManualInstructionsAgree(unittest.TestCase):
     def test_every_hook_script_is_named_in_the_readme(self) -> None:
         body = self.README.read_text(encoding="utf-8")
         for _event, script in EXPECTED_HOOKS:
-            self.assertIn(script, body, f"{script} is installed but never documented")
+            self.assertTrue(
+                script in body, f"{script} is installed but never documented"
+            )
 
     def test_the_absorbed_files_are_documented_too(self) -> None:
         """A capability that ships and is written down nowhere is a capability
