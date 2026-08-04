@@ -737,7 +737,6 @@ Tuning knobs:
 | `VELESDB_HOOK_MIN_BYTES` | `12000` | Below this, pass through — compiling would cost more than it saves. |
 | `VELESDB_HOOK_TOKEN_BUDGET` | `2000` | Token budget handed to `compile-stdin`. |
 | `VELESDB_HOOK_TOKEN_BUDGET_MAX` | twice `VELESDB_HOOK_TOKEN_BUDGET` | Ceiling a `risk: high` compilation may retry at. Equal to the budget forbids the retry. |
-| `VELESDB_HOOK_ARCHIVE_DAYS` | `7` | Age, in days, past which session start deletes archived originals. |
 | `VELESDB_HOOK_PROBE_TIMEOUT` | `10` | Seconds the capability probe may take. |
 
 > **The hook refuses a `risk: high` compilation.** It retries once at the

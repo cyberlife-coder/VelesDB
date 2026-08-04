@@ -26,18 +26,6 @@ fi
 
 resolve_config "$cwd"
 
-# The PostToolUse hook archives every original it compiles, and never deletes
-# one — deleting the only copy of a tool result is the one thing it must not
-# do. Nothing else swept them either, so the directory grew without bound.
-# Session start is the right moment: no compilation is in flight, and anything
-# a week old belongs to a session whose transcript is long gone. Best-effort
-# by construction: a failed purge must never cost the user a session start.
-archive_dir="${TMPDIR:-/tmp}/velesdb-agent-hooks/tool-output"
-if [ -d "$archive_dir" ]; then
-  find "$archive_dir" -type f -name '*.txt' \
-    -mtime "+${VELESDB_HOOK_ARCHIVE_DAYS:-7}" -delete 2>/dev/null || true
-fi
-
 context="Session memory (velesdb-memory): call load_working_context(project=\"$PROJECT\", session=\"$SESSION\") as your first action, unless you already loaded it earlier this session. It restores the prior distilled state (goal, constraints, verified facts, decisions, pending actions) left by save_working_context, so work continues instead of re-deriving context from scratch. load_working_context returns {found, working, other_sessions}: read 'working' for the state. If 'found' is false, nothing was saved under that EXACT project+session — but check 'other_sessions' before starting fresh: a similarly-named session listed there means the session id was a typo, not a new task. 'other_sessions' is filled in on a hit too, so if one of them looks more like the session you meant, you may have just resumed the wrong work. Reinforcement loop: whenever a memory surfaced by recall/recall_fused (or pulled into compile_context — its decision carries the memory_id) actually helps you, call feedback(id, true) with the id_str string; if it misled you, feedback(id, false). This is what makes ranking improve with use — skipping it keeps confidence flat."
 
 # A daemon behind the published release is worth one line, and only when it

@@ -332,7 +332,6 @@ rules are strict, and each is covered by `test/hooks.test.sh`:
 | `VELESDB_HOOK_MIN_BYTES` | `12000` | Below this, pass through — compiling would cost more than it saves. |
 | `VELESDB_HOOK_TOKEN_BUDGET` | `2000` | Token budget handed to `compile-stdin`. |
 | `VELESDB_HOOK_TOKEN_BUDGET_MAX` | twice `VELESDB_HOOK_TOKEN_BUDGET` | Ceiling a `risk: high` compilation may retry at. Set it equal to the budget to forbid the retry. |
-| `VELESDB_HOOK_ARCHIVE_DAYS` | `7` | Age, in days, past which session start deletes archived originals. |
 | `VELESDB_MEMORY_BIN` | `velesdb-memory` on `PATH` | Binary to invoke. |
 | `VELESDB_HOOK_PROBE_TIMEOUT` | `10` | Seconds the capability probe may take. |
 

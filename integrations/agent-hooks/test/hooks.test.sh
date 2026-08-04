@@ -62,6 +62,16 @@ trap cleanup EXIT
 export TMPDIR="$TMP_TEST_DIR/tmp"
 mkdir -p "$TMPDIR"
 
+# An archived original is the only recovery path for a memoryless
+# `compile-stdin` result. Session startup must therefore never age it out behind
+# the transcript's back: retention is a separate product policy, not a hook
+# side effect. Make this file old enough that the former seven-day purge would
+# delete it, then require both its path and bytes to survive SessionStart.
+archive_control="$TMPDIR/velesdb-agent-hooks/tool-output/still-referenced.txt"
+mkdir -p "$(dirname "$archive_control")"
+printf 'original bytes still referenced by a transcript' > "$archive_control"
+touch -t 202001010000 "$archive_control"
+
 PROJECT_DIR="$TMP_TEST_DIR/project"
 mkdir -p "$PROJECT_DIR"
 cat > "$PROJECT_DIR/.velesdb-hooks.json" <<'EOF'
@@ -77,6 +87,13 @@ session_start_payload="$(jq -n --arg cwd "$PROJECT_DIR" --arg sid "$SESSION_ID" 
   '{session_id: $sid, cwd: $cwd, hook_event_name: "SessionStart", source: "startup"}')"
 
 session_start_out="$(printf '%s' "$session_start_payload" | bash "$HOOKS_DIR/session-start.sh")"
+
+if [ -f "$archive_control" ] \
+  && [ "$(cat "$archive_control")" = "original bytes still referenced by a transcript" ]; then
+  pass "SessionStart: never purges the only archived original"
+else
+  fail "SessionStart: never purges the only archived original"
+fi
 
 if printf '%s' "$session_start_out" | jq -e '.hookSpecificOutput.hookEventName == "SessionStart"' >/dev/null; then
   pass "SessionStart: hookSpecificOutput.hookEventName is SessionStart"
