@@ -162,8 +162,7 @@ fn validate_capability_keys(capabilities: &BTreeMap<String, Capability>) -> Resu
         return Ok(());
     }
     Err(format!(
-        "diagnosis report capabilities are incomplete or unknown: expected exactly {:?}, got {:?}",
-        DIAGNOSIS_CAPABILITY_KEYS, actual_keys
+        "diagnosis report capabilities are incomplete or unknown: expected exactly {DIAGNOSIS_CAPABILITY_KEYS:?}, got {actual_keys:?}"
     ))
 }
 

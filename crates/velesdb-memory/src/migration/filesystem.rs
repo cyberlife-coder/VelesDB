@@ -198,7 +198,7 @@ fn open_expected_file(path: &Path, expected_len: u64) -> Result<File, crate::Mem
 
 fn hash_reader(path: &Path, file: File, hash: &mut Sha256) -> Result<u64, crate::MemoryError> {
     let mut reader = BufReader::new(file);
-    let mut buffer = [0u8; 64 * 1024];
+    let mut buffer = vec![0u8; 64 * 1024].into_boxed_slice();
     let mut bytes_read = 0u64;
     loop {
         let read = reader
