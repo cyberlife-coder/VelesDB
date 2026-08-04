@@ -56,7 +56,7 @@ pub(super) fn require_canonical_capability(
 ) -> Result<(), String> {
     let actual = capabilities
         .get(name)
-        .expect("the exact capability-key validation runs first");
+        .ok_or_else(|| format!("diagnosis capability `{name}` is missing"))?;
     if actual == expected {
         Ok(())
     } else {
@@ -220,5 +220,24 @@ fn staging_capability(copy: &DiagnosticCopy) -> Capability {
             copy.staging_required(),
             copy.source_bytes()
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_missing_canonical_capability_is_a_validation_error() {
+        let result = require_canonical_capability(
+            &BTreeMap::new(),
+            "disk_headroom",
+            &missing_capability(NO_HEADROOM),
+        );
+
+        assert_eq!(
+            result,
+            Err("diagnosis capability `disk_headroom` is missing".to_owned())
+        );
     }
 }
