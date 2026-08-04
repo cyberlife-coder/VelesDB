@@ -22,8 +22,8 @@
 #     ground-truth check.
 #   - Client config paths follow Windows conventions: Claude Desktop
 #     `%APPDATA%\Claude\claude_desktop_config.json` (stdio-only, so the
-#     installer writes an mcp-remote stdio→HTTPS bridge entry there with
-#     NODE_EXTRA_CA_CERTS — same mechanism as macOS; `.cmd` shims are
+#     installer writes a pinned mcp-remote stdio→HTTPS bridge entry there with
+#     NODE_EXTRA_CA_CERTS — same mechanism as macOS; the `npx.cmd` shim is
 #     resolved explicitly because Desktop spawns the command without a
 #     shell, and a bare/`.ps1` resolution would fail), Windsurf
 #     `%USERPROFILE%\.codeium\windsurf\mcp_config.json`, Devin CLI
@@ -35,7 +35,7 @@
 #     on Windows), with the same timestamped-backup-before-write policy.
 #
 # Everything else — flags, defaults, the "never delete local state" uninstall
-# policy, the HTTPS-by-default daemon, the four wired clients — is the same
+# policy, the HTTPS-by-default daemon, the five wired clients — is the same
 # product as scripts/install-memory-daemon.sh; read that file for the "why".
 #
 # Usage:
@@ -55,7 +55,7 @@
 #   -OllamaModel <model>      Ollama embedding model (default: all-minilm)
 #   -Ttl <seconds>            Default TTL for new facts (default: prompted, empty = permanent)
 #   -Yes                      Assume yes to interactive prompts (e.g. `ollama pull`)
-#   -SkipClient <name>        Skip wiring a client (repeatable): claude-code|claude-desktop|windsurf|devin
+#   -SkipClient <name>        Skip wiring a client (repeatable): claude-code|codex|claude-desktop|windsurf|devin
 #   -SkipCaTrust              Skip trusting the local CA in the CurrentUser\Root store
 #   -WireOnly                 Skip build/daemon setup: only (re-)verify CA trust and re-wire the
 #                             clients against an already-installed daemon (no prompts, fast)
@@ -160,6 +160,7 @@ $WindsurfConfig = "$env:USERPROFILE\.codeium\windsurf\mcp_config.json"
 # ("%APPDATA%\devin\config.json" on Windows) — unlike most of this ecosystem,
 # Devin's own docs give the Windows path explicitly, so this isn't a guess.
 $DevinConfig = "$env:APPDATA\devin\config.json"
+$script:CodexWiringStatus = 'not attempted'
 
 function Write-Info { param([string]$Message) Write-Host $Message -ForegroundColor Blue }
 function Write-Success { param([string]$Message) Write-Host $Message -ForegroundColor Green }
@@ -633,9 +634,22 @@ function Set-ClaudeCodeClient {
         return
     }
 
-    claude mcp remove velesdb-memory -s user *> $null
-    claude mcp add --transport http --scope user velesdb-memory "https://127.0.0.1:$Port/mcp" *> $null
-    if ($LASTEXITCODE -eq 0) {
+    # Removal is best-effort: a missing entry is normal, and PowerShell 7.3+
+    # can turn a native non-zero status into a terminating exception.
+    try {
+        & claude mcp remove velesdb-memory -s user *> $null
+    } catch {
+        # Continue to the idempotent add below.
+    }
+
+    $addExit = 1
+    try {
+        & claude mcp add --transport http --scope user velesdb-memory "https://127.0.0.1:$Port/mcp" *> $null
+        $addExit = $LASTEXITCODE
+    } catch {
+        if ($LASTEXITCODE -ne 0) { $addExit = $LASTEXITCODE }
+    }
+    if ($addExit -eq 0) {
         Write-Success "Claude Code wired (user scope) -> https://127.0.0.1:$Port/mcp"
         Write-Warn '   Note: project/local-scope entries (if any) are not touched — check with `claude mcp list`.'
         Write-Warn '   Note: Node-based tools don''t always consult the Windows certificate store for TLS'
@@ -643,6 +657,71 @@ function Set-ClaudeCodeClient {
         Write-Warn "     `$env:NODE_EXTRA_CA_CERTS = `"$script:TlsDir\ca-cert.pem`""
     } else {
         Write-ErrorMsg 'Failed to wire Claude Code.'
+    }
+}
+
+# Codex 0.113 introduced native Streamable HTTP session recovery. Use that
+# transport directly so an expired-session 404 can trigger re-initialization
+# instead of being swallowed by a stdio bridge.
+function Set-CodexClient {
+    if (Test-ShouldSkip 'codex') {
+        $script:CodexWiringStatus = 'skipped (-SkipClient)'
+        Write-Warn 'Skipping Codex (-SkipClient).'
+        return
+    }
+    if (-not (Get-Command codex -ErrorAction SilentlyContinue)) {
+        $script:CodexWiringStatus = 'not wired (CLI not detected)'
+        Write-Warn "'codex' CLI not found — skipping Codex wiring."
+        return
+    }
+
+    try {
+        $versionOutput = ((& codex --version 2>&1) | Out-String).Trim()
+        $versionExit = $LASTEXITCODE
+    } catch {
+        $script:CodexWiringStatus = 'not wired (version check failed)'
+        Write-Warn 'Could not read the Codex version — leaving its MCP configuration untouched.'
+        return
+    }
+    if ($versionExit -ne 0) {
+        $script:CodexWiringStatus = 'not wired (version check failed)'
+        Write-Warn 'Could not read the Codex version — leaving its MCP configuration untouched.'
+        return
+    }
+    if ($versionOutput -match '(?im)\bcodex(?:-cli)?\s+v?([0-9]+)\.([0-9]+)\.([0-9]+)') {
+        $major = [int]$Matches[1]
+        $minor = [int]$Matches[2]
+    } elseif ($versionOutput -match '^\s*v?([0-9]+)\.([0-9]+)\.([0-9]+)\s*$') {
+        $major = [int]$Matches[1]
+        $minor = [int]$Matches[2]
+    } else {
+        $script:CodexWiringStatus = 'not wired (unrecognized version)'
+        Write-Warn "Unrecognized Codex version ('$versionOutput') — native HTTP requires Codex 0.113 or newer; skipping safely."
+        return
+    }
+
+    if ($major -eq 0 -and $minor -lt 113) {
+        $script:CodexWiringStatus = 'not wired (requires >= 0.113)'
+        Write-Warn "Codex $major.$minor is too old for reliable native HTTP session recovery (minimum 0.113) — skipping."
+        return
+    }
+
+    $url = "https://127.0.0.1:$Port/mcp"
+    # `codex mcp add` updates the named entry in place. Deliberately do not
+    # remove first: a failed validation/write must not erase a working entry.
+    $addExit = 1
+    try {
+        & codex mcp add velesdb-memory --url $url *> $null
+        $addExit = $LASTEXITCODE
+    } catch {
+        if ($LASTEXITCODE -ne 0) { $addExit = $LASTEXITCODE }
+    }
+    if ($addExit -eq 0) {
+        $script:CodexWiringStatus = 'wired (native HTTP)'
+        Write-Success "Codex wired through native Streamable HTTP -> $url"
+    } else {
+        $script:CodexWiringStatus = 'not wired (add failed)'
+        Write-ErrorMsg 'Failed to wire Codex; no existing velesdb-memory entry was removed first.'
     }
 }
 
@@ -657,8 +736,8 @@ function Set-ClaudeCodeClient {
 # CA so the bridge verifies TLS strictly (never NODE_TLS_REJECT_UNAUTHORIZED=0
 # — that disables verification entirely). The bridge is a plain HTTPS client
 # of the daemon: it never opens the store itself, so no lock conflict.
-# `.cmd` shims are resolved explicitly (mcp-remote.cmd / npx.cmd, absolute
-# paths): Desktop spawns the command without a shell, so a bare name or a
+# The `npx.cmd` shim is resolved explicitly (as an absolute path): Desktop
+# spawns the command without a shell, so a bare name or a
 # `.ps1` shim would fail to launch.
 function Set-ClaudeDesktopClient {
     if (Test-ShouldSkip 'claude-desktop') {
@@ -675,30 +754,55 @@ function Set-ClaudeDesktopClient {
     $caCert = "$script:TlsDir\ca-cert.pem"
     $url = "https://127.0.0.1:$Port/mcp"
 
-    # Resolve the bridge: a globally-installed mcp-remote wins (no npx
-    # startup cost); otherwise npx fetches/caches it on first launch.
+    # Always run the audited bridge version through npx. A globally installed
+    # mcp-remote has unknown version and transport defaults, so it is ignored.
     $bridgeCmd = $null
-    $bridgeArgs = @()
-    $mcpRemote = Get-Command 'mcp-remote.cmd' -ErrorAction SilentlyContinue
+    $bridgeArgs = @('-y', 'mcp-remote@0.1.38', $url, '--transport', 'http-only')
     $npx = Get-Command 'npx.cmd' -ErrorAction SilentlyContinue
     $node = Get-Command 'node.exe' -ErrorAction SilentlyContinue
-    if ($mcpRemote) {
-        $bridgeCmd = $mcpRemote.Source
-        $bridgeArgs = @($url)
-    } elseif ($npx) {
+    if ($npx) {
         $bridgeCmd = $npx.Source
-        $bridgeArgs = @('-y', 'mcp-remote', $url)
     }
 
     if (-not $bridgeCmd -or -not $node) {
         Write-Host ''
         Write-Warn 'Claude Desktop needs a stdio->HTTPS bridge (mcp-remote), which needs Node.js —'
-        Write-Warn "   'mcp-remote.cmd'/'npx.cmd'/'node.exe' not found on PATH. Two ways to finish:"
+        Write-Warn "   'npx.cmd'/'node.exe' not found on PATH. Two ways to finish:"
         Write-Warn '   a) install Node.js (https://nodejs.org) and re-run: pwsh -File scripts/install-memory-daemon.ps1 -WireOnly'
         Write-Warn '   b) or use Desktop''s UI: Settings -> Connectors -> Add custom connector, paste:'
         Write-Host "        $url"
         Write-Warn '      (no API key needed — but this path requires the CA-trust step above to have'
         Write-Warn '      succeeded, and Desktop''s own TLS stack may still refuse a local CA).'
+        return
+    }
+
+    try {
+        $nodeVersion = ((& $node.Source --version 2>&1) | Out-String).Trim()
+        $nodeVersionExit = $LASTEXITCODE
+    } catch {
+        $nodeVersion = ''
+        $nodeVersionExit = 1
+    }
+    if ($nodeVersionExit -ne 0 -or $nodeVersion -notmatch '^v?([0-9]+)\.([0-9]+)\.([0-9]+)') {
+        Write-Warn 'Could not establish the Node.js version — leaving Claude Desktop untouched.'
+        Write-Warn '   mcp-remote@0.1.38 currently requires Node.js >=20.18.1.'
+        return
+    }
+    $nodeMajor = [int]$Matches[1]
+    $nodeMinor = [int]$Matches[2]
+    $nodePatch = [int]$Matches[3]
+    $nodeTooOld = $nodeMajor -lt 20 -or
+        ($nodeMajor -eq 20 -and $nodeMinor -lt 18) -or
+        ($nodeMajor -eq 20 -and $nodeMinor -eq 18 -and $nodePatch -lt 1)
+    if ($nodeTooOld) {
+        Write-Warn "Node.js $nodeVersion is too old for mcp-remote@0.1.38 (minimum 20.18.1)."
+        Write-Warn '   Upgrade Node.js and re-run with -WireOnly; Claude Desktop was left untouched.'
+        return
+    }
+
+    if ($env:NODE_TLS_REJECT_UNAUTHORIZED -eq '0') {
+        Write-ErrorMsg 'Refusing to wire Claude Desktop while NODE_TLS_REJECT_UNAUTHORIZED=0 disables TLS verification.'
+        Write-Warn '   Remove that variable and re-run with -WireOnly; NODE_EXTRA_CA_CERTS is the supported trust path.'
         return
     }
 
@@ -710,9 +814,14 @@ function Set-ClaudeDesktopClient {
     if (Test-Path $caCert) {
         $previousCa = $env:NODE_EXTRA_CA_CERTS
         $env:NODE_EXTRA_CA_CERTS = $caCert
-        & $node.Source -e 'require("https").get(process.argv[1],(r)=>process.exit(r.statusCode===200?0:1)).on("error",()=>process.exit(1));setTimeout(()=>process.exit(1),8000);' "https://127.0.0.1:$Port/health" *> $null
-        $nodeOk = ($LASTEXITCODE -eq 0)
-        $env:NODE_EXTRA_CA_CERTS = $previousCa
+        try {
+            & $node.Source -e 'require("https").get(process.argv[1],(r)=>process.exit(r.statusCode===200?0:1)).on("error",()=>process.exit(1));setTimeout(()=>process.exit(1),8000);' "https://127.0.0.1:$Port/health" *> $null
+            $nodeOk = ($LASTEXITCODE -eq 0)
+        } catch {
+            $nodeOk = $false
+        } finally {
+            $env:NODE_EXTRA_CA_CERTS = $previousCa
+        }
         if ($nodeOk) {
             Write-Success 'Node accepts the daemon''s certificate via NODE_EXTRA_CA_CERTS — the Desktop bridge will verify TLS strictly.'
         } else {
@@ -845,7 +954,28 @@ function Invoke-Uninstall {
     Remove-Item -Path $WrapperPath -Force -ErrorAction SilentlyContinue
 
     if (Get-Command claude -ErrorAction SilentlyContinue) {
-        claude mcp remove velesdb-memory -s user *> $null
+        $removeExit = 1
+        try {
+            & claude mcp remove velesdb-memory -s user *> $null
+            $removeExit = $LASTEXITCODE
+        } catch {
+            if ($LASTEXITCODE -ne 0) { $removeExit = $LASTEXITCODE }
+        }
+        if ($removeExit -ne 0) {
+            Write-Warn 'Could not remove the Claude Code entry; continuing with the remaining clients.'
+        }
+    }
+    if (Get-Command codex -ErrorAction SilentlyContinue) {
+        $removeExit = 1
+        try {
+            & codex mcp remove velesdb-memory *> $null
+            $removeExit = $LASTEXITCODE
+        } catch {
+            if ($LASTEXITCODE -ne 0) { $removeExit = $LASTEXITCODE }
+        }
+        if ($removeExit -ne 0) {
+            Write-Warn 'Could not remove the Codex entry; continuing with the remaining clients.'
+        }
     }
 
     foreach ($cfg in @($DesktopConfig, $WindsurfConfig, $DevinConfig)) {
@@ -874,11 +1004,19 @@ function Show-Summary {
     Write-Info '==============================================='
     Write-Info '  velesdb-memory daemon — summary'
     Write-Info '==============================================='
-    Write-Host "  Embedder:  $script:Embedder"
+    $embedderSummary = if ($WireOnly) { '(unchanged — -WireOnly)' } else { $script:Embedder }
+    $ttlSummary = if ($WireOnly) {
+        '(unchanged — -WireOnly)'
+    } elseif ($script:Ttl -ne '') {
+        $script:Ttl
+    } else {
+        'permanent (no expiry)'
+    }
+    Write-Host "  Embedder:  $embedderSummary"
     Write-Host "  Port:      $Port"
     Write-Host "  Store:     $script:Store"
     Write-Host "  TLS CA:    $script:TlsDir\ca-cert.pem"
-    Write-Host "  TTL:       $(if ($script:Ttl -ne '') { $script:Ttl } else { 'permanent (no expiry)' })"
+    Write-Host "  TTL:       $ttlSummary"
 
     $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
     $up = $false
@@ -895,7 +1033,11 @@ function Show-Summary {
         Write-Warn "not confirmed up — check $LogsDir\daemon.err.log"
     }
 
-    foreach ($client in @('claude-code', 'claude-desktop', 'windsurf', 'devin')) {
+    foreach ($client in @('claude-code', 'codex', 'claude-desktop', 'windsurf', 'devin')) {
+        if ($client -eq 'codex') {
+            Write-Host "  codex: $script:CodexWiringStatus"
+            continue
+        }
         if (Test-ShouldSkip $client) {
             Write-Host "  $client`: skipped (-SkipClient)"
         } else {
@@ -935,11 +1077,10 @@ function Main {
         }
         Enable-LocalCaTrust -CaCertPath $caCert
         Set-ClaudeCodeClient
+        Set-CodexClient
         Set-ClaudeDesktopClient
         Set-WindsurfClient
         Set-DevinClient
-        $script:Embedder = '(unchanged — -WireOnly)'
-        $script:Ttl = '(unchanged — -WireOnly)'
         Show-Summary
         exit 0
     }
@@ -957,6 +1098,7 @@ function Main {
     if ($FromRelease) { Install-FromRelease } else { Build-Daemon }
     Set-Daemon
     Set-ClaudeCodeClient
+    Set-CodexClient
     Set-ClaudeDesktopClient
     Set-WindsurfClient
     Set-DevinClient

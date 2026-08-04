@@ -57,7 +57,7 @@ No Rust toolchain? `npm i @wiscale/velesdb-memory-node`, or grab a prebuilt `.mc
 
 **Memory used *continuously*, not just available:** [`integrations/agent-hooks/`](integrations/agent-hooks/README.md) wires four Claude Code hooks — `SessionStart`/`Stop`/`PreCompact` resume and save the working context automatically, and `PostToolUse` compiles an oversized tool result *before* it enters the transcript. One global install covers every project.
 
-**One memory shared by several clients** (Claude Code, Claude Desktop, Windsurf, Devin CLI): [`scripts/install-memory-daemon.sh`](crates/velesdb-memory/README.md#http-transport-multi-client) runs `velesdb-memory` as a single local daemon — HTTPS by default, with a natively generated local CA.
+**One memory shared by several clients** (Claude Code, Codex CLI, Claude Desktop, Windsurf, Devin CLI): [`scripts/install-memory-daemon.sh`](crates/velesdb-memory/README.md#http-transport-multi-client) runs `velesdb-memory` as a single local daemon — HTTPS by default, with a natively generated local CA.
 
 **Cargo (Rust + REST server):** `cargo install velesdb-server velesdb-cli` — **Docker** (multi-arch linux/amd64 + linux/arm64): `docker run -d -p 8080:8080 -v velesdb_data:/data --name velesdb ghcr.io/cyberlife-coder/velesdb:latest`, then `curl http://localhost:8080/health`.
 

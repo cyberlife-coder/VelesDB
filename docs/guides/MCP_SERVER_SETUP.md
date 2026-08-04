@@ -64,8 +64,8 @@ there** — use an absolute path. The examples below use
 
 > **Want several clients sharing one memory?** Skip this section and jump to
 > [HTTP transport](#http-transport-multi-client): one `install-memory-daemon`
-> run builds, runs, and wires Claude Code / Claude Desktop / Windsurf / Devin
-> CLI to a single shared daemon.
+> run builds, runs, and wires Claude Code / Codex CLI / Claude Desktop /
+> Windsurf / Devin CLI to a single shared daemon.
 
 **Claude Code** — the one command most people need:
 
@@ -259,6 +259,18 @@ A client only needs to trust that CA once (the installer scripts do it
 automatically); every future leaf certificate this daemon issues is signed by
 the same CA and is trusted automatically after that.
 
+For Codex CLI, use the native Streamable HTTP transport (Codex 0.113 or
+newer), not a stdio bridge:
+
+```bash
+codex mcp add velesdb-memory --url https://127.0.0.1:18090/mcp
+```
+
+The daemon installers issue exactly that command after checking the version.
+They do not remove the existing entry first, so a failed update does not erase
+the last configuration. Older or unrecognized Codex versions are left
+untouched with a warning.
+
 | Flag / variable | Effect |
 |---|---|
 | `--http` / `VELESDB_MEMORY_HTTP=1` | Serve over streamable-HTTP instead of stdio. |
@@ -280,8 +292,20 @@ re-initializing — which is cheap and invisible when the client does it.
 call never reaches the tool, so nothing is written, while the caller sees only
 "request timed out". Measured against this daemon: it answered the retired
 session in **48 ms** with a clean `404`, and the client still reported a
-timeout. That mishandling is a client-side defect — it is not something the
-daemon can correct, and it should be reported to the client concerned.
+timeout. The HTTP regression test now gives that expired-session POST a hard
+one-second bound, independently of the setup sleep.
+
+Codex 0.113+ handles this lifecycle natively: it establishes a new session and
+retries. The installers therefore wire Codex straight to the HTTPS URL.
+Claude Desktop cannot consume that URL from its config file and still needs a
+bridge. Its pinned `mcp-remote@0.1.38` bridge does **not** recover correctly
+from the expired-session `404`: after a silence longer than the daemon's idle
+timeout, the next Desktop call can still hang until the client times out. Quit
+and restart Desktop to establish a new bridge/session. `--transport http-only`
+makes the bridge transport deterministic; it does not fix session expiry.
+That remaining Desktop limitation must not be presented as a daemon latency
+or tool-execution problem: the rejected call never reaches `memory_scope` (or
+any other tool).
 
 The default idle timeout is **60 minutes** rather than the 5 minutes the
 underlying transport library uses, because five minutes is shorter than the
@@ -422,7 +446,8 @@ claude mcp add --transport http velesdb-memory https://127.0.0.1:18090/mcp
 [`scripts/install-memory-daemon.sh`](../../scripts/install-memory-daemon.sh)
 automates all of this end to end on macOS: building with the right features,
 running the daemon as a `launchd` agent, trusting the local CA in your login
-keychain, and wiring Claude Code / Claude Desktop / Windsurf / Devin CLI. See
+keychain, and wiring Claude Code / Codex CLI / Claude Desktop / Windsurf /
+Devin CLI. See
 `--help` for the flags (`--embedder`, `--port`, `--store`, `--tls-dir`,
 `--ttl`, `--skip-client`, `--skip-ca-trust`, `--wire-only`, `--from-release`,
 `--uninstall`, …). On Linux it still builds and wires clients but skips daemon
@@ -441,12 +466,27 @@ Claude Desktop is a different mechanism than every other client, twice over:
   CA-trust step, the UI path can still refuse the daemon's certificate.
 
 The installers therefore wire Desktop through a **stdio→HTTPS bridge**:
-[`mcp-remote`](https://www.npmjs.com/package/mcp-remote) (needs Node.js),
-spawned by Desktop over stdio, connecting to the daemon over HTTPS with
+[`mcp-remote@0.1.38`](https://www.npmjs.com/package/mcp-remote). Its current
+dependency tree needs Node.js 20.18.1 or newer; the installers verify that
+minimum before touching Desktop's configuration. The bridge is spawned by
+Desktop over stdio and connects to the daemon over HTTPS with
 `NODE_EXTRA_CA_CERTS` pointed at the daemon's CA so TLS is verified *strictly*
 — never `NODE_TLS_REJECT_UNAUTHORIZED=0`, which disables verification
-entirely. The bridge is a plain HTTPS client of the daemon: it never opens the
-store, so there is no `flock` conflict.
+entirely. An ambient `NODE_TLS_REJECT_UNAUTHORIZED=0` makes the installers
+refuse to write the entry. The bridge is a plain HTTPS client of the daemon:
+it never opens the store, so there is no `flock` conflict.
+
+The top-level bridge version and transport are deliberately fixed as
+`npx -y mcp-remote@0.1.38 <url> --transport http-only`; an unversioned global
+`mcp-remote` is ignored. This prevents accidental bridge-version drift and
+transport fallback. npm still resolves the bridge's transitive dependency
+ranges on a cold install, so the command is version-pinned rather than a full
+lockfile-reproducible installation, and its first launch needs either registry
+access or an existing npm cache. The pin also does not repair the bridge's
+expired-session handling. After more than the configured idle timeout with no
+MCP traffic, the first Desktop call may time out; fully restart Desktop to
+create a fresh bridge/session. Codex does not share this limitation because it
+uses native HTTP.
 
 **Happy path** — run the installer, restart Desktop, done:
 
@@ -464,23 +504,24 @@ Then quit Claude Desktop **fully** (macOS: menu bar → Quit; Windows: system
 tray → Quit — closing the window is not enough) and relaunch it:
 **velesdb-memory** appears under **Settings → Developer** as "running".
 
-The installer verifies the whole TLS path before writing the entry (a Node
-probe against `/health` with `NODE_EXTRA_CA_CERTS` — exactly what the bridge
-will do) and merges into the existing config non-destructively, with a
-timestamped backup. Re-running is idempotent; to re-wire without rebuilding
-anything (for example after installing Node later), pass `--wire-only` /
-`-WireOnly`.
+When the CA already exists, the installer probes the same TLS path the bridge
+will use: Node requests `/health` with `NODE_EXTRA_CA_CERTS`. A missing CA or a
+failed probe produces a warning but does not suppress the entry, because the
+daemon may simply not have generated the certificate or finished starting yet;
+re-run `--wire-only` / `-WireOnly` to verify it later. The config merge itself
+is non-destructive, creates a timestamped backup, and is idempotent.
 
 The generated entry looks like this (macOS shown; Windows is the same shape
-with `mcp-remote.cmd` / `npx.cmd` and `%USERPROFILE%` paths — the installer
+with `npx.cmd` and `%USERPROFILE%` paths — the installer
 resolves **absolute** paths because Desktop spawns the command without a shell
 and, on macOS, with launchd's minimal `PATH` that contains neither Homebrew nor
 nvm):
 
 ```json
 { "mcpServers": { "velesdb-memory": {
-  "command": "/opt/homebrew/bin/mcp-remote",
-  "args": ["https://127.0.0.1:18090/mcp"],
+  "command": "/opt/homebrew/bin/npx",
+  "args": ["-y", "mcp-remote@0.1.38", "https://127.0.0.1:18090/mcp",
+           "--transport", "http-only"],
   "env": {
     "NODE_EXTRA_CA_CERTS": "/Users/you/.velesdb-memory-tls/ca-cert.pem",
     "PATH": "/opt/homebrew/bin:/usr/bin:/bin"
@@ -488,16 +529,14 @@ nvm):
 } } }
 ```
 
-Without a global `mcp-remote`, the installer writes `npx -y mcp-remote <url>`
-instead — same result, fetched on first launch.
-
 ### Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
 | Certificate refused / bridge disconnected | The CA is not trusted by the bridge's Node stack, or `NODE_EXTRA_CA_CERTS` points at a missing file. | Check the daemon answers: `curl --cacert ~/.velesdb-memory-tls/ca-cert.pem https://127.0.0.1:18090/health` (Windows: `curl.exe --cacert "$env:USERPROFILE\.velesdb-memory-tls\ca-cert.pem" https://127.0.0.1:18090/health`). Then confirm the config entry's `NODE_EXTRA_CA_CERTS` path exists, and re-run the installer with `--wire-only` / `-WireOnly`. **Never** "fix" this with `NODE_TLS_REJECT_UNAUTHORIZED=0`. |
+| First call after a long idle period times out in Desktop | `mcp-remote@0.1.38` does not turn the daemon's expired-session `404` into a fresh MCP session. The tool was never invoked. | Quit Desktop fully and relaunch it. Raising `VELESDB_MEMORY_HTTP_KEEP_ALIVE_SECS` reduces how often this occurs but does not fix the bridge. Use Codex 0.113+ over native HTTP when transparent recovery is required. |
 | Port already in use | Another process holds the port; the installer refuses to grab it. | Re-run everything with `--port=<other>` / `-Port <other>` — the Desktop entry is rewritten to match. |
-| No Node.js on the machine | The bridge cannot run. | Install Node (macOS: `brew install node`; Windows: <https://nodejs.org>) and re-run with `--wire-only` / `-WireOnly`. Until then the installer prints the UI alternative: Settings → Connectors → Add custom connector, paste `https://127.0.0.1:18090/mcp` (no API key — loopback only; requires the CA-trust step to have succeeded, and Desktop's own TLS stack may still refuse a local CA, which is why the bridge is the default). |
+| Node.js is missing or older than 20.18.1 | The pinned bridge's current dependency tree cannot run safely on that runtime. | Install or upgrade Node (macOS: `brew install node`; Windows: <https://nodejs.org>) and re-run with `--wire-only` / `-WireOnly`. Until then the installer leaves the existing Desktop config untouched and prints the UI alternative: Settings → Connectors → Add custom connector, paste `https://127.0.0.1:18090/mcp` (no API key — loopback only; requires the CA-trust step to have succeeded, and Desktop's own TLS stack may still refuse a local CA, which is why the bridge is the default). |
 | `Storage(DatabaseLocked)` | Something is opening the store directly alongside the daemon. | The bridge never does this — look for a leftover stdio entry pointing `VELESDB_MEMORY_PATH` at the daemon's store. |
 
 If you would rather not share memory with the daemon at all, the plain stdio
@@ -524,9 +563,10 @@ places:
   task launches. Daemon logs land in `%LOCALAPPDATA%\velesdb-memory\logs\`.
 - **CA trust** — the `Cert:\CurrentUser\Root` store instead of the login
   keychain, also without admin rights (see [The local CA](#the-local-ca)).
-- **Client config paths** — Claude Desktop
+- **Client wiring** — Codex 0.113+ is configured through its native HTTP CLI;
+  Claude Desktop uses
   `%APPDATA%\Claude\claude_desktop_config.json` (wired with the same
-  `mcp-remote` stdio→HTTPS bridge as macOS; `.cmd` shims resolved explicitly
+  `mcp-remote` stdio→HTTPS bridge as macOS; `npx.cmd` resolved explicitly
   because Desktop spawns the command without a shell), Windsurf
   `%USERPROFILE%\.codeium\windsurf\mcp_config.json`, Devin CLI
   `%APPDATA%\devin\config.json`.
