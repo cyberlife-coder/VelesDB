@@ -7,7 +7,9 @@ Read and follow [`AGENTS.md`](AGENTS.md) before making any change; it is the
 canonical repository contract — working principles, the CI-enforced constraints
 a PR cannot merge without, the pre-push validation sequence, and the
 architecture. This file used to duplicate it verbatim, and the two drifted: the
-declared MSRV was wrong in both for weeks. One source now.
+declared MSRV was wrong in both for weeks. What is left here is deliberate and
+bounded — the product line, three rules worth knowing before the first command,
+and the pointer list. Everywhere the two overlap, `AGENTS.md` wins.
 
 The three things worth knowing before you read it:
 
