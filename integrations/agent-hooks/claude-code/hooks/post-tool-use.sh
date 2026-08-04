@@ -62,7 +62,7 @@ payload="$(read_stdin_payload)"
 printf '%s' "$payload" | jq -e . >/dev/null 2>&1 || passthrough
 
 tool_name="$(printf '%s' "$payload" | jq -r '.tool_name // empty')"
-session_id="$(printf '%s' "$payload" | jq -r '.session_id // "unknown-session"')"
+session_id="$(printf '%s' "$payload" | jq -r '.session_id // empty')"
 tool_use_id="$(printf '%s' "$payload" | jq -r '.tool_use_id // "unknown-call"')"
 cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty')"
 [ -n "$cwd" ] || cwd="$PWD"
@@ -71,9 +71,10 @@ cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty')"
 # results are normally small and are evidence for the learning-loop guard,
 # not candidates for context compression.
 resolve_config "$cwd"
-if learning_loop_enabled && successful_memory_recall "$payload"; then
+if learning_loop_enabled && [ -n "$session_id" ] && successful_memory_recall "$payload"; then
   : > "$(sentinel_path "recall" "$session_id")"
 fi
+[ -n "$session_id" ] || session_id="unknown-session"
 
 # Tools whose output is prose or logs, and therefore compressible without
 # breaking the agent's reasoning. Override with a comma-separated list.
@@ -142,7 +143,7 @@ fi
 # Rule 1: the original survives, at a path the agent can read back.
 archive_dir="${TMPDIR:-/tmp}/velesdb-agent-hooks/tool-output"
 mkdir -p "$archive_dir"
-archive="${archive_dir}/${session_id}-${tool_use_id}.txt"
+archive="$(mktemp "${archive_dir}/velesdb-output.XXXXXX")" || passthrough
 printf '%s' "$text" > "$archive"
 
 budget="${VELESDB_HOOK_TOKEN_BUDGET:-2000}"

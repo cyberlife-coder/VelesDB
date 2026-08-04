@@ -12,10 +12,9 @@ payload="$(read_stdin_payload)"
 cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null || true)"
 session_id="$(printf '%s' "$payload" | jq -r '.session_id // empty' 2>/dev/null || true)"
 [ -n "$cwd" ] || cwd="$PWD"
-[ -n "$session_id" ] || session_id="unknown-session"
 
 resolve_config "$cwd"
-if learning_loop_enabled && successful_memory_recall "$payload"; then
+if learning_loop_enabled && [ -n "$session_id" ] && successful_memory_recall "$payload"; then
   : > "$(sentinel_path "codex-recall" "$session_id")"
 fi
 

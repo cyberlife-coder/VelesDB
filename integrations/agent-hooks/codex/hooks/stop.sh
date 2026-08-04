@@ -45,7 +45,7 @@ fi
 : > "$sentinel"
 
 if learning_loop_enabled; then
-  reason="Before finishing, complete the VelesDB learning loop: (1) recall prior patterns; (2) remember each non-trivial decision; (3) relate each decision to its cause with an outgoing relation; (4) send feedback for every recalled memory that helped or misled. Then call save_working_context(project=\"$PROJECT\", session=\"$SESSION\") with the distilled state and stop."
+  reason="Before finishing, complete the VelesDB learning loop: 1. Recall prior patterns; 2. Decision: remember each non-trivial decision; 3. Causality: relate each decision to its cause with an outgoing relation; 4. Feedback: send feedback for every recalled memory that helped or misled. Then call save_working_context(project=\"$PROJECT\", session=\"$SESSION\") with the distilled state and stop."
 else
   reason="Before finishing: call save_working_context(project=\"$PROJECT\", session=\"$SESSION\") via velesdb-memory with the distilled state (goal, key decisions, verified facts, pending actions), then stop."
 fi

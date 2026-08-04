@@ -268,6 +268,47 @@ class LearningLoopPolicy(unittest.TestCase):
                     self.edit(host, f"{host}-session-b", tool_name), host=host
                 )
 
+    def test_missing_session_id_never_creates_a_shared_unlock(self) -> None:
+        for host, contract in HOSTS.items():
+            with self.subTest(host=host):
+                recall = hook_payload(
+                    "PostToolUse",
+                    cwd=self.nested,
+                    session_id="discarded",
+                    tool_name="mcp__velesdb-memory__recall_fused",
+                    tool_input={"query": "known failures"},
+                    tool_response={"content": [], "isError": False},
+                )
+                recall.pop("session_id")
+                post = self.run_hook(host, "post-tool-use.sh", recall)
+                self.assertEqual(post.returncode, 0, post.stderr)
+
+                edit = hook_payload(
+                    "PreToolUse",
+                    cwd=self.nested,
+                    session_id="discarded",
+                    tool_name=contract["edit_tools"][0],
+                    tool_input={"file_path": str(self.project / "src" / "lib.rs")},
+                )
+                edit.pop("session_id")
+                self.assert_blocked(
+                    self.run_hook(host, "pre-tool-use.sh", edit), host=host
+                )
+
+    def test_hostile_session_id_is_safe_and_still_scoped(self) -> None:
+        hostile = "../../" + ("very-long/session-id/" * 40)
+        for host, contract in HOSTS.items():
+            with self.subTest(host=host):
+                self.unlock_with_recall(host, hostile)
+                self.assert_passed(
+                    self.edit(host, hostile, contract["edit_tools"][0]), host=host
+                )
+        marker_root = self.sentinels / "velesdb-agent-hooks"
+        self.assertTrue(marker_root.is_dir())
+        for marker in marker_root.rglob("*"):
+            self.assertLessEqual(len(marker.name), 255)
+            self.assertNotIn("very-long", marker.name)
+
     def test_failed_mcp_recall_never_unlocks(self) -> None:
         for host, contract in HOSTS.items():
             with self.subTest(host=host):

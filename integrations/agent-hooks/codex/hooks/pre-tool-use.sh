@@ -16,9 +16,12 @@ session_id="$(printf '%s' "$payload" | jq -r '.session_id // empty' 2>/dev/null 
 
 [ "$tool_name" = "apply_patch" ] || { echo '{}'; exit 0; }
 [ -n "$cwd" ] || cwd="$PWD"
-[ -n "$session_id" ] || session_id="unknown-session"
 resolve_config "$cwd"
 learning_loop_enabled || { echo '{}'; exit 0; }
+[ -n "$session_id" ] || {
+  echo "VelesDB learning-loop guard: the hook payload has no session_id, so same-session recall cannot be verified. Retry in a valid Codex session before editing." >&2
+  exit 2
+}
 
 sentinel="$(sentinel_path "codex-recall" "$session_id")"
 [ -f "$sentinel" ] && { echo '{}'; exit 0; }

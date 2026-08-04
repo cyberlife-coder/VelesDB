@@ -99,6 +99,17 @@ read_stdin_payload() {
   cat
 }
 
+# safe_marker_key VALUE: a bounded, filename-safe identity for host-provided
+# session/tool ids. Hook payload ids are normally UUIDs, but treating raw
+# values as path components would make slashes or an overlong id break every
+# later hook in that session.
+safe_marker_key() {
+  local value="$1"
+  local checksum
+  checksum="$(printf '%s' "$value" | cksum)"
+  printf '%s' "${checksum// /-}"
+}
+
 # sentinel_path KIND SESSION_ID: path to a once-per-session marker file used
 # by Stop and the successful-recall edit gate.
 # Uses $TMPDIR (falling back to /tmp) rather than a hardcoded path so it
@@ -108,6 +119,8 @@ sentinel_path() {
   local kind="$1"
   local session_id="$2"
   local dir="${TMPDIR:-/tmp}/velesdb-agent-hooks"
+  local key
   mkdir -p "$dir"
-  printf '%s/%s-%s.marker' "$dir" "$kind" "$session_id"
+  key="$(safe_marker_key "$session_id")"
+  printf '%s/%s-%s.marker' "$dir" "$kind" "$key"
 }
