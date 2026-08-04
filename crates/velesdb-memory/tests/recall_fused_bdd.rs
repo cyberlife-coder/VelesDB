@@ -13,8 +13,8 @@ mod common;
 use common::service;
 use serde_json::Value;
 use velesdb_memory::{
-    ExtractError, ExtractedFact, Extractor, FusionOptions, HashEmbedder, Link, MemoryError,
-    MemoryService, RerankError, Reranker,
+    EmbedError, Embedder, ExtractError, ExtractedFact, Extractor, FusionOptions, HashEmbedder,
+    Link, MemoryError, MemoryService, RerankError, Reranker,
 };
 
 const DECISION: &str = "we chose parking_lot to avoid lock poisoning";
@@ -90,6 +90,27 @@ impl Extractor for WeightedExtractor {
                 entities: vec!["commontopic".to_string()],
             },
         ])
+    }
+}
+
+/// Exact query match for the seed; a small vector advantage for common-only
+/// siblings; no vector signal for any other fact. This makes the graph weight,
+/// rather than incidental token overlap, decide whether the dual-hub fact wins.
+struct DualHubEmbedder;
+
+impl Embedder for DualHubEmbedder {
+    fn dimension(&self) -> usize {
+        2
+    }
+
+    fn embed(&self, text: &str) -> Result<Vec<f32>, EmbedError> {
+        if text == SEED_TEXT {
+            return Ok(vec![1.0, 0.0]);
+        }
+        if text.starts_with("common-only") {
+            return Ok(vec![0.05, 0.998_749_2]);
+        }
+        Ok(vec![0.0, 1.0])
     }
 }
 
@@ -358,6 +379,70 @@ fn recall_fused_ranks_rare_hub_sibling_above_common_hub_sibling() {
         assert!(
             rare_rank < common_rank,
             "the rare-hub sibling must outrank {common:?} (idf weighting)"
+        );
+    }
+}
+
+#[test]
+fn recall_fused_weighs_a_dual_hub_fact_by_its_rarest_hub() {
+    let dir = tempfile::TempDir::new().expect("create tempdir");
+    let svc = MemoryService::open(dir.path(), DualHubEmbedder).expect("open memory store");
+    let seed = svc.remember(SEED_TEXT, &[], None).expect("remember seed");
+    let common_hub = svc
+        .remember("common hub", &[], None)
+        .expect("remember common hub");
+    let rare_hub = svc
+        .remember("rare hub", &[], None)
+        .expect("remember rare hub");
+    let dual = svc
+        .remember("dual sibling", &[], None)
+        .expect("remember dual sibling");
+    let common_one = svc
+        .remember("common-only sibling one", &[], None)
+        .expect("remember common sibling one");
+    let common_two = svc
+        .remember("common-only sibling two", &[], None)
+        .expect("remember common sibling two");
+
+    svc.relate(seed, common_hub, "about")
+        .expect("relate seed to common hub first");
+    svc.relate(seed, rare_hub, "about")
+        .expect("relate seed to rare hub second");
+    for target in [dual, common_one, common_two] {
+        svc.relate(common_hub, target, "mentions")
+            .expect("relate common hub to sibling");
+    }
+    svc.relate(rare_hub, dual, "mentions")
+        .expect("relate rare hub to dual sibling second");
+
+    let explanation = svc.why(SEED_TEXT, 2, None).expect("why");
+    let reaching_hubs: Vec<u64> = explanation
+        .edges
+        .iter()
+        .filter(|edge| edge.to == dual && edge.relation == "mentions")
+        .map(|edge| edge.from)
+        .collect();
+    assert_eq!(reaching_hubs, [common_hub, rare_hub]);
+
+    let vector_only = svc.recall(SEED_TEXT, 10, None).expect("recall");
+    let vector_score = |id| {
+        vector_only
+            .iter()
+            .find(|hit| hit.id == id)
+            .map(|hit| hit.score)
+    };
+    assert!(vector_score(common_one) > vector_score(dual));
+
+    let fused = svc
+        .recall_fused(SEED_TEXT, 10, None, FusionOptions::default())
+        .expect("recall_fused");
+    let rank_of = |id| fused.iter().position(|hit| hit.id == id);
+    let dual_rank = rank_of(dual).expect("dual-hub sibling present");
+    for common in [common_one, common_two] {
+        let common_rank = rank_of(common).expect("common-hub sibling present");
+        assert!(
+            dual_rank < common_rank,
+            "the dual-hub sibling must use the second, rarer hub instead of the first"
         );
     }
 }

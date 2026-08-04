@@ -177,6 +177,13 @@ name = "context_compiler_benchmark"
 harness = false
 required-features = ["context"]
 
+# Latency of recall_fused's graph walk as a single entity hub's fan-out
+# grows (issue #1742) — needs the file-backed store.
+[[bench]]
+name = "fused_recall_benchmark"
+harness = false
+required-features = ["persistence"]
+
 # Reproducible before/after benchmark of the deterministic context compiler.
 # Offline and dependency-free — needs only the `context` feature.
 [[example]]

@@ -95,6 +95,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`recall_fused`'s graph reach is no longer quadratic in a hub's fan-out
+  (#1742).** `reach_weight` used to rescan every edge the traversal collected,
+  once per reached node, to find the `mentions` edges pointing at it —
+  O(hub degree) work repeated for each of O(hub degree) nodes. A user
+  accumulating facts about the same entity (the product's nominal use case,
+  not an edge case) paid a cost growing with the square of their history on
+  that topic. `mentions` edges are now indexed by target once per call
+  (`fact_id -> [hub_id, ...]`), turning the whole pass into O(edges + nodes).
+  Weighting is unchanged — a fact reached through several hubs still ranks by
+  the rarest (highest-idf) one — locked in by a new test
+  (`recall_fused_weighs_a_dual_hub_fact_by_its_rarest_hub`) and tracked going
+  forward by `benches/fused_recall_benchmark.rs`.
+
 - **TypeScript SDK: `CompileContextFragment` gains `priority`.** The wire has
   accepted it since the context compiler shipped, and this SDK never declared
   it — so a TypeScript caller could reach `compileContext` and not express the
