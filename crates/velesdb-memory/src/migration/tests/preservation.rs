@@ -145,14 +145,21 @@ fn a_collision_has_an_explicit_result() {
 
 /// Write a point straight into the collection, expiry included.
 ///
-/// NO published API produces an already-expired fact: `store_with_metadata`
-/// STRIPS `_veles_expires_at` out of caller metadata (`build_payload`), and
-/// `store_with_ttl(_, 0)` DELETES the fact rather than expiring it. An expired
-/// fact is only ever reached by time passing — which a test cannot wait for and
-/// must not fake with a sleep. So the fixture writes the on-disk state such a
-/// fact actually has: the engine never rewrites a payload when its expiry
-/// passes, it filters at read time.
-fn seed_raw(dir: &std::path::Path, id: u64, content: &str, expires_at: Option<u64>) {
+/// The direct write is what lets a fixture pick an expiry STRICTLY in the past.
+/// Two published routes do reach an expired fact, but both can only stamp
+/// `expires_at = now` — `store_with_metadata_and_ttl(_, 0)` and
+/// `AgentMemory::set_semantic_ttl_durable(_, 0)` go through `MemoryTtl::now()`,
+/// and the predicate is `exp <= now`. That is expired, but it sits exactly on
+/// the second boundary, so a fixture built on it races the clock. The test
+/// below pins that those routes work; this one keeps the fixture deterministic.
+///
+/// Two routes genuinely cannot: `store_with_metadata` STRIPS `_veles_expires_at`
+/// out of caller metadata (`build_payload`), and `store_with_ttl(_, 0)` DELETES
+/// the fact rather than expiring it.
+///
+/// What no route does is REWRITE a payload when its expiry passes — the engine
+/// filters at read time — so this is the on-disk state an expired fact has.
+pub(super) fn seed_raw(dir: &std::path::Path, id: u64, content: &str, expires_at: Option<u64>) {
     let db = velesdb_core::Database::open(dir).expect("open");
     let any = db
         .get_any_collection("_semantic_memory")
@@ -168,6 +175,41 @@ fn seed_raw(dir: &std::path::Path, id: u64, content: &str, expires_at: Option<u6
         Some(Value::Object(payload)),
     )])
     .expect("upsert");
+}
+
+#[test]
+fn the_published_zero_ttl_route_does_reach_an_expired_fact() {
+    // This file used to state that no published API produces an already-expired
+    // fact. It does: `store_with_metadata_and_ttl(_, 0)` writes the fact and
+    // then stamps `expires_at = now` through `set_ttl_durable`, and the engine's
+    // predicate is `exp <= now`. Recorded here because the claim was quoted as
+    // established while planning a rebuild, and it would have ruled out the
+    // simplest fixture in the repository.
+    let dir = tempfile::tempdir().expect("tempdir");
+    {
+        let store = NativeStore::open(dir.path(), DIM).expect("open store");
+        store
+            .store_with_metadata(1, "a live fact", &EMBEDDING, &meta(&[]))
+            .expect("seed live");
+        store
+            .store_with_metadata_and_ttl(2, "expiring on write", &EMBEDDING, &meta(&[]), 0)
+            .expect("a zero ttl must be accepted by this route");
+    }
+
+    let ids: BTreeSet<u64> = read_out(dir.path(), "_semantic_memory")
+        .iter()
+        .map(|f| f.id)
+        .collect();
+    assert!(
+        ids.contains(&1),
+        "positive control: the LIVE fact must come back, or this test proves only \
+         that the walk returns nothing"
+    );
+    assert!(
+        !ids.contains(&2),
+        "a fact written with a zero ttl is expired the moment it lands, so the walk \
+         must not export it"
+    );
 }
 
 #[test]

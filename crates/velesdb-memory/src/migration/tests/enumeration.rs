@@ -271,6 +271,115 @@ pub(super) fn enumerate_page(
 // THE GUARD — a rebuild must not come back to LIMIT/OFFSET
 // ---------------------------------------------------------------------------
 
+/// Both walks must exclude exactly the SAME expired facts.
+///
+/// They filter with the same predicate (`is_payload_expired`) and the same clock
+/// function (`now_unix_secs`), but at two different sites: `collection/core/scroll.rs`
+/// for the cursor, `search/query/similarity_filter.rs` for the scan. The predicate
+/// is therefore not where they can disagree.
+///
+/// Pagination is. `execute_scan_query` collects the first `limit + offset` LIVE
+/// points in PHYSICAL order and only then lets `ORDER BY id` sort them, so
+/// excluding an expired point shifts the physical window and not merely the
+/// sorted list. With ids that are neither contiguous nor written in ascending
+/// order, and expired facts interleaved so that no page boundary lands on a run
+/// of one kind, a walk that paged by position would show a gap or a repeat here.
+///
+/// `expired_points_are_not_resurrected` already pins the cursor side. This is
+/// the missing half: that the independent verification path agrees with it.
+#[test]
+fn both_walks_exclude_exactly_the_same_expired_facts() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut live: Vec<u64> = Vec::new();
+    let mut expired: Vec<u64> = Vec::new();
+    {
+        let store = NativeStore::open(dir.path(), DIM).expect("open store");
+        for (n, id) in SCRAMBLED.iter().copied().enumerate() {
+            if n % 2 == 0 {
+                store
+                    .store_with_metadata(id, &format!("live {id}"), &EMBEDDING, &meta(&[]))
+                    .expect("seed live");
+                live.push(id);
+            } else {
+                expired.push(id);
+            }
+        }
+    }
+    // A past instant, not `now`: the published zero-ttl route stamps
+    // `expires_at = now` and the predicate is `exp <= now`, which is expired but
+    // sits on the second boundary. A fixture must not race the clock.
+    for id in &expired {
+        super::preservation::seed_raw(dir.path(), *id, &format!("expired {id}"), Some(1_000_000));
+    }
+
+    let db = velesdb_core::Database::open(dir.path()).expect("open source");
+    let ids = |facts: Vec<RawFact>| -> Vec<u64> { facts.iter().map(|f| f.id).collect() };
+    let by_cursor = ids(enumerate_by_cursor(&db, "_semantic_memory", PAGE).expect("cursor walk"));
+    let by_offset = ids(enumerate_collection(&db, "_semantic_memory", PAGE).expect("offset walk"));
+    drop(db);
+
+    let mut only_live = live.clone();
+    only_live.sort_unstable();
+    assert_eq!(
+        by_cursor, only_live,
+        "positive control: the cursor must return every LIVE id and nothing else, \
+         or the comparison below would only prove two empty walks agree"
+    );
+    assert_eq!(
+        by_offset, by_cursor,
+        "the two walks disagree on which facts are expired; a rebuild verified by \
+         one and performed by the other would carry, or drop, exactly this difference"
+    );
+
+    // The other regime, on the SAME fixture shape. Without it the agreement above
+    // could hold because both walks return the live set for a reason that has
+    // nothing to do with expiry — and the comparison would never be seen doing
+    // work. Here the two must agree on a set that is strictly LARGER.
+    let future = tempfile::tempdir().expect("tempdir");
+    {
+        let store = NativeStore::open(future.path(), DIM).expect("open store");
+        for id in &live {
+            store
+                .store_with_metadata(*id, &format!("live {id}"), &EMBEDDING, &meta(&[]))
+                .expect("seed live");
+        }
+    }
+    for id in &expired {
+        super::preservation::seed_raw(
+            future.path(),
+            *id,
+            &format!("not yet expired {id}"),
+            Some(4_000_000_000),
+        );
+    }
+    let db = velesdb_core::Database::open(future.path()).expect("open source");
+    let future_cursor =
+        ids(enumerate_by_cursor(&db, "_semantic_memory", PAGE).expect("cursor walk"));
+    let future_offset =
+        ids(enumerate_collection(&db, "_semantic_memory", PAGE).expect("offset walk"));
+
+    let mut everything = SCRAMBLED.to_vec();
+    everything.sort_unstable();
+    assert_eq!(
+        future_cursor, everything,
+        "control: under a FUTURE expiry every seeded fact must come back, so the \
+         exclusion above was about the expiry and not about the raw write path"
+    );
+    assert_eq!(
+        future_offset, future_cursor,
+        "the two walks must also agree when nothing is expired"
+    );
+    println!(
+        "  past expiry:   {} live / {} expired over pages of {PAGE} -> both walks {by_cursor:?}",
+        live.len(),
+        expired.len()
+    );
+    println!(
+        "  future expiry: all {} seeded -> both walks {future_cursor:?}",
+        everything.len()
+    );
+}
+
 /// Files allowed to name the `OFFSET` walk, because they DEFINE it or exercise
 /// it as the independent verification path.
 const OFFSET_WALK_OWNERS: &[&str] = &[
