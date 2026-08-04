@@ -33,6 +33,13 @@
 #   4. Tool allowlist. Only tools whose output is prose/logs are compressed.
 #      `Read` and `Edit` are deliberately NEVER in it: the model needs file
 #      contents verbatim, byte for byte.
+#   5. Fidelity. A compilation the compiler reports as `risk: high` is REFUSED,
+#      not shipped: `high` means at least one fragment it classifies as
+#      critical — a code fence, a negative constraint, an exact value, a URL —
+#      did not survive verbatim. Rule 1 is not a substitute here. On this path
+#      the compiler runs with no store and no bridge, so the `ctx://source/…`
+#      handles it mints resolve to NOTHING; the temp file is the only way back,
+#      and a model that was never told to look will not look.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -126,25 +133,67 @@ archive="${archive_dir}/${session_id}-${tool_use_id}.txt"
 printf '%s' "$text" > "$archive"
 
 budget="${VELESDB_HOOK_TOKEN_BUDGET:-2000}"
+budget_max="${VELESDB_HOOK_TOKEN_BUDGET_MAX:-$((budget * 2))}"
 compiled_file="$(sentinel_path "compile-stdin-result" "${session_id}-${tool_use_id}")"
-if ! printf '%s' "$text" \
-  | run_with_watchdog 20 "$compiled_file" "$bin" compile-stdin --budget "$budget" --query "$tool_name output"; then
+
+# One compilation attempt at $1 tokens, into $compiled_file.
+compile_at() {
+  printf '%s' "$text" \
+    | run_with_watchdog 20 "$compiled_file" "$bin" compile-stdin --budget "$1" \
+      --query "$tool_name output"
+}
+
+field() {
+  jq -r "$1 // empty" "$compiled_file" 2>/dev/null || true
+}
+
+if ! compile_at "$budget"; then
   rm -f "$compiled_file"
   passthrough
 fi
+risk="$(field '.risk')"
 
-content="$(jq -r '.content // empty' "$compiled_file" 2>/dev/null || true)"
+# Rule 5: FIDELITY. `risk: high` is not a hint that the summary reads badly —
+# it is the compiler reporting that at least one fragment it classifies as
+# CRITICAL (a code fence, a negative constraint, an exact value, a URL) did not
+# survive into the output verbatim. Shipping that in place of the real result
+# is how a hook that exists to save tokens ends up costing a diagnosis.
+#
+# One escalation first, because the budget is usually what is too tight rather
+# than the content being incompressible: a 268 KB cargo log is `high` at 2 000
+# tokens and `medium` at 4 000. When the ceiling does not rescue it — a 584 KB
+# thread-stack sample stays `high` at 2 000, 4 000, 8 000 and 16 000 — the
+# answer is to compress nothing.
+if [ "$risk" = "high" ] && [ "$budget_max" -gt "$budget" ]; then
+  if ! compile_at "$budget_max"; then
+    rm -f "$compiled_file"
+    passthrough
+  fi
+  risk="$(field '.risk')"
+fi
+
+content="$(field '.content')"
 tokens_in="$(jq -r '.tokens_in // 0' "$compiled_file" 2>/dev/null || echo 0)"
 tokens_out="$(jq -r '.tokens_out // 0' "$compiled_file" 2>/dev/null || echo 0)"
 tokens_saved="$(jq -r '.tokens_saved // 0' "$compiled_file" 2>/dev/null || echo 0)"
 rm -f "$compiled_file"
 
+if [ "$risk" = "high" ]; then
+  # The tool result is left BYTE-IDENTICAL rather than annotated. Appending a
+  # sentence would mean re-encoding the whole original through `jq --arg` for
+  # no gain: the model already has the real thing, and the reason belongs to
+  # whoever is debugging the hook, not to the transcript.
+  printf 'velesdb: declined to compile a %s-byte %s result — risk=high even at budget %s; the original is untouched\n' \
+    "$original_bytes" "$tool_name" "$budget_max" >&2
+  passthrough
+fi
+
 # An empty compilation would replace a real result with nothing. compile-stdin
 # already refuses to emit one, but the hook does not take that on trust.
 [ -n "$content" ] || passthrough
 
-footer="$(printf '\n\n--- velesdb: compiled %s tokens down to %s (saved %s). Nothing was deleted — the untouched %s-byte original is at %s; Read it if this view is not enough. ---' \
-  "$tokens_in" "$tokens_out" "$tokens_saved" "$original_bytes" "$archive")"
+footer="$(printf '\n\n--- velesdb: compiled %s tokens down to %s (saved %s, fidelity risk %s). Nothing was deleted — the untouched %s-byte original is at %s; Read it if this view is not enough. ---' \
+  "$tokens_in" "$tokens_out" "$tokens_saved" "${risk:-unknown}" "$original_bytes" "$archive")"
 
 jq -n --arg out "${content}${footer}" \
   '{hookSpecificOutput: {hookEventName: "PostToolUse", updatedToolOutput: $out}}'

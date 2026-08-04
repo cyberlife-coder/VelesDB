@@ -331,8 +331,30 @@ rules are strict, and each is covered by `test/hooks.test.sh`:
 | `VELESDB_HOOK_COMPRESS_TOOLS` | `Bash,Grep,WebFetch` | Comma-separated tool allowlist. |
 | `VELESDB_HOOK_MIN_BYTES` | `12000` | Below this, pass through — compiling would cost more than it saves. |
 | `VELESDB_HOOK_TOKEN_BUDGET` | `2000` | Token budget handed to `compile-stdin`. |
+| `VELESDB_HOOK_TOKEN_BUDGET_MAX` | twice `VELESDB_HOOK_TOKEN_BUDGET` | Ceiling a `risk: high` compilation may retry at. Set it equal to the budget to forbid the retry. |
+| `VELESDB_HOOK_ARCHIVE_DAYS` | `7` | Age, in days, past which session start deletes archived originals. |
 | `VELESDB_MEMORY_BIN` | `velesdb-memory` on `PATH` | Binary to invoke. |
 | `VELESDB_HOOK_PROBE_TIMEOUT` | `10` | Seconds the capability probe may take. |
+
+**Fidelity.** A compilation the compiler reports as `risk: high` is **refused**,
+not shipped: `high` means at least one fragment it classifies as critical — a
+code fence, a negative constraint, an exact value, a URL — did not survive
+verbatim. The hook retries once at the ceiling first, because the budget is
+usually what is too tight rather than the content being incompressible; a
+268 KB cargo log measures `high` at 2 000 tokens and `medium` at 4 000. When
+the ceiling does not rescue it — a 584 KB thread-stack sample stays `high` at
+2 000, 4 000, 8 000 and 16 000 — the tool result is left byte-identical and the
+reason goes to stderr.
+
+Archiving the original is not a substitute for this. On the `compile-stdin`
+path the compiler runs with no store and no bridge, so the `ctx://source/…`
+handles it mints resolve to **nothing**; the temp file is the only way back,
+and a model that was never told to look will not look.
+
+This gate lives where the compression does, so it is Claude Code only. Codex
+cannot host the compression hook at all (see the parity table above), and there
+the same discipline exists only as guidance in the `velesdb-context-optimizer`
+skill.
 
 **Design note — why `PreCompact` blocks instead of using
 `additionalContext`:** the original plan for this feature assumed
