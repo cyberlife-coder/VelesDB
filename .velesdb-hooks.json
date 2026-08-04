@@ -1,0 +1,5 @@
+{
+  "project": "velesdb",
+  "session": "rolling",
+  "enforce_learning_loop": true
+}
