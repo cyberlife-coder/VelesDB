@@ -49,21 +49,67 @@ cargo fmt --all
 cargo clippy --workspace --all-targets --features persistence,gpu,update-check \
   --exclude velesdb-python --exclude velesdb-node -- -D warnings -D clippy::pedantic
 cargo clippy -p velesdb-node --lib -- -D warnings   # node is excluded above (N-API link), linted separately
+PYO3_PYTHON=python3 cargo clippy -p velesdb-python --lib -- -D warnings   # excluded above too (PyO3 link)
+cargo clippy -p velesdb-core --lib --bins --features persistence,gpu,update-check \
+  -- -A warnings -D clippy::undocumented_unsafe_blocks
 cargo test -p velesdb-core --features persistence -- --test-threads=1
 # A single test by name:
 cargo test -p velesdb-core --features persistence <test_name> -- --test-threads=1
 # If search path modified:
 cargo test -p velesdb-core --features persistence test_recall -- --test-threads=1
+# Doctests are a separate CI job from the test suite above:
+cargo test --doc --package velesdb-core
+cargo test --doc --package velesdb-server
 # Feature-gate sanity:
 cargo check --no-default-features
 cargo check -p velesdb-wasm --no-default-features --target wasm32-unknown-unknown
 # Functional wasm gate — catches std APIs that abort on wasm32 (e.g. SystemTime::now):
 wasm-pack test --node crates/velesdb-wasm
+# Guards and contracts. Every one of these blocks a PR through `CI Success`, and
+# every one runs here. `unittest discover` prints "Performance claims audit
+# FAILED" on stdout while passing — that is a test exercising a guard's refusal
+# path, so read `Ran N tests` + `OK`, never grep for FAILED.
+python3 -m unittest discover -s scripts/tests -p "test_*.py" -t .
+python3 scripts/check-version-sync.py
+python3 scripts/check-feature-claims.py
+python3 scripts/check-perf-claims.py --no-criterion
+python3 scripts/check-promise-contract.py
+python3 scripts/check-mcp-doc-contract.py --verbose
+python3 scripts/check-skill-private-references.py
+python3 scripts/check-ai-attribution.py "origin/develop..HEAD"
+bash scripts/check-doc-contract.sh
+for g in stamp index tracked versions; do
+  python3 scripts/check-doc-freshness.py --guard "$g" --mode strict
+done
+bash integrations/agent-hooks/test/hooks.test.sh
+cargo deny check advisories licenses bans sources
 # Shipping a new surface? grep the READMEs/CHANGELOG for now-stale availability caveats.
 ```
 
 Shortcut: `.\scripts\local-ci.ps1` (full) or `-Quick` (fmt + clippy). Git hooks: `git config core.hooksPath .githooks`.
 Benchmarks: `cargo bench -p velesdb-core --bench hnsw_benchmark` (also `simd_benchmark`, `sparse_benchmark`); end-to-end perf/recall via `python benchmarks/velesdb_benchmark.py --recall`.
+
+---
+
+## What the pre-push block does not catch
+
+The block above is not the whole of `CI Success`. These jobs block a PR too, but
+need a toolchain, a build, or a state a local run does not have. When one of them
+goes red, the cause is not in what you just ran — go read that job.
+
+| CI job | Why it is not in the block above |
+|---|---|
+| `python-integrations` | installs the wheel plus the four integration packages |
+| `python-sdk-tests` | maturin build of `velesdb-python` |
+| `node-binding-tests` | `napi build` plus npm install; the Windows job runs only when `crates/velesdb-node/` changed |
+| `velesql-conformance` | seven cargo suites plus an npm contract fixture |
+| `openapi-drift` | regenerates the spec and diffs the committed copy |
+| `perf-smoke` | criterion bench plus a 15% regression comparison |
+| `binary-size` | release build of three binaries |
+| `run-production-gates`, `propagation-guard` | cross-crate sweeps over every SDK, demo and example |
+| `compat-matrix` | Windows, wasm32 and a nightly loom pass |
+| node licence boundary | `cargo tree` assertion that `velesdb-node` never pulls `velesdb-core` |
+| `pr-governance` | branch prefix, and "not behind base" — properties of the PR, not of the tree |
 
 ---
 
