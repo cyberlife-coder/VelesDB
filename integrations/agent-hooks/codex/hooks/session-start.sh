@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Codex CLI SessionStart hook: tell the model to resume its rolling working
-# context, and — when the session restarts *because of a compaction* — to
-# compile what is about to be lost.
+# context, and — when the session restarts *because of a compaction* — to save
+# the useful state that survived before more work displaces it.
 #
 # Why SessionStart carries the compaction reminder here, unlike the Claude
 # Code integration which has a dedicated pre-compact.sh: per the Codex hooks
-# reference (checked 2026-07-25), `PreCompact` and `PostCompact` do NOT
+# reference (checked 2026-08-04), `PreCompact` and `PostCompact` do NOT
 # support `hookSpecificOutput.additionalContext`, and no `decision`/`reason`
 # output is documented for them either — so a Codex PreCompact hook has no
 # documented channel that reaches the model at all. `SessionStart` does, and

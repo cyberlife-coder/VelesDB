@@ -702,11 +702,11 @@ otherwise it exits with an explicit message.
 ## The `PostToolUse` hook
 
 [`integrations/agent-hooks/`](../../integrations/agent-hooks/README.md) ships
-four Claude Code hooks. Three of them (`SessionStart`, `Stop`, `PreCompact`)
-can only *nudge*: they hand the model a reason string and hope it calls the
-right tool, so whether the context actually shrinks stays the model's
-decision. See [Agent Memory → harness hooks](AGENT_MEMORY.md#agent-harness-hooks-mcp-server-path)
-for the full table.
+five Claude Code hooks. Three (`SessionStart`, `Stop`, `PreCompact`) are
+advisory continuations: they ask the model to call the corresponding memory or
+compiler tool. `PreToolUse` is binding for opted-in repositories, but only for
+recall-before-edit; it does not shrink context. See [Agent Memory → harness
+hooks](AGENT_MEMORY.md#agent-harness-hooks-mcp-server-path) for the full table.
 
 `PostToolUse` is different. Its output schema carries replacement content
 (`hookSpecificOutput.updatedToolOutput`), so an oversized tool result is
@@ -714,17 +714,20 @@ compiled **once**, and the compiled view is what enters the transcript. The
 bulky original is therefore never re-sent on any later turn.
 
 Compilation runs in a separate, store-free process (`velesdb-memory
-compile-stdin`, above). Three rules keep it safe on *every* tool call, each
+compile-stdin`, above). Four rules keep it safe on *every* tool call, each
 covered by
 [`integrations/agent-hooks/test/hooks.test.sh`](../../integrations/agent-hooks/test/hooks.test.sh):
 
-- **Nothing is deleted.** The untouched original is archived under
-  `$TMPDIR/velesdb-agent-hooks/tool-output/` and its path is quoted in the
-  replacement, so the agent can `Read` it back whenever the compiled view is
-  not enough.
-- **Strict allowlist.** `Bash`, `Grep`, `WebFetch` by default. `Read` and
-  `Edit` are deliberately excluded and must stay excluded — their value *is*
-  the exact bytes.
+- **Nothing is deleted.** The complete original Bash output object is
+  serialized as JSON under `$TMPDIR/velesdb-agent-hooks-$UID/tool-output/` and its
+  path is quoted in the replacement, so the agent can `Read` it back whenever
+  the compiled view is not enough.
+- **Strict schema allowlist.** Only `Bash` is enabled because its structured
+  output is documented and contract-tested. `Grep` and `WebFetch` remain off
+  until their host schemas are pinned; `Read` and `Edit` stay excluded because
+  their value *is* the exact bytes.
+- **Positive net gain.** A faithful compilation still passes through unless
+  its gross saving covers every footer byte plus a 128-token safety margin.
 - **Identity fallback everywhere.** Missing `jq`, a missing or too-old binary,
   a compilation error, an empty compiled result — each one leaves the tool
   result exactly as it was.
@@ -733,8 +736,9 @@ Tuning knobs:
 
 | Variable | Default | Effect |
 |---|---|---|
-| `VELESDB_HOOK_COMPRESS_TOOLS` | `Bash,Grep,WebFetch` | Comma-separated tool allowlist. |
+| `VELESDB_HOOK_COMPRESS_TOOLS` | `Bash` | May disable `Bash`; it cannot opt an unverified built-in output schema into replacement. |
 | `VELESDB_HOOK_MIN_BYTES` | `12000` | Below this, pass through — compiling would cost more than it saves. |
+| `VELESDB_HOOK_MIN_SAVED_TOKENS` | `128` | Minimum conservative net saving after counting each footer byte as one token. |
 | `VELESDB_HOOK_TOKEN_BUDGET` | `2000` | Token budget handed to `compile-stdin`. |
 | `VELESDB_HOOK_TOKEN_BUDGET_MAX` | twice `VELESDB_HOOK_TOKEN_BUDGET` | Ceiling a `risk: high` compilation may retry at. Equal to the budget forbids the retry. |
 | `VELESDB_HOOK_PROBE_TIMEOUT` | `10` | Seconds the capability probe may take. |
@@ -747,13 +751,14 @@ Tuning knobs:
 > resolve to nothing, and the archived temp file is the only way back to what
 > was dropped. Only explicit `risk: low` and `risk: medium` results may replace
 > a tool result; a missing, unknown, or non-string verdict fails closed to the
-> untouched original.
+> host-provided original.
 
 > **`updatedToolOutput` is Claude-Code-specific.** No other agent harness is
 > known to expose an equivalent field — Windsurf's post-hooks cannot alter a
-> result at all, and Codex, which does have lifecycle hooks, documents no
-> replacement field (A VERIFIER). So this hook is a Claude Code *bonus*, not
-> the portable core of velesdb-memory; the portable value stays the MCP tool
+> result at all, and Codex, whose current hook contract was checked and
+> measured on 2026-08-04, exposes no replacement field. So this hook is a
+> Claude Code *bonus*, not the portable core of velesdb-memory; the portable
+> value stays the MCP tool
 > surface itself, and `compile-stdin` stays usable from any script. What each
 > harness has today is tabulated in
 > [`integrations/agent-hooks/README.md`](../../integrations/agent-hooks/README.md#parity-across-harnesses).

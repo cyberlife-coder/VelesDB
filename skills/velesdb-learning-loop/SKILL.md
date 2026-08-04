@@ -29,6 +29,64 @@ This skill is not a new set of tools — it's a **discipline on top of**
 verification on velesdb *compound*: each cycle should make the next one faster
 and safer, not just add another isolated fact.
 
+## This policy is binding
+
+For an opted-in repository, the learning loop has four mandatory steps:
+
+1. **Recall** relevant decisions and anti-patterns before the first code edit.
+2. **Decision**: store every non-trivial approach, trade-off, or exception that
+   a later session must preserve.
+3. **Causality**: link the decision to its evidence and an incident to its root
+   cause with an outgoing relation.
+4. **Feedback**: reinforce or demote every recalled memory that affected the
+   work.
+
+The repository opts in with `enforce_learning_loop: true` in
+`.velesdb-hooks.json`. The `PreToolUse` guard refuses the first `Edit`/`Write`
+or `apply_patch` until `PostToolUse` has observed a successful VelesDB recall
+in the same host session and repository. A timeout, an MCP error, or
+`compile_context` without a `memory_scope` never creates the sentinel. The
+`Stop` guard blocks once on the first Stop so design, diagnosis, and review
+sessions without edits still close the loop. It blocks again after each later
+covered edit batch. Before consuming those edit records it stores the complete
+batch in an atomic pending/delivered manifest, so an interrupted Stop re-emits
+every repository identity; the continuation then passes, while a later edit
+creates a fresh checkpoint.
+
+The edit target, not just the host `cwd`, selects the repository policy. When
+they differ, a refusal queues the target. A successful recall promotes it only
+when the target is unambiguous from cwd, an explicit project filter, or a sole
+pending record from an unconfigured cwd. An accepted multi-repository patch
+records every opted-in target independently for the next `Stop`, which must
+save each listed project/session.
+
+Policy discovery canonicalizes the nearest existing parent directory. A final
+symlink that crosses an opted-in repository boundary is refused even after
+recall; invoke the edit through its physical path instead.
+
+The versioned implementation lives in `pre-tool-use.sh`, `post-tool-use.sh`,
+and `stop.sh` under each supported harness integration. Installing the skill
+alone teaches the policy; installing and trusting the hooks activates the
+mechanical guard.
+
+Be exact about the enforcement boundary: only recall-before-edit is refused
+mechanically. Decision, causality, and feedback are policy plus a blocking
+continuation reminder; shell commands that mutate files and specialized tool
+paths can bypass the edit hook. Never describe this guardrail as a complete
+security boundary.
+
+The continuation has a real context cost: at most one extra model turn for a
+session with no covered edit, plus one after each later covered edit batch.
+Claude can offset large tool-result costs through deterministic replacement;
+Codex exposes no equivalent replacement channel. Do not claim that the guard
+itself saves tokens or that its overhead is neutral.
+
+The installed hooks require `jq`. The installer and drift check refuse a
+missing dependency. If it disappears while a host is running, the edit guard
+uses the host's blocking exit code before every covered edit; other lifecycle
+reminders may still fail. “Binding” therefore also assumes the hooks are
+installed and trusted.
+
 ## Writing is never systematic — sort first
 
 Most of what happens in a session must NOT be written. A memory store that
@@ -49,9 +107,9 @@ Before storing anything, sort it into one of five:
 When in doubt, ask whether a *later* session reaching this fact would act on
 it. If not, it is noise.
 
-## The three checkpoints
+## The four steps and their checkpoints
 
-### 1. Before design/implementation — recall, don't assume
+### 1. Recall
 
 Before proposing an approach or writing code for a feature/module/area, run:
 
@@ -83,7 +141,27 @@ answer.
 If recall returns nothing, say so and proceed — never invent a memory to
 fill the gap.
 
-### 2. After a bug is found and fixed — check recurrence BEFORE remembering
+### 2. Decision
+
+When the work selects an approach, accepts a compromise, rejects a plausible
+alternative, or creates an exception to an existing rule, remember the
+decision while its reason is still known. Use `type: "decision"`, the project
+and area metadata below, and wording that states both **what** was chosen and
+**why**.
+
+Then create an outgoing relation from the decision to the evidence or cause:
+
+```
+relate(decision_id, cause_id, "caused_by")
+```
+
+Direction is part of the contract. `why(decision)` follows outgoing edges; a
+cause pointing into the decision produces a graph that looks connected from
+the other side but cannot explain the decision being queried. If a decision
+replaces an earlier one, preserve the history with `supersedes` instead of
+silently contradicting it.
+
+### 3. Causality
 
 This is the step most likely to be skipped, and the one that matters most.
 When you fix a bug, a race, a silent data-loss path, or a review finding:
@@ -110,10 +188,37 @@ When you fix a bug, a race, a silent data-loss path, or a review finding:
    - `relate` it to the fix (PR/commit description as a fact if durable
      enough), the module it concerns, and any design decision it invalidates.
 
+Before calling a cause "root", write the complete chain. A durable incident
+must distinguish these seven points:
+
+1. observed symptom;
+2. failing boundary or component;
+3. trigger and required preconditions;
+4. faulty mechanism;
+5. invariant that mechanism violated;
+6. why existing guards or tests did not catch it;
+7. corrective control and recurrence-prevention guard.
+
+If one of those is unknown, label it unknown. A plausible mechanism is a
+hypothesis, not a cause. Recall the chain before remembering: a match on the
+mechanism and violated invariant is recurrence even when the symptom differs.
+
 Skipping step 1 is how the same class of bug gets fixed twice under two
 different names, two years apart, with nothing connecting them.
 
-### 3. Before closing verification — cross-check the adversarial standard
+### 4. Feedback
+
+For every memory surfaced in Step 1 or the recurrence check that influenced
+the work, call `feedback(id_str, true)` when it helped and
+`feedback(id_str, false)` when it misled. Do this before closing, not only when
+repairing a false memory. A recalled item that was ignored because it was
+irrelevant still needs a negative outcome if it materially distracted the
+reasoning; otherwise ranking cannot learn from use.
+
+Feedback is not a substitute for correction. If the fact itself is false,
+follow the forget-and-replace procedure below as well.
+
+### Verification checkpoint — cross-check the adversarial standard
 
 Before marking a change "tested" or a PR "ready", recall the project's own
 test standard rather than trusting a green suite or a coverage number:
@@ -207,6 +312,34 @@ tail (already fixed once, PR #1011).
 - **Skipping this loop under time pressure "just this once."** The failure
   mode this skill exists to prevent happens under exactly that pressure —
   a suite that was green while three deterministic blockers sat behind it.
+
+### A green signal can lie
+
+Treat a green result as evidence only after excluding these observed modes:
+
+1. a query-language limit was mistaken for an architectural limit;
+2. a property measured below a threshold was generalized above it;
+3. asymmetric operations were compared as a ratio;
+4. debug-profile performance was presented as product performance;
+5. a benchmark changed two paths at once, so it attributed neither;
+6. a test called the setup API but never asserted the intended state existed;
+7. `0 passed, N filtered out` was read as a passing test;
+8. concurrent benchmarks contaminated each other's latency;
+9. top-k excluded the target and was mistaken for data loss;
+10. a job log was searched for tests that the job never runs.
+
+For every guard, assert the state or effect it protects, run latency measures
+alone, and verify what the job actually executes. A guard counts only after
+its refusal and the corresponding positive control have both been observed.
+
+### A red signal can lie too
+
+A red exit code can send the work toward code that is healthy. Run the guard
+alone and read its message before blaming the change. Exit status `2` may be a
+missing file or invocation error rather than the guard's intended refusal.
+In zsh, a scalar containing `script.py --flag` is not split into a command and
+argument as bash users may expect; use an argument array or spell the command
+out. Record the discriminating message, not only the color or status code.
 
 ## Where the tool contract lives
 

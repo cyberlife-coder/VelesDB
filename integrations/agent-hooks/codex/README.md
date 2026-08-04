@@ -1,56 +1,54 @@
 # Codex CLI — continuous velesdb-memory usage
 
-Two hooks ship here, mirroring the Claude Code integration where the Codex
-event surface allows it: `SessionStart` (resume the working context) and
-`Stop` (save it before the session ends). Two more steps of the loop have **no
-Codex equivalent** and are not faked — see [Parity with the Claude Code
-integration](#parity-with-the-claude-code-integration) for exactly which
-event is missing and why.
+Four hooks ship here: `SessionStart` resumes working context, `PreToolUse`
+refuses an opted-in `apply_patch` before recall, `PostToolUse` records only a
+successful VelesDB recall, and `Stop` continues once on the first Stop and
+after each later covered edit batch with the four-step learning-loop checklist
+and working-context save. Tool-result replacement still has no Codex equivalent
+and is not faked.
 
 > **Verification status.** The scripts are asserted by
 > [`../test/hooks.test.sh`](../test/hooks.test.sh) against the payload and
 > output contract published in the Codex hooks reference
-> (<https://learn.chatgpt.com/docs/hooks>, checked 2026-07-25). That harness
-> proves the scripts' decision logic, not that a real Codex build sends
-> exactly those fields. **A VERIFIER on a real Codex install**: that
-> `session_id`, `cwd` and `source` arrive as documented, and the minimum
-> Codex CLI version that ships hooks (the reference does not state one).
+> (<https://learn.chatgpt.com/docs/hooks>, checked 2026-08-04). The contract
+> was measured on `codex-cli 0.146.0-alpha.9.2` with stable hooks: a real MCP
+> `PostToolUse` payload included `tool_name`, `tool_input`, `tool_response`,
+> `tool_use_id`, and `isError: false`. The harness pins the same success and
+> failure shapes without calling a model.
 
 ## 1. Wire the velesdb-memory MCP server
 
-`~/.codex/config.toml` (or the project-local equivalent). Use an absolute
-path — `~` is not expanded in this file:
+Use the shared daemon over Codex's native Streamable HTTP transport (0.113 or
+newer), not a stdio bridge:
 
-```toml
-[mcp_servers.velesdb-memory]
-command = "/home/you/.cargo/bin/velesdb-memory"
-args = []
-env = { VELESDB_MEMORY_PATH = "/home/you/.velesdb-memory" }
+```bash
+codex mcp add velesdb-memory --url https://127.0.0.1:18090/mcp
 ```
 
-Adjust `command` to wherever `cargo install velesdb-memory` (or your local
-`target/release/velesdb-memory` build) actually put the binary — Codex
-spawns it directly, without a shell, so `~` and `$HOME` are not expanded
-here.
+The daemon installer performs that version-checked update non-destructively.
+Native HTTP re-initializes after an expired-session response; the historical
+stdio bridge can leave the host waiting instead.
 
 ## 2. Install the hooks
 
-Both scripts need `bash` and `jq` on `PATH` — they refuse to run without `jq`
-rather than silently emitting malformed JSON.
+All four scripts need `bash` and `jq` on `PATH`. The installer refuses to lay
+down hooks without `jq`; the drift check also fails if an installed tree loses
+it. At runtime a missing `jq` makes `PreToolUse` exit with Codex's blocking
+status before a covered `apply_patch`; `Stop` emits a constant blocking result
+until the dependency is restored. The guard is binding only while the hooks
+remain installed and trusted.
 
 ```bash
-mkdir -p ~/.codex/hooks/velesdb-memory
-cp /path/to/velesdb/integrations/agent-hooks/codex/hooks/*.sh ~/.codex/hooks/velesdb-memory/
-cp -r /path/to/velesdb/integrations/agent-hooks/codex/hooks/lib ~/.codex/hooks/velesdb-memory/
-chmod +x ~/.codex/hooks/velesdb-memory/*.sh
+python3 scripts/sync-agent-hooks.py --install --client codex
+python3 scripts/sync-skills.py --install --client codex
 ```
 
-Then merge [`hooks-snippet.json`](hooks-snippet.json) into `~/.codex/hooks.json`
-(user-wide) or `<repo>/.codex/hooks.json` (project-only), replacing
-`/home/you` with your real home directory. Codex spawns the command the same
-way it spawns an MCP server, so **write absolute paths** — do not rely on `~`
-or `$HOME` being expanded (A VERIFIER: whether the `command` string is passed
-through a shell at all).
+The first installer atomically replaces only its script tree and reconciles
+only entries under `${CODEX_HOME:-~/.codex}/hooks/velesdb-memory/`, preserving foreign hooks.
+The second installs the versioned policy that governs the three steps the edit
+sentinel cannot prove. Then open `/hooks`, review the exact non-managed
+definitions, and trust them. Hook trust is a Codex security boundary; neither
+installer bypasses it.
 
 The same wiring in `config.toml` form, if you prefer one file:
 
@@ -59,7 +57,7 @@ The same wiring in `config.toml` form, if you prefer one file:
 
 [[hooks.SessionStart.hooks]]
 type = "command"
-command = "bash /home/you/.codex/hooks/velesdb-memory/session-start.sh"
+command = "bash '/home/you/.codex/hooks/velesdb-memory/session-start.sh'"
 timeout = 10
 statusMessage = "velesdb-memory: resume working context"
 
@@ -67,37 +65,79 @@ statusMessage = "velesdb-memory: resume working context"
 
 [[hooks.Stop.hooks]]
 type = "command"
-command = "bash /home/you/.codex/hooks/velesdb-memory/stop.sh"
+command = "bash '/home/you/.codex/hooks/velesdb-memory/stop.sh'"
 timeout = 10
 statusMessage = "velesdb-memory: save working context"
+
+[[hooks.PreToolUse]]
+matcher = "^(apply_patch|Edit|Write)$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "bash '/home/you/.codex/hooks/velesdb-memory/pre-tool-use.sh'"
+timeout = 10
+statusMessage = "velesdb-memory: require recall before edit"
+
+[[hooks.PostToolUse]]
+matcher = "^mcp__velesdb[-_]memory__(recall|recall_fused|recall_where|compile_context|entity|why)$"
+
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = "bash '/home/you/.codex/hooks/velesdb-memory/post-tool-use.sh'"
+timeout = 10
+statusMessage = "velesdb-memory: record successful recall"
 ```
 
-## 3. Optional — pin the project and session ids
+## 3. Pin identity and opt in to enforcement
 
-Both hooks derive `project` from `basename(cwd)` and use `session="rolling"`
-by default. To pin them, drop a `.velesdb-hooks.json` at the repository root
-(the hooks walk up to 20 directories looking for it):
+The lifecycle hooks derive `project` from `basename(cwd)` and use
+`session="rolling"` by default. The edit guard resolves every `Add`, `Update`,
+`Delete`, and `Move` target in `tool_input.command`, so a patch issued from a
+different cwd still observes each target repository's policy. To pin identity,
+drop a `.velesdb-hooks.json` at the repository root (lookups walk up at most 20
+directories):
+
+Policy discovery canonicalizes the nearest existing parent directory. A final
+symlink that crosses an opted-in repository boundary is refused even after
+recall; invoke the edit through its physical path instead.
 
 ```json
-{"project": "my-product", "session": "rolling"}
+{"project": "my-product", "session": "rolling", "enforce_learning_loop": true}
 ```
 
 Use a stable `session` id rather than a fresh one per run, so state
 accumulates across sessions instead of fragmenting, and pick `project` to
 match the repository/product rather than the individual task.
+The boolean is deliberately explicit because the hooks are installed
+user-wide. Without it, load/save reminders still work but repository edits in
+unrelated projects are never blocked.
 
 ## What each hook does
 
 | Script | Event | Output channel | Behaviour |
 |---|---|---|---|
 | `hooks/session-start.sh` | `SessionStart` | `hookSpecificOutput.additionalContext` | Asks the model to call `load_working_context` first, and to close the `feedback` loop on memories that helped. When `source == "compact"` it appends a post-compaction reminder (see below). |
-| `hooks/stop.sh` | `Stop` | `decision: "block"` + `reason` | Blocks the **first** stop per `session_id` with a `save_working_context` reminder; every later stop in the same session passes through as `{}`. |
+| `hooks/pre-tool-use.sh` | `PreToolUse` | exit 2 + stderr | Refuses `apply_patch` until every opted-in target repository has a successful recall sentinel for this host session. Missing `jq` also blocks instead of failing open. |
+| `hooks/post-tool-use.sh` | `PostToolUse` | `{}` plus sentinel side effect | Marks `recall`, `recall_fused`, `recall_where`, `entity`, `why`, or scoped `compile_context` only when the MCP response is successful. |
+| `hooks/stop.sh` | `Stop` | `decision: "block"` + `reason` | In an opted-in repository, blocks on the first Stop and after each later covered `apply_patch` batch with the four-step checklist and `save_working_context`; snapshots the session-wide records into an atomic pending/delivered manifest before consuming them, so an interrupted checklist is re-emitted and each completed continuation passes. Without enforcement, keeps the legacy first-Stop save reminder. |
 
-The once-per-session guard is a sentinel file under
-`${TMPDIR:-/tmp}/velesdb-agent-hooks/`, keyed on `session_id` and namespaced
-`codex-stop-*` so it cannot collide with the Claude Code hooks if you run both.
+The guard markers live under `${TMPDIR:-/tmp}/velesdb-agent-hooks-$UID/`, keyed on
+both the opted-in repository root and `session_id`, and namespaced so Codex
+cannot collide with Claude Code. A refused target is queued; a recall promotes
+it only when cwd, an explicit project filter, or a sole pending record makes
+the target unambiguous. Recall persists for that repository and host session.
+Each accepted patch records every opted-in target in its own atomic file, so
+parallel hooks cannot lose a repository. `Stop` names every project/session
+that must be saved and retains the complete batch in a recoverable manifest
+until the following Stop acknowledges delivery.
 
-Neither hook ever opens the velesdb-memory store itself: the store is
+This enforcement is not token-neutral. It adds at most one continuation turn
+for a session with no covered edit, then one after each later covered edit
+batch. Codex has no tool-output replacement channel to offset that overhead;
+measure the workload before making a net-savings claim. The learning checkpoint
+is for durability, while token savings are a separate compiler capability.
+
+None of the hooks opens the velesdb-memory store itself: the store is
 mono-process (`flock`) and the MCP server inside the running Codex session
 already holds the lock. A hook can only steer the model into calling the
 session's *own* MCP tool. See [`../README.md`](../README.md) for the full
@@ -113,7 +153,8 @@ named.
 | Loop step | Claude Code | Codex CLI | Why |
 |---|---|---|---|
 | Load working context at session start | ✅ `session-start.sh` on `SessionStart` | ✅ `hooks/session-start.sh` on `SessionStart` | `SessionStart` supports `additionalContext` in both harnesses |
-| Save working context before the session ends | ✅ `stop.sh` on `Stop`, blocking the first stop | ✅ `hooks/stop.sh` on `Stop`, same blocking pattern | Codex documents `decision: "block"` + `reason` as a Stop continuation prompt |
+| Save/checkpoint working context | ✅ first Stop plus later edit-triggered checkpoints when opted in; legacy first-Stop reminder otherwise | ✅ same pattern in `hooks/stop.sh` | The first reminder covers non-edit work; per-repository edit records time later checklists without losing parallel targets |
+| Require successful recall before repository edit | ✅ `PreToolUse` on `Edit`/`Write` | ✅ `PreToolUse` on canonical `apply_patch` | Codex MCP `PostToolUse` was measured and exposes a success result; timeout/error results do not mark the session |
 | Compile the transcript **before** compaction | ✅ `pre-compact.sh` on `PreCompact` | ⚠️ **no pre-compaction hook.** `SessionStart` with `source == "compact"` carries an *after the fact* reminder instead | `PreCompact` and `PostCompact` support **neither** `hookSpecificOutput.additionalContext` **nor** a documented `decision`/`reason` output. A Codex `PreCompact` hook has no documented channel that reaches the model, so shipping one would be shipping a no-op. By the time `source: "compact"` fires, the detail is already gone |
 | Replace an oversized tool result | ✅ `post-tool-use.sh` via `hookSpecificOutput.updatedToolOutput` | ❌ **API gap.** No hook shipped | Codex `PostToolUse` can add `additionalContext`, or use `decision: "block"` to substitute *feedback* for the result, but documents no equivalent of `updatedToolOutput` — it cannot hand the model a compiled version of the real output. A block-based imitation would discard the tool result instead of shrinking it: data loss, not compression |
 
@@ -173,6 +214,8 @@ bash integrations/agent-hooks/test/hooks.test.sh
 To check the wiring end to end on a real Codex build, run a session in a
 directory containing a `.velesdb-hooks.json` and confirm that (a) the model
 calls `load_working_context` unprompted at the start, and (b) the first
-attempt to end the session is turned into a `save_working_context` call. If
-neither happens, the hooks are not being discovered — check that the path in
-`hooks.json` is absolute and that the scripts are executable.
+`apply_patch` is refused before recall, (c) a successful recall makes the same
+edit pass, and (d) the next Stop after that edit becomes the four-step
+continuation while a later edit creates another checkpoint. If none happens,
+open `/hooks` first: changed non-managed hooks
+remain skipped until reviewed and trusted.

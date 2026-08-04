@@ -2,6 +2,20 @@
 # Shared helpers for the VelesDB agent-hooks scripts.
 # Sourced by session-start.sh, stop.sh, pre-compact.sh — not meant to be run directly.
 
+umask 077
+
+physical_policy_start() {
+  local candidate="$1"
+  local depth=0
+  while [ ! -d "$candidate" ] && [ "$depth" -lt 40 ]; do
+    [ "$candidate" = "/" ] && break
+    candidate="$(dirname "$candidate")"
+    depth=$((depth + 1))
+  done
+  [ -d "$candidate" ] || return 1
+  (cd "$candidate" 2>/dev/null && pwd -P)
+}
+
 # require_jq: fail loudly (not silently) if jq is missing, since every hook
 # builds its JSON output through jq to get escaping right.
 require_jq() {
@@ -19,6 +33,9 @@ require_jq() {
 # can pin stable identifiers via the config file.
 resolve_config() {
   local start_dir="$1"
+  local physical_start
+  physical_start="$(physical_policy_start "$start_dir")" || return 1
+  start_dir="$physical_start"
   local dir="$start_dir"
   local config=""
   local depth=0
@@ -55,15 +72,54 @@ read_stdin_payload() {
   cat
 }
 
+safe_marker_key() {
+  local value="$1"
+  local checksum
+  checksum="$(printf '%s' "$value" | cksum)"
+  printf '%s' "${checksum// /-}"
+}
+
+marker_base_dir() {
+  local parent="${TMPDIR:-/tmp}"
+  local dir="${parent}/velesdb-agent-hooks-${UID}"
+  if [ -L "$dir" ]; then
+    return 1
+  fi
+  if [ ! -e "$dir" ]; then
+    mkdir -m 700 "$dir" 2>/dev/null || [ -d "$dir" ] || return 1
+  fi
+  [ -d "$dir" ] && [ ! -L "$dir" ] && [ -O "$dir" ] || return 1
+  chmod 700 "$dir" || return 1
+  printf '%s' "$dir"
+}
+
 # sentinel_path KIND SESSION_ID: path to the once-per-session marker file
-# used by the Stop and PreCompact hooks to fire their reminder exactly once.
-# Uses $TMPDIR (falling back to /tmp) rather than a hardcoded path so it
-# works unmodified on macOS and Linux, and namespaces under
-# velesdb-agent-hooks/ to avoid colliding with unrelated temp files.
+# used by the prompt hook to fire its reminder exactly once.
 sentinel_path() {
   local kind="$1"
   local session_id="$2"
-  local dir="${TMPDIR:-/tmp}/velesdb-agent-hooks"
-  mkdir -p "$dir"
-  printf '%s/%s-%s.marker' "$dir" "$kind" "$session_id"
+  local dir
+  local key
+  dir="$(marker_base_dir)" || return 1
+  key="$(safe_marker_key "$session_id")"
+  printf '%s/%s-%s.marker' "$dir" "$kind" "$key"
+}
+
+touch_private_marker() {
+  local path="$1"
+  local tmp
+  if [ -L "$path" ] || { [ -e "$path" ] && [ ! -f "$path" ]; }; then
+    return 1
+  fi
+  tmp="$(mktemp "${path}.tmp.XXXXXX")" || return 1
+  if ! : > "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  mv -f "$tmp" "$path"
+}
+
+valid_private_marker() {
+  local path="$1"
+  [ -f "$path" ] && [ ! -L "$path" ] && [ -O "$path" ]
 }

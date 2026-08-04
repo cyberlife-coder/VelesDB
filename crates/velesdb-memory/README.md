@@ -78,14 +78,16 @@ ones sharing no words with your question. A plain search cannot do that.
 > flat and `why` behaves like a search. Point `remember_extracted` at a
 > paragraph and it splits it into facts and wires the links for you.
 
-**4. It compresses what is too big, at the right moment.** Four [agent
+**4. It compresses what is too big, at the right moment.** Five [agent
 hooks](../../integrations/agent-hooks/README.md) fire automatically in Claude
 Code: two remind it to save and reload its state around a session, one does the
-same before a compaction, and `PostToolUse` is the one that *replaces* an
-oversized tool result with a compiled view — so the payload
-never enters the conversation at all. Nothing is deleted: the untouched
-original is written to a file and its path is quoted in the replacement, so the
-agent can read the full thing whenever the summary is not enough.
+same before a compaction, `PreToolUse` requires successful recall before an
+opted-in repository edit, and `PostToolUse` is the one that *replaces* an
+oversized `Bash` result with a schema-compatible compiled view — so the bulky
+text never enters the conversation when Claude accepts the replacement.
+Nothing is deleted: the complete original Bash output object is serialized as
+JSON and its path is quoted in the replacement, so the agent can read the full
+thing whenever the compiled view is not enough.
 
 ## Use cases
 
@@ -255,7 +257,7 @@ in [`BENCHMARK.md`](BENCHMARK.md).
 | Any MCP client | Supported | stdio by default; streamable-HTTP with `--features http`. |
 | Claude Code | Supported | `claude mcp add`, stdio or `--transport http`. Also the only harness with the `PostToolUse` replacing hook. |
 | Claude Desktop | Supported, with a caveat | Its config file accepts stdio only; for the shared daemon the installers wire a pinned `mcp-remote` stdio→HTTPS bridge, whose current dependency tree needs Node.js 20.18.1 or newer. That bridge does not yet recover transparently from an idle-expired session; restart Desktop after such a timeout. |
-| Codex CLI | Supported | `codex mcp add`, or a `[mcp_servers.*]` table. The shared-daemon installers require Codex 0.113+ and use its native Streamable HTTP transport so an expired-session `404` is re-initialized instead of hanging behind a bridge. Two lifecycle hooks ship: `SessionStart` (resume the rolling working context, and compile what a compaction is about to lose) and `Stop` (save it before finishing). `PreCompact`/`PostCompact` are not wired — they have no documented output channel that reaches the model. |
+| Codex CLI | Supported | `codex mcp add`, or a `[mcp_servers.*]` table. The shared-daemon installers require Codex 0.113+ and use its native Streamable HTTP transport so an expired-session `404` is re-initialized instead of hanging behind a bridge. Four lifecycle hooks ship: `SessionStart` resumes rolling context, `PreToolUse`/`PostToolUse` require a successful recall before an opted-in `apply_patch`, and `Stop` saves context with the learning-loop checklist. `PreCompact`/`PostCompact` are not wired — they have no documented context channel; `SessionStart` handles the post-compaction continuation. |
 | Windsurf | Supported | stdio (`mcp_config.json`) or `serverUrl` against the daemon. One advisory `pre_user_prompt` hook is wired; it is shown to the user, not injected into the model context. |
 
 Other verified clients: Cursor, Cline, Zed, opencode, Devin CLI.

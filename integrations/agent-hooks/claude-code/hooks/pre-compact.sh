@@ -39,14 +39,27 @@ fi
 
 resolve_config "$cwd"
 
-sentinel="$(sentinel_path "precompact" "$session_id")"
-
-if [ -f "$sentinel" ]; then
-  echo '{}'
+if ! sentinel="$(sentinel_path "precompact" "$session_id")"; then
+  reason="VelesDB private hook-state storage is unsafe or unavailable. Keep the session open, repair the per-user state directory, and retry compaction."
+  jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'
   exit 0
 fi
 
-: > "$sentinel"
+if valid_private_marker "$sentinel"; then
+  echo '{}'
+  exit 0
+fi
+if [ -e "$sentinel" ] || [ -L "$sentinel" ]; then
+  reason="VelesDB PreCompact marker is linked or malformed. Keep the session open, repair the private hook-state directory, and retry compaction."
+  jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'
+  exit 0
+fi
+
+if ! touch_private_marker "$sentinel"; then
+  reason="VelesDB could not persist the PreCompact continuation marker. Keep the session open, inspect the private hook-state directory, and retry compaction."
+  jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'
+  exit 0
+fi
 
 reason="Before compaction: the transcript about to be compacted is exactly what compile_transcript exists for — call it (velesdb-memory) with a token_budget to deterministically compress it (duplicates dropped, logs collapsed, code/negative-constraints preserved verbatim) instead of losing detail to lossy compaction. Also call save_working_context(project=\"$PROJECT\", session=\"$SESSION\") with the distilled state (goal, decisions, pending actions) so nothing is lost even for content compile_transcript can't recover. Then retry — compaction will proceed on the next attempt."
 
