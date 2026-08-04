@@ -225,12 +225,13 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         let nodes: Vec<&MemoryNode> = explanation.nodes.iter().filter(|n| n.hop != 0).collect();
         let ids: Vec<u64> = nodes.iter().map(|n| n.id).collect();
         let raw_payloads = self.store.get_metadata_batch(&ids)?;
+        let mentions_by_target = index_mentions_edges(&explanation.edges);
 
         let mut idf_cache: HashMap<u64, f64> = HashMap::new();
         let mut reached = Vec::new();
         for (node, raw) in nodes.into_iter().zip(raw_payloads) {
             if let Some(candidate) =
-                self.reached_candidate(node, raw, &explanation.edges, filter, &mut idf_cache)?
+                self.reached_candidate(node, raw, &mentions_by_target, filter, &mut idf_cache)?
             {
                 reached.push(candidate);
             }
@@ -254,7 +255,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         &self,
         node: &MemoryNode,
         raw: Option<Metadata>,
-        edges: &[MemoryEdge],
+        mentions_by_target: &HashMap<u64, Vec<u64>>,
         filter: Option<&Metadata>,
         idf_cache: &mut HashMap<u64, f64>,
     ) -> Result<Option<Candidate>, MemoryError> {
@@ -268,7 +269,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         if !matches_filter(metadata.as_ref(), filter) {
             return Ok(None);
         }
-        let weight = self.reach_weight(node.id, edges, idf_cache)?;
+        let weight = self.reach_weight(node.id, mentions_by_target, idf_cache)?;
         Ok(Some(Candidate {
             recollection: Recollection {
                 id: node.id,
@@ -282,22 +283,23 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     }
 
     /// The strength of the link(s) that reached `fact_id`: the maximum
-    /// entity-idf ([`Self::entity_idf`]) over every hub with a `mentions`
-    /// edge into it, or a flat `1.0` when it was reached through a direct
+    /// entity-idf ([`Self::entity_idf`]) over every hub `mentions_by_target`
+    /// lists for it, or a flat `1.0` when it was reached through a direct
     /// (non-hub) [`Self::relate`] edge instead — idf has nothing to weight
     /// there, so the original flat signal is kept.
     fn reach_weight(
         &self,
         fact_id: u64,
-        edges: &[MemoryEdge],
+        mentions_by_target: &HashMap<u64, Vec<u64>>,
         idf_cache: &mut HashMap<u64, f64>,
     ) -> Result<f64, MemoryError> {
+        let Some(hub_ids) = mentions_by_target.get(&fact_id) else {
+            return Ok(1.0);
+        };
         let mut weight: Option<f64> = None;
-        for edge in edges {
-            if edge.to == fact_id && edge.relation == MENTIONS_RELATION {
-                let idf = self.cached_entity_idf(edge.from, idf_cache)?;
-                weight = Some(weight.map_or(idf, |w: f64| w.max(idf)));
-            }
+        for &hub_id in hub_ids {
+            let idf = self.cached_entity_idf(hub_id, idf_cache)?;
+            weight = Some(weight.map_or(idf, |w: f64| w.max(idf)));
         }
         Ok(weight.unwrap_or(1.0))
     }
@@ -335,6 +337,23 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         let (n, d) = (n as f64, degree as f64);
         Ok((n / d).ln() / n.ln())
     }
+}
+
+/// Index of `mentions` edges by target, built once per [`MemoryService::graph_reached`]
+/// call: `fact_id -> [hub_id, ...]`. [`MemoryService::reach_weight`] used to
+/// rescan every edge in the traversal for each reached node, making
+/// `graph_reached` quadratic in the number of facts a hub mentions (a single
+/// entity accumulating history is the product's nominal use case, not an edge
+/// case). This index turns that per-node scan into an O(1) lookup, so the
+/// whole pass over `edges` costs O(edges) once instead of O(edges) per node.
+fn index_mentions_edges(edges: &[MemoryEdge]) -> HashMap<u64, Vec<u64>> {
+    let mut index: HashMap<u64, Vec<u64>> = HashMap::new();
+    for edge in edges {
+        if edge.relation == MENTIONS_RELATION {
+            index.entry(edge.to).or_default().push(edge.from);
+        }
+    }
+    index
 }
 
 /// True when `filter` is absent, or every key in it matches `metadata`

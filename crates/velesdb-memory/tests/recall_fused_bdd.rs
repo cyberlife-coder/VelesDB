@@ -93,6 +93,34 @@ impl Extractor for WeightedExtractor {
     }
 }
 
+/// A seed tagged with a rare and a common topic, plus one sibling reached
+/// through BOTH hubs and two siblings reached through the common hub only —
+/// isolates `reach_weight`'s max-over-hubs rule from its single-hub case.
+struct DualHubExtractor;
+
+impl Extractor for DualHubExtractor {
+    fn extract(&self, _text: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
+        Ok(vec![
+            ExtractedFact {
+                text: SEED_TEXT.to_string(),
+                entities: vec!["raretopic".to_string(), "commontopic".to_string()],
+            },
+            ExtractedFact {
+                text: "dual sibling via the rare and common topics".to_string(),
+                entities: vec!["raretopic".to_string(), "commontopic".to_string()],
+            },
+            ExtractedFact {
+                text: "common-only sibling via the common topic".to_string(),
+                entities: vec!["commontopic".to_string()],
+            },
+            ExtractedFact {
+                text: "common sibling two via the common topic".to_string(),
+                entities: vec!["commontopic".to_string()],
+            },
+        ])
+    }
+}
+
 /// A reranker that reverses the candidate order — proof the pool actually
 /// reaches the caller's hook and its output order is honored, not ignored.
 struct ReverseReranker;
@@ -358,6 +386,31 @@ fn recall_fused_ranks_rare_hub_sibling_above_common_hub_sibling() {
         assert!(
             rare_rank < common_rank,
             "the rare-hub sibling must outrank {common:?} (idf weighting)"
+        );
+    }
+}
+
+#[test]
+fn recall_fused_weighs_a_dual_hub_fact_by_its_rarest_hub() {
+    let (_dir, svc) = service();
+    svc.remember_extracted(SEED_TEXT, &DualHubExtractor, None)
+        .expect("extract and remember");
+
+    // The dual sibling is reached through BOTH the rare and the common hub;
+    // reach_weight must take the MAX over every reaching hub, so it should
+    // rank strictly above a sibling reached through the common hub alone —
+    // proof the multi-hub weighting survives being computed from an index
+    // instead of a per-node scan over every edge.
+    let fused = svc
+        .recall_fused(SEED_TEXT, 10, None, FusionOptions::default())
+        .expect("recall_fused");
+    let rank_of = |needle: &str| fused.iter().position(|r| r.content.contains(needle));
+    let dual_rank = rank_of("dual sibling").expect("dual-hub sibling present");
+    for common in ["common-only sibling", "common sibling two"] {
+        let common_rank = rank_of(common).expect("common-hub sibling present");
+        assert!(
+            dual_rank < common_rank,
+            "the dual-hub sibling must outrank {common:?} (max-over-hubs idf weighting)"
         );
     }
 }
