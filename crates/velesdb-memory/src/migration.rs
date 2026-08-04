@@ -47,16 +47,18 @@
 
 mod diagnosis;
 mod enumeration;
+mod filesystem;
 mod state;
 
 pub use diagnosis::{
-    bytes_on_disk, diagnose, fingerprint, same_filesystem, Capability, CollectionInventory,
-    DiagnosisReport, SourceProvenance, TtlSummary, DIAGNOSIS_FORMAT_VERSION,
+    diagnose, same_filesystem, Capability, CollectionInventory, DiagnosisReport, SourceProvenance,
+    TtlSummary, DIAGNOSIS_FORMAT_VERSION,
 };
 pub use enumeration::{
     enumerate_by_cursor, enumerate_collection, enumerate_page, reinsert, reinsert_batch,
     scroll_page, BatchReinsertion, RawFact, Reinsertion, AGENT_COLLECTIONS,
 };
+pub use filesystem::{bytes_on_disk, fingerprint};
 pub use state::{
     MigrationLock, MigrationState, Phase, Recovery, SwitchState, LOCK_FILE, PHASES, STATE_FILE,
     STATE_FORMAT_VERSION,

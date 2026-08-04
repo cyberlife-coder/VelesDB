@@ -1,4 +1,5 @@
 use super::enumeration::{enumerate_by_cursor, scroll_page, AGENT_COLLECTIONS};
+use super::filesystem::{bytes_on_disk, fingerprint};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -40,7 +41,7 @@ impl Capability {
 /// whether a prepared migration may resume. A report whose version this build
 /// does not understand is refused rather than guessed at, which is only
 /// possible because the number travels with the data.
-pub const DIAGNOSIS_FORMAT_VERSION: u32 = 1;
+pub const DIAGNOSIS_FORMAT_VERSION: u32 = 2;
 
 /// What the store itself records about the embedder that filled it.
 ///
@@ -216,72 +217,6 @@ impl DiagnosisReport {
     pub fn is_clear(&self) -> bool {
         self.blockers.is_empty() && self.capabilities.values().all(Capability::is_proven)
     }
-}
-
-/// A digest of every file in `dir`, over paths and lengths.
-///
-/// Deliberately NOT a cryptographic hash and deliberately not `DefaultHasher`:
-/// the first would cost a full read of the store to answer a question about
-/// accidental change, and the second is explicitly not stable across Rust
-/// releases — a fingerprint taken by one binary and compared by the next has to
-/// mean the same thing. FNV-1a over the sorted `(relative path, length)` pairs
-/// is fixed by this function and by nothing else.
-///
-/// What it detects: a file added, removed, or resized between prepare and
-/// resume. What it does not: an in-place edit that preserves length, or
-/// tampering by anyone who can also recompute this. It is a guard against a
-/// store that moved on, not against an adversary.
-///
-/// # Errors
-/// Returns [`crate::MemoryError`] if the directory cannot be walked.
-pub fn fingerprint(dir: &Path) -> Result<String, crate::MemoryError> {
-    let mut entries: Vec<(String, u64)> = Vec::new();
-    collect_files(dir, dir, &mut entries)?;
-    entries.sort_unstable();
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for (path, len) in &entries {
-        for byte in path.as_bytes().iter().chain(&len.to_le_bytes()) {
-            hash ^= u64::from(*byte);
-            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-    }
-    Ok(format!("fnv1a64:{hash:016x}"))
-}
-
-/// Sum of every file's length under `dir`.
-///
-/// # Errors
-/// Returns [`crate::MemoryError`] if the directory cannot be walked.
-pub fn bytes_on_disk(dir: &Path) -> Result<u64, crate::MemoryError> {
-    let mut entries: Vec<(String, u64)> = Vec::new();
-    collect_files(dir, dir, &mut entries)?;
-    Ok(entries.iter().map(|(_, len)| len).sum())
-}
-
-/// Walk `dir` recursively, recording each file's path relative to `root` and
-/// its length.
-fn collect_files(
-    root: &Path,
-    dir: &Path,
-    out: &mut Vec<(String, u64)>,
-) -> Result<(), crate::MemoryError> {
-    let read = std::fs::read_dir(dir)
-        .map_err(|e| velesdb_core::Error::Query(format!("cannot read {}: {e}", dir.display())))?;
-    for entry in read {
-        let entry =
-            entry.map_err(|e| velesdb_core::Error::Query(format!("cannot read an entry: {e}")))?;
-        let path = entry.path();
-        let meta = entry.metadata().map_err(|e| {
-            velesdb_core::Error::Query(format!("cannot stat {}: {e}", path.display()))
-        })?;
-        if meta.is_dir() {
-            collect_files(root, &path, out)?;
-        } else {
-            let rel = path.strip_prefix(root).unwrap_or(&path).to_string_lossy();
-            out.push((rel.into_owned(), meta.len()));
-        }
-    }
-    Ok(())
 }
 
 /// Whether `a` and `b` sit on the same filesystem.

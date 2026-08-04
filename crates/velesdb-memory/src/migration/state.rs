@@ -19,11 +19,10 @@ pub const STATE_FILE: &str = "migration-state.json";
 
 /// The shape of a [`MigrationState`].
 ///
-/// Bumped when the state's meaning changes. A state stamped NEWER than the
-/// binary reading it is refused outright: an older build resuming a newer
-/// migration would act on fields it does not know exist, half-way through a
-/// switch-over.
-pub const STATE_FORMAT_VERSION: u32 = 1;
+/// Bumped when the state's meaning changes. Only the current version may
+/// resume: a newer state may contain unknown decisions, while an older one may
+/// rely on guarantees this build deliberately strengthened.
+pub const STATE_FORMAT_VERSION: u32 = 2;
 
 /// Where a migration has got to.
 ///
@@ -260,12 +259,16 @@ impl MigrationState {
     /// # Errors
     /// A message naming what changed and what the operator can do about it.
     pub fn may_resume(&self, source_fingerprint: &str, target_model: &str) -> Result<(), String> {
-        if self.format_version > STATE_FORMAT_VERSION {
+        if self.format_version != STATE_FORMAT_VERSION {
+            let action = if self.format_version < STATE_FORMAT_VERSION {
+                "This older state predates content-based source fingerprints. Start a fresh diagnosis."
+            } else {
+                "Use the version that wrote it."
+            };
             return Err(format!(
-                "this migration state is version {} and this build understands up to {}. \
-                 Resuming would mean acting on fields this binary does not know exist, \
-                 part-way through a switch-over. Use the version that wrote it.",
-                self.format_version, STATE_FORMAT_VERSION
+                "this migration state is version {} and this build requires version {}. \
+                 Resuming across incompatible state semantics is unsafe. {action}",
+                self.format_version, STATE_FORMAT_VERSION,
             ));
         }
         if self.source_fingerprint != source_fingerprint {
@@ -296,7 +299,7 @@ impl MigrationState {
     ///
     /// # Errors
     /// The file is unreadable, is not JSON, or is stamped with a version newer
-    /// than [`STATE_FORMAT_VERSION`].
+    /// from [`STATE_FORMAT_VERSION`].
     pub fn read(workspace: &Path) -> Result<Option<Self>, String> {
         let path = workspace.join(STATE_FILE);
         let raw = match std::fs::read_to_string(&path) {
@@ -310,10 +313,15 @@ impl MigrationState {
             .get("format_version")
             .and_then(Value::as_u64)
             .ok_or_else(|| format!("{STATE_FILE} carries no format_version"))?;
-        if version > u64::from(STATE_FORMAT_VERSION) {
+        if version != u64::from(STATE_FORMAT_VERSION) {
+            let action = if version < u64::from(STATE_FORMAT_VERSION) {
+                "This older state predates content-based source fingerprints; start a fresh diagnosis."
+            } else {
+                "Use the version that wrote it."
+            };
             return Err(format!(
-                "{STATE_FILE} is version {version} and this build understands up to \
-                 {STATE_FORMAT_VERSION}. Refusing to act on a state written by a newer version."
+                "{STATE_FILE} is version {version} and this build requires version \
+                 {STATE_FORMAT_VERSION}. Refusing incompatible migration semantics. {action}"
             ));
         }
         serde_json::from_value(value)

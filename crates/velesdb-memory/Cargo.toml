@@ -31,6 +31,7 @@ serde = { workspace = true }
 # capability, it is how the daemon is operated.
 toml = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { version = "0.11", optional = true }
 # Pinned to rmcp's schemars (1.2.x) so domain types and MCP DTOs share one
 # JsonSchema derive — no duplicate wire/domain structs.
 schemars = "1"
@@ -132,7 +133,7 @@ context = []
 # — tokio/mio/memmap2). On by default; a backend with its own MemoryStore impl
 # (e.g. velesdb-wasm's in-memory one) builds with `default-features = false`
 # and omits this, so those heavy deps never enter its dependency graph.
-persistence = ["velesdb-core/persistence"]
+persistence = ["velesdb-core/persistence", "dep:sha2"]
 # Real on-device semantic recall via a local Ollama embeddings endpoint. Off by
 # default so the shipped binary stays tiny, zero-dependency, and fully offline.
 ollama = ["dep:ureq"]

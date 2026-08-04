@@ -16,7 +16,7 @@ fn resumable_state() -> MigrationState {
         format_version: super::STATE_FORMAT_VERSION,
         phase: Phase::Prepared,
         source_path: std::path::PathBuf::from("/store"),
-        source_fingerprint: "fnv1a64:0123456789abcdef".to_owned(),
+        source_fingerprint: "sha256-tree-v2:0123456789abcdef".to_owned(),
         target_model: TARGET_MODEL.to_owned(),
         target_dimension: TARGET_DIM,
     }
@@ -162,7 +162,7 @@ fn a_newer_state_version_is_refused() {
         "format_version": super::STATE_FORMAT_VERSION + 1,
         "phase": "prepared",
         "source_path": "/store",
-        "source_fingerprint": "fnv1a64:0123456789abcdef",
+        "source_fingerprint": "sha256-tree-v2:0123456789abcdef",
         "target_model": TARGET_MODEL,
         "target_dimension": TARGET_DIM,
         "a_field_from_the_future": { "that": "this build cannot interpret" },
@@ -200,6 +200,41 @@ fn a_newer_state_version_is_refused() {
 }
 
 #[test]
+fn an_older_weak_fingerprint_state_requires_a_fresh_diagnosis() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let old = serde_json::json!({
+        "format_version": super::STATE_FORMAT_VERSION - 1,
+        "phase": "prepared",
+        "source_path": "/store",
+        "source_fingerprint": "fnv1a64:0123456789abcdef",
+        "target_model": TARGET_MODEL,
+        "target_dimension": TARGET_DIM,
+    });
+    std::fs::write(
+        workspace.path().join(super::STATE_FILE),
+        serde_json::to_string_pretty(&old).expect("json"),
+    )
+    .expect("write old state");
+
+    let refusal = MigrationState::read(workspace.path())
+        .expect_err("a weak length-only fingerprint must never resume");
+    assert!(
+        refusal.contains("older")
+            && refusal.contains("content-based")
+            && refusal.contains("fresh diagnosis"),
+        "the refusal must explain why the old state is unsafe and how to recover: {refusal}"
+    );
+
+    let mut in_memory = resumable_state();
+    in_memory.format_version -= 1;
+    in_memory.source_fingerprint = "fnv1a64:0123456789abcdef".to_owned();
+    let refusal = in_memory
+        .may_resume(&in_memory.source_fingerprint, TARGET_MODEL)
+        .expect_err("an in-memory old state must not bypass the version gate");
+    assert!(refusal.contains("fresh diagnosis"), "{refusal}");
+}
+
+#[test]
 fn a_changed_source_fingerprint_refuses_resume() {
     let state = resumable_state();
 
@@ -233,6 +268,22 @@ fn a_changed_source_fingerprint_refuses_resume() {
         after,
         "and it must be stable when the store is not — a fingerprint that \
          changed on its own would refuse every legitimate resume"
+    );
+}
+
+#[test]
+fn a_same_size_content_change_changes_the_fingerprint() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("payload.bin");
+    std::fs::write(&file, b"AAAA").expect("write initial content");
+    let before = super::fingerprint(dir.path()).expect("fingerprint before");
+
+    std::fs::write(&file, b"BBBB").expect("replace with same-size content");
+    let after = super::fingerprint(dir.path()).expect("fingerprint after");
+
+    assert_ne!(
+        before, after,
+        "a content edit that preserves file length must invalidate a prepared migration"
     );
 }
 
