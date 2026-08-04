@@ -285,6 +285,52 @@ class LearningLoopPolicy(unittest.TestCase):
             {"project": "velesdb", "session": "rolling", "enforce_learning_loop": True},
         )
 
+        # Exercise the leak on a checkout whose basename differs from the pinned
+        # project — the shape every worktree has. `REPO.name` could not stand in
+        # for it: on a canonical lowercase clone it IS "velesdb", so asserting it
+        # absent contradicted the assertIn above, and the test passed only where
+        # the directory happened to be cased differently from the project
+        # (GitHub checks out VelesDB/, so CI was green while a local velesdb/
+        # was red). `self.project` is named velesdb-wt-contract and carries its
+        # own pinning file, so the property holds in either casing.
+        # Both cwds matter. From the checkout root the fallback would emit the
+        # basename itself, so `assertNotIn` is the assertion that fires; from a
+        # nested path it would emit that path's basename instead, which only
+        # `assertIn` catches. Testing one of the two leaves the other unproven.
+        for host in HOSTS:
+            for cwd in (self.project, self.nested):
+                with self.subTest(host=host, cwd=cwd.name):
+                    result = self.run_hook(
+                        host,
+                        "session-start.sh",
+                        hook_payload(
+                            "SessionStart",
+                            cwd=cwd,
+                            session_id=f"identity-{host}",
+                        ),
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    context = json.loads(result.stdout)["hookSpecificOutput"][
+                        "additionalContext"
+                    ]
+                    self.assertIn('project="velesdb"', context)
+                    self.assertIn('session="rolling"', context)
+                    self.assertNotIn(
+                        self.project.name,
+                        context,
+                        "a worktree basename leaked into memory identity",
+                    )
+
+    def test_an_unpinned_checkout_does_leak_its_basename(self) -> None:
+        """Positive control: the guard above must be able to refuse.
+
+        `common.sh` falls back to `project=basename(cwd)` when no
+        `.velesdb-hooks.json` is found. That fallback is the whole reason the
+        guard exists; if it ever stops leaking, the assertion above becomes
+        vacuous and has to be re-derived rather than trusted.
+        """
+        unpinned = self.private / "velesdb-wt-unpinned"
+        unpinned.mkdir(parents=True)
         for host in HOSTS:
             with self.subTest(host=host):
                 result = self.run_hook(
@@ -292,19 +338,13 @@ class LearningLoopPolicy(unittest.TestCase):
                     "session-start.sh",
                     hook_payload(
                         "SessionStart",
-                        cwd=REPO / "crates",
-                        session_id=f"identity-{host}",
+                        cwd=unpinned,
+                        session_id=f"unpinned-{host}",
                     ),
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
-                self.assertIn('project="velesdb"', context)
-                self.assertIn('session="rolling"', context)
-                self.assertNotIn(
-                    REPO.name,
-                    context,
-                    "a worktree basename leaked into memory identity",
-                )
+                self.assertIn(f'project="{unpinned.name}"', context)
 
     def test_disabled_or_unconfigured_projects_do_not_gate_edits(self) -> None:
         unconfigured = self.private / "ordinary-project"
