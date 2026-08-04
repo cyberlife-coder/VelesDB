@@ -541,6 +541,143 @@ fn the_cursor_cost_per_fact_does_not_grow_like_the_offset_walk() {
     );
 }
 
+/// What the two rebuild regimes cost per fact, measured instead of inferred.
+///
+/// `embedder_cost` is [`Capability::Missing`], and its blocker text quotes
+/// `16.3 us/fact to re-insert`. That is the REINSERTION cost, measured on the
+/// store, in the regime where the embedder is never called at all. Reading it as
+/// an embedder cost is what makes "the embedder dominates a rebuild" look
+/// established when it is regime-dependent.
+///
+/// `reinsert` takes the vector FROM THE CALLER. A rebuild that does not change
+/// the embedding model can therefore replay the source vectors and never embed
+/// anything; the embedder only dominates when the model CHANGES. Both unit costs
+/// are measured here, in the same run, and printed side by side.
+///
+/// What this does NOT do is compose them into a rebuild duration. No rebuild is
+/// callable — the module has no consumer — so a total would be an extrapolation
+/// wearing a measurement's clothes. It is also a one-call-per-fact figure: the
+/// backend accepts batched requests, and a batched re-embedding would not cost
+/// this.
+///
+/// A live backend is required, and `OllamaEmbedder::new` probes the dimension on
+/// construction, so an absent one fails here loudly rather than leaving a cost
+/// test quietly passing on nothing.
+///
+/// Measured 2026-08-05, aarch64-apple-darwin, debug profile, machine at rest,
+/// bge-m3 at 1024 dimensions, 32 facts, one call per fact:
+///
+/// | regime                          | per fact   |
+/// |---------------------------------|------------|
+/// | re-embedding (model CHANGED)    | 88 462 µs  |
+/// | reinsertion (vectors REUSED)    |  3 900 µs  |
+/// | ratio                           | ×23        |
+///
+/// **×23, not orders of magnitude — and the ratio depends on the payload.**
+/// Comparing an embedding time against the `16.3 us/fact` in the blocker text
+/// suggests a factor near ten thousand. It is wrong on both terms.
+///
+/// Probed the same day, same 1024 dimensions, payload carrying NO text:
+/// reinsertion drops to 460 µs/fact and the ratio rises to ×194. So the
+/// dominant term in reinsertion is not the vector width — it is the BM25 text
+/// WAL, which the table in `the_per_point_write_cost_is_attributed_to_payload_or_vector`
+/// already attributes at `DIM = 4` (3 457.8 µs/fact with text against 15.1
+/// without). Decomposed from the three measurements: text indexing ≈ 3 440
+/// µs/fact, vector width from 4 to 1024 ≈ 445, the bare write ≈ 15.
+///
+/// The blocker's 16.3 is therefore a no-text, `DIM = 4` figure. Agent facts
+/// always carry `content`, so for this product it understates reinsertion by
+/// roughly two hundred fold, and quoting it beside an embedding time compounds
+/// that with the mislabelling.
+///
+/// The operative number here is ×23: a rebuild that changes the model pays
+/// about twenty times one that replays its vectors. That is a real penalty and
+/// an affordable one. Ten thousand would have made a model change prohibitive,
+/// and deciding otherwise on that figure is the mistake this measurement exists
+/// to prevent.
+///
+/// Both figures are debug-profile and one-call-per-fact. Release timings and a
+/// batched embedding request would both move them, in the same direction but not
+/// by the same amount, which is why the assertion below compares the two
+/// measurements to each other and not to any number written here.
+#[test]
+#[cfg(feature = "ollama")]
+#[ignore = "needs a live embedding backend; run deliberately, on a machine at rest"]
+fn the_embedder_dominates_only_when_the_model_changes() {
+    use crate::embedder::{Embedder, OllamaEmbedder};
+
+    const FACTS: usize = 32;
+    let n = u64::try_from(FACTS).expect("fits");
+    let texts: Vec<String> = (0..FACTS)
+        .map(|i| format!("fact number {i}: what a rebuild has to carry across"))
+        .collect();
+
+    let url = std::env::var("VELESDB_MEMORY_OLLAMA_URL")
+        .unwrap_or_else(|_| "http://localhost:11434".to_owned());
+    let model =
+        std::env::var("VELESDB_MEMORY_OLLAMA_MODEL").unwrap_or_else(|_| "bge-m3".to_owned());
+    let embedder = OllamaEmbedder::new(&url, &model).unwrap_or_else(|e| {
+        panic!(
+            "this test measures a REAL embedder and {url} / {model} is unreachable ({e}); \
+             it must fail here rather than report a cost for a backend that is not there"
+        )
+    });
+    let dimension = embedder.dimension();
+    // The first call pays model load. Timing it would spread a one-off over
+    // every fact and inflate the very figure this test exists to establish.
+    embedder.embed("warm up").expect("warm up");
+
+    let start = std::time::Instant::now();
+    let vectors: Vec<Vec<f32>> = texts
+        .iter()
+        .map(|text| embedder.embed(text).expect("embed"))
+        .collect();
+    let embed_elapsed = start.elapsed();
+
+    let batch: Vec<(RawFact, Vec<f32>)> = vectors
+        .into_iter()
+        .enumerate()
+        .map(|(i, vector)| {
+            let id = u64::try_from(i).expect("fits") + 1;
+            let payload = serde_json::json!({ "content": texts[i] }).to_string();
+            (RawFact { id, payload }, vector)
+        })
+        .collect();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    {
+        let _store = NativeStore::open(dir.path(), dimension).expect("open destination");
+    }
+    let db = database(&dir);
+    let start = std::time::Instant::now();
+    let written = reinsert_batch(&db, "_semantic_memory", &batch).expect("reinsert");
+    let reinsert_elapsed = start.elapsed();
+    assert_eq!(
+        written.inserted, n,
+        "positive control: a batch that did not land would make its timing meaningless"
+    );
+
+    let embed_cost = per_fact(embed_elapsed, n);
+    let reinsert_cost = per_fact(reinsert_elapsed, n);
+    println!("  model={model}  dimension={dimension}  facts={FACTS}");
+    println!(
+        "  re-embedding (model CHANGED):   {embed_elapsed:>10.2?}  {embed_cost:>10.1} us/fact"
+    );
+    println!("  reinsertion  (vectors REUSED):  {reinsert_elapsed:>10.2?}  {reinsert_cost:>10.1} us/fact");
+    println!(
+        "  embedding costs x{:.0} what reinsertion costs, per fact",
+        embed_cost / reinsert_cost
+    );
+    assert!(
+        embed_cost > reinsert_cost,
+        "re-embedding was not more expensive than reinsertion (embed \
+         {embed_cost:.1} us/fact, reinsert {reinsert_cost:.1} us/fact). The whole \
+         reason a rebuild reuses source vectors when the model is unchanged is \
+         that it is not; if that stops holding, the choice has to be re-argued \
+         rather than inherited"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // GATE 2c — the ceiling, which is a CORRECTNESS bound and not a cost one
 // ---------------------------------------------------------------------------
