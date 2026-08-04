@@ -62,6 +62,16 @@ trap cleanup EXIT
 export TMPDIR="$TMP_TEST_DIR/tmp"
 mkdir -p "$TMPDIR"
 
+# An archived original is the only recovery path for a memoryless
+# `compile-stdin` result. Session startup must therefore never age it out behind
+# the transcript's back: retention is a separate product policy, not a hook
+# side effect. Make this file old enough that the former seven-day purge would
+# delete it, then require both its path and bytes to survive SessionStart.
+archive_control="$TMPDIR/velesdb-agent-hooks/tool-output/still-referenced.txt"
+mkdir -p "$(dirname "$archive_control")"
+printf 'original bytes still referenced by a transcript' > "$archive_control"
+touch -t 202001010000 "$archive_control"
+
 PROJECT_DIR="$TMP_TEST_DIR/project"
 mkdir -p "$PROJECT_DIR"
 cat > "$PROJECT_DIR/.velesdb-hooks.json" <<'EOF'
@@ -77,6 +87,13 @@ session_start_payload="$(jq -n --arg cwd "$PROJECT_DIR" --arg sid "$SESSION_ID" 
   '{session_id: $sid, cwd: $cwd, hook_event_name: "SessionStart", source: "startup"}')"
 
 session_start_out="$(printf '%s' "$session_start_payload" | bash "$HOOKS_DIR/session-start.sh")"
+
+if [ -f "$archive_control" ] \
+  && [ "$(cat "$archive_control")" = "original bytes still referenced by a transcript" ]; then
+  pass "SessionStart: never purges the only archived original"
+else
+  fail "SessionStart: never purges the only archived original"
+fi
 
 if printf '%s' "$session_start_out" | jq -e '.hookSpecificOutput.hookEventName == "SessionStart"' >/dev/null; then
   pass "SessionStart: hookSpecificOutput.hookEventName is SessionStart"
@@ -371,7 +388,68 @@ cat > "$FAKE_BIN_DIR/fake-old" <<'FAKE'
 sleep 30
 FAKE
 
-chmod +x "$FAKE_BIN_DIR/fake-ok" "$FAKE_BIN_DIR/fake-fail" "$FAKE_BIN_DIR/fake-old"
+# Behaves like a corpus the compiler cannot fit without dropping something it
+# classifies as CRITICAL — a code fence, an exact value, a URL. No budget
+# rescues it; the real 584 KB thread-stack sample under
+# .investigation/http-deadlock-2026-07-22/ measures `high` at 2 000, 4 000,
+# 8 000 and 16 000.
+cat > "$FAKE_BIN_DIR/fake-high" <<'FAKE'
+#!/usr/bin/env bash
+cat >/dev/null
+printf '{"content":"LOSSY SUMMARY","tokens_in":4000,"tokens_out":300,"tokens_saved":3700,"risk":"high"}\n'
+FAKE
+
+# Behaves like a corpus that is merely CRAMPED rather than incompressible: the
+# first budget loses something critical, twice the budget does not. That is the
+# common case — the real 268 KB cargo log measures `high` at 2 000 and `medium`
+# at 4 000 — and it is why the hook escalates before it refuses.
+cat > "$FAKE_BIN_DIR/fake-escalate" <<'FAKE'
+#!/usr/bin/env bash
+cat >/dev/null
+# argv: compile-stdin --budget N --query ...
+if [ "${3:-0}" -ge 4000 ]; then
+  printf '{"content":"ROOMIER SUMMARY","tokens_in":4000,"tokens_out":600,"tokens_saved":3400,"risk":"medium"}\n'
+else
+  printf '{"content":"CRAMPED SUMMARY","tokens_in":4000,"tokens_out":300,"tokens_saved":3700,"risk":"high"}\n'
+fi
+FAKE
+
+# Proves both halves of the fail-closed wire contract. The capability probe
+# gets a valid low-risk response, so these binaries cannot pass merely because
+# the hook disabled them before the real compilation. The queried invocation
+# then returns content whose risk is absent, unknown, or the wrong JSON type.
+cat > "$FAKE_BIN_DIR/fake-risk-contract" <<'FAKE'
+#!/usr/bin/env bash
+cat >/dev/null
+case " $* " in
+  *" --query "*)
+    case "${FAKE_FINAL_RISK_MODE:-missing}" in
+      missing)
+        printf '{"content":"UNVERIFIED SUMMARY","tokens_in":4000,"tokens_out":300,"tokens_saved":3700}\n'
+        ;;
+      unknown)
+        printf '{"content":"UNVERIFIED SUMMARY","tokens_in":4000,"tokens_out":300,"tokens_saved":3700,"risk":"critical"}\n'
+        ;;
+      malformed)
+        printf '{"content":"UNVERIFIED SUMMARY","tokens_in":4000,"tokens_out":300,"tokens_saved":3700,"risk":{"level":"medium"}}\n'
+        ;;
+    esac
+    ;;
+  *)
+    printf '{"content":"PROBE","tokens_in":4,"tokens_out":1,"tokens_saved":3,"risk":"low"}\n'
+    ;;
+esac
+FAKE
+
+cat > "$FAKE_BIN_DIR/fake-low" <<'FAKE'
+#!/usr/bin/env bash
+cat >/dev/null
+printf '{"content":"LOSSLESS SUMMARY","tokens_in":4000,"tokens_out":300,"tokens_saved":3700,"risk":"low"}\n'
+FAKE
+
+chmod +x "$FAKE_BIN_DIR/fake-ok" "$FAKE_BIN_DIR/fake-fail" "$FAKE_BIN_DIR/fake-old" \
+  "$FAKE_BIN_DIR/fake-high" "$FAKE_BIN_DIR/fake-escalate" \
+  "$FAKE_BIN_DIR/fake-risk-contract" "$FAKE_BIN_DIR/fake-low"
 
 big_output="$(head -c 40000 < /dev/zero | tr '\0' 'x')"
 
@@ -415,6 +493,135 @@ if printf '%s' "$big_out" | jq -e '.hookSpecificOutput.updatedToolOutput | conta
   pass "PostToolUse: updatedToolOutput carries the compiled content"
 else
   fail "PostToolUse: updatedToolOutput carries the compiled content"
+fi
+
+low_out="$(post_tool_payload "Bash" "low" "$big_output" \
+  | VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-low" bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
+if printf '%s' "$low_out" | jq -e '.hookSpecificOutput.updatedToolOutput | contains("LOSSLESS SUMMARY")' >/dev/null; then
+  pass "PostToolUse: a risk=low compilation IS shipped (second positive control)"
+else
+  fail "PostToolUse: a risk=low compilation IS shipped (second positive control)"
+fi
+
+for bad_risk in missing unknown malformed; do
+  bad_risk_out="$(post_tool_payload "Bash" "risk-$bad_risk" "$big_output" \
+    | FAKE_FINAL_RISK_MODE="$bad_risk" \
+      VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-risk-contract" \
+      bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
+  if [ "$(printf '%s' "$bad_risk_out" | jq -c .)" = "{}" ]; then
+    pass "PostToolUse: risk=$bad_risk is refused instead of shipping unverifiable content"
+  else
+    fail "PostToolUse: risk=$bad_risk is refused instead of shipping unverifiable content"
+  fi
+done
+
+# --- Rule 5: fidelity ------------------------------------------------------
+# `risk: high` is not "the summary reads badly". It is the compiler reporting
+# that a fragment it classifies as critical did not survive verbatim — and on
+# this path there is no store behind the `ctx://source/…` handles it mints, so
+# the temp file is the ONLY way back. Shipping that in place of the real result
+# is how a hook meant to save tokens costs a diagnosis.
+high_out="$(post_tool_payload "Bash" "high" "$big_output" \
+  | VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-high" bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
+if [ "$(printf '%s' "$high_out" | jq -c .)" = "{}" ]; then
+  pass "PostToolUse: a risk=high compilation is refused, leaving the result untouched"
+else
+  fail "PostToolUse: a risk=high compilation is refused, leaving the result untouched"
+fi
+
+# The positive control for the refusal above. Without it, a hook that refused
+# EVERYTHING would satisfy it while never compressing anything — the same
+# assertion passing for the opposite reason. `fake-ok` reports `medium`, and
+# `$big_out` above shows it IS shipped.
+if printf '%s' "$big_out" | jq -e '.hookSpecificOutput.updatedToolOutput | contains("COMPILED SUMMARY")' >/dev/null; then
+  pass "PostToolUse: a risk=medium compilation IS shipped (control for the refusal)"
+else
+  fail "PostToolUse: a risk=medium compilation IS shipped (control for the refusal)"
+fi
+
+# Escalate before refusing: the budget is usually what is too tight, not the
+# content that is incompressible.
+esc_out="$(post_tool_payload "Bash" "escalate" "$big_output" \
+  | VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-escalate" bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
+if printf '%s' "$esc_out" | jq -e '.hookSpecificOutput.updatedToolOutput | contains("ROOMIER SUMMARY")' >/dev/null; then
+  pass "PostToolUse: risk=high at the first budget retries at the ceiling and ships that"
+else
+  fail "PostToolUse: risk=high at the first budget retries at the ceiling and ships that"
+fi
+
+# ...and the cramped first attempt must NOT be what reaches the model, or the
+# escalation would be decorative.
+if printf '%s' "$esc_out" | jq -e '.hookSpecificOutput.updatedToolOutput | contains("CRAMPED SUMMARY") | not' >/dev/null; then
+  pass "PostToolUse: the refused first attempt never reaches the model"
+else
+  fail "PostToolUse: the refused first attempt never reaches the model"
+fi
+
+# A ceiling equal to the starting budget means there is no second attempt to
+# make, so the first `high` is final. This is what makes the ceiling a real
+# bound rather than a suggestion.
+noesc_out="$(post_tool_payload "Bash" "noesc" "$big_output" \
+  | VELESDB_HOOK_TOKEN_BUDGET=2000 VELESDB_HOOK_TOKEN_BUDGET_MAX=2000 \
+    VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-escalate" bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
+if [ "$(printf '%s' "$noesc_out" | jq -c .)" = "{}" ]; then
+  pass "PostToolUse: a ceiling equal to the budget forbids the retry and refuses"
+else
+  fail "PostToolUse: a ceiling equal to the budget forbids the retry and refuses"
+fi
+
+# The model must be told which fidelity it is reading. A compiled view that
+# looks identical whether it lost something or not is one the model cannot
+# reason about.
+if printf '%s' "$big_out" | jq -e '.hookSpecificOutput.updatedToolOutput | contains("fidelity risk medium")' >/dev/null; then
+  pass "PostToolUse: the footer names the fidelity risk of what it shipped"
+else
+  fail "PostToolUse: the footer names the fidelity risk of what it shipped"
+fi
+
+# --- Against the REAL binary -----------------------------------------------
+# Everything above drives fake binaries, which is right for the decision logic
+# but proves nothing about the contract the two sides actually share: that the
+# compiler emits a `risk` field the hook can read, spelled the way the hook
+# expects. A rename on either side would leave every test above green.
+#
+# Two corpora, both generated here so the harness stays hermetic, both measured
+# against the current-checkout binary supplied explicitly by CI:
+#   * URLs and hex checksums — content the classifier calls CRITICAL. Dropping
+#     any of it is `high`, and stays `high` well past the ceiling.
+#   * identical heartbeat lines — the repetitive case abstraction handles
+#     cleanly, and reports `medium`.
+real_bin="${VELESDB_MEMORY_BIN_REAL:-}"
+if [ -n "$real_bin" ]; then
+  if [ ! -x "$real_bin" ]; then
+    fail "PostToolUse/real: VELESDB_MEMORY_BIN_REAL names an executable checkout binary"
+  elif ! printf 'probe\n' | "$real_bin" compile-stdin --budget 4096 2>/dev/null \
+    | jq -e '.risk == "low" or .risk == "medium" or .risk == "high"' >/dev/null 2>&1; then
+    fail "PostToolUse/real: the checkout binary exposes an explicit fidelity risk"
+  else
+
+    critical_corpus="$(awk 'BEGIN { for (i = 0; i < 200; i++)
+      printf "2026-08-04T00:%02d:00Z ERROR shard=%d url=https://example.invalid/api/v1/resource/%d checksum=0x%08x elapsed=%dms\n", i % 60, i, i, i, i * 7 }')"
+    repetitive_corpus="$(awk 'BEGIN { for (i = 0; i < 400; i++)
+      print "INFO  worker heartbeat ok, queue depth nominal, nothing to report" }')"
+
+    real_high="$(post_tool_payload "Bash" "realhigh" "$critical_corpus" \
+      | VELESDB_MEMORY_BIN="$real_bin" bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
+    if [ "$(printf '%s' "$real_high" | jq -c .)" = "{}" ]; then
+      pass "PostToolUse/real: the real compiler's risk=high verdict is honoured"
+    else
+      fail "PostToolUse/real: the real compiler's risk=high verdict is honoured"
+    fi
+
+    real_ok="$(post_tool_payload "Bash" "realok" "$repetitive_corpus" \
+      | VELESDB_MEMORY_BIN="$real_bin" bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
+    if printf '%s' "$real_ok" | jq -e '.hookSpecificOutput.updatedToolOutput | contains("fidelity risk")' >/dev/null; then
+      pass "PostToolUse/real: a compressible corpus is still compressed by the real compiler"
+    else
+      fail "PostToolUse/real: a compressible corpus is still compressed by the real compiler"
+    fi
+  fi
+else
+  printf '# INFO - real-binary contract runs in CI against target/debug/velesdb-memory\n'
 fi
 
 # Rule 1 — nothing is deleted: the replacement must point at the untouched
@@ -505,7 +712,7 @@ fi
 cat > "$FAKE_BIN_DIR/fake-record" <<FAKE
 #!/usr/bin/env bash
 cat > "$TMP_TEST_DIR/received.txt"
-printf '{"content":"COMPILED","tokens_in":4000,"tokens_out":300,"tokens_saved":3700}\n'
+printf '{"content":"COMPILED","tokens_in":4000,"tokens_out":300,"tokens_saved":3700,"risk":"medium"}\n'
 FAKE
 chmod +x "$FAKE_BIN_DIR/fake-record"
 

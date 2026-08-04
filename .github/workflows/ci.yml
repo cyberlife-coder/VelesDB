@@ -453,6 +453,16 @@ jobs:
           cargo build -p velesdb-memory
           python3 crates/velesdb-memory/examples/context_savings/real_measures/mcp_e2e.py
 
+      # The fast hook harness also runs in mcp-doc-contract without a Rust
+      # toolchain. This second invocation owns the real wire check: it points
+      # at the binary built from this checkout immediately above, never at an
+      # arbitrary installation on PATH. Missing or renamed `risk` is a hard
+      # failure inside the harness, not a skip that reads like a pass.
+      - name: Agent hook contract against current checkout binary
+        run: bash integrations/agent-hooks/test/hooks.test.sh
+        env:
+          VELESDB_MEMORY_BIN_REAL: ${{ github.workspace }}/target/debug/velesdb-memory
+
   # ===========================================================================
   # Security Audit (parallèle - outils pré-compilés)
   # ===========================================================================

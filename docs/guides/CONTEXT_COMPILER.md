@@ -736,7 +736,18 @@ Tuning knobs:
 | `VELESDB_HOOK_COMPRESS_TOOLS` | `Bash,Grep,WebFetch` | Comma-separated tool allowlist. |
 | `VELESDB_HOOK_MIN_BYTES` | `12000` | Below this, pass through — compiling would cost more than it saves. |
 | `VELESDB_HOOK_TOKEN_BUDGET` | `2000` | Token budget handed to `compile-stdin`. |
+| `VELESDB_HOOK_TOKEN_BUDGET_MAX` | twice `VELESDB_HOOK_TOKEN_BUDGET` | Ceiling a `risk: high` compilation may retry at. Equal to the budget forbids the retry. |
 | `VELESDB_HOOK_PROBE_TIMEOUT` | `10` | Seconds the capability probe may take. |
+
+> **The hook refuses a `risk: high` compilation.** It retries once at the
+> ceiling — a 268 KB cargo log is `high` at 2 000 tokens and `medium` at
+> 4 000 — and if the ceiling does not rescue it, leaves the tool result
+> byte-identical. This matters more here than on the MCP path: `compile-stdin`
+> runs with no store and no bridge, so the `ctx://source/…` handles it mints
+> resolve to nothing, and the archived temp file is the only way back to what
+> was dropped. Only explicit `risk: low` and `risk: medium` results may replace
+> a tool result; a missing, unknown, or non-string verdict fails closed to the
+> untouched original.
 
 > **`updatedToolOutput` is Claude-Code-specific.** No other agent harness is
 > known to expose an equivalent field — Windsurf's post-hooks cannot alter a
