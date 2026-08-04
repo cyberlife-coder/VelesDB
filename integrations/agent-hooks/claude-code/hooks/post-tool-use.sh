@@ -277,7 +277,9 @@ fi
 archive_dir="$(marker_base_dir)/tool-output" || passthrough
 [ -L "$archive_dir" ] && passthrough
 mkdir -p "$archive_dir" || passthrough
-[ -d "$archive_dir" ] && [ ! -L "$archive_dir" ] || passthrough
+if [ ! -d "$archive_dir" ] || [ -L "$archive_dir" ]; then
+  passthrough
+fi
 chmod 700 "$archive_dir" || passthrough
 archive="$(mktemp "${archive_dir}/velesdb-output.XXXXXX")" || passthrough
 if ! printf '%s' "$payload" | jq '.tool_response' > "$archive"; then
