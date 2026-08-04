@@ -27,6 +27,7 @@ use serde_json::Value;
 use std::collections::BTreeSet;
 
 mod diagnostic_copy;
+mod state_persistence;
 
 const DIM: usize = 4;
 const EMBEDDING: [f32; 4] = [1.0, 0.0, 0.0, 0.0];

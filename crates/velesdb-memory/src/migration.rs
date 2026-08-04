@@ -62,7 +62,7 @@ pub use enumeration::{
 pub use filesystem::{bytes_on_disk, fingerprint};
 pub use state::{
     MigrationLock, MigrationState, Phase, Recovery, SwitchState, LOCK_FILE, PHASES, STATE_FILE,
-    STATE_FORMAT_VERSION,
+    STATE_FORMAT_VERSION, STATE_TEMP_FILE,
 };
 
 #[cfg(test)]

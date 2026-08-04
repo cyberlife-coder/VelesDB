@@ -148,9 +148,12 @@ fn the_lock_never_lives_in_the_source() {
 #[test]
 fn a_newer_state_version_is_refused() {
     let workspace = tempfile::tempdir().expect("tempdir");
+    let lock = MigrationLock::acquire(workspace.path(), "state-version-test").expect("lock");
 
     // The positive control first: a state at THIS version reads back.
-    resumable_state().write(workspace.path()).expect("write");
+    resumable_state()
+        .write(workspace.path(), &lock)
+        .expect("write");
     let read = MigrationState::read(workspace.path())
         .expect("a state at the current version must read")
         .expect("it exists");
@@ -197,6 +200,7 @@ fn a_newer_state_version_is_refused() {
             .is_err(),
         "may_resume must refuse a newer version too"
     );
+    lock.release().expect("release");
 }
 
 #[test]

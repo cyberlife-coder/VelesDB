@@ -17,6 +17,12 @@ pub const LOCK_FILE: &str = "migration.lock";
 /// The file a prepared migration records its state in.
 pub const STATE_FILE: &str = "migration-state.json";
 
+/// The fixed sibling staging file for an atomic state replacement.
+///
+/// Its presence is ambiguous evidence of an interrupted writer, so it is
+/// never overwritten or silently swept by a later run.
+pub const STATE_TEMP_FILE: &str = "migration-state.json.tmp";
+
 /// The shape of a [`MigrationState`].
 ///
 /// Bumped when the state's meaning changes. Only the current version may
@@ -329,16 +335,176 @@ impl MigrationState {
             .map_err(|err| format!("{STATE_FILE} is version {version} but does not parse: {err}"))
     }
 
-    /// Write this state into `workspace`.
+    /// Atomically and durably replace the state in `workspace`.
+    ///
+    /// The caller must hold `lock`. The complete JSON is written to a fixed
+    /// sibling staging file, flushed and synced before one atomic promotion.
+    /// The promotion is then made durable with the platform's directory or
+    /// write-through barrier. A pre-existing staging file is refused as
+    /// evidence of an interrupted writer; it is never overwritten.
     ///
     /// # Errors
-    /// The workspace is unwritable, or serialisation fails.
-    pub fn write(&self, workspace: &Path) -> Result<(), String> {
+    /// The lock does not guard this workspace, an existing state is invalid,
+    /// staging is ambiguous, or any write/durability step fails.
+    pub fn write(&self, workspace: &Path, lock: &MigrationLock) -> Result<(), String> {
+        lock.verify_workspace(workspace)?;
         let body = serde_json::to_string_pretty(self)
             .map_err(|err| format!("cannot serialise the migration state: {err}"))?;
-        std::fs::write(workspace.join(STATE_FILE), body)
-            .map_err(|err| format!("cannot write {STATE_FILE}: {err}"))
+        validate_existing_state(workspace)?;
+        commit_state_with(
+            workspace,
+            body.as_bytes(),
+            promote_state,
+            state_durability_barrier,
+        )
     }
+}
+
+fn validate_existing_state(workspace: &Path) -> Result<(), String> {
+    let path = workspace.join(STATE_FILE);
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(format!("cannot inspect existing {STATE_FILE}: {err}")),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(format!(
+            "refusing to replace {STATE_FILE}: {} is a symlink, directory, or special file",
+            path.display()
+        ));
+    }
+    MigrationState::read(workspace)?
+        .ok_or_else(|| format!("{STATE_FILE} disappeared while it was being validated"))?;
+    Ok(())
+}
+
+pub(super) fn commit_state_with<P, B>(
+    workspace: &Path,
+    body: &[u8],
+    promote: P,
+    durability_barrier: B,
+) -> Result<(), String>
+where
+    P: FnOnce(&Path, &Path) -> std::io::Result<()>,
+    B: FnOnce(&Path, &Path) -> std::io::Result<()>,
+{
+    use std::io::Write;
+
+    let temporary = workspace.join(STATE_TEMP_FILE);
+    let final_path = workspace.join(STATE_FILE);
+    let mut file = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+    {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(format!(
+                "refusing to overwrite pre-existing {STATE_TEMP_FILE} at {}: it may be evidence of an interrupted state write; inspect and remove that exact file manually",
+                temporary.display()
+            ));
+        }
+        Err(err) => return Err(format!("cannot create {STATE_TEMP_FILE}: {err}")),
+    };
+
+    let write_result = (|| {
+        file.write_all(body)?;
+        file.flush()?;
+        file.sync_all()
+    })();
+    drop(file);
+    if let Err(err) = write_result {
+        return cleanup_uncommitted_temp(
+            &temporary,
+            format!("cannot write and sync {STATE_TEMP_FILE}: {err}"),
+        );
+    }
+
+    if let Err(err) = promote(&temporary, &final_path) {
+        return cleanup_uncommitted_temp(
+            &temporary,
+            format!("cannot atomically promote {STATE_TEMP_FILE} to {STATE_FILE}: {err}"),
+        );
+    }
+    durability_barrier(workspace, &final_path).map_err(|err| {
+        format!(
+            "{STATE_FILE} was replaced and is visible, but its durability could not be confirmed: {err}. Do not retry blindly; inspect the state before continuing"
+        )
+    })
+}
+
+fn cleanup_uncommitted_temp(temporary: &Path, primary: String) -> Result<(), String> {
+    match std::fs::remove_file(temporary) {
+        Ok(()) => Err(primary),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Err(primary),
+        Err(err) => Err(format!(
+            "{primary}; additionally, cannot remove {}: {err}",
+            temporary.display()
+        )),
+    }
+}
+
+#[cfg(unix)]
+fn promote_state(temporary: &Path, final_path: &Path) -> std::io::Result<()> {
+    std::fs::rename(temporary, final_path)
+}
+
+#[cfg(windows)]
+fn promote_state(temporary: &Path, final_path: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let temporary: Vec<u16> = temporary.as_os_str().encode_wide().chain(Some(0)).collect();
+    let final_path: Vec<u16> = final_path
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    // SAFETY: `MoveFileExW` receives valid Windows path pointers and flags.
+    // - Both vectors are NUL-terminated UTF-16 paths with no interior NUL.
+    // - Both vectors remain alive and are not mutated for the duration of the call.
+    // Reason: the native write-through flag is required to make replacement durable.
+    let moved = unsafe {
+        MoveFileExW(
+            temporary.as_ptr(),
+            final_path.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if moved == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn promote_state(_temporary: &Path, _final_path: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "durable migration-state replacement is supported only on Unix and Windows",
+    ))
+}
+
+#[cfg(unix)]
+fn state_durability_barrier(workspace: &Path, _final_path: &Path) -> std::io::Result<()> {
+    std::fs::File::open(workspace)?.sync_all()
+}
+
+#[cfg(windows)]
+fn state_durability_barrier(_workspace: &Path, _final_path: &Path) -> std::io::Result<()> {
+    // `promote_state` already uses MOVEFILE_WRITE_THROUGH, the native barrier.
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn state_durability_barrier(_workspace: &Path, _final_path: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "no durable migration-state barrier is defined for this platform",
+    ))
 }
 
 /// Exclusive possession of a migration workspace.
@@ -409,6 +575,19 @@ impl MigrationLock {
         std::fs::read_to_string(workspace.join(LOCK_FILE))
             .ok()
             .map(|body| body.trim().to_owned())
+    }
+
+    fn verify_workspace(&self, workspace: &Path) -> Result<(), String> {
+        let expected = workspace.join(LOCK_FILE);
+        let is_live_regular_file = std::fs::symlink_metadata(&expected)
+            .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink());
+        if self.path != expected || !is_live_regular_file {
+            return Err(format!(
+                "cannot write {STATE_FILE} without the live migration lock for {}; acquire MigrationLock for this exact workspace first",
+                workspace.display()
+            ));
+        }
+        Ok(())
     }
 
     /// Release the lock.
