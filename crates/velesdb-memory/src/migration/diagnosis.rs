@@ -1,8 +1,14 @@
 use super::diagnostic_copy::DiagnosticCopy;
-use super::enumeration::{enumerate_by_cursor, scroll_page, AGENT_COLLECTIONS};
-use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+
+mod capabilities;
+mod inventory;
+mod report;
+
+pub(super) fn switch_filesystem_capability(same_filesystem: Option<bool>) -> Capability {
+    capabilities::switch_filesystem_capability(same_filesystem)
+}
 
 /// Whether a capability the rebuild depends on is established, or missing.
 ///
@@ -42,19 +48,6 @@ impl Capability {
 /// does not understand is refused rather than guessed at, which is only
 /// possible because the number travels with the data.
 pub const DIAGNOSIS_FORMAT_VERSION: u32 = 4;
-
-/// The complete v4 capability vocabulary, in `BTreeMap` iteration order.
-const DIAGNOSIS_CAPABILITY_KEYS: [&str; 9] = [
-    "diagnostic_staging",
-    "disk_headroom",
-    "edge_counts",
-    "edge_export",
-    "embedder_cost",
-    "inventory",
-    "source_access_is_read_only",
-    "source_provenance",
-    "switch_same_filesystem",
-];
 
 /// What the store itself records about the embedder that filled it.
 ///
@@ -223,208 +216,6 @@ pub struct DiagnosisReport {
     pub blockers: Vec<String>,
 }
 
-/// Wire shape read before the v4 invariants are trusted.
-///
-/// Keeping this private prevents callers from accidentally treating successful
-/// JSON decoding as a validated diagnosis. The public type is only produced
-/// after [`DiagnosisReport::validate`] accepts every derived field.
-#[derive(serde::Deserialize)]
-struct UncheckedDiagnosisReport {
-    format_version: u32,
-    source_path: PathBuf,
-    source_fingerprint: String,
-    source_dimension: Option<usize>,
-    source_provenance: SourceProvenance,
-    target_model: String,
-    target_dimension: usize,
-    collections: Vec<CollectionInventory>,
-    facts: u64,
-    edges: u64,
-    working_contexts: u64,
-    reserved_metadata: BTreeSet<String>,
-    ttl_summary: TtlSummary,
-    bytes_on_disk: u64,
-    diagnostic_staging_required: u64,
-    diagnostic_staging_available: u64,
-    disk_headroom: Option<u64>,
-    same_filesystem: Option<bool>,
-    capabilities: BTreeMap<String, Capability>,
-    blockers: Vec<String>,
-}
-
-impl TryFrom<UncheckedDiagnosisReport> for DiagnosisReport {
-    type Error = String;
-
-    fn try_from(unchecked: UncheckedDiagnosisReport) -> Result<Self, Self::Error> {
-        let UncheckedDiagnosisReport {
-            format_version,
-            source_path,
-            source_fingerprint,
-            source_dimension,
-            source_provenance,
-            target_model,
-            target_dimension,
-            collections,
-            facts,
-            edges,
-            working_contexts,
-            reserved_metadata,
-            ttl_summary,
-            bytes_on_disk,
-            diagnostic_staging_required,
-            diagnostic_staging_available,
-            disk_headroom,
-            same_filesystem,
-            capabilities,
-            blockers,
-        } = unchecked;
-        let report = Self {
-            format_version,
-            source_path,
-            source_fingerprint,
-            source_dimension,
-            source_provenance,
-            target_model,
-            target_dimension,
-            collections,
-            facts,
-            edges,
-            working_contexts,
-            reserved_metadata,
-            ttl_summary,
-            bytes_on_disk,
-            diagnostic_staging_required,
-            diagnostic_staging_available,
-            disk_headroom,
-            same_filesystem,
-            capabilities,
-            blockers,
-        };
-        report.validate()?;
-        Ok(report)
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for DiagnosisReport {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let unchecked =
-            <UncheckedDiagnosisReport as serde::Deserialize>::deserialize(deserializer)?;
-        Self::try_from(unchecked).map_err(serde::de::Error::custom)
-    }
-}
-
-impl DiagnosisReport {
-    /// Parse a persisted report, refusing a shape from another version before
-    /// deserializing the rest of it.
-    ///
-    /// Reading `format_version` first is deliberate: a future report may add
-    /// fields or change representations this binary cannot understand. Such a
-    /// report is an incompatible artifact, not corrupt JSON and not something
-    /// to interpret approximately.
-    ///
-    /// # Errors
-    /// Returns a descriptive refusal when the JSON is malformed, has no
-    /// integer `format_version`, or was produced with a different format.
-    pub fn parse(json: &str) -> Result<Self, String> {
-        let value: Value = serde_json::from_str(json)
-            .map_err(|err| format!("cannot parse diagnosis report JSON: {err}"))?;
-        let version = value
-            .get("format_version")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| {
-                "diagnosis report has no unsigned integer `format_version`; refusing an unversioned artifact"
-                    .to_owned()
-            })?;
-        validate_format_version(version)?;
-        serde_json::from_value(value)
-            .map_err(|err| format!("cannot parse diagnosis report version {version}: {err}"))
-    }
-
-    /// Validate every v4 field that is derived rather than independently
-    /// observed.
-    fn validate(&self) -> Result<(), String> {
-        validate_format_version(u64::from(self.format_version))?;
-
-        let actual_keys: Vec<&str> = self.capabilities.keys().map(String::as_str).collect();
-        if actual_keys != DIAGNOSIS_CAPABILITY_KEYS {
-            return Err(format!(
-                "diagnosis report capabilities are incomplete or unknown: expected exactly {:?}, got {:?}",
-                DIAGNOSIS_CAPABILITY_KEYS, actual_keys
-            ));
-        }
-
-        require_canonical_capability(
-            &self.capabilities,
-            "edge_export",
-            &missing_capability(NO_EDGE_EXPORT),
-        )?;
-        require_canonical_capability(
-            &self.capabilities,
-            "disk_headroom",
-            &missing_capability(NO_HEADROOM),
-        )?;
-        require_canonical_capability(
-            &self.capabilities,
-            "embedder_cost",
-            &missing_capability(NO_EMBEDDER_COST),
-        )?;
-        require_canonical_capability(
-            &self.capabilities,
-            "switch_same_filesystem",
-            &switch_filesystem_capability(self.same_filesystem),
-        )?;
-        require_canonical_capability(
-            &self.capabilities,
-            "source_provenance",
-            &provenance_capability(
-                &self.source_provenance,
-                self.source_dimension,
-                &self.target_model,
-                self.target_dimension,
-            ),
-        )?;
-
-        let expected_blockers = blockers_for(&self.capabilities, &self.collections);
-        if self.blockers != expected_blockers {
-            return Err(format!(
-                "diagnosis report blockers do not match its capabilities and absent collections: expected {expected_blockers:?}, got {:?}",
-                self.blockers
-            ));
-        }
-        Ok(())
-    }
-
-    /// Whether a rebuild could proceed with no outstanding question.
-    ///
-    /// Expect `false` until every environmental question (source provenance,
-    /// destination capacity and real embedder cost included) has evidence.
-    #[must_use]
-    pub fn is_clear(&self) -> bool {
-        self.validate().is_ok()
-            && !self.capabilities.is_empty()
-            && self.blockers.is_empty()
-            && self.capabilities.values().all(Capability::is_proven)
-    }
-}
-
-/// Refuse a report from a binary with different diagnosis semantics.
-fn validate_format_version(version: u64) -> Result<(), String> {
-    if version == u64::from(DIAGNOSIS_FORMAT_VERSION) {
-        return Ok(());
-    }
-    let relation = if version < u64::from(DIAGNOSIS_FORMAT_VERSION) {
-        "older"
-    } else {
-        "newer"
-    };
-    Err(format!(
-        "diagnosis report format version {version} is {relation} than the supported version {DIAGNOSIS_FORMAT_VERSION}; run a fresh diagnosis with this binary"
-    ))
-}
-
 /// Whether `a` and `b` sit on the same filesystem.
 ///
 /// The destination normally does NOT exist yet — that is the whole point of
@@ -456,11 +247,6 @@ pub fn same_filesystem(a: &Path, b: &Path) -> Option<bool> {
 fn existing_ancestor(path: &Path) -> Option<std::fs::Metadata> {
     path.ancestors().find_map(|p| std::fs::metadata(p).ok())
 }
-
-/// The batch size the inventory walks with — large enough that the walk is not
-/// dominated by per-batch overhead, small enough that a store far bigger than
-/// memory is still read in bounded chunks.
-const INVENTORY_BATCH: usize = 1024;
 
 /// Inspect `source` and report what a rebuild onto `target_model` would face.
 ///
@@ -523,47 +309,51 @@ pub(super) fn diagnose_copy(
     destination: Option<&Path>,
     copy: &DiagnosticCopy,
 ) -> Result<DiagnosisReport, crate::MemoryError> {
-    let source_provenance = read_provenance(copy.store_path());
-
-    let db = std::sync::Arc::new(velesdb_core::Database::open(copy.store_path())?);
-    let mut collections: Vec<CollectionInventory> = AGENT_COLLECTIONS
-        .iter()
-        .map(|name| inventory_collection(&db, name))
-        .collect::<Result<_, _>>()?;
-    let source_dimension = agreed_dimension(&collections);
-    let edges_capability = attach_edge_counts(&db, &mut collections, source_dimension);
-
-    let mut totals = Totals::default();
-    for inv in &collections {
-        totals.fold(inv);
-    }
+    let inventory = inventory::inspect(copy.store_path())?;
     copy.verify_source_unchanged(source)?;
     let same_filesystem = destination.and_then(|dest| same_filesystem(source, dest));
-    let capabilities = capability_map(
-        &source_provenance,
-        source_dimension,
+    Ok(report_from_inventory(
+        source,
         target_model,
         target_dimension,
-        edges_capability,
+        same_filesystem,
+        copy,
+        inventory,
+    ))
+}
+
+fn report_from_inventory(
+    source: &Path,
+    target_model: &str,
+    target_dimension: usize,
+    same_filesystem: Option<bool>,
+    copy: &DiagnosticCopy,
+    inventory: inventory::StoreInventory,
+) -> DiagnosisReport {
+    let capabilities = capabilities::capability_map(
+        &inventory.source_provenance,
+        inventory.source_dimension,
+        target_model,
+        target_dimension,
+        inventory.edge_counts,
         same_filesystem,
         copy,
     );
-    let blockers = blockers_for(&capabilities, &collections);
-
-    Ok(DiagnosisReport {
+    let blockers = capabilities::blockers_for(&capabilities, &inventory.collections);
+    DiagnosisReport {
         format_version: DIAGNOSIS_FORMAT_VERSION,
         source_path: source.to_path_buf(),
         source_fingerprint: copy.source_fingerprint().to_owned(),
-        source_dimension,
-        source_provenance,
+        source_dimension: inventory.source_dimension,
+        source_provenance: inventory.source_provenance,
         target_model: target_model.to_owned(),
         target_dimension,
-        collections,
-        facts: totals.facts,
-        edges: totals.edges,
-        working_contexts: totals.working_contexts,
-        reserved_metadata: totals.reserved_metadata,
-        ttl_summary: totals.ttl,
+        collections: inventory.collections,
+        facts: inventory.facts,
+        edges: inventory.edges,
+        working_contexts: inventory.working_contexts,
+        reserved_metadata: inventory.reserved_metadata,
+        ttl_summary: inventory.ttl,
         bytes_on_disk: copy.source_bytes(),
         diagnostic_staging_required: copy.staging_required(),
         diagnostic_staging_available: copy.staging_available(),
@@ -571,417 +361,5 @@ pub(super) fn diagnose_copy(
         same_filesystem,
         capabilities,
         blockers,
-    })
-}
-
-/// Store-wide sums, folded one collection at a time.
-#[derive(Default)]
-struct Totals {
-    facts: u64,
-    edges: u64,
-    working_contexts: u64,
-    reserved_metadata: BTreeSet<String>,
-    ttl: TtlSummary,
-}
-
-impl Totals {
-    fn fold(&mut self, inv: &CollectionInventory) {
-        self.facts += inv.facts;
-        self.edges += inv.edges.unwrap_or(0);
-        self.working_contexts += inv.working_contexts;
-        self.reserved_metadata
-            .extend(inv.reserved_metadata.iter().cloned());
-        self.ttl.merge(&inv.ttl);
     }
-}
-
-/// What the store records about its embedder, phrased so an absent record
-/// cannot be misread as a match.
-fn read_provenance(source: &Path) -> SourceProvenance {
-    match crate::embedding_provenance::read(source) {
-        Ok(Some(p)) => SourceProvenance::Known {
-            model: p.model,
-            dimension: p.dimension,
-        },
-        Ok(None) => SourceProvenance::Unknown {
-            reason: format!(
-                "no {} in the store: it predates embedding-model recording, so the model that \
-                 filled it is not knowable from disk. Only the vector WIDTH can be compared, and \
-                 two different models of the same width are indistinguishable here.",
-                crate::embedding_provenance::PROVENANCE_FILE
-            ),
-        },
-        Err(err) => SourceProvenance::Unknown {
-            reason: format!(
-                "the embedding record exists but could not be read ({err}) — which is not the \
-                 same as absent, and is reported as unknown rather than as a match."
-            ),
-        },
-    }
-}
-
-/// Walk one collection and describe it.
-///
-/// The counts come from the WALK, not from `point_count`: the config's count is
-/// what the collection believes, and the rebuild will carry what the walk
-/// actually yields. Where those two disagree, the walk is the one that matters.
-fn inventory_collection(
-    db: &velesdb_core::Database,
-    name: &str,
-) -> Result<CollectionInventory, crate::MemoryError> {
-    let Some(any) = db.get_any_collection(name) else {
-        return Ok(CollectionInventory::absent(name));
-    };
-    let mut inv = CollectionInventory {
-        name: name.to_owned(),
-        present: true,
-        dimension: Some(any.config().dimension),
-        facts: 0,
-        edges: None,
-        working_contexts: 0,
-        reserved_metadata: BTreeSet::new(),
-        ttl: TtlSummary::default(),
-    };
-    let mut cursor: Option<u64> = None;
-    loop {
-        let (facts, next) = scroll_page(db, name, cursor, INVENTORY_BATCH)?;
-        if facts.is_empty() {
-            break;
-        }
-        for fact in &facts {
-            fold_payload(&mut inv, &fact.payload);
-        }
-        match next {
-            Some(c) => cursor = Some(c),
-            None => break,
-        }
-    }
-    Ok(inv)
-}
-
-/// Fold one stored payload into the collection's tallies.
-fn fold_payload(inv: &mut CollectionInventory, payload: &str) {
-    inv.facts += 1;
-    let Ok(Value::Object(map)) = serde_json::from_str::<Value>(payload) else {
-        return;
-    };
-    for key in map.keys() {
-        if crate::storage::is_reserved_key(key) {
-            inv.reserved_metadata.insert(key.clone());
-        }
-    }
-    if map.contains_key(crate::storage::CTX_WORKING_FIELD) {
-        inv.working_contexts += 1;
-    }
-    if let Some(expiry) = map
-        .get(velesdb_core::collection::EXPIRES_AT_KEY)
-        .and_then(Value::as_u64)
-    {
-        inv.ttl.observe(expiry);
-    }
-}
-
-/// The one width every present collection shares, or `None` when they disagree.
-///
-/// They disagreeing is not a theoretical case to shrug at: `AgentMemory` opens
-/// all three at ONE dimension, so a store whose collections drifted apart
-/// cannot be opened by it at all, and the rebuild has no single source width to
-/// read from.
-fn agreed_dimension(collections: &[CollectionInventory]) -> Option<usize> {
-    let mut dims = collections.iter().filter_map(|c| c.dimension);
-    let first = dims.next()?;
-    dims.all(|d| d == first).then_some(first)
-}
-
-/// Count the edges of each collection, when doing so is safe.
-///
-/// Edges are reachable from outside `velesdb-core` only through `AgentMemory`,
-/// because the three agent collections are created as VECTOR collections while
-/// the edge API is published on `GraphCollection` — so `as_graph()` returns
-/// `None` on exactly these three and the graph route is closed.
-///
-/// `AgentMemory` is therefore the only route, and it comes with a hazard worth
-/// stating: constructing it CREATES any collection it does not find. On a
-/// complete store that is a no-op, but on a store missing one of the three it
-/// would write — during a diagnosis whose whole contract is that it does not.
-/// So the counts are taken only when all three are present at one agreed width,
-/// and the capability records why when they are not.
-fn attach_edge_counts(
-    db: &std::sync::Arc<velesdb_core::Database>,
-    collections: &mut [CollectionInventory],
-    source_dimension: Option<usize>,
-) -> Capability {
-    if !collections.iter().all(|c| c.present) {
-        return Capability::Missing {
-            blocker: "at least one of the three agent collections is absent, and constructing \
-                      `AgentMemory` to reach the edge API would CREATE it — a write a diagnosis \
-                      must not perform. Edge counts are not established for this store."
-                .to_owned(),
-        };
-    }
-    let Some(dimension) = source_dimension else {
-        return Capability::Missing {
-            blocker: "the collections do not share one width, so `AgentMemory` — which opens all \
-                      three at a single dimension — cannot be constructed to reach the edge API."
-                .to_owned(),
-        };
-    };
-    match count_edges(db, collections, dimension) {
-        Ok(total) => Capability::Proven {
-            evidence: format!(
-                "walked every id of the three collections through `AgentMemory::relations` at the \
-                 source width {dimension} and summed the outgoing edges: {total}. Outgoing-only \
-                 is what makes each edge count once — every edge has exactly one source."
-            ),
-        },
-        Err(err) => Capability::Missing {
-            blocker: format!("the edge walk failed: {err}"),
-        },
-    }
-}
-
-/// Sum each collection's outgoing edges through `AgentMemory`, writing the
-/// per-collection count back into the inventory.
-fn count_edges(
-    db: &std::sync::Arc<velesdb_core::Database>,
-    collections: &mut [CollectionInventory],
-    dimension: usize,
-) -> Result<u64, crate::MemoryError> {
-    let memory =
-        velesdb_core::agent::AgentMemory::with_dimension(std::sync::Arc::clone(db), dimension)?;
-    let mut total = 0u64;
-    for inv in collections.iter_mut() {
-        let ids: Vec<u64> = enumerate_by_cursor(db, &inv.name, INVENTORY_BATCH)?
-            .into_iter()
-            .map(|f| f.id)
-            .collect();
-        let mut count = 0u64;
-        for id in ids {
-            count += edges_of(&memory, &inv.name, id)?;
-        }
-        inv.edges = Some(count);
-        total += count;
-    }
-    Ok(total)
-}
-
-/// Outgoing edges of one fact, dispatched on which subsystem owns it.
-fn edges_of(
-    memory: &velesdb_core::agent::AgentMemory,
-    collection: &str,
-    id: u64,
-) -> Result<u64, crate::MemoryError> {
-    let edges = match collection {
-        "_semantic_memory" => memory.semantic().relations(id)?,
-        "_episodic_memory" => memory.episodic().relations(id)?,
-        "_procedural_memory" => memory.procedural().relations(id)?,
-        other => {
-            return Err(velesdb_core::Error::Query(format!(
-                "`{other}` is not one of the agent collections"
-            ))
-            .into())
-        }
-    };
-    Ok(u64::try_from(edges.len()).unwrap_or(u64::MAX))
-}
-
-/// Destination capacity is distinct from the staging proof done by diagnosis.
-const NO_HEADROOM: &str =
-    "free space for the future rebuilt destination is not established. Diagnostic staging is \
-     checked separately and does not prove that a different destination volume can hold the \
-     rebuilt vectors. Supply and measure the final destination before reconstruction.";
-
-/// The embedder's cost per fact is the one number a rebuild's duration turns on
-/// and the one this gate cannot produce.
-const NO_EMBEDDER_COST: &str =
-    "the embedding cost per fact is NOT established. Everything measured so far is the STORE's      cost — 16.3 us/fact to re-insert, once #1797 removed the per-document fsync — and that is      the smaller half. Re-embedding calls a model over a network, at a cost set by the model,      the backend and the hardware, none of which a unit test may depend on without becoming a      test of whether Ollama happens to be running. Stated rather than guessed: a rebuild's      duration is dominated by this unknown, and it has to be measured against the actual target      model before any duration is promised to an operator.";
-
-/// An unrecorded source model makes an equal-width swap invisible.
-const NO_PROVENANCE: &str =
-    "the source model is not recorded, so a model change at EQUAL width cannot be detected — the \
-     vectors would be silently incomparable. The operator has to state the source model; it \
-     cannot be discovered.";
-
-/// Counting relations is not an export contract.
-const NO_EDGE_EXPORT: &str =
-    "the public diagnosis/rebuild path can count outgoing relations, but it does not export a \
-     complete stream of edge tuples (stable edge id, source, target, label and properties). \
-     Reconstructing edges from an external list would only prove that list agrees with itself, \
-     not that every source edge was preserved. A lossless edge export and reinsertion API must \
-     exist and be tested before reconstruction.";
-
-/// A canonical missing verdict used both when generating and validating v4.
-fn missing_capability(blocker: &str) -> Capability {
-    Capability::Missing {
-        blocker: blocker.to_owned(),
-    }
-}
-
-/// Require a derived capability to match its canonical v4 verdict.
-fn require_canonical_capability(
-    capabilities: &BTreeMap<String, Capability>,
-    name: &str,
-    expected: &Capability,
-) -> Result<(), String> {
-    let actual = capabilities
-        .get(name)
-        .expect("the exact capability-key validation runs first");
-    if actual == expected {
-        Ok(())
-    } else {
-        Err(format!(
-            "diagnosis capability `{name}` is inconsistent with its report fields: expected {expected:?}, got {actual:?}"
-        ))
-    }
-}
-
-/// Whether a rename-based switch can be atomic on the observed topology.
-pub(super) fn switch_filesystem_capability(same_filesystem: Option<bool>) -> Capability {
-    match same_filesystem {
-        Some(true) => Capability::Proven {
-            evidence: "source and destination resolve to the same filesystem, so the prepared \
-                       directory can be switched into place with one filesystem rename"
-                .to_owned(),
-        },
-        Some(false) => Capability::Missing {
-            blocker: "source and destination are on different filesystems. The switch contract \
-                      is a filesystem rename, which cannot atomically cross that boundary; choose \
-                      a destination on the source filesystem"
-                .to_owned(),
-        },
-        None => Capability::Missing {
-            blocker: "source and destination have not been proven to share a filesystem. The \
-                      switch contract is a filesystem rename, so unknown topology cannot be \
-                      treated as atomically switchable; supply a destination and establish the \
-                      comparison"
-                .to_owned(),
-        },
-    }
-}
-
-/// Reconcile the recorded source embedder with the store and target contracts.
-fn provenance_capability(
-    provenance: &SourceProvenance,
-    source_dimension: Option<usize>,
-    target_model: &str,
-    target_dimension: usize,
-) -> Capability {
-    let SourceProvenance::Known { model, dimension } = provenance else {
-        return Capability::Missing {
-            blocker: NO_PROVENANCE.to_owned(),
-        };
-    };
-    let Some(collection_dimension) = source_dimension else {
-        return Capability::Missing {
-            blocker: format!(
-                "the source provenance records model '{model}' at {dimension} dimensions, but \
-                 the source collections do not establish one shared dimension. The record cannot \
-                 be reconciled with the data it claims to describe"
-            ),
-        };
-    };
-    if *dimension != collection_dimension {
-        return Capability::Missing {
-            blocker: format!(
-                "the source provenance records model '{model}' at {dimension} dimensions, but \
-                 the source collections are {collection_dimension}-dimensional. At least one side \
-                 does not describe the vectors on disk"
-            ),
-        };
-    }
-    if model == target_model && *dimension != target_dimension {
-        return Capability::Missing {
-            blocker: format!(
-                "model '{model}' is recorded at {dimension} dimensions in the source but declared \
-                 at {target_dimension} dimensions for the target. One model identity cannot \
-                 satisfy both contracts; use the correct target model identifier or dimension"
-            ),
-        };
-    }
-    Capability::Proven {
-        evidence: format!(
-            "the source records model '{model}' at {dimension} dimensions, matching the shared \
-             collection width; the target contract is '{target_model}' at {target_dimension} \
-             dimensions"
-        ),
-    }
-}
-
-/// Turn missing capabilities and absent collections into operator-facing gates.
-fn blockers_for(
-    capabilities: &BTreeMap<String, Capability>,
-    collections: &[CollectionInventory],
-) -> Vec<String> {
-    capabilities
-        .iter()
-        .filter_map(|(name, cap)| match cap {
-            Capability::Missing { blocker } => Some(format!("{name}: {blocker}")),
-            Capability::Proven { .. } => None,
-        })
-        .chain(
-            collections
-                .iter()
-                .filter(|c| !c.present)
-                .map(|c| format!("collection `{}` is absent from the store", c.name)),
-        )
-        .collect()
-}
-
-/// Every capability the rebuild depends on, with its verdict.
-fn capability_map(
-    provenance: &SourceProvenance,
-    source_dimension: Option<usize>,
-    target_model: &str,
-    target_dimension: usize,
-    edge_counts: Capability,
-    same_filesystem: Option<bool>,
-    copy: &DiagnosticCopy,
-) -> BTreeMap<String, Capability> {
-    let mut capabilities = BTreeMap::new();
-    capabilities.insert("edge_counts".to_owned(), edge_counts);
-    capabilities.insert("edge_export".to_owned(), missing_capability(NO_EDGE_EXPORT));
-    capabilities.insert(
-        "inventory".to_owned(),
-        Capability::Proven {
-            evidence: format!(
-                "all {} agent collections were looked up by name and walked by cursor; absent \
-                 ones are reported as absent rather than skipped.",
-                AGENT_COLLECTIONS.len()
-            ),
-        },
-    );
-    capabilities.insert(
-        "source_access_is_read_only".to_owned(),
-        Capability::Proven {
-            evidence: format!(
-                "the live source was never passed to Database::open; it matched content fingerprint '{}' before capture, after capture, and after inventory of the verified copy",
-                copy.source_fingerprint()
-            ),
-        },
-    );
-    capabilities.insert(
-        "diagnostic_staging".to_owned(),
-        Capability::Proven {
-            evidence: format!(
-                "{} bytes were available on the staging volume before copying; {} bytes were required for the {}-byte source plus fixed and percentage headroom",
-                copy.staging_available(),
-                copy.staging_required(),
-                copy.source_bytes()
-            ),
-        },
-    );
-    capabilities.insert("disk_headroom".to_owned(), missing_capability(NO_HEADROOM));
-    capabilities.insert(
-        "embedder_cost".to_owned(),
-        missing_capability(NO_EMBEDDER_COST),
-    );
-    capabilities.insert(
-        "source_provenance".to_owned(),
-        provenance_capability(provenance, source_dimension, target_model, target_dimension),
-    );
-    capabilities.insert(
-        "switch_same_filesystem".to_owned(),
-        switch_filesystem_capability(same_filesystem),
-    );
-    capabilities
 }
