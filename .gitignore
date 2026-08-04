@@ -166,10 +166,8 @@ todo_analysis_report_updated.md
 graphify-out/
 test_repl_data/
 
-# Artefacts locaux d'outillage agent, jamais du contenu de depot.
-# Embarques par accident dans le commit de release 4.1.0 via un `git add -A` :
-# .velesdb-hooks.json porte l'etat de session d'un poste (project/session),
-# et .agents/ est un repertoire de skills local. Les versionner publierait la
-# configuration d'une machine.
-.velesdb-hooks.json
+# Artefacts locaux d'outillage agent, jamais du contenu de depot. `.agents/`
+# a ete embarque par accident dans le commit de release 4.1.0. En revanche,
+# la racine versionne maintenant un `.velesdb-hooks.json` stable et sans
+# donnees machine afin que tous les worktrees gardent la meme identite.
 .agents/

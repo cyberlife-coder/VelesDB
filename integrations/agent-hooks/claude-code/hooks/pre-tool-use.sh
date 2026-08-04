@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Refuse the first repository edit in an opted-in project until a VelesDB
+# recall has completed successfully in the same agent session.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=./lib/common.sh
+source "$SCRIPT_DIR/lib/common.sh"
+
+require_jq
+payload="$(read_stdin_payload)"
+tool_name="$(printf '%s' "$payload" | jq -r '.tool_name // empty' 2>/dev/null || true)"
+cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null || true)"
+session_id="$(printf '%s' "$payload" | jq -r '.session_id // empty' 2>/dev/null || true)"
+
+case "$tool_name" in
+  Edit|Write) ;;
+  *) echo '{}'; exit 0 ;;
+esac
+
+[ -n "$cwd" ] || cwd="$PWD"
+[ -n "$session_id" ] || session_id="unknown-session"
+resolve_config "$cwd"
+learning_loop_enabled || { echo '{}'; exit 0; }
+
+sentinel="$(sentinel_path "recall" "$session_id")"
+[ -f "$sentinel" ] && { echo '{}'; exit 0; }
+
+echo "VelesDB learning-loop guard: run a velesdb-memory recall_fused for this code area and wait for its successful result before the first Edit/Write. A timeout or failed recall does not unlock the edit." >&2
+exit 2

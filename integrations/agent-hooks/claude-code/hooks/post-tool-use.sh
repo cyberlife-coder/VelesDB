@@ -2,7 +2,7 @@
 # PostToolUse hook: shrink an oversized tool result BEFORE it enters the
 # agent's context, using the deterministic VelesDB context compiler.
 #
-# Why this hook is different from the other three. SessionStart, Stop and
+# Why this hook is different from the three advisory hooks. SessionStart, Stop and
 # PreCompact can only *nudge the model* — they hand it a reason string and
 # hope it calls the right tool. PostToolUse is the one event whose output
 # schema can REPLACE what the model sees
@@ -64,6 +64,16 @@ printf '%s' "$payload" | jq -e . >/dev/null 2>&1 || passthrough
 tool_name="$(printf '%s' "$payload" | jq -r '.tool_name // empty')"
 session_id="$(printf '%s' "$payload" | jq -r '.session_id // "unknown-session"')"
 tool_use_id="$(printf '%s' "$payload" | jq -r '.tool_use_id // "unknown-call"')"
+cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty')"
+[ -n "$cwd" ] || cwd="$PWD"
+
+# This happens before the compiler allowlist and size checks: MCP recall
+# results are normally small and are evidence for the learning-loop guard,
+# not candidates for context compression.
+resolve_config "$cwd"
+if learning_loop_enabled && successful_memory_recall "$payload"; then
+  : > "$(sentinel_path "recall" "$session_id")"
+fi
 
 # Tools whose output is prose or logs, and therefore compressible without
 # breaking the agent's reasoning. Override with a comma-separated list.

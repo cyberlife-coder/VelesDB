@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Keep the skills installed under `~/.claude/skills` in step with this repo.
+"""Keep the skills installed for supported agents in step with this repo.
 
 ## The defect this closes (#1712)
 
 `scripts/tests/test_skill_copies_are_identical.py` holds the repo's two copies
-of a SKILL.md against each other. It cannot see a THIRD copy — the one an agent
-actually loads, installed under `~/.claude/skills` — because that copy lives
-outside the repository, on one machine.
+of a SKILL.md against each other. It cannot see the copies agents actually
+load, installed under `~/.claude/skills` and `~/.codex/skills`, because those
+live outside the repository, on one machine.
 
 So it drifted, silently and consequentially. Measured on 2026-08-02: the
 installed `velesdb-memory` skill was 67 lines behind, and among them it stated
@@ -57,10 +57,11 @@ list this tool already owns, and the two byte-identity guards stay red until it
 has been run.
 
 Usage:
-    python3 scripts/sync-skills.py --check            # drift fails; absent is reported
-    python3 scripts/sync-skills.py --check --strict   # absent fails too
-    python3 scripts/sync-skills.py --install          # repo -> ~/.claude/skills
-    python3 scripts/sync-skills.py --bundle           # repo -> the npm-bundled copies
+    python3 scripts/sync-skills.py --check                    # Claude; drift fails
+    python3 scripts/sync-skills.py --check --strict           # Claude; absent fails too
+    python3 scripts/sync-skills.py --install --client codex   # repo -> ~/.codex/skills
+    python3 scripts/sync-skills.py --install --client all     # both supported clients
+    python3 scripts/sync-skills.py --bundle                   # repo -> npm copies
 """
 
 from __future__ import annotations
@@ -74,7 +75,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 
-#: `(source directory in the repo, installed name under ~/.claude/skills)`.
+#: `(source directory in the repo, installed name under the client's skills root)`.
 #:
 #: Deliberately an explicit pair list, not a scan: seven other skills live in
 #: that directory and come from elsewhere. Touching one of them — or merely
@@ -98,11 +99,12 @@ SKILLS: tuple[tuple[str, str], ...] = (
 LOCAL_FILES: tuple[str, ...] = ("LOCAL.md",)
 
 
-def installed_root() -> Path:
-    """Where an agent loads skills from. `CLAUDE_SKILLS_DIR` overrides it, which
-    is what lets this tool be tested without writing into a real install."""
-    override = os.environ.get("CLAUDE_SKILLS_DIR")
-    return Path(override) if override else Path.home() / ".claude" / "skills"
+def installed_root(client: str = "claude") -> Path:
+    """Where a client loads skills, with a client-specific test override."""
+    variable = "CLAUDE_SKILLS_DIR" if client == "claude" else "CODEX_SKILLS_DIR"
+    override = os.environ.get(variable)
+    directory = ".claude" if client == "claude" else ".codex"
+    return Path(override) if override else Path.home() / directory / "skills"
 
 
 def bundle_root() -> Path:
@@ -187,7 +189,7 @@ def install_one(source: Path, target: Path) -> None:
         shutil.rmtree(previous, ignore_errors=True)
 
 
-def run_check(root: Path, strict: bool) -> int:
+def run_check(root: Path, strict: bool, client: str = "claude") -> int:
     """Report each managed skill as one of THREE states, never two.
 
     `in step`, `drifted` and `absent` lead to different actions, and collapsing
@@ -226,7 +228,7 @@ def run_check(root: Path, strict: bool) -> int:
             "\nManaged skill(s) are not in step with the repository:\n\n    "
             + "\n\n    ".join(report)
             + "\n\nThe repository is the source of truth. Install or re-sync with:\n"
-            "    python3 scripts/sync-skills.py --install\n",
+            f"    python3 scripts/sync-skills.py --install --client {client}\n",
             file=sys.stderr,
         )
         return 1
@@ -256,11 +258,18 @@ def deploy(root: Path, verb: str) -> int:
 
 
 def dispatch(args: argparse.Namespace) -> int:
-    if args.check:
-        return run_check(installed_root(), args.strict)
     if args.bundle:
         return deploy(bundle_root(), "bundled")
-    return deploy(installed_root(), "installed")
+    clients = ("claude", "codex") if args.client == "all" else (args.client,)
+    results = []
+    for client in clients:
+        if len(clients) > 1:
+            print(f"{client}:")
+        if args.check:
+            results.append(run_check(installed_root(client), args.strict, client))
+        else:
+            results.append(deploy(installed_root(client), f"installed for {client}"))
+    return max(results, default=0)
 
 
 def main() -> int:
@@ -277,6 +286,12 @@ def main() -> int:
         "--strict",
         action="store_true",
         help="with --check: a managed skill that is absent also exits non-zero",
+    )
+    parser.add_argument(
+        "--client",
+        choices=("claude", "codex", "all"),
+        default="claude",
+        help="installed client to reconcile (default: claude; ignored by --bundle)",
     )
     return dispatch(parser.parse_args())
 
