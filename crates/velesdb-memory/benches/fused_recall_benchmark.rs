@@ -47,11 +47,10 @@ fn hub_store(degree: usize) -> (TempDir, MemoryService<HashEmbedder>) {
 
 fn bench_recall_fused_by_hub_degree(c: &mut Criterion) {
     let mut group = c.benchmark_group("recall_fused_hub_degree");
-    // Capped at 1000: past roughly 1195 total memories in a store, seed
-    // lookup by exact vector match stops finding anything at all (tracked
-    // separately, not a `recall_fused`/graph-walk issue) — so degrees above
-    // this would silently benchmark a no-op walk instead of the real one.
-    for degree in [50_usize, 200, 500, 1000] {
+    // The 2,000-degree point keeps the benchmark on the high-cardinality side
+    // of #1805's reported 1,193-memory boundary. The `why` assertion below is
+    // the liveness gate: a search regression cannot silently benchmark a no-op.
+    for degree in [50_usize, 200, 500, 1000, 2000] {
         let (_dir, svc) = hub_store(degree);
         // The walk must actually reach every fact under the hub (seed + hub
         // + degree facts) — otherwise a regression elsewhere silently turns
@@ -61,6 +60,13 @@ fn bench_recall_fused_by_hub_degree(c: &mut Criterion) {
             reached,
             degree + 2,
             "traversal did not reach the full hub fan-out"
+        );
+        let preflight = svc
+            .recall_fused(SEED, 10, None, FusionOptions::default())
+            .expect("recall_fused preflight");
+        assert!(
+            preflight.iter().any(|memory| memory.content == SEED),
+            "fused recall did not retain the exact seed"
         );
         group.throughput(Throughput::Elements(degree as u64));
         group.bench_with_input(BenchmarkId::from_parameter(degree), &degree, |b, _| {
