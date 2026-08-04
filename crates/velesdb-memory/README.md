@@ -83,10 +83,11 @@ hooks](../../integrations/agent-hooks/README.md) fire automatically in Claude
 Code: two remind it to save and reload its state around a session, one does the
 same before a compaction, `PreToolUse` requires successful recall before an
 opted-in repository edit, and `PostToolUse` is the one that *replaces* an
-oversized tool result with a compiled view — so the payload
-never enters the conversation at all. Nothing is deleted: the untouched
-original is written to a file and its path is quoted in the replacement, so the
-agent can read the full thing whenever the summary is not enough.
+oversized `Bash` result with a schema-compatible compiled view — so the bulky
+text never enters the conversation when Claude accepts the replacement.
+Nothing is deleted: the complete original Bash output object is serialized as
+JSON and its path is quoted in the replacement, so the agent can read the full
+thing whenever the compiled view is not enough.
 
 ## Use cases
 

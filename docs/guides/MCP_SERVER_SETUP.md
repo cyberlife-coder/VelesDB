@@ -211,17 +211,19 @@ overwrites the local copy.
 
 Skills teach an agent what to do; they do not make it remember to do it.
 [`integrations/agent-hooks/`](../../integrations/agent-hooks/README.md) closes
-that gap for Claude Code with four real hooks. `SessionStart`, `Stop`, and
-`PreCompact` nudge `load_working_context` / `save_working_context`
-automatically; `PostToolUse` goes further and **replaces** an oversized tool
-result with a compiled view — see
+that gap for Claude Code with five real hooks. `SessionStart`, `Stop`, and
+`PreCompact` nudge `load_working_context` / `save_working_context`,
+`PreToolUse` requires a successful recall before an opted-in repository edit,
+and `PostToolUse` both records that recall and can **replace** a schema-valid
+oversized Bash result with a compiled view — see
 [Context compiler → the `PostToolUse` hook](CONTEXT_COMPILER.md#the-posttooluse-hook).
 
 Install once **globally** (`~/.claude/hooks/`) for continuous memory across
 every project, or per-project if you would rather vendor the scripts into one
-repo. Codex CLI has no hook mechanism yet; the same directory documents an
-`AGENTS.md`-based convention for it, and Windsurf exposes a single advisory
-`pre_user_prompt` hook.
+repo. Codex CLI supports the same session-start, Stop and recall-before-edit
+loop through four hooks, but has no output-replacement channel; Windsurf
+exposes a single advisory `pre_user_prompt` hook. The integration guide pins
+the exact parity and installation commands for each host.
 
 ## HTTP transport (multi-client)
 

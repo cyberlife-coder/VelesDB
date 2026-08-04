@@ -103,8 +103,21 @@ def installed_root(client: str = "claude") -> Path:
     """Where a client loads skills, with a client-specific test override."""
     variable = "CLAUDE_SKILLS_DIR" if client == "claude" else "CODEX_SKILLS_DIR"
     override = os.environ.get(variable)
-    directory = ".claude" if client == "claude" else ".codex"
-    return Path(override) if override else Path.home() / directory / "skills"
+    if override:
+        root = Path(override).expanduser()
+        if not root.is_absolute():
+            raise SystemExit(f"{variable} must be an absolute path")
+        return root
+    if client == "codex":
+        codex_home = os.environ.get("CODEX_HOME")
+        if codex_home:
+            root = Path(codex_home).expanduser()
+            if not root.is_absolute():
+                raise SystemExit("CODEX_HOME must be an absolute path")
+        else:
+            root = Path.home() / ".codex"
+        return root / "skills"
+    return Path.home() / ".claude" / "skills"
 
 
 def bundle_root() -> Path:
@@ -135,8 +148,13 @@ def drift(source: Path, installed: Path) -> list[str]:
     layer, not drift: the design invites them, so reporting them would make
     this guard red on a correct install.
     """
-    want, have = digest(source), digest(installed)
     problems = []
+    linked = [path for path in installed.rglob("*") if path.is_symlink()]
+    for path in linked:
+        problems.append(f"unsafe symlink: {path.relative_to(installed)}")
+    if problems:
+        return problems
+    want, have = digest(source), digest(installed)
     for name in sorted(set(want) - set(have)):
         problems.append(f"missing: {name}")
     for name in sorted(set(have) - set(want) - set(LOCAL_FILES)):
@@ -160,7 +178,35 @@ def carry_local_layer(installed: Path, staging: Path) -> None:
             shutil.copy2(current, staging / name)
 
 
-def install_one(source: Path, target: Path) -> None:
+def validate_skill_target(target: Path) -> None:
+    """Refuse targets an atomic directory swap cannot safely own."""
+    if target.is_symlink():
+        raise SystemExit(f"refusing symlinked skill target {target}")
+    if target.exists() and not target.is_dir():
+        raise SystemExit(
+            f"refusing skill target {target}: existing target is not a directory"
+        )
+    if target.is_dir():
+        linked = [path for path in target.rglob("*") if path.is_symlink()]
+        if linked:
+            raise SystemExit(f"refusing linked path inside skill target {linked[0]}")
+
+
+def validate_source_target_separation(source: Path, target: Path) -> None:
+    """Refuse equal or nested source/target trees before an atomic swap."""
+    resolved_source = source.resolve(strict=True)
+    resolved_target = target.resolve(strict=False)
+    if (
+        resolved_source == resolved_target
+        or resolved_source in resolved_target.parents
+        or resolved_target in resolved_source.parents
+    ):
+        raise SystemExit(
+            f"refusing overlapping skill source and target: {source} -> {target}"
+        )
+
+
+def install_one(source: Path, target: Path, *, preserve_local: bool = True) -> None:
     """Replace `target` with `source`, without ever leaving a half-written skill.
 
     The new tree is built beside the target and moved into place by rename, so
@@ -169,24 +215,39 @@ def install_one(source: Path, target: Path) -> None:
     first half is new and second half is old — and a SKILL.md is read by an
     agent at arbitrary moments, including during an install.
 
-    The machine-local layer is carried across before the swap. Without that,
-    the atomicity that protects the shipped files is exactly what destroys the
-    one file nothing else holds a copy of.
+    For a client install, the machine-local layer is carried across before the
+    swap. Bundles deliberately disable that behaviour: a private `LOCAL.md`
+    must never survive regeneration into the npm package.
     """
+    validate_skill_target(target)
     target.parent.mkdir(parents=True, exist_ok=True)
     staging = target.parent / f".{target.name}.staging-{os.getpid()}"
     previous = target.parent / f".{target.name}.previous-{os.getpid()}"
     shutil.rmtree(staging, ignore_errors=True)
     shutil.rmtree(previous, ignore_errors=True)
+    installed = False
+    restored = False
     try:
         shutil.copytree(source, staging)
-        carry_local_layer(target, staging)
+        if preserve_local:
+            carry_local_layer(target, staging)
         if target.exists():
             os.replace(target, previous)
         os.replace(staging, target)
+        installed = True
+    except BaseException:
+        # The old tree has already moved when the final swap fails. Restore it
+        # before propagating the error; deleting `previous` here would also
+        # delete the only copy of the machine-local LOCAL.md layer.
+        if previous.exists() and not target.exists():
+            os.replace(previous, target)
+            restored = True
+        raise
     finally:
         shutil.rmtree(staging, ignore_errors=True)
-        shutil.rmtree(previous, ignore_errors=True)
+        # If rollback itself failed, keep `previous` for manual recovery.
+        if installed or restored:
+            shutil.rmtree(previous, ignore_errors=True)
 
 
 def run_check(root: Path, strict: bool, client: str = "claude") -> int:
@@ -208,11 +269,18 @@ def run_check(root: Path, strict: bool, client: str = "claude") -> int:
         if not source.is_dir():
             failures.append(f"{name}: {source_rel} is missing from the repository")
             continue
+        if installed.is_symlink():
+            drifted.append(f"{name} ({installed}): unsafe symlinked skill target")
+            print(f"  {name}: drifted")
+            continue
         if not installed.exists():
             absent.append(f"{name}: absent — nothing is installed at {installed}")
             print(f"  {name}: absent (not installed)")
             continue
-        problems = drift(source, installed)
+        if not installed.is_dir():
+            problems = ["unsafe target: installed path is not a directory"]
+        else:
+            problems = drift(source, installed)
         if problems:
             drifted.append(f"{name} ({installed}):\n      " + "\n      ".join(problems))
             print(f"  {name}: drifted")
@@ -240,7 +308,7 @@ def run_check(root: Path, strict: bool, client: str = "claude") -> int:
     return 0
 
 
-def deploy(root: Path, verb: str) -> int:
+def deploy(root: Path, verb: str, *, preserve_local: bool = True) -> int:
     """Write every managed skill into `root`, one atomic swap each.
 
     Shared by `--install` and `--bundle` so the two destinations can never be
@@ -252,14 +320,19 @@ def deploy(root: Path, verb: str) -> int:
         if not source.is_dir():
             print(f"{source_rel} is missing from the repository", file=sys.stderr)
             return 1
-        install_one(source, root / name)
+        target = root / name
+        validate_source_target_separation(source, target)
+        validate_skill_target(target)
+    for source_rel, name in SKILLS:
+        source = REPO / source_rel
+        install_one(source, root / name, preserve_local=preserve_local)
         print(f"  {verb} {name} <- {source_rel}")
     return 0
 
 
 def dispatch(args: argparse.Namespace) -> int:
     if args.bundle:
-        return deploy(bundle_root(), "bundled")
+        return deploy(bundle_root(), "bundled", preserve_local=False)
     clients = ("claude", "codex") if args.client == "all" else (args.client,)
     results = []
     for client in clients:

@@ -28,7 +28,7 @@ Claude Code equivalent · ❌ = not shipped, with the reason spelled out.
 | Loop step | Claude Code | Windsurf | Codex CLI |
 |---|---|---|---|
 | Load working context at session start | ✅ `session-start.sh` on `SessionStart` | ⚠️ `pre-user-prompt.sh` on `pre_user_prompt`, once per `trajectory_id` — advisory text, see the delivery caveat below | ✅ `codex/hooks/session-start.sh` on `SessionStart`, via `additionalContext` |
-| Save working context before the session ends | ✅ `stop.sh` on `Stop`, blocking the first stop per session | ⚠️ no end-of-session event is used: the *same* first-prompt reminder also asks for the save, hours in advance | ✅ `codex/hooks/stop.sh` on `Stop`, blocking the first stop per session |
+| Save/checkpoint working context | ✅ first Stop plus every later covered edit batch when opted in; otherwise the first Stop keeps the legacy save reminder | ⚠️ no end-of-session event is used: the *same* first-prompt reminder also asks for the save, hours in advance | ✅ same session-and-edit checkpoint as Claude; otherwise the first Stop keeps the legacy save reminder |
 | Require successful recall before the first repository edit | ✅ `pre-tool-use.sh` refuses `Edit`/`Write`; `post-tool-use.sh` marks only a successful VelesDB recall | ❌ not implemented | ✅ `codex/hooks/pre-tool-use.sh` refuses `apply_patch`; its PostToolUse partner applies the same success rule |
 | Compile the transcript before compaction | ✅ `pre-compact.sh` on `PreCompact` | ❌ Windsurf documents no compaction event. A VERIFIER: whether Cascade compacts at all in a way any hook can observe | ⚠️ **no pre-compaction hook is possible.** `PreCompact`/`PostCompact` support neither `additionalContext` nor a documented `decision`/`reason`, so nothing a hook prints there reaches the model. `codex/hooks/session-start.sh` compensates *after the fact* on `source == "compact"` |
 | Replace an oversized tool result | ✅ `post-tool-use.sh` via `hookSpecificOutput.updatedToolOutput` | ❌ **API gap.** Windsurf post-hooks cannot alter or block a result — "post-hooks cannot block since the action has already occurred" — and no documented field replaces one | ❌ **API gap as documented.** Codex `PostToolUse` can add `additionalContext`, or `decision: "block"` to substitute feedback for the result, but documents no equivalent of `updatedToolOutput` — it cannot hand back a *compiled* version of the real output |
@@ -104,8 +104,11 @@ there); Codex hooks reference, <https://learn.chatgpt.com/docs/hooks>
 
 ## Install — Claude Code
 
-Both variants need `bash` and `jq` on `PATH` — the hooks refuse to run
-without `jq` rather than silently emitting malformed JSON.
+Both variants need `bash` and `jq` on `PATH`. The installer refuses to create
+an inert hook tree without `jq`, and the drift check reports if an installed
+tree later loses it. If the dependency disappears at runtime, `PreToolUse`
+exits with the host's blocking code before any covered edit; the other
+lifecycle reminders may still be treated as failed hooks by the host.
 
 **Global (recommended for continuous CLI usage — every project, one-time
 setup).** One command does both halves — the scripts and the five
@@ -149,19 +152,19 @@ be relative to for a global install):
 {
   "hooks": {
     "SessionStart": [
-      { "hooks": [{ "type": "command", "command": "bash \"/Users/you/.claude/hooks/velesdb-memory/session-start.sh\"" }] }
+      { "hooks": [{ "type": "command", "command": "bash '/Users/you/.claude/hooks/velesdb-memory/session-start.sh'" }] }
     ],
     "Stop": [
-      { "hooks": [{ "type": "command", "command": "bash \"/Users/you/.claude/hooks/velesdb-memory/stop.sh\"" }] }
+      { "hooks": [{ "type": "command", "command": "bash '/Users/you/.claude/hooks/velesdb-memory/stop.sh'" }] }
     ],
     "PreCompact": [
-      { "hooks": [{ "type": "command", "command": "bash \"/Users/you/.claude/hooks/velesdb-memory/pre-compact.sh\"" }] }
+      { "hooks": [{ "type": "command", "command": "bash '/Users/you/.claude/hooks/velesdb-memory/pre-compact.sh'" }] }
     ],
     "PreToolUse": [
-      { "matcher": "^(Edit|Write)$", "hooks": [{ "type": "command", "command": "bash \"/Users/you/.claude/hooks/velesdb-memory/pre-tool-use.sh\"" }] }
+      { "matcher": "^(Edit|Write)$", "hooks": [{ "type": "command", "command": "bash '/Users/you/.claude/hooks/velesdb-memory/pre-tool-use.sh'" }] }
     ],
     "PostToolUse": [
-      { "hooks": [{ "type": "command", "command": "bash \"/Users/you/.claude/hooks/velesdb-memory/post-tool-use.sh\"" }] }
+      { "hooks": [{ "type": "command", "command": "bash '/Users/you/.claude/hooks/velesdb-memory/post-tool-use.sh'" }] }
     ]
   }
 }
@@ -171,8 +174,9 @@ be relative to for a global install):
 
 `PostToolUse` additionally needs a `velesdb-memory` binary on `PATH` that
 knows the `compile-stdin` subcommand. Until you have one, the hook is
-inert — it detects the missing capability and passes every tool result
-through untouched, so installing it early costs nothing.
+an identity transform — it detects the missing capability and passes every
+tool result through untouched. The hook process still has a small local
+latency cost even though it saves no paid-model tokens on that path.
 
 Works with zero further setup (each project defaults to
 `project = basename(cwd)`, `session = "rolling"`) — drop a
@@ -306,14 +310,14 @@ install section above — it folds the same load/save loop into one event.)
 | Event | What it does | Mechanism |
 |---|---|---|
 | `SessionStart` | Fires on every session start (new, resume, clear, or post-compact). Emits `additionalContext` telling the model to call `load_working_context(project, session)` as its first action if it hasn't already. | `hookSpecificOutput.additionalContext` — supported by `SessionStart`. |
-| `Stop` | Fires when Claude is about to stop responding. The **first** `Stop` per session is blocked with a reason telling the model to call `save_working_context(project, session)` with the distilled state before stopping; every later `Stop` in the same session passes through untouched. | `{"decision":"block","reason":"..."}`, gated by a sentinel file in `$TMPDIR` (or `/tmp`) keyed by the payload's `session_id`, so the reminder fires once, not on every turn. |
-| `PreCompact` | Fires before the transcript is compacted (manual or auto-triggered). The **first** `PreCompact` per session is blocked with a reason telling the model to `compile_transcript` the about-to-be-compacted transcript (deterministic compression, not lossy compaction) and `save_working_context` first; later ones pass through. | Same block-once-then-pass pattern as `Stop`, separate sentinel key. |
-| `PreToolUse` | In an opted-in project, refuses the first `Edit`/`Write` until the same session has completed a successful VelesDB recall. | Exit 2 with an actionable reason; a per-session sentinel is written only by `PostToolUse`. |
-| `PostToolUse` | Marks a successful VelesDB recall for the edit guard. Separately, when an **allowlisted** tool returns more than the size threshold, compiles it through `velesdb-memory compile-stdin` and replaces the view. | Success-gated sentinel plus `hookSpecificOutput.updatedToolOutput` for compression. |
+| `Stop` | Fires whenever Claude is about to stop responding, not only at final session exit. In an opted-in repository it blocks on the first Stop and after each later covered edit batch with the four-step checklist and `save_working_context`; each continuation passes. Without enforcement it retains the legacy first-Stop save reminder. | `{"decision":"block","reason":"..."}` plus repository-and-session first-Stop markers, a session-wide queue carrying every edited repository identity, and an atomic pending/delivered manifest that makes an interrupted checklist recoverable. |
+| `PreCompact` | Fires before the transcript is compacted (manual or auto-triggered). The **first** `PreCompact` per session is blocked with a reason telling the model to `compile_transcript` the about-to-be-compacted transcript (deterministic compression, not lossy compaction) and `save_working_context` first; later ones pass through. | Its own block-once-then-pass sentinel, separate from edit checkpoints. |
+| `PreToolUse` | In an opted-in project, refuses the first `Edit`/`Write` until the same host session has completed a successful VelesDB recall in that repository. | Exit 2 with an actionable reason; the refused target is queued so a successful recall remains bound to it even if the host `cwd` is elsewhere. |
+| `PostToolUse` | Marks a successful VelesDB recall for the edit guard. Separately, when a schema-valid `Bash` result exceeds the size threshold, compiles it through `velesdb-memory compile-stdin` and replaces the view only if fidelity and net-savings gates pass. | Success-gated sentinel plus shape-preserving `hookSpecificOutput.updatedToolOutput` for compression. |
 
-**Design note — the only hook that reduces the payload itself.** The other
-three can only ask the model to call a tool; whether the context actually
-shrinks is the model's decision. `PostToolUse` is different: its output
+**Design note — the only hook that reduces the payload itself.** The three
+lifecycle continuations can only ask the model to call a tool; whether context
+actually shrinks is the model's decision. `PostToolUse` is different: its output
 schema replaces the tool result before it ever enters the transcript. A
 300 KB `Bash` result compiled here is 300 KB that never gets re-sent on
 every later turn — the compression is structural, not advisory.
@@ -321,10 +325,10 @@ every later turn — the compression is structural, not advisory.
 Because it runs on *every* tool call and *replaces* content, its safety
 rules are strict, and each is covered by `test/hooks.test.sh`:
 
-- **Nothing is deleted.** The untouched original is written under
-  `$TMPDIR/velesdb-agent-hooks/tool-output/` and its path is quoted in the
-  replacement, so the agent can `Read` it back — the out-of-store equivalent
-  of a retrieval handle.
+- **Nothing is deleted.** The complete original Bash output object is
+  serialized as JSON under `$TMPDIR/velesdb-agent-hooks-$UID/tool-output/` and its
+  path is quoted in the replacement, so the agent can `Read` it back — the
+  out-of-store equivalent of a retrieval handle.
 - **Identity fallback everywhere.** Missing `jq`, missing binary, a binary
   too old to know `compile-stdin`, a compilation error, an empty compiled
   result — each emits `{}` and leaves the tool result exactly as it was.
@@ -333,14 +337,19 @@ rules are strict, and each is covered by `test/hooks.test.sh`:
   watchdog (no `timeout`, absent from stock macOS) bounds the call, and a
   cached capability probe tells old binaries from new ones without guessing
   versions.
-- **Allowlist, not denylist.** Default `Bash,Grep,WebFetch`. `Read` and
-  `Edit` are deliberately excluded and must stay excluded: their value *is*
-  the exact bytes.
+- **Schema allowlist, not denylist.** Only `Bash` is enabled because Claude's
+  `{stdout, stderr, interrupted, isImage}` output is documented and pinned by
+  fixtures. `Grep` and `WebFetch` stay off until their schemas are verified;
+  `Read` and `Edit` stay excluded because their value *is* the exact bytes.
+- **Positive net gain.** `risk: low` or `medium` is necessary, not sufficient:
+  the compiler's gross saving must also cover every footer byte plus a
+  configurable net margin. Otherwise the original passes through.
 
 | Env var | Default | Meaning |
 |---|---|---|
-| `VELESDB_HOOK_COMPRESS_TOOLS` | `Bash,Grep,WebFetch` | Comma-separated tool allowlist. |
+| `VELESDB_HOOK_COMPRESS_TOOLS` | `Bash` | May disable `Bash`; naming another tool does not opt an unverified output schema into replacement. |
 | `VELESDB_HOOK_MIN_BYTES` | `12000` | Below this, pass through — compiling would cost more than it saves. |
+| `VELESDB_HOOK_MIN_SAVED_TOKENS` | `128` | Conservative minimum net saving after counting each footer byte as one token. |
 | `VELESDB_HOOK_TOKEN_BUDGET` | `2000` | Token budget handed to `compile-stdin`. |
 | `VELESDB_HOOK_TOKEN_BUDGET_MAX` | twice `VELESDB_HOOK_TOKEN_BUDGET` | Ceiling a `risk: high` compilation may retry at. Set it equal to the budget to forbid the retry. |
 | `VELESDB_MEMORY_BIN` | `velesdb-memory` on `PATH` | Binary to invoke. |
@@ -359,6 +368,11 @@ reason goes to stderr.
 The wire check is fail-closed too: only explicit `risk: low` and
 `risk: medium` results may replace a tool result. A missing field, an unknown
 enum value, or a value of the wrong JSON type leaves the original untouched.
+
+Claude also ignores a replacement whose value does not match the built-in
+tool's output shape. The hook therefore preserves the complete host-provided
+`Bash` object and changes only `stdout`/`stderr`; the fixture follows the
+[current Claude hooks contract](https://code.claude.com/docs/en/hooks#posttooluse-decision-control).
 
 Archiving the original is not a substitute for this. On the `compile-stdin`
 path the compiler runs with no store and no bridge, so the `ctx://source/…`
@@ -384,8 +398,10 @@ compacting).
 
 ## `.velesdb-hooks.json` config format
 
-Place at your project root (the hooks walk up from the payload's `cwd`
-looking for it, up to 20 directories):
+Place at your project root. Lifecycle hooks walk up from the payload's `cwd`;
+the edit guard instead walks from Claude's `file_path` or every Codex patch
+target (`Add`, `Update`, `Delete`, and `Move`), falling back to `cwd` only when
+the documented target is absent. Every lookup is bounded to 20 directories:
 
 ```json
 {
@@ -407,6 +423,19 @@ looking for it, up to 20 directories):
   four-step Stop checklist. Defaults to `false`; missing or malformed config
   must never block an unrelated repository.
 
+When the target repository differs from `cwd`, the refused edit records that
+repository as pending. The next successful supported VelesDB recall in the
+same host session promotes it only when the target is unambiguous: the recall
+runs from that root, explicitly filters that project, or it is the sole pending
+target from an unconfigured cwd. A multi-repository patch may therefore need
+one refused-attempt/recall cycle per unseen repository. After the edit passes,
+independent per-repository records let concurrent hooks feed a session-wide
+`Stop` checkpoint without losing an identity.
+
+Policy discovery canonicalizes the nearest existing parent directory. A final
+symlink that crosses an opted-in repository boundary is refused even after
+recall; invoke the edit through its physical path instead.
+
 All three fields are optional. With no config file, load/save and compiler
 guidance still work (defaulting `project` to the directory name and `session`
 to `"rolling"`), but recall-before-edit remains disabled. This keeps a global
@@ -419,9 +448,10 @@ bash test/hooks.test.sh
 ```
 
 Simulates the stdin payload each harness documents for each event and asserts
-the exact JSON the script prints back (including the block-once/pass-after
-behaviour of `Stop` and `PreCompact`, and the Codex `source == "compact"`
-branch). It also shellchecks every script and rejects hardcoded home paths.
+the exact JSON the script prints back (including edit-triggered Stop
+checkpoints, `PreCompact`'s block-once/pass-after behaviour, and the Codex
+`source == "compact"` branch). It also shellchecks every script and rejects
+hardcoded home paths.
 Run it after touching any script in `claude-code/hooks/`, `windsurf/hooks/`
 or `codex/hooks/`.
 

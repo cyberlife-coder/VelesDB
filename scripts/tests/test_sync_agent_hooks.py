@@ -31,14 +31,18 @@ developer's own hooks or settings.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
+import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "sync-agent-hooks.py"
@@ -82,6 +86,12 @@ BINDING_CODEX_HOOKS = (
 BINDING_CODEX_FILES = tuple(script for _event, script in BINDING_CODEX_HOOKS) + (
     "lib/common.sh",
 )
+CODEX_STATUS_MESSAGES = {
+    "SessionStart": "velesdb-memory: resume working context",
+    "Stop": "velesdb-memory: save working context",
+    "PreToolUse": "velesdb-memory: require recall before edit",
+    "PostToolUse": "velesdb-memory: record successful recall",
+}
 
 #: A settings.json with foreign hooks arranged the way a real one is — note
 #: SessionStart holds a foreign hook and a VelesDB hook in the SAME group, so
@@ -107,8 +117,15 @@ FOREIGN_SETTINGS = {
 }
 
 
-def run(*args: str, home: Path) -> subprocess.CompletedProcess[str]:
+def run(
+    *args: str,
+    home: Path,
+    codex_home: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ, HOME=str(home))
+    env.pop("CODEX_HOME", None)
+    if codex_home is not None:
+        env["CODEX_HOME"] = str(codex_home)
     return subprocess.run(
         [sys.executable, str(SCRIPT), *args],
         capture_output=True,
@@ -116,6 +133,14 @@ def run(*args: str, home: Path) -> subprocess.CompletedProcess[str]:
         env=env,
         check=False,
     )
+
+
+def load_installer():
+    """Import the installer so failure points can be injected hermetically."""
+    spec = importlib.util.spec_from_file_location("sync_agent_hooks", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def foreign_view(settings: Path) -> str:
@@ -310,12 +335,270 @@ class InstallerBehaviour(unittest.TestCase):
         self.assertEqual(self.settings.read_bytes(), first_settings, "install is not idempotent")
         self.assertEqual(tree_state(self.hooks), first_tree)
 
+    def test_failed_final_tree_swap_restores_hooks_and_local_layer(self) -> None:
+        run("--install", home=self.home)
+        old_stop = "#!/usr/bin/env bash\n# previous working hook\n"
+        (self.hooks / "stop.sh").write_text(old_stop, encoding="utf-8")
+        local = self.hooks / "LOCAL.md"
+        local.write_text("# machine-only hook guidance\n", encoding="utf-8")
+
+        installer = load_installer()
+        real_replace = os.replace
+        replace_calls = 0
+
+        def fail_final_swap(source: Path, target: Path) -> None:
+            nonlocal replace_calls
+            replace_calls += 1
+            if replace_calls == 2:
+                raise OSError("injected final-swap failure")
+            real_replace(source, target)
+
+        with mock.patch.dict(os.environ, {"HOME": str(self.home)}), mock.patch.object(
+            installer.os, "replace", side_effect=fail_final_swap
+        ):
+            with self.assertRaisesRegex(OSError, "injected final-swap failure"):
+                installer.install_scripts("claude")
+
+        self.assertEqual((self.hooks / "stop.sh").read_text(encoding="utf-8"), old_stop)
+        self.assertEqual(local.read_text(encoding="utf-8"), "# machine-only hook guidance\n")
+        leftovers = [p.name for p in self.hooks.parent.iterdir() if p.name.startswith(".")]
+        self.assertEqual(leftovers, [], f"failed swap left recovery debris: {leftovers}")
+
+    def test_failed_swap_keeps_previous_tree_when_target_reappears(self) -> None:
+        run("--install", home=self.home)
+        old_stop = "#!/usr/bin/env bash\n# recover me\n"
+        (self.hooks / "stop.sh").write_text(old_stop, encoding="utf-8")
+        installer = load_installer()
+        real_replace = os.replace
+        replace_calls = 0
+
+        def race_final_swap(source: Path, target: Path) -> None:
+            nonlocal replace_calls
+            replace_calls += 1
+            if replace_calls == 2:
+                target.mkdir()
+                raise OSError("injected target race")
+            real_replace(source, target)
+
+        with mock.patch.dict(os.environ, {"HOME": str(self.home)}), mock.patch.object(
+            installer.os, "replace", side_effect=race_final_swap
+        ):
+            with self.assertRaisesRegex(OSError, "injected target race"):
+                installer.install_scripts("claude")
+
+        recovery = list(self.hooks.parent.glob(".velesdb-memory.previous-*"))
+        self.assertEqual(len(recovery), 1, recovery)
+        self.assertEqual(
+            (recovery[0] / "stop.sh").read_text(encoding="utf-8"), old_stop
+        )
+
     def test_install_writes_a_backup_before_touching_settings(self) -> None:
         original = self.settings.read_bytes()
         run("--install", home=self.home)
         backups = [p for p in self.claude.iterdir() if "backup" in p.name]
         self.assertTrue(backups, "no backup of settings.json was written")
         self.assertEqual(backups[0].read_bytes(), original)
+
+    def test_install_updates_a_linked_registry_without_replacing_the_link(self) -> None:
+        dotfiles = self.home / "dotfiles"
+        dotfiles.mkdir()
+        target = dotfiles / "claude-settings.json"
+        target.write_text(json.dumps(FOREIGN_SETTINGS) + "\n", encoding="utf-8")
+        self.settings.unlink()
+        self.settings.symlink_to(target)
+
+        result = run("--install", home=self.home)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(self.settings.is_symlink(), "installer replaced the dotfile symlink")
+        document = json.loads(target.read_text(encoding="utf-8"))
+        self.assertTrue(
+            any(
+                "velesdb-memory/" in hook.get("command", "")
+                for groups in document["hooks"].values()
+                for group in groups
+                for hook in group.get("hooks", [])
+            )
+        )
+
+    def test_registry_link_into_managed_hook_tree_is_refused_before_swap(self) -> None:
+        self.hooks.mkdir(parents=True)
+        target = self.hooks / "registry.json"
+        target.write_text(json.dumps(FOREIGN_SETTINGS) + "\n", encoding="utf-8")
+        self.settings.unlink()
+        self.settings.symlink_to(target)
+        before = tree_state(self.hooks)
+
+        result = run("--install", home=self.home)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("aliases managed hook tree", result.stderr)
+        self.assertTrue(self.settings.is_symlink())
+        self.assertEqual(tree_state(self.hooks), before)
+        self.assertEqual(json.loads(target.read_text(encoding="utf-8")), FOREIGN_SETTINGS)
+
+    def test_broken_registry_symlink_is_refused_before_scripts_change(self) -> None:
+        self.settings.unlink()
+        self.settings.symlink_to(self.home / "missing-dotfile.json")
+
+        result = run("--install", home=self.home)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("broken registry symlink", result.stderr)
+        self.assertFalse(self.hooks.exists())
+
+    def test_uninstall_refuses_broken_registry_symlink_before_scripts_change(
+        self,
+    ) -> None:
+        self.assertEqual(run("--install", home=self.home).returncode, 0)
+        before = tree_state(self.hooks)
+        self.settings.unlink()
+        self.settings.symlink_to(self.home / "missing-uninstall-dotfile.json")
+
+        result = run("--uninstall", home=self.home)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("broken registry symlink", result.stderr)
+        self.assertEqual(tree_state(self.hooks), before)
+
+    def test_install_refuses_registry_directory_before_scripts_change(self) -> None:
+        self.settings.unlink()
+        self.settings.mkdir()
+
+        result = run("--install", home=self.home)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("existing target is not a file", result.stderr)
+        self.assertFalse(self.hooks.exists())
+
+    def test_uninstall_refuses_registry_directory_before_scripts_change(self) -> None:
+        self.assertEqual(run("--install", home=self.home).returncode, 0)
+        before = tree_state(self.hooks)
+        self.settings.unlink()
+        self.settings.mkdir()
+
+        result = run("--uninstall", home=self.home)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("existing target is not a file", result.stderr)
+        self.assertEqual(tree_state(self.hooks), before)
+
+    def test_install_and_uninstall_refuse_a_linked_hook_tree_without_mutation(self) -> None:
+        original = self.settings.read_bytes()
+        broad_target = self.home / "dotfiles-hooks"
+        broad_target.mkdir()
+        keep = broad_target / "KEEP.txt"
+        keep.write_text("outside installer scope\n", encoding="utf-8")
+        self.hooks.parent.mkdir(parents=True, exist_ok=True)
+        self.hooks.symlink_to(broad_target)
+
+        for mode in ("--install", "--uninstall"):
+            with self.subTest(mode=mode):
+                result = run(mode, home=self.home)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("symlinked hook tree", result.stderr)
+                self.assertTrue(self.hooks.is_symlink())
+                self.assertEqual(keep.read_text(encoding="utf-8"), "outside installer scope\n")
+                self.assertEqual(self.settings.read_bytes(), original)
+
+        check = run("--check", "--strict", home=self.home)
+        self.assertNotEqual(check.returncode, 0)
+        self.assertIn("Unsafe agent-hook installation", check.stderr)
+
+    def test_uninstall_refuses_an_internal_directory_link(self) -> None:
+        self.assertEqual(run("--install", home=self.home).returncode, 0)
+        outside = self.home / "outside-hook-lib"
+        outside.mkdir()
+        external_common = outside / "common.sh"
+        external_common.write_text("external bytes\n", encoding="utf-8")
+        shutil.rmtree(self.hooks / "lib")
+        (self.hooks / "lib").symlink_to(outside)
+
+        result = run("--uninstall", home=self.home)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("linked path inside hook tree", result.stderr)
+        self.assertEqual(external_common.read_text(encoding="utf-8"), "external bytes\n")
+        self.assertTrue((self.hooks / "stop.sh").is_file())
+
+    def test_check_and_dry_run_report_owned_entry_under_unexpected_event(self) -> None:
+        self.assertEqual(run("--install", home=self.home).returncode, 0)
+        document = json.loads(self.settings.read_text(encoding="utf-8"))
+        command = next(
+            hook["command"]
+            for group in document["hooks"]["Stop"]
+            for hook in group["hooks"]
+            if "velesdb-memory" in hook["command"]
+        )
+        document["hooks"]["ObsoleteEvent"] = [
+            {"hooks": [{"type": "command", "command": command}]}
+        ]
+        self.write_settings(document)
+
+        checked = run("--check", "--strict", home=self.home)
+        dry = run("--install", "--dry-run", home=self.home)
+
+        self.assertNotEqual(checked.returncode, 0)
+        self.assertIn("ObsoleteEvent", checked.stdout + checked.stderr)
+        self.assertIn("unexpected registry entry", dry.stdout)
+        self.assertNotIn("would change nothing", dry.stdout)
+
+    def test_shell_command_quotes_hostile_home_as_one_literal_argument(self) -> None:
+        hostile_home = self.home / "home with 'quote' and $(touch PWNED)"
+        claude = hostile_home / ".claude"
+        claude.mkdir(parents=True)
+        settings = claude / "settings.json"
+        settings.write_text(json.dumps(FOREIGN_SETTINGS) + "\n", encoding="utf-8")
+
+        result = run("--install", home=hostile_home)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        document = json.loads(settings.read_text(encoding="utf-8"))
+        commands = [
+            hook["command"]
+            for groups in document["hooks"].values()
+            for group in groups
+            for hook in group.get("hooks", [])
+            if "velesdb-memory" in hook.get("command", "")
+        ]
+        self.assertTrue(commands)
+        for command in commands:
+            arguments = shlex.split(command)
+            self.assertEqual(arguments[0], "bash")
+            self.assertTrue(Path(arguments[1]).is_relative_to(hostile_home))
+        self.assertFalse((self.home / "PWNED").exists())
+
+    def test_broken_hook_tree_symlink_is_refused_before_registry_change(self) -> None:
+        original = self.settings.read_bytes()
+        self.hooks.parent.mkdir(parents=True, exist_ok=True)
+        self.hooks.symlink_to(self.home / "missing-hooks")
+
+        result = run("--install", home=self.home)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("symlinked hook tree", result.stderr)
+        self.assertEqual(self.settings.read_bytes(), original)
+
+    def test_registry_staging_is_private_before_content_is_written(self) -> None:
+        installer = load_installer()
+        observed_modes: list[int] = []
+        real_fdopen = os.fdopen
+
+        def inspect_fd(descriptor: int, *args, **kwargs):
+            observed_modes.append(stat.S_IMODE(os.fstat(descriptor).st_mode))
+            return real_fdopen(descriptor, *args, **kwargs)
+
+        with mock.patch.dict(os.environ, {"HOME": str(self.home)}), mock.patch.object(
+            installer.os, "fdopen", side_effect=inspect_fd
+        ):
+            installer.write_settings(FOREIGN_SETTINGS)
+
+        self.assertEqual(
+            observed_modes,
+            [0o600, 0o600],
+            "backup and registry staging files must both be private before writes",
+        )
 
     def test_dry_run_changes_nothing_on_disk(self) -> None:
         before_settings = self.settings.read_bytes()
@@ -331,6 +614,28 @@ class InstallerBehaviour(unittest.TestCase):
     def test_dry_run_still_says_what_it_would_do(self) -> None:
         result = run("--install", "--dry-run", home=self.home)
         self.assertIn("would", result.stdout.lower())
+
+    def test_dry_run_discloses_unexpected_file_removal(self) -> None:
+        run("--install", home=self.home)
+        unexpected = self.hooks / "stale-private-copy.sh"
+        unexpected.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+
+        result = run("--install", "--dry-run", home=self.home)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("would remove unexpected file", result.stdout)
+        self.assertIn(unexpected.name, result.stdout)
+        self.assertNotIn("would change nothing", result.stdout)
+
+    def test_install_refuses_when_jq_is_unavailable(self) -> None:
+        installer = load_installer()
+        with mock.patch.dict(os.environ, {"HOME": str(self.home)}), mock.patch.object(
+            installer.shutil, "which", return_value=None
+        ):
+            result = installer.run_install(False, "claude")
+
+        self.assertEqual(result, 1)
+        self.assertFalse(self.hooks.exists())
 
     def test_uninstall_removes_only_velesdb(self) -> None:
         before = foreign_view(self.settings)
@@ -349,6 +654,28 @@ class InstallerBehaviour(unittest.TestCase):
             for h in group.get("hooks", [])
         ]
         self.assertFalse([c for c in remaining if "velesdb-memory/" in c], remaining)
+
+    def test_uninstall_preserves_the_machine_local_hook_layer(self) -> None:
+        run("--install", home=self.home)
+        local = self.hooks / "LOCAL.md"
+        local.write_text("# machine-only hook guidance\n", encoding="utf-8")
+
+        result = run("--uninstall", home=self.home)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(local.read_text(encoding="utf-8"), "# machine-only hook guidance\n")
+        self.assertFalse((self.hooks / "stop.sh").exists())
+
+    def test_uninstall_dry_run_names_the_machine_local_layer(self) -> None:
+        run("--install", home=self.home)
+        local = self.hooks / "LOCAL.md"
+        local.write_text("# machine-only hook guidance\n", encoding="utf-8")
+
+        result = run("--uninstall", "--dry-run", home=self.home)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("would preserve machine-local LOCAL.md", result.stdout)
+        self.assertTrue(local.is_file())
 
     def test_uninstall_removes_the_absorbed_files_too(self) -> None:
         run("--install", home=self.home)
@@ -385,6 +712,7 @@ class InstallerBehaviour(unittest.TestCase):
             if "velesdb-memory/" in hook.get("command", "")
         ]
         self.assertEqual(len(ours), len(EXPECTED_HOOKS))
+        self.assertEqual(stat.S_IMODE(self.settings.stat().st_mode), 0o600)
 
     def test_the_installed_commands_carry_no_hard_coded_home(self) -> None:
         """The command must be built from the running HOME, not from a string
@@ -541,9 +869,156 @@ class BindingLoopInstallerContract(unittest.TestCase):
         self.assertEqual(set(installed_by_event), {event for event, _ in BINDING_CODEX_HOOKS})
         for event, script in BINDING_CODEX_HOOKS:
             self.assertTrue(
-                any(command.endswith(f'/{script}"') for command in installed_by_event[event]),
+                any(
+                    len(shlex.split(command)) >= 2
+                    and shlex.split(command)[1].endswith(f"/{script}")
+                    for command in installed_by_event[event]
+                ),
                 f"{event} does not invoke {script}: {installed_by_event[event]}",
             )
+
+    def test_install_preserves_both_existing_registry_modes(self) -> None:
+        self.claude_settings.chmod(0o600)
+        self.codex_settings.chmod(0o640)
+
+        result = run("--install", "--client", "all", home=self.home)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(stat.S_IMODE(self.claude_settings.stat().st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(self.codex_settings.stat().st_mode), 0o640)
+
+    def test_absent_codex_registry_is_created_private(self) -> None:
+        self.codex_settings.unlink()
+
+        result = run("--install", "--client", "codex", home=self.home)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(stat.S_IMODE(self.codex_settings.stat().st_mode), 0o600)
+
+    def test_codex_home_controls_hooks_and_registry_destinations(self) -> None:
+        custom_home = self.home / "custom-codex-home"
+
+        result = run(
+            "--install",
+            "--client",
+            "codex",
+            home=self.home,
+            codex_home=custom_home,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((custom_home / "hooks.json").is_file())
+        self.assertTrue(
+            (custom_home / "hooks" / "velesdb-memory" / "pre-tool-use.sh").is_file()
+        )
+        original = json.loads(self.codex_settings.read_text(encoding="utf-8"))
+        self.assertFalse(
+            any(
+                "velesdb-memory/" in hook.get("command", "")
+                for groups in original.get("hooks", {}).values()
+                for group in groups
+                for hook in group.get("hooks", [])
+            )
+        )
+
+    def test_codex_home_must_be_absolute(self) -> None:
+        result = run(
+            "--install",
+            "--client",
+            "codex",
+            home=self.home,
+            codex_home=Path("relative-codex-home"),
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("CODEX_HOME must be an absolute path", result.stderr)
+
+    def test_registry_backup_symlink_is_replaced_not_followed(self) -> None:
+        for client, registry in (
+            ("claude", self.claude_settings),
+            ("codex", self.codex_settings),
+        ):
+            with self.subTest(client=client):
+                original = registry.read_bytes()
+                outside = self.home / f"{client}-backup-target.txt"
+                outside.write_text("do not overwrite\n", encoding="utf-8")
+                backup = registry.with_name(registry.name + ".velesdb-backup")
+                backup.symlink_to(outside)
+
+                result = run("--install", "--client", client, home=self.home)
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(
+                    outside.read_text(encoding="utf-8"), "do not overwrite\n"
+                )
+                self.assertFalse(backup.is_symlink())
+                self.assertEqual(backup.read_bytes(), original)
+
+    def test_codex_handler_bounds_type_and_uniqueness_are_checked(self) -> None:
+        def installed_document() -> dict:
+            self.assertEqual(
+                run("--install", "--client", "codex", home=self.home).returncode,
+                0,
+            )
+            return json.loads(self.codex_settings.read_text(encoding="utf-8"))
+
+        def ours(document: dict) -> tuple[dict, dict]:
+            group = next(
+                group
+                for group in document["hooks"]["PreToolUse"]
+                if any(
+                    ".codex/hooks/velesdb-memory/" in hook.get("command", "")
+                    for hook in group.get("hooks", [])
+                )
+            )
+            handler = next(
+                hook
+                for hook in group["hooks"]
+                if ".codex/hooks/velesdb-memory/" in hook.get("command", "")
+            )
+            return group, handler
+
+        for label in ("timeout", "type", "duplicate"):
+            with self.subTest(label=label):
+                document = installed_document()
+                group, handler = ours(document)
+                if label == "timeout":
+                    handler["timeout"] = 600
+                elif label == "type":
+                    handler["type"] = "prompt"
+                else:
+                    group["hooks"].append(dict(handler))
+                self.codex_settings.write_text(
+                    json.dumps(document, indent=2) + "\n", encoding="utf-8"
+                )
+
+                result = run("--check", "--strict", "--client", "codex", home=self.home)
+
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("PreToolUse entry", result.stdout + result.stderr)
+                self.assertIn("drifted", result.stdout + result.stderr)
+
+    def test_codex_install_writes_bounded_typed_handlers(self) -> None:
+        self.assertEqual(
+            run("--install", "--client", "codex", home=self.home).returncode,
+            0,
+        )
+        document = json.loads(self.codex_settings.read_text(encoding="utf-8"))
+
+        for event, _script in BINDING_CODEX_HOOKS:
+            with self.subTest(event=event):
+                ours = [
+                    hook
+                    for group in document["hooks"][event]
+                    for hook in group["hooks"]
+                    if ".codex/hooks/velesdb-memory/" in hook.get("command", "")
+                ]
+                self.assertEqual(len(ours), 1)
+                self.assertEqual(ours[0]["type"], "command")
+                self.assertEqual(ours[0]["timeout"], 10)
+                self.assertEqual(
+                    ours[0]["statusMessage"], CODEX_STATUS_MESSAGES[event]
+                )
 
     def test_strict_check_observes_codex_drift(self) -> None:
         self.assertEqual(
@@ -572,6 +1047,8 @@ class ManualInstructionsAgree(unittest.TestCase):
     """
 
     README = REPO / "integrations" / "agent-hooks" / "README.md"
+    CODEX_README = REPO / "integrations" / "agent-hooks" / "codex" / "README.md"
+    CODEX_SNIPPET = REPO / "integrations" / "agent-hooks" / "codex" / "hooks-snippet.json"
 
     def test_every_documented_command_has_the_shape_the_tool_writes(self) -> None:
         body = self.README.read_text(encoding="utf-8")
@@ -583,7 +1060,7 @@ class ManualInstructionsAgree(unittest.TestCase):
         self.assertTrue(documented, "the README no longer documents the entries at all")
         for line in documented:
             self.assertIn(
-                'bash \\"',
+                '"command": "bash \'/Users/you/',
                 line,
                 "a documented command leaves the path unquoted, so a HOME with a "
                 f"space splits it — and --check calls the result drift:\n{line}",
@@ -595,6 +1072,30 @@ class ManualInstructionsAgree(unittest.TestCase):
             self.assertTrue(
                 script in body, f"{script} is installed but never documented"
             )
+
+    def test_codex_manual_commands_quote_home_paths(self) -> None:
+        snippet = json.loads(self.CODEX_SNIPPET.read_text(encoding="utf-8"))
+        commands = [
+            hook["command"]
+            for groups in snippet["hooks"].values()
+            for group in groups
+            for hook in group["hooks"]
+        ]
+        self.assertTrue(commands)
+        for command in commands:
+            arguments = shlex.split(command)
+            self.assertEqual(arguments[0], "bash", command)
+            self.assertTrue(arguments[1].endswith(".sh"), command)
+
+        toml_commands = [
+            line.strip()
+            for line in self.CODEX_README.read_text(encoding="utf-8").splitlines()
+            if line.strip().startswith("command =") and ".codex/hooks/" in line
+        ]
+        self.assertEqual(len(toml_commands), len(BINDING_CODEX_HOOKS))
+        for line in toml_commands:
+            self.assertTrue(line.startswith('command = "bash \''), line)
+            self.assertTrue(line.endswith(".sh'\""), line)
 
     def test_the_absorbed_files_are_documented_too(self) -> None:
         """A capability that ships and is written down nowhere is a capability

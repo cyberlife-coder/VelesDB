@@ -22,6 +22,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "sync-skills.py"
@@ -204,6 +205,78 @@ class SyncSkills(unittest.TestCase):
         leftovers = [p.name for p in self.root.iterdir() if p.name.startswith(".")]
         self.assertEqual(leftovers, [], f"staging residue left behind: {leftovers}")
 
+    def test_install_refuses_a_symlinked_skill_without_touching_its_target(self) -> None:
+        outside_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(outside_tmp.cleanup)
+        outside = Path(outside_tmp.name)
+        keep = outside / "KEEP.txt"
+        keep.write_text("outside installer scope\n", encoding="utf-8")
+        (self.root / EXPECTED[0]).symlink_to(outside)
+
+        result = run("--install", root=self.root)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("symlinked skill target", result.stderr)
+        self.assertTrue((self.root / EXPECTED[0]).is_symlink())
+        self.assertEqual(keep.read_text(encoding="utf-8"), "outside installer scope\n")
+        self.assertFalse((self.root / EXPECTED[1]).exists())
+
+    def test_install_refuses_file_target_before_installing_any_skill(self) -> None:
+        target = self.root / EXPECTED[1]
+        target.write_text("user-owned file\n", encoding="utf-8")
+
+        result = run("--install", root=self.root)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("existing target is not a directory", result.stderr)
+        self.assertEqual(target.read_text(encoding="utf-8"), "user-owned file\n")
+        for name in EXPECTED:
+            if name != EXPECTED[1]:
+                self.assertFalse((self.root / name).exists(), name)
+
+    def test_install_refuses_a_source_target_overlap_before_any_swap(self) -> None:
+        module = load_script()
+        fake_repo = self.root / "fake-repo"
+        for source_rel, name in EXPECTED_PAIRS:
+            source = fake_repo / source_rel
+            source.mkdir(parents=True)
+            (source / "SKILL.md").write_text(f"# {name}\n", encoding="utf-8")
+        before = {
+            str(path.relative_to(fake_repo)): path.read_bytes()
+            for path in fake_repo.rglob("*")
+            if path.is_file()
+        }
+
+        with mock.patch.object(module, "REPO", fake_repo), self.assertRaisesRegex(
+            SystemExit, "overlapping skill source and target"
+        ):
+            module.deploy(fake_repo / "skills", "installed for claude")
+
+        after = {
+            str(path.relative_to(fake_repo)): path.read_bytes()
+            for path in fake_repo.rglob("*")
+            if path.is_file()
+        }
+        self.assertEqual(after, before)
+
+    def test_check_and_install_refuse_internal_skill_symlink(self) -> None:
+        self.assertEqual(run("--install", root=self.root).returncode, 0)
+        target = self.root / EXPECTED[1]
+        skill = target / "SKILL.md"
+        external = self.root / "external-skill.md"
+        external.write_text(skill.read_text(encoding="utf-8"), encoding="utf-8")
+        skill.unlink()
+        skill.symlink_to(external)
+
+        checked = run("--check", "--strict", root=self.root)
+        installed = run("--install", root=self.root)
+
+        self.assertNotEqual(checked.returncode, 0)
+        self.assertIn("unsafe symlink", checked.stderr)
+        self.assertNotEqual(installed.returncode, 0)
+        self.assertIn("linked path inside skill target", installed.stderr)
+        self.assertTrue(skill.is_symlink())
+
     def test_install_never_leaves_a_partially_written_skill(self) -> None:
         """Re-installing over a live install replaces it wholesale. Checked by
         content rather than by watching the filesystem race: after a second
@@ -216,6 +289,63 @@ class SyncSkills(unittest.TestCase):
 
         source = (REPO / SOURCE_OF[EXPECTED[1]] / "SKILL.md").read_bytes()
         self.assertEqual(target.read_bytes(), source)
+
+    def test_failed_final_swap_restores_skill_and_local_layer(self) -> None:
+        module = load_script()
+        source = REPO / SOURCE_OF[EXPECTED[1]]
+        target = self.root / EXPECTED[1]
+        target.mkdir()
+        old_skill = "# previous working skill\n"
+        (target / "SKILL.md").write_text(old_skill, encoding="utf-8")
+        local = target / "LOCAL.md"
+        local.write_text("# machine-only skill guidance\n", encoding="utf-8")
+
+        real_replace = os.replace
+        replace_calls = 0
+
+        def fail_final_swap(source_path: Path, target_path: Path) -> None:
+            nonlocal replace_calls
+            replace_calls += 1
+            if replace_calls == 2:
+                raise OSError("injected final-swap failure")
+            real_replace(source_path, target_path)
+
+        with mock.patch.object(module.os, "replace", side_effect=fail_final_swap):
+            with self.assertRaisesRegex(OSError, "injected final-swap failure"):
+                module.install_one(source, target)
+
+        self.assertEqual((target / "SKILL.md").read_text(encoding="utf-8"), old_skill)
+        self.assertEqual(local.read_text(encoding="utf-8"), "# machine-only skill guidance\n")
+        leftovers = [p.name for p in self.root.iterdir() if p.name.startswith(".")]
+        self.assertEqual(leftovers, [], f"failed swap left recovery debris: {leftovers}")
+
+    def test_failed_swap_keeps_previous_skill_when_target_reappears(self) -> None:
+        module = load_script()
+        source = REPO / SOURCE_OF[EXPECTED[1]]
+        target = self.root / EXPECTED[1]
+        target.mkdir()
+        old_skill = "# recover this skill\n"
+        (target / "SKILL.md").write_text(old_skill, encoding="utf-8")
+        real_replace = os.replace
+        replace_calls = 0
+
+        def race_final_swap(source_path: Path, target_path: Path) -> None:
+            nonlocal replace_calls
+            replace_calls += 1
+            if replace_calls == 2:
+                target_path.mkdir()
+                raise OSError("injected target race")
+            real_replace(source_path, target_path)
+
+        with mock.patch.object(module.os, "replace", side_effect=race_final_swap):
+            with self.assertRaisesRegex(OSError, "injected target race"):
+                module.install_one(source, target)
+
+        recovery = list(self.root.glob(f".{EXPECTED[1]}.previous-*"))
+        self.assertEqual(len(recovery), 1, recovery)
+        self.assertEqual(
+            (recovery[0] / "SKILL.md").read_text(encoding="utf-8"), old_skill
+        )
 
 class HostInstallParity(unittest.TestCase):
     """Claude and Codex must load the exact same versioned skill bytes."""
@@ -271,6 +401,26 @@ class HostInstallParity(unittest.TestCase):
         self.assertEqual(self.sync("--install", "--client", "all").returncode, 0)
 
         self.assertEqual(local.read_text(encoding="utf-8"), "# Codex-local guidance\n")
+
+    def test_codex_home_controls_the_default_skill_destination(self) -> None:
+        private = self.codex.parent
+        process_home = private / "process-home"
+        codex_home = private / "custom-codex-home"
+        process_home.mkdir()
+        env = dict(os.environ, HOME=str(process_home), CODEX_HOME=str(codex_home))
+        env.pop("CODEX_SKILLS_DIR", None)
+
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--install", "--client", "codex"],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_host_matches_sources(codex_home / "skills")
+        self.assertFalse((process_home / ".codex" / "skills").exists())
 
 
 class LocalLayer(unittest.TestCase):
@@ -411,6 +561,17 @@ class BundledCopies(unittest.TestCase):
         self.bundled("--bundle")
 
         self.assertFalse(stale.exists(), "a stale bundled file survived the regeneration")
+
+    def test_bundle_removes_a_machine_local_layer(self) -> None:
+        """`LOCAL.md` belongs only to client installs and must not ship in npm."""
+        self.bundled("--bundle")
+        local = self.bundle / EXPECTED[0] / "LOCAL.md"
+        local.write_text("private machine guidance\n", encoding="utf-8")
+
+        result = self.bundled("--bundle")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(local.exists(), "a private LOCAL.md survived npm bundling")
 
     def test_the_committed_bundle_is_exactly_what_bundle_produces(self) -> None:
         """The claim "generated, not hand-maintained" is only true if the

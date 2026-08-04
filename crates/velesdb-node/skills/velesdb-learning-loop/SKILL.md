@@ -44,9 +44,25 @@ For an opted-in repository, the learning loop has four mandatory steps:
 The repository opts in with `enforce_learning_loop: true` in
 `.velesdb-hooks.json`. The `PreToolUse` guard refuses the first `Edit`/`Write`
 or `apply_patch` until `PostToolUse` has observed a successful VelesDB recall
-in the same session. A timeout, an MCP error, or `compile_context` without a
-`memory_scope` never creates the sentinel. The `Stop` guard then blocks once
-with the four-step checklist and the working-context save.
+in the same host session and repository. A timeout, an MCP error, or
+`compile_context` without a `memory_scope` never creates the sentinel. The
+`Stop` guard blocks once on the first Stop so design, diagnosis, and review
+sessions without edits still close the loop. It blocks again after each later
+covered edit batch. Before consuming those edit records it stores the complete
+batch in an atomic pending/delivered manifest, so an interrupted Stop re-emits
+every repository identity; the continuation then passes, while a later edit
+creates a fresh checkpoint.
+
+The edit target, not just the host `cwd`, selects the repository policy. When
+they differ, a refusal queues the target. A successful recall promotes it only
+when the target is unambiguous from cwd, an explicit project filter, or a sole
+pending record from an unconfigured cwd. An accepted multi-repository patch
+records every opted-in target independently for the next `Stop`, which must
+save each listed project/session.
+
+Policy discovery canonicalizes the nearest existing parent directory. A final
+symlink that crosses an opted-in repository boundary is refused even after
+recall; invoke the edit through its physical path instead.
 
 The versioned implementation lives in `pre-tool-use.sh`, `post-tool-use.sh`,
 and `stop.sh` under each supported harness integration. Installing the skill
@@ -58,6 +74,18 @@ mechanically. Decision, causality, and feedback are policy plus a blocking
 continuation reminder; shell commands that mutate files and specialized tool
 paths can bypass the edit hook. Never describe this guardrail as a complete
 security boundary.
+
+The continuation has a real context cost: at most one extra model turn for a
+session with no covered edit, plus one after each later covered edit batch.
+Claude can offset large tool-result costs through deterministic replacement;
+Codex exposes no equivalent replacement channel. Do not claim that the guard
+itself saves tokens or that its overhead is neutral.
+
+The installed hooks require `jq`. The installer and drift check refuse a
+missing dependency. If it disappears while a host is running, the edit guard
+uses the host's blocking exit code before every covered edit; other lifecycle
+reminders may still fail. “Binding” therefore also assumes the hooks are
+installed and trusted.
 
 ## Writing is never systematic — sort first
 

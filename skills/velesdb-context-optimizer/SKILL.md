@@ -66,8 +66,8 @@ with steps 1-3.
 
 ## Oversized tool results — usually not your job
 
-A tool result that blew up (a 300 KB build log, a wide `grep`, a fetched
-page) is the single biggest source of context bloat, and it is worth
+A tool result that blew up (especially a 300 KB `Bash` build log) is the
+single biggest source of context bloat, and it is worth
 compressing *once*, at the moment it arrives — every later turn re-sends it
 otherwise. But you are usually not the one who should do it: the
 `PostToolUse` hook shipped in `integrations/agent-hooks/` compresses it
@@ -75,11 +75,12 @@ before it ever reaches you, using `velesdb-memory compile-stdin` (the
 store-free CLI form of this compiler) and replacing the tool result in
 place. When that hook is installed you will see results ending in a
 `--- velesdb: compiled N tokens down to M …` footer quoting the path of the
-untouched original — `Read` that path when the compiled view is not enough.
+complete original Bash output object serialized as JSON — `Read` that path
+when the compiled view is not enough.
 
 Compress a tool result *yourself* only when the hook is not installed, or
-when it deliberately skipped the tool (`Read`/`Edit` outputs are never
-compressed — the exact bytes are the point). In that case treat the output
+when it deliberately skipped the tool (only the documented `Bash` output
+shape is currently enabled). In that case treat the output
 as a transcript and call `compile_transcript` on it. Never re-compress
 something that already carries the footer above: it has been compiled once
 already, and compiling a compilation only loses fidelity.
