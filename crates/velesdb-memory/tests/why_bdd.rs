@@ -9,6 +9,7 @@ mod common;
 
 use common::service;
 use tempfile::TempDir;
+use velesdb_memory::limits::{MAX_WHY_NODES, MAX_WHY_NODE_DEGREE};
 use velesdb_memory::{HashEmbedder, Link, MemoryService};
 
 const DECISION: &str = "we chose parking_lot to avoid lock poisoning";
@@ -127,6 +128,65 @@ fn why_stops_at_the_hop_budget() {
     assert!(
         !ids.contains(&ticket),
         "one hop must not reach the two-hop ticket"
+    );
+}
+
+#[test]
+fn why_caps_a_single_nodes_out_degree() {
+    // Regression for issue #1743: a super-node (an entity hub in production,
+    // but the cap applies to any node) must not dump its entire neighborhood
+    // into one response. Relate the seed directly to more facts than
+    // `MAX_WHY_NODE_DEGREE` allows and check the walk stops following that
+    // node's edges once the cap is spent.
+    let (_dir, svc) = service();
+    let seed = svc
+        .remember("a fact many others point at", &[], None)
+        .expect("remember seed");
+    for i in 0..MAX_WHY_NODE_DEGREE + 20 {
+        let target = svc
+            .remember(&format!("fact number {i} related to the seed"), &[], None)
+            .expect("remember target");
+        svc.relate(seed, target, "mentions").expect("relate");
+    }
+
+    let explanation = svc
+        .why("a fact many others point at", 1, None)
+        .expect("why");
+
+    assert_eq!(
+        explanation.nodes.len(),
+        1 + MAX_WHY_NODE_DEGREE,
+        "the seed plus at most MAX_WHY_NODE_DEGREE one-hop targets, not all of them"
+    );
+}
+
+#[test]
+fn why_caps_the_total_nodes_across_the_whole_walk() {
+    // Regression for issue #1743: even when no single node exceeds the
+    // per-node degree cap, a long enough chain must not grow the response
+    // past `MAX_WHY_NODES`. Each link here has out-degree 1, so
+    // `why_caps_a_single_nodes_out_degree` alone would never catch this.
+    let (_dir, svc) = service();
+    let mut previous = svc
+        .remember("chain link 0, the seed", &[], None)
+        .expect("remember seed");
+    let chain_len = MAX_WHY_NODES + 10;
+    for i in 1..chain_len {
+        let next = svc
+            .remember(&format!("chain link {i}"), &[], None)
+            .expect("remember link");
+        svc.relate(previous, next, "next").expect("relate");
+        previous = next;
+    }
+
+    let explanation = svc
+        .why("chain link 0, the seed", chain_len, None)
+        .expect("why");
+
+    assert_eq!(
+        explanation.nodes.len(),
+        MAX_WHY_NODES,
+        "the walk stops at the total node budget, well short of the full chain"
     );
 }
 
