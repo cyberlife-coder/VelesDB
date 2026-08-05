@@ -511,9 +511,132 @@ const OFFSET_WALK_OWNERS: &[&str] = &[
 /// therefore contractual — and a contract nobody checks is decoration, so it is
 /// checked below, with a positive control proving the check can fail.
 fn uses_the_offset_walk(source: &str) -> bool {
-    source.contains("enumerate_collection")
-        || source.contains("enumerate_page")
-        || source.contains("OFFSET")
+    let (code, strings) = code_and_string_contents(source);
+    code.contains("enumerate_collection")
+        || code.contains("enumerate_page")
+        || strings.contains("OFFSET")
+}
+
+/// Split `source` into what the compiler reads as CODE and what it reads as
+/// STRING-LITERAL contents, dropping comments entirely.
+///
+/// The previous matcher searched the raw text, so a comment DOCUMENTING the
+/// danger ("// the bounded OFFSET walk is not used here") tripped the guard —
+/// it punished exactly the writing-down this repository wants. Proven red on
+/// 2026-08-05 by injecting that comment into `migration/strategy.rs`. The
+/// walk's names are only reachable as code, and `OFFSET` only does harm
+/// inside a query string, so each is searched where it can act.
+fn code_and_string_contents(source: &str) -> (String, String) {
+    let chars: Vec<char> = source.chars().collect();
+    let (mut code, mut strings) = (String::new(), String::new());
+    let mut i = 0;
+    while i < chars.len() {
+        let pair = (chars[i], chars.get(i + 1).copied());
+        i = match pair {
+            ('/', Some('/')) => skip_line_comment(&chars, i),
+            ('/', Some('*')) => skip_block_comment(&chars, i),
+            ('r', Some('"' | '#')) => consume_raw_string(&chars, i, &mut strings, &mut code),
+            ('"', _) => consume_string(&chars, i, &mut strings),
+            ('\'', _) => consume_char_or_lifetime(&chars, i, &mut code),
+            (c, _) => {
+                code.push(c);
+                i + 1
+            }
+        };
+    }
+    (code, strings)
+}
+
+fn skip_line_comment(chars: &[char], mut i: usize) -> usize {
+    while i < chars.len() && chars[i] != '\n' {
+        i += 1;
+    }
+    i
+}
+
+/// Rust block comments nest; a non-nesting skip would resume "code" too early.
+fn skip_block_comment(chars: &[char], mut i: usize) -> usize {
+    let mut depth = 1;
+    i += 2;
+    while i < chars.len() && depth > 0 {
+        match (chars[i], chars.get(i + 1).copied()) {
+            ('/', Some('*')) => {
+                depth += 1;
+                i += 2;
+            }
+            ('*', Some('/')) => {
+                depth -= 1;
+                i += 2;
+            }
+            _ => i += 1,
+        }
+    }
+    i
+}
+
+fn consume_string(chars: &[char], mut i: usize, strings: &mut String) -> usize {
+    i += 1;
+    while i < chars.len() {
+        match chars[i] {
+            '\\' => {
+                i += 2; // the escaped char cannot close the literal
+            }
+            '"' => return i + 1,
+            c => {
+                strings.push(c);
+                i += 1;
+            }
+        }
+    }
+    i
+}
+
+/// `r"..."` / `r#"..."#`: no escapes, closed by `"` plus the opening hashes.
+fn consume_raw_string(
+    chars: &[char],
+    start: usize,
+    strings: &mut String,
+    code: &mut String,
+) -> usize {
+    let mut i = start + 1;
+    let mut hashes = 0;
+    while chars.get(i) == Some(&'#') {
+        hashes += 1;
+        i += 1;
+    }
+    if chars.get(i) != Some(&'"') {
+        // `r` was an ordinary identifier character after all.
+        code.push('r');
+        return start + 1;
+    }
+    i += 1;
+    while i < chars.len() {
+        if chars[i] == '"' && (1..=hashes).all(|h| chars.get(i + h) == Some(&'#')) {
+            return i + 1 + hashes;
+        }
+        strings.push(chars[i]);
+        i += 1;
+    }
+    i
+}
+
+/// A `'` opens a char literal (`'x'`, `'\n'`) or a lifetime (`'a`). Telling
+/// them apart matters because `'"'` would otherwise open a phantom string.
+fn consume_char_or_lifetime(chars: &[char], i: usize, code: &mut String) -> usize {
+    match (chars.get(i + 1).copied(), chars.get(i + 2).copied()) {
+        (Some('\\'), _) => {
+            let mut j = i + 2;
+            while j < chars.len() && chars[j] != '\'' {
+                j += 1;
+            }
+            j + 1
+        }
+        (Some(_), Some('\'')) => i + 3,
+        _ => {
+            code.push('\'');
+            i + 1
+        }
+    }
 }
 
 /// Every Rust source that belongs to the migration facade or one of its
@@ -547,16 +670,44 @@ fn collect_migration_sources(dir: &std::path::Path, sources: &mut Vec<std::path:
 /// module cannot make a future migration source invisible to the guard.
 #[test]
 fn no_migration_module_beyond_verification_reaches_for_the_offset_walk() {
-    // Positive control: the check must be able to fail.
+    // Positive controls: the check must be able to fail, on each of the ways
+    // source code actually reaches the walk.
     assert!(
         uses_the_offset_walk("let facts = enumerate_page(&db, c, 10, 0);"),
         "the guard must catch a call into the OFFSET walk"
     );
     assert!(
-        uses_the_offset_walk("SELECT * FROM c ORDER BY id LIMIT 10 OFFSET 20"),
-        "the guard must catch a raw OFFSET query"
+        uses_the_offset_walk(
+            r#"let sql = format!("SELECT * FROM {c} ORDER BY id LIMIT {p} OFFSET {o}");"#
+        ),
+        "the guard must catch OFFSET inside an ordinary string literal"
     );
-    // Negative control: the supported route must not trip it.
+    assert!(
+        uses_the_offset_walk(r##"let sql = r#"LIMIT 10 OFFSET 20"#;"##),
+        "the guard must catch OFFSET inside a raw string literal"
+    );
+    // Negative controls: what the guard must NOT punish. The first two are the
+    // defect this matcher replaced — the raw-substring version reddened on a
+    // comment DOCUMENTING the danger, proven by injecting exactly this line
+    // into `migration/strategy.rs` (2026-08-05).
+    assert!(
+        !uses_the_offset_walk(
+            "// Note: the bounded OFFSET walk (enumerate_page) is not used here."
+        ),
+        "documenting the danger in a line comment must not trip the guard"
+    );
+    assert!(
+        !uses_the_offset_walk("/* enumerate_collection pages by OFFSET — see the owners */"),
+        "documenting the danger in a block comment must not trip the guard"
+    );
+    assert!(
+        !uses_the_offset_walk("const OFFSET_LIKE_IDENT: usize = 3;"),
+        "an identifier merely containing OFFSET is code, not a query"
+    );
+    assert!(
+        !uses_the_offset_walk(r#"let quote = '"'; // then a comment with OFFSET"#),
+        "a quote CHAR literal must not open a phantom string that swallows the line"
+    );
     assert!(
         !uses_the_offset_walk("let batch = scroll_page(&db, c, cursor, 1024)?;"),
         "the guard must not fire on the cursor route"
