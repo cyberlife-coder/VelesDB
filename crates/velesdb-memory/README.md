@@ -7,6 +7,7 @@
 [![npm](https://img.shields.io/npm/v/%40wiscale%2Fvelesdb-memory-node?logo=npm&label=npm)](https://www.npmjs.com/package/@wiscale/velesdb-memory-node)
 [![PyPI](https://img.shields.io/pypi/v/velesdb?logo=pypi&logoColor=white&label=PyPI)](https://pypi.org/project/velesdb/)
 [![MCP registry](https://img.shields.io/badge/MCP_registry-io.github.cyberlife--coder%2Fvelesdb--memory-1f6feb?logo=modelcontextprotocol&logoColor=white)](https://registry.modelcontextprotocol.io)
+[![MCP Toplist](https://mcptoplist.com/badge/io.github.cyberlife-coder%2Fvelesdb-memory.svg)](https://mcptoplist.com/server/io.github.cyberlife-coder%2Fvelesdb-memory)
 [![License](https://img.shields.io/badge/license-VelesDB_Core_1.0_(source--available)-e8702a)](https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE)
 
 > **Portability**: ✅ the server and all of its tools work in any MCP client
