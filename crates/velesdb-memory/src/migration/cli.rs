@@ -234,7 +234,7 @@ pub fn not_yet_executable() -> &'static str {
 /// The default scratch parent: the directory the store itself sits in.
 ///
 /// This used to be `std::env::temp_dir()`, and Codacy's finding on it
-/// ("temp_dir should not be used for security operations") was right for a
+/// ("`temp_dir` should not be used for security operations") was right for a
 /// reason it did not name. Secrecy is already handled — the copy lands in a
 /// directory created `0o700` with an owner token, one level down — but the
 /// wrong VOLUME is not: the diagnosis copies the whole store, temp
