@@ -182,13 +182,34 @@ fn the_dry_run_leaves_the_store_byte_for_byte_as_it_found_it() {
 }
 
 #[test]
-fn the_default_scratch_parent_exists_so_a_dry_run_has_somewhere_to_stage() {
-    let parent = default_scratch_parent();
+fn the_default_scratch_parent_is_the_store_s_own_volume_not_the_temp_dir() {
+    let (dir, _ttl) = seeded();
 
-    assert!(
-        parent.is_dir(),
-        "the diagnosis copies the whole store into this directory; if it does \
-         not exist, every dry run fails on a path the operator never chose: {}",
-        parent.display()
+    let parent = default_scratch_parent(dir.path()).expect("a real store has a parent");
+
+    assert_eq!(
+        parent,
+        dir.path().parent().expect("tempdir has a parent"),
+        "the diagnosis copies the WHOLE store; staging beside it is on the \
+         store's volume by construction, where a temp filesystem sized for \
+         small files is exactly where a real store would fail"
     );
+
+    // The default must be USABLE, not merely computed: a dry run actually
+    // stages there and completes.
+    let report = dry_run(
+        dir.path(),
+        &parent,
+        &TargetContract::automatic(TARGET_MODEL, TARGET_DIM),
+        None,
+    )
+    .expect("a dry run staging beside the store");
+    assert!(report.facts > 0, "the fixture must not be empty");
+
+    // And a store with no usable parent is an ERROR naming the flag — never a
+    // quiet switch to a different volume, which is how the old temp_dir
+    // default would have resurfaced under another name.
+    let rootless = default_scratch_parent(std::path::Path::new("/"))
+        .expect_err("no parent to stage beside must refuse");
+    assert!(rootless.contains("--scratch"), "{rootless}");
 }

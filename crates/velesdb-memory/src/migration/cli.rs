@@ -231,12 +231,32 @@ pub fn not_yet_executable() -> &'static str {
     NOT_YET_EXECUTABLE
 }
 
-/// The default scratch parent: the platform temp directory.
+/// The default scratch parent: the directory the store itself sits in.
 ///
-/// Overridable with `--scratch` because the diagnosis copies the whole store,
-/// and a temp filesystem sized for small files is exactly where a real store
-/// would fail.
-#[must_use]
-pub fn default_scratch_parent() -> PathBuf {
-    std::env::temp_dir()
+/// This used to be `std::env::temp_dir()`, and Codacy's finding on it
+/// ("temp_dir should not be used for security operations") was right for a
+/// reason it did not name. Secrecy is already handled — the copy lands in a
+/// directory created `0o700` with an owner token, one level down — but the
+/// wrong VOLUME is not: the diagnosis copies the whole store, temp
+/// filesystems are routinely small and sometimes RAM-backed, and the doc
+/// comment that used to sit here named that failure mode while the code
+/// shipped it as the default anyway. The store's parent is on the store's
+/// volume by construction, so room for a copy of the store is at least
+/// plausible there — and the staging check still measures it rather than
+/// assuming it.
+///
+/// No silent fallback: a store with no usable parent is an error naming
+/// `--scratch`, never a quiet switch to a different volume.
+///
+/// # Errors
+/// The store path has no non-empty parent to stage beside.
+pub fn default_scratch_parent(store: &Path) -> Result<PathBuf, String> {
+    match store.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => Ok(parent.to_path_buf()),
+        _ => Err(format!(
+            "cannot derive a scratch parent beside {}: pass --scratch <dir>. The diagnosis \
+             copies the whole store there, so a directory on the store's own volume is best",
+            store.display()
+        )),
+    }
 }

@@ -550,10 +550,18 @@ fn run_migrate_embeddings(
         dimension: embedder.dimension(),
         strategy: options.strategy,
     };
-    let scratch = options
-        .scratch
-        .clone()
-        .unwrap_or_else(migration::default_scratch_parent);
+    let scratch = match options.scratch.clone() {
+        Some(dir) => dir,
+        None => {
+            // Canonicalize first so a relative store path ("./store") yields a
+            // real parent rather than the empty string. A store that does not
+            // exist falls through unchanged — the diagnosis then fails on it
+            // with its own, more precise message.
+            let resolved =
+                std::fs::canonicalize(&store_path).unwrap_or_else(|_| store_path.clone());
+            migration::default_scratch_parent(&resolved)?
+        }
+    };
 
     let report = migration::dry_run(
         &store_path,
