@@ -15,6 +15,35 @@ use super::*;
 // Until that is measured, `scalable_reconstruction` has no verdict, and PR B
 // stays blocked on it rather than on the enumeration.
 
+/// The sizes both cost sweeps walk.
+///
+/// Shared so the two are comparable by construction: a sweep that quietly
+/// changed one list would produce two sets of numbers that look like a
+/// comparison and are not one.
+const SWEEP_SIZES: [u64; 4] = [250, 500, 1000, 2000];
+
+/// A store holding `n` facts at scattered ids, for the cost sweeps.
+///
+/// `id * 7` rather than `id`: contiguous ids let a walk that pages by position
+/// look correct, which is the confusion the enumeration gates exist to rule out.
+fn seeded_at_size(n: u64) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("tempdir");
+    {
+        let store = NativeStore::open(dir.path(), DIM).expect("open");
+        for id in 1..=n {
+            store
+                .store_with_metadata(
+                    id * 7,
+                    &format!("fact {id}"),
+                    &EMBEDDING,
+                    &meta(&[("project", Value::from("veles"))]),
+                )
+                .expect("seed");
+        }
+    }
+    dir
+}
+
 /// Micro-seconds per fact, in the style the cost tests above already use.
 fn per_fact(elapsed: std::time::Duration, n: u64) -> f64 {
     let micros = u32::try_from(elapsed.as_micros()).map_or(f64::from(u32::MAX), f64::from);
@@ -397,21 +426,8 @@ fn write_path_unit_versus_batch_at_a_fixed_volume() {
 #[ignore = "seeds thousands of facts; run deliberately, on a machine at rest"]
 fn paging_cost_grows_faster_than_the_store() {
     let mut costs: Vec<f64> = Vec::new();
-    for n in [250u64, 500, 1000, 2000] {
-        let dir = tempfile::tempdir().expect("tempdir");
-        {
-            let store = NativeStore::open(dir.path(), DIM).expect("open");
-            for id in 1..=n {
-                store
-                    .store_with_metadata(
-                        id * 7,
-                        &format!("fact {id}"),
-                        &EMBEDDING,
-                        &meta(&[("project", Value::from("veles"))]),
-                    )
-                    .expect("seed");
-            }
-        }
+    for n in SWEEP_SIZES {
+        let dir = seeded_at_size(n);
         let db = database(&dir);
         let start = std::time::Instant::now();
         let facts = enumerate_collection(&db, "_semantic_memory", 100).expect("enumerate");
@@ -479,21 +495,8 @@ fn paging_cost_grows_faster_than_the_store() {
 fn the_cursor_cost_per_fact_does_not_grow_like_the_offset_walk() {
     let mut cursor_costs: Vec<f64> = Vec::new();
     let mut offset_costs: Vec<f64> = Vec::new();
-    for n in [250u64, 500, 1000, 2000] {
-        let dir = tempfile::tempdir().expect("tempdir");
-        {
-            let store = NativeStore::open(dir.path(), DIM).expect("open");
-            for id in 1..=n {
-                store
-                    .store_with_metadata(
-                        id * 7,
-                        &format!("fact {id}"),
-                        &EMBEDDING,
-                        &meta(&[("project", Value::from("veles"))]),
-                    )
-                    .expect("seed");
-            }
-        }
+    for n in SWEEP_SIZES {
+        let dir = seeded_at_size(n);
         let db = database(&dir);
         let expected = usize::try_from(n).expect("fits");
 
@@ -640,7 +643,15 @@ fn the_embedder_dominates_only_when_the_model_changes() {
         .map(|(i, vector)| {
             let id = u64::try_from(i).expect("fits") + 1;
             let payload = serde_json::json!({ "content": texts[i] }).to_string();
-            (RawFact { id, payload }, vector)
+            let source_vector = vector.clone();
+            (
+                RawFact {
+                    id,
+                    payload,
+                    source_vector,
+                },
+                vector,
+            )
         })
         .collect();
 

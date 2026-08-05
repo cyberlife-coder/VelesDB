@@ -8,15 +8,35 @@ pub const AGENT_COLLECTIONS: &[&str] =
 
 /// One fact as the rebuild will need to re-create it.
 ///
-/// The old vector is deliberately absent: it is recomputed by the new
-/// embedder, and carrying it would only invite writing it back.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// # Why the source vector is here, having once been left out deliberately
+///
+/// This type used to carry `id` and `payload` only, on the stated grounds that
+/// "the old vector is recomputed by the new embedder, and carrying it would
+/// only invite writing it back". That was written when a rebuild had one
+/// regime. #1815 arbitrated two: reuse the source vectors where compatibility
+/// is *proven*, re-embed everywhere else. A type that cannot carry the source
+/// vector cannot express the first, so the reasoning no longer held and the
+/// comment asserting it was describing a decision that had been reversed.
+///
+/// The field is named `source_vector` rather than `vector` for the reason the
+/// old comment was right about: it is the vector of the model being migrated
+/// *from*, and writing it back is only ever legitimate against a
+/// [`Compatibility::Match`](crate::migration::Compatibility::Match). What
+/// [`reinsert`] writes is always the vector its caller passed, never this one
+/// by default.
+#[derive(Debug, Clone, PartialEq)]
 pub struct RawFact {
     /// The id the fact must keep. Not a suggestion.
     pub id: u64,
     /// The whole stored payload, reserved keys included — `content` and every
     /// `_veles_*` key travel here verbatim.
     pub payload: String,
+    /// The vector as the SOURCE store holds it, at the source's width.
+    ///
+    /// Read out on every enumeration because the cost is a clone of something
+    /// the engine already materialised, and a second read path taken only under
+    /// `reuse` would be a path the `reembed` tests never exercise.
+    pub source_vector: Vec<f32>,
 }
 
 /// Read every fact of `collection` out of `db`, in pages of `page`.
@@ -86,6 +106,7 @@ pub fn enumerate_page(
                 .payload
                 .as_ref()
                 .map_or_else(|| Value::Null.to_string(), std::string::ToString::to_string),
+            source_vector: hit.point.vector,
         })
         .collect())
 }
@@ -141,6 +162,7 @@ pub fn scroll_page(
                 .payload
                 .as_ref()
                 .map_or_else(|| Value::Null.to_string(), std::string::ToString::to_string),
+            source_vector: point.vector,
         })
         .collect();
     Ok((facts, scrolled.next_cursor))
@@ -209,11 +231,16 @@ pub enum Reinsertion {
 }
 
 /// Put `fact` back into `collection` under its ORIGINAL id, with `vector` as
-/// the new embedder computed it.
+/// the caller decided it.
 ///
-/// The old vector is not carried and not written: it belongs to the model being
-/// migrated away from, and re-writing it would produce a store whose vectors
-/// and whose recorded model disagree.
+/// `vector` is the target embedder's output under `reembed`, or
+/// `fact.source_vector` under `reuse`. This function does not choose between
+/// them and must not: passing the source vector is legitimate exactly when the
+/// source records the target model at the target width, and the only thing that
+/// establishes it is [`resolve`](crate::migration::resolve) — one place, tested
+/// as one rule. Writing back a source vector on any other footing produces a
+/// store whose vectors and whose recorded model disagree, which recall answers
+/// from without ever failing.
 ///
 /// # Errors
 /// Returns [`crate::MemoryError`] if the collection is absent, if the stored

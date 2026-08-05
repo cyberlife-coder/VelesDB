@@ -123,3 +123,4 @@ mod enumeration;
 mod performance;
 mod preservation;
 mod state;
+mod strategy;
