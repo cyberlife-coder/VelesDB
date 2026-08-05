@@ -45,6 +45,7 @@
 // `lib.rs`; repeating it here as an inner attribute is what `clippy::
 // duplicated_attributes` fires on.
 
+mod cli;
 mod diagnosis;
 mod diagnostic_copy;
 mod enumeration;
@@ -52,6 +53,10 @@ mod filesystem;
 mod state;
 mod strategy;
 
+pub use cli::{
+    default_scratch_parent, dry_run, not_yet_executable, parse as parse_migrate_args, refuses,
+    render, require_dry_run, MigrateOptions,
+};
 pub use diagnosis::{
     diagnose, same_filesystem, Capability, CollectionInventory, DiagnosisReport, SourceProvenance,
     TargetContract, TtlSummary, DIAGNOSIS_FORMAT_VERSION,

@@ -9,8 +9,8 @@ use super::*;
 // never checked is a claim, not a property.
 // ---------------------------------------------------------------------------
 
-pub(super) const TARGET_MODEL: &str = "bge-m3";
-pub(super) const TARGET_DIM: usize = 1024;
+pub(crate) const TARGET_MODEL: &str = "bge-m3";
+pub(crate) const TARGET_DIM: usize = 1024;
 
 /// Every file under `dir`, by relative path, with its length and its bytes.
 ///
@@ -648,7 +648,7 @@ fn edge_counts_do_not_masquerade_as_a_lossless_edge_export() {
 // ---------------------------------------------------------------------------
 
 /// Diagnose `source` with an explicitly selected regime.
-fn diagnose_as(
+pub(super) fn diagnose_as(
     source: &std::path::Path,
     strategy: super::Strategy,
     target_model: &str,

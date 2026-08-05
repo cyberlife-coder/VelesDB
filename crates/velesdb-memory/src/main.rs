@@ -73,6 +73,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return run_compile_stdin(&args[2..]);
     }
 
+    // Short-circuits for a third reason: this one must NOT open the store even
+    // though it inspects one. A diagnosis reads a verified copy and never calls
+    // `Database::open` on the live directory, which is what lets an operator run
+    // it while their daemon is up (#1762's protocol allows exactly that, read
+    // only). Falling through to `build_configured_service` would take the
+    // single-writer `flock` and refuse against the very daemon whose store the
+    // operator is asking about.
+    if args.get(1).is_some_and(|arg| arg == "migrate-embeddings") {
+        return run_migrate_embeddings(&args, &args[2..]);
+    }
+
     // Captured FIRST — before the (possibly seconds-long) embedder probe and
     // store open — so a client that exits during our own startup still
     // reparents us AFTER the baseline, and the watchdog sees the change. A
@@ -500,6 +511,62 @@ fn build_configured_service(
         &store_path,
         configured,
     )?)
+}
+
+/// Run `migrate-embeddings`: diagnose a store against the configured target
+/// embedder and print the regime it resolves to.
+///
+/// `argv` is the whole command line, so `--config` keeps working here exactly
+/// as it does for the daemon; `flags` is what follows the subcommand.
+///
+/// Exits `2` on a refusal rather than returning `Ok`. A command that printed
+/// `REFUSE` and exited `0` would be read as success by every script wrapping
+/// it, and the whole point of the refusal is that something must not proceed.
+///
+/// # Errors
+/// An unparsable invocation, a non-dry-run request (not built yet — see
+/// #1762), an unreachable embedder, or a store that cannot be read or copied.
+fn run_migrate_embeddings(
+    argv: &[String],
+    flags: &[String],
+) -> Result<(), Box<dyn std::error::Error>> {
+    use velesdb_memory::migration;
+
+    let options = migration::parse_migrate_args(flags)?;
+    migration::require_dry_run(&options)?;
+
+    apply_config_file(argv)?;
+    let store_path = options.store.clone().unwrap_or_else(|| {
+        std::path::PathBuf::from(
+            std::env::var("VELESDB_MEMORY_PATH").unwrap_or_else(|_| default_store_path()),
+        )
+    });
+    // The target's identity comes from the embedder the daemon WOULD build, not
+    // from a flag: a model name an operator typed is a claim, and the dimension
+    // has to be the one the embedder actually produces.
+    let ConfiguredEmbedder { embedder, model } = build_embedder()?;
+    let target = migration::TargetContract {
+        model,
+        dimension: embedder.dimension(),
+        strategy: options.strategy,
+    };
+    let scratch = options
+        .scratch
+        .clone()
+        .unwrap_or_else(migration::default_scratch_parent);
+
+    let report = migration::dry_run(
+        &store_path,
+        &scratch,
+        &target,
+        options.destination.as_deref(),
+    )?;
+    print!("{}", migration::render(&report));
+
+    if migration::refuses(&report) {
+        std::process::exit(2);
+    }
+    Ok(())
 }
 
 /// An embedder together with the identifier of the model behind it.

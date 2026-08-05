@@ -117,6 +117,7 @@ fn database(dir: &tempfile::TempDir) -> velesdb_core::Database {
     velesdb_core::Database::open(dir.path()).expect("open database")
 }
 
+mod cli;
 mod diagnosis;
 mod enumeration;
 mod performance;
