@@ -242,6 +242,7 @@ capabilities (`query`, `create_collection`, `upsert`, `traverse`).
 | [MCP tool reference](../../docs/reference/MCP_TOOLS.md) | one section per tool: parameters, returns, limits, error model |
 | [Context compiler](../../docs/guides/CONTEXT_COMPILER.md) | budgets, preservation rules, `risk`, retrieval handles, media, `path` ingestion, transcripts, the `compile-stdin` CLI and the `PostToolUse` hook |
 | [Agent Memory SDK](../../docs/guides/AGENT_MEMORY.md) | the *other* path: the embedded, language-native `AgentMemory` API |
+| [Migrating embedding models](../../docs/guides/MIGRATE_EMBEDDINGS.md) | `migrate-embeddings` end to end: regimes, the journal, crash recovery, the switch, and what it costs |
 | [`BENCHMARK.md`](BENCHMARK.md) | every published retrieval number, its method, and how to reproduce it |
 | [`POSITIONING.md`](POSITIONING.md) | honest comparison against Mem0 and Zep/Graphiti, and where local-first is a hard requirement |
 | [`CHANGELOG.md`](CHANGELOG.md) | what changed in each release |
