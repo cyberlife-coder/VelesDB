@@ -90,6 +90,7 @@ fn fresh_state() -> MigrationState {
         source_fingerprint: super::state_persistence::VALID_FINGERPRINT.to_owned(),
         target_model: "hash".to_owned(),
         target_dimension: NEW_DIM,
+        embedder_witness: None,
         progress: AGENT_COLLECTIONS
             .iter()
             .map(|name| {
@@ -293,6 +294,77 @@ fn an_interrupted_rebuild_resumes_replaying_only_the_unjournalled_batch() {
         edge_tuples(dest.path(), NEW_DIM),
         edge_tuples(source.path(), DIM),
         "and every edge"
+    );
+}
+
+#[test]
+fn an_interruption_past_the_first_checkpoint_resumes_from_the_journalled_cursor() {
+    // The test above stops after batch ONE, whose checkpoint is `cursor: None`
+    // — so its "resume" is byte-identical to starting over, and a `walk_facts`
+    // that IGNORED its cursor argument would pass it. This one stops after
+    // batch TWO: the journal holds batch one's real cursor, and the exact
+    // counts below are what pin the cursor as actually used. SEEDED = 7 and
+    // BATCH = 3 give batches of 3+3+1; a stop after the second leaves 6 facts
+    // at the destination and one journalled checkpoint.
+    let source = seeded_source();
+    let state = fresh_state();
+    let (dest, workspace, lock) = prepared_destination(&state);
+    let embedder = HashEmbedder::new(NEW_DIM);
+    let policy = super::super::VectorPolicy::Reembed(&embedder);
+
+    drive(
+        source.path(),
+        dest.path(),
+        NEW_DIM,
+        (workspace.path(), &lock),
+        &mut state.clone(),
+        &policy,
+        Some(2),
+    )
+    .expect_err("the injected stop must interrupt after the second batch");
+
+    let journalled = MigrationState::read(workspace.path())
+        .expect("read journal")
+        .expect("journal exists");
+    let Some(CollectionProgress::Facts { cursor: Some(_) }) =
+        journalled.progress.get("_semantic_memory").copied()
+    else {
+        panic!(
+            "positive control: batch one's checkpoint must be journalled as a \
+             REAL cursor, or this test degenerates into the one above; got {:?}",
+            journalled.progress.get("_semantic_memory")
+        );
+    };
+
+    let mut resumed = journalled;
+    let outcome = drive(
+        source.path(),
+        dest.path(),
+        NEW_DIM,
+        (workspace.path(), &lock),
+        &mut resumed,
+        &policy,
+        None,
+    )
+    .expect("resume");
+
+    let batch = u64::try_from(BATCH).expect("batch fits");
+    assert_eq!(
+        outcome.collisions, batch,
+        "exactly the ONE unjournalled batch is replayed: more collisions means \
+         the cursor was ignored and the walk started over; fewer means part of \
+         the replayed batch went missing"
+    );
+    assert_eq!(
+        outcome.facts,
+        SEEDED - 2 * batch,
+        "only the facts past the interrupted batch are new; anything else \
+         means the cursor did not resume where the journal said"
+    );
+    assert_eq!(
+        contents(dest.path()),
+        contents(source.path()),
+        "after the resume the destination must hold every fact exactly once"
     );
 }
 

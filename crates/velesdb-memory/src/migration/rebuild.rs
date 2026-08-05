@@ -310,10 +310,20 @@ fn edge_pass(
         step.batch,
     )?;
     same_edge_tuples(&exported, &back).map_err(|difference| {
+        // Honesty about what this mismatch can mean: the export, the
+        // reinsertion and the re-read are three separate clock reads, and a
+        // fact whose ABSOLUTE expiry falls between them shrinks one side
+        // without anything being lost — the C2a lesson (two walks must share
+        // one snapshot) cannot apply here because a write sits between the
+        // walks. Distinguishing that transient from real loss mechanically is
+        // the validation pass's job (C3); until then the pass stops, says
+        // both readings, and stays resumable.
         query_error(format!(
             "after reinsertion the destination's edges do not match the export \
-             for '{}': {difference}. The return codes said success; the re-read \
-             is the verdict, and it says loss",
+             for '{}': {difference}. Either an edge was lost, or an endpoint's \
+             absolute expiry passed between the export and the re-read. The \
+             pass is resumable: re-run it, and a mismatch that PERSISTS across \
+             runs is real loss",
             step.collection
         ))
     })?;

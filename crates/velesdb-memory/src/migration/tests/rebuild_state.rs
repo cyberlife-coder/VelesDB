@@ -3,10 +3,11 @@
 //! v2 recorded WHERE a migration stood (its phase) but nothing about how far
 //! the work inside `Prepared` had progressed: a resumed rebuild would have had
 //! to start every collection from zero and re-answer every collision. v3 adds
-//! per-collection progress, and these tests pin the three properties that make
-//! it a journal rather than a scratchpad: it round-trips exactly, it can only
-//! advance, and the phase cannot leave `Prepared` while any collection is
-//! unfinished.
+//! per-collection progress, and these tests pin the properties that make it a
+//! journal rather than a scratchpad: it round-trips exactly, it can only
+//! advance ALONG THE TRANSITIONS THE PASS ACTUALLY EMITS (`Facts → Edges →
+//! Complete`, never skipping `Edges`), and the phase cannot leave `Prepared`
+//! while any collection is unfinished.
 
 use super::state_persistence::VALID_FINGERPRINT;
 use super::*;
@@ -26,6 +27,7 @@ fn state_with_progress(progress: BTreeMap<String, CollectionProgress>) -> Migrat
         target_model: diagnosis::TARGET_MODEL.to_owned(),
         target_dimension: diagnosis::TARGET_DIM,
         progress,
+        embedder_witness: None,
     }
 }
 
@@ -47,24 +49,29 @@ fn mixed_progress_round_trips_byte_exactly_through_write_and_read() {
     let lock = lock(workspace.path());
 
     // Every stage is represented at once, because the bug this guards against
-    // is a serde attribute that flattens one variant into another.
-    let mut progress = fresh_progress();
-    progress.insert(
+    // is a serde attribute that flattens one variant into another. The mixed
+    // shape is reached through the pass's own transitions — a journal must
+    // begin at the beginning and may not skip Edges.
+    let mut step = fresh_progress();
+    step.insert(
         "_semantic_memory".to_owned(),
         CollectionProgress::Facts { cursor: Some(42) },
     );
-    progress.insert("_episodic_memory".to_owned(), CollectionProgress::Edges);
-    progress.insert(
+    step.insert("_episodic_memory".to_owned(), CollectionProgress::Edges);
+    step.insert("_procedural_memory".to_owned(), CollectionProgress::Edges);
+    let mut mixed = step.clone();
+    mixed.insert(
         "_procedural_memory".to_owned(),
         CollectionProgress::Complete,
     );
-    let written = state_with_progress(progress);
+    let written = state_with_progress(mixed);
 
-    // A journal must begin at the beginning: seed the initial entry first,
-    // then advance to the mixed shape.
     state_with_progress(fresh_progress())
         .write(workspace.path(), &lock)
         .expect("initial write");
+    state_with_progress(step)
+        .write(workspace.path(), &lock)
+        .expect("advance through edges");
     written.write(workspace.path(), &lock).expect("advance");
 
     let read = MigrationState::read(workspace.path())
@@ -157,12 +164,30 @@ fn progress_may_advance_or_repeat_but_never_regress() {
         );
     }
 
+    // Skipping the Edges stage is REFUSED, not tolerated as "forward". The
+    // pass journals Edges unconditionally, so no honest writer ever produces
+    // Facts→Complete — only a writer that lost its edge pass would, and that
+    // is precisely the bug this refusal makes un-journallable.
+    let mut skipped = current.clone();
+    skipped.insert("_semantic_memory".to_owned(), CollectionProgress::Complete);
+    let refusal = state_with_progress(skipped)
+        .write(workspace.path(), &lock)
+        .expect_err("Complete without passing through Edges means the edge pass never ran");
+    assert!(
+        refusal.contains("_semantic_memory"),
+        "the refusal must name the collection: {refusal}"
+    );
+
     // ...and a finished stage cannot be reopened.
     let mut done = current.clone();
+    done.insert("_semantic_memory".to_owned(), CollectionProgress::Edges);
+    state_with_progress(done.clone())
+        .write(workspace.path(), &lock)
+        .expect("facts to edges is the pass's own transition");
     done.insert("_semantic_memory".to_owned(), CollectionProgress::Complete);
     state_with_progress(done.clone())
         .write(workspace.path(), &lock)
-        .expect("skip to complete is forward");
+        .expect("edges to complete is the pass's own transition");
     let mut reopened = done;
     reopened.insert("_semantic_memory".to_owned(), CollectionProgress::Edges);
     let refusal = state_with_progress(reopened)
@@ -178,7 +203,13 @@ fn progress_may_advance_or_repeat_but_never_regress() {
 fn the_phase_cannot_leave_prepared_while_any_collection_is_unfinished() {
     let workspace = tempfile::tempdir().expect("workspace");
     let lock = lock(workspace.path());
-    let mut almost = fresh_progress();
+    // Reached through the pass's own transitions: everything to Edges, then
+    // everything but episodic to Complete.
+    let mut edging = BTreeMap::new();
+    for name in AGENT_COLLECTIONS {
+        edging.insert((*name).to_owned(), CollectionProgress::Edges);
+    }
+    let mut almost = edging.clone();
     for name in AGENT_COLLECTIONS {
         almost.insert((*name).to_owned(), CollectionProgress::Complete);
     }
@@ -187,6 +218,9 @@ fn the_phase_cannot_leave_prepared_while_any_collection_is_unfinished() {
     state_with_progress(fresh_progress())
         .write(workspace.path(), &lock)
         .expect("initial write");
+    state_with_progress(edging)
+        .write(workspace.path(), &lock)
+        .expect("advance to edges");
     state_with_progress(almost.clone())
         .write(workspace.path(), &lock)
         .expect("advance");

@@ -11,6 +11,7 @@ fn state(phase: Phase) -> MigrationState {
         source_fingerprint: VALID_FINGERPRINT.to_owned(),
         target_model: diagnosis::TARGET_MODEL.to_owned(),
         target_dimension: diagnosis::TARGET_DIM,
+        embedder_witness: None,
         // Complete rather than fresh, because this file's tests advance the
         // PHASE — and a phase past Prepared with an unfinished rebuild is now
         // itself a semantics refusal, which would shadow what each test is

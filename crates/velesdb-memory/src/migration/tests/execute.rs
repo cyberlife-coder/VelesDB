@@ -47,16 +47,38 @@ fn contents(dir: &std::path::Path) -> BTreeMap<u64, serde_json::Value> {
         .collect()
 }
 
-fn run(root: &std::path::Path) -> Result<super::super::ExecuteOutcome, crate::MemoryError> {
-    let embedder = HashEmbedder::new(NEW_DIM);
+fn run_with(
+    root: &std::path::Path,
+    embedder: &dyn crate::Embedder,
+) -> Result<super::super::ExecuteOutcome, crate::MemoryError> {
     super::super::execute(
         &root.join("store"),
         root,
         &TargetContract::automatic("hash", NEW_DIM),
         &root.join("rebuilt"),
-        &embedder,
+        embedder,
         1024,
     )
+}
+
+fn run(root: &std::path::Path) -> Result<super::super::ExecuteOutcome, crate::MemoryError> {
+    run_with(root, &HashEmbedder::new(NEW_DIM))
+}
+
+/// The same dimension, the same claimed identity, DIFFERENT vectors — what an
+/// in-place model update looks like from the outside.
+struct DriftedEmbedder(HashEmbedder);
+
+impl crate::Embedder for DriftedEmbedder {
+    fn dimension(&self) -> usize {
+        self.0.dimension()
+    }
+
+    fn embed(&self, text: &str) -> Result<Vec<f32>, crate::EmbedError> {
+        let mut vector = self.0.embed(text)?;
+        vector[0] += 1.0;
+        Ok(vector)
+    }
 }
 
 #[test]
@@ -119,6 +141,31 @@ fn a_second_execute_resumes_the_journal_and_replays_nothing() {
         contents(&first.destination),
         "the destination must be untouched by the no-op resume"
     );
+}
+
+#[test]
+fn a_resume_across_an_embedder_updated_in_place_is_refused_by_its_witness() {
+    // `may_resume` compares the model's NAME, and a name is a claim: `ollama
+    // pull` replaces a model's weights under the same identifier. A resume
+    // across such an update would leave the replayed batches with run-one
+    // vectors and write run-two vectors after them — one store, one recorded
+    // model, two incompatible vector spaces. The journal therefore carries a
+    // WITNESS of what the embedder produces, and this is the test that the
+    // witness actually refuses.
+    let root = root_with_source();
+    run(root.path()).expect("first execute");
+
+    let refusal = run_with(root.path(), &DriftedEmbedder(HashEmbedder::new(NEW_DIM)))
+        .expect_err("same name, same dimension, different vectors must refuse the resume");
+    let message = refusal.to_string();
+    assert!(
+        message.contains("witness") && message.contains("fresh migration"),
+        "the refusal must name the witness and the recovery: {message}"
+    );
+
+    // Positive control: the UNCHANGED embedder still resumes — so the refusal
+    // above was about the vectors, not about resuming per se.
+    run(root.path()).expect("the same embedder must still resume");
 }
 
 #[test]

@@ -68,18 +68,16 @@ pub enum CollectionProgress {
 }
 
 impl CollectionProgress {
-    /// Stage order for the never-regress rule. Skipping forward is legal — a
-    /// collection with no edges goes straight from `Facts` to `Complete` — but
-    /// any step backwards would be a journal inventing undone work.
-    fn stage_rank(self) -> u8 {
-        match self {
-            Self::Facts { .. } => 0,
-            Self::Edges => 1,
-            Self::Complete => 2,
-        }
-    }
-
     /// Whether `self` may be recorded after `previous` for one collection.
+    ///
+    /// Exactly the transitions the pass emits, and no others. An earlier
+    /// version tolerated skipping `Edges` ("a collection with no edges goes
+    /// straight to Complete") — which was FALSE: the pass journals `Edges`
+    /// unconditionally, edges or none. A tolerance the writer never uses only
+    /// widens what a BUGGY writer can make the journal swallow — a refactor
+    /// that lost the edge pass would have journalled `Complete` without a
+    /// sound. Requiring the passage through `Edges` costs the real writer
+    /// nothing and makes that bug un-journallable.
     fn may_follow(self, previous: Self) -> bool {
         match (previous, self) {
             (Self::Facts { cursor: before }, Self::Facts { cursor: after }) => {
@@ -89,7 +87,9 @@ impl CollectionProgress {
                     (None, _) => true,
                 }
             }
-            _ => self.stage_rank() >= previous.stage_rank(),
+            (Self::Facts { .. } | Self::Edges, Self::Edges)
+            | (Self::Edges | Self::Complete, Self::Complete) => true,
+            _ => false,
         }
     }
 }
@@ -120,6 +120,20 @@ pub struct MigrationState {
     /// rebuild; an extra one would journal work nobody will do. Both are
     /// refused by validation rather than tolerated.
     pub progress: std::collections::BTreeMap<String, CollectionProgress>,
+    /// A digest of what the target embedder actually PRODUCES, not what it is
+    /// called — `sha256:` over the vector it answers for a fixed sentinel
+    /// sentence. `Some` exactly when the resolved regime is `reembed`, `None`
+    /// under `reuse`, so the field also records the regime without a second
+    /// field to drift from it.
+    ///
+    /// This exists because [`MigrationState::may_resume`]'s model check
+    /// compares NAMES, and a name is a claim: `ollama pull` updates a model's
+    /// weights in place under the same identifier. A run resumed across such
+    /// an update would collide its replayed batch into run-one vectors and
+    /// write run-two vectors after it — one store, one recorded model, two
+    /// incompatible vector spaces, which is exactly what the model check says
+    /// it prevents. Vectors do not lie about the embedder that made them.
+    pub embedder_witness: Option<String>,
 }
 
 impl MigrationState {
@@ -312,7 +326,32 @@ fn validate_state_semantics(state: &MigrationState) -> Result<(), String> {
         state.target_dimension,
     )?;
     validate_progress_keys(state)?;
-    validate_phase_against_progress(state)
+    validate_phase_against_progress(state)?;
+    validate_embedder_witness(state)
+}
+
+/// A present witness must be a well-formed digest, not free text an editor
+/// could plausibly have typed.
+fn validate_embedder_witness(state: &MigrationState) -> Result<(), String> {
+    let Some(witness) = &state.embedder_witness else {
+        return Ok(());
+    };
+    let digest = witness
+        .strip_prefix("sha256:")
+        .filter(|digest| digest.len() == 64)
+        .filter(|digest| {
+            digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        });
+    if digest.is_none() {
+        return Err(
+            "embedder_witness must be exactly 'sha256:' followed by 64 lowercase hexadecimal \
+             characters"
+                .to_owned(),
+        );
+    }
+    Ok(())
 }
 
 /// The progress map must cover exactly the agent collections.
@@ -430,6 +469,14 @@ fn validate_state_update(
         Some(format!(
             "target_dimension changed from {} to {}",
             existing.target_dimension, candidate.target_dimension
+        ))
+    } else if existing.embedder_witness != candidate.embedder_witness {
+        Some(format!(
+            "embedder_witness changed from {:?} to {:?} — either the embedder's \
+             output drifted under a stable model name, or the resolved regime \
+             flipped between runs; both make the replayed and the remaining \
+             batches incompatible",
+            existing.embedder_witness, candidate.embedder_witness
         ))
     } else {
         None

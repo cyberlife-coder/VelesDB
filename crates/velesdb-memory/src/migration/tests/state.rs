@@ -22,6 +22,7 @@ fn resumable_state() -> MigrationState {
         source_fingerprint: VALID_FINGERPRINT.to_owned(),
         target_model: TARGET_MODEL.to_owned(),
         target_dimension: TARGET_DIM,
+        embedder_witness: None,
         progress: AGENT_COLLECTIONS
             .iter()
             .map(|name| {

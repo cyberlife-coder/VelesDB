@@ -90,10 +90,29 @@ pub fn execute(
     // Release on BOTH paths. The fail-closed evidence a dropped lock leaves is
     // for crashes — a run that reached a clean `Err` has nothing for the
     // operator to acknowledge, and making them `rm` a lock file after every
-    // refusal would train them to do it after real crashes too.
-    let released = lock.release().map_err(query_error);
-    let rebuild = result?;
-    released?;
+    // refusal would train them to do it after real crashes too. And when BOTH
+    // fail, both are reported: an operator who fixes the rebuild error and
+    // reruns deserves to know beforehand that the lock evidence remains, not
+    // to discover it as a second surprise.
+    let released = lock.release();
+    let rebuild = match (result, released) {
+        (Ok(rebuild), Ok(())) => rebuild,
+        (Ok(_), Err(release_error)) => {
+            return Err(query_error(format!(
+                "the rebuild completed, but releasing the migration lock \
+                 failed: {release_error}. The canonical lock record remains \
+                 and must be removed by hand before the next run"
+            )));
+        }
+        (Err(error), Ok(())) => return Err(error),
+        (Err(error), Err(release_error)) => {
+            return Err(query_error(format!(
+                "{error}; additionally, releasing the migration lock failed: \
+                 {release_error} — the canonical lock record remains and must \
+                 be removed by hand before the next run"
+            )));
+        }
+    };
     Ok(ExecuteOutcome {
         report,
         rebuild,
@@ -162,14 +181,7 @@ fn execute_locked(
     lock: &MigrationLock,
     pass: &ExecutePass<'_>,
 ) -> Result<RebuildOutcome, crate::MemoryError> {
-    let mut state = journal_entry(
-        report,
-        target,
-        workspace,
-        lock,
-        pass.resuming,
-        pass.settled_fingerprint,
-    )?;
+    let mut state = journal_entry(report, target, workspace, lock, pass)?;
     let policy = match report.resolution {
         Resolution::Reuse => VectorPolicy::Reuse,
         Resolution::Reembed { .. } => VectorPolicy::Reembed(pass.embedder),
@@ -208,42 +220,67 @@ fn execute_locked(
     )
 }
 
+/// The sentence every `reembed` migration embeds once at prepare and once at
+/// every resume. Its content is arbitrary; its STABILITY is the contract —
+/// change it and every in-flight migration's witness stops matching.
+const WITNESS_SENTENCE: &str =
+    "velesdb embedder witness v1: one fixed sentence, embedded at prepare and at every resume";
+
+/// What the target embedder actually produces, as a digest — `Some` under
+/// `reembed`, `None` under `reuse` (where the embedder is never called).
+fn embedder_witness(
+    resolution: Resolution,
+    embedder: &dyn Embedder,
+) -> Result<Option<String>, crate::MemoryError> {
+    match resolution {
+        Resolution::Reuse => Ok(None),
+        Resolution::Reembed { .. } => {
+            use sha2::Digest;
+            let vector = embedder.embed(WITNESS_SENTENCE).map_err(|err| {
+                query_error(format!(
+                    "the target embedder cannot embed the witness: {err}"
+                ))
+            })?;
+            let mut hash = sha2::Sha256::new();
+            for value in &vector {
+                hash.update(value.to_le_bytes());
+            }
+            Ok(Some(format!(
+                "sha256:{}",
+                super::filesystem::encode_hex(&hash.finalize())
+            )))
+        }
+        Resolution::Refuse { .. } => {
+            unreachable!("execute gated Refuse before the witness was computed")
+        }
+    }
+}
+
 /// Read-and-verify the existing journal, or write the first entry.
 ///
 /// Both directions use the SETTLED fingerprint, never the diagnosis's: the
-/// diagnosis fingerprinted the tree before the settle compacted it.
+/// diagnosis fingerprinted the tree before the settle compacted it. And both
+/// carry the embedder WITNESS, not just the model name: `may_resume` checks
+/// what the embedder is CALLED, the witness what it PRODUCES, and only the
+/// second survives a model updated in place under a stable name — the replayed
+/// batches would keep run-one vectors while the remaining batches got
+/// run-two's, one store with two incompatible vector spaces.
 fn journal_entry(
     report: &DiagnosisReport,
     target: &TargetContract,
     workspace: &Path,
     lock: &MigrationLock,
-    resuming: bool,
-    settled_fingerprint: &str,
+    pass: &ExecutePass<'_>,
 ) -> Result<MigrationState, crate::MemoryError> {
-    if resuming {
-        let state = MigrationState::read(workspace)
-            .map_err(query_error)?
-            .ok_or_else(|| {
-                query_error(format!(
-                    "the journal at {} disappeared between inspection and locking",
-                    workspace.display()
-                ))
-            })?;
-        state
-            .may_resume(
-                &report.source_path,
-                settled_fingerprint,
-                &target.model,
-                target.dimension,
-            )
-            .map_err(query_error)?;
-        return Ok(state);
+    let witness = embedder_witness(report.resolution, pass.embedder)?;
+    if pass.resuming {
+        return resume_journal(report, target, workspace, pass, witness.as_deref());
     }
     let state = MigrationState {
         format_version: super::state::STATE_FORMAT_VERSION,
         phase: Phase::Prepared,
         source_path: report.source_path.clone(),
-        source_fingerprint: settled_fingerprint.to_owned(),
+        source_fingerprint: pass.settled_fingerprint.to_owned(),
         target_model: target.model.clone(),
         target_dimension: target.dimension,
         progress: super::enumeration::AGENT_COLLECTIONS
@@ -255,8 +292,46 @@ fn journal_entry(
                 )
             })
             .collect(),
+        embedder_witness: witness,
     };
     state.write(workspace, lock).map_err(query_error)?;
+    Ok(state)
+}
+
+/// Verify an existing journal against the run in front of us.
+fn resume_journal(
+    report: &DiagnosisReport,
+    target: &TargetContract,
+    workspace: &Path,
+    pass: &ExecutePass<'_>,
+    witness: Option<&str>,
+) -> Result<MigrationState, crate::MemoryError> {
+    let state = MigrationState::read(workspace)
+        .map_err(query_error)?
+        .ok_or_else(|| {
+            query_error(format!(
+                "the journal at {} disappeared between inspection and locking",
+                workspace.display()
+            ))
+        })?;
+    state
+        .may_resume(
+            &report.source_path,
+            pass.settled_fingerprint,
+            &target.model,
+            target.dimension,
+        )
+        .map_err(query_error)?;
+    if state.embedder_witness.as_deref() != witness {
+        return Err(query_error(format!(
+            "this migration was prepared with an embedder whose witness was \
+             {:?}, and the embedder answering to '{}' now produces {:?}. Same \
+             name, different vectors — the model was updated in place, or the \
+             regime changed between runs. Resuming would mix two vector spaces \
+             in one store; start a fresh migration",
+            state.embedder_witness, target.model, witness,
+        )));
+    }
     Ok(state)
 }
 
