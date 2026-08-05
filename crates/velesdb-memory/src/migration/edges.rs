@@ -71,9 +71,12 @@ fn subsystem_of(collection: &str) -> Result<Subsystem, crate::MemoryError> {
     }
 }
 
-/// Which index a walk reads. The two are physically distinct — `outgoing` and
-/// `incoming` are separate maps in the edge store — which is what makes one a
-/// check on the other rather than a restatement of it.
+/// Which adjacency map a walk reads.
+///
+/// `outgoing` and `incoming` are separate maps, so an edge missing from one of
+/// them is caught by the other. They are not separate copies: both resolve the
+/// id through the same stored record. See [`cross_check_edges`] for what that
+/// buys and what it does not.
 #[derive(Debug, Clone, Copy)]
 enum Direction {
     Outgoing,
@@ -119,30 +122,55 @@ fn require_derived_id(edge: GraphEdge) -> Result<GraphEdge, crate::MemoryError> 
     .into())
 }
 
-/// Walk `collection` and collect its edges through `direction`.
+/// Collect the edges reachable from `ids` through `direction`.
+///
+/// Takes the fact ids rather than finding them, so that a caller checking one
+/// direction against the other can hand both walks the SAME snapshot. That is
+/// not a convenience: expiry is evaluated against the wall clock on every read,
+/// so two walks that each enumerated the store afresh could straddle a fact's
+/// expiry instant and disagree — reporting a divergence that is a tick of the
+/// clock rather than a lost edge, and aborting a migration whose indexes were
+/// never anything but consistent.
 fn collect(
     memory: &AgentMemory,
-    db: &Database,
-    collection: &str,
-    batch: usize,
+    subsystem: Subsystem,
+    ids: &[u64],
     direction: Direction,
 ) -> Result<Vec<GraphEdge>, crate::MemoryError> {
-    let subsystem = subsystem_of(collection)?;
     let mut out: Vec<GraphEdge> = Vec::new();
     let mut seen: std::collections::HashSet<u64> = std::collections::HashSet::new();
-    for fact in enumerate_by_cursor(db, collection, batch)? {
-        for edge in edges_at(memory, subsystem, direction, fact.id)? {
+    for &id in ids {
+        for edge in edges_at(memory, subsystem, direction, id)? {
             let edge = require_derived_id(edge)?;
-            // A self-loop is reachable from its single endpoint through BOTH
-            // indexes, so the walk would otherwise report it twice and the two
-            // directions would disagree on cardinality for a reason that has
-            // nothing to do with loss.
-            if seen.insert(edge.id()) {
-                out.push(edge);
+            // Each walk reads ONE index, and an edge id is unique within a
+            // collection — the edge store refuses a duplicate id inside its
+            // write guard. A self-loop is pushed into both the outgoing and the
+            // incoming index, but a single walk still meets it once. So this
+            // branch is unreachable today, measured rather than assumed, and it
+            // is an ERROR rather than a silent skip: were it ever reached, the
+            // edge store would be handing out one id twice and quietly keeping
+            // the first is the worst available answer.
+            if !seen.insert(edge.id()) {
+                return Err(velesdb_core::Error::Query(format!(
+                    "edge {} was reported twice by a single {direction:?} walk of \
+                     one collection; edge ids are unique per collection, so the \
+                     edge index is inconsistent and no export from it can be \
+                     trusted",
+                    edge.id(),
+                ))
+                .into());
             }
+            out.push(edge);
         }
     }
     Ok(out)
+}
+
+fn live_ids(db: &Database, collection: &str, batch: usize) -> Result<Vec<u64>, crate::MemoryError> {
+    Ok(enumerate_by_cursor(db, collection, batch)?
+        .into_iter()
+        .map(|fact| fact.id)
+        .collect())
 }
 
 /// Every edge of `collection` that lies between two exported facts, as complete
@@ -161,14 +189,90 @@ pub fn export_edges(
     collection: &str,
     batch: usize,
 ) -> Result<Vec<GraphEdge>, crate::MemoryError> {
-    collect(memory, db, collection, batch, Direction::Outgoing)
+    let subsystem = subsystem_of(collection)?;
+    collect(
+        memory,
+        subsystem,
+        &live_ids(db, collection, batch)?,
+        Direction::Outgoing,
+    )
+}
+
+/// The export, checked against the incoming index over ONE snapshot of the live
+/// facts.
+///
+/// This is the entry point a rebuild should use. [`export_edges`] and
+/// [`cross_check_edges`] each enumerate the store for themselves, which is fine
+/// in isolation and wrong as a pair: expiry is evaluated against the wall clock
+/// on every read, so a fact whose expiry falls between the two calls leaves the
+/// two walks disagreeing about an edge neither of them lost. Enumerating once
+/// and walking both directions over that one list removes the window rather than
+/// narrowing it.
+///
+/// # Errors
+/// Returns [`crate::MemoryError`] under the conditions of [`export_edges`], and
+/// additionally when the two indexes do not yield the same set of tuples.
+pub fn export_edges_verified(
+    memory: &AgentMemory,
+    db: &Database,
+    collection: &str,
+    batch: usize,
+) -> Result<Vec<GraphEdge>, crate::MemoryError> {
+    let subsystem = subsystem_of(collection)?;
+    let ids = live_ids(db, collection, batch)?;
+    let exported = collect(memory, subsystem, &ids, Direction::Outgoing)?;
+    let crossed = collect(memory, subsystem, &ids, Direction::Incoming)?;
+    let (left, right) = (comparable(&exported), comparable(&crossed));
+    if left != right {
+        return Err(velesdb_core::Error::Query(format!(
+            "the outgoing and incoming edge indexes disagree over the same {} live \
+             facts: {} tuples out, {} tuples in, {} present in only one of them. \
+             An export cannot be called lossless while the two indexes describe \
+             different graphs",
+            ids.len(),
+            left.len(),
+            right.len(),
+            left.symmetric_difference(&right).count(),
+        ))
+        .into());
+    }
+    Ok(exported)
+}
+
+/// An edge reduced to something orderable, so two collections of edges compare
+/// as SETS OF TUPLES. Comparing counts would let two walks that had each lost
+/// one edge agree.
+fn comparable(edges: &[GraphEdge]) -> std::collections::BTreeSet<(u64, u64, u64, String, String)> {
+    edges
+        .iter()
+        .map(|edge| {
+            let properties: std::collections::BTreeMap<_, _> = edge.properties().iter().collect();
+            (
+                edge.id(),
+                edge.source(),
+                edge.target(),
+                edge.label().to_owned(),
+                serde_json::to_string(&properties).unwrap_or_default(),
+            )
+        })
+        .collect()
 }
 
 /// The same collection of edges, gathered through the INCOMING index instead.
 ///
-/// The independent second path [`export_edges`] is checked against. The caller
-/// compares the two as SETS OF TUPLES, not as counts: two walks that had each
-/// lost one edge would agree on cardinality and disagree on nothing else.
+/// Prefer [`export_edges_verified`], which walks both directions over one
+/// snapshot; this is the single-direction primitive, and comparing its result
+/// against a separately-enumerated [`export_edges`] reintroduces the clock
+/// window that entry point exists to close.
+///
+/// # What the agreement of the two indexes does and does not prove
+///
+/// `outgoing` and `incoming` are separate adjacency maps, so an edge that fell
+/// out of one of them is caught. They are NOT separate copies of the edge: both
+/// resolve the id through the same `edges` map in the shard, so a tuple whose
+/// stored properties were corrupted would come back identically corrupted
+/// through both. This checks MEMBERSHIP in two indexes, not the content twice.
+/// The content is checked by re-reading the destination after reinsertion.
 ///
 /// # Errors
 /// Returns [`crate::MemoryError`] under the same conditions as [`export_edges`].
@@ -178,7 +282,13 @@ pub fn cross_check_edges(
     collection: &str,
     batch: usize,
 ) -> Result<Vec<GraphEdge>, crate::MemoryError> {
-    collect(memory, db, collection, batch, Direction::Incoming)
+    let subsystem = subsystem_of(collection)?;
+    collect(
+        memory,
+        subsystem,
+        &live_ids(db, collection, batch)?,
+        Direction::Incoming,
+    )
 }
 
 /// What putting the edges back produced.

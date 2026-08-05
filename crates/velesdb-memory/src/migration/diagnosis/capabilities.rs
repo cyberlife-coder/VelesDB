@@ -57,16 +57,20 @@ const NO_PROVENANCE: &str =
 /// if it were the solution.
 pub(super) fn edge_export_capability() -> Capability {
     Capability::Proven {
-        evidence: "edges export as complete tuples — stable edge id, source, target, label and \
-                   properties — through `migration::export_edges`, which walks the live fact ids \
-                   with the fact export's own cursor and refuses any edge whose id its triple \
-                   does not derive. `migration::cross_check_edges` re-collects the same set \
-                   through the physically distinct incoming index, and the two are compared as \
-                   sets of tuples rather than as counts. `migration::reinsert_edges` puts them \
-                   back after the facts and the destination is verified by RE-READING it through \
-                   the same export, never by the return code. Both guards are mutation-tested: \
-                   dropping properties on reinsertion, and disabling the id check, each turn \
-                   exactly one test red."
+        evidence: "a lossless edge export and reinsertion API exists and is tested. Edges export \
+                   as complete tuples — stable edge id, source, target, label and properties — \
+                   through `migration::export_edges_verified`, which walks the live fact ids with \
+                   the fact export's own cursor, refuses any edge whose id its triple does not \
+                   derive, and collects the outgoing and incoming adjacency maps over ONE \
+                   snapshot before comparing them as sets of tuples rather than as counts. That \
+                   comparison attests MEMBERSHIP in two indexes; it is not a second copy of the \
+                   tuple, since both indexes resolve the edge through the same stored record. The \
+                   content is attested instead by `migration::reinsert_edges`, which puts the \
+                   edges back after the facts and is verified by RE-READING the destination \
+                   through the same export, never by the return code. Both guards are \
+                   mutation-tested: dropping properties on reinsertion, and disabling the id \
+                   check, each turn exactly one test red. The rebuild does not yet call this API \
+                   — that is the reconstruction pass this capability unblocks."
             .to_owned(),
     }
 }

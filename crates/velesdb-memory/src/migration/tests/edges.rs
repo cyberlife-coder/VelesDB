@@ -292,6 +292,46 @@ fn the_incoming_walk_yields_the_same_tuples_as_the_outgoing_one() {
 }
 
 #[test]
+fn the_verified_export_walks_both_directions_over_one_snapshot() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let expected = source_with_rich_edges(dir.path());
+
+    let (db, memory) = opened(dir.path(), DIM);
+    let verified = super::super::export_edges_verified(&memory, &db, "_semantic_memory", 1024)
+        .expect("verified export");
+    assert_eq!(
+        tuples(&verified),
+        expected,
+        "the verified entry point must return what the outgoing walk returns, \
+         having agreed with the incoming one"
+    );
+    drop(memory);
+    drop(db);
+
+    // Why this entry point exists: `export_edges` and `cross_check_edges` each
+    // enumerate the store for themselves, and expiry is read against the wall
+    // clock on every read. A fact expiring between two such calls leaves them
+    // disagreeing about an edge neither of them lost. The verified walk takes
+    // ONE snapshot of the live ids, so it cannot see a fact live in one
+    // direction and dead in the other however long the two halves take.
+    super::preservation::seed_raw(dir.path(), LATER_EXPIRED, "fact 3", Some(PAST));
+    let (db, memory) = opened(dir.path(), DIM);
+    let after = super::super::export_edges_verified(&memory, &db, "_semantic_memory", 1024)
+        .expect("verified export after expiry");
+    assert!(
+        after.len() < verified.len(),
+        "positive control: expiring an endpoint must actually change the export, \
+         or this test compares a walk against itself"
+    );
+    assert!(
+        after
+            .iter()
+            .all(|edge| edge.source() != LATER_EXPIRED && edge.target() != LATER_EXPIRED),
+        "no edge touching the expired fact may survive, in either direction"
+    );
+}
+
+#[test]
 fn reinserted_edges_are_read_back_identical_at_the_destination() {
     let dir = tempfile::tempdir().expect("tempdir");
     let expected = source_with_rich_edges(dir.path());

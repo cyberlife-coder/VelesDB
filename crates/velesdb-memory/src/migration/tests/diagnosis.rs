@@ -826,6 +826,53 @@ fn a_diagnosis_report_round_trips_through_its_versioned_parser() {
 }
 
 #[test]
+fn a_v5_report_is_refused_for_its_age_and_never_accused_of_inconsistency() {
+    // The only version test used to be the NEWER direction, on a fixture whose
+    // capabilities were canonical for the current build. That combination cannot
+    // see the failure this one is about. A REAL v5 report carries
+    // `edge_export: Missing`, which was canonical when it was written and is
+    // inconsistent now — so if `validate` ever checked capabilities before the
+    // version, an operator holding a legitimate older report would be told their
+    // file was tampered with. The version check must come first, and the message
+    // must say so.
+    let (dir, _ttl) = seeded();
+    let report = diagnose(dir.path(), TARGET_MODEL, TARGET_DIM, None).expect("diagnose");
+    assert_eq!(
+        DIAGNOSIS_FORMAT_VERSION, 6,
+        "positive control: this test is about the v5 -> v6 step and must be \
+         revisited, not silently kept, when the version moves again"
+    );
+
+    let mut older = serde_json::to_value(report).expect("serialize report");
+    older["format_version"] = serde_json::json!(DIAGNOSIS_FORMAT_VERSION - 1);
+    older["capabilities"]["edge_export"] = serde_json::to_value(Capability::Missing {
+        blocker: "the public diagnosis/rebuild path can count outgoing relations, but it does \
+                  not export a complete stream of edge tuples"
+            .to_owned(),
+    })
+    .expect("serialize the v5 verdict");
+    let json = serde_json::to_string(&older).expect("serialize older report");
+
+    for refusal in [
+        DiagnosisReport::parse(&json).expect_err("an older format must be refused"),
+        serde_json::from_str::<DiagnosisReport>(&json)
+            .expect_err("Deserialize itself must refuse an older report")
+            .to_string(),
+    ] {
+        assert!(
+            refusal.contains("older") && refusal.contains("fresh diagnosis"),
+            "the refusal must name the report's AGE and the recovery action: {refusal}"
+        );
+        assert!(
+            !refusal.contains("inconsistent"),
+            "a legitimate v5 report must never be accused of internal \
+             inconsistency — its `edge_export` verdict was canonical when it was \
+             written: {refusal}"
+        );
+    }
+}
+
+#[test]
 fn a_report_from_a_future_format_is_refused_before_its_shape_is_interpreted() {
     let (dir, _ttl) = seeded();
     let report = diagnose(dir.path(), TARGET_MODEL, TARGET_DIM, None).expect("diagnose");
