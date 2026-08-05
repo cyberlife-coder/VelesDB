@@ -268,8 +268,11 @@ pub(super) fn same_edge_tuples(left: &[GraphEdge], right: &[GraphEdge]) -> Resul
 /// what "the same edge" means.
 pub(super) type CanonicalEdge = (u64, u64, u64, String, String);
 
-/// See [`CanonicalEdge`]. The render cannot fail: the properties came out of
-/// the store as JSON, and a `BTreeMap` of them serialises deterministically.
+/// See [`CanonicalEdge`]. The render of a `BTreeMap` of stored JSON values
+/// cannot fail in practice; if it ever does, the error TEXT becomes the
+/// rendering — still deterministic, still distinct from every successful
+/// render, and (unlike a default empty string) incapable of making a failed
+/// comparison pass by making both sides say nothing.
 pub(super) fn canonical_edge(edge: &GraphEdge) -> CanonicalEdge {
     let properties: std::collections::BTreeMap<_, _> = edge.properties().iter().collect();
     (
@@ -277,7 +280,8 @@ pub(super) fn canonical_edge(edge: &GraphEdge) -> CanonicalEdge {
         edge.source(),
         edge.target(),
         edge.label().to_owned(),
-        serde_json::to_string(&properties).expect("stored JSON properties render"),
+        serde_json::to_string(&properties)
+            .unwrap_or_else(|err| format!("<properties failed to render: {err}>")),
     )
 }
 
