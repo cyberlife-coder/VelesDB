@@ -30,7 +30,7 @@ fn journal(workspace: &std::path::Path) -> MigrationState {
 }
 
 /// Advance the journal by hand, as the crashed run would have.
-fn journal_phase(workspace: &std::path::Path, phase: Phase) {
+pub(super) fn journal_phase(workspace: &std::path::Path, phase: Phase) {
     let lock = MigrationLock::acquire(workspace, "switch-test").expect("lock");
     let mut state = journal(workspace);
     state.phase = phase;
@@ -207,6 +207,97 @@ fn an_unstamped_occupant_of_the_source_slot_is_refused() {
         elsewhere.exists(),
         "the set-aside destination must be untouched"
     );
+}
+
+#[test]
+fn a_source_that_moved_on_cannot_be_archived_by_a_stale_journal() {
+    // The stamp alone cannot tell two migrations toward the same target
+    // apart, and a crashed migration's journal stays at DestinationValidated
+    // forever. If a LATER write lands in the source — a daemon, or a whole
+    // second migration — this journal describes a store that no longer
+    // exists, and archiving the live one on its say-so would end with commit
+    // DESTROYING post-journal writes. The fingerprint is what notices.
+    let root = root_with_source();
+    let executed = validated(root.path());
+    let store = root.path().join("store");
+    {
+        let native = crate::storage::NativeStore::open(&store, DIM).expect("open");
+        native
+            .store(77, "written after validation", &EMBEDDING)
+            .expect("late write");
+    }
+
+    let refusal = super::super::switch_over(&store, &executed.destination)
+        .expect_err("a stale journal must not move a store that moved on");
+    let message = refusal.to_string();
+    assert!(
+        message.contains("fingerprint") || message.contains("changed"),
+        "the refusal must say the source no longer matches the journal: {message}"
+    );
+    assert!(store.exists(), "nothing may have moved");
+    assert!(executed.destination.exists(), "nothing may have moved");
+}
+
+#[test]
+fn commit_refuses_to_free_an_archive_that_received_writes() {
+    // The archive is the ONLY copy of the old data, and (measured in review)
+    // neither a rename nor remove_dir_all is stopped by a daemon's flock on a
+    // file inside it: a daemon that opened the source in the validate→switch
+    // window keeps writing into the ARCHIVE after the first rename, silently.
+    // Freeing that archive would destroy its writes. Before destruction, the
+    // archive must still fingerprint as the settled source the journal knows.
+    let root = root_with_source();
+    let executed = validated(root.path());
+    let store = root.path().join("store");
+    let archive = root.path().join("store.archive");
+
+    // Both renames done, journal caught up to DestinationActivated — and then
+    // a foreign write lands in the archive.
+    std::fs::rename(&store, &archive).expect("first rename");
+    journal_phase(&executed.workspace, Phase::SourceArchived);
+    std::fs::rename(&executed.destination, &store).expect("second rename");
+    journal_phase(&executed.workspace, Phase::DestinationActivated);
+    std::fs::write(archive.join("daemon-was-here.wal"), b"unsynced writes").expect("foreign write");
+
+    let refusal = super::super::switch_over(&store, &executed.destination)
+        .expect_err("an archive that changed since the journal must not be destroyed");
+    let message = refusal.to_string();
+    assert!(
+        message.contains("archive"),
+        "the refusal must name the archive: {message}"
+    );
+    assert!(
+        std::fs::read(archive.join("daemon-was-here.wal")).is_ok(),
+        "the foreign write — possibly the only copy of someone's data — must survive"
+    );
+    assert_eq!(
+        journal(&executed.workspace).phase,
+        Phase::DestinationActivated,
+        "a refused commit must leave the journal where it was"
+    );
+}
+
+#[test]
+fn a_manual_restore_is_re_archived_and_the_switch_completes() {
+    // The recovery table's advice for SourceArchived is "move the archive
+    // back to the source's name". An operator who follows it and then re-runs
+    // the switch presents: source at its name, no archive, destination
+    // intact, journal at SourceArchived — the journal AHEAD of the disk. The
+    // switch redoes the first rename (fingerprint-checked) and completes,
+    // instead of stranding the migration in a shape everything refuses.
+    let root = root_with_source();
+    let executed = validated(root.path());
+    let store = root.path().join("store");
+    let archive = root.path().join("store.archive");
+
+    std::fs::rename(&store, &archive).expect("first rename");
+    journal_phase(&executed.workspace, Phase::SourceArchived);
+    std::fs::rename(&archive, &store).expect("the operator's manual restore");
+
+    let outcome = super::super::switch_over(&store, &executed.destination)
+        .expect("a restored source under a SourceArchived journal must re-archive and continue");
+    assert_eq!(outcome.activated, store.canonicalize().expect("exists"));
+    assert_eq!(journal(&executed.workspace).phase, Phase::Committed);
 }
 
 #[test]

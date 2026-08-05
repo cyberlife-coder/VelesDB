@@ -261,23 +261,30 @@ pub(super) fn same_edge_tuples(left: &[GraphEdge], right: &[GraphEdge]) -> Resul
     ))
 }
 
-/// An edge reduced to something orderable, so two collections of edges compare
-/// as SETS OF TUPLES. Comparing counts would let two walks that had each lost
-/// one edge agree.
-fn comparable(edges: &[GraphEdge]) -> std::collections::BTreeSet<(u64, u64, u64, String, String)> {
-    edges
-        .iter()
-        .map(|edge| {
-            let properties: std::collections::BTreeMap<_, _> = edge.properties().iter().collect();
-            (
-                edge.id(),
-                edge.source(),
-                edge.target(),
-                edge.label().to_owned(),
-                serde_json::to_string(&properties).unwrap_or_default(),
-            )
-        })
-        .collect()
+/// The canonical, orderable form of one edge: every field, with properties
+/// rendered through a `BTreeMap` for a stable key order. This is THE reduction
+/// every comparison in the migration uses — the cross-check here and the
+/// validation pass both — so two comparisons cannot quietly disagree about
+/// what "the same edge" means.
+pub(super) type CanonicalEdge = (u64, u64, u64, String, String);
+
+/// See [`CanonicalEdge`]. The render cannot fail: the properties came out of
+/// the store as JSON, and a `BTreeMap` of them serialises deterministically.
+pub(super) fn canonical_edge(edge: &GraphEdge) -> CanonicalEdge {
+    let properties: std::collections::BTreeMap<_, _> = edge.properties().iter().collect();
+    (
+        edge.id(),
+        edge.source(),
+        edge.target(),
+        edge.label().to_owned(),
+        serde_json::to_string(&properties).expect("stored JSON properties render"),
+    )
+}
+
+/// Edges as a SET of canonical tuples. Comparing counts would let two walks
+/// that had each lost one edge agree.
+fn comparable(edges: &[GraphEdge]) -> std::collections::BTreeSet<CanonicalEdge> {
+    edges.iter().map(canonical_edge).collect()
 }
 
 /// The same collection of edges, gathered through the INCOMING index instead.

@@ -29,6 +29,7 @@
 //! two re-runs an idempotent commit instead of leaving a freed archive that
 //! the journal still believes in.
 
+use super::query_error;
 use std::path::{Path, PathBuf};
 
 use super::execute::journal_workspace;
@@ -60,10 +61,7 @@ pub fn switch_over(store: &Path, destination: &Path) -> Result<SwitchOutcome, cr
     let workspace = journal_workspace(destination)?;
     let lock = MigrationLock::acquire(&workspace, "migrate-switch").map_err(query_error)?;
     let result = switch_locked(store, destination, &workspace, &lock);
-    let released = lock.release().map_err(query_error);
-    let outcome = result?;
-    released?;
-    Ok(outcome)
+    super::execute::reconcile(result, lock.release())
 }
 
 fn switch_locked(
@@ -178,22 +176,29 @@ fn step_archive(
 ) -> Result<(), crate::MemoryError> {
     match slots.on_disk() {
         // The step is pending: the slot must be free, or renaming would eat
-        // whatever sits there.
+        // whatever sits there — and the source must still BE the store the
+        // journal describes. A stale journal (a crashed migration, overtaken
+        // by later writes or by a whole second migration) would otherwise
+        // archive the LIVE store here and destroy it at commit.
         SwitchState {
             source: true,
             archive: false,
             destination: true,
         } => {
+            require_journalled_fingerprint(&slots.source, state, "source")?;
             rename_durably(&slots.source, &slots.archive)?;
         }
         // The step already happened and its journal entry did not — the crash
         // window. Journal it late; undoing a rename the disk holds would
-        // discard the step.
+        // discard the step. The archive must fingerprint as the journalled
+        // source, or what was archived is not what this journal describes.
         SwitchState {
             source: false,
             archive: true,
             destination: true,
-        } => {}
+        } => {
+            require_journalled_fingerprint(&slots.archive, state, "archive")?;
+        }
         SwitchState {
             source: true,
             archive: true,
@@ -224,22 +229,56 @@ fn step_activate(
             archive: true,
             destination: true,
         } => {
+            require_journalled_fingerprint(&slots.archive, state, "archive")?;
             rename_durably(&slots.destination, &slots.source)?;
         }
         // Source-name occupied, archive present, destination gone: either the
         // rename happened and its journal entry did not, or something else sat
-        // down at the source's name. The provenance stamp validation wrote on
-        // the destination is what tells them apart.
+        // down at the source's name. Two proofs discriminate: the occupant
+        // carries the TARGET's provenance stamp (validation wrote it on the
+        // destination and nothing else has it), and the archive fingerprints
+        // as the journalled source (so this archive belongs to THIS journal,
+        // not to a later migration toward the same target).
         SwitchState {
             source: true,
             archive: true,
             destination: false,
-        } => {
-            require_target_stamp(slots, state)?;
-        }
+        } => late_activation(slots, state)?,
+        // The recovery table's manual advice for this phase is "move the
+        // archive back to the source's name". An operator who followed it and
+        // re-ran presents the journal AHEAD of the disk: source restored,
+        // archive slot empty, destination intact. Redo the first rename —
+        // fingerprint-checked like any other — and continue, rather than
+        // stranding the migration in a shape everything refuses.
+        SwitchState {
+            source: true,
+            archive: false,
+            destination: true,
+        } => redo_after_manual_restore(slots, state)?,
         other => return Err(unrecognised_disk(other, Phase::SourceArchived)),
     }
     advance(state, Phase::DestinationActivated, workspace, lock)
+}
+
+/// The second rename already happened and only the journal is behind. Two
+/// proofs before the late journal entry: the occupant carries the TARGET's
+/// stamp, and the archive fingerprints as THIS journal's source.
+fn late_activation(slots: &Slots, state: &MigrationState) -> Result<(), crate::MemoryError> {
+    require_target_stamp(slots, state)?;
+    require_journalled_fingerprint(&slots.archive, state, "archive")
+}
+
+/// The operator followed the recovery table's manual advice and moved the
+/// archive back; the journal is AHEAD of the disk. Redo both renames —
+/// fingerprint-checked — instead of stranding the migration in a shape
+/// everything refuses.
+fn redo_after_manual_restore(
+    slots: &Slots,
+    state: &MigrationState,
+) -> Result<(), crate::MemoryError> {
+    require_journalled_fingerprint(&slots.source, state, "restored source")?;
+    rename_durably(&slots.source, &slots.archive)?;
+    rename_durably(&slots.destination, &slots.source)
 }
 
 /// Commit: verify the activated store, free the archive, journal the end.
@@ -254,6 +293,14 @@ fn step_commit(
         let _opens = velesdb_core::Database::open(&slots.source)?;
     }
     if slots.archive.exists() {
+        // The archive is the ONLY copy of the old data, and no flock stops a
+        // rename or a recursive delete (measured in review: a daemon that
+        // opened the source in a lock-free window keeps writing into the
+        // archive after the first rename, and remove_dir_all succeeds under
+        // it, unlinking its inodes silently). Before destruction, the archive
+        // must still fingerprint as the settled source the journal knows —
+        // anything else means writes landed here that exist nowhere else.
+        require_journalled_fingerprint(&slots.archive, state, "archive")?;
         std::fs::remove_dir_all(&slots.archive).map_err(|err| {
             query_error(format!(
                 "the activated store is verified but the archive {} could not \
@@ -263,6 +310,29 @@ fn step_commit(
         })?;
     }
     advance(state, Phase::Committed, workspace, lock)
+}
+
+/// The tree at `path` must still fingerprint as the source this journal was
+/// written about. This is the switch's identity check — the stamp says WHAT
+/// KIND of store an occupant is, the fingerprint says WHICH store a tree is,
+/// and only the second can tell this migration's source from a later state of
+/// the same path.
+fn require_journalled_fingerprint(
+    path: &Path,
+    state: &MigrationState,
+    role: &str,
+) -> Result<(), crate::MemoryError> {
+    let observed = super::filesystem::fingerprint(path)?;
+    if observed == state.source_fingerprint {
+        return Ok(());
+    }
+    Err(query_error(format!(
+        "the {role} at {} no longer fingerprints as the store this journal \
+         describes — something wrote to it after the journal was written. \
+         Nothing was moved or deleted; a store that changed hands must be \
+         inspected, not migrated on a stale journal",
+        path.display(),
+    )))
 }
 
 /// The occupant of the source's name must carry the TARGET's provenance stamp
@@ -353,8 +423,4 @@ fn rename_durably(from: &Path, to: &Path) -> Result<(), crate::MemoryError> {
         })?;
     }
     Ok(())
-}
-
-fn query_error(message: impl Into<String>) -> crate::MemoryError {
-    velesdb_core::Error::Query(message.into()).into()
 }

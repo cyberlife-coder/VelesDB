@@ -28,6 +28,7 @@ use std::collections::BTreeSet;
 
 mod diagnostic_copy;
 mod execute;
+mod orchestrate;
 mod rebuild;
 mod rebuild_state;
 mod state_persistence;

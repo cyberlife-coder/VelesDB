@@ -37,6 +37,7 @@
 //! checked against — after the comparison passes and before the phase
 //! advances.
 
+use super::query_error;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -83,10 +84,7 @@ pub fn validate_destination(
     let workspace = journal_workspace(destination)?;
     let lock = MigrationLock::acquire(&workspace, "migrate-validate").map_err(query_error)?;
     let result = validate_locked(store, destination, target, batch, &workspace, &lock);
-    let released = lock.release().map_err(query_error);
-    let outcome = result?;
-    released?;
-    Ok(outcome)
+    super::execute::reconcile(result, lock.release())
 }
 
 fn validate_locked(
@@ -354,8 +352,8 @@ impl Comparison<'_> {
     /// Source edges the destination lacks or holds differently.
     fn sweep_missing_or_changed(
         &mut self,
-        source_tuples: &BTreeMap<u64, EdgeTuple>,
-        destination_tuples: &BTreeMap<u64, EdgeTuple>,
+        source_tuples: &BTreeMap<u64, super::edges::CanonicalEdge>,
+        destination_tuples: &BTreeMap<u64, super::edges::CanonicalEdge>,
         exported: &[GraphEdge],
     ) -> Result<(), crate::MemoryError> {
         for (id, tuple) in source_tuples {
@@ -369,8 +367,8 @@ impl Comparison<'_> {
     /// Destination edges the source never exported.
     fn sweep_surplus(
         &mut self,
-        source_tuples: &BTreeMap<u64, EdgeTuple>,
-        destination_tuples: &BTreeMap<u64, EdgeTuple>,
+        source_tuples: &BTreeMap<u64, super::edges::CanonicalEdge>,
+        destination_tuples: &BTreeMap<u64, super::edges::CanonicalEdge>,
         back: &[GraphEdge],
     ) -> Result<(), crate::MemoryError> {
         for id in destination_tuples.keys() {
@@ -414,25 +412,12 @@ impl Comparison<'_> {
     }
 }
 
-type EdgeTuple = (u64, u64, String, String);
-
-/// Edges keyed by id, each reduced to an orderable tuple with its properties
-/// rendered through a `BTreeMap` for a stable order.
-fn edge_map(edges: &[GraphEdge]) -> BTreeMap<u64, EdgeTuple> {
+/// Edges keyed by id, in the migration's one canonical form
+/// ([`super::edges::canonical_edge`]).
+fn edge_map(edges: &[GraphEdge]) -> BTreeMap<u64, super::edges::CanonicalEdge> {
     edges
         .iter()
-        .map(|edge| {
-            let properties: BTreeMap<_, _> = edge.properties().iter().collect();
-            (
-                edge.id(),
-                (
-                    edge.source(),
-                    edge.target(),
-                    edge.label().to_owned(),
-                    serde_json::to_string(&properties).unwrap_or_default(),
-                ),
-            )
-        })
+        .map(|edge| (edge.id(), super::edges::canonical_edge(edge)))
         .collect()
 }
 
@@ -458,8 +443,4 @@ pub(crate) fn divergence_explained_by_expiry(db: &Database, collection: &str, id
         return false;
     };
     !matches!(any.get(&[id]).into_iter().next(), Some(Some(_)))
-}
-
-fn query_error(message: impl Into<String>) -> crate::MemoryError {
-    velesdb_core::Error::Query(message.into()).into()
 }

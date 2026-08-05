@@ -29,6 +29,7 @@
 //! runs strictly inside [`Phase::Prepared`], and leaving that phase is the
 //! validation-and-switch work of a later PR.
 
+use super::query_error;
 use std::path::Path;
 
 use velesdb_core::agent::AgentMemory;
@@ -340,8 +341,4 @@ fn journal_progress(
     state
         .write(journal.workspace, journal.lock)
         .map_err(query_error)
-}
-
-fn query_error(message: impl Into<String>) -> crate::MemoryError {
-    velesdb_core::Error::Query(message.into()).into()
 }

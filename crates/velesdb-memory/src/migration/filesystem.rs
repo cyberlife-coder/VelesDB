@@ -1,3 +1,4 @@
+use super::query_error;
 use sha2::{Digest, Sha256};
 use std::ffi::OsStr;
 use std::fs::File;
@@ -242,10 +243,6 @@ fn update_os_str(hash: &mut Sha256, value: &OsStr) {
     let bytes = value.to_string_lossy();
     hash.update(u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_le_bytes());
     hash.update(bytes.as_bytes());
-}
-
-fn query_error(message: String) -> crate::MemoryError {
-    velesdb_core::Error::Query(message).into()
 }
 
 pub(super) fn encode_hex(bytes: &[u8]) -> String {

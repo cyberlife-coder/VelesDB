@@ -1,4 +1,5 @@
 use super::filesystem::{bytes_on_disk, fingerprint};
+use super::query_error;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -444,8 +445,4 @@ fn combined_error(
     query_error(format!(
         "{primary}; additionally, scratch cleanup failed: {cleanup}"
     ))
-}
-
-fn query_error(message: String) -> crate::MemoryError {
-    velesdb_core::Error::Query(message).into()
 }

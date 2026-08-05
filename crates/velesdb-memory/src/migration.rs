@@ -52,6 +52,7 @@ mod edges;
 mod enumeration;
 mod execute;
 mod filesystem;
+mod orchestrate;
 mod rebuild;
 mod state;
 mod strategy;
@@ -75,6 +76,7 @@ pub use enumeration::{
 };
 pub use execute::{execute, ExecuteOutcome};
 pub use filesystem::{bytes_on_disk, fingerprint};
+pub use orchestrate::{migrate, MigrateOutcome};
 #[cfg(test)]
 pub(crate) use rebuild::rebuild_with_stop;
 pub use rebuild::{
@@ -89,6 +91,13 @@ pub use switchover::{switch_over, SwitchOutcome, ARCHIVE_SUFFIX};
 #[cfg(test)]
 pub(crate) use validate::divergence_explained_by_expiry;
 pub use validate::{validate_destination, ValidationOutcome};
+
+/// The one conversion every migration module needs: a message become the
+/// engine's query error, become this crate's. Defined once — six private
+/// copies of it had already drifted into two signatures.
+pub(crate) fn query_error(message: impl Into<String>) -> crate::MemoryError {
+    velesdb_core::Error::Query(message.into()).into()
+}
 
 #[cfg(test)]
 mod tests;
