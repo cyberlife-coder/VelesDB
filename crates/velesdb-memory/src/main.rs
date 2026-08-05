@@ -536,11 +536,7 @@ fn run_migrate_embeddings(
     migration::require_dry_run(&options)?;
 
     apply_config_file(argv)?;
-    let store_path = options.store.clone().unwrap_or_else(|| {
-        std::path::PathBuf::from(
-            std::env::var("VELESDB_MEMORY_PATH").unwrap_or_else(|_| default_store_path()),
-        )
-    });
+    let store_path = migrate_store_path(&options);
     // The target's identity comes from the embedder the daemon WOULD build, not
     // from a flag: a model name an operator typed is a claim, and the dimension
     // has to be the one the embedder actually produces.
@@ -550,16 +546,7 @@ fn run_migrate_embeddings(
         dimension: embedder.dimension(),
         strategy: options.strategy,
     };
-    let scratch = if let Some(dir) = options.scratch.clone() {
-        dir
-    } else {
-        // Canonicalize first so a relative store path ("./store") yields a
-        // real parent rather than the empty string. A store that does not
-        // exist falls through unchanged — the diagnosis then fails on it
-        // with its own, more precise message.
-        let resolved = std::fs::canonicalize(&store_path).unwrap_or_else(|_| store_path.clone());
-        migration::default_scratch_parent(&resolved)?
-    };
+    let scratch = migrate_scratch_parent(&options, &store_path)?;
 
     let report = migration::dry_run(
         &store_path,
@@ -573,6 +560,36 @@ fn run_migrate_embeddings(
         std::process::exit(2);
     }
     Ok(())
+}
+
+/// The store `migrate-embeddings` operates on: `--store`, else exactly where
+/// the daemon would look (`VELESDB_MEMORY_PATH`, else the advertised default).
+fn migrate_store_path(options: &velesdb_memory::migration::MigrateOptions) -> std::path::PathBuf {
+    options.store.clone().unwrap_or_else(|| {
+        std::path::PathBuf::from(
+            std::env::var("VELESDB_MEMORY_PATH").unwrap_or_else(|_| default_store_path()),
+        )
+    })
+}
+
+/// Where the diagnosis stages its verified copy: `--scratch`, else beside the
+/// store — see `migration::default_scratch_parent` for why not the temp dir.
+///
+/// # Errors
+/// The store path has no usable parent and `--scratch` was not given.
+fn migrate_scratch_parent(
+    options: &velesdb_memory::migration::MigrateOptions,
+    store_path: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    if let Some(dir) = options.scratch.clone() {
+        return Ok(dir);
+    }
+    // Canonicalize first so a relative store path ("./store") yields a real
+    // parent rather than the empty string. A store that does not exist falls
+    // through unchanged — the diagnosis then fails on it with its own, more
+    // precise message.
+    let resolved = std::fs::canonicalize(store_path).unwrap_or_else(|_| store_path.to_path_buf());
+    velesdb_memory::migration::default_scratch_parent(&resolved)
 }
 
 /// An embedder together with the identifier of the model behind it.
