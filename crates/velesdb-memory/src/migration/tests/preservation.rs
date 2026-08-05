@@ -113,6 +113,7 @@ fn a_collision_has_an_explicit_result() {
     let intruder = RawFact {
         id: 1,
         payload: serde_json::json!({ "content": "an intruder that must not land" }).to_string(),
+        source_vector: EMBEDDING.to_vec(),
     };
     let outcome = reinsert(&db, "_semantic_memory", &intruder, &NEW_EMBEDDING).expect("second");
     match &outcome {

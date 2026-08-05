@@ -43,8 +43,7 @@ fn diagnose(
     super::diagnose(
         source,
         staging.path(),
-        target_model,
-        target_dimension,
+        &TargetContract::automatic(target_model, target_dimension),
         destination,
     )
 }
@@ -118,8 +117,10 @@ fn database(dir: &tempfile::TempDir) -> velesdb_core::Database {
     velesdb_core::Database::open(dir.path()).expect("open database")
 }
 
+mod cli;
 mod diagnosis;
 mod enumeration;
 mod performance;
 mod preservation;
 mod state;
+mod strategy;

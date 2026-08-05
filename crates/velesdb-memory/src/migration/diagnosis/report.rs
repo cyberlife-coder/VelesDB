@@ -3,8 +3,8 @@ use super::capabilities::{
     DIAGNOSIS_CAPABILITY_KEYS, NO_EDGE_EXPORT, NO_EMBEDDER_COST, NO_HEADROOM,
 };
 use super::{
-    switch_filesystem_capability, Capability, CollectionInventory, DiagnosisReport,
-    SourceProvenance, DIAGNOSIS_FORMAT_VERSION,
+    assess, resolve, switch_filesystem_capability, Capability, CollectionInventory,
+    DiagnosisReport, Resolution, SourceProvenance, Strategy, DIAGNOSIS_FORMAT_VERSION,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -24,6 +24,8 @@ struct UncheckedDiagnosisReport {
     source_provenance: SourceProvenance,
     target_model: String,
     target_dimension: usize,
+    requested_strategy: Strategy,
+    resolution: Resolution,
     collections: Vec<CollectionInventory>,
     facts: u64,
     edges: u64,
@@ -51,6 +53,8 @@ impl TryFrom<UncheckedDiagnosisReport> for DiagnosisReport {
             source_provenance,
             target_model,
             target_dimension,
+            requested_strategy,
+            resolution,
             collections,
             facts,
             edges,
@@ -73,6 +77,8 @@ impl TryFrom<UncheckedDiagnosisReport> for DiagnosisReport {
             source_provenance,
             target_model,
             target_dimension,
+            requested_strategy,
+            resolution,
             collections,
             facts,
             edges,
@@ -130,7 +136,7 @@ impl DiagnosisReport {
             .map_err(|err| format!("cannot parse diagnosis report version {version}: {err}"))
     }
 
-    /// Validate every v4 field that is derived rather than independently
+    /// Validate every v5 field that is derived rather than independently
     /// observed.
     fn validate(&self) -> Result<(), String> {
         validate_format_version(u64::from(self.format_version))?;
@@ -140,6 +146,7 @@ impl DiagnosisReport {
             require_canonical_capability(&self.capabilities, name, &expected)?;
         }
 
+        validate_resolution(self)?;
         validate_blockers(self)
     }
 
@@ -185,6 +192,33 @@ fn canonical_capabilities(report: &DiagnosisReport) -> [(&'static str, Capabilit
             ),
         ),
     ]
+}
+
+/// Refuse a report whose stated regime does not follow from its own fields.
+///
+/// The regime is the one thing in a diagnosis an operator acts on, and it is
+/// derived — so a report carrying a hand-edited `resolution`, or one produced by
+/// a build whose rule differed, must not be read as authority. Recomputing it
+/// here is what makes "this report says REUSE" mean "this store permits reuse"
+/// rather than "this file contains the word REUSE".
+fn validate_resolution(report: &DiagnosisReport) -> Result<(), String> {
+    let expected = resolve(
+        report.requested_strategy,
+        assess(
+            &report.source_provenance,
+            report.source_dimension,
+            &report.target_model,
+            report.target_dimension,
+        ),
+    );
+    if report.resolution == expected {
+        return Ok(());
+    }
+    Err(format!(
+        "diagnosis report states resolution {:?} for a {:?} request, but its own provenance and \
+         target contract resolve to {expected:?}",
+        report.resolution, report.requested_strategy
+    ))
 }
 
 fn validate_blockers(report: &DiagnosisReport) -> Result<(), String> {

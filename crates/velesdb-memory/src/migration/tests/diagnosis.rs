@@ -9,8 +9,8 @@ use super::*;
 // never checked is a claim, not a property.
 // ---------------------------------------------------------------------------
 
-pub(super) const TARGET_MODEL: &str = "bge-m3";
-pub(super) const TARGET_DIM: usize = 1024;
+pub(crate) const TARGET_MODEL: &str = "bge-m3";
+pub(crate) const TARGET_DIM: usize = 1024;
 
 /// Every file under `dir`, by relative path, with its length and its bytes.
 ///
@@ -552,14 +552,23 @@ fn the_embedding_cost_is_declared_unestablished_rather_than_guessed() {
             report.capabilities.get("embedder_cost")
         );
     };
+    // This assertion used to require the string `16.3 us/fact`, which pinned the
+    // store's DIM=4 text-free RE-INSERTION cost into a blocker about the
+    // EMBEDDER. A test can keep a wrong number alive as effectively as a
+    // comment can, and this one did until #1815 named the conflation.
     assert!(
-        blocker.contains("16.3 us/fact"),
-        "the blocker must say what WAS measured, so the unmeasured part is not \
-         confused with the measured one: {blocker}"
+        blocker.contains("23x") && blocker.contains("bge-m3"),
+        "the blocker must say what #1816 actually measured — a RATIO, against a \
+         named model — so the unmeasured part is not confused with it: {blocker}"
     );
     assert!(
-        blocker.contains("Ollama") || blocker.contains("network"),
-        "and it must say why a unit test cannot supply it: {blocker}"
+        blocker.contains("unbatched") || blocker.contains("debug build"),
+        "and it must name the conditions that stop that ratio transferring: {blocker}"
+    );
+    assert!(
+        blocker.contains("`reuse`"),
+        "and it must say that under reuse this cost is zero, since a blocker that \
+         reads as unconditional would block a regime it does not apply to: {blocker}"
     );
 }
 
@@ -632,6 +641,140 @@ fn edge_counts_do_not_masquerade_as_a_lossless_edge_export() {
         "the missing export must be a blocker, not a footnote"
     );
     assert!(!report.is_clear());
+}
+
+// ---------------------------------------------------------------------------
+// THE REGIME THE REPORT STATES (#1815)
+// ---------------------------------------------------------------------------
+
+/// Diagnose `source` with an explicitly selected regime.
+pub(super) fn diagnose_as(
+    source: &std::path::Path,
+    strategy: super::Strategy,
+    target_model: &str,
+    target_dimension: usize,
+) -> DiagnosisReport {
+    let staging = tempfile::tempdir().expect("diagnostic staging");
+    super::super::diagnose(
+        source,
+        staging.path(),
+        &super::TargetContract {
+            model: target_model.to_owned(),
+            dimension: target_dimension,
+            strategy,
+        },
+        None,
+    )
+    .expect("diagnose")
+}
+
+/// A store recording `model` at the width its collections actually hold.
+fn stamped(model: &str) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("tempdir");
+    {
+        let _store = NativeStore::open(dir.path(), DIM).expect("open store");
+    }
+    crate::embedding_provenance::write(
+        dir.path(),
+        &crate::embedding_provenance::EmbeddingProvenance::new(model, DIM),
+    )
+    .expect("write provenance");
+    dir
+}
+
+#[test]
+fn an_unstamped_store_is_reported_as_re_embedding_and_says_why() {
+    // The store this migration exists for: it holds facts and predates the
+    // record, so it can never be stamped retroactively and `auto` can only ever
+    // re-embed it.
+    let (dir, _ttl) = seeded();
+
+    let report = diagnose_as(dir.path(), super::Strategy::Auto, TARGET_MODEL, TARGET_DIM);
+
+    assert_eq!(report.requested_strategy, super::Strategy::Auto);
+    assert_eq!(
+        report.resolution,
+        super::Resolution::Reembed {
+            because: super::Compatibility::ProvenanceUnknown
+        }
+    );
+    assert_eq!(
+        report.resolution.diagnostic(),
+        "REEMBED: source provenance is unknown"
+    );
+}
+
+#[test]
+fn a_store_stamped_with_the_target_model_at_the_target_width_reports_reuse() {
+    // The positive control for the test above: without it, "REEMBED" could be a
+    // constant rather than a decision.
+    let dir = stamped(TARGET_MODEL);
+
+    let report = diagnose_as(dir.path(), super::Strategy::Auto, TARGET_MODEL, DIM);
+
+    assert_eq!(report.resolution, super::Resolution::Reuse);
+    assert_eq!(
+        report.resolution.diagnostic(),
+        "REUSE: source and target embedding provenance match"
+    );
+}
+
+#[test]
+fn a_stamped_store_at_the_target_width_but_another_model_still_re_embeds() {
+    // DIM on both sides: the width agrees and the vectors do not. Nothing but
+    // the recorded model separates this case from the one above.
+    let dir = stamped("all-minilm");
+
+    let report = diagnose_as(dir.path(), super::Strategy::Auto, TARGET_MODEL, DIM);
+
+    assert_eq!(
+        report.resolution,
+        super::Resolution::Reembed {
+            because: super::Compatibility::ModelDiffers
+        },
+        "an equal-width model change must still re-embed"
+    );
+}
+
+#[test]
+fn an_explicit_reuse_against_an_unstamped_store_is_reported_as_refused() {
+    let (dir, _ttl) = seeded();
+
+    let report = diagnose_as(dir.path(), super::Strategy::Reuse, TARGET_MODEL, TARGET_DIM);
+
+    assert!(!report.resolution.runs());
+    assert_eq!(
+        report.resolution.diagnostic(),
+        "REFUSE: reuse was requested, but source provenance is unknown"
+    );
+    assert!(
+        report.resolution.guidance().is_some(),
+        "a refusal must hand the operator a next step"
+    );
+}
+
+#[test]
+fn a_forged_regime_cannot_survive_the_parser() {
+    // The regime is the one field an operator acts on, and it is DERIVED. A
+    // report that could carry a hand-edited `REUSE` over an unstamped store
+    // would be a file that authorises what the rule refuses.
+    let (dir, _ttl) = seeded();
+    let mut forged = diagnose_as(dir.path(), super::Strategy::Auto, TARGET_MODEL, TARGET_DIM);
+    assert_eq!(
+        forged.resolution,
+        super::Resolution::Reembed {
+            because: super::Compatibility::ProvenanceUnknown
+        },
+        "the fixture must start from a report that does NOT say reuse"
+    );
+
+    forged.resolution = super::Resolution::Reuse;
+
+    let refusal = direct_deserialization_refusal(&forged);
+    assert!(
+        refusal.contains("resolve to"),
+        "the refusal must say the report contradicts its own fields: {refusal}"
+    );
 }
 
 #[test]

@@ -257,6 +257,119 @@ fn resuming_at_a_recorded_offset_skips_nothing_and_repeats_nothing() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// THE SOURCE VECTOR — what makes the `reuse` regime possible at all (#1815)
+// ---------------------------------------------------------------------------
+
+/// A store whose facts carry vectors that are all DIFFERENT from one another.
+///
+/// The shared `seeded()` fixture writes one constant embedding into every fact,
+/// which is right for the questions it was built for and useless for this one:
+/// a read path that returned a placeholder, the first fact's vector, or the
+/// same buffer every time would agree with a constant fixture perfectly.
+fn seeded_with_distinct_vectors() -> (tempfile::TempDir, Vec<(u64, Vec<f32>)>) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let written: Vec<(u64, Vec<f32>)> = SCRAMBLED
+        .iter()
+        .enumerate()
+        .map(|(i, &id)| {
+            let step = f32::from(u8::try_from(i).expect("the fixture is eight facts long"));
+            (id, vec![step, 1.0 - step, step * 0.5, -step])
+        })
+        .collect();
+    {
+        let store = NativeStore::open(dir.path(), DIM).expect("open store");
+        for (id, vector) in &written {
+            store
+                .store_with_metadata(*id, &format!("fact number {id}"), vector, &meta(&[]))
+                .expect("seed fact");
+        }
+    }
+    (dir, written)
+}
+
+#[test]
+fn both_read_paths_return_each_fact_s_own_vector() {
+    // Without this, `RawFact::source_vector` is a field that compiles. The
+    // `reuse` regime writes exactly these floats back into the destination, so
+    // "the right shape arrived" is not the question — "fact 999's vector, and
+    // not fact 3's" is.
+    let (dir, written) = seeded_with_distinct_vectors();
+    let db = database(&dir);
+
+    let by_cursor = super::enumerate_by_cursor(&db, "_semantic_memory", PAGE).expect("cursor");
+    let by_offset = super::enumerate_collection(&db, "_semantic_memory", PAGE).expect("offset");
+
+    let vectors = |facts: &[RawFact]| -> std::collections::BTreeMap<u64, Vec<f32>> {
+        facts
+            .iter()
+            .map(|f| (f.id, f.source_vector.clone()))
+            .collect()
+    };
+    let cursor_vectors = vectors(&by_cursor);
+    let expected: std::collections::BTreeMap<u64, Vec<f32>> = written.into_iter().collect();
+
+    assert_eq!(
+        cursor_vectors, expected,
+        "the cursor must return the vector each fact was written with"
+    );
+    assert_eq!(
+        vectors(&by_offset),
+        expected,
+        "the independent scan must agree with the cursor, vector for vector"
+    );
+}
+
+#[test]
+fn a_reused_vector_survives_the_round_trip_into_a_destination() {
+    // The `reuse` regime in one assertion: read a fact out, put it back with
+    // its OWN vector, read it out of the destination and get the same floats.
+    // A store that normalised or quantised on write would fail here, and that
+    // is the point — it is the property reuse depends on, not an assumption
+    // about how the engine stores what it is given.
+    let (source_dir, _written) = seeded_with_distinct_vectors();
+    let source = database(&source_dir);
+    let facts = super::enumerate_by_cursor(&source, "_semantic_memory", PAGE).expect("read out");
+    drop(source);
+    // Without this, an enumeration that returned nothing would make every
+    // comparison below compare two empty maps and report success.
+    assert_eq!(
+        facts.len(),
+        SCRAMBLED.len(),
+        "the source must yield every seeded fact, or this test proves nothing"
+    );
+
+    let dest_dir = tempfile::tempdir().expect("tempdir");
+    {
+        let _store = NativeStore::open(dest_dir.path(), DIM).expect("open destination");
+    }
+    let destination = velesdb_core::Database::open(dest_dir.path()).expect("open destination db");
+    for fact in &facts {
+        let vector = fact.source_vector.clone();
+        assert_eq!(
+            super::reinsert(&destination, "_semantic_memory", fact, &vector).expect("reinsert"),
+            Reinsertion::Inserted,
+            "fact {} must land on a free id",
+            fact.id
+        );
+    }
+
+    let rebuilt =
+        super::enumerate_by_cursor(&destination, "_semantic_memory", PAGE).expect("read back");
+    let by_id = |facts: &[RawFact]| -> std::collections::BTreeMap<u64, Vec<f32>> {
+        facts
+            .iter()
+            .map(|f| (f.id, f.source_vector.clone()))
+            .collect()
+    };
+
+    assert_eq!(
+        by_id(&rebuilt),
+        by_id(&facts),
+        "a vector carried across under `reuse` must arrive unchanged"
+    );
+}
+
 /// One page, at an explicit offset — the unit a checkpoint resumes from.
 pub(super) fn enumerate_page(
     db: &velesdb_core::Database,
