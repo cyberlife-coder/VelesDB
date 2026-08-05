@@ -48,7 +48,16 @@ impl Capability {
 /// whether a prepared migration may resume. A report whose version this build
 /// does not understand is refused rather than guessed at, which is only
 /// possible because the number travels with the data.
-pub const DIAGNOSIS_FORMAT_VERSION: u32 = 5;
+/// # v6 — `edge_export` became `Proven` (#1762, PR C2a)
+///
+/// The bump is not cosmetic and not optional. A capability's canonical verdict
+/// is part of the report's shape: [`DiagnosisReport::validate`] refuses a report
+/// whose `edge_export` disagrees with what this build derives. A v5 report on
+/// disk carries the `Missing` verdict that was canonical when it was written,
+/// so a v6 build reading it would reject it as *inconsistent* — an accusation
+/// about the report's contents, when the truth is that it predates the
+/// capability. The version number is what turns that into a clear refusal.
+pub const DIAGNOSIS_FORMAT_VERSION: u32 = 6;
 
 /// What the store itself records about the embedder that filled it.
 ///

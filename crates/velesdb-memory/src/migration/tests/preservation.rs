@@ -368,7 +368,7 @@ fn rebuild_source_facts(source: &std::path::Path) -> tempfile::TempDir {
 }
 
 #[test]
-fn fact_export_cannot_preserve_edges_without_a_complete_edge_export() {
+fn a_fact_only_rebuild_still_carries_no_edges_at_all() {
     // The source deliberately has both directions and two labels. The old
     // version of this test then re-created those edges from EDGE_TRIPLETS and
     // compared them with EDGE_TRIPLETS: that proved deterministic edge ids,
@@ -408,8 +408,12 @@ fn fact_export_cannot_preserve_edges_without_a_complete_edge_export() {
     assert_eq!(
         destination_edges.len(),
         0,
-        "the current fact-only export contains no complete edge tuples, so a rebuild cannot \
-         honestly claim relation preservation; this remains a blocking missing capability"
+        "reinserting facts moves points and nothing else: no edge follows a point \
+         to the destination. #1762 PR C2a did not change this and must not — it \
+         added a SEPARATE pass (`migration::reinsert_edges`, proven in \
+         `tests::edges`), and this assertion is what keeps that pass necessary. \
+         The day edges start arriving on their own, the edge pass would be \
+         doing its work twice and nobody would notice"
     );
 }
 
