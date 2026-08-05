@@ -90,35 +90,39 @@ pub fn execute(
     // Release on BOTH paths. The fail-closed evidence a dropped lock leaves is
     // for crashes — a run that reached a clean `Err` has nothing for the
     // operator to acknowledge, and making them `rm` a lock file after every
-    // refusal would train them to do it after real crashes too. And when BOTH
-    // fail, both are reported: an operator who fixes the rebuild error and
-    // reruns deserves to know beforehand that the lock evidence remains, not
-    // to discover it as a second surprise.
-    let released = lock.release();
-    let rebuild = match (result, released) {
-        (Ok(rebuild), Ok(())) => rebuild,
-        (Ok(_), Err(release_error)) => {
-            return Err(query_error(format!(
-                "the rebuild completed, but releasing the migration lock \
-                 failed: {release_error}. The canonical lock record remains \
-                 and must be removed by hand before the next run"
-            )));
-        }
-        (Err(error), Ok(())) => return Err(error),
-        (Err(error), Err(release_error)) => {
-            return Err(query_error(format!(
-                "{error}; additionally, releasing the migration lock failed: \
-                 {release_error} — the canonical lock record remains and must \
-                 be removed by hand before the next run"
-            )));
-        }
-    };
+    // refusal would train them to do it after real crashes too.
+    let rebuild = reconcile(result, lock.release())?;
     Ok(ExecuteOutcome {
         report,
         rebuild,
         destination: destination.to_path_buf(),
         workspace: staging.workspace,
     })
+}
+
+/// Fold the pass's result and the lock release into one verdict.
+///
+/// When BOTH fail, both are reported: an operator who fixes the rebuild error
+/// and reruns deserves to know beforehand that the lock evidence remains, not
+/// to discover it as a second surprise.
+fn reconcile(
+    result: Result<RebuildOutcome, crate::MemoryError>,
+    released: Result<(), String>,
+) -> Result<RebuildOutcome, crate::MemoryError> {
+    match (result, released) {
+        (Ok(rebuild), Ok(())) => Ok(rebuild),
+        (Ok(_), Err(release_error)) => Err(query_error(format!(
+            "the rebuild completed, but releasing the migration lock failed: \
+             {release_error}. The canonical lock record remains and must be \
+             removed by hand before the next run"
+        ))),
+        (Err(error), Ok(())) => Err(error),
+        (Err(error), Err(release_error)) => Err(query_error(format!(
+            "{error}; additionally, releasing the migration lock failed: \
+             {release_error} — the canonical lock record remains and must be \
+             removed by hand before the next run"
+        ))),
+    }
 }
 
 /// What the pre-lock staging established.
