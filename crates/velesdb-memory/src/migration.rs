@@ -48,6 +48,7 @@
 mod cli;
 mod diagnosis;
 mod diagnostic_copy;
+mod edges;
 mod enumeration;
 mod filesystem;
 mod state;
@@ -60,6 +61,9 @@ pub use cli::{
 pub use diagnosis::{
     diagnose, same_filesystem, Capability, CollectionInventory, DiagnosisReport, SourceProvenance,
     TargetContract, TtlSummary, DIAGNOSIS_FORMAT_VERSION,
+};
+pub use edges::{
+    cross_check_edges, export_edges, export_edges_verified, reinsert_edges, EdgeReinsertion,
 };
 pub use enumeration::{
     enumerate_by_cursor, enumerate_collection, enumerate_page, reinsert, reinsert_batch,

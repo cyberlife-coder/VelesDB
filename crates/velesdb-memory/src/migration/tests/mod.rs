@@ -119,6 +119,7 @@ fn database(dir: &tempfile::TempDir) -> velesdb_core::Database {
 
 mod cli;
 mod diagnosis;
+mod edges;
 mod enumeration;
 mod performance;
 mod preservation;

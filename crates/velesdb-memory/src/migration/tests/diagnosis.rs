@@ -623,24 +623,52 @@ fn edge_counts_do_not_masquerade_as_a_lossless_edge_export() {
         ),
         "counting should remain separately evidenced"
     );
-    let Some(Capability::Missing { blocker }) = report.capabilities.get("edge_export") else {
+    // #1762 PR C2a promoted `edge_export`. What this test guards did not change
+    // with it: counting relations is still not exporting them, so the two
+    // capabilities must remain SEPARATELY evidenced. A promotion that let
+    // `edge_export` inherit the counter's evidence would read as proven and
+    // prove nothing.
+    let (Some(Capability::Proven { evidence: counted }), Some(Capability::Proven { evidence })) = (
+        report.capabilities.get("edge_counts"),
+        report.capabilities.get("edge_export"),
+    ) else {
         panic!(
-            "a count-only report must not claim complete edge export, got {:?}",
+            "both must be proven and separately so, got counts={:?} export={:?}",
+            report.capabilities.get("edge_counts"),
             report.capabilities.get("edge_export")
         );
     };
-    assert!(
-        blocker.contains("edge id") && blocker.contains("properties"),
-        "the blocker must name the fields a lossless export needs: {blocker}"
+    assert_ne!(
+        counted, evidence,
+        "the export must not be evidenced by the COUNT; identical evidence is \
+         exactly the masquerade this test is named after"
     );
+    for field in ["edge id", "source", "target", "label", "properties"] {
+        assert!(
+            evidence.contains(field),
+            "the evidence must name `{field}`, one of the fields a lossless \
+             export has to carry: {evidence}"
+        );
+    }
+    assert!(
+        !report
+            .blockers
+            .iter()
+            .any(|entry| entry.starts_with("edge_export:")),
+        "a proven export must no longer block, got {:?}",
+        report.blockers
+    );
+    // ...and the report is still not clear, on the gates that remain. Asserted
+    // by NAME rather than as a bare `!is_clear()`, which would keep passing if
+    // `edge_export` had silently come back as the reason.
     assert!(
         report
             .blockers
             .iter()
-            .any(|entry| entry.starts_with("edge_export:")),
-        "the missing export must be a blocker, not a footnote"
+            .any(|entry| entry.starts_with("disk_headroom:")),
+        "the remaining blockers must be the permanent ones, got {:?}",
+        report.blockers
     );
-    assert!(!report.is_clear());
 }
 
 // ---------------------------------------------------------------------------
@@ -798,6 +826,53 @@ fn a_diagnosis_report_round_trips_through_its_versioned_parser() {
 }
 
 #[test]
+fn a_v5_report_is_refused_for_its_age_and_never_accused_of_inconsistency() {
+    // The only version test used to be the NEWER direction, on a fixture whose
+    // capabilities were canonical for the current build. That combination cannot
+    // see the failure this one is about. A REAL v5 report carries
+    // `edge_export: Missing`, which was canonical when it was written and is
+    // inconsistent now — so if `validate` ever checked capabilities before the
+    // version, an operator holding a legitimate older report would be told their
+    // file was tampered with. The version check must come first, and the message
+    // must say so.
+    let (dir, _ttl) = seeded();
+    let report = diagnose(dir.path(), TARGET_MODEL, TARGET_DIM, None).expect("diagnose");
+    assert_eq!(
+        DIAGNOSIS_FORMAT_VERSION, 6,
+        "positive control: this test is about the v5 -> v6 step and must be \
+         revisited, not silently kept, when the version moves again"
+    );
+
+    let mut older = serde_json::to_value(report).expect("serialize report");
+    older["format_version"] = serde_json::json!(DIAGNOSIS_FORMAT_VERSION - 1);
+    older["capabilities"]["edge_export"] = serde_json::to_value(Capability::Missing {
+        blocker: "the public diagnosis/rebuild path can count outgoing relations, but it does \
+                  not export a complete stream of edge tuples"
+            .to_owned(),
+    })
+    .expect("serialize the v5 verdict");
+    let json = serde_json::to_string(&older).expect("serialize older report");
+
+    for refusal in [
+        DiagnosisReport::parse(&json).expect_err("an older format must be refused"),
+        serde_json::from_str::<DiagnosisReport>(&json)
+            .expect_err("Deserialize itself must refuse an older report")
+            .to_string(),
+    ] {
+        assert!(
+            refusal.contains("older") && refusal.contains("fresh diagnosis"),
+            "the refusal must name the report's AGE and the recovery action: {refusal}"
+        );
+        assert!(
+            !refusal.contains("inconsistent"),
+            "a legitimate v5 report must never be accused of internal \
+             inconsistency — its `edge_export` verdict was canonical when it was \
+             written: {refusal}"
+        );
+    }
+}
+
+#[test]
 fn a_report_from_a_future_format_is_refused_before_its_shape_is_interpreted() {
     let (dir, _ttl) = seeded();
     let report = diagnose(dir.path(), TARGET_MODEL, TARGET_DIM, None).expect("diagnose");
@@ -906,7 +981,13 @@ fn permanent_v4_gates_cannot_be_promoted_by_editing_json() {
     let (dir, _ttl) = seeded();
     let report = diagnose(dir.path(), TARGET_MODEL, TARGET_DIM, None).expect("diagnose");
 
-    for capability_name in ["edge_export", "disk_headroom", "embedder_cost"] {
+    // `edge_export` used to be on this list. #1762 PR C2a promoted it, so it is
+    // asserted below on its own footing instead of being carried along here —
+    // it would still have PASSED in this loop, refused for having the wrong
+    // evidence rather than for being wrongly promoted, and a test that passes
+    // for a reason that no longer exists is the kind of green this suite is
+    // written to avoid.
+    for capability_name in ["disk_headroom", "embedder_cost"] {
         let mut forged = report.clone();
         forged.capabilities.insert(
             capability_name.to_owned(),
@@ -920,4 +1001,37 @@ fn permanent_v4_gates_cannot_be_promoted_by_editing_json() {
             "the canonical v4 Missing verdict for {capability_name} must be immutable: {refusal}"
         );
     }
+}
+
+#[test]
+fn a_proven_capability_cannot_have_its_evidence_rewritten_either() {
+    let (dir, _ttl) = seeded();
+    let report = diagnose(dir.path(), TARGET_MODEL, TARGET_DIM, None).expect("diagnose");
+
+    assert!(
+        matches!(
+            report.capabilities.get("edge_export"),
+            Some(Capability::Proven { .. })
+        ),
+        "positive control: this test is about a PROVEN capability, and it stops \
+         meaning anything the day `edge_export` goes back to Missing"
+    );
+
+    // Promotion moves a capability from "cannot be forged into Proven" to
+    // "cannot be forged into a DIFFERENT Proven". Evidence is what an operator
+    // reads to decide whether to run a migration; if it could be edited in the
+    // JSON, a rebuild could be authorised by a sentence nobody derived.
+    let mut forged = report.clone();
+    forged.capabilities.insert(
+        "edge_export".to_owned(),
+        Capability::Proven {
+            evidence: "an operator wrote this by hand".to_owned(),
+        },
+    );
+    let refusal = direct_deserialization_refusal(&forged);
+    assert!(
+        refusal.contains("edge_export") && refusal.contains("inconsistent"),
+        "the evidence for edge_export must be recalculated, never accepted from \
+         the file: {refusal}"
+    );
 }

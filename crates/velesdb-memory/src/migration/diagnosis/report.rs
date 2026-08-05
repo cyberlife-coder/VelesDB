@@ -1,6 +1,6 @@
 use super::capabilities::{
-    blockers_for, missing_capability, provenance_capability, require_canonical_capability,
-    DIAGNOSIS_CAPABILITY_KEYS, NO_EDGE_EXPORT, NO_EMBEDDER_COST, NO_HEADROOM,
+    blockers_for, edge_export_capability, missing_capability, provenance_capability,
+    require_canonical_capability, DIAGNOSIS_CAPABILITY_KEYS, NO_EMBEDDER_COST, NO_HEADROOM,
 };
 use super::{
     assess, resolve, switch_filesystem_capability, Capability, CollectionInventory,
@@ -175,7 +175,7 @@ fn validate_capability_keys(capabilities: &BTreeMap<String, Capability>) -> Resu
 
 fn canonical_capabilities(report: &DiagnosisReport) -> [(&'static str, Capability); 5] {
     [
-        ("edge_export", missing_capability(NO_EDGE_EXPORT)),
+        ("edge_export", edge_export_capability()),
         ("disk_headroom", missing_capability(NO_HEADROOM)),
         ("embedder_cost", missing_capability(NO_EMBEDDER_COST)),
         (

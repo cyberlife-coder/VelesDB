@@ -46,13 +46,34 @@ const NO_PROVENANCE: &str =
      vectors would be silently incomparable. The operator has to state the source model; it \
      cannot be discovered.";
 
-/// Counting relations is not an export contract.
-pub(super) const NO_EDGE_EXPORT: &str =
-    "the public diagnosis/rebuild path can count outgoing relations, but it does not export a \
-     complete stream of edge tuples (stable edge id, source, target, label and properties). \
-     Reconstructing edges from an external list would only prove that list agrees with itself, \
-     not that every source edge was preserved. A lossless edge export and reinsertion API must \
-     exist and be tested before reconstruction.";
+/// What used to block `edge_export`, kept as the text this capability had to
+/// answer: "a lossless edge export and reinsertion API must exist and be tested
+/// before reconstruction". [`edge_export_capability`] is that answer, and the
+/// evidence it publishes names the tests rather than restating the intention.
+///
+/// The blocker itself is gone rather than softened. A capability that stayed
+/// `Missing` with a gentler wording would still stop the rebuild, and one that
+/// went `Proven` with the old text as evidence would be quoting the problem as
+/// if it were the solution.
+pub(super) fn edge_export_capability() -> Capability {
+    Capability::Proven {
+        evidence: "a lossless edge export and reinsertion API exists and is tested. Edges export \
+                   as complete tuples — stable edge id, source, target, label and properties — \
+                   through `migration::export_edges_verified`, which walks the live fact ids with \
+                   the fact export's own cursor, refuses any edge whose id its triple does not \
+                   derive, and collects the outgoing and incoming adjacency maps over ONE \
+                   snapshot before comparing them as sets of tuples rather than as counts. That \
+                   comparison attests MEMBERSHIP in two indexes; it is not a second copy of the \
+                   tuple, since both indexes resolve the edge through the same stored record. The \
+                   content is attested instead by `migration::reinsert_edges`, which puts the \
+                   edges back after the facts and is verified by RE-READING the destination \
+                   through the same export, never by the return code. Both guards are \
+                   mutation-tested: dropping properties on reinsertion, and disabling the id \
+                   check, each turn exactly one test red. The rebuild does not yet call this API \
+                   — that is the reconstruction pass this capability unblocks."
+            .to_owned(),
+    }
+}
 
 /// A canonical missing verdict used both when generating and validating v4.
 pub(super) fn missing_capability(blocker: &str) -> Capability {
@@ -185,7 +206,7 @@ pub(super) fn capability_map(
         ("diagnostic_staging".to_owned(), staging_capability(copy)),
         ("disk_headroom".to_owned(), missing_capability(NO_HEADROOM)),
         ("edge_counts".to_owned(), edge_counts),
-        ("edge_export".to_owned(), missing_capability(NO_EDGE_EXPORT)),
+        ("edge_export".to_owned(), edge_export_capability()),
         (
             "embedder_cost".to_owned(),
             missing_capability(NO_EMBEDDER_COST),
