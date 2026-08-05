@@ -27,6 +27,9 @@ use serde_json::Value;
 use std::collections::BTreeSet;
 
 mod diagnostic_copy;
+mod execute;
+mod rebuild;
+mod rebuild_state;
 mod state_persistence;
 
 const DIM: usize = 4;

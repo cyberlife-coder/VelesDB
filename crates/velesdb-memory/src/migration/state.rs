@@ -34,7 +34,65 @@ pub const STATE_TEMP_FILE: &str = "migration-state.json.tmp";
 /// Bumped when the state's meaning changes. Only the current version may
 /// resume: a newer state may contain unknown decisions, while an older one may
 /// rely on guarantees this build deliberately strengthened.
-pub const STATE_FORMAT_VERSION: u32 = 2;
+///
+/// # v3 — per-collection rebuild progress (#1762, PR C2b)
+///
+/// v2 recorded the phase and nothing else, so a resumed rebuild had to start
+/// every collection from zero. v3 adds [`MigrationState::progress`], and with
+/// it two rules a v2 build never enforced: progress can only advance, and the
+/// phase cannot leave [`Phase::Prepared`] while any collection is unfinished.
+pub const STATE_FORMAT_VERSION: u32 = 3;
+
+/// How far one collection's rebuild got inside [`Phase::Prepared`].
+///
+/// Three stages, because a resume needs to answer three different questions.
+/// `Facts` says where the cursor walk stands — `cursor` is the last fact id
+/// reinserted, and `None` means the walk has not started. `Edges` says every
+/// fact landed and the edge pass is running; it carries no cursor because the
+/// pass is idempotent end to end (reinserting an existing edge answers with
+/// the same id, and the destination is verified by re-reading, so replaying it
+/// after a crash is safe where replaying half a fact walk would not be).
+/// `Complete` says both are done and a resume must not touch the collection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "stage", rename_all = "snake_case")]
+pub enum CollectionProgress {
+    /// The fact walk is under way, resumable strictly after `cursor`.
+    Facts {
+        /// The last fact id reinserted at the destination; `None` = not started.
+        cursor: Option<u64>,
+    },
+    /// Every fact landed; the (idempotent) edge pass runs until `Complete`.
+    Edges,
+    /// Facts and edges are both at the destination.
+    Complete,
+}
+
+impl CollectionProgress {
+    /// Whether `self` may be recorded after `previous` for one collection.
+    ///
+    /// Exactly the transitions the pass emits, and no others. An earlier
+    /// version tolerated skipping `Edges` ("a collection with no edges goes
+    /// straight to Complete") — which was FALSE: the pass journals `Edges`
+    /// unconditionally, edges or none. A tolerance the writer never uses only
+    /// widens what a BUGGY writer can make the journal swallow — a refactor
+    /// that lost the edge pass would have journalled `Complete` without a
+    /// sound. Requiring the passage through `Edges` costs the real writer
+    /// nothing and makes that bug un-journallable.
+    fn may_follow(self, previous: Self) -> bool {
+        match (previous, self) {
+            (Self::Facts { cursor: before }, Self::Facts { cursor: after }) => {
+                match (before, after) {
+                    (Some(before), Some(after)) => after >= before,
+                    (Some(_), None) => false,
+                    (None, _) => true,
+                }
+            }
+            (Self::Facts { .. } | Self::Edges, Self::Edges)
+            | (Self::Edges | Self::Complete, Self::Complete) => true,
+            _ => false,
+        }
+    }
+}
 
 /// What a prepared migration recorded, so a later run can decide whether to
 /// resume it.
@@ -57,6 +115,25 @@ pub struct MigrationState {
     pub target_model: String,
     /// The width that model produces.
     pub target_dimension: usize,
+    /// How far each collection's rebuild got — exactly one entry per agent
+    /// collection, always. A missing key would silently skip a collection's
+    /// rebuild; an extra one would journal work nobody will do. Both are
+    /// refused by validation rather than tolerated.
+    pub progress: std::collections::BTreeMap<String, CollectionProgress>,
+    /// A digest of what the target embedder actually PRODUCES, not what it is
+    /// called — `sha256:` over the vector it answers for a fixed sentinel
+    /// sentence. `Some` exactly when the resolved regime is `reembed`, `None`
+    /// under `reuse`, so the field also records the regime without a second
+    /// field to drift from it.
+    ///
+    /// This exists because [`MigrationState::may_resume`]'s model check
+    /// compares NAMES, and a name is a claim: `ollama pull` updates a model's
+    /// weights in place under the same identifier. A run resumed across such
+    /// an update would collide its replayed batch into run-one vectors and
+    /// write run-two vectors after it — one store, one recorded model, two
+    /// incompatible vector spaces, which is exactly what the model check says
+    /// it prevents. Vectors do not lie about the embedder that made them.
+    pub embedder_witness: Option<String>,
 }
 
 impl MigrationState {
@@ -216,7 +293,7 @@ fn validate_serialized_state_version(version: u64) -> Result<(), String> {
         return Ok(());
     }
     let action = if version < u64::from(STATE_FORMAT_VERSION) {
-        "This older state predates content-based source fingerprints; start a fresh diagnosis."
+        "This older state predates per-collection rebuild progress; start a fresh diagnosis."
     } else {
         "Use the version that wrote it."
     };
@@ -230,7 +307,7 @@ fn validate_current_state_version(state: &MigrationState) -> Result<(), String> 
         return Ok(());
     }
     let action = if state.format_version < STATE_FORMAT_VERSION {
-        "This older state predates content-based source fingerprints. Start a fresh diagnosis."
+        "This older state predates per-collection rebuild progress. Start a fresh diagnosis."
     } else {
         "Use the version that wrote it."
     };
@@ -247,7 +324,76 @@ fn validate_state_semantics(state: &MigrationState) -> Result<(), String> {
         &state.source_fingerprint,
         &state.target_model,
         state.target_dimension,
-    )
+    )?;
+    validate_progress_keys(state)?;
+    validate_phase_against_progress(state)?;
+    validate_embedder_witness(state)
+}
+
+/// A present witness must be a well-formed digest, not free text an editor
+/// could plausibly have typed.
+fn validate_embedder_witness(state: &MigrationState) -> Result<(), String> {
+    let Some(witness) = &state.embedder_witness else {
+        return Ok(());
+    };
+    let digest = witness
+        .strip_prefix("sha256:")
+        .filter(|digest| digest.len() == 64)
+        .filter(|digest| {
+            digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        });
+    if digest.is_none() {
+        return Err(
+            "embedder_witness must be exactly 'sha256:' followed by 64 lowercase hexadecimal \
+             characters"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+/// The progress map must cover exactly the agent collections.
+fn validate_progress_keys(state: &MigrationState) -> Result<(), String> {
+    for name in super::enumeration::AGENT_COLLECTIONS {
+        if !state.progress.contains_key(*name) {
+            return Err(format!(
+                "progress carries no entry for collection '{name}'; a resume would \
+                 silently skip its rebuild"
+            ));
+        }
+    }
+    for name in state.progress.keys() {
+        if !super::enumeration::AGENT_COLLECTIONS.contains(&name.as_str()) {
+            return Err(format!(
+                "progress tracks '{name}', which is not an agent collection; this \
+                 journal describes work nobody will do"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// A phase past [`Phase::Prepared`] asserts the rebuild is finished, so every
+/// collection must say so too — otherwise the journal contradicts itself and
+/// a later phase would validate, archive, or activate a half-built store.
+fn validate_phase_against_progress(state: &MigrationState) -> Result<(), String> {
+    if state.phase == Phase::Prepared {
+        return Ok(());
+    }
+    for (name, progress) in &state.progress {
+        if *progress != CollectionProgress::Complete {
+            return Err(format!(
+                "phase {:?} asserts the rebuild is finished, but collection \
+                 '{name}' stands at {progress:?}; the phase cannot leave \
+                 {:?} while any collection is unfinished",
+                state.phase,
+                Phase::Prepared,
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn validate_migration_identity(
@@ -324,6 +470,14 @@ fn validate_state_update(
             "target_dimension changed from {} to {}",
             existing.target_dimension, candidate.target_dimension
         ))
+    } else if existing.embedder_witness != candidate.embedder_witness {
+        Some(format!(
+            "embedder_witness changed from {:?} to {:?} — either the embedder's \
+             output drifted under a stable model name, or the resolved regime \
+             flipped between runs; both make the replayed and the remaining \
+             batches incompatible",
+            existing.embedder_witness, candidate.embedder_witness
+        ))
     } else {
         None
     };
@@ -337,6 +491,29 @@ fn validate_state_update(
             "refusing migration phase transition from {:?} to {:?}: journal updates may be idempotent or advance exactly one phase, never regress or skip work",
             existing.phase, candidate.phase
         ));
+    }
+    validate_progress_advance(existing, candidate)
+}
+
+/// Progress may repeat or advance per collection, never regress.
+///
+/// Key equality between the two maps is already established: both states
+/// passed [`validate_progress_keys`] before reaching this comparison.
+fn validate_progress_advance(
+    existing: &MigrationState,
+    candidate: &MigrationState,
+) -> Result<(), String> {
+    for (name, after) in &candidate.progress {
+        let Some(before) = existing.progress.get(name) else {
+            continue;
+        };
+        if !after.may_follow(*before) {
+            return Err(format!(
+                "refusing progress regression on collection '{name}': the journal \
+                 records {before:?} and the update asserts {after:?}; a rebuild \
+                 journal may repeat or advance, never regress"
+            ));
+        }
     }
     Ok(())
 }

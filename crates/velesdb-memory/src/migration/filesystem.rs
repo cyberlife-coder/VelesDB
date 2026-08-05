@@ -248,7 +248,7 @@ fn query_error(message: String) -> crate::MemoryError {
     velesdb_core::Error::Query(message).into()
 }
 
-fn encode_hex(bytes: &[u8]) -> String {
+pub(super) fn encode_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut encoded = String::with_capacity(bytes.len() * 2);
     for byte in bytes {

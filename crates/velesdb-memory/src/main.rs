@@ -533,7 +533,6 @@ fn run_migrate_embeddings(
     use velesdb_memory::migration;
 
     let options = migration::parse_migrate_args(flags)?;
-    migration::require_dry_run(&options)?;
 
     apply_config_file(argv)?;
     let store_path = migrate_store_path(&options);
@@ -548,19 +547,56 @@ fn run_migrate_embeddings(
     };
     let scratch = migrate_scratch_parent(&options, &store_path)?;
 
-    let report = migration::dry_run(
-        &store_path,
-        &scratch,
-        &target,
-        options.destination.as_deref(),
-    )?;
-    print!("{}", migration::render(&report));
-
-    if migration::refuses(&report) {
-        std::process::exit(2);
+    if options.dry_run {
+        let report = migration::dry_run(
+            &store_path,
+            &scratch,
+            &target,
+            options.destination.as_deref(),
+        )?;
+        print!("{}", migration::render(&report));
+        if migration::refuses(&report) {
+            std::process::exit(2);
+        }
+        return Ok(());
     }
+    run_migrate_rebuild(&options, &store_path, &scratch, &target, embedder.as_ref())
+}
+
+/// The non-dry-run tail of `migrate-embeddings`: rebuild, then say plainly
+/// where the wired part ends.
+fn run_migrate_rebuild(
+    options: &velesdb_memory::migration::MigrateOptions,
+    store_path: &std::path::Path,
+    scratch: &std::path::Path,
+    target: &velesdb_memory::migration::TargetContract,
+    embedder: &dyn velesdb_memory::Embedder,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use velesdb_memory::migration;
+
+    let destination = migration::require_destination(options)?;
+    let outcome = migration::execute(
+        store_path,
+        scratch,
+        target,
+        &destination,
+        embedder,
+        MIGRATE_BATCH,
+    )?;
+    print!("{}", migration::render(&outcome.report));
+    println!(
+        "rebuild: {} facts written, {} already present, {} edges, journal at {}",
+        outcome.rebuild.facts,
+        outcome.rebuild.collisions,
+        outcome.rebuild.edges,
+        outcome.workspace.display(),
+    );
+    println!("{}", migration::not_yet_switchable());
     Ok(())
 }
+
+/// The rebuild's batch size: the fact export's own proven default.
+const MIGRATE_BATCH: usize = 1024;
 
 /// The store `migrate-embeddings` operates on: `--store`, else exactly where
 /// the daemon would look (`VELESDB_MEMORY_PATH`, else the advertised default).
