@@ -22,6 +22,15 @@ fn resumable_state() -> MigrationState {
         source_fingerprint: VALID_FINGERPRINT.to_owned(),
         target_model: TARGET_MODEL.to_owned(),
         target_dimension: TARGET_DIM,
+        progress: AGENT_COLLECTIONS
+            .iter()
+            .map(|name| {
+                (
+                    (*name).to_owned(),
+                    CollectionProgress::Facts { cursor: None },
+                )
+            })
+            .collect(),
     }
 }
 
@@ -221,8 +230,13 @@ fn a_newer_state_version_is_refused() {
 #[test]
 fn an_older_weak_fingerprint_state_requires_a_fresh_diagnosis() {
     let workspace = tempfile::tempdir().expect("tempdir");
+    // Pinned to the LITERAL version 1, not `STATE_FORMAT_VERSION - 1`: this
+    // fixture is a real v1 file with the weak length-only fingerprint v1
+    // actually carried. Version-relative arithmetic made the fixture drift —
+    // at v3 it described a "v2" file with a fingerprint no v2 build ever
+    // wrote. (The v2 boundary has its own test in `rebuild_state`.)
     let old = serde_json::json!({
-        "format_version": super::STATE_FORMAT_VERSION - 1,
+        "format_version": 1,
         "phase": "prepared",
         "source_path": "/store",
         "source_fingerprint": "fnv1a64:0123456789abcdef",
@@ -238,10 +252,12 @@ fn an_older_weak_fingerprint_state_requires_a_fresh_diagnosis() {
     let refusal = MigrationState::read(workspace.path())
         .expect_err("a weak length-only fingerprint must never resume");
     assert!(
-        refusal.contains("older")
-            && refusal.contains("content-based")
-            && refusal.contains("fresh diagnosis"),
-        "the refusal must explain why the old state is unsafe and how to recover: {refusal}"
+        refusal.contains("older") && refusal.contains("fresh diagnosis"),
+        "the refusal must name the state as older and say how to recover: {refusal}"
+    );
+    assert!(
+        refusal.contains("version 1") && refusal.contains(&super::STATE_FORMAT_VERSION.to_string()),
+        "the refusal must name both versions: {refusal}"
     );
 
     let mut in_memory = resumable_state();

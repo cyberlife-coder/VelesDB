@@ -239,6 +239,28 @@ pub fn export_edges_verified(
     Ok(exported)
 }
 
+/// Whether two collections of edges hold the same SET OF TUPLES, every field
+/// included.
+///
+/// The failure names the sizes and the symmetric difference count rather than
+/// the tuples themselves: an operator debugging a mismatch wants to know HOW
+/// diverged before wading into WHAT, and the full tuples are one export away.
+///
+/// # Errors
+/// A message describing the divergence when the sets differ.
+pub(super) fn same_edge_tuples(left: &[GraphEdge], right: &[GraphEdge]) -> Result<(), String> {
+    let (left, right) = (comparable(left), comparable(right));
+    if left == right {
+        return Ok(());
+    }
+    Err(format!(
+        "{} tuples on one side, {} on the other, {} present in only one of them",
+        left.len(),
+        right.len(),
+        left.symmetric_difference(&right).count(),
+    ))
+}
+
 /// An edge reduced to something orderable, so two collections of edges compare
 /// as SETS OF TUPLES. Comparing counts would let two walks that had each lost
 /// one edge agree.

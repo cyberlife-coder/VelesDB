@@ -34,7 +34,65 @@ pub const STATE_TEMP_FILE: &str = "migration-state.json.tmp";
 /// Bumped when the state's meaning changes. Only the current version may
 /// resume: a newer state may contain unknown decisions, while an older one may
 /// rely on guarantees this build deliberately strengthened.
-pub const STATE_FORMAT_VERSION: u32 = 2;
+///
+/// # v3 — per-collection rebuild progress (#1762, PR C2b)
+///
+/// v2 recorded the phase and nothing else, so a resumed rebuild had to start
+/// every collection from zero. v3 adds [`MigrationState::progress`], and with
+/// it two rules a v2 build never enforced: progress can only advance, and the
+/// phase cannot leave [`Phase::Prepared`] while any collection is unfinished.
+pub const STATE_FORMAT_VERSION: u32 = 3;
+
+/// How far one collection's rebuild got inside [`Phase::Prepared`].
+///
+/// Three stages, because a resume needs to answer three different questions.
+/// `Facts` says where the cursor walk stands — `cursor` is the last fact id
+/// reinserted, and `None` means the walk has not started. `Edges` says every
+/// fact landed and the edge pass is running; it carries no cursor because the
+/// pass is idempotent end to end (reinserting an existing edge answers with
+/// the same id, and the destination is verified by re-reading, so replaying it
+/// after a crash is safe where replaying half a fact walk would not be).
+/// `Complete` says both are done and a resume must not touch the collection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "stage", rename_all = "snake_case")]
+pub enum CollectionProgress {
+    /// The fact walk is under way, resumable strictly after `cursor`.
+    Facts {
+        /// The last fact id reinserted at the destination; `None` = not started.
+        cursor: Option<u64>,
+    },
+    /// Every fact landed; the (idempotent) edge pass runs until `Complete`.
+    Edges,
+    /// Facts and edges are both at the destination.
+    Complete,
+}
+
+impl CollectionProgress {
+    /// Stage order for the never-regress rule. Skipping forward is legal — a
+    /// collection with no edges goes straight from `Facts` to `Complete` — but
+    /// any step backwards would be a journal inventing undone work.
+    fn stage_rank(self) -> u8 {
+        match self {
+            Self::Facts { .. } => 0,
+            Self::Edges => 1,
+            Self::Complete => 2,
+        }
+    }
+
+    /// Whether `self` may be recorded after `previous` for one collection.
+    fn may_follow(self, previous: Self) -> bool {
+        match (previous, self) {
+            (Self::Facts { cursor: before }, Self::Facts { cursor: after }) => {
+                match (before, after) {
+                    (Some(before), Some(after)) => after >= before,
+                    (Some(_), None) => false,
+                    (None, _) => true,
+                }
+            }
+            _ => self.stage_rank() >= previous.stage_rank(),
+        }
+    }
+}
 
 /// What a prepared migration recorded, so a later run can decide whether to
 /// resume it.
@@ -57,6 +115,11 @@ pub struct MigrationState {
     pub target_model: String,
     /// The width that model produces.
     pub target_dimension: usize,
+    /// How far each collection's rebuild got — exactly one entry per agent
+    /// collection, always. A missing key would silently skip a collection's
+    /// rebuild; an extra one would journal work nobody will do. Both are
+    /// refused by validation rather than tolerated.
+    pub progress: std::collections::BTreeMap<String, CollectionProgress>,
 }
 
 impl MigrationState {
@@ -216,7 +279,7 @@ fn validate_serialized_state_version(version: u64) -> Result<(), String> {
         return Ok(());
     }
     let action = if version < u64::from(STATE_FORMAT_VERSION) {
-        "This older state predates content-based source fingerprints; start a fresh diagnosis."
+        "This older state predates per-collection rebuild progress; start a fresh diagnosis."
     } else {
         "Use the version that wrote it."
     };
@@ -230,7 +293,7 @@ fn validate_current_state_version(state: &MigrationState) -> Result<(), String> 
         return Ok(());
     }
     let action = if state.format_version < STATE_FORMAT_VERSION {
-        "This older state predates content-based source fingerprints. Start a fresh diagnosis."
+        "This older state predates per-collection rebuild progress. Start a fresh diagnosis."
     } else {
         "Use the version that wrote it."
     };
@@ -247,7 +310,51 @@ fn validate_state_semantics(state: &MigrationState) -> Result<(), String> {
         &state.source_fingerprint,
         &state.target_model,
         state.target_dimension,
-    )
+    )?;
+    validate_progress_keys(state)?;
+    validate_phase_against_progress(state)
+}
+
+/// The progress map must cover exactly the agent collections.
+fn validate_progress_keys(state: &MigrationState) -> Result<(), String> {
+    for name in super::enumeration::AGENT_COLLECTIONS {
+        if !state.progress.contains_key(*name) {
+            return Err(format!(
+                "progress carries no entry for collection '{name}'; a resume would \
+                 silently skip its rebuild"
+            ));
+        }
+    }
+    for name in state.progress.keys() {
+        if !super::enumeration::AGENT_COLLECTIONS.contains(&name.as_str()) {
+            return Err(format!(
+                "progress tracks '{name}', which is not an agent collection; this \
+                 journal describes work nobody will do"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// A phase past [`Phase::Prepared`] asserts the rebuild is finished, so every
+/// collection must say so too — otherwise the journal contradicts itself and
+/// a later phase would validate, archive, or activate a half-built store.
+fn validate_phase_against_progress(state: &MigrationState) -> Result<(), String> {
+    if state.phase == Phase::Prepared {
+        return Ok(());
+    }
+    for (name, progress) in &state.progress {
+        if *progress != CollectionProgress::Complete {
+            return Err(format!(
+                "phase {:?} asserts the rebuild is finished, but collection \
+                 '{name}' stands at {progress:?}; the phase cannot leave \
+                 {:?} while any collection is unfinished",
+                state.phase,
+                Phase::Prepared,
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn validate_migration_identity(
@@ -337,6 +444,29 @@ fn validate_state_update(
             "refusing migration phase transition from {:?} to {:?}: journal updates may be idempotent or advance exactly one phase, never regress or skip work",
             existing.phase, candidate.phase
         ));
+    }
+    validate_progress_advance(existing, candidate)
+}
+
+/// Progress may repeat or advance per collection, never regress.
+///
+/// Key equality between the two maps is already established: both states
+/// passed [`validate_progress_keys`] before reaching this comparison.
+fn validate_progress_advance(
+    existing: &MigrationState,
+    candidate: &MigrationState,
+) -> Result<(), String> {
+    for (name, after) in &candidate.progress {
+        let Some(before) = existing.progress.get(name) else {
+            continue;
+        };
+        if !after.may_follow(*before) {
+            return Err(format!(
+                "refusing progress regression on collection '{name}': the journal \
+                 records {before:?} and the update asserts {after:?}; a rebuild \
+                 journal may repeat or advance, never regress"
+            ));
+        }
     }
     Ok(())
 }

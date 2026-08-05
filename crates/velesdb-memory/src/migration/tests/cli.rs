@@ -91,19 +91,49 @@ fn force_reuse_is_refused_at_the_command_line_and_not_only_in_the_rule() {
 }
 
 #[test]
-fn anything_that_is_not_a_dry_run_is_refused_rather_than_silently_doing_nothing() {
+fn a_rebuild_without_a_named_destination_is_refused_rather_than_guessing_one() {
+    // This test used to pin `require_dry_run` — "anything that is not a dry
+    // run is refused", because nothing else was wired. PR C2b wired the
+    // rebuild, so the premise moved: a non-dry-run now RUNS, and what must
+    // still be refused is running it without the operator naming where the
+    // rebuilt store goes. A guessed destination is a directory a later switch
+    // would rename over the live store.
     let asked_for_a_migration = parse_migrate_args(&args(&["--strategy", "auto"])).expect("flags");
 
-    let refusal = require_dry_run(&asked_for_a_migration)
-        .expect_err("a non-dry-run invocation must be refused in this version");
-
+    let refusal = require_destination(&asked_for_a_migration)
+        .expect_err("a rebuild must not invent its own destination");
     assert!(
-        refusal.contains("--dry-run") && refusal.contains("#1762"),
-        "the refusal must name the supported mode and where the rest is tracked: {refusal}"
+        refusal.contains("--destination") && refusal.contains("--dry-run"),
+        "the refusal must name the missing flag and the diagnose-only alternative: {refusal}"
     );
 
-    require_dry_run(&parse_migrate_args(&args(&["--dry-run"])).expect("flags"))
-        .expect("a dry run must be accepted");
+    let named = parse_migrate_args(&args(&["--destination", "/rebuilt"])).expect("flags");
+    assert_eq!(
+        require_destination(&named).expect("a named destination must be accepted"),
+        std::path::PathBuf::from("/rebuilt"),
+        "the destination handed back must be the one the operator named"
+    );
+}
+
+#[test]
+fn the_switch_boundary_message_says_what_did_not_happen() {
+    // The success message of a non-dry-run is load-bearing: `execute` stops at
+    // a rebuilt-but-unswitched destination, and an operator who reads its
+    // output as "migration done" will point their daemon at the OLD store and
+    // wonder where the new vectors went. The message must therefore say, in so
+    // many words, that nothing was validated and nothing was switched.
+    let boundary = not_yet_switchable();
+    for needle in [
+        "NOT been validated",
+        "NOT been switched",
+        "#1762",
+        "source store is still",
+    ] {
+        assert!(
+            boundary.contains(needle),
+            "the boundary message must contain '{needle}': {boundary}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

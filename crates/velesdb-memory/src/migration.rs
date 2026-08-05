@@ -50,13 +50,15 @@ mod diagnosis;
 mod diagnostic_copy;
 mod edges;
 mod enumeration;
+mod execute;
 mod filesystem;
+mod rebuild;
 mod state;
 mod strategy;
 
 pub use cli::{
-    default_scratch_parent, dry_run, not_yet_executable, parse as parse_migrate_args, refuses,
-    render, require_dry_run, MigrateOptions,
+    default_scratch_parent, dry_run, not_yet_switchable, parse as parse_migrate_args, refuses,
+    render, require_destination, MigrateOptions,
 };
 pub use diagnosis::{
     diagnose, same_filesystem, Capability, CollectionInventory, DiagnosisReport, SourceProvenance,
@@ -69,10 +71,16 @@ pub use enumeration::{
     enumerate_by_cursor, enumerate_collection, enumerate_page, reinsert, reinsert_batch,
     scroll_page, BatchReinsertion, RawFact, Reinsertion, AGENT_COLLECTIONS,
 };
+pub use execute::{execute, ExecuteOutcome};
 pub use filesystem::{bytes_on_disk, fingerprint};
+#[cfg(test)]
+pub(crate) use rebuild::rebuild_with_stop;
+pub use rebuild::{
+    rebuild, RebuildDestination, RebuildJournal, RebuildOutcome, RebuildSource, VectorPolicy,
+};
 pub use state::{
-    MigrationLock, MigrationState, Phase, Recovery, SwitchState, LOCK_FILE, PHASES, STATE_FILE,
-    STATE_FORMAT_VERSION, STATE_TEMP_FILE,
+    CollectionProgress, MigrationLock, MigrationState, Phase, Recovery, SwitchState, LOCK_FILE,
+    PHASES, STATE_FILE, STATE_FORMAT_VERSION, STATE_TEMP_FILE,
 };
 pub use strategy::{assess, resolve, Compatibility, Resolution, Strategy};
 

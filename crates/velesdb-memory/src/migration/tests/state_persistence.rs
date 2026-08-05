@@ -1,6 +1,6 @@
 use super::*;
 
-const VALID_FINGERPRINT: &str =
+pub(super) const VALID_FINGERPRINT: &str =
     "sha256-tree-v2:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 fn state(phase: Phase) -> MigrationState {
@@ -11,6 +11,14 @@ fn state(phase: Phase) -> MigrationState {
         source_fingerprint: VALID_FINGERPRINT.to_owned(),
         target_model: diagnosis::TARGET_MODEL.to_owned(),
         target_dimension: diagnosis::TARGET_DIM,
+        // Complete rather than fresh, because this file's tests advance the
+        // PHASE — and a phase past Prepared with an unfinished rebuild is now
+        // itself a semantics refusal, which would shadow what each test is
+        // actually about.
+        progress: AGENT_COLLECTIONS
+            .iter()
+            .map(|name| ((*name).to_owned(), CollectionProgress::Complete))
+            .collect(),
     }
 }
 

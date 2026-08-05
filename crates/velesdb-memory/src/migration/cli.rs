@@ -50,13 +50,19 @@ impl Default for MigrateOptions {
     }
 }
 
-/// What an operator must be told when they ask for the part that is not built.
-const NOT_YET_EXECUTABLE: &str =
-    "migrate-embeddings can only --dry-run in this version. The rebuild itself \
-     (reading every fact out, producing its vector, writing it to a destination, \
-     validating it and switching over) is not wired yet — see #1762. Re-run with \
-     --dry-run to see the regime this store resolves to and what still blocks a \
-     rebuild.";
+/// What an operator must be told after a successful non-dry-run: how far it
+/// went, and exactly where the wired part ends.
+///
+/// This text replaced `NOT_YET_EXECUTABLE` when the rebuild itself was wired
+/// (#1762, PR C2b). What remains unwired moved, it did not shrink to nothing:
+/// the rebuilt destination is NOT validated and NOT switched into place, and a
+/// message that failed to say so would read as "the migration is done" to
+/// every operator who ran it.
+const NOT_YET_SWITCHABLE: &str =
+    "the rebuild is complete and journalled, but the destination has NOT been \
+     validated and has NOT been switched into place — that part is not wired \
+     yet, see #1762. The source store is still the live one. Keep the \
+     destination and its .migration-journal sibling until the switch ships.";
 
 /// Parse `migrate-embeddings`' flags.
 ///
@@ -122,15 +128,21 @@ pub fn dry_run(
     diagnose(store, scratch_parent, target, destination)
 }
 
-/// Refuse an invocation this version cannot honour.
+/// Require the flag a non-dry-run cannot proceed without.
+///
+/// The rebuild writes somewhere, and "wherever seems sensible" is not an
+/// answer when the somewhere will later be renamed over the live store: the
+/// operator names the destination, or the run does not start.
 ///
 /// # Errors
-/// [`NOT_YET_EXECUTABLE`] whenever `--dry-run` was not given.
-pub fn require_dry_run(options: &MigrateOptions) -> Result<(), String> {
-    if options.dry_run {
-        return Ok(());
-    }
-    Err(NOT_YET_EXECUTABLE.to_owned())
+/// A message naming the missing flag when `--destination` was not given.
+pub fn require_destination(options: &MigrateOptions) -> Result<PathBuf, String> {
+    options.destination.clone().ok_or_else(|| {
+        "a non-dry-run migrate-embeddings rebuilds into a destination you name: \
+         pass --destination <dir> (an empty or not-yet-existing directory on \
+         the store's filesystem), or --dry-run to only diagnose"
+            .to_owned()
+    })
 }
 
 /// Render a report for an operator: what is here, what would happen, and what
@@ -225,10 +237,10 @@ pub fn refuses(report: &DiagnosisReport) -> bool {
     !report.resolution.runs()
 }
 
-/// Re-exported so the binary can name the refusal without duplicating it.
+/// Re-exported so the binary can print the boundary without duplicating it.
 #[must_use]
-pub fn not_yet_executable() -> &'static str {
-    NOT_YET_EXECUTABLE
+pub fn not_yet_switchable() -> &'static str {
+    NOT_YET_SWITCHABLE
 }
 
 /// The default scratch parent: the directory the store itself sits in.
