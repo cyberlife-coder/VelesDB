@@ -54,7 +54,7 @@ mod strategy;
 
 pub use diagnosis::{
     diagnose, same_filesystem, Capability, CollectionInventory, DiagnosisReport, SourceProvenance,
-    TtlSummary, DIAGNOSIS_FORMAT_VERSION,
+    TargetContract, TtlSummary, DIAGNOSIS_FORMAT_VERSION,
 };
 pub use enumeration::{
     enumerate_by_cursor, enumerate_collection, enumerate_page, reinsert, reinsert_batch,

@@ -43,8 +43,7 @@ fn diagnose(
     super::diagnose(
         source,
         staging.path(),
-        target_model,
-        target_dimension,
+        &TargetContract::automatic(target_model, target_dimension),
         destination,
     )
 }

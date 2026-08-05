@@ -1,4 +1,5 @@
 use super::diagnostic_copy::DiagnosticCopy;
+use super::strategy::{assess, resolve, Resolution, Strategy};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -47,7 +48,7 @@ impl Capability {
 /// whether a prepared migration may resume. A report whose version this build
 /// does not understand is refused rather than guessed at, which is only
 /// possible because the number travels with the data.
-pub const DIAGNOSIS_FORMAT_VERSION: u32 = 4;
+pub const DIAGNOSIS_FORMAT_VERSION: u32 = 5;
 
 /// What the store itself records about the embedder that filled it.
 ///
@@ -184,6 +185,16 @@ pub struct DiagnosisReport {
     pub target_model: String,
     /// The width that model produces.
     pub target_dimension: usize,
+    /// The regime the operator selected — `auto` unless they said otherwise.
+    pub requested_strategy: Strategy,
+    /// What that request resolves to against this store, and why.
+    ///
+    /// Derived, never independently observed: [`DiagnosisReport::validate`]
+    /// recomputes it from the provenance and the target contract and refuses a
+    /// report whose stated regime does not follow from its own fields. A
+    /// diagnosis an operator reads a regime off is a diagnosis that can lie
+    /// about one.
+    pub resolution: Resolution,
     /// One entry per collection in [`AGENT_COLLECTIONS`], absent ones included.
     pub collections: Vec<CollectionInventory>,
     /// Live facts across the store.
@@ -262,14 +273,41 @@ fn existing_ancestor(path: &Path) -> Option<std::fs::Metadata> {
 pub fn diagnose(
     source: &Path,
     scratch_parent: &Path,
-    target_model: &str,
-    target_dimension: usize,
+    target: &TargetContract,
     destination: Option<&Path>,
 ) -> Result<DiagnosisReport, crate::MemoryError> {
     let source = canonical_source(source)?;
     let copy = DiagnosticCopy::capture(&source, scratch_parent)?;
-    let result = diagnose_copy(&source, target_model, target_dimension, destination, &copy);
+    let result = diagnose_copy(&source, target, destination, &copy);
     copy.finish(result)
+}
+
+/// What the operator is pointing the rebuild at: the target embedder's
+/// identity, and the regime they selected.
+///
+/// Grouped rather than passed as three parallel arguments because the three
+/// only ever travel together, and because a call site that passed a model and a
+/// width belonging to two different embedders would type-check perfectly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TargetContract {
+    /// The model identifier the rebuild would embed with.
+    pub model: String,
+    /// The width that model produces, as the embedder itself reports it.
+    pub dimension: usize,
+    /// `auto` unless the operator named a regime.
+    pub strategy: Strategy,
+}
+
+impl TargetContract {
+    /// The usual case: a target embedder, and no opinion about the regime.
+    #[must_use]
+    pub fn automatic(model: impl Into<String>, dimension: usize) -> Self {
+        Self {
+            model: model.into(),
+            dimension,
+            strategy: Strategy::Auto,
+        }
+    }
 }
 
 fn canonical_source(source: &Path) -> Result<PathBuf, crate::MemoryError> {
@@ -304,8 +342,7 @@ fn canonical_source(source: &Path) -> Result<PathBuf, crate::MemoryError> {
 
 pub(super) fn diagnose_copy(
     source: &Path,
-    target_model: &str,
-    target_dimension: usize,
+    target: &TargetContract,
     destination: Option<&Path>,
     copy: &DiagnosticCopy,
 ) -> Result<DiagnosisReport, crate::MemoryError> {
@@ -314,8 +351,7 @@ pub(super) fn diagnose_copy(
     let same_filesystem = destination.and_then(|dest| same_filesystem(source, dest));
     Ok(report_from_inventory(
         source,
-        target_model,
-        target_dimension,
+        target,
         same_filesystem,
         copy,
         inventory,
@@ -324,8 +360,7 @@ pub(super) fn diagnose_copy(
 
 fn report_from_inventory(
     source: &Path,
-    target_model: &str,
-    target_dimension: usize,
+    target: &TargetContract,
     same_filesystem: Option<bool>,
     copy: &DiagnosticCopy,
     inventory: inventory::StoreInventory,
@@ -333,21 +368,32 @@ fn report_from_inventory(
     let capabilities = capabilities::capability_map(
         &inventory.source_provenance,
         inventory.source_dimension,
-        target_model,
-        target_dimension,
+        &target.model,
+        target.dimension,
         inventory.edge_counts,
         same_filesystem,
         copy,
     );
     let blockers = capabilities::blockers_for(&capabilities, &inventory.collections);
+    let resolution = resolve(
+        target.strategy,
+        assess(
+            &inventory.source_provenance,
+            inventory.source_dimension,
+            &target.model,
+            target.dimension,
+        ),
+    );
     DiagnosisReport {
         format_version: DIAGNOSIS_FORMAT_VERSION,
         source_path: source.to_path_buf(),
         source_fingerprint: copy.source_fingerprint().to_owned(),
         source_dimension: inventory.source_dimension,
         source_provenance: inventory.source_provenance,
-        target_model: target_model.to_owned(),
-        target_dimension,
+        target_model: target.model.clone(),
+        target_dimension: target.dimension,
+        requested_strategy: target.strategy,
+        resolution,
         collections: inventory.collections,
         facts: inventory.facts,
         edges: inventory.edges,

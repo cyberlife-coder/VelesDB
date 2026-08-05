@@ -18,8 +18,7 @@ fn diagnosis_works_while_the_original_lock_is_held_and_leaves_source_unchanged()
     let report = super::super::diagnose(
         source.path(),
         staging.path(),
-        diagnosis::TARGET_MODEL,
-        diagnosis::TARGET_DIM,
+        &super::super::TargetContract::automatic(diagnosis::TARGET_MODEL, diagnosis::TARGET_DIM),
         None,
     )
     .expect("diagnosis must not contend on the live source lock");
@@ -120,8 +119,7 @@ fn a_source_mutation_after_capture_refuses_the_inventory_report() {
         .expect("simulate concurrent daemon write");
     let result = super::super::diagnosis::diagnose_copy(
         source.path(),
-        diagnosis::TARGET_MODEL,
-        diagnosis::TARGET_DIM,
+        &super::super::TargetContract::automatic(diagnosis::TARGET_MODEL, diagnosis::TARGET_DIM),
         None,
         &copy,
     );
@@ -191,8 +189,7 @@ fn scratch_inside_source_is_refused_without_mutating_the_source() {
     let error = super::super::diagnose(
         source.path(),
         &inside,
-        diagnosis::TARGET_MODEL,
-        diagnosis::TARGET_DIM,
+        &super::super::TargetContract::automatic(diagnosis::TARGET_MODEL, diagnosis::TARGET_DIM),
         None,
     )
     .expect_err("scratch inside source must be refused");

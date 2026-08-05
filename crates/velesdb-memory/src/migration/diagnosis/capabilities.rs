@@ -22,10 +22,23 @@ pub(super) const NO_HEADROOM: &str =
      checked separately and does not prove that a different destination volume can hold the \
      rebuilt vectors. Supply and measure the final destination before reconstruction.";
 
-/// The embedder's cost per fact is the one number a rebuild's duration turns on
-/// and the one this gate cannot produce.
+/// The embedder's cost per fact is the one number a `reembed` rebuild's
+/// duration turns on, and the one this gate still cannot produce.
+///
+/// This text used to quote `16.3 us/fact` as the thing to weigh the embedder
+/// against. That number is the store's re-insertion cost measured at DIM=4 on
+/// payloads carrying no text, and presenting it beside an embedder cost made a
+/// regime-dependent claim look settled — which is what opened #1815.
 pub(super) const NO_EMBEDDER_COST: &str =
-    "the embedding cost per fact is NOT established. Everything measured so far is the STORE's      cost — 16.3 us/fact to re-insert, once #1797 removed the per-document fsync — and that is      the smaller half. Re-embedding calls a model over a network, at a cost set by the model,      the backend and the hardware, none of which a unit test may depend on without becoming a      test of whether Ollama happens to be running. Stated rather than guessed: a rebuild's      duration is dominated by this unknown, and it has to be measured against the actual target      model before any duration is promised to an operator.";
+    "the embedding cost per fact is NOT established for the target model. What #1816 measured, on \
+     one machine in a debug build with one embedder call per fact, is a RATIO: re-embedding cost \
+     about 23x a re-insertion (88 462 us against 3 900 us per fact, bge-m3 at 1024 dimensions). \
+     That figure licenses no duration promise. It is one model, unbatched, unoptimised, and the \
+     dominant term in its denominator turned out to be the payload's BM25 text indexing rather \
+     than the vector's width — so it does not transfer to another embedder, another backend, or a \
+     batched run. Under `reuse` the embedder is never called and this cost is zero. Before any \
+     duration is quoted to an operator, it has to be measured against the actual target model on \
+     the actual machine.";
 
 /// An unrecorded source model makes an equal-width swap invisible.
 const NO_PROVENANCE: &str =
