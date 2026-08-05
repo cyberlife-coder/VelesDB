@@ -1154,7 +1154,13 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         'hops: for hop in 1..=max_hops {
             next.clear();
             for node_id in frontier.drain(..) {
-                if explanation.nodes.len() >= crate::limits::MAX_WHY_NODES {
+                // Both width budgets, checked here AND inside `expand`: this
+                // check alone would let the expansion that crosses the line
+                // finish its node — up to MAX_WHY_NODE_DEGREE nodes past the
+                // "ceiling", which a review measured at 522 of a promised 500.
+                if explanation.nodes.len() >= crate::limits::MAX_WHY_NODES
+                    || explanation.edges.len() >= crate::limits::MAX_WHY_EDGES
+                {
                     break 'hops; // width budget spent — depth left in max_hops is moot
                 }
                 self.expand(node_id, hop, &mut explanation, &mut visited, &mut next)?;
@@ -1184,6 +1190,15 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     ) -> Result<(), MemoryError> {
         let edges = self.store.relations(node_id)?;
         for edge in edges.into_iter().take(crate::limits::MAX_WHY_NODE_DEGREE) {
+            // The budgets are ceilings, not suggestions: once either is spent,
+            // this node's expansion stops MID-NODE rather than finishing. The
+            // caller's check between nodes cannot provide that — an expansion
+            // that crosses the line would otherwise add its whole degree.
+            if explanation.nodes.len() >= crate::limits::MAX_WHY_NODES
+                || explanation.edges.len() >= crate::limits::MAX_WHY_EDGES
+            {
+                break;
+            }
             let target = edge.to;
             if !visited.contains(&target) {
                 let Some((content, _embedding)) = self.store.get(target)? else {

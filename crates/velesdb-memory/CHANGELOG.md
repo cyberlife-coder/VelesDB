@@ -106,7 +106,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any one node, and `MAX_WHY_NODES` (500) caps the total nodes a walk collects
   across every hop. Both apply to `why` and `recall_fused` alike — they share
   the same internal traversal. `MAX_WHY_HOPS`'s comment now says what it
-  actually bounds.
+  actually bounds. Review hardening on the same fix: the node ceiling is now
+  exact — enforced at the push site, where checking only between expansions
+  let the crossing expansion overshoot to a measured 522 of the documented
+  500 — and `MAX_WHY_EDGES` (2000) caps the edges a walk records, the half of
+  #1743's ask ("nodes AND edges") the first cut left unbounded: 60
+  fully-connected nodes returned 3 540 edges against a node count of 60.
 
 - **`recall_fused`'s graph reach is no longer quadratic in a hub's fan-out
   (#1742).** `reach_weight` used to rescan every edge the traversal collected,
