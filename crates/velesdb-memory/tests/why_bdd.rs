@@ -9,6 +9,7 @@ mod common;
 
 use common::service;
 use tempfile::TempDir;
+use velesdb_memory::limits::{MAX_WHY_EDGES, MAX_WHY_NODES, MAX_WHY_NODE_DEGREE};
 use velesdb_memory::{HashEmbedder, Link, MemoryService};
 
 const DECISION: &str = "we chose parking_lot to avoid lock poisoning";
@@ -131,6 +132,65 @@ fn why_stops_at_the_hop_budget() {
 }
 
 #[test]
+fn why_caps_a_single_nodes_out_degree() {
+    // Regression for issue #1743: a super-node (an entity hub in production,
+    // but the cap applies to any node) must not dump its entire neighborhood
+    // into one response. Relate the seed directly to more facts than
+    // `MAX_WHY_NODE_DEGREE` allows and check the walk stops following that
+    // node's edges once the cap is spent.
+    let (_dir, svc) = service();
+    let seed = svc
+        .remember("a fact many others point at", &[], None)
+        .expect("remember seed");
+    for i in 0..MAX_WHY_NODE_DEGREE + 20 {
+        let target = svc
+            .remember(&format!("fact number {i} related to the seed"), &[], None)
+            .expect("remember target");
+        svc.relate(seed, target, "mentions").expect("relate");
+    }
+
+    let explanation = svc
+        .why("a fact many others point at", 1, None)
+        .expect("why");
+
+    assert_eq!(
+        explanation.nodes.len(),
+        1 + MAX_WHY_NODE_DEGREE,
+        "the seed plus at most MAX_WHY_NODE_DEGREE one-hop targets, not all of them"
+    );
+}
+
+#[test]
+fn why_caps_the_total_nodes_across_the_whole_walk() {
+    // Regression for issue #1743: even when no single node exceeds the
+    // per-node degree cap, a long enough chain must not grow the response
+    // past `MAX_WHY_NODES`. Each link here has out-degree 1, so
+    // `why_caps_a_single_nodes_out_degree` alone would never catch this.
+    let (_dir, svc) = service();
+    let mut previous = svc
+        .remember("chain link 0, the seed", &[], None)
+        .expect("remember seed");
+    let chain_len = MAX_WHY_NODES + 10;
+    for i in 1..chain_len {
+        let next = svc
+            .remember(&format!("chain link {i}"), &[], None)
+            .expect("remember link");
+        svc.relate(previous, next, "next").expect("relate");
+        previous = next;
+    }
+
+    let explanation = svc
+        .why("chain link 0, the seed", chain_len, None)
+        .expect("why");
+
+    assert_eq!(
+        explanation.nodes.len(),
+        MAX_WHY_NODES,
+        "the walk stops at the total node budget, well short of the full chain"
+    );
+}
+
+#[test]
 fn why_on_isolated_memory_returns_just_that_memory() {
     let (_dir, svc) = service();
     let lone = svc
@@ -214,4 +274,78 @@ fn why_on_blank_decision_is_empty() {
     let explanation = svc.why("   ", 2, None).expect("why on blank decision");
 
     assert!(explanation.nodes.is_empty() && explanation.edges.is_empty());
+}
+
+#[test]
+fn why_cannot_overshoot_the_node_budget_mid_expansion() {
+    // Regression for the review of this fix itself. The chain test above can
+    // never see an overshoot: with out-degree 1, the budget check before each
+    // expansion is exact. With hubs near the boundary it is not — a check
+    // that only runs BEFORE an expansion lets the expansion that crosses the
+    // line add up to `MAX_WHY_NODE_DEGREE` nodes past it, so the documented
+    // ceiling of 500 was actually 563. Nine 64-target hubs cross the line
+    // mid-hop and expose exactly that.
+    let (_dir, svc) = service();
+    let seed = svc
+        .remember("hub overshoot seed", &[], None)
+        .expect("remember seed");
+    for hub_index in 0..9 {
+        let hub = svc
+            .remember(&format!("hub number {hub_index}"), &[], None)
+            .expect("remember hub");
+        svc.relate(seed, hub, "spokes").expect("relate seed->hub");
+        for target_index in 0..MAX_WHY_NODE_DEGREE {
+            let target = svc
+                .remember(&format!("target {hub_index}/{target_index}"), &[], None)
+                .expect("remember target");
+            svc.relate(hub, target, "mentions")
+                .expect("relate hub->target");
+        }
+    }
+
+    let explanation = svc.why("hub overshoot seed", 2, None).expect("why");
+
+    assert_eq!(
+        explanation.nodes.len(),
+        MAX_WHY_NODES,
+        "the node budget is a ceiling, not a suggestion: the expansion that \
+         reaches it must stop AT it, not finish its node first"
+    );
+}
+
+#[test]
+fn why_caps_the_total_edges_across_the_whole_walk() {
+    // The other half of #1743's own words: "nombre maximal de noeuds ET
+    // d'aretes retournes". Every edge followed is recorded even when its
+    // target is already visited, so a dense subgraph well under the node
+    // budget could still return edges without any bound — 60 fully-connected
+    // nodes produce 3 540 directed edges against a node count of 60.
+    let (_dir, svc) = service();
+    let mut ids = Vec::new();
+    for i in 0..60 {
+        ids.push(
+            svc.remember(&format!("dense clique member {i}"), &[], None)
+                .expect("remember member"),
+        );
+    }
+    for &from in &ids {
+        for &to in &ids {
+            if from != to {
+                svc.relate(from, to, "sees").expect("relate");
+            }
+        }
+    }
+
+    let explanation = svc.why("dense clique member 0", 3, None).expect("why");
+
+    assert!(
+        explanation.nodes.len() <= MAX_WHY_NODES,
+        "sanity: the clique sits well under the node budget"
+    );
+    assert_eq!(
+        explanation.edges.len(),
+        MAX_WHY_EDGES,
+        "a walk over a dense subgraph must stop recording edges at the edge \
+         budget; without one, 60 nodes can still return thousands of edges"
+    );
 }

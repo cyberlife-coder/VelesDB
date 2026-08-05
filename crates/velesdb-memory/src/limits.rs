@@ -57,8 +57,45 @@ pub fn metadata_bytes(meta: &Metadata) -> usize {
 /// cap `k`, so the adapters do).
 pub const MAX_RECALL_LIMIT: usize = 1_000;
 
-/// Cap on `why` hop depth — prevents exponential graph fan-out.
+/// Cap on `why`/`recall_fused` hop depth. Bounds DEPTH only: an entity hub
+/// reached at any hop is, by construction, a super-node whose degree scales
+/// with the whole store, so this alone does not bound how much a walk
+/// returns — see [`MAX_WHY_NODE_DEGREE`] and [`MAX_WHY_NODES`] for the width
+/// budget (issue #1743: a hub dumped its entire neighborhood, full fact
+/// content included, into a single response).
 pub const MAX_WHY_HOPS: usize = 10;
+
+/// Maximum outgoing edges a `why`/`recall_fused` graph walk follows from any
+/// ONE node. Without this, expanding a single entity hub pushes one edge
+/// (and, for each unseen target, a full-content node) per fact that ever
+/// mentioned it — the walk's cost is then `O(store size)` at a single hop,
+/// no matter how shallow [`MAX_WHY_HOPS`] is set.
+pub const MAX_WHY_NODE_DEGREE: usize = 64;
+
+/// Maximum number of nodes one `why`/`recall_fused` graph walk may collect,
+/// seed included. [`MAX_WHY_NODE_DEGREE`] bounds any single node's
+/// contribution; this bounds the walk's total size across every node it
+/// expands, so many hubs each under the per-node cap still cannot together
+/// grow a response past a fixed ceiling.
+///
+/// An exact ceiling, enforced at the push site: the expansion that reaches it
+/// stops mid-node. Checking only between expansions read as the same
+/// guarantee but let the crossing expansion finish its whole degree first —
+/// a measured 522 nodes of a documented 500.
+pub const MAX_WHY_NODES: usize = 500;
+
+/// Maximum edges one `why`/`recall_fused` graph walk may record.
+///
+/// [`MAX_WHY_NODES`] alone does not bound a response: every edge FOLLOWED is
+/// recorded even when its target is already visited, so a dense subgraph far
+/// under the node budget can still return on the order of
+/// `nodes x MAX_WHY_NODE_DEGREE` edges — tens of thousands at the caps, a
+/// multi-megabyte response, which is the other half of what issue #1743
+/// asked to bound ("nombre maximal de noeuds et d'aretes retournes"). Four
+/// edges per node of budget covers a spanning forest (which needs fewer than
+/// one edge per node) plus three cross-links per node on top — a fixed
+/// ceiling on the response, not a tuning knob.
+pub const MAX_WHY_EDGES: usize = MAX_WHY_NODES * 4;
 
 /// Maximum accepted size of a single context-compiler fragment (1 MiB, the
 /// same ceiling as [`MAX_FACT_BYTES`]) — prevents a single fragment from

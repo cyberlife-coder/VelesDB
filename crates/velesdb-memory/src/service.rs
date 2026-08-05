@@ -1151,9 +1151,18 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         let mut visited: HashSet<u64> = HashSet::from([seed_id]);
         let mut frontier = vec![seed_id];
         let mut next: Vec<u64> = Vec::new();
-        for hop in 1..=max_hops {
+        'hops: for hop in 1..=max_hops {
             next.clear();
             for node_id in frontier.drain(..) {
+                // Both width budgets, checked here AND inside `expand`: this
+                // check alone would let the expansion that crosses the line
+                // finish its node — up to MAX_WHY_NODE_DEGREE nodes past the
+                // "ceiling", which a review measured at 522 of a promised 500.
+                if explanation.nodes.len() >= crate::limits::MAX_WHY_NODES
+                    || explanation.edges.len() >= crate::limits::MAX_WHY_EDGES
+                {
+                    break 'hops; // width budget spent — depth left in max_hops is moot
+                }
                 self.expand(node_id, hop, &mut explanation, &mut visited, &mut next)?;
             }
             if next.is_empty() {
@@ -1164,7 +1173,10 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         Ok(explanation)
     }
 
-    /// Expand a single node: enqueue unseen targets and record edges. An edge is
+    /// Expand a single node: enqueue unseen targets and record edges, following
+    /// at most [`crate::limits::MAX_WHY_NODE_DEGREE`] outgoing edges — an entity
+    /// hub's degree scales with the whole store, so an unbounded walk here would
+    /// dump its entire neighborhood into one response (issue #1743). An edge is
     /// only recorded once its target is a resolved node, so the subgraph never
     /// contains an edge pointing at a node absent from `nodes` (e.g. a forgotten
     /// target whose edge outlived it).
@@ -1176,7 +1188,17 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         visited: &mut HashSet<u64>,
         next: &mut Vec<u64>,
     ) -> Result<(), MemoryError> {
-        for edge in self.store.relations(node_id)? {
+        let edges = self.store.relations(node_id)?;
+        for edge in edges.into_iter().take(crate::limits::MAX_WHY_NODE_DEGREE) {
+            // The budgets are ceilings, not suggestions: once either is spent,
+            // this node's expansion stops MID-NODE rather than finishing. The
+            // caller's check between nodes cannot provide that — an expansion
+            // that crosses the line would otherwise add its whole degree.
+            if explanation.nodes.len() >= crate::limits::MAX_WHY_NODES
+                || explanation.edges.len() >= crate::limits::MAX_WHY_EDGES
+            {
+                break;
+            }
             let target = edge.to;
             if !visited.contains(&target) {
                 let Some((content, _embedding)) = self.store.get(target)? else {
