@@ -145,6 +145,7 @@ impl DiagnosisReport {
         for (name, expected) in canonical_capabilities(self) {
             require_canonical_capability(&self.capabilities, name, &expected)?;
         }
+        validate_uncalculated_capability_shapes(&self.capabilities)?;
 
         validate_resolution(self)?;
         validate_blockers(self)
@@ -171,6 +172,44 @@ fn validate_capability_keys(capabilities: &BTreeMap<String, Capability>) -> Resu
     Err(format!(
         "diagnosis report capabilities are incomplete or unknown: expected exactly {DIAGNOSIS_CAPABILITY_KEYS:?}, got {actual_keys:?}"
     ))
+}
+
+/// Hold the four capabilities the parser cannot recalculate to their SHAPE.
+///
+/// Their evidence embeds measurements only the live diagnosis could take —
+/// staging room, edge counts, the read-only fingerprint check — so a parsed
+/// report cannot re-derive the text. Two shape facts survive parsing anyway:
+/// three of them have no Missing-producing code path in `diagnose`, so a
+/// Missing one was not produced by a diagnosis; and evidence or blocker text
+/// that is empty says nothing, which no capability of any provenance does.
+fn validate_uncalculated_capability_shapes(
+    capabilities: &BTreeMap<String, Capability>,
+) -> Result<(), String> {
+    for name in [
+        "diagnostic_staging",
+        "inventory",
+        "source_access_is_read_only",
+    ] {
+        if let Some(Capability::Missing { .. }) = capabilities.get(name) {
+            return Err(format!(
+                "diagnosis capability `{name}` is inconsistent with its report \
+                 fields: no diagnosis produces it as Missing"
+            ));
+        }
+    }
+    for (name, capability) in capabilities {
+        let text = match capability {
+            Capability::Proven { evidence } => evidence,
+            Capability::Missing { blocker } => blocker,
+        };
+        if text.trim().is_empty() {
+            return Err(format!(
+                "diagnosis capability `{name}` carries an empty text; evidence \
+                 that says nothing is not evidence"
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn canonical_capabilities(report: &DiagnosisReport) -> [(&'static str, Capability); 5] {

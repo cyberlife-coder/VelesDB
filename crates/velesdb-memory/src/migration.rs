@@ -52,13 +52,16 @@ mod edges;
 mod enumeration;
 mod execute;
 mod filesystem;
+mod orchestrate;
 mod rebuild;
 mod state;
 mod strategy;
+mod switchover;
+mod validate;
 
 pub use cli::{
-    default_scratch_parent, dry_run, not_yet_switchable, parse as parse_migrate_args, refuses,
-    render, require_destination, MigrateOptions,
+    default_scratch_parent, dry_run, migration_complete_notice, parse as parse_migrate_args,
+    refuses, render, require_destination, MigrateOptions,
 };
 pub use diagnosis::{
     diagnose, same_filesystem, Capability, CollectionInventory, DiagnosisReport, SourceProvenance,
@@ -73,6 +76,7 @@ pub use enumeration::{
 };
 pub use execute::{execute, ExecuteOutcome};
 pub use filesystem::{bytes_on_disk, fingerprint};
+pub use orchestrate::{migrate, MigrateOutcome};
 #[cfg(test)]
 pub(crate) use rebuild::rebuild_with_stop;
 pub use rebuild::{
@@ -83,6 +87,17 @@ pub use state::{
     PHASES, STATE_FILE, STATE_FORMAT_VERSION, STATE_TEMP_FILE,
 };
 pub use strategy::{assess, resolve, Compatibility, Resolution, Strategy};
+pub use switchover::{switch_over, SwitchOutcome, ARCHIVE_SUFFIX};
+#[cfg(test)]
+pub(crate) use validate::divergence_explained_by_expiry;
+pub use validate::{validate_destination, ValidationOutcome};
+
+/// The one conversion every migration module needs: a message become the
+/// engine's query error, become this crate's. Defined once — six private
+/// copies of it had already drifted into two signatures.
+pub(crate) fn query_error(message: impl Into<String>) -> crate::MemoryError {
+    velesdb_core::Error::Query(message.into()).into()
+}
 
 #[cfg(test)]
 mod tests;

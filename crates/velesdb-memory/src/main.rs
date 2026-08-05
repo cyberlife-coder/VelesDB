@@ -563,8 +563,12 @@ fn run_migrate_embeddings(
     run_migrate_rebuild(&options, &store_path, &scratch, &target, embedder.as_ref())
 }
 
-/// The non-dry-run tail of `migrate-embeddings`: rebuild, then say plainly
-/// where the wired part ends.
+/// The non-dry-run tail of `migrate-embeddings`: rebuild, validate, switch.
+///
+/// The chain enters wherever the journal stands — a re-run after any crash
+/// resumes rather than failing on the stage the crash already completed —
+/// and each stage that ran reports itself; one that was journalled as done
+/// stays silent rather than misreporting work this run did not do.
 fn run_migrate_rebuild(
     options: &velesdb_memory::migration::MigrateOptions,
     store_path: &std::path::Path,
@@ -575,7 +579,7 @@ fn run_migrate_rebuild(
     use velesdb_memory::migration;
 
     let destination = migration::require_destination(options)?;
-    let outcome = migration::execute(
+    let outcome = migration::migrate(
         store_path,
         scratch,
         target,
@@ -583,15 +587,24 @@ fn run_migrate_rebuild(
         embedder,
         MIGRATE_BATCH,
     )?;
-    print!("{}", migration::render(&outcome.report));
-    println!(
-        "rebuild: {} facts written, {} already present, {} edges, journal at {}",
-        outcome.rebuild.facts,
-        outcome.rebuild.collisions,
-        outcome.rebuild.edges,
-        outcome.workspace.display(),
-    );
-    println!("{}", migration::not_yet_switchable());
+    if let Some(executed) = &outcome.executed {
+        print!("{}", migration::render(&executed.report));
+        println!(
+            "rebuild: {} facts written, {} already present, {} edges, journal at {}",
+            executed.rebuild.facts,
+            executed.rebuild.collisions,
+            executed.rebuild.edges,
+            executed.workspace.display(),
+        );
+    }
+    if let Some(validated) = &outcome.validated {
+        println!(
+            "validated: {} facts and {} edges compared, {} divergence(s) explained by expiry",
+            validated.facts, validated.edges, validated.explained_by_expiry,
+        );
+    }
+    println!("activated: {}", outcome.switched.activated.display());
+    println!("{}", migration::migration_complete_notice());
     Ok(())
 }
 

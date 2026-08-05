@@ -24,6 +24,7 @@
 //! `Complete`. Validation of the destination and the switch itself are the
 //! next PR's work; see [`NOT_YET_SWITCHABLE`](super::not_yet_switchable).
 
+use super::query_error;
 use std::path::{Path, PathBuf};
 
 use velesdb_core::agent::AgentMemory;
@@ -100,19 +101,22 @@ pub fn execute(
     })
 }
 
-/// Fold the pass's result and the lock release into one verdict.
+/// Fold a locked pass's result and the lock release into one verdict.
 ///
-/// When BOTH fail, both are reported: an operator who fixes the rebuild error
+/// When BOTH fail, both are reported: an operator who fixes the pass's error
 /// and reruns deserves to know beforehand that the lock evidence remains, not
-/// to discover it as a second surprise.
-fn reconcile(
-    result: Result<RebuildOutcome, crate::MemoryError>,
+/// to discover it as a second surprise. Shared by every locked entry point in
+/// this module tree — execute, validate, switch — because the first rewrite of
+/// this pattern silently dropped the release error, and the second and third
+/// would have too.
+pub(super) fn reconcile<T>(
+    result: Result<T, crate::MemoryError>,
     released: Result<(), String>,
-) -> Result<RebuildOutcome, crate::MemoryError> {
+) -> Result<T, crate::MemoryError> {
     match (result, released) {
-        (Ok(rebuild), Ok(())) => Ok(rebuild),
+        (Ok(value), Ok(())) => Ok(value),
         (Ok(_), Err(release_error)) => Err(query_error(format!(
-            "the rebuild completed, but releasing the migration lock failed: \
+            "the pass completed, but releasing the migration lock failed: \
              {release_error}. The canonical lock record remains and must be \
              removed by hand before the next run"
         ))),
@@ -349,7 +353,7 @@ fn regime_word(strategy: super::strategy::Strategy) -> &'static str {
 }
 
 /// The journal's home: a sibling of the destination, named after it.
-fn journal_workspace(destination: &Path) -> Result<PathBuf, crate::MemoryError> {
+pub(super) fn journal_workspace(destination: &Path) -> Result<PathBuf, crate::MemoryError> {
     let name = destination
         .file_name()
         .and_then(|name| name.to_str())
@@ -401,8 +405,4 @@ fn ensure_destination(destination: &Path, resuming: bool) -> Result<(), crate::M
         )));
     }
     Ok(())
-}
-
-fn query_error(message: impl Into<String>) -> crate::MemoryError {
-    velesdb_core::Error::Query(message.into()).into()
 }

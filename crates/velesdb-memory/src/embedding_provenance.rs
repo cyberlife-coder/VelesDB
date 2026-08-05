@@ -131,10 +131,10 @@ pub fn check(
         "this store was filled with the embedding model '{}' ({} dimensions), and the daemon is \
          configured for '{}' ({} dimensions). Vectors from two different models are not \
          comparable, so recall would silently return nonsense. Either point \
-         VELESDB_MEMORY_EMBEDDER_MODEL back at '{}', or re-index the store against the new model \
-         (re-indexing is not implemented yet — see #1751). Which backend serves the model does \
-         not matter and is not recorded: the same model over Ollama, oMLX or an \
-         OpenAI-compatible API produces the same vectors.",
+         VELESDB_MEMORY_EMBEDDER_MODEL back at '{}', or migrate the store against the new model \
+         with `velesdb-memory migrate-embeddings` (start with --dry-run; see #1762). Which \
+         backend serves the model does not matter and is not recorded: the same model over \
+         Ollama, oMLX or an OpenAI-compatible API produces the same vectors.",
         stored.model, stored.dimension, model, dimension, stored.model
     ))
 }

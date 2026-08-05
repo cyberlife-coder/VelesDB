@@ -116,22 +116,23 @@ fn a_rebuild_without_a_named_destination_is_refused_rather_than_guessing_one() {
 }
 
 #[test]
-fn the_switch_boundary_message_says_what_did_not_happen() {
-    // The success message of a non-dry-run is load-bearing: `execute` stops at
-    // a rebuilt-but-unswitched destination, and an operator who reads its
-    // output as "migration done" will point their daemon at the OLD store and
-    // wonder where the new vectors went. The message must therefore say, in so
-    // many words, that nothing was validated and nothing was switched.
-    let boundary = not_yet_switchable();
+fn the_completion_message_names_the_restart_and_the_journal() {
+    // This test used to pin the BOUNDARY message — "nothing was validated,
+    // nothing was switched" — because C2b stopped there. C3 wired both, so
+    // the premise inverted, and what the success message must now carry is
+    // the two facts an operator cannot discover from the exit code: the
+    // daemon serves the OLD data from its startup handle until it restarts,
+    // and the journal is left behind on purpose, theirs to remove.
+    let notice = migration_complete_notice();
     for needle in [
-        "NOT been validated",
-        "NOT been switched",
-        "#1762",
-        "source store is still",
+        "RESTART",
+        "handle taken at startup",
+        "journal",
+        "may be removed",
     ] {
         assert!(
-            boundary.contains(needle),
-            "the boundary message must contain '{needle}': {boundary}"
+            notice.contains(needle),
+            "the completion message must contain '{needle}': {notice}"
         );
     }
 }

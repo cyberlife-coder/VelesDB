@@ -50,19 +50,24 @@ impl Default for MigrateOptions {
     }
 }
 
-/// What an operator must be told after a successful non-dry-run: how far it
-/// went, and exactly where the wired part ends.
+/// What an operator must be told after a COMPLETED migration.
 ///
-/// This text replaced `NOT_YET_EXECUTABLE` when the rebuild itself was wired
-/// (#1762, PR C2b). What remains unwired moved, it did not shrink to nothing:
-/// the rebuilt destination is NOT validated and NOT switched into place, and a
-/// message that failed to say so would read as "the migration is done" to
-/// every operator who ran it.
-const NOT_YET_SWITCHABLE: &str =
-    "the rebuild is complete and journalled, but the destination has NOT been \
-     validated and has NOT been switched into place — that part is not wired \
-     yet, see #1762. The source store is still the live one. Keep the \
-     destination and its .migration-journal sibling until the switch ships.";
+/// This text replaced `NOT_YET_SWITCHABLE` when C3 wired validation and the
+/// switch. Two things in it are load-bearing. The daemon holds its store as
+/// an in-memory handle taken at startup and never refreshed, so a daemon that
+/// was running against the old store keeps serving the old data until it is
+/// RESTARTED — a message that failed to say so would let an operator migrate
+/// perfectly and then wonder where the new vectors went. And the journal is
+/// left in place deliberately: it is the evidence of what happened, and its
+/// removal is the operator's call, not this command's.
+const MIGRATION_COMPLETE: &str =
+    "the migration is complete: the rebuilt store now sits at the source's \
+     path, its provenance stamp names the target embedder, and the archived \
+     old store has been freed. RESTART the daemon — it holds its store as a \
+     handle taken at startup, and until it restarts it keeps serving the old \
+     data from memory. The .migration-journal directory beside the (now \
+     empty) destination path is the journal of what happened; it may be \
+     removed once you no longer want the evidence.";
 
 /// Parse `migrate-embeddings`' flags.
 ///
@@ -237,10 +242,10 @@ pub fn refuses(report: &DiagnosisReport) -> bool {
     !report.resolution.runs()
 }
 
-/// Re-exported so the binary can print the boundary without duplicating it.
+/// Re-exported so the binary can print the completion without duplicating it.
 #[must_use]
-pub fn not_yet_switchable() -> &'static str {
-    NOT_YET_SWITCHABLE
+pub fn migration_complete_notice() -> &'static str {
+    MIGRATION_COMPLETE
 }
 
 /// The default scratch parent: the directory the store itself sits in.
