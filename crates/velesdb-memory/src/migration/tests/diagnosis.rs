@@ -1004,6 +1004,54 @@ fn permanent_v4_gates_cannot_be_promoted_by_editing_json() {
 }
 
 #[test]
+fn the_uncalculated_capabilities_are_still_held_to_their_shape() {
+    // Five capabilities are recalculated verbatim at deserialisation; the
+    // other four carry evidence only the live diagnosis could compute
+    // (staging room, edge counts, the read-only fingerprint check), so a
+    // parsed report cannot re-derive their text. What CAN be held is their
+    // shape: three of them are Proven by construction — `diagnose` has no
+    // code path that produces them Missing — so a report carrying one as
+    // Missing was not produced by `diagnose`. And every capability's text
+    // must be non-empty: evidence that says nothing is not evidence.
+    let (dir, _ttl) = seeded();
+    let report = diagnose(dir.path(), TARGET_MODEL, TARGET_DIM, None).expect("diagnose");
+
+    for name in [
+        "diagnostic_staging",
+        "inventory",
+        "source_access_is_read_only",
+    ] {
+        let mut forged = report.clone();
+        forged.capabilities.insert(
+            name.to_owned(),
+            Capability::Missing {
+                blocker: "forged into a blocker no diagnosis ever produced".to_owned(),
+            },
+        );
+        let refusal = direct_deserialization_refusal(&forged);
+        assert!(
+            refusal.contains(name),
+            "{name} has no Missing-producing code path, so a Missing one must \
+             be refused by name: {refusal}"
+        );
+    }
+
+    let mut hollow = report.clone();
+    hollow.capabilities.insert(
+        "edge_counts".to_owned(),
+        Capability::Proven {
+            evidence: String::new(),
+        },
+    );
+    let refusal = direct_deserialization_refusal(&hollow);
+    assert!(
+        refusal.contains("edge_counts") && refusal.contains("empty"),
+        "evidence that says nothing is not evidence, and the refusal must say \
+         which capability said nothing: {refusal}"
+    );
+}
+
+#[test]
 fn a_proven_capability_cannot_have_its_evidence_rewritten_either() {
     let (dir, _ttl) = seeded();
     let report = diagnose(dir.path(), TARGET_MODEL, TARGET_DIM, None).expect("diagnose");

@@ -14,12 +14,12 @@ use crate::storage::NativeStore;
 use crate::MemoryStore;
 use std::collections::BTreeMap;
 
-const NEW_DIM: usize = 8;
-const SEEDED: u64 = 5;
+pub(super) const NEW_DIM: usize = 8;
+pub(super) const SEEDED: u64 = 5;
 
 /// A root holding the source store at `store/`, leaving room for a sibling
 /// destination on the same filesystem — the layout the switch (C3) requires.
-fn root_with_source() -> tempfile::TempDir {
+pub(super) fn root_with_source() -> tempfile::TempDir {
     let root = tempfile::tempdir().expect("root");
     let store = root.path().join("store");
     std::fs::create_dir(&store).expect("mkdir store");
@@ -35,7 +35,7 @@ fn root_with_source() -> tempfile::TempDir {
     root
 }
 
-fn contents(dir: &std::path::Path) -> BTreeMap<u64, serde_json::Value> {
+pub(super) fn contents(dir: &std::path::Path) -> BTreeMap<u64, serde_json::Value> {
     super::preservation::read_out(dir, "_semantic_memory")
         .iter()
         .map(|fact| {
@@ -61,7 +61,9 @@ fn run_with(
     )
 }
 
-fn run(root: &std::path::Path) -> Result<super::super::ExecuteOutcome, crate::MemoryError> {
+pub(super) fn run(
+    root: &std::path::Path,
+) -> Result<super::super::ExecuteOutcome, crate::MemoryError> {
     run_with(root, &HashEmbedder::new(NEW_DIM))
 }
 

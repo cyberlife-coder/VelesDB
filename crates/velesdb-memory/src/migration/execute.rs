@@ -349,7 +349,7 @@ fn regime_word(strategy: super::strategy::Strategy) -> &'static str {
 }
 
 /// The journal's home: a sibling of the destination, named after it.
-fn journal_workspace(destination: &Path) -> Result<PathBuf, crate::MemoryError> {
+pub(super) fn journal_workspace(destination: &Path) -> Result<PathBuf, crate::MemoryError> {
     let name = destination
         .file_name()
         .and_then(|name| name.to_str())

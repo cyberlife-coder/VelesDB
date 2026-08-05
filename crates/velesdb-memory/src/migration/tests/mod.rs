@@ -31,6 +31,8 @@ mod execute;
 mod rebuild;
 mod rebuild_state;
 mod state_persistence;
+mod switchover;
+mod validate;
 
 const DIM: usize = 4;
 const EMBEDDING: [f32; 4] = [1.0, 0.0, 0.0, 0.0];

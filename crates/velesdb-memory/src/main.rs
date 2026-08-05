@@ -563,8 +563,10 @@ fn run_migrate_embeddings(
     run_migrate_rebuild(&options, &store_path, &scratch, &target, embedder.as_ref())
 }
 
-/// The non-dry-run tail of `migrate-embeddings`: rebuild, then say plainly
-/// where the wired part ends.
+/// The non-dry-run tail of `migrate-embeddings`: rebuild, validate, switch.
+///
+/// Three stages, three refusal surfaces — a failure names its stage, and each
+/// stage is independently resumable by re-running the same command.
 fn run_migrate_rebuild(
     options: &velesdb_memory::migration::MigrateOptions,
     store_path: &std::path::Path,
@@ -591,7 +593,17 @@ fn run_migrate_rebuild(
         outcome.rebuild.edges,
         outcome.workspace.display(),
     );
-    println!("{}", migration::not_yet_switchable());
+
+    let validated =
+        migration::validate_destination(store_path, &destination, target, MIGRATE_BATCH)?;
+    println!(
+        "validated: {} facts and {} edges compared, {} divergence(s) explained by expiry",
+        validated.facts, validated.edges, validated.explained_by_expiry,
+    );
+
+    let switched = migration::switch_over(store_path, &destination)?;
+    println!("activated: {}", switched.activated.display());
+    println!("{}", migration::migration_complete_notice());
     Ok(())
 }
 

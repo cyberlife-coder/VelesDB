@@ -55,10 +55,12 @@ mod filesystem;
 mod rebuild;
 mod state;
 mod strategy;
+mod switchover;
+mod validate;
 
 pub use cli::{
-    default_scratch_parent, dry_run, not_yet_switchable, parse as parse_migrate_args, refuses,
-    render, require_destination, MigrateOptions,
+    default_scratch_parent, dry_run, migration_complete_notice, parse as parse_migrate_args,
+    refuses, render, require_destination, MigrateOptions,
 };
 pub use diagnosis::{
     diagnose, same_filesystem, Capability, CollectionInventory, DiagnosisReport, SourceProvenance,
@@ -83,6 +85,10 @@ pub use state::{
     PHASES, STATE_FILE, STATE_FORMAT_VERSION, STATE_TEMP_FILE,
 };
 pub use strategy::{assess, resolve, Compatibility, Resolution, Strategy};
+pub use switchover::{switch_over, SwitchOutcome, ARCHIVE_SUFFIX};
+#[cfg(test)]
+pub(crate) use validate::divergence_explained_by_expiry;
+pub use validate::{validate_destination, ValidationOutcome};
 
 #[cfg(test)]
 mod tests;
