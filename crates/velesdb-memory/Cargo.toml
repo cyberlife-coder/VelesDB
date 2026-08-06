@@ -25,6 +25,9 @@ exclude = ["media/"]
 # one like velesdb-wasm that explicitly disables it to stay off tokio/mio.
 velesdb-core = { workspace = true, default-features = false }
 thiserror = { workspace = true }
+# Guards `WORKING_INDEX_WRITE` (src/context/memory_bridge.rs) — no poisoning,
+# unlike `std::sync::Mutex`, per the workspace's lock policy (AGENTS.md).
+parking_lot = "0.12"
 serde = { workspace = true }
 # The optional `velesdb-memory.toml` config file (see `src/config.rs`).
 # Native-only by `cfg` rather than by feature: a config file is not an opt-in
