@@ -158,7 +158,7 @@ static EVENT_SEQ: AtomicU64 = AtomicU64::new(0);
 /// `HashMap<String, _>` keyed by caller-supplied project names is an unbounded
 /// slow leak for no measurable gain. Per-project striping is the obvious
 /// upgrade if index writes ever become hot.
-static WORKING_INDEX_WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static WORKING_INDEX_WRITE: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
 impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// [`ContextCompiler::compile`] with this service's memory folded in:
@@ -1061,11 +1061,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     fn update_working_index(&self, project: &str, session: &str) -> Result<(), MemoryError> {
         // Read-modify-write of a single shared fact: held for the whole
         // sequence, otherwise a concurrent save silently erases this entry.
-        // The guarded data is `()`, so a poisoned lock carries no broken
-        // invariant — recover rather than propagate someone else's panic.
-        let _guard = WORKING_INDEX_WRITE
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = WORKING_INDEX_WRITE.lock();
         // A corrupt index must not brick saving for the whole project. The
         // read path surfaces the error — that is where a human can act on it
         // — but propagating it here would make every future save of every

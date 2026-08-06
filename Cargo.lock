@@ -6950,6 +6950,7 @@ dependencies = [
  "futures",
  "hyper",
  "hyper-util",
+ "parking_lot",
  "rcgen",
  "reqwest",
  "rmcp",
