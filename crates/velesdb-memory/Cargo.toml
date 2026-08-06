@@ -42,7 +42,7 @@ schemars = "1"
 # The MCP server stack — optional, behind the (default) `mcp` feature. Library
 # consumers (e.g. the language bindings) build with `default-features = false`
 # to get the memory core without the `rmcp`/`tokio` server dependencies.
-rmcp = { version = "2.0.0", features = ["server", "macros", "transport-io", "transport-streamable-http-server"], optional = true }
+rmcp = { version = "3.1", features = ["server", "macros", "transport-io", "transport-streamable-http-server"], optional = true }
 tokio = { workspace = true, optional = true }
 # Optional real-recall backend (off by default). HTTP-only to a local Ollama;
 # `default-features = false` drops TLS to keep the binary small.
@@ -171,7 +171,7 @@ criterion = { workspace = true }
 # OWN `reqwest::Client`s (one trusting nothing extra, one trusting the
 # generated local CA via `add_root_certificate`) and hands them to
 # `StreamableHttpClientTransport::with_client` for the RED/GREEN proof.
-rmcp = { version = "2.0.0", features = ["client", "transport-streamable-http-client-reqwest", "reqwest"] }
+rmcp = { version = "3.1", features = ["client", "transport-streamable-http-client-reqwest", "reqwest"] }
 # Same crate + version rmcp's reqwest transport resolves to (Cargo unifies
 # the two into one compiled `reqwest`), named directly here so
 # tests/http_tls.rs can construct `reqwest::Client`/`reqwest::Certificate`
