@@ -282,7 +282,31 @@ untouched with a warning.
 | `VELESDB_MEMORY_HTTP_MAX_BODY_BYTES` | Max size of a single `/mcp` request body (default 16 MiB). An oversized request is rejected instead of being buffered into memory unbounded. |
 | `VELESDB_MEMORY_HTTP_MAX_SESSIONS` | Max concurrent MCP sessions (default 64). Each session holds a worker task and a couple of small bounded channels — cheap individually, but a client that opens sessions without closing them could otherwise grow that without bound. |
 | `VELESDB_MEMORY_HTTP_KEEP_ALIVE_SECS` | How long a session may sit idle before it is retired (default 3600 — 60 minutes). See [Idle sessions, and why a timeout is not a failed write](#idle-sessions-and-why-a-timeout-is-not-a-failed-write). |
+| `VELESDB_MEMORY_LOG` | Per-request logging to stderr, as `EnvFilter` directives. Unset (the binary's default) is fully silent; the macOS installer deploys the daemon with the payload-safe incident preset on. See [Reading the daemon's log](#reading-the-daemons-log). |
 | `GET /health` | Plain 200 OK liveness probe, no MCP handshake needed — what the installer and CI use to confirm the daemon is up (over HTTPS too, once TLS is the transport). |
+
+### Reading the daemon's log
+
+With `VELESDB_MEMORY_LOG` set, every `/mcp` request leaves one stderr line
+(method, `mcp-session-id`, status, duration), and every tool call another
+(tool name, session, verdict, duration) — which is what tells the three
+outside-identical incident cases apart: a request that **never arrived**
+leaves no line, one **refused** (expired/unknown session) leaves its `404`,
+one **handled** leaves its `2xx` plus the tool line. On macOS the launchd
+daemon's stderr lands in `~/Library/Logs/velesdb-memory/daemon.err.log`, and
+the installer deploys with the incident preset
+(`info,rmcp::service=error,rmcp::transport::worker=debug,rmcp::transport::streamable_http_server=debug`)
+already on: those events never carry request content — canary tests hold the
+preset to that, on the happy path and on the error path — so the log is safe
+to keep. The `worker` target is what records a session worker dying of idle
+timeout, and `rmcp::service` is pinned to `error` because its `warn`-level
+`response error` event quotes the failing request's error message, client
+input included.
+
+Do **not** reach for `rmcp=debug` or a blanket `trace` on a store that holds
+anything sensitive: at those levels rmcp itself dumps full request arguments
+— fact text included — into the log. That verbosity is for deliberate wire
+debugging only.
 
 ### Idle sessions, and why a timeout is not a failed write
 

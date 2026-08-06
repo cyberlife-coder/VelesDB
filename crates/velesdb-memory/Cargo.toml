@@ -44,6 +44,14 @@ schemars = "1"
 # to get the memory core without the `rmcp`/`tokio` server dependencies.
 rmcp = { version = "2.0.0", features = ["server", "macros", "transport-io", "transport-streamable-http-server"], optional = true }
 tokio = { workspace = true, optional = true }
+# Per-request observability (#1780): `tracing` carries the events (one per MCP
+# request: tool, session, verdict, duration — never a payload), and
+# `tracing-subscriber` renders them to stderr when VELESDB_MEMORY_LOG is set
+# (see `src/logging.rs`). Both ride the `mcp` feature: `tracing` is already in
+# the server's dependency graph via rmcp/axum/hyper, so this adds no weight
+# there, and library consumers (`default-features = false`) stay free of both.
+tracing = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, optional = true }
 # Optional real-recall backend (off by default). HTTP-only to a local Ollama;
 # `default-features = false` drops TLS to keep the binary small.
 ureq = { version = "2", optional = true, default-features = false }
@@ -110,7 +118,7 @@ optional = true
 # by default so `cargo build` produces the server; library consumers disable
 # defaults to pick only what they need.
 default = ["mcp", "persistence", "context"]
-mcp = ["dep:rmcp", "dep:tokio", "persistence"]
+mcp = ["dep:rmcp", "dep:tokio", "dep:tracing", "dep:tracing-subscriber", "persistence"]
 # Streamable-HTTP transport (multi-client daemon mode, see the README's "HTTP
 # transport" section): lets several MCP clients share ONE `velesdb-memory`
 # process instead of each spawning its own stdio process and fighting over
@@ -162,6 +170,12 @@ tempfile = "3"
 serde_json = { workspace = true }
 tokio = { workspace = true }
 criterion = { workspace = true }
+# tests/daemon_logging.rs (#1780) installs a capturing global subscriber to
+# assert the per-request events exist, carry the promised fields, and never
+# leak a payload. Dev-only copies of the optional prod deps above, so the
+# tests build regardless of which features the prod side enabled.
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 # MCP client-side streamable-HTTP transport, dev-only: drives the `http`
 # feature's server transport in tests/http_transport.rs with a real client
 # (the same one exercised by rmcp's own upstream test suite) rather than
@@ -228,6 +242,16 @@ workspace = true
 [[test]]
 name = "http_transport"
 path = "tests/http_transport.rs"
+required-features = ["http"]
+
+# Per-request observability (#1780): proves the transport- and tool-level
+# trace events exist, distinguish refused from handled requests, and never
+# carry fact content. `http` because the three-cases contract (never
+# arrived / refused / handled) is only observable through the HTTP session
+# layer.
+[[test]]
+name = "daemon_logging"
+path = "tests/daemon_logging.rs"
 required-features = ["http"]
 
 # A second `--http` daemon against a store another process already holds

@@ -496,10 +496,11 @@ impl McpServer {
     }
 }
 
-/// `#[tool_handler]` generates `call_tool` / `list_tools` from the router;
-/// `get_info` is overridden so the server identifies itself as `velesdb-memory`
-/// (the macro default falls back to rmcp's own identity). Per-tool guidance
-/// lives in each `#[tool(description = …)]`.
+/// `#[tool_handler]` generates `list_tools` from the router — `call_tool` is
+/// written by hand below (see its doc comment) and the macro skips what
+/// already exists. `get_info` is overridden so the server identifies itself
+/// as `velesdb-memory` (the macro default falls back to rmcp's own
+/// identity). Per-tool guidance lives in each `#[tool(description = …)]`.
 /// The server's one-shot vitrine to a connecting agent (V2a-1 quick win):
 /// must cover every tool family, not just memory — a `#[cfg(feature =
 /// "context")]` variant since the context-compiler tools only exist in that
@@ -520,6 +521,76 @@ impl ServerHandler for McpServer {
         info.instructions = Some(SERVER_INSTRUCTIONS.to_owned());
         info
     }
+
+    /// One trace event per tool call (#1780): tool name, session id, verdict,
+    /// duration — never an argument or fact content
+    /// (`tests/daemon_logging.rs` holds a canary against that). Written by
+    /// hand so the event wraps the dispatch — `#[tool_handler]` sees the
+    /// method already exists and only generates `list_tools`; the dispatch
+    /// below is exactly what the macro would have generated.
+    async fn call_tool(
+        &self,
+        request: rmcp::model::CallToolRequestParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::CallToolResult, ErrorData> {
+        let tool = request.name.clone();
+        let session = http_session_id(&context.extensions);
+        let started = std::time::Instant::now();
+        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        let outcome = self.tool_router.call(tcc).await;
+        log_tool_call(&tool, session.as_deref(), &outcome, started);
+        outcome
+    }
+}
+
+/// The tool-level trace event (#1780), split from `call_tool` so the verdict
+/// taxonomy is readable in one place. `Err` is a protocol-level failure, but
+/// a *refused* tool call comes back as `Ok` with `is_error` set INSIDE a
+/// valid result — reading only the outer `Result` would log every refusal as
+/// a success, the exact misreading this event exists to prevent.
+fn log_tool_call(
+    tool: &str,
+    session: Option<&str>,
+    outcome: &Result<rmcp::model::CallToolResult, ErrorData>,
+    started: std::time::Instant,
+) {
+    let verdict = match outcome {
+        Err(_) => "error",
+        Ok(result) if result.is_error == Some(true) => "tool_error",
+        Ok(_) => "ok",
+    };
+    // `%` (Display) rather than the default Debug capture: Debug renders
+    // strings quoted (`tool="recall"`), and these lines exist to be grepped
+    // (`grep tool=recall`) by an operator mid-incident. The target is pinned
+    // explicitly for the same operators: a module refactor must not silently
+    // rename the lines their tooling matches on.
+    tracing::info!(
+        target: "velesdb_memory::mcp",
+        tool = %tool,
+        session = %session.unwrap_or(crate::logging::NO_SESSION),
+        verdict = %verdict,
+        elapsed_ms = crate::logging::elapsed_millis(started),
+        "mcp tool call"
+    );
+}
+
+/// The `mcp-session-id` this call arrived under, read from the HTTP request
+/// parts rmcp injects into the request's extensions (its streamable-HTTP
+/// tower service does this for every incoming `POST`). HTTP transport only —
+/// there is no session id on stdio, and the event then reports `-`.
+#[cfg(feature = "http")]
+fn http_session_id(extensions: &rmcp::model::Extensions) -> Option<String> {
+    extensions
+        .get::<axum::http::request::Parts>()
+        .and_then(|parts| crate::http::session_from_headers(&parts.headers))
+}
+
+/// Without the HTTP transport nothing ever injects request parts, so there
+/// is no session id to read — same cfg-pair shape as the binary's
+/// transport-dependent helpers.
+#[cfg(not(feature = "http"))]
+fn http_session_id(_extensions: &rmcp::model::Extensions) -> Option<String> {
+    None
 }
 
 /// La post-condition du point de passage, verifiee SUR PLACE.
