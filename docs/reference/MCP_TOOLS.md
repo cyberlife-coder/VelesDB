@@ -119,8 +119,8 @@ from every read.
 
 ## `recall`
 
-Semantic (vector) retrieval, most similar first, with an optional exact-match
-metadata filter served by the ColumnStore.
+Semantic (vector) retrieval with an optional exact-match metadata filter
+served by the ColumnStore.
 
 | Parameter | Type | Required | Notes |
 |---|---|---|---|
@@ -129,8 +129,9 @@ metadata filter served by the ColumnStore.
 | `filter` | object | no | Exact-match metadata, e.g. `{"project":"veles","status":"resolved"}`. |
 
 Returns `{ memories: [ { id, id_str, score, content, metadata } ] }`. Ranking
-also folds in each fact's learned confidence, so `feedback` changes future
-`recall` order.
+blends similarity with each fact's learned confidence, so `feedback` changes
+future `recall` order; the returned `score` stays the raw similarity, never
+the blended value.
 
 ```jsonc
 recall { "query": "billing retries", "limit": 5, "filter": { "project": "checkout" } }

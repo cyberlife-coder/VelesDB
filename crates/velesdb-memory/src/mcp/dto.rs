@@ -112,7 +112,11 @@ impl From<Recollection> for RecollectionDto {
 /// Result of the `recall` tool.
 #[derive(Serialize, JsonSchema)]
 pub(super) struct RecallResult {
-    /// Recalled memories, most similar first.
+    /// Recalled memories, best match first. The two tools returning this
+    /// shape rank differently: `recall` blends similarity with learned
+    /// confidence (see `feedback`), while `recall_where` with filters
+    /// orders by pure similarity. Each `score` is the raw similarity,
+    /// never a blended value.
     pub(super) memories: Vec<RecollectionDto>,
 }
 
