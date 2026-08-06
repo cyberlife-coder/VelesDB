@@ -1,3 +1,5 @@
+[![MCP Toplist](https://mcptoplist.com/badge/io.github.cyberlife-coder%2Fvelesdb-memory.svg)](https://mcptoplist.com/server/io.github.cyberlife-coder%2Fvelesdb-memory)
+
 <!--
   NOTE: several phrasings/numbers below are pinned verbatim by docs/reference/promise-contract.json
   and checked by scripts/check-promise-contract.py. Moving or rewording a pinned line/table
