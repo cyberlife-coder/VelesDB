@@ -524,8 +524,9 @@ fn build_configured_service(
 /// it, and the whole point of the refusal is that something must not proceed.
 ///
 /// # Errors
-/// An unparsable invocation, a non-dry-run request (not built yet — see
-/// #1762), an unreachable embedder, or a store that cannot be read or copied.
+/// An unparsable invocation, a non-dry-run request without `--destination`,
+/// an unreachable embedder, a store that cannot be read or copied, or any
+/// stage of the migration itself refusing.
 fn run_migrate_embeddings(
     argv: &[String],
     flags: &[String],

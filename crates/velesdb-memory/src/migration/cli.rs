@@ -8,17 +8,15 @@
 //! destructive tool call particularly unsuitable. So the first surface is a
 //! subcommand, the engine stays a library, and no mutating MCP tool is added.
 //!
-//! # What this phase does and does not do
+//! # What this module does and does not do
 //!
-//! `--dry-run` only. It reads, it decides a regime, it prints what it found and
-//! what would happen. It writes nothing, takes no lock, and may run while the
-//! daemon holds the store: [`diagnose`](crate::migration::diagnose) never opens
-//! the live source, it inspects a verified copy.
-//!
-//! Any invocation that is not a dry run is REFUSED with the reason, rather than
-//! accepted and quietly doing nothing. An operator who types
-//! `migrate-embeddings --strategy auto` is asking for a migration; answering
-//! with silence and exit 0 would be the worst of the available behaviours.
+//! Parsing, the dry-run entry point, rendering, and the operator-facing
+//! texts. `--dry-run` reads, decides a regime, and prints what it found and
+//! what would happen — it writes nothing, takes no lock, and may run while
+//! the daemon holds the store: [`diagnose`](crate::migration::diagnose) never
+//! opens the live source, it inspects a verified copy. A non-dry-run runs the
+//! whole migration ([`migrate`](crate::migration::migrate) — rebuild,
+//! validation, switch) and requires the operator to name the destination.
 
 use super::{diagnose, DiagnosisReport, Strategy, TargetContract};
 use std::path::{Path, PathBuf};
