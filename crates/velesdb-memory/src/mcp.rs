@@ -532,7 +532,7 @@ impl ServerHandler for McpServer {
         &self,
         request: rmcp::model::CallToolRequestParams,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
-    ) -> Result<rmcp::model::CallToolResult, ErrorData> {
+    ) -> Result<rmcp::model::CallToolResponse, ErrorData> {
         let tool = request.name.clone();
         let session = http_session_id(&context.extensions);
         let started = std::time::Instant::now();
@@ -551,13 +551,19 @@ impl ServerHandler for McpServer {
 fn log_tool_call(
     tool: &str,
     session: Option<&str>,
-    outcome: &Result<rmcp::model::CallToolResult, ErrorData>,
+    outcome: &Result<rmcp::model::CallToolResponse, ErrorData>,
     started: std::time::Instant,
 ) {
+    use rmcp::model::CallToolResponse;
     let verdict = match outcome {
         Err(_) => "error",
-        Ok(result) if result.is_error == Some(true) => "tool_error",
-        Ok(_) => "ok",
+        Ok(CallToolResponse::Complete(result)) if result.is_error == Some(true) => "tool_error",
+        Ok(CallToolResponse::Complete(_)) => "ok",
+        // rmcp 3's InputRequired/Task responses (SEP-2663) carry no verdict:
+        // the call has not completed. No tool of this server produces them —
+        // if one ever appears here, "pending" keeps the event truthful
+        // instead of misreporting an unfinished call as a success.
+        Ok(_) => "pending",
     };
     // `%` (Display) rather than the default Debug capture: Debug renders
     // strings quoted (`tool="recall"`), and these lines exist to be grepped
