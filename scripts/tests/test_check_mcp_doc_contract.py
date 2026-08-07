@@ -114,6 +114,7 @@ class DocContractTestCase(unittest.TestCase):
         self.write("docs/reference/DEMO_TOOLS.md", REFERENCE_CLEAN)
         self.write("skills/demo/SKILL.md", SKILL_CLEAN)
         self.policed(_tool())
+        self.non_mcp()
 
     def write(self, rel_path: str, content: str) -> None:
         path = self.tmp / rel_path
@@ -126,6 +127,14 @@ class DocContractTestCase(unittest.TestCase):
         cmdc.POLICED_TOOLS = tuple(tools)
         self.addCleanup(setattr, cmdc, "POLICED_TOOLS", previous)
 
+    def non_mcp(self, entries: "dict[str, str] | None" = None) -> None:
+        """Swap the out-of-scope registry — empty by default: the sandbox
+        holds none of the real repository's other-API surfaces, and the
+        staleness rule would (rightly) refuse every real entry here."""
+        previous = cmdc.NON_MCP_SURFACES
+        cmdc.NON_MCP_SURFACES = dict(entries or {})
+        self.addCleanup(setattr, cmdc, "NON_MCP_SURFACES", previous)
+
     def assertGuardPasses(self) -> None:
         failures, _info = cmdc.guard_return_shape(self.tmp)
         self.assertEqual(failures, [], f"guard should pass but reported {failures}")
@@ -137,6 +146,56 @@ class DocContractTestCase(unittest.TestCase):
         for needle in expected_substrings:
             self.assertIn(needle, joined)
         return failures
+
+
+class ExactSiblingShapeTests(DocContractTestCase):
+    """#1695: a literal that IS another tool's exact root shape belongs to
+    that tool — a sentence naming both ("demo_tool wraps sibling_tool, which
+    answers {found, removed}") must not read as demo_tool drifting."""
+
+    def test_a_siblings_exact_shape_named_in_demo_tools_prose_is_not_drift(self) -> None:
+        self.write(
+            "docs/reference/DEMO_TOOLS.md",
+            REFERENCE_CLEAN
+            + "\nUndo pairing: `demo_tool` pairs with `sibling_tool`, which "
+            "returns `{found, removed}` for the undo.\n",
+        )
+        self.assertGuardPasses()
+
+    def test_a_shape_matching_no_tool_still_reads_as_drift(self) -> None:
+        # The tie-break must not become a loophole: keys matching NO
+        # published tool stay charged to the named tool as drift.
+        self.write(
+            "docs/reference/DEMO_TOOLS.md",
+            REFERENCE_CLEAN
+            + "\nUndo pairing: `demo_tool` also returns `{found, wrong_key}` "
+            "sometimes.\n",
+        )
+        self.assertGuardFails("wrong_key")
+
+
+class NonMcpSurfaceTests(DocContractTestCase):
+    """#1695: a surface documenting ANOTHER API that shares a tool's verb is
+    declared out of scope WITH a reason — and a stale entry is refused."""
+
+    OTHER_API = "docs/guides/CORE_API.md"
+    OTHER_API_TEXT = (
+        "# Core API\n\nThe core's own `demo_tool` returns "
+        "`{payload, score}` — a different shape by design.\n"
+    )
+
+    def test_an_unregistered_other_api_surface_reads_as_drift(self) -> None:
+        self.write(self.OTHER_API, self.OTHER_API_TEXT)
+        self.assertGuardFails("payload")
+
+    def test_a_registered_other_api_surface_is_skipped_with_its_reason(self) -> None:
+        self.write(self.OTHER_API, self.OTHER_API_TEXT)
+        self.non_mcp({self.OTHER_API: "documents the core API, not the MCP tool"})
+        self.assertGuardPasses()
+
+    def test_a_stale_registry_entry_is_refused(self) -> None:
+        self.non_mcp({"docs/guides/GONE.md": "matches nothing anymore"})
+        self.assertGuardFails("stale exemption")
 
 
 class TrackedPerimeterTests(DocContractTestCase):
@@ -679,6 +738,11 @@ class RealRepositoryTests(unittest.TestCase):
         # that grows by batches (#1695) needs the counter to grow with it, or
         # nine of the ten are back to being deletable one sentence at a time.
         expected = {
+            # #1695 batch 1 — each pinned at least on the tool reference.
+            "feedback": {"docs/reference/MCP_TOOLS.md"},
+            "recall_where": {"docs/reference/MCP_TOOLS.md"},
+            "relate": {"docs/reference/MCP_TOOLS.md"},
+            "unrelate": {"docs/reference/MCP_TOOLS.md"},
             "compile_transcript": {
                 "crates/velesdb-node/src/lib.rs",
                 "docs/reference/MCP_TOOLS.md",

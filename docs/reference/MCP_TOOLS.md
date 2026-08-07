@@ -149,6 +149,10 @@ comparisons, not just equality.
 | `limit` | integer | no | Default 10, capped at 1000. |
 | `filters` | array of `{field, op, value}` | yes | `op` ∈ `eq`, `ne`, `lt`, `le`, `gt`, `ge`. All predicates are ANDed. |
 
+`recall_where` returns `{ memories }`, most similar first — the same envelope
+as `recall`, each memory carrying its id (`id_str` for float-lossy clients),
+content, score and metadata.
+
 **Comparisons are type-strict, with no runtime coercion.** A filter value of
 `20230601` (a JSON number) never matches a fact stored as `{"ts":
 "20230601"}` (a JSON string) — same value, different JSON type, no match and
