@@ -68,8 +68,9 @@ pub struct McpServer {
     service: Arc<MemoryService<DynEmbedder>>,
     /// Join guard of the background autograph worker (#1846) — present iff
     /// an autograph extractor is configured. Held only for its `Drop`: the
-    /// server going down closes the queue and joins the worker, so the
-    /// enrichments the queue accepted are wired before exit.
+    /// server going down closes the queue and joins the worker — the job in
+    /// flight completes, still-queued ones are skipped and counted, so exit
+    /// waits for at most ONE generation.
     _autograph_worker: Option<Arc<crate::service::AutographWorkerHandle>>,
     /// Optional extraction backend powering `remember_extracted`. `None` unless
     /// a backend is attached via [`Self::with_extractor`]; the tool then reports
@@ -98,7 +99,7 @@ impl McpServer {
         // configured, ONE background worker consumes a bounded queue and
         // `remember` returns as soon as the fact is stored — measured 46-52 s
         // inline against a 0.12 s embedding. The handle rides the server so
-        // shutdown drains what the queue accepted.
+        // shutdown finishes the job in flight and skips the rest, counted.
         let autograph_worker = if service.has_autograph() {
             match service.spawn_autograph_worker(crate::limits::MAX_AUTOGRAPH_QUEUE) {
                 Ok(handle) => Some(Arc::new(handle)),

@@ -12,7 +12,8 @@
 //! * the enrichment still lands — `entity()` sees the wired edge within a
 //!   bounded wait (an event poll, not a wall-clock guess: #1793's rule);
 //! * a FULL queue drops enrichments COUNTED and never blocks the write;
-//! * dropping the handle drains what the queue accepted, deterministically.
+//! * shutdown is BOUNDED: the in-flight job completes, queued jobs are
+//!   skipped and counted — an exit never waits out a queue of generations.
 
 #![cfg(feature = "persistence")]
 
@@ -140,11 +141,11 @@ fn remember_pays_for_the_write_not_for_the_model() {
 fn a_full_queue_drops_counted_and_never_blocks_the_write() {
     let (_dir, svc, extractor, release) = gated_service();
     let worker = svc
-        .spawn_autograph_worker(1)
+        .spawn_autograph_worker(2)
         .expect("spawn autograph worker");
 
-    // Job 1 is taken by the worker and BLOCKS on the gate; job 2 fills the
-    // queue (capacity 1); jobs 3 and 4 must be dropped — counted, and the
+    // Job 0 is taken by the worker and BLOCKS on the gate; jobs 1 and 2 fill
+    // the queue (capacity 2); job 3 must be dropped — counted, and the
     // writes themselves still instant.
     let started = Instant::now();
     for i in 0..4 {
@@ -155,34 +156,62 @@ fn a_full_queue_drops_counted_and_never_blocks_the_write() {
         started.elapsed() < Duration::from_secs(2),
         "four writes against a stuck extractor must not block on the queue"
     );
-    let observed = wait_until(Duration::from_secs(5), || svc.autograph_dropped() == 2);
+    let observed = wait_until(Duration::from_secs(5), || svc.autograph_dropped() == 1);
     assert!(
         observed,
-        "exactly the two over-capacity enrichments are dropped and COUNTED, \
+        "exactly the one over-capacity enrichment is dropped and COUNTED, \
          got {} — a silent loss here is the defect class #1820 closed for \
          responses",
         svc.autograph_dropped()
     );
 
-    // Release both accepted jobs, then drop the handle: it must JOIN —
-    // returning only once the in-flight job and the queued one are wired.
-    release.send(()).expect("release job 1");
-    release.send(()).expect("release job 2");
-    drop(worker);
+    // Shutdown is BOUNDED (#1846's approved design): close the queue while
+    // job 0 is still in flight and jobs 1-2 sit queued. The in-flight job
+    // completes; the queued ones are SKIPPED and counted with the same drop
+    // counter — the daemon's exit must not wait out a queue of generations
+    // (64 deep × a 46 s model would be tens of minutes).
+    let joiner = std::thread::spawn(move || drop(worker));
+    let closed = wait_until(Duration::from_secs(5), || !svc.autograph_queue_open());
+    assert!(closed, "dropping the handle must close the queue first");
+    release.send(()).expect("release the in-flight job");
+    joiner.join().expect("join the dropping thread");
     assert_eq!(
         extractor.calls.load(Ordering::SeqCst),
-        2,
-        "dropping the handle drains exactly what the queue accepted"
+        1,
+        "only the in-flight job is wired on shutdown"
+    );
+    assert_eq!(
+        svc.autograph_dropped(),
+        3,
+        "the two queued jobs skipped on shutdown join the overflow in the \
+         SAME counter — a loss nobody can see is the defect class #1820 \
+         closed for responses"
     );
 }
 
 #[test]
-fn a_second_worker_is_refused() {
-    let (_dir, svc, _extractor, _release) = gated_service();
-    let _first = svc.spawn_autograph_worker(4).expect("first worker");
+fn a_second_worker_is_refused_but_a_respawn_after_drop_works() {
+    let (_dir, svc, extractor, release) = gated_service();
+    let first = svc.spawn_autograph_worker(4).expect("first worker");
     assert!(
         svc.spawn_autograph_worker(4).is_err(),
         "two workers would race the single-writer store for no gain — the \
          second spawn must be refused, not silently doubled"
+    );
+
+    // After the first worker is gone, a respawn must serve again: the
+    // closing latch is per-worker, not a one-way poison for the service.
+    drop(first);
+    let _second = svc.spawn_autograph_worker(4).expect("respawn after drop");
+    svc.remember("Un fait après le respawn du worker.", &[], None)
+        .expect("remember");
+    release.send(()).expect("release the enrichment");
+    let processed = wait_until(Duration::from_secs(5), || {
+        extractor.calls.load(Ordering::SeqCst) == 1
+    });
+    assert!(
+        processed,
+        "a respawned worker must process new jobs — the shutdown latch has \
+         to re-arm on spawn, or every later enrichment is silently skipped"
     );
 }

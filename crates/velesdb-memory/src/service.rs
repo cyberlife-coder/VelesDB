@@ -123,21 +123,31 @@ struct AutographJob {
 /// its response path — 46 s measured for a 12-word fact on the production
 /// daemon, versus a 0.12 s embedding — and the worker wires the graph behind.
 ///
-/// `dropped` counts enrichments refused by a FULL queue. Non-negotiably
-/// visible: a burst that outruns the extractor loses graph structure, and a
-/// loss nobody can see is the exact defect class #1820 closed for responses.
+/// `dropped` counts enrichments refused by a FULL queue or skipped by a
+/// closing worker. Non-negotiably visible: a burst that outruns the
+/// extractor loses graph structure, and a loss nobody can see is the exact
+/// defect class #1820 closed for responses.
+///
+/// `closing` is the shutdown latch: the handle's drop raises it BEFORE
+/// removing the sender, so the worker finishes the job in flight and SKIPS
+/// what is still queued (counted, one aggregated warning) instead of
+/// draining a queue of generations — 64 × a 46 s model would hold the
+/// daemon's exit for tens of minutes. Re-armed by each spawn.
 #[derive(Default)]
 struct AutographQueue {
     tx: parking_lot::Mutex<Option<std::sync::mpsc::SyncSender<AutographJob>>>,
     dropped: std::sync::atomic::AtomicU64,
+    closing: std::sync::atomic::AtomicBool,
 }
 
 /// Join guard for the background autograph worker.
 ///
-/// Dropping it closes the queue (taking the sender out of the service) and
-/// JOINS the worker: the job in flight completes, the already-queued ones
-/// are drained, and only then does the drop return. Tests get determinism;
-/// the daemon's shutdown waits for at most the queue it accepted.
+/// Dropping it raises the closing latch, takes the sender out of the
+/// service, and JOINS the worker: the job in flight completes, the
+/// still-queued ones are SKIPPED — counted in the drop counter, one
+/// aggregated warning — and only then does the drop return. Tests get
+/// determinism; the daemon's shutdown waits for at most ONE generation,
+/// never a queue of them.
 pub struct AutographWorkerHandle {
     close_queue: Option<Box<dyn FnOnce() + Send + Sync>>,
     join: Option<std::thread::JoinHandle<()>>,
@@ -440,6 +450,14 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    /// Whether the background autograph queue is OPEN — a worker is spawned
+    /// and `remember` enqueues instead of running the enrichment inline.
+    /// Turns false the moment a worker handle's drop closes the queue.
+    #[must_use]
+    pub fn autograph_queue_open(&self) -> bool {
+        self.autograph_queue.tx.lock().is_some()
+    }
+
     /// Whether an autograph extractor is configured at all.
     #[must_use]
     pub fn has_autograph(&self) -> bool {
@@ -491,15 +509,46 @@ where
                 )));
             }
             *guard = Some(tx);
+            // Re-arm the shutdown latch under the same lock that installs
+            // the sender: a previous worker's close must not poison this one
+            // into skipping every job it will ever receive.
+            self.autograph_queue
+                .closing
+                .store(false, std::sync::atomic::Ordering::Release);
         }
         let worker_service = std::sync::Arc::clone(self);
         let join = std::thread::Builder::new()
             .name("velesdb-autograph".to_owned())
             .spawn(move || {
                 // Ends when every sender is gone — i.e. when the handle's
-                // drop takes the sender back out of the service.
+                // drop takes the sender back out of the service. Once the
+                // closing latch is up, still-queued jobs are SKIPPED: the
+                // exit pays for the job in flight, never for the queue.
+                let mut skipped_on_close: u64 = 0;
                 for job in rx {
+                    if worker_service
+                        .autograph_queue
+                        .closing
+                        .load(std::sync::atomic::Ordering::Acquire)
+                    {
+                        skipped_on_close += 1;
+                        continue;
+                    }
                     worker_service.autograph(job.fact_id, &job.fact);
+                }
+                if skipped_on_close > 0 {
+                    worker_service
+                        .autograph_queue
+                        .dropped
+                        .fetch_add(skipped_on_close, std::sync::atomic::Ordering::Relaxed);
+                    // ONE aggregated line, not one per job (#1834's rule).
+                    #[cfg(feature = "mcp")]
+                    tracing::warn!(
+                        skipped = skipped_on_close,
+                        "autograph worker closing: queued enrichments skipped — \
+                         the facts are stored, their graph structure is not; \
+                         re-remembering rebuilds it"
+                    );
                 }
             })
             .map_err(|err| {
@@ -510,6 +559,13 @@ where
         let closer_service = std::sync::Arc::clone(self);
         Ok(AutographWorkerHandle {
             close_queue: Some(Box::new(move || {
+                // Latch FIRST, sender out second: the worker observes the
+                // latch no later than the queue's end, so it cannot start
+                // draining jobs the shutdown meant to skip.
+                closer_service
+                    .autograph_queue
+                    .closing
+                    .store(true, std::sync::atomic::Ordering::Release);
                 closer_service.autograph_queue.tx.lock().take();
             })),
             join: Some(join),
