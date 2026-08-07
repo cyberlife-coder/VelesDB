@@ -760,15 +760,13 @@ fn merge_tiny(pieces: Vec<RawPiece>, min_bytes: usize) -> Vec<RawPiece> {
                 && last.range.len() + piece.range.len() <= MAX_FRAGMENT_BYTES
                 && (last.range.len() < min_bytes || piece.range.len() < min_bytes)
         });
-        if mergeable {
-            // Safe: `mergeable` only true when `merged` is non-empty.
-            merged
-                .last_mut()
-                .expect("checked non-empty above")
-                .range
-                .end = piece.range.end;
-        } else {
-            merged.push(piece);
+        // `mergeable` is only true when `merged` is non-empty, but branch on
+        // the `Option` rather than assume it: a future edit to `mergeable`
+        // that breaks the invariant then drops nothing silently and panics
+        // nowhere, it just falls back to pushing `piece` as its own entry.
+        match merged.last_mut() {
+            Some(last) if mergeable => last.range.end = piece.range.end,
+            _ => merged.push(piece),
         }
     }
     merged

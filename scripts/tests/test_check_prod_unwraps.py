@@ -1,6 +1,6 @@
 """Tests for scripts/check_prod_unwraps.py.
 
-Pins two audit contracts:
+Pins three audit contracts:
 
 * F-3.10 — every production crate's `src/` is in the scan set (bindings and
   adapters were historically excluded, leaving an unwrap/expect blind spot).
@@ -9,6 +9,14 @@ Pins two audit contracts:
   gate. The old exact-string match only handled bare `#[cfg(test)]`, so
   `.expect()` calls inside those gated test modules were reported as false
   positives (e.g. velesdb-memory/src/reinforce.rs).
+* F-3.12 — a `///` line whose "```" is prose (an inline code span
+  double-backtick-escaping a literal triple backtick, not a fence marker)
+  must not toggle doc-example tracking. The old substring check
+  (`"```" in stripped`) treated any occurrence as a fence open, got stuck
+  "inside" a doc example with no closing fence for the rest of the file, and
+  silently exempted every remaining line — including real functions — from
+  the unwrap/expect scan (found live in velesdb-memory/src/context/
+  segment.rs, which was hiding a production `.expect()` this way).
 """
 
 from __future__ import annotations
@@ -185,6 +193,64 @@ class TestGatedBlockIsSkippedNotTheRestOfTheFile(unittest.TestCase):
             "#[cfg(test)]\nmod t2 { fn b() { z.unwrap(); } }\n"
         )
         self.assertEqual([line for line, _ in hits], [3])
+
+
+class TestDocFenceMarker(unittest.TestCase):
+    def test_bare_fence_open_is_a_marker(self) -> None:
+        self.assertTrue(cpu.is_doc_fence_marker("/// ```"))
+
+    def test_fence_open_with_language_tag_is_a_marker(self) -> None:
+        self.assertTrue(cpu.is_doc_fence_marker("/// ```rust"))
+
+    def test_double_backtick_escaped_literal_is_not_a_marker(self) -> None:
+        # segment.rs:112 / chunk.rs:87 — prose *about* the fence sequence,
+        # not a fence itself.
+        self.assertFalse(
+            cpu.is_doc_fence_marker("/// `` ``` `` (defense in depth).")
+        )
+
+    def test_non_doc_comment_is_not_a_marker(self) -> None:
+        self.assertFalse(cpu.is_doc_fence_marker('//! `` ``` ``'))
+
+
+class TestScanFileDocFenceFalsePositive(unittest.TestCase):
+    """F-3.12: a prose-only ``` inside a `///` line must not blind the rest
+    of the file's scan (regression for the segment.rs live finding)."""
+
+    def setUp(self) -> None:
+        import tempfile
+
+        self._tmpdir = tempfile.TemporaryDirectory()
+
+    def tearDown(self) -> None:
+        self._tmpdir.cleanup()
+
+    def test_expect_after_an_escaped_triple_backtick_comment_is_flagged(
+        self,
+    ) -> None:
+        content = (
+            "/// `` ``` `` (defense in depth; it usually does).\n"
+            "pub fn a() {}\n"
+            "\n"
+            "fn merge_tiny() {\n"
+            '    merged.last_mut().expect("checked non-empty above");\n'
+            "}\n"
+        )
+        tmp = Path(self._tmpdir.name) / "segment_like.rs"
+        tmp.write_text(content, encoding="utf-8")
+        hits = cpu.scan_file(tmp)
+        self.assertEqual([line for line, _ in hits], [5])
+
+    def test_a_real_fenced_example_still_hides_its_contents(self) -> None:
+        content = (
+            "/// ```\n"
+            "/// let v = x.unwrap();\n"
+            "/// ```\n"
+            "pub fn a() {}\n"
+        )
+        tmp = Path(self._tmpdir.name) / "real_fence.rs"
+        tmp.write_text(content, encoding="utf-8")
+        self.assertEqual(cpu.scan_file(tmp), [])
 
 
 class TestScanDirsCoverage(unittest.TestCase):

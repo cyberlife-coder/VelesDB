@@ -282,7 +282,31 @@ untouched with a warning.
 | `VELESDB_MEMORY_HTTP_MAX_BODY_BYTES` | Max size of a single `/mcp` request body (default 16 MiB). An oversized request is rejected instead of being buffered into memory unbounded. |
 | `VELESDB_MEMORY_HTTP_MAX_SESSIONS` | Max concurrent MCP sessions (default 64). Each session holds a worker task and a couple of small bounded channels — cheap individually, but a client that opens sessions without closing them could otherwise grow that without bound. |
 | `VELESDB_MEMORY_HTTP_KEEP_ALIVE_SECS` | How long a session may sit idle before it is retired (default 3600 — 60 minutes). See [Idle sessions, and why a timeout is not a failed write](#idle-sessions-and-why-a-timeout-is-not-a-failed-write). |
+| `VELESDB_MEMORY_LOG` | Per-request logging to stderr, as `EnvFilter` directives. Unset (the binary's default) is fully silent; the macOS installer deploys the daemon with the payload-safe incident preset on. See [Reading the daemon's log](#reading-the-daemons-log). |
 | `GET /health` | Plain 200 OK liveness probe, no MCP handshake needed — what the installer and CI use to confirm the daemon is up (over HTTPS too, once TLS is the transport). |
+
+### Reading the daemon's log
+
+With `VELESDB_MEMORY_LOG` set, every `/mcp` request leaves one stderr line
+(method, `mcp-session-id`, status, duration), and every tool call another
+(tool name, session, verdict, duration) — which is what tells the three
+outside-identical incident cases apart: a request that **never arrived**
+leaves no line, one **refused** (expired/unknown session) leaves its `404`,
+one **handled** leaves its `2xx` plus the tool line. On macOS the launchd
+daemon's stderr lands in `~/Library/Logs/velesdb-memory/daemon.err.log`, and
+the installer deploys with the incident preset
+(`info,rmcp::service=error,rmcp::transport::worker=debug,rmcp::transport::streamable_http_server=debug`)
+already on: those events never carry request content — canary tests hold the
+preset to that, on the happy path and on the error path — so the log is safe
+to keep. The `worker` target is what records a session worker dying of idle
+timeout, and `rmcp::service` is pinned to `error` because its `warn`-level
+`response error` event quotes the failing request's error message, client
+input included.
+
+Do **not** reach for `rmcp=debug` or a blanket `trace` on a store that holds
+anything sensitive: at those levels rmcp itself dumps full request arguments
+— fact text included — into the log. That verbosity is for deliberate wire
+debugging only.
 
 ### Idle sessions, and why a timeout is not a failed write
 
@@ -296,6 +320,20 @@ call never reaches the tool, so nothing is written, while the caller sees only
 session in **48 ms** with a clean `404`, and the client still reported a
 timeout. The HTTP regression test now gives that expired-session POST a hard
 one-second bound, independently of the setup sleep.
+
+With `VELESDB_MEMORY_LOG` on, the whole mechanism is visible in the daemon's
+own request log — captured live on 2026-08-07 against Claude Code's *native*
+HTTP client (not the `mcp-remote` bridge), settling #1727: the dead-session
+POST arrives and is refused with `404` in **0 ms**; the client retries the
+SAME dead session inside the call (a second `404`, one minute later) and then
+reports `-32001`; the **next** call re-initializes — `initialize` with no
+session header, a fresh id, and the tool call succeeds immediately. So the
+in-call retry is what loses the write, the across-calls recovery is what
+makes an identical resend succeed, and the server never hangs and never
+writes late. The operating rule stands unchanged: a timeout proves nothing —
+confirm the write (`saved_at` via `list_working_contexts`) and resend
+identically if it is missing; `save_working_context` upserts, so a resend
+replaces rather than duplicates.
 
 Codex 0.113+ handles this lifecycle natively: it establishes a new session and
 retries. The installers therefore wire Codex straight to the HTTPS URL.

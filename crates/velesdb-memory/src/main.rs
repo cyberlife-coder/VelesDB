@@ -18,6 +18,9 @@
 //! server is a different URL, never a new backend name. Tokens are read from
 //! the environment only, never from the config file. Set
 //! `VELESDB_MEMORY_DEFAULT_TTL` (seconds) to expire remembered facts by default.
+//! Set `VELESDB_MEMORY_LOG` (`EnvFilter` directives, e.g. `info`) for
+//! per-request stderr logging — unset is fully silent; see
+//! `velesdb_memory::logging` for the payload-safety contract.
 //! Set `VELESDB_MEMORY_INGEST_ROOTS` (a `PATH`-list of directories) to let
 //! `compile_context`/`explain_compilation` fragments reference a file by
 //! `path` instead of inline `content`; unset disables that field entirely.
@@ -84,6 +87,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return run_migrate_embeddings(&args, &args[2..]);
     }
 
+    // Per-request observability (#1780), installed before anything below so
+    // the startup sequence itself (config file, embedder probe, store open)
+    // is already traceable. `VELESDB_MEMORY_LOG` unset stays byte-for-byte
+    // silent; env-only on purpose — the config file cannot carry it, since
+    // the file is only read further down and a boot problem is exactly what
+    // these logs must be able to see. Stderr only: on stdio, stdout carries
+    // the MCP protocol itself.
+    apply_logging();
+
     // Captured FIRST — before the (possibly seconds-long) embedder probe and
     // store open — so a client that exits during our own startup still
     // reparents us AFTER the baseline, and the watchdog sees the change. A
@@ -129,6 +141,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     })
+}
+
+/// Install the `VELESDB_MEMORY_LOG` subscriber, or exit with its actionable
+/// message. The exit path (prefixed `eprintln!` + status 1) matches every
+/// other startup refusal in this binary (`requested_http_bind`,
+/// `open_store_with_actionable_lock_error`) — bubbling the `String` up
+/// through `main`'s `Result` would print it as an unprefixed `Debug` quote
+/// instead.
+fn apply_logging() {
+    if let Err(err) = velesdb_memory::logging::init_from_env() {
+        eprintln!("[velesdb-memory] {err}");
+        std::process::exit(1);
+    }
 }
 
 /// A resolved `--http`/`VELESDB_MEMORY_HTTP=1` request: where to bind, and

@@ -2406,7 +2406,7 @@
       }
     },
     {
-      "description": "Recall memories semantically similar to a query (vector), most similar first. Optionally narrow to exact-match metadata via `filter` (ColumnStore), e.g. {\"project\":\"veles\",\"status\":\"resolved\"}. Ids exceed 2^53 — always relay them as strings (`id_str`); passing a JSON-number id read from a previous response will fail on float-lossy clients.",
+      "description": "Recall memories semantically similar to a query (vector). Ranking blends similarity with each fact's learned confidence (see `feedback`), so the order is not pure similarity — the returned `score` is always the raw similarity, never the blended value. Optionally narrow to exact-match metadata via `filter` (ColumnStore), e.g. {\"project\":\"veles\",\"status\":\"resolved\"}. Ids exceed 2^53 — always relay them as strings (`id_str`); passing a JSON-number id read from a previous response will fail on float-lossy clients.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
@@ -2435,7 +2435,7 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
           "memories": {
-            "description": "Recalled memories, most similar first.",
+            "description": "Recalled memories, best match first. The two tools returning this\nshape rank differently: `recall` blends similarity with learned\nconfidence (see `feedback`), while `recall_where` with filters\norders by pure similarity. Each `score` is the raw similarity,\nnever a blended value.",
             "items": {
               "description": "Wire shape of one recalled memory: [`Recollection`] plus the `id_str`\ntwin (issue #1468). Built via `From<Recollection>` at the serialization\nboundary so the domain type itself stays untouched.",
               "properties": {
@@ -2658,7 +2658,7 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
           "memories": {
-            "description": "Recalled memories, most similar first.",
+            "description": "Recalled memories, best match first. The two tools returning this\nshape rank differently: `recall` blends similarity with learned\nconfidence (see `feedback`), while `recall_where` with filters\norders by pure similarity. Each `score` is the raw similarity,\nnever a blended value.",
             "items": {
               "description": "Wire shape of one recalled memory: [`Recollection`] plus the `id_str`\ntwin (issue #1468). Built via `From<Recollection>` at the serialization\nboundary so the domain type itself stays untouched.",
               "properties": {

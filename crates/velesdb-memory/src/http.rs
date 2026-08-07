@@ -244,9 +244,64 @@ pub fn router_with_limits_and_keep_alive(
             Arc::new(session_manager),
             StreamableHttpServerConfig::default().with_cancellation_token(cancellation_token),
         );
+    // `route_layer` scopes the trace middleware to the routes added SO FAR —
+    // `/mcp` and nothing else. `/health`, added after, stays untraced on
+    // purpose: the installer and CI poll it, and a heartbeat line per poll
+    // would bury the requests an incident reader is looking for.
     Router::new()
         .nest_service("/mcp", RequestBodyLimit::new(mcp_service, max_body_bytes))
+        .route_layer(axum::middleware::from_fn(trace_mcp_http))
         .route("/health", get(health))
+}
+
+/// One transport-level trace event per `/mcp` request (#1780): HTTP method,
+/// `mcp-session-id`, response status, duration — never the body.
+///
+/// This is the event that tells the three outside-identical incident cases
+/// apart (#1727 was mis-diagnosed twice for lack of it): a request that
+/// **never arrived** leaves no line at all; one that arrived and was
+/// **refused** (unknown/expired session) leaves its `404`; one that was
+/// **handled** leaves its `2xx` — with the tool-level event (`crate::mcp`)
+/// alongside. The duration is measured to the response HEAD, so a streaming
+/// (SSE) response doesn't hold the event hostage until the stream closes.
+async fn trace_mcp_http(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let method = request.method().clone();
+    let session = session_from_headers(request.headers());
+    let started = std::time::Instant::now();
+    let response = next.run(request).await;
+    // `%`-Display fields and a pinned target, for the reasons given at the
+    // tool-level event (`crate::mcp`'s `log_tool_call`): unquoted grep-able
+    // values, and log lines stable across module refactors.
+    tracing::info!(
+        target: "velesdb_memory::http",
+        %method,
+        session = %session.as_deref().unwrap_or(crate::logging::NO_SESSION),
+        status = response.status().as_u16(),
+        elapsed_ms = crate::logging::elapsed_millis(started),
+        "mcp http request"
+    );
+    response
+}
+
+/// The streamable-HTTP session header [`session_from_headers`] reads. Only
+/// that one derivation consumes it; it lives here, beside it, rather than in
+/// `crate::logging`'s shared-vocabulary set, which this feature-gated module
+/// could not contribute to in an HTTP-less build anyway.
+pub(crate) const MCP_SESSION_HEADER: &str = "mcp-session-id";
+
+/// The `mcp-session-id` a request carries, if any — the ONE derivation both
+/// trace points share: the middleware above reads it off the live request,
+/// the tool-level event (`crate::mcp`) off the `Parts` rmcp injects into the
+/// request's extensions. Centralized so the two can never diverge on
+/// anything beyond where the headers came from.
+pub(crate) fn session_from_headers(headers: &axum::http::HeaderMap) -> Option<String> {
+    headers
+        .get(MCP_SESSION_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
 }
 
 /// Liveness probe: 200 OK with no body semantics beyond "the process is up

@@ -2359,9 +2359,12 @@ class MemoryService:
 
         Returns:
             List of ``{"id": int, "score": float, "content": str,
-            "metadata": Optional[Dict[str, Any]]}`` dicts, ordered by
-            descending similarity score. ``metadata`` is always ``None``
-            here (only :meth:`recall_where` populates it).
+            "metadata": Optional[Dict[str, Any]]}`` dicts. Ranking blends
+            similarity with each fact's learned confidence (see
+            :meth:`feedback`), so the order is not pure similarity —
+            ``score`` is always the raw similarity, never the blended
+            value. ``metadata`` carries whatever the fact was stored
+            with, or ``None`` if it has none.
         """
         ...
 

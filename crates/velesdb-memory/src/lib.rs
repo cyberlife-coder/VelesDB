@@ -79,6 +79,11 @@ pub(crate) mod id;
 /// Resource caps (DoS limits) shared by every adapter — the single source of
 /// truth for fact size, recall limit, and `why` hop depth.
 pub mod limits;
+/// Per-request observability, gated by `VELESDB_MEMORY_LOG` (#1780): silent
+/// by default, stderr only, never a payload. Rides the `mcp` feature with
+/// the server it observes.
+#[cfg(feature = "mcp")]
+pub mod logging;
 /// The MCP server transport. Gated behind the default `mcp` feature so library
 /// consumers (e.g. the language bindings) can depend on the memory core without
 /// pulling the `rmcp`/`tokio` server stack.
