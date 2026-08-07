@@ -424,6 +424,9 @@ impl EntityProfileOut {
 struct ExplanationOut {
     nodes: Vec<MemoryNodeOut>,
     edges: Vec<MemoryEdgeOut>,
+    /// Whether a width budget cut the walk — a subgraph sitting exactly at
+    /// a cap is otherwise indistinguishable from a complete one (#1820).
+    truncated: bool,
 }
 
 impl From<Explanation> for ExplanationOut {
@@ -431,6 +434,7 @@ impl From<Explanation> for ExplanationOut {
         Self {
             nodes: e.nodes.into_iter().map(MemoryNodeOut::from).collect(),
             edges: e.edges.into_iter().map(MemoryEdgeOut::from).collect(),
+            truncated: e.truncated,
         }
     }
 }

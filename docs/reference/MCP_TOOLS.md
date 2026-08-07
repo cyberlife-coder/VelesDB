@@ -298,15 +298,16 @@ subgraph** reachable from it through typed links.
 | `max_hops` | integer | no | Default 2 (`DEFAULT_WHY_HOPS`), capped at 10 (`MAX_WHY_HOPS`). |
 | `filter` | object | no | Exact-match metadata filter scoping the seed, e.g. `{"project":"veles"}`. |
 
-Returns `{ nodes: [ { id, id_str, content, hop } ], edges: [ { from, from_str, to, to_str, relation } ] }`
+Returns `{ nodes: [ { id, id_str, content, hop } ], edges: [ { from, from_str, to, to_str, relation } ], truncated }`
 — the seed is `hop: 0`.
 
 The walk is width-bounded as well as depth-bounded: at most 64 outgoing edges
 are followed from any one node (`MAX_WHY_NODE_DEGREE`), at most 500 nodes
 (`MAX_WHY_NODES`) and 2000 edges (`MAX_WHY_EDGES`) are returned per walk. A
-walk that hits a budget is cut silently — a response whose counts sit at a cap
-is the signal that more of the graph exists than was returned. The same
-budgets bound the graph half of `recall_fused`.
+walk that hits a budget SAYS so: `truncated: true` means a cap cut the walk
+before it exhausted the reachable graph — the signal counts alone cannot
+carry, a subgraph sitting exactly at a cap being indistinguishable from a
+complete one. The same budgets bound the graph half of `recall_fused`.
 
 This is what a pure vector search cannot do: it surfaces the PR, the ticket,
 or the benchmark reachable through typed links **even when they share no

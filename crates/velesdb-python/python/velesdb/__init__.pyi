@@ -2549,7 +2549,11 @@ class MemoryService:
 
         Returns:
             ``{"nodes": [{"id": int, "content": str, "hop": int}, ...],
-               "edges": [{"from": int, "to": int, "relation": str}, ...]}``
+               "edges": [{"from": int, "to": int, "relation": str}, ...],
+               "truncated": bool}``.
+            ``truncated`` is ``True`` when a width budget cut the walk — a
+            subgraph sitting exactly at a cap is otherwise indistinguishable
+            from a complete one.
         """
         ...
 

@@ -419,6 +419,20 @@ pub struct Explanation {
     pub nodes: Vec<MemoryNode>,
     /// Typed edges connecting the nodes.
     pub edges: Vec<MemoryEdge>,
+    /// Whether a width budget cut this walk before it exhausted the
+    /// reachable graph (#1820). A subgraph sitting exactly at a cap
+    /// ([`crate::limits::MAX_WHY_NODES`], [`crate::limits::MAX_WHY_EDGES`],
+    /// [`crate::limits::MAX_WHY_NODE_DEGREE`]) is otherwise
+    /// indistinguishable from a complete one — counts at a ceiling were the
+    /// only signal, and they are ambiguous by construction.
+    ///
+    /// True when a node's degree exceeded the per-node budget, or when the
+    /// node/edge budget stopped the walk while unexpanded work remained.
+    /// The latter is conservative: expanding the rest is exactly what the
+    /// budget forbids, so whether it held anything unseen is unknowable —
+    /// and a rare cautious `true` is harmless where a false "complete" is
+    /// the defect this field exists to close.
+    pub truncated: bool,
 }
 
 #[cfg(test)]

@@ -1177,6 +1177,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
                 hop: 0,
             }],
             edges: Vec::new(),
+            truncated: false,
         };
         let mut visited: HashSet<u64> = HashSet::from([seed_id]);
         let mut frontier = vec![seed_id];
@@ -1191,6 +1192,11 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
                 if explanation.nodes.len() >= crate::limits::MAX_WHY_NODES
                     || explanation.edges.len() >= crate::limits::MAX_WHY_EDGES
                 {
+                    // Unexpanded frontier work remained — the response is a
+                    // partial view and must SAY so (#1820); whether the rest
+                    // held anything unseen is exactly what the budget forbids
+                    // finding out, so the cautious true is the honest one.
+                    explanation.truncated = true;
                     break 'hops; // width budget spent — depth left in max_hops is moot
                 }
                 self.expand(node_id, hop, &mut explanation, &mut visited, &mut next)?;
@@ -1218,8 +1224,19 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         visited: &mut HashSet<u64>,
         next: &mut Vec<u64>,
     ) -> Result<(), MemoryError> {
-        let edges = self.store.relations(node_id)?;
-        for edge in edges.into_iter().take(crate::limits::MAX_WHY_NODE_DEGREE) {
+        // The bounded read pushes the per-node budget into the store's own
+        // index scan: the old full fetch materialized a super-node's whole
+        // degree before `.take()` could apply — O(store size) transient
+        // allocation at a single hop, the cost half of #1743 that #1820
+        // closes. The store also reports whether the degree exceeded the
+        // budget, which is what makes the cut OBSERVABLE.
+        let bounded = self
+            .store
+            .relations_bounded(node_id, crate::limits::MAX_WHY_NODE_DEGREE)?;
+        if bounded.truncated {
+            explanation.truncated = true;
+        }
+        for edge in bounded.edges {
             // The budgets are ceilings, not suggestions: once either is spent,
             // this node's expansion stops MID-NODE rather than finishing. The
             // caller's check between nodes cannot provide that — an expansion
@@ -1227,6 +1244,9 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             if explanation.nodes.len() >= crate::limits::MAX_WHY_NODES
                 || explanation.edges.len() >= crate::limits::MAX_WHY_EDGES
             {
+                // An edge was in hand and not followed — an exact cut, not
+                // a conservative one.
+                explanation.truncated = true;
                 break;
             }
             let target = edge.to;

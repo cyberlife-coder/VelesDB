@@ -3375,11 +3375,16 @@
               "type": "object"
             },
             "type": "array"
+          },
+          "truncated": {
+            "description": "Whether a width budget cut the walk — a subgraph sitting exactly at\na cap is otherwise indistinguishable from a complete one (#1820).",
+            "type": "boolean"
           }
         },
         "required": [
           "nodes",
-          "edges"
+          "edges",
+          "truncated"
         ],
         "type": "object"
       }

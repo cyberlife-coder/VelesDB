@@ -348,4 +348,56 @@ fn why_caps_the_total_edges_across_the_whole_walk() {
         "a walk over a dense subgraph must stop recording edges at the edge \
          budget; without one, 60 nodes can still return thousands of edges"
     );
+    assert!(
+        explanation.truncated,
+        "the edge budget stopped this walk mid-node — an exact cut that \
+         must be reported (#1820)"
+    );
+}
+
+// --- Truncation is observable, never silent (#1820) -------------------------
+
+#[test]
+fn a_walk_cut_by_a_width_budget_reports_truncation() {
+    // A seed whose degree exceeds the per-node budget: the walk follows only
+    // MAX_WHY_NODE_DEGREE of its edges, and before #1820 that cut was
+    // structurally invisible — a subgraph at exactly the cap read the same
+    // as a complete one.
+    let (_dir, svc) = service();
+    let seed = svc.remember(DECISION, &[], None).expect("remember seed");
+    for i in 0..=MAX_WHY_NODE_DEGREE {
+        let target = svc
+            .remember(&format!("satellite fact {i}"), &[], None)
+            .expect("remember satellite");
+        svc.relate(seed, target, "cites").expect("relate");
+    }
+
+    let explanation = svc.why(DECISION, 1, None).expect("why");
+    assert_eq!(
+        explanation.edges.len(),
+        MAX_WHY_NODE_DEGREE,
+        "sanity: the per-node budget did cut the expansion"
+    );
+    assert!(
+        explanation.truncated,
+        "a cut walk must SAY it is partial — counts at a cap are ambiguous \
+         by construction, which is the defect #1820 names"
+    );
+}
+
+#[test]
+fn a_walk_under_every_budget_is_not_reported_truncated() {
+    // The honesty control: the flag must never cry wolf. The canonical
+    // three-node chain sits far under every width budget.
+    let (_dir, svc, _decision, _pr, _ticket) = seeded_chain();
+    let explanation = svc.why(DECISION, 2, None).expect("why");
+    assert_eq!(
+        explanation.nodes.len(),
+        3,
+        "sanity: the whole chain is here"
+    );
+    assert!(
+        !explanation.truncated,
+        "a complete subgraph must not claim to be partial"
+    );
 }

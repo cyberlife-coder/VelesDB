@@ -240,6 +240,7 @@ fn explanation_to_dict(py: Python<'_>, e: &Explanation) -> PyResult<Py<PyAny>> {
     let out = PyDict::new(py);
     out.set_item(PyString::intern(py, "nodes"), nodes)?;
     out.set_item(PyString::intern(py, "edges"), edges)?;
+    out.set_item(PyString::intern(py, "truncated"), e.truncated)?;
     Ok(out.into())
 }
 
@@ -566,7 +567,10 @@ impl PyMemoryService {
     }
 
     /// Explain a decision: the best-matching memory plus its connected subgraph
-    /// (multi-hop). Returns `{nodes, edges}` — the wedge a plain recall misses.
+    /// (multi-hop). Returns `{nodes, edges, truncated}` — the wedge a plain
+    /// recall misses. `truncated` is `True` when a width budget cut the walk:
+    /// a subgraph sitting exactly at a cap is otherwise indistinguishable
+    /// from a complete one.
     ///
     /// `max_hops` is silently capped at 10 to prevent unbounded traversal on
     /// dense graphs (same limit as the MCP server).

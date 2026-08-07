@@ -140,6 +140,9 @@ pub struct ExplanationJs {
     pub nodes: Vec<MemoryNodeJs>,
     /// Typed edges connecting the nodes.
     pub edges: Vec<MemoryEdgeJs>,
+    /// Whether a width budget cut the walk — a subgraph sitting exactly at
+    /// a cap is otherwise indistinguishable from a complete one (#1820).
+    pub truncated: bool,
 }
 
 impl From<Explanation> for ExplanationJs {
@@ -147,6 +150,7 @@ impl From<Explanation> for ExplanationJs {
         Self {
             nodes: e.nodes.into_iter().map(MemoryNodeJs::from).collect(),
             edges: e.edges.into_iter().map(MemoryEdgeJs::from).collect(),
+            truncated: e.truncated,
         }
     }
 }

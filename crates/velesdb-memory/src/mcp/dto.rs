@@ -537,6 +537,9 @@ pub(super) struct ExplanationDto {
     pub(super) nodes: Vec<MemoryNodeDto>,
     /// Typed edges connecting the nodes.
     pub(super) edges: Vec<MemoryEdgeDto>,
+    /// Whether a width budget cut the walk — a subgraph sitting exactly at
+    /// a cap is otherwise indistinguishable from a complete one (#1820).
+    pub(super) truncated: bool,
 }
 
 impl From<Explanation> for ExplanationDto {
@@ -552,6 +555,7 @@ impl From<Explanation> for ExplanationDto {
                 .into_iter()
                 .map(MemoryEdgeDto::from)
                 .collect(),
+            truncated: explanation.truncated,
         }
     }
 }
