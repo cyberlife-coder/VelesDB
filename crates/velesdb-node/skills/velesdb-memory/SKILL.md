@@ -235,7 +235,12 @@ and evict a real fact from your results. So:
   attributes and every typed edge touching him, in BOTH directions:
   `relations` leave him, `relations_in` point AT him. Ask only the first and
   the graph looks half empty — it holds `camille --sister of--> theo`, so
-  Theo's outgoing edges never mention Camille.
+  Theo's outgoing edges never mention Camille. Each side is budget-bounded:
+  `relations_truncated` / `relations_in_truncated` tell you the list is a
+  PARTIAL view, which a list sitting exactly at the cap cannot tell you by
+  itself. Same rule on `why`: its `truncated` says a width budget cut the
+  walk, so an answer built on a cut subgraph is never mistaken for a
+  complete one.
 - *"Which notes mention Theo?"* → `recall("Theo Durand")` — returns sentences.
 
 Use `entity` for questions **about a thing**, `recall` for questions **about what

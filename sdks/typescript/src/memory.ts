@@ -439,6 +439,12 @@ export interface MemoryExplanation {
   nodes: MemoryNode[];
   /** Typed edges connecting the nodes. */
   edges: MemoryEdge[];
+  /**
+   * `true` when a width budget cut the walk before it exhausted the reachable
+   * graph. Counts alone cannot say it: a subgraph sitting exactly at a cap is
+   * indistinguishable from a complete one.
+   */
+  truncated: boolean;
 }
 
 /** What {@link MemoryService.unrelate} actually removed. */
@@ -482,6 +488,14 @@ export interface MemoryEntityProfile {
    * so reading Theo's outgoing edges never finds Camille.
    */
   relationsIn: MemoryEntityRelation[];
+  /**
+   * `true` when {@link MemoryEntityProfile.relations} is a PARTIAL view — a
+   * response budget cut the outgoing side. A list holding exactly the cap is
+   * otherwise indistinguishable from a cut one.
+   */
+  relationsTruncated: boolean;
+  /** `true` when {@link MemoryEntityProfile.relationsIn} is a partial view. */
+  relationsInTruncated: boolean;
 }
 
 /** Outcome of {@link MemoryService.rememberExtracted}. */

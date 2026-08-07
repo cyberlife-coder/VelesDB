@@ -268,12 +268,15 @@ Contract details:
 
 - `entity(name)` answers a question ABOUT a named thing — a person, a place,
   an organisation — rather than about the sentences mentioning it. It returns
-  `{found, id, name, attributes, relations, relationsIn}`, each edge
+  `{found, id, name, attributes, relations, relationsIn, relationsTruncated,
+  relationsInTruncated}`, each edge
   `{predicate, targetId, target}`. `relations` LEAVE the entity;
   `relationsIn` point AT it, and there `targetId`/`target` name the far end
   the edge comes FROM. Reading only the first makes the graph look half
   empty: it holds `camille --sister of--> theo`, so Theo's own outgoing edges
-  never mention Camille.
+  never mention Camille. Each direction is budget-bounded, and its
+  `*Truncated` flag says when the list is a PARTIAL view — a list holding
+  exactly the cap is otherwise indistinguishable from a cut one.
 - `rememberExtracted(text, metadata?, extractor?)` returns
   `{ids, skippedOverCap}` and is the WRITE side of `entity` — entity hubs are
   born only of extraction. `extractor` defaults to `"outline"`, the
