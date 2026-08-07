@@ -1389,10 +1389,11 @@ DIRECTION: the subject is whoever CARRIES the relation, not the subject of the \
 sentence. \"A a une soeur, B\" means B is A's sister, so the triple is \
 B/\"soeur de\"/A — never A/\"soeur de\"/B. \"A has a brother, B\" means B is \
 A's brother: B/\"brother of\"/A. Same for every possessive.\n\
-EXACTLY ONE triple per stated relationship. Never emit both directions of the \
-same predicate over the same pair: \"X brother of Y\" plus \"Y brother of X\" \
-is a contradiction, not a converse. Add a converse ONLY when the passage \
-states it separately AND with a different predicate.\n\
+Never emit both directions of the SAME predicate over the same pair — \
+\"X brother of Y\" plus \"Y brother of X\" is a contradiction, not a \
+converse: emit exactly one. But two DIFFERENT predicates the passage states \
+separately over the same pair (\"A possede B\" then \"B appartient a A\") \
+are two stated facts — keep both.\n\
 Every named entity the passage RELATES to another must appear in at least one \
 triple — an entity that only receives attributes and no edge is a dead end in \
 the graph.\n\n\
@@ -1666,8 +1667,15 @@ mod tests {
     fn graph_prompt_forbids_both_directions_of_one_predicate() {
         let prompt = build_graph_prompt("Sarah Miller has a brother, Tom Miller.");
         assert!(
-            prompt.contains("EXACTLY ONE triple per stated relationship"),
-            "the one-triple rule must be stated as a hard bound"
+            prompt.contains("emit exactly one"),
+            "the one-per-predicate rule must be stated as a hard bound"
+        );
+        assert!(
+            prompt.contains("keep both"),
+            "the rule must carry its POSITIVE half too: two different \
+             predicates stated separately are two facts — without it a model \
+             collapses a real converse pair into one edge (measured 3/3 on \
+             the bench's converse case)"
         );
         assert!(
             prompt.contains("is a contradiction, not a converse"),
