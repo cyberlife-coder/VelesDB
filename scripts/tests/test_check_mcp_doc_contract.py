@@ -205,6 +205,25 @@ class ReturnShapeRuleTests(DocContractTestCase):
         )
 
 
+class UntrackedCacheScopeTests(DocContractTestCase):
+    """The sweep must read the same surface set from a dev machine and from a
+    clean worktree of the same commit (issue #1730): regenerable tool caches
+    (`.pytest_cache/`, `.mypy_cache/`, …) are untracked, live under globbed
+    roots, and must never enter the sweep."""
+
+    DRIFTED = REFERENCE_CLEAN.replace("{ found, working, other_sessions }", "{ working }")
+
+    def test_a_drifted_declaration_inside_a_hidden_cache_dir_is_not_swept(self) -> None:
+        self.write("docs/.pytest_cache/README.md", self.DRIFTED)
+        self.assertGuardPasses()
+
+    def test_positive_control_the_same_file_outside_the_cache_is_refused(self) -> None:
+        # Proves the mutation above is potent — the pass is the exclusion's
+        # doing, not a blind spot in the drift rule.
+        self.write("docs/reference/CACHED.md", self.DRIFTED)
+        self.assertGuardFails("docs/reference/CACHED.md")
+
+
 class AntiDisarmTests(DocContractTestCase):
     """Every way this guard could quietly verify nothing must be red."""
 

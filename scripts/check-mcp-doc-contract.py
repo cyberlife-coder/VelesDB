@@ -297,6 +297,14 @@ SURFACE_EXCLUDED_PARTS: "tuple[str, ...]" = (
     "/node_modules/",
     "/target/",
     "/__pycache__/",
+    # Any hidden directory (issue #1730): regenerable tool caches —
+    # `.pytest_cache/`, `.mypy_cache/`, `.venv/`, … — are UNTRACKED, so a
+    # sweep that reads them sees a different surface count on a dev machine
+    # than in a clean worktree of the same commit. Excluding the dot-dir
+    # convention wholesale (rather than naming caches one by one) is what
+    # keeps the next cache tool from re-opening the gap; measured on this
+    # tree, no declared glob reaches a legitimate surface through one.
+    "/.",
 )
 SURFACE_EXCLUDED_NAMES = re.compile(r"^(CHANGELOG|MIGRATION_)", re.IGNORECASE)
 
