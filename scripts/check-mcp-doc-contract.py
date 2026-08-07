@@ -120,6 +120,7 @@ import argparse
 import bisect
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -404,11 +405,48 @@ def _is_scanned(root: Path, path: Path) -> bool:
     return not SURFACE_EXCLUDED_NAMES.match(path.name)
 
 
+def _tracked_files(root: Path) -> "set[Path] | None":
+    """The set of git-tracked files under `root`, or `None` outside a repo.
+
+    The sweep's perimeter is what git TRACKS, not what the working tree
+    happens to contain (#1730): the same commit used to sweep 218 files from
+    the main repository and 214 from a clean worktree, the four extras being
+    untracked artifacts (`integrations/**/.pytest_cache/README.md`). An
+    exclusion list enumerates incidents; the tracked set states the rule.
+
+    `None` (not a git repository, or no git binary) falls back to the raw
+    globs — the sandboxed unit tests of this guard run in plain temp dirs,
+    and a tarball consumer still gets the historical behavior. Inside a
+    repository the filter always applies, which is the case CI and every
+    developer checkout are in.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "-z"],
+            capture_output=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return {
+        root / name
+        for name in out.stdout.decode("utf-8", "surrogateescape").split("\0")
+        if name
+    }
+
+
 def surface_files(root: Path) -> "list[Path]":
     """Every file the sweep reads, deduplicated and sorted."""
+    tracked = _tracked_files(root)
     matched: "set[Path]" = set()
     for glob in SURFACE_GLOBS:
-        matched.update(p for p in root.glob(glob) if p.is_file() and _is_scanned(root, p))
+        matched.update(
+            p
+            for p in root.glob(glob)
+            if p.is_file()
+            and _is_scanned(root, p)
+            and (tracked is None or p in tracked)
+        )
     return sorted(matched)
 
 
