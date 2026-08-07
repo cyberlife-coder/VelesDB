@@ -1557,7 +1557,12 @@ mod tests {
         let extraction = raw.into_extraction();
         assert_eq!(extraction.facts.len(), 1);
         assert_eq!(extraction.relations.len(), 1);
+        // Endpoints asserted by name: a subject↔object swap in
+        // `into_relation` kept this test green when only the predicate was
+        // checked (#1792).
+        assert_eq!(extraction.relations[0].subject, "zephyrin");
         assert_eq!(extraction.relations[0].predicate, "pere de");
+        assert_eq!(extraction.relations[0].object, "kaltar");
         assert_eq!(extraction.attributes.len(), 1);
         assert_eq!(extraction.attributes[0].value, serde_json::json!(15));
     }
