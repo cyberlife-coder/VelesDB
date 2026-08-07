@@ -20,6 +20,8 @@
 //! whatever triple the backend returned, the graph stores it with the same
 //! orientation.
 
+#![cfg(feature = "persistence")]
+
 use tempfile::TempDir;
 use velesdb_memory::{
     ExtractError, ExtractedFact, ExtractedRelation, Extraction, Extractor, HashEmbedder,

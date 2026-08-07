@@ -226,7 +226,8 @@ required-features = ["context"]
 [[example]]
 name = "locomo"
 path = "examples/locomo/main.rs"
-required-features = ["ollama"]
+# `persistence` too: these examples open the file-backed store (#1765).
+required-features = ["ollama", "persistence"]
 
 [lib]
 name = "velesdb_memory"
@@ -291,22 +292,41 @@ name = "config_store_path_process"
 path = "tests/config_store_path_process.rs"
 required-features = ["http"]
 
+# Multi-hop write/read benchmark over the file-backed store; the Ollama
+# embedder path inside is feature-gated inline, so `persistence` is the
+# only build requirement (#1765).
+[[example]]
+name = "bench_multihop"
+path = "examples/bench_multihop.rs"
+required-features = ["persistence"]
+
+# Offline walkthrough over the file-backed store; same inline gating of the
+# optional Ollama path as bench_multihop (#1765).
+[[example]]
+name = "wow_offline"
+path = "examples/wow_offline.rs"
+required-features = ["persistence"]
+
 [[example]]
 name = "multihop"
 path = "examples/multihop/main.rs"
-required-features = ["ollama"]
+# `persistence` too: these examples open the file-backed store (#1765).
+required-features = ["ollama", "persistence"]
 
 [[example]]
 name = "colfilter"
 path = "examples/colfilter/main.rs"
-required-features = ["ollama"]
+# `persistence` too: these examples open the file-backed store (#1765).
+required-features = ["ollama", "persistence"]
 
 [[example]]
 name = "timeqa"
 path = "examples/timeqa/main.rs"
-required-features = ["ollama"]
+# `persistence` too: these examples open the file-backed store (#1765).
+required-features = ["ollama", "persistence"]
 
 [[example]]
 name = "triengine"
 path = "examples/triengine/main.rs"
-required-features = ["ollama"]
+# `persistence` too: these examples open the file-backed store (#1765).
+required-features = ["ollama", "persistence"]

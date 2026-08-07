@@ -7,6 +7,8 @@
 //!
 //! Categories: Nominal, Edge, Negative.
 
+#![cfg(feature = "persistence")]
+
 mod common;
 
 use common::service;

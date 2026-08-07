@@ -7,6 +7,8 @@
 //! (`_veles_expires_at`). The core store path now carries reserved system keys
 //! forward across a re-store; this suite proves it through the public API.
 
+#![cfg(feature = "persistence")]
+
 mod common;
 
 use common::service;

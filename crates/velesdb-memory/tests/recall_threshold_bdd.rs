@@ -17,6 +17,8 @@
 //!   recall_and_why_stay_live_across_1193_memories
 //! ```
 
+#![cfg(feature = "persistence")]
+
 mod common;
 
 use common::{meta, service};

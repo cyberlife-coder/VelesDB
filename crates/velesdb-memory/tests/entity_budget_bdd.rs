@@ -18,6 +18,8 @@
 //! the STORE reports (its raw scan window) reaches the profile even when the
 //! resolved list is small.
 
+#![cfg(feature = "persistence")]
+
 use std::fmt::Write as _;
 
 use tempfile::TempDir;
