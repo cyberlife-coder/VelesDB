@@ -30,6 +30,7 @@ import importlib.util
 import io
 import json
 import shutil
+import subprocess
 import sys
 import tempfile
 import types
@@ -136,6 +137,98 @@ class DocContractTestCase(unittest.TestCase):
         for needle in expected_substrings:
             self.assertIn(needle, joined)
         return failures
+
+
+class TrackedPerimeterTests(DocContractTestCase):
+    """#1730: the sweep's perimeter is what git TRACKS, not what the working
+    tree happens to contain.
+
+    Measured on 2026-07-31: the same commit swept 218 surface files from the
+    main repository and 214 from a clean worktree — the four extras were
+    untracked artifacts like `integrations/langchain/.pytest_cache/README.md`.
+    A guard whose perimeter depends on what lies around in the tree gives a
+    different verdict locally and in CI, and in the WRONG direction: CI
+    sweeps less than the developer's machine. The root-cause rule is to
+    refuse what git does not track — not to grow the exclusion list by one
+    cache directory per incident.
+    """
+
+    UNTRACKED_DECLARATION = (
+        "# pytest cache\n\n`demo_tool` returns `{found, wrong_key}`.\n"
+    )
+    CACHE_PATH = "integrations/langchain/.pytest_cache/README.md"
+
+    def _git(self, *args: str) -> None:
+        subprocess.run(
+            ["git", "-C", str(self.tmp), *args],
+            check=True,
+            capture_output=True,
+        )
+
+    def _init_repo_tracking_baseline(self) -> None:
+        self._git("init", "-q")
+        self._git("add", "-A")
+        self._git(
+            "-c",
+            "user.email=guard@test",
+            "-c",
+            "user.name=guard",
+            "commit",
+            "-qm",
+            "baseline",
+        )
+
+    def test_an_untracked_file_is_invisible_to_the_sweep(self) -> None:
+        # The exact class from the issue: a regenerable cache README carrying
+        # what the attribution would read as a WRONG declaration.
+        self._init_repo_tracking_baseline()
+        self.write(self.CACHE_PATH, self.UNTRACKED_DECLARATION)
+
+        swept = {p.relative_to(self.tmp).as_posix() for p in cmdc.surface_files(self.tmp)}
+        self.assertNotIn(
+            self.CACHE_PATH,
+            swept,
+            "an UNTRACKED file must be outside the sweep's perimeter — a guard "
+            "that reads it gives a different verdict here than in CI (#1730)",
+        )
+        self.assertGuardPasses()
+
+    def test_the_same_file_tracked_is_swept_and_refused(self) -> None:
+        # The positive control the invisibility above is worthless without:
+        # committed, the very same content must be seen AND its wrong shape
+        # refused — proving the planted declaration is potent, so the
+        # untracked case is invisible for the RIGHT reason.
+        self._init_repo_tracking_baseline()
+        self.write(self.CACHE_PATH, self.UNTRACKED_DECLARATION)
+        # `-f`: a machine-global gitignore may ignore `.pytest_cache` (that is
+        # WHY such files lie around untracked in real trees) — what this
+        # control needs is the tracked STATUS, however obtained.
+        self._git("add", "-f", self.CACHE_PATH)
+        self._git(
+            "-c",
+            "user.email=guard@test",
+            "-c",
+            "user.name=guard",
+            "commit",
+            "-qm",
+            "track the cache file",
+        )
+
+        swept = {p.relative_to(self.tmp).as_posix() for p in cmdc.surface_files(self.tmp)}
+        self.assertIn(self.CACHE_PATH, swept, "a tracked file must stay in the sweep")
+        self.assertGuardFails("wrong_key")
+
+    def test_a_sandbox_without_git_keeps_the_unfiltered_sweep(self) -> None:
+        # The fallback the rest of this suite depends on: no repository means
+        # no tracked-set to intersect with, so the sweep reads the raw globs
+        # (this sandbox has no .git — every other test here exercises it).
+        self.write(self.CACHE_PATH, self.UNTRACKED_DECLARATION)
+        swept = {p.relative_to(self.tmp).as_posix() for p in cmdc.surface_files(self.tmp)}
+        self.assertIn(
+            self.CACHE_PATH,
+            swept,
+            "outside a git repository the sweep falls back to the raw globs",
+        )
 
 
 class ReturnShapeRuleTests(DocContractTestCase):
