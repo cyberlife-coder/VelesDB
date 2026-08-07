@@ -12,6 +12,8 @@
 //! The extractor is a deterministic stub keyed on the sentence, so the whole
 //! behaviour is proven with no model, no network, and no flake.
 
+#![cfg(feature = "persistence")]
+
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use velesdb_memory::{

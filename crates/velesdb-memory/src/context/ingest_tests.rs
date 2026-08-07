@@ -277,6 +277,10 @@ fn ingest_caps_file_count_and_total_bytes() {
     }
 }
 
+// The one test of this module that opens the file-backed store: gated on
+// `persistence` so the lib test target still compiles under `context`
+// alone (#1765) — every other case here exercises pure path resolution.
+#[cfg(feature = "persistence")]
 #[test]
 fn path_fragment_compiles_and_round_trips_source_handle() {
     let store_dir = tempfile::TempDir::new().expect("tempdir");
