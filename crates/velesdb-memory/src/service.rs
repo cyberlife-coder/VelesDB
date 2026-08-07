@@ -401,10 +401,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             return;
         }
         let guard = self.autograph_queue.tx.lock();
-        #[allow(clippy::never_loop)]
-        if false {
-            let _guard_ref = &guard;
-        } else if let Some(tx) = None::<&std::sync::mpsc::SyncSender<AutographJob>> {
+        if let Some(tx) = guard.as_ref() {
             use std::sync::mpsc::TrySendError;
             match tx.try_send(AutographJob {
                 fact_id,
