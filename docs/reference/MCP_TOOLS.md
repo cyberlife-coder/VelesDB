@@ -262,7 +262,8 @@ attributes merged onto its node and the typed edges leaving it.
 |---|---|---|---|
 | `name` | string | yes | Matched case-insensitively (trimmed, lowercased). |
 
-Returns `{ found, id, id_str, name, attributes, relations, relations_in }`.
+Returns `{ found, id, id_str, name, attributes, relations, relations_in,
+relations_truncated, relations_in_truncated }`.
 `found: false` means nothing has ever mentioned that entity; `name` always
 echoes the canonicalized queried name so parallel lookups stay pairable.
 `relations` are the typed edges **leaving** the entity; `relations_in` those
@@ -270,6 +271,14 @@ echoes the canonicalized queried name so parallel lookups stay pairable.
 loses half the graph: the store holds `camille --soeur de--> theo`, so "who is
 Theo's sister?" is answered by his `relations_in`, never by his `relations`.
 The bipartite `mentions` scaffolding is excluded from both.
+
+Each direction is budget-bounded: at most 64 resolved edges
+(`MAX_ENTITY_RELATIONS`) found within a scan window of 4096 raw edges
+(`MAX_ENTITY_SCAN_EDGES`) — an entity mentioned by thousands of facts would
+otherwise be a constructible multi-megabyte response. A cut is REPORTED, not
+silent: `relations_truncated` / `relations_in_truncated` say when the
+matching list is a partial view, since a list holding exactly the cap is
+otherwise indistinguishable from a cut one.
 
 ```jsonc
 entity { "name": "Theo Durand" }

@@ -475,6 +475,13 @@ pub(super) struct EntityProfileDto {
     /// label needs the gender, which the graph does not hold; this reports
     /// only what is stored.
     pub(super) relations_in: Vec<EntityRelationDto>,
+    /// Whether `relations` is a PARTIAL view — true when a response budget
+    /// cut the outgoing side. A list holding exactly the cap is otherwise
+    /// indistinguishable from a cut one (#1820).
+    pub(super) relations_truncated: bool,
+    /// Whether `relations_in` is a PARTIAL view — the incoming mirror of
+    /// `relations_truncated`.
+    pub(super) relations_in_truncated: bool,
 }
 
 impl EntityProfileDto {
@@ -496,6 +503,8 @@ impl EntityProfileDto {
                 attributes: Metadata::new(),
                 relations: Vec::new(),
                 relations_in: Vec::new(),
+                relations_truncated: false,
+                relations_in_truncated: false,
             };
         };
         Self {
@@ -514,6 +523,8 @@ impl EntityProfileDto {
                 .into_iter()
                 .map(EntityRelationDto::from)
                 .collect(),
+            relations_truncated: profile.relations_truncated,
+            relations_in_truncated: profile.relations_in_truncated,
         }
     }
 }

@@ -202,6 +202,13 @@ pub struct EntityProfileJs {
     /// Nothing is inferred — the converse of a kinship label would need a
     /// gender the graph does not hold; this reports only what is stored.
     pub relations_in: Vec<EntityRelationJs>,
+    /// Whether `relations` is a PARTIAL view — true when a response budget
+    /// cut the outgoing side. A list holding exactly the cap is otherwise
+    /// indistinguishable from a cut one (#1820).
+    pub relations_truncated: bool,
+    /// Whether `relationsIn` is a PARTIAL view — the incoming mirror of
+    /// `relationsTruncated`.
+    pub relations_in_truncated: bool,
 }
 
 impl EntityProfileJs {
@@ -217,6 +224,8 @@ impl EntityProfileJs {
                 attributes: Value::Object(serde_json::Map::new()),
                 relations: Vec::new(),
                 relations_in: Vec::new(),
+                relations_truncated: false,
+                relations_in_truncated: false,
             };
         };
         Self {
@@ -234,6 +243,8 @@ impl EntityProfileJs {
                 .into_iter()
                 .map(EntityRelationJs::from)
                 .collect(),
+            relations_truncated: profile.relations_truncated,
+            relations_in_truncated: profile.relations_in_truncated,
         }
     }
 }

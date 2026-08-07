@@ -315,6 +315,24 @@ pub struct MemoryEdge {
     pub relation: String,
 }
 
+/// At most `cap` edges of one memory point, plus the honest signal that the
+/// point carries more — returned by the bounded accessors of
+/// [`MemoryStore`](crate::storage::MemoryStore) (#1820).
+///
+/// `truncated` is a separate field because `edges.len() == cap` cannot carry
+/// the signal: a node with exactly `cap` edges is indistinguishable from a
+/// truncated one. It compares the node's TOTAL stored degree against the
+/// scan cap, so expired far ends dropped inside the scanned window (never
+/// replaced — the O(cap) bound is the contract) can leave `edges.len() <
+/// cap` with `truncated == true` as a normal outcome.
+#[derive(Debug, Clone)]
+pub struct BoundedMemoryEdges {
+    /// At most `cap` edges, in storage index order.
+    pub edges: Vec<MemoryEdge>,
+    /// Whether the node's total stored degree exceeded the scan cap.
+    pub truncated: bool,
+}
+
 /// Outcome of [`MemoryService::unrelate`](crate::service::MemoryService::unrelate):
 /// idempotent by design, so an absent edge is a `found: false` answer, not an
 /// error — a cleanup must be replayable.
@@ -372,12 +390,23 @@ pub struct EntityProfile {
     pub name: String,
     /// Attributes learned about this entity, reserved keys stripped.
     pub attributes: crate::service::Metadata,
-    /// Typed edges leaving this entity (bipartite scaffolding excluded).
+    /// Typed edges leaving this entity (bipartite scaffolding excluded), at
+    /// most [`crate::limits::MAX_ENTITY_RELATIONS`] of them.
     pub relations: Vec<EntityRelation>,
-    /// Typed edges pointing AT this entity (bipartite scaffolding excluded).
+    /// Typed edges pointing AT this entity (bipartite scaffolding excluded),
+    /// at most [`crate::limits::MAX_ENTITY_RELATIONS`] of them.
     /// Here [`EntityRelation::target_id`]/[`EntityRelation::target`] name the
     /// far end the edge comes FROM — its source.
     pub relations_in: Vec<EntityRelation>,
+    /// Whether `relations` is a PARTIAL view: true when the resolution cap
+    /// ([`crate::limits::MAX_ENTITY_RELATIONS`]) or the raw scan window
+    /// ([`crate::limits::MAX_ENTITY_SCAN_EDGES`]) cut the outgoing side. A
+    /// list holding exactly the cap is otherwise indistinguishable from a
+    /// cut one (#1820).
+    pub relations_truncated: bool,
+    /// Whether `relations_in` is a PARTIAL view — the incoming mirror of
+    /// [`Self::relations_truncated`].
+    pub relations_in_truncated: bool,
 }
 
 /// The connected answer to a `why` question: the best-matching seed memory plus

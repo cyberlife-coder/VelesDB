@@ -373,6 +373,13 @@ struct EntityProfileOut {
     /// holds `camille --sister of--> theo`, so asking what Theo's outgoing
     /// edges say never finds Camille.
     relations_in: Vec<EntityRelationOut>,
+    /// Whether `relations` is a PARTIAL view — true when a response budget
+    /// cut the outgoing side. A list holding exactly the cap is otherwise
+    /// indistinguishable from a cut one (#1820).
+    relations_truncated: bool,
+    /// Whether `relationsIn` is a PARTIAL view — the incoming mirror of
+    /// `relationsTruncated`.
+    relations_in_truncated: bool,
 }
 
 impl EntityProfileOut {
@@ -388,6 +395,8 @@ impl EntityProfileOut {
                 attributes: Value::Object(serde_json::Map::new()),
                 relations: Vec::new(),
                 relations_in: Vec::new(),
+                relations_truncated: false,
+                relations_in_truncated: false,
             };
         };
         Self {
@@ -405,6 +414,8 @@ impl EntityProfileOut {
                 .into_iter()
                 .map(EntityRelationOut::from)
                 .collect(),
+            relations_truncated: profile.relations_truncated,
+            relations_in_truncated: profile.relations_in_truncated,
         }
     }
 }

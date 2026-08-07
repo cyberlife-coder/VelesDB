@@ -1549,6 +1549,14 @@
               "type": "object"
             },
             "type": "array"
+          },
+          "relations_in_truncated": {
+            "description": "Whether `relations_in` is a PARTIAL view — the incoming mirror of\n`relations_truncated`.",
+            "type": "boolean"
+          },
+          "relations_truncated": {
+            "description": "Whether `relations` is a PARTIAL view — true when a response budget\ncut the outgoing side. A list holding exactly the cap is otherwise\nindistinguishable from a cut one (#1820).",
+            "type": "boolean"
           }
         },
         "required": [
@@ -1558,7 +1566,9 @@
           "name",
           "attributes",
           "relations",
-          "relations_in"
+          "relations_in",
+          "relations_truncated",
+          "relations_in_truncated"
         ],
         "type": "object"
       }

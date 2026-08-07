@@ -244,7 +244,8 @@ fn explanation_to_dict(py: Python<'_>, e: &Explanation) -> PyResult<Py<PyAny>> {
 }
 
 /// An [`EntityProfile`] lookup as
-/// `{found, id, name, attributes, relations, relations_in}`, where each edge
+/// `{found, id, name, attributes, relations, relations_in,
+/// relations_truncated, relations_in_truncated}`, where each edge
 /// is `{predicate, target_id, target}`.
 ///
 /// `relations` are the edges LEAVING the entity, `relations_in` those
@@ -274,6 +275,8 @@ fn entity_profile_to_value(queried: &str, profile: Option<EntityProfile>) -> ser
             "attributes": {},
             "relations": [],
             "relations_in": [],
+            "relations_truncated": false,
+            "relations_in_truncated": false,
         });
     };
     serde_json::json!({
@@ -283,6 +286,8 @@ fn entity_profile_to_value(queried: &str, profile: Option<EntityProfile>) -> ser
         "attributes": serde_json::Value::Object(profile.attributes),
         "relations": entity_relations_to_value(profile.relations),
         "relations_in": entity_relations_to_value(profile.relations_in),
+        "relations_truncated": profile.relations_truncated,
+        "relations_in_truncated": profile.relations_in_truncated,
     })
 }
 
@@ -597,11 +602,14 @@ impl PyMemoryService {
     ///         it is stable across sessions).
     ///
     /// Returns:
-    ///     `{found, id, name, attributes, relations, relations_in}`, each
+    ///     `{found, id, name, attributes, relations, relations_in,
+    ///     relations_truncated, relations_in_truncated}`, each
     ///     edge being `{predicate, target_id, target}`. `found` is `False`
     ///     when nothing has ever mentioned that name; `name` still echoes the
     ///     query in its canonical (trimmed, lowercased) form, so several
-    ///     lookups can be told apart.
+    ///     lookups can be told apart. The `*_truncated` booleans say when a
+    ///     list is a PARTIAL view cut by a response budget — a list holding
+    ///     exactly the cap is otherwise indistinguishable from a cut one.
     ///
     ///     `relations` are the edges LEAVING the entity, `relations_in` those
     ///     pointing AT it — there, `target_id`/`target` name the far end the

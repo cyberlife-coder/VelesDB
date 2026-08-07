@@ -586,6 +586,8 @@ fn test_entity_serializes_to_the_documented_camel_case_wire_shape() {
             target_id: "43".to_owned(),
             target: "Entity: camille martin".to_owned(),
         }],
+        relations_truncated: true,
+        relations_in_truncated: false,
     };
     let wire = serde_json::to_value(&out).expect("EntityProfileOut is serializable");
     assert_eq!(
@@ -607,7 +609,12 @@ fn test_entity_serializes_to_the_documented_camel_case_wire_shape() {
                 "predicate": "sister of",
                 "targetId": "43",
                 "target": "Entity: camille martin"
-            }]
+            }],
+            // The truncation flags cross in camelCase like every other
+            // multi-word key, and an asymmetric pair here proves neither
+            // mirrors the other.
+            "relationsTruncated": true,
+            "relationsInTruncated": false
         })
     );
 }
