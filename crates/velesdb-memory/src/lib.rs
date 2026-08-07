@@ -178,9 +178,9 @@ pub use http_client::{Auth, HttpJsonClient};
 #[cfg(feature = "mcp")]
 pub use mcp::McpServer;
 pub use model::{
-    column_value_matches, ColumnFilter, ColumnOp, EntityProfile, EntityRelation, Explanation,
-    FusionOptions, Link, MemoryEdge, MemoryNode, Recollection, RememberedExtraction,
-    UnrelateOutcome,
+    column_value_matches, BoundedMemoryEdges, ColumnFilter, ColumnOp, EntityProfile,
+    EntityRelation, Explanation, FusionOptions, Link, MemoryEdge, MemoryNode, Recollection,
+    RememberedExtraction, UnrelateOutcome,
 };
 pub use rerank::{DynReranker, RerankError, Reranker};
 pub use service::{MemoryService, Metadata};

@@ -6,6 +6,8 @@
 //! a deterministic, network-free `Extractor`: feed it a paragraph, and `why()`
 //! reaches a sibling fact through a shared topic with no manual `relate()`.
 
+#![cfg(feature = "persistence")]
+
 use serde_json::Value;
 use tempfile::TempDir;
 use velesdb_memory::{

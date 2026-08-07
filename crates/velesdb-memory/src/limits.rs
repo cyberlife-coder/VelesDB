@@ -97,6 +97,29 @@ pub const MAX_WHY_NODES: usize = 500;
 /// ceiling on the response, not a tuning knob.
 pub const MAX_WHY_EDGES: usize = MAX_WHY_NODES * 4;
 
+/// Maximum typed edges an `entity` profile resolves and returns PER
+/// DIRECTION (`relations` and `relations_in` each) — the same width grammar
+/// as [`MAX_WHY_NODE_DEGREE`], on the surface #1743 never covered: resolving
+/// an entity followed every non-scaffolding edge of its hub, full target
+/// content included, so `entity("X")` on a name mentioned by thousands of
+/// facts was a constructible multi-megabyte response (#1820). Truncation is
+/// REPORTED (`relations_truncated`/`relations_in_truncated` on the profile),
+/// never silent: a profile with exactly this many edges is otherwise
+/// indistinguishable from a cut one.
+pub const MAX_ENTITY_RELATIONS: usize = 64;
+
+/// Maximum RAW edges an `entity` profile may scan per direction while
+/// looking for its [`MAX_ENTITY_RELATIONS`] typed ones. A hub's edges are
+/// mostly bipartite scaffolding (`mentions`/`about`, one per mentioning
+/// fact), filtered out AFTER the store hands them over — so the resolution
+/// cap alone would leave the scan O(degree), and a scan capped at the
+/// resolution cap would return scaffolding-only windows on any busy hub.
+/// Two named numbers, one per concern: this one bounds the transient scan
+/// (the #1743 cost class), the other bounds the resolved response. A typed
+/// edge sitting past this window is not found — that blindness is declared
+/// by the same truncation flags, not masked.
+pub const MAX_ENTITY_SCAN_EDGES: usize = 4_096;
+
 /// Maximum accepted size of a single context-compiler fragment (1 MiB, the
 /// same ceiling as [`MAX_FACT_BYTES`]) — prevents a single fragment from
 /// forcing huge allocations in the compile pipeline.

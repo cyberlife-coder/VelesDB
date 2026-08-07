@@ -143,12 +143,18 @@ jobs:
       # `dep:ureq` but not `ollama`, while extract.rs calls a helper gated on
       # `ollama`. Each optional feature of velesdb-memory is therefore checked
       # in isolation.
+      #
+      # `--all-targets` is part of the contract, not an embellishment: without
+      # it this step never compiles the test and example targets, and sixteen
+      # BDD suites plus six examples sat broken under `context`/`ollama`/
+      # `extract` alone with this step green (#1765) — a target that cannot
+      # fail the build is not guarded by it.
       - name: Check each velesdb-memory feature in isolation
         run: |
           set -eu
           for feat in mcp http context persistence ollama extract; do
             echo "::group::--features $feat"
-            cargo check -p velesdb-memory --no-default-features --features "$feat"
+            cargo check -p velesdb-memory --no-default-features --features "$feat" --all-targets
             echo "::endgroup::"
           done
 

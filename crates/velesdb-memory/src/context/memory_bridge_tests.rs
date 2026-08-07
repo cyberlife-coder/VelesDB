@@ -19,7 +19,7 @@ use super::*;
 use crate::context::model::CompilePolicy;
 use crate::context::{fragment_id, ContextAction};
 use crate::embedder::HashEmbedder;
-use crate::model::MemoryEdge;
+use crate::model::{BoundedMemoryEdges, MemoryEdge};
 use crate::storage::NativeStore;
 
 const DIM: usize = 384;
@@ -740,6 +740,22 @@ macro_rules! delegate_untouched_store_methods {
 
         fn incoming_relations(&self, id: u64) -> Result<Vec<MemoryEdge>, MemoryError> {
             self.inner.incoming_relations(id)
+        }
+
+        fn relations_bounded(
+            &self,
+            id: u64,
+            cap: usize,
+        ) -> Result<BoundedMemoryEdges, MemoryError> {
+            self.inner.relations_bounded(id, cap)
+        }
+
+        fn incoming_relations_bounded(
+            &self,
+            id: u64,
+            cap: usize,
+        ) -> Result<BoundedMemoryEdges, MemoryError> {
+            self.inner.incoming_relations_bounded(id, cap)
         }
 
         fn unrelate(&self, edge_id: u64) -> Result<bool, MemoryError> {

@@ -19,6 +19,8 @@
 //! being re-pointed. Without that pair a "fix" that simply stopped re-orienting
 //! would pass every other assertion here.
 
+#![cfg(feature = "persistence")]
+
 use tempfile::TempDir;
 use velesdb_memory::{
     ExtractError, ExtractedFact, ExtractedRelation, Extraction, Extractor, HashEmbedder,

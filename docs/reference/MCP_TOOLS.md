@@ -262,7 +262,8 @@ attributes merged onto its node and the typed edges leaving it.
 |---|---|---|---|
 | `name` | string | yes | Matched case-insensitively (trimmed, lowercased). |
 
-Returns `{ found, id, id_str, name, attributes, relations, relations_in }`.
+Returns `{ found, id, id_str, name, attributes, relations, relations_in,
+relations_truncated, relations_in_truncated }`.
 `found: false` means nothing has ever mentioned that entity; `name` always
 echoes the canonicalized queried name so parallel lookups stay pairable.
 `relations` are the typed edges **leaving** the entity; `relations_in` those
@@ -270,6 +271,14 @@ echoes the canonicalized queried name so parallel lookups stay pairable.
 loses half the graph: the store holds `camille --soeur de--> theo`, so "who is
 Theo's sister?" is answered by his `relations_in`, never by his `relations`.
 The bipartite `mentions` scaffolding is excluded from both.
+
+Each direction is budget-bounded: at most 64 resolved edges
+(`MAX_ENTITY_RELATIONS`) found within a scan window of 4096 raw edges
+(`MAX_ENTITY_SCAN_EDGES`) — an entity mentioned by thousands of facts would
+otherwise be a constructible multi-megabyte response. A cut is REPORTED, not
+silent: `relations_truncated` / `relations_in_truncated` say when the
+matching list is a partial view, since a list holding exactly the cap is
+otherwise indistinguishable from a cut one.
 
 ```jsonc
 entity { "name": "Theo Durand" }
@@ -289,15 +298,16 @@ subgraph** reachable from it through typed links.
 | `max_hops` | integer | no | Default 2 (`DEFAULT_WHY_HOPS`), capped at 10 (`MAX_WHY_HOPS`). |
 | `filter` | object | no | Exact-match metadata filter scoping the seed, e.g. `{"project":"veles"}`. |
 
-Returns `{ nodes: [ { id, id_str, content, hop } ], edges: [ { from, from_str, to, to_str, relation } ] }`
+Returns `{ nodes: [ { id, id_str, content, hop } ], edges: [ { from, from_str, to, to_str, relation } ], truncated }`
 — the seed is `hop: 0`.
 
 The walk is width-bounded as well as depth-bounded: at most 64 outgoing edges
 are followed from any one node (`MAX_WHY_NODE_DEGREE`), at most 500 nodes
 (`MAX_WHY_NODES`) and 2000 edges (`MAX_WHY_EDGES`) are returned per walk. A
-walk that hits a budget is cut silently — a response whose counts sit at a cap
-is the signal that more of the graph exists than was returned. The same
-budgets bound the graph half of `recall_fused`.
+walk that hits a budget SAYS so: `truncated: true` means a cap cut the walk
+before it exhausted the reachable graph — the signal counts alone cannot
+carry, a subgraph sitting exactly at a cap being indistinguishable from a
+complete one. The same budgets bound the graph half of `recall_fused`.
 
 This is what a pure vector search cannot do: it surfaces the PR, the ticket,
 or the benchmark reachable through typed links **even when they share no

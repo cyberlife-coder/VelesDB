@@ -468,26 +468,38 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         // Reserved system keys (the hub flag itself) are scaffolding, not
         // attributes the caller ever wrote — strip them exactly as every other
         // caller-facing read path does.
+        let (relations, relations_truncated) = self.outgoing_entity_relations(id)?;
+        let (relations_in, relations_in_truncated) = self.incoming_entity_relations(id)?;
         Ok(Some(EntityProfile {
             id,
             name: key,
             attributes: strip_reserved_keys(self.store.get_metadata(id)?).unwrap_or_default(),
-            relations: self.outgoing_entity_relations(id)?,
-            relations_in: self.incoming_entity_relations(id)?,
+            relations,
+            relations_in,
+            relations_truncated,
+            relations_in_truncated,
         }))
     }
 
-    /// The typed edges leaving `id`, resolved to their target's content.
+    /// The typed edges leaving `id`, resolved to their target's content, and
+    /// whether that list is a partial view.
     ///
     /// Scaffolding edges (`mentions`, and `about` for symmetry — a hub never
     /// has an outgoing `about`) are dropped: they point at the facts that
     /// tagged this entity, not at a statement *about* it.
-    fn outgoing_entity_relations(&self, id: u64) -> Result<Vec<EntityRelation>, MemoryError> {
-        self.resolve_entity_relations(self.store.relations(id)?, |edge| edge.to)
+    fn outgoing_entity_relations(
+        &self,
+        id: u64,
+    ) -> Result<(Vec<EntityRelation>, bool), MemoryError> {
+        let scanned = self
+            .store
+            .relations_bounded(id, crate::limits::MAX_ENTITY_SCAN_EDGES)?;
+        self.resolve_entity_relations(scanned, |edge| edge.to)
     }
 
     /// The typed edges pointing at `id`, resolved to their SOURCE's content —
-    /// for an incoming edge the far end is where it comes *from*.
+    /// for an incoming edge the far end is where it comes *from* — and
+    /// whether that list is a partial view.
     ///
     /// Without these, a question is only answerable from one side: the graph
     /// holds `camille --soeur de--> theo`, so reading Theo's outgoing edges
@@ -497,22 +509,40 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// [`Self::outgoing_entity_relations`]'s: `about` edges are dropped (they
     /// are the fact → hub half of the `about`/`mentions` pair), and `mentions`
     /// with them for symmetry.
-    fn incoming_entity_relations(&self, id: u64) -> Result<Vec<EntityRelation>, MemoryError> {
-        self.resolve_entity_relations(self.store.incoming_relations(id)?, |edge| edge.from)
+    fn incoming_entity_relations(
+        &self,
+        id: u64,
+    ) -> Result<(Vec<EntityRelation>, bool), MemoryError> {
+        let scanned = self
+            .store
+            .incoming_relations_bounded(id, crate::limits::MAX_ENTITY_SCAN_EDGES)?;
+        self.resolve_entity_relations(scanned, |edge| edge.from)
     }
 
     /// Shared resolver for both edge directions: skip the bipartite
     /// scaffolding labels, resolve each edge's far end (`far_end` picks which
-    /// endpoint that is) to its stored content.
+    /// endpoint that is) to its stored content — at most
+    /// [`crate::limits::MAX_ENTITY_RELATIONS`] of them — and say whether the
+    /// result is a partial view (#1820).
+    ///
+    /// Truncated when either budget bit: the store's raw scan window
+    /// ([`crate::limits::MAX_ENTITY_SCAN_EDGES`]) left edges unread, or a
+    /// typed edge past the resolution cap was seen and dropped. Both cuts
+    /// are the same honest signal — "there is more than this view shows".
     fn resolve_entity_relations(
         &self,
-        edges: Vec<MemoryEdge>,
+        scanned: crate::model::BoundedMemoryEdges,
         far_end: impl Fn(&MemoryEdge) -> u64,
-    ) -> Result<Vec<EntityRelation>, MemoryError> {
+    ) -> Result<(Vec<EntityRelation>, bool), MemoryError> {
         let mut relations = Vec::new();
-        for edge in edges {
+        let mut truncated = scanned.truncated;
+        for edge in scanned.edges {
             if edge.relation == MENTIONS_RELATION || edge.relation == ABOUT_RELATION {
                 continue;
+            }
+            if relations.len() >= crate::limits::MAX_ENTITY_RELATIONS {
+                truncated = true;
+                break;
             }
             let far = far_end(&edge);
             let content = self.store.get(far)?.map(|(content, _)| content);
@@ -522,7 +552,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
                 target: content.unwrap_or_default(),
             });
         }
-        Ok(relations)
+        Ok((relations, truncated))
     }
 
     /// Wire each extracted `subject -[predicate]-> object` triple as a typed
@@ -1147,6 +1177,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
                 hop: 0,
             }],
             edges: Vec::new(),
+            truncated: false,
         };
         let mut visited: HashSet<u64> = HashSet::from([seed_id]);
         let mut frontier = vec![seed_id];
@@ -1161,6 +1192,11 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
                 if explanation.nodes.len() >= crate::limits::MAX_WHY_NODES
                     || explanation.edges.len() >= crate::limits::MAX_WHY_EDGES
                 {
+                    // Unexpanded frontier work remained — the response is a
+                    // partial view and must SAY so (#1820); whether the rest
+                    // held anything unseen is exactly what the budget forbids
+                    // finding out, so the cautious true is the honest one.
+                    explanation.truncated = true;
                     break 'hops; // width budget spent — depth left in max_hops is moot
                 }
                 self.expand(node_id, hop, &mut explanation, &mut visited, &mut next)?;
@@ -1188,8 +1224,19 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         visited: &mut HashSet<u64>,
         next: &mut Vec<u64>,
     ) -> Result<(), MemoryError> {
-        let edges = self.store.relations(node_id)?;
-        for edge in edges.into_iter().take(crate::limits::MAX_WHY_NODE_DEGREE) {
+        // The bounded read pushes the per-node budget into the store's own
+        // index scan: the old full fetch materialized a super-node's whole
+        // degree before `.take()` could apply — O(store size) transient
+        // allocation at a single hop, the cost half of #1743 that #1820
+        // closes. The store also reports whether the degree exceeded the
+        // budget, which is what makes the cut OBSERVABLE.
+        let bounded = self
+            .store
+            .relations_bounded(node_id, crate::limits::MAX_WHY_NODE_DEGREE)?;
+        if bounded.truncated {
+            explanation.truncated = true;
+        }
+        for edge in bounded.edges {
             // The budgets are ceilings, not suggestions: once either is spent,
             // this node's expansion stops MID-NODE rather than finishing. The
             // caller's check between nodes cannot provide that — an expansion
@@ -1197,6 +1244,9 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             if explanation.nodes.len() >= crate::limits::MAX_WHY_NODES
                 || explanation.edges.len() >= crate::limits::MAX_WHY_EDGES
             {
+                // An edge was in hand and not followed — an exact cut, not
+                // a conservative one.
+                explanation.truncated = true;
                 break;
             }
             let target = edge.to;

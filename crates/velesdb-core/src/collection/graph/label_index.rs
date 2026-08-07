@@ -16,8 +16,14 @@ use std::collections::HashMap;
 ///
 /// # Limitations
 ///
-/// `RoaringBitmap` only supports u32 IDs. Node IDs exceeding `u32::MAX`
-/// are silently skipped (logged at warn level on insert).
+/// `RoaringBitmap` only supports u32 IDs. Node IDs exceeding `u32::MAX` are
+/// skipped: counted (and logged at DEBUG) when the node carries `_labels` —
+/// an unlabeled node had nothing to index, so its oversized id costs
+/// nothing and is not an event. Per-node WARN here used to describe the
+/// NOMINAL state of a memory store (hashed u64 ids are all but guaranteed
+/// past `u32::MAX` — 788 lines on one startup) and drowned the incident
+/// log #1780 exists to keep readable; the caller that rebuilds the index
+/// emits ONE aggregated warning instead (#1834).
 ///
 /// # Example
 ///
@@ -35,10 +41,13 @@ use std::collections::HashMap;
 pub struct LabelIndex {
     /// label_name -> set of node IDs with that label.
     labels: HashMap<String, RoaringBitmap>,
-    /// Set to `true` when any `index_from_payload` call encounters a node ID
-    /// exceeding `u32::MAX`. Callers should fall back to a full scan when this
-    /// flag is set and the bitmap lookup returns no results.
-    has_large_ids: bool,
+    /// How many LABELED nodes an `index_from_payload` call skipped for an ID
+    /// exceeding `u32::MAX`. Callers should fall back to a full scan when
+    /// this is non-zero and the bitmap lookup returns no results; the index
+    /// rebuild reports it once, aggregated, instead of one line per node
+    /// (#1834). Unlabeled oversized ids are not counted: they had nothing
+    /// to index, so nothing was lost.
+    unindexable_labeled: u64,
 }
 
 impl LabelIndex {
@@ -56,20 +65,24 @@ impl LabelIndex {
     /// Returns the number of labels successfully indexed (0 if payload has
     /// no `_labels` array or node ID exceeds `u32::MAX`).
     pub fn index_from_payload(&mut self, node_id: u64, payload: &serde_json::Value) -> usize {
+        let labels = payload.get("_labels").and_then(|v| v.as_array());
         let Some(safe_id) = safe_bitmap_id(node_id) else {
-            tracing::warn!(
-                node_id,
-                "LabelIndex: node_id exceeds u32::MAX, cannot index"
-            );
-            // Track that we have unindexable IDs so callers can fall back
-            // to a full scan instead of returning silently incomplete results.
-            if payload.get("_labels").and_then(|v| v.as_array()).is_some() {
-                self.has_large_ids = true;
+            // Count (and detail at DEBUG) only when something was actually
+            // lost — the node carried labels this index cannot hold. The
+            // caller falls back to a full scan off the counter, and the
+            // rebuild reports the total ONCE instead of per node (#1834).
+            if labels.is_some() {
+                self.unindexable_labeled += 1;
+                tracing::debug!(
+                    node_id,
+                    "LabelIndex: labeled node_id exceeds u32::MAX, not indexed — \
+                     label lookups fall back to a full scan"
+                );
             }
             return 0;
         };
 
-        let Some(labels_arr) = payload.get("_labels").and_then(|v| v.as_array()) else {
+        let Some(labels_arr) = labels else {
             return 0;
         };
 
@@ -129,7 +142,16 @@ impl LabelIndex {
     /// this is `true` and the bitmap lookup returns empty results.
     #[must_use]
     pub fn has_large_ids(&self) -> bool {
-        self.has_large_ids
+        self.unindexable_labeled > 0
+    }
+
+    /// How many labeled nodes were skipped for an ID exceeding `u32::MAX` —
+    /// what the index rebuild reports once, aggregated, instead of one WARN
+    /// per node (#1834). Unlabeled oversized ids are not counted: they had
+    /// nothing to index.
+    #[must_use]
+    pub fn unindexable_labeled(&self) -> u64 {
+        self.unindexable_labeled
     }
 
     /// Returns the bitmap of node IDs carrying the given label.

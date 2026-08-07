@@ -4,6 +4,8 @@
 //!
 //! Categories: Nominal (≥60%), Edge (~20%), Negative (≥20%).
 
+#![cfg(feature = "persistence")]
+
 mod common;
 
 use common::{meta, service};

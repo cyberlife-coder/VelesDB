@@ -20,7 +20,6 @@
 //! `remember`+`recall` mix) must all complete with no panic and no deadlock.
 
 use std::net::SocketAddr;
-use std::time::Duration;
 
 use rmcp::model::{CallToolRequestParams, ClientInfo};
 use rmcp::service::RunningService;
@@ -589,41 +588,71 @@ async fn the_session_cap_holds_while_a_slot_is_occupied() {
     shutdown(server).await;
 }
 
+/// How long the slot-return poll may wait before declaring the slot lost.
+/// A PASS never pays it: the expected sequence (150 ms keep-alive + rmcp's
+/// per-session worker noticing) completes in well under a second, and the
+/// poll returns the instant it does. Only a genuinely stuck slot — the very
+/// defect this test exists to catch — runs the deadline out.
+const SLOT_RETURN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Interval between slot-return attempts — long enough not to hammer the
+/// server, short enough that a pass is detected promptly.
+const SLOT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(25);
+
 #[tokio::test]
 async fn an_idle_expired_session_returns_its_slot() {
     // `max_sessions = 1` makes the accounting observable: whether the slot
     // came back is exactly whether a second session can be created.
     //
-    // Every wait here needs the session DEAD, so a slow runner only ever helps
-    // — the timing pressure is one-sided. The cap-while-alive assertion that
-    // used to sit in this test pulled the other way and is now its own test.
+    // The slot's return is an EVENT, not a point on the wall clock: after
+    // the keep-alive elapses, rmcp's per-session worker still has to run
+    // before `close_session` frees the slot — and on a loaded runner that
+    // task can lag past any fixed sleep. This test's previous shape slept
+    // 700 ms and asserted once, which is exactly how it flaked twice on an
+    // unchanged `develop` (#1793). So it now waits for the event itself:
+    // poll "can a second session be created?" under a deadline. A slow
+    // runner delays the event; it cannot un-happen it — waiting longer only
+    // ever helps, and a pass never waits longer than the event takes.
+    //
+    // Deliberately NOT polled: anything touching the first session. Any
+    // request against it counts as activity and refreshes its idle timer, so
+    // a "wait until it answers 404" loop would keep it alive forever — the
+    // livelock is the reason death is observed only through the slot.
     let server = spawn_http_server_with_keep_alive(1, KEEP_ALIVE_EXPIRES_PROMPTLY).await;
 
     let first = try_raw_initialize(server.addr)
         .await
         .expect("the first session must be created");
 
-    // Let it die of pure inactivity — no DELETE, no close, just silence.
-    tokio::time::sleep(PAST_EXPIRY).await;
+    // Let it die of pure inactivity — no DELETE, no close, just silence,
+    // while polling the one observable that has no side effect on it.
+    let deadline = tokio::time::Instant::now() + SLOT_RETURN_DEADLINE;
+    let second = loop {
+        if let Some(id) = try_raw_initialize(server.addr).await {
+            break Some(id);
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "a session that died of inactivity must return its slot within \
+             {SLOT_RETURN_DEADLINE:?} — otherwise the daemon locks itself out \
+             after `max_sessions` idle expiries"
+        );
+        tokio::time::sleep(SLOT_POLL_INTERVAL).await;
+    };
 
-    let expired_status = tokio::time::timeout(
-        Duration::from_secs(1),
-        status_for_session(server.addr, &first),
-    )
-    .await
-    .expect("an expired-session POST must be rejected within one second");
+    // The slot came back, so the worker has closed the first session — from
+    // here the checks are deterministic, no timing left in them.
+    assert_ne!(
+        second.as_deref(),
+        Some(first.as_str()),
+        "the reused slot must be a NEW session"
+    );
+    let expired_status = status_for_session(server.addr, &first).await;
     assert_eq!(
         expired_status,
         reqwest::StatusCode::NOT_FOUND,
-        "an expired session must be gone, and say so"
+        "a closed session must be gone, and say so"
     );
-    let second = try_raw_initialize(server.addr).await;
-    assert!(
-        second.is_some(),
-        "a session that died of inactivity must return its slot — otherwise the \
-         daemon locks itself out after `max_sessions` idle expiries"
-    );
-    assert_ne!(second, Some(first), "the reused slot must be a NEW session");
 
     shutdown(server).await;
 }

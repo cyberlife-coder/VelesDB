@@ -324,4 +324,4 @@ thread 'main' panicked at ...
 
 ---
 
-*Last updated: 2026-03-20 · Applies to: velesdb-core 4.2.0 (introduced: EPIC-025)*
+*Last updated: 2026-03-20 · Applies to: velesdb-core 4.3.0 (introduced: EPIC-025)*

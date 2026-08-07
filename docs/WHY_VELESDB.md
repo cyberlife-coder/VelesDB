@@ -128,4 +128,4 @@ See [BENCHMARKS.md](./BENCHMARKS.md) for detailed numbers and methodology.
 - You only need simple vector search without graph or column queries (ChromaDB)
 
 ---
-Last updated: 2026-07-25 · Applies to: velesdb-core 4.2.0
+Last updated: 2026-07-25 · Applies to: velesdb-core 4.3.0

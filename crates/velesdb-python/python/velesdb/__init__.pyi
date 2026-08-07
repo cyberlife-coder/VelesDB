@@ -2549,7 +2549,11 @@ class MemoryService:
 
         Returns:
             ``{"nodes": [{"id": int, "content": str, "hop": int}, ...],
-               "edges": [{"from": int, "to": int, "relation": str}, ...]}``
+               "edges": [{"from": int, "to": int, "relation": str}, ...],
+               "truncated": bool}``.
+            ``truncated`` is ``True`` when a width budget cut the walk — a
+            subgraph sitting exactly at a cap is otherwise indistinguishable
+            from a complete one.
         """
         ...
 
@@ -2571,7 +2575,9 @@ class MemoryService:
                "attributes": Dict[str, Any],
                "relations": [{"predicate": str, "target_id": int,
                               "target": str}, ...],
-               "relations_in": [...the same shape...]}``.
+               "relations_in": [...the same shape...],
+               "relations_truncated": bool,
+               "relations_in_truncated": bool}``.
             ``found`` is ``False`` when nothing has ever mentioned that name;
             ``name`` still echoes the query in its canonical (trimmed,
             lowercased) form, so several lookups can be told apart.
@@ -2582,6 +2588,10 @@ class MemoryService:
             is only answerable from one side: the graph holds
             ``camille --sister of--> theo``, so reading Theo's outgoing edges
             never finds Camille. Both are present on a miss too, empty.
+
+            The ``*_truncated`` booleans say when the matching list is a
+            PARTIAL view cut by a response budget — a list holding exactly
+            the cap is otherwise indistinguishable from a cut one.
         """
         ...
 
