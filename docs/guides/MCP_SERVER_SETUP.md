@@ -321,6 +321,20 @@ session in **48 ms** with a clean `404`, and the client still reported a
 timeout. The HTTP regression test now gives that expired-session POST a hard
 one-second bound, independently of the setup sleep.
 
+With `VELESDB_MEMORY_LOG` on, the whole mechanism is visible in the daemon's
+own request log — captured live on 2026-08-07 against Claude Code's *native*
+HTTP client (not the `mcp-remote` bridge), settling #1727: the dead-session
+POST arrives and is refused with `404` in **0 ms**; the client retries the
+SAME dead session inside the call (a second `404`, one minute later) and then
+reports `-32001`; the **next** call re-initializes — `initialize` with no
+session header, a fresh id, and the tool call succeeds immediately. So the
+in-call retry is what loses the write, the across-calls recovery is what
+makes an identical resend succeed, and the server never hangs and never
+writes late. The operating rule stands unchanged: a timeout proves nothing —
+confirm the write (`saved_at` via `list_working_contexts`) and resend
+identically if it is missing; `save_working_context` upserts, so a resend
+replaces rather than duplicates.
+
 Codex 0.113+ handles this lifecycle natively: it establishes a new session and
 retries. The installers therefore wire Codex straight to the HTTPS URL.
 Claude Desktop cannot consume that URL from its config file and still needs a
