@@ -1052,12 +1052,7 @@ impl WireInputSchema {
 #[cfg(feature = "mcp")]
 impl WireOutputSchema {
     fn derived<T: schemars::JsonSchema + std::any::Any>() -> Self {
-        let schema = rmcp::handler::server::tool::schema_for_output::<T>().unwrap_or_else(|e| {
-            panic!(
-                "Invalid output schema for {}: {e}",
-                std::any::type_name::<T>()
-            )
-        });
+        let schema = rmcp::handler::server::tool::schema_for_output::<T>();
         Self((*schema).clone())
     }
 

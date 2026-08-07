@@ -224,7 +224,11 @@ async fn initialize_round_trip_succeeds_over_http() {
     let info = client
         .peer_info()
         .expect("server must advertise its info during initialize");
-    assert_eq!(info.server_info.name, "velesdb-memory");
+    let server_info = info
+        .server_info
+        .as_ref()
+        .expect("server must name itself during initialize");
+    assert_eq!(server_info.name, "velesdb-memory");
 
     shutdown(server).await;
 }
