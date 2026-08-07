@@ -64,6 +64,26 @@ pub use memory::{
     AgentMemory, AgentMemoryError, EpisodicMemory, ProceduralMemory, ProcedureMatch,
     SemanticMemory, DEFAULT_DIMENSION,
 };
+
+/// At most `cap` relation edges of one memory point, plus the honest signal
+/// that the point carries more. Returned by the `relations_bounded` /
+/// `incoming_relations_bounded` accessors of every memory kind.
+///
+/// The signal is a separate field because `edges.len() == cap` cannot carry
+/// it: a node with exactly `cap` edges is indistinguishable from a truncated
+/// one (#1820). `truncated` compares the node's TOTAL stored degree — read
+/// under the same shard guard as the edges — against the scan cap, so it is
+/// true exactly when stored edges were left unread. Note that TTL-expired
+/// edges inside the scanned window are dropped without being replaced (the
+/// O(cap) scan bound outranks returning exactly `cap` live entries), so
+/// `edges.len() < cap` with `truncated == true` is a normal outcome.
+#[derive(Debug, Clone)]
+pub struct BoundedRelations {
+    /// At most `cap` edges, in index order, TTL-expired far ends dropped.
+    pub edges: Vec<crate::collection::graph::GraphEdge>,
+    /// Whether the node's total stored degree exceeded the scan cap.
+    pub truncated: bool,
+}
 pub use reinforcement::{
     power_law_decay, AdaptiveLearningRate, CompositeStrategy, ContextualReinforcement,
     DiminishingReturns, FixedRate, ReinforcementContext, ReinforcementStrategy, TemporalDecay,

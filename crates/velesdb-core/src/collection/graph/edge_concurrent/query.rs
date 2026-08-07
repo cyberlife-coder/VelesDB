@@ -31,6 +31,44 @@ impl ConcurrentEdgeStore {
         guard.get_incoming(node_id).into_iter().cloned().collect()
     }
 
+    /// Gets at most `cap` outgoing edges from a node, plus the node's TOTAL
+    /// outgoing degree (thread-safe).
+    ///
+    /// Work and allocation are O(cap), never O(degree) — the bound reaches
+    /// the shard's index scan itself (#1820). Both values are read under ONE
+    /// shard guard, so the pair cannot tear: the degree always describes the
+    /// same instant as the edges, which is what lets a caller derive an
+    /// honest `truncated = total > cap` signal.
+    #[must_use]
+    pub fn get_outgoing_bounded(&self, node_id: u64, cap: usize) -> (Vec<GraphEdge>, usize) {
+        let shard = &self.shards[self.shard_index(node_id)];
+        let guard = shard.read();
+        let total = guard.outgoing_degree(node_id);
+        let edges = guard
+            .get_outgoing_bounded(node_id, cap)
+            .into_iter()
+            .cloned()
+            .collect();
+        (edges, total)
+    }
+
+    /// Gets at most `cap` incoming edges to a node, plus the node's TOTAL
+    /// incoming degree (thread-safe) — the mirror of
+    /// [`Self::get_outgoing_bounded`], same O(cap) and same single-guard
+    /// consistency.
+    #[must_use]
+    pub fn get_incoming_bounded(&self, node_id: u64, cap: usize) -> (Vec<GraphEdge>, usize) {
+        let shard = &self.shards[self.shard_index(node_id)];
+        let guard = shard.read();
+        let total = guard.incoming_degree(node_id);
+        let edges = guard
+            .get_incoming_bounded(node_id, cap)
+            .into_iter()
+            .cloned()
+            .collect();
+        (edges, total)
+    }
+
     /// Gets neighbors (target nodes) of a given node.
     ///
     /// When a CSR read snapshot is available (see

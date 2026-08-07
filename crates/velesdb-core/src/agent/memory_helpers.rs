@@ -694,6 +694,39 @@ pub(super) fn relations_of(
         .collect())
 }
 
+/// Bounded twin of [`relations_of`] (#1820): resolves at most `cap` stored
+/// edges — work and transient allocation O(cap), never O(degree) — and says
+/// whether the point's total degree exceeded the scan.
+///
+/// The TTL filter runs on the scanned window only: an expired edge inside it
+/// is dropped without scanning further, because the O(cap) bound is the
+/// contract. `truncated` compares the TOTAL stored degree (read under the
+/// same shard guard as the edges) against `cap`, so a caller can tell
+/// "exactly `cap` edges" from "cut at `cap`" — the ambiguity the unbounded
+/// accessor structurally cannot resolve.
+///
+/// # Errors
+///
+/// Returns `CollectionError` when the collection cannot be resolved.
+pub(super) fn relations_of_bounded(
+    db: &Database,
+    collection_name: &str,
+    id: u64,
+    ttl: &super::ttl::MemoryTtl,
+    kind: super::ttl::MemoryKind,
+    cap: usize,
+) -> Result<super::BoundedRelations, AgentMemoryError> {
+    let collection = get_collection(db, collection_name)?;
+    let (edges, total) = collection.get_outgoing_edges_bounded(id, cap);
+    Ok(super::BoundedRelations {
+        edges: edges
+            .into_iter()
+            .filter(|edge| !ttl.is_expired(kind, edge.target()))
+            .collect(),
+        truncated: total > cap,
+    })
+}
+
 /// Returns the incoming relation edges of a memory point, filtering out edges
 /// whose source is TTL-expired in the given subsystem.
 ///
@@ -719,6 +752,33 @@ pub(super) fn incoming_relations_of(
         .into_iter()
         .filter(|edge| !ttl.is_expired(kind, edge.source()))
         .collect())
+}
+
+/// Bounded twin of [`incoming_relations_of`] — the incoming mirror of
+/// [`relations_of_bounded`], with the same O(cap) scan contract and the same
+/// window-only TTL filtering (here on `source()`, the far end of an incoming
+/// edge).
+///
+/// # Errors
+///
+/// Returns `CollectionError` when the collection cannot be resolved.
+pub(super) fn incoming_relations_of_bounded(
+    db: &Database,
+    collection_name: &str,
+    id: u64,
+    ttl: &super::ttl::MemoryTtl,
+    kind: super::ttl::MemoryKind,
+    cap: usize,
+) -> Result<super::BoundedRelations, AgentMemoryError> {
+    let collection = get_collection(db, collection_name)?;
+    let (edges, total) = collection.get_incoming_edges_bounded(id, cap);
+    Ok(super::BoundedRelations {
+        edges: edges
+            .into_iter()
+            .filter(|edge| !ttl.is_expired(kind, edge.source()))
+            .collect(),
+        truncated: total > cap,
+    })
 }
 
 /// Removes a relation edge from a memory collection.
