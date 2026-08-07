@@ -1365,32 +1365,42 @@ fn build_graph_prompt(text: &str) -> String {
     format!(
         "You are building a knowledge graph from the passage below.\n\n\
 Passage:\n{text}\n\n\
+STEP 0 — Identify the passage's language. Everything you write (facts, \
+predicates, attribute keys) MUST be in THAT language. Do not copy the language \
+of the examples below: they are shown in several languages on purpose, and you \
+must match the PASSAGE, never the example.\n\n\
 Return THREE things.\n\n\
-1. \"facts\": the atomic, standalone facts a person would remember. Rewrite each \
-as a self-contained sentence (resolve pronouns to names; keep absolute dates). \
-For each, list 1-4 key TOPICS it concerns, as short canonical lowercase noun \
-phrases, so the same topic recurs as the SAME tag across passages.\n\n\
+1. \"facts\": the atomic, standalone facts a person would remember, in the \
+passage's language. Rewrite each as a self-contained sentence (resolve \
+pronouns to names; keep absolute dates). For each, list 1-4 key TOPICS it \
+concerns, as short canonical lowercase noun phrases, so the same topic recurs \
+as the SAME tag across passages.\n\n\
 2. \"relations\": every explicit relationship BETWEEN TWO NAMED ENTITIES, as \
 subject/predicate/object triples. Use the entity's full name, lowercase \
 (e.g. \"bruno durand\").\n\
 The predicate is a LABEL, not a sentence: **at most 3 words**, lowercase, in \
-the passage's own language (e.g. \"pere de\", \"soeur de\", \"works at\", \
-\"moteur de recherche\"). NEVER restate the sentence — write \"surveille les \
-fuites\", not \"est utilise pour la surveillance de fuites de donnees\". If you \
-cannot say it in 3 words, pick the closest short label.\n\
-State the triple in the direction the passage states it, and add the converse \
-ONLY if the passage states it too.\n\
+the passage's language. Examples of the SHAPE, each in its own language — \
+match the passage, not these: a French passage gives \"travaille chez\", \
+\"pere de\"; an English passage gives \"works at\", \"father of\"; a Spanish \
+passage gives \"trabaja en\". NEVER restate the sentence — write \"surveille \
+les fuites\", not \"est utilise pour la surveillance de fuites de donnees\". \
+If you cannot say it in 3 words, pick the closest short label.\n\
 DIRECTION: the subject is whoever CARRIES the relation, not the subject of the \
 sentence. \"A a une soeur, B\" means B is A's sister, so the triple is \
-B/\"soeur de\"/A — never A/\"soeur de\"/B. Same for every possessive \
-(\"a un frere\", \"a une fille\", \"has a brother\").\n\
+B/\"soeur de\"/A — never A/\"soeur de\"/B. \"A has a brother, B\" means B is \
+A's brother: B/\"brother of\"/A. Same for every possessive.\n\
+EXACTLY ONE triple per stated relationship. Never emit both directions of the \
+same predicate over the same pair: \"X brother of Y\" plus \"Y brother of X\" \
+is a contradiction, not a converse. Add a converse ONLY when the passage \
+states it separately AND with a different predicate.\n\
 Every named entity the passage RELATES to another must appear in at least one \
 triple — an entity that only receives attributes and no edge is a dead end in \
 the graph.\n\n\
 3. \"attributes\": every property a named entity HAS, as entity/key/value. Use \
-short lowercase keys (\"age\", \"ville\", \"employeur\"). Emit numbers as JSON \
-NUMBERS, never strings: 15, not \"15\". Omit anything the passage does not state.\n\n\
-Return ONLY this JSON object, no prose:\n\
+short lowercase keys in the passage's language (\"age\", \"ville\", \
+\"employeur\"). Emit numbers as JSON NUMBERS, never strings: 15, not \"15\". \
+Omit anything the passage does not state.\n\n\
+Return ONLY this JSON object, no prose, no markdown fence:\n\
 {{\"facts\": [{{\"fact\": string, \"entities\": [string]}}], \
 \"relations\": [{{\"subject\": string, \"predicate\": string, \"object\": string}}], \
 \"attributes\": [{{\"entity\": string, \"key\": string, \"value\": string|number|boolean}}]}}"
@@ -1620,6 +1630,49 @@ mod tests {
             prompt.contains("at least one triple"),
             "an entity with attributes but no edge is a dead end — the prompt \
              must ask for the edge"
+        );
+    }
+
+    /// The prompt must make the language rule SYMMETRIC (#1846). Its previous
+    /// form gave predicate examples in mixed languages with no rule tying the
+    /// answer to the passage: on an English passage, `default:fast` emitted
+    /// `frere de` (French) — and a graph holding both `works at` and
+    /// `travaille chez` for the same relation fragments it into two
+    /// predicates. Measured fix: with this rule the same model passes both
+    /// languages; a one-sided rule ("answer in French") merely inverted the
+    /// defect.
+    #[test]
+    fn graph_prompt_ties_every_output_to_the_passage_language() {
+        let prompt = build_graph_prompt("Sarah Miller has a brother, Tom Miller.");
+        assert!(
+            prompt.contains("Identify the passage's language"),
+            "the language rule must be an explicit first step, not an aside"
+        );
+        assert!(
+            prompt.contains("match the PASSAGE, never the example"),
+            "mixed-language examples are load-bearing — the rule must say they \
+             are examples of SHAPE, not of language"
+        );
+    }
+
+    /// The prompt must forbid the fake converse (#1846). Its previous form
+    /// said "add the converse ONLY if the passage states it too", and on an
+    /// English passage `default:fast` still emitted BOTH `tom brother of
+    /// sarah` AND `sarah brother of tom` — each the sibling of the other, a
+    /// contradiction `orient_kinship` repairs for kinship only: `works at` /
+    /// `manages` would ship inverted. The rule must name the failure, not
+    /// just permit its absence.
+    #[test]
+    fn graph_prompt_forbids_both_directions_of_one_predicate() {
+        let prompt = build_graph_prompt("Sarah Miller has a brother, Tom Miller.");
+        assert!(
+            prompt.contains("EXACTLY ONE triple per stated relationship"),
+            "the one-triple rule must be stated as a hard bound"
+        );
+        assert!(
+            prompt.contains("is a contradiction, not a converse"),
+            "the counter-example is what makes the rule unambiguous — the same \
+             device the carrier rule below relies on"
         );
     }
 
