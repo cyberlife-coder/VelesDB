@@ -51,13 +51,26 @@ use session_limit::BoundedSessionManager;
 pub const DEFAULT_HTTP_BIND: &str = "127.0.0.1:18090";
 
 /// Default max size (bytes) of a single `/mcp` HTTP request body when
-/// `VELESDB_MEMORY_HTTP_MAX_BODY_BYTES` is unset — 16 MiB. Generous headroom
-/// above the largest single field cap enforced deeper in the stack
-/// ([`crate::limits::MAX_TRANSCRIPT_BYTES`], 8 MiB) to cover JSON-RPC framing
-/// and multi-field payloads, while still bounding the raw allocation an
+/// `VELESDB_MEMORY_HTTP_MAX_BODY_BYTES` is unset — the full media budget the
+/// core itself accepts, plus text-and-framing headroom. 80 MiB at today's
+/// terms, but DERIVED rather than chosen: the previous hand-picked 16 MiB
+/// reasoned only about text ([`crate::limits::MAX_TRANSCRIPT_BYTES`], 8 MiB)
+/// and silently sat 48 MiB under [`crate::limits::MAX_TOTAL_MEDIA_BYTES`] —
+/// a `compile_context` call the core accepts (a screenshot-heavy session
+/// within its published 64 MiB media budget, each payload under
+/// [`crate::limits::MAX_MEDIA_BYTES`]) was refused by this transport alone,
+/// while the same call succeeded over stdio, which has no body cap (#1746).
+/// Deriving keeps the question answered: the next media-budget adjustment
+/// moves this cap with it instead of re-opening the same gap.
+///
+/// The headroom term covers JSON-RPC framing and every text field riding
+/// beside the media: twice the largest single text cap — the same "generous
+/// headroom above the largest field" rule the old constant applied, kept as
+/// a rule instead of a number. The result still bounds the raw allocation an
 /// unauthenticated-by-design loopback client can force before any
 /// application-level check ever runs (see [`RequestBodyLimit`] in [`router`]).
-pub const DEFAULT_HTTP_MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
+pub const DEFAULT_HTTP_MAX_BODY_BYTES: usize =
+    crate::limits::MAX_TOTAL_MEDIA_BYTES + 2 * crate::limits::MAX_TRANSCRIPT_BYTES;
 
 /// Resolve the `/mcp` request body limit from
 /// `VELESDB_MEMORY_HTTP_MAX_BODY_BYTES`. Unset, unparseable, or `0` falls
@@ -384,6 +397,29 @@ fn spawn_tls_connection(
             .serve_connection_with_upgrades(io, hyper_service)
             .await;
     });
+}
+
+#[cfg(test)]
+mod body_cap_tests {
+    use super::DEFAULT_HTTP_MAX_BODY_BYTES;
+    use crate::limits::{MAX_TOTAL_MEDIA_BYTES, MAX_TRANSCRIPT_BYTES};
+
+    /// The daemon's default transport cap must carry every request the core
+    /// itself accepts: the full published media budget plus the largest
+    /// single text field, with framing on top (#1746). Asserted as a
+    /// RELATION between the constants, not as a number — the next adjustment
+    /// to either side must re-face this invariant instead of a stale figure.
+    #[test]
+    fn the_default_body_cap_carries_the_full_media_budget() {
+        assert!(
+            DEFAULT_HTTP_MAX_BODY_BYTES >= MAX_TOTAL_MEDIA_BYTES + MAX_TRANSCRIPT_BYTES,
+            "a request the core accepts (up to {MAX_TOTAL_MEDIA_BYTES} bytes of media \
+             plus up to {MAX_TRANSCRIPT_BYTES} bytes of text) must not be refused by \
+             the transport alone — stdio has no such cap, so a tighter HTTP default \
+             makes the SAME call succeed or fail depending on how the client connected \
+             (got {DEFAULT_HTTP_MAX_BODY_BYTES})"
+        );
+    }
 }
 
 #[cfg(test)]
