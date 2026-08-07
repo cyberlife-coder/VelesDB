@@ -55,6 +55,25 @@ def is_cfg_test_gate(stripped: str) -> bool:
     return re.search(r"\btest\b", without_strings) is not None
 
 
+def is_doc_fence_marker(stripped: str) -> bool:
+    """True if a `///` line opens/closes a rustdoc example fence.
+
+    A genuine fence marker has the triple backtick as the first thing after
+    the `///` prefix (optionally followed by a language tag, e.g.
+    `/// ```rust`). A ``` occurring elsewhere on the line is prose, not a
+    fence — e.g. an inline code span that double-backtick-escapes a literal
+    triple backtick, as in `` `` ``` `` `` (segment.rs:112, chunk.rs:87),
+    used when a doc comment needs to talk *about* fence syntax without
+    opening one. The old substring check (`"```" in stripped`) toggled on
+    that occurrence and, finding no closing fence for the rest of the file,
+    stayed stuck open — silently exempting every remaining line (including
+    unrelated functions) from the unwrap/expect scan.
+    """
+    if not stripped.startswith("///"):
+        return False
+    return stripped[3:].lstrip().startswith("```")
+
+
 def is_production_file(path: Path) -> bool:
     name = path.name
     if name.endswith("_tests.rs") or name.endswith("_test.rs"):
@@ -138,9 +157,8 @@ def scan_file(path: Path) -> list[tuple[int, str]]:
         # Skip single-line comments
         if stripped.startswith("//"):
             # Track doc example fences
-            if stripped.startswith("///"):
-                if "```" in stripped:
-                    in_doc_example = not in_doc_example
+            if is_doc_fence_marker(stripped):
+                in_doc_example = not in_doc_example
             continue
 
         # Skip lines inside doc examples
