@@ -359,6 +359,50 @@ impl ProceduralMemory {
         )
     }
 
+    /// Returns at most `cap` outgoing relations of a procedure, plus whether
+    /// its total degree exceeded the scan — work and transient allocation
+    /// O(cap), never O(degree) (#1820).
+    ///
+    /// # Errors
+    ///
+    /// Returns `CollectionError` when the collection cannot be resolved.
+    pub fn relations_bounded(
+        &self,
+        id: u64,
+        cap: usize,
+    ) -> Result<super::BoundedRelations, AgentMemoryError> {
+        memory_helpers::relations_of_bounded(
+            &self.db,
+            &self.collection_name,
+            id,
+            &self.ttl,
+            MemoryKind::Procedural,
+            cap,
+        )
+    }
+
+    /// Returns at most `cap` incoming relations of a procedure, plus whether
+    /// its total incoming degree exceeded the scan — the mirror of
+    /// [`Self::relations_bounded`].
+    ///
+    /// # Errors
+    ///
+    /// Returns `CollectionError` when the collection cannot be resolved.
+    pub fn incoming_relations_bounded(
+        &self,
+        id: u64,
+        cap: usize,
+    ) -> Result<super::BoundedRelations, AgentMemoryError> {
+        memory_helpers::incoming_relations_of_bounded(
+            &self.db,
+            &self.collection_name,
+            id,
+            &self.ttl,
+            MemoryKind::Procedural,
+            cap,
+        )
+    }
+
     /// Removes a relation edge created by [`Self::relate`].
     ///
     /// # Errors

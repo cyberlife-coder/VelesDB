@@ -399,6 +399,39 @@ impl Collection {
         self.graph.edge_store.get_incoming(node_id)
     }
 
+    /// Gets at most `cap` outgoing edges from a node, plus the node's total
+    /// outgoing degree — work and allocation O(cap), never O(degree), read
+    /// consistently under one shard guard (#1820).
+    ///
+    /// # Arguments
+    ///
+    /// * `node_id` - The source node ID
+    /// * `cap` - Maximum number of edges to resolve
+    ///
+    /// # Returns
+    ///
+    /// At most `cap` edges (cloned) and the node's total outgoing degree.
+    #[must_use]
+    pub fn get_outgoing_edges_bounded(&self, node_id: u64, cap: usize) -> (Vec<GraphEdge>, usize) {
+        self.graph.edge_store.get_outgoing_bounded(node_id, cap)
+    }
+
+    /// Gets at most `cap` incoming edges to a node, plus the node's total
+    /// incoming degree — the mirror of [`Self::get_outgoing_edges_bounded`].
+    ///
+    /// # Arguments
+    ///
+    /// * `node_id` - The target node ID
+    /// * `cap` - Maximum number of edges to resolve
+    ///
+    /// # Returns
+    ///
+    /// At most `cap` edges (cloned) and the node's total incoming degree.
+    #[must_use]
+    pub fn get_incoming_edges_bounded(&self, node_id: u64, cap: usize) -> (Vec<GraphEdge>, usize) {
+        self.graph.edge_store.get_incoming_bounded(node_id, cap)
+    }
+
     /// Traverses the graph using BFS from a source node.
     ///
     /// # Arguments

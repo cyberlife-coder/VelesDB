@@ -22,7 +22,7 @@ No feature flags needed. Native HNSW is the only implementation:
 
 ```toml
 [dependencies]
-velesdb-core = "4.2.0"
+velesdb-core = "4.3.0"
 ```
 
 ## API

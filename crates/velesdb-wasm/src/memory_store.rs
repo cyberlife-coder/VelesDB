@@ -17,8 +17,8 @@ use std::collections::HashMap;
 
 use serde_json::{Map, Value};
 use velesdb_memory::{
-    column_value_matches, ColumnFilter, MemoryEdge, MemoryError, MemoryStore, Metadata,
-    Recollection,
+    column_value_matches, BoundedMemoryEdges, ColumnFilter, MemoryEdge, MemoryError, MemoryStore,
+    Metadata, Recollection,
 };
 
 use crate::graph_store::WasmGraphStore;
@@ -339,6 +339,49 @@ impl MemoryStore for WasmStore {
             .filter(|e| e.target == id && inner.live_fact(e.source).is_some())
             .map(to_memory_edge)
             .collect())
+    }
+
+    fn relations_bounded(&self, id: u64, cap: usize) -> Result<BoundedMemoryEdges, MemoryError> {
+        let inner = self.inner.borrow();
+        // This store has no adjacency index, so the SCAN is O(total edges)
+        // either way — what the bound guarantees here is the ALLOCATION:
+        // at most `cap` edges are materialized, and `truncated` compares the
+        // node's full stored degree against the cap exactly as the native
+        // backend does (TTL-dead edges inside the window are dropped without
+        // being replaced, same contract).
+        let mut total = 0usize;
+        let mut edges = Vec::new();
+        for e in inner.graph.edges().iter().filter(|e| e.source == id) {
+            total += 1;
+            if total <= cap && inner.live_fact(e.target).is_some() {
+                edges.push(to_memory_edge(e));
+            }
+        }
+        Ok(BoundedMemoryEdges {
+            edges,
+            truncated: total > cap,
+        })
+    }
+
+    fn incoming_relations_bounded(
+        &self,
+        id: u64,
+        cap: usize,
+    ) -> Result<BoundedMemoryEdges, MemoryError> {
+        let inner = self.inner.borrow();
+        // Mirror of `relations_bounded`: the far end is the SOURCE here.
+        let mut total = 0usize;
+        let mut edges = Vec::new();
+        for e in inner.graph.edges().iter().filter(|e| e.target == id) {
+            total += 1;
+            if total <= cap && inner.live_fact(e.source).is_some() {
+                edges.push(to_memory_edge(e));
+            }
+        }
+        Ok(BoundedMemoryEdges {
+            edges,
+            truncated: total > cap,
+        })
     }
 
     fn unrelate(&self, edge_id: u64) -> Result<bool, MemoryError> {

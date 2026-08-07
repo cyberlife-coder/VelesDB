@@ -429,6 +429,55 @@ impl SemanticMemory {
         )
     }
 
+    /// Returns at most `cap` outgoing relations of a fact, plus whether its
+    /// total degree exceeded the scan — work and transient allocation
+    /// O(cap), never O(degree) (#1820).
+    ///
+    /// Prefer this over [`Self::relations`] wherever the caller keeps only a
+    /// bounded prefix: on a super-node (an entity hub mentioned by thousands
+    /// of facts) the unbounded accessor materializes the whole degree before
+    /// the caller's own cap can apply.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CollectionError` when the collection cannot be resolved.
+    pub fn relations_bounded(
+        &self,
+        id: u64,
+        cap: usize,
+    ) -> Result<super::BoundedRelations, AgentMemoryError> {
+        memory_helpers::relations_of_bounded(
+            &self.db,
+            &self.collection_name,
+            id,
+            &self.ttl,
+            MemoryKind::Semantic,
+            cap,
+        )
+    }
+
+    /// Returns at most `cap` incoming relations of a fact, plus whether its
+    /// total incoming degree exceeded the scan — the mirror of
+    /// [`Self::relations_bounded`].
+    ///
+    /// # Errors
+    ///
+    /// Returns `CollectionError` when the collection cannot be resolved.
+    pub fn incoming_relations_bounded(
+        &self,
+        id: u64,
+        cap: usize,
+    ) -> Result<super::BoundedRelations, AgentMemoryError> {
+        memory_helpers::incoming_relations_of_bounded(
+            &self.db,
+            &self.collection_name,
+            id,
+            &self.ttl,
+            MemoryKind::Semantic,
+            cap,
+        )
+    }
+
     /// Removes a relation edge created by [`Self::relate`].
     ///
     /// Returns `true` when the edge existed and was removed.

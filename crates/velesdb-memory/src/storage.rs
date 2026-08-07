@@ -23,7 +23,7 @@ use velesdb_core::agent::AgentMemory;
 use velesdb_core::{Database, SearchResult};
 
 use crate::error::MemoryError;
-use crate::model::{ColumnFilter, MemoryEdge, Recollection};
+use crate::model::{BoundedMemoryEdges, ColumnFilter, MemoryEdge, Recollection};
 use crate::service::Metadata;
 
 /// The storage primitives [`crate::service::MemoryService`] needs: write,
@@ -204,6 +204,32 @@ pub trait MemoryStore {
     /// # Errors
     /// Returns [`MemoryError`] if storage access fails.
     fn incoming_relations(&self, id: u64) -> Result<Vec<MemoryEdge>, MemoryError>;
+
+    /// At most `cap` outgoing edges of `id`, plus whether its total degree
+    /// exceeded the scan — the bounded twin of [`Self::relations`] (#1820).
+    ///
+    /// The contract is on COST, not just shape: an implementation must keep
+    /// work and transient allocation O(cap), never O(degree) — a super-node
+    /// (an entity hub mentioned by thousands of facts) is exactly where this
+    /// accessor is reached for. `truncated` is a separate signal because
+    /// `edges.len() == cap` cannot carry it: a node with exactly `cap` edges
+    /// is indistinguishable from a truncated one.
+    ///
+    /// # Errors
+    /// Returns [`MemoryError`] if storage access fails.
+    fn relations_bounded(&self, id: u64, cap: usize) -> Result<BoundedMemoryEdges, MemoryError>;
+
+    /// At most `cap` incoming edges of `id`, plus whether its total incoming
+    /// degree exceeded the scan — the mirror of [`Self::relations_bounded`],
+    /// same O(cap) cost contract.
+    ///
+    /// # Errors
+    /// Returns [`MemoryError`] if storage access fails.
+    fn incoming_relations_bounded(
+        &self,
+        id: u64,
+        cap: usize,
+    ) -> Result<BoundedMemoryEdges, MemoryError>;
 
     /// Remove the edge with `edge_id`. Returns `true` when it existed —
     /// idempotent: removing an absent edge is `Ok(false)`, never an error.
@@ -393,6 +419,26 @@ impl MemoryStore for NativeStore {
         Ok(to_memory_edges(
             self.memory.semantic().incoming_relations(id)?,
         ))
+    }
+
+    fn relations_bounded(&self, id: u64, cap: usize) -> Result<BoundedMemoryEdges, MemoryError> {
+        let bounded = self.memory.semantic().relations_bounded(id, cap)?;
+        Ok(BoundedMemoryEdges {
+            edges: to_memory_edges(bounded.edges),
+            truncated: bounded.truncated,
+        })
+    }
+
+    fn incoming_relations_bounded(
+        &self,
+        id: u64,
+        cap: usize,
+    ) -> Result<BoundedMemoryEdges, MemoryError> {
+        let bounded = self.memory.semantic().incoming_relations_bounded(id, cap)?;
+        Ok(BoundedMemoryEdges {
+            edges: to_memory_edges(bounded.edges),
+            truncated: bounded.truncated,
+        })
     }
 
     fn unrelate(&self, edge_id: u64) -> Result<bool, MemoryError> {

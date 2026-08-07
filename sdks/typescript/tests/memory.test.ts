@@ -45,12 +45,17 @@ class MockWasmMemoryService {
     relationsIn: [
       { predicate: 'sister of', targetId: '43', target: 'Entity: camille durand' },
     ],
+    // Asymmetric on purpose: a mock repeating one value for both would keep
+    // a SDK that mirrored the two flags green.
+    relationsTruncated: true,
+    relationsInTruncated: false,
   }));
   rememberExtracted = vi.fn(() => ({ ids: ['1'], skippedOverCap: 0 }));
   forget = vi.fn(() => true);
   why = vi.fn(() => ({
     nodes: [{ id: '1', content: 'we chose parking_lot', hop: 0 }],
     edges: [],
+    truncated: false,
   }));
   compileContext = vi.fn(() => ({
     content: 'compiled',
@@ -326,6 +331,11 @@ describe('MemoryService', () => {
         { predicate: 'sister of', targetId: '43', target: 'Entity: camille durand' },
       ]);
       expect(profile.relations).toEqual([]);
+      // A budget cut must reach the SDK caller: an empty `relations` that was
+      // TRUNCATED means "more exist", and reads identically to a genuinely
+      // empty one without this flag.
+      expect(profile.relationsTruncated).toBe(true);
+      expect(profile.relationsInTruncated).toBe(false);
       expect(lastMockInstance!.entity).toHaveBeenCalledWith('Theo Durand');
     });
 
