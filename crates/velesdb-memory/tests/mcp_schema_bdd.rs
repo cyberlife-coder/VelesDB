@@ -1437,3 +1437,83 @@ fn admits_null(slot: &Value) -> bool {
         }),
     }
 }
+
+// --- The vitrine must name every tool it ships (#1847) ------------------------
+
+/// Whether `haystack` names `tool` as a WHOLE word.
+///
+/// A plain `contains` is not enough and the difference is not academic:
+/// the instructions describe "the entities … a passage states", so
+/// `contains("entity")` is satisfied by `entities` and the guard would pass
+/// while the `entity` TOOL goes unnamed — the exact defect it exists to
+/// catch, waved through by its own substring. Found by mutating this guard
+/// rather than by reading it.
+fn names_tool(haystack: &str, tool: &str) -> bool {
+    let bounded = |c: Option<char>| c.is_none_or(|c| !c.is_alphanumeric() && c != '_');
+    haystack.match_indices(tool).any(|(at, _)| {
+        bounded(haystack[..at].chars().next_back())
+            && bounded(haystack[at + tool.len()..].chars().next())
+    })
+}
+
+/// `instructions` is the FIRST thing an MCP client reads — a tool missing
+/// from it is, in practice, a tool the agent never learns exists.
+///
+/// It shipped enumerating 9 + 6 + 3 = eighteen tools while the server
+/// published twenty: `entity` and `remember_extracted` were absent — the two
+/// that BUILD and QUERY the knowledge graph, i.e. the pair the product's own
+/// pitch rests on. The README's prose said "18 MCP tools" while its table
+/// right below listed all twenty. Nothing compared any of it to the server.
+///
+/// Both counts are now derived from the live server, so the next tool added
+/// cannot silently miss the shop window. Deliberately checks the WHOLE
+/// published set rather than a hand-kept list: a second copy of the truth is
+/// exactly what let this drift.
+#[tokio::test]
+async fn the_server_instructions_name_every_published_tool() {
+    let (_store, client) = connected().await;
+    let info = client
+        .peer_info()
+        .expect("the handshake carries server info");
+    let instructions = info
+        .instructions
+        .clone()
+        .expect("the server ships instructions");
+    let tools = client.list_all_tools().await.expect("list tools");
+
+    let missing: Vec<&str> = tools
+        .iter()
+        .map(|tool| tool.name.as_ref())
+        .filter(|name| !names_tool(&instructions, name))
+        .collect();
+
+    assert!(
+        missing.is_empty(),
+        "{} tool(s) the server PUBLISHES are absent from its `instructions`: {missing:?}\n\n         That string is the vitrine an MCP client reads before anything else, so a tool          missing here is one the agent never learns it has — `entity` and          `remember_extracted` were, for the graph half of the product.",
+        missing.len(),
+    );
+    client.cancel().await.expect("close the MCP session");
+}
+
+/// The README's PROSE count must match what the server publishes.
+///
+/// Its own table already listed twenty while the sentence above said
+/// eighteen: the drift was visible on one screen and still shipped, because
+/// no gate compared either number to the server.
+#[tokio::test]
+async fn the_readme_tool_count_matches_the_published_surface() {
+    let (_store, client) = connected().await;
+    let published = client.list_all_tools().await.expect("list tools").len();
+    let readme =
+        std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md"))
+            .expect("read velesdb-memory README");
+
+    let claim = format!("{published} MCP tools in the default build");
+    assert!(
+        readme.contains(&claim),
+        "the README must state the count the server actually publishes \
+         (expected the phrase {claim:?}); a stale figure there is the first \
+         thing a reader trusts and the last thing anyone re-checks",
+    );
+    client.cancel().await.expect("close the MCP session");
+}
