@@ -35,6 +35,17 @@ fn service() -> (TempDir, MemoryService<HashEmbedder>) {
     (dir, svc)
 }
 
+/// The profile of `name`, which must exist — the lookup boilerplate every
+/// case shares, whatever store the service runs on.
+fn profile_of<S: MemoryStore>(
+    svc: &MemoryService<HashEmbedder, S>,
+    name: &str,
+) -> velesdb_memory::EntityProfile {
+    svc.entity_profile(name)
+        .expect("profile lookup")
+        .unwrap_or_else(|| panic!("{name} has a hub"))
+}
+
 /// An outline passage wiring `count` typed edges out of one hub, each to a
 /// distinct person.
 fn hub_with_typed_edges(count: usize) -> String {
@@ -52,10 +63,7 @@ fn a_hub_past_the_resolution_cap_is_cut_at_the_named_budget_and_says_so() {
     svc.remember_extracted(&hub_with_typed_edges(over_cap), &OutlineExtractor, None)
         .expect("outline remember");
 
-    let profile = svc
-        .entity_profile("hub corp")
-        .expect("profile lookup")
-        .expect("hub exists");
+    let profile = profile_of(&svc, "hub corp");
     assert_eq!(
         profile.relations.len(),
         MAX_ENTITY_RELATIONS,
@@ -71,10 +79,7 @@ fn a_hub_past_the_resolution_cap_is_cut_at_the_named_budget_and_says_so() {
     );
 
     // The far end of one edge still sees the hub from its own side, whole.
-    let person = svc
-        .entity_profile("person 0")
-        .expect("profile lookup")
-        .expect("person exists");
+    let person = profile_of(&svc, "person 0");
     assert_eq!(person.relations_in.len(), 1, "one edge points at person 0");
     assert!(
         !person.relations_in_truncated && !person.relations_truncated,
@@ -92,10 +97,7 @@ fn a_profile_under_every_cap_is_not_reported_truncated() {
     )
     .expect("outline remember");
 
-    let profile = svc
-        .entity_profile("alice martin")
-        .expect("profile lookup")
-        .expect("alice exists");
+    let profile = profile_of(&svc, "alice martin");
     assert_eq!(profile.relations.len(), 1);
     assert!(
         !profile.relations_truncated && !profile.relations_in_truncated,
@@ -238,10 +240,7 @@ fn a_scan_window_cut_reported_by_the_store_reaches_the_profile() {
     )
     .expect("outline remember");
 
-    let profile = svc
-        .entity_profile("alice martin")
-        .expect("profile lookup")
-        .expect("alice exists");
+    let profile = profile_of(&svc, "alice martin");
     assert_eq!(
         profile.relations.len(),
         1,
