@@ -7,14 +7,9 @@ use std::fs;
 use std::path::Path;
 
 use super::{resolve_one, IngestRoots};
-use crate::context::model::{CompilePolicy, CompileRequest, ContextFragment};
-use crate::context::ContextCompiler;
-use crate::embedder::HashEmbedder;
+use crate::context::model::ContextFragment;
 use crate::error::MemoryError;
 use crate::limits::{MAX_INGEST_FILES, MAX_INGEST_FILE_BYTES, MAX_TOTAL_INGEST_BYTES};
-use crate::service::MemoryService;
-
-const DIM: usize = 384;
 
 fn path_fragment(path: &str) -> ContextFragment {
     ContextFragment {
@@ -283,6 +278,15 @@ fn ingest_caps_file_count_and_total_bytes() {
 #[cfg(feature = "persistence")]
 #[test]
 fn path_fragment_compiles_and_round_trips_source_handle() {
+    // Local to the one gated test: hoisting these to the module would leave
+    // them unused — an error under the CI's -Dwarnings — whenever `context`
+    // builds without `persistence` (#1765).
+    use crate::context::model::{CompilePolicy, CompileRequest};
+    use crate::context::ContextCompiler;
+    use crate::embedder::HashEmbedder;
+    use crate::service::MemoryService;
+    const DIM: usize = 384;
+
     let store_dir = tempfile::TempDir::new().expect("tempdir");
     let service =
         MemoryService::open(store_dir.path(), HashEmbedder::new(DIM)).expect("open memory store");
