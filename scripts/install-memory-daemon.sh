@@ -580,6 +580,23 @@ setup_daemon() {
     TTL_PLIST_ENTRY="    <key>VELESDB_MEMORY_DEFAULT_TTL</key><string>$TTL</string>"
   fi
 
+  # Per-request observability (#1780). The deployed daemon logs by default —
+  # its stderr already lands in ~/Library/Logs/velesdb-memory/daemon.err.log,
+  # and a daemon that says nothing is undiagnosable (#1727 cost two wrong
+  # diagnoses that way). The default filter below is the payload-safe incident
+  # preset declared in crates/velesdb-memory/src/logging.rs
+  # (INCIDENT_PRESET — a crate test refuses drift between these two
+  # files): per-request events plus rmcp's session lifecycle, never request
+  # content. Export VELESDB_MEMORY_LOG before running this installer to pick
+  # another filter, or export it EMPTY to deploy a silent daemon — the same
+  # blank-means-silence contract the daemon itself applies to the variable
+  # (hence `-`, not `:-`: only an UNSET variable gets the default).
+  LOG_FILTER="${VELESDB_MEMORY_LOG-info,rmcp::service=error,rmcp::transport::worker=debug,rmcp::transport::streamable_http_server=debug}"
+  LOG_PLIST_ENTRY=""
+  if [ -n "${LOG_FILTER// /}" ]; then
+    LOG_PLIST_ENTRY="    <key>VELESDB_MEMORY_LOG</key><string>$LOG_FILTER</string>"
+  fi
+
   cat > "$PLIST_PATH" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -602,6 +619,7 @@ setup_daemon() {
     <key>VELESDB_MEMORY_OLLAMA_MODEL</key><string>$OLLAMA_MODEL</string>
 $EXTRACTOR_PLIST_ENTRY
 $TTL_PLIST_ENTRY
+$LOG_PLIST_ENTRY
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
