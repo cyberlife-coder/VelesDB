@@ -407,6 +407,6 @@ consistency-cleanup PR. Each binding glue must pass that crate's CI line
 
 ---
 
-*Last updated: 2026-07-25 · Applies to: velesdb-core 4.2.0 (this stamp tracks
+*Last updated: 2026-07-25 · Applies to: velesdb-core 4.3.0 (this stamp tracks
 the document revision; the inventory itself was last re-verified against the
 code on 2026-06-14, as stated at the top of this page)*
