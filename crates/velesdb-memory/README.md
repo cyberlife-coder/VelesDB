@@ -220,7 +220,7 @@ end-to-end *extraction* comparison on the real
 
 ## What the server exposes
 
-18 MCP tools in the default build, in three families:
+20 MCP tools in the default build, in three families:
 
 | Family | Tools |
 |---|---|
