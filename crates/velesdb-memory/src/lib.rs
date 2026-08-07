@@ -183,7 +183,7 @@ pub use model::{
     RememberedExtraction, UnrelateOutcome,
 };
 pub use rerank::{DynReranker, RerankError, Reranker};
-pub use service::{MemoryService, Metadata};
+pub use service::{AutographWorkerHandle, MemoryService, Metadata};
 #[cfg(feature = "persistence")]
 pub use storage::NativeStore;
 pub use storage::{MemoryStore, AUTO_DATE_FIELD};

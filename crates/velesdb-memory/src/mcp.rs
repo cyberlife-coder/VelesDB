@@ -66,6 +66,11 @@ use crate::schema::wire_safe_input_schema as id_wire_input_schema;
 #[derive(Clone)]
 pub struct McpServer {
     service: Arc<MemoryService<DynEmbedder>>,
+    /// Join guard of the background autograph worker (#1846) — present iff
+    /// an autograph extractor is configured. Held only for its `Drop`: the
+    /// server going down closes the queue and joins the worker, so the
+    /// enrichments the queue accepted are wired before exit.
+    _autograph_worker: Option<Arc<crate::service::AutographWorkerHandle>>,
     /// Optional extraction backend powering `remember_extracted`. `None` unless
     /// a backend is attached via [`Self::with_extractor`]; the tool then reports
     /// extraction as unconfigured.
@@ -88,8 +93,26 @@ impl McpServer {
     /// Wrap a memory service as an MCP server.
     #[must_use]
     pub fn new(service: MemoryService<DynEmbedder>) -> Self {
+        let service = Arc::new(service);
+        // Autograph leaves the response path here (#1846): with an extractor
+        // configured, ONE background worker consumes a bounded queue and
+        // `remember` returns as soon as the fact is stored — measured 46-52 s
+        // inline against a 0.12 s embedding. The handle rides the server so
+        // shutdown drains what the queue accepted.
+        let autograph_worker = if service.has_autograph() {
+            match service.spawn_autograph_worker(crate::limits::MAX_AUTOGRAPH_QUEUE) {
+                Ok(handle) => Some(Arc::new(handle)),
+                Err(error) => {
+                    tracing::warn!(%error, "autograph worker not spawned; falling back inline");
+                    None
+                }
+            }
+        } else {
+            None
+        };
         Self {
-            service: Arc::new(service),
+            service,
+            _autograph_worker: autograph_worker,
             extractor: None,
             default_ttl: None,
             #[cfg(all(feature = "context", not(target_arch = "wasm32")))]
