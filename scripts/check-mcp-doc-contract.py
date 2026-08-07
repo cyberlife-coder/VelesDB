@@ -152,6 +152,30 @@ class PolicedTool:
 
 
 POLICED_TOOLS: "tuple[PolicedTool, ...]" = (
+    # --- #1695 batch 1: the low-noise five --------------------------------
+    PolicedTool(
+        "feedback",
+        (),
+        ("docs/reference/MCP_TOOLS.md",),
+    ),
+    # `recall` joins batch 2: its two remaining literals need the
+    # nested-shape treatment (WASM item fields, the SDK's dated envelope),
+    # not a shortcut at the registry level.
+    PolicedTool(
+        "recall_where",
+        (),
+        ("docs/reference/MCP_TOOLS.md",),
+    ),
+    PolicedTool(
+        "relate",
+        ("RelateResult",),
+        ("docs/reference/MCP_TOOLS.md",),
+    ),
+    PolicedTool(
+        "unrelate",
+        ("UnrelateOutcome",),
+        ("docs/reference/MCP_TOOLS.md",),
+    ),
     PolicedTool(
         "compile_transcript",
         (),
@@ -300,6 +324,41 @@ SURFACE_EXCLUDED_PARTS: "tuple[str, ...]" = (
     "/__pycache__/",
 )
 SURFACE_EXCLUDED_NAMES = re.compile(r"^(CHANGELOG|MIGRATION_)", re.IGNORECASE)
+
+# Surfaces that document ANOTHER API sharing the MCP tools' verbs — the core
+# `AgentMemory` Rust API, the SDK's core-collection backends, the VelesQL
+# grammar. Their `recall`/`relate`/`feedback` legitimately return OTHER
+# shapes, and attributing those literals to the MCP tools is the
+# false-positive class the widening of #1695 predicted. Declared here WITH a
+# reason, never silently skipped — and each entry must keep matching a swept
+# file, or the guard reports it stale (the SHAPE_DIVERGENCES rule).
+NON_MCP_SURFACES: "dict[str, str]" = {
+    "docs/guides/AGENT_MEMORY.md": (
+        "documents velesdb-core's AgentMemory Rust API — same verbs "
+        "(recall, relate), different shapes by design"
+    ),
+    "docs/VELESQL_SPEC.md": (
+        "the VelesQL grammar; its `feedback`/`{name}` literals belong to the "
+        "query language, not to MCP tools"
+    ),
+    "sdks/typescript/src/backends/": (
+        "SDK backends wrap velesdb-core collections (graph edges, agent "
+        "memory records) — their relate/unrelate/recall shapes are the "
+        "core's, not the MCP tools'"
+    ),
+    "integrations/common/src/velesdb_common/memory.py": (
+        "the Python integrations' shared core-API helper — its recall "
+        "returns core recollections, not the MCP envelope"
+    ),
+}
+
+
+def non_mcp_reason(surface: str) -> "str | None":
+    """The registered reason ``surface`` is out of MCP scope, if any."""
+    for prefix, reason in NON_MCP_SURFACES.items():
+        if surface == prefix or surface.startswith(prefix):
+            return reason
+    return None
 
 # A brace literal counts as a return declaration only when one of these
 # anchors it. Measured against this tree: dropping the anchor re-admits input
@@ -737,6 +796,7 @@ def find_declarations(
     tool_name: str,
     positions: "list[tuple[int, str]]",
     sections: "list[tuple[int, str | None]]",
+    schema: "dict[str, list[str]] | None" = None,
 ) -> "list[tuple[int, list[str]]]":
     """Every return-shape declaration ATTRIBUTED to ``tool_name`` in ``text``."""
     found: "list[tuple[int, list[str]]]" = []
@@ -745,9 +805,32 @@ def find_declarations(
         if owning_tool(text, sections, positions, start) != tool_name:
             continue
         keys = _declaration_at(text, start)
-        if keys is not None:
-            found.append((start, keys))
+        if keys is None:
+            continue
+        if schema and _is_another_tools_exact_shape(keys, tool_name, schema):
+            # The literal IS another published tool's root shape, verbatim.
+            # A sentence like "unrelate — relate's exact undo — answers
+            # {found, removed}" names both tools, and proximity alone charged
+            # the neighbour; an exact match of a sibling's schema is that
+            # sibling's correct declaration, not this tool lying.
+            continue
+        found.append((start, keys))
     return found
+
+
+def _is_another_tools_exact_shape(
+    keys: "list[str]",
+    tool_name: str,
+    schema: "dict[str, list[str]]",
+) -> bool:
+    """Whether ``keys`` equals the FULL root shape of a DIFFERENT tool."""
+    published = set(keys)
+    if published == set(schema.get(tool_name, ())):
+        return False
+    return any(
+        other != tool_name and published == set(other_keys) and other_keys
+        for other, other_keys in schema.items()
+    )
 
 
 # --------------------------------------------------------------------------
@@ -867,16 +950,23 @@ def _check_tool(
     schema_keys: "list[str]",
     texts: "list[tuple[str, str]]",
     index: "dict[str, str]",
+    schema: "dict[str, list[str]] | None" = None,
 ) -> "tuple[list[str], list[str]]":
     failures: "list[str]" = []
     info: "list[str]" = []
     seen: "set[str]" = set()
     published = sorted(snake_case(key) for key in schema_keys)
     for name, raw in texts:
+        reason = non_mcp_reason(name)
+        if reason is not None:
+            # Declared out of MCP scope: this surface documents another API
+            # that shares the tool's verb. Skipped WITH its reason on file,
+            # and the registry itself is policed for staleness below.
+            continue
         text = mask_jsdoc_links(raw)
         positions = alias_positions(text, index)
         sections = section_positions(text, set(index.values()))
-        for offset, keys in find_declarations(text, tool.name, positions, sections):
+        for offset, keys in find_declarations(text, tool.name, positions, sections, schema):
             seen.add(name)
             where = f"{name}:{line_of(raw, offset)}"
             if sorted({snake_case(key) for key in keys}) == published:
@@ -906,8 +996,15 @@ def guard_return_shape(root: Path) -> "tuple[list[str], list[str]]":
         for path in files
     ]
     failures: "list[str]" = []
+    for prefix in NON_MCP_SURFACES:
+        if not any(name == prefix or name.startswith(prefix) for name in swept):
+            failures.append(
+                f"NON_MCP_SURFACES entry {prefix!r} matches no swept surface — "
+                "a stale exemption hides nothing today and everything tomorrow; "
+                "drop it or fix the path."
+            )
     for tool in POLICED_TOOLS:
-        tool_failures, tool_info = _check_tool(tool, schema[tool.name], texts, index)
+        tool_failures, tool_info = _check_tool(tool, schema[tool.name], texts, index, schema)
         failures.extend(tool_failures)
         info.extend(tool_info)
     return failures, info
