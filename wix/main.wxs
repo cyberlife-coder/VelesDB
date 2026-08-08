@@ -103,7 +103,7 @@
                 <File Id='ARCHITECTURE.md'
                     Name='ARCHITECTURE.md'
                     DiskId='1'
-                    Source='docs\ARCHITECTURE.md'
+                    Source='ARCHITECTURE.md'
                     KeyPath='yes'/>
             </Component>
             

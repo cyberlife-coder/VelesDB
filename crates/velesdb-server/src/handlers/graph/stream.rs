@@ -21,7 +21,7 @@
 //! incremental streaming — where each node is emitted to the wire
 //! as soon as the traversal visits it — requires a new callback-based
 //! core method (`traverse_bfs_stream(config, cb)`) and is tracked as
-//! a post-seed EPIC in `docs/ARCHITECTURE.md`.
+//! a post-seed EPIC in `docs/TECH_DEBT_REGISTRY.md`.
 
 use axum::{
     extract::{Path, Query, State},

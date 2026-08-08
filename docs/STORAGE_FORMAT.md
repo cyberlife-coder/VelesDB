@@ -1,7 +1,7 @@
 # VelesDB Storage Format Specification
 
 **Version**: 1.0.0  
-Last updated: 2026-06-12 · Applies to: velesdb-core 4.3.0  
+Last updated: 2026-08-08 · Applies to: velesdb-core 4.3.0  
 **Status**: Stable
 
 ## Overview
@@ -40,7 +40,7 @@ collection_directory/
 {
   "dimension": 128,
   "distance_metric": "cosine",
-  "schema_version": 1,
+  "schema_version": 2,
   "hnsw_config": {
     "m": 16,
     "ef_construction": 100
@@ -54,7 +54,7 @@ collection_directory/
 |-------|------|---------|-------------|
 | `dimension` | u32 | — | Vector dimension |
 | `distance_metric` | string | `"cosine"` | Distance metric |
-| `schema_version` | u32 | `1` | On-disk format version (see below) |
+| `schema_version` | u32 | `2` (absent reads as `1`) | On-disk format version (see below) |
 | `hnsw_config` | object | — | HNSW index parameters |
 | `indexed_fields` | string[] | `[]` | Payload fields with a secondary index (`CREATE INDEX`); rebuilt from payloads on open (EPIC-081). Omitted when empty |
 
@@ -66,10 +66,11 @@ The `schema_version` field tracks the on-disk format version for forward-compati
 |-------|----------|
 | absent | Treated as `1` (backward compatibility with pre-versioned collections) |
 | `0` | Treated as `1` (backward compatibility) |
-| `1` | Current version -- normal operation |
+| `1` | Older version -- read with serde defaults for the fields added in v2 |
+| `2` | Current version -- normal operation |
 | `> CURRENT_SCHEMA_VERSION` | Rejected with `VELES-036 IncompatibleSchemaVersion` |
 
-This field is validated at collection load time (`Collection::open()`). When a newer VelesDB writes a collection with a higher schema version, older binaries refuse to open it rather than silently corrupting data. The current schema version is defined as `CURRENT_SCHEMA_VERSION = 1` in `crates/velesdb-core/src/collection/types.rs`.
+This field is validated at collection load time (`Collection::open()`). When a newer VelesDB writes a collection with a higher schema version, older binaries refuse to open it rather than silently corrupting data. The current schema version is defined as `CURRENT_SCHEMA_VERSION = 2` in `crates/velesdb-core/src/collection/collection_config.rs`.
 
 ## Vector Storage (vectors.dat)
 
@@ -294,11 +295,14 @@ All multi-byte integers are stored in **little-endian** format.
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-> **Note on step 5.** `Collection::open()` only loads a persisted HNSW index
-> when a legacy `hnsw.bin` file is present — a file current versions never
-> write. The `native_*` sidecars written at flush time are therefore not
-> reloaded on this path: in practice the collection starts with an empty HNSW
-> index and step 6 re-indexes all stored vectors (O(N) rebuild at open).
+> **Note on step 5.** `Collection::open()` loads the persisted HNSW index from
+> the `native_*` sidecars when `native_meta.bin` — the generation-stamped
+> commit point written last by `HnswIndex::save` — is present
+> (`load_or_create_hnsw` / `try_load_hnsw` in
+> `crates/velesdb-core/src/collection/core/lifecycle.rs`). If the sidecar load
+> fails (corruption, generation mismatch) or the persisted dimension/metric
+> disagree with the collection config, it falls back to an empty index and
+> step 6 re-indexes all stored vectors (O(N) rebuild at open).
 
 ### Crash-safe WAL replay ordering
 
@@ -366,7 +370,7 @@ deletes replay in order.
 
 ### Format Version
 
-Explicit via `schema_version` in `config.json` (current: v1). See [schema_version](#schema_version) above.
+Explicit via `schema_version` in `config.json` (current: v2). See [schema_version](#schema_version) above.
 
 ### Compatibility Rules
 

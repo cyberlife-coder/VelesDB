@@ -184,7 +184,7 @@ impl VectorCollection {
     /// shared edge store.
     ///
     /// Edges are a first-class, kind-agnostic feature (see
-    /// [`Self::add_edge`] and `docs/ARCHITECTURE.md` §F2.2 R1.2c): they can
+    /// [`Self::add_edge`] and `docs/TECH_DEBT_REGISTRY.md` §F2.2 R1.2c): they can
     /// be created on any collection kind via REST `/relations` or the
     /// agent-memory wedge (`velesdb-memory`), so traversal must be reachable
     /// from `VectorCollection` too — mirroring

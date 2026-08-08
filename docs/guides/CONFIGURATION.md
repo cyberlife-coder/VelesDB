@@ -1,6 +1,6 @@
 # ⚙️ VelesDB Configuration
 
-*Version 4.3.0 — May 2026*
+*Version 4.3.0 — Last updated: 2026-08-08*
 
 Complete guide for configuring VelesDB via configuration file, environment variables, and runtime parameters.
 
@@ -684,7 +684,7 @@ VelesDB validates the configuration at startup and displays errors clearly:
 
 ```
 ERROR: Configuration validation failed:
-  - search.default_mode: invalid value "ultra_fast", expected one of: fast, balanced, accurate, perfect, adaptive
+  - search.default_mode: invalid value "ultra_fast", expected one of: fast, balanced, accurate, perfect
   - hnsw.m: value 256 exceeds maximum 128
   - storage.data_dir: directory "/nonexistent" does not exist and cannot be created
 ```
@@ -864,4 +864,4 @@ impl VelesConfig {
 
 ---
 
-*VelesDB Documentation — March 2026*
+*VelesDB Documentation — Last updated: 2026-08-08 · Applies to: velesdb-core 4.3.0*

@@ -373,7 +373,7 @@ curl -X POST http://localhost:8080/v1/query/explain \
   "query_type": "select",
   "collection": "demo",
   "plan": [
-    {"step": 1, "operation": "VectorSearch", "description": "HNSW nearest-neighbor scan, ef_search=128, limit=5"}
+    {"step": 1, "operation": "VectorSearch", "description": "HNSW nearest-neighbor scan, ef_search=160, limit=5"}
   ],
   "estimated_cost": {
     "uses_index": true,
@@ -579,4 +579,4 @@ Numbers match the canonical contract in
 
 ---
 
-Last updated: 2026-07-25 · Applies to: velesdb-core 4.3.0
+Last updated: 2026-08-08 · Applies to: velesdb-core 4.3.0

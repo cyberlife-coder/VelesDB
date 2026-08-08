@@ -72,6 +72,10 @@ not surfaced in the connector APIs yet. Drop down to the raw `velesdb`
 Python wrapper if you need them — see [`docs/reference/ECOSYSTEM_PARITY.md`](../docs/reference/ECOSYSTEM_PARITY.md)
 for the full feature matrix.
 
+Before writing integration code, read the
+[Python security guidelines](../docs/contributing/PYTHON_SECURITY.md) —
+notably: never derive persisted IDs from Python's `hash()`.
+
 ## Quick start
 
 ```python

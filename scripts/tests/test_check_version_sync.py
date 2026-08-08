@@ -149,5 +149,83 @@ class NodeReadmeIsActuallyPolicedTests(unittest.TestCase):
         self.assertIs(cvs._READERS["node_readme_stamp"], cvs._read_node_readme_stamp)
 
 
+class CrateFooterStampTests(unittest.TestCase):
+    """The `` `<crate> vX.Y.Z` `` footer every crate README ships.
+
+    The 2026-08 audit found eight of these announcing 4.0/4.1/0.11-era
+    versions in a 4.3.0/0.12.0 tree — hand-maintained, published by the
+    registries, policed by nothing. The reader keys the crate name on the
+    README's parent directory, so both failure modes below are pinned:
+    a stale version AND a footer copy-pasted from another crate.
+    """
+
+    def _crate_readme(self, crate: str, body: str) -> Path:
+        directory = Path(tempfile.mkdtemp()) / crate
+        directory.mkdir()
+        path = directory / "README.md"
+        path.write_text(body, encoding="utf-8")
+        return path
+
+    def test_reads_the_version_of_the_named_crate(self):
+        path = self._crate_readme(
+            "velesdb-cli",
+            "# CLI\n\n---\n\n`velesdb-cli v4.3.0` · Last updated: 2026-08-08\n",
+        )
+        self.assertEqual(cvs._read_crate_footer_stamp(path), "4.3.0")
+
+    def test_a_footer_naming_another_crate_is_an_error(self):
+        # Copy-pasted footer: the file lives in velesdb-server/ but announces
+        # the CLI. Matching on the directory name makes this loud instead of
+        # silently reading whichever version the wrong crate carries.
+        path = self._crate_readme(
+            "velesdb-server",
+            "# Server\n\n---\n\n`velesdb-cli v4.3.0` · Last updated: 2026-08-08\n",
+        )
+        with self.assertRaises(RuntimeError):
+            cvs._read_crate_footer_stamp(path)
+
+    def test_a_missing_footer_is_an_error_not_a_silent_skip(self):
+        path = self._crate_readme("velesdb-cli", "# CLI\n\nNo footer.\n")
+        with self.assertRaises(RuntimeError):
+            cvs._read_crate_footer_stamp(path)
+
+
+class CrateFootersAreActuallyPolicedTests(unittest.TestCase):
+    """Wiring assertions, same rationale as the node-README class above."""
+
+    WORKSPACE_READMES = (
+        "crates/velesdb-cli/README.md",
+        "crates/velesdb-migrate/README.md",
+        "crates/velesdb-mobile/README.md",
+        "crates/velesdb-python/README.md",
+        "crates/velesdb-server/README.md",
+        "crates/velesdb-wasm/README.md",
+        "crates/tauri-plugin-velesdb/README.md",
+    )
+
+    def test_every_workspace_crate_readme_footer_is_a_target(self):
+        for readme in self.WORKSPACE_READMES:
+            self.assertIn(
+                (readme, "crate_footer_stamp"),
+                cvs.TARGETS,
+                f"{readme}'s footer must track the workspace version",
+            )
+
+    def test_the_core_readme_stamp_is_a_target(self):
+        # velesdb-core's footer carries no crate-version half; its
+        # `Applies to:` stamp is the pinned form instead.
+        self.assertIn(("crates/velesdb-core/README.md", "applies_to_stamp"), cvs.TARGETS)
+
+    def test_the_memory_readme_footer_is_a_memory_target(self):
+        self.assertIn(
+            ("crates/velesdb-memory/README.md", "crate_footer_stamp"),
+            cvs.MEMORY_TARGETS,
+            "the memory crate versions independently; its footer tracks 0.x",
+        )
+
+    def test_the_reader_is_registered(self):
+        self.assertIs(cvs._READERS["crate_footer_stamp"], cvs._read_crate_footer_stamp)
+
+
 if __name__ == "__main__":
     unittest.main()
