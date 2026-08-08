@@ -96,12 +96,72 @@ pub struct MemoryService<E: Embedder, S: MemoryStore = NativeStore> {
     store: S,
     embedder: E,
     autograph: Option<crate::extract::DynExtractor>,
+    autograph_queue: AutographQueue,
 }
 #[cfg(not(feature = "persistence"))]
 pub struct MemoryService<E: Embedder, S: MemoryStore> {
     store: S,
     embedder: E,
     autograph: Option<crate::extract::DynExtractor>,
+    autograph_queue: AutographQueue,
+}
+
+/// One deferred autograph: the stored fact a background worker will read for
+/// entities, edges and attributes (#1846).
+struct AutographJob {
+    fact_id: u64,
+    fact: String,
+}
+
+/// The decoupling state of [`MemoryService::autograph`] (#1846).
+///
+/// Empty by default: every construction path starts with autograph running
+/// INLINE, exactly as before — the WASM binding has no threads, library
+/// consumers keep the synchronous contract, and every existing test stays
+/// meaningful. [`MemoryService::spawn_autograph_worker`] fills `tx`, after
+/// which `remember` only ENQUEUES: the caller stops paying the generation on
+/// its response path — 46 s measured for a 12-word fact on the production
+/// daemon, versus a 0.12 s embedding — and the worker wires the graph behind.
+///
+/// `dropped` counts enrichments refused by a FULL queue or skipped by a
+/// closing worker. Non-negotiably visible: a burst that outruns the
+/// extractor loses graph structure, and a loss nobody can see is the exact
+/// defect class #1820 closed for responses.
+///
+/// `closing` is the shutdown latch: the handle's drop raises it BEFORE
+/// removing the sender, so the worker finishes the job in flight and SKIPS
+/// what is still queued (counted, one aggregated warning) instead of
+/// draining a queue of generations — 64 × a 46 s model would hold the
+/// daemon's exit for tens of minutes. Re-armed by each spawn.
+#[derive(Default)]
+struct AutographQueue {
+    tx: parking_lot::Mutex<Option<std::sync::mpsc::SyncSender<AutographJob>>>,
+    dropped: std::sync::atomic::AtomicU64,
+    closing: std::sync::atomic::AtomicBool,
+}
+
+/// Join guard for the background autograph worker.
+///
+/// Dropping it raises the closing latch, takes the sender out of the
+/// service, and JOINS the worker: the job in flight completes, the
+/// still-queued ones are SKIPPED — counted in the drop counter, one
+/// aggregated warning — and only then does the drop return. Tests get
+/// determinism; the daemon's shutdown waits for at most ONE generation,
+/// never a queue of them.
+pub struct AutographWorkerHandle {
+    close_queue: Option<Box<dyn FnOnce() + Send + Sync>>,
+    join: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for AutographWorkerHandle {
+    fn drop(&mut self) {
+        if let Some(close) = self.close_queue.take() {
+            close();
+        }
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+    }
 }
 
 #[cfg(feature = "persistence")]
@@ -118,6 +178,7 @@ impl<E: Embedder> MemoryService<E, NativeStore> {
             store,
             embedder,
             autograph: None,
+            autograph_queue: AutographQueue::default(),
         })
     }
 }
@@ -131,6 +192,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             store,
             embedder,
             autograph: None,
+            autograph_queue: AutographQueue::default(),
         }
     }
 
@@ -336,12 +398,182 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
 
     /// Run [`Self::autograph`] only when this write path asked for it — the
     /// branch lives here rather than in the write path itself.
+    ///
+    /// With a worker spawned ([`Self::spawn_autograph_worker`]), the job is
+    /// ENQUEUED and this returns immediately: the enrichment leaves the
+    /// caller's response path (#1846). A FULL queue drops the job, counted
+    /// in [`Self::autograph_dropped`] — losing structure is recoverable by
+    /// re-remembering, stalling every write behind a slow model is not. A
+    /// disconnected queue (worker gone) falls back inline, so the graph
+    /// keeps building even if the worker died.
     fn autograph_if(&self, run: bool, fact_id: u64, fact: &str) {
-        if run {
-            self.autograph(fact_id, fact);
+        if !run {
+            return;
         }
+        let guard = self.autograph_queue.tx.lock();
+        if let Some(tx) = guard.as_ref() {
+            use std::sync::mpsc::TrySendError;
+            match tx.try_send(AutographJob {
+                fact_id,
+                fact: fact.to_owned(),
+            }) {
+                Ok(()) => return,
+                Err(TrySendError::Full(_)) => {
+                    self.autograph_queue
+                        .dropped
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    #[cfg(feature = "mcp")]
+                    tracing::warn!(
+                        fact_id,
+                        "autograph queue full: enrichment dropped — the fact is \
+                         stored, its graph structure is not; re-remembering \
+                         rebuilds it"
+                    );
+                    return;
+                }
+                Err(TrySendError::Disconnected(_)) => {
+                    // fall through to the inline path below
+                }
+            }
+        }
+        drop(guard);
+        self.autograph(fact_id, fact);
     }
 
+    /// How many autograph enrichments a FULL queue refused since this
+    /// service was built (#1846). The facts themselves were stored; only
+    /// their graph wiring was skipped, and re-remembering a fact rebuilds it.
+    #[must_use]
+    pub fn autograph_dropped(&self) -> u64 {
+        self.autograph_queue
+            .dropped
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Whether the background autograph queue is OPEN — a worker is spawned
+    /// and `remember` enqueues instead of running the enrichment inline.
+    /// Turns false the moment a worker handle's drop closes the queue.
+    #[must_use]
+    pub fn autograph_queue_open(&self) -> bool {
+        self.autograph_queue.tx.lock().is_some()
+    }
+
+    /// Whether an autograph extractor is configured at all.
+    #[must_use]
+    pub fn has_autograph(&self) -> bool {
+        self.autograph.is_some()
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<E, S> MemoryService<E, S>
+where
+    E: Embedder + Send + Sync + 'static,
+    S: MemoryStore + Send + Sync + 'static,
+{
+    /// Move autograph off the response path: spawn ONE background worker
+    /// consuming a bounded queue, so `remember` returns as soon as the fact
+    /// is durably stored and the graph is wired behind (#1846).
+    ///
+    /// Measured motivation: with the production extractor, an inline
+    /// autograph held every `remember` for 46-52 s while the embedding cost
+    /// 0.12 s — and the MCP client timed out mid-generation, making a stored
+    /// fact indistinguishable from a lost one (#1839).
+    ///
+    /// The read-after-write contract changes, deliberately and visibly: an
+    /// `entity()` issued right after `remember` may not see the new edges
+    /// yet. The fact itself is always readable immediately — only the
+    /// DERIVED structure lags by one generation.
+    ///
+    /// One worker on purpose: the store is single-writer, and a second
+    /// in-flight generation would only add contention, not throughput.
+    /// `capacity` bounds the queue ([`crate::limits::MAX_AUTOGRAPH_QUEUE`]
+    /// is the daemon's choice); a full queue DROPS new enrichments, counted
+    /// by [`Self::autograph_dropped`] and logged — never silent, never
+    /// blocking the write path.
+    ///
+    /// # Errors
+    /// Returns [`MemoryError::Extract`] when a worker is already spawned for
+    /// this service — two workers would race the single-writer store for no
+    /// gain — or when the OS refuses the thread.
+    pub fn spawn_autograph_worker(
+        self: &std::sync::Arc<Self>,
+        capacity: usize,
+    ) -> Result<AutographWorkerHandle, MemoryError> {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<AutographJob>(capacity);
+        {
+            let mut guard = self.autograph_queue.tx.lock();
+            if guard.is_some() {
+                return Err(MemoryError::Extract(crate::extract::ExtractError::Backend(
+                    "autograph worker already spawned for this service".to_owned(),
+                )));
+            }
+            *guard = Some(tx);
+            // Re-arm the shutdown latch under the same lock that installs
+            // the sender: a previous worker's close must not poison this one
+            // into skipping every job it will ever receive.
+            self.autograph_queue
+                .closing
+                .store(false, std::sync::atomic::Ordering::Release);
+        }
+        let worker_service = std::sync::Arc::clone(self);
+        let join = std::thread::Builder::new()
+            .name("velesdb-autograph".to_owned())
+            .spawn(move || {
+                // Ends when every sender is gone — i.e. when the handle's
+                // drop takes the sender back out of the service. Once the
+                // closing latch is up, still-queued jobs are SKIPPED: the
+                // exit pays for the job in flight, never for the queue.
+                let mut skipped_on_close: u64 = 0;
+                for job in rx {
+                    if worker_service
+                        .autograph_queue
+                        .closing
+                        .load(std::sync::atomic::Ordering::Acquire)
+                    {
+                        skipped_on_close += 1;
+                        continue;
+                    }
+                    worker_service.autograph(job.fact_id, &job.fact);
+                }
+                if skipped_on_close > 0 {
+                    worker_service
+                        .autograph_queue
+                        .dropped
+                        .fetch_add(skipped_on_close, std::sync::atomic::Ordering::Relaxed);
+                    // ONE aggregated line, not one per job (#1834's rule).
+                    #[cfg(feature = "mcp")]
+                    tracing::warn!(
+                        skipped = skipped_on_close,
+                        "autograph worker closing: queued enrichments skipped — \
+                         the facts are stored, their graph structure is not; \
+                         re-remembering rebuilds it"
+                    );
+                }
+            })
+            .map_err(|err| {
+                MemoryError::Extract(crate::extract::ExtractError::Backend(format!(
+                    "spawn autograph worker: {err}"
+                )))
+            })?;
+        let closer_service = std::sync::Arc::clone(self);
+        Ok(AutographWorkerHandle {
+            close_queue: Some(Box::new(move || {
+                // Latch FIRST, sender out second: the worker observes the
+                // latch no later than the queue's end, so it cannot start
+                // draining jobs the shutdown meant to skip.
+                closer_service
+                    .autograph_queue
+                    .closing
+                    .store(true, std::sync::atomic::Ordering::Release);
+                closer_service.autograph_queue.tx.lock().take();
+            })),
+            join: Some(join),
+        })
+    }
+}
+
+impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// Autograph one just-stored fact: read the entities, entity→entity edges
     /// and attributes it states, and wire them around it.
     ///
