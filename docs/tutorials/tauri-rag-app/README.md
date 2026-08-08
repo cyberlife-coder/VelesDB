@@ -280,10 +280,10 @@ fn chunk_text(text: &str, chunk_size: usize) -> Vec<String> {
 fn generate_embedding(text: &str) -> Vec<f32> {
     // Simple hash-based embedding for demo purposes
     // Replace with real embedding model in production!
-    let mut embedding = vec![0.0_f32; 128];
+    let mut embedding = vec![0.0_f32; EMBEDDING_DIM];
 
     for (i, c) in text.chars().enumerate() {
-        let idx = i % 128;
+        let idx = i % EMBEDDING_DIM;
         embedding[idx] += (c as u32 as f32) / 1000.0;
     }
 
@@ -298,63 +298,117 @@ fn generate_embedding(text: &str) -> Vec<f32> {
     embedding
 }
 
+/// Ensure the RAG collection exists, creating it if needed.
+///
+/// When the collection already exists, the ID counter is seeded from the
+/// persisted max ID so new chunks never overwrite existing ones.
+fn ensure_collection(state: &VelesDbState) -> Result<(), String> {
+    state
+        .with_db(|db: Arc<Database>| {
+            if let Some(coll) = db.get_vector_collection(COLLECTION) {
+                let persisted_max = coll.all_ids().into_iter().max().unwrap_or(0);
+                let needed_next = persisted_max.saturating_add(1);
+                if needed_next > NEXT_CHUNK_ID.load(Ordering::Relaxed) {
+                    NEXT_CHUNK_ID.store(needed_next, Ordering::Relaxed);
+                }
+            } else {
+                db.create_vector_collection(COLLECTION, EMBEDDING_DIM, DistanceMetric::Cosine)
+                    .map_err(PluginError::Database)?;
+            }
+            Ok(())
+        })
+        .map_err(|e| format!("DB error: {e}"))
+}
+
 /// Ingest text and create embeddings
 #[tauri::command]
 pub async fn ingest_text(
-    app: tauri::AppHandle,
+    app: AppHandle,
     text: String,
     chunk_size: Option<usize>,
 ) -> Result<Vec<Chunk>, String> {
     let chunk_size = chunk_size.unwrap_or(500);
-    let chunks = chunk_text(&text, chunk_size);
-    let mut result = Vec::new();
-
-    let db = app.velesdb();
-
-    for (i, chunk_text) in chunks.iter().enumerate() {
-        let id = i as u64;
-        let embedding = generate_embedding(chunk_text);
-
-        db.insert(id, &embedding)
-            .map_err(|e| format!("Insert error: {e}"))?;
-
-        result.push(Chunk {
-            id,
-            text: chunk_text.clone(),
-            score: None,
-        });
+    let chunk_texts = chunk_text(&text, chunk_size);
+    if chunk_texts.is_empty() {
+        return Ok(vec![]);
     }
 
-    Ok(result)
+    let state = app.state::<VelesDbState>();
+    ensure_collection(&state)?;
+
+    // Store the raw text inside each Point's payload so search can return it.
+    let mut ids = Vec::with_capacity(chunk_texts.len());
+    let points: Vec<Point> = chunk_texts
+        .iter()
+        .map(|chunk| {
+            let id = next_id();
+            ids.push(id);
+            let payload = serde_json::json!({ "text": chunk });
+            Point::new(id, generate_embedding(chunk), Some(payload))
+        })
+        .collect();
+
+    state
+        .with_db(|db: Arc<Database>| {
+            let coll = db
+                .get_vector_collection(COLLECTION)
+                .ok_or_else(|| PluginError::CollectionNotFound(COLLECTION.to_string()))?;
+            coll.upsert_bulk(&points)
+                .map(|_| ())
+                .map_err(PluginError::Database)
+        })
+        .map_err(|e| format!("Insert error: {e}"))?;
+
+    Ok(chunk_texts
+        .into_iter()
+        .zip(ids)
+        .map(|(text, id)| Chunk { id, text, score: None })
+        .collect())
 }
 
 /// Search for similar chunks
 #[tauri::command]
 pub async fn search(
-    app: tauri::AppHandle,
+    app: AppHandle,
     query: String,
     k: Option<usize>,
 ) -> Result<SearchResult, String> {
-    let start = std::time::Instant::now();
     let k = k.unwrap_or(5);
-
     let query_embedding = generate_embedding(&query);
-    let db = app.velesdb();
 
-    let results = db
-        .search(&query_embedding, k)
+    let state = app.state::<VelesDbState>();
+    ensure_collection(&state)?;
+
+    let start = std::time::Instant::now();
+    let raw = state
+        .with_db(|db: Arc<Database>| {
+            let coll = db
+                .get_vector_collection(COLLECTION)
+                .ok_or_else(|| PluginError::CollectionNotFound(COLLECTION.to_string()))?;
+            coll.search(&query_embedding, k).map_err(PluginError::Database)
+        })
         .map_err(|e| format!("Search error: {e}"))?;
+    let time_ms = start.elapsed().as_secs_f64() * 1000.0;
 
-    let chunks: Vec<Chunk> = results
-        .iter()
-        .map(|(id, score)| Chunk {
-            id: *id,
-            text: format!("Chunk {id}"), // In real app, retrieve from storage
-            score: Some(*score),
+    let chunks: Vec<Chunk> = raw
+        .into_iter()
+        .map(|sr| {
+            // Text was stored in the payload at ingest time.
+            let text = sr
+                .point
+                .payload
+                .as_ref()
+                .and_then(|p| p.get("text"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            Chunk {
+                id: sr.point.id,
+                text,
+                score: Some(sr.score),
+            }
         })
         .collect();
-
-    let time_ms = start.elapsed().as_secs_f64() * 1000.0;
 
     Ok(SearchResult {
         chunks,
@@ -365,20 +419,35 @@ pub async fn search(
 
 /// Get index statistics
 #[tauri::command]
-pub async fn get_stats(app: tauri::AppHandle) -> Result<IndexStats, String> {
-    let db = app.velesdb();
+pub async fn get_stats(app: AppHandle) -> Result<IndexStats, String> {
+    let state = app.state::<VelesDbState>();
+    let total_chunks = state
+        .with_db(|db: Arc<Database>| {
+            Ok(db.get_vector_collection(COLLECTION).map_or(0, |c| c.len()))
+        })
+        .map_err(|e| format!("Stats error: {e}"))?;
 
     Ok(IndexStats {
-        total_chunks: db.len(),
-        dimension: db.dimension(),
+        total_chunks,
+        dimension: EMBEDDING_DIM,
     })
 }
 
 /// Clear the index
 #[tauri::command]
-pub async fn clear_index(app: tauri::AppHandle) -> Result<(), String> {
-    let db = app.velesdb();
-    db.clear();
+pub async fn clear_index(app: AppHandle) -> Result<(), String> {
+    let state = app.state::<VelesDbState>();
+    state
+        .with_db(|db: Arc<Database>| {
+            if db.get_vector_collection(COLLECTION).is_some() {
+                db.delete_collection(COLLECTION).map_err(PluginError::Database)?;
+            }
+            db.create_vector_collection(COLLECTION, EMBEDDING_DIM, DistanceMetric::Cosine)
+                .map_err(PluginError::Database)
+        })
+        .map_err(|e| format!("Clear error: {e}"))?;
+
+    NEXT_CHUNK_ID.store(0, Ordering::Relaxed);
     Ok(())
 }
 ```

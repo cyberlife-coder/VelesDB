@@ -21,7 +21,7 @@
 | Fast Insert 1K×768D | 122.17 ms | 99.60 ms | **-18.5% faster** | Yes |
 | Turbo 1K×768D | 71.91 ms | 55.68 ms | **-22.6% faster** | Yes |
 
-**Verdict**: Zero regression on sequential insert. Les "régressions" du run précédent étaient du bruit (compilations en arrière-plan). Le path séquentiel standard/fast/turbo est en fait **18-23% plus rapide**.
+**Verdict**: Zero regression on sequential insert. The "regressions" in the previous run were noise (background compilations). The standard/fast/turbo sequential path is actually **18-23% faster**.
 
 ---
 
@@ -37,7 +37,7 @@
 
 *Baseline values from previous run (parallel_benchmark wasn't re-run on baseline in this session due to worktree cleanup)
 
-**Verdict**: **7-13x speedup** sur le batch insert, confirmé sur machine calme.
+**Verdict**: **7-13x speedup** on batch insert, confirmed on a quiet machine.
 
 ---
 
@@ -55,7 +55,7 @@
 
 *top-100 has high variance (high outliers in both runs)
 
-**Verdict**: Search est **10-28% plus rapide** sur la majorité des métriques. Le `&[NodeId]` (zero-alloc) au lieu de `Vec<NodeId>` dans `search_layer()` contribue à ce gain.
+**Verdict**: Search is **10-28% faster** on most metrics. Using `&[NodeId]` (zero-alloc) instead of `Vec<NodeId>` in `search_layer()` contributes to this gain.
 
 ---
 
