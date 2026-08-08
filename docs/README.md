@@ -96,8 +96,7 @@ For contributors and developers:
 
 | Guide | Description |
 |-------|-------------|
-| [Coding Rules](./contributing/CODING_RULES.md) | Code style and conventions |
-| [TDD Rules](./contributing/TDD_RULES.md) | Test-driven development practices |
+| [Coding Rules](./contributing/CODING_RULES.md) | Code style, conventions and the TDD workflow |
 | [Benchmarking Guide](./contributing/BENCHMARKING_GUIDE.md) | How to run and interpret benchmarks |
 | [Code Signing](./contributing/CODE_SIGNING.md) | Release signing process |
 | [Project Structure](./contributing/PROJECT_STRUCTURE.md) | Codebase organization |

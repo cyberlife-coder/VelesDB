@@ -1,6 +1,6 @@
 # VelesDB Performance Benchmarks
 
-*Last updated: 2026-07-26 · Applies to: velesdb-core 4.3.0. Figures are re-validated at each release only when re-measured — each section carries its own measurement date and machine; this stamp tracks the document revision, not a fresh measurement.*
+*Last updated: 2026-08-08 · Applies to: velesdb-core 4.3.0. Figures are re-validated at each release only when re-measured — each section carries its own measurement date and machine; this stamp tracks the document revision, not a fresh measurement.*
 
 ---
 
@@ -169,13 +169,13 @@ The RRF fusion step is a simple score merge with no distance computation, so hyb
 
 | Profile | ef_search | Recall@10 | Latency P50 |
 |---------|-----------|-----------|-------------|
-| Fast | 64 | 92.2% | 36 us |
-| Balanced | 128 | 98.8% | 57 us |
+| Fast | 96 | 92.2% | 36 us |
+| Balanced | 160 | 98.8% | 57 us |
 | Accurate | 512 | 100.0% | 130 us |
 | Perfect | 4096 | 100% | 200 us |
 | Adaptive | 32–512 | 95%+ | ~15-40 us (easy queries) |
 
-*Recall values from recall_benchmark. Latencies measured March 19, 2026. ef_search values are base values (scaled with k).*
+*Recall values from recall_benchmark. Latencies measured March 19, 2026, with the ef defaults current at that time (Fast=64, Balanced=128); the Fast/Balanced profiles have since been raised to ef 96/160, so their measured recall figures are lower bounds and their latencies slightly optimistic until re-measured. ef_search values are base values (scaled with k).*
 
 Recall@10 >= 95% is the design target for Balanced mode and above, and is what we measure on the benchmark sets below — it is a measured target, not a hard guarantee, since HNSW is an approximate index. The new **Adaptive** mode starts with a low ef and escalates only for hard queries, achieving 2-4x faster median latency. Use `HnswParams::for_dataset_size()` for automatic parameter tuning.
 
