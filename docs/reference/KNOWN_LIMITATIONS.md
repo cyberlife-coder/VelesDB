@@ -77,7 +77,7 @@ For a metadata query whose `WHERE` reduces to an indexed `Eq`, the executor uses
 
 The `velesdb-migrate` sub-crate ships a migration toolkit covering 9 source databases (Supabase, Qdrant, Pinecone, Weaviate, Milvus, ChromaDB, JSON/CSV, Elasticsearch, Redis). It is currently bundled in the workspace but is identified for **rework or extraction in a future release**: the current scope inflates the workspace surface (12k LOC, 9 third-party API surfaces) without a measured user base, and the connectors evolve at different cadences than the core engine.
 
-**Decision criteria for v1.15.0** (per ROADMAP.md Horizon 2):
+**Decision criteria** (set during the v1.15.0 cycle; the horizon has since been re-baselined — see ROADMAP.md "Next"):
 
 - crates.io download counts for `velesdb-migrate` over the last 90 days
 - GitHub stars / watchers attributable to migration tooling
