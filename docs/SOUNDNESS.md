@@ -964,7 +964,9 @@ behavior or data inconsistency can occur:
 
 **Rule**: `edges → outgoing → incoming → nodes`
 
-See `SYSTEM-RETRIEVED-MEMORY[b65ec9e5]` for deadlock fix details.
+The lock-order contract is documented per write method in
+`crates/velesdb-mobile/src/graph.rs` (each `# Lock Order` doc section); every
+write path acquires the four locks in this fixed order so no cycle can form.
 
 ---
 
@@ -1049,6 +1051,6 @@ let data_as_bytes: &mut [u8] = unsafe {
 
 ---
 
-*Last updated: 2026-07-25 · Applies to: velesdb-core 4.3.0 (this stamp tracks
+*Last updated: 2026-08-08 · Applies to: velesdb-core 4.3.0 (this stamp tracks
 the document revision; the underlying unsafe audit was last run in full on
 2026-06-12, as stated at the top of this page)*

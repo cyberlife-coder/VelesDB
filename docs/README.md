@@ -69,7 +69,7 @@ In-depth technical documentation. **[Full reference index →](./reference/READM
 | Reference | Description |
 |-----------|-------------|
 | [Architecture](./reference/ARCHITECTURE.md) | System design and internals |
-| [VelesQL Specification](./VELESQL_SPEC.md) | Query language grammar and syntax (v3.12.0, canonical) |
+| [VelesQL Specification](./VELESQL_SPEC.md) | Query language grammar and syntax (v3.10.0, canonical) |
 | [VelesQL Cheat Sheet](./reference/VELESQL_CHEATSHEET.md) | One-page quick reference: search, filter, graph MATCH, fusion, sparse, EXPLAIN |
 | [VelesQL Contract](./reference/VELESQL_CONTRACT.md) | Canonical REST contract (`/query`, `/match`, error model) |
 | [VelesQL Conformance](./reference/VELESQL_CONFORMANCE_MATRIX.md) | Cross-ecosystem conformance matrix |
@@ -181,4 +181,4 @@ the remaining debt is. Read these when you need the *why* behind a behaviour.
 *VelesDB — the explainable, local-first memory engine for AI agents. (Microsecond vector search is the proof, not the pitch.)*
 
 ---
-Last updated: 2026-07-25 · Applies to: velesdb-core 4.3.0
+Last updated: 2026-08-08 · Applies to: velesdb-core 4.3.0

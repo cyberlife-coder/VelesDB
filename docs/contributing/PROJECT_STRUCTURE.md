@@ -121,10 +121,10 @@ velesdb-core/
 │
 ├── integrations/
 │   ├── common/                # Shared integration utilities
-│   ├── agent-hooks/           # Agent memory hooks
+│   ├── agent-hooks/           # Harness hooks for velesdb-memory agents
 │   ├── haystack/              # Haystack DocumentStore
 │   ├── langchain/             # LangChain VectorStore
-│   ├── langgraph/             # LangGraph checkpointer/store
+│   ├── langgraph/             # LangGraph agent memory integration
 │   └── llamaindex/            # LlamaIndex VectorStore
 │
 ├── conformance/               # VelesQL cross-ecosystem conformance cases
@@ -199,7 +199,7 @@ iOS and Android bindings via UniFFI:
 
 ### `velesdb-migrate`
 
-Schema and data migration tooling. Supports 12 source connectors: Qdrant, Pinecone, Weaviate, Milvus, ChromaDB, pgvector, Supabase, Elasticsearch, MongoDB Atlas, Redis, JSON, CSV.
+Schema and data migration tooling. Supports 10 source connectors: Qdrant, Pinecone, Weaviate, Milvus, ChromaDB, Supabase, Elasticsearch, Redis, JSON, CSV.
 
 ### `tauri-plugin-velesdb`
 
