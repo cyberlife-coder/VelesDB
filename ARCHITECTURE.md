@@ -2,7 +2,7 @@
 
 This document is the **15-minute read** an engineer or a technical due-diligence reviewer should start with. It tells you what VelesDB is, how it is shaped, and where to dig deeper.
 
-> **Last updated:** 2026-07-16 — applies to v3.x and onward.
+> **Last updated:** 2026-08-08 — applies to v4.x (workspace 4.3.0).
 
 ---
 
@@ -69,7 +69,7 @@ For component-level box diagrams, see [`docs/reference/ARCHITECTURE.md`](docs/re
 
 ## The crates
 
-The workspace is laid out as eight crates with one-way dependencies (no cycles).
+The workspace is laid out as ten crates with one-way dependencies (no cycles).
 
 | Crate | Role | Public surface | Notes |
 |-------|------|---------------|-------|
@@ -80,7 +80,7 @@ The workspace is laid out as eight crates with one-way dependencies (no cycles).
 | **`velesdb-mobile`** | iOS / Android bindings via UniFFI. | Swift + Kotlin | One binding crate, two outputs. |
 | **`velesdb-cli`** | Interactive REPL for VelesQL. | Single binary | Wraps `velesdb-core`. |
 | **`velesdb-migrate`** | Migration tooling: import from Pinecone / Qdrant / Milvus / Weaviate / Chroma / Elasticsearch / Redis. | CLI tool | Strategic candidate to extract to a separate repo (see ROADMAP.md Horizon 4). |
-| **`velesdb-memory`** | Local-first MCP agent-memory server: the high-level `MemoryService` wedge (remember/recall/recall_where/relate/forget/why/remember_extracted) plus the deterministic context compiler (`compile_context` / `context_savings` / `explain_compilation` / `retrieve_context_source`). | MCP server + Rust/Python/Node API | Independent `0.1.0` cadence. Depends on `velesdb-core` (not the engine's `3.x` line). |
+| **`velesdb-memory`** | Local-first MCP agent-memory server: the high-level `MemoryService` wedge (remember/recall/recall_where/relate/forget/why/remember_extracted) plus the deterministic context compiler (`compile_context` / `context_savings` / `explain_compilation` / `retrieve_context_source`). | MCP server + Rust/Python/Node API | Independent `0.x` cadence (currently 0.12.0). Depends on `velesdb-core` (not the engine's `4.x` line). |
 | **`velesdb-node`** | Node.js (napi-rs) binding of the memory wedge. | `@wiscale/velesdb-memory-node` (npm) | Depends on `velesdb-memory` only (never `velesdb-core` directly) — the license boundary. |
 | **`tauri-plugin-velesdb`** | Tauri desktop integration. | Plugin | Used by `demos/tauri-rag-app`. |
 
@@ -214,7 +214,7 @@ The full performance budget gates are in [`QUALITY_BAR.md`](QUALITY_BAR.md). The
 | What's the query language? | [`docs/VELESQL_SPEC.md`](docs/VELESQL_SPEC.md) |
 | How do I tune HNSW parameters? | [`docs/guides/TUNING_GUIDE.md`](docs/guides/TUNING_GUIDE.md) |
 | What are the current technical limitations? | [`docs/reference/KNOWN_LIMITATIONS.md`](docs/reference/KNOWN_LIMITATIONS.md) |
-| What architectural debt is tracked? | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (tech-debt registry, despite the name) |
+| What architectural debt is tracked? | [`docs/TECH_DEBT_REGISTRY.md`](docs/TECH_DEBT_REGISTRY.md) |
 | What's coming next? | [`ROADMAP.md`](ROADMAP.md) |
 | What is the quality bar for shipping? | [`QUALITY_BAR.md`](QUALITY_BAR.md) |
 | How does a query become results, line by line? | The *Anatomy of a query* section above; deep version in [`docs/reference/ARCHITECTURE.md`](docs/reference/ARCHITECTURE.md) §3 |
@@ -223,4 +223,4 @@ The full performance budget gates are in [`QUALITY_BAR.md`](QUALITY_BAR.md). The
 
 ## A note on naming
 
-`docs/ARCHITECTURE.md` exists in this repo, but despite its name it is **a tracker for architectural tech debt** (e.g. the `Collection` god-object split, EPIC #1384 — resolved: the internals were organized into named concern sub-structs and a shared `Arc<GraphStore>` handle, while exclusive per-kind ownership was shown to be infeasible because edge/graph, label-index, and query-engine state are legitimately shared across all three collection kinds; see the F2.2 section), not an architecture overview. The actual architecture documents are this file (high-level, narrative) and [`docs/reference/ARCHITECTURE.md`](docs/reference/ARCHITECTURE.md) (deep, comprehensive). The tech-debt registry is kept under its current name because eight in-code references depend on the path; renaming it is on the cleanup backlog.
+Architectural tech debt is tracked separately in [`docs/TECH_DEBT_REGISTRY.md`](docs/TECH_DEBT_REGISTRY.md) (e.g. the `Collection` god-object split, EPIC #1384 — resolved: the internals were organized into named concern sub-structs and a shared `Arc<GraphStore>` handle, while exclusive per-kind ownership was shown to be infeasible because edge/graph, label-index, and query-engine state are legitimately shared across all three collection kinds; see its F2.2 section). The architecture documents are this file (high-level, narrative) and [`docs/reference/ARCHITECTURE.md`](docs/reference/ARCHITECTURE.md) (deep, comprehensive).

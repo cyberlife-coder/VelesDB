@@ -7,11 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-> **Versioning note (2026-07-23)** — the crate and its guest-js package now
-> track the VelesDB workspace version (3.12.0, `version.workspace = true`);
-> the `[1.11.1]` heading below is the last release under the plugin's old
-> independent versioning scheme. Changes since then are tracked under
-> Unreleased until the next tagged workspace release.
+> **Versioning note** — the crate and its guest-js package track the VelesDB
+> workspace version (`version.workspace = true`; see the root `Cargo.toml`); the
+> `[1.11.1]` heading below is the last release under the plugin's old
+> independent versioning scheme. Plugin changes in every release since then
+> are recorded in the workspace root [`CHANGELOG.md`](../../CHANGELOG.md),
+> not here.
 
 ### Refactored
 - **Types consolidation** — `SearchResult` is now `pub type SearchResult = velesdb_core::api_types::SearchResultResponse`

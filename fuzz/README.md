@@ -38,6 +38,17 @@ cd fuzz
 cargo +nightly fuzz run fuzz_distance_metrics
 ```
 
+### `fuzz_snapshot_parser`
+
+Tests the snapshot loader against malformed binary snapshots to find:
+- OOM from attacker-controlled `entry_count`/length fields sizing allocations
+- Panics or UB on truncated or corrupted snapshot files
+
+```bash
+cd fuzz
+cargo +nightly fuzz run fuzz_snapshot_parser
+```
+
 ## Running Fuzzing
 
 ### Quick Run (1 minute)

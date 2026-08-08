@@ -388,7 +388,7 @@ fn handle_error(err: &Error) {
 }
 ```
 
-### REST API (v1.9.2)
+### REST API
 
 Error responses from `velesdb-server` now include an optional `code` field with the
 VELES-XXX error code when applicable:

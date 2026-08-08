@@ -80,7 +80,7 @@ New to the codebase? Start with these documents (in order):
 | Crate | Purpose |
 |-------|---------|
 | `velesdb-core` | Core engine: HNSW, SIMD, VelesQL, collections, storage |
-| `velesdb-server` | Axum REST API server (47 endpoints, OpenAPI optional) |
+| `velesdb-server` | Axum REST API server (54 endpoints, 61 operations; OpenAPI optional) |
 | `velesdb-cli` | Interactive REPL for VelesQL |
 | `velesdb-python` | PyO3 bindings with NumPy support |
 | `velesdb-wasm` | Browser-side vector search (no `persistence` feature) |
@@ -126,9 +126,9 @@ Run this sequence **before every push** (CI runs on every PR — running it loca
 # 1. Format
 cargo fmt --all
 
-# 2. Lint (strict — mirrors CI)
+# 2. Lint (strict — mirrors CI; node and python are linted separately, see AGENTS.md)
 cargo clippy --workspace --all-targets --features persistence,gpu,update-check \
-  --exclude velesdb-python -- -D warnings -D clippy::pedantic
+  --exclude velesdb-python --exclude velesdb-node -- -D warnings -D clippy::pedantic
 
 # 3. Tests
 cargo test -p velesdb-core --features persistence -- --test-threads=1
@@ -155,9 +155,11 @@ ignores silently — an un-executable hook does not fail, it simply never runs.
 
 The bare equivalent is `git config core.hooksPath .githooks`.
 
-Three hooks then apply: `commit-msg` rejects AI-attributed authors and AI
-attribution trailers, `pre-commit` validates the change, and `pre-push` runs the
-full local gate.
+Four hooks then apply: `commit-msg` rejects AI-attributed authors and AI
+attribution trailers, `pre-commit` validates the change, `pre-push` runs the
+full local gate — only on direct pushes to `develop`/`main`; feature-branch
+pushes are waved through and CI is the gate — and `post-merge` warns when a
+merge moved the repo ahead of your installed skills.
 
 > **Note (SSH pushes):** the pre-push hook runs the full validation (~15 min) while
 > git already holds the connection to GitHub open; if that SSH connection dies in
@@ -196,9 +198,9 @@ cargo build --workspace
 cargo test --workspace --features persistence,gpu,update-check \
   --exclude velesdb-python -- --test-threads=1
 
-# Lint (strict — mirrors CI)
+# Lint (strict — mirrors CI; node and python are linted separately, see AGENTS.md)
 cargo clippy --workspace --all-targets --features persistence,gpu,update-check \
-  --exclude velesdb-python -- -D warnings -D clippy::pedantic
+  --exclude velesdb-python --exclude velesdb-node -- -D warnings -D clippy::pedantic
 
 # Run the server locally
 cargo run --bin velesdb-server -- --data-dir ./data
@@ -239,11 +241,11 @@ python3 scripts/sync-skills.py --bundle
 
 Each managed skill is reported as one of **three** states, never two:
 
-| état | signification | `--check` | `--check --strict` |
+| state | meaning | `--check` | `--check --strict` |
 |---|---|---|---|
-| `in step` | l'agent lit la bonne chose | vert | vert |
-| `drifted` | l'agent lit la **mauvaise** chose | **exit 1** | **exit 1** |
-| `absent` | l'agent ne lit **rien** | rapporté, exit 0 | **exit 1** |
+| `in step` | the agent reads the right thing | green | green |
+| `drifted` | the agent reads the **wrong** thing | **exit 1** | **exit 1** |
+| `absent` | the agent reads **nothing** | reported, exit 0 | **exit 1** |
 
 - **Only the managed skills are touched.** Any other skill installed in that
   directory is left exactly as it is — the tool works from an explicit pair
@@ -352,11 +354,14 @@ Contributors are recognized in:
 
 ## Release Process
 
-VelesDB uses **3 simplified GitHub Actions workflows**:
+CI spans 21 workflow files; the merge gate is the **`CI Success`** summary job,
+whose `needs:` list in [`ci.yml`](.github/workflows/ci.yml) is the authoritative
+inventory (mapped guard-by-guard in [`scripts/guards.json`](scripts/guards.json)).
+The three you interact with most:
 
 | Workflow | Purpose |
 |----------|---------|
-| `ci.yml` | Tests, lint, security |
+| `ci.yml` | Tests, lint, security, and the `CI Success` gate |
 | `release.yml` | Full publish (binaries, crates.io, PyPI, npm) |
 | `bench-regression.yml` | Benchmarks |
 

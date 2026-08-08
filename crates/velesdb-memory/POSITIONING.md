@@ -165,11 +165,14 @@ publish what you can reproduce.
    deploys at all.
 3. **Cost-sensitive, high-volume agents.** When every memory write is 2–3
    cloud-LLM calls, economics flip at scale: local extraction and recall remove
-   the per-token bill entirely. Early, exploratory signal (2-conversation
-   subset, not yet confirmed at full scale): the graph may reach similar
-   LoCoMo accuracy at **half the context budget** (fused k=32 vs brute-force
-   vector k=64 — see [`BENCHMARK.md`](BENCHMARK.md)), which would halve the
-   *answering* token bill too.
+   the per-token bill entirely. An earlier exploratory note claimed the graph
+   might also reach similar LoCoMo accuracy at half the context budget (fused
+   k=32 vs brute-force vector k=64); measured at fuller scale **that lead did
+   not hold and is retracted** — fused k=32 lands ~4pp *below* vector k=64 on
+   multi-hop, because multi-hop answers need a chain of facts that a wider
+   vector budget captures and graph traversal does not (see
+   [`BENCHMARK.md`](BENCHMARK.md)). The cost case rests on the removed
+   per-write API bill, not on a smaller answering budget.
 
 ## 8. The close
 

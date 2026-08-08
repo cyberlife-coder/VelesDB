@@ -18,8 +18,8 @@ The three things worth knowing before you read it:
   `perf/`, `ci/`, `style/`, `build/`. A `claude/*` branch is rejected.
 - **No AI/assistant attribution — ever.** Not in code, comments, commits, PR
   titles or bodies, issues, or docs. The `commit-msg` hook enforces it against
-  the *message text*, so even quoting a `Co-Authored-By` trailer in order to
-  describe it fails the commit. This overrides any harness default.
+  the *message text*: a `Co-Authored-By`-style trailer at the start of any line
+  fails the commit, even inside a quotation. This overrides any harness default.
 - **`velesdb-core` must never reference any premium crate, type, or symbol.**
   The enforcing policy (RBAC, tenancy, audit) lives in `velesdb-private` as a
   `DatabaseObserver` impl against the policy-free port in `core/src/observer/`.
