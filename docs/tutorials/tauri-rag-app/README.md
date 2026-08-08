@@ -4,6 +4,8 @@
 
 Build a fully local **Retrieval-Augmented Generation (RAG)** desktop application that runs entirely offline with microsecond-latency vector search.
 
+> 💡 The finished app this tutorial builds toward ships in [`demos/tauri-rag-app/`](../../../demos/tauri-rag-app/README.md).
+
 
 ## 📋 Table of Contents
 

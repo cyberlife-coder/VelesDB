@@ -2,6 +2,8 @@
 
 > **Difficulty: Advanced** | Showcases: Vector search, Tauri desktop integration, RAG pipeline, knowledge graph, real-time events
 
+> Prefer to build it from scratch? The [Tauri RAG tutorial](../../docs/tutorials/tauri-rag-app/README.md) walks through this app step by step.
+
 Build a local **Retrieval-Augmented Generation (RAG)** desktop application using:
 - **Tauri 2.0** - Rust-based desktop framework
 - **VelesDB** - Lightning-fast vector search (microseconds!)

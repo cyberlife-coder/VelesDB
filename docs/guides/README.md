@@ -27,7 +27,7 @@ each guide links back.
 | [Core: sparse vectors and fusion](./CORE_SPARSE_AND_FUSION.md) | Named sparse vectors (SPLADE, BM25, tag sets) beside dense embeddings, and result fusion |
 | [Core: streaming inserts](./CORE_STREAMING_INSERTS.md) | Bounded-channel ingestion, backpressure and the delta buffer for continuously arriving data |
 | [Core: query plan cache](./CORE_QUERY_PLAN_CACHE.md) | The two-tier LRU plan cache that lets repeated queries skip parsing and planning |
-| [Core: Agent Memory SDK (Rust)](./CORE_AGENT_MEMORY_RUST.md) | The `velesdb_core::agent` memory subsystems for chatbots, RAG and autonomous agents |
+| [Core: Agent Memory SDK (Rust)](./AGENT_MEMORY.md#rust-api) | The `velesdb_core::agent` memory subsystems for chatbots, RAG and autonomous agents — the Rust API section of the Agent Memory guide |
 | [Core: performance numbers](./CORE_PERFORMANCE.md) | The measured figures, with their methodology and hardware |
 | [Search Modes](./SEARCH_MODES.md) | What Fast/Balanced/Accurate/Perfect/Adaptive mean and when to pick which |
 | [Quantization](./QUANTIZATION.md) | Vector compression mechanisms (SQ8, PQ, Binary, RaBitQ): internals, training, persistence |
