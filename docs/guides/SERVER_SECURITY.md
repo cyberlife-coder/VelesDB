@@ -110,7 +110,7 @@ api_keys = [
 
 ```bash
 curl -H "Authorization: Bearer key-for-app-a" \
-     http://localhost:8080/api/v1/collections
+     http://localhost:8080/v1/collections
 ```
 
 ### Unauthenticated responses
@@ -379,3 +379,7 @@ until curl -sf http://localhost:8080/ready > /dev/null 2>&1; do
 done
 echo "VelesDB is ready!"
 ```
+
+---
+
+Last updated: 2026-08-08 · Applies to: velesdb-core 4.3.0

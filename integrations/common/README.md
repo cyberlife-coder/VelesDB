@@ -47,7 +47,10 @@ direct use by end users.
 
 | Export | Type | Description |
 |--------|------|-------------|
+| `chronological` | function | Sorts episodic events oldest-first on `(timestamp, id)` |
 | `format_procedural_results` | function | Normalizes raw procedural-memory recall output into a stable result list |
+| `parse_event_entry` | function | Parses a JSON event description into `(role, content)` |
+| `resolve_procedure_id` | function | Resolves a procedure name or numeric ID for `reinforce()` |
 | `store_procedure` | function | Inserts a procedural-memory entry with the canonical schema used by both integrations |
 
 **Security: validators**
@@ -75,6 +78,7 @@ direct use by end users.
 |--------|------|-------------|
 | `ALLOWED_METRICS` | set | Canonical metric strings (cosine, euclidean, dot, …); single-sourced from `velesdb.DISTANCE_METRICS`, with a literal fallback when the wheel is absent |
 | `ALLOWED_STORAGE_MODES` | set | Canonical storage modes (full, sq8, binary, pq, rabitq); single-sourced from `velesdb.STORAGE_MODES`, with a literal fallback when the wheel is absent |
+| `ALLOWED_CONDITION_TYPES` | set | Canonical procedural condition types; single-sourced from `velesdb.CONDITION_TYPES`, with a literal fallback when the wheel is absent |
 | `STORAGE_MODE_ALIASES` | dict | Alias → canonical mapping (e.g. `int8` → `sq8`) |
 | `DEFAULT_TIMEOUT_MS` | int | Default timeout used when callers don't specify one |
 | `MIN_DIMENSION` / `MAX_DIMENSION` | int | Vector dimension bounds |

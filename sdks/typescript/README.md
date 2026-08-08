@@ -30,96 +30,9 @@ resolves paths either. Path ingestion is a capability of the `velesdb-memory`
 **daemon**, reachable over MCP; from an SDK, read the file yourself and pass
 its text as `content`.
 
-## What's New in v3.6.0
+## Earlier releases
 
-- **Memory wedge, running in-browser via WASM**: new `MemoryService` class (`remember`/`recall`/`recallWhere`/`recallFused`/`relate`/`forget`/`why`) — the same local-first agent memory as `@wiscale/velesdb-memory-node` and the Python binding, now reachable without a server. In-memory only in this release (no filesystem access under WASM); see [Memory Wedge](#memory-wedge-agent-memory) below. Requires `@wiscale/velesdb-wasm` >= 3.6.0 — fresh installs resolve it automatically; on an upgrade, refresh the dependency in your lockfile (`init()` reports the exact cause otherwise).
-
-## What's New in v3.0.0
-
-- **Streaming ingestion enablement (2026-06-14)** (REST backend): `enableStreaming(collection, config?)` turns on the bounded streaming-ingestion channel before `streamInsert()`. The optional `StreamingConfig` (`bufferSize`, `batchSize`, `flushIntervalMs`) is camelCase; omitted fields fall back to the server defaults. See [`db.enableStreaming`](#dbenablestreamingcollection-config) below. The WASM backend throws `NOT_SUPPORTED`.
-- **Relation + durable-TTL surface** (REST backend): `relate()`, `unrelate()`, `getRelations()`, `setTtlDurable()` — now fully tested and documented (see [Knowledge Graph API](#knowledge-graph-api) and [Agent Memory API](#agent-memory-api) below). The WASM backend throws `NOT_SUPPORTED` for these methods.
-- The shipped example (`examples/hybrid_queries.ts`) was rewritten against the real API and is now compile-checked in CI.
-
-## What's New in v2.0.0
-
-- v2.0.0: graph dimension on agent memory — `relate()` / `relations()` / `unrelate()`; durable-TTL setters; aligns with the engine 2.0 release. See the root [CHANGELOG](../../CHANGELOG.md) for the breaking VelesQL changes.
-- v1.18.0: agent-memory parity wave — temporal recall facades (`recallRecent` / `recallOlderThan`), id-coercion hardening for `deleteMemory(string | number)`.
-
-## What's New in v1.16.0
-
-- **First-party embedding helper.** New `OpenAIEmbedder` (plus the `Embedder` interface and `OpenAIEmbedderOptions` type), exported from the package root. It calls any OpenAI-compatible `/embeddings` endpoint via the global `fetch` API — no extra runtime dependency — so you can go from text to vectors without hand-writing the request. See [Embedding helper](#embedding-helper) below. Works in Node.js ≥ 18, browsers, and Deno.
-
-### Previous (v1.14.2)
-
-- **No SDK source change.** v1.14.2 was a workspace patch focused on the Python Haystack `DocumentStore` (`DuplicatePolicy.SKIP` contract fix) and seven version-drift gaps in the release tooling. The TS SDK ships in lock-step with the workspace and was functionally identical to v1.14.1.
-
-### Previous (v1.14.1)
-
-- **Pipeline fix only.** v1.14.0 added Haystack 2.x DocumentStore source code on the Python side but the release workflow forgot to publish `haystack-velesdb` to PyPI. v1.14.1 closes that gap. No TS SDK source change.
-
-### Previous (v1.14.0)
-
-- **MSRV Rust 1.89** -- workspace and CI now align with the actual SIMD path (`avx512vpopcntdq` target feature). No source change for the SDK; bumps in lock-step with the workspace.
-- **Dockerfile auto-sync** -- release tooling now keeps `LABEL version=` in lock-step across all Dockerfiles. Indirectly improves anyone running `docker build` against a checkout.
-
-### Previous (v1.13.7)
-
-- **Node.js WASM init fix** -- `new VelesDB({ backend: 'wasm' }).init()` now reads `velesdb_wasm_bg.wasm` bytes from disk via `fs.readFile` so Node 20+ no longer crashes on the broken `fetch('file://')` path. Browsers are unchanged.
-- **Lifecycle hardening** -- memoised in-flight init promise + generation token make `close()` race-free.
-- **Dual ESM + CJS bundles** -- TS SDK build emits both formats with `import.meta.url`/`__filename` polyfilled correctly.
-
-### Previous (v1.13.0)
-
-- **WASM VelesQL executor** -- full browser-side VelesQL execution: SELECT/INSERT/UPDATE/DELETE/DDL + aggregations (COUNT/SUM/AVG/MIN/MAX) + GROUP BY/HAVING/UNION/INTERSECT/EXCEPT/JOIN/FUSION/MATCH 1-2 hops + NOT De Morgan distribution
-- **TS SDK coverage raised** -- per-file thresholds codified in `vitest.config.ts` (423 tests as of v1.13.0; the vitest suite has since grown past 770 cases). Note: the suite runs locally via `npm test` and is not currently executed in CI
-- **SIFT1M standardized ANN benchmark** -- fvecs/ivecs loader + Criterion ef sweep on the INRIA TEXMEX dataset, feature-gated behind `--features bench-sift1m`
-- **Security hardening** -- `validateCollectionName()` helper on TS SDK prevents VelesQL injection in `trainPq`
-- **API consistency** -- `streamInsert` now serializes `payload: null` explicitly (matches `streamUpsertPoints`)
-
-### Previous (v1.12.0)
-
-- **Cross-collection MATCH queries** -- `@collection` annotation on MATCH node patterns enables cross-collection graph queries
-- **MATCH via `/query` endpoint** -- MATCH queries can now be executed via `Database::execute_query`
-- **BFS dedup** -- CSR and EdgeStore BFS no longer produce duplicate results for diamond graphs
-- **`rrf_k` propagation** -- now properly propagated to `hybrid_search_with_filter`
-- **`ComponentScores` optimization** -- changed to `&'static str` for zero-allocation score tagging
-
-### Previous (v1.11.1)
-
-- **Graph API parity** -- 7 new REST endpoints for complete graph operations (delete edge, edge count, list nodes, node edges, node payload, parallel BFS, graph search)
-- **Bitmap pre-filter** -- adaptive strategy selection for filtered search
-- **CSR graph traversal v2** -- lock-free adjacency with edge IDs and labels
-- **Bulk insert v2** -- DirectVectorWriter + AsyncIndexBuilder pipeline
-
-### Previous (v1.11.0)
-
-- **15 new VelesQL statements** -- SHOW COLLECTIONS, DESCRIBE, EXPLAIN, CREATE/DROP INDEX, ANALYZE, TRUNCATE, ALTER COLLECTION, FLUSH, multi-row INSERT, UPSERT, SELECT EDGES, INSERT NODE
-- **203 BDD E2E tests** -- comprehensive end-to-end test coverage for all VelesQL features
-- **TRUNCATE on graph collections** -- clears nodes + edges in a single statement
-- **Python `execute_query()`** -- full VelesQL execution from Python bindings
-- **Cyclomatic complexity ≤ 8** -- refactored 6 hotspots for Codacy compliance
-
-### Previous (v1.10.0)
-
-- **SearchQuality type** -- `SearchQuality` type and `quality` field in `SearchOptions`
-- **StorageMode in HnswParams** -- `storageMode` field in HNSW configuration
-- **Relative score fusion** -- `'relative_score'` fusion strategy
-- **DistanceMetric "ip" alias** -- `"ip"` accepted as alias for `"dot"`
-- **StorageMode aliases** -- `"f32"`, `"int8"`, `"bit"` accepted
-
-### Previous (v1.9.1)
-
-- **Agent Memory API** -- semantic, episodic, and procedural memory for AI agents (REST only)
-- **Graph collections** -- dedicated `createGraphCollection()` for knowledge graphs (REST only)
-- **Metadata-only collections** -- reference tables with no vectors, joinable via VelesQL
-- **Sparse vector support** -- hybrid sparse+dense search on insert and query (REST + WASM)
-- **Stream insert with backpressure** -- `streamInsert()` for high-throughput ingestion (REST only)
-- **Product Quantization training** -- `trainPq()` for further memory compression (REST only)
-- **Collection analytics** -- `analyzeCollection()`, `getCollectionStats()`, `getCollectionConfig()` (REST only)
-- **Property indexes** -- `createIndex()` / `listIndexes()` / `dropIndex()` for O(1) lookups (REST only)
-- **Query introspection** -- `queryExplain()` and `collectionSanity()` diagnostics (REST only)
-- **Batch search** -- `searchBatch()` for parallel multi-query execution
-- **Lightweight search** -- `searchIds()` returns only IDs and scores (REST only)
+The full release-by-release history lives in the root [CHANGELOG.md](../../CHANGELOG.md).
 
 ## Installation
 

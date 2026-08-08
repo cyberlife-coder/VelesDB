@@ -159,6 +159,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
      breaking change as 4.3.0, and every consumer pinned `>=4.2,<5` would take
      it silently. `check-version-sync.py` cannot catch this — it compares
      version strings to each other and has no notion of a breaking change.
+     Note that the workspace manifest currently carries 4.3.0 as its
+     *working* version; that number must not ship — the release that
+     carries these changes ships as 5.0.0.
   2. **Raise `sdks/typescript/package.json`'s `@wiscale/velesdb-wasm` floor to
      that release.** It sits at `^4.1.0`, which resolves to builds that still
      return the bare form; it cannot be raised in advance because the version
@@ -170,11 +173,104 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
      floor** for the same reason and with the same constraint; the toolkit
      likewise reports the drift at call time in the meantime.
 
+## [4.2.0] — 2026-07-29
+
+*This section was reconstructed after the fact from the merge history — the
+50 first-parent commits between the 4.1.0 release commit and the 4.2.0
+workspace bump (2026-07-26 → 2026-07-29); it was missing from this file when
+4.2.0 shipped.*
+
+Minor: the headline is `incoming_relations`. The engine already knew how to
+read a node's incoming edges, but none of the three agent memories exposed
+them, so a relation was only consultable from its emitter. This release
+closes that, and brings the Node, Python and WASM bindings to parity with
+the MCP tool surface.
+
+### Added
+
+- **`velesdb-core`**: `incoming_relations` on the three agent memories
+  (semantic, episodic, procedural) — the exact mirror of `relations`,
+  exposing a node's incoming edges. The one subtlety that matters: the
+  queried point is alive by construction, so the TTL filter must keep the
+  *far* endpoint (`source`) — an edge coming from an expired point is dead
+  and must not be reported. (#1676)
+- **Binding parity with the MCP tool surface, and the guard that keeps it
+  permanent (#1668).** `entity` is now exposed on Node, Python and WASM —
+  entity hubs are deliberately invisible to `recall`, so everything the
+  autograph merged onto a hub was stored correctly yet unreachable from the
+  three bindings. The same guard surfaced the other gaps it closed:
+  `suggest_budget` on Node and Python, `list_working_contexts` and
+  `compile_transcript` on Python. The pure-Rust half of the transcript
+  bridge, previously two hand-synced copies in the Node and WASM bindings,
+  now lives in `velesdb_memory::context::transcript_bridge`. The parity test
+  holds every (tool, binding) pair to "implemented OR exempted with its
+  reason", reading the binding surfaces from their sources rather than a
+  manifest.
+- **`velesdb-memory`**: `unrelate` — the symmetric cancellation of `relate`
+  — plus a CI guard that proves the crate is publishable against the
+  crates.io core before a release, and that learned to distinguish a
+  transient bump-in-progress resolution failure from a genuinely missing
+  core API. (#1666, #1678)
+- **`velesdb-memory`**: the autograph builds the graph on its own and the
+  daemon is configurable from a single file (#1627); extraction also orients
+  the genitive, the plural and alliance phrasings (#1674) and kinship stated
+  in the possessive (#1656); the autograph's predicate is bounded and the
+  edge required (#1635).
+- **`velesdb-memory`**: the daemon drains in-flight work on SIGTERM, not
+  only on Ctrl-C — SIGTERM being what a service manager actually sends.
+  (#1636)
+
+### Fixed
+
+- **MCP schema honesty**: every tool declares a typed *output* schema
+  (#1611, #1617), optional slots in the advertised schemas are typed
+  (#1655), the documented `pool` ceiling matches the code (#1675),
+  `recall_fused` exposes its `pool` knob on the MCP tool (#1672), and the
+  tools refuse the five malformed inputs they previously accepted (#1657).
+- **`velesdb-memory` TTL races**: metadata and TTL are written in a single
+  call (#1641), and the remaining race was closed without a new core API
+  and shipped as 0.11.4 (#1650).
+- **`velesdb-memory`**: `forget` collects the entity hubs that no fact
+  mentions anymore (#1634); the config file is looked up next to the
+  *effective* store path, not the default one (#1633); the text embedded
+  from sources is capped and an overlong extracted fact is no longer fatal
+  (#1664).
+- **Feature flags**: `--features extract` (#1610) and `--features http`
+  (#1617) each compile on their own.
+- **Release pipeline**: `langgraph-velesdb` was absent from the PyPI matrix
+  and is published again (#1616), and the 97 Rust tests of `velesdb-python`
+  are executable again (#1670).
+
+### Changed
+
+- **`velesdb-memory`**: the JSON-schema `$defs` that inlining had made
+  unreachable are pruned from the advertised schemas (#1612); six functions
+  brought back under the complexity threshold (#1673); internal dedup in
+  core of the secondary-index type, traversal metrics and score-context
+  construction (#1648).
+
+### Documentation
+
+- A migration guide for 4.0.0 — the major had shipped without one (#1630); a
+  four-wave documentation overhaul settling eight standing arbitrations
+  (#1593); the declared MSRV now tells the truth, with a guard that stops
+  Dependabot from re-proposing what breaks it (#1640); real names in the
+  examples replaced by fictional ones (#1658); the TODO-tag rule described
+  as CI actually enforces it (#1618).
+
+### Maintenance
+
+- `velesdb-memory` advanced from 0.11.3 to 0.11.5 inside this window (its
+  own changelog has the detail); test determinism and coverage work landed
+  (#1631, #1632, #1637, #1645, #1669, #1677); plus the usual batch of
+  Dependabot updates (cargo, npm, GitHub Actions), the post-4.1.0 backmerge
+  and the removal of two accidentally tracked local artifacts.
+
 ## [4.1.0] — 2026-07-26
 
-Mineure : 38 commits depuis la 4.0.0. Le verrou de gouvernance CORE-2 couvre
-desormais les lectures graphe REST, l'audit des capacites honore les
-denegations, et velesdb-memory corrige quatre defauts constates en usage reel.
+Minor: 38 commits since 4.0.0. The CORE-2 governance lock now covers the REST
+graph reads, the capability audit honours denials, and velesdb-memory fixes
+four defects observed in real-world use.
 
 ### Fixed
 
@@ -6572,27 +6668,317 @@ This change ensures VelesDB remains freely available while protecting against cl
 
 ### Added
 
-#### Performance Optimizations (P1)
-- **ContiguousVectors**: Cache-optimized memory layout for vector storage
-  - 64-byte cache-line aligned allocation
-  - 40% faster random access vs `Vec<Vec<f32>>`
-  - Batch operations with SIMD acceleration
+#### Performance Optimizations P1
 
-- **CPU Prefetch Hints**: Hardware prefetch for HNSW traversal
-  - +12% throughput on neighbor traversal
-  - Configurable prefetch distance
+- **ContiguousVectors**: Cache-optimized memory layout
+  - 64-byte aligned contiguous buffer for cache line efficiency
+  - Zero-indirection vector access
+  - 14 TDD tests
 
-- **Batch WAL Write**: Optimized bulk import
-  - 10x improvement for large batch inserts
-  - Reduced I/O overhead
+- **CPU Prefetch Hints**: L2 cache warming for HNSW traversal
+  - Lookahead distance of 4 vectors
+  - +12% throughput on random access patterns
+
+- **Batch WAL Write**: Single disk write per bulk import
+  - `store_batch()` method on `VectorStorage` trait
+  - Contiguous mmap allocation for batch vectors
+
+- **Batch Distance Computation**: SIMD-optimized batch operations
+  - `batch_dot_products()` with prefetching
+  - `batch_cosine_similarities()` for parallel queries
 
 ### Performance
+
+| Benchmark | Result | Improvement |
+|-----------|--------|-------------|
+| Random Access | **2.3 Gelem/s** | +12% with prefetch |
+| Insert (128D) | **100M elem/s** | Contiguous layout |
+| Insert (768D) | **1.84M elem/s** | Batch WAL |
+| Bulk Import | **15.4K vec/s** | 10x vs regular upsert |
+| Memory Alloc | **6.75ms** | +8% vs Vec<Vec> |
 
 | Mode | Recall@10 | Improvement |
 |------|-----------|-------------|
 | Balanced | 98.2% | +0.5% |
 | Accurate | 99.4% | +0.3% |
 | HighRecall | 99.6% | +0.2% |
+
+### Search Quality
+
+| Mode | Recall@10 | Status |
+|------|-----------|--------|
+| Balanced (ef=128) | **98.2%** | ✅ >= 95% |
+| Accurate (ef=256) | **99.4%** | ✅ >= 95% |
+| HighRecall (ef=512) | **99.6%** | ✅ >= 95% |
+
+### Testing
+
+- **417 tests** total (all passing)
+- Code coverage maintained >= 80%
+
+---
+
+## [0.3.0] - 2025-12-22
+
+### Added
+
+#### TypeScript SDK
+- **`@velesdb/sdk`**: Unified TypeScript client for browser and Node.js
+  - WASM backend for client-side vector search
+  - REST backend for server communication
+  - Full type definitions with strict TypeScript
+  - Error handling with custom exception classes
+  - 61 comprehensive tests
+
+- **API**:
+  ```typescript
+  import { VelesDB } from '@velesdb/sdk';
+  
+  const db = new VelesDB({ backend: 'wasm' });
+  await db.init();
+  await db.createCollection('docs', { dimension: 768 });
+  await db.insert('docs', { id: '1', vector: [...] });
+  const results = await db.search('docs', query, { k: 5 });
+  ```
+
+#### IndexedDB Persistence
+- **`export_to_bytes()`**: Serialize vector store to binary format
+- **`import_from_bytes()`**: Restore from binary data
+- Custom binary format with "VELS" magic number, versioning
+- Perfect for IndexedDB, localStorage, file downloads
+
+- **Performance** (after optimization):
+  | Operation | Throughput |
+  |-----------|------------|
+  | Export | **4479 MB/s** |
+  | Import | **2943 MB/s** |
+
+#### Tauri RAG Tutorial
+- **`examples/tauri-rag-app`**: Complete desktop RAG application
+  - React + Tailwind UI
+  - Document ingestion with chunking
+  - Semantic search with VelesDB
+  - Ready-to-run Tauri v2 template
+
+### Changed
+
+#### Performance Optimizations
+- **Contiguous memory layout**: 58x faster import
+  - Vector data stored in single buffer instead of individual allocations
+  - Better cache locality for search operations
+  - Bulk memory copy via unsafe slice operations
+
+- **Pre-allocation**: Exact buffer sizing to avoid reallocations
+
+### Testing
+
+- **427 tests** total (+53 from v0.2.0)
+  - 337 Rust core tests
+  - 29 WASM tests
+  - 61 TypeScript SDK tests
+
+---
+
+## [0.2.0] - 2025-12-22
+
+### Added
+
+#### BM25 Full-Text Search
+- **`Bm25Index`**: Full-text search with BM25 ranking algorithm
+  - Tokenization with stopword removal
+  - Term frequency / inverse document frequency scoring
+  - Persistent storage with automatic recovery
+  - 15+ TDD tests
+
+- **`Collection::text_search()`**: Search by text content
+- **`Collection::hybrid_search()`**: Combined vector + BM25 with RRF fusion
+  - Configurable `vector_weight` parameter (0.0-1.0)
+  - Reciprocal Rank Fusion for result merging
+
+- **VelesQL MATCH clause**:
+  ```sql
+  SELECT * FROM documents 
+  WHERE content MATCH 'rust programming'
+  LIMIT 10
+  ```
+
+- **REST API Endpoints**:
+  - `POST /collections/{name}/search/text` - BM25 text search
+  - `POST /collections/{name}/search/hybrid` - Hybrid search
+
+#### Tauri Desktop Plugin
+- **`tauri-plugin-velesdb`**: Vector search in desktop applications
+  - Full Tauri v2 compatibility
+  - 9 commands: CRUD, search, text_search, hybrid_search, query
+  - TypeScript bindings with full type definitions
+  - Auto-generated Tauri permissions
+  - 26 TDD tests
+
+- **Commands**:
+  | Command | Description |
+  |---------|-------------|
+  | `create_collection` | Create vector collection |
+  | `delete_collection` | Delete collection |
+  | `list_collections` | List all collections |
+  | `get_collection` | Get collection info |
+  | `upsert` | Insert/update vectors |
+  | `search` | Vector similarity search |
+  | `text_search` | BM25 full-text search |
+  | `hybrid_search` | Vector + text fusion |
+  | `query` | Execute VelesQL |
+
+- **JavaScript API**:
+  ```javascript
+  import { invoke } from '@tauri-apps/api/core';
+  
+  await invoke('plugin:velesdb|search', {
+    request: { collection: 'docs', vector: [...], topK: 10 }
+  });
+  ```
+
+#### Python Bindings (PyO3)
+- **Native Python API**: Full-featured Python bindings for VelesDB
+  - `velesdb.Database` - Database management
+  - `velesdb.Collection` - Collection operations (upsert, search, delete)
+  - Support for Python lists and NumPy arrays
+  - Automatic `float64` → `float32` conversion
+
+- **NumPy Integration**:
+  - Direct support for `numpy.ndarray` in `upsert()` and `search()`
+  - Zero-copy when possible for performance
+  - Mixed Python list / NumPy array in same batch
+
+#### VelesQL CLI/REPL
+- **Interactive REPL**: `velesdb-cli repl`
+  - Syntax highlighting
+  - Command history
+  - Tab completion
+- **Single Query Mode**: `velesdb-cli query "SELECT ..."`
+- **Database Info**: `velesdb-cli info ./data`
+
+#### LangChain Integration
+- **`langchain-velesdb` package**: LangChain VectorStore adapter
+  - `VelesDBVectorStore` class
+  - `add_texts()`, `similarity_search()`, `delete()`
+  - `as_retriever()` for RAG pipelines
+  - Full test suite (9 tests)
+
+#### Additional Distance Metrics
+- **Hamming Distance**: For binary vectors and locality-sensitive hashing
+  - Ultra-fast bit comparison (XOR + popcount)
+  - Ideal for: image hashing, fingerprints, duplicate detection
+  - Values > 0.5 treated as 1, else 0
+
+- **Jaccard Similarity**: For set-like vectors
+  - Measures intersection over union of non-zero elements
+  - Ideal for: recommendations, tags, document similarity
+  - Returns 1.0 for identical sets, 0.0 for disjoint sets
+
+- **SIMD-Optimized**: Loop unrolling (4x) for auto-vectorization
+
+### Performance
+
+| Operation | Latency | Throughput |
+|-----------|---------|------------|
+| Text search (10k docs) | < 5ms | 200 q/s |
+| Hybrid search | < 10ms | 100 q/s |
+| Tauri vector search | < 1ms | 1000 q/s |
+
+| Operation | Metric | Value |
+|-----------|--------|-------|
+| Python upsert (1000 vectors) | Throughput | ~50K vec/sec |
+| Python search (768d) | Latency | < 2ms |
+| VelesQL CLI parse | Throughput | 1.3M queries/sec |
+
+### Testing
+
+- **374 tests** total (+48 from v0.1.4)
+  - 333 core engine tests
+  - 26 Tauri plugin tests
+  - 6 REST API tests
+  - 9 WASM tests
+
+---
+
+## [0.1.4] - 2025-12-21
+
+### Added
+
+#### Half-Precision Support
+- **f16/bf16 vectors**: 50% memory reduction
+  - `VectorPrecision` enum: F32, F16, BF16
+  - `VectorData` with automatic conversions
+  - SIMD-optimized distance calculations
+  - 24 TDD tests
+
+| Dimension | f32 Size | f16 Size | Savings |
+|-----------|----------|----------|---------|
+| 768 (BERT)| 3.0 KB   | 1.5 KB   | 50%     |
+| 1536 (GPT)| 6.0 KB   | 3.0 KB   | 50%     |
+
+#### WASM Support
+- **`velesdb-wasm` crate**: Vector search in the browser
+  - `VectorStore` with insert/search/remove
+  - Cosine, Euclidean, Dot Product metrics
+  - WASM SIMD128 optimizations via `wide` crate
+  - JavaScript API via wasm-bindgen
+
+#### AVX-512 Optimizations
+- **wide32 processing**: 4x f32x8 accumulators for maximum ILP
+  - 40-50% improvement on HNSW recall benchmarks
+  - Automatic CPU feature detection
+
+### Performance
+
+| Operation | Time (768d) | Speedup |
+|-----------|-------------|---------|
+| Dot Product | **42 ns** | 6.8x vs baseline |
+| Normalize | **209 ns** | 2x vs baseline |
+| HNSW Recall | **115 ms** | 45% faster |
+
+---
+
+## [0.1.2] - 2025-12-21
+
+### Added
+
+#### Performance Optimizations
+- **Explicit SIMD**: 4.2x faster cosine similarity using `wide` crate
+  - Cosine: 320ns → **76ns** (4.2x speedup)
+  - Euclidean: 138ns → **47ns** (2.9x speedup)
+  - Dot Product: 130ns → **45ns** (2.9x speedup)
+
+- **ColumnStore Filtering**: 122x faster metadata filtering
+  - Columnar storage for typed metadata (i64, f64, string, bool)
+  - String interning for efficient string comparisons
+  - RoaringBitmap for combining filters (AND/OR)
+
+- **Binary Hamming Distance**: ~6ns per operation (164M ops/sec)
+
+#### Developer Experience
+- **One-liner Installers**: 
+  - Linux/macOS: `curl -fsSL .../install.sh | bash`
+  - Windows: `irm .../install.ps1 | iex`
+
+- **OpenAPI/Swagger**: Full API documentation
+  - Swagger UI at `/swagger-ui`
+  - OpenAPI spec at `/api-docs/openapi.json`
+
+- **Python Bindings**: Hamming & Jaccard metric support
+
+#### Documentation
+- Updated all README files with new performance metrics
+- Added BENCHMARKING_GUIDE.md for reproducible benchmarks
+- Added PERFORMANCE_ROADMAP.md
+
+### Performance
+
+| Operation | Time (768d) | Throughput |
+|-----------|-------------|------------|
+| Cosine Similarity | **76 ns** | 13M ops/sec |
+| Euclidean Distance | **47 ns** | 21M ops/sec |
+| Hamming (Binary) | **6 ns** | 164M ops/sec |
+| ColumnStore Filter | **27 µs** | 122x vs JSON |
 
 ---
 
@@ -6674,325 +7060,6 @@ This change ensures VelesDB remains freely available while protecting against cl
 
 ---
 
-## [0.2.0] - 2025-12-20
-
-### Added
-
-#### Python Bindings (PyO3)
-- **Native Python API**: Full-featured Python bindings for VelesDB
-  - `velesdb.Database` - Database management
-  - `velesdb.Collection` - Collection operations (upsert, search, delete)
-  - Support for Python lists and NumPy arrays
-  - Automatic `float64` → `float32` conversion
-
-- **NumPy Integration**:
-  - Direct support for `numpy.ndarray` in `upsert()` and `search()`
-  - Zero-copy when possible for performance
-  - Mixed Python list / NumPy array in same batch
-
-#### VelesQL CLI/REPL
-- **Interactive REPL**: `velesdb-cli repl`
-  - Syntax highlighting
-  - Command history
-  - Tab completion
-- **Single Query Mode**: `velesdb-cli query "SELECT ..."`
-- **Database Info**: `velesdb-cli info ./data`
-
-#### LangChain Integration
-- **`langchain-velesdb` package**: LangChain VectorStore adapter
-  - `VelesDBVectorStore` class
-  - `add_texts()`, `similarity_search()`, `delete()`
-  - `as_retriever()` for RAG pipelines
-  - Full test suite (9 tests)
-
-#### Additional Distance Metrics
-- **Hamming Distance**: For binary vectors and locality-sensitive hashing
-  - Ultra-fast bit comparison (XOR + popcount)
-  - Ideal for: image hashing, fingerprints, duplicate detection
-  - Values > 0.5 treated as 1, else 0
-
-- **Jaccard Similarity**: For set-like vectors
-  - Measures intersection over union of non-zero elements
-  - Ideal for: recommendations, tags, document similarity
-  - Returns 1.0 for identical sets, 0.0 for disjoint sets
-
-- **SIMD-Optimized**: Loop unrolling (4x) for auto-vectorization
-
-### Performance
-
-| Operation | Metric | Value |
-|-----------|--------|-------|
-| Python upsert (1000 vectors) | Throughput | ~50K vec/sec |
-| Python search (768d) | Latency | < 2ms |
-| VelesQL CLI parse | Throughput | 1.3M queries/sec |
-
----
-
-## [0.1.2] - 2025-12-21
-
-### Added
-
-#### Performance Optimizations
-- **Explicit SIMD**: 4.2x faster cosine similarity using `wide` crate
-  - Cosine: 320ns → **76ns** (4.2x speedup)
-  - Euclidean: 138ns → **47ns** (2.9x speedup)
-  - Dot Product: 130ns → **45ns** (2.9x speedup)
-
-- **ColumnStore Filtering**: 122x faster metadata filtering
-  - Columnar storage for typed metadata (i64, f64, string, bool)
-  - String interning for efficient string comparisons
-  - RoaringBitmap for combining filters (AND/OR)
-
-- **Binary Hamming Distance**: ~6ns per operation (164M ops/sec)
-
-#### Developer Experience
-- **One-liner Installers**: 
-  - Linux/macOS: `curl -fsSL .../install.sh | bash`
-  - Windows: `irm .../install.ps1 | iex`
-
-- **OpenAPI/Swagger**: Full API documentation
-  - Swagger UI at `/swagger-ui`
-  - OpenAPI spec at `/api-docs/openapi.json`
-
-- **Python Bindings**: Hamming & Jaccard metric support
-
-#### Documentation
-- Updated all README files with new performance metrics
-- Added BENCHMARKING_GUIDE.md for reproducible benchmarks
-- Added PERFORMANCE_ROADMAP.md
-
-### Performance
-
-| Operation | Time (768d) | Throughput |
-|-----------|-------------|------------|
-| Cosine Similarity | **76 ns** | 13M ops/sec |
-| Euclidean Distance | **47 ns** | 21M ops/sec |
-| Hamming (Binary) | **6 ns** | 164M ops/sec |
-| ColumnStore Filter | **27 µs** | 122x vs JSON |
-
----
-
-## [0.1.4] - 2025-12-21
-
-### Added
-
-#### Half-Precision Support
-- **f16/bf16 vectors**: 50% memory reduction
-  - `VectorPrecision` enum: F32, F16, BF16
-  - `VectorData` with automatic conversions
-  - SIMD-optimized distance calculations
-  - 24 TDD tests
-
-| Dimension | f32 Size | f16 Size | Savings |
-|-----------|----------|----------|---------|
-| 768 (BERT)| 3.0 KB   | 1.5 KB   | 50%     |
-| 1536 (GPT)| 6.0 KB   | 3.0 KB   | 50%     |
-
-#### WASM Support
-- **`velesdb-wasm` crate**: Vector search in the browser
-  - `VectorStore` with insert/search/remove
-  - Cosine, Euclidean, Dot Product metrics
-  - WASM SIMD128 optimizations via `wide` crate
-  - JavaScript API via wasm-bindgen
-
-#### AVX-512 Optimizations
-- **wide32 processing**: 4x f32x8 accumulators for maximum ILP
-  - 40-50% improvement on HNSW recall benchmarks
-  - Automatic CPU feature detection
-
-### Performance
-
-| Operation | Time (768d) | Speedup |
-|-----------|-------------|---------|
-| Dot Product | **42 ns** | 6.8x vs baseline |
-| Normalize | **209 ns** | 2x vs baseline |
-| HNSW Recall | **115 ms** | 45% faster |
-
----
-
-## [0.2.0] - 2025-12-22
-
-### Added
-
-#### BM25 Full-Text Search
-- **`Bm25Index`**: Full-text search with BM25 ranking algorithm
-  - Tokenization with stopword removal
-  - Term frequency / inverse document frequency scoring
-  - Persistent storage with automatic recovery
-  - 15+ TDD tests
-
-- **`Collection::text_search()`**: Search by text content
-- **`Collection::hybrid_search()`**: Combined vector + BM25 with RRF fusion
-  - Configurable `vector_weight` parameter (0.0-1.0)
-  - Reciprocal Rank Fusion for result merging
-
-- **VelesQL MATCH clause**:
-  ```sql
-  SELECT * FROM documents 
-  WHERE content MATCH 'rust programming'
-  LIMIT 10
-  ```
-
-- **REST API Endpoints**:
-  - `POST /collections/{name}/search/text` - BM25 text search
-  - `POST /collections/{name}/search/hybrid` - Hybrid search
-
-#### Tauri Desktop Plugin
-- **`tauri-plugin-velesdb`**: Vector search in desktop applications
-  - Full Tauri v2 compatibility
-  - 9 commands: CRUD, search, text_search, hybrid_search, query
-  - TypeScript bindings with full type definitions
-  - Auto-generated Tauri permissions
-  - 26 TDD tests
-
-- **Commands**:
-  | Command | Description |
-  |---------|-------------|
-  | `create_collection` | Create vector collection |
-  | `delete_collection` | Delete collection |
-  | `list_collections` | List all collections |
-  | `get_collection` | Get collection info |
-  | `upsert` | Insert/update vectors |
-  | `search` | Vector similarity search |
-  | `text_search` | BM25 full-text search |
-  | `hybrid_search` | Vector + text fusion |
-  | `query` | Execute VelesQL |
-
-- **JavaScript API**:
-  ```javascript
-  import { invoke } from '@tauri-apps/api/core';
-  
-  await invoke('plugin:velesdb|search', {
-    request: { collection: 'docs', vector: [...], topK: 10 }
-  });
-  ```
-
-### Performance
-
-| Operation | Latency | Throughput |
-|-----------|---------|------------|
-| Text search (10k docs) | < 5ms | 200 q/s |
-| Hybrid search | < 10ms | 100 q/s |
-| Tauri vector search | < 1ms | 1000 q/s |
-
-### Testing
-
-- **374 tests** total (+48 from v0.1.4)
-  - 333 core engine tests
-  - 26 Tauri plugin tests
-  - 6 REST API tests
-  - 9 WASM tests
-
----
-
-## [0.3.0] - 2025-12-22
-
-### Added
-
-#### TypeScript SDK
-- **`@velesdb/sdk`**: Unified TypeScript client for browser and Node.js
-  - WASM backend for client-side vector search
-  - REST backend for server communication
-  - Full type definitions with strict TypeScript
-  - Error handling with custom exception classes
-  - 61 comprehensive tests
-
-- **API**:
-  ```typescript
-  import { VelesDB } from '@velesdb/sdk';
-  
-  const db = new VelesDB({ backend: 'wasm' });
-  await db.init();
-  await db.createCollection('docs', { dimension: 768 });
-  await db.insert('docs', { id: '1', vector: [...] });
-  const results = await db.search('docs', query, { k: 5 });
-  ```
-
-#### IndexedDB Persistence
-- **`export_to_bytes()`**: Serialize vector store to binary format
-- **`import_from_bytes()`**: Restore from binary data
-- Custom binary format with "VELS" magic number, versioning
-- Perfect for IndexedDB, localStorage, file downloads
-
-- **Performance** (after optimization):
-  | Operation | Throughput |
-  |-----------|------------|
-  | Export | **4479 MB/s** |
-  | Import | **2943 MB/s** |
-
-#### Tauri RAG Tutorial
-- **`examples/tauri-rag-app`**: Complete desktop RAG application
-  - React + Tailwind UI
-  - Document ingestion with chunking
-  - Semantic search with VelesDB
-  - Ready-to-run Tauri v2 template
-
-### Changed
-
-#### Performance Optimizations
-- **Contiguous memory layout**: 58x faster import
-  - Vector data stored in single buffer instead of individual allocations
-  - Better cache locality for search operations
-  - Bulk memory copy via unsafe slice operations
-
-- **Pre-allocation**: Exact buffer sizing to avoid reallocations
-
-### Testing
-
-- **427 tests** total (+53 from v0.2.0)
-  - 337 Rust core tests
-  - 29 WASM tests
-  - 61 TypeScript SDK tests
-
----
-
-## [0.3.1] - 2025-12-23
-
-### Added
-
-#### Performance Optimizations P1
-
-- **ContiguousVectors**: Cache-optimized memory layout
-  - 64-byte aligned contiguous buffer for cache line efficiency
-  - Zero-indirection vector access
-  - 14 TDD tests
-
-- **CPU Prefetch Hints**: L2 cache warming for HNSW traversal
-  - Lookahead distance of 4 vectors
-  - +12% throughput on random access patterns
-
-- **Batch WAL Write**: Single disk write per bulk import
-  - `store_batch()` method on `VectorStorage` trait
-  - Contiguous mmap allocation for batch vectors
-
-- **Batch Distance Computation**: SIMD-optimized batch operations
-  - `batch_dot_products()` with prefetching
-  - `batch_cosine_similarities()` for parallel queries
-
-### Performance
-
-| Benchmark | Result | Improvement |
-|-----------|--------|-------------|
-| Random Access | **2.3 Gelem/s** | +12% with prefetch |
-| Insert (128D) | **100M elem/s** | Contiguous layout |
-| Insert (768D) | **1.84M elem/s** | Batch WAL |
-| Bulk Import | **15.4K vec/s** | 10x vs regular upsert |
-| Memory Alloc | **6.75ms** | +8% vs Vec<Vec> |
-
-### Search Quality
-
-| Mode | Recall@10 | Status |
-|------|-----------|--------|
-| Balanced (ef=128) | **98.2%** | ✅ >= 95% |
-| Accurate (ef=256) | **99.4%** | ✅ >= 95% |
-| HighRecall (ef=512) | **99.6%** | ✅ >= 95% |
-
-### Testing
-
-- **417 tests** total (all passing)
-- Code coverage maintained >= 80%
-
----
 
 ## Roadmap
 

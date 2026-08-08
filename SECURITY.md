@@ -4,10 +4,10 @@
 
 | Version | Supported |
 |---------|-----------|
-| 4.2.x   | Yes       |
+| 4.3.x   | Yes       |
+| 4.2.x   | Security fixes only |
 | 4.1.x   | Security fixes only |
-| 4.0.x   | Security fixes only |
-| < 4.0   | No        |
+| < 4.1   | No        |
 
 > VelesDB ships weekly; this table is updated at every minor release. The latest minor always receives full support, and the two previous minors receive security fixes.
 >
@@ -59,7 +59,7 @@ The following components are in scope:
 | Mobile bindings | `crates/velesdb-mobile/` |
 | CLI | `crates/velesdb-cli/` |
 | TypeScript SDK | `sdks/typescript/` |
-| Tauri plugin | `tauri-plugin-velesdb/` |
+| Tauri plugin | `crates/tauri-plugin-velesdb/` |
 
 ### What Qualifies as a Vulnerability
 

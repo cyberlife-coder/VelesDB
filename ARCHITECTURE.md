@@ -2,7 +2,7 @@
 
 This document is the **15-minute read** an engineer or a technical due-diligence reviewer should start with. It tells you what VelesDB is, how it is shaped, and where to dig deeper.
 
-> **Last updated:** 2026-07-16 — applies to v3.x and onward.
+> **Last updated:** 2026-08-08 — applies to v4.x (workspace 4.3.0).
 
 ---
 
@@ -69,7 +69,7 @@ For component-level box diagrams, see [`docs/reference/ARCHITECTURE.md`](docs/re
 
 ## The crates
 
-The workspace is laid out as eight crates with one-way dependencies (no cycles).
+The workspace is laid out as ten crates with one-way dependencies (no cycles).
 
 | Crate | Role | Public surface | Notes |
 |-------|------|---------------|-------|
@@ -79,8 +79,8 @@ The workspace is laid out as eight crates with one-way dependencies (no cycles).
 | **`velesdb-wasm`** | Browser-side vector search. | `@wiscale/velesdb-sdk` partial | No `persistence` feature; transient in-memory. |
 | **`velesdb-mobile`** | iOS / Android bindings via UniFFI. | Swift + Kotlin | One binding crate, two outputs. |
 | **`velesdb-cli`** | Interactive REPL for VelesQL. | Single binary | Wraps `velesdb-core`. |
-| **`velesdb-migrate`** | Migration tooling: import from Pinecone / Qdrant / Milvus / Weaviate / Chroma / Elasticsearch / Redis. | CLI tool | Strategic candidate to extract to a separate repo (see ROADMAP.md Horizon 4). |
-| **`velesdb-memory`** | Local-first MCP agent-memory server: the high-level `MemoryService` wedge (remember/recall/recall_where/relate/forget/why/remember_extracted) plus the deterministic context compiler (`compile_context` / `context_savings` / `explain_compilation` / `retrieve_context_source`). | MCP server + Rust/Python/Node API | Independent `0.1.0` cadence. Depends on `velesdb-core` (not the engine's `3.x` line). |
+| **`velesdb-migrate`** | Migration tooling: import from Pinecone / Qdrant / Milvus / Weaviate / Chroma / Elasticsearch / Redis. | CLI tool | Strategic candidate to extract to a separate repo (tracked in ROADMAP.md, "Later"). |
+| **`velesdb-memory`** | Local-first MCP agent-memory server: the high-level `MemoryService` wedge (remember/recall/recall_where/relate/forget/why/remember_extracted) plus the deterministic context compiler (`compile_context` / `context_savings` / `explain_compilation` / `retrieve_context_source`). | MCP server + Rust/Python/Node API | Independent `0.x` cadence (currently 0.12.0). Depends on `velesdb-core` (not the engine's `4.x` line). |
 | **`velesdb-node`** | Node.js (napi-rs) binding of the memory wedge. | `@wiscale/velesdb-memory-node` (npm) | Depends on `velesdb-memory` only (never `velesdb-core` directly) — the license boundary. |
 | **`tauri-plugin-velesdb`** | Tauri desktop integration. | Plugin | Used by `demos/tauri-rag-app`. |
 
@@ -165,7 +165,7 @@ For the byte-level layout and serialization format, see [`docs/STORAGE_FORMAT.md
 
 These are intentional non-features. Each one keeps the engine simple at the cost of a use case we have ruled out for now:
 
-- **No Raft / multi-node replication.** Single-node, local-first. Tracked for the Enterprise edition in ROADMAP.md (tentative scope, Horizon 4).
+- **No Raft / multi-node replication.** Single-node, local-first. Tracked as a `roadmap` issue (Enterprise-edition scope, not committed).
 - **No built-in embedding model.** Embedding is a model concern; you bring your own (sentence-transformers, OpenAI, Cohere, BGE, CLIP).
 - **No K8s operator / cloud-managed mode.** Conflicts with local-first. Run it on a server, on your laptop, in a container, in WASM, in a mobile app — all the same code.
 - **No reranker / LLM glue.** That's user space.
@@ -188,7 +188,7 @@ The areas where VelesDB uses `unsafe` are:
 
 Every `unsafe` block has a `// SAFETY: <reason>` comment, enforced by `scripts/verify_unsafe_safety_template.py` in CI. Live counts (unsafe sites and `// SAFETY:` comments) are reported by the script on every push and tracked release-over-release in `CHANGELOG.md`. The full audit narrative is in [`docs/SOUNDNESS.md`](docs/SOUNDNESS.md).
 
-External soundness audit (Cure53 / independent Rust safety expert) is on the roadmap, conditional on funding. See ROADMAP.md Horizon 4.
+External soundness audit (Cure53 / independent Rust safety expert) is planned, conditional on funding — see QUALITY_BAR.md.
 
 ---
 
@@ -198,7 +198,7 @@ External soundness audit (Cure53 / independent Rust safety expert) is on the roa
 
 Index-only micro-benchmarks (HNSW search isolated, no WAL, hot cache) measure ~55 µs in the same conditions at 10K/768D. They are useful to understand where the time goes but they are **not the same number**. The README and the crate README disambiguate explicitly since v1.13.3.
 
-The full performance budget gates are in [`QUALITY_BAR.md`](QUALITY_BAR.md). The benchmark methodology is in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md). A reproducible head-to-head benchmark vs Qdrant + Chroma + pgvector under Docker Compose remains on the roadmap (ROADMAP.md Horizon 4).
+The full performance budget gates are in [`QUALITY_BAR.md`](QUALITY_BAR.md). The benchmark methodology is in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md). A reproducible head-to-head benchmark vs Qdrant + Chroma + pgvector under Docker Compose is tracked as a `roadmap` issue (see ROADMAP.md, "Later").
 
 ---
 
@@ -214,7 +214,7 @@ The full performance budget gates are in [`QUALITY_BAR.md`](QUALITY_BAR.md). The
 | What's the query language? | [`docs/VELESQL_SPEC.md`](docs/VELESQL_SPEC.md) |
 | How do I tune HNSW parameters? | [`docs/guides/TUNING_GUIDE.md`](docs/guides/TUNING_GUIDE.md) |
 | What are the current technical limitations? | [`docs/reference/KNOWN_LIMITATIONS.md`](docs/reference/KNOWN_LIMITATIONS.md) |
-| What architectural debt is tracked? | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (tech-debt registry, despite the name) |
+| What architectural debt is tracked? | [`docs/TECH_DEBT_REGISTRY.md`](docs/TECH_DEBT_REGISTRY.md) |
 | What's coming next? | [`ROADMAP.md`](ROADMAP.md) |
 | What is the quality bar for shipping? | [`QUALITY_BAR.md`](QUALITY_BAR.md) |
 | How does a query become results, line by line? | The *Anatomy of a query* section above; deep version in [`docs/reference/ARCHITECTURE.md`](docs/reference/ARCHITECTURE.md) §3 |
@@ -223,4 +223,4 @@ The full performance budget gates are in [`QUALITY_BAR.md`](QUALITY_BAR.md). The
 
 ## A note on naming
 
-`docs/ARCHITECTURE.md` exists in this repo, but despite its name it is **a tracker for architectural tech debt** (e.g. the `Collection` god-object split, EPIC #1384 — resolved: the internals were organized into named concern sub-structs and a shared `Arc<GraphStore>` handle, while exclusive per-kind ownership was shown to be infeasible because edge/graph, label-index, and query-engine state are legitimately shared across all three collection kinds; see the F2.2 section), not an architecture overview. The actual architecture documents are this file (high-level, narrative) and [`docs/reference/ARCHITECTURE.md`](docs/reference/ARCHITECTURE.md) (deep, comprehensive). The tech-debt registry is kept under its current name because eight in-code references depend on the path; renaming it is on the cleanup backlog.
+Architectural tech debt is tracked separately in [`docs/TECH_DEBT_REGISTRY.md`](docs/TECH_DEBT_REGISTRY.md) (e.g. the `Collection` god-object split, EPIC #1384 — resolved: the internals were organized into named concern sub-structs and a shared `Arc<GraphStore>` handle, while exclusive per-kind ownership was shown to be infeasible because edge/graph, label-index, and query-engine state are legitimately shared across all three collection kinds; see its F2.2 section). The architecture documents are this file (high-level, narrative) and [`docs/reference/ARCHITECTURE.md`](docs/reference/ARCHITECTURE.md) (deep, comprehensive).

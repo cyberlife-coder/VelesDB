@@ -1,8 +1,9 @@
-# VelesDB-Core - Development Rules
+# VelesDB — Development Rules
 
-## Project Goal
-
-VelesDB-Core is the **open-source vector database engine**. It provides the public API and core functionality consumed by VelesDB-Premium.
+Repo-specific coding rules. The canonical copies of the CI-enforced constraints
+and the exact pre-push command block live in [`AGENTS.md`](../../AGENTS.md);
+gate thresholds and their enforcement live in [`QUALITY_BAR.md`](../../QUALITY_BAR.md).
+This file does not restate them — it carries the rules that live nowhere else.
 
 ---
 
@@ -11,7 +12,7 @@ VelesDB-Core is the **open-source vector database engine**. It provides the publ
 ### Crate Structure
 
 ```
-velesdb-core/
+VelesDB/
 ├── crates/
 │   ├── velesdb-core/          # Core engine (storage, indexing, search)
 │   ├── velesdb-server/        # Axum REST API server
@@ -20,89 +21,58 @@ velesdb-core/
 │   ├── velesdb-wasm/          # Browser WASM (no persistence)
 │   ├── velesdb-mobile/        # iOS/Android (UniFFI)
 │   ├── velesdb-migrate/       # Migration tooling
+│   ├── velesdb-memory/        # MCP agent-memory server (independent 0.x cadence)
+│   ├── velesdb-node/          # Node.js binding of the memory wedge (napi-rs)
 │   └── tauri-plugin-velesdb/  # Tauri plugin
 ```
 
 ### Architectural Principles
 
-- **Separation of concerns**: Each module has a single responsibility
-- **Stable API**: Core is a versioned dependency of Premium
-- **Zero-copy**: Prefer `&[u8]`, `Bytes`, `memmap2` for performance
-- **Concurrency**: Use `parking_lot::RwLock` throughout (not `std::sync::RwLock`)
-- **Error handling**: Use `thiserror` for typed errors. Do not use `anyhow` in library crates.
+- **Separation of concerns**: each module has a single responsibility.
+- **Stable API**: core is a versioned dependency of the premium crate.
+- **Zero-copy**: prefer `&[u8]`, `Bytes`, `memmap2` for performance.
+- **Concurrency**: `parking_lot::RwLock` throughout (never `std::sync`).
+- **Error handling**: `thiserror` for typed errors. No `anyhow` in library crates.
+- **Numeric casts**: `try_from` for `u64`-to-`usize` casts, never `as usize`
+  (clippy::pedantic).
+- **Features**: always explicit (`--features persistence,gpu,update-check`) —
+  never `--all-features` (feature unification hides gating bugs).
 
 ---
 
-## Test-Driven Development (TDD)
+## Test-Driven Development
 
-### Required Workflow
+1. **Red** — write a failing test. 2. **Green** — minimum code to pass.
+3. **Refactor** — improve without breaking tests.
 
-1. **Red**: Write a failing test
-2. **Green**: Write the minimum code to pass the test
-3. **Blue**: Refactor without breaking tests
+Structure each test as Arrange-Act-Assert, named
+`test_<function>_<scenario>()`:
 
-### Minimum Coverage
+```rust
+fn test_search_returns_top_k_results() { ... }
+fn test_insert_with_invalid_dimension_fails() { ... }
+fn test_delete_nonexistent_point_is_noop() { ... }
+```
 
-- **Target**: > 80% code coverage
-- **Tool**: `cargo tarpaulin`
+Cover the success path AND the error path of every public function; use
+`proptest` for invariants worth holding under arbitrary input (e.g. distance
+symmetry). Build shared fixtures as `#[cfg(test)]` helpers with `tempfile`.
+Coverage target: > 80% (`cargo tarpaulin`).
 
-### Test Execution
-
-Tests must run single-threaded to avoid file system races between test fixtures:
+Tests run single-threaded — they share filesystem state:
 
 ```bash
 cargo test --workspace --features persistence,gpu,update-check \
   --exclude velesdb-python -- --test-threads=1
 ```
 
-### Test Types
-
-```rust
-// Unit test (in the same file)
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_feature_basic() {
-        // Arrange
-        // Act
-        // Assert
-    }
-}
-
-// Integration test (in tests/)
-#[tokio::test]
-async fn test_integration_scenario() {
-    // ...
-}
-
-// Benchmark (in benches/)
-fn benchmark_search(c: &mut Criterion) {
-    // ...
-}
-```
+Anti-patterns: `#[ignore]` without a reason, order-dependent tests,
+message-less `unwrap()` in tests (use `expect("context")`), vague assertions,
+flaky/random tests.
 
 ---
 
-## Code Standards
-
-### Formatting
-
-```bash
-cargo fmt --all -- --check
-```
-
-### Linting
-
-Use explicit features -- never `--all-features`:
-
-```bash
-cargo clippy --workspace --all-targets --features persistence,gpu,update-check \
-  --exclude velesdb-python -- -D warnings -D clippy::pedantic
-```
-
-### Naming Conventions
+## Naming Conventions
 
 | Type | Convention | Example |
 |------|------------|---------|
@@ -112,83 +82,24 @@ cargo clippy --workspace --all-targets --features persistence,gpu,update-check \
 | Constants | SCREAMING_SNAKE | `MAX_DIMENSIONS` |
 | Modules | snake_case | `vector_storage` |
 
-### Code Quality Limits
-
-| Metric | Limit | Scope |
-|--------|-------|-------|
-| Function NLOC | 50 | Per function/method |
-| File NLOC | 500 | Per source file |
-| Cyclomatic complexity | 8 | Per function/method |
-
-### Specific Rules
-
-- **No `unwrap()`** in production code (only after validation)
-- **Error handling** with `thiserror` only (not `anyhow`)
-- **Documentation** required on all public API items (`///`)
-- **Unsafe code** must include a `// SAFETY:` comment explaining the invariant
-- **TODO comments** must carry an issue tag -- `// TODO(EPIC-XXX): ...`, `// TODO(US-XXX): ...`, `// TODO: ... #123`, or `// TODO: ... #issue` -- bare `TODO`/`FIXME`/`HACK` are rejected by CI (`scripts/check-todo-annotations.py`)
-- **Numeric casts**: Use `try_from` for `u64`-to-`usize` casts, never `as usize` (clippy::pedantic)
-
 ---
 
 ## Security
 
-### Automated Audit
-
-```bash
-cargo audit
-cargo deny check
-```
-
-### Rules
-
-- No `unsafe` without a documented `// SAFETY:` comment
-- Validate all user input
-- No secrets in code
+- `cargo audit` and `cargo deny check` must pass.
+- No `unsafe` without a documented `// SAFETY:` comment.
+- Validate all user input; no secrets in code.
 
 ---
 
 ## Performance
 
-### Benchmarks
-
-Run benchmarks with explicit features:
-
-```bash
-cargo bench -p velesdb-core --bench simd_benchmark -- --noplot
-```
-
-### Principles
-
-- **Measure before optimizing**
-- Use `criterion` for benchmarks
-- Profile with `cargo flamegraph`
-- Performance regression baseline is at `benchmarks/baseline.json`
+- **Measure before optimizing**; benchmarks use `criterion`
+  (`cargo bench -p velesdb-core --bench simd_benchmark -- --noplot`),
+  profiling uses `cargo flamegraph`.
+- The regression baseline lives at `benchmarks/baseline.json`.
 
 ---
 
-## Release
-
-### Semantic Versioning
-
-| Type | When |
-|------|------|
-| MAJOR | Breaking API or on-disk format change |
-| MINOR | New backward-compatible feature |
-| PATCH | Bug fix |
-
-### Command
-
-```bash
-./scripts/release.sh patch|minor|major
-```
-
----
-
-## Pre-commit Checklist
-
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo clippy --workspace --all-targets --features persistence,gpu,update-check --exclude velesdb-python -- -D warnings -D clippy::pedantic`
-- [ ] `cargo test --workspace --features persistence,gpu,update-check --exclude velesdb-python -- --test-threads=1`
-- [ ] Documentation up to date
-- [ ] No secrets in code
+Release procedure: [`RELEASE.md`](RELEASE.md). Pre-push validation: the
+command block in [`AGENTS.md`](../../AGENTS.md) — do not copy it here.

@@ -27,15 +27,17 @@ Development builds skip wasm-opt for faster iteration.
 
 ## Bundle Size Targets
 
-| Build | Aspirational target | Measured (v1.18.0 npm artifact) | Notes |
-|-------|---------------------|--------------------------------|-------|
-| Release (gzipped) | < 200 KB | ~550 KB | Full feature set (VelesQL execution, graph, BM25) outgrew the original vector-only target |
-| Release (raw) | < 800 KB | ~1.3 MB | Before compression |
+| Build | Aspirational target | Measured (`@wiscale/velesdb-wasm` npm artifact) | Notes |
+|-------|---------------------|-----------------------------------------------|-------|
+| Release (gzipped) | < 200 KB | ~674 KB | Full feature set (VelesQL execution, graph, BM25) outgrew the original vector-only target |
+| Release (raw) | < 800 KB | ~2.0 MB | Before compression |
 | Dev | N/A | N/A | Speed over size |
 
 > The original targets predate VelesQL-in-WASM and the graph store; they are
 > kept as the optimization goal for a future feature-gated "core-only" build.
-> The published claim is the measured figure (~550 KB gzipped, `@wiscale/velesdb-wasm@3.12.0`, 2026-07-20).
+> The published claim is the measured figure (~674 KB gzipped,
+> `@wiscale/velesdb-wasm` npm artifact, measured 2026-07-25 — see
+> `docs/reference/promise-contract.json` for the validation command).
 
 ## Tree-Shaking
 
@@ -97,3 +99,4 @@ wasm-opt -Os --print-stack-ir pkg/velesdb_wasm_bg.wasm -o /dev/null
 | Date | Change |
 |------|--------|
 | 2026-01-29 | Initial documentation (US-006) |
+| 2026-08-08 | Measured sizes aligned with the published npm artifact (~674 KB gzipped, ~2.0 MB raw); version labeling unified |

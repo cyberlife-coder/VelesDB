@@ -1293,6 +1293,172 @@ jobs:
     name: Binary Size Gate
     uses: ./.github/workflows/binary-size.yml
 
+  # ===========================================================================
+  # Perf Gate (E2E) — QUALITY_BAR.md Gates 1 & 2, folded into `CI Success`.
+  #
+  # This gate ran for months as a standalone path-filtered workflow
+  # (perf-gate-e2e.yml), which meant it could go red on a search-path PR
+  # without holding the merge: it was never in ci-success's `needs`. Folding
+  # it in uses the same two-job pattern as the Windows node leg above —
+  # required checks must always run (#1465), so the filter job decides and
+  # every step of the gate job is conditioned on its output; a PR that does
+  # not touch the search hot path gets a green no-op, not an absent check.
+  # The nightly 100K-scale recall validation stays in perf-gate-e2e.yml.
+  # ===========================================================================
+  perf-path-changed:
+    name: Perf Gate (E2E) — path filter
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: a shallow (depth-1) PR checkout only fetches the
+          # merge commit itself, not the base commit `git diff` needs below.
+          fetch-depth: 0
+
+      - name: Determine if the search hot path changed
+        id: filter
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE_SHA="${{ github.event.before }}"
+          fi
+          if [[ -z "$BASE_SHA" || "$BASE_SHA" == "0000000000000000000000000000000000000000" ]]; then
+            BASE_SHA="$(git rev-list --max-parents=0 HEAD)"
+          fi
+          if git diff --name-only "$BASE_SHA" "${{ github.sha }}" | grep -qE '^crates/velesdb-core/src/(index|simd_native|quantization|fusion|wal|storage)/|^crates/velesdb-python/|^benchmarks/velesdb_benchmark\.py$|^\.github/workflows/ci\.yml$'; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "search hot path changed — perf gate will run."
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+            echo "search hot path unchanged — perf gate will no-op (cost guard)."
+          fi
+
+  perf-gate-e2e:
+    name: Perf Gate (E2E) — recall ≥ 0.95 + p50 sanity floor (10K/384D)
+    runs-on: ubuntu-latest
+    needs: [test, perf-path-changed]
+    timeout-minutes: 30
+    env:
+      # Loose order-of-magnitude floor: GitHub-hosted runners are ~3-4×
+      # slower and noisier than the i9-14900KF reference machine, so the
+      # 450 µs contract p50 is gated locally and in release engineering;
+      # this floor catches algorithmic regressions without runner-noise
+      # false positives.
+      P50_MAX_US: 1500
+      RECALL_MIN: 0.95
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.perf-path-changed.outputs.relevant == 'true'
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
+        if: needs.perf-path-changed.outputs.relevant == 'true'
+        with:
+          toolchain: "1.90"
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: needs.perf-path-changed.outputs.relevant == 'true'
+        with:
+          python-version: "3.11"
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        if: needs.perf-path-changed.outputs.relevant == 'true'
+        with:
+          shared-key: "velesdb-perf-gate"
+
+      - name: Build velesdb-python (release wheel)
+        if: needs.perf-path-changed.outputs.relevant == 'true'
+        run: |
+          python -m pip install --upgrade pip "maturin>=1.7,<2" numpy
+          # Release build is mandatory for a perf gate — debug builds are
+          # 10×+ slower and force a meaningless threshold. We build a
+          # release wheel and pip-install it; `maturin develop` would
+          # complain about installing into the system interpreter in CI,
+          # and pip's PEP 517 path does not currently forward `--release`
+          # cleanly (see commentary in §test for the history).
+          cd crates/velesdb-python
+          maturin build --release --interpreter python3.11
+          pip install --force-reinstall ../../target/wheels/velesdb-*.whl
+
+      - name: Run benchmark (10K vectors, 384D, --recall, --json)
+        if: needs.perf-path-changed.outputs.relevant == 'true'
+        run: |
+          python benchmarks/velesdb_benchmark.py \
+            --datasets 10000 \
+            --dimension 384 \
+            --recall \
+            --json \
+            --output perf-report.json
+
+      - name: Gate report on recall and p50 floor
+        if: needs.perf-path-changed.outputs.relevant == 'true'
+        id: gate
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+
+          with open("perf-report.json") as f:
+              report = json.load(f)
+
+          p50_max_us = int(os.environ["P50_MAX_US"])
+          recall_min = float(os.environ["RECALL_MIN"])
+
+          # Find the 10K result block.
+          ten_k = next(
+              (r for r in report["results"] if r.get("num_vectors") == 10_000),
+              None,
+          )
+          if ten_k is None:
+              sys.exit("FAIL: no 10K result block in report")
+
+          p50 = ten_k["search_p50_us"]
+          p99 = ten_k["search_p99_us"]
+          recall = report.get("recall", {}).get("recall_at_10_mean", 0.0)
+
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+          lines = [
+              "## Perf Gate (E2E) — 10K / 384D / WAL ON",
+              "",
+              f"- search p50: **{p50} µs** (CI floor: {p50_max_us} µs, contract on i9-14900KF: 450 µs)",
+              f"- search p99: {p99} µs",
+              f"- recall@10: **{recall:.4f}** (gate: ≥ {recall_min})",
+              "",
+          ]
+          if summary_path:
+              with open(summary_path, "a") as s:
+                  s.write("\n".join(lines) + "\n")
+          for line in lines:
+              print(line)
+
+          failed = []
+          if recall < recall_min:
+              failed.append(f"recall@10 {recall:.4f} < {recall_min}")
+          if p50 > p50_max_us:
+              failed.append(f"p50 {p50} µs > CI floor {p50_max_us} µs")
+          if failed:
+              sys.exit("FAIL: " + "; ".join(failed))
+          print("PASS")
+          PY
+
+      - name: Upload perf report
+        if: needs.perf-path-changed.outputs.relevant == 'true' && always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: perf-report-${{ github.sha }}
+          path: perf-report.json
+          retention-days: 30
+
+      - name: Skipped — search hot path unchanged
+        if: needs.perf-path-changed.outputs.relevant != 'true'
+        shell: bash
+        # Block scalar, not a plain one: on a plain `run:` line a bare `#`
+        # starts a YAML comment, which truncated this echo before its closing
+        # quote and failed every no-op leg with `unexpected EOF` (#1857-era).
+        run: |
+          echo "Search hot path unchanged; perf gate no-ops green (required checks must always run, #1465)."
+
   # Last of the fold, and the one #1698 named: Git Flow, branch freshness and
   # the AI-attribution guard ran beside the required check, so none of them
   # could block a merge. Freshness matters most — it is the in-house
@@ -1315,7 +1481,7 @@ jobs:
   ci-success:
     name: CI Success
     runs-on: ubuntu-latest
-    needs: [lint, test, security, wasm-check, openapi-drift, mcp-doc-contract, velesql-conformance, perf-smoke, bench-sift1m-compile, python-sdk-tests, python-integrations, node-binding-tests, node-binding-tests-windows, gate-contracts, doc-contract, promise-contract, production-gates, propagation-guard, binary-size, pr-governance, sonarcloud]
+    needs: [lint, test, security, wasm-check, openapi-drift, mcp-doc-contract, velesql-conformance, perf-smoke, bench-sift1m-compile, perf-gate-e2e, python-sdk-tests, python-integrations, node-binding-tests, node-binding-tests-windows, gate-contracts, doc-contract, promise-contract, production-gates, propagation-guard, binary-size, pr-governance, sonarcloud]
     if: always()
     steps:
       # sonarcloud is intentionally absent from the gate below: it is an
@@ -1331,6 +1497,7 @@ jobs:
           [[ "${{ needs.velesql-conformance.result }}" == "success" ]] && \
           [[ "${{ needs.perf-smoke.result }}" == "success" ]] && \
           [[ "${{ needs.bench-sift1m-compile.result }}" == "success" ]] && \
+          [[ "${{ needs.perf-gate-e2e.result }}" == "success" ]] && \
           [[ "${{ needs.python-sdk-tests.result }}" == "success" ]] && \
           [[ "${{ needs.python-integrations.result }}" == "success" ]] && \
           [[ "${{ needs.node-binding-tests.result }}" == "success" ]] && \

@@ -1,6 +1,6 @@
 # VelesQL Ecosystem Parity Matrix
 
-Last updated: 2026-08-07 (v4.3.0; velesdb-memory 0.12.0)
+Last updated: 2026-08-08 (v4.3.0; velesdb-memory 0.12.0)
 
 This matrix tracks runtime contract and feature parity across the VelesDB ecosystem.
 
@@ -188,7 +188,7 @@ All 4 strategies (`RRF`, `Weighted`, `Maximum`, `RSF`) plus `Average` are suppor
 | LlamaIndex | ✅ |
 | Haystack | ✅ |
 
-### SearchQuality — 7/10
+### SearchQuality — 9/10
 
 4 HNSW presets (`Fast`, `Balanced`, `Accurate`, `Perfect`) plus `Custom(usize)` and `Adaptive`. WASM uses brute-force search (no HNSW), so `SearchQuality` is not applicable there; Mobile and Tauri are HNSW-backed via core defaults and expose the presets (`crates/velesdb-mobile/src/types.rs` `SearchQuality`, `crates/tauri-plugin-velesdb/src/helpers.rs` `parse_search_quality`).
 
@@ -232,7 +232,7 @@ collection creation; only Haystack is limited by its DocumentStore protocol.
 | `DistanceMetric` | 10/10 | 100% |
 | `StorageMode` | 10/10 | 100% |
 | `FusionStrategy` | 10/10 | 100% |
-| `SearchQuality` | 7/10 | N/A for WASM/Mobile/Tauri (brute-force) |
+| `SearchQuality` | 9/10 | N/A for WASM only (brute-force, no HNSW) |
 | `CollectionType` | 9/10 | Haystack `Vector` only by protocol; all native crates full |
 
 ---

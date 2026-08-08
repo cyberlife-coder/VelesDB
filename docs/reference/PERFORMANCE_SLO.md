@@ -1,6 +1,6 @@
 # VelesDB Performance SLO
 
-Last updated: 2026-03-25
+Last updated: 2026-08-08
 
 This file defines measurable performance objectives used as CI regression gates.
 
@@ -36,14 +36,19 @@ On `main` and `develop` pushes:
 
 If threshold is exceeded, CI fails.
 
-## v1.7.2 Optimization Notes
+## v1.7.2 Optimization Notes (historical)
 
-v1.7.2 includes three internal optimizations that may improve SLO metrics:
+> Historical record of the v1.7.2 optimization pass; kept for context. The
+> figures below reflect the baselines of that era and are superseded by the
+> current CI baseline (`benchmarks/baseline.json`). Details of these
+> optimizations live in `docs/guides/TUNING_GUIDE.md` and `docs/BENCHMARKS.md`.
+
+v1.7.2 included three internal optimizations that improved SLO metrics:
 - **Partial sort** (#373) — HNSW search uses O(ef + k log k) instead of O(ef log ef)
 - **Batch fast-path** (#375) — pure-insert workloads skip DashMap write lock overhead
 - **Upsert lock contention fix** — `Collection::upsert()` restructured into a 3-phase pipeline with read lock on HNSW (replacing write lock) and batch I/O. Primarily affects insert SLO: upsert throughput gap vs `upsert_bulk()` dropped from ~19x to ~1x on local benchmarks (i9-14900KF, 10K/384D).
 
-The `baseline.json` is CI-authoritative and will be re-baselined automatically on the next `main` push. Local validation (i9-14900KF) confirmed no regression:
+At the time, local validation (i9-14900KF) confirmed no regression against the then-current CI baseline:
 - `smoke_insert/10k_128d`: 8.36s (CI baseline: 9.0s, threshold: 25%)
 - `smoke_search/10k_128d_k10`: 191.73 µs (local machine — CI baseline not directly comparable)
 
