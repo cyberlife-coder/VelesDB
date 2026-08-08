@@ -147,7 +147,7 @@ the remaining debt is. Read these when you need the *why* behind a behaviour.
 
 | Document | Description |
 |----------|-------------|
-| [Architecture](./ARCHITECTURE.md) | How the engine is put together, layer by layer. |
+| [Tech-debt registry](./TECH_DEBT_REGISTRY.md) | Deferred architectural decisions and known open items. |
 | [Concurrency model](./CONCURRENCY_MODEL.md) | Which operations run in parallel, and the locks that make that safe. |
 | [Storage format](./STORAGE_FORMAT.md) | The on-disk layout and its compatibility rules. |
 | [Soundness](./SOUNDNESS.md) | The invariants the engine relies on, and why they hold. |

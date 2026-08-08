@@ -1,16 +1,15 @@
-# Architecture — Tech debt registry (NOT the architecture overview)
-
-> **Looking for the actual architecture?** See [`ARCHITECTURE.md`](../ARCHITECTURE.md) at the repo root (15-minute narrative gateway) and [`docs/reference/ARCHITECTURE.md`](reference/ARCHITECTURE.md) (comprehensive 518-line deep dive with diagrams). This file is a **tech-debt registry** despite its filename — the path is preserved because eight in-code references depend on it, but the content here is *deferred decisions* and *known limitations*, not an overview.
+# Tech-debt registry
 
 This document tracks architectural decisions that are deliberately
 deferred and known tech-debt items that the codebase is aware of but
 has not yet resolved. Each entry links the related audit finding, the
 mitigation currently in place, and the post-seed remediation plan.
 
-> **Note**: this is **not** a comprehensive architecture overview. For
-> the current module layout and data flow, see [`ARCHITECTURE.md`](../ARCHITECTURE.md) at the
-> repo root and the per-crate `README.md` files. This document is a registry of
-> intentional open items.
+> Looking for the architecture itself? See [`ARCHITECTURE.md`](../ARCHITECTURE.md)
+> at the repo root (15-minute narrative gateway) and
+> [`docs/reference/ARCHITECTURE.md`](reference/ARCHITECTURE.md) (comprehensive
+> deep dive with diagrams). This file lived at `docs/ARCHITECTURE.md` until
+> 2026-08; it is a registry of intentional open items, not an overview.
 
 ---
 

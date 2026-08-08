@@ -214,7 +214,7 @@ The full performance budget gates are in [`QUALITY_BAR.md`](QUALITY_BAR.md). The
 | What's the query language? | [`docs/VELESQL_SPEC.md`](docs/VELESQL_SPEC.md) |
 | How do I tune HNSW parameters? | [`docs/guides/TUNING_GUIDE.md`](docs/guides/TUNING_GUIDE.md) |
 | What are the current technical limitations? | [`docs/reference/KNOWN_LIMITATIONS.md`](docs/reference/KNOWN_LIMITATIONS.md) |
-| What architectural debt is tracked? | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (tech-debt registry, despite the name) |
+| What architectural debt is tracked? | [`docs/TECH_DEBT_REGISTRY.md`](docs/TECH_DEBT_REGISTRY.md) |
 | What's coming next? | [`ROADMAP.md`](ROADMAP.md) |
 | What is the quality bar for shipping? | [`QUALITY_BAR.md`](QUALITY_BAR.md) |
 | How does a query become results, line by line? | The *Anatomy of a query* section above; deep version in [`docs/reference/ARCHITECTURE.md`](docs/reference/ARCHITECTURE.md) §3 |

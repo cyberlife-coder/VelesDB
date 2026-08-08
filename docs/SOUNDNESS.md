@@ -839,7 +839,7 @@ misleading), because the underlying storage holds no homogeneous vector index.
 
 Prefer the safe, variant-checked `into_vector()` (returns `Result`) when the
 caller can branch. A type-safe refactor eliminating this method is tracked in
-`docs/ARCHITECTURE.md` (pre-seed audit finding F2.2).
+`docs/TECH_DEBT_REGISTRY.md` (pre-seed audit finding F2.2).
 
 ---
 
