@@ -208,3 +208,7 @@ When combining vector and graph results:
 - [Search Modes](./SEARCH_MODES.md)
 - [Benchmarks](../BENCHMARKS.md)
 
+---
+
+Last updated: 2026-08-08 · Applies to: velesdb-core 4.3.0
+
