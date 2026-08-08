@@ -115,12 +115,14 @@ version migration guides below.
 | [Migrate: CLI and configuration](./MIGRATE_CLI.md) | Command surface and the full YAML schema |
 | [Migrate: source reference](./MIGRATE_SOURCES.md) | Per-source configuration for every shipped connector |
 | [Migrate: operations](./MIGRATE_OPERATIONS.md) | Throughput tuning, secret handling and troubleshooting |
+| [Migrate: embeddings](./MIGRATE_EMBEDDINGS.md) | Rebuilding a `velesdb-memory` store against a new embedding model |
 
 ## Version migration guides
 
 | Guide | Description |
 |-------|-------------|
 | [Migration v3.3.0](./MIGRATION_v3.3.0.md) | VelesQL correctness + cross-surface parity release migration guide |
+| [Migration v4.0.0](./MIGRATION_v4.0.0.md) | Hardening + API-cleanup release migration guide |
 
 ## Tutorials
 

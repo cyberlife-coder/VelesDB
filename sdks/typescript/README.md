@@ -32,7 +32,7 @@ its text as `content`.
 
 ## Earlier releases
 
-The full release-by-release history (v3.6.0 and earlier included) lives in the root [CHANGELOG.md](../../CHANGELOG.md).
+The full release-by-release history lives in the root [CHANGELOG.md](../../CHANGELOG.md).
 
 ## Installation
 

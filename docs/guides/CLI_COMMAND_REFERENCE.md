@@ -4,7 +4,7 @@ Complete reference for the `velesdb` binary shipped by the
 [`velesdb-cli`](../../crates/velesdb-cli/README.md) crate.
 
 All subcommands operate **offline** against a database directory — no running
-server is required. Every command below was executed against `velesdb 4.0.0`.
+server is required. Every command below was executed against `velesdb 4.3.0`.
 
 Related: [REPL reference](CLI_REPL_REFERENCE.md) ·
 [VelesQL cookbook](CLI_VELESQL_COOKBOOK.md) ·
