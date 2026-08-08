@@ -108,6 +108,7 @@ goes red, the cause is not in what you just ran — go read that job.
 | `binary-size` | release build of three binaries |
 | `run-production-gates`, `propagation-guard` | cross-crate sweeps over every SDK, demo and example |
 | `bench-sift1m-compile` | compile-only check of the SIFT1M bench harness |
+| `perf-gate-e2e` | release wheel build + 10K recall/latency benchmark; no-ops green unless the search hot path changed |
 | `compat-matrix` | Windows, wasm32 and a nightly loom pass — runs on PRs but is *not* in `CI Success`'s `needs:`, so it cannot hold a merge |
 | node licence boundary | `cargo tree` assertion that `velesdb-node` never pulls `velesdb-core` |
 | `pr-governance` | branch prefix, and "not behind base" — properties of the PR, not of the tree |

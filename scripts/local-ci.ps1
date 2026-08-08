@@ -143,9 +143,16 @@ try {
 # ============================================================================
 Write-Step "Check: Codacy CLI static analysis"
 try {
+    # The repo path inside WSL is machine-specific: set VELESDB_WSL_REPO_PATH
+    # to your clone's /mnt/... path, or the step derives it from the current
+    # directory. Never hardcode a personal drive here.
+    $wslRepoPath = $env:VELESDB_WSL_REPO_PATH
+    if (-not $wslRepoPath) {
+        $wslRepoPath = wsl -- wslpath -a "$(Get-Location)" 2>$null
+    }
     $wslCheck = wsl -- bash -c "which codacy-cli 2>/dev/null" 2>&1
-    if ($LASTEXITCODE -eq 0) {
-        $codacyOutput = wsl -- bash -c "cd /mnt/d/Projets-dev/velesDB/velesdb-core && codacy-cli analyze 2>&1"
+    if ($LASTEXITCODE -eq 0 -and $wslRepoPath) {
+        $codacyOutput = wsl -- bash -c "cd '$wslRepoPath' && codacy-cli analyze 2>&1"
         if ($LASTEXITCODE -ne 0) { throw "Codacy CLI failed" }
         $findingsLine = $codacyOutput | Select-String "findings\." | Select-Object -Last 1
         if ($findingsLine -match "0 findings") {
@@ -156,7 +163,7 @@ try {
             $errors += "CodacyCLI"
         }
     } else {
-        Write-Warn "Codacy CLI not installed in WSL - skipping"
+        Write-Warn "Codacy CLI not available in WSL (or repo path unresolved) - skipping"
         Write-Output "   Install: https://docs.codacy.com/related-tools/local-analysis/client-side-tools/"
     }
 } catch {

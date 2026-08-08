@@ -12,7 +12,7 @@ These gates are not aspirational. They are enforced via CI workflows, scripts, a
 
 | # | Gate | Threshold | Enforced by |
 |---|------|-----------|-------------|
-| 1 | **Recall@10** | ≥ 0.95 (10K, CI on search-path PRs) ; ≥ 0.90 (100K, manual `#[ignore]` test) | `cargo test test_recall` + `perf-gate-e2e.yml`; 100K floor run manually (see Gate 1) |
+| 1 | **Recall@10** | ≥ 0.95 (10K, CI on search-path PRs) ; ≥ 0.90 (100K, manual `#[ignore]` test) | `cargo test test_recall` + the `perf-gate-e2e` job in `CI Success`; 100K floor run manually (see Gate 1) |
 | 2 | **End-to-end search latency p50** | ≤ 450 µs (10K/384D, WAL ON, recall ≥ 96%) | `python benchmarks/velesdb_benchmark.py --recall` + perf-smoke CI gate |
 | 3 | **No `.unwrap()` in production code** | Zero | `scripts/check_prod_unwraps.py` in CI |
 | 4 | **No `unsafe` without `// SAFETY:` comment** | Zero | `scripts/verify_unsafe_safety_template.py` in CI |
@@ -39,7 +39,7 @@ A pull request that breaks any of these gates **cannot be merged**. There are no
   Must pass with recall ≥ 0.95 on 10K vectors.
 
 - **CI (authoritative):**
-  - [`.github/workflows/perf-gate-e2e.yml`](.github/workflows/perf-gate-e2e.yml) gates **recall@10 ≥ 0.95** on the 10K/384D benchmark for every PR touching the search hot path (also gates Gate 2's p50 — same workflow, single source of truth).
+  - The `perf-gate-e2e` job in [`ci.yml`](.github/workflows/ci.yml) (part of the required `CI Success` check) gates **recall@10 ≥ 0.95** on the 10K/384D benchmark for every PR touching the search hot path (also gates Gate 2's p50 — same job, single source of truth). [`perf-gate-e2e.yml`](.github/workflows/perf-gate-e2e.yml) re-validates recall at 100K scale nightly.
   - The 100K-vector ≥ 0.90 floor is a **manual** gate: the tests in
     [`crates/velesdb-core/tests/scale_recall_100k.rs`](crates/velesdb-core/tests/scale_recall_100k.rs)
     are `#[ignore]` (long-running) and are not wired into any CI workflow. Run them with:
@@ -76,7 +76,7 @@ A pull request that breaks any of these gates **cannot be merged**. There are no
 
 **Enforcement:**
 
-- **CI gate** (separate workflow — not in `CI Success`'s `needs:`, so it flags rather than holds a merge): [`.github/workflows/perf-gate-e2e.yml`](.github/workflows/perf-gate-e2e.yml) runs `benchmarks/velesdb_benchmark.py --datasets 10000 --recall --json` on every PR that touches `crates/velesdb-core/src/{index,simd_native,quantization,fusion,wal,storage}/`, `crates/velesdb-python/`, or `benchmarks/velesdb_benchmark.py`. The recall@10 ≥ 0.95 bound (Gate 1) is gated at the contract threshold; the p50 bound is gated at a deliberately loose **1500 µs sanity floor** that catches order-of-magnitude algorithmic regressions without flaking on the ~3-4× slower GitHub-hosted runner. The canonical 450 µs claim itself is preserved by local + release-engineering measurement on the i9-14900KF reference machine.
+- **CI gate (blocking — the `perf-gate-e2e` job in [`ci.yml`](.github/workflows/ci.yml), part of `CI Success`'s `needs:`):** runs `benchmarks/velesdb_benchmark.py --datasets 10000 --recall --json` on every PR that touches `crates/velesdb-core/src/{index,simd_native,quantization,fusion,wal,storage}/`, `crates/velesdb-python/`, or `benchmarks/velesdb_benchmark.py`. The recall@10 ≥ 0.95 bound (Gate 1) is gated at the contract threshold; the p50 bound is gated at a deliberately loose **1500 µs sanity floor** that catches order-of-magnitude algorithmic regressions without flaking on the ~3-4× slower GitHub-hosted runner. The canonical 450 µs claim itself is preserved by local + release-engineering measurement on the i9-14900KF reference machine.
 - **Reproducible benchmark:** `python benchmarks/velesdb_benchmark.py --recall`
 - **Source:** `CHANGELOG.md` v1.13.0 (measured 2026-03-27, baseline preserved through pre-seed remediation phases)
 - **Promise contract:** [`docs/reference/promise-contract.json`](docs/reference/promise-contract.json) entry `readme_production_search_latency` enforces the exact substring `**450 us**` in `README.md`.
