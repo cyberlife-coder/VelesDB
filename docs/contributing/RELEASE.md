@@ -2,7 +2,7 @@
 
 Guide simplifié pour publier une nouvelle version de VelesDB.
 
-## Architecture des Workflows
+## Workflow Architecture
 
 VelesDB utilise **3 workflows GitHub Actions** :
 
@@ -12,9 +12,9 @@ VelesDB utilise **3 workflows GitHub Actions** :
 | `release.yml` | Tag `v*` | Publication complète |
 | `bench-regression.yml` | Push sur main | Benchmarks de régression |
 
-## Publier une Release
+## Publishing a Release
 
-### 1. Bump version (automatisé)
+### 1. Bump version (automated)
 
 ```bash
 # Apply the bump to every policed manifest (X.Y.Z = target release version)
@@ -31,15 +31,18 @@ Le script `bump_version.py` met à jour automatiquement :
 - `crates/velesdb-python/pyproject.toml`
 - `crates/velesdb-wasm/pkg/package.json`
 - `crates/tauri-plugin-velesdb/guest-js/package.json`
+- `integrations/common/pyproject.toml`
 - `integrations/langchain/pyproject.toml`
 - `integrations/llamaindex/pyproject.toml`
+- `integrations/haystack/pyproject.toml`
+- `integrations/langgraph/pyproject.toml`
 - `demos/rag-pdf-demo/pyproject.toml`
 
-### 2. Mettre à jour CHANGELOG.md
+### 2. Update CHANGELOG.md
 
 Ajouter une section pour la nouvelle version avec les changements.
 
-### 3. Commit et push (SANS tag)
+### 3. Commit and push (WITHOUT tag)
 
 ```bash
 git add -A
@@ -47,7 +50,7 @@ git commit -m "chore(release): bump version to X.Y.Z"
 git push origin main
 ```
 
-### 4. Attendre que le CI passe sur main
+### 4. Wait for CI to pass on main
 
 Le CI (`ci.yml`) valide le commit de release : tests, lint, security, conformance,
 perf smoke. **Ne pas créer le tag tant que le CI n'est pas vert.**
@@ -60,14 +63,14 @@ gh run watch $(gh run list --branch main --limit 1 --json databaseId --jq '.[0].
 Si le CI échoue, corriger et re-pusher. Aucun tag n'existe donc aucun rollback
 de version n'est nécessaire.
 
-### 5. Créer et pusher le tag (après CI vert)
+### 5. Create and push the tag (after CI is green)
 
 ```bash
 git tag -a vX.Y.Z -m "vX.Y.Z - Description"
 git push origin vX.Y.Z
 ```
 
-### 6. Le workflow `release.yml` publie automatiquement
+### 6. The `release.yml` workflow publishes automatically
 
 | Destination | Package |
 |-------------|---------|
@@ -77,7 +80,7 @@ git push origin vX.Y.Z
 | **PyPI** | velesdb |
 | **npm** | @wiscale/velesdb-wasm, @wiscale/velesdb-sdk, @wiscale/velesdb-memory-node (napi prebuilds; publish job TBD, see note) |
 
-### 7. Vérifier le déploiement
+### 7. Verify the deployment
 
 - GitHub Actions : https://github.com/cyberlife-coder/VelesDB/actions
 - GitHub Releases : https://github.com/cyberlife-coder/VelesDB/releases
@@ -98,7 +101,7 @@ Le workflow détecte automatiquement les pre-releases et :
 - Crée une GitHub Release marquée "Pre-release"
 - **Ne publie PAS** sur crates.io/PyPI/npm
 
-## Secrets requis
+## Required Secrets
 
 | Secret | Usage |
 |--------|-------|
@@ -106,9 +109,9 @@ Le workflow détecte automatiquement les pre-releases et :
 | `NPM_TOKEN` | Publication npm |
 | `PYPI_API_TOKEN` | Publication PyPI (ou trusted publishing) |
 
-## Dépannage
+## Troubleshooting
 
-### Le workflow ne se déclenche pas
+### The workflow does not trigger
 
 Vérifier que le tag suit le format `v[0-9]+.[0-9]+.[0-9]+` :
 - ✅ `vX.Y.Z`
@@ -116,11 +119,11 @@ Vérifier que le tag suit le format `v[0-9]+.[0-9]+.[0-9]+` :
 - ❌ `X.Y.Z` (pas de "v")
 - ❌ `vX.Y` (version incomplète)
 
-### Publication déjà existante
+### Version already published
 
 Si une version existe déjà sur crates.io/PyPI/npm, le workflow skip cette étape avec un message `⏭️ already published`.
 
-### Force-update un tag
+### Force-update a tag
 
 ```bash
 git tag -d vX.Y.Z
@@ -128,7 +131,7 @@ git tag vX.Y.Z
 git push origin vX.Y.Z --force
 ```
 
-## Workflow manuel
+## Manual Workflow
 
 Pour déclencher manuellement une release sans tag :
 

@@ -218,7 +218,7 @@ time-scoped" — but every number reproduces from `examples/triengine`.)
 
 [LoCoMo](https://github.com/snap-research/locomo) (Snap Research, ACL 2024) is a
 long-term conversational-memory benchmark: each conversation runs ~300 turns
-across up to 35 sessions, and the system must answer questions spanning five
+across up to 32 sessions, and the system must answer questions spanning five
 categories — multi-hop, temporal, open-domain, single-hop, and adversarial. It
 stresses exactly what an agent memory layer is for: recalling and reasoning over
 facts stated dozens of sessions ago.

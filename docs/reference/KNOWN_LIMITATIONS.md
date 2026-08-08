@@ -71,11 +71,11 @@ For a metadata query whose `WHERE` reduces to an indexed `Eq`, the executor uses
 
 ## Workspace scope
 
-### 4. `velesdb-migrate` (12,108 LOC, 9 connectors) — to be reworked
+### 4. `velesdb-migrate` (10 connectors) — to be reworked
 
-**Status**: open, scheduled for rework decision in v1.15.0. Source: `crates/velesdb-migrate/` (workspace member).
+**Status**: open, rework decision still pending. Source: `crates/velesdb-migrate/` (workspace member).
 
-The `velesdb-migrate` sub-crate ships a migration toolkit covering 9 source databases (Supabase, Qdrant, Pinecone, Weaviate, Milvus, ChromaDB, JSON/CSV, Elasticsearch, Redis). It is currently bundled in the workspace but is identified for **rework or extraction in a future release**: the current scope inflates the workspace surface (12k LOC, 9 third-party API surfaces) without a measured user base, and the connectors evolve at different cadences than the core engine.
+The `velesdb-migrate` sub-crate ships a migration toolkit covering 10 source connectors (Supabase, Qdrant, Pinecone, Weaviate, Milvus, ChromaDB, JSON, CSV, Elasticsearch, Redis — `crates/velesdb-migrate/src/connectors/`). It is currently bundled in the workspace but is identified for **rework or extraction in a future release**: the current scope inflates the workspace surface (10 connector surfaces, most against third-party APIs) without a measured user base, and the connectors evolve at different cadences than the core engine.
 
 **Decision criteria** (set during the v1.15.0 cycle; the horizon has since been re-baselined — see ROADMAP.md "Next"):
 
@@ -83,29 +83,17 @@ The `velesdb-migrate` sub-crate ships a migration toolkit covering 9 source data
 - GitHub stars / watchers attributable to migration tooling
 - Open issues count specifically scoped to migration connectors
 
-**User impact**: until the rework decision lands, the crate is maintained on a best-effort basis. Users depending on it should pin to the v1.14.x line. No migration tooling will be removed or moved during the v1.14.x line — this is purely a forward-looking transparency note.
+**User impact**: until the rework decision lands, the crate is maintained on a best-effort basis. No migration tooling will be removed or moved without a documented sunset window — this is purely a forward-looking transparency note.
 
-**Resolution path**: tracked for v1.15.0 evaluation; the candidate outcomes are (a) keep + invest, (b) extract to separate `velesdb-migrate` repository under the same org, or (c) archive with documented sunset window. The decision will be made in a separate planning issue once the criteria above are measurable.
+**Resolution path**: the candidate outcomes are (a) keep + invest, (b) extract to separate `velesdb-migrate` repository under the same org, or (c) archive with documented sunset window. The decision will be made in a separate planning issue once the criteria above are measurable.
 
-### 5. No macOS Intel (x86_64) wheel on PyPI
+### 5. macOS Intel (x86_64) wheel — served via `universal2` (resolved)
 
-**Status**: open, no ETA. Source: `.github/workflows/release.yml` `publish-pypi-wheels` matrix.
+**Status**: resolved. Source: `.github/workflows/release.yml` `publish-pypi-wheels` matrix.
 
-The `macos-13` (Intel x86_64) entry was added briefly in v1.14.4 (PR #738) but the GitHub-hosted `macos-13` runner availability proved unreliable: one v1.14.4 publish attempt left the wheel-build job queued for over 9 hours without a runner being assigned, blocking the rest of the release pipeline. The entry was removed in v1.14.5 to keep the release pipeline reliable.
+A dedicated `macos-13` (Intel x86_64) matrix entry was added briefly in v1.14.4 (PR #738) but the GitHub-hosted `macos-13` runner availability proved unreliable: one v1.14.4 publish attempt left the wheel-build job queued for over 9 hours without a runner being assigned, blocking the rest of the release pipeline. The entry was removed in v1.14.5 to keep the release pipeline reliable.
 
-**User impact**: Intel Mac users have three options.
-
-1. **Recommended**: install via the macOS aarch64 wheel under Rosetta 2 — `arch -arm64 pip install velesdb`. Performance is within ~3-5% of native on Intel Macs running macOS 12+ with Rosetta 2.
-2. **Build from source**: `cargo install velesdb-cli` (or `pip install velesdb --no-binary :all:` with a working Rust toolchain) produces a native x86_64 binary.
-3. Use the Linux x86_64 wheel inside Docker / Lima / Multipass.
-
-**Resolution path**: tracked for v1.15.0+. Candidate outcomes:
-
-- (a) Provision a self-hosted `macos-13` runner via a paid CI provider with reliable Intel-Mac capacity.
-- (b) Wait for GitHub-hosted `macos-13` queue times to stabilize and re-add the matrix entry.
-- (c) Drop x86_64 macOS wheel support officially — Apple stopped shipping new Intel Macs in 2023, and Rosetta 2 covers existing devices.
-
-A measurable decision will be made when one of: download counts on `manylinux2014_x86_64.whl` from macOS user-agents drops below 5%/month, OR a self-hosted runner is funded.
+**Current state**: the PyPI matrix now builds a single `universal2` macOS wheel on `macos-14` (arm64 + x86_64 slices in one artifact), so Intel Macs are covered without the unreliable `macos-13` runner. Building from source (`pip install velesdb --no-binary :all:` with a Rust toolchain) also remains available for native x86_64 builds.
 
 ---
 
@@ -478,7 +466,7 @@ The enforced Codacy metric is **per-function**: cyclomatic complexity ≤ 8 and 
 Several production files exceed ~900 raw lines (e.g. `simd_native/x86_avx512.rs` ≈ 1469 raw / ~944 NLOC — dominated by per-intrinsic `// SAFETY:` blocks; `tauri-plugin-velesdb/src/{types,commands}.rs`; `velesdb-python/src/{agent.rs, collection/search.rs}`; `velesql/.../match_dispatch.rs`; `velesdb-server/src/config.rs`). They fall into two buckets:
 
 - **Covered by an exclusion**: the tauri-plugin files via the `crates/tauri-plugin-velesdb/src/**` lizard glob.
-- **Compliant without an exclusion**: the rest — their individual functions stay within CC ≤ 8 / NLOC ≤ 50, which is why `main` (3.10.0) ships Codacy-green. They are intentionally **not** added to `.codacy.yml`, because a blanket file exclusion would suppress genuine future per-function findings in them.
+- **Compliant without an exclusion**: the rest — their individual functions stay within CC ≤ 8 / NLOC ≤ 50, which is why `main` ships Codacy-green. They are intentionally **not** added to `.codacy.yml`, because a blanket file exclusion would suppress genuine future per-function findings in them.
 
 The rule of thumb when adding a large file: only list it under `engines.lizard.exclude_paths` (with a rationale) if a **specific function** legitimately exceeds the per-function budget; never to silence file size alone.
 

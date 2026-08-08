@@ -1,7 +1,7 @@
 //! Tests for `VectorCollection::traverse_bfs` (issue #1439).
 //!
 //! `VectorCollection` shares its edge store with `GraphCollection` and
-//! `MetadataCollection` (docs/ARCHITECTURE.md F2.2, R1.2c): edges created via
+//! `MetadataCollection` (docs/TECH_DEBT_REGISTRY.md F2.2, R1.2c): edges created via
 //! REST `/relations` or the agent-memory wedge (`velesdb-memory`) land on the
 //! backing `Collection`'s edge store regardless of the newtype used to reach
 //! it. `traverse_bfs` must therefore be usable on a `VectorCollection`,

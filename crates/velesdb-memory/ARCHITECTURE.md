@@ -21,8 +21,8 @@ invariants that hold the design together.
 │                                                                            │
 │   src/main.rs ── env config (store path, embedder, extractor) ──┐          │
 │                                                                 ▼          │
-│   src/mcp.rs ── McpServer: 6 tools                                         │
-│     remember · recall · relate · forget · why · remember_extracted        │
+│   src/mcp.rs ── McpServer: 20 tools (memory + graph + context compiler)    │
+│     remember · recall · relate · forget · why · remember_extracted · …    │
 │        │                                                                   │
 │        ▼                                                                   │
 │   src/service.rs ── MemoryService<E: Embedder>  (the domain core)         │
@@ -66,7 +66,7 @@ Mermaid view (renders on GitHub):
 flowchart TD
   C["MCP clients (Claude Code, Cursor, Zed…)"] -- "stdio JSON-RPC" --> M
   subgraph VM["velesdb-memory (this crate)"]
-    M["mcp.rs · McpServer — 6 tools"] --> S["service.rs · MemoryService&lt;E&gt;"]
+    M["mcp.rs · McpServer — 20 tools"] --> S["service.rs · MemoryService&lt;E&gt;"]
     EMB["embedder.rs · Embedder (Hash | Ollama)"] --> S
     EXT["extract.rs · Extractor (Ollama | BYO)"] --> S
     S --> LB{{"License boundary: memory semantics only"}}
@@ -203,4 +203,3 @@ scaffolding: marked with the reserved `_veles_hub` key and **excluded from
 - The `why` subgraph still includes intermediate topic-hub *nodes* (the
   connecting topic); collapsing them to direct fact→fact links is an optional
   presentation refinement.
-```

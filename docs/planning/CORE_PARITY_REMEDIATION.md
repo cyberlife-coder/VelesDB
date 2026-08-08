@@ -1,6 +1,6 @@
 # Core ↔ Children Parity & Architecture Remediation Plan
 
-Status: **in progress** — opened 2026-06-14 after the core-vs-ecosystem gap + architecture audit.
+Status: **completed 2026-08-08** — opened 2026-06-14 after the core-vs-ecosystem gap + architecture audit; all TODOs (T1–T6) have landed. Kept as the record of the remediation.
 Re-runnable any time via the `/core-parity-audit` skill (`.claude/skills/core-parity-audit/`).
 
 ## Context (the audit verdict)
@@ -31,7 +31,7 @@ the residual gaps are core-internal/ops plumbing (by design) or already tracked 
 
 ## Waves (each item = a feature branch off `develop` → PR, per Git Flow)
 
-- **Wave 1 — safety net + quick wins (no search path):** T2, T3-Haystack, T5.  ← *in progress*
+- **Wave 1 — safety net + quick wins (no search path):** T2, T3-Haystack, T5.  — *done*
 - **Wave 2 — divergence removal:** T1 (under the recall gate, protected by T2's net), T4 type re-export.
 - **Wave 3 — docs:** T6.
 

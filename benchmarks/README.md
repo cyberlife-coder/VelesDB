@@ -9,37 +9,6 @@ Benchmark suite comparing VelesDB against pgvector (HNSW).
 - Do not claim superiority over FAISS, Qdrant, SimSIMD, or other systems unless the dataset, recall target, hardware, and methodology are matched.
 - For the latest controlled-host remediation run, see `benchmarks/results/2026-03-10-perf-remediation-report.md`.
 
-## v1.7.0 Results: VelesDB Recall ≥95% Guaranteed
-
-> Legacy note: The table below was originally captured under v0.7.3 Docker benchmarks.
-> For the latest controlled-host remediation run, see `benchmarks/results/2026-03-10-perf-remediation-report.md`.
-
-### Search Performance (100K vectors, 768D, Docker — Legacy v0.7.3)
-
-| Mode | ef_search | Recall@10 | Latency P50 |
-|------|-----------|-----------|-------------|
-| Fast | 64 | 34.2% | 59.3ms |
-| Balanced | 128 | 48.8% | 60.9ms |
-| Accurate | 256 | 67.6% | 78.3ms |
-| **HighRecall** | **1024** | **96.1%** ✅ | 73.0ms |
-| **Perfect** | **2048** | **100.0%** | 42.1ms |
-
-### Insert Performance (100K vectors, 768D — Legacy v0.7.3)
-
-*Legacy comparison from v0.7.3 Docker benchmarks (2025). Hardware and methodology differ from current benchmarks. See [DOCKER_BENCHMARK_RESULTS.md](DOCKER_BENCHMARK_RESULTS.md) for details.*
-
-| Dataset | VelesDB | pgvector | Speedup |
-|---------|---------|----------|--------|
-| 10K | ~5s | ~19s | **3.8x** |
-| 100K | ~52s | ~365s | **7x** |
-
-### Key Optimizations (v1.7.0)
-
-- **SIMD AVX-512/AVX2** - 32-wide processing with FMA
-- **Adaptive HNSW params** - `HnswParams::for_dataset_size()` for optimal recall
-- **Parallel search** - Batch parallel with prefetching
-- **Quantization** - SQ8 (4x) and Binary (32x) compression
-
 ## Benchmark Modes
 
 ### 1. Docker vs Docker (Fair comparison)

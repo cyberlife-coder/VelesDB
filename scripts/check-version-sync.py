@@ -157,6 +157,19 @@ TARGETS: "list[tuple[str, str]]" = [
     # `**VelesDB version:** X.Y.Z` label.
     ("docs/VELESQL_SPEC.md", "applies_to_stamp"),
     ("docs/reference/VELESQL_CHEATSHEET.md", "md_version_label"),
+    # Every workspace-versioned crate README carries a hand-maintained
+    # `` `velesdb-<crate> vX.Y.Z` `` footer — the page crates.io/npm renders.
+    # The 2026-08 audit found all seven of these stale (v4.0/v4.1 in a 4.3.0
+    # tree) because nothing policed them; velesdb-core's footer carries no
+    # crate-version half, so its `Applies to:` stamp is pinned instead.
+    ("crates/velesdb-cli/README.md", "crate_footer_stamp"),
+    ("crates/velesdb-migrate/README.md", "crate_footer_stamp"),
+    ("crates/velesdb-mobile/README.md", "crate_footer_stamp"),
+    ("crates/velesdb-python/README.md", "crate_footer_stamp"),
+    ("crates/velesdb-server/README.md", "crate_footer_stamp"),
+    ("crates/velesdb-wasm/README.md", "crate_footer_stamp"),
+    ("crates/tauri-plugin-velesdb/README.md", "crate_footer_stamp"),
+    ("crates/velesdb-core/README.md", "applies_to_stamp"),
 ]
 
 # velesdb-memory is versioned independently of the workspace (it ships its own
@@ -192,6 +205,10 @@ MEMORY_TARGETS: "list[tuple[str, str]]" = [
     # documented a 0.12.0 change. The document contradicted itself about which
     # release it describes, and passed both gates doing it.
     ("docs/reference/ECOSYSTEM_PARITY.md", "doc_last_updated_memory_version"),
+    # Same footer, same audit finding, on the memory crate's own README
+    # (found announcing v0.11.2 in a 0.12.0 tree). velesdb-node's footer is
+    # already policed above by the two-version `node_readme_stamp` reader.
+    ("crates/velesdb-memory/README.md", "crate_footer_stamp"),
 ]
 
 
@@ -376,6 +393,25 @@ def _read_applies_to_stamp(path: Path) -> str:
         raise RuntimeError(f"No `Applies to: velesdb-core X.Y.Z` stamp in {path}")
     uniq = set(matches)
     return matches[0] if len(uniq) == 1 else "/".join(matches)
+
+
+def _read_crate_footer_stamp(path: Path) -> str:
+    """The `` `<crate> vX.Y.Z` `` half of a crate README footer.
+
+    The 2026-08 audit found EIGHT of these footers announcing 4.0/4.1/0.11-era
+    versions in a 4.3.0/0.12.0 tree: they are hand-maintained, they ship (the
+    README is the page crates.io/npm/PyPI renders), and nothing policed them —
+    `check-doc-freshness` sweeps `docs/**` plus the root README only, and this
+    script pinned just the python/node stamps. The crate name is taken from
+    the README's parent directory, so a copy-pasted footer naming the wrong
+    crate fails as loudly as a stale version.
+    """
+    crate = path.parent.name
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r"`" + re.escape(crate) + r" v(\d+\.\d+\.\d+)`", text)
+    if not match:
+        raise RuntimeError(f"No `{crate} vX.Y.Z` footer stamp in {path}")
+    return match.group(1)
 
 
 def _read_doc_version_badge(path: Path) -> str:
@@ -567,6 +603,7 @@ _READERS = {
     "yaml_openapi": _read_yaml_openapi_version,
     "doc_health_snippet": _read_doc_health_snippet,
     "applies_to_stamp": _read_applies_to_stamp,
+    "crate_footer_stamp": _read_crate_footer_stamp,
     "node_readme_stamp": _read_node_readme_stamp,
     "doc_last_updated_memory_version": _read_doc_last_updated_memory_version,
     "dockerfile_label": _read_dockerfile_label,

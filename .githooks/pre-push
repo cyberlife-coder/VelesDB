@@ -60,17 +60,17 @@ if [[ "$protected_push" == true ]]; then
     fi
     echo -e "${GREEN}✅ Formatting OK${NC}"
 
-    # 2. Clippy (exclude velesdb-python due to PyO3 env issues)
+    # 2. Clippy (exclude velesdb-python: PyO3 link; velesdb-node: N-API link on --all-targets)
     echo -e "\n${YELLOW}📎 Check 2/4: Clippy...${NC}"
-    if ! cargo clippy --workspace --exclude velesdb-python --all-targets -- -D warnings </dev/null; then
+    if ! cargo clippy --workspace --exclude velesdb-python --exclude velesdb-node --all-targets -- -D warnings </dev/null; then
         echo -e "${RED}❌ Clippy found issues${NC}"
         exit 1
     fi
     echo -e "${GREEN}✅ Clippy OK${NC}"
 
-    # 3. Tests (exclude velesdb-python due to PyO3 env issues)
+    # 3. Tests (exclude velesdb-python: PyO3 link; single-threaded — suites share filesystem state)
     echo -e "\n${YELLOW}🧪 Check 3/4: Tests...${NC}"
-    if ! cargo test --workspace --exclude velesdb-python </dev/null; then
+    if ! cargo test --workspace --exclude velesdb-python --features persistence -- --test-threads=1 </dev/null; then
         echo -e "${RED}❌ Tests failed${NC}"
         exit 1
     fi

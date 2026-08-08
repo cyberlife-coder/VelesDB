@@ -82,7 +82,7 @@ coerce with `String(e)` before displaying — every example does.
 - **~100 K vectors** is the practical ceiling, set by browser RAM.
 - **`MemoryService` is in-memory only.** There is no filesystem; nothing
   persists unless you persist it yourself.
-- **`SemanticMemory.query()` is broken in 4.0.0** — it throws
+- **`SemanticMemory.query()` has been broken since 4.0.0 (still present)** — it throws
   `Invalid search results` on every call. Example 02 shows the supported
   alternative; example 04 uses `MemoryService`.
 

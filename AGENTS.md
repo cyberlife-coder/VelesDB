@@ -32,7 +32,7 @@ Bias toward caution over speed. For trivial tasks, use judgment.
 - **Locks: `parking_lot` only**, never `std::sync` (no poisoning). Follow lock ordering in [CONCURRENCY_MODEL.md](docs/CONCURRENCY_MODEL.md).
 - **Tests run single-threaded** (`--test-threads=1`) — they share filesystem state.
 - **Recall@10 ≥ 0.95** if you touch the search path (`index/hnsw/`, `simd_native/`, `quantization/`, `fusion/`, or Python result conversion). See [QUALITY_BAR.md](QUALITY_BAR.md) Gate 1.
-- **TODOs:** `// TODO(EPIC-XXX):` format only.
+- **TODOs:** every `TODO`/`FIXME`/`HACK` carries a tracker tag — `TODO(EPIC-XXX)`, `[EPIC-XXX/US-YYY]`, `(PREFIX-NNN)` or `#123`; bare markers fail. (`scripts/check-todo-annotations.py`)
 - **Git Flow:** branch off and target `develop`, never `main`. Release/hotfix branches target `main`.
 - **Crate quirks that `ls` won't tell you:** `velesdb-python` is excluded from the strict clippy
   line above (N-API/PyO3 link); `velesdb-node` builds with the `release-node` profile
@@ -57,7 +57,7 @@ cargo test -p velesdb-core --features persistence -- --test-threads=1
 cargo test -p velesdb-core --features persistence <test_name> -- --test-threads=1
 # If search path modified:
 cargo test -p velesdb-core --features persistence test_recall -- --test-threads=1
-# Doctests are a separate CI job from the test suite above:
+# Doctests are a separate CI step from the test suite above:
 cargo test --doc --package velesdb-core
 cargo test --doc --package velesdb-server
 # Feature-gate sanity:
@@ -78,7 +78,7 @@ python3 scripts/check-mcp-doc-contract.py --verbose
 python3 scripts/check-skill-private-references.py
 python3 scripts/check-ai-attribution.py "origin/develop..HEAD"
 bash scripts/check-doc-contract.sh
-for g in stamp index tracked versions; do
+for g in stamp index tracked versions decisions; do
   python3 scripts/check-doc-freshness.py --guard "$g" --mode strict
 done
 bash integrations/agent-hooks/test/hooks.test.sh
@@ -107,7 +107,9 @@ goes red, the cause is not in what you just ran — go read that job.
 | `perf-smoke` | criterion bench plus a 15% regression comparison |
 | `binary-size` | release build of three binaries |
 | `run-production-gates`, `propagation-guard` | cross-crate sweeps over every SDK, demo and example |
-| `compat-matrix` | Windows, wasm32 and a nightly loom pass |
+| `bench-sift1m-compile` | compile-only check of the SIFT1M bench harness |
+| `perf-gate-e2e` | release wheel build + 10K recall/latency benchmark; no-ops green unless the search hot path changed |
+| `compat-matrix` | Windows, wasm32 and a nightly loom pass — runs on PRs but is *not* in `CI Success`'s `needs:`, so it cannot hold a merge |
 | node licence boundary | `cargo tree` assertion that `velesdb-node` never pulls `velesdb-core` |
 | `pr-governance` | branch prefix, and "not behind base" — properties of the PR, not of the tree |
 
