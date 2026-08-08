@@ -8,12 +8,15 @@
 
 **Quantization** reduces the in-memory size of vectors while preserving excellent search accuracy. VelesDB offers four methods:
 
-| Method | Compression | Recall loss | Training required | Use case |
-|---------|-------------|-----------------|-----------------|-------------|
-| **SQ8** (Scalar 8-bit) | **4x** | < 2% | No | General purpose, Edge |
-| **PQ** (Product Quantization) | **8-32x** | 5-15% | Yes | Large datasets, limited memory |
-| **Binary** (1-bit) | **32x** | ~10-15% | No | IoT, fingerprints |
-| **RaBitQ** (Randomized Binary) | **32x** | ~5-10% | Yes (rotation) | High compression + good recall |
+- **SQ8** (Scalar 8-bit) — one byte per dimension via min/max scaling, no training
+- **PQ** (Product Quantization) — codebook-based sub-vector encoding, trained
+- **Binary** (1-bit) — one sign bit per dimension, no training
+- **RaBitQ** (Randomized Binary) — binary encoding behind a trained orthogonal rotation
+
+This guide covers how each method works, its training workflow, and its
+persistence behavior. The compression ratios, recall impact, and training cost
+per method are consolidated in one place:
+[Tuning Guide — When to Use Each Mode](TUNING_GUIDE.md#when-to-use-each-mode).
 
 ### Capacity mode vs search-path mode
 
@@ -245,34 +248,17 @@ After:    [0b10100110, ...]      → 768 / 8 = 96 bytes
 
 ## Method comparison
 
-| Method | Compression | Recall@10 | Training | Training time | Best for |
-|---------|-------------|-----------|----------|----------------|-------------|
-| **f32** | 1x | 99.4% | No | - | Maximum precision |
-| **SQ8** | 4x | ~97.5% | No | - | General purpose, Edge |
-| **PQ** (m=8) | ~48x | ~85% | Yes | ~5s/100K | Large dataset, limited memory |
-| **PQ** + rescore | ~48x | ~93% | Yes | ~5s/100K | Recall/memory trade-off |
-| **PQ** + OPQ | ~48x | ~88% | Yes | ~10s/100K | Correlated data |
-| **Binary** | 32x | ~85% | No | - | Fingerprints, IoT |
-| **RaBitQ** | 32x | ~90-93% | Yes | ~2s/100K | High compression + good recall |
+The cross-method comparison table (compression, Recall@10, training cost per
+method) moved to the
+[Tuning Guide — When to Use Each Mode](TUNING_GUIDE.md#when-to-use-each-mode),
+the single home for those numbers. Keep in mind the wiring caveat: in the
+collection query path only **RaBitQ** and **PQ** are wired up today (see the
+status callouts above) — the SQ8/Binary modes maintain caches there that search
+does not consume yet.
 
 ---
 
 ## Choosing the right method
-
-```
-                    Precision
-                        ↑
-                        │
-         f32 ●──────────┤  99.4% recall
-                        │
-         SQ8 ●──────────┤  97.5% recall
-                        │
-                        │
-      Binary ●──────────┤  85-90% recall
-                        │
-        ────────────────┴────────────────→ Compression
-                   4x        32x
-```
 
 | Scenario | Recommendation |
 |----------|----------------|
@@ -284,8 +270,8 @@ After:    [0b10100110, ...]      → 768 / 8 = 96 bytes
 | **Fingerprints/hashes** | Binary |
 | **Correlated data** | PQ + OPQ |
 
-> Note: this table compares the methods as such. In the collection query
-> path, only **RaBitQ** and **PQ** are wired up today (see the status
+> Note: these recommendations compare the methods as such. In the collection
+> query path, only **RaBitQ** and **PQ** are wired up today (see the status
 > callouts above) — the SQ8/Binary modes maintain caches there that search
 > does not consume yet.
 
@@ -365,6 +351,13 @@ SQ8 Encode/768        time:   [1.2 µs 1.3 µs 1.4 µs]
 Dot Product f32_simd  time:   [41 ns 42 ns 43 ns]
 Dot Product sq8_simd  time:   [58 ns 60 ns 62 ns]
 ```
+
+---
+
+See also: [Tuning Guide](TUNING_GUIDE.md) — the numeric home for the
+quantization comparison, memory estimation, and mode defaults ·
+[Search Modes](SEARCH_MODES.md) — the recall/latency modes these storage
+modes combine with.
 
 ---
 

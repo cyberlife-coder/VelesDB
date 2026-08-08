@@ -29,9 +29,9 @@ each guide links back.
 | [Core: query plan cache](./CORE_QUERY_PLAN_CACHE.md) | The two-tier LRU plan cache that lets repeated queries skip parsing and planning |
 | [Core: Agent Memory SDK (Rust)](./CORE_AGENT_MEMORY_RUST.md) | The `velesdb_core::agent` memory subsystems for chatbots, RAG and autonomous agents |
 | [Core: performance numbers](./CORE_PERFORMANCE.md) | The measured figures, with their methodology and hardware |
-| [Search Modes](./SEARCH_MODES.md) | Understanding Fast/Balanced/Accurate/Perfect modes |
-| [Quantization](./QUANTIZATION.md) | Vector compression (SQ8, PQ, Binary, RaBitQ) |
-| [Tuning Guide](./TUNING_GUIDE.md) | HNSW parameter tuning and performance optimization |
+| [Search Modes](./SEARCH_MODES.md) | What Fast/Balanced/Accurate/Perfect/Adaptive mean and when to pick which |
+| [Quantization](./QUANTIZATION.md) | Vector compression mechanisms (SQ8, PQ, Binary, RaBitQ): internals, training, persistence |
+| [Tuning Guide](./TUNING_GUIDE.md) | The numeric reference: mode defaults, HNSW parameters, quantization trade-offs, memory estimation |
 | [Graph Patterns](./GRAPH_PATTERNS.md) | Graph modeling and `MATCH` pattern recipes |
 | [Multi-Model Queries](./MULTIMODEL_QUERIES.md) | Combining vector, graph, and structured data in one VelesQL query |
 | [Concurrency & Locking](./CONCURRENCY_LOCKING.md) | Concurrent access and file-locking behavior |
