@@ -56,7 +56,7 @@ VelesDB core architecture is explicitly **hybrid by design**:
 │  │                     DISTANCE LAYER (SIMD)                        │   │
 │  ├─────────────────────────────────────────────────────────────────┤   │
 │  │  Cosine  │  Euclidean  │  Dot Product  │  Hamming  │  Jaccard   │   │
-│  │  (33.1ns)│   (22.5ns)  │    (19.8ns)   │  (35.8ns) │   (35.1ns) │   │
+│  │  (33.1ns)│   (26.0ns)  │    (21.7ns)   │  (35.8ns) │   (35.1ns) │   │
 │  │                                                                  │   │
 │  │  AVX2/AVX-512 │ ARM64 NEON │ Scalar fallback (incl. WASM —    │   │
 │  │               │ (simd_neon)│ SIMD128 planned)                 │   │
@@ -76,6 +76,9 @@ VelesDB core architecture is explicitly **hybrid by design**:
 │  File System / Memory / IndexedDB (WASM)                                │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
+
+> Distance-layer latencies in the diagram are the contract values from
+> `docs/reference/promise-contract.json` (see the Distance Layer table below).
 
 ## Component Details
 
@@ -488,13 +491,14 @@ instructions for distance calculations via the `simd_native` module, with both
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                       DISTRIBUTED LAYER (v1.0+)                          │
+│                     DISTRIBUTED LAYER (planned)                          │
 ├─────────────────────────────────────────────────────────────────────────┤
 │   Coordinator   │   Sharding   │   Replication   │   Consensus (Raft)  │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **GPU Acceleration**: CUDA kernels for large-scale (wgpu-based, optional)
+- **GPU Acceleration** (shipped): wgpu-based distance kernels behind the
+  optional `gpu` feature (`crates/velesdb-core/src/gpu/`)
 
 ### v1.6.0 Architecture Improvements (Shipped)
 
@@ -507,7 +511,8 @@ The following architectural changes, originally identified in the January 2026 t
 | **SIMD Dispatch** | Per-call feature detection | `OnceLock` function pointer |
 | **Unsafe** | `'static` lifetime tricks | Safe self-referential via `ouroboros` |
 
-See `docs/internal/TECHNICAL_AUDIT_PLAN.md` for the original audit plan.
+The original audit plan document has been retired; ongoing architectural debt
+is tracked in [`docs/TECH_DEBT_REGISTRY.md`](../TECH_DEBT_REGISTRY.md).
 
 ## Code-Truth Matrix (2026-02-26)
 
@@ -519,6 +524,3 @@ See `docs/internal/TECHNICAL_AUDIT_PLAN.md` for the original audit plan.
 | Multi-column filtering | `crates/velesdb-core/src/column_store/*` | Typed filters + bitmap paths |
 | Hybrid execution / fusion | `crates/velesdb-core/src/collection/search/query/*` | Pushdown + fusion strategies |
 | Storage + WAL/recovery | `crates/velesdb-core/src/storage/*` | mmap storage and recovery tests |
-
-### Governance links
-- Operations runbook: `docs/reference/OPERATIONS_RUNBOOK.md`

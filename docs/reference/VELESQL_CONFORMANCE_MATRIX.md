@@ -4,7 +4,7 @@ This document lists every VelesQL feature with its parser and executor status.
 A feature can be **Parsed** (the grammar + AST accept it) without being
 **Executed** (the query engine acts on it at runtime).
 
-> Last updated: 2026-08-07 (VelesDB v4.3.0)
+> Last updated: 2026-08-08 (VelesDB v4.3.0)
 
 ## Fully Supported (Parsed AND Executed)
 
@@ -62,7 +62,7 @@ incorrect or empty results at execution time.
 
 | Feature | Parser source | Status | Notes |
 |---------|--------------|--------|-------|
-| Scalar subqueries | `grammar.pest:subquery_expr`, `ast/values.rs:Subquery` | Parsed, then rejected at validation with V010 (SubqueryNotExecutable) | EPIC-039 |
+| Correlated subqueries | `grammar.pest:subquery_expr`, `ast/values.rs:Subquery` | Parsed, then rejected at validation with V010 (SubqueryNotExecutable). Non-correlated scalar subqueries (e.g. `WHERE price > (SELECT AVG(price) FROM products)`) **are** executed: they are evaluated and substituted as literals before validation runs (`velesql/validation.rs:reject_subqueries`) | EPIC-039 |
 | MATCH `ORDER BY` aggregate (no `GROUP BY`) or bare alias | `match_exec/order_by.rs` | Parsed, then rejected at execution with VELES-018 (GraphNotSupported). Supported MATCH `ORDER BY`: `similarity()`, `similarity(field, $v)`, `depth`, `alias.property`, arithmetic over a bare property identifier (e.g. `year - 2000`) | EPIC-045 |
 | MATCH `ORDER BY` in the WASM/browser executor | `velesdb-wasm/src/velesql_match_orderby.rs` | Reduced subset of the row above: only `depth` and `alias.property` are honored. `similarity()`, `similarity(field, $v)`, arithmetic, and aggregate forms are rejected with an error because the browser MATCH path materializes no vector scores | Core supports the full set; this is a documented WASM-only divergence |
 
@@ -83,7 +83,7 @@ parse errors.
 
 ## Conformance Test Coverage
 
-- **Parser conformance cases**: 140 cases in `conformance/velesql_parser_cases.json`
+- **Parser conformance cases**: 134 cases in `conformance/velesql_parser_cases.json`
 - **Cross-crate tests**: `velesql_parser_conformance` integration test runs in each crate
 - **Join tests**: `search/query/join_tests.rs` (374-435)
 - **Set operation parse tests**: `velesql/set_operations_tests.rs`

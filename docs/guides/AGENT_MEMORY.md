@@ -888,11 +888,15 @@ for t in threads: t.join()
 
 ## Rust API
 
-The Rust API is more complete than the Python bindings:
+The Rust API (`velesdb_core::agent`) is more complete than the Python
+bindings. It requires the default `persistence` feature — the `agent` module is
+gated behind it. The default embedding dimension is **384**, configurable with
+`AgentMemory::with_dimension(db, dim)`. The snippets below use `?`, so paste
+them inside `fn main() -> Result<(), Box<dyn std::error::Error>> { ... Ok(()) }`.
 
 ```rust
 use std::sync::Arc;
-use velesdb_core::{Database, agent::AgentMemory};
+use velesdb_core::{Database, agent::{AgentMemory, EvictionConfig}};
 
 let db = Arc::new(Database::open("./agent_data")?);
 let memory = AgentMemory::new(Arc::clone(&db))?;
@@ -918,10 +922,15 @@ memory.procedural().delete(1)?;
 
 // TTL
 memory.set_semantic_ttl(1, 3600);    // 1 hour
-memory.auto_expire();                 // purge expired entries
+let stats = memory.auto_expire()?;    // purge expired entries -> ExpireResult
 
-// Snapshots
-let memory = memory.with_snapshots("./snapshots", 10)?;
+// Evict low-confidence procedures
+let evicted = memory.evict_low_confidence_procedures(0.3)?;
+
+// Snapshots and eviction tuning (builders)
+let memory = memory
+    .with_snapshots("./snapshots", 10)
+    .with_eviction_config(EvictionConfig::default());
 memory.snapshot()?;
 memory.load_latest_snapshot()?;
 ```
@@ -942,6 +951,23 @@ memory.load_latest_snapshot()?;
 >   only through `AgentMemory.semantic` (shared, snapshot-backed TTL).
 > - **TypeScript** is REST-backed with no in-process engine, so none of this
 >   applies.
+
+### Rust types
+
+| Type | Description |
+|------|-------------|
+| `AgentMemory` | Unified interface; holds `SemanticMemory`, `EpisodicMemory`, `ProceduralMemory` |
+| `SemanticMemory` | `store(id, content, embedding)`, `query(embedding, k)` returning `Vec<(id, score, content)>` |
+| `EpisodicMemory` | `record(id, description, timestamp, embedding)`, `recent(limit, since)`, `recall_similar(embedding, k)` |
+| `ProceduralMemory` | `learn(id, name, steps, embedding, confidence)`, `recall(embedding, k, min_confidence)`, `reinforce(id, success)` |
+| `ProcedureMatch` | Recall result: `id`, `name`, `steps: Vec<String>`, `confidence: f32`, `score: f32` |
+| `EvictionConfig` | `consolidation_age_threshold: u64`, `min_confidence_threshold: f32`, `max_entries_per_cycle: usize` |
+| `SnapshotManager` | `new(dir, max_snapshots)` — versioned state persistence with automatic rotation |
+| `TemporalIndex` | B-tree temporal index for O(log N) time-range queries |
+| `ExpireResult` | Returned by `auto_expire()`: `semantic_expired`, `episodic_expired`, `procedural_expired`, `episodic_consolidated`, `procedural_evicted`, `consolidation_truncated` |
+
+Full signatures live on [docs.rs](https://docs.rs/velesdb-core). For dated
+recall on top of these subsystems, see [Temporal memory](./TEMPORAL_MEMORY.md).
 
 ### API Availability by Binding
 
@@ -1136,3 +1162,7 @@ Yes. The SDK is covered end-to-end by Rust and Python test suites, including sna
 
 > **Source code**: [`crates/velesdb-core/src/agent/`](../../crates/velesdb-core/src/agent/)
 > **Python bindings**: [`crates/velesdb-python/src/agent.rs`](../../crates/velesdb-python/src/agent.rs)
+
+---
+
+Last updated: 2026-08-08 · Applies to: velesdb-core 4.3.0

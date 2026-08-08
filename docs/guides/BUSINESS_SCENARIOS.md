@@ -9,6 +9,7 @@
 **Problem:** "Show me products similar to this photo, from trusted suppliers, under $500"
 
 ```sql
+-- PSEUDOCODE: conceptual query, not executable VelesQL
 -- Traditional approach: Pinecone (image search) + Neo4j (supplier trust) + PostgreSQL (price)
 -- VelesDB: ONE query
 
@@ -65,6 +66,7 @@ RETURN tx.id, account.id, similarity() as fraud_score
 **Problem:** "Find similar patient cases with treatment outcomes, for HIPAA-regulated data"
 
 ```sql
+-- PSEUDOCODE: conceptual query, not executable VelesQL
 -- Medical RAG: symptoms + patient network + treatment history
 MATCH (patient:Patient)-[:HAS_CONDITION]->(condition:Condition)
       -[:TREATED_WITH]->(treatment:Treatment)
@@ -120,6 +122,7 @@ LIMIT 10
 **Goal:** Demonstrate the power of cross-model queries - finding semantically similar documents through graph relationships with structured data filtering
 
 ```sql
+-- PSEUDOCODE: conceptual query, not executable VelesQL
 -- The VelesDB Advantage: One query across all three stores
 MATCH (doc:Document)-[:AUTHORED_BY]->(author:Author)
 WHERE
@@ -284,7 +287,7 @@ curl -X POST http://localhost:8080/collections \
   -d '{"name": "image_hashes", "dimension": 256, "metric": "hamming"}'
 ```
 ```sql
--- Find near-duplicate images (bit-level comparison, 6ns latency!)
+-- Find near-duplicate images (bit-level comparison, ~36ns per distance)
 SELECT * FROM image_hashes
 WHERE vector NEAR $perceptual_hash
   AND source = 'user_uploads'
@@ -323,7 +326,7 @@ LIMIT 20
 
 > Per-metric latency values are the contract numbers in `docs/reference/promise-contract.json`.
 
-> **Tip:** Hamming is 10x faster than float metrics - ideal for binary embeddings on edge devices!
+> **Tip:** Hamming works on binary vectors, which are 32x smaller than float32 embeddings - ideal for memory-constrained edge devices!
 
 ---
 

@@ -22,6 +22,9 @@ no model download, and no internet.
 | File | Language | What it shows | How to run |
 |------|----------|---------------|------------|
 | `wedge_quickstart.py` | Python | **The differentiator:** `MemoryService.why()` reaches a 2-hop memory that plain `recall()` misses. Start here. | `python wedge_quickstart.py` |
+| `why_across_sessions.py` | Python | A brand-new session reopens the same on-disk memory; `why()` walks typed links to the *reason* plain recall is blind to, across the session boundary. | `python why_across_sessions.py` |
+| `why_magic_constant.py` | Python | Why is that timeout 7 seconds? `why()` walks from the config value to the business reason behind it before you "clean it up". | `python why_magic_constant.py` |
+| `memory_builds_its_own_graph.py` | Python | `remember_extracted()` reads raw prose with a local LLM and auto-wires the fact↔topic graph — no `relate()` calls. Needs Ollama. | `python memory_builds_its_own_graph.py` |
 | `agent_loop.py` | Python | Full agent loop: semantic + episodic + procedural, plus a TTL + snapshot cycle. Doubles as a smoke test (prints a trace and exits 0). | `python agent_loop.py` |
 | `snapshot_ttl.rs` | Rust | `velesdb-core` public API: namespaced TTL, `auto_expire`, snapshot save/load round-trip. | `cargo run --bin snapshot_ttl` |
 | `agent_memory.ts` | TypeScript | `db.agentMemory()` SDK facade: `storeFact` / `recordEvent` / `learnProcedure` and their recall counterparts. Needs a running `velesdb-server`. | `npx tsx agent_memory.ts` |

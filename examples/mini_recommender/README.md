@@ -54,7 +54,7 @@ cargo run
   home        |     1 | $89.99
   sports      |     3 | $139.99
 
-✨ Tutorial complete! See docs/guides/TUTORIALS/MINI_RECOMMENDER.md
+✨ Tutorial complete! See docs/guides/tutorials/MINI_RECOMMENDER.md
 ```
 
 Scores may differ slightly depending on your platform.

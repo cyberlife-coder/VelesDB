@@ -85,7 +85,8 @@ See [mini_recommender/README.md](./mini_recommender/README.md) for expected outp
 
 Multi-model queries combining five search modes in one binary:
 - Vector similarity search
-- VelesQL with filters and ORDER BY similarity
+- VelesQL with a similarity threshold
+- VelesQL with ORDER BY similarity
 - Hybrid search (vector + BM25 text)
 - Pure text search
 

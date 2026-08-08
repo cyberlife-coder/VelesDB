@@ -118,33 +118,9 @@ Simulates data durability and concurrent access.
 
 ## Performance Benchmarks
 
-Based on criterion benchmarks (Intel/AMD x86_64):
-
-### Distance Calculations (768D vectors)
-
-| Operation | Time | Speedup vs Baseline |
-|-----------|------|---------------------|
-| Dot Product (SIMD) | ~42 ns | 6.5x faster |
-| Cosine Similarity | ~45 ns | 6.0x faster |
-| Euclidean Distance | ~39 µs | 30% improved |
-| Normalize In-place | ~218 ns | 15% improved |
-
-### Search Operations
-
-| Operation | Time | Notes |
-|-----------|------|-------|
-| Vector Search (1000 docs) | ~60 µs | HNSW index |
-| Text Search (BM25) | ~32 µs | Inverted index |
-| Hybrid Search | ~63 µs | RRF fusion |
-
-### Recall Validation
-
-| Dimension | Time | Status |
-|-----------|------|--------|
-| 128D | ~34 ms | ✅ Stable |
-| 384D | ~52 ms | ✅ Stable |
-| 768D | ~109 ms | ✅ Improved 7% |
-| 1536D | ~257 ms | ✅ Stable |
+Current numbers come from the criterion benches, not from this README — run
+them locally (see the `cargo bench` commands below) and read the report in
+`target/criterion/report/index.html`.
 
 ---
 
@@ -170,22 +146,22 @@ cargo bench -p velesdb-core --bench bm25_benchmark
 
 ## Test Coverage
 
-These integration tests complement the 346 unit tests in `velesdb-core`, providing:
+These integration tests complement the unit tests embedded in `velesdb-core`'s
+source modules, providing:
 
 - **End-to-end validation** of complete workflows
 - **Performance regression detection** via timing assertions
 - **Concurrency safety verification**
 - **Multi-collection isolation testing**
 
-Total test count: **381 tests** (346 unit + 12 integration + 23 use case tests)
+This directory holds several dozen integration test files (`ls crates/velesdb-core/tests/*.rs`
+for the current count); `cargo test -p velesdb-core` reports the authoritative totals.
 
 ---
 
 ## Known Limitations
 
-1. **Persistence across restarts**: The current `Database` API doesn't automatically reload collections on reopen. Use `Collection::open()` directly for persistence testing.
-
-2. **Cosine with unnormalized vectors**: When using `DistanceMetric::Cosine`, vectors should ideally be normalized to avoid numerical precision issues in edge cases.
+1. **Cosine with unnormalized vectors**: When using `DistanceMetric::Cosine`, vectors should ideally be normalized to avoid numerical precision issues in edge cases.
 
 ---
 

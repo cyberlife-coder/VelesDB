@@ -9,7 +9,7 @@
 > - Premium: `velesdb-private` — Commercial
 >
 > Grounded in the actual code as of the audit below, **not** in the specs alone
-> (several spec tasks are marked done on an unlanded branch — see Truth 2).
+> (Truth 2 records how the once-unlanded seam was verified landed).
 
 ---
 
@@ -60,8 +60,8 @@ consumed by premium, but no GitHub **release** artifacts are published for it ye
 point at v3.8.1 by design until a 3.9.x release is cut.
 
 **Headline:** you are not mid-architecture, you are **mid-hardening**. The split is
-real. Pending work is (a) landing the uncommitted core seam, (b) finishing premium's
-"truthful over impressive" GA gaps (P6 / R16–R28), and (c) one net-new open
+real and the core seam is landed (v3.9.0). Pending work is (a) finishing premium's
+"truthful over impressive" GA gaps (P6 / R16–R28), and (b) one net-new open
 primitive: provenance.
 
 ---
@@ -87,7 +87,7 @@ role, no cluster enters core.
 
 | # | Action | Where | Status today |
 |---|--------|-------|--------------|
-| **C0** | **Land the uncommitted seam.** Commit/PR the `observer/`, `conformance/`, `LockRank`, `WalCursor`, `hash_id`, delta-WAL removal on `chore/kiro-workspace-setup` → `develop`. Until merged, everything premium relies on is a working-tree artifact. | branch merge | ⚠️ done in tree, **not landed** |
+| **C0** | **Land the seam.** The `observer/`, `conformance/`, `LockRank`, `WalCursor`, `hash_id` and delta-WAL removal merged to `develop` (`feat(core): control-plane boundary seam`, 3f4dcc11) and tagged `v3.9.0` — see Truth 2. | branch merge | ✅ landed (v3.9.0, 2026-07) |
 | **C1** | **Fix the version truth.** Bumped core's internal `workspace.dependencies velesdb-core` `3.8.1` → `3.9.0` and `velesdb-python/pyproject.toml` `3.8.1` → `3.9.0`; corrected the stale "1.9.1" note. | `Cargo.toml`, `velesdb-python/pyproject.toml` | ✅ resolved 2026-07 |
 | **C2** | **Provenance as a first-class typed field.** Promote `who`/`source`/`created_at`/`confidence`/`validated_by` from ad-hoc `metadata` into a typed `Provenance` struct on `Recollection`/`Link`, and carry it on `MemoryNode` so `why()` returns a structured audit trail, not a blob. | `velesdb-memory/model.rs`, `service.rs` | ❌ genuine gap |
 | **C3** | **Bitemporality on the existing temporal index.** Evolve `temporal_index.rs` from decay-only to valid-time + transaction-time ("what did we know yesterday"). | `core/src/agent/temporal_index.rs` | ⚠️ decay only |
@@ -130,26 +130,26 @@ All currently respected — keep them so.
 
 ## 6. Sequencing (solo founder, budget-constrained)
 
-1. **C0 + C1** — land the seam, fix versions. Unblocks everything; pure hygiene.
+1. **C0 + C1** — seam landed, versions fixed. ✅ done 2026-07; unblocked everything downstream.
 2. **C2 provenance** — cheap, builds on existing `metadata` / `Explanation`, feeds the EU AI Act argument (Aug 2026).
 3. **P1 + P2 + P3 + P4** — premium GA truthfulness. Makes the current release *honest and sellable*; the only open task block.
 4. **C3 bitemporal → P5** — the vendable differentiator (replay + governance).
 5. **C4 RL outcome API + P6/P7** — vision layer, once the socle is honest and sold.
 
-Do not parallelize. The two blocking hinges are **C0** (land the core seam) and
+Do not parallelize. With **C0** landed (v3.9.0), the one blocking hinge left is
 **P1** (make HTTP enforcement real, not middleware-only) — everything else is
-downstream of those.
+downstream of it.
 
 ---
 
 ## 7. The one correction to remember
 
 The differentiators aren't things to invent, and the split isn't a decision to make —
-both largely exist. The real risk is **spec-vs-code drift** (tasks marked `[x]` on an
-unlanded branch; a "501-truthful" premium whose reads still bypass the gate). The
-pertinent action plan is: **land what's built, make the claims true, and add
+both largely exist. The real risk is **spec-vs-code drift** (the seam sat done-in-tree
+but unlanded for weeks before v3.9.0; a "501-truthful" premium whose reads still
+bypass the gate). The pertinent action plan is: **make the claims true, and add
 provenance** — not re-architect.
 
 ---
 
-*Last updated: 2026-07-27 · Applies to: velesdb-core 4.3.0 (this stamp tracks the document revision, not a re-verification of the split).*
+*Last updated: 2026-08-08 · Applies to: velesdb-core 4.3.0 (this stamp tracks the document revision, not a re-verification of the split).*

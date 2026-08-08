@@ -1,7 +1,7 @@
 //! Mini Recommender Example
 //!
 //! Demonstrates building a product recommendation engine with `VelesDB`.
-//! See the full tutorial: `docs/guides/TUTORIALS/MINI_RECOMMENDER.md`
+//! See the full tutorial: `docs/guides/tutorials/MINI_RECOMMENDER.md`
 
 #![allow(clippy::cast_precision_loss)] // demo: small integer indices cast to f32 for sin wave
 
@@ -65,7 +65,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Step 6: Analytics
     analyze_catalog(&products);
 
-    println!("\n✨ Tutorial complete! See docs/guides/TUTORIALS/MINI_RECOMMENDER.md");
+    println!("\n✨ Tutorial complete! See docs/guides/tutorials/MINI_RECOMMENDER.md");
 
     Ok(())
 }
