@@ -852,12 +852,16 @@ fn ingest_pdf(path: &Path) -> Result<String, Error> {
 Combine vector + keyword search:
 
 ```rust
-let hybrid_results = app.velesdb().hybrid_search(
-    &query_embedding,
-    &query_text,
-    10,
-    0.7  // 70% vector, 30% keyword
-)?;
+let state = app.state::<VelesDbState>();
+let hybrid_results = state
+    .with_db(|db: Arc<Database>| {
+        let coll = db
+            .get_vector_collection(COLLECTION)
+            .ok_or_else(|| PluginError::CollectionNotFound(COLLECTION.to_string()))?;
+        coll.hybrid_search(&query_embedding, &query_text, 10, Some(0.7)) // alpha: 70% vector, 30% BM25
+            .map_err(PluginError::Database)
+    })
+    .map_err(|e| format!("Hybrid search error: {e}"))?;
 ```
 
 ---
