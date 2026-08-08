@@ -368,4 +368,4 @@ Dot Product sq8_simd  time:   [58 ns 60 ns 62 ns]
 
 ---
 
-*VelesDB Documentation -- 2026-06-12*
+*VelesDB Documentation -- Last updated: 2026-08-08 · Applies to: velesdb-core 4.3.0*

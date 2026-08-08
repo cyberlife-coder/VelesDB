@@ -143,7 +143,7 @@ memory.load_snapshot_version(version)?;
 | `EvictionConfig` | `consolidation_age_threshold: u64`, `min_confidence_threshold: f32`, `max_entries_per_cycle: usize` |
 | `SnapshotManager` | `new(dir, max_snapshots)` — versioned state persistence with automatic rotation |
 | `TemporalIndex` | B-tree temporal index for O(log N) time-range queries |
-| `ExpireResult` | Returned by `auto_expire()`: `semantic_expired`, `episodic_expired`, `episodic_consolidated` |
+| `ExpireResult` | Returned by `auto_expire()`: `semantic_expired`, `episodic_expired`, `procedural_expired`, `episodic_consolidated`, `procedural_evicted`, `consolidation_truncated` |
 
 Full signatures live on [docs.rs](https://docs.rs/velesdb-core).
 
@@ -155,4 +155,4 @@ Full signatures live on [docs.rs](https://docs.rs/velesdb-core).
 
 ---
 
-Last updated: 2026-07-25 · Applies to: velesdb-core 4.3.0
+Last updated: 2026-08-08 · Applies to: velesdb-core 4.3.0
