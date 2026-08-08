@@ -67,7 +67,7 @@ Three files, no bundler, no config.
 
 ```bash
 mkdir velesdb-hello && cd velesdb-hello
-npm install @wiscale/velesdb-wasm@4.0.0
+npm install @wiscale/velesdb-wasm
 ```
 
 Create `index.html`:
@@ -165,7 +165,7 @@ below `Number.MAX_SAFE_INTEGER`.
 - **No quantizer training.** `TRAIN QUANTIZER`, Product Quantization and RaBitQ
   need `rayon`/`ndarray`/`persistence`, which are compiled out for
   `wasm32-unknown-unknown`. `sq8` and `binary` storage modes still work.
-- **`SemanticMemory.query()` is broken in 4.0.0** — it throws
+- **`SemanticMemory.query()` has been broken since 4.0.0 (still present)** — it throws
   `Invalid search results` on every call (`src/agent.rs` calls `as_string()` on
   an array-valued `JsValue`). Use `MemoryService`, or a `VectorStore` with
   `insert_with_payload` + `search_with_filter`.
@@ -204,7 +204,7 @@ to instantiate the module.
 | `Error: [VELES-004] Vector dimension mismatch: expected N, got M` | The query length differs from `store.dimension`. | Embed the query with the same model and dimension used at index time. |
 | `Unknown metric. Use: cosine, euclidean, l2, dot, dotproduct, inner, ip, hamming, jaccard` | Unsupported metric string in the constructor. | Use one of the listed names; they are case-insensitive. |
 | `Invalid data: wrong magic number` on `import_from_bytes` | The buffer is not a `VELS` export (truncated, or another format). | Re-export from a `VectorStore`; see the [binary format](../../docs/guides/WASM_PERSISTENCE.md#binary-format-vels-v2). |
-| `Invalid search results` | `SemanticMemory.query()` — a known 4.0.0 defect. | Use `MemoryService` instead. |
+| `Invalid search results` | `SemanticMemory.query()` — a known defect since 4.0.0, still present. | Use `MemoryService` instead. |
 | Console warning about `application/wasm` MIME type | The static server does not label `.wasm`. | Harmless: the loader falls back to `WebAssembly.instantiate`. Configure the MIME type to keep `WebAssembly.instantiateStreaming` on the fast path. |
 
 ## License
@@ -215,4 +215,4 @@ artifact embeds the engine and is governed by the Core License.
 
 ---
 
-`velesdb-wasm v4.1.0` · Last updated: 2026-07-25 · Applies to: velesdb-core 4.3.0 · [Report a docs error](https://github.com/cyberlife-coder/velesdb/issues)
+`velesdb-wasm v4.3.0` · Last updated: 2026-08-08 · Applies to: velesdb-core 4.3.0 · [Report a docs error](https://github.com/cyberlife-coder/velesdb/issues)

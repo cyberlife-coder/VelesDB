@@ -168,7 +168,6 @@ enabled = false
 - [velesdb-server README](../../crates/velesdb-server/README.md)
 - [REST tour](SERVER_REST_TOUR.md) — the API, endpoint by endpoint, with curl
 - [Server security](SERVER_SECURITY.md) — API keys, TLS, shutdown, health
-- [Operations runbook](../reference/OPERATIONS_RUNBOOK.md)
 
 ---
 

@@ -2,7 +2,7 @@
 
 Complete REST API documentation for VelesDB.
 
-> **Last updated**: 2026-07-23 (VelesDB v3.12.0). The machine-readable source of
+> **Last updated**: 2026-08-08 (VelesDB v4.3.0). The machine-readable source of
 > truth is [`docs/openapi.yaml`](../openapi.yaml), regenerated from the server's
 > annotated handlers and drift-checked in CI; this page is the human-readable
 > companion.
@@ -886,69 +886,20 @@ Execute aggregation-only VelesQL queries.
 
 ### VelesQL Syntax Reference
 
-| Feature | Syntax | Example |
-|---------|--------|---------|
-| Vector search | `vector NEAR $param` | `WHERE vector NEAR $query` |
-| Distance metric | `vector NEAR COSINE $param` | `COSINE`, `EUCLIDEAN`, `DOT` |
-| Equality | `field = value` | `category = 'tech'` |
-| Comparison | `field > value` | `price > 100` |
-| IN clause | `field IN (...)` | `status IN ('active', 'pending')` |
-| BETWEEN | `field BETWEEN a AND b` | `price BETWEEN 10 AND 100` |
-| LIKE | `field LIKE pattern` | `title LIKE '%rust%'` |
-| NULL check | `field IS NULL` | `deleted_at IS NULL` |
-| Logical | `AND`, `OR` | `a = 1 AND b = 2` |
-| Full-text | `field MATCH 'query'` | `content MATCH 'rust'` |
-| Limit | `LIMIT n` | `LIMIT 10` |
+The query language itself is documented once, not per surface. For the full
+syntax — DDL, DML, `vector NEAR`, sparse and hybrid search, `MATCH`
+traversals, `WHERE` operators, scalar subqueries, pagination — see the
+[VelesQL cheat sheet](./VELESQL_CHEATSHEET.md) (every example there is
+parse-checked in CI) and, normatively, [`VELESQL_SPEC.md`](../VELESQL_SPEC.md).
 
 ### VelesQL v2.0 Features
 
-| Feature | Syntax | Example |
-|---------|--------|---------|
-| GROUP BY | `GROUP BY col1, col2` | `GROUP BY category` |
-| HAVING | `HAVING agg > val` | `HAVING COUNT(*) > 5` |
-| HAVING AND/OR | `HAVING a AND b` | `HAVING COUNT(*) > 5 AND AVG(price) > 50` |
-| Aggregates | `COUNT`, `SUM`, `AVG`, `MIN`, `MAX` | `SELECT COUNT(*), AVG(price)` |
-| ORDER BY multi | `ORDER BY col1, col2` | `ORDER BY category, price DESC` |
-| ORDER BY similarity | `ORDER BY similarity(field, $v)` | `ORDER BY similarity(vector, $query) DESC` |
-| JOIN | `JOIN table ON condition` | `JOIN prices ON prices.id = p.id` |
-| LEFT/RIGHT/FULL JOIN | `LEFT JOIN table ON ...` | Parser/spec variants exist, runtime support pending |
-| JOIN USING | `JOIN table USING (col)` | Parser support only, runtime support pending |
-| UNION | `query1 UNION query2` | `SELECT * FROM a UNION SELECT * FROM b` |
-| INTERSECT | `query1 INTERSECT query2` | Set intersection |
-| EXCEPT | `query1 EXCEPT query2` | Set difference |
-| USING FUSION | `USING FUSION(strategy)` | `USING FUSION(strategy='rrf', k=60)` |
-| WITH options | `WITH (max_groups=N)` | `WITH (max_groups=100)` |
-
-**VelesQL v2.0 Examples:**
-
-```sql
--- Analytics with aggregation
-SELECT category, COUNT(*), AVG(price) 
-FROM products 
-GROUP BY category 
-HAVING COUNT(*) > 5 AND AVG(price) > 50
-
--- Multi-column ORDER BY with similarity
-SELECT * FROM docs 
-WHERE vector NEAR $query 
-ORDER BY similarity(vector, $query) DESC, created_at DESC 
-LIMIT 20
-
--- Cross-store JOIN
-SELECT p.name, pr.amount 
-FROM products AS p 
-JOIN prices AS pr ON pr.product_id = p.id 
-WHERE pr.amount < 100
-
--- Hybrid search with fusion (USING FUSION is a trailing clause: after LIMIT)
-SELECT * FROM docs 
-LIMIT 20 USING FUSION(strategy='rrf', k=60)
-
--- Set operations
-SELECT * FROM active_users 
-UNION 
-SELECT * FROM archived_users
-```
+Aggregation (`GROUP BY` / `HAVING`), multi-column `ORDER BY`,
+`ORDER BY similarity(...)`, JOINs (including `LEFT`/`RIGHT`/`FULL` and
+single-column `USING`), set operations (`UNION` / `INTERSECT` / `EXCEPT`),
+`USING FUSION(...)` and `WITH (...)` options are likewise covered by the
+[cheat sheet](./VELESQL_CHEATSHEET.md) and specified in
+[`VELESQL_SPEC.md`](../VELESQL_SPEC.md).
 
 ### POST /collections/:name/match
 
@@ -1348,49 +1299,17 @@ cargo feature is a default feature). Unlike `/health` and `/ready`, `/metrics`
 
 ## Python API
 
+The embedded Python binding has its own reference and is not duplicated here.
+
 ### Installation
 
-```bash
-cd crates/velesdb-python
-pip install maturin
-maturin develop --release
-```
+Covered in [`crates/velesdb-python/README.md`](../../crates/velesdb-python/README.md):
+`pip install velesdb` from PyPI, or `maturin develop --release` from a source
+checkout.
 
 ### Quick Reference
 
-```python
-import velesdb
-import numpy as np
-
-# Database
-db = velesdb.Database("./data")
-
-# Collection
-collection = db.create_collection("docs", dimension=768, metric="cosine")
-collection = db.get_collection("docs")
-db.delete_collection("docs")
-collections = db.list_collections()
-
-# Tuned HNSW at creation (typed options)
-from velesdb import HnswOptions
-collection = db.create_collection(
-    "docs_hi_recall",
-    dimension=768,
-    hnsw=HnswOptions(m=48, ef_construction=600),
-)
-# Auto-tuned for an expected dataset size:
-collection = db.create_collection(
-    "big",
-    dimension=128,
-    hnsw=HnswOptions.for_dataset_size(128, 1_000_000),
-)
-
-# Points
-collection.upsert([{"id": 1, "vector": [...], "payload": {...}}])
-points = collection.get([1])
-collection.delete([1, 2, 3])
-
-# Search (supports numpy arrays)
-results = collection.search_request(velesdb.SearchOptions(vector=query_vector, top_k=10))
-results = collection.search_request(velesdb.SearchOptions(vector=np.array([...], dtype=np.float32), top_k=10))
-```
+The full embedded surface — `Database`, `Collection`, `SearchOptions`, typed
+HNSW options, fusion strategies, sparse vectors, storage modes, bulk loading —
+is documented in the
+[Python API reference](../guides/PYTHON_API_REFERENCE.md).

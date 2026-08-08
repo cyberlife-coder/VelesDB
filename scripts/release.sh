@@ -194,11 +194,18 @@ main() {
     
     local current_version=$(get_current_version)
     local new_version=$(calculate_new_version "$current_version" "$version_type")
-    
+
     info "Version actuelle: $current_version"
     info "Nouvelle version: $new_version"
     echo ""
-    
+
+    # La 4.2.0 a été publiée sans section CHANGELOG (le fichier sautait de
+    # [Unreleased] à [4.1.0]) parce que rien ne le vérifiait. Une release ne
+    # part plus sans sa section : écrire `## [$new_version]` d'abord.
+    if ! grep -q "^## \[$new_version\]" CHANGELOG.md; then
+        error "CHANGELOG.md n'a pas de section '## [$new_version]'. Écrivez la section de release avant de publier."
+    fi
+
     read -p "Voulez-vous continuer avec la release v$new_version ? (y/n) " -n 1 -r
     echo ""
     

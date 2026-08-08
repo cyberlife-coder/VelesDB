@@ -253,4 +253,4 @@ tier is for those cases.
 - [Tuning Guide](TUNING_GUIDE.md) — HNSW + quantization parameters
 - [Configuration](CONFIGURATION.md) — `VelesConfig` reference
 - [Core Wiring Debt](../CORE_WIRING_DEBT.md) — internal engineering debt catalogue
-- [Architecture](../ARCHITECTURE.md) — overall system design
+- [Architecture](../reference/ARCHITECTURE.md) — overall system design

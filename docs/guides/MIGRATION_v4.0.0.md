@@ -127,4 +127,4 @@ raising anything.
 
 ---
 
-Last updated: 2026-07-27 · Applies to: velesdb-core 4.1.0
+Last updated: 2026-08-08 · Applies to: velesdb-core 4.3.0

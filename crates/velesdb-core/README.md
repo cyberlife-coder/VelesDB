@@ -168,7 +168,7 @@ Task guides, all moved out of this README so it stays readable:
 | [Sparse vectors and fusion](../../docs/guides/CORE_SPARSE_AND_FUSION.md) | Named sparse indexes, DAAT `MaxScore`, RRF and Relative Score fusion |
 | [Streaming inserts](../../docs/guides/CORE_STREAMING_INSERTS.md) | `StreamIngester`, backpressure, delta buffer (insert-and-search) |
 | [Query plan cache](../../docs/guides/CORE_QUERY_PLAN_CACHE.md) | Two-tier LRU cache, write-generation invalidation, `EXPLAIN` cache fields, metrics |
-| [Agent Memory SDK (Rust)](../../docs/guides/CORE_AGENT_MEMORY_RUST.md) | Semantic, episodic and procedural memory, TTL, eviction, snapshots |
+| [Agent Memory SDK (Rust)](../../docs/guides/AGENT_MEMORY.md#rust-api) | Semantic, episodic and procedural memory, TTL, eviction, snapshots |
 | [Core performance](../../docs/guides/CORE_PERFORMANCE.md) | Every published number, its measurement context, and how to reproduce it |
 | [Graph patterns](../../docs/guides/GRAPH_PATTERNS.md) · [Multi-model queries](../../docs/guides/MULTIMODEL_QUERIES.md) | Graph modelling and cross-engine statements |
 | [Search modes](../../docs/guides/SEARCH_MODES.md) · [Tuning guide](../../docs/guides/TUNING_GUIDE.md) · [Quantization](../../docs/guides/QUANTIZATION.md) | Recall/latency trade-offs |

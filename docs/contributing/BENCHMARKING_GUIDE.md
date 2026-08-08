@@ -218,7 +218,7 @@ export CARGO_INCREMENTAL=1
 
 ---
 
-## � ARM64 Benchmarks (EPIC-054)
+## 💪 ARM64 Benchmarks (EPIC-054)
 
 ### CI/CD Integration
 
@@ -291,8 +291,12 @@ python scripts/perf_phase_gate.py summary
 
 ### What the Gate Checks
 
-| Check | Threshold | Blocks PR? |
-|-------|-----------|------------|
+`perf_phase_gate.py` is a **manual tool**: it is not wired into any CI
+workflow, so it never blocks a PR on its own. Run it locally and act on a
+failed gate before pushing.
+
+| Check | Threshold | Fails the local gate? |
+|-------|-----------|-----------------------|
 | Search latency regression | > 5% | Yes |
 | Insert throughput regression | > 10% | Yes |
 | SIMD kernel regression | > 3% | Yes |
