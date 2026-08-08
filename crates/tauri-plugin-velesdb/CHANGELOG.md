@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 > **Versioning note** — the crate and its guest-js package track the VelesDB
-> workspace version (currently 4.3.0, `version.workspace = true`); the
+> workspace version (`version.workspace = true`; see the root `Cargo.toml`); the
 > `[1.11.1]` heading below is the last release under the plugin's old
 > independent versioning scheme. Plugin changes in every release since then
 > are recorded in the workspace root [`CHANGELOG.md`](../../CHANGELOG.md),
