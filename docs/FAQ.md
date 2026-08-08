@@ -39,7 +39,7 @@ For example, the legacy `Collection` type was deprecated in v1.4 and is marked `
 
 ### Are on-disk formats stable?
 
-On-disk format stability is guaranteed within a major version. If a format change is required in a minor release (as happened in v1.5 with the bincode-to-postcard migration), a migration path is provided. See `docs/guides/MIGRATION_v1.6.md` and `docs/guides/MIGRATION_v1.7.md` for recent migration guides.
+On-disk format stability is guaranteed within a major version. If a format change is required in a minor release (as happened in v1.5 with the bincode-to-postcard migration), a migration path is provided. Migration guides ship in `docs/guides/` — the most recent is [`MIGRATION_v4.0.0.md`](guides/MIGRATION_v4.0.0.md).
 
 ---
 

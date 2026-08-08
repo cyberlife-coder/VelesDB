@@ -16,7 +16,7 @@ mitigation currently in place, and the post-seed remediation plan.
 
 ## F2.2 — `AnyCollection` variant-access API & unchecked cross-cast
 
-**Audit finding**: F2.2 of the pre-seed audit (`AUDIT_VELESDB_CORE.md`).
+**Audit finding**: F2.2 of the pre-seed audit (internal report, not kept in this repository).
 
 **Summary**: the `AnyCollection` enum exposes a method that consumes
 the enum and returns a `VectorCollection` newtype regardless of the

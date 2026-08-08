@@ -50,7 +50,6 @@ each guide links back.
 
 | Guide | Description |
 |-------|-------------|
-| [CLI & REPL](./CLI_REPL.md) | Command-line interface and interactive shell |
 | [CLI command reference](./CLI_COMMAND_REFERENCE.md) | `velesdb`: every subcommand and flag, import/export formats, packaging, error reference |
 | [REPL reference](./CLI_REPL_REFERENCE.md) | `velesdb repl`: dot-commands, session commands and settings, output formats |
 | [VelesQL cookbook (CLI & REPL)](./CLI_VELESQL_COOKBOOK.md) | Runnable VelesQL snippets: vector, hybrid, sparse, temporal, graph, aggregation, JOIN |
@@ -121,8 +120,6 @@ version migration guides below.
 
 | Guide | Description |
 |-------|-------------|
-| [Migration v1.6](./MIGRATION_v1.6.md) | Version migration guide |
-| [Migration v1.7](./MIGRATION_v1.7.md) | Version migration guide |
 | [Migration v3.3.0](./MIGRATION_v3.3.0.md) | VelesQL correctness + cross-surface parity release migration guide |
 
 ## Tutorials

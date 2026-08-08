@@ -25,7 +25,7 @@ Detailed guides for using VelesDB features. **[Full guides index →](./guides/R
 | [Installation options](./guides/INSTALL_OPTIONS.md) | Decision aid: which install path to pick for core vs. agent memory |
 | [Configuration](./guides/CONFIGURATION.md) | `velesdb.toml` configuration reference |
 | [Search Modes](./guides/SEARCH_MODES.md) | Understanding Fast/Balanced/Accurate/Perfect modes |
-| [CLI & REPL](./guides/CLI_REPL.md) | Command-line interface and interactive shell |
+| [CLI reference](./guides/CLI_COMMAND_REFERENCE.md) / [REPL](./guides/CLI_REPL_REFERENCE.md) | Command-line interface and interactive shell |
 | [Quantization](./guides/QUANTIZATION.md) | Vector compression (SQ8, PQ, Binary, RaBitQ) |
 | [Tuning Guide](./guides/TUNING_GUIDE.md) | HNSW parameter tuning and performance optimization |
 | [Agent Memory](./guides/AGENT_MEMORY.md) | AI agent memory: semantic, episodic, procedural, TTL, snapshots |
@@ -39,7 +39,6 @@ Detailed guides for using VelesDB features. **[Full guides index →](./guides/R
 | [Concurrency & Locking](./guides/CONCURRENCY_LOCKING.md) | Concurrent access and file-locking behavior |
 | [Write Concurrency](./guides/WRITE_CONCURRENCY.md) | Single-writer-per-collection model, batching patterns, Enterprise tier |
 | [Use Cases](./guides/USE_CASES.md) | Common use cases and recommended configurations |
-| [Migration v1.6](./guides/MIGRATION_v1.6.md) / [v1.7](./guides/MIGRATION_v1.7.md) | Version migration guides |
 | [Migration v3.3.0](./guides/MIGRATION_v3.3.0.md) | Error codes, REST statuses and query results that changed in 3.3.0. |
 | [Migration v4.0.0](./guides/MIGRATION_v4.0.0.md) | The 4.0.0 breaking changes — start with the WASM `weighted` reordering, which is silent. |
 | [Troubleshooting](./NEW_USER_TROUBLESHOOTING.md) | Solutions for common issues new users encounter |
