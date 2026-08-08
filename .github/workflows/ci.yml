@@ -1453,7 +1453,11 @@ jobs:
       - name: Skipped — search hot path unchanged
         if: needs.perf-path-changed.outputs.relevant != 'true'
         shell: bash
-        run: echo "Search hot path unchanged; perf gate no-ops green (required checks must always run, #1465)."
+        # Block scalar, not a plain one: on a plain `run:` line a bare `#`
+        # starts a YAML comment, which truncated this echo before its closing
+        # quote and failed every no-op leg with `unexpected EOF` (#1857-era).
+        run: |
+          echo "Search hot path unchanged; perf gate no-ops green (required checks must always run, #1465)."
 
   # Last of the fold, and the one #1698 named: Git Flow, branch freshness and
   # the AI-attribution guard ran beside the required check, so none of them
