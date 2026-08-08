@@ -1,6 +1,6 @@
 # 🎯 Search Modes - Recall Configuration Guide
 
-*Version 4.3.0 -- 2026-06-12*
+*Version 4.3.0 -- Last updated: 2026-08-08*
 
 Complete guide to configuring the **recall vs latency** trade-off in VelesDB. Covers dense search (HNSW), sparse search (SPLADE/BM42), and hybrid search (dense+sparse with fusion). Includes a comparison with Milvus, OpenSearch, and Qdrant practices.
 
@@ -45,18 +45,18 @@ Recall@10 = (Number of true top-10 neighbors found) / 10 × 100%
                     Latency
                         ↑
                         │
-          Fast ●────────┤  < 1ms    (~92% recall)
+          Fast ●────────┤  < 1ms    (~95% recall)
                         │
       Adaptive ●╌╌╌╌╌╌╌┤  ~1-5ms   (95%+ recall, auto-escalation)
                         │
-      Balanced ●────────┤  ~2ms     (~99% recall)
+      Balanced ●────────┤  ~2ms     (~99.5% recall)
                         │
       Accurate ●────────┤  ~5ms     (~99.5%+ recall)
                         │
        Perfect ●────────┤  ~15ms+   (100% recall, exhaustive HNSW)
                         │
         ────────────────┴────────────────→ Recall
-                   92%      95%      99%   100%
+                   95%      99%     99.5%  100%
 ```
 
 > The **Adaptive** mode is shown with a dashed line because its latency varies with query difficulty.
@@ -73,8 +73,8 @@ VelesDB exposes 5 predefined **presets** plus a `Custom` mode via the `SearchQua
 
 | Parameter | Value |
 |-----------|--------|
-| `ef_search` | `max(64, k × 2)` |
-| Typical recall | ~92% |
+| `ef_search` | `max(96, k × 3)` |
+| Typical recall | ~95% |
 | Latency (100K vecs, 768D) | < 1 ms |
 
 **Use cases:**
@@ -83,8 +83,8 @@ VelesDB exposes 5 predefined **presets** plus a `Custom` mode via the `SearchQua
 - Rapid prototyping
 
 ```rust
-// ef_search = max(64, k * 2) = 64
-collection.search_with_ef(&query, 10, 64)?;
+// ef_search = max(96, k * 3) = 96
+collection.search_with_ef(&query, 10, 96)?;
 ```
 
 ---
@@ -93,8 +93,8 @@ collection.search_with_ef(&query, 10, 64)?;
 
 | Parameter | Value |
 |-----------|--------|
-| `ef_search` | `max(128, k × 4)` |
-| Typical recall | ~99% |
+| `ef_search` | `max(160, k × 5)` |
+| Typical recall | ~99.5% |
 | Latency (100K vecs, 768D) | ~2 ms |
 
 **Use cases:**
@@ -456,10 +456,10 @@ USING FUSION(strategy = 'rsf', dense_weight = 0.7, sparse_weight = 0.3)
 **Milvus equivalence:**
 ```python
 # Milvus
-search_params = {"metric_type": "COSINE", "params": {"ef": 128}}
+search_params = {"metric_type": "COSINE", "params": {"ef": 160}}
 
 # VelesDB equivalent
-SearchQuality::Balanced  // ef_search = 128
+SearchQuality::Balanced  // ef_search = 160
 ```
 
 ### VelesDB vs OpenSearch
@@ -505,7 +505,7 @@ SearchQuality::Accurate  // ef_search = 512
 {
   "vector": [...],
   "limit": 10,
-  "params": { "hnsw_ef": 128, "exact": false }
+  "params": { "hnsw_ef": 160, "exact": false }
 }
 
 // VelesDB equivalent
@@ -516,8 +516,8 @@ SearchQuality::Balanced
 
 | VelesDB Mode | ef_search | Milvus ef | OpenSearch ef_search | Qdrant hnsw_ef |
 |--------------|-----------|-----------|----------------------|----------------|
-| Fast | 64 | 64 | 64 | 64 |
-| Balanced | 128 | 128 | 128 | 128 |
+| Fast | 96 | 96 | 96 | 96 |
+| Balanced | 160 | 160 | 160 | 160 |
 | Accurate | 512 | 512 | 512 | 512 |
 | Perfect | 4096 | FLAT index | `"exact": true` | `"exact": true` |
 
@@ -600,14 +600,14 @@ SearchQuality::Accurate
 ```rust
 use velesdb_core::VectorCollection;
 
-// Method 1: Default mode (Balanced, ef_search=128)
+// Method 1: Default mode (Balanced, ef_search=160)
 let results = collection.search(&query_vector, 10)?;
 
 // Method 2: Custom ef_search (high precision)
 let results = collection.search_with_ef(&query_vector, 10, 1024)?;
 
 // Method 3: ef_search for fast mode
-let results = collection.search_with_ef(&query_vector, 10, 64)?;
+let results = collection.search_with_ef(&query_vector, 10, 96)?;
 
 // Method 4: Perfect mode (exhaustive HNSW, ef_search=4096)
 let results = collection.search_with_ef(&query_vector, 10, 4096)?;
@@ -711,8 +711,8 @@ velesdb> SELECT * FROM products WHERE vector NEAR $v LIMIT 10;
 
 | Mode | ef_search | Recall@10 | p50 latency | p99 latency | QPS |
 |------|-----------|-----------|-------------|-------------|-----|
-| Fast | 64 | ~92% | 0.8 ms | 1.5 ms | 12,500 |
-| Balanced | 128 | ~99% | 1.9 ms | 3.2 ms | 5,200 |
+| Fast | 96 | ~95% | 0.8 ms | 1.5 ms | 12,500 |
+| Balanced | 160 | ~99.5% | 1.9 ms | 3.2 ms | 5,200 |
 | Accurate | 512 | ~99.5% | 4.1 ms | 6.8 ms | 2,400 |
 | Perfect | 4096 | 100.0% | 14.2 ms | 22.1 ms | 700 |
 
@@ -752,7 +752,7 @@ velesdb> SELECT * FROM products WHERE vector NEAR $v LIMIT 10;
 
 ```rust
 // Benchmark recall
-let ann_results = collection.search(&query, 10)?;           // Balanced (ef_search=128)
+let ann_results = collection.search(&query, 10)?;           // Balanced (ef_search=160)
 let exact_results = collection.search_with_ef(&query, 10, 4096)?; // Perfect (100% recall)
 
 let recall = calculate_recall(&ann_results, &exact_results);
@@ -778,4 +778,4 @@ println!("Recall@10: {:.1}%", recall * 100.0);
 
 ---
 
-*VelesDB Documentation -- 2026-06-12*
+*VelesDB Documentation -- Last updated: 2026-08-08 · Applies to: velesdb-core 4.3.0*

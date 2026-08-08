@@ -4,7 +4,7 @@ This document specifies the **explicit, enforceable thresholds** below which Vel
 
 These gates are not aspirational. They are enforced via CI workflows, scripts, and explicit pre-merge protocols. Each gate listed here links to its enforcement mechanism so that the gate can be inspected, contested, or extended publicly.
 
-> **Last updated:** 2026-07-16 — applies to v3.x and onward.
+> **Last updated:** 2026-08-08 — applies to v4.x (workspace 4.3.0).
 
 ---
 
@@ -76,7 +76,7 @@ A pull request that breaks any of these gates **cannot be merged**. There are no
 
 **Enforcement:**
 
-- **CI gate (blocking):** [`.github/workflows/perf-gate-e2e.yml`](.github/workflows/perf-gate-e2e.yml) runs `benchmarks/velesdb_benchmark.py --datasets 10000 --recall --json` on every PR that touches `crates/velesdb-core/src/{index,simd_native,quantization,fusion,wal,storage}/`, `crates/velesdb-python/`, or `benchmarks/velesdb_benchmark.py`. The recall@10 ≥ 0.95 bound (Gate 1) is gated at the contract threshold; the p50 bound is gated at a deliberately loose **1500 µs sanity floor** that catches order-of-magnitude algorithmic regressions without flaking on the ~3-4× slower GitHub-hosted runner. The canonical 450 µs claim itself is preserved by local + release-engineering measurement on the i9-14900KF reference machine.
+- **CI gate** (separate workflow — not in `CI Success`'s `needs:`, so it flags rather than holds a merge): [`.github/workflows/perf-gate-e2e.yml`](.github/workflows/perf-gate-e2e.yml) runs `benchmarks/velesdb_benchmark.py --datasets 10000 --recall --json` on every PR that touches `crates/velesdb-core/src/{index,simd_native,quantization,fusion,wal,storage}/`, `crates/velesdb-python/`, or `benchmarks/velesdb_benchmark.py`. The recall@10 ≥ 0.95 bound (Gate 1) is gated at the contract threshold; the p50 bound is gated at a deliberately loose **1500 µs sanity floor** that catches order-of-magnitude algorithmic regressions without flaking on the ~3-4× slower GitHub-hosted runner. The canonical 450 µs claim itself is preserved by local + release-engineering measurement on the i9-14900KF reference machine.
 - **Reproducible benchmark:** `python benchmarks/velesdb_benchmark.py --recall`
 - **Source:** `CHANGELOG.md` v1.13.0 (measured 2026-03-27, baseline preserved through pre-seed remediation phases)
 - **Promise contract:** [`docs/reference/promise-contract.json`](docs/reference/promise-contract.json) entry `readme_production_search_latency` enforces the exact substring `**450 us**` in `README.md`.
@@ -131,7 +131,7 @@ These are **not the same number** as the canonical 450 µs. The README explicitl
 - **Coverage:** every unsafe site in the workspace is annotated; live counts (unsafe sites and `// SAFETY:` comments) are reported by the script in CI logs and tracked release-over-release in `CHANGELOG.md`.
 - **Audit trail:** [`docs/SOUNDNESS.md`](docs/SOUNDNESS.md) documents invariants for every unsafe pattern in the codebase.
 
-**External audit:** Planned in v1.15 horizon (Cure53 / independent Rust safety expert), conditional on funding.
+**External audit:** Planned (Cure53 / independent Rust safety expert), conditional on funding.
 
 ---
 
@@ -166,8 +166,8 @@ These are **not the same number** as the canonical 450 µs. The README explicitl
 |------|------|------|
 | `simd_native/x86_avx512.rs` | 1468 | Hard to split (intrinsics block); accepted exception |
 | `simd_native/neon.rs` | 902 | Same as above |
-| `velesdb-server/src/config.rs` | 837 | v1.15 — refactor planned |
-| `velesdb-migrate/src/pipeline.rs` | 806 | v1.15 — refactor planned |
+| `velesdb-server/src/config.rs` | 837 | Refactor pending |
+| `velesdb-migrate/src/pipeline.rs` | 806 | Refactor pending |
 
 These are tracked but do not block release because they are SIMD intrinsics blocks (function-level NLOC is fine; file-level breach is unavoidable for hand-written intrinsics).
 
@@ -210,14 +210,14 @@ These signals are tracked but do not block release individually:
 Before tagging any release (patch, minor, major), all of the following must be **green**:
 
 - [ ] Local: `cargo fmt --all -- --check`
-- [ ] Local: `cargo clippy --workspace --all-targets --features persistence,gpu,update-check --exclude velesdb-python -- -D warnings -D clippy::pedantic`
+- [ ] Local: `cargo clippy --workspace --all-targets --features persistence,gpu,update-check --exclude velesdb-python --exclude velesdb-node -- -D warnings -D clippy::pedantic` (then `cargo clippy -p velesdb-node --lib` and `PYO3_PYTHON=python3 cargo clippy -p velesdb-python --lib`, each `-D warnings` — both are excluded above for link reasons)
 - [ ] Local: `cargo test --workspace --features persistence,gpu,update-check --exclude velesdb-python -- --test-threads=1`
 - [ ] Local: `python scripts/check_prod_unwraps.py`
 - [ ] Local: `python scripts/check-promise-contract.py`
-- [ ] Local: `wsl -- bash -c "codacy-cli analyze"` (Codacy CLI in WSL)
+- [ ] Local: `codacy-cli analyze` (via WSL on Windows)
 - [ ] CI on `develop`: all jobs green for last 3 commits
 - [ ] If search path touched: recall test ≥ 0.95
-- [ ] If perf optimization: `python scripts/perf_phase_gate.py gate --phase <ID>` exit code 0
+- [ ] If perf optimization: `python scripts/perf_phase_gate.py gate --phase <ID>` exit code 0 (manual tool — wired to no workflow; see `scripts/guards.json`)
 - [ ] CHANGELOG.md updated with conventional commit subject groups
 - [ ] All numeric claims in CHANGELOG/README updated in `promise-contract.json`
 - [ ] Automated code review on the release PR: clean

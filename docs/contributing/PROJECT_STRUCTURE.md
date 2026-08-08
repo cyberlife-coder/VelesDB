@@ -2,7 +2,7 @@
 
 ## Overview
 
-VelesDB-Core is a **Cargo workspace** containing eight crates. It is the open-source engine for the VelesDB vector database combining Vector + Graph + ColumnStore in a single engine.
+VelesDB-Core is a **Cargo workspace** containing ten crates. It is the open-source engine for the VelesDB vector database combining Vector + Graph + ColumnStore in a single engine.
 
 ```
 velesdb-core/
@@ -121,7 +121,10 @@ velesdb-core/
 │
 ├── integrations/
 │   ├── common/                # Shared integration utilities
+│   ├── agent-hooks/           # Agent memory hooks
+│   ├── haystack/              # Haystack DocumentStore
 │   ├── langchain/             # LangChain VectorStore
+│   ├── langgraph/             # LangGraph checkpointer/store
 │   └── llamaindex/            # LlamaIndex VectorStore
 │
 ├── conformance/               # VelesQL cross-ecosystem conformance cases

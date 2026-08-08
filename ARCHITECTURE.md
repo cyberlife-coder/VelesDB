@@ -2,7 +2,7 @@
 
 This document is the **15-minute read** an engineer or a technical due-diligence reviewer should start with. It tells you what VelesDB is, how it is shaped, and where to dig deeper.
 
-> **Last updated:** 2026-07-16 — applies to v3.x and onward.
+> **Last updated:** 2026-08-08 — applies to v4.x (workspace 4.3.0).
 
 ---
 
@@ -69,7 +69,7 @@ For component-level box diagrams, see [`docs/reference/ARCHITECTURE.md`](docs/re
 
 ## The crates
 
-The workspace is laid out as eight crates with one-way dependencies (no cycles).
+The workspace is laid out as ten crates with one-way dependencies (no cycles).
 
 | Crate | Role | Public surface | Notes |
 |-------|------|---------------|-------|
@@ -80,7 +80,7 @@ The workspace is laid out as eight crates with one-way dependencies (no cycles).
 | **`velesdb-mobile`** | iOS / Android bindings via UniFFI. | Swift + Kotlin | One binding crate, two outputs. |
 | **`velesdb-cli`** | Interactive REPL for VelesQL. | Single binary | Wraps `velesdb-core`. |
 | **`velesdb-migrate`** | Migration tooling: import from Pinecone / Qdrant / Milvus / Weaviate / Chroma / Elasticsearch / Redis. | CLI tool | Strategic candidate to extract to a separate repo (see ROADMAP.md Horizon 4). |
-| **`velesdb-memory`** | Local-first MCP agent-memory server: the high-level `MemoryService` wedge (remember/recall/recall_where/relate/forget/why/remember_extracted) plus the deterministic context compiler (`compile_context` / `context_savings` / `explain_compilation` / `retrieve_context_source`). | MCP server + Rust/Python/Node API | Independent `0.1.0` cadence. Depends on `velesdb-core` (not the engine's `3.x` line). |
+| **`velesdb-memory`** | Local-first MCP agent-memory server: the high-level `MemoryService` wedge (remember/recall/recall_where/relate/forget/why/remember_extracted) plus the deterministic context compiler (`compile_context` / `context_savings` / `explain_compilation` / `retrieve_context_source`). | MCP server + Rust/Python/Node API | Independent `0.x` cadence (currently 0.12.0). Depends on `velesdb-core` (not the engine's `4.x` line). |
 | **`velesdb-node`** | Node.js (napi-rs) binding of the memory wedge. | `@wiscale/velesdb-memory-node` (npm) | Depends on `velesdb-memory` only (never `velesdb-core` directly) — the license boundary. |
 | **`tauri-plugin-velesdb`** | Tauri desktop integration. | Plugin | Used by `demos/tauri-rag-app`. |
 

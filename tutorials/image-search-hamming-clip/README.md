@@ -620,5 +620,5 @@ shortlist K.
 
 *Companion code: [`examples/tutorials/image_search_hamming_clip.py`](../../examples/tutorials/image_search_hamming_clip.py)*
 
-*VelesDB is source-available under the Elastic License 2.0.*
+*VelesDB is source-available under the VelesDB Core License 1.0.*
 *GitHub stars welcome: [github.com/cyberlife-coder/VelesDB](https://github.com/cyberlife-coder/VelesDB)*

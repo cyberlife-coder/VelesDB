@@ -66,10 +66,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   avoids the issue entirely.
 
 ### Note
-- Versions 1.12 through the current 3.12.0 (workspace-wide version bumps)
-  are tracked in the workspace root `CHANGELOG.md`, not here; this file's
-  per-crate entries resume from this point rather than inventing history
-  for the skipped range.
+- Versions 1.12 through the current workspace version (4.3.0; the crate is
+  workspace-versioned) are tracked in the workspace root `CHANGELOG.md`, not
+  here; this file's per-crate entries resume from this point rather than
+  inventing history for the skipped range.
 
 ### Added
 - **`MemoryService`**: `compileTranscript`, `explainCompilation`,

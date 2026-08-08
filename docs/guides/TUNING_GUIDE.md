@@ -202,8 +202,8 @@ parameter with dynamic scaling based on the requested result count `k`.
 
 | Variant | Base ef_search | Scaling | Approx. Recall | Use Case |
 |---------|---------------|---------|----------------|----------|
-| `Fast` | 64 | max(64, k*2) | ~92% | Real-time serving, low latency |
-| `Balanced` (default) | 128 | max(128, k*4) | ~99% | General purpose, production |
+| `Fast` | 96 | max(96, k*3) | ~95% | Real-time serving, low latency |
+| `Balanced` (default) | 160 | max(160, k*5) | ~99.5% | General purpose, production |
 | `Accurate` | 512 | max(512, k*16) | ~100% | Analytics, batch processing |
 | `Perfect` | 4096 | max(4096, k*100) | 100% | Ground truth, evaluation |
 | `Custom(n)` | n | n | Varies | Fine-grained control |
@@ -257,8 +257,8 @@ configuration level.
 
 | Variant | ef_search | Use Case |
 |---------|-----------|----------|
-| `Fast` | 64 | Real-time serving |
-| `Balanced` (default) | 128 | General purpose |
+| `Fast` | 96 | Real-time serving |
+| `Balanced` (default) | 160 | General purpose |
 | `Accurate` | 512 | Analytics |
 | `Perfect` | exhaustive | Ground truth |
 
@@ -534,7 +534,7 @@ built-in search handles alignment internally.
 
 3. **ef_search scales with k**: `SearchQuality` automatically scales `ef_search` with
    the number of requested results. Requesting `k=100` with `Balanced` uses
-   `max(128, 400)` = 400, not 128.
+   `max(160, 500)` = 500, not 160.
 
 4. **Quantize after tuning**: Get your HNSW parameters right with `StorageMode::Full`
    first, then switch to SQ8/Binary and verify recall is acceptable.

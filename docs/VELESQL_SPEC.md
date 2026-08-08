@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector + graph + column-store search in VelesDB.
 
-**Version**: 3.10.0 | Last updated: 2026-07-26 · Applies to: velesdb-core 4.3.0
+**Version**: 3.10.0 | Last updated: 2026-08-08 · Applies to: velesdb-core 4.3.0
 
 ---
 
@@ -1528,7 +1528,7 @@ WITH (mode = 'accurate', ef_search = 512, timeout_ms = 5000)
 
 | Option | Type | Values | Description |
 |--------|------|--------|-------------|
-| `mode` | string | `fast`, `balanced`, `accurate`, `perfect`, `autotune` | Search quality preset (maps to ef_search: 64/128/512/4096/auto) |
+| `mode` | string | `fast`, `balanced`, `accurate`, `perfect`, `autotune` | Search quality preset (maps to ef_search: 96/160/512/4096/auto) |
 | `quality` | string | same as `mode` | Alias for `mode` (v3.5+). If both are set, `mode` takes precedence. |
 | `ef_search` | integer | 16--4096 | HNSW ef_search parameter (overrides `mode`) |
 | `timeout_ms` | integer | >= 100 | Per-query timeout in milliseconds |
@@ -2979,7 +2979,7 @@ SELECT id AS `select` FROM docs
 | WITH mode | balanced | |
 | USING FUSION strategy | rrf | |
 | USING FUSION k | 60 | |
-| ef_search | Depends on mode | fast=32, balanced=64, accurate=256, perfect=512 |
+| ef_search | Depends on mode | fast=96, balanced=160, accurate=512, perfect=4096 |
 
 ---
 
@@ -3073,13 +3073,6 @@ SELECT * FROM places WHERE GEO_BBOX(location, 48.8, 2.3, 48.9, 2.4);
 - Boundary is inclusive: points exactly on the edge are included.
 - Inverted coordinates (`lat_min > lat_max`) return empty results.
 - Null GeoPoint values are excluded from results.
-| NOT IN | `column NOT IN (values)` | `WHERE status NOT IN ('deleted')` |
-| BETWEEN | `column BETWEEN a AND b` | `WHERE price BETWEEN 10 AND 100` |
-| LIKE | `column LIKE 'pattern'` | `WHERE name LIKE 'John%'` |
-| ILIKE | `column ILIKE 'pattern'` | `WHERE name ILIKE '%john%'` |
-| IS NULL | `column IS NULL` | `WHERE deleted_at IS NULL` |
-| IS NOT NULL | `column IS NOT NULL` | `WHERE email IS NOT NULL` |
-| AND / OR / NOT | logical combinators | `WHERE a > 1 AND (b = 2 OR c = 3)` |
 
 ### Clauses
 

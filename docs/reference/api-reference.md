@@ -2,7 +2,7 @@
 
 Complete REST API documentation for VelesDB.
 
-> **Last updated**: 2026-07-23 (VelesDB v3.12.0). The machine-readable source of
+> **Last updated**: 2026-08-08 (VelesDB v4.3.0). The machine-readable source of
 > truth is [`docs/openapi.yaml`](../openapi.yaml), regenerated from the server's
 > annotated handlers and drift-checked in CI; this page is the human-readable
 > companion.
@@ -911,8 +911,8 @@ Execute aggregation-only VelesQL queries.
 | ORDER BY multi | `ORDER BY col1, col2` | `ORDER BY category, price DESC` |
 | ORDER BY similarity | `ORDER BY similarity(field, $v)` | `ORDER BY similarity(vector, $query) DESC` |
 | JOIN | `JOIN table ON condition` | `JOIN prices ON prices.id = p.id` |
-| LEFT/RIGHT/FULL JOIN | `LEFT JOIN table ON ...` | Parser/spec variants exist, runtime support pending |
-| JOIN USING | `JOIN table USING (col)` | Parser support only, runtime support pending |
+| LEFT/RIGHT/FULL JOIN | `LEFT JOIN table ON ...` | `LEFT JOIN prices ON prices.id = p.id` |
+| JOIN USING | `JOIN table USING (col)` | Single-column USING only; multi-column USING is rejected |
 | UNION | `query1 UNION query2` | `SELECT * FROM a UNION SELECT * FROM b` |
 | INTERSECT | `query1 INTERSECT query2` | Set intersection |
 | EXCEPT | `query1 EXCEPT query2` | Set difference |
