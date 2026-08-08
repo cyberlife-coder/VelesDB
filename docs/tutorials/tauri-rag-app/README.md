@@ -46,7 +46,7 @@ A desktop application that:
 ### Required Software
 
 ```bash
-# Rust (1.70+)
+# Rust (1.90+)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Node.js (18+)
@@ -142,10 +142,10 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-shell = "2"
-tauri-plugin-velesdb = "1"  # Add VelesDB plugin
+tauri-plugin-velesdb = "4.3.0"  # Add VelesDB plugin
+velesdb-core = { version = "4.3.0", features = ["persistence"] }  # Core types (Point, DistanceMetric)
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-thiserror = "1"
 
 [features]
 default = ["custom-protocol"]
@@ -206,7 +206,25 @@ Create `src-tauri/src/commands.rs`:
 //! Tauri commands for RAG operations
 
 use serde::{Deserialize, Serialize};
-use tauri_plugin_velesdb::VelesDbExt;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use tauri::{AppHandle, Manager};
+use tauri_plugin_velesdb::{Error as PluginError, VelesDbState};
+use velesdb_core::{Database, DistanceMetric, Point};
+
+/// Name of the persistent VectorCollection used for RAG.
+const COLLECTION: &str = "rag-docs";
+
+/// Dimension of the (placeholder) embeddings.
+const EMBEDDING_DIM: usize = 128;
+
+/// Monotonic chunk-ID counter, seeded from the persisted collection on first use
+/// so IDs never collide across app restarts.
+static NEXT_CHUNK_ID: AtomicU64 = AtomicU64::new(0);
+
+fn next_id() -> u64 {
+    NEXT_CHUNK_ID.fetch_add(1, Ordering::Relaxed)
+}
 
 /// Document chunk with text and embedding
 #[derive(Debug, Clone, Serialize, Deserialize)]
