@@ -1481,3 +1481,214 @@ async fn an_outline_configured_server_builds_a_hub_that_entity_finds() {
          incoming {incoming:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Autograph wiring at SERVER level (#1846/#1851)
+// ---------------------------------------------------------------------------
+//
+// `McpServer::new` does three load-bearing things when the service carries an
+// autograph extractor: it spawns the background worker (sized
+// `limits::MAX_AUTOGRAPH_QUEUE`), it keeps the returned
+// `AutographWorkerHandle` so the SERVER's own drop bounds shutdown, and it
+// falls back inline with a warning if the spawn is refused. The service-level
+// suite (tests/autograph_async_bdd.rs) proves the worker itself; nothing
+// proved the server WIRED it — a regression to the pre-#1851 construction
+// (no spawn, enrichment inline on the tool path) passes every service test
+// and hangs every MCP client on the model's generation time.
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+use crate::extract::{ExtractError, ExtractedFact, ExtractedRelation, Extraction, Extractor};
+
+/// The gate idiom from tests/autograph_async_bdd.rs: `extract_graph` blocks
+/// until the test RELEASES it, so every timing claim below is an event,
+/// never a sleep. `entered` flips BEFORE the block — the observable
+/// "job is in flight" event — and `completed` after it.
+struct GatedServerExtractor {
+    gate: Mutex<Receiver<()>>,
+    entered: AtomicUsize,
+    completed: AtomicUsize,
+}
+
+impl GatedServerExtractor {
+    fn new() -> (Arc<Self>, SyncSender<()>) {
+        let (tx, rx) = sync_channel::<()>(64);
+        (
+            Arc::new(Self {
+                gate: Mutex::new(rx),
+                entered: AtomicUsize::new(0),
+                completed: AtomicUsize::new(0),
+            }),
+            tx,
+        )
+    }
+}
+
+impl Extractor for GatedServerExtractor {
+    fn extract(&self, _text: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
+        Ok(Vec::new())
+    }
+
+    fn extract_graph(&self, _text: &str) -> Result<Extraction, ExtractError> {
+        self.entered.fetch_add(1, Ordering::SeqCst);
+        self.gate
+            .lock()
+            .expect("gate lock")
+            .recv()
+            .map_err(|_| ExtractError::Backend("gate closed".to_owned()))?;
+        self.completed.fetch_add(1, Ordering::SeqCst);
+        Ok(Extraction {
+            facts: Vec::new(),
+            relations: vec![ExtractedRelation {
+                subject: "alice martin".to_owned(),
+                predicate: "travaille chez".to_owned(),
+                object: "wiscale".to_owned(),
+            }],
+            attributes: Vec::new(),
+        })
+    }
+}
+
+/// A server over a service that carries the gated extractor as autograph,
+/// plus the release channel. The [`TempDir`] must outlive everything.
+fn gated_server() -> (TempDir, McpServer, Arc<GatedServerExtractor>, SyncSender<()>) {
+    let dir = TempDir::new().expect("create tempdir");
+    let embedder: DynEmbedder = Box::new(HashEmbedder::new(crate::DEFAULT_DIMENSION));
+    let (extractor, release) = GatedServerExtractor::new();
+    let service = MemoryService::open(dir.path(), embedder)
+        .expect("open memory store")
+        .with_autograph(extractor.clone());
+    (dir, McpServer::new(service), extractor, release)
+}
+
+/// Poll until `probe` answers true — the event, not the clock (#1793).
+fn wait_for(deadline: Duration, mut probe: impl FnMut() -> bool) -> bool {
+    let end = Instant::now() + deadline;
+    loop {
+        if probe() {
+            return true;
+        }
+        if Instant::now() >= end {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[tokio::test]
+async fn remember_tool_answers_while_the_autograph_gate_is_still_shut() {
+    let (_dir, srv, _extractor, release) = gated_server();
+
+    // The wiring itself, before any call: the constructor must have spawned
+    // the worker and kept its handle. Without the handle there is no queue,
+    // and without the queue `remember` runs the enrichment inline.
+    assert!(
+        srv._autograph_worker.is_some(),
+        "constructing the server over an autograph-carrying service must \
+         spawn the background worker and STORE its handle — the handle is \
+         what makes the server's drop bound shutdown"
+    );
+    assert!(
+        srv.service.autograph_queue_open(),
+        "the spawned worker's queue must be open, so remember enqueues \
+         instead of running the enrichment on the response path"
+    );
+
+    // The extractor is GATED shut: an inline autograph could not return at
+    // all. The tool must answer on the write's own budget.
+    let started = Instant::now();
+    let Json(_stored) = srv
+        .remember(Parameters(RememberParams {
+            fact: "Alice Martin travaille chez Wiscale.".to_owned(),
+            links: Vec::new(),
+            metadata: None,
+            ttl_seconds: None,
+        }))
+        .await
+        .expect("remember");
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "the remember TOOL must answer with the extractor gate still SHUT — \
+         it took {elapsed:?}, so the enrichment sat on the server's response \
+         path, the exact pre-#1851 behaviour"
+    );
+
+    // Deferred is not dropped: release the enrichment and require the entity
+    // TOOL to see the wired edge within a bounded wait (an event poll).
+    release.send(()).expect("release the gated extraction");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let Json(profile) = srv
+            .entity(Parameters(EntityParams {
+                name: "alice martin".to_owned(),
+            }))
+            .await
+            .expect("entity");
+        if profile.found && !profile.relations.is_empty() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the deferred enrichment must eventually wire alice martin's \
+             edge — deferred is not dropped"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test]
+async fn dropping_the_server_bounds_shutdown_and_skips_queued_jobs() {
+    let (_dir, srv, extractor, release) = gated_server();
+    let service = Arc::clone(&srv.service);
+
+    // Three writes: job 0 is dequeued by the worker and BLOCKS on the gate;
+    // jobs 1 and 2 sit in the queue. `entered == 1` is the event proving
+    // job 0 is IN FLIGHT before the drop — not a wall-clock guess.
+    for i in 0..3 {
+        srv.remember(Parameters(RememberParams {
+            fact: format!("fait en rafale numero {i}"),
+            links: Vec::new(),
+            metadata: None,
+            ttl_seconds: None,
+        }))
+        .await
+        .expect("remember");
+    }
+    assert!(
+        wait_for(Duration::from_secs(5), || {
+            extractor.entered.load(Ordering::SeqCst) == 1
+        }),
+        "the worker must have dequeued job 0 and be blocked on the gate"
+    );
+
+    // Drop the server on a side thread: the handle it stores is the ONLY
+    // thing that closes the queue and joins the worker.
+    let started = Instant::now();
+    let joiner = std::thread::spawn(move || drop(srv));
+    assert!(
+        wait_for(Duration::from_secs(5), || !service.autograph_queue_open()),
+        "dropping the server must close the autograph queue via the stored \
+         worker handle"
+    );
+    release.send(()).expect("release the in-flight job");
+    joiner.join().expect("join the dropping thread");
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "shutdown is BOUNDED: it waits for at most the ONE in-flight \
+         generation, never the queue behind it"
+    );
+    assert_eq!(
+        extractor.completed.load(Ordering::SeqCst),
+        1,
+        "only the in-flight job is wired on shutdown"
+    );
+    assert_eq!(
+        service.autograph_dropped(),
+        2,
+        "the two still-queued jobs are SKIPPED and counted, not waited out"
+    );
+}
