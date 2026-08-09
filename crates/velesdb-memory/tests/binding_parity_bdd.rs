@@ -172,36 +172,6 @@ const EXEMPTIONS: &[Exemption] = &[
                  NativeStore/filesystem code into the very bundle this binding exists to avoid",
     },
     Exemption {
-        binding: "velesdb-node",
-        tool: "memory_status",
-        reason: "memory_status reports SERVER-RUNTIME state a binding host already holds in its \
-                 own hands: the embedder identity is whatever the host constructed (there is no \
-                 env-var resolution to reveal), and the daemon's provenance record lives with the \
-                 daemon's store. The counts (facts/edges) would be genuinely useful here — a \
-                 language-level stats accessor is its own change, tracked with the reembed work",
-    },
-    Exemption {
-        binding: "velesdb-python",
-        tool: "memory_status",
-        reason: "same as velesdb-node: the host constructs its embedder explicitly, so the \
-                 status tool's central answer (which embedder actually runs, is recall semantic) \
-                 is the caller's own constructor argument; a stats accessor for the counts is \
-                 tracked as its own change",
-    },
-    Exemption {
-        binding: "velesdb-node",
-        tool: "list_memories",
-        reason: "the audit walk pages through MemoryStore::list, which only the native \
-                 store implements today; the binding surface for it rides the same planned \
-                 change as the stats accessor - one language-level inspection API",
-    },
-    Exemption {
-        binding: "velesdb-python",
-        tool: "list_memories",
-        reason: "same as velesdb-node: one planned language-level inspection API covers \
-                 listing and stats together",
-    },
-    Exemption {
         binding: "velesdb-wasm",
         tool: "list_memories",
         reason: "the WASM backend keeps MemoryStore::list default refusal - its in-memory \

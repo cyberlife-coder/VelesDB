@@ -360,6 +360,14 @@ fn fusion_options_from_dict(options: Option<&Bound<'_, PyDict>>) -> PyResult<Fus
 #[pyclass(name = "MemoryService")]
 pub struct PyMemoryService {
     svc: MemoryService<DynEmbedder>,
+    /// The embedder identity resolved at construction — what
+    /// `memory_status` reports as RUNNING. The service itself only ever
+    /// sees `&[f32]`, so the constructor is the one place that knows.
+    embedder_model: String,
+    embedder_dimension: usize,
+    /// Where the store lives, for the provenance block of `memory_status`
+    /// (#1751's on-disk record).
+    store_dir: std::path::PathBuf,
 }
 
 #[pymethods]
@@ -378,9 +386,21 @@ impl PyMemoryService {
         ollama_url: Option<String>,
         ollama_model: Option<String>,
     ) -> PyResult<Self> {
+        let embedder_model = match embedder {
+            "hash" => "hash".to_owned(),
+            _ => ollama_model
+                .clone()
+                .unwrap_or_else(|| DEFAULT_OLLAMA_MODEL.to_owned()),
+        };
         let emb = build_embedder(embedder, ollama_url, ollama_model)?;
+        let embedder_dimension = emb.dimension();
         let svc = MemoryService::open(&path, emb).map_err(to_py_err)?;
-        Ok(Self { svc })
+        Ok(Self {
+            svc,
+            embedder_model,
+            embedder_dimension,
+            store_dir: std::path::PathBuf::from(path),
+        })
     }
 
     /// Store a fact; returns its stable id. `links` is a list of `(target_id,
@@ -872,6 +892,86 @@ impl PyMemoryService {
     ///     ``{"found": bool, "working": dict | None, "other_sessions":
     ///     [str]}``. Ids stay native Python ints here (unlimited precision),
     ///     unlike the JS bindings' decimal strings.
+    /// The server's health, in the SAME envelope the MCP `memory_status`
+    /// tool returns: which embedder RUNS (`embedder["semantic"] is False`
+    /// means the offline `hash` default — recall matches surface form, not
+    /// meaning), what the store was FILLED by per its on-disk provenance
+    /// record, the extraction wiring (this binding passes its extractor per
+    /// `remember_extracted` call, so nothing is pre-attached and the
+    /// autograph fields report the service's actual state), and the corpus
+    /// size — `memory["edges"] == 0` is the observable "why() has nothing
+    /// to walk" state.
+    fn memory_status(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let (recorded, facts, edges) = py.detach(|| {
+            let recorded = velesdb_memory::embedding_provenance::read(&self.store_dir)
+                .ok()
+                .flatten();
+            (recorded, self.svc.fact_count(), self.svc.edge_count())
+        });
+        let provenance = match recorded {
+            Some(record) => serde_json::json!({
+                "recorded": true, "model": record.model, "dimension": record.dimension
+            }),
+            None => serde_json::json!({
+                "recorded": false, "model": null, "dimension": null
+            }),
+        };
+        let status = serde_json::json!({
+            "embedder": {
+                "model": self.embedder_model,
+                "dimension": self.embedder_dimension,
+                "semantic": self.embedder_model != "hash",
+            },
+            "provenance": provenance,
+            "extraction": {
+                "configured": self.svc.has_autograph(),
+                "autograph_active": self.svc.autograph_queue_open(),
+                "autograph_dropped": self.svc.autograph_dropped(),
+            },
+            "memory": { "facts": facts, "edges": edges },
+        });
+        Ok(json_to_python(py, &status))
+    }
+
+    /// Audit the store page by page — the SAME walk and envelope as the MCP
+    /// `list_memories` tool: ids ascending, TTL-expired facts skipped,
+    /// metadata under recall's visibility rule unless `include_internal`.
+    /// `cursor` is the previous page's `next_cursor`; `None` ends the walk.
+    /// A filtered page may come back sparse — keep following the cursor,
+    /// the walk stays exhaustive.
+    #[pyo3(signature = (cursor = None, limit = 50, filter = None, include_internal = false))]
+    fn list_memories(
+        &self,
+        py: Python<'_>,
+        cursor: Option<u64>,
+        limit: usize,
+        filter: Option<HashMap<String, Py<PyAny>>>,
+        include_internal: bool,
+    ) -> PyResult<Py<PyAny>> {
+        let filter = to_metadata(py, filter)?;
+        let (memories, next) = py.detach(|| {
+            self.svc
+                .list(cursor, limit, filter.as_ref(), include_internal)
+                .map_err(to_py_err)
+        })?;
+        let entries: Vec<serde_json::Value> = memories
+            .into_iter()
+            .map(|memory| {
+                serde_json::json!({
+                    "id": memory.id,
+                    "id_str": memory.id.to_string(),
+                    "content": memory.content,
+                    "metadata": memory.metadata,
+                })
+            })
+            .collect();
+        let page = serde_json::json!({
+            "memories": entries,
+            "next_cursor": next.map(|id| id.to_string()),
+        });
+        Ok(json_to_python(py, &page))
+    }
+
     fn load_working_context(
         &self,
         py: Python<'_>,
