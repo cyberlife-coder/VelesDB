@@ -13,7 +13,10 @@
 //! Wire-level like the other BDD suites: the REAL server over an in-memory
 //! duplex, raw tool calls, assertions on `structuredContent`.
 
-#![cfg(feature = "persistence")]
+// `mcp` (which implies `persistence`), not `persistence`: this file boots the
+// MCP server itself, and the feature-isolation matrix checks `persistence`
+// ALONE with --all-targets — under which `McpServer` does not exist.
+#![cfg(feature = "mcp")]
 
 use rmcp::model::CallToolRequestParams;
 use rmcp::service::ServiceExt;
