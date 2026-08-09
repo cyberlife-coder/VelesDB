@@ -522,25 +522,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         let (page, next) = self.store.list(cursor, limit)?;
         let memories = page
             .into_iter()
-            .filter(|fact| {
-                include_internal || !crate::storage::is_internal_scaffolding(&fact.payload)
-            })
-            .filter(|fact| {
-                filter.is_none_or(|wanted| {
-                    wanted
-                        .iter()
-                        .all(|(key, value)| fact.payload.get(key) == Some(value))
-                })
-            })
-            .map(|fact| crate::model::ListedMemory {
-                id: fact.id,
-                content: fact.content,
-                metadata: if include_internal {
-                    (!fact.payload.is_empty()).then_some(fact.payload)
-                } else {
-                    strip_reserved_keys(Some(fact.payload))
-                },
-            })
+            .filter_map(|fact| audited(fact, filter, include_internal))
             .collect();
         Ok((memories, next))
     }
@@ -1677,6 +1659,39 @@ pub(crate) fn positive_ttl(ttl_seconds: Option<u64>) -> Option<u64> {
 /// `name: ""` when nothing matched left a caller running several lookups
 /// unable to pair a response with its question (issue #1654). Hit and miss go
 /// through this one function, so the two can never drift.
+/// The audit's per-fact visibility policy, in one place: `None` skips the
+/// fact (internal scaffolding under the default view, or a metadata filter
+/// miss), `Some` carries what the caller may see — reserved keys stripped
+/// exactly as recall strips them, or the raw payload under
+/// `include_internal`.
+fn audited(
+    fact: crate::storage::RawListedFact,
+    filter: Option<&Metadata>,
+    include_internal: bool,
+) -> Option<crate::model::ListedMemory> {
+    if !include_internal && crate::storage::is_internal_scaffolding(&fact.payload) {
+        return None;
+    }
+    let matches = filter.is_none_or(|wanted| {
+        wanted
+            .iter()
+            .all(|(key, value)| fact.payload.get(key) == Some(value))
+    });
+    if !matches {
+        return None;
+    }
+    let metadata = if include_internal {
+        (!fact.payload.is_empty()).then_some(fact.payload)
+    } else {
+        strip_reserved_keys(Some(fact.payload))
+    };
+    Some(crate::model::ListedMemory {
+        id: fact.id,
+        content: fact.content,
+        metadata,
+    })
+}
+
 #[must_use]
 pub fn canonical_entity_name(name: &str) -> String {
     name.trim().to_lowercase()
