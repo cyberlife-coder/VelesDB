@@ -3,6 +3,7 @@
 //! Extracted from `match_exec/mod.rs` to reduce NLOC.
 //! Contains `find_start_nodes`, label/property matching, and pattern helpers.
 
+use super::MatchStorageGuards;
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::storage::{PayloadStorage, VectorStorage};
@@ -20,17 +21,20 @@ impl Collection {
     ///
     /// # Lock note
     ///
-    /// The caller (`execute_match_with_context`) already holds a
-    /// `payload_storage.read()` guard. This method (and its delegates
-    /// `find_start_nodes_indexed`, `find_start_nodes_full_scan`) may acquire
-    /// a second concurrent read lock on the same `payload_storage`. This is
-    /// safe because `parking_lot::RwLock` allows unlimited concurrent readers
-    /// with no poisoning or deadlock risk. Refactoring to pass the existing
-    /// guard down would require changing 4+ function signatures for minimal
-    /// runtime benefit (read locks are non-blocking).
+    /// `guards` carries the `vector_storage` (rank 2) and `payload_storage`
+    /// (rank 3) read guards acquired ONCE by the top frame in decree order
+    /// and passed down. This method and its delegates
+    /// (`find_start_nodes_indexed`, `find_start_nodes_full_scan`) must use
+    /// them and never re-acquire either lock: parking_lot's task-fair
+    /// `RwLock` blocks a second read acquisition on the same thread as soon
+    /// as one writer is queued, so a nested `payload_storage.read()` under
+    /// the already-held guard deadlocks against any concurrent writer (the
+    /// same rule `graph_api.rs::validate_edge_endpoints_exist` documents for
+    /// the edge-write path).
     pub(super) fn find_start_nodes(
         &self,
         pattern: &GraphPattern,
+        guards: &MatchStorageGuards<'_>,
     ) -> Result<Vec<(u64, HashMap<String, u64>)>> {
         let first_node = pattern
             .nodes
@@ -40,29 +44,29 @@ impl Collection {
         // Fast path: use label index when labels are specified.
         if !first_node.labels.is_empty() {
             let has_large = self.graph.label_index.read().has_large_ids();
-            let indexed = self.find_start_nodes_indexed(first_node);
+            let indexed = self.find_start_nodes_indexed(first_node, guards.payload_guard);
 
             if has_large {
                 // RoaringBitmap cannot index IDs > u32::MAX, so the bitmap
                 // result may be incomplete. Fall back to a full scan and
                 // merge the results to avoid silently missing large-ID nodes.
-                return Ok(self.merge_with_full_scan(indexed, first_node));
+                return Ok(Self::merge_with_full_scan(indexed, first_node, guards));
             }
             return Ok(indexed);
         }
 
         // Slow path: full scan (no labels in pattern).
-        Ok(self.find_start_nodes_full_scan(first_node))
+        Ok(Self::find_start_nodes_full_scan(first_node, guards))
     }
 
     /// Merges indexed bitmap results with a full scan to capture nodes whose
     /// IDs exceed `u32::MAX` (not representable in `RoaringBitmap`).
     fn merge_with_full_scan(
-        &self,
         indexed: Vec<(u64, HashMap<String, u64>)>,
         first_node: &crate::velesql::NodePattern,
+        guards: &MatchStorageGuards<'_>,
     ) -> Vec<(u64, HashMap<String, u64>)> {
-        let full = self.find_start_nodes_full_scan(first_node);
+        let full = Self::find_start_nodes_full_scan(first_node, guards);
         if indexed.is_empty() {
             return full;
         }
@@ -77,9 +81,13 @@ impl Collection {
     }
 
     /// O(k) label-indexed lookup for start nodes.
+    ///
+    /// Uses the caller's hoisted `payload_guard` — never re-acquires the
+    /// payload lock (see the lock note on [`Self::find_start_nodes`]).
     fn find_start_nodes_indexed(
         &self,
         first_node: &crate::velesql::NodePattern,
+        payload_guard: &crate::storage::LogPayloadStorage,
     ) -> Vec<(u64, HashMap<String, u64>)> {
         let label_idx = self.graph.label_index.read();
         let bitmap = label_idx.lookup_intersection(&first_node.labels);
@@ -96,14 +104,13 @@ impl Collection {
                 .collect();
         }
 
-        let payload_storage = self.storage.payload_storage.read();
         bitmap
             .iter()
             .filter(|&id| {
                 Self::node_matches_properties_by_id(
                     u64::from(id),
                     &first_node.properties,
-                    &payload_storage,
+                    payload_guard,
                 )
             })
             .map(|id| Self::build_start_binding(u64::from(id), first_node))
@@ -111,26 +118,26 @@ impl Collection {
     }
 
     /// O(N) full scan fallback for start nodes (no labels, or large-ID fallback).
+    ///
+    /// Reads only through the hoisted guards — never re-acquires
+    /// `vector_storage` or `payload_storage` (see the lock note on
+    /// [`Self::find_start_nodes`]).
     fn find_start_nodes_full_scan(
-        &self,
         first_node: &crate::velesql::NodePattern,
+        guards: &MatchStorageGuards<'_>,
     ) -> Vec<(u64, HashMap<String, u64>)> {
-        // LOCK ORDER: vector_storage(2) before payload_storage(3) — was
-        // reversed here. See .investigation/http-deadlock-2026-07-22/.
-        let vector_storage = self.storage.vector_storage.read();
-        let payload_storage = self.storage.payload_storage.read();
         let needs_payload = !first_node.properties.is_empty() || !first_node.labels.is_empty();
 
         let mut all_ids: std::collections::HashSet<u64> =
-            vector_storage.ids().into_iter().collect();
-        for id in payload_storage.ids() {
+            guards.vector_guard.ids().into_iter().collect();
+        for id in guards.payload_guard.ids() {
             all_ids.insert(id);
         }
 
         all_ids
             .into_iter()
             .filter(|id| {
-                Self::node_matches_pattern(*id, first_node, needs_payload, &payload_storage)
+                Self::node_matches_pattern(*id, first_node, needs_payload, guards.payload_guard)
             })
             .map(|id| Self::build_start_binding(id, first_node))
             .collect()

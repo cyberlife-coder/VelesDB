@@ -74,14 +74,16 @@ impl Collection {
         let Some((first, rest)) = predicates.split_first() else {
             return Ok(None);
         };
+        // No storage guard is held at this dispatch level — the nested MATCH
+        // traversal acquires its own guards (`guards: None`).
         let mut anchors = cache
-            .get_or_compute(self, first, params, from_aliases)?
+            .get_or_compute(self, first, params, from_aliases, None)?
             .clone();
         for predicate in rest {
             if anchors.is_empty() {
                 break;
             }
-            let ids = cache.get_or_compute(self, predicate, params, from_aliases)?;
+            let ids = cache.get_or_compute(self, predicate, params, from_aliases, None)?;
             anchors.retain(|id| ids.contains(id));
         }
         Ok(Some(anchors))
@@ -233,6 +235,7 @@ impl Collection {
                     params,
                     from_aliases,
                     cache,
+                    None,
                 )?;
                 if passes {
                     results.push(SearchResult::new(point, 1.0));

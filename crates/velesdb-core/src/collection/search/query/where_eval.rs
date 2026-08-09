@@ -3,6 +3,7 @@
 //! This module is used when a query includes graph predicates (`MATCH (...)`)
 //! inside SELECT WHERE so boolean semantics are preserved for AND/OR/NOT.
 
+use super::match_exec::MatchStorageGuards;
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::point::SearchResult;
@@ -24,18 +25,24 @@ pub(crate) struct GraphMatchEvalCache {
 }
 
 impl GraphMatchEvalCache {
+    /// `guards`: pass `Some` when the caller already holds the storage
+    /// guards (vector then payload, decree order) so the nested MATCH
+    /// traversal reuses them instead of re-acquiring the locks; `None`
+    /// otherwise (the traversal then acquires its own guards).
     pub(super) fn get_or_compute(
         &mut self,
         collection: &Collection,
         predicate: &GraphMatchPredicate,
         params: &std::collections::HashMap<String, serde_json::Value>,
         from_aliases: &[String],
+        guards: Option<&MatchStorageGuards<'_>>,
     ) -> Result<&HashSet<u64>> {
         if let Some(idx) = self.entries.iter().position(|(p, _)| p == predicate) {
             return Ok(&self.entries[idx].1);
         }
 
-        let ids = collection.evaluate_graph_match_anchor_ids(predicate, params, from_aliases)?;
+        let ids =
+            collection.evaluate_graph_match_anchor_ids(predicate, params, from_aliases, guards)?;
         self.entries.push((predicate.clone(), ids));
         let entry_idx = self.entries.len() - 1;
         Ok(&self.entries[entry_idx].1)
@@ -70,6 +77,9 @@ struct WhereEvalCtx<'a> {
     vector: Option<&'a [f32]>,
     params: &'a std::collections::HashMap<String, serde_json::Value>,
     from_aliases: &'a [String],
+    /// Storage guards already held by the caller (decree order), forwarded to
+    /// nested MATCH-in-WHERE traversals so they never re-acquire the locks.
+    guards: Option<&'a MatchStorageGuards<'a>>,
 }
 
 impl Collection {
@@ -161,6 +171,7 @@ impl Collection {
                 params,
                 from_aliases,
                 cache,
+                None,
             )? {
                 filtered.push(result);
             }
@@ -170,8 +181,13 @@ impl Collection {
     }
 
     /// Evaluate WHERE condition for one record.
+    ///
+    /// `guards`: `Some` when the caller already holds the storage guards in
+    /// decree order (aggregation scan loops) — forwarded so a nested
+    /// MATCH-in-WHERE traversal reuses them instead of re-acquiring the
+    /// locks; `None` when no storage guard is held.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn evaluate_where_condition_for_record(
+    pub(in crate::collection::search::query) fn evaluate_where_condition_for_record(
         &self,
         condition: &Condition,
         id: u64,
@@ -180,6 +196,7 @@ impl Collection {
         params: &std::collections::HashMap<String, serde_json::Value>,
         from_aliases: &[String],
         graph_cache: &mut GraphMatchEvalCache,
+        guards: Option<&MatchStorageGuards<'_>>,
     ) -> Result<bool> {
         let ctx = WhereEvalCtx {
             id,
@@ -187,6 +204,7 @@ impl Collection {
             vector,
             params,
             from_aliases,
+            guards,
         };
         self.eval_condition(condition, &ctx, graph_cache)
     }
@@ -200,8 +218,13 @@ impl Collection {
     ) -> Result<bool> {
         match condition {
             Condition::GraphMatch(predicate) => {
-                let ids =
-                    graph_cache.get_or_compute(self, predicate, ctx.params, ctx.from_aliases)?;
+                let ids = graph_cache.get_or_compute(
+                    self,
+                    predicate,
+                    ctx.params,
+                    ctx.from_aliases,
+                    ctx.guards,
+                )?;
                 Ok(ids.contains(&ctx.id))
             }
             Condition::And(left, right) => {

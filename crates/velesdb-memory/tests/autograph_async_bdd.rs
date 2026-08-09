@@ -190,6 +190,59 @@ fn a_full_queue_drops_counted_and_never_blocks_the_write() {
 }
 
 #[test]
+fn a_forgotten_fact_is_not_resurrected_by_its_stale_enrichment() {
+    // A queued enrichment can sit for minutes-to-hours and its generation runs
+    // for tens of seconds. If a `forget` lands in that window, the deletion is
+    // durable and cannot be undone — the stale job must NOT wire the entity
+    // hubs its extraction states, or `entity()` would serve structure derived
+    // from a fact the user permanently deleted.
+    let (_dir, svc, extractor, release) = gated_service();
+    let worker = svc
+        .spawn_autograph_worker(8)
+        .expect("spawn autograph worker");
+
+    // The write returns at once; the worker takes the job and BLOCKS in the
+    // gated generation, having wired nothing yet.
+    let fact_id = svc
+        .remember("Alice Martin travaille chez Wiscale.", &[], None)
+        .expect("remember");
+
+    // Forget while the generation is stuck behind the gate. The fact is gone
+    // and its (yet-unwired) hubs collect nothing — this is the permanent
+    // deletion the stale job must respect.
+    assert!(svc.forget(fact_id).expect("forget"), "the fact existed");
+
+    // Release the generation and drain: dropping the handle closes the queue
+    // and joins the worker, so the in-flight job's autograph has fully run (or
+    // been skipped) by the time the join returns — a controlled order, no
+    // wall-clock guess.
+    release.send(()).expect("release the gated extraction");
+    drop(worker);
+    assert_eq!(
+        extractor.calls.load(Ordering::SeqCst),
+        1,
+        "the released generation ran exactly once"
+    );
+
+    // The entity the retired fact would have introduced must not exist: a
+    // permanently forgotten fact cannot be resurrected through the graph.
+    assert!(
+        svc.entity_profile("alice martin")
+            .expect("entity lookup")
+            .is_none(),
+        "a stale enrichment resurrected the hubs of a forgotten fact — deletion \
+         must be durable, and autograph derives structure only from a fact that \
+         still exists"
+    );
+    assert!(
+        svc.entity_profile("wiscale")
+            .expect("entity lookup")
+            .is_none(),
+        "the second endpoint hub was resurrected too"
+    );
+}
+
+#[test]
 fn a_second_worker_is_refused_but_a_respawn_after_drop_works() {
     let (_dir, svc, extractor, release) = gated_service();
     let first = svc.spawn_autograph_worker(4).expect("first worker");

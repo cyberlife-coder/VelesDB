@@ -19,10 +19,16 @@
 //!
 //! # Release Build Behavior (F-25)
 //!
-//! In release builds, lock-rank tracking is a no-op for maximum
-//! search throughput. Only the atomic violation counter is incremented
-//! (no thread-local stack overhead). In debug builds, full stack-based
-//! tracking with tracing warnings is enabled.
+//! In release builds, lock-rank tracking is a complete no-op for maximum
+//! search throughput: `record_lock_acquire`/`record_lock_release` discard the
+//! rank and touch nothing — no thread-local stack, and (contrary to an earlier
+//! version of this note) no atomic counter either. The violation counter is
+//! incremented **only** inside the `#[cfg(debug_assertions)]` block. In debug
+//! builds, full stack-based tracking is enabled, but it only *warns* via
+//! `tracing::warn!` — it never panics — and only for the ranks that actually
+//! have a `record_lock_acquire` call site (`GpuVectorsSnapshot`, `Vectors`,
+//! `Layers`; `Columnar` and `Neighbors` are `#[allow(dead_code)]` and never
+//! recorded).
 //!
 //! # Higher-level synchronization layered on top of these ranks
 //!

@@ -191,7 +191,11 @@ impl Collection {
         old_payloads: &[Option<serde_json::Value>],
         sparse_batch: &BTreeMap<String, Vec<(u64, crate::index::sparse::SparseVector)>>,
     ) -> Result<()> {
-        self.storage.config.write().point_count = self.storage.vector_storage.read().len();
+        // Two statements so the guards never overlap: the one-liner form
+        // evaluates the RHS first, holding vector_storage (rank 2) while
+        // acquiring config (rank 1) — a decreed-order inversion.
+        let point_count = self.storage.vector_storage.read().len();
+        self.storage.config.write().point_count = point_count;
         self.apply_sparse_batch_bulk(sparse_batch)?;
         // Incremental histogram maintenance (Bug #47 + Bug #49): dedup by id
         // so only the final payload counts, then atomic decrement + increment.
