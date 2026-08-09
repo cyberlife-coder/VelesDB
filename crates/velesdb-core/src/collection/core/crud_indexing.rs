@@ -269,6 +269,27 @@ impl Collection {
         crate::index::bm25_persistence_wal::wal_append_remove_document(&wal_path, id)
     }
 
+    /// Appends `remove_document` mutations for a whole batch to the BM25 WAL
+    /// under ONE durability barrier.
+    ///
+    /// Batched counterpart of [`Self::append_bm25_wal_remove`]: calling that
+    /// in a loop pays one `open` + one fsync PER ID (the #1797 failure mode,
+    /// resurfacing on the delete path — finding C3). The frames are identical
+    /// to N sequential appends; only the syscall count differs. Callers keep
+    /// WAL-before-apply at batch granularity: let this return `Ok` first,
+    /// then remove the documents from the in-memory index.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any WAL open / write / flush / fsync failure; nothing was
+    /// acknowledged in that case and the in-memory index must not be touched.
+    #[cfg(feature = "persistence")]
+    pub(super) fn append_bm25_wal_remove_batch(&self, ids: &[u64]) -> Result<()> {
+        use crate::index::bm25_persistence_wal::{wal_append_batch, wal_path_for_bm25, WalOp};
+        let ops: Vec<WalOp<'_>> = ids.iter().map(|&id| WalOp::Remove { id }).collect();
+        wal_append_batch(&wal_path_for_bm25(&self.storage.path), &ops)
+    }
+
     /// Appends `(name, point_id, sparse_vector)` triples to the per-index
     /// sparse WAL under WAL-before-apply semantics.
     ///
