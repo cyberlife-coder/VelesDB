@@ -658,18 +658,18 @@ quality, and `why`'s seed match, depend on it.
 | `VELESDB_MEMORY_EMBEDDER` | Recall quality | Footprint | Needs |
 |---|---|---|---|
 | `hash` (default) | keyword-ish, deterministic | tiny, **fully offline, zero-dep** | nothing |
-| `ollama` | real semantic | tiny binary + your local model | a running Ollama; build `--features ollama` |
-| `openai` | real semantic | tiny binary + whatever serves the model | any OpenAI-compatible server; build `--features ollama` |
+| `ollama` | real semantic | tiny binary + your local model | a running Ollama (backend compiled in by default) |
+| `openai` | real semantic | tiny binary + whatever serves the model | any OpenAI-compatible server (backend compiled in by default) |
 
-The default keeps the *single tiny offline binary* promise intact. For real
-semantic recall, build with the `ollama` feature and point it at a local model
-— the model runs on your own machine, so memory still never leaves it:
+The default keeps the *single tiny offline binary* promise intact, and both
+HTTP backends are compiled into that same default binary — switching to real
+semantic recall is an env-var change, never a rebuild. Point it at a local
+model — the model runs on your own machine, so memory still never leaves it:
 
 ```bash
-cargo build --release -p velesdb-memory --features ollama
-ollama pull all-minilm
+ollama pull bge-m3
 VELESDB_MEMORY_EMBEDDER=ollama \
-VELESDB_MEMORY_EMBEDDER_MODEL=all-minilm \
+VELESDB_MEMORY_EMBEDDER_MODEL=bge-m3 \
   /path/to/velesdb-memory
 ```
 
@@ -720,11 +720,10 @@ model and the dimension rather than which backend served them.
 By default the graph is **bring-your-own-links**: you wire edges with `relate`
 or with `remember`'s `links`. The `remember_extracted` tool turns that into a
 commodity — a local LLM reads raw text, and the server stores its facts and
-auto-builds the fact↔topic graph. It is off by default (it pulls an HTTP
-dependency), so the standard binary stays tiny and offline:
+auto-builds the fact↔topic graph. The backend is compiled into the default
+binary but stays off at runtime until you configure it:
 
 ```bash
-cargo build --release -p velesdb-memory --features extract
 VELESDB_MEMORY_EXTRACTOR=ollama \
 VELESDB_MEMORY_EXTRACTOR_MODEL=qwen3.6:35b-mlx \
   /path/to/velesdb-memory
@@ -765,8 +764,8 @@ VELESDB_MEMORY_EXTRACTOR_MODEL=your-model \
 The two backends are **not** interchangeable:
 
 - **`ollama`** runs a local generative model that **infers** the facts, entity
-  edges and attributes a passage states. It needs that model running, and a
-  binary built with `--features extract`.
+  edges and attributes a passage states. It needs that model running — the
+  backend itself is compiled into the default binary.
 - **`outline`** is deterministic and fully offline — no model, no network, and
   **no extra build feature**, so it works in the default binary. But it only
   reads structure written out **explicitly**, one directive per line (`fact:`,

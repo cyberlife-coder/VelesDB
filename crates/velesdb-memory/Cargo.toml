@@ -114,18 +114,25 @@ version = "0.4.4"
 optional = true
 
 [features]
-# The MCP server transport + binary, and the native file-backed store, are on
-# by default so `cargo build` produces the server; library consumers disable
-# defaults to pick only what they need.
-default = ["mcp", "persistence", "context"]
+# The MCP server transport + binary, the native file-backed store, and both
+# HTTP-client roles (embedding + extraction) are on by default so `cargo
+# build` — and therefore `cargo install` and the `.mcpb` registry bundle —
+# produces a binary where semantic recall and extraction are a RUNTIME
+# choice (`VELESDB_MEMORY_EMBEDDER` / `VELESDB_MEMORY_EXTRACTOR`), never a
+# rebuild. The runtime default stays `hash`: fully offline, no model
+# contacted unless the user opts in. Library consumers disable defaults to
+# pick only what they need. The cost of the two extra defaults is one small
+# HTTP client (`ureq`, no TLS); the least technical install paths were the
+# ones locked out of the product's own pitch without them (#1846 aftermath).
+default = ["mcp", "persistence", "context", "ollama", "extract"]
 mcp = ["dep:rmcp", "dep:tokio", "dep:tracing", "dep:tracing-subscriber", "persistence"]
 # Streamable-HTTP transport (multi-client daemon mode, see the README's "HTTP
 # transport" section): lets several MCP clients share ONE `velesdb-memory`
 # process instead of each spawning its own stdio process and fighting over
 # the store's single-writer flock. Off by default so `cargo install
-# velesdb-memory` still produces the tiny, fully-offline stdio-only binary —
-# only the installer script opts a LOCAL build into this at build time; the
-# hash/ollama embedder choice stays a pure runtime switch either way.
+# velesdb-memory` still produces a stdio-only binary — only the installer
+# script opts a LOCAL build into this at build time; the hash/ollama
+# embedder choice stays a pure runtime switch either way.
 http = [
     "mcp",
     "dep:axum",
@@ -157,12 +164,17 @@ persistence = [
     "dep:fs2",
     "dep:atomicwrites",
 ]
-# Real on-device semantic recall via a local Ollama embeddings endpoint. Off by
-# default so the shipped binary stays tiny, zero-dependency, and fully offline.
+# Real on-device semantic recall via a local Ollama or OpenAI-compatible
+# embeddings endpoint (the name predates the protocol split: this is the HTTP
+# dependency for the embedding ROLE, not a vendor). On by default — see the
+# `default` comment; nothing is contacted unless `VELESDB_MEMORY_EMBEDDER`
+# opts in at runtime.
 ollama = ["dep:ureq"]
-# Batteries-included text → facts+entities extraction (OllamaExtractor) so the
-# fact↔entity graph self-builds. Off by default: the Extractor trait is always
-# available for bring-your-own-LLM; only this local backend pulls the HTTP dep.
+# Batteries-included text → facts+entities extraction (Ollama or
+# OpenAI-compatible backends) so the fact↔entity graph self-builds. On by
+# default — same reasoning and same runtime opt-in (`VELESDB_MEMORY_EXTRACTOR`)
+# as `ollama`; the Extractor trait itself is always available feature-free for
+# bring-your-own-LLM.
 extract = ["dep:ureq"]
 
 [dev-dependencies]
