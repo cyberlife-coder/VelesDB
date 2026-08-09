@@ -663,7 +663,10 @@ quality, and `why`'s seed match, depend on it.
 
 The default keeps the *single tiny offline binary* promise intact, and both
 HTTP backends are compiled into that same default binary — switching to real
-semantic recall is an env-var change, never a rebuild. Point it at a local
+semantic recall is an env-var change, never a rebuild. The recommended model
+is **`bge-m3`** (multilingual, 1024-dim, strong retrieval quality for its
+size); `all-minilm` remains the smaller/faster fallback and the historical
+default of `VELESDB_MEMORY_EMBEDDER_MODEL`. Point the daemon at a local
 model — the model runs on your own machine, so memory still never leaves it:
 
 ```bash
