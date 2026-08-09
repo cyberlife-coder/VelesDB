@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **`scripts/run-failure-injection-harness.sh` (#1708).** Zero references
+  anywhere in the repository — no workflow, no hook, no doc — and the one
+  test unique to it, `test_crash_recovery_insert_scenario`, is `#[ignore]`d;
+  the script invoked it without `--include-ignored`, so even a manual run
+  silently skipped the one thing it existed to prove. Its other two
+  invocations (`test_multiple_corruptions`, `storage::wal_recovery_tests`)
+  are plain `#[test]`s already covered by the standard
+  `cargo test -p velesdb-core --features persistence` run. A harness nothing
+  calls and that skips its own ignored test is not coverage — it is the same
+  gap the required-guards audit (#1698) flagged, one layer further down.
+
 ### Added
 
 - **A startup signal when the configured extraction backend cannot be reached
