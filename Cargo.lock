@@ -5908,6 +5908,7 @@ dependencies = [
  "tauri-plugin",
  "tempfile",
  "thiserror 2.0.19",
+ "tokio",
  "toml 1.1.4+spec-1.1.0",
  "tracing",
  "velesdb-core",

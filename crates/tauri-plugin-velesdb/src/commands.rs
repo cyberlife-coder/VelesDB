@@ -60,7 +60,7 @@ pub async fn create_collection<R: Runtime>(
     let storage_mode = parse_storage_mode(&request.storage_mode).map_err(CommandError::from)?;
 
     let result = state
-        .with_db(|db| {
+        .run_db(move |db| {
             if has_advanced_params(&request) {
                 let hnsw_params = build_hnsw_params(&request, storage_mode);
                 // Reject out-of-range tunables (e.g. hnsw_alpha < 1.0 or
@@ -90,6 +90,7 @@ pub async fn create_collection<R: Runtime>(
                 storage_mode: storage_mode_to_string(storage_mode).to_string(),
             })
         })
+        .await
         .map_err(CommandError::from)?;
 
     Ok(result)
@@ -103,16 +104,17 @@ pub async fn create_metadata_collection<R: Runtime>(
     request: CreateMetadataCollectionRequest,
 ) -> std::result::Result<CollectionInfo, CommandError> {
     let result = state
-        .with_db(|db| {
+        .run_db(move |db| {
             db.create_metadata_collection(&request.name)?;
             Ok(CollectionInfo {
-                name: request.name.clone(),
+                name: request.name,
                 dimension: 0,
                 metric: "none".to_string(),
                 count: 0,
                 storage_mode: "metadata_only".to_string(),
             })
         })
+        .await
         .map_err(CommandError::from)?;
 
     Ok(result)
@@ -126,10 +128,11 @@ pub async fn delete_collection<R: Runtime>(
     name: String,
 ) -> std::result::Result<(), CommandError> {
     state
-        .with_db(|db| {
+        .run_db(move |db| {
             db.delete_collection(&name)?;
             Ok(())
         })
+        .await
         .map_err(CommandError::from)?;
 
     Ok(())
@@ -142,7 +145,7 @@ pub async fn list_collections<R: Runtime>(
     state: State<'_, VelesDbState>,
 ) -> std::result::Result<Vec<CollectionInfo>, CommandError> {
     state
-        .with_db(|db| {
+        .run_db(move |db| {
             let names = db.list_collections();
             let mut collections = Vec::new();
             for name in names {
@@ -159,6 +162,7 @@ pub async fn list_collections<R: Runtime>(
             }
             Ok(collections)
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -170,7 +174,7 @@ pub async fn get_collection<R: Runtime>(
     name: String,
 ) -> std::result::Result<CollectionInfo, CommandError> {
     state
-        .with_db(|db| {
+        .run_db(move |db| {
             let coll = require_collection(&db, &name)?;
             let config = coll.config();
             Ok(CollectionInfo {
@@ -181,6 +185,7 @@ pub async fn get_collection<R: Runtime>(
                 storage_mode: storage_mode_to_string(config.storage_mode).to_string(),
             })
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -189,34 +194,38 @@ pub async fn get_collection<R: Runtime>(
 ///
 /// Shared skeleton of [`upsert`] and [`upsert_metadata`]: only the per-point
 /// construction and the core insert method differ between callers.
-fn upsert_points<R, B, I>(
+async fn upsert_points<R, B, I>(
     app: &AppHandle<R>,
     state: &State<'_, VelesDbState>,
-    collection: &str,
+    collection: String,
     event: &str,
     build: B,
     insert: I,
 ) -> std::result::Result<usize, CommandError>
 where
     R: Runtime,
-    B: FnOnce() -> Vec<velesdb_core::Point>,
+    B: FnOnce() -> Vec<velesdb_core::Point> + Send + 'static,
     I: FnOnce(
-        &velesdb_core::VectorCollection,
-        Vec<velesdb_core::Point>,
-    ) -> crate::error::Result<()>,
+            &velesdb_core::VectorCollection,
+            Vec<velesdb_core::Point>,
+        ) -> crate::error::Result<()>
+        + Send
+        + 'static,
 {
+    let coll_name = collection.clone();
     let count = state
-        .with_db(|db| {
-            let coll = require_collection(&db, collection)?;
+        .run_db(move |db| {
+            let coll = require_collection(&db, &coll_name)?;
 
             let points = build();
             let count = points.len();
             insert(&coll, points)?;
             Ok(count)
         })
+        .await
         .map_err(CommandError::from)?;
 
-    emit_collection_updated(app, collection, event, count);
+    emit_collection_updated(app, &collection, event, count);
     Ok(count)
 }
 
@@ -231,9 +240,9 @@ pub async fn upsert<R: Runtime>(
     upsert_points(
         &app,
         &state,
-        &collection_name,
+        collection_name,
         "upsert",
-        || {
+        move || {
             request
                 .points
                 .into_iter()
@@ -242,6 +251,7 @@ pub async fn upsert<R: Runtime>(
         },
         |coll, points| coll.upsert(points).map_err(crate::error::Error::Database),
     )
+    .await
 }
 
 /// Upserts metadata-only points into a collection.
@@ -255,9 +265,9 @@ pub async fn upsert_metadata<R: Runtime>(
     upsert_points(
         &app,
         &state,
-        &collection_name,
+        collection_name,
         "upsert_metadata",
-        || {
+        move || {
             request
                 .points
                 .into_iter()
@@ -269,6 +279,7 @@ pub async fn upsert_metadata<R: Runtime>(
                 .map_err(crate::error::Error::Database)
         },
     )
+    .await
 }
 
 /// Gets points by their IDs.
@@ -279,7 +290,7 @@ pub async fn get_points<R: Runtime>(
     request: GetPointsRequest,
 ) -> std::result::Result<Vec<Option<PointOutput>>, CommandError> {
     state
-        .with_db(|db| {
+        .run_db(move |db| {
             let coll = require_collection(&db, &request.collection)?;
 
             let points = coll.get(&request.ids);
@@ -294,6 +305,7 @@ pub async fn get_points<R: Runtime>(
                 })
                 .collect())
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -305,12 +317,13 @@ pub async fn delete_points<R: Runtime>(
     request: DeletePointsRequest,
 ) -> std::result::Result<(), CommandError> {
     state
-        .with_db(|db| {
+        .run_db(move |db| {
             let coll = require_collection(&db, &request.collection)?;
 
             coll.delete(&request.ids)?;
             Ok(())
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -388,7 +401,7 @@ pub async fn search<R: Runtime>(
     let parsed_quality: Option<()> = None;
 
     let results = state
-        .with_db(|db| {
+        .run_db(move |db| {
             let coll = require_collection(&db, &request.collection)?;
             let search_results = search_full(
                 &coll,
@@ -398,6 +411,7 @@ pub async fn search<R: Runtime>(
             )?;
             Ok(map_core_results(search_results))
         })
+        .await
         .map_err(CommandError::from)?;
 
     Ok(timed_search_response(results, start))
@@ -434,7 +448,7 @@ pub async fn search_ids<R: Runtime>(
     let parsed_quality: Option<()> = None;
 
     state
-        .with_db(|db| {
+        .run_db(move |db| {
             let coll = require_collection(&db, &request.collection)?;
             // Optimized id-only path only when no filter and no quality; both
             // require the full search that hydrates results before projecting.
@@ -457,6 +471,7 @@ pub async fn search_ids<R: Runtime>(
             };
             Ok(scored)
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -475,9 +490,9 @@ pub async fn batch_search<R: Runtime>(
     let has_quality = request.searches.iter().any(|s| s.quality.is_some());
 
     let batch_results = if has_quality {
-        batch_search_per_query(&state, &request)?
+        batch_search_per_query(&state, request).await?
     } else {
-        batch_search_bulk(&state, &request)?
+        batch_search_bulk(&state, request).await?
     };
 
     let timing_ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -488,12 +503,12 @@ pub async fn batch_search<R: Runtime>(
 }
 
 /// Per-query batch search with per-search quality dispatch.
-fn batch_search_per_query(
+async fn batch_search_per_query(
     state: &VelesDbState,
-    request: &BatchSearchRequest,
+    request: BatchSearchRequest,
 ) -> std::result::Result<Vec<Vec<crate::types::SearchResult>>, CommandError> {
     state
-        .with_db(|db| {
+        .run_db(move |db| {
             let coll = require_collection(&db, &request.collection)?;
             let mut all_results = Vec::with_capacity(request.searches.len());
             for s in &request.searches {
@@ -518,16 +533,17 @@ fn batch_search_per_query(
             }
             Ok(all_results)
         })
+        .await
         .map_err(CommandError::from)
 }
 
 /// Optimized bulk batch search (no per-query quality).
-fn batch_search_bulk(
+async fn batch_search_bulk(
     state: &VelesDbState,
-    request: &BatchSearchRequest,
+    request: BatchSearchRequest,
 ) -> std::result::Result<Vec<Vec<crate::types::SearchResult>>, CommandError> {
     state
-        .with_db(|db| {
+        .run_db(move |db| {
             let coll = require_collection(&db, &request.collection)?;
 
             let query_refs: Vec<&[f32]> = request
@@ -558,43 +574,39 @@ fn batch_search_bulk(
                 })
                 .collect::<Vec<_>>())
         })
+        .await
         .map_err(CommandError::from)
 }
 
 /// Runs a filter-aware search on `collection` and wraps the mapped results in a
 /// timed [`SearchResponse`].
 ///
-/// Shared skeleton of [`text_search`] and [`hybrid_search`]: when a filter is
-/// present `filtered` is invoked with it, otherwise `unfiltered` is used. Only
-/// those two core calls differ between callers.
-fn run_filtered_search<Filtered, Unfiltered>(
+/// Shared skeleton of [`text_search`] and [`hybrid_search`]: `search` receives
+/// the collection plus the parsed filter (if any) and dispatches to the
+/// matching core call. The whole search runs on the blocking pool via
+/// [`VelesDbState::run_db`].
+async fn run_filtered_search<F>(
     state: &State<'_, VelesDbState>,
-    collection: &str,
-    parsed_filter: Option<&velesdb_core::Filter>,
-    filtered: Filtered,
-    unfiltered: Unfiltered,
+    collection: String,
+    parsed_filter: Option<velesdb_core::Filter>,
+    search: F,
 ) -> std::result::Result<SearchResponse, CommandError>
 where
-    Filtered: FnOnce(
-        &velesdb_core::VectorCollection,
-        &velesdb_core::Filter,
-    ) -> crate::error::Result<Vec<velesdb_core::SearchResult>>,
-    Unfiltered: FnOnce(
-        &velesdb_core::VectorCollection,
-    ) -> crate::error::Result<Vec<velesdb_core::SearchResult>>,
+    F: FnOnce(
+            &velesdb_core::VectorCollection,
+            Option<&velesdb_core::Filter>,
+        ) -> crate::error::Result<Vec<velesdb_core::SearchResult>>
+        + Send
+        + 'static,
 {
     let start = std::time::Instant::now();
     let results = state
-        .with_db(|db| {
-            let coll = require_collection(&db, collection)?;
-
-            let search_results = if let Some(f) = parsed_filter {
-                filtered(&coll, f)?
-            } else {
-                unfiltered(&coll)?
-            };
+        .run_db(move |db| {
+            let coll = require_collection(&db, &collection)?;
+            let search_results = search(&coll, parsed_filter.as_ref())?;
             Ok(map_core_results(search_results))
         })
+        .await
         .map_err(CommandError::from)?;
 
     Ok(timed_search_response(results, start))
@@ -608,20 +620,16 @@ pub async fn text_search<R: Runtime>(
     request: TextSearchRequest,
 ) -> std::result::Result<SearchResponse, CommandError> {
     let parsed_filter = parse_filter(&request.filter).map_err(CommandError::from)?;
+    let collection = request.collection.clone();
 
-    run_filtered_search(
-        &state,
-        &request.collection,
-        parsed_filter.as_ref(),
-        |coll, f| {
-            coll.text_search_with_filter(&request.query, request.top_k, f)
-                .map_err(crate::error::Error::Database)
-        },
-        |coll| {
-            coll.text_search(&request.query, request.top_k)
-                .map_err(crate::error::Error::Database)
-        },
-    )
+    run_filtered_search(&state, collection, parsed_filter, move |coll, filter| {
+        match filter {
+            Some(f) => coll.text_search_with_filter(&request.query, request.top_k, f),
+            None => coll.text_search(&request.query, request.top_k),
+        }
+        .map_err(crate::error::Error::Database)
+    })
+    .await
 }
 
 /// Hybrid search combining vector similarity and BM25.
@@ -632,31 +640,27 @@ pub async fn hybrid_search<R: Runtime>(
     request: HybridSearchRequest,
 ) -> std::result::Result<SearchResponse, CommandError> {
     let parsed_filter = parse_filter(&request.filter).map_err(CommandError::from)?;
+    let collection = request.collection.clone();
 
-    run_filtered_search(
-        &state,
-        &request.collection,
-        parsed_filter.as_ref(),
-        |coll, f| {
-            coll.hybrid_search_with_filter(
+    run_filtered_search(&state, collection, parsed_filter, move |coll, filter| {
+        match filter {
+            Some(f) => coll.hybrid_search_with_filter(
                 &request.vector,
                 &request.query,
                 request.top_k,
                 Some(request.vector_weight),
                 f,
-            )
-            .map_err(crate::error::Error::Database)
-        },
-        |coll| {
-            coll.hybrid_search(
+            ),
+            None => coll.hybrid_search(
                 &request.vector,
                 &request.query,
                 request.top_k,
                 Some(request.vector_weight),
-            )
-            .map_err(crate::error::Error::Database)
-        },
-    )
+            ),
+        }
+        .map_err(crate::error::Error::Database)
+    })
+    .await
 }
 
 // NOTE: VelesQL query command moved to commands_query.rs (NLOC refactoring)
@@ -670,10 +674,11 @@ pub async fn is_empty<R: Runtime>(
     name: String,
 ) -> std::result::Result<bool, CommandError> {
     state
-        .with_db(|db| {
+        .run_db(move |db| {
             let coll = require_collection(&db, &name)?;
             Ok(coll.is_empty())
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -685,11 +690,12 @@ pub async fn flush<R: Runtime>(
     name: String,
 ) -> std::result::Result<(), CommandError> {
     state
-        .with_db(|db| {
+        .run_db(move |db| {
             let coll = require_collection(&db, &name)?;
             coll.flush()?;
             Ok(())
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -702,11 +708,12 @@ pub async fn compact_storage<R: Runtime>(
     name: String,
 ) -> std::result::Result<u64, CommandError> {
     state
-        .with_db(|db| {
+        .run_db(move |db| {
             let coll = require_collection(&db, &name)?;
             let freed = coll.compact_storage()?;
             Ok(u64::try_from(freed).unwrap_or(u64::MAX))
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -720,10 +727,11 @@ pub async fn update_guardrails<R: Runtime>(
     limits: GuardrailLimits,
 ) -> std::result::Result<(), CommandError> {
     state
-        .with_db(|db| {
+        .run_db(move |db| {
             db.update_guardrails(&limits.into());
             Ok(())
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -735,10 +743,11 @@ pub async fn get_guardrails<R: Runtime>(
     name: String,
 ) -> std::result::Result<GuardrailLimits, CommandError> {
     state
-        .with_db(|db| {
+        .run_db(move |db| {
             let coll = require_collection(&db, &name)?;
             Ok(GuardrailLimits::from(coll.guard_rails().limits()))
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -752,7 +761,7 @@ pub async fn scroll_collection<R: Runtime>(
     let parsed_filter = parse_filter(&request.filter).map_err(CommandError::from)?;
 
     state
-        .with_db(|db| {
+        .run_db(move |db| {
             let coll = require_collection(&db, &request.collection)?;
             let batch =
                 coll.scroll_batch(request.cursor, request.batch_size, parsed_filter.as_ref())?;
@@ -769,6 +778,7 @@ pub async fn scroll_collection<R: Runtime>(
                 next_cursor: batch.next_cursor,
             })
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -785,7 +795,7 @@ pub async fn multi_query_search<R: Runtime>(
     let parsed_filter = parse_filter(&request.filter).map_err(CommandError::from)?;
 
     let results = state
-        .with_db(|db| {
+        .run_db(move |db| {
             let coll = require_collection(&db, &request.collection)?;
 
             let vector_refs: Vec<&[f32]> = request.vectors.iter().map(Vec::as_slice).collect();
@@ -799,6 +809,7 @@ pub async fn multi_query_search<R: Runtime>(
 
             Ok(map_core_results(search_results))
         })
+        .await
         .map_err(CommandError::from)?;
 
     Ok(timed_search_response(results, start))
@@ -819,7 +830,7 @@ pub async fn train_pq<R: Runtime>(
     request: TrainPqRequest,
 ) -> std::result::Result<String, CommandError> {
     state
-        .with_db(|db| {
+        .run_db(move |db| {
             use velesdb_core::velesql::{Query, TrainStatement, WithValue};
 
             let mut params = std::collections::HashMap::new();
@@ -850,6 +861,7 @@ pub async fn train_pq<R: Runtime>(
 
             Ok("PQ training complete".to_string())
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -870,7 +882,7 @@ pub async fn stream_insert<R: Runtime>(
 ) -> std::result::Result<usize, CommandError> {
     let collection_name = request.collection.clone();
     let count = state
-        .with_db(|db| {
+        .run_db(move |db| {
             let coll = require_vector_collection(&db, &request.collection)?;
 
             let mut inserted = 0;
@@ -883,6 +895,7 @@ pub async fn stream_insert<R: Runtime>(
             }
             Ok(inserted)
         })
+        .await
         .map_err(CommandError::from)?;
 
     emit_collection_updated(&app, &collection_name, "stream_insert", count);
@@ -918,11 +931,12 @@ pub async fn enable_streaming<R: Runtime>(
     let collection_name = request.collection.clone();
     let config = streaming_config_from_request(&request);
     state
-        .with_db(|db| {
+        .run_db(move |db| {
             let coll = require_vector_collection(&db, &request.collection)?;
             coll.enable_streaming(config);
             Ok(())
         })
+        .await
         .map_err(CommandError::from)?;
 
     emit_collection_updated(&app, &collection_name, "enable_streaming", 0);
