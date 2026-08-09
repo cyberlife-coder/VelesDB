@@ -1202,8 +1202,9 @@ fn build_openai_extractor() -> Result<velesdb_memory::DynExtractor, Box<dyn std:
 }
 
 /// Select the embedding backend from `VELESDB_MEMORY_EMBEDDER`: `hash`
-/// (default) is deterministic and fully offline; `ollama` gives real on-device
-/// semantic recall and requires building with `--features ollama`.
+/// (default) is deterministic and fully offline; `ollama` / `openai` give real
+/// on-device semantic recall. Both HTTP backends are compiled into the default
+/// build, so the choice is an env-var switch, never a rebuild.
 ///
 /// A thin read of the environment on top of
 /// [`velesdb_memory::select_embedder`], mirroring what [`build_server`] does
@@ -1289,9 +1290,9 @@ fn warn_hash_embedder_not_semantic() {
     eprintln!(
         "[velesdb-memory] Using the default 'hash' embedder: deterministic and \
          fully offline, but NOT semantic — recall matches surface form, not meaning. \
-         For real semantic recall, run an Ollama build with \
-         VELESDB_MEMORY_EMBEDDER=ollama (see crates/velesdb-memory/README.md). \
-         Set VELESDB_MEMORY_QUIET=1 to silence this notice."
+         For real semantic recall set VELESDB_MEMORY_EMBEDDER=ollama or =openai \
+         (no rebuild needed; see crates/velesdb-memory/README.md for the model \
+         to pull). Set VELESDB_MEMORY_QUIET=1 to silence this notice."
     );
 }
 

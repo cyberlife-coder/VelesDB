@@ -257,8 +257,8 @@ itself as unconfigured rather than silently storing less. Two exist, and they
 are **not** interchangeable:
 
 - `"ollama"` runs a local generative model that **infers** the facts, entity
-  edges and attributes a passage states. It needs that model running, and a
-  binary built with `--features extract`.
+  edges and attributes a passage states. It needs that model running — the
+  backend itself is compiled into the default binary, no rebuild.
 - `"outline"` is deterministic and fully offline — no model, no network, and no
   extra build feature. But it only reads structure you write out **explicitly**,
   one directive per line (`fact:`, `edge:`, `attr:`). Hand it free prose and you
@@ -314,13 +314,12 @@ launched with:
   shared words, so recall of paraphrases is weak. Good enough to demo the *graph*
   (`why` still works — it follows links, not similarity), but for real semantic
   recall configure a semantic embedder.
-- **`ollama`:** real on-device semantic recall. Requires a build with
-  `--features ollama`, a running Ollama, and `ollama pull all-minilm`; set
-  `VELESDB_MEMORY_EMBEDDER=ollama`.
+- **`ollama`:** real on-device semantic recall. Compiled into the default
+  binary; requires only a running Ollama and a pulled embedding model
+  (`ollama pull bge-m3`); set `VELESDB_MEMORY_EMBEDDER=ollama`.
 - **`openai`:** any OpenAI-compatible server — oMLX, llama.cpp, LM Studio,
-  vLLM, or a hosted provider. Same `--features ollama` build (that feature
-  carries the HTTP dependency for the embedding role, and its name predates
-  the protocol split). `openai` names a **protocol, not a vendor**: reaching a
+  vLLM, or a hosted provider. Also compiled into the default binary. `openai`
+  names a **protocol, not a vendor**: reaching a
   different server is a different URL, never a new backend name. It therefore
   has **no default URL and no default model** — set
   `VELESDB_MEMORY_EMBEDDER_URL` and `_MODEL` yourself.
