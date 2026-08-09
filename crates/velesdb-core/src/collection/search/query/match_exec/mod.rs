@@ -20,11 +20,38 @@ mod vector_first;
 pub(in crate::collection::search::query) mod where_eval;
 
 use crate::collection::types::Collection;
+use crate::distance::DistanceMetric;
 use crate::error::{Error, Result};
 use crate::guardrails::QueryContext;
-use crate::storage::LogPayloadStorage;
+use crate::storage::{LogPayloadStorage, MmapStorage};
 use crate::velesql::{GraphPattern, MatchClause};
 use std::collections::{HashMap, HashSet};
+
+/// Storage guards hoisted once per MATCH execution, in the decreed lock
+/// order: `vector_storage` (rank 2) before `payload_storage` (rank 3) — the
+/// same order writers such as `delete_vector_core_stores` use (see LOCK
+/// ORDERING in `collection/types.rs`).
+///
+/// The top frame acquires both guards exactly once and passes this bundle
+/// down the whole execution tree; no callee may re-acquire either lock.
+/// A nested `read()` on a lock whose guard is already held by the same
+/// thread deadlocks as soon as one writer queues (parking_lot's task-fair
+/// `RwLock` is not re-entrant — see
+/// `graph_api.rs::validate_edge_endpoints_exist`), and acquiring the pair
+/// in the reversed order is the ABBA half of a hold-and-wait cycle with
+/// the delete path.
+///
+/// `metric` is resolved from `config` (rank 1) BEFORE either guard is
+/// acquired, so similarity evaluation never takes the rank-1 lock while
+/// ranks 2/3 are held.
+pub(in crate::collection::search::query) struct MatchStorageGuards<'a> {
+    /// Distance metric snapshot (from `config`, rank 1) taken before the guards.
+    pub(in crate::collection::search::query) metric: DistanceMetric,
+    /// `vector_storage` read guard (rank 2).
+    pub(in crate::collection::search::query) vector_guard: &'a MmapStorage,
+    /// `payload_storage` read guard (rank 3).
+    pub(in crate::collection::search::query) payload_guard: &'a LogPayloadStorage,
+}
 
 /// Result of a MATCH query traversal.
 ///
@@ -170,7 +197,7 @@ pub fn parse_property_path(expression: &str) -> Option<(&str, &str)> {
 struct SingleNodeCtx<'a> {
     match_clause: &'a MatchClause,
     params: &'a HashMap<String, serde_json::Value>,
-    payload_guard: &'a LogPayloadStorage,
+    guards: &'a MatchStorageGuards<'a>,
     seen_pairs: &'a mut std::collections::HashSet<(u64, u64)>,
     all_results: &'a mut Vec<MatchResult>,
     limit: usize,
@@ -182,7 +209,7 @@ struct SingleNodeCtx<'a> {
 struct TraversalCtx<'a> {
     match_clause: &'a MatchClause,
     params: &'a HashMap<String, serde_json::Value>,
-    payload_guard: &'a LogPayloadStorage,
+    guards: &'a MatchStorageGuards<'a>,
     guardrail: Option<&'a QueryContext>,
     all_results: &'a mut Vec<MatchResult>,
     limit: usize,
@@ -238,9 +265,16 @@ impl Collection {
     /// relationships, enforces guard-rail limits, filters by WHERE, and
     /// projects RETURN properties.
     ///
-    /// Hoists `payload_storage.read()` once before the traversal loop to avoid
-    /// per-node lock acquisitions. The `ConcurrentEdgeStore` manages its own
-    /// internal shard locks — no outer lock is needed.
+    /// Hoists both storage read guards once, in the decreed lock order —
+    /// `vector_storage` (2) before `payload_storage` (3) — and passes them
+    /// down via [`MatchStorageGuards`] so no callee re-acquires either lock.
+    /// The `ConcurrentEdgeStore` manages its own internal shard locks — no
+    /// outer lock is needed.
+    ///
+    /// Callers that already hold both guards (e.g. the aggregation runtime
+    /// WHERE evaluation running a MATCH-in-WHERE predicate) must use
+    /// [`Self::execute_match_with_guards`] instead of this entry point, which
+    /// would re-acquire the locks under them.
     ///
     /// # Errors
     ///
@@ -250,6 +284,33 @@ impl Collection {
         match_clause: &MatchClause,
         params: &HashMap<String, serde_json::Value>,
         ctx: Option<&QueryContext>,
+    ) -> Result<Vec<MatchResult>> {
+        // Metric snapshot (config, rank 1) BEFORE the guards, then both
+        // guards in decree order (2 then 3). See `MatchStorageGuards`.
+        let metric = self.storage.config.read().metric;
+        let vector_guard = self.storage.vector_storage.read();
+        let payload_guard = self.storage.payload_storage.read();
+        let guards = MatchStorageGuards {
+            metric,
+            vector_guard: &vector_guard,
+            payload_guard: &payload_guard,
+        };
+        self.execute_match_with_guards(match_clause, params, ctx, &guards)
+    }
+
+    /// Guard-accepting MATCH execution: the body of
+    /// [`Self::execute_match_with_context`], for callers that already hold the
+    /// storage guards in decree order and must not re-acquire them.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query cannot be executed or a guard-rail is violated.
+    pub(in crate::collection::search::query) fn execute_match_with_guards(
+        &self,
+        match_clause: &MatchClause,
+        params: &HashMap<String, serde_json::Value>,
+        ctx: Option<&QueryContext>,
+        guards: &MatchStorageGuards<'_>,
     ) -> Result<Vec<MatchResult>> {
         if match_clause.patterns.is_empty() {
             return Err(Error::Query(
@@ -265,9 +326,6 @@ impl Collection {
         let mut iteration_count: u32 = 0;
         let mut reported_cardinality: usize = 0;
 
-        // Hoist payload_storage lock once for the entire query.
-        let payload_guard = self.storage.payload_storage.read();
-
         for pattern in &match_clause.patterns {
             if all_results.len() >= limit {
                 break;
@@ -277,7 +335,7 @@ impl Collection {
                 match_clause,
                 params,
                 ctx,
-                &payload_guard,
+                guards,
                 &self.graph.edge_store,
                 limit,
                 &mut all_results,
@@ -310,14 +368,14 @@ impl Collection {
         match_clause: &MatchClause,
         params: &HashMap<String, serde_json::Value>,
         ctx: Option<&QueryContext>,
-        payload_guard: &LogPayloadStorage,
+        guards: &MatchStorageGuards<'_>,
         edge_store: &crate::collection::graph::ConcurrentEdgeStore,
         limit: usize,
         all_results: &mut Vec<MatchResult>,
         iteration_count: &mut u32,
         reported_cardinality: &mut usize,
     ) -> Result<()> {
-        let start_nodes = self.find_start_nodes(pattern)?;
+        let start_nodes = self.find_start_nodes(pattern, guards)?;
         if start_nodes.is_empty() {
             return Ok(());
         }
@@ -337,7 +395,7 @@ impl Collection {
             let mut sn_ctx = SingleNodeCtx {
                 match_clause,
                 params,
-                payload_guard,
+                guards,
                 seen_pairs: &mut seen_pairs,
                 all_results,
                 limit,
@@ -349,7 +407,7 @@ impl Collection {
         let mut trav_ctx = TraversalCtx {
             match_clause,
             params,
-            payload_guard,
+            guards,
             guardrail: ctx,
             all_results,
             limit,
@@ -362,8 +420,8 @@ impl Collection {
 
     /// Collects results for single-node patterns (no relationships).
     ///
-    /// Uses the pre-acquired `payload_guard` from the context to avoid
-    /// per-node lock acquisitions.
+    /// Uses the pre-acquired guards from the context to avoid per-node lock
+    /// acquisitions.
     fn collect_single_node_results(
         &self,
         start_nodes: &[(u64, HashMap<String, u64>)],
@@ -384,7 +442,7 @@ impl Collection {
                     where_eval::EdgeAliasBindings::NONE,
                     where_clause,
                     ctx.params,
-                    ctx.payload_guard,
+                    ctx.guards,
                 )? {
                     continue;
                 }
@@ -401,7 +459,7 @@ impl Collection {
                 &HashMap::new(),
                 &HashMap::new(),
                 &ctx.match_clause.return_clause,
-                ctx.payload_guard,
+                ctx.guards.payload_guard,
             );
             ctx.all_results.push(result);
         }

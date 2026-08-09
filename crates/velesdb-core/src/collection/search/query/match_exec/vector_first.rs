@@ -15,7 +15,7 @@
 #![allow(clippy::cast_precision_loss)]
 
 use super::where_eval::resolve_query_vector;
-use super::MatchResult;
+use super::{MatchResult, MatchStorageGuards};
 use crate::collection::graph::{concurrent_bfs_stream, StreamingConfig};
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
@@ -53,9 +53,11 @@ impl Collection {
 
         let candidates = self.search(&query_vector, top_k)?;
 
-        let config = self.storage.config.read();
-        let higher_is_better = config.metric.higher_is_better();
-        drop(config);
+        // Metric snapshot (config, rank 1) — also reused by
+        // `filter_candidates_by_graph` for its guard bundle, so the rank-1
+        // lock is never taken under the storage guards.
+        let metric = self.storage.config.read().metric;
+        let higher_is_better = metric.higher_is_better();
 
         let above_threshold: Vec<_> = candidates
             .into_iter()
@@ -68,18 +70,16 @@ impl Collection {
             .and_then(|l| usize::try_from(l).ok())
             .unwrap_or(100);
 
-        self.filter_candidates_by_graph(
-            &above_threshold,
-            match_clause,
-            params,
-            ctx,
-            limit,
-            higher_is_better,
-        )
+        self.filter_candidates_by_graph(&above_threshold, match_clause, params, ctx, limit, metric)
     }
 
     /// Validates each vector candidate against the graph pattern and builds
     /// `MatchResult` entries for those that pass.
+    ///
+    /// Hoists both storage guards once, in decree order — `vector_storage`
+    /// (2) before `payload_storage` (3) — and passes them down so WHERE
+    /// evaluation (including similarity re-checks) never re-acquires a
+    /// storage lock under them.
     fn filter_candidates_by_graph(
         &self,
         candidates: &[crate::point::SearchResult],
@@ -87,9 +87,15 @@ impl Collection {
         params: &HashMap<String, serde_json::Value>,
         ctx: &QueryContext,
         limit: usize,
-        higher_is_better: bool,
+        metric: crate::distance::DistanceMetric,
     ) -> Result<Vec<MatchResult>> {
+        let vector_guard = self.storage.vector_storage.read();
         let payload_guard = self.storage.payload_storage.read();
+        let guards = MatchStorageGuards {
+            metric,
+            vector_guard: &vector_guard,
+            payload_guard: &payload_guard,
+        };
         let mut results = Vec::new();
         let mut examined = 0u64;
 
@@ -102,7 +108,7 @@ impl Collection {
             examined += 1;
 
             if let Some(mr) =
-                self.try_match_candidate(candidate, match_clause, params, ctx, &payload_guard)?
+                self.try_match_candidate(candidate, match_clause, params, ctx, &guards)?
             {
                 results.push(mr);
             }
@@ -112,7 +118,7 @@ impl Collection {
         // nodes_visited (the per-candidate BFS adds the nodes/edges it reaches),
         // so EXPLAIN ANALYZE reports real traversal counts for this strategy too.
         ctx.add_traversal(examined, 0);
-        Self::sort_by_score(&mut results, higher_is_better);
+        Self::sort_by_score(&mut results, metric.higher_is_better());
         Ok(results)
     }
 
@@ -125,28 +131,21 @@ impl Collection {
         match_clause: &MatchClause,
         params: &HashMap<String, serde_json::Value>,
         ctx: &QueryContext,
-        payload_guard: &crate::storage::LogPayloadStorage,
+        guards: &MatchStorageGuards<'_>,
     ) -> Result<Option<MatchResult>> {
         let node_id = candidate.point.id;
         let Some(pattern) = match_clause.patterns.first() else {
             return Ok(None);
         };
 
-        if !self.candidate_matches_start_pattern(node_id, pattern, payload_guard) {
+        if !self.candidate_matches_start_pattern(node_id, pattern, guards.payload_guard) {
             return Ok(None);
         }
 
         let graph_ok = if pattern.relationships.is_empty() {
-            self.candidate_passes_where(node_id, match_clause, params, payload_guard, pattern)?
+            self.candidate_passes_where(node_id, match_clause, params, guards, pattern)?
         } else {
-            self.candidate_has_graph_path(
-                node_id,
-                match_clause,
-                params,
-                ctx,
-                payload_guard,
-                pattern,
-            )?
+            self.candidate_has_graph_path(node_id, match_clause, params, ctx, guards, pattern)?
         };
 
         if !graph_ok {
@@ -164,7 +163,7 @@ impl Collection {
             &mr.edge_paths,
             &match_clause.return_clause,
             Some(candidate.score),
-            payload_guard,
+            guards.payload_guard,
         );
         Ok(Some(mr))
     }
@@ -206,7 +205,7 @@ impl Collection {
         node_id: u64,
         match_clause: &MatchClause,
         params: &HashMap<String, serde_json::Value>,
-        payload_guard: &crate::storage::LogPayloadStorage,
+        guards: &MatchStorageGuards<'_>,
         pattern: &crate::velesql::GraphPattern,
     ) -> Result<bool> {
         let non_sim = strip_similarity_from_where(match_clause.where_clause.as_ref());
@@ -222,7 +221,7 @@ impl Collection {
                 super::where_eval::EdgeAliasBindings::NONE,
                 cond,
                 params,
-                payload_guard,
+                guards,
             )
         } else {
             Ok(true)
@@ -241,7 +240,7 @@ impl Collection {
         match_clause: &MatchClause,
         params: &HashMap<String, serde_json::Value>,
         ctx: &QueryContext,
-        payload_guard: &crate::storage::LogPayloadStorage,
+        guards: &MatchStorageGuards<'_>,
         pattern: &crate::velesql::GraphPattern,
     ) -> Result<bool> {
         let max_depth = Self::compute_max_depth(pattern);
@@ -274,7 +273,7 @@ impl Collection {
                     super::where_eval::EdgeAliasBindings::NONE,
                     cond,
                     params,
-                    payload_guard,
+                    guards,
                 )? {
                     return Ok(true);
                 }

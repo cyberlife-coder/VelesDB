@@ -135,11 +135,22 @@ impl MobileGraphStore {
 
     /// Persists the current nodes and edges to `path` as JSON so the graph
     /// survives an app restart (the store is otherwise in-memory only).
+    ///
+    /// # Lock Order
+    ///
+    /// Acquires and RELEASES each read guard in turn — `edges` first, then
+    /// `nodes` — so no two of this store's locks are ever held at once. The
+    /// earlier form built the snapshot in one struct literal, whose temporary
+    /// guards both lived to the end of the statement, taking `nodes` then
+    /// `edges` — the exact reverse of the `edges → outgoing → incoming → nodes`
+    /// order every mutator uses (`add_edge`, `remove_node`, `clear`). A
+    /// concurrent `save`/`remove_node` from two UniFFI-called threads was a
+    /// textbook ABBA deadlock; holding at most one lock here cannot deadlock
+    /// against any acquisition order.
     pub fn save(&self, path: String) -> Result<(), crate::VelesError> {
-        let snapshot = GraphSnapshot {
-            nodes: self.nodes.read().values().cloned().collect(),
-            edges: self.edges.read().values().cloned().collect(),
-        };
+        let edges: Vec<MobileGraphEdge> = self.edges.read().values().cloned().collect();
+        let nodes: Vec<MobileGraphNode> = self.nodes.read().values().cloned().collect();
+        let snapshot = GraphSnapshot { nodes, edges };
         let bytes = serde_json::to_vec(&snapshot)
             .map_err(|e| crate::VelesError::database(format!("Graph serialize failed: {e}")))?;
         std::fs::write(&path, bytes)
@@ -765,5 +776,68 @@ mod tests {
 
         assert_eq!(store.node_count(), 0);
         assert_eq!(store.edge_count(), 0);
+    }
+
+    /// Regression: `save()` must never deadlock against a concurrent mutator.
+    ///
+    /// `save()` used to take `nodes` then `edges` (the reverse of every
+    /// mutator's `edges → … → nodes`), so a `save` on one UniFFI-called thread
+    /// racing a `remove_node`/`clear` on another was an ABBA deadlock with no
+    /// recovery. This runs both in tight loops from two threads and fails via a
+    /// watchdog if they lock up. On the pre-fix code the workers wedge and the
+    /// `recv_timeout` elapses; on the fixed code (save holds one lock at a
+    /// time) it completes in well under the timeout.
+    #[test]
+    fn save_never_deadlocks_against_concurrent_mutation() {
+        use std::sync::mpsc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("g.json").to_string_lossy().into_owned();
+        let store = store_with_nodes(8);
+        for i in 0..7 {
+            let _ = store.add_edge(knows_edge(1000 + i, i + 1, i + 2));
+        }
+
+        let iters = 2_000;
+        let (done_tx, done_rx) = mpsc::channel::<()>();
+
+        let saver = {
+            let store = Arc::clone(&store);
+            let path = path.clone();
+            let done_tx = done_tx.clone();
+            std::thread::spawn(move || {
+                for _ in 0..iters {
+                    let _ = store.save(path.clone());
+                }
+                let _ = done_tx.send(());
+            })
+        };
+        let mutator = {
+            let store = Arc::clone(&store);
+            std::thread::spawn(move || {
+                for i in 0..iters {
+                    // Alternate the two mutators that take edges→…→nodes, the
+                    // order save() used to invert.
+                    if i % 2 == 0 {
+                        store.remove_node(((i % 8) + 1) as u64);
+                        store.add_node(person_node(((i % 8) + 1) as u64));
+                    } else {
+                        store.clear();
+                        store.add_node(person_node(1));
+                    }
+                }
+                let _ = done_tx.send(());
+            })
+        };
+
+        // Both workers must report within the watchdog window or the locks
+        // deadlocked (parking_lot has no recovery — the threads never return).
+        for _ in 0..2 {
+            done_rx
+                .recv_timeout(std::time::Duration::from_secs(30))
+                .expect("save/mutation deadlocked: worker did not finish within 30s");
+        }
+        saver.join().unwrap();
+        mutator.join().unwrap();
     }
 }

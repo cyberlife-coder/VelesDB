@@ -77,6 +77,9 @@ pub struct VectorSliceGuard<'a> {
 // - Condition 1: `_guard` pins the mapping and prevents concurrent remap mutation.
 // - Condition 2: Epoch checks reject stale pointers after remap.
 // SAFETY: Transferring read-only guard ownership across threads preserves invariants.
+// SAFETY: sound only while parking_lot's `deadlock_detection`/`send_guard` features
+// stay off — moving a guard across threads corrupts the detector's per-thread
+// bookkeeping; do not enable those features without revisiting this impl.
 unsafe impl Send for VectorSliceGuard<'_> {}
 #[allow(clippy::non_send_fields_in_send_ty)]
 // SAFETY: `VectorSliceGuard` is `Sync` because shared access is immutable.

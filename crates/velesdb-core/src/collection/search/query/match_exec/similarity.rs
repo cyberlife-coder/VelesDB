@@ -349,6 +349,15 @@ impl Collection {
             higher_is_better,
         )?;
 
+        // Release both guards BEFORE ordering: the ORDER BY paths
+        // (`order_by.rs`) acquire `config`, `vector_storage` and
+        // `payload_storage` themselves, so keeping these guards alive across
+        // `apply_match_order_by` would re-acquire locks this thread already
+        // holds — a deadlock as soon as one writer queues (parking_lot
+        // task-fair semantics) — and take `config` (rank 1) under ranks 2/3.
+        drop(vector_storage);
+        drop(payload_guard);
+
         Self::sort_by_score(&mut scored_results, higher_is_better);
 
         // A RETURN ORDER BY (when present) overrides the implicit score sort;

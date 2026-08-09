@@ -93,7 +93,11 @@ impl Collection {
         self.update_secondary_indexes_from_raw(ids, payloads, &old_payloads);
 
         let inserted = self.bulk_index_or_defer(&vector_refs);
-        self.storage.config.write().point_count = self.storage.vector_storage.read().len();
+        // Two statements so the guards never overlap: the one-liner form
+        // evaluates the RHS first, holding vector_storage (rank 2) while
+        // acquiring config (rank 1) — a decreed-order inversion.
+        let point_count = self.storage.vector_storage.read().len();
+        self.storage.config.write().point_count = point_count;
 
         self.maintain_histograms_for_raw(ids, payloads, &old_payloads);
 

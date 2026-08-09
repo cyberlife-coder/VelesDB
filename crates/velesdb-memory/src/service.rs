@@ -609,6 +609,17 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         let Ok(mut extraction) = extractor.extract_graph(fact) else {
             return;
         };
+        // Privacy invariant: autograph derives structure FROM a stored fact, so
+        // if the fact no longer exists, none of its derived structure may be
+        // created. With a background worker a job can sit queued for
+        // minutes-to-hours and its generation runs for tens of seconds, so a
+        // `forget` issued in between must win — a permanent deletion cannot be
+        // undone by a stale enrichment resurrecting the entity hubs. Re-check
+        // once the generation has returned, before any wiring: this closes the
+        // whole queue-plus-generation window, the common case, completely.
+        if !self.fact_exists(fact_id) {
+            return;
+        }
         crate::extract::orient_kinship(fact, &mut extraction.relations);
         let mut entity_ids: HashMap<String, u64> = HashMap::new();
         let mut edges: HashSet<(u64, u64, String)> = HashSet::new();
@@ -619,8 +630,27 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         for extracted in &extraction.facts {
             let _ = self.wire_entities(fact_id, &extracted.entities, &mut entity_ids, &mut edges);
         }
+        // A concurrent `forget` can still race the wiring writes above between
+        // the first check and here. Re-check once more before the hub↔hub and
+        // attribute writes — neither of which references the source fact, so
+        // `ensure_exists` cannot catch a retired fact for them — leaving a
+        // residual window of a single already-committed generation, not the
+        // whole job.
+        if !self.fact_exists(fact_id) {
+            return;
+        }
         let _ = self.wire_relations(&extraction.relations, &mut entity_ids, &mut edges);
         let _ = self.wire_attributes(&extraction.attributes, &mut entity_ids);
+    }
+
+    /// Cheap "is this fact still stored?" probe gating [`Self::autograph`]'s
+    /// wiring: the same `store.get` existence check [`Self::forget`] and
+    /// [`Self::ensure_exists`] use. A store read error answers `false` —
+    /// autograph must never fabricate structure for a fact it cannot prove is
+    /// still there, and a missing (or unprovable) fact is a clean skip, never
+    /// an error on this deliberately-infallible path.
+    fn fact_exists(&self, fact_id: u64) -> bool {
+        matches!(self.store.get(fact_id), Ok(Some(_)))
     }
 
     /// Create each outgoing link from `fact_id`.
