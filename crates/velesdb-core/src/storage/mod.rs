@@ -33,7 +33,11 @@ mod traits;
 pub mod vector_bytes;
 #[cfg(test)]
 mod vector_bytes_tests;
-pub mod wal_batcher;
+// Dormant by design (CORE_WIRING_DEBT entry 1): zero production call sites,
+// kept for the declared premium transfer. Only tests exercise it, so the
+// non-test build must tolerate the unused items.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) mod wal_batcher;
 #[cfg(test)]
 mod wal_batcher_tests;
 pub mod wal_cursor;

@@ -52,6 +52,11 @@ Every entry below names its target outcome explicitly.
 **What is missing**:
 - No call site uses `WalBatcher`. It is a dormant utility (re-verified
   2026-06-12: still zero call sites outside `wal_batcher.rs`).
+- 2026-08-09: demoted from `pub` to `pub(crate)` — a dormant concurrency
+  primitive must not be part of the public API surface going into 5.0.0.
+  The code and its tests are kept intact pending the declared premium
+  transfer; re-promoting is a one-line change if the transfer lands the
+  wiring instead.
 
 **Why wiring is non-trivial**:
 - `LogPayloadStorage` uses a `RwLock<BufWriter<File>>` with offset tracking
