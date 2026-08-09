@@ -636,21 +636,23 @@ impl ExportOptions {
         while let Some(flag) = it.next() {
             match flag.as_str() {
                 "--include-internal" => options.include_internal = true,
-                "--store" => {
-                    options.store_path =
-                        Some(it.next().ok_or("--store requires a path argument")?.clone());
-                }
-                "--output" => {
-                    options.output = Some(
-                        it.next()
-                            .ok_or("--output requires a path argument")?
-                            .clone(),
-                    );
-                }
+                "--store" => options.store_path = Some(Self::value_of(&mut it, "--store")?),
+                "--output" => options.output = Some(Self::value_of(&mut it, "--output")?),
                 other => return Err(format!("unknown export flag '{other}'").into()),
             }
         }
         Ok(options)
+    }
+
+    /// The argument a valued flag requires, or the error naming the flag.
+    fn value_of(
+        it: &mut std::slice::Iter<'_, String>,
+        flag: &str,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        Ok(it
+            .next()
+            .ok_or_else(|| format!("{flag} requires a path argument"))?
+            .clone())
     }
 }
 

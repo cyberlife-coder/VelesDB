@@ -60,22 +60,31 @@ pub fn export_jsonl<W: Write>(
     loop {
         let (facts, next) =
             crate::migration::scroll_page(&db, "_semantic_memory", cursor, EXPORT_BATCH)?;
-        if facts.is_empty() && next.is_none() {
-            break;
-        }
-        for fact in facts {
-            if let Some(line) = jsonl_line(&fact, include_internal) {
-                writeln!(out, "{line}").map_err(|err| {
-                    MemoryError::Storage(velesdb_core::Error::Query(format!(
-                        "export write failed: {err}"
-                    )))
-                })?;
-                written += 1;
-            }
-        }
+        written += write_page(out, &facts, include_internal)?;
         match next {
             Some(id) => cursor = Some(id),
             None => break,
+        }
+    }
+    Ok(written)
+}
+
+/// Write one page of the walk, returning how many lines it produced. Split
+/// from [`export_jsonl`] so the walk reads as a walk — page, write, advance.
+fn write_page<W: Write>(
+    out: &mut W,
+    facts: &[crate::migration::RawFact],
+    include_internal: bool,
+) -> Result<u64, MemoryError> {
+    let mut written = 0_u64;
+    for fact in facts {
+        if let Some(line) = jsonl_line(fact, include_internal) {
+            writeln!(out, "{line}").map_err(|err| {
+                MemoryError::Storage(velesdb_core::Error::Query(format!(
+                    "export write failed: {err}"
+                )))
+            })?;
+            written += 1;
         }
     }
     Ok(written)
