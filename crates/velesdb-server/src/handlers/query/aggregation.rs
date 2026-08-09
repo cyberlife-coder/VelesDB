@@ -115,7 +115,6 @@ pub(crate) fn resolve_aggregate_collection(
         (status = 404, description = "Collection not found", body = crate::types::VelesqlErrorResponse)
     )
 )]
-#[allow(clippy::unused_async)]
 pub async fn aggregate(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     Json(req): Json<QueryRequest>,
@@ -151,5 +150,12 @@ pub async fn aggregate(
         }
     };
 
-    execute_aggregation_query(&state, &collection_name, &parsed, &req.params, start)
+    // The aggregation scan is synchronous core code — run it on the
+    // blocking pool so the async workers stay responsive.
+    let state_clone = Arc::clone(&state);
+    crate::handlers::helpers::run_blocking(move || {
+        execute_aggregation_query(&state_clone, &collection_name, &parsed, &req.params, start)
+    })
+    .await
+    .unwrap_or_else(|resp| resp)
 }

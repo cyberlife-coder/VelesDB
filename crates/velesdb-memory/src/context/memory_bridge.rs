@@ -1059,6 +1059,17 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// the same lock and in the same read-modify-write that was already
     /// paid for. Reads never mutate it.
     fn update_working_index(&self, project: &str, session: &str) -> Result<(), MemoryError> {
+        // The index slot's embedding derives from the PROJECT NAME alone,
+        // never from the index content, so it is computed here, BEFORE the
+        // lock: an embedder can be a network round-trip (or a hung one), and
+        // holding the global write lock across it stalls every working-index
+        // write in the process behind one slow call. Racing saves may embed
+        // concurrently, but they embed the same text, so whichever vector
+        // lands is equivalent — no re-check under the lock is needed. The
+        // index CONTENT read-modify-write stays entirely under the lock.
+        let embedding = self
+            .embedder
+            .embed(&format!("working context index {project}"))?;
         // Read-modify-write of a single shared fact: held for the whole
         // sequence, otherwise a concurrent save silently erases this entry.
         let _guard = WORKING_INDEX_WRITE.lock();
@@ -1087,24 +1098,28 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         index.sessions = self.live_sessions(project, index.sessions)?;
         let content = serde_json::to_string(&index)
             .map_err(|err| MemoryError::WorkingContextCodec(err.to_string()))?;
-        self.write_working_index(project, &content)
+        self.write_working_index(project, &content, &embedding)
     }
 
     /// Persist a serialized index into `project`'s reserved index slot —
     /// always with the [`CTX_WORKING_INDEX_FIELD`] marker, since an index
     /// written without it would be treated as a squatter and read back as
     /// empty. Only [`Self::update_working_index`] (which holds
-    /// [`WORKING_INDEX_WRITE`]) calls this.
-    fn write_working_index(&self, project: &str, content: &str) -> Result<(), MemoryError> {
+    /// [`WORKING_INDEX_WRITE`] and supplies the slot `embedding` it computed
+    /// before taking that lock) calls this: nothing in here may call the
+    /// embedder, or the lock would again be held across a network hop.
+    fn write_working_index(
+        &self,
+        project: &str,
+        content: &str,
+        embedding: &[f32],
+    ) -> Result<(), MemoryError> {
         let slot = working_index_id(project);
-        let embedding = self
-            .embedder
-            .embed(&format!("working context index {project}"))?;
         let meta = system_meta(&[
             (CTX_WORKING_INDEX_FIELD, Value::Bool(true)),
             (CTX_PROJECT_FIELD, Value::String(project.to_owned())),
         ]);
-        self.store_fact(slot, content, &embedding, Some(&meta), None)?;
+        self.store_fact(slot, content, embedding, Some(&meta), None)?;
         Ok(())
     }
 }

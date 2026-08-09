@@ -64,7 +64,7 @@ The `velesdb-memory` 0.12.0 result-envelope break (`load_working_context` now re
 
 | Entry | State | Target outcome |
 |---|---|---|
-| 1 — `WalBatchConfig` / `WalBatcher` | code exists, **zero call sites**; TOML parsed and ignored | execute the declared premium transfer — or drop the dormant `enabled` field in the 5.0.0 break |
+| 1 — `WalBatchConfig` / `WalBatcher` | code exists, **zero call sites**, now `pub(crate)` (off the public surface); TOML parsed and ignored | execute the declared premium transfer — or drop the dormant `enabled` field in the 5.0.0 break |
 | 3 — `deferred_indexing` / `async_index_builder` | runtime-wired; no TOML/create-time surface | the "Streaming Ingestion Configuration" RFC |
 | 4 — `SearchConfig` global defaults | hard-coded local defaults shadow the runtime config | consolidate the fallback chain through one helper |
 

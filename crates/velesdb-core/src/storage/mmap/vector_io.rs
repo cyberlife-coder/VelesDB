@@ -111,6 +111,32 @@ fn write_wal_delete_entry(
     wal.write_all(&crc.to_le_bytes())
 }
 
+/// Per-entry WAL delete frame size: op(1) + id(8) + crc(4) = 13 bytes.
+const WAL_DELETE_ENTRY_SIZE: usize = 13;
+
+/// Serializes multiple CRC32-framed delete entries and writes them to the
+/// WAL in a single `write_all` call.
+///
+/// Each entry retains the standard per-entry CRC32 frame of
+/// [`write_wal_delete_entry`], so replay is unchanged — only the I/O is
+/// coalesced (one syscall instead of 2N). Mirrors
+/// [`write_wal_store_entries_grouped`].
+fn write_wal_delete_entries_grouped(wal: &mut io::BufWriter<File>, ids: &[u64]) -> io::Result<()> {
+    let mut entry_buf = Vec::with_capacity(1 + 8);
+    let mut group_buf = Vec::with_capacity(ids.len() * WAL_DELETE_ENTRY_SIZE);
+
+    for &id in ids {
+        entry_buf.clear();
+        entry_buf.push(2u8);
+        entry_buf.extend_from_slice(&id.to_le_bytes());
+        let crc = crc32_hash(&entry_buf);
+        group_buf.extend_from_slice(&entry_buf);
+        group_buf.extend_from_slice(&crc.to_le_bytes());
+    }
+
+    wal.write_all(&group_buf)
+}
+
 /// RF-2: Shared dimension validation for `store` and `store_batch`.
 #[inline]
 fn validate_dimension(expected: usize, actual: usize) -> io::Result<()> {
@@ -293,26 +319,8 @@ impl VectorStorage for MmapStorage {
             }
         }
 
-        // 2. Get offset before removing from index (for hole-punch)
-        // EPIC-033/US-004: Use sharded index for reduced contention
-        let offset = self.index.get(id);
-
-        // 3. Remove from Index
-        self.index.remove(id);
-
-        // 4. EPIC-033/US-003: Hole-punch to reclaim disk space immediately
-        // This releases disk blocks back to the filesystem without rewriting the file
-        if let Some(offset) = offset {
-            let vector_size = self.dimension * std::mem::size_of::<f32>();
-            // Best-effort: ignore errors (space will be reclaimed on compact())
-            // Reason: offset and vector_size are bounded by file size, always fit in u64 on 64-bit
-            let offset_u64 = u64::try_from(offset).unwrap_or(u64::MAX);
-            let size_u64 = u64::try_from(vector_size).unwrap_or(u64::MAX);
-            if offset_u64 != u64::MAX && size_u64 != u64::MAX {
-                let _ =
-                    crate::storage::compaction::punch_hole(&self.data_file, offset_u64, size_u64);
-            }
-        }
+        // 2-4. Remove from index and hole-punch (shared with `delete_batch`).
+        self.remove_from_index_and_punch(id);
 
         Ok(())
     }
@@ -358,6 +366,82 @@ impl VectorStorage for MmapStorage {
 }
 
 impl MmapStorage {
+    /// Deletes a whole batch of vectors under ONE durability barrier.
+    ///
+    /// Batched counterpart of [`VectorStorage::delete`], which pays one WAL
+    /// `flush` + `sync_all` PER ID: calling it in a loop is what made a batch
+    /// delete of N points cost N fsyncs on this store alone (finding C3).
+    /// Here every CRC32-framed delete entry is serialized into one buffer,
+    /// written with a single `write_all`, and synced once — byte-for-byte
+    /// identical to what N sequential [`VectorStorage::delete`] calls would
+    /// have written, so [`super::wal_replay`] needs no change.
+    ///
+    /// # Crash-safety ordering (#898 invariant, batch granularity)
+    ///
+    /// Every delete entry reaches the WAL — flushed unconditionally, fsynced
+    /// under [`DurabilityMode::Fsync`] — BEFORE any hole-punch below zeroes
+    /// on-disk bytes. A crash before the barrier loses the whole batch's
+    /// deletes (the vectors simply remain live; nothing was punched yet);
+    /// a crash after it replays every delete. A punched region is therefore
+    /// always shadowed by a durable delete record — no id can be resurrected
+    /// as a zero vector.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the WAL write, flush, or fsync fails. On error
+    /// nothing has been applied: the index and data file are untouched.
+    pub(crate) fn delete_batch(&mut self, ids: &[u64]) -> io::Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+
+        // 1. Group WAL write: all delete frames, one syscall, one barrier.
+        if self.durability != DurabilityMode::None {
+            let mut wal = self.wal.write();
+            write_wal_delete_entries_grouped(&mut wal, ids)?;
+            wal.flush()?;
+            if self.durability == DurabilityMode::Fsync {
+                wal.get_ref().sync_all()?;
+            }
+        }
+
+        // 2. Apply: index removal + hole-punch, only after the WAL barrier.
+        for &id in ids {
+            self.remove_from_index_and_punch(id);
+        }
+
+        Ok(())
+    }
+
+    /// Removes `id` from the index and hole-punches its data region.
+    ///
+    /// Shared apply step of [`VectorStorage::delete`] and
+    /// [`Self::delete_batch`]. Callers MUST have made the corresponding WAL
+    /// delete entry durable (per their durability mode) before calling — the
+    /// hole-punch is destructive (see the #898 note in `delete`).
+    fn remove_from_index_and_punch(&self, id: u64) {
+        // Get offset before removing from index (for hole-punch).
+        // EPIC-033/US-004: Use sharded index for reduced contention.
+        let offset = self.index.get(id);
+
+        self.index.remove(id);
+
+        // EPIC-033/US-003: Hole-punch to reclaim disk space immediately.
+        // This releases disk blocks back to the filesystem without rewriting
+        // the file.
+        if let Some(offset) = offset {
+            let vector_size = self.dimension * std::mem::size_of::<f32>();
+            // Best-effort: ignore errors (space will be reclaimed on compact())
+            // Reason: offset and vector_size are bounded by file size, always fit in u64 on 64-bit
+            let offset_u64 = u64::try_from(offset).unwrap_or(u64::MAX);
+            let size_u64 = u64::try_from(vector_size).unwrap_or(u64::MAX);
+            if offset_u64 != u64::MAX && size_u64 != u64::MAX {
+                let _ =
+                    crate::storage::compaction::punch_hole(&self.data_file, offset_u64, size_u64);
+            }
+        }
+    }
+
     /// Computes offsets for new vectors (not yet in the index).
     ///
     /// Returns a map of `(id -> offset)` for new vectors and the total

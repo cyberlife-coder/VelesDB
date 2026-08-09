@@ -378,6 +378,76 @@ impl LogPayloadStorage {
         self.maybe_auto_snapshot();
         Ok(())
     }
+
+    /// Deletes multiple payloads under ONE durability barrier.
+    ///
+    /// Batched counterpart of [`PayloadStorage::delete`], which syncs the WAL
+    /// per id: calling it in a loop cost one fsync PER POINT on this store
+    /// (finding C3). Here every CRC-protected tombstone (`Marker(0xC4) |
+    /// ID(8) | CRC32(4)`) is built into one buffer, written with a single
+    /// `write_all`, and synced once via [`Self::sync_wal_or_resync`] — the
+    /// bytes are identical to N sequential `delete` calls, so WAL replay is
+    /// unchanged. Ids absent from the index are skipped (no tombstone),
+    /// mirroring the single-delete guard.
+    ///
+    /// # Crash contract
+    ///
+    /// The batch's tombstones become durable together: a crash before the
+    /// sync loses ALL of them (the payloads simply remain live on replay —
+    /// nothing is half-applied), a crash after it persists all. A torn tail
+    /// inside the record group is skipped by CRC framing on replay. Index
+    /// entries are removed only after the sync succeeded, so acknowledged
+    /// in-memory state never runs ahead of the WAL.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the WAL write or sync fails; the index is left
+    /// untouched in that case.
+    pub fn delete_batch(&mut self, ids: &[u64]) -> io::Result<()> {
+        /// Tombstone record size: Marker(1) + ID(8) + CRC32(4).
+        const TOMBSTONE_BYTES: u64 = 1 + 8 + 4;
+
+        // SAFETY: `&mut self` serializes all writers, so the read-then-write
+        // gap below cannot race a concurrent `store(id)` (same argument as
+        // the single-`delete` guard).
+        let live: Vec<u64> = {
+            let index = self.index.read();
+            ids.iter()
+                .copied()
+                .filter(|id| index.contains_key(id))
+                .collect()
+        };
+        if live.is_empty() {
+            return Ok(());
+        }
+
+        // Scoped block: all lock guards are released before the auto-snapshot
+        // check, which itself acquires locks (see `create_snapshot`).
+        {
+            let mut wal = self.wal.write();
+            let mut index = self.index.write();
+            let mut offset = self.write_offset.write();
+
+            let mut records = Vec::with_capacity(live.len() * 13);
+            for &id in &live {
+                records.push(CRC_DELETE_MARKER);
+                records.extend_from_slice(&id.to_le_bytes());
+                records.extend_from_slice(&compute_delete_crc(id).to_le_bytes());
+            }
+            wal.write_all(&records)?;
+
+            // ONE sync for the whole batch (resync offset on failure).
+            Self::sync_wal_or_resync(&mut wal, self.durability, &mut offset)?;
+
+            for &id in &live {
+                *offset += TOMBSTONE_BYTES;
+                index.remove(&id);
+            }
+        }
+
+        self.maybe_auto_snapshot();
+        Ok(())
+    }
 }
 
 impl PayloadStorage for LogPayloadStorage {

@@ -117,9 +117,18 @@ pub async fn match_query(
     State(state): State<Arc<AppState>>,
     Json(request): Json<MatchQueryRequest>,
 ) -> axum::response::Response {
-    match run_match(&state, &collection_name, &request) {
-        Ok(response) => Json(response).into_response(),
-        Err(e) => auto_core_error_response(&e),
+    // MATCH execution is a synchronous graph traversal (lock-taking core
+    // code) — run it on the blocking pool so the async workers stay
+    // responsive.
+    let state_clone = Arc::clone(&state);
+    let outcome = crate::handlers::helpers::run_blocking(move || {
+        run_match(&state_clone, &collection_name, &request)
+    })
+    .await;
+    match outcome {
+        Ok(Ok(response)) => Json(response).into_response(),
+        Ok(Err(e)) => auto_core_error_response(&e),
+        Err(resp) => resp,
     }
 }
 

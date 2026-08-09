@@ -19,11 +19,13 @@ const MEMORY_SNAPSHOT_DIR: &str = "_memory_snapshots";
 /// Maximum number of versioned memory snapshots retained on disk.
 const MEMORY_SNAPSHOT_MAX: usize = 16;
 
-/// Plugin state holding the database instance.
+/// Shared inner state, reference-counted so blocking tasks can own a handle.
 ///
-/// This struct is managed by Tauri and provides thread-safe access
-/// to the `VelesDB` database from all commands.
-pub struct VelesDbState {
+/// [`VelesDbState`] wraps this in an [`Arc`] so [`VelesDbState::run_db`] /
+/// [`VelesDbState::run_memory`] can move an owned clone into
+/// `tauri::async_runtime::spawn_blocking` closures (`'static` bound) without
+/// borrowing the Tauri-managed state.
+struct StateInner {
     /// The database instance wrapped in Arc<RwLock> for thread-safe access.
     db: Arc<RwLock<Option<Arc<Database>>>>,
     /// Persistent unified `AgentMemory` handle.
@@ -33,7 +35,7 @@ pub struct VelesDbState {
     /// snapshot manager survive between invocations. Re-opening a fresh memory
     /// per command (the previous behaviour) silently dropped the in-memory TTL
     /// registry, so TTL / auto-expire / snapshot versioning never worked.
-    memory: Arc<RwLock<Option<Arc<AgentMemory>>>>,
+    memory: RwLock<Option<Arc<AgentMemory>>>,
     /// Path to the database directory.
     path: PathBuf,
     /// Optional lifecycle observer injected when the database is opened.
@@ -47,6 +49,82 @@ pub struct VelesDbState {
     /// `None` preserves the historical behaviour: the database opens with
     /// core defaults, exactly as before config wiring existed.
     config: Option<VelesConfig>,
+}
+
+impl StateInner {
+    /// Opens the database if it is not open yet (double-checked under the
+    /// write lock). Idempotent.
+    fn open(&self) -> Result<()> {
+        let mut db_guard = self.db.write();
+        if db_guard.is_none() {
+            let db = match (&self.observer, &self.config) {
+                (Some(observer), Some(config)) => Database::open_with_observer_and_config(
+                    &self.path,
+                    Arc::clone(observer),
+                    config.clone(),
+                )?,
+                (Some(observer), None) => {
+                    Database::open_with_observer(&self.path, Arc::clone(observer))?
+                }
+                (None, Some(config)) => Database::open_with_config(&self.path, config.clone())?,
+                (None, None) => Database::open(&self.path)?,
+            };
+            *db_guard = Some(Arc::new(db));
+            tracing::info!("VelesDB opened at {:?}", self.path);
+        }
+        Ok(())
+    }
+
+    /// Returns an owned handle to the database, opening it if necessary.
+    ///
+    /// Lock scoping: the `db` read guard is held only long enough to clone the
+    /// inner [`Arc<Database>`] and is dropped before the handle is returned, so
+    /// no state lock is ever held across a core operation.
+    fn db_handle(&self) -> Result<Arc<Database>> {
+        if let Some(db) = self.db.read().as_ref() {
+            return Ok(Arc::clone(db));
+        }
+        self.open()?;
+        let db_guard = self.db.read();
+        db_guard
+            .as_ref()
+            .map(Arc::clone)
+            .ok_or_else(|| Error::InvalidConfig("Database not initialized".to_string()))
+    }
+
+    /// Returns the shared `AgentMemory`, building it on first use.
+    ///
+    /// Lock ordering: the `db` lock (via [`Self::db_handle`]) is fully released
+    /// before the `memory` write lock is taken, so the two are never nested.
+    /// The `memory` write lock is held across the one-time construction only —
+    /// racing initializers would otherwise both create memory collections in
+    /// the database. Every later call takes the read lock just long enough to
+    /// clone the existing [`Arc`].
+    fn memory_handle(&self) -> Result<Arc<AgentMemory>> {
+        if let Some(existing) = self.memory.read().clone() {
+            return Ok(existing);
+        }
+        let db = self.db_handle()?;
+        let snapshot_dir = self.path.join(MEMORY_SNAPSHOT_DIR);
+        let mut guard = self.memory.write();
+        if let Some(existing) = guard.clone() {
+            return Ok(existing);
+        }
+        let snapshot_dir = snapshot_dir.to_string_lossy().into_owned();
+        let memory =
+            Arc::new(AgentMemory::new(db)?.with_snapshots(&snapshot_dir, MEMORY_SNAPSHOT_MAX));
+        *guard = Some(Arc::clone(&memory));
+        Ok(memory)
+    }
+}
+
+/// Plugin state holding the database instance.
+///
+/// This struct is managed by Tauri and provides thread-safe access
+/// to the `VelesDB` database from all commands.
+pub struct VelesDbState {
+    /// Shared inner state; cloned into blocking tasks by the `run_*` methods.
+    inner: Arc<StateInner>,
 }
 
 impl VelesDbState {
@@ -99,11 +177,13 @@ impl VelesDbState {
         config: Option<VelesConfig>,
     ) -> Self {
         Self {
-            db: Arc::new(RwLock::new(None)),
-            memory: Arc::new(RwLock::new(None)),
-            path,
-            observer,
-            config,
+            inner: Arc::new(StateInner {
+                db: Arc::new(RwLock::new(None)),
+                memory: RwLock::new(None),
+                path,
+                observer,
+                config,
+            }),
         }
     }
 
@@ -113,24 +193,7 @@ impl VelesDbState {
     ///
     /// Returns an error if the database cannot be opened.
     pub fn open(&self) -> Result<()> {
-        let mut db_guard = self.db.write();
-        if db_guard.is_none() {
-            let db = match (&self.observer, &self.config) {
-                (Some(observer), Some(config)) => Database::open_with_observer_and_config(
-                    &self.path,
-                    Arc::clone(observer),
-                    config.clone(),
-                )?,
-                (Some(observer), None) => {
-                    Database::open_with_observer(&self.path, Arc::clone(observer))?
-                }
-                (None, Some(config)) => Database::open_with_config(&self.path, config.clone())?,
-                (None, None) => Database::open(&self.path)?,
-            };
-            *db_guard = Some(Arc::new(db));
-            tracing::info!("VelesDB opened at {:?}", self.path);
-        }
-        Ok(())
+        self.inner.open()
     }
 
     /// Returns a reference to the database, opening it if necessary.
@@ -139,18 +202,18 @@ impl VelesDbState {
     ///
     /// Returns an error if the database cannot be accessed.
     pub fn get_db(&self) -> Result<Arc<RwLock<Option<Arc<Database>>>>> {
-        // Ensure database is open
-        {
-            let db_guard = self.db.read();
-            if db_guard.is_none() {
-                drop(db_guard);
-                self.open()?;
-            }
-        }
-        Ok(Arc::clone(&self.db))
+        self.inner.db_handle()?;
+        Ok(Arc::clone(&self.inner.db))
     }
 
-    /// Executes a function with read access to the database.
+    /// Executes a function against an owned database handle.
+    ///
+    /// The internal state lock is held only long enough to clone the
+    /// [`Arc<Database>`]; it is released before `f` runs, so a long core
+    /// operation never blocks other state accesses (including `open`).
+    ///
+    /// Prefer [`Self::run_db`] inside async Tauri commands: `f` runs on the
+    /// caller's thread here, which must not be an async runtime worker.
     ///
     /// # Errors
     ///
@@ -159,12 +222,35 @@ impl VelesDbState {
     where
         F: FnOnce(Arc<Database>) -> Result<T>,
     {
-        self.open()?;
-        let db_guard = self.db.read();
-        let db = db_guard
-            .as_ref()
-            .ok_or_else(|| Error::InvalidConfig("Database not initialized".to_string()))?;
-        f(Arc::clone(db))
+        let db = self.inner.db_handle()?;
+        f(db)
+    }
+
+    /// Runs a synchronous database operation on Tauri's blocking thread pool.
+    ///
+    /// Core operations are synchronous and may fsync; running them inline in an
+    /// async command starves the async runtime under load. This method moves
+    /// the operation (and the lazy first open) onto
+    /// `tauri::async_runtime::spawn_blocking`, keeping runtime workers free.
+    /// The state lock is held only long enough to clone the database handle,
+    /// never across the operation itself.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database is not available, if `f` fails, or if
+    /// the blocking task cannot be joined.
+    pub async fn run_db<F, T>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(Arc<Database>) -> Result<T> + Send + 'static,
+        T: Send + 'static,
+    {
+        let inner = Arc::clone(&self.inner);
+        tauri::async_runtime::spawn_blocking(move || {
+            let db = inner.db_handle()?;
+            f(db)
+        })
+        .await
+        .map_err(|e| Error::TaskJoin(e.to_string()))?
     }
 
     /// Executes a function with the persistent unified `AgentMemory` handle.
@@ -172,7 +258,10 @@ impl VelesDbState {
     /// The handle is built once (lazily) using the default embedding dimension
     /// and a snapshot directory under the database path, then reused for every
     /// later call. This keeps the TTL registry, temporal index, and snapshot
-    /// manager alive across commands.
+    /// manager alive across commands. No state lock is held while `f` runs.
+    ///
+    /// Prefer [`Self::run_memory`] inside async Tauri commands: `f` runs on
+    /// the caller's thread here, which must not be an async runtime worker.
     ///
     /// # Errors
     ///
@@ -181,35 +270,45 @@ impl VelesDbState {
     where
         F: FnOnce(&AgentMemory) -> Result<T>,
     {
-        let memory = self.memory_handle()?;
+        let memory = self.inner.memory_handle()?;
         f(&memory)
     }
 
-    /// Returns the shared `AgentMemory`, building it on first use.
+    /// Runs a synchronous `AgentMemory` operation on Tauri's blocking pool.
     ///
-    /// Lock ordering: the `db` lock (via `with_db`) is fully released before the
-    /// `memory` write lock is taken, so the two are never nested.
+    /// Same rationale as [`Self::run_db`]: memory operations hit the same
+    /// synchronous, fsync-bearing core paths and must not run inline on the
+    /// async runtime. The lazy first construction of the handle also happens
+    /// off-runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the memory subsystem cannot be opened, if `f`
+    /// fails, or if the blocking task cannot be joined.
+    pub async fn run_memory<F, T>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(&AgentMemory) -> Result<T> + Send + 'static,
+        T: Send + 'static,
+    {
+        let inner = Arc::clone(&self.inner);
+        tauri::async_runtime::spawn_blocking(move || {
+            let memory = inner.memory_handle()?;
+            f(&memory)
+        })
+        .await
+        .map_err(|e| Error::TaskJoin(e.to_string()))?
+    }
+
+    /// Returns the shared `AgentMemory`, building it on first use.
+    #[cfg(test)]
     fn memory_handle(&self) -> Result<Arc<AgentMemory>> {
-        if let Some(existing) = self.memory.read().clone() {
-            return Ok(existing);
-        }
-        let db = self.with_db(Ok)?;
-        let snapshot_dir = self.path.join(MEMORY_SNAPSHOT_DIR);
-        let mut guard = self.memory.write();
-        if let Some(existing) = guard.clone() {
-            return Ok(existing);
-        }
-        let snapshot_dir = snapshot_dir.to_string_lossy().into_owned();
-        let memory =
-            Arc::new(AgentMemory::new(db)?.with_snapshots(&snapshot_dir, MEMORY_SNAPSHOT_MAX));
-        *guard = Some(Arc::clone(&memory));
-        Ok(memory)
+        self.inner.memory_handle()
     }
 
     /// Returns the database path.
     #[must_use]
     pub fn path(&self) -> &PathBuf {
-        &self.path
+        &self.inner.path
     }
 }
 

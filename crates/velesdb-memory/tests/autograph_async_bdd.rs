@@ -33,6 +33,12 @@ use velesdb_memory::{
 /// exactly one `extract_graph` through.
 struct GatedExtractor {
     gate: Mutex<Receiver<()>>,
+    /// Incremented BEFORE the gate blocks: the observable "the worker has
+    /// dequeued this job and is now stuck in its generation". Tests that need
+    /// a job to be IN FLIGHT (rather than still queued) must wait on this —
+    /// `calls` only rises once the gate opens, which is too late to
+    /// distinguish the two states.
+    entered: AtomicUsize,
     calls: AtomicUsize,
 }
 
@@ -42,6 +48,7 @@ impl GatedExtractor {
         (
             Arc::new(Self {
                 gate: Mutex::new(rx),
+                entered: AtomicUsize::new(0),
                 calls: AtomicUsize::new(0),
             }),
             tx,
@@ -55,6 +62,7 @@ impl Extractor for GatedExtractor {
     }
 
     fn extract_graph(&self, _text: &str) -> Result<Extraction, ExtractError> {
+        self.entered.fetch_add(1, Ordering::SeqCst);
         self.gate
             .lock()
             .expect("gate lock")
@@ -148,12 +156,26 @@ fn a_full_queue_drops_counted_and_never_blocks_the_write() {
     // the queue (capacity 2); job 3 must be dropped — counted, and the
     // writes themselves still instant.
     let started = Instant::now();
-    for i in 0..4 {
+    svc.remember("fait en rafale numero 0", &[], None)
+        .expect("remember");
+    let first_write = started.elapsed();
+    // Job 0 must be IN FLIGHT before the rest are submitted, or the capacity
+    // arithmetic is a race: a job 0 still sitting in the queue occupies a slot,
+    // and the drop lands on job 2 instead of job 3.
+    assert!(
+        wait_until(Duration::from_secs(10), || extractor
+            .entered
+            .load(Ordering::SeqCst)
+            == 1),
+        "the worker must have entered the gated generation"
+    );
+    let burst = Instant::now();
+    for i in 1..4 {
         svc.remember(&format!("fait en rafale numero {i}"), &[], None)
             .expect("remember");
     }
     assert!(
-        started.elapsed() < Duration::from_secs(2),
+        first_write < Duration::from_secs(2) && burst.elapsed() < Duration::from_secs(2),
         "four writes against a stuck extractor must not block on the queue"
     );
     let observed = wait_until(Duration::from_secs(5), || svc.autograph_dropped() == 1);
@@ -206,6 +228,18 @@ fn a_forgotten_fact_is_not_resurrected_by_its_stale_enrichment() {
     let fact_id = svc
         .remember("Alice Martin travaille chez Wiscale.", &[], None)
         .expect("remember");
+    // Wait for the job to be IN FLIGHT, not merely queued: the scenario is a
+    // generation that outlives a forget, and only a dequeued job survives the
+    // bounded shutdown below (a still-queued one is skipped by design, which
+    // would leave `calls` at 0 for a reason that has nothing to do with the
+    // resurrection this test is about).
+    assert!(
+        wait_until(Duration::from_secs(10), || extractor
+            .entered
+            .load(Ordering::SeqCst)
+            == 1),
+        "the worker must have entered the gated generation"
+    );
 
     // Forget while the generation is stuck behind the gate. The fact is gone
     // and its (yet-unwired) hubs collect nothing — this is the permanent

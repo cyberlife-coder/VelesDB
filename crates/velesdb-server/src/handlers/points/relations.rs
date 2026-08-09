@@ -21,7 +21,9 @@ use velesdb_core::point::Point;
 use crate::types::ErrorResponse;
 use crate::AppState;
 
-use super::super::helpers::{auto_core_error_response, error_response, get_collection_or_404};
+use super::super::helpers::{
+    auto_core_error_response, error_response, get_collection_or_404, run_blocking,
+};
 
 use velesdb_core::EXPIRES_AT_KEY;
 
@@ -134,9 +136,11 @@ pub async fn relate_points(
         }
     };
 
-    match insert_edge_with_retry(&coll, &req, properties) {
-        Ok(edge_id) => (StatusCode::CREATED, Json(RelateResponse { edge_id })).into_response(),
-        Err(r) => r,
+    // Edge allocation + insertion take write locks and persist — run them on
+    // the blocking pool.
+    match run_blocking(move || insert_edge_with_retry(&coll, &req, properties)).await {
+        Ok(Ok(edge_id)) => (StatusCode::CREATED, Json(RelateResponse { edge_id })).into_response(),
+        Ok(Err(r)) | Err(r) => r,
     }
 }
 
@@ -210,7 +214,12 @@ pub async fn unrelate_points(
         Err(r) => return r,
     };
 
-    if coll.remove_edge(edge_id) {
+    // Edge removal takes write locks and persists — run it on the blocking pool.
+    let removed = match run_blocking(move || coll.remove_edge(edge_id)).await {
+        Ok(removed) => removed,
+        Err(resp) => return resp,
+    };
+    if removed {
         StatusCode::NO_CONTENT.into_response()
     } else {
         let err = velesdb_core::Error::EdgeNotFound(edge_id);
@@ -249,7 +258,11 @@ pub async fn get_point_relations(
         Err(r) => return r,
     };
 
-    let raw_edges = coll.get_outgoing_edges(id);
+    // Edge listing takes edge-store shard locks — run it on the blocking pool.
+    let raw_edges = match run_blocking(move || coll.get_outgoing_edges(id)).await {
+        Ok(edges) => edges,
+        Err(resp) => return resp,
+    };
     let edges: Vec<RelationEdge> = raw_edges
         .into_iter()
         .map(|e| RelationEdge {
@@ -297,6 +310,21 @@ pub async fn set_point_ttl(
         Err(r) => return r,
     };
 
+    // The read-modify-write (get + upsert with fsync) is synchronous core
+    // code — run it on the blocking pool.
+    run_blocking(move || set_point_ttl_sync(&coll, id, req.ttl_seconds, &name))
+        .await
+        .unwrap_or_else(|resp| resp)
+}
+
+/// Synchronous body of [`set_point_ttl`]: reads the point, stamps the durable
+/// expiry, and upserts it back. Runs on the blocking pool.
+fn set_point_ttl_sync(
+    coll: &velesdb_core::AnyCollection,
+    id: u64,
+    ttl_seconds: u64,
+    name: &str,
+) -> axum::response::Response {
     let point = match coll.get(&[id]).into_iter().flatten().next() {
         Some(p) => p,
         None => {
@@ -312,8 +340,8 @@ pub async fn set_point_ttl(
         }
     };
 
-    let expires_at = now_secs().saturating_add(req.ttl_seconds);
-    let updated = match stamp_ttl(point, id, expires_at, &name) {
+    let expires_at = now_secs().saturating_add(ttl_seconds);
+    let updated = match stamp_ttl(point, id, expires_at, name) {
         Ok(p) => p,
         Err(r) => return r,
     };

@@ -16,12 +16,13 @@ pub async fn create_index<R: Runtime>(
     request: crate::types::CreateIndexRequest,
 ) -> std::result::Result<(), CommandError> {
     state
-        .with_db(|db| {
+        .run_db(move |db| {
             let coll = require_vector_collection(&db, &request.collection)?;
             coll.create_index(&request.field_name)
                 .map_err(|e| Error::InvalidConfig(e.to_string()))?;
             Ok(())
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -33,10 +34,11 @@ pub async fn drop_index<R: Runtime>(
     request: crate::types::DropIndexRequest,
 ) -> std::result::Result<bool, CommandError> {
     state
-        .with_db(|db| {
+        .run_db(move |db| {
             let coll = require_vector_collection(&db, &request.collection)?;
             Ok(coll.drop_secondary_index(&request.field_name))
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -48,7 +50,7 @@ pub async fn list_indexes<R: Runtime>(
     request: crate::types::ListIndexesRequest,
 ) -> std::result::Result<Vec<crate::types::IndexInfoOutput>, CommandError> {
     state
-        .with_db(|db| {
+        .run_db(move |db| {
             let coll = require_vector_collection(&db, &request.collection)?;
             let indexes = coll.list_indexes();
             Ok(indexes
@@ -62,5 +64,6 @@ pub async fn list_indexes<R: Runtime>(
                 })
                 .collect())
         })
+        .await
         .map_err(CommandError::from)
 }

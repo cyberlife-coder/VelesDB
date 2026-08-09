@@ -179,17 +179,31 @@ impl Collection {
     }
 
     /// Deletes metadata-only points.
+    ///
+    /// Durability discipline and crash contract are identical to
+    /// [`delete_vector_core_stores`](Self::delete_vector_core_stores) minus
+    /// the vector store: one WAL barrier for the payload tombstones, one for
+    /// the BM25 removes — O(1) fsyncs per batch under the write locks, not
+    /// O(N) (finding C3).
     fn delete_metadata_only(&self, ids: &[u64]) -> Result<()> {
         // LOCK ORDER: payload_storage(3) → label_index(7).
         let mut payload_storage = self.storage.payload_storage.write();
         let mut label_idx = self.graph.label_index.write();
-        for &id in ids {
-            let old_payload = payload_storage.retrieve(id).ok().flatten();
-            payload_storage.delete(id)?;
-            // Issue #389: WAL-before-apply for BM25 removes so crash
-            // recovery replays the remove.
-            #[cfg(feature = "persistence")]
-            self.append_bm25_wal_remove(id)?;
+
+        // Old payloads must be read before the tombstones land — they feed
+        // the secondary-index and label-index removals below.
+        let old_payloads: Vec<Option<serde_json::Value>> = ids
+            .iter()
+            .map(|&id| payload_storage.retrieve(id).ok().flatten())
+            .collect();
+
+        payload_storage.delete_batch(ids)?;
+        // Issue #389: WAL-before-apply for BM25 removes so crash recovery
+        // replays the remove — batched, one barrier for the whole batch.
+        #[cfg(feature = "persistence")]
+        self.append_bm25_wal_remove_batch(ids)?;
+
+        for (&id, old_payload) in ids.iter().zip(&old_payloads) {
             self.storage.text_index.remove_document(id);
             self.update_secondary_indexes_on_delete(id, old_payload.as_ref());
             if let Some(ref old) = old_payload {
@@ -212,6 +226,47 @@ impl Collection {
     }
 
     /// Removes points from vector/payload storage, HNSW index, caches, and label index.
+    ///
+    /// # Durability: one barrier per touched store per batch (finding C3)
+    ///
+    /// This used to call each store's per-point `delete()` inside the loop,
+    /// paying ~3 fsyncs PER POINT (vector WAL + payload WAL + BM25 WAL)
+    /// while holding every write lock below — a batch of N points wedged all
+    /// concurrent readers/writers of the collection behind ~3N synchronous
+    /// fsyncs. Now each store receives the whole batch under a single
+    /// durability barrier ([`crate::storage::MmapStorage::delete_batch`],
+    /// [`crate::storage::LogPayloadStorage::delete_batch`], BM25
+    /// `wal_append_batch`), mirroring the bulk-upsert discipline
+    /// (`store_batch` + one sync, #1797): exactly 3 fsyncs per batch, with
+    /// the rest of the lock hold being in-memory/mmap work.
+    ///
+    /// The barriers stay under the locks because the mmap store's hole-punch
+    /// is destructive and MUST follow a durable delete frame (#898) — but
+    /// they are O(1) per batch, which removes the seconds-to-minutes wedge.
+    ///
+    /// # Crash contract
+    ///
+    /// A crash mid-batch may lose the (not yet synced) tail of the batch but
+    /// never corrupts:
+    ///
+    /// * Deletes that did not reach their barrier are lost wholesale — the
+    ///   points remain fully live after reopen. All three replay paths
+    ///   CRC-check each frame and stop cleanly at a torn tail: vector WAL
+    ///   (`storage/mmap/wal_replay.rs::replay_wal_to_index`, op=2 frames),
+    ///   payload WAL (`storage/log_payload.rs::replay_wal_from` via
+    ///   `WalEntry`, 0xC4 tombstones), BM25 (`bm25_persistence_wal::
+    ///   wal_replay`, Remove frames on top of the snapshot).
+    /// * `MmapStorage::delete_batch` syncs every delete frame BEFORE any
+    ///   hole-punch, so a punched region is always shadowed by a durable
+    ///   delete record — no zero-vector resurrection (#898 invariant).
+    /// * A crash BETWEEN the barriers (vector → payload → BM25) can leave a
+    ///   point deleted in one store but not the next. That window is not
+    ///   new — pre-fix it existed per point, between its three fsyncs — and
+    ///   reopen converges: `get()`/search require the (deleted) vector, HNSW
+    ///   orphans are removed by the 3-pass reconciliation in
+    ///   `collection/core/recovery.rs`, and the leftover payload/BM25
+    ///   entries are exactly what a re-issued delete of the same ids cleans
+    ///   up.
     fn delete_vector_core_stores(&self, ids: &[u64]) -> Result<()> {
         // LOCK ORDER: vector_storage(2) → payload_storage(3) → caches(4) → label_index(7).
         let mut vector_storage = self.storage.vector_storage.write();
@@ -221,18 +276,26 @@ impl Collection {
         let mut pq_cache = self.storage.pq_cache.write();
         let mut label_idx = self.graph.label_index.write();
 
-        for &id in ids {
-            let old_payload = payload_storage.retrieve(id).ok().flatten();
-            vector_storage.delete(id)?;
-            payload_storage.delete(id)?;
+        // Old payloads must be read before the tombstones land — they feed
+        // the secondary-index and label-index removals below.
+        let old_payloads: Vec<Option<serde_json::Value>> = ids
+            .iter()
+            .map(|&id| payload_storage.retrieve(id).ok().flatten())
+            .collect();
+
+        // ONE durability barrier per store for the whole batch (see rustdoc).
+        vector_storage.delete_batch(ids)?;
+        payload_storage.delete_batch(ids)?;
+        // Issue #389: WAL-before-apply for BM25 removes so crash recovery
+        // replays the remove — batched, applied in-memory only below.
+        #[cfg(feature = "persistence")]
+        self.append_bm25_wal_remove_batch(ids)?;
+
+        for (&id, old_payload) in ids.iter().zip(&old_payloads) {
             self.storage.index.remove(id);
             sq8_cache.remove(&id);
             binary_cache.remove(&id);
             pq_cache.remove(&id);
-            // Issue #389: WAL-before-apply for BM25 removes so crash
-            // recovery replays the remove.
-            #[cfg(feature = "persistence")]
-            self.append_bm25_wal_remove(id)?;
             self.storage.text_index.remove_document(id);
             self.update_secondary_indexes_on_delete(id, old_payload.as_ref());
             if let Some(ref old) = old_payload {
