@@ -1465,7 +1465,7 @@ test('working context id fields cross as decimal strings in both directions', as
 
 test('memoryStatus reports the hash default as NOT semantic, with counts', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'veles-status-'))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => rmStoreDir(dir))
   const svc = MemoryService.open(dir)
 
   const before = await svc.memoryStatus()
@@ -1487,7 +1487,7 @@ test('memoryStatus reports the hash default as NOT semantic, with counts', async
 
 test('listMemories walks the store exhaustively through the cursor', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'veles-list-'))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => rmStoreDir(dir))
   const svc = MemoryService.open(dir)
   for (let i = 0; i < 5; i += 1) {
     await svc.remember(`fait numero ${i}`, [], { project: 'acme' })
