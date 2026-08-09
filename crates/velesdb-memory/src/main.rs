@@ -108,7 +108,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // All synchronous setup (config file, env probing, blocking HTTP to
     // Ollama, disk open) happens in here, before the async runtime starts, so
     // we never block a tokio worker thread on a synchronous operation.
-    let service = build_configured_service(&args)?;
+    let configured = build_configured_service(&args)?;
 
     // Read AFTER the config file has been applied, since the file can set
     // `VELESDB_MEMORY_HTTP`. Same manual-parsing style as `--version` above
@@ -116,7 +116,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // the server is *served*, further down, since store opening (and its
     // `flock`) is identical either way.
     let http_bind = requested_http_bind(&args);
-    let server = apply_ingest_roots(apply_default_ttl(build_server(service)?)?)?;
+    let ConfiguredService {
+        service,
+        store_path,
+        embedder_model,
+        embedder_dimension,
+    } = configured;
+    let server = apply_ingest_roots(apply_default_ttl(
+        build_server(service)?
+            .with_embedder_identity(embedder_model, embedder_dimension)
+            .with_store_dir(store_path),
+    )?)?;
 
     tokio::runtime::Runtime::new()?.block_on(async move {
         match http_bind {
@@ -528,14 +538,37 @@ fn record_embedding_model(
 /// `command line > environment > file > default`.
 fn build_configured_service(
     args: &[String],
-) -> Result<MemoryService<DynEmbedder>, Box<dyn std::error::Error>> {
+) -> Result<ConfiguredService, Box<dyn std::error::Error>> {
     apply_config_file(args)?;
     let store_path = std::env::var("VELESDB_MEMORY_PATH").unwrap_or_else(|_| default_store_path());
     let configured = build_embedder()?;
-    apply_autograph(open_store_with_actionable_lock_error(
+    // Kept for `memory_status`, which reports the RUNNING embedder: the
+    // `ConfiguredEmbedder` itself is consumed by the store-open path below,
+    // and the service only ever sees `&[f32]` — this is the one place the
+    // resolved identity still exists.
+    let embedder_model = configured.model.clone();
+    let embedder_dimension = configured.embedder.dimension();
+    let service = apply_autograph(open_store_with_actionable_lock_error(
         &store_path,
         configured,
-    )?)
+    )?)?;
+    Ok(ConfiguredService {
+        service,
+        store_path,
+        embedder_model,
+        embedder_dimension,
+    })
+}
+
+/// A built service plus the resolved configuration `memory_status` reports:
+/// which embedder actually runs, and where the store (and its provenance
+/// record) lives. Exists because the service deliberately does not know its
+/// embedder's name — only this binary does.
+struct ConfiguredService {
+    service: MemoryService<DynEmbedder>,
+    store_path: String,
+    embedder_model: String,
+    embedder_dimension: usize,
 }
 
 /// Run `migrate-embeddings`: diagnose a store against the configured target

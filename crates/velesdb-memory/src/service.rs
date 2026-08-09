@@ -476,6 +476,22 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     pub fn has_autograph(&self) -> bool {
         self.autograph.is_some()
     }
+
+    /// The total number of live tracked facts, internal entity hubs included
+    /// — the store's [`MemoryStore::count`], relayed for `memory_status`.
+    #[must_use]
+    pub fn fact_count(&self) -> usize {
+        self.store.count()
+    }
+
+    /// The total number of graph edges, when the backend can say —
+    /// [`MemoryStore::edge_count`], relayed for `memory_status`. `None`
+    /// means "cannot say", never "zero": the two answers tell a caller
+    /// different things about `why()`.
+    #[must_use]
+    pub fn edge_count(&self) -> Option<usize> {
+        self.store.edge_count()
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -737,6 +737,20 @@ impl SemanticMemory {
         self.stored_ids.read().is_empty()
     }
 
+    /// Returns the total number of graph edges in this memory's collection,
+    /// without materializing them.
+    ///
+    /// The observable difference between a memory whose `why()` can walk
+    /// somewhere and one where it degrades to plain similarity search: zero
+    /// edges means nothing ever wired the graph.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the collection cannot be accessed.
+    pub fn edge_count(&self) -> Result<usize, AgentMemoryError> {
+        Ok(memory_helpers::get_collection(&self.db, &self.collection_name)?.edge_count())
+    }
+
     /// Removes all facts and their tracking entries.
     ///
     /// # Errors

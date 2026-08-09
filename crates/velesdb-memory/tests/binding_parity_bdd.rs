@@ -162,14 +162,40 @@ struct Exemption {
     reason: &'static str,
 }
 
-const EXEMPTIONS: &[Exemption] = &[Exemption {
-    binding: "velesdb-wasm",
-    tool: "feedback",
-    reason: "a durable learned confidence is meaningless on the in-memory WASM backend: \
+const EXEMPTIONS: &[Exemption] = &[
+    Exemption {
+        binding: "velesdb-wasm",
+        tool: "feedback",
+        reason: "a durable learned confidence is meaningless on the in-memory WASM backend: \
                  MemoryService::feedback lives in the `persistence`-gated `reinforce` module and \
                  is not compiled for wasm32 at all — exposing it would mean pulling \
                  NativeStore/filesystem code into the very bundle this binding exists to avoid",
-}];
+    },
+    Exemption {
+        binding: "velesdb-node",
+        tool: "memory_status",
+        reason: "memory_status reports SERVER-RUNTIME state a binding host already holds in its \
+                 own hands: the embedder identity is whatever the host constructed (there is no \
+                 env-var resolution to reveal), and the daemon's provenance record lives with the \
+                 daemon's store. The counts (facts/edges) would be genuinely useful here — a \
+                 language-level stats accessor is its own change, tracked with the reembed work",
+    },
+    Exemption {
+        binding: "velesdb-python",
+        tool: "memory_status",
+        reason: "same as velesdb-node: the host constructs its embedder explicitly, so the \
+                 status tool's central answer (which embedder actually runs, is recall semantic) \
+                 is the caller's own constructor argument; a stats accessor for the counts is \
+                 tracked as its own change",
+    },
+    Exemption {
+        binding: "velesdb-wasm",
+        tool: "memory_status",
+        reason: "the WASM backend is in-memory and persistence-free: no provenance record, no \
+                 store directory, no autograph worker — every block of the status except the \
+                 fact count is structurally absent from that build",
+    },
+];
 
 /// One `output_schema` root field a binding deliberately does NOT relay.
 ///
@@ -836,7 +862,7 @@ fn server_output_types() -> BTreeMap<String, String> {
     assert!(
         types.len() >= 20,
         "only {} tool output type(s) parsed out of the server source — the scan is broken, \
-         not the server (it publishes 20 tools)",
+         not the server (it publishes 21 tools)",
         types.len(),
     );
     types

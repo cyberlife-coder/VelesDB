@@ -241,6 +241,20 @@ pub trait MemoryStore {
     /// The total number of live (non-expired) tracked facts, including
     /// internal entity hubs — used as a corpus-size proxy for idf weighting.
     fn count(&self) -> usize;
+
+    /// The total number of graph edges, when the backend can answer without
+    /// materializing them — the observable difference between a store whose
+    /// `why()` can walk somewhere and one where it degrades to plain
+    /// similarity search.
+    ///
+    /// Defaulted to `None` ("cannot say") rather than required, deliberately:
+    /// a backend outside this crate (velesdb-wasm's in-memory store) must
+    /// keep compiling when this surface grows, and a wrong-but-cheap answer
+    /// here would flag healthy graphs as flat. `memory_status` reports the
+    /// distinction to the caller instead of papering over it.
+    fn edge_count(&self) -> Option<usize> {
+        None
+    }
 }
 
 /// The default [`MemoryStore`]: the native, file-backed engine
@@ -450,6 +464,13 @@ impl MemoryStore for NativeStore {
 
     fn count(&self) -> usize {
         self.memory.semantic().count()
+    }
+
+    fn edge_count(&self) -> Option<usize> {
+        // A collection-access failure here means the store is unusable for
+        // every other call too; for a status readout "cannot say" is the
+        // honest degradation, not an error path of its own.
+        self.memory.semantic().edge_count().ok()
     }
 }
 
