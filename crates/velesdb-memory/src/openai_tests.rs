@@ -24,12 +24,22 @@ fn an_embeddings_body_carries_the_model_and_the_input() {
 fn a_chat_body_pins_temperature_to_zero() {
     // Same reason the Ollama backend pins it: a backend that answers
     // differently to the same text turns one stored fact into two on a re-run.
-    let body = chat_body("qwen3", "extract facts");
+    let body = chat_body("qwen3", "extract facts", 512);
     let json: Value = serde_json::from_str(&body).expect("valid json");
     assert_eq!(json["model"], "qwen3");
     assert_eq!(json["messages"][0]["role"], "user");
     assert_eq!(json["messages"][0]["content"], "extract facts");
     assert_eq!(json["temperature"], 0);
+}
+
+#[test]
+#[cfg(feature = "extract")]
+fn a_chat_body_caps_completion_tokens() {
+    // Unbounded, the real extraction prompt measured 3 933 completion tokens
+    // for a twelve-word sentence — 1 min 59 s to store one fact (#1846).
+    let body = chat_body("qwen3", "extract facts", 512);
+    let json: Value = serde_json::from_str(&body).expect("valid json");
+    assert_eq!(json["max_tokens"], 512);
 }
 
 #[test]

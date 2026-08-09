@@ -58,13 +58,15 @@ pub(crate) fn embeddings_body(model: &str, input: &str) -> String {
 ///
 /// `temperature: 0` for the same reason the Ollama backend pins it: a backend
 /// that answers differently to the same text turns one stored fact into two
-/// on a re-run.
+/// on a re-run. `max_tokens` caps runaway generation the same way the Ollama
+/// backend's `num_predict` does — see `extract::MAX_GENERATION_TOKENS` (#1846).
 #[cfg(feature = "extract")]
-pub(crate) fn chat_body(model: &str, prompt: &str) -> String {
+pub(crate) fn chat_body(model: &str, prompt: &str, max_tokens: u32) -> String {
     json!({
         "model": model,
         "messages": [{ "role": "user", "content": prompt }],
         "temperature": 0,
+        "max_tokens": max_tokens,
     })
     .to_string()
 }

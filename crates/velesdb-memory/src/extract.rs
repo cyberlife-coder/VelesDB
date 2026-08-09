@@ -971,6 +971,18 @@ const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 #[cfg(feature = "extract")]
 const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// Ceiling on how many tokens one extraction call may generate.
+///
+/// Unbounded, the real graph-extraction prompt measured 3 933 completion
+/// tokens for a twelve-word sentence — 1 min 59 s spent generating JSON to
+/// store one fact (#1846). The same call capped at 600 tokens measured
+/// 14.9 s. 512 sits just under that, comfortably above what any realistic
+/// sentence's worth of triples needs, and turns the worst case into a
+/// bounded one instead of a tuning knob callers have to discover by timing
+/// out.
+#[cfg(feature = "extract")]
+const MAX_GENERATION_TOKENS: u32 = 512;
+
 /// The knobs that actually configure the extractor, named in its failures.
 ///
 /// **Not** the embedder's variables. `main.rs`'s `build_ollama_extractor` reads
@@ -1144,7 +1156,7 @@ impl OpenAiExtractor {
 
     /// POST one prompt and return the assistant's reply.
     fn generate(&self, prompt: &str) -> Result<String, ExtractError> {
-        let body = crate::openai::chat_body(&self.model, prompt);
+        let body = crate::openai::chat_body(&self.model, prompt, MAX_GENERATION_TOKENS);
         let payload = self
             .client
             .post_json(crate::openai::CHAT_COMPLETIONS_PATH, &body)
@@ -1198,7 +1210,7 @@ impl OllamaExtractor {
             // cost, not the generation. Shares the embedder's knob so one
             // setting governs every Ollama call the daemon makes.
             "keep_alive": crate::embedder::keep_alive(),
-            "options": { "temperature": 0 },
+            "options": { "temperature": 0, "num_predict": MAX_GENERATION_TOKENS },
         })
         .to_string();
         let attempt = || {
