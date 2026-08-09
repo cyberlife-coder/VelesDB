@@ -256,9 +256,9 @@
       "self_test_required": true,
       "blind_spot": {
         "issue": 1695,
-        "summary": "POLICED_TOOLS holds 10 of the 20 published tools, and SURFACE_GLOBS still misses the Python and WASM binding sources. The ten left out are named in the module header with what blocks each: measured on this tree they carry 38 literals the guard would report as drift that are really a sibling's shape, an input schema, an MCP client config file or another API's dict — entity alone has twelve, six of them LangChain dictionaries. They go in by batches, each batch verified by a mutation that must make the guard refuse."
+        "summary": "POLICED_TOOLS holds 14 of the 20 published tools, and SURFACE_GLOBS still misses the Python and WASM binding sources. The six left out — compile_context, entity, recall, remember, remember_extracted, why — are named in the module header with what blocks them: each is waiting on the nested-shape treatment (#1695 lots 2-3), because they carry literals the guard would report as drift that are really a sibling's shape, an input schema, an MCP client config file or another API's dict — entity alone has twelve, six of them LangChain dictionaries. They go in by batches, each batch verified by a mutation that must make the guard refuse."
       },
-      "refusal_untested": "Takes --root, and the REFUSED half is cheap. The blocker is the ACCEPTED control, and it is structural: _structural_failures short-circuits before any drift check unless every pinned surface of every policed tool is present AND carries a declaration the attribution rule credits to that tool. With the registry at ten tools that is 17 distinct files, one of which (docs/reference/MCP_TOOLS.md) must carry ten correct declarations at once. The cost scales with the registry, so a fixture written for this batch has to be rewritten at the next one — the same argument that deferred it from the attribution rule, now transposed to the registry. Refusal IS proven meanwhile, three ways: ModeTests drives main(['--root', ...]) to exit 1 and back to 0; the synthetic suite pins every rule RED-first; and RealRepositoryTests runs the shipped registry against this tree. What is missing is only the subprocess vector over the SHIPPED registry. Tracked by #1715.",
+      "refusal_untested": "Takes --root, and the REFUSED half is cheap. The blocker is the ACCEPTED control, and it is structural: _structural_failures short-circuits before any drift check unless every pinned surface of every policed tool is present AND carries a declaration the attribution rule credits to that tool. With the registry at fourteen tools that is 17 distinct files, one of which (docs/reference/MCP_TOOLS.md) must carry fourteen correct declarations at once. The cost scales with the registry, so a fixture written for this batch has to be rewritten at the next one — the same argument that deferred it from the attribution rule, now transposed to the registry. Refusal IS proven meanwhile, three ways: ModeTests drives main(['--root', ...]) to exit 1 and back to 0; the synthetic suite pins every rule RED-first; and RealRepositoryTests runs the shipped registry against this tree. What is missing is only the subprocess vector over the SHIPPED registry. Tracked by #1715.",
       "subguards": [
         "return-shape"
       ]
@@ -622,6 +622,60 @@
         "summary": "Reads the RAW identity (%an <%ae>, never %aN): a .mailmap line in this repository already maps anthropic to the maintainer, and the mapped name would launder the case being looked for. Admission is by whole identity, so an impostor of an admitted bot does not inherit it."
       },
       "required_via": "pr-governance"
+    },
+    {
+      "script": ".github/workflows/ci.yml",
+      "inline_steps": [
+        "Build napi addon + run Node tests"
+      ],
+      "purpose": "The Node binding's functional gate: build the napi addon (debug profile) and run every __test__/*.spec.mjs suite via `npm test`.",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "node-binding-tests",
+      "required": true,
+      "mode": "strict",
+      "self_test": null,
+      "self_test_required": false,
+      "blind_spot": {
+        "issue": null,
+        "summary": "The pin holds the step by its `- name:`, so the wiring test proves the step exists in the job and is not disarmed — it cannot prove the step's shell body still runs `npm test`. A body rewritten to a no-op under the same name stays green. Same limit as every inline guard, pr-governance's included."
+      },
+      "refusal_untested": "Not a script but a workflow step whose body is `npm install` + `npx napi build --platform` + `npm test` against the real crate: exit 1 needs a failing Node test and exit 0 a full addon build, neither reachable from a materialised temp tree. Its refusal is its test suite's. Measured before this entry existed: deleting the step's one `run:` block turned nothing red — the audit finding this entry closes. Tracked by #1715."
+    },
+    {
+      "script": ".github/workflows/ci.yml",
+      "inline_steps": [
+        "Build napi addon + run Node tests (Windows)"
+      ],
+      "purpose": "The Windows leg of the Node binding gate (#1515): the same napi build, then `node --test __test__/index.spec.mjs` — the file that carries the three Windows-only regressions (#1509, #1510, #1511).",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "node-binding-tests-windows",
+      "required": true,
+      "mode": "strict",
+      "self_test": null,
+      "self_test_required": false,
+      "blind_spot": {
+        "issue": null,
+        "summary": "The step is `if:`-guarded by the node-windows-changed path filter, so on a PR that leaves crates/velesdb-node/** untouched it no-ops by design (the cost tradeoff is written above the job). The wiring test proves the step exists and is not disarmed, not that any given PR executed it — and not that its shell body still runs the spec file."
+      },
+      "refusal_untested": "Same shape as the Linux leg: a workflow step whose body builds the addon on windows-latest and runs one spec file — no materialised tree can reach either exit. It runs only when the path filter says the addon changed, which is the documented tradeoff, not a disarm. Deleting the step was measured green before this entry pinned it. Tracked by #1715."
+    },
+    {
+      "script": ".github/workflows/ci.yml",
+      "inline_steps": [
+        "Run wasm-bindgen tests (Node)"
+      ],
+      "purpose": "The WASM functional gate: `wasm-pack test --node crates/velesdb-wasm` runs the wasm-bindgen suites (tests/*.rs gated on target_arch = \"wasm32\") that compile to empty binaries under the native test job and are invisible to `cargo check`.",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "wasm-check",
+      "required": true,
+      "mode": "strict",
+      "self_test": null,
+      "self_test_required": false,
+      "blind_spot": {
+        "issue": null,
+        "summary": "The pin holds the step by its `- name:`; a body rewritten away from `wasm-pack test` under the same name stays green. And the step covers only the wasm32-gated suites — the host-run quantization parity step in the same job is not pinned here, though it is also named coverage the `test` job already runs transitively."
+      },
+      "refusal_untested": "A workflow step whose body is a wasm-pack build-and-test of the real crate under a Node runner: exit 1 needs a failing wasm-bindgen test, exit 0 a full wasm32 build — neither reachable from a materialised temp tree. Its refusal is the suite's own (memory_wedge_web.rs and siblings). This step was the one-line deletion that turned nothing red until this entry pinned it. Tracked by #1715."
     },
     {
       "script": "scripts/compare_perf.py",

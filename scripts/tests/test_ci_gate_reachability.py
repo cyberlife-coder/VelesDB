@@ -655,8 +655,18 @@ class GuardRegistryShapeTests(unittest.TestCase):
                 )
 
     def test_no_guard_is_declared_twice(self) -> None:
-        scripts = [entry["script"] for entry in self.guards]
-        duplicates = sorted({s for s in scripts if scripts.count(s) > 1})
+        # For a script guard the path IS the identity. An inline guard's
+        # `script` is its workflow file, which every inline guard of that
+        # workflow shares (ci.yml carries three), so its identity is
+        # (workflow, job). Script paths keep the stricter rule: one entry
+        # per script, whatever the job.
+        keys = [
+            (entry["script"], entry["job"])
+            if "inline_steps" in entry
+            else entry["script"]
+            for entry in self.guards
+        ]
+        duplicates = sorted({str(key) for key in keys if keys.count(key) > 1})
         self.assertEqual(duplicates, [], f"duplicate registry entries: {duplicates}")
 
     def test_every_declared_script_exists_on_disk(self) -> None:

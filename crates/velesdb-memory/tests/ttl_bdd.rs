@@ -103,16 +103,19 @@ fn none_ttl_matches_plain_remember() {
 #[test]
 fn expired_fact_is_no_longer_recalled() {
     let (_dir, svc) = service();
-    // 2s, not 1s. `store_fact` writes a TTL'd fact in TWO store calls —
-    // `store_with_ttl` then `update_metadata` — and the auto date stamp means
-    // metadata is always present, so EVERY ttl'd write takes that path. On a
-    // loaded machine a 1s expiry can lapse between the two calls, and the
-    // second one then fails with `NotFound(... is expired ...)`: the write
-    // errors instead of succeeding. Observed once during a full workspace run.
-    //
-    // That race is a real defect, tracked separately — this test is about
-    // expiry dropping a fact from recall, not about how fast the write path
-    // is. The wider window keeps it testing its own subject.
+    // 2s, not 1s — a margin kept for history and scheduling headroom. A
+    // TTL'd fact USED to be written in two store calls (`store_with_ttl`
+    // then `update_metadata`), and with the auto date stamp making metadata
+    // always present, every TTL'd write took that path: on a loaded machine
+    // a 1s expiry could lapse between the calls and the second one failed
+    // with `NotFound(... is expired ...)`. That race is FIXED (#1641): the
+    // service now dispatches metadata+TTL as ONE combined
+    // `store_with_metadata_and_ttl` call, and the shipped backend writes the
+    // metadata before applying the expiry, so the fact cannot expire
+    // mid-write. The call shape is pinned by tests/ttl_call_order_bdd.rs;
+    // this test stays about its own subject — expiry dropping a fact from
+    // recall — and the wider window just keeps a loaded CI from racing the
+    // 2.5s sleep below.
     let id = svc
         .remember_with_ttl("short-lived secret", &[], None, Some(2))
         .expect("remember with 2s ttl");

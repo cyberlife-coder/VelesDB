@@ -15,6 +15,12 @@
 
 import { ConnectionError, NotFoundError, ValidationError, VelesDBError } from './types';
 
+// The wasm capability floor this SDK's memory surface requires. MUST match
+// package.json's `@wiscale/velesdb-wasm` range — the runtime check in
+// `runInit` quotes it, and a literal that drifts from the manifest is how
+// the error message came to name ^3.8.0 against a ^4.1.0 manifest.
+const WASM_MEMORY_FLOOR = '4.2.0';
+
 // ---------------------------------------------------------------------------
 // Public types — mirror crates/velesdb-node/index.d.ts's Js DTOs
 // ---------------------------------------------------------------------------
@@ -572,8 +578,8 @@ interface WasmErrorLike {
  * subgraph). Runs entirely in-process (browser or Node) via WebAssembly —
  * no server, no network.
  *
- * Two methods available on the Node (`@wiscale/velesdb-memory-node`) and
- * Python bindings are deliberately absent here (issue #1547's audit):
+ * One method available on the Node (`@wiscale/velesdb-memory-node`) and
+ * Python bindings is deliberately absent here (issue #1547's audit):
  *
  * - `feedback` (RL Memory re-ranking): the underlying
  *   `MemoryService::feedback` lives behind `velesdb-memory`'s
@@ -581,10 +587,10 @@ interface WasmErrorLike {
  *   durable learned confidence is meaningless for a store that disappears
  *   on page reload (see `crates/velesdb-wasm/src/memory_service.rs`'s
  *   module doc). Not a missing binding; an intentional boundary.
- * - `rememberExtracted`: it needs a generative model (the only
- *   `Extractor` implementation in `velesdb-memory` calls out to Ollama),
- *   which would pull a network dependency into the WASM bundle by
- *   default. A JS-provided extractor callback is a natural v2 addition.
+ *
+ * `rememberExtracted` (once on that absent list) IS available: it runs the
+ * deterministic `outline` extractor in-process; generative backends are
+ * refused by name so no network dependency enters the WASM bundle.
  *
  * @example
  * ```typescript
@@ -638,14 +644,14 @@ export class MemoryService {
       );
     }
     // Capability floor, checked at runtime because a stale lockfile can
-    // resolve a wasm build older than the declared range (^3.8.0, the
-    // floor this SDK's full memory surface — media fragments,
-    // retrieveContextSource — needs; the wedge itself first shipped in
+    // resolve a wasm build older than the declared range
+    // (WASM_MEMORY_FLOOR — keep it equal to package.json's
+    // @wiscale/velesdb-wasm floor; the wedge itself first shipped in
     // 3.6.0). Fail with the actionable cause, not a generic load error.
     if (typeof mod.MemoryService !== 'function') {
       throw new ConnectionError(
         'The resolved @wiscale/velesdb-wasm build does not ship MemoryService — ' +
-          'the memory wedge requires @wiscale/velesdb-wasm >= 3.8.0 ' +
+          `the memory wedge requires @wiscale/velesdb-wasm >= ${WASM_MEMORY_FLOOR} ` +
           '(update the dependency in your lockfile)'
       );
     }

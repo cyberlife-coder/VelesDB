@@ -69,13 +69,17 @@ Store a fact in durable local memory.
 
 | Parameter | Type | Required | Notes |
 |---|---|---|---|
-| `fact` | string | yes | The text to store. Capped at 1 MiB (`MAX_FACT_BYTES`). |
+| `fact` | string | yes | The text to store. Capped at 2048 bytes (`MAX_EMBEDDABLE_TEXT_BYTES`) — roughly what the embedding model's context window holds; a longer fact is refused with its size, never silently truncated. (The wider 1 MiB `MAX_FACT_BYTES` allocation cap applies to `remember_extracted`'s raw `text` and to stored context-compiler sources, not to a single fact.) |
 | `links` | array of `{target, relation}` | no | Typed edges created at write time; `target` accepts a number or a decimal string. |
 | `metadata` | object | no | Free-form structured metadata for later filtering. Capped at 64 KiB serialized (`MAX_METADATA_BYTES`). |
 | `ttl_seconds` | integer | no | Durable expiry that survives a restart. Omit for a permanent fact; falls back to the server's `VELESDB_MEMORY_DEFAULT_TTL`. |
 
 Returns `{ id, id_str }`. The id is derived from the fact's content, so
 re-remembering identical text is idempotent — same id, updated in place.
+
+When the server runs autograph through its async worker, edges derived from a
+`remember` land asynchronously: an `entity` or `why` read immediately after
+may not see them yet — the fact itself is always immediately readable.
 
 ```jsonc
 remember { "fact": "we chose parking_lot to avoid lock poisoning",
@@ -283,6 +287,10 @@ otherwise be a constructible multi-megabyte response. A cut is REPORTED, not
 silent: `relations_truncated` / `relations_in_truncated` say when the
 matching list is a partial view, since a list holding exactly the cap is
 otherwise indistinguishable from a cut one.
+
+With the async autograph worker active, edges derived from a `remember` land
+asynchronously, so an `entity` read immediately after that `remember` may not
+see them yet — the fact itself is always immediately readable.
 
 ```jsonc
 entity { "name": "Theo Durand" }
@@ -603,4 +611,4 @@ so the MCP taxonomy cannot drift from the bindings':
 
 ---
 
-Last updated: 2026-07-25 · Applies to: velesdb-memory 0.12.0
+Last updated: 2026-08-09 · Applies to: velesdb-memory 0.12.0
