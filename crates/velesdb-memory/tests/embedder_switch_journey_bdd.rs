@@ -27,16 +27,13 @@ const OLD_MODEL: &str = "hash";
 const NEW_MODEL: &str = "bge-mock";
 const NEW_DIMENSION: usize = 1024;
 
-#[test]
-fn a_hash_store_survives_the_switch_to_a_semantic_embedder() {
-    let root = tempfile::tempdir().expect("scratch root");
-    let store_dir = root.path().join("store");
-
-    // ACT 1 — life on the default: facts accumulate under `hash`, and the
-    // daemon's startup path records what filled the store (#1751).
+/// ACT 1 — life on the default: facts accumulate under `hash`, and the
+/// daemon's startup path records what filled the store (#1751). Returns the
+/// id of the fact whose survival the journey is about.
+fn live_on_the_default_embedder(store_dir: &std::path::Path) -> u64 {
     let fact_id;
     {
-        let service = MemoryService::open(&store_dir, HashEmbedder::new(DEFAULT_DIMENSION))
+        let service = MemoryService::open(store_dir, HashEmbedder::new(DEFAULT_DIMENSION))
             .expect("open the store under the default embedder");
         fact_id = service
             .remember(
@@ -50,10 +47,18 @@ fn a_hash_store_survives_the_switch_to_a_semantic_embedder() {
             .expect("remember a second fact");
     }
     embedding_provenance::write(
-        &store_dir,
+        store_dir,
         &EmbeddingProvenance::new(OLD_MODEL, DEFAULT_DIMENSION),
     )
     .expect("record the filling model, as the daemon does on first open");
+    fact_id
+}
+
+#[test]
+fn a_hash_store_survives_the_switch_to_a_semantic_embedder() {
+    let root = tempfile::tempdir().expect("scratch root");
+    let store_dir = root.path().join("store");
+    let fact_id = live_on_the_default_embedder(&store_dir);
 
     // ACT 2 — the flip. The daemon's pre-open check must REFUSE (silently
     // serving nonsense is the audit's failure mode), and the refusal must
