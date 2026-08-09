@@ -660,3 +660,55 @@ pub(super) struct MemoryStatusResult {
     /// Corpus and graph size.
     pub(super) memory: MemoryCounts,
 }
+
+/// Parameters for the `list_memories` tool.
+#[derive(Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct ListMemoriesParams {
+    /// Resume the walk strictly after this id — the `next_cursor` of the
+    /// previous page. Omit to start from the beginning. Accepts a JSON
+    /// number or a decimal string (issue #1468).
+    #[serde(default, deserialize_with = "crate::model::deserialize_optional_id")]
+    pub(super) cursor: Option<u64>,
+    /// Page size (default 50). Clamped server-side.
+    #[serde(default)]
+    pub(super) limit: Option<usize>,
+    /// Keep only facts whose metadata equals every given key, e.g.
+    /// `{"project": "acme"}`. A filtered page may come back sparse — keep
+    /// following `next_cursor`; the walk stays exhaustive.
+    #[serde(default, deserialize_with = "super::wire::lenient")]
+    pub(super) filter: Option<Metadata>,
+    /// Also list internal graph scaffolding (entity hubs) and reserved
+    /// `_veles_*` keys, verbatim. Default `false`: the audit shows the
+    /// user's facts as `recall` would show them.
+    #[serde(default, deserialize_with = "super::wire::lenient")]
+    pub(super) include_internal: bool,
+}
+
+/// One entry of [`ListMemoriesResult`].
+#[derive(Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct ListedMemoryDto {
+    /// Stable id of the memory.
+    pub(super) id: u64,
+    /// Decimal-string twin of `id` (issue #1468) — see
+    /// [`RememberResult::id_str`].
+    pub(super) id_str: String,
+    /// Stored fact content.
+    pub(super) content: String,
+    /// Metadata under the same visibility policy as `recall` (business keys
+    /// plus the auto-stamped `_veles_date`), or the raw payload when
+    /// `include_internal` was set. `null` when nothing survives.
+    pub(super) metadata: Option<Metadata>,
+}
+
+/// Result of the `list_memories` tool.
+#[derive(Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct ListMemoriesResult {
+    /// This page of the walk, ids ascending.
+    pub(super) memories: Vec<ListedMemoryDto>,
+    /// Pass as `cursor` to get the next page; `null` means the walk is
+    /// complete.
+    pub(super) next_cursor: Option<String>,
+}

@@ -255,6 +255,67 @@ pub trait MemoryStore {
     fn edge_count(&self) -> Option<usize> {
         None
     }
+
+    /// One cursor page of the store's live facts, ids ascending: up to
+    /// `limit` entries strictly after `cursor` (`None` starts the walk),
+    /// plus the cursor for the next page (`None` ends it). Payloads come
+    /// back RAW — reserved keys and scaffolding markers included — because
+    /// the policy of what a caller may see (hub filtering, key stripping)
+    /// belongs to the service layer, in one place, for every backend.
+    ///
+    /// TTL-expired facts are skipped, not listed: an audit must show what
+    /// the store will still serve, and a fact past its expiry is not it.
+    ///
+    /// Defaulted to a refusal rather than required, same reasoning as
+    /// [`Self::edge_count`]: an out-of-crate backend keeps compiling, and
+    /// its `list_memories` answers with this error instead of a wrong walk.
+    ///
+    /// # Errors
+    /// Returns [`MemoryError`] if the backend cannot enumerate at all, or if
+    /// the walk fails.
+    fn list(
+        &self,
+        cursor: Option<u64>,
+        limit: usize,
+    ) -> Result<(Vec<RawListedFact>, Option<u64>), MemoryError> {
+        let _ = (cursor, limit);
+        Err(MemoryError::InvalidFilter(
+            "this storage backend does not support listing".to_owned(),
+        ))
+    }
+}
+
+/// One fact as [`MemoryStore::list`] hands it to the service layer: content
+/// split out, everything else — reserved keys and scaffolding markers
+/// included — still in `payload` so the service can apply its visibility
+/// policy exactly once for every backend.
+#[derive(Debug, Clone)]
+pub struct RawListedFact {
+    /// Stable id of the fact.
+    pub id: u64,
+    /// The stored fact text (the payload's `content` key).
+    pub content: String,
+    /// The rest of the stored payload, verbatim.
+    pub payload: Metadata,
+}
+
+#[cfg(feature = "persistence")]
+impl RawListedFact {
+    /// The one place a stored payload is split into content + the rest —
+    /// shared by [`MemoryStore::list`] and the JSONL export so the two
+    /// reading surfaces can never disagree on what a fact's content IS.
+    pub(crate) fn from_raw(fact: &crate::migration::RawFact) -> Self {
+        let mut payload: Metadata = serde_json::from_str(&fact.payload).unwrap_or_default();
+        let content = match payload.remove("content") {
+            Some(Value::String(text)) => text,
+            _ => String::new(),
+        };
+        Self {
+            id: fact.id,
+            content,
+            payload,
+        }
+    }
 }
 
 /// The default [`MemoryStore`]: the native, file-backed engine
@@ -264,6 +325,10 @@ pub trait MemoryStore {
 #[cfg(feature = "persistence")]
 pub struct NativeStore {
     memory: AgentMemory,
+    /// Kept beside `memory` (which owns its own clone) for the read paths
+    /// that speak to the engine directly — [`MemoryStore::list`] walks the
+    /// collection cursor, which `AgentMemory` does not re-expose.
+    db: Arc<Database>,
 }
 
 #[cfg(feature = "persistence")]
@@ -274,8 +339,8 @@ impl NativeStore {
     /// Returns [`MemoryError`] if the store cannot be opened.
     pub fn open<P: AsRef<Path>>(path: P, dimension: usize) -> Result<Self, MemoryError> {
         let db = Arc::new(Database::open(path)?);
-        let memory = AgentMemory::with_dimension(db, dimension)?;
-        Ok(Self { memory })
+        let memory = AgentMemory::with_dimension(Arc::clone(&db), dimension)?;
+        Ok(Self { memory, db })
     }
 }
 
@@ -471,6 +536,25 @@ impl MemoryStore for NativeStore {
         // every other call too; for a status readout "cannot say" is the
         // honest degradation, not an error path of its own.
         self.memory.semantic().edge_count().ok()
+    }
+
+    fn list(
+        &self,
+        cursor: Option<u64>,
+        limit: usize,
+    ) -> Result<(Vec<RawListedFact>, Option<u64>), MemoryError> {
+        // The migration module's cursor walk, reused verbatim: id-keyed,
+        // ascending, exclusive, and it skips TTL-expired points — exactly
+        // the audit contract (#1762 built it to enumerate a store with full
+        // fidelity, which is what an audit is).
+        let (facts, next) = crate::migration::scroll_page(
+            &self.db,
+            self.memory.semantic().collection_name(),
+            cursor,
+            limit,
+        )?;
+        let listed = facts.iter().map(RawListedFact::from_raw).collect();
+        Ok((listed, next))
     }
 }
 

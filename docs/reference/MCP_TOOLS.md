@@ -21,14 +21,14 @@ The tool surface is feature-gated at build time:
 
 | Feature | Default? | Tools it adds |
 |---|---|---|
-| `mcp` | yes | `remember`, `recall`, `recall_where`, `recall_fused`, `feedback`, `relate`, `unrelate`, `forget`, `entity`, `why`, `remember_extracted`, `memory_status` |
+| `mcp` | yes | `remember`, `recall`, `recall_where`, `recall_fused`, `feedback`, `relate`, `unrelate`, `forget`, `entity`, `why`, `remember_extracted`, `memory_status`, `list_memories` |
 | `context` | yes | `compile_context`, `compile_transcript`, `explain_compilation`, `retrieve_context_source`, `context_savings`, `save_working_context`, `load_working_context`, `list_working_contexts`, `suggest_budget` |
 | `extract` | no | none — it enables the *backend* `remember_extracted` needs (see that tool) |
 
 `default = ["mcp", "persistence", "context", "ollama", "extract"]` (the last
 two carry the HTTP backends for embedding and extraction — runtime-switched,
 off until their env vars opt in), so a plain `cargo install velesdb-memory`
-advertises all **21** tools. They are served by
+advertises all **22** tools. They are served by
 one MCP server: the context router is combined into the memory router in
 `McpServer::new`, never a second server.
 
@@ -388,6 +388,35 @@ Returns `{ embedder, provenance, extraction, memory }`:
 
 Call it at session start, and whenever recall quality or `why`'s evidence
 trails surprise you.
+
+## `list_memories`
+
+Audit the store: walk every stored fact, page by page — the question
+`recall` structurally cannot answer, because recall ranks by resemblance to
+a query and what resembles nothing you thought to ask stays invisible.
+
+| Parameter | Type | Required | Notes |
+|---|---|---|---|
+| `cursor` | integer or decimal string | no | The previous page's `next_cursor`. Omit to start the walk. |
+| `limit` | integer | no | Page size (default 50, clamped server-side). |
+| `filter` | object | no | Keep only facts whose metadata equals every given key. A filtered page may come back sparse — keep following `next_cursor`; the walk stays exhaustive. |
+| `include_internal` | boolean | no | Also list graph scaffolding and reserved `_veles_*` keys, verbatim. Default `false`. |
+
+Returns `{ memories, next_cursor }`: `memories` entries carry
+`{ id, id_str, content, metadata }`, ids ascending — two audits of the same
+store see the same order — with metadata under `recall`'s visibility rule
+(business keys plus the auto-stamped `_veles_date`). `next_cursor` is a
+decimal string to pass back as `cursor`; `null` ends the walk. Ids exceed
+2^53 — relay `id_str`.
+
+For a full-store backup in one command — including a store whose configured
+embedder no longer matches, which the daemon refuses to SERVE but which
+stays yours to READ — use the CLI instead (stop the daemon first; it holds
+the store's single-writer lock):
+
+```bash
+velesdb-memory export --output memories.jsonl   # --include-internal for a verbatim backup
+```
 
 **Opt-in at runtime.** The backend is compiled into the default build; the
 server must be started with `VELESDB_MEMORY_EXTRACTOR` set. Without a backend the tool returns an

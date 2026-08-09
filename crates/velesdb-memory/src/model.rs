@@ -41,6 +41,39 @@ where
     }
 }
 
+/// [`deserialize_id`]'s `Option`-shaped sibling for OPTIONAL id fields
+/// (`list_memories.cursor`): absent and `null` mean `None`, anything else
+/// takes the same number-or-decimal-string rule. Feature-independent like
+/// its sibling and for the same reason — `crate::context::wire`'s
+/// equivalent lives behind the `context` feature, and an `mcp`-only build
+/// must still parse the cursor.
+///
+/// Gated on `mcp` — its one consumer is the tool DTO layer — because the
+/// wasm build (`context` alone, `-D warnings`) rejects it as dead code
+/// otherwise. `deserialize_id` above stays ungated only because [`Link`]'s
+/// own deserialization uses it feature-free.
+#[cfg(feature = "mcp")]
+pub(crate) fn deserialize_optional_id<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    let expected = "expected a u64 number, a decimal u64 string, or null";
+    match Value::deserialize(deserializer)? {
+        Value::Null => Ok(None),
+        Value::Number(number) => number
+            .as_u64()
+            .map(Some)
+            .ok_or_else(|| Error::custom(format!("invalid id {number} ({expected})"))),
+        Value::String(text) => text
+            .trim()
+            .parse()
+            .map(Some)
+            .map_err(|_| Error::custom(format!("invalid id '{text}' ({expected})"))),
+        other => Err(Error::custom(format!("invalid id {other} ({expected})"))),
+    }
+}
+
 /// A typed link from a freshly remembered fact to an existing memory.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
@@ -438,3 +471,18 @@ pub struct Explanation {
 #[cfg(test)]
 #[path = "model_tests.rs"]
 mod tests;
+
+/// One audited fact, as `list_memories` returns it: the caller-facing shape
+/// of a [`crate::storage::RawListedFact`] after the service applied its
+/// visibility policy (hub filtering, reserved-key stripping).
+#[derive(Debug, Clone)]
+pub struct ListedMemory {
+    /// Stable id of the memory.
+    pub id: u64,
+    /// Stored fact content.
+    pub content: String,
+    /// Metadata as the policy leaves it: business keys (plus the
+    /// auto-stamped date) by default, the raw payload under
+    /// `include_internal`. `None` when nothing survives.
+    pub metadata: Option<crate::service::Metadata>,
+}

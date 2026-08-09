@@ -492,6 +492,40 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     pub fn edge_count(&self) -> Option<usize> {
         self.store.edge_count()
     }
+
+    /// One page of the store's facts, for auditing — "what does my agent
+    /// know?" — which `recall` structurally cannot answer: it ranks by
+    /// resemblance to a query, and what resembles nothing you thought to
+    /// ask stays invisible.
+    ///
+    /// The store hands back raw pages ([`MemoryStore::list`]); the
+    /// visibility policy is applied here, once, for every backend: internal
+    /// entity hubs are skipped unless `include_internal` (they are the
+    /// graph's scaffolding, not the user's facts), reserved `_veles_*` keys
+    /// are stripped exactly as `recall` strips them (the auto-stamped date
+    /// survives — an audit legitimately asks WHEN), and `filter` keeps only
+    /// facts whose metadata equals every given key. A filtered page may
+    /// come back sparse — the cursor still advances over what was skipped,
+    /// so the WALK stays exhaustive.
+    ///
+    /// # Errors
+    /// Returns [`MemoryError`] if the backend cannot enumerate or the walk
+    /// fails.
+    pub fn list(
+        &self,
+        cursor: Option<u64>,
+        limit: usize,
+        filter: Option<&Metadata>,
+        include_internal: bool,
+    ) -> Result<(Vec<crate::model::ListedMemory>, Option<u64>), MemoryError> {
+        let limit = crate::limits::clamp_recall_limit(limit.max(1));
+        let (page, next) = self.store.list(cursor, limit)?;
+        let memories = page
+            .into_iter()
+            .filter_map(|fact| audited(fact, filter, include_internal))
+            .collect();
+        Ok((memories, next))
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1625,6 +1659,39 @@ pub(crate) fn positive_ttl(ttl_seconds: Option<u64>) -> Option<u64> {
 /// `name: ""` when nothing matched left a caller running several lookups
 /// unable to pair a response with its question (issue #1654). Hit and miss go
 /// through this one function, so the two can never drift.
+/// The audit's per-fact visibility policy, in one place: `None` skips the
+/// fact (internal scaffolding under the default view, or a metadata filter
+/// miss), `Some` carries what the caller may see — reserved keys stripped
+/// exactly as recall strips them, or the raw payload under
+/// `include_internal`.
+fn audited(
+    fact: crate::storage::RawListedFact,
+    filter: Option<&Metadata>,
+    include_internal: bool,
+) -> Option<crate::model::ListedMemory> {
+    if !include_internal && crate::storage::is_internal_scaffolding(&fact.payload) {
+        return None;
+    }
+    let matches = filter.is_none_or(|wanted| {
+        wanted
+            .iter()
+            .all(|(key, value)| fact.payload.get(key) == Some(value))
+    });
+    if !matches {
+        return None;
+    }
+    let metadata = if include_internal {
+        (!fact.payload.is_empty()).then_some(fact.payload)
+    } else {
+        strip_reserved_keys(Some(fact.payload))
+    };
+    Some(crate::model::ListedMemory {
+        id: fact.id,
+        content: fact.content,
+        metadata,
+    })
+}
+
 #[must_use]
 pub fn canonical_entity_name(name: &str) -> String {
     name.trim().to_lowercase()

@@ -21,7 +21,7 @@ invariants that hold the design together.
 │                                                                            │
 │   src/main.rs ── env config (store path, embedder, extractor) ──┐          │
 │                                                                 ▼          │
-│   src/mcp.rs ── McpServer: 21 tools (memory + graph + context compiler)    │
+│   src/mcp.rs ── McpServer: 22 tools (memory + graph + context compiler)    │
 │     remember · recall · relate · forget · why · remember_extracted · …    │
 │        │                                                                   │
 │        ▼                                                                   │
@@ -66,7 +66,7 @@ Mermaid view (renders on GitHub):
 flowchart TD
   C["MCP clients (Claude Code, Cursor, Zed…)"] -- "stdio JSON-RPC" --> M
   subgraph VM["velesdb-memory (this crate)"]
-    M["mcp.rs · McpServer — 21 tools"] --> S["service.rs · MemoryService&lt;E&gt;"]
+    M["mcp.rs · McpServer — 22 tools"] --> S["service.rs · MemoryService&lt;E&gt;"]
     EMB["embedder.rs · Embedder (Hash | Ollama)"] --> S
     EXT["extract.rs · Extractor (Ollama | BYO)"] --> S
     S --> LB{{"License boundary: memory semantics only"}}
