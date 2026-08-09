@@ -492,6 +492,58 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     pub fn edge_count(&self) -> Option<usize> {
         self.store.edge_count()
     }
+
+    /// One page of the store's facts, for auditing — "what does my agent
+    /// know?" — which `recall` structurally cannot answer: it ranks by
+    /// resemblance to a query, and what resembles nothing you thought to
+    /// ask stays invisible.
+    ///
+    /// The store hands back raw pages ([`MemoryStore::list`]); the
+    /// visibility policy is applied here, once, for every backend: internal
+    /// entity hubs are skipped unless `include_internal` (they are the
+    /// graph's scaffolding, not the user's facts), reserved `_veles_*` keys
+    /// are stripped exactly as `recall` strips them (the auto-stamped date
+    /// survives — an audit legitimately asks WHEN), and `filter` keeps only
+    /// facts whose metadata equals every given key. A filtered page may
+    /// come back sparse — the cursor still advances over what was skipped,
+    /// so the WALK stays exhaustive.
+    ///
+    /// # Errors
+    /// Returns [`MemoryError`] if the backend cannot enumerate or the walk
+    /// fails.
+    pub fn list(
+        &self,
+        cursor: Option<u64>,
+        limit: usize,
+        filter: Option<&Metadata>,
+        include_internal: bool,
+    ) -> Result<(Vec<crate::model::ListedMemory>, Option<u64>), MemoryError> {
+        let limit = crate::limits::clamp_recall_limit(limit.max(1));
+        let (page, next) = self.store.list(cursor, limit)?;
+        let memories = page
+            .into_iter()
+            .filter(|fact| {
+                include_internal || !crate::storage::is_internal_scaffolding(&fact.payload)
+            })
+            .filter(|fact| {
+                filter.is_none_or(|wanted| {
+                    wanted
+                        .iter()
+                        .all(|(key, value)| fact.payload.get(key) == Some(value))
+                })
+            })
+            .map(|fact| crate::model::ListedMemory {
+                id: fact.id,
+                content: fact.content,
+                metadata: if include_internal {
+                    (!fact.payload.is_empty()).then_some(fact.payload)
+                } else {
+                    strip_reserved_keys(Some(fact.payload))
+                },
+            })
+            .collect();
+        Ok((memories, next))
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]

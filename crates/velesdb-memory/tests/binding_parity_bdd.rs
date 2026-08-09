@@ -189,6 +189,26 @@ const EXEMPTIONS: &[Exemption] = &[
                  tracked as its own change",
     },
     Exemption {
+        binding: "velesdb-node",
+        tool: "list_memories",
+        reason: "the audit walk pages through MemoryStore::list, which only the native \
+                 store implements today; the binding surface for it rides the same planned \
+                 change as the stats accessor - one language-level inspection API",
+    },
+    Exemption {
+        binding: "velesdb-python",
+        tool: "list_memories",
+        reason: "same as velesdb-node: one planned language-level inspection API covers \
+                 listing and stats together",
+    },
+    Exemption {
+        binding: "velesdb-wasm",
+        tool: "list_memories",
+        reason: "the WASM backend keeps MemoryStore::list default refusal - its in-memory \
+                 store lives and dies with the page, so what-does-my-agent-know is answered \
+                 by the caller own state, not by an audit walk",
+    },
+    Exemption {
         binding: "velesdb-wasm",
         tool: "memory_status",
         reason: "the WASM backend is in-memory and persistence-free: no provenance record, no \
@@ -862,7 +882,7 @@ fn server_output_types() -> BTreeMap<String, String> {
     assert!(
         types.len() >= 20,
         "only {} tool output type(s) parsed out of the server source — the scan is broken, \
-         not the server (it publishes 21 tools)",
+         not the server (it publishes 22 tools)",
         types.len(),
     );
     types

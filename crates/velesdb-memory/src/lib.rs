@@ -57,6 +57,8 @@ pub mod embedder;
 #[cfg(feature = "persistence")]
 pub mod embedding_provenance;
 pub mod error;
+#[cfg(feature = "persistence")]
+pub mod export;
 pub mod extract;
 /// Vector+graph score fusion — the ranking layer behind
 /// [`service::MemoryService::recall_fused`]. Internal: callers reach it only

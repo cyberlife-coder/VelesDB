@@ -759,6 +759,7 @@ class RealRepositoryTests(unittest.TestCase):
                 "docs/guides/NODE_ADDON.md",
                 "docs/reference/MCP_TOOLS.md",
             },
+            "list_memories": {"docs/reference/MCP_TOOLS.md"},
             "memory_status": {"docs/reference/MCP_TOOLS.md"},
             "load_working_context": {
                 # The two `velesdb-context-optimizer` copies used to be here.

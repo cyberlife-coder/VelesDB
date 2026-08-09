@@ -258,11 +258,11 @@ end-to-end *extraction* comparison on the real
 
 ## What the server exposes
 
-21 MCP tools in the default build, in three families:
+22 MCP tools in the default build, in three families:
 
 | Family | Tools |
 |---|---|
-| Durable memory | `remember`, `recall`, `recall_where`, `recall_fused`, `relate`, `unrelate`, `forget`, `entity`, `why`, `feedback`, `remember_extracted`, `memory_status` |
+| Durable memory | `remember`, `recall`, `recall_where`, `recall_fused`, `relate`, `unrelate`, `forget`, `entity`, `why`, `feedback`, `remember_extracted`, `memory_status`, `list_memories` |
 | Context compiler | `compile_context`, `compile_transcript`, `explain_compilation`, `retrieve_context_source`, `context_savings`, `suggest_budget` |
 | Session resumption | `save_working_context`, `load_working_context`, `list_working_contexts` |
 

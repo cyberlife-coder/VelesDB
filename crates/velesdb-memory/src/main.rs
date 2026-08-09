@@ -87,6 +87,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return run_migrate_embeddings(&args, &args[2..]);
     }
 
+    // Short-circuits like `migrate-embeddings`, for the mirror-image reason:
+    // this path opens the store WITHOUT building an embedder, so it must not
+    // fall through to the daemon's embedder probe and provenance check — an
+    // export must work on exactly the store those refuse (your data outlives
+    // your configuration). It does take the store's single-writer lock, so
+    // it runs against a stopped daemon; the lock refusal is already
+    // actionable (#1448).
+    if args.get(1).is_some_and(|arg| arg == "export") {
+        return run_export(&args, &args[2..]);
+    }
+
     // Per-request observability (#1780), installed before anything below so
     // the startup sequence itself (config file, embedder probe, store open)
     // is already traceable. `VELESDB_MEMORY_LOG` unset stays byte-for-byte
@@ -569,6 +580,57 @@ struct ConfiguredService {
     store_path: String,
     embedder_model: String,
     embedder_dimension: usize,
+}
+
+/// Run `export`: write every live fact of the store as JSONL, embedder-free.
+///
+/// Flags: `--output <path>` (default: stdout), `--include-internal` (list
+/// graph scaffolding and reserved keys verbatim — the backup shape),
+/// `--store <path>` (default: `VELESDB_MEMORY_PATH`, then the config file,
+/// then the standard location — same precedence as the daemon).
+///
+/// # Errors
+/// An unparsable invocation, a store that cannot be opened (a RUNNING daemon
+/// holds its single-writer lock — stop it first; the refusal says so), or a
+/// write failure on the output.
+fn run_export(argv: &[String], flags: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    apply_config_file(argv)?;
+    let mut store_path: Option<String> = None;
+    let mut output: Option<String> = None;
+    let mut include_internal = false;
+    let mut it = flags.iter();
+    while let Some(flag) = it.next() {
+        match flag.as_str() {
+            "--include-internal" => include_internal = true,
+            "--store" => {
+                store_path = Some(it.next().ok_or("--store requires a path argument")?.clone());
+            }
+            "--output" => {
+                output = Some(
+                    it.next()
+                        .ok_or("--output requires a path argument")?
+                        .clone(),
+                );
+            }
+            other => return Err(format!("unknown export flag '{other}'").into()),
+        }
+    }
+    let store = store_path
+        .or_else(|| std::env::var("VELESDB_MEMORY_PATH").ok())
+        .unwrap_or_else(default_store_path);
+    let store = std::path::Path::new(&store);
+    let written = if let Some(path) = output {
+        let mut file = std::io::BufWriter::new(std::fs::File::create(&path)?);
+        let written = velesdb_memory::export::export_jsonl(store, &mut file, include_internal)?;
+        std::io::Write::flush(&mut file)?;
+        written
+    } else {
+        let stdout = std::io::stdout();
+        let mut lock = stdout.lock();
+        velesdb_memory::export::export_jsonl(store, &mut lock, include_internal)?
+    };
+    eprintln!("[velesdb-memory] exported {written} memories");
+    Ok(())
 }
 
 /// Run `migrate-embeddings`: diagnose a store against the configured target

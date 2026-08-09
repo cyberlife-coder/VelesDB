@@ -18,6 +18,10 @@ use crate::service::MemoryService;
 /// Default number of memories returned by `recall`.
 const DEFAULT_RECALL_LIMIT: usize = 10;
 
+/// Default page size of `list_memories` — bigger than recall's because an
+/// audit walks everything anyway and pages are pure I/O, no ranking.
+const DEFAULT_LIST_LIMIT: usize = 50;
+
 // The boxed embedder and the shared, runtime-attached extraction backend the
 // server stores — imported for internal use only. The canonical public paths are
 // `velesdb_memory::DynEmbedder` / `velesdb_memory::DynExtractor` (crate root).
@@ -39,14 +43,14 @@ mod dto;
 mod wire;
 use dto::{
     EmbedderStatus, EntityParams, EntityProfileDto, ExplanationDto, ExtractionStatus,
-    FeedbackParams, FeedbackResult, ForgetParams, ForgetResult, MemoryCounts, MemoryStatusResult,
-    ProvenanceStatus, RecallFusedParams, RecallFusedResult, RecallParams, RecallResult,
-    RecallWhereParams, RelateParams, RelateResult, RememberExtractedParams,
-    RememberExtractedResult, RememberParams, RememberResult, UnrelateParams, UnrelateResult,
-    WhyParams,
+    FeedbackParams, FeedbackResult, ForgetParams, ForgetResult, ListMemoriesParams,
+    ListMemoriesResult, ListedMemoryDto, MemoryCounts, MemoryStatusResult, ProvenanceStatus,
+    RecallFusedParams, RecallFusedResult, RecallParams, RecallResult, RecallWhereParams,
+    RelateParams, RelateResult, RememberExtractedParams, RememberExtractedResult, RememberParams,
+    RememberResult, UnrelateParams, UnrelateResult, WhyParams,
 };
 
-/// Le constructeur de schema d'ENTREE, unique pour les vingt-et-un outils :
+/// Le constructeur de schema d'ENTREE, unique pour les vingt-deux outils :
 /// [`crate::schema::wire_safe_input_schema`].
 ///
 /// `keys` nomme les proprietes que CET outil accepte en chaine decimale
@@ -611,6 +615,51 @@ impl McpServer {
                 autograph_dropped: self.service.autograph_dropped(),
             },
             memory: MemoryCounts { facts, edges },
+        }))
+    }
+
+    #[tool(
+        name = "list_memories",
+        // Sans declaration explicite, rmcp derive un schema de sortie qui
+        // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
+        // or les SDK MCP valident structuredContent contre ce schema.
+        output_schema = crate::schema::wire_safe_output_schema::<ListMemoriesResult>(),
+        input_schema = id_wire_input_schema::<ListMemoriesParams>(&["cursor"]),
+        description = "AUDIT the store: walk every stored fact, page by page — the question `recall` structurally cannot answer, because recall ranks by resemblance to a query and what resembles nothing you thought to ask stays invisible. Use it when the user asks what the memory contains ('what do you know about me / this project?'), to review or clean up before sharing a store, or to back up its contents. Returns `memories` (ids ascending — two audits of the same store see the same order; each entry carries `id`, `id_str`, `content`, `metadata`) and `next_cursor`: pass it back as `cursor` for the next page, `null` means the walk is complete. `filter` keeps only facts whose metadata equals every given key (e.g. {\"project\": \"acme\"}); a filtered page may come back sparse — KEEP following `next_cursor`, the walk stays exhaustive. Metadata follows recall's visibility rule (business keys plus the auto-stamped `_veles_date`; internal graph scaffolding excluded) unless `include_internal` is set, which lists everything verbatim. Ids exceed 2^53 — always relay them as strings (`id_str`, and `next_cursor` is already a string)."
+    )]
+    async fn list_memories(
+        &self,
+        Parameters(params): Parameters<ListMemoriesParams>,
+    ) -> Result<Json<ListMemoriesResult>, ErrorData> {
+        let service = Arc::clone(&self.service);
+        let ListMemoriesParams {
+            cursor,
+            limit,
+            filter,
+            include_internal,
+        } = params;
+        let (memories, next) = tokio::task::spawn_blocking(move || {
+            service.list(
+                cursor,
+                limit.unwrap_or(DEFAULT_LIST_LIMIT),
+                filter.as_ref(),
+                include_internal,
+            )
+        })
+        .await
+        .map_err(join_error)?
+        .map_err(to_error)?;
+        Ok(Json(ListMemoriesResult {
+            memories: memories
+                .into_iter()
+                .map(|memory| ListedMemoryDto {
+                    id: memory.id,
+                    id_str: memory.id.to_string(),
+                    content: memory.content,
+                    metadata: memory.metadata,
+                })
+                .collect(),
+            next_cursor: next.map(|id| id.to_string()),
         }))
     }
 }

@@ -24,7 +24,7 @@ It also only sees *literal* shape declarations (``Returns `{a, b, c}` ``) —
 a TypeScript ``interface`` or a Rust ``struct`` is a type declaration, left to
 the binding-parity gate.
 
-**Second written limit: the registry is FIFTEEN tools of the twenty-one
+**Second written limit: the registry is SIXTEEN tools of the twenty-two
 published, and the six still held out are ``compile_context``, ``entity``,
 ``recall``, ``remember``, ``remember_extracted`` and ``why`` — each is waiting
 on the nested-shape treatment (#1695, lots 2-3) before its literals can be
@@ -203,6 +203,11 @@ POLICED_TOOLS: "tuple[PolicedTool, ...]" = (
     ),
     PolicedTool(
         "forget",
+        (),
+        ("docs/reference/MCP_TOOLS.md",),
+    ),
+    PolicedTool(
+        "list_memories",
         (),
         ("docs/reference/MCP_TOOLS.md",),
     ),
