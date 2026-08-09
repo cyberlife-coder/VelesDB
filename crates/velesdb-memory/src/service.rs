@@ -108,6 +108,10 @@ pub struct MemoryService<E: Embedder, S: MemoryStore> {
 
 /// One deferred autograph: the stored fact a background worker will read for
 /// entities, edges and attributes (#1846).
+// The fields are read only on the worker path, which `spawn_autograph_worker`
+// cfg-gates off wasm32 (no threads there) — without this the wasm check dies
+// on dead_code under -D warnings.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 struct AutographJob {
     fact_id: u64,
     fact: String,
@@ -134,6 +138,9 @@ struct AutographJob {
 /// draining a queue of generations — 64 × a 46 s model would hold the
 /// daemon's exit for tens of minutes. Re-armed by each spawn.
 #[derive(Default)]
+// `closing` is read only by the worker/drop path, absent on wasm32 — same
+// rationale as `AutographJob` above.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 struct AutographQueue {
     tx: parking_lot::Mutex<Option<std::sync::mpsc::SyncSender<AutographJob>>>,
     dropped: std::sync::atomic::AtomicU64,
