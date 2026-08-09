@@ -97,6 +97,16 @@ pub const MAX_WHY_NODES: usize = 500;
 /// ceiling on the response, not a tuning knob.
 pub const MAX_WHY_EDGES: usize = MAX_WHY_NODES * 4;
 
+/// Bound on the background autograph queue (#1846): how many just-stored
+/// facts may wait for their graph enrichment before new enrichments are
+/// DROPPED (counted by `MemoryService::autograph_dropped`, logged, never
+/// blocking the write path). 64 outstanding generations is already minutes
+/// of extractor work — a burst deeper than this is the extractor falling
+/// behind for good, and stalling `remember` behind it is exactly what
+/// #1846 removed. The fact itself is always stored; a dropped enrichment
+/// is rebuilt by re-remembering.
+pub const MAX_AUTOGRAPH_QUEUE: usize = 64;
+
 /// Maximum typed edges an `entity` profile resolves and returns PER
 /// DIRECTION (`relations` and `relations_in` each) — the same width grammar
 /// as [`MAX_WHY_NODE_DEGREE`], on the surface #1743 never covered: resolving
