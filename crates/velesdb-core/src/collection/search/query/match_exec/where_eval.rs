@@ -4,11 +4,12 @@
 //! Fix #492: metadata conditions (IN, BETWEEN, LIKE, IS NULL) are now evaluated
 //! against node payloads instead of being silently ignored by a catch-all arm.
 
+use super::MatchStorageGuards;
 use crate::collection::graph::GraphEdge;
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::filter;
-use crate::storage::{LogPayloadStorage, PayloadStorage, VectorStorage};
+use crate::storage::{PayloadStorage, VectorStorage};
 use std::collections::HashMap;
 
 /// Applies an ordering comparison operator to an `Ord` pair.
@@ -134,7 +135,9 @@ struct MatchWhereCtx<'a> {
     /// when at least one traversed edge satisfies it.
     edge_paths: Option<&'a HashMap<String, Vec<u64>>>,
     params: &'a HashMap<String, serde_json::Value>,
-    payload_guard: &'a LogPayloadStorage,
+    /// Hoisted storage guards (decree order) from the top MATCH frame; WHERE
+    /// evaluation reads through them and never re-acquires a storage lock.
+    guards: &'a MatchStorageGuards<'a>,
 }
 
 impl MatchWhereCtx<'_> {
@@ -168,22 +171,24 @@ impl Collection {
     /// conditions (IN, BETWEEN, LIKE, ILIKE, IS NULL, IS NOT NULL, MATCH).
     /// Parameters are resolved from the `params` map.
     ///
-    /// The caller must pass a pre-acquired `payload_guard` to avoid
-    /// per-node lock acquisitions during BFS traversal.
+    /// The caller must pass the pre-acquired storage `guards` (hoisted once
+    /// at the top MATCH frame in decree order) to avoid per-node lock
+    /// acquisitions during BFS traversal — and because re-acquiring a lock
+    /// whose guard is already held deadlocks once a writer queues.
     ///
     /// Fix #492: metadata conditions are now evaluated via the filter engine
     /// instead of being silently ignored by a catch-all arm.
     ///
     /// `edge_bindings` maps relationship aliases to traversed edge ids so
     /// `r.prop` resolves against the EDGE's properties (audit 2026-06 F).
-    pub(crate) fn evaluate_where_condition(
+    pub(in crate::collection::search::query) fn evaluate_where_condition(
         &self,
         node_id: u64,
         bindings: Option<&HashMap<String, u64>>,
         edges: EdgeAliasBindings<'_>,
         condition: &crate::velesql::Condition,
         params: &HashMap<String, serde_json::Value>,
-        payload_guard: &LogPayloadStorage,
+        guards: &MatchStorageGuards<'_>,
     ) -> Result<bool> {
         let ctx = MatchWhereCtx {
             node_id,
@@ -191,7 +196,7 @@ impl Collection {
             edge_bindings: edges.scalar,
             edge_paths: edges.paths,
             params,
-            payload_guard,
+            guards,
         };
         self.eval_match_condition(&ctx, condition)
     }
@@ -216,7 +221,7 @@ impl Collection {
                 // score is computed on the aliased node, not the traversal
                 // target. Unbound/bare fields keep the previous behaviour.
                 let target_id = resolve_target_id(&sim.field, ctx.bindings, ctx.node_id);
-                self.evaluate_similarity_condition(target_id, sim, ctx.params)
+                Self::evaluate_similarity_condition(target_id, sim, ctx.params, ctx.guards)
             }
             // Fix #492: metadata conditions converted to filter engine evaluation.
             Condition::In(_)
@@ -284,7 +289,8 @@ impl Collection {
 
         let target_id = resolve_target_id(&cmp.column, ctx.bindings, ctx.node_id);
 
-        let Some(target_payload) = ctx.payload_guard.retrieve(target_id).ok().flatten() else {
+        let Some(target_payload) = ctx.guards.payload_guard.retrieve(target_id).ok().flatten()
+        else {
             return Ok(false);
         };
 
@@ -347,7 +353,7 @@ impl Collection {
             resolve_target_id(col, ctx.bindings, ctx.node_id)
         });
 
-        let Some(payload) = ctx.payload_guard.retrieve(target_id).ok().flatten() else {
+        let Some(payload) = ctx.guards.payload_guard.retrieve(target_id).ok().flatten() else {
             return Ok(false);
         };
 
@@ -407,19 +413,24 @@ impl Collection {
     }
 
     /// Evaluates a similarity condition against a node's vector (EPIC-052 US-007).
+    ///
+    /// Reads the node vector through the hoisted `vector_guard` and the
+    /// metric from the config snapshot taken BEFORE the guards — this frame
+    /// runs under the rank-2/rank-3 guards, so acquiring `vector_storage`
+    /// or `config` here would either deadlock (nested re-acquisition with a
+    /// queued writer) or invert the decreed lock order.
     fn evaluate_similarity_condition(
-        &self,
         node_id: u64,
         sim: &crate::velesql::SimilarityCondition,
         params: &HashMap<String, serde_json::Value>,
+        guards: &MatchStorageGuards<'_>,
     ) -> Result<bool> {
         let query_vector = resolve_query_vector(&sim.vector, params)?;
         if query_vector.is_empty() {
             return Ok(false);
         }
 
-        let vector_storage = self.storage.vector_storage.read();
-        let Some(node_vector) = vector_storage.retrieve(node_id)? else {
+        let Some(node_vector) = guards.vector_guard.retrieve(node_id)? else {
             return Ok(false);
         };
 
@@ -427,10 +438,8 @@ impl Collection {
             return Ok(false);
         }
 
-        let config = self.storage.config.read();
-        let metric = config.metric;
+        let metric = guards.metric;
         let higher_is_better = metric.higher_is_better();
-        drop(config);
 
         let score = metric.calculate(&node_vector, &query_vector);
 

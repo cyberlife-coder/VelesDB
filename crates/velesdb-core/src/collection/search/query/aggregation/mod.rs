@@ -20,6 +20,7 @@ mod having;
 #[cfg(test)]
 mod having_tests;
 
+use super::match_exec::MatchStorageGuards;
 use super::where_eval::GraphMatchEvalCache;
 use crate::collection::types::Collection;
 use crate::error::Result;
@@ -103,6 +104,11 @@ pub(super) struct RuntimeWhereCtx<'a> {
     pub(super) params: &'a HashMap<String, serde_json::Value>,
     pub(super) needs_vector_eval: bool,
     pub(super) graph_cache: &'a mut GraphMatchEvalCache,
+    /// The scan loop's hoisted vector/payload guards (decree order),
+    /// forwarded into MATCH-in-WHERE evaluation so the nested traversal
+    /// never re-acquires the locks this loop already holds — a nested read
+    /// acquisition on the same thread deadlocks once a writer queues.
+    pub(super) match_guards: &'a MatchStorageGuards<'a>,
 }
 
 /// Context for sequential aggregation over a set of IDs.
@@ -115,6 +121,8 @@ struct SequentialAggCtx<'a> {
     columns_to_aggregate: &'a [String],
     has_count_star: bool,
     use_runtime_where_eval: bool,
+    /// See [`RuntimeWhereCtx::match_guards`].
+    match_guards: &'a MatchStorageGuards<'a>,
 }
 
 /// Threshold for switching to parallel aggregation.
@@ -210,12 +218,19 @@ impl Collection {
         let filter = Self::build_static_filter(where_clause, use_runtime_where_eval, params)?;
         let (columns_vec, has_count_star) = Self::prepare_agg_columns(aggregations);
 
-        // LOCK ORDER: vector_storage(2) before payload_storage(3) — was
+        // LOCK ORDER: metric snapshot (config, rank 1) first, then
+        // vector_storage(2) before payload_storage(3) — the pair was
         // reversed here. See .investigation/http-deadlock-2026-07-22/. This
         // site also feeds `run_parallel_path` (rayon `par_chunks`), so the
         // wrong order compounded the ABBA risk with rayon-pool exhaustion.
+        let metric = self.storage.config.read().metric;
         let vector_storage = self.storage.vector_storage.read();
         let payload_storage = self.storage.payload_storage.read();
+        let match_guards = MatchStorageGuards {
+            metric,
+            vector_guard: &vector_storage,
+            payload_guard: &payload_storage,
+        };
         let ids: Vec<u64> = vector_storage.ids();
 
         if ids.len() >= PARALLEL_THRESHOLD && !use_runtime_where_eval {
@@ -236,6 +251,7 @@ impl Collection {
                 columns_to_aggregate: &columns_vec,
                 has_count_star,
                 use_runtime_where_eval,
+                match_guards: &match_guards,
             };
             self.aggregate_sequential(&ids, &ctx)
         }
@@ -349,6 +365,7 @@ impl Collection {
                 ctx.params,
                 &ctx.stmt.from_alias,
                 ctx.graph_cache,
+                Some(ctx.match_guards),
             ),
             None => Ok(true),
         }
@@ -370,6 +387,7 @@ impl Collection {
                 params: ctx.params,
                 needs_vector_eval,
                 graph_cache,
+                match_guards: ctx.match_guards,
             };
             self.runtime_where_passes(id, payload, &mut where_ctx)
         } else if let Some(f) = ctx.filter {

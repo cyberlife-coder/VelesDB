@@ -301,3 +301,112 @@ async fn concurrent_spawn_blocking_semantic_memory_store_and_query_within_bound(
     assert_eq!(stores_completed.load(Ordering::SeqCst), 20);
     assert_eq!(queries_completed.load(Ordering::SeqCst), 10);
 }
+
+/// Regression guard for the MATCH-path deadlocks fixed in the 2026-08 lock
+/// audit (`match_exec`): the query used to hoist `payload_storage.read()`
+/// (rank 3) for the whole traversal and, UNDER that guard, both re-acquire
+/// `payload_storage.read()` (`find_start_nodes` — re-entrant read that
+/// deadlocks 2 threads once a writer queues under `parking_lot`'s task-fair
+/// `RwLock`) and acquire `vector_storage.read()` (rank 2) in the label-less
+/// full scan and per-candidate similarity evaluation — an effective 3→2
+/// order that ABBAs against `delete()`'s decreed `vector.write()` →
+/// `payload.write()` (rank 2 → 3) pair. Both storage guards are now hoisted
+/// once at the top MATCH frame in decree order and passed down.
+///
+/// The load shape: label-less MATCH with a similarity WHERE (full scan +
+/// per-node vector read) racing delete/upsert writers on one shared
+/// collection. Pre-fix this cycles; post-fix it must finish in the bound.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn concurrent_match_full_scan_and_deletes_complete_within_bound() {
+    const DIMENSION: usize = 8;
+    const SEED_POINTS: u64 = 64;
+    let (collection, _tempdir) = open_collection("match_delete_repro", DIMENSION);
+
+    for i in 0..SEED_POINTS {
+        let payload = serde_json::json!({ "idx": i, "text": format!("node {i}") });
+        let point = Point::new(i, make_vector(DIMENSION, i), Some(payload));
+        collection.upsert(vec![point]).expect("seed upsert");
+    }
+
+    let clause = velesdb_core::velesql::Parser::parse(
+        "MATCH (n) WHERE similarity(n, $v) > 0.0 RETURN n LIMIT 5",
+    )
+    .expect("parse MATCH")
+    .match_clause
+    .expect("MATCH clause present");
+
+    let matches_completed = Arc::new(AtomicUsize::new(0));
+    let writes_completed = Arc::new(AtomicUsize::new(0));
+    let mut tasks = tokio::task::JoinSet::new();
+
+    for i in 0..10u64 {
+        let collection = Arc::clone(&collection);
+        let counter = Arc::clone(&matches_completed);
+        let clause = clause.clone();
+        tasks.spawn(async move {
+            tokio::task::spawn_blocking(move || {
+                let mut params = std::collections::HashMap::new();
+                params.insert(
+                    "v".to_string(),
+                    serde_json::json!(make_vector(DIMENSION, i)),
+                );
+                for _ in 0..25 {
+                    collection.execute_match(&clause, &params)?;
+                }
+                Ok::<_, velesdb_core::error::Error>(())
+            })
+            .await
+            .expect("match task must not panic")
+            .expect("match must succeed");
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+    }
+
+    for i in 0..6u64 {
+        let collection = Arc::clone(&collection);
+        let counter = Arc::clone(&writes_completed);
+        tasks.spawn(async move {
+            tokio::task::spawn_blocking(move || {
+                let id = i % SEED_POINTS;
+                for _ in 0..25 {
+                    collection.delete(&[id])?;
+                    let payload = serde_json::json!({ "idx": id, "text": format!("node {id}") });
+                    collection.upsert(vec![Point::new(
+                        id,
+                        make_vector(DIMENSION, id),
+                        Some(payload),
+                    )])?;
+                }
+                Ok::<_, velesdb_core::error::Error>(())
+            })
+            .await
+            .expect("writer task must not panic")
+            .expect("delete/upsert must succeed");
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+    }
+
+    let all = async {
+        while let Some(result) = tasks.join_next().await {
+            result.expect("spawned task must not panic");
+        }
+    };
+
+    let outcome = tokio::time::timeout(Duration::from_secs(30), all).await;
+
+    if outcome.is_err() {
+        // `process::exit`, not `panic!` — see the first test's comment on
+        // uncancellable `spawn_blocking` stragglers during runtime teardown.
+        print_to_real_stderr_before_exit(format!(
+            "HANG REPRODUCED (MATCH full-scan vs delete): 16 concurrent spawn_blocking \
+             MATCH/delete loops on a shared VectorCollection did not complete within 30s. \
+             Completed before timeout: {}/10 match loops, {}/6 writer loops.",
+            matches_completed.load(Ordering::SeqCst),
+            writes_completed.load(Ordering::SeqCst),
+        ));
+        std::process::exit(1);
+    }
+
+    assert_eq!(matches_completed.load(Ordering::SeqCst), 10);
+    assert_eq!(writes_completed.load(Ordering::SeqCst), 6);
+}
