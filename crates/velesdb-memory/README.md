@@ -68,7 +68,11 @@ It is written to a local file store. No model call, no network.
 
 **2. It finds them by meaning, not keywords.** `recall` matches on sense, so
 asking about *"which port did we settle on"* finds that fact even though the
-words differ. This uses a local embedding model of your choosing.
+words differ. This uses a local embedding model of your choosing — and the
+honest caveat is that until you pick one, the out-of-the-box default is a
+deterministic offline embedder that matches **surface form, not meaning**
+(great for zero-dependency demos, wrong for real recall). Picking a real
+model is one env var, no rebuild: [two commands, below](#real-semantic-recall-in-5-minutes).
 
 **3. It connects them, which is the part that matters.** Facts are linked to
 the topics they mention. `why` starts from the best match and then *walks those
@@ -152,6 +156,40 @@ writable. (`_veles_date` is stamped automatically — see
 Every other client — Cursor, Zed, Codex CLI, Claude Desktop, Windsurf, Devin
 CLI — is one config block away in
 [MCP server setup](../../docs/guides/MCP_SERVER_SETUP.md#configure-your-client-stdio).
+
+## Real semantic recall in 5 minutes
+
+The 60-second setup above runs the offline `hash` embedder: deterministic,
+zero-dependency — and **lexical**, not semantic. Both semantic backends are
+compiled into the binary you just installed, so upgrading is configuration,
+not a rebuild. With [Ollama](https://ollama.com) installed, the recommended
+model is `bge-m3` (multilingual, 1024-dim):
+
+```bash
+ollama pull bge-m3
+claude mcp add velesdb-memory \
+  --env VELESDB_MEMORY_PATH="$HOME/.velesdb-memory" \
+  --env VELESDB_MEMORY_EMBEDDER=ollama \
+  --env VELESDB_MEMORY_EMBEDDER_MODEL=bge-m3 \
+  -- ~/.cargo/bin/velesdb-memory
+```
+
+No Ollama? Any OpenAI-compatible server (oMLX, llama.cpp, LM Studio, vLLM)
+works with `VELESDB_MEMORY_EMBEDDER=openai` and a URL — the model still runs
+on your machine, and memory still never leaves it. All options:
+[embedding backend](../../docs/guides/MCP_SERVER_SETUP.md#embedding-backend).
+
+Two things to know when switching:
+
+- **Your agent can check.** The `memory_status` tool reports which embedder
+  actually runs and whether recall is semantic — ask *"call memory_status"*
+  and read `embedder.semantic`. The server also flags a degraded (hash) run
+  in its instructions to every connecting client.
+- **Your memories survive the switch.** The store records which model filled
+  it; on a mismatch the server refuses to serve nonsense and names the
+  migration command (`velesdb-memory migrate-embeddings`, dry-run first),
+  which re-embeds every fact under its original id. Switching embedders
+  never costs you your memories.
 
 ## See the wedge (offline, one command)
 

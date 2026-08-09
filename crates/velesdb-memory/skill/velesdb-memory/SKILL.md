@@ -3,7 +3,7 @@ name: velesdb-memory
 description: >
   Use durable, explainable, self-improving memory across a coding session via the
   velesdb-memory MCP server. Trigger whenever the velesdb-memory MCP tools
-  (remember/recall/recall_fused/relate/why/feedback/forget/remember_extracted/entity)
+  (remember/recall/recall_fused/relate/why/feedback/forget/remember_extracted/entity/memory_status)
   are available and the
   work would benefit from remembering decisions, recalling prior context, or
   answering "why did we do X". Use it at the START of a task (recall what's known),
@@ -44,6 +44,15 @@ The npm package bundles it too, at
 Server setup: [velesdb-memory README](https://github.com/cyberlife-coder/VelesDB/blob/main/crates/velesdb-memory/README.md#configure-your-client).
 
 ## The loop (run it every task)
+
+0. **Know what you are running on — once per session.** Call `memory_status`
+   at the start of the first task. Read three things: `embedder.semantic`
+   (`false` = the offline `hash` default — recall matches surface form, and
+   the USER should be told if recall quality matters, since fixing it is one
+   env var); `memory.edges` (`0` = the graph is flat, so `why` degrades to
+   plain search until something wires links); `extraction.configured`
+   (whether `remember_extracted` will work at all). Do not re-poll it every
+   turn — it answers configuration questions, not content ones.
 
 1. **Recall before you act.** At the start of a task, retrieve what's already
    known before doing anything else.
@@ -307,8 +316,9 @@ code — memory that survived the process restart is exactly the point.
 
 ## Setup notes (know your embedder)
 
-Recall quality depends entirely on the embedding backend the server was built and
-launched with:
+Recall quality depends entirely on the embedding backend the server was
+launched with — and you never have to guess which one that is:
+`memory_status` names it and answers `embedder.semantic` directly.
 
 - **`hash` (default in the prebuilt binary): lexical, NOT semantic.** It matches on
   shared words, so recall of paraphrases is weak. Good enough to demo the *graph*
