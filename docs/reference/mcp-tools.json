@@ -2416,6 +2416,128 @@
       }
     },
     {
+      "description": "Report this memory server's health and configuration: which embedder is running and whether recall is SEMANTIC (`embedder.semantic: false` means the offline `hash` default — recall matches surface form, not meaning, and configuring a semantic embedder is an env-var switch, no rebuild), what embedder the store was filled by per its on-disk provenance record, whether an extraction backend is configured (`remember_extracted` works iff `extraction.configured`), whether the background autograph worker is active and how many enrichments a full queue dropped, and the corpus size — `memory.facts` and `memory.edges`. Read `memory.edges` when `why` seems to add nothing over `recall`: `0` means no fact was ever linked (by `relate`, `remember`'s `links`, or extraction), so `why` HAS no graph to walk and degrades to plain search — that is a wiring gap, not a defect. Call this at session start, or whenever recall quality or `why`'s evidence trails surprise you, and tell the user when the server runs degraded. Takes no parameters.",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "memory_status",
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "embedder": {
+            "description": "Which embedder is running and whether recall is semantic.",
+            "properties": {
+              "dimension": {
+                "description": "The vector width the embedder produces. Reported with the model so a\nmismatch diagnosis never needs a second call.",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "model": {
+                "description": "The model identifier actually running — `hash` for the built-in\noffline embedder, otherwise as configured (`bge-m3`, `all-minilm`).\n`null` when the host embedded this server without declaring one\n(a binding constructing [`McpServer`](super::McpServer) directly).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "semantic": {
+                "description": "Whether recall is SEMANTIC. `false` means the `hash` embedder: recall\nmatches surface form, not meaning — the single most common \"why is\nrecall bad?\" answer, now readable by the agent instead of dying on a\nswallowed stderr. `null` when no identity was declared.",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "extraction": {
+            "description": "Extraction and autograph wiring.",
+            "properties": {
+              "autograph_active": {
+                "description": "Whether the background autograph worker is consuming the queue\n(#1846): `remember`'s graph enrichment runs behind the response.",
+                "type": "boolean"
+              },
+              "autograph_dropped": {
+                "description": "Enrichments refused by a FULL queue since startup — the facts were\nstored, only their wiring was skipped (#1846's counted-drop rule).",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "configured": {
+                "description": "Whether an extraction backend is attached — `remember_extracted`\nworks iff this is `true`.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "configured",
+              "autograph_active",
+              "autograph_dropped"
+            ],
+            "type": "object"
+          },
+          "memory": {
+            "description": "Corpus and graph size.",
+            "properties": {
+              "edges": {
+                "description": "Total graph edges, or `null` when the backend cannot say without\nmaterializing them. `0` is the meaningful value: it is the state in\nwhich `why()` degrades to plain similarity search.",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "facts": {
+                "description": "Live tracked facts, internal entity hubs included.",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "facts"
+            ],
+            "type": "object"
+          },
+          "provenance": {
+            "description": "What embedder the store was filled by, per its on-disk record.",
+            "properties": {
+              "dimension": {
+                "description": "The recorded vector width, when there is a record.",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "model": {
+                "description": "The recorded model, when there is a record.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "recorded": {
+                "description": "Whether the store carries an embedding-provenance record (#1751).\n`false` on a store that predates the record or was filled outside the\ndaemon — the check then degrades to dimension alone.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "recorded"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "embedder",
+          "provenance",
+          "extraction",
+          "memory"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "description": "Recall memories semantically similar to a query (vector). Ranking blends similarity with each fact's learned confidence (see `feedback`), so the order is not pure similarity — the returned `score` is always the raw similarity, never the blended value. Optionally narrow to exact-match metadata via `filter` (ColumnStore), e.g. {\"project\":\"veles\",\"status\":\"resolved\"}. Ids exceed 2^53 — always relay them as strings (`id_str`); passing a JSON-number id read from a previous response will fail on float-lossy clients.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2831,7 +2953,7 @@
       }
     },
     {
-      "description": "Store a passage of raw text by extracting its atomic facts and auto-building the fact↔topic graph, so `why` can later connect them with no manual links. Requires the server to be started with an extraction backend (set VELESDB_MEMORY_EXTRACTOR; build with --features extract). Returns `ids` — the stored facts' ids, in extraction order — plus `ids_str`, their decimal-string twins: ids exceed 2^53, so always relay those on clients without u64-safe JSON number parsing. It also returns `skipped_over_cap`, and you should read it: that is how many facts the extractor DID produce out of your text and this tool did NOT store, because each was longer than the per-fact text limit. A non-zero `skipped_over_cap` means part of what you sent was extracted and then dropped — without that number, a short `ids` list is indistinguishable from a passage that simply held fewer facts.",
+      "description": "Store a passage of raw text by extracting its atomic facts and auto-building the fact↔topic graph, so `why` can later connect them with no manual links. Requires the server to be started with an extraction backend (set VELESDB_MEMORY_EXTRACTOR — compiled into the default build, no rebuild). Returns `ids` — the stored facts' ids, in extraction order — plus `ids_str`, their decimal-string twins: ids exceed 2^53, so always relay those on clients without u64-safe JSON number parsing. It also returns `skipped_over_cap`, and you should read it: that is how many facts the extractor DID produce out of your text and this tool did NOT store, because each was longer than the per-fact text limit. A non-zero `skipped_over_cap` means part of what you sent was extracted and then dropped — without that number, a short `ids` list is indistinguishable from a passage that simply held fewer facts.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {

@@ -586,3 +586,77 @@ pub(super) struct RememberExtractedResult {
     /// it stored.
     pub(super) skipped_over_cap: usize,
 }
+
+/// The `embedder` block of [`MemoryStatusResult`].
+#[derive(Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct EmbedderStatus {
+    /// The model identifier actually running — `hash` for the built-in
+    /// offline embedder, otherwise as configured (`bge-m3`, `all-minilm`).
+    /// `null` when the host embedded this server without declaring one
+    /// (a binding constructing [`McpServer`](super::McpServer) directly).
+    pub(super) model: Option<String>,
+    /// The vector width the embedder produces. Reported with the model so a
+    /// mismatch diagnosis never needs a second call.
+    pub(super) dimension: Option<usize>,
+    /// Whether recall is SEMANTIC. `false` means the `hash` embedder: recall
+    /// matches surface form, not meaning — the single most common "why is
+    /// recall bad?" answer, now readable by the agent instead of dying on a
+    /// swallowed stderr. `null` when no identity was declared.
+    pub(super) semantic: Option<bool>,
+}
+
+/// The `provenance` block of [`MemoryStatusResult`].
+#[derive(Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct ProvenanceStatus {
+    /// Whether the store carries an embedding-provenance record (#1751).
+    /// `false` on a store that predates the record or was filled outside the
+    /// daemon — the check then degrades to dimension alone.
+    pub(super) recorded: bool,
+    /// The recorded model, when there is a record.
+    pub(super) model: Option<String>,
+    /// The recorded vector width, when there is a record.
+    pub(super) dimension: Option<usize>,
+}
+
+/// The `extraction` block of [`MemoryStatusResult`].
+#[derive(Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct ExtractionStatus {
+    /// Whether an extraction backend is attached — `remember_extracted`
+    /// works iff this is `true`.
+    pub(super) configured: bool,
+    /// Whether the background autograph worker is consuming the queue
+    /// (#1846): `remember`'s graph enrichment runs behind the response.
+    pub(super) autograph_active: bool,
+    /// Enrichments refused by a FULL queue since startup — the facts were
+    /// stored, only their wiring was skipped (#1846's counted-drop rule).
+    pub(super) autograph_dropped: u64,
+}
+
+/// The `memory` block of [`MemoryStatusResult`].
+#[derive(Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct MemoryCounts {
+    /// Live tracked facts, internal entity hubs included.
+    pub(super) facts: usize,
+    /// Total graph edges, or `null` when the backend cannot say without
+    /// materializing them. `0` is the meaningful value: it is the state in
+    /// which `why()` degrades to plain similarity search.
+    pub(super) edges: Option<usize>,
+}
+
+/// Result of the `memory_status` tool.
+#[derive(Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct MemoryStatusResult {
+    /// Which embedder is running and whether recall is semantic.
+    pub(super) embedder: EmbedderStatus,
+    /// What embedder the store was filled by, per its on-disk record.
+    pub(super) provenance: ProvenanceStatus,
+    /// Extraction and autograph wiring.
+    pub(super) extraction: ExtractionStatus,
+    /// Corpus and graph size.
+    pub(super) memory: MemoryCounts,
+}

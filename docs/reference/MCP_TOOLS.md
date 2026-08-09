@@ -21,12 +21,14 @@ The tool surface is feature-gated at build time:
 
 | Feature | Default? | Tools it adds |
 |---|---|---|
-| `mcp` | yes | `remember`, `recall`, `recall_where`, `recall_fused`, `feedback`, `relate`, `unrelate`, `forget`, `entity`, `why`, `remember_extracted` |
+| `mcp` | yes | `remember`, `recall`, `recall_where`, `recall_fused`, `feedback`, `relate`, `unrelate`, `forget`, `entity`, `why`, `remember_extracted`, `memory_status` |
 | `context` | yes | `compile_context`, `compile_transcript`, `explain_compilation`, `retrieve_context_source`, `context_savings`, `save_working_context`, `load_working_context`, `list_working_contexts`, `suggest_budget` |
 | `extract` | no | none — it enables the *backend* `remember_extracted` needs (see that tool) |
 
-`default = ["mcp", "persistence", "context"]`, so a plain
-`cargo install velesdb-memory` advertises all **20** tools. They are served by
+`default = ["mcp", "persistence", "context", "ollama", "extract"]` (the last
+two carry the HTTP backends for embedding and extraction — runtime-switched,
+off until their env vars opt in), so a plain `cargo install velesdb-memory`
+advertises all **21** tools. They are served by
 one MCP server: the context router is combined into the memory router in
 `McpServer::new`, never a second server.
 
@@ -361,8 +363,34 @@ for exceeding the 2048-byte embeddable-text cap. It is always present, and it
 is the only way to tell a drop from the model simply extracting fewer facts —
 read it, or you will believe you stored a passage you stored only part of.
 
-**Opt-in.** The server must be built with `--features extract` *and* started
-with `VELESDB_MEMORY_EXTRACTOR` set. Without a backend the tool returns an
+## `memory_status`
+
+Report the server's health and configuration — the answers a user otherwise
+discovers only through degraded recall. Takes no parameters.
+
+Returns `{ embedder, provenance, extraction, memory }`:
+
+- `embedder` — `{ model, dimension, semantic }`: what is RUNNING.
+  `semantic: false` means the offline `hash` default — recall matches surface
+  form, not meaning, and switching to a semantic embedder is an env-var
+  change, never a rebuild. All three are `null` when the host embedded the
+  server without declaring an identity.
+- `provenance` — `{ recorded, model, dimension }`: what the store was FILLED
+  by, per its on-disk record (#1751). `recorded: false` on a store predating
+  the record; the mismatch check then degrades to dimension alone.
+- `extraction` — `{ configured, autograph_active, autograph_dropped }`:
+  `remember_extracted` works iff `configured`; the two autograph fields
+  report the background enrichment worker and its counted drops.
+- `memory` — `{ facts, edges }`: corpus size. `edges: 0` is the meaningful
+  reading — nothing ever wired the graph, so `why` has nothing to walk and
+  degrades to plain search. `edges: null` means the backend cannot count
+  without materializing (not the same statement as `0`).
+
+Call it at session start, and whenever recall quality or `why`'s evidence
+trails surprise you.
+
+**Opt-in at runtime.** The backend is compiled into the default build; the
+server must be started with `VELESDB_MEMORY_EXTRACTOR` set. Without a backend the tool returns an
 explicit "extraction backend not configured" error rather than silently doing
 nothing. Configuration: [MCP server setup →
 auto-extraction](../guides/MCP_SERVER_SETUP.md#auto-extraction-backend-opt-in).

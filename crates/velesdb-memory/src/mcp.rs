@@ -38,14 +38,15 @@ mod context_tools;
 mod dto;
 mod wire;
 use dto::{
-    EntityParams, EntityProfileDto, ExplanationDto, FeedbackParams, FeedbackResult, ForgetParams,
-    ForgetResult, RecallFusedParams, RecallFusedResult, RecallParams, RecallResult,
+    EmbedderStatus, EntityParams, EntityProfileDto, ExplanationDto, ExtractionStatus,
+    FeedbackParams, FeedbackResult, ForgetParams, ForgetResult, MemoryCounts, MemoryStatusResult,
+    ProvenanceStatus, RecallFusedParams, RecallFusedResult, RecallParams, RecallResult,
     RecallWhereParams, RelateParams, RelateResult, RememberExtractedParams,
     RememberExtractedResult, RememberParams, RememberResult, UnrelateParams, UnrelateResult,
     WhyParams,
 };
 
-/// Le constructeur de schema d'ENTREE, unique pour les vingt outils :
+/// Le constructeur de schema d'ENTREE, unique pour les vingt-et-un outils :
 /// [`crate::schema::wire_safe_input_schema`].
 ///
 /// `keys` nomme les proprietes que CET outil accepte en chaine decimale
@@ -80,6 +81,18 @@ pub struct McpServer {
     /// specify their own `ttl_seconds`. `None` (the default) stores permanently.
     /// Set from `VELESDB_MEMORY_DEFAULT_TTL` by the binary.
     default_ttl: Option<u64>,
+    /// The embedder identity the host declared (model name + dimension) —
+    /// what `memory_status` reports as the RUNNING embedder. `None` when the
+    /// host embedded this server without declaring one; the status then says
+    /// "unreported" rather than guessing. Set via
+    /// [`Self::with_embedder_identity`] by the binary, which is the one
+    /// place that knows what `VELESDB_MEMORY_EMBEDDER` resolved to.
+    embedder_identity: Option<(String, usize)>,
+    /// The store directory, for reading the embedding-provenance record
+    /// (#1751) in `memory_status`. `None` disables the provenance block
+    /// (reported as unrecorded — a store nobody can locate has no readable
+    /// record either way).
+    store_dir: Option<std::path::PathBuf>,
     /// Allowlisted filesystem roots for `path`-referenced context fragments
     /// (V2b-1). `None` (the default) disables path ingestion entirely — every
     /// `path` fragment fails with an explicit error. Set from
@@ -116,10 +129,31 @@ impl McpServer {
             _autograph_worker: autograph_worker,
             extractor: None,
             default_ttl: None,
+            embedder_identity: None,
+            store_dir: None,
             #[cfg(all(feature = "context", not(target_arch = "wasm32")))]
             ingest_roots: None,
             tool_router: Self::combined_router(),
         }
+    }
+
+    /// Declare the running embedder's identity (model name + vector width)
+    /// so `memory_status` can name it — and say whether recall is semantic.
+    /// Undeclared, the status reports the embedder as unreported rather than
+    /// guessing from the service, which only ever sees `&[f32]`.
+    #[must_use]
+    pub fn with_embedder_identity(mut self, model: impl Into<String>, dimension: usize) -> Self {
+        self.embedder_identity = Some((model.into(), dimension));
+        self
+    }
+
+    /// Point `memory_status` at the store directory so it can relay the
+    /// embedding-provenance record (#1751). Without it the provenance block
+    /// reports `recorded: false`.
+    #[must_use]
+    pub fn with_store_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
+        self.store_dir = Some(dir.into());
+        self
     }
 
     /// The full tool router: the memory tools, plus the context compiler's
@@ -477,7 +511,7 @@ impl McpServer {
         // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
         // or les SDK MCP valident structuredContent contre ce schema.
         output_schema = crate::schema::wire_safe_output_schema::<RememberExtractedResult>(),
-        description = "Store a passage of raw text by extracting its atomic facts and auto-building the fact↔topic graph, so `why` can later connect them with no manual links. Requires the server to be started with an extraction backend (set VELESDB_MEMORY_EXTRACTOR; build with --features extract). Returns `ids` — the stored facts' ids, in extraction order — plus `ids_str`, their decimal-string twins: ids exceed 2^53, so always relay those on clients without u64-safe JSON number parsing. It also returns `skipped_over_cap`, and you should read it: that is how many facts the extractor DID produce out of your text and this tool did NOT store, because each was longer than the per-fact text limit. A non-zero `skipped_over_cap` means part of what you sent was extracted and then dropped — without that number, a short `ids` list is indistinguishable from a passage that simply held fewer facts."
+        description = "Store a passage of raw text by extracting its atomic facts and auto-building the fact↔topic graph, so `why` can later connect them with no manual links. Requires the server to be started with an extraction backend (set VELESDB_MEMORY_EXTRACTOR — compiled into the default build, no rebuild). Returns `ids` — the stored facts' ids, in extraction order — plus `ids_str`, their decimal-string twins: ids exceed 2^53, so always relay those on clients without u64-safe JSON number parsing. It also returns `skipped_over_cap`, and you should read it: that is how many facts the extractor DID produce out of your text and this tool did NOT store, because each was longer than the per-fact text limit. A non-zero `skipped_over_cap` means part of what you sent was extracted and then dropped — without that number, a short `ids` list is indistinguishable from a passage that simply held fewer facts."
     )]
     async fn remember_extracted(
         &self,
@@ -518,6 +552,67 @@ impl McpServer {
             skipped_over_cap: outcome.skipped_over_cap,
         }))
     }
+
+    #[tool(
+        name = "memory_status",
+        // Sans declaration explicite, rmcp derive un schema de sortie qui
+        // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
+        // or les SDK MCP valident structuredContent contre ce schema.
+        output_schema = crate::schema::wire_safe_output_schema::<MemoryStatusResult>(),
+        description = "Report this memory server's health and configuration: which embedder is running and whether recall is SEMANTIC (`embedder.semantic: false` means the offline `hash` default — recall matches surface form, not meaning, and configuring a semantic embedder is an env-var switch, no rebuild), what embedder the store was filled by per its on-disk provenance record, whether an extraction backend is configured (`remember_extracted` works iff `extraction.configured`), whether the background autograph worker is active and how many enrichments a full queue dropped, and the corpus size — `memory.facts` and `memory.edges`. Read `memory.edges` when `why` seems to add nothing over `recall`: `0` means no fact was ever linked (by `relate`, `remember`'s `links`, or extraction), so `why` HAS no graph to walk and degrades to plain search — that is a wiring gap, not a defect. Call this at session start, or whenever recall quality or `why`'s evidence trails surprise you, and tell the user when the server runs degraded. Takes no parameters."
+    )]
+    async fn memory_status(&self) -> Result<Json<MemoryStatusResult>, ErrorData> {
+        let embedder = match &self.embedder_identity {
+            Some((model, dimension)) => EmbedderStatus {
+                model: Some(model.clone()),
+                dimension: Some(*dimension),
+                semantic: Some(model != "hash"),
+            },
+            None => EmbedderStatus {
+                model: None,
+                dimension: None,
+                semantic: None,
+            },
+        };
+        // The provenance record and the counts both touch the filesystem —
+        // off the async workers, like every other tool body.
+        let service = Arc::clone(&self.service);
+        let store_dir = self.store_dir.clone();
+        let (provenance, facts, edges) = tokio::task::spawn_blocking(move || {
+            let recorded = store_dir
+                .as_deref()
+                .and_then(|dir| crate::embedding_provenance::read(dir).ok().flatten());
+            (recorded, service.fact_count(), service.edge_count())
+        })
+        .await
+        .map_err(join_error)?;
+        let provenance = match provenance {
+            Some(record) => ProvenanceStatus {
+                recorded: true,
+                model: Some(record.model),
+                dimension: Some(record.dimension),
+            },
+            None => ProvenanceStatus {
+                recorded: false,
+                model: None,
+                dimension: None,
+            },
+        };
+        Ok(Json(MemoryStatusResult {
+            embedder,
+            provenance,
+            extraction: ExtractionStatus {
+                // Exactly the `remember_extracted` gate — the autograph
+                // extractor is attached separately and reports through the
+                // two autograph fields, so an autograph-only configuration
+                // never claims a tool that would refuse.
+                configured: self.extractor.is_some(),
+                autograph_active: self.service.autograph_queue_open(),
+                autograph_dropped: self.service.autograph_dropped(),
+            },
+            memory: MemoryCounts { facts, edges },
+        }))
+    }
 }
 
 /// `#[tool_handler]` generates `list_tools` from the router — `call_tool` is
@@ -530,11 +625,13 @@ impl McpServer {
 /// "context")]` variant since the context-compiler tools only exist in that
 /// build.
 #[cfg(feature = "context")]
-const SERVER_INSTRUCTIONS: &str = "Local-first memory and context engineering for AI agents, three tool families: (1) durable memory — remember, remember_extracted, recall, recall_fused, recall_where, relate, unrelate, forget, feedback, entity, and why — explainable (why returns the evidence trail) and self-improving (feedback re-ranks future recall); remember_extracted reads the entities, typed edges and attributes a passage STATES and wires them into the graph, and entity(name) answers a question ABOUT a named thing rather than about the sentences mentioning it; (2) the deterministic context compiler — compile_context, compile_transcript, explain_compilation, retrieve_context_source, context_savings, and suggest_budget — token-budgets and audits prompt context with no LLM call, ever; (3) cross-session working-context resumption — save_working_context, load_working_context, and list_working_contexts. compile_context/explain_compilation fragments accept a `path` instead of inline `content` to ingest a file by reference — disabled unless the server is started with VELESDB_MEMORY_INGEST_ROOTS set to an allowlist of directories (compile_transcript's own `path` field uses the same allowlist). compile_transcript is a one-call shortcut over compile_context for a raw agent-session transcript: it segments plain or JSONL text into turns before compiling, so an agent no longer needs to segment a transcript by hand. Nothing ever leaves the machine.";
+const SERVER_INSTRUCTIONS: &str = "Local-first memory and context engineering for AI agents, three tool families: (1) durable memory — remember, remember_extracted, recall, recall_fused, recall_where, relate, unrelate, forget, feedback, entity, and why — explainable (why returns the evidence trail) and self-improving (feedback re-ranks future recall); remember_extracted reads the entities, typed edges and attributes a passage STATES and wires them into the graph, and entity(name) answers a question ABOUT a named thing rather than about the sentences mentioning it; memory_status reports the server's health — which embedder runs and whether recall is semantic, extraction wiring, and graph size; (2) the deterministic context compiler — compile_context, compile_transcript, explain_compilation, retrieve_context_source, context_savings, and suggest_budget — token-budgets and audits prompt context with no LLM call, ever; (3) cross-session working-context resumption — save_working_context, load_working_context, and list_working_contexts. compile_context/explain_compilation fragments accept a `path` instead of inline `content` to ingest a file by reference — disabled unless the server is started with VELESDB_MEMORY_INGEST_ROOTS set to an allowlist of directories (compile_transcript's own `path` field uses the same allowlist). compile_transcript is a one-call shortcut over compile_context for a raw agent-session transcript: it segments plain or JSONL text into turns before compiling, so an agent no longer needs to segment a transcript by hand. Nothing ever leaves the machine.";
 
 #[cfg(not(feature = "context"))]
 const SERVER_INSTRUCTIONS: &str = "Local-first memory for AI agents: remember facts, recall them \
-     semantically, relate them, forget them, and ask why a decision was made (connected subgraph).";
+     semantically, relate them, forget them, ask why a decision was made (connected subgraph), \
+     and read memory_status for the server's health — embedder semantics, extraction wiring, \
+     graph size.";
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for McpServer {
@@ -542,7 +639,24 @@ impl ServerHandler for McpServer {
         let mut info = ServerInfo::default();
         info.server_info = Implementation::new(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
-        info.instructions = Some(SERVER_INSTRUCTIONS.to_owned());
+        let mut instructions = SERVER_INSTRUCTIONS.to_owned();
+        // The one channel a client is REQUIRED to read. The stderr warning
+        // for the same fact is swallowed by every mainstream MCP harness, so
+        // a degraded server that only warned there was indistinguishable
+        // from a healthy one — the audit finding memory_status closes, and
+        // this note is its push half (the tool is the pull half).
+        if let Some(("hash", _)) = self
+            .embedder_identity
+            .as_ref()
+            .map(|(model, dim)| (model.as_str(), dim))
+        {
+            instructions.push_str(
+                " NOTE: this server is running the offline 'hash' embedder — recall matches \
+                 surface form, NOT meaning. If recall quality matters to the user, say so: a \
+                 semantic embedder is an env-var switch away (call memory_status for details).",
+            );
+        }
+        info.instructions = Some(instructions);
         info
     }
 
