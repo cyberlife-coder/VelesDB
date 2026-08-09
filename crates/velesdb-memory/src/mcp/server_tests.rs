@@ -1503,7 +1503,7 @@ use std::time::{Duration, Instant};
 
 use crate::extract::{ExtractError, ExtractedFact, ExtractedRelation, Extraction, Extractor};
 
-/// The gate idiom from tests/autograph_async_bdd.rs: `extract_graph` blocks
+/// The gate idiom from `tests/autograph_async_bdd.rs`: `extract_graph` blocks
 /// until the test RELEASES it, so every timing claim below is an event,
 /// never a sleep. `entered` flips BEFORE the block — the observable
 /// "job is in flight" event — and `completed` after it.
@@ -1589,9 +1589,13 @@ async fn remember_tool_answers_while_the_autograph_gate_is_still_shut() {
 
     // The wiring itself, before any call: the constructor must have spawned
     // the worker and kept its handle. Without the handle there is no queue,
-    // and without the queue `remember` runs the enrichment inline.
+    // and without the queue `remember` runs the enrichment inline. The field
+    // is underscore-prefixed in prod because only Drop reads it — this
+    // assertion is the one legitimate reader.
+    #[allow(clippy::used_underscore_binding)]
+    let handle_stored = srv._autograph_worker.is_some();
     assert!(
-        srv._autograph_worker.is_some(),
+        handle_stored,
         "constructing the server over an autograph-carrying service must \
          spawn the background worker and STORE its handle — the handle is \
          what makes the server's drop bound shutdown"

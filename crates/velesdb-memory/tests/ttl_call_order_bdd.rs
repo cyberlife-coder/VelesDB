@@ -10,7 +10,7 @@
 //! orders metadata BEFORE expiry, so no window exists where the fact is
 //! TTL'd but metadata-less.
 //!
-//! Every behavioural test (tests/ttl_bdd.rs, src/storage_tests.rs) stays
+//! Every behavioural test (`tests/ttl_bdd.rs`, `src/storage_tests.rs`) stays
 //! green against a service that quietly reintroduces the two-call sequence:
 //! nothing pinned the CALL SHAPE. This suite records the exact sequence of
 //! [`MemoryStore`] calls the service makes and pins it at the one seam the
