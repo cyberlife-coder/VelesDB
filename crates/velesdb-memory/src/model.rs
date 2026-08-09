@@ -47,6 +47,12 @@ where
 /// its sibling and for the same reason — `crate::context::wire`'s
 /// equivalent lives behind the `context` feature, and an `mcp`-only build
 /// must still parse the cursor.
+///
+/// Gated on `mcp` — its one consumer is the tool DTO layer — because the
+/// wasm build (`context` alone, `-D warnings`) rejects it as dead code
+/// otherwise. `deserialize_id` above stays ungated only because [`Link`]'s
+/// own deserialization uses it feature-free.
+#[cfg(feature = "mcp")]
 pub(crate) fn deserialize_optional_id<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
 where
     D: serde::Deserializer<'de>,
