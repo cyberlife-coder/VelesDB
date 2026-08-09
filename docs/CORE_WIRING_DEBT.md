@@ -385,6 +385,60 @@ consistency-cleanup PR. Each binding glue must pass that crate's CI line
 
 ---
 
+## 7. Lock-order enforcement — typed `LockRank` unwired, collection tier comment-only
+
+**Outcome**: **Wired in a future velesdb-core sprint** (enforcement mechanism;
+correctness itself holds today via review + regression tests).
+
+**What exists**:
+- `crates/velesdb-core/src/lock_rank.rs` defines a public `LockRank` newtype
+  with a total ordering and a debug-only `assert_lock_order(previously_held,
+  about_to_acquire)` helper that `debug_assert!`s ascending acquisition.
+- `crates/velesdb-core/src/index/hnsw/native/graph/locking.rs` defines a
+  *separate*, private `record_lock_acquire`/`record_lock_release` pair (its own
+  `LockRank` enum) that tracks a per-thread rank stack in debug builds.
+- `crates/velesdb-core/src/collection/types.rs` carries a plain-comment
+  `=== LOCK ORDERING ===` block enumerating the collection-tier order
+  (positions 1, 1b, 2, 3, 3b, 4–12).
+
+**What is missing**:
+- The public `assert_lock_order` has **zero production call sites** — it is
+  referenced only by `lock_rank_tests.rs` and
+  `tests/concurrency_lock_order.rs`. No production path, debug or release,
+  invokes it.
+- The HNSW `record_lock_acquire` tracker is **debug-only and warn-only**: on a
+  violation it increments an atomic counter and emits `tracing::warn!`, never
+  panics. It is also **partial** — only `GpuVectorsSnapshot`, `Vectors`, and
+  `Layers` are recorded; `Columnar` and `Neighbors` are `#[allow(dead_code)]`
+  and never recorded (2 of 5 core ranks dead).
+- The **collection tier** (the one that deadlocked in 2026-07) is
+  **comment-enforced only** — no typed rank, no assertion of any kind guards it.
+
+**Why wiring is non-trivial**:
+- The two rank vocabularies (`lock_rank.rs::LockRank` and the HNSW
+  `locking.rs::LockRank`) are disjoint and cover different lock sets; unifying
+  them and threading `assert_lock_order` through every acquisition site touches
+  the hot search path, where F-25 deliberately removed per-acquire overhead in
+  release builds.
+- The collection tier has no lock-guard wrapper to hook an assertion into;
+  adding one means intercepting every `RwLock`/`Mutex` acquisition on
+  `Collection` fields across ~25 files.
+
+**Current behavior / coverage**: the 2↔3 (vector/payload) pair is
+regression-pinned by the tokio repro tests and the new MATCH deadlock tests;
+positions 1, 1b, 3b, 4–12 are unpinned. Release binaries carry no runtime
+lock-order check at all (zero-overhead by design). See
+`docs/CONCURRENCY_MODEL.md` ("Global Lock Order" and "Collection-level lock
+order") for the full narrative.
+
+**Future action**: scope a mechanism that either (a) wires a unified typed rank
+through a lock-guard wrapper with a debug-only assertion covering both the HNSW
+and collection tiers, or (b) records the decision to keep enforcement at
+review + regression-test level and removes the unwired `assert_lock_order` to
+avoid implying a guarantee that does not exist. Community-scope.
+
+---
+
 ## Summary table
 
 | Config | Wired? | Outcome | Effort | Target |
@@ -395,6 +449,7 @@ consistency-cleanup PR. Each binding glue must pass that crate's CI line
 | `SearchConfig` global defaults | Partial | Consolidation cleanup | 1-2 commits | Community (future sprint) |
 | `LimitsConfig` (5/5 fields) | Yes | Wired — all 5 fields enforced (creation + runtime ingest/search caps) 2026-06-14 | done | Community |
 | Binding API-parity gaps (6.1–6.11) | DONE | Closed via 4 PRs #1096/#1098/#1099 + consistency (6.11 = verified no-gap); see §6 | 4 PRs (embedded-ops / ops-observability / recall-gated / consistency) | Community |
+| Lock-order enforcement (`LockRank`/`assert_lock_order`) | No | Wire a debug-only assertion or record review+tests as the mechanism | Unscoped | Community (future sprint) |
 
 ## Conventions
 
@@ -407,6 +462,7 @@ consistency-cleanup PR. Each binding glue must pass that crate's CI line
 
 ---
 
-*Last updated: 2026-07-25 · Applies to: velesdb-core 4.3.0 (this stamp tracks
-the document revision; the inventory itself was last re-verified against the
-code on 2026-06-14, as stated at the top of this page)*
+*Last updated: 2026-08-09 · Applies to: velesdb-core 4.3.0 (this stamp tracks
+the document revision; this revision adds entry 7, lock-order enforcement debt.
+The rest of the inventory was last re-verified against the code on 2026-06-14,
+as stated at the top of this page)*
