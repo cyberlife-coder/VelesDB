@@ -299,6 +299,25 @@ pub struct RawListedFact {
     pub payload: Metadata,
 }
 
+#[cfg(feature = "persistence")]
+impl RawListedFact {
+    /// The one place a stored payload is split into content + the rest —
+    /// shared by [`MemoryStore::list`] and the JSONL export so the two
+    /// reading surfaces can never disagree on what a fact's content IS.
+    pub(crate) fn from_raw(fact: &crate::migration::RawFact) -> Self {
+        let mut payload: Metadata = serde_json::from_str(&fact.payload).unwrap_or_default();
+        let content = match payload.remove("content") {
+            Some(Value::String(text)) => text,
+            _ => String::new(),
+        };
+        Self {
+            id: fact.id,
+            content,
+            payload,
+        }
+    }
+}
+
 /// The default [`MemoryStore`]: the native, file-backed engine
 /// (`velesdb-core`'s `Database`/`AgentMemory`, requiring the `persistence`
 /// feature). Existing callers of `MemoryService::open` see no change — this
@@ -534,21 +553,7 @@ impl MemoryStore for NativeStore {
             cursor,
             limit,
         )?;
-        let listed = facts
-            .into_iter()
-            .map(|fact| {
-                let mut payload: Metadata = serde_json::from_str(&fact.payload).unwrap_or_default();
-                let content = match payload.remove("content") {
-                    Some(Value::String(text)) => text,
-                    _ => String::new(),
-                };
-                RawListedFact {
-                    id: fact.id,
-                    content,
-                    payload,
-                }
-            })
-            .collect();
+        let listed = facts.iter().map(RawListedFact::from_raw).collect();
         Ok((listed, next))
     }
 }

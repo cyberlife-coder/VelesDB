@@ -595,30 +595,13 @@ struct ConfiguredService {
 /// write failure on the output.
 fn run_export(argv: &[String], flags: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     apply_config_file(argv)?;
-    let mut store_path: Option<String> = None;
-    let mut output: Option<String> = None;
-    let mut include_internal = false;
-    let mut it = flags.iter();
-    while let Some(flag) = it.next() {
-        match flag.as_str() {
-            "--include-internal" => include_internal = true,
-            "--store" => {
-                store_path = Some(it.next().ok_or("--store requires a path argument")?.clone());
-            }
-            "--output" => {
-                output = Some(
-                    it.next()
-                        .ok_or("--output requires a path argument")?
-                        .clone(),
-                );
-            }
-            other => return Err(format!("unknown export flag '{other}'").into()),
-        }
-    }
-    let store = store_path
+    let options = ExportOptions::parse(flags)?;
+    let store = options
+        .store_path
         .or_else(|| std::env::var("VELESDB_MEMORY_PATH").ok())
         .unwrap_or_else(default_store_path);
     let store = std::path::Path::new(&store);
+    let (output, include_internal) = (options.output, options.include_internal);
     let written = if let Some(path) = output {
         let mut file = std::io::BufWriter::new(std::fs::File::create(&path)?);
         let written = velesdb_memory::export::export_jsonl(store, &mut file, include_internal)?;
@@ -631,6 +614,44 @@ fn run_export(argv: &[String], flags: &[String]) -> Result<(), Box<dyn std::erro
     };
     eprintln!("[velesdb-memory] exported {written} memories");
     Ok(())
+}
+
+/// The `export` subcommand's parsed flags — split from [`run_export`] so
+/// each function carries one concern: this one the CLI grammar, that one
+/// the walk.
+struct ExportOptions {
+    store_path: Option<String>,
+    output: Option<String>,
+    include_internal: bool,
+}
+
+impl ExportOptions {
+    fn parse(flags: &[String]) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut options = Self {
+            store_path: None,
+            output: None,
+            include_internal: false,
+        };
+        let mut it = flags.iter();
+        while let Some(flag) = it.next() {
+            match flag.as_str() {
+                "--include-internal" => options.include_internal = true,
+                "--store" => {
+                    options.store_path =
+                        Some(it.next().ok_or("--store requires a path argument")?.clone());
+                }
+                "--output" => {
+                    options.output = Some(
+                        it.next()
+                            .ok_or("--output requires a path argument")?
+                            .clone(),
+                    );
+                }
+                other => return Err(format!("unknown export flag '{other}'").into()),
+            }
+        }
+        Ok(options)
+    }
 }
 
 /// Run `migrate-embeddings`: diagnose a store against the configured target

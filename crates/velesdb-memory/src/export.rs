@@ -17,7 +17,6 @@ use std::io::Write;
 use std::path::Path;
 
 use crate::error::MemoryError;
-use crate::service::Metadata;
 use crate::storage::{is_internal_scaffolding, strip_reserved_keys};
 
 /// Page size of the export walk. Purely an I/O batch — no ranking, no
@@ -65,31 +64,14 @@ pub fn export_jsonl<W: Write>(
             break;
         }
         for fact in facts {
-            let mut payload: Metadata = serde_json::from_str(&fact.payload).unwrap_or_default();
-            let content = match payload.remove("content") {
-                Some(serde_json::Value::String(text)) => text,
-                _ => String::new(),
-            };
-            if !include_internal && is_internal_scaffolding(&payload) {
-                continue;
+            if let Some(line) = jsonl_line(&fact, include_internal) {
+                writeln!(out, "{line}").map_err(|err| {
+                    MemoryError::Storage(velesdb_core::Error::Query(format!(
+                        "export write failed: {err}"
+                    )))
+                })?;
+                written += 1;
             }
-            let metadata = if include_internal {
-                (!payload.is_empty()).then_some(payload)
-            } else {
-                strip_reserved_keys(Some(payload))
-            };
-            let line = serde_json::json!({
-                "id": fact.id,
-                "id_str": fact.id.to_string(),
-                "content": content,
-                "metadata": metadata,
-            });
-            writeln!(out, "{line}").map_err(|err| {
-                MemoryError::Storage(velesdb_core::Error::Query(format!(
-                    "export write failed: {err}"
-                )))
-            })?;
-            written += 1;
         }
         match next {
             Some(id) => cursor = Some(id),
@@ -97,6 +79,30 @@ pub fn export_jsonl<W: Write>(
         }
     }
     Ok(written)
+}
+
+/// One fact as its JSONL line, or `None` when the visibility policy skips
+/// it (internal scaffolding under the default view). Split from the walk so
+/// the loop reads as what it is — enumerate, filter, write.
+fn jsonl_line(
+    fact: &crate::migration::RawFact,
+    include_internal: bool,
+) -> Option<serde_json::Value> {
+    let split = crate::storage::RawListedFact::from_raw(fact);
+    if !include_internal && is_internal_scaffolding(&split.payload) {
+        return None;
+    }
+    let metadata = if include_internal {
+        (!split.payload.is_empty()).then_some(split.payload)
+    } else {
+        strip_reserved_keys(Some(split.payload))
+    };
+    Some(serde_json::json!({
+        "id": split.id,
+        "id_str": split.id.to_string(),
+        "content": split.content,
+        "metadata": metadata,
+    }))
 }
 
 #[cfg(test)]
