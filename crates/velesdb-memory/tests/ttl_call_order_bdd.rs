@@ -238,8 +238,13 @@ fn a_ttld_write_with_metadata_is_one_combined_store_call() {
     let mut meta = Metadata::new();
     meta.insert("project".to_owned(), Value::from("veles"));
 
-    svc.remember_with_ttl("the staging token rotates nightly", &[], Some(&meta), Some(3_600))
-        .expect("remember with metadata + ttl");
+    svc.remember_with_ttl(
+        "the staging token rotates nightly",
+        &[],
+        Some(&meta),
+        Some(3_600),
+    )
+    .expect("remember with metadata + ttl");
 
     let log = calls.lock().expect("calls lock").clone();
     assert_eq!(

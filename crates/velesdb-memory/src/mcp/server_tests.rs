@@ -1554,7 +1554,12 @@ impl Extractor for GatedServerExtractor {
 
 /// A server over a service that carries the gated extractor as autograph,
 /// plus the release channel. The [`TempDir`] must outlive everything.
-fn gated_server() -> (TempDir, McpServer, Arc<GatedServerExtractor>, SyncSender<()>) {
+fn gated_server() -> (
+    TempDir,
+    McpServer,
+    Arc<GatedServerExtractor>,
+    SyncSender<()>,
+) {
     let dir = TempDir::new().expect("create tempdir");
     let embedder: DynEmbedder = Box::new(HashEmbedder::new(crate::DEFAULT_DIMENSION));
     let (extractor, release) = GatedServerExtractor::new();
