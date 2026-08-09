@@ -28,7 +28,7 @@ use velesdb_core::api_types::serde_id;
 use velesdb_core::Point;
 
 use crate::handlers::helpers::{
-    auto_core_error_response, error_response, get_vector_collection_or_404,
+    auto_core_error_response, error_response, get_vector_collection_or_404, run_blocking,
 };
 
 use velesdb_core::index::sparse::SparseVector;
@@ -211,7 +211,11 @@ pub async fn get_point(
         Err(resp) => return resp,
     };
 
-    let points = collection.get(&[id]);
+    // Point lookup takes storage read locks — run it on the blocking pool.
+    let points = match run_blocking(move || collection.get(&[id])).await {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
 
     match points.into_iter().next().flatten() {
         // ID as a string for JS precision-safety above 2^53-1, consistent with
@@ -252,15 +256,17 @@ pub async fn delete_point(
         Err(resp) => return resp,
     };
 
-    match collection.delete(&[id]) {
+    // Deletion takes write locks and fsyncs — run it on the blocking pool.
+    match run_blocking(move || collection.delete(&[id])).await {
         // ID as a string for JS precision-safety (see `serde_id`), consistent
         // with the string ID accepted in the path and returned by reads.
-        Ok(()) => Json(serde_json::json!({
+        Ok(Ok(())) => Json(serde_json::json!({
             "message": "Point deleted",
             "id": id.to_string()
         }))
         .into_response(),
-        Err(e) => auto_core_error_response(&e),
+        Ok(Err(e)) => auto_core_error_response(&e),
+        Err(resp) => resp,
     }
 }
 

@@ -30,7 +30,6 @@ use velesdb_core::Error as CoreError;
         (status = 404, description = "Collection not found", body = crate::types::VelesqlErrorResponse)
     )
 )]
-#[allow(clippy::unused_async)]
 pub async fn explain(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ExplainRequest>,
@@ -40,6 +39,21 @@ pub async fn explain(
         Err(resp) => return resp,
     };
 
+    // Plan building and (with `analyze`) query execution call synchronous
+    // core code that can take locks — run them on the blocking pool so the
+    // async workers stay responsive.
+    let state_clone = Arc::clone(&state);
+    crate::handlers::helpers::run_blocking(move || explain_parsed(&state_clone, &req, &parsed))
+        .await
+        .unwrap_or_else(|resp| resp)
+}
+
+/// Synchronous post-parse body of [`explain`]. Runs on the blocking pool.
+fn explain_parsed(
+    state: &AppState,
+    req: &ExplainRequest,
+    parsed: &velesdb_core::velesql::Query,
+) -> axum::response::Response {
     let select = &parsed.select;
 
     let collection_exists = state.db.get_any_collection(&select.from).is_some();
@@ -48,10 +62,10 @@ pub async fn explain(
     }
 
     if req.analyze {
-        return explain_with_analyze(&state, &req, &parsed);
+        return explain_with_analyze(state, req, parsed);
     }
 
-    explain_plan_only(&state, &req, &parsed)
+    explain_plan_only(state, req, parsed)
 }
 
 /// Computes the EXPLAIN preamble shared by the plan-only and ANALYZE paths:

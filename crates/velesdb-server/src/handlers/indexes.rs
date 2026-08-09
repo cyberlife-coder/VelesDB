@@ -11,7 +11,9 @@ use std::sync::Arc;
 use crate::types::{CreateIndexRequest, ErrorResponse, IndexResponse, ListIndexesResponse};
 use crate::AppState;
 
-use super::helpers::{auto_core_error_response, error_response, get_vector_collection_or_404};
+use super::helpers::{
+    auto_core_error_response, error_response, get_vector_collection_or_404, run_blocking,
+};
 
 /// Create a property index on a graph collection.
 #[utoipa::path(
@@ -38,7 +40,20 @@ pub async fn create_index(
         Err(resp) => return resp,
     };
 
-    let result = match dispatch_index_creation(&collection, &req) {
+    // Index creation scans the collection under write locks — run it on
+    // the blocking pool.
+    run_blocking(move || create_index_sync(&collection, req))
+        .await
+        .unwrap_or_else(|resp| resp)
+}
+
+/// Synchronous body of [`create_index`]: dispatches the index build and
+/// reads back the created index's stats. Runs on the blocking pool.
+fn create_index_sync(
+    collection: &velesdb_core::collection::VectorCollection,
+    req: CreateIndexRequest,
+) -> axum::response::Response {
+    let result = match dispatch_index_creation(collection, &req) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -106,7 +121,12 @@ pub async fn list_indexes(
         Err(resp) => return resp,
     };
 
-    let core_indexes = collection.list_indexes();
+    // Index metadata reads take the index registry lock, which long index
+    // builds hold — run it on the blocking pool.
+    let core_indexes = match run_blocking(move || collection.list_indexes()).await {
+        Ok(indexes) => indexes,
+        Err(resp) => return resp,
+    };
     let indexes: Vec<IndexResponse> = core_indexes
         .into_iter()
         .map(|i| IndexResponse {
@@ -146,22 +166,24 @@ pub async fn delete_index(
         Err(resp) => return resp,
     };
 
-    match collection.drop_index(&label, &property) {
-        Ok(dropped) => {
-            if dropped {
-                Json(serde_json::json!({
-                    "message": "Index deleted",
-                    "label": label,
-                    "property": property
-                }))
-                .into_response()
-            } else {
-                error_response(
-                    StatusCode::NOT_FOUND,
-                    format!("Index on {}.{} not found", label, property),
-                )
-            }
-        }
-        Err(e) => auto_core_error_response(&e),
+    // Index removal takes the index registry write lock and persists — run
+    // it on the blocking pool.
+    let dropped_label = label.clone();
+    let dropped_property = property.clone();
+    let result =
+        run_blocking(move || collection.drop_index(&dropped_label, &dropped_property)).await;
+    match result {
+        Ok(Ok(true)) => Json(serde_json::json!({
+            "message": "Index deleted",
+            "label": label,
+            "property": property
+        }))
+        .into_response(),
+        Ok(Ok(false)) => error_response(
+            StatusCode::NOT_FOUND,
+            format!("Index on {label}.{property} not found"),
+        ),
+        Ok(Err(e)) => auto_core_error_response(&e),
+        Err(resp) => resp,
     }
 }
