@@ -9,7 +9,7 @@ and a 60-second first success. This guide is the reference behind it.
 
 ## Contents
 
-- [The 18-method surface](#the-18-method-surface)
+- [The 21-method surface](#the-21-method-surface)
 - [Three contracts that apply to every method](#three-contracts-that-apply-to-every-method)
 - [Choosing an embedder](#choosing-an-embedder)
 - [Auto-extraction (`rememberExtracted`)](#auto-extraction-rememberextracted)
@@ -20,7 +20,7 @@ and a 60-second first success. This guide is the reference behind it.
 - [Need the full engine?](#need-the-full-engine)
 - [Resource caps](#resource-caps)
 
-## The 18-method surface
+## The 21-method surface
 
 `MemoryService.open(path, embedder?, ollamaUrl?, ollamaModel?)` is the only
 constructor (a static factory). Everything else is an instance method, and
@@ -28,8 +28,8 @@ every instance method returns a `Promise`.
 
 | Family | Methods |
 |---|---|
-| Durable memory | `remember`, `recall`, `recallWhere`, `recallFused`, `recallFusedDated`, `relate`, `forget`, `why`, `feedback`, `rememberExtracted` |
-| Context compiler | `compileContext`, `compileTranscript`, `explainCompilation`, `contextSavings`, `retrieveContextSource` |
+| Durable memory | `remember`, `recall`, `recallWhere`, `recallFused`, `recallFusedDated`, `relate`, `unrelate`, `forget`, `entity`, `why`, `feedback`, `rememberExtracted` |
+| Context compiler | `compileContext`, `compileTranscript`, `explainCompilation`, `contextSavings`, `retrieveContextSource`, `suggestBudget` |
 | Session resumption | `saveWorkingContext`, `loadWorkingContext`, `listWorkingContexts` |
 
 That list is pinned by a test — `__test__/index.spec.mjs` asserts the exact
@@ -320,4 +320,4 @@ silently reduced instead.
 
 ---
 
-Last updated: 2026-07-25 · Applies to: velesdb-core 4.3.0
+Last updated: 2026-08-09 · Applies to: velesdb-core 4.3.0

@@ -578,8 +578,8 @@ interface WasmErrorLike {
  * subgraph). Runs entirely in-process (browser or Node) via WebAssembly —
  * no server, no network.
  *
- * Two methods available on the Node (`@wiscale/velesdb-memory-node`) and
- * Python bindings are deliberately absent here (issue #1547's audit):
+ * One method available on the Node (`@wiscale/velesdb-memory-node`) and
+ * Python bindings is deliberately absent here (issue #1547's audit):
  *
  * - `feedback` (RL Memory re-ranking): the underlying
  *   `MemoryService::feedback` lives behind `velesdb-memory`'s
@@ -587,10 +587,10 @@ interface WasmErrorLike {
  *   durable learned confidence is meaningless for a store that disappears
  *   on page reload (see `crates/velesdb-wasm/src/memory_service.rs`'s
  *   module doc). Not a missing binding; an intentional boundary.
- * - `rememberExtracted`: it needs a generative model (the only
- *   `Extractor` implementation in `velesdb-memory` calls out to Ollama),
- *   which would pull a network dependency into the WASM bundle by
- *   default. A JS-provided extractor callback is a natural v2 addition.
+ *
+ * `rememberExtracted` (once on that absent list) IS available: it runs the
+ * deterministic `outline` extractor in-process; generative backends are
+ * refused by name so no network dependency enters the WASM bundle.
  *
  * @example
  * ```typescript

@@ -690,8 +690,10 @@ impl WasmMemoryService {
     }
 
     /// Explain a decision: the best-matching memory plus its connected
-    /// subgraph. Resolves to `{nodes, edges}`. `maxHops` (default 2) is
-    /// capped at 10.
+    /// subgraph. Resolves to `{nodes, edges, truncated}` — `truncated` is
+    /// `true` when a width budget cut the walk, since a subgraph sitting
+    /// exactly at a cap is otherwise indistinguishable from a complete one.
+    /// `maxHops` (default 2) is capped at 10.
     #[wasm_bindgen(js_name = why)]
     pub fn why(
         &self,
@@ -720,10 +722,13 @@ impl WasmMemoryService {
     ///
     /// `name` is matched case-insensitively (the id is content-addressed, so
     /// it is stable). Returns
-    /// `{found, id, name, attributes, relations, relationsIn}`, each edge
+    /// `{found, id, name, attributes, relations, relationsIn,
+    /// relationsTruncated, relationsInTruncated}`, each edge
     /// `{predicate, targetId, target}`. `found: false` means nothing has ever
     /// mentioned that name; `name` still echoes the query canonicalized, so
-    /// several lookups can be told apart.
+    /// several lookups can be told apart. The two `*Truncated` booleans say
+    /// when a response budget cut the matching side — a list holding exactly
+    /// the cap is otherwise indistinguishable from a cut one.
     ///
     /// `relations` are the typed edges LEAVING the entity, `relationsIn`
     /// those pointing AT it — each naming, in `targetId`/`target`, the far

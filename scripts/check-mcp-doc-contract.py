@@ -24,18 +24,21 @@ It also only sees *literal* shape declarations (``Returns `{a, b, c}` ``) —
 a TypeScript ``interface`` or a Rust ``struct`` is a type declaration, left to
 the binding-parity gate.
 
-**Second written limit: the registry is TEN tools of the twenty published,
-and the other ten are held out for a measured reason.** The structure-aware
-attribution described below is what made widening possible at all — under
-proximity alone, 13 of ``docs/reference/MCP_TOOLS.md``'s 19 declarations were
-charged to a neighbouring section, which is the "68 non-conformances" this
-header used to record. It is not enough for the rest: each tool still out
-carries literals this guard would report as drift that are really a sibling's
-shape, an input schema, an MCP client config file or another API's dict.
-``entity`` alone has twelve, six of them LangChain dictionaries in files
-saturated with the word. They go in by batches, and #1695 says how: each batch
-verified by a mutation that must make the guard refuse. Say "this guard
-polices ten of the twenty published tools", never "every MCP tool".
+**Second written limit: the registry is FOURTEEN tools of the twenty
+published, and the six still held out are ``compile_context``, ``entity``,
+``recall``, ``remember``, ``remember_extracted`` and ``why`` — each is waiting
+on the nested-shape treatment (#1695, lots 2-3) before its literals can be
+read without false drift.** The structure-aware attribution described below
+is what made widening possible at all — under proximity alone, 13 of
+``docs/reference/MCP_TOOLS.md``'s 19 declarations were charged to a
+neighbouring section, which is the "68 non-conformances" this header used to
+record. It is not enough for the rest: each tool still out carries literals
+this guard would report as drift that are really a sibling's shape, an input
+schema, an MCP client config file or another API's dict. ``entity`` alone has
+twelve, six of them LangChain dictionaries in files saturated with the word.
+They go in by batches, and #1695 says how: each batch verified by a mutation
+that must make the guard refuse. Say "this guard polices fourteen of the
+twenty published tools", never "every MCP tool".
 
 **Third: what the sweep reads is a measured list, not every file.** Adding
 ``crates/velesdb-memory/src/**/*.rs``, ``crates/velesdb-wasm/src`` or the

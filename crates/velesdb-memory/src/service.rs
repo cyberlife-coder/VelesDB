@@ -208,10 +208,16 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// and wires them — so the knowledge graph builds itself from ordinary
     /// `remember` calls, with no separate [`Self::remember_extracted`].
     ///
-    /// Opt-in, and off unless this is called. It costs one generation per
-    /// `remember`, which is a real latency and availability change: a memory
-    /// write that silently depends on a local model being up is not a default
-    /// anyone should inherit.
+    /// Opt-in, and off unless this is called. It runs in one of two modes:
+    /// **inline** by default — the enrichment costs one generation per
+    /// `remember`, on the caller's write path, which is a real latency and
+    /// availability change: a memory write that silently depends on a local
+    /// model being up is not a default anyone should inherit — or
+    /// **decoupled** when [`Self::spawn_autograph_worker`] is active, where
+    /// `remember` returns as soon as the fact is durably stored and the
+    /// derived edges lag by one generation (an `entity`/`why` read issued
+    /// immediately after may not see them yet; the fact itself is always
+    /// immediately readable).
     ///
     /// The caller's fact is stored **verbatim and first**. Autograph only
     /// *adds* structure around it; it never rewrites or replaces what the

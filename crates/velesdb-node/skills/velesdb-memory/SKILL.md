@@ -381,6 +381,11 @@ With `autograph = true` you stop having to choose the right tool: a plain
 it is opt-in — and if the model is down the write still succeeds, losing only
 the enrichment, never the fact.
 
+The daemon runs that enrichment through an async worker: with it active,
+edges derived from a `remember` land asynchronously, so an `entity` or `why`
+read immediately after may not see them yet — the fact itself is always
+immediately readable.
+
 That degradation is silent **in flight**, on purpose. It is no longer silent
 **forever**: at startup the daemon asks the configured extraction backend
 whether it is there, and prints one line naming the role, the URL and the model
