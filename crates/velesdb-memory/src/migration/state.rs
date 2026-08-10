@@ -3,6 +3,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 mod lock;
+mod resume;
 mod switch;
 
 #[cfg(test)]
@@ -165,10 +166,10 @@ impl MigrationState {
         .map_err(|reason| {
             format!("cannot resume against an invalid requested identity: {reason}")
         })?;
-        validate_resume_source(self, source_path)?;
-        validate_resume_fingerprint(self, source_fingerprint)?;
-        validate_resume_model(self, target_model)?;
-        validate_resume_dimension(self, target_dimension)?;
+        resume::validate_resume_source(self, source_path)?;
+        resume::validate_resume_fingerprint(self, source_fingerprint)?;
+        resume::validate_resume_model(self, target_model)?;
+        resume::validate_resume_dimension(self, target_dimension)?;
         Ok(())
     }
 
@@ -226,47 +227,6 @@ impl MigrationState {
             state_durability_barrier,
         )
     }
-}
-
-fn validate_resume_source(state: &MigrationState, requested: &Path) -> Result<(), String> {
-    if state.source_path == requested {
-        return Ok(());
-    }
-    Err(format!(
-        "this migration was prepared for source '{}' and the request names '{}'. A journal cannot be transferred between stores. Start a fresh diagnosis.",
-        state.source_path.display(),
-        requested.display()
-    ))
-}
-
-fn validate_resume_fingerprint(state: &MigrationState, requested: &str) -> Result<(), String> {
-    if state.source_fingerprint == requested {
-        return Ok(());
-    }
-    Err(format!(
-        "the source changed since this migration was prepared: it was fingerprinted '{}' and is now '{}'. Resuming would rebuild from an inventory that no longer describes the store. Start a fresh diagnosis.",
-        state.source_fingerprint, requested
-    ))
-}
-
-fn validate_resume_model(state: &MigrationState, requested: &str) -> Result<(), String> {
-    if state.target_model == requested {
-        return Ok(());
-    }
-    Err(format!(
-        "this migration was prepared for the model '{}' and the request names '{}'. Half a store embedded by one model and half by another is not searchable. Either point the request back at '{}', or start a fresh migration.",
-        state.target_model, requested, state.target_model
-    ))
-}
-
-fn validate_resume_dimension(state: &MigrationState, requested: usize) -> Result<(), String> {
-    if state.target_dimension == requested {
-        return Ok(());
-    }
-    Err(format!(
-        "this migration was prepared for target dimension {} and the request names {}. Changing vector width mid-migration would make the rebuilt store unreadable. Start a fresh migration.",
-        state.target_dimension, requested
-    ))
 }
 
 fn read_state_value(workspace: &Path) -> Result<Option<Value>, String> {
