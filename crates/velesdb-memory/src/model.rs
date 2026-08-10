@@ -174,29 +174,43 @@ pub fn column_value_matches(stored: &Value, op: ColumnOp, target: &Value) -> boo
         return false;
     }
     if let (Some(left), Some(right)) = (stored.as_f64(), target.as_f64()) {
-        return match op {
-            ColumnOp::Eq => (left - right).abs() < f64::EPSILON,
-            ColumnOp::Ne => (left - right).abs() >= f64::EPSILON,
-            ColumnOp::Lt => left < right,
-            ColumnOp::Le => left <= right,
-            ColumnOp::Gt => left > right,
-            ColumnOp::Ge => left >= right,
-        };
+        return compare_f64(op, left, right);
     }
     if let (Some(left), Some(right)) = (stored.as_str(), target.as_str()) {
-        return match op {
-            ColumnOp::Eq => left == right,
-            ColumnOp::Ne => left != right,
-            ColumnOp::Lt => left < right,
-            ColumnOp::Le => left <= right,
-            ColumnOp::Gt => left > right,
-            ColumnOp::Ge => left >= right,
-        };
+        return compare_ordered(op, &left, &right);
     }
     match op {
         ColumnOp::Eq => stored == target,
         ColumnOp::Ne => stored != target,
         ColumnOp::Lt | ColumnOp::Le | ColumnOp::Gt | ColumnOp::Ge => false,
+    }
+}
+
+/// The numeric arm of [`column_value_matches`], split out for its one real
+/// difference from the ordered arm: equality is epsilon-based, so `Eq`/`Ne`
+/// cannot be expressed through `PartialOrd` without changing what a
+/// float-rounded stored value matches.
+fn compare_f64(op: ColumnOp, left: f64, right: f64) -> bool {
+    match op {
+        ColumnOp::Eq => (left - right).abs() < f64::EPSILON,
+        ColumnOp::Ne => (left - right).abs() >= f64::EPSILON,
+        ColumnOp::Lt => left < right,
+        ColumnOp::Le => left <= right,
+        ColumnOp::Gt => left > right,
+        ColumnOp::Ge => left >= right,
+    }
+}
+
+/// The ordered arm of [`column_value_matches`]: any type whose native
+/// comparisons ARE the predicate semantics (strings today).
+fn compare_ordered<T: PartialOrd>(op: ColumnOp, left: &T, right: &T) -> bool {
+    match op {
+        ColumnOp::Eq => left == right,
+        ColumnOp::Ne => left != right,
+        ColumnOp::Lt => left < right,
+        ColumnOp::Le => left <= right,
+        ColumnOp::Gt => left > right,
+        ColumnOp::Ge => left >= right,
     }
 }
 

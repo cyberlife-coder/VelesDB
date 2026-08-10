@@ -174,6 +174,22 @@ pub async fn get_edges(
 }
 
 /// Add an edge to a collection's graph.
+/// The write-result match [`add_edge`] and [`add_edges_batch`] share: the
+/// blocking-pool outcome routed through `auto_core_error_response` (so e.g.
+/// `EdgeExists` surfaces as 409 + VELES-019, never a 500 string), success
+/// shaped by the caller. One copy, so the two handlers cannot drift on the
+/// error route.
+fn created_or_core_error<T>(
+    outcome: Result<Result<T, velesdb_core::Error>, axum::response::Response>,
+    success: impl FnOnce(T) -> axum::response::Response,
+) -> axum::response::Response {
+    match outcome {
+        Ok(Ok(value)) => success(value),
+        Ok(Err(e)) => auto_core_error_response(&e),
+        Err(resp) => resp,
+    }
+}
+
 #[utoipa::path(
     post,
     path = "/collections/{name}/graph/edges",
@@ -204,11 +220,9 @@ pub async fn add_edge(
     // Edge insertion takes write locks and persists — run it on the blocking
     // pool. Route the core error through `auto_core_error_response` so e.g.
     // `EdgeExists` surfaces as 409 + VELES-019 instead of a generic 500 string.
-    match run_blocking(move || coll.add_edge(edge)).await {
-        Ok(Ok(())) => StatusCode::CREATED.into_response(),
-        Ok(Err(e)) => auto_core_error_response(&e),
-        Err(resp) => resp,
-    }
+    created_or_core_error(run_blocking(move || coll.add_edge(edge)).await, |()| {
+        StatusCode::CREATED.into_response()
+    })
 }
 
 /// Converts an [`AddEdgeRequest`] into a core [`GraphEdge`], validating the
@@ -281,13 +295,10 @@ pub async fn add_edges_batch(
     // Batch edge insertion takes write locks and persists — run it on the
     // blocking pool. Route the core error through `auto_core_error_response`
     // so e.g. `EdgeExists` surfaces as 409 + VELES-019 instead of a 500 string.
-    match run_blocking(move || coll.add_edges_batch(edges)).await {
-        Ok(Ok(added)) => {
-            (StatusCode::CREATED, Json(AddEdgesBatchResponse { added })).into_response()
-        }
-        Ok(Err(e)) => auto_core_error_response(&e),
-        Err(resp) => resp,
-    }
+    created_or_core_error(
+        run_blocking(move || coll.add_edges_batch(edges)).await,
+        |added| (StatusCode::CREATED, Json(AddEdgesBatchResponse { added })).into_response(),
+    )
 }
 
 /// Traverse the graph using BFS or DFS from a source node.
