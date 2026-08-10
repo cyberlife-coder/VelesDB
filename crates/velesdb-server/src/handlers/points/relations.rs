@@ -96,10 +96,6 @@ pub struct SetTtlRequest {
 // Handler implementations
 // ---------------------------------------------------------------------------
 
-/// Create a relation edge between two points in a collection.
-///
-/// Works on vector, graph, and metadata collections alike.
-/// The edge ID is auto-assigned; the response body carries the allocated value.
 /// The `properties` coercion of [`relate_points`]: an object passes through,
 /// `null` means none, anything else is the caller's error — split out so the
 /// handler reads as its three phases (resolve, coerce, insert).
@@ -119,6 +115,10 @@ fn relation_properties(
     }
 }
 
+/// Create a relation edge between two points in a collection.
+///
+/// Works on vector, graph, and metadata collections alike.
+/// The edge ID is auto-assigned; the response body carries the allocated value.
 #[utoipa::path(
     post,
     path = "/collections/{name}/relations",

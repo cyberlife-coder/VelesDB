@@ -100,9 +100,6 @@ pub(crate) fn resolve_aggregate_collection(
         })
 }
 
-/// Execute an aggregation-only VelesQL query.
-///
-/// This endpoint is explicit and stable for GROUP BY / HAVING / aggregate workloads.
 /// The refuse-or-proceed phase of [`aggregate`], one rule per step: the
 /// query parses, it IS an aggregation (row/search/graph belong on
 /// `/query`), and it names exactly one resolvable collection. Split out so
@@ -126,6 +123,9 @@ fn prepare_aggregation(
     Ok((parsed, collection_name))
 }
 
+/// Execute an aggregation-only VelesQL query.
+///
+/// This endpoint is explicit and stable for GROUP BY / HAVING / aggregate workloads.
 #[utoipa::path(
     post,
     path = "/aggregate",

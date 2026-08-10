@@ -173,7 +173,6 @@ pub async fn get_edges(
     Ok(Json(EdgesResponse { edges, count }))
 }
 
-/// Add an edge to a collection's graph.
 /// The write-result match [`add_edge`] and [`add_edges_batch`] share: the
 /// blocking-pool outcome routed through `auto_core_error_response` (so e.g.
 /// `EdgeExists` surfaces as 409 + VELES-019, never a 500 string), success
@@ -190,6 +189,7 @@ fn created_or_core_error<T>(
     }
 }
 
+/// Add an edge to a collection's graph.
 #[utoipa::path(
     post,
     path = "/collections/{name}/graph/edges",
