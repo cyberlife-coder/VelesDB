@@ -636,6 +636,17 @@ unsafe impl Send for VectorSliceGuard<'_> {}
 unsafe impl Sync for VectorSliceGuard<'_> {}
 ```
 
+**Additional invariant — `parking_lot` features must stay off**: the `Send`
+impl moves a `parking_lot::RwLockReadGuard<'a, MmapMut>` across threads. This is
+sound **only** because the workspace enables no `parking_lot` features. With
+`deadlock_detection` or `send_guard` enabled, a `RwLockReadGuard` carries
+per-thread bookkeeping that is corrupted when the guard is released on a thread
+other than the one that acquired it. Do not enable either feature without
+revisiting this impl. (Verified: no `Cargo.toml` in the workspace enables a
+`parking_lot` feature — every dependant pins the bare `parking_lot = "0.12"` /
+version-only form, and `velesdb-core`'s `[dependencies.parking_lot]` table
+declares `version` only.)
+
 ---
 
 ## Pointer Operations
@@ -839,7 +850,7 @@ misleading), because the underlying storage holds no homogeneous vector index.
 
 Prefer the safe, variant-checked `into_vector()` (returns `Result`) when the
 caller can branch. A type-safe refactor eliminating this method is tracked in
-`docs/ARCHITECTURE.md` (pre-seed audit finding F2.2).
+`docs/TECH_DEBT_REGISTRY.md` (pre-seed audit finding F2.2).
 
 ---
 
@@ -964,7 +975,9 @@ behavior or data inconsistency can occur:
 
 **Rule**: `edges → outgoing → incoming → nodes`
 
-See `SYSTEM-RETRIEVED-MEMORY[b65ec9e5]` for deadlock fix details.
+The lock-order contract is documented per write method in
+`crates/velesdb-mobile/src/graph.rs` (each `# Lock Order` doc section); every
+write path acquires the four locks in this fixed order so no cycle can form.
 
 ---
 
@@ -1049,6 +1062,7 @@ let data_as_bytes: &mut [u8] = unsafe {
 
 ---
 
-*Last updated: 2026-07-25 · Applies to: velesdb-core 4.2.0 (this stamp tracks
-the document revision; the underlying unsafe audit was last run in full on
+*Last updated: 2026-08-09 · Applies to: velesdb-core 5.0.0 (this stamp tracks
+the document revision; this revision adds the `parking_lot`-features invariant to
+the `VectorSliceGuard` entry. The underlying unsafe audit was last run in full on
 2026-06-12, as stated at the top of this page)*

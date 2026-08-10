@@ -120,80 +120,98 @@ pub struct Extraction {
 /// Deliberately NOT here: `"partner"` / `"compagnon"`. "X has a partner, Y" is
 /// a business relation as often as a family one, and a wrong re-point is worse
 /// than none at all.
-const KINSHIP_NOUNS: &[&str] = &[
-    // Blood ties, fr.
-    "pere",
-    "mere",
-    "frere",
-    "soeur",
-    "fils",
-    "fille",
-    "oncle",
-    "tante",
-    "cousin",
-    "cousine",
-    "neveu",
-    "niece",
-    "grand-pere",
-    "grand-mere",
-    "grand-oncle",
-    "grand-tante",
-    "arriere-grand-pere",
-    "arriere-grand-mere",
-    "petit-fils",
-    "petite-fille",
-    // Alliances and step-family, fr.
-    "beau-pere",
-    "belle-mere",
-    "beau-frere",
-    "belle-soeur",
-    "beau-fils",
-    "belle-fille",
-    "gendre",
-    "bru",
-    "demi-frere",
-    "demi-soeur",
-    "parrain",
-    "marraine",
-    "filleul",
-    "filleule",
-    "epoux",
-    "epouse",
-    "mari",
-    "femme",
-    // Blood ties, en.
-    "father",
-    "mother",
-    "brother",
-    "sister",
-    "son",
-    "daughter",
-    "uncle",
-    "aunt",
-    "nephew",
-    "grandfather",
-    "grandmother",
-    "grandson",
-    "granddaughter",
-    // Alliances and step-family, en.
-    "husband",
-    "wife",
-    "father-in-law",
-    "mother-in-law",
-    "brother-in-law",
-    "sister-in-law",
-    "son-in-law",
-    "daughter-in-law",
-    "stepfather",
-    "stepmother",
-    "stepbrother",
-    "stepsister",
-    "half-brother",
-    "half-sister",
-    "godfather",
-    "godmother",
-    "godson",
-    "goddaughter",
+/// Every noun is paired with the CANONICAL noun of the relation it denotes.
+///
+/// The orientation pass decides direction by asking whether the predicate names
+/// the same kinship the passage named. Asking that of the SPELLING made two
+/// words for one relation read as each other's converse, and stored the edge
+/// backwards (#1754) — across languages (`"sister"` vs `"soeur"`), and just as
+/// much within one (`"mari"` vs `"epoux"`, `"gendre"` vs `"beau-fils"`, both
+/// listed here). Comparing canonical forms asks it of the MEANING instead, so a
+/// synonym orients like the word it stands for and only a real converse flips.
+///
+/// Where one French noun covers two English ones — `"beau-pere"` is both the
+/// father-in-law and the stepfather — every spelling folds onto that single
+/// canonical. Deliberate: the pass has no "unrelated" branch, so anything not
+/// judged identical is treated as the converse. Reading two step/in-law words
+/// as ONE relation leaves an edge unturned; reading them as converses points it
+/// the wrong way, and this pass already holds that a missing correction beats a
+/// wrong one.
+const KINSHIP_NOUNS: &[(&str, &str)] = &[
+    // Blood ties, fr. — each its own canonical.
+    ("pere", "pere"),
+    ("mere", "mere"),
+    ("frere", "frere"),
+    ("soeur", "soeur"),
+    ("fils", "fils"),
+    ("fille", "fille"),
+    ("oncle", "oncle"),
+    ("tante", "tante"),
+    ("cousin", "cousin"),
+    ("cousine", "cousine"),
+    ("neveu", "neveu"),
+    ("niece", "niece"),
+    ("grand-pere", "grand-pere"),
+    ("grand-mere", "grand-mere"),
+    ("grand-oncle", "grand-oncle"),
+    ("grand-tante", "grand-tante"),
+    ("arriere-grand-pere", "arriere-grand-pere"),
+    ("arriere-grand-mere", "arriere-grand-mere"),
+    ("petit-fils", "petit-fils"),
+    ("petite-fille", "petite-fille"),
+    // Alliances and step-family, fr. — `gendre`/`bru` and `mari`/`femme` are
+    // synonyms of the nouns they fold onto, not converses of them.
+    ("beau-pere", "beau-pere"),
+    ("belle-mere", "belle-mere"),
+    ("beau-frere", "beau-frere"),
+    ("belle-soeur", "belle-soeur"),
+    ("beau-fils", "beau-fils"),
+    ("belle-fille", "belle-fille"),
+    ("gendre", "beau-fils"),
+    ("bru", "belle-fille"),
+    ("demi-frere", "demi-frere"),
+    ("demi-soeur", "demi-soeur"),
+    ("parrain", "parrain"),
+    ("marraine", "marraine"),
+    ("filleul", "filleul"),
+    ("filleule", "filleule"),
+    ("epoux", "epoux"),
+    ("epouse", "epouse"),
+    ("mari", "epoux"),
+    ("femme", "epouse"),
+    // Blood ties, en. — folded onto their French twin.
+    ("father", "pere"),
+    ("mother", "mere"),
+    ("brother", "frere"),
+    ("sister", "soeur"),
+    ("son", "fils"),
+    ("daughter", "fille"),
+    ("uncle", "oncle"),
+    ("aunt", "tante"),
+    ("nephew", "neveu"),
+    ("grandfather", "grand-pere"),
+    ("grandmother", "grand-mere"),
+    ("grandson", "petit-fils"),
+    ("granddaughter", "petite-fille"),
+    // Alliances and step-family, en. — folded onto their French twin.
+    ("husband", "epoux"),
+    ("wife", "epouse"),
+    ("father-in-law", "beau-pere"),
+    ("mother-in-law", "belle-mere"),
+    ("brother-in-law", "beau-frere"),
+    ("sister-in-law", "belle-soeur"),
+    ("son-in-law", "beau-fils"),
+    ("daughter-in-law", "belle-fille"),
+    ("stepfather", "beau-pere"),
+    ("stepmother", "belle-mere"),
+    ("stepbrother", "beau-frere"),
+    ("stepsister", "belle-soeur"),
+    ("half-brother", "demi-frere"),
+    ("half-sister", "demi-soeur"),
+    ("godfather", "parrain"),
+    ("godmother", "marraine"),
+    ("godson", "filleul"),
+    ("goddaughter", "filleule"),
 ];
 
 /// What precedes the kinship noun when the sentence hangs the relation on the
@@ -324,18 +342,20 @@ fn ends_exactly(head: &str, word: &str) -> bool {
 
 /// The kinship noun written at the start of `text`, and how many bytes it
 /// occupies there.
+/// The length is that of the spelling actually written; the noun returned is
+/// its CANONICAL form, so a caller compares meanings and never spellings.
 fn noun_at(text: &str) -> Option<(&'static str, usize)> {
-    KINSHIP_NOUNS
-        .iter()
-        .find_map(|noun| word_prefix_len(text, noun).map(|len| (*noun, len)))
+    KINSHIP_NOUNS.iter().find_map(|(spelling, canonical)| {
+        word_prefix_len(text, spelling).map(|len| (*canonical, len))
+    })
 }
 
-/// The kinship noun `head` ends on.
+/// The kinship noun `head` ends on, in its canonical form.
 fn noun_before(head: &str) -> Option<&'static str> {
     KINSHIP_NOUNS
         .iter()
-        .copied()
-        .find(|noun| ends_with_word(head, noun))
+        .find(|(spelling, _)| ends_with_word(head, spelling))
+        .map(|(_, canonical)| *canonical)
 }
 
 /// The text left once the first of `prefixes` that `text` starts with is
@@ -578,8 +598,8 @@ fn predicate_noun(predicate: &str) -> Option<&'static str> {
     let stem = predicate_stem(predicate);
     KINSHIP_NOUNS
         .iter()
-        .copied()
-        .find(|noun| word_prefix_len(&stem, noun) == Some(stem.len()))
+        .find(|(spelling, _)| word_prefix_len(&stem, spelling) == Some(stem.len()))
+        .map(|(_, canonical)| *canonical)
 }
 
 /// Whether the triple runs between exactly these two entities, either way round.
@@ -590,12 +610,16 @@ fn joins(relation: &ExtractedRelation, one: &str, other: &str) -> bool {
 
 /// Point one triple the way the passage states it.
 ///
-/// The triple built on the noun the passage used belongs to the person that
-/// noun introduced; any *other* kinship label over the same pair is its
+/// The triple built on the RELATION the passage named belongs to the person
+/// that noun introduced; any *other* kinship relation over the same pair is its
 /// converse and therefore runs the other way. That single rule is also all an
 /// alliance ever needs: list `"beau-frere"` in the table and its converse is
 /// whatever else the extractor labelled the pair with. Anything else is
 /// untouched.
+///
+/// "Same relation" is decided on the CANONICAL noun, never on the spelling —
+/// otherwise `"sister"` and `"soeur"`, or `"mari"` and `"epoux"`, read as each
+/// other's converse and the edge is stored backwards (#1754).
 fn reorient(relation: &mut ExtractedRelation, noun: &str, holder: &str, bearer: &str) {
     let Some(stem) = predicate_noun(&relation.predicate) else {
         return;
@@ -705,6 +729,221 @@ impl<T: Extractor + ?Sized> Extractor for std::sync::Arc<T> {
 /// runtime without the type being generic.
 pub type DynExtractor = std::sync::Arc<dyn Extractor + Send + Sync>;
 
+// --- Always-available backend: the outline a passage states -------------------
+//
+// The twin of `HashEmbedder` on this side of the crate, and for the same
+// reason: without a dependency-free choice, every contract
+// `remember_extracted` publishes is reachable only through a network call, so
+// no binding can exercise it and no test can prove it. Deliberately NOT behind
+// `extract` — that feature exists to pull in the HTTP client, which this
+// backend does not need.
+
+/// Deterministic, network-free extractor: it reads the structure a passage
+/// STATES instead of inferring it.
+///
+/// A generative backend guesses which facts a paragraph holds; this one is
+/// told. Each non-blank line of the passage is one directive:
+///
+/// | line | yields |
+/// |---|---|
+/// | `edge: <subject> \| <predicate> \| <object>` | one [`ExtractedRelation`] |
+/// | `attr: <entity> \| <key> \| <json value>` | one [`ExtractedAttribute`] |
+/// | `fact: <text> \| <topic>, <topic>` | one [`ExtractedFact`] |
+/// | anything else | one [`ExtractedFact`], no topics |
+///
+/// Entity names are canonicalized (trimmed, lowercased) exactly as
+/// [`ExtractedFact::entities`] are, so they resolve to the SAME
+/// content-addressed hubs a generative backend's would — the two backends can
+/// write into one graph.
+///
+/// Its purpose matches [`crate::HashEmbedder`]'s: reproducible tests and
+/// offline behavior. It reads no natural language, so a caller holding only
+/// prose wants a generative backend. What it offers instead is the one thing a
+/// model cannot: the graph is exactly the one the caller wrote down — up to
+/// [`orient_kinship`], the repointing pass EVERY backend's relations go
+/// through, which can flip a triple whose predicate is a kinship noun the
+/// passage also states possessively.
+///
+/// A malformed directive is an [`ExtractError::Parse`], never a silently
+/// dropped line: a graph that quietly loses half of what it was handed is
+/// worse than one that refuses.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OutlineExtractor;
+
+/// The `|`-separated fields of one directive body, trimmed.
+fn directive_fields(rest: &str) -> Vec<&str> {
+    rest.split('|').map(str::trim).collect()
+}
+
+/// The error a directive carrying the wrong number of fields deserves.
+fn wrong_field_count(kind: &str, expected: usize, given: usize) -> ExtractError {
+    ExtractError::Parse(format!(
+        "`{kind}:` takes {expected} `|`-separated fields, {given} given"
+    ))
+}
+
+/// `edge: <subject> | <predicate> | <object>`.
+fn parse_edge(rest: &str) -> Result<ExtractedRelation, ExtractError> {
+    let fields = directive_fields(rest);
+    let [subject, predicate, object] = fields[..] else {
+        return Err(wrong_field_count("edge", 3, fields.len()));
+    };
+    if subject.is_empty() || predicate.is_empty() || object.is_empty() {
+        return Err(ExtractError::Parse(
+            "`edge:` takes a non-blank subject, predicate and object".to_owned(),
+        ));
+    }
+    Ok(ExtractedRelation {
+        subject: crate::service::canonical_entity_name(subject),
+        predicate: predicate.to_owned(),
+        object: crate::service::canonical_entity_name(object),
+    })
+}
+
+/// `attr: <entity> | <key> | <json value>`.
+fn parse_attr(rest: &str) -> Result<ExtractedAttribute, ExtractError> {
+    let fields = directive_fields(rest);
+    let [entity, key, value] = fields[..] else {
+        return Err(wrong_field_count("attr", 3, fields.len()));
+    };
+    if entity.is_empty() || key.is_empty() {
+        return Err(ExtractError::Parse(
+            "`attr:` takes a non-blank entity and key".to_owned(),
+        ));
+    }
+    // Parsed as JSON, not stored as text, because `recall_where` comparisons
+    // are type-strict: an age handed over as `"15"` would never match a
+    // numeric filter (see [`ExtractedAttribute::value`]).
+    let value = serde_json::from_str(value)
+        .map_err(|err| ExtractError::Parse(format!("`attr:` value is not JSON: {err}")))?;
+    Ok(ExtractedAttribute {
+        entity: crate::service::canonical_entity_name(entity),
+        key: key.to_owned(),
+        value,
+    })
+}
+
+/// `fact: <text> | <topic>, <topic>`, and the fallback for any other line.
+fn parse_fact(body: &str) -> Result<ExtractedFact, ExtractError> {
+    let (text, topics) = body.split_once('|').unwrap_or((body, ""));
+    let text = text.trim();
+    if text.is_empty() {
+        return Err(ExtractError::Parse(
+            "a fact line takes a non-blank text".to_owned(),
+        ));
+    }
+    Ok(ExtractedFact {
+        text: text.to_owned(),
+        entities: topics
+            .split(',')
+            .map(crate::service::canonical_entity_name)
+            .filter(|topic| !topic.is_empty())
+            .collect(),
+    })
+}
+
+impl Extractor for OutlineExtractor {
+    fn extract(&self, text: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
+        Ok(self.extract_graph(text)?.facts)
+    }
+
+    fn extract_graph(&self, text: &str) -> Result<Extraction, ExtractError> {
+        let mut extraction = Extraction::default();
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix("edge:") {
+                extraction.relations.push(parse_edge(rest)?);
+            } else if let Some(rest) = line.strip_prefix("attr:") {
+                extraction.attributes.push(parse_attr(rest)?);
+            } else {
+                extraction
+                    .facts
+                    .push(parse_fact(line.strip_prefix("fact:").unwrap_or(line))?);
+            }
+        }
+        Ok(extraction)
+    }
+}
+
+/// What a caller must do to honour a requested extraction backend.
+///
+/// Returned by [`select_extractor`], which is the single place that knows which
+/// backend names exist. Splitting the answer into these three shapes is what
+/// lets the dependency-free backends be selected in **any** build: only the
+/// [`Self::NeedsRemoteConfig`] arm requires an optional dependency and the URL
+/// and model that go with it, and only that arm's construction is feature-gated.
+pub enum ExtractorSelection {
+    /// No extraction. Tools that need an extractor answer "not configured".
+    Disabled,
+    /// Ready to use as-is: needs no configuration, no network, no optional
+    /// dependency. Attach it and the graph builds.
+    Ready(DynExtractor),
+    /// A network-backed backend the caller must build itself, because only the
+    /// caller knows its URL and model. Carries the backend's name so the caller
+    /// can dispatch without re-parsing the string.
+    NeedsRemoteConfig(&'static str),
+}
+
+/// Hand-written because [`DynExtractor`] is a trait object and the trait does
+/// not require `Debug` — a backend is identified by its shape here, never by
+/// dumping its innards (an HTTP-backed one holds a URL, and a panic message is
+/// not the place for it).
+impl std::fmt::Debug for ExtractorSelection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Disabled => f.write_str("Disabled"),
+            Self::Ready(_) => f.write_str("Ready(<extractor>)"),
+            Self::NeedsRemoteConfig(name) => write!(f, "NeedsRemoteConfig({name})"),
+        }
+    }
+}
+
+/// Resolve an extraction backend name to what the caller must do about it.
+///
+/// # Why this exists, and why it is in the library rather than the binary
+///
+/// The selection used to live inside the daemon's `#[cfg(feature = "extract")]`
+/// block. That gate is what made [`OutlineExtractor`] unreachable from the MCP
+/// server (#1734): the extractor needs no dependency and is linked into every
+/// build, but the only code that could *choose* it was compiled away unless an
+/// unrelated HTTP feature was on. Two of the twenty published tools were dead by
+/// default as a result — `remember_extracted` refused outright, and `entity`
+/// answered `found: false` for every name, entity hubs being born only of
+/// extraction.
+///
+/// Living here rather than in `main.rs` also means the daemon and the tests
+/// exercise the **same** function: a test can select `outline` and drive the
+/// real server with the result, instead of proving a seam written for the test.
+///
+/// # Errors
+/// A human-readable message naming the accepted forms, for an unknown backend.
+pub fn select_extractor(backend: &str) -> Result<ExtractorSelection, String> {
+    match backend {
+        // No `#[cfg]` here, and that absence IS the fix: this arm must survive
+        // in a build without any HTTP feature, which is exactly the build the
+        // published binary ships.
+        "outline" => Ok(ExtractorSelection::Ready(std::sync::Arc::new(
+            OutlineExtractor,
+        ))),
+        "ollama" => Ok(ExtractorSelection::NeedsRemoteConfig("ollama")),
+        // A protocol, not a vendor — see [`crate::select_embedder`]'s own
+        // `openai` arm. The two roles accept the same names on purpose: an
+        // operator who learned one has learned the other.
+        "openai" => Ok(ExtractorSelection::NeedsRemoteConfig("openai")),
+        "none" | "" => Ok(ExtractorSelection::Disabled),
+        other => Err(format!(
+            "unknown extraction backend '{other}' (expected 'outline' for the \
+             offline deterministic reader, 'ollama' for a local generative \
+             model, 'openai' for any OpenAI-compatible server — oMLX, \
+             llama.cpp, LM Studio, vLLM or a hosted provider, selected by URL \
+             rather than by name — or 'none')"
+        )),
+    }
+}
+
 // --- Optional batteries-included backend: a local Ollama generative model -----
 //
 // Enabled with `--features extract`. The default build omits this backend (and
@@ -732,6 +971,18 @@ const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 #[cfg(feature = "extract")]
 const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// Ceiling on how many tokens one extraction call may generate.
+///
+/// Unbounded, the real graph-extraction prompt measured 3 933 completion
+/// tokens for a twelve-word sentence — 1 min 59 s spent generating JSON to
+/// store one fact (#1846). The same call capped at 600 tokens measured
+/// 14.9 s. 512 sits just under that, comfortably above what any realistic
+/// sentence's worth of triples needs, and turns the worst case into a
+/// bounded one instead of a tuning knob callers have to discover by timing
+/// out.
+#[cfg(feature = "extract")]
+const MAX_GENERATION_TOKENS: u32 = 512;
+
 /// The knobs that actually configure the extractor, named in its failures.
 ///
 /// **Not** the embedder's variables. `main.rs`'s `build_ollama_extractor` reads
@@ -741,8 +992,8 @@ const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 /// is no offline fallback to offer either: extraction is opt-in, and running
 /// without it is simply not passing an extractor.
 #[cfg(feature = "extract")]
-const EXTRACT_LEVERS: crate::ollama_retry::OllamaLevers<'static> =
-    crate::ollama_retry::OllamaLevers {
+const EXTRACT_LEVERS: crate::http_retry::FailureLevers<'static> =
+    crate::http_retry::FailureLevers {
         url_var: "VELESDB_MEMORY_EXTRACTOR_URL",
         model_var: "VELESDB_MEMORY_EXTRACTOR_MODEL",
         fallback: None,
@@ -763,8 +1014,8 @@ enum GenerateCall {
 #[cfg(feature = "extract")]
 fn generate_is_retryable(err: &GenerateCall) -> bool {
     match err {
-        GenerateCall::Transport(inner) => crate::ollama_retry::is_retryable(inner),
-        GenerateCall::Body(inner) => crate::ollama_retry::io_is_retryable(inner),
+        GenerateCall::Transport(inner) => crate::http_retry::is_retryable(inner),
+        GenerateCall::Body(inner) => crate::http_retry::io_is_retryable(inner),
     }
 }
 
@@ -776,7 +1027,7 @@ fn describe_generate_failure(url: &str, model: &str, err: &GenerateCall, attempt
         GenerateCall::Transport(inner) => inner.to_string(),
         GenerateCall::Body(inner) => format!("reading the response failed: {inner}"),
     };
-    crate::ollama_retry::actionable_failure(
+    crate::http_retry::actionable_ollama_failure(
         "generate",
         url,
         model,
@@ -829,20 +1080,111 @@ impl OllamaExtractor {
     }
 }
 
+/// Read a model's reply as the flat fact list [`Extractor::extract`] promises.
+///
+/// A free function because every generative backend produces the same reply
+/// and reads it the same way — only the transport differs. Leaving a copy in
+/// each `impl` would let two backends drift on what counts as a valid answer.
+#[cfg(feature = "extract")]
+fn facts_from_reply(reply: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
+    let raw =
+        json_slice::<Vec<RawFact>>(reply).ok_or_else(|| ExtractError::Parse(truncate(reply)))?;
+    Ok(raw.into_iter().filter_map(RawFact::into_fact).collect())
+}
+
+/// [`facts_from_reply`]'s counterpart for [`Extractor::extract_graph`].
+#[cfg(feature = "extract")]
+fn extraction_from_reply(reply: &str) -> Result<Extraction, ExtractError> {
+    let raw = json_slice_object::<RawExtraction>(reply)
+        .ok_or_else(|| ExtractError::Parse(truncate(reply)))?;
+    Ok(raw.into_extraction())
+}
+
 #[cfg(feature = "extract")]
 impl Extractor for OllamaExtractor {
     fn extract(&self, text: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
-        let reply = self.generate(&build_prompt(text))?;
-        let raw = json_slice::<Vec<RawFact>>(&reply)
-            .ok_or_else(|| ExtractError::Parse(truncate(&reply)))?;
-        Ok(raw.into_iter().filter_map(RawFact::into_fact).collect())
+        facts_from_reply(&self.generate(&build_prompt(text))?)
     }
 
     fn extract_graph(&self, text: &str) -> Result<Extraction, ExtractError> {
-        let reply = self.generate(&build_graph_prompt(text))?;
-        let raw = json_slice_object::<RawExtraction>(&reply)
-            .ok_or_else(|| ExtractError::Parse(truncate(&reply)))?;
-        Ok(raw.into_extraction())
+        extraction_from_reply(&self.generate(&build_graph_prompt(text))?)
+    }
+}
+
+/// Extracts through any **OpenAI-compatible** `/v1/chat/completions` endpoint.
+///
+/// A sibling of [`OllamaExtractor`], not a layer over it — the same shape the
+/// embedding role takes. The prompt stays here, on the role side: it is what
+/// this crate wants said, not something the protocol knows about.
+#[cfg(feature = "extract")]
+#[derive(Debug)]
+pub struct OpenAiExtractor {
+    client: crate::http_client::HttpJsonClient,
+    model: String,
+}
+
+#[cfg(feature = "extract")]
+impl OpenAiExtractor {
+    /// Build an extractor targeting `model` on the server at `base_url`
+    /// (origin and port, no path).
+    ///
+    /// Bounded on the same four axes as [`OllamaExtractor::new`], with the
+    /// same generous [`REQUEST_TIMEOUT_SECS`]: generation is slow wherever it
+    /// runs, and the ceiling belongs to the role, not to the transport.
+    #[must_use]
+    pub fn new(
+        base_url: impl Into<String>,
+        model: impl Into<String>,
+        auth: crate::http_client::Auth,
+    ) -> Self {
+        let timeout = std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS);
+        let agent = ureq::AgentBuilder::new()
+            .timeout_connect(CONNECT_TIMEOUT)
+            .timeout_write(WRITE_TIMEOUT)
+            .timeout_read(timeout)
+            .timeout(timeout)
+            .build();
+        Self {
+            client: crate::http_client::HttpJsonClient::new(
+                crate::openai::base_url(&base_url.into()),
+                auth,
+                agent,
+            ),
+            model: model.into(),
+        }
+    }
+
+    /// POST one prompt and return the assistant's reply.
+    fn generate(&self, prompt: &str) -> Result<String, ExtractError> {
+        let body = crate::openai::chat_body(&self.model, prompt, MAX_GENERATION_TOKENS);
+        let payload = self
+            .client
+            .post_json(crate::openai::CHAT_COMPLETIONS_PATH, &body)
+            .map_err(|failure| {
+                ExtractError::Backend(crate::http_retry::actionable_openai_failure(
+                    "chat/completions",
+                    &failure.url,
+                    &self.model,
+                    failure.attempts,
+                    &failure.cause,
+                    Some(
+                        "use the offline deterministic reader with \
+                         VELESDB_MEMORY_EXTRACTOR=outline",
+                    ),
+                ))
+            })?;
+        crate::openai::parse_chat_response(&payload).map_err(ExtractError::Backend)
+    }
+}
+
+#[cfg(feature = "extract")]
+impl Extractor for OpenAiExtractor {
+    fn extract(&self, text: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
+        facts_from_reply(&self.generate(&build_prompt(text))?)
+    }
+
+    fn extract_graph(&self, text: &str) -> Result<Extraction, ExtractError> {
+        extraction_from_reply(&self.generate(&build_graph_prompt(text))?)
     }
 }
 
@@ -868,7 +1210,7 @@ impl OllamaExtractor {
             // cost, not the generation. Shares the embedder's knob so one
             // setting governs every Ollama call the daemon makes.
             "keep_alive": crate::embedder::keep_alive(),
-            "options": { "temperature": 0 },
+            "options": { "temperature": 0, "num_predict": MAX_GENERATION_TOKENS },
         })
         .to_string();
         let attempt = || {
@@ -881,8 +1223,8 @@ impl OllamaExtractor {
             response.into_string().map_err(GenerateCall::Body)
         };
 
-        let payload = crate::ollama_retry::with_retry(
-            &crate::ollama_retry::OLLAMA_RETRIES,
+        let payload = crate::http_retry::with_retry(
+            &crate::http_retry::HTTP_RETRIES,
             generate_is_retryable,
             attempt,
         )
@@ -1035,32 +1377,43 @@ fn build_graph_prompt(text: &str) -> String {
     format!(
         "You are building a knowledge graph from the passage below.\n\n\
 Passage:\n{text}\n\n\
+STEP 0 — Identify the passage's language. Everything you write (facts, \
+predicates, attribute keys) MUST be in THAT language. Do not copy the language \
+of the examples below: they are shown in several languages on purpose, and you \
+must match the PASSAGE, never the example.\n\n\
 Return THREE things.\n\n\
-1. \"facts\": the atomic, standalone facts a person would remember. Rewrite each \
-as a self-contained sentence (resolve pronouns to names; keep absolute dates). \
-For each, list 1-4 key TOPICS it concerns, as short canonical lowercase noun \
-phrases, so the same topic recurs as the SAME tag across passages.\n\n\
+1. \"facts\": the atomic, standalone facts a person would remember, in the \
+passage's language. Rewrite each as a self-contained sentence (resolve \
+pronouns to names; keep absolute dates). For each, list 1-4 key TOPICS it \
+concerns, as short canonical lowercase noun phrases, so the same topic recurs \
+as the SAME tag across passages.\n\n\
 2. \"relations\": every explicit relationship BETWEEN TWO NAMED ENTITIES, as \
 subject/predicate/object triples. Use the entity's full name, lowercase \
 (e.g. \"bruno durand\").\n\
 The predicate is a LABEL, not a sentence: **at most 3 words**, lowercase, in \
-the passage's own language (e.g. \"pere de\", \"soeur de\", \"works at\", \
-\"moteur de recherche\"). NEVER restate the sentence — write \"surveille les \
-fuites\", not \"est utilise pour la surveillance de fuites de donnees\". If you \
-cannot say it in 3 words, pick the closest short label.\n\
-State the triple in the direction the passage states it, and add the converse \
-ONLY if the passage states it too.\n\
+the passage's language. Examples of the SHAPE, each in its own language — \
+match the passage, not these: a French passage gives \"travaille chez\", \
+\"pere de\"; an English passage gives \"works at\", \"father of\"; a Spanish \
+passage gives \"trabaja en\". NEVER restate the sentence — write \"surveille \
+les fuites\", not \"est utilise pour la surveillance de fuites de donnees\". \
+If you cannot say it in 3 words, pick the closest short label.\n\
 DIRECTION: the subject is whoever CARRIES the relation, not the subject of the \
 sentence. \"A a une soeur, B\" means B is A's sister, so the triple is \
-B/\"soeur de\"/A — never A/\"soeur de\"/B. Same for every possessive \
-(\"a un frere\", \"a une fille\", \"has a brother\").\n\
+B/\"soeur de\"/A — never A/\"soeur de\"/B. \"A has a brother, B\" means B is \
+A's brother: B/\"brother of\"/A. Same for every possessive.\n\
+Never emit both directions of the SAME predicate over the same pair — \
+\"X brother of Y\" plus \"Y brother of X\" is a contradiction, not a \
+converse: emit exactly one. But two DIFFERENT predicates the passage states \
+separately over the same pair (\"A possede B\" then \"B appartient a A\") \
+are two stated facts — keep both.\n\
 Every named entity the passage RELATES to another must appear in at least one \
 triple — an entity that only receives attributes and no edge is a dead end in \
 the graph.\n\n\
 3. \"attributes\": every property a named entity HAS, as entity/key/value. Use \
-short lowercase keys (\"age\", \"ville\", \"employeur\"). Emit numbers as JSON \
-NUMBERS, never strings: 15, not \"15\". Omit anything the passage does not state.\n\n\
-Return ONLY this JSON object, no prose:\n\
+short lowercase keys in the passage's language (\"age\", \"ville\", \
+\"employeur\"). Emit numbers as JSON NUMBERS, never strings: 15, not \"15\". \
+Omit anything the passage does not state.\n\n\
+Return ONLY this JSON object, no prose, no markdown fence:\n\
 {{\"facts\": [{{\"fact\": string, \"entities\": [string]}}], \
 \"relations\": [{{\"subject\": string, \"predicate\": string, \"object\": string}}], \
 \"attributes\": [{{\"entity\": string, \"key\": string, \"value\": string|number|boolean}}]}}"
@@ -1208,6 +1561,10 @@ fn step_string(escaped: &mut bool, byte: u8) -> bool {
     }
 }
 
+#[cfg(test)]
+#[path = "extractor_selection_tests.rs"]
+mod selection_tests;
+
 #[cfg(all(test, feature = "extract"))]
 mod tests {
     use super::*;
@@ -1223,7 +1580,12 @@ mod tests {
         let extraction = raw.into_extraction();
         assert_eq!(extraction.facts.len(), 1);
         assert_eq!(extraction.relations.len(), 1);
+        // Endpoints asserted by name: a subject↔object swap in
+        // `into_relation` kept this test green when only the predicate was
+        // checked (#1792).
+        assert_eq!(extraction.relations[0].subject, "zephyrin");
         assert_eq!(extraction.relations[0].predicate, "pere de");
+        assert_eq!(extraction.relations[0].object, "kaltar");
         assert_eq!(extraction.attributes.len(), 1);
         assert_eq!(extraction.attributes[0].value, serde_json::json!(15));
     }
@@ -1281,6 +1643,56 @@ mod tests {
             prompt.contains("at least one triple"),
             "an entity with attributes but no edge is a dead end — the prompt \
              must ask for the edge"
+        );
+    }
+
+    /// The prompt must make the language rule SYMMETRIC (#1846). Its previous
+    /// form gave predicate examples in mixed languages with no rule tying the
+    /// answer to the passage: on an English passage, `default:fast` emitted
+    /// `frere de` (French) — and a graph holding both `works at` and
+    /// `travaille chez` for the same relation fragments it into two
+    /// predicates. Measured fix: with this rule the same model passes both
+    /// languages; a one-sided rule ("answer in French") merely inverted the
+    /// defect.
+    #[test]
+    fn graph_prompt_ties_every_output_to_the_passage_language() {
+        let prompt = build_graph_prompt("Sarah Miller has a brother, Tom Miller.");
+        assert!(
+            prompt.contains("Identify the passage's language"),
+            "the language rule must be an explicit first step, not an aside"
+        );
+        assert!(
+            prompt.contains("match the PASSAGE, never the example"),
+            "mixed-language examples are load-bearing — the rule must say they \
+             are examples of SHAPE, not of language"
+        );
+    }
+
+    /// The prompt must forbid the fake converse (#1846). Its previous form
+    /// said "add the converse ONLY if the passage states it too", and on an
+    /// English passage `default:fast` still emitted BOTH `tom brother of
+    /// sarah` AND `sarah brother of tom` — each the sibling of the other, a
+    /// contradiction `orient_kinship` repairs for kinship only: `works at` /
+    /// `manages` would ship inverted. The rule must name the failure, not
+    /// just permit its absence.
+    #[test]
+    fn graph_prompt_forbids_both_directions_of_one_predicate() {
+        let prompt = build_graph_prompt("Sarah Miller has a brother, Tom Miller.");
+        assert!(
+            prompt.contains("emit exactly one"),
+            "the one-per-predicate rule must be stated as a hard bound"
+        );
+        assert!(
+            prompt.contains("keep both"),
+            "the rule must carry its POSITIVE half too: two different \
+             predicates stated separately are two facts — without it a model \
+             collapses a real converse pair into one edge (measured 3/3 on \
+             the bench's converse case)"
+        );
+        assert!(
+            prompt.contains("is a contradiction, not a converse"),
+            "the counter-example is what makes the rule unambiguous — the same \
+             device the carrier rule below relies on"
         );
     }
 

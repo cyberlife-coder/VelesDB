@@ -56,7 +56,7 @@ pub async fn query<R: Runtime>(
     let parsed = velesdb_core::velesql::Parser::parse(&request.query)
         .map_err(|e| Error::InvalidConfig(format!("VelesQL parse error: {}", e.message)))?;
 
-    let results = dispatch_tauri_query(&state, &parsed, &request)?;
+    let results = dispatch_tauri_query(&state, parsed, request).await?;
 
     Ok(QueryResponse {
         results,
@@ -65,41 +65,40 @@ pub async fn query<R: Runtime>(
 }
 
 /// Dispatches a tauri query to aggregation or standard execution path.
-fn dispatch_tauri_query(
+async fn dispatch_tauri_query(
     state: &VelesDbState,
-    parsed: &velesdb_core::velesql::Query,
-    request: &QueryRequest,
+    parsed: velesdb_core::velesql::Query,
+    request: QueryRequest,
 ) -> std::result::Result<Vec<HybridResult>, CommandError> {
-    let collection_name = &parsed.select.from;
-
-    if is_aggregation_query(parsed) && !collection_name.is_empty() {
-        return execute_tauri_aggregation(state, parsed, request, collection_name);
+    if is_aggregation_query(&parsed) && !parsed.select.from.is_empty() {
+        return execute_tauri_aggregation(state, parsed, request).await;
     }
 
     state
-        .with_db(|db| {
-            let search_results = db.execute_query(parsed, &request.params)?;
+        .run_db(move |db| {
+            let search_results = db.execute_query(&parsed, &request.params)?;
             Ok(search_results
                 .into_iter()
                 .map(|r| search_result_to_hybrid(&r))
                 .collect())
         })
+        .await
         .map_err(CommandError::from)
 }
 
 /// Executes an aggregation query through the collection API.
-fn execute_tauri_aggregation(
+async fn execute_tauri_aggregation(
     state: &VelesDbState,
-    parsed: &velesdb_core::velesql::Query,
-    request: &QueryRequest,
-    collection_name: &str,
+    parsed: velesdb_core::velesql::Query,
+    request: QueryRequest,
 ) -> std::result::Result<Vec<HybridResult>, CommandError> {
     let agg_json = state
-        .with_db(|db| {
-            let coll = require_collection(&db, collection_name)?;
-            coll.execute_aggregate(parsed, &request.params)
+        .run_db(move |db| {
+            let coll = require_collection(&db, &parsed.select.from)?;
+            coll.execute_aggregate(&parsed, &request.params)
                 .map_err(|e| Error::InvalidConfig(format!("Aggregation error: {e}")))
         })
+        .await
         .map_err(CommandError::from)?;
 
     Ok(vec![HybridResult {

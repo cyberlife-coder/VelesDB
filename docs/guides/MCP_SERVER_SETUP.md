@@ -64,8 +64,8 @@ there** — use an absolute path. The examples below use
 
 > **Want several clients sharing one memory?** Skip this section and jump to
 > [HTTP transport](#http-transport-multi-client): one `install-memory-daemon`
-> run builds, runs, and wires Claude Code / Claude Desktop / Windsurf / Devin
-> CLI to a single shared daemon.
+> run builds, runs, and wires Claude Code / Codex CLI / Claude Desktop /
+> Windsurf / Devin CLI to a single shared daemon.
 
 **Claude Code** — the one command most people need:
 
@@ -181,9 +181,20 @@ cp -r skills/velesdb-context-optimizer ~/.claude/skills/
 → [`skills/velesdb-context-optimizer/SKILL.md`](../../skills/velesdb-context-optimizer/SKILL.md)
 and the [Context compiler guide](CONTEXT_COMPILER.md).
 
+A third, **`velesdb-learning-loop`**, is the discipline over the other two —
+recall before designing, check whether a fix is a *recurrence* before storing
+it, correct a wrong memory rather than adding beside it, and treat writing to
+memory as a decision, never a reflex:
+
+```bash
+cp -r skills/velesdb-learning-loop ~/.claude/skills/
+```
+
+→ [`skills/velesdb-learning-loop/SKILL.md`](../../skills/velesdb-learning-loop/SKILL.md)
+
 **No repo clone needed.** Every
 [GitHub Release](https://github.com/cyberlife-coder/VelesDB/releases/latest)
-attaches `velesdb-skills.tar.gz` — both skills, one folder per skill at the
+attaches `velesdb-skills.tar.gz` — every skill, one folder per skill at the
 archive root — so a one-liner installs them straight from the release:
 
 ```bash
@@ -200,17 +211,19 @@ overwrites the local copy.
 
 Skills teach an agent what to do; they do not make it remember to do it.
 [`integrations/agent-hooks/`](../../integrations/agent-hooks/README.md) closes
-that gap for Claude Code with four real hooks. `SessionStart`, `Stop`, and
-`PreCompact` nudge `load_working_context` / `save_working_context`
-automatically; `PostToolUse` goes further and **replaces** an oversized tool
-result with a compiled view — see
+that gap for Claude Code with five real hooks. `SessionStart`, `Stop`, and
+`PreCompact` nudge `load_working_context` / `save_working_context`,
+`PreToolUse` requires a successful recall before an opted-in repository edit,
+and `PostToolUse` both records that recall and can **replace** a schema-valid
+oversized Bash result with a compiled view — see
 [Context compiler → the `PostToolUse` hook](CONTEXT_COMPILER.md#the-posttooluse-hook).
 
 Install once **globally** (`~/.claude/hooks/`) for continuous memory across
 every project, or per-project if you would rather vendor the scripts into one
-repo. Codex CLI has no hook mechanism yet; the same directory documents an
-`AGENTS.md`-based convention for it, and Windsurf exposes a single advisory
-`pre_user_prompt` hook.
+repo. Codex CLI supports the same session-start, Stop and recall-before-edit
+loop through four hooks, but has no output-replacement channel; Windsurf
+exposes a single advisory `pre_user_prompt` hook. The integration guide pins
+the exact parity and installation commands for each host.
 
 ## HTTP transport (multi-client)
 
@@ -248,15 +261,115 @@ A client only needs to trust that CA once (the installer scripts do it
 automatically); every future leaf certificate this daemon issues is signed by
 the same CA and is trusted automatically after that.
 
+For Codex CLI, use the native Streamable HTTP transport (Codex 0.113 or
+newer), not a stdio bridge:
+
+```bash
+codex mcp add velesdb-memory --url https://127.0.0.1:18090/mcp
+```
+
+The daemon installers issue exactly that command after checking the version.
+They do not remove the existing entry first, so a failed update does not erase
+the last configuration. Older or unrecognized Codex versions are left
+untouched with a warning.
+
 | Flag / variable | Effect |
 |---|---|
 | `--http` / `VELESDB_MEMORY_HTTP=1` | Serve over streamable-HTTP instead of stdio. |
 | `--http-port <PORT>` / `VELESDB_MEMORY_HTTP_BIND=<host:port>` | Override the bind address (default `127.0.0.1:18090`). `--http-port` overrides just the port on top of `VELESDB_MEMORY_HTTP_BIND`. |
 | `--http-insecure` / `VELESDB_MEMORY_HTTP_INSECURE=1` | Opt OUT of HTTPS and serve plain HTTP, printing a loud warning at startup. For local debugging, or behind a trusted TLS-terminating proxy — not for normal use. |
 | `VELESDB_MEMORY_HTTP_ALLOW_REMOTE=1` | Required before a non-loopback bind host is accepted at all. |
-| `VELESDB_MEMORY_HTTP_MAX_BODY_BYTES` | Max size of a single `/mcp` request body (default 16 MiB). An oversized request is rejected instead of being buffered into memory unbounded. |
+| `VELESDB_MEMORY_HTTP_MAX_BODY_BYTES` | Max size of a single `/mcp` request body (default 80 MiB: the compiler's full 64 MiB per-request media budget plus text/framing headroom, so a request the core accepts is never refused by the transport alone). An oversized request is rejected instead of being buffered into memory unbounded. |
 | `VELESDB_MEMORY_HTTP_MAX_SESSIONS` | Max concurrent MCP sessions (default 64). Each session holds a worker task and a couple of small bounded channels — cheap individually, but a client that opens sessions without closing them could otherwise grow that without bound. |
+| `VELESDB_MEMORY_HTTP_KEEP_ALIVE_SECS` | How long a session may sit idle before it is retired (default 3600 — 60 minutes). See [Idle sessions, and why a timeout is not a failed write](#idle-sessions-and-why-a-timeout-is-not-a-failed-write). |
+| `VELESDB_MEMORY_LOG` | Per-request logging to stderr, as `EnvFilter` directives. Unset (the binary's default) is fully silent; the macOS installer deploys the daemon with the payload-safe incident preset on. See [Reading the daemon's log](#reading-the-daemons-log). |
 | `GET /health` | Plain 200 OK liveness probe, no MCP handshake needed — what the installer and CI use to confirm the daemon is up (over HTTPS too, once TLS is the transport). |
+
+### Reading the daemon's log
+
+With `VELESDB_MEMORY_LOG` set, every `/mcp` request leaves one stderr line
+(method, `mcp-session-id`, status, duration), and every tool call another
+(tool name, session, verdict, duration) — which is what tells the three
+outside-identical incident cases apart: a request that **never arrived**
+leaves no line, one **refused** (expired/unknown session) leaves its `404`,
+one **handled** leaves its `2xx` plus the tool line. On macOS the launchd
+daemon's stderr lands in `~/Library/Logs/velesdb-memory/daemon.err.log`, and
+the installer deploys with the incident preset
+(`info,rmcp::service=error,rmcp::transport::worker=debug,rmcp::transport::streamable_http_server=debug`)
+already on: those events never carry request content — canary tests hold the
+preset to that, on the happy path and on the error path — so the log is safe
+to keep. The `worker` target is what records a session worker dying of idle
+timeout, and `rmcp::service` is pinned to `error` because its `warn`-level
+`response error` event quotes the failing request's error message, client
+input included.
+
+Do **not** reach for `rmcp=debug` or a blanket `trace` on a store that holds
+anything sensitive: at those levels rmcp itself dumps full request arguments
+— fact text included — into the log. That verbosity is for deliberate wire
+debugging only.
+
+### Idle sessions, and why a timeout is not a failed write
+
+A session that goes quiet is eventually retired. The next request carrying its
+id then gets a `404`, and the client is expected to answer that by
+re-initializing — which is cheap and invisible when the client does it.
+
+**A client that mishandles the `404` surfaces it as a timeout instead.** The
+call never reaches the tool, so nothing is written, while the caller sees only
+"request timed out". Measured against this daemon: it answered the retired
+session in **48 ms** with a clean `404`, and the client still reported a
+timeout. The HTTP regression test now gives that expired-session POST a hard
+one-second bound, independently of the setup sleep.
+
+With `VELESDB_MEMORY_LOG` on, the whole mechanism is visible in the daemon's
+own request log — captured live on 2026-08-07 against Claude Code's *native*
+HTTP client (not the `mcp-remote` bridge), settling #1727: the dead-session
+POST arrives and is refused with `404` in **0 ms**; the client retries the
+SAME dead session inside the call (a second `404`, one minute later) and then
+reports `-32001`; the **next** call re-initializes — `initialize` with no
+session header, a fresh id, and the tool call succeeds immediately. So the
+in-call retry is what loses the write, the across-calls recovery is what
+makes an identical resend succeed, and the server never hangs and never
+writes late. The operating rule stands unchanged: a timeout proves nothing —
+confirm the write (`saved_at` via `list_working_contexts`) and resend
+identically if it is missing; `save_working_context` upserts, so a resend
+replaces rather than duplicates.
+
+Codex 0.113+ handles this lifecycle natively: it establishes a new session and
+retries. The installers therefore wire Codex straight to the HTTPS URL.
+Claude Desktop cannot consume that URL from its config file and still needs a
+bridge. Its pinned `mcp-remote@0.1.38` bridge does **not** recover correctly
+from the expired-session `404`: after a silence longer than the daemon's idle
+timeout, the next Desktop call can still hang until the client times out. Quit
+and restart Desktop to establish a new bridge/session. `--transport http-only`
+makes the bridge transport deterministic; it does not fix session expiry.
+That remaining Desktop limitation must not be presented as a daemon latency
+or tool-execution problem: the rejected call never reaches `memory_scope` (or
+any other tool).
+
+The default idle timeout is **60 minutes** rather than the 5 minutes the
+underlying transport library uses, because five minutes is shorter than the
+ordinary silences of an agent that compiles, waits on CI, or thinks — a CI wait
+alone already approaches 30 minutes. Sixty minutes puts the timeout beyond
+those normal pauses. Lower it with `VELESDB_MEMORY_HTTP_KEEP_ALIVE_SECS` if
+your clients are chattier and you would rather reclaim sessions sooner.
+
+**This is a mitigation, not a fix, and two things stay true regardless:**
+
+- a session can still expire — a silence longer than the configured timeout
+  will retire it, whatever that timeout is;
+- **a timeout never proves the write succeeded**, and never proves it failed
+  either.
+
+So after any timeout on `save_working_context`, do not treat the save as done.
+Call `list_working_contexts` and check that the session's `saved_at` actually
+advanced; re-send the identical call if it did not. Re-sending is safe: the
+write is an upsert on `project` + `session`, so it replaces the stored state
+rather than adding a duplicate.
+
+Do not use the returned id, or the mere absence of an error, as proof of a
+write — only `saved_at` moving is proof. Use `load_working_context` when the
+stored *content* itself has to be verified.
 
 **The transport has no authentication.** Anyone who can reach the socket gets
 full `remember` / `recall` / `relate` access to the store. HTTPS-by-default
@@ -373,7 +486,8 @@ claude mcp add --transport http velesdb-memory https://127.0.0.1:18090/mcp
 [`scripts/install-memory-daemon.sh`](../../scripts/install-memory-daemon.sh)
 automates all of this end to end on macOS: building with the right features,
 running the daemon as a `launchd` agent, trusting the local CA in your login
-keychain, and wiring Claude Code / Claude Desktop / Windsurf / Devin CLI. See
+keychain, and wiring Claude Code / Codex CLI / Claude Desktop / Windsurf /
+Devin CLI. See
 `--help` for the flags (`--embedder`, `--port`, `--store`, `--tls-dir`,
 `--ttl`, `--skip-client`, `--skip-ca-trust`, `--wire-only`, `--from-release`,
 `--uninstall`, …). On Linux it still builds and wires clients but skips daemon
@@ -392,12 +506,27 @@ Claude Desktop is a different mechanism than every other client, twice over:
   CA-trust step, the UI path can still refuse the daemon's certificate.
 
 The installers therefore wire Desktop through a **stdio→HTTPS bridge**:
-[`mcp-remote`](https://www.npmjs.com/package/mcp-remote) (needs Node.js),
-spawned by Desktop over stdio, connecting to the daemon over HTTPS with
+[`mcp-remote@0.1.38`](https://www.npmjs.com/package/mcp-remote). Its current
+dependency tree needs Node.js 20.18.1 or newer; the installers verify that
+minimum before touching Desktop's configuration. The bridge is spawned by
+Desktop over stdio and connects to the daemon over HTTPS with
 `NODE_EXTRA_CA_CERTS` pointed at the daemon's CA so TLS is verified *strictly*
 — never `NODE_TLS_REJECT_UNAUTHORIZED=0`, which disables verification
-entirely. The bridge is a plain HTTPS client of the daemon: it never opens the
-store, so there is no `flock` conflict.
+entirely. An ambient `NODE_TLS_REJECT_UNAUTHORIZED=0` makes the installers
+refuse to write the entry. The bridge is a plain HTTPS client of the daemon:
+it never opens the store, so there is no `flock` conflict.
+
+The top-level bridge version and transport are deliberately fixed as
+`npx -y mcp-remote@0.1.38 <url> --transport http-only`; an unversioned global
+`mcp-remote` is ignored. This prevents accidental bridge-version drift and
+transport fallback. npm still resolves the bridge's transitive dependency
+ranges on a cold install, so the command is version-pinned rather than a full
+lockfile-reproducible installation, and its first launch needs either registry
+access or an existing npm cache. The pin also does not repair the bridge's
+expired-session handling. After more than the configured idle timeout with no
+MCP traffic, the first Desktop call may time out; fully restart Desktop to
+create a fresh bridge/session. Codex does not share this limitation because it
+uses native HTTP.
 
 **Happy path** — run the installer, restart Desktop, done:
 
@@ -415,23 +544,24 @@ Then quit Claude Desktop **fully** (macOS: menu bar → Quit; Windows: system
 tray → Quit — closing the window is not enough) and relaunch it:
 **velesdb-memory** appears under **Settings → Developer** as "running".
 
-The installer verifies the whole TLS path before writing the entry (a Node
-probe against `/health` with `NODE_EXTRA_CA_CERTS` — exactly what the bridge
-will do) and merges into the existing config non-destructively, with a
-timestamped backup. Re-running is idempotent; to re-wire without rebuilding
-anything (for example after installing Node later), pass `--wire-only` /
-`-WireOnly`.
+When the CA already exists, the installer probes the same TLS path the bridge
+will use: Node requests `/health` with `NODE_EXTRA_CA_CERTS`. A missing CA or a
+failed probe produces a warning but does not suppress the entry, because the
+daemon may simply not have generated the certificate or finished starting yet;
+re-run `--wire-only` / `-WireOnly` to verify it later. The config merge itself
+is non-destructive, creates a timestamped backup, and is idempotent.
 
 The generated entry looks like this (macOS shown; Windows is the same shape
-with `mcp-remote.cmd` / `npx.cmd` and `%USERPROFILE%` paths — the installer
+with `npx.cmd` and `%USERPROFILE%` paths — the installer
 resolves **absolute** paths because Desktop spawns the command without a shell
 and, on macOS, with launchd's minimal `PATH` that contains neither Homebrew nor
 nvm):
 
 ```json
 { "mcpServers": { "velesdb-memory": {
-  "command": "/opt/homebrew/bin/mcp-remote",
-  "args": ["https://127.0.0.1:18090/mcp"],
+  "command": "/opt/homebrew/bin/npx",
+  "args": ["-y", "mcp-remote@0.1.38", "https://127.0.0.1:18090/mcp",
+           "--transport", "http-only"],
   "env": {
     "NODE_EXTRA_CA_CERTS": "/Users/you/.velesdb-memory-tls/ca-cert.pem",
     "PATH": "/opt/homebrew/bin:/usr/bin:/bin"
@@ -439,16 +569,14 @@ nvm):
 } } }
 ```
 
-Without a global `mcp-remote`, the installer writes `npx -y mcp-remote <url>`
-instead — same result, fetched on first launch.
-
 ### Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
 | Certificate refused / bridge disconnected | The CA is not trusted by the bridge's Node stack, or `NODE_EXTRA_CA_CERTS` points at a missing file. | Check the daemon answers: `curl --cacert ~/.velesdb-memory-tls/ca-cert.pem https://127.0.0.1:18090/health` (Windows: `curl.exe --cacert "$env:USERPROFILE\.velesdb-memory-tls\ca-cert.pem" https://127.0.0.1:18090/health`). Then confirm the config entry's `NODE_EXTRA_CA_CERTS` path exists, and re-run the installer with `--wire-only` / `-WireOnly`. **Never** "fix" this with `NODE_TLS_REJECT_UNAUTHORIZED=0`. |
+| First call after a long idle period times out in Desktop | `mcp-remote@0.1.38` does not turn the daemon's expired-session `404` into a fresh MCP session. The tool was never invoked. | Quit Desktop fully and relaunch it. Raising `VELESDB_MEMORY_HTTP_KEEP_ALIVE_SECS` reduces how often this occurs but does not fix the bridge. Use Codex 0.113+ over native HTTP when transparent recovery is required. |
 | Port already in use | Another process holds the port; the installer refuses to grab it. | Re-run everything with `--port=<other>` / `-Port <other>` — the Desktop entry is rewritten to match. |
-| No Node.js on the machine | The bridge cannot run. | Install Node (macOS: `brew install node`; Windows: <https://nodejs.org>) and re-run with `--wire-only` / `-WireOnly`. Until then the installer prints the UI alternative: Settings → Connectors → Add custom connector, paste `https://127.0.0.1:18090/mcp` (no API key — loopback only; requires the CA-trust step to have succeeded, and Desktop's own TLS stack may still refuse a local CA, which is why the bridge is the default). |
+| Node.js is missing or older than 20.18.1 | The pinned bridge's current dependency tree cannot run safely on that runtime. | Install or upgrade Node (macOS: `brew install node`; Windows: <https://nodejs.org>) and re-run with `--wire-only` / `-WireOnly`. Until then the installer leaves the existing Desktop config untouched and prints the UI alternative: Settings → Connectors → Add custom connector, paste `https://127.0.0.1:18090/mcp` (no API key — loopback only; requires the CA-trust step to have succeeded, and Desktop's own TLS stack may still refuse a local CA, which is why the bridge is the default). |
 | `Storage(DatabaseLocked)` | Something is opening the store directly alongside the daemon. | The bridge never does this — look for a leftover stdio entry pointing `VELESDB_MEMORY_PATH` at the daemon's store. |
 
 If you would rather not share memory with the daemon at all, the plain stdio
@@ -475,9 +603,10 @@ places:
   task launches. Daemon logs land in `%LOCALAPPDATA%\velesdb-memory\logs\`.
 - **CA trust** — the `Cert:\CurrentUser\Root` store instead of the login
   keychain, also without admin rights (see [The local CA](#the-local-ca)).
-- **Client config paths** — Claude Desktop
+- **Client wiring** — Codex 0.113+ is configured through its native HTTP CLI;
+  Claude Desktop uses
   `%APPDATA%\Claude\claude_desktop_config.json` (wired with the same
-  `mcp-remote` stdio→HTTPS bridge as macOS; `.cmd` shims resolved explicitly
+  `mcp-remote` stdio→HTTPS bridge as macOS; `npx.cmd` resolved explicitly
   because Desktop spawns the command without a shell), Windsurf
   `%USERPROFILE%\.codeium\windsurf\mcp_config.json`, Devin CLI
   `%APPDATA%\devin\config.json`.
@@ -505,14 +634,20 @@ a cryptographic signature and does not by itself prove the archive's
 *authenticity*: anyone who could tamper with the archive could regenerate a
 matching checksum next to it.
 
-**This path only becomes active from the first release published after the
-change.** `release-memory.yml`'s `build-daemon-archive` job produces these
-archives, but the `velesdb-memory-v0.11.6` release (and everything before it)
-predates it and carries no such asset, so `--from-release` against `v0.11.0`
-fails with a clear 404-explaining message rather than a bare `curl` /
+**Releases from 0.11.1 onwards carry the archive; 0.11.0 and earlier do
+not.** `release-memory.yml`'s `build-daemon-archive` job was added on
+2026-07-23 and has run for every memory release cut since, so `--from-release`
+resolves against 0.11.1 and later. Point it at 0.11.0 or earlier and it fails
+with a clear 404-explaining message rather than a bare `curl` /
 `Invoke-WebRequest` error. This is a **different artifact** than the `.mcpb`
 bundles on the same release: those are built with default features (stdio
 only) for MCP-registry clients and cannot run as this daemon.
+
+The boundary above is a fact about the PAST, so it is deliberately written
+without a `velesdb-memory-vX.Y.Z` tag literal. That form is policed by
+`scripts/check-doc-freshness.py` as a claim about the CURRENT version, and it
+rewrote this very sentence at each release bump — turning a true statement
+about 0.11.0 into a false one about whichever version shipped last.
 
 ## Embedding backend
 
@@ -523,49 +658,130 @@ quality, and `why`'s seed match, depend on it.
 | `VELESDB_MEMORY_EMBEDDER` | Recall quality | Footprint | Needs |
 |---|---|---|---|
 | `hash` (default) | keyword-ish, deterministic | tiny, **fully offline, zero-dep** | nothing |
-| `ollama` | real semantic | tiny binary + your local model | a running Ollama; build `--features ollama` |
+| `ollama` | real semantic | tiny binary + your local model | a running Ollama (backend compiled in by default) |
+| `openai` | real semantic | tiny binary + whatever serves the model | any OpenAI-compatible server (backend compiled in by default) |
 
-The default keeps the *single tiny offline binary* promise intact. For real
-semantic recall, build with the `ollama` feature and point it at a local model
-— the model runs in your own Ollama, so memory still never leaves the machine:
+The default keeps the *single tiny offline binary* promise intact, and both
+HTTP backends are compiled into that same default binary — switching to real
+semantic recall is an env-var change, never a rebuild. The recommended model
+is **`bge-m3`** (multilingual, 1024-dim, strong retrieval quality for its
+size); `all-minilm` remains the smaller/faster fallback and the historical
+default of `VELESDB_MEMORY_EMBEDDER_MODEL`. Point the daemon at a local
+model — the model runs on your own machine, so memory still never leaves it:
 
 ```bash
-cargo build --release -p velesdb-memory --features ollama
-ollama pull all-minilm
+ollama pull bge-m3
 VELESDB_MEMORY_EMBEDDER=ollama \
-VELESDB_MEMORY_OLLAMA_MODEL=all-minilm \
+VELESDB_MEMORY_EMBEDDER_MODEL=bge-m3 \
   /path/to/velesdb-memory
 ```
 
-Env vars: `VELESDB_MEMORY_OLLAMA_URL` (default `http://localhost:11434`),
-`VELESDB_MEMORY_OLLAMA_MODEL` (default `all-minilm`).
+Env vars: `VELESDB_MEMORY_EMBEDDER_URL` (default `http://localhost:11434` for
+`ollama`, **required** for `openai`), `VELESDB_MEMORY_EMBEDDER_MODEL` (default
+`all-minilm` for `ollama`, **required** for `openai`),
+`VELESDB_MEMORY_EMBEDDER_API_TOKEN` (optional; when unset, **no**
+`Authorization` header is sent).
+
+`VELESDB_MEMORY_OLLAMA_URL` and `VELESDB_MEMORY_OLLAMA_MODEL` remain supported
+as aliases of the two role-named variables above, so an existing setup keeps
+working unchanged. If both names are set to *different* values, the role-named
+one wins and the daemon says so once at startup.
+
+### `openai` is a protocol, not a vendor
+
+The `openai` value selects the OpenAI-compatible HTTP shape (`/v1/embeddings`,
+`/v1/chat/completions`), which oMLX, llama.cpp's server, LM Studio, vLLM and
+the hosted providers all speak. Reaching a different server is a **different
+URL**, never a new backend name — which is why neither the URL nor the model
+has a default here: guessing either would pick one of those servers for you.
+
+```bash
+VELESDB_MEMORY_EMBEDDER=openai \
+VELESDB_MEMORY_EMBEDDER_URL=http://127.0.0.1:8019 \
+VELESDB_MEMORY_EMBEDDER_MODEL=bge-m3 \
+  /path/to/velesdb-memory
+```
+
+The URL may be written **with or without** the `/v1` suffix — both reach the
+same endpoint. Server consoles advertise the version-prefixed form
+(`http://127.0.0.1:8019/v1`) next to a copy button, so pasting it must work
+rather than silently produce `/v1/v1/embeddings` and a `404`.
+
+**API tokens are read from the environment only.** There is deliberately no
+`api_token` field in `velesdb-memory.toml`, and putting one there is refused at
+startup: a credential at rest in a versionable file is one `git add .` away
+from a public history.
 
 **The embedding dimension is probed from the model, so a store is fixed to one
-embedder** — do not switch embedders on an existing store.
+embedder** — do not switch embedding *models* on an existing store. Switching
+the *transport* is safe: the same model served by Ollama or by an
+OpenAI-compatible server produces the same vectors, and the daemon compares the
+model and the dimension rather than which backend served them.
 
 ## Auto-extraction backend (opt-in)
 
 By default the graph is **bring-your-own-links**: you wire edges with `relate`
 or with `remember`'s `links`. The `remember_extracted` tool turns that into a
 commodity — a local LLM reads raw text, and the server stores its facts and
-auto-builds the fact↔topic graph. It is off by default (it pulls an HTTP
-dependency), so the standard binary stays tiny and offline:
+auto-builds the fact↔topic graph. The backend is compiled into the default
+binary but stays off at runtime until you configure it:
 
 ```bash
-cargo build --release -p velesdb-memory --features extract
 VELESDB_MEMORY_EXTRACTOR=ollama \
 VELESDB_MEMORY_EXTRACTOR_MODEL=qwen3.6:35b-mlx \
   /path/to/velesdb-memory
 ```
 
-Env vars: `VELESDB_MEMORY_EXTRACTOR` (`ollama` to enable),
-`VELESDB_MEMORY_EXTRACTOR_URL` (default `http://localhost:11434`),
-`VELESDB_MEMORY_EXTRACTOR_MODEL` (required, a generative model). Without a
+Env vars: `VELESDB_MEMORY_EXTRACTOR` (`outline`, `ollama` or `openai`),
+`VELESDB_MEMORY_EXTRACTOR_URL` (default `http://localhost:11434` for `ollama`,
+**required** for `openai`, unused by `outline`),
+`VELESDB_MEMORY_EXTRACTOR_MODEL` (a generative model — required for `ollama`
+and `openai`, unused by `outline`), `VELESDB_MEMORY_EXTRACTOR_API_TOKEN`
+(optional; when unset, **no** `Authorization` header is sent). Without a
 backend the tool returns a clear "not configured" error.
 
-To plug a different model, implement the dependency-free `Extractor` trait and
-pass it to `MemoryService::remember_extracted` from Rust.
+`openai` is the same OpenAI-compatible protocol described under
+[Embedding backend](#embedding-backend), reached over
+`/v1/chat/completions`:
+
+```bash
+VELESDB_MEMORY_EXTRACTOR=openai \
+VELESDB_MEMORY_EXTRACTOR_URL=http://127.0.0.1:8019 \
+VELESDB_MEMORY_EXTRACTOR_MODEL=your-model \
+  /path/to/velesdb-memory
+```
+
+**The two roles are configured independently** — nothing requires them to share
+a backend, a server or a token. Embedding on a local Ollama while extracting on
+an OpenAI-compatible server is a supported combination, not an accident:
+
+```bash
+VELESDB_MEMORY_EMBEDDER=ollama \
+VELESDB_MEMORY_EMBEDDER_MODEL=bge-m3 \
+VELESDB_MEMORY_EXTRACTOR=openai \
+VELESDB_MEMORY_EXTRACTOR_URL=http://127.0.0.1:8019 \
+VELESDB_MEMORY_EXTRACTOR_MODEL=your-model \
+  /path/to/velesdb-memory
+```
+
+The two backends are **not** interchangeable:
+
+- **`ollama`** runs a local generative model that **infers** the facts, entity
+  edges and attributes a passage states. It needs that model running — the
+  backend itself is compiled into the default binary.
+- **`outline`** is deterministic and fully offline — no model, no network, and
+  **no extra build feature**, so it works in the default binary. But it only
+  reads structure written out **explicitly**, one directive per line (`fact:`,
+  `edge:`, `attr:`). Free prose handed to it becomes plain facts with no graph
+  around them.
+
+Choose `outline` when you control the input format, or to get a graph at all
+without running a model; choose `ollama` when the input is prose nobody is
+going to reformat.
+
+To plug a different backend entirely, implement the dependency-free `Extractor`
+trait and pass it to `MemoryService::remember_extracted` from Rust.
 
 ---
 
-Last updated: 2026-07-25 · Applies to: velesdb-memory 0.11.6
+Last updated: 2026-07-25 · Applies to: velesdb-memory 0.12.0

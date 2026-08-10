@@ -1,11 +1,12 @@
 //! Tests for DDL and extended DML executor (Phase 5).
 
 use super::*;
+use crate::collection::graph::EdgeRemoval;
 use crate::velesql::{
     AlterCollectionStatement, CompareOp, Comparison, Condition, CreateCollectionKind,
     CreateCollectionStatement, DdlStatement, DeleteEdgeStatement, DeleteStatement, DmlStatement,
     DropCollectionStatement, GraphCollectionParams, GraphSchemaMode, InCondition,
-    InsertEdgeStatement, Query, SchemaDefinition, SelectEdgesStatement, Value,
+    InsertEdgeStatement, Query, SchemaDefinition, SelectEdgesStatement, TruncateStatement, Value,
     VectorCollectionParams,
 };
 use crate::wire::hash_edge_id;
@@ -513,6 +514,180 @@ fn test_delete_edge_nonexistent_reports_false() {
     let payload = results[0].point.payload.as_ref().expect("payload");
     assert_eq!(payload["deleted"], false);
     assert_eq!(payload["edge_id"], 999);
+}
+
+#[test]
+fn test_truncate_graph_reports_actual_removed_edge_count() {
+    let dir = tempdir().expect("tempdir");
+    let db = Database::open(dir.path()).expect("open");
+
+    let create = DdlStatement::CreateCollection(CreateCollectionStatement {
+        name: "truncate_g".to_string(),
+        kind: CreateCollectionKind::Graph(GraphCollectionParams {
+            dimension: None,
+            metric: None,
+            schema_mode: GraphSchemaMode::Schemaless,
+        }),
+    });
+    execute_ddl(&db, create).expect("create graph");
+
+    let gc = db.get_graph_collection("truncate_g").expect("get");
+    for id in [10, 20, 30] {
+        gc.upsert_node_payload(id, &serde_json::json!({}))
+            .expect("store node");
+    }
+    gc.add_edge(crate::GraphEdge::new(1, 10, 20, "A").expect("edge"))
+        .expect("add 1");
+    gc.add_edge(crate::GraphEdge::new(2, 20, 30, "B").expect("edge"))
+        .expect("add 2");
+    assert_eq!(gc.edge_count(), 2);
+
+    let ddl = DdlStatement::Truncate(TruncateStatement {
+        collection: "truncate_g".to_string(),
+    });
+    let results = execute_ddl(&db, ddl).expect("truncate");
+    assert_eq!(results.len(), 1);
+    let payload = results[0].point.payload.as_ref().expect("payload");
+
+    // Nominal-path coverage: no prior execution-level test existed for
+    // TRUNCATE on a graph collection. The counting invariant under a
+    // `remove_edge` failure is proven separately, deterministically, by
+    // `test_count_successful_removals_counts_only_successes_without_short_circuiting`
+    // below — that failure mode can't be triggered from this black-box path.
+    assert_eq!(payload["deleted_edges"], 2);
+    assert_eq!(payload["deleted_nodes"], 3);
+    assert_eq!(payload["deleted_count"], 5);
+    assert_eq!(gc.edge_count(), 0);
+    assert_eq!(gc.get_edges(None).len(), 0);
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn test_truncate_graph_fails_loudly_when_an_edge_removal_fails() {
+    // #1749: TRUNCATE used to return Ok even when an edge could not be
+    // removed — the edge half swallowed its failures while the node half, in
+    // the same function, propagated its own. This drives the real executor
+    // against a real failure: the edges are healthy and listed, but their
+    // removal cannot be made durable, so the store is left unmutated.
+    let dir = tempdir().expect("tempdir");
+    let db = Database::open(dir.path()).expect("open");
+
+    let create = DdlStatement::CreateCollection(CreateCollectionStatement {
+        name: "truncate_fail".to_string(),
+        kind: CreateCollectionKind::Graph(GraphCollectionParams {
+            dimension: None,
+            metric: None,
+            schema_mode: GraphSchemaMode::Schemaless,
+        }),
+    });
+    execute_ddl(&db, create).expect("create graph");
+
+    let gc = db.get_graph_collection("truncate_fail").expect("get");
+    for id in [10, 20, 30] {
+        gc.upsert_node_payload(id, &serde_json::json!({}))
+            .expect("store node");
+    }
+    gc.add_edge(crate::GraphEdge::new(1, 10, 20, "A").expect("edge"))
+        .expect("add 1");
+    gc.add_edge(crate::GraphEdge::new(2, 20, 30, "B").expect("edge"))
+        .expect("add 2");
+    assert_eq!(gc.edge_count(), 2);
+
+    gc.break_edge_wal_for_test().expect("break the edge WAL");
+
+    let ddl = DdlStatement::Truncate(TruncateStatement {
+        collection: "truncate_fail".to_string(),
+    });
+    let err = execute_ddl(&db, ddl).expect_err("TRUNCATE must NOT report success");
+
+    let message = err.to_string();
+    // `get_edges` iterates a hash map, so either edge may be attempted first —
+    // asserting a specific id here would make this test order-dependent.
+    assert!(
+        message.contains("failed on edge 1") || message.contains("failed on edge 2"),
+        "the error must name the edge that failed, got: {message}"
+    );
+    assert!(
+        message.contains("removed 0 of 2 edges"),
+        "the error must say what WAS removed before the failure, got: {message}"
+    );
+    assert!(
+        message.contains("write-ahead log refused"),
+        "the error must say WHY the removal failed, got: {message}"
+    );
+
+    // Fail-closed: a removal that could not be logged must not be applied.
+    assert_eq!(
+        gc.edge_count(),
+        2,
+        "edges must survive a removal that could not be made durable"
+    );
+    // The nodes must survive too: deleting them anyway is exactly what turns a
+    // surviving edge into a dangling one pointing at ids that no longer exist.
+    assert_eq!(
+        gc.all_node_ids().len(),
+        3,
+        "nodes must be left in place when an edge removal fails"
+    );
+}
+
+#[test]
+fn test_remove_edges_counts_only_successes_without_short_circuiting() {
+    // Regression test for the TRUNCATE edge-count bug: the previous
+    // implementation used `edges.len()` regardless of whether each
+    // `remove_edge` call actually succeeded. This drives the extracted
+    // removal logic directly with an injected, deterministic outcome —
+    // no fault injection into the graph storage layer required.
+    //
+    // An edge that was already gone is NOT a failure: the contract tolerates
+    // removing an absent edge, and this test pins that down.
+    let attempted = std::cell::RefCell::new(Vec::new());
+    let (count, failure) =
+        super::ddl_executor::remove_edges_reporting_failure([1, 2, 3, 4].into_iter(), |id| {
+            attempted.borrow_mut().push(id);
+            if id % 2 == 0 {
+                EdgeRemoval::Removed
+            } else {
+                EdgeRemoval::Absent // as if `remove_edge` reported it missing
+            }
+        });
+
+    assert_eq!(count, 2, "only ids the removal succeeded on should count");
+    assert_eq!(failure, None, "an absent edge is not a failure");
+    assert_eq!(
+        *attempted.borrow(),
+        vec![1, 2, 3, 4],
+        "every id must be attempted — a failure must not skip the rest"
+    );
+}
+
+#[test]
+fn test_remove_edges_reports_first_failure_after_attempting_every_id() {
+    // #1749: a genuine `remove_edge` failure must NOT be swallowed. The
+    // helper reports the first real failure while still attempting every
+    // remaining id, so a mid-list failure never strands the rest.
+    let attempted = std::cell::RefCell::new(Vec::new());
+    let (count, failure) =
+        super::ddl_executor::remove_edges_reporting_failure([1, 2, 3, 4].into_iter(), |id| {
+            attempted.borrow_mut().push(id);
+            match id {
+                2 => EdgeRemoval::Failed("index desync".to_string()),
+                3 => EdgeRemoval::Failed("second failure, must not mask the first".to_string()),
+                _ => EdgeRemoval::Removed,
+            }
+        });
+
+    assert_eq!(count, 2, "ids 1 and 4 were removed");
+    assert_eq!(
+        failure,
+        Some((2, "index desync".to_string())),
+        "the FIRST genuine failure must be reported, never dropped"
+    );
+    assert_eq!(
+        *attempted.borrow(),
+        vec![1, 2, 3, 4],
+        "a failure must not short-circuit the remaining removals"
+    );
 }
 
 // =========================================================================

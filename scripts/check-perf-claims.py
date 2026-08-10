@@ -113,11 +113,21 @@ def _is_quality_label(normalised: str) -> bool:
 # ---------------------------------------------------------------------------
 
 # Table row: | **Label** | value unit | ...
-# We match exactly the first value cell after the label cell to avoid
-# picking up per-unit qualifiers in later cells (e.g. "6.8 µs/doc").
-# The value cell must start with optional whitespace then digits.
+#
+# ANCHORED at the start of the line, and used with `match`, never `finditer`.
+# The comment here used to claim it matched "exactly the first value cell" —
+# it did not, and that was the whole of #1701. On a multi-column row like
+#   | **Dot Product** | 5.4 ns | 10.7 ns | 21.8 ns |
+# `finditer` matched again from the second cell onward, taking the PREVIOUS
+# VALUE CELL as the label: the grouping key became `simd kernel latency 10 7
+# ns`. A key that contains its own value can never collide with another
+# claim about the same benchmark, so the comparison loop had nothing to
+# compare and the only `exit 1` path was unreachable.
+#
+# Measured on this repository: 80 claims and 0 comparable groups before,
+# 41 claims and 0 keys embedding a value after.
 _TABLE_LABEL_RE = re.compile(
-    r"\|\s*\*{0,2}([^|*]{4,60}?)\*{0,2}\s*\|\s*([\d.,]+)\s*"
+    r"^\s*\|\s*\*{0,2}([^|*]{4,60}?)\*{0,2}\s*\|\s*([\d.,]+)\s*"
     r"(µs|us|ms|ns|Gelem/s|K\s*QPS|QPS)\b",
     re.IGNORECASE,
 )
@@ -195,8 +205,10 @@ def _extract_from_line(
                 return True
         return False
 
-    # 1. Table rows — highest fidelity, process first
-    for m in _TABLE_LABEL_RE.finditer(line):
+    # 1. Table rows — highest fidelity, process first. ONE per row: the row
+    # names one benchmark, and its later cells are other columns of the same
+    # measurement, not other benchmarks (#1701).
+    for m in filter(None, [_TABLE_LABEL_RE.match(line)]):
         if _overlaps(m.span()):
             continue
         label_raw, num_raw, unit = m.group(1), m.group(2), m.group(3)
@@ -513,11 +525,34 @@ def _val_str(result: ConsistencyResult) -> str:
 # ---------------------------------------------------------------------------
 
 
-def main() -> int:
+def main(argv: "list[str] | None" = None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Audit performance claims.")
+    parser.add_argument(
+        "--no-criterion",
+        action="store_true",
+        help="skip the Criterion cross-reference (it never feeds the exit code)",
+    )
+    parser.add_argument(
+        "--root",
+        default=None,
+        help="directory holding the documents to audit, instead of this "
+        "repository. What lets a refusal vector be handed to the guard as a "
+        "PROCESS (#1715): today's corpus produces no comparable group at all, "
+        "so nothing else can show the exit-1 path is reachable.",
+    )
+    args = parser.parse_args(argv)
+
     print("=== Performance Claims Audit ===\n")
 
-    existing = [p for p in DOC_FILES if p.exists()]
-    missing = [p for p in DOC_FILES if not p.exists()]
+    doc_files = DOC_FILES
+    if args.root:
+        root = Path(args.root)
+        doc_files = [root / p.relative_to(ROOT) for p in DOC_FILES]
+
+    existing = [p for p in doc_files if p.exists()]
+    missing = [p for p in doc_files if not p.exists()]
 
     print(f"Scanning {len(existing)} documentation file(s)...")
     for p in missing:
@@ -562,7 +597,11 @@ def main() -> int:
                 f"-- {result.diff_pct * 100:.1f}% diff (FLAGGED)"
             )
 
-    consistent_count += len(single_source)
+    # NOT folded into consistent_count: a claim that appears in exactly one
+    # document was never compared to anything. Counting it as "Consistent"
+    # is how this audit reported "Consistent: 80" while comparing zero
+    # claims (#1701) — a coherence it had not verified.
+    uncompared_count = len(single_source)
     print()
 
     # Criterion cross-reference
@@ -602,9 +641,12 @@ def main() -> int:
     total = len(all_claims)
     print("=== Summary ===")
     print(f"Claims found: {total}")
-    print(f"Consistent: {consistent_count}")
-    print(f"Minor inconsistencies (<15%): {minor_count}")
-    print(f"Major inconsistencies (>15%): {major_count}")
+    print(f"Compared and consistent: {consistent_count}")
+    print(f"Never compared (a single source names them): {uncompared_count}")
+    print(
+        f"Minor inconsistencies (<= {MAJOR_THRESHOLD:.0%}): {minor_count}"
+    )
+    print(f"Major inconsistencies (> {MAJOR_THRESHOLD:.0%}): {major_count}")
     print()
 
     if major_count > 0:

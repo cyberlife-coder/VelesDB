@@ -17,7 +17,8 @@ use std::collections::HashMap;
 
 use serde_json::{Map, Value};
 use velesdb_memory::{
-    ColumnFilter, ColumnOp, MemoryEdge, MemoryError, MemoryStore, Metadata, Recollection,
+    column_value_matches, BoundedMemoryEdges, ColumnFilter, MemoryEdge, MemoryError, MemoryStore,
+    Metadata, Recollection,
 };
 
 use crate::graph_store::WasmGraphStore;
@@ -270,7 +271,16 @@ impl MemoryStore for WasmStore {
             embedding,
             k,
             0,
-            |payload| columnar_matches(payload, filters),
+            // Internal scaffolding is excluded by the PRESENCE of its marker,
+            // checked on the raw payload before it is stripped. This backend
+            // cannot express the exclusion as a `ColumnFilter` the way the
+            // native one does: `columnar_matches` is `is_some_and`, so a
+            // `marker != true` predicate would demand the field be present
+            // and black out every caller fact instead.
+            |payload| {
+                !velesdb_memory::storage::is_internal_scaffolding(payload)
+                    && columnar_matches(payload, filters)
+            },
             |id, score, fact| Recollection {
                 id,
                 score,
@@ -329,6 +339,49 @@ impl MemoryStore for WasmStore {
             .filter(|e| e.target == id && inner.live_fact(e.source).is_some())
             .map(to_memory_edge)
             .collect())
+    }
+
+    fn relations_bounded(&self, id: u64, cap: usize) -> Result<BoundedMemoryEdges, MemoryError> {
+        let inner = self.inner.borrow();
+        // This store has no adjacency index, so the SCAN is O(total edges)
+        // either way — what the bound guarantees here is the ALLOCATION:
+        // at most `cap` edges are materialized, and `truncated` compares the
+        // node's full stored degree against the cap exactly as the native
+        // backend does (TTL-dead edges inside the window are dropped without
+        // being replaced, same contract).
+        let mut total = 0usize;
+        let mut edges = Vec::new();
+        for e in inner.graph.edges().iter().filter(|e| e.source == id) {
+            total += 1;
+            if total <= cap && inner.live_fact(e.target).is_some() {
+                edges.push(to_memory_edge(e));
+            }
+        }
+        Ok(BoundedMemoryEdges {
+            edges,
+            truncated: total > cap,
+        })
+    }
+
+    fn incoming_relations_bounded(
+        &self,
+        id: u64,
+        cap: usize,
+    ) -> Result<BoundedMemoryEdges, MemoryError> {
+        let inner = self.inner.borrow();
+        // Mirror of `relations_bounded`: the far end is the SOURCE here.
+        let mut total = 0usize;
+        let mut edges = Vec::new();
+        for e in inner.graph.edges().iter().filter(|e| e.target == id) {
+            total += 1;
+            if total <= cap && inner.live_fact(e.source).is_some() {
+                edges.push(to_memory_edge(e));
+            }
+        }
+        Ok(BoundedMemoryEdges {
+            edges,
+            truncated: total > cap,
+        })
     }
 
     fn unrelate(&self, edge_id: u64) -> Result<bool, MemoryError> {
@@ -430,44 +483,19 @@ impl WasmStore {
 }
 
 /// True when every filter in `filters` is satisfied by `payload` (AND-combined).
+///
+/// The per-value rule is [`velesdb_memory::column_value_matches`], not a copy
+/// of it: this backend and the `VelesQL`-translating one each carrying their
+/// own is exactly how `ne` came to mean two different things (#1759). A field
+/// this payload does not carry satisfies nothing, which — with the shared
+/// rule's refusal of a stored `null` — is the published contract: present,
+/// non-null, and comparing true.
 fn columnar_matches(payload: &Map<String, Value>, filters: &[ColumnFilter]) -> bool {
     filters.iter().all(|filter| {
         payload
             .get(&filter.field)
-            .is_some_and(|value| compare(value, filter.op, &filter.value))
+            .is_some_and(|value| column_value_matches(value, filter.op, &filter.value))
     })
-}
-
-/// Evaluate one [`ColumnOp`] between a stored payload value and the filter's
-/// value: numeric comparison when both are numbers, lexicographic when both
-/// are strings, equality-only otherwise (matches `VelesQL`'s scalar-comparison
-/// semantics for the types `MemoryService::recall_where` accepts).
-fn compare(stored: &Value, op: ColumnOp, target: &Value) -> bool {
-    if let (Some(a), Some(b)) = (stored.as_f64(), target.as_f64()) {
-        return match op {
-            ColumnOp::Eq => (a - b).abs() < f64::EPSILON,
-            ColumnOp::Ne => (a - b).abs() >= f64::EPSILON,
-            ColumnOp::Lt => a < b,
-            ColumnOp::Le => a <= b,
-            ColumnOp::Gt => a > b,
-            ColumnOp::Ge => a >= b,
-        };
-    }
-    if let (Some(a), Some(b)) = (stored.as_str(), target.as_str()) {
-        return match op {
-            ColumnOp::Eq => a == b,
-            ColumnOp::Ne => a != b,
-            ColumnOp::Lt => a < b,
-            ColumnOp::Le => a <= b,
-            ColumnOp::Gt => a > b,
-            ColumnOp::Ge => a >= b,
-        };
-    }
-    match op {
-        ColumnOp::Eq => stored == target,
-        ColumnOp::Ne => stored != target,
-        _ => false,
-    }
 }
 
 #[cfg(test)]

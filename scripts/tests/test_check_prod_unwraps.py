@@ -1,6 +1,6 @@
 """Tests for scripts/check_prod_unwraps.py.
 
-Pins two audit contracts:
+Pins three audit contracts:
 
 * F-3.10 — every production crate's `src/` is in the scan set (bindings and
   adapters were historically excluded, leaving an unwrap/expect blind spot).
@@ -9,6 +9,14 @@ Pins two audit contracts:
   gate. The old exact-string match only handled bare `#[cfg(test)]`, so
   `.expect()` calls inside those gated test modules were reported as false
   positives (e.g. velesdb-memory/src/reinforce.rs).
+* F-3.12 — a `///` line whose "```" is prose (an inline code span
+  double-backtick-escaping a literal triple backtick, not a fence marker)
+  must not toggle doc-example tracking. The old substring check
+  (`"```" in stripped`) treated any occurrence as a fence open, got stuck
+  "inside" a doc example with no closing fence for the rest of the file, and
+  silently exempted every remaining line — including real functions — from
+  the unwrap/expect scan (found live in velesdb-memory/src/context/
+  segment.rs, which was hiding a production `.expect()` this way).
 """
 
 from __future__ import annotations
@@ -109,6 +117,140 @@ class TestScanFileStopsAtCompositeTestGate(unittest.TestCase):
 
     def tearDown(self) -> None:
         self._tmpdir.cleanup()
+
+
+class TestGatedBlockIsSkippedNotTheRestOfTheFile(unittest.TestCase):
+    """The two causes of #1700, each pinned on the shape that exposed it.
+
+    The old scanner did `break` on the first ``#[cfg(test)]`` marker: 33 914
+    production lines across 51 files were never read, and the break sat
+    BEFORE comment tracking, so a marker merely QUOTED in a ``/* */`` comment
+    blinded the whole file. Measured after the fix: those lines contain zero
+    production unwrap/expect — the blindness was real, the pile was not.
+    """
+
+    def setUp(self) -> None:
+        import tempfile
+
+        self._tmpdir = tempfile.TemporaryDirectory()
+
+    def tearDown(self) -> None:
+        self._tmpdir.cleanup()
+
+    def _hits(self, content: str) -> "list[tuple[int, str]]":
+        tmp = Path(self._tmpdir.name) / "case.rs"
+        tmp.write_text(content, encoding="utf-8")
+        return cpu.scan_file(tmp)
+
+    def test_production_code_after_a_gated_mod_is_read(self) -> None:
+        # Cause 1, the 33 914-line blindness itself.
+        hits = self._hits(
+            "fn a() {}\n"
+            "#[cfg(test)]\n"
+            "mod tests {\n"
+            "    fn t() { x.unwrap(); }\n"
+            "}\n"
+            "pub fn b() { y.unwrap(); }\n"
+        )
+        self.assertEqual([line for line, _ in hits], [6])
+
+    def test_a_marker_quoted_in_a_block_comment_does_not_blind_the_file(self) -> None:
+        # Cause 2: the break ran before comment tracking.
+        hits = self._hits("/*\n * #[cfg(test)]\n */\npub fn b() { y.unwrap(); }\n")
+        self.assertEqual([line for line, _ in hits], [4])
+
+    def test_unwrap_inside_the_gated_mod_stays_invisible(self) -> None:
+        # The positive control: the fix must not start flagging test code.
+        hits = self._hits("#[cfg(test)]\nmod tests {\n    fn t() { x.unwrap(); }\n}\n")
+        self.assertEqual(hits, [])
+
+    def test_an_attribute_stack_between_gate_and_item_is_followed(self) -> None:
+        hits = self._hits(
+            "#[cfg(test)]\n#[allow(dead_code)]\nmod tests {\n"
+            "    fn t() { x.unwrap(); }\n}\npub fn b() { y.unwrap(); }\n"
+        )
+        self.assertEqual([line for line, _ in hits], [6])
+
+    def test_a_gated_mod_declaration_without_body_swallows_nothing(self) -> None:
+        hits = self._hits("#[cfg(test)]\nmod tests;\npub fn b() { y.unwrap(); }\n")
+        self.assertEqual([line for line, _ in hits], [3])
+
+    def test_braces_inside_strings_do_not_derail_the_depth(self) -> None:
+        hits = self._hits(
+            "#[cfg(test)]\nmod tests {\n"
+            '    const S: &str = "{{{";\n'
+            "    fn t() { x.unwrap(); }\n}\npub fn b() { y.unwrap(); }\n"
+        )
+        self.assertEqual([line for line, _ in hits], [6])
+
+    def test_production_between_two_gated_mods_is_read(self) -> None:
+        # A one-line gated item opens AND closes its braces on the same line:
+        # net depth 0, but the item is over — the first fix draft kept
+        # waiting and swallowed everything after it.
+        hits = self._hits(
+            "#[cfg(test)]\nmod t1 { fn a() { x.unwrap(); } }\n"
+            "pub fn mid() { y.unwrap(); }\n"
+            "#[cfg(test)]\nmod t2 { fn b() { z.unwrap(); } }\n"
+        )
+        self.assertEqual([line for line, _ in hits], [3])
+
+
+class TestDocFenceMarker(unittest.TestCase):
+    def test_bare_fence_open_is_a_marker(self) -> None:
+        self.assertTrue(cpu.is_doc_fence_marker("/// ```"))
+
+    def test_fence_open_with_language_tag_is_a_marker(self) -> None:
+        self.assertTrue(cpu.is_doc_fence_marker("/// ```rust"))
+
+    def test_double_backtick_escaped_literal_is_not_a_marker(self) -> None:
+        # segment.rs:112 / chunk.rs:87 — prose *about* the fence sequence,
+        # not a fence itself.
+        self.assertFalse(
+            cpu.is_doc_fence_marker("/// `` ``` `` (defense in depth).")
+        )
+
+    def test_non_doc_comment_is_not_a_marker(self) -> None:
+        self.assertFalse(cpu.is_doc_fence_marker('//! `` ``` ``'))
+
+
+class TestScanFileDocFenceFalsePositive(unittest.TestCase):
+    """F-3.12: a prose-only ``` inside a `///` line must not blind the rest
+    of the file's scan (regression for the segment.rs live finding)."""
+
+    def setUp(self) -> None:
+        import tempfile
+
+        self._tmpdir = tempfile.TemporaryDirectory()
+
+    def tearDown(self) -> None:
+        self._tmpdir.cleanup()
+
+    def test_expect_after_an_escaped_triple_backtick_comment_is_flagged(
+        self,
+    ) -> None:
+        content = (
+            "/// `` ``` `` (defense in depth; it usually does).\n"
+            "pub fn a() {}\n"
+            "\n"
+            "fn merge_tiny() {\n"
+            '    merged.last_mut().expect("checked non-empty above");\n'
+            "}\n"
+        )
+        tmp = Path(self._tmpdir.name) / "segment_like.rs"
+        tmp.write_text(content, encoding="utf-8")
+        hits = cpu.scan_file(tmp)
+        self.assertEqual([line for line, _ in hits], [5])
+
+    def test_a_real_fenced_example_still_hides_its_contents(self) -> None:
+        content = (
+            "/// ```\n"
+            "/// let v = x.unwrap();\n"
+            "/// ```\n"
+            "pub fn a() {}\n"
+        )
+        tmp = Path(self._tmpdir.name) / "real_fence.rs"
+        tmp.write_text(content, encoding="utf-8")
+        self.assertEqual(cpu.scan_file(tmp), [])
 
 
 class TestScanDirsCoverage(unittest.TestCase):

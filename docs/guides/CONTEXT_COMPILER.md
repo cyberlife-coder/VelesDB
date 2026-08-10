@@ -61,9 +61,9 @@ Per compilation:
 |---|---|
 | **MCP server** | the full set: `compile_context`, `compile_transcript`, `explain_compilation`, `retrieve_context_source`, `context_savings`, `suggest_budget`, `save_working_context`, `load_working_context`, `list_working_contexts` |
 | **Rust** (`velesdb_memory::context`) | the full set, plus the Rust-only `compile_context_reranked`; `compile_transcript` is composed by hand from `context::segment_transcript` + `ContextCompiler` / `MemoryService::compile_context` |
-| **Node** (`@wiscale/velesdb-memory-node`) | `compileContext`, `retrieveContextSource`, `save`/`loadWorkingContext`, `feedback` — no `context_savings`, no `explain_compilation`, no one-call `compileTranscript` yet |
-| **Python** (`from velesdb import MemoryService`) | `compile_context`, `retrieve_context_source`, `context_savings`, `save`/`load_working_context`, `feedback` merged on `develop` (no `explain_compilation`, no one-call transcript helper) — **the published PyPI wheel predates all of it** |
-| **WASM** | `compileContext` (media fragments compile, dedup, and cost correctly on the in-memory `WasmStore`); `retrieveContextSource` is not exposed, and `path` ingestion is compiled out entirely |
+| **Node** (`@wiscale/velesdb-memory-node`) | the full set: `compileContext`, `compileTranscript`, `explainCompilation`, `retrieveContextSource`, `contextSavings`, `suggestBudget`, `save`/`load`/`listWorkingContexts` |
+| **Python** (`from velesdb import MemoryService`) | the full set: `compile_context`, `compile_transcript`, `explain_compilation`, `retrieve_context_source`, `context_savings`, `suggest_budget`, `save`/`load`/`list_working_contexts` — check the published wheel's version before assuming it carries the newest of these |
+| **WASM** | the full set: `compileContext`, `compileTranscript`, `explainCompilation`, `retrieveContextSource`, `contextSavings`, `suggestBudget`, `save`/`load`/`listWorkingContexts`. Media fragments compile, dedup and cost correctly on the in-memory `WasmStore`; `path` ingestion is compiled out entirely |
 
 Until the next PyPI release, Python agents reach the compiler through the MCP
 server. Any MCP-speaking client gets the full surface regardless of language.
@@ -206,8 +206,13 @@ fragment — stability wins over relevance, but only for cache-marked fragments.
 
 `warnings` is a mechanical, low-noise shortlist over `decisions`: every
 externalized fragment relevant enough to the query that it is worth a second
-look. Reading `decisions` by hand is only needed when `warnings` is non-empty
-and still ambiguous.
+look.
+
+An **empty `warnings` is not a clean bill of health.** Only `retrieve`
+decisions at or above a relevance floor ever qualify, so two real losses never
+show up there: a `preserve` fragment the packer could only fit partially, and
+an abstracted one. `decisions` stays the exhaustive record; `risk` is the cheap
+second signal when you do not want to read it entry by entry.
 
 `insights.tokens_saved` is a **local estimate**. It is calibrated against a
 real BPE (cl100k) to deliberately over-count every measured content class
@@ -353,8 +358,9 @@ caption, often empty for a bare screenshot.
   — never the caption, so two different images always get two distinct,
   independently resolving handles even when both captions are blank, and
   byte-identical images share one handle. With `policy.store_sources` (the
-  default), `retrieve_context_source(handle)` returns `{content, media?}` with
-  `media` present whenever the original fragment carried one. Media is embedded
+  default), `retrieve_context_source(handle)` returns `{content, handle,
+  media}` — `handle` echoing back the one resolved, `media` non-null whenever
+  the original fragment carried one. Media is embedded
   with a deterministic placeholder vector derived from its bytes' hash, never
   through the text embedder: resolution is by content-addressed hash only,
   never by vector search. The bare `ContextCompiler` (no memory attached) still
@@ -373,9 +379,9 @@ caption, often empty for a bare screenshot.
   optional `media` on the retrieve result are both *advertised* in the schemas,
   not merely accepted), the Python binding, the Node binding
   ([`compileContext` / `retrieveContextSource`](../../crates/velesdb-node/README.md),
-  same `{handle, content, media?}` shape), and WASM's `compileContext`
-  (`retrieveContextSource` is not exposed on WASM, so resolving a media handle
-  back to bytes *within* a wasm session is Node/Python/MCP-only for now).
+  same `{handle, content, media?}` shape), and WASM — which exposes
+  `retrieveContextSource` too (`crates/velesdb-wasm/src/memory_service.rs:831`),
+  so resolving a media handle back to bytes works in a wasm session as well.
 
 Minimal end-to-end example — the exact calls
 [`mcp_e2e.py`](../../crates/velesdb-memory/examples/context_savings/real_measures/mcp_e2e.py)
@@ -422,8 +428,10 @@ disables the field entirely: every `path` fragment then fails with
 
 Every `path` fragment runs the same ordered, short-circuiting pipeline:
 
-1. A fragment may set exactly one of `path`, non-empty `content`, or `media` —
-   checked first, independent of whether ingestion is enabled.
+1. `path` is **exclusive** — it is resolved *into* `content`, so a fragment
+   setting both is rejected — while `content` and `media` **may** travel
+   together (an image and its caption). A fragment carrying none of the three
+   is rejected too. Checked first, independent of whether ingestion is enabled.
 2. The path must be **absolute**; an MCP server's working directory is not
    something a caller can rely on. A relative path is rejected outright.
 3. [`std::fs::canonicalize`](https://doc.rust-lang.org/std/fs/fn.canonicalize.html)
@@ -694,11 +702,11 @@ otherwise it exits with an explicit message.
 ## The `PostToolUse` hook
 
 [`integrations/agent-hooks/`](../../integrations/agent-hooks/README.md) ships
-four Claude Code hooks. Three of them (`SessionStart`, `Stop`, `PreCompact`)
-can only *nudge*: they hand the model a reason string and hope it calls the
-right tool, so whether the context actually shrinks stays the model's
-decision. See [Agent Memory → harness hooks](AGENT_MEMORY.md#agent-harness-hooks-mcp-server-path)
-for the full table.
+five Claude Code hooks. Three (`SessionStart`, `Stop`, `PreCompact`) are
+advisory continuations: they ask the model to call the corresponding memory or
+compiler tool. `PreToolUse` is binding for opted-in repositories, but only for
+recall-before-edit; it does not shrink context. See [Agent Memory → harness
+hooks](AGENT_MEMORY.md#agent-harness-hooks-mcp-server-path) for the full table.
 
 `PostToolUse` is different. Its output schema carries replacement content
 (`hookSpecificOutput.updatedToolOutput`), so an oversized tool result is
@@ -706,17 +714,20 @@ compiled **once**, and the compiled view is what enters the transcript. The
 bulky original is therefore never re-sent on any later turn.
 
 Compilation runs in a separate, store-free process (`velesdb-memory
-compile-stdin`, above). Three rules keep it safe on *every* tool call, each
+compile-stdin`, above). Four rules keep it safe on *every* tool call, each
 covered by
 [`integrations/agent-hooks/test/hooks.test.sh`](../../integrations/agent-hooks/test/hooks.test.sh):
 
-- **Nothing is deleted.** The untouched original is archived under
-  `$TMPDIR/velesdb-agent-hooks/tool-output/` and its path is quoted in the
-  replacement, so the agent can `Read` it back whenever the compiled view is
-  not enough.
-- **Strict allowlist.** `Bash`, `Grep`, `WebFetch` by default. `Read` and
-  `Edit` are deliberately excluded and must stay excluded — their value *is*
-  the exact bytes.
+- **Nothing is deleted.** The complete original Bash output object is
+  serialized as JSON under `$TMPDIR/velesdb-agent-hooks-$UID/tool-output/` and its
+  path is quoted in the replacement, so the agent can `Read` it back whenever
+  the compiled view is not enough.
+- **Strict schema allowlist.** Only `Bash` is enabled because its structured
+  output is documented and contract-tested. `Grep` and `WebFetch` remain off
+  until their host schemas are pinned; `Read` and `Edit` stay excluded because
+  their value *is* the exact bytes.
+- **Positive net gain.** A faithful compilation still passes through unless
+  its gross saving covers every footer byte plus a 128-token safety margin.
 - **Identity fallback everywhere.** Missing `jq`, a missing or too-old binary,
   a compilation error, an empty compiled result — each one leaves the tool
   result exactly as it was.
@@ -725,16 +736,29 @@ Tuning knobs:
 
 | Variable | Default | Effect |
 |---|---|---|
-| `VELESDB_HOOK_COMPRESS_TOOLS` | `Bash,Grep,WebFetch` | Comma-separated tool allowlist. |
+| `VELESDB_HOOK_COMPRESS_TOOLS` | `Bash` | May disable `Bash`; it cannot opt an unverified built-in output schema into replacement. |
 | `VELESDB_HOOK_MIN_BYTES` | `12000` | Below this, pass through — compiling would cost more than it saves. |
+| `VELESDB_HOOK_MIN_SAVED_TOKENS` | `128` | Minimum conservative net saving after counting each footer byte as one token. |
 | `VELESDB_HOOK_TOKEN_BUDGET` | `2000` | Token budget handed to `compile-stdin`. |
+| `VELESDB_HOOK_TOKEN_BUDGET_MAX` | twice `VELESDB_HOOK_TOKEN_BUDGET` | Ceiling a `risk: high` compilation may retry at. Equal to the budget forbids the retry. |
 | `VELESDB_HOOK_PROBE_TIMEOUT` | `10` | Seconds the capability probe may take. |
+
+> **The hook refuses a `risk: high` compilation.** It retries once at the
+> ceiling — a 268 KB cargo log is `high` at 2 000 tokens and `medium` at
+> 4 000 — and if the ceiling does not rescue it, leaves the tool result
+> byte-identical. This matters more here than on the MCP path: `compile-stdin`
+> runs with no store and no bridge, so the `ctx://source/…` handles it mints
+> resolve to nothing, and the archived temp file is the only way back to what
+> was dropped. Only explicit `risk: low` and `risk: medium` results may replace
+> a tool result; a missing, unknown, or non-string verdict fails closed to the
+> host-provided original.
 
 > **`updatedToolOutput` is Claude-Code-specific.** No other agent harness is
 > known to expose an equivalent field — Windsurf's post-hooks cannot alter a
-> result at all, and Codex, which does have lifecycle hooks, documents no
-> replacement field (A VERIFIER). So this hook is a Claude Code *bonus*, not
-> the portable core of velesdb-memory; the portable value stays the MCP tool
+> result at all, and Codex, whose current hook contract was checked and
+> measured on 2026-08-04, exposes no replacement field. So this hook is a
+> Claude Code *bonus*, not the portable core of velesdb-memory; the portable
+> value stays the MCP tool
 > surface itself, and `compile-stdin` stays usable from any script. What each
 > harness has today is tabulated in
 > [`integrations/agent-hooks/README.md`](../../integrations/agent-hooks/README.md#parity-across-harnesses).
@@ -817,4 +841,4 @@ skill teaches an agent the full workflow — including when *not* to compress.
 
 ---
 
-Last updated: 2026-07-25 · Applies to: velesdb-memory 0.11.6
+Last updated: 2026-07-25 · Applies to: velesdb-memory 0.12.0

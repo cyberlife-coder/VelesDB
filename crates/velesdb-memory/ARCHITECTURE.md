@@ -21,8 +21,8 @@ invariants that hold the design together.
 │                                                                            │
 │   src/main.rs ── env config (store path, embedder, extractor) ──┐          │
 │                                                                 ▼          │
-│   src/mcp.rs ── McpServer: 6 tools                                         │
-│     remember · recall · relate · forget · why · remember_extracted        │
+│   src/mcp.rs ── McpServer: 22 tools (memory + graph + context compiler)    │
+│     remember · recall · relate · forget · why · remember_extracted · …    │
 │        │                                                                   │
 │        ▼                                                                   │
 │   src/service.rs ── MemoryService<E: Embedder>  (the domain core)         │
@@ -66,7 +66,7 @@ Mermaid view (renders on GitHub):
 flowchart TD
   C["MCP clients (Claude Code, Cursor, Zed…)"] -- "stdio JSON-RPC" --> M
   subgraph VM["velesdb-memory (this crate)"]
-    M["mcp.rs · McpServer — 6 tools"] --> S["service.rs · MemoryService&lt;E&gt;"]
+    M["mcp.rs · McpServer — 22 tools"] --> S["service.rs · MemoryService&lt;E&gt;"]
     EMB["embedder.rs · Embedder (Hash | Ollama)"] --> S
     EXT["extract.rs · Extractor (Ollama | BYO)"] --> S
     S --> LB{{"License boundary: memory semantics only"}}
@@ -184,8 +184,12 @@ scaffolding: marked with the reserved `_veles_hub` key and **excluded from
 - **Feature gates** keep the default build tiny:
   - `ollama` → real semantic recall via a local embedding model.
   - `extract` → the `OllamaExtractor` backend for `remember_extracted` (HTTP).
-- **Env config**: `VELESDB_MEMORY_PATH`, `VELESDB_MEMORY_EMBEDDER` (`hash`|`ollama`),
-  `VELESDB_MEMORY_EXTRACTOR` (`ollama`) + model/URL vars. The `Extractor` trait
+- **Env config**: `VELESDB_MEMORY_PATH`, `VELESDB_MEMORY_EMBEDDER`
+  (`hash`|`ollama`|`openai`), `VELESDB_MEMORY_EXTRACTOR`
+  (`outline`|`ollama`|`openai`) + role-named `_URL`/`_MODEL`/`_API_TOKEN` vars
+  (`VELESDB_MEMORY_OLLAMA_URL`/`_MODEL` stay supported as aliases of the
+  embedding role's). `openai` names a protocol, not a vendor: a different
+  server is a different URL, never a new backend name. The `Extractor` trait
   is dependency-free, so the tool is always present and reports "not configured"
   when no backend is attached.
 
@@ -199,4 +203,3 @@ scaffolding: marked with the reserved `_veles_hub` key and **excluded from
 - The `why` subgraph still includes intermediate topic-hub *nodes* (the
   connecting topic); collapsing them to direct fact→fact links is an optional
   presentation refinement.
-```

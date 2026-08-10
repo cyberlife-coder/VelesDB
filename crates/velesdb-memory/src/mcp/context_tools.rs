@@ -10,9 +10,8 @@
 
 use std::sync::Arc;
 
-use rmcp::handler::server::tool::schema_for_input;
 use rmcp::handler::server::wrapper::{Json, Parameters};
-use rmcp::model::{ErrorCode, JsonObject};
+use rmcp::model::ErrorCode;
 use rmcp::{tool, tool_router, ErrorData};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -22,9 +21,9 @@ use super::{join_error, to_error, McpServer};
 use crate::context::wire::stringify_id_fields;
 use crate::context::{
     fragment_id, segment_transcript, suggest_token_budget, CompilePolicy, CompileRequest,
-    CompiledContext, ContextCompiler, ContextDecision, ContextFragment, ContextSavings, MediaRef,
-    SegmentFormat, SegmentKind, SegmentationPolicy, SuggestedBudget, WorkingContext,
-    WorkingContextSession,
+    CompiledContext, ContextCompiler, ContextDecision, ContextFragment, ContextSavings,
+    LoadedWorkingContext, MediaRef, SegmentFormat, SegmentKind, SegmentationPolicy,
+    SuggestedBudget, WorkingContext, WorkingContextSession,
 };
 
 /// Serialize `payload`, opt-in rewriting every id field into decimal-string
@@ -58,22 +57,16 @@ pub(super) use crate::schema::wire_safe_output_schema;
 
 /// Input-side counterpart: `fragments[].id` accepts an integer or a decimal
 /// string ([`crate::context::wire::deserialize_optional_id`]), so the
-/// advertised input schema announces both — a client generating requests
-/// from the schema must be able to discover the string form. Scoped to the
-/// `id` property only: `explain_compilation`'s own `fragment_id` parameter
-/// deserializes as a strict `u64` and stays typed `integer`.
-fn wire_safe_input_schema<T: JsonSchema + std::any::Any>() -> Arc<JsonObject> {
-    let schema = schema_for_input::<Parameters<T>>().unwrap_or_else(|e| {
-        panic!(
-            "Invalid input schema for {}: {e}",
-            std::any::type_name::<T>()
-        )
-    });
-    let mut map = (*schema).clone();
-    crate::schema::widen_id_properties(&mut map, &["id"]);
-    crate::schema::inline_ref_only_properties(&mut map);
-    Arc::new(map)
-}
+/// advertised input schema announces the string form — a client generating
+/// requests from the schema must be able to discover it.
+///
+/// Le jeu de cles n'est plus fige a `"id"` : il est passe par l'outil, comme
+/// dans `mcp.rs`, parce que `save_working_context` porte des ids sous
+/// d'autres noms (`fragment_id`, `memory_id`, imbriques dans
+/// `WorkingContext`) tandis que `explain_compilation.fragment_id` est un
+/// `u64` STRICT qu'annoncer `string` serait une promesse fausse. Un seul
+/// constructeur, donc, mais toujours une decision par outil.
+pub(super) use crate::schema::wire_safe_input_schema;
 
 // --- Thin request envelopes --------------------------------------------------
 
@@ -92,10 +85,27 @@ pub(super) struct ExplainCompilationParams {
     /// re-submitting the request reproduces the exact decisions).
     #[serde(deserialize_with = "super::wire::lenient")]
     pub request: CompileRequest,
+    // Aller-retour casse jusqu'au 2026-07-29, et casse depuis toujours :
+    // `fragment_id` est le SELECTEUR d'une decision, et la decision d'ou le
+    // client le tire lui arrive en CHAINE decimale des que la requete porte
+    // `policy.ids_as_strings` (`fragment_id` est dans
+    // `context::wire::ID_KEYS`). Ce champ etait un `u64` nu : l'outil
+    // refusait litteralement les octets qu'il venait d'emettre, et comme un
+    // `fragment_id` est un FNV-1a 64 — au-dela de 2^53 dans ~99,95 % des cas
+    // — le repli « renvoyer un nombre » etait deja arrondi chez un client
+    // JSON a nombres flottants. Les deux formes echouaient : sur un tel
+    // client, l'outil etait inatteignable par son propre selecteur.
+    //
+    // Ce n'etait pas une omission : trois tests et deux jeux de cles d'id
+    // epinglaient la forme stricte comme voulue. Ce que personne n'avait
+    // fait, c'est l'aller-retour.
     /// The fragment whose decision to return. Looked up by matching
     /// `ContextDecision::fragment_id`, UNLESS `fragment_index` is also
     /// given (see there) — still required even then, since it is the only
-    /// disambiguator when `fragment_index` is absent.
+    /// disambiguator when `fragment_index` is absent. Accepts a JSON number
+    /// OR a decimal string, so a `fragment_id` received under
+    /// [`CompilePolicy::ids_as_strings`] can be relayed back unchanged.
+    #[serde(deserialize_with = "crate::model::deserialize_id")]
     pub fragment_id: u64,
     /// Optional, 0-based position of the fragment in `request.fragments`.
     /// When given, TAKES PRIORITY over `fragment_id` for locating the
@@ -157,6 +167,13 @@ pub(super) struct SaveWorkingContextParams {
 pub(super) struct SaveWorkingContextResult {
     /// Id of the stored system fact backing this working context.
     pub id: u64,
+    /// Decimal-string twin of `id`, same contract as
+    /// [`crate::mcp::dto::RememberResult::id_str`]: the id is content-addressed
+    /// (FNV-1a 64), so it is past 2^53 and a float-lossy JSON client rounds
+    /// `id` on arrival. This was the ONE tool handing back an id without its
+    /// twin while `forget`/`feedback` accept only the decimal string — the
+    /// caller had no way to build the form the schema demands.
+    pub id_str: String,
 }
 
 /// Input of the `load_working_context` tool.
@@ -166,29 +183,6 @@ pub(super) struct LoadWorkingContextParams {
     pub project: String,
     /// Session identifier the working context was saved under.
     pub session: String,
-}
-
-/// Output of the `load_working_context` tool. An envelope (not a bare
-/// `Option<WorkingContext>`): the MCP spec requires the output schema's
-/// root to be an object, so a nullable root is rejected by rmcp.
-#[derive(Debug, serde::Serialize, JsonSchema)]
-#[schemars(transform = crate::schema::strip_int_formats)]
-pub(super) struct LoadWorkingContextResult {
-    /// `true` when a working context was found under this exact project +
-    /// session. Wire-additive alongside `working` (added V2a-1): a client
-    /// that only reads `working` sees no change.
-    pub found: bool,
-    /// The previously saved working context, or `null` when nothing was ever
-    /// saved under that project + session (a fresh start, not an error).
-    pub working: Option<WorkingContext>,
-    /// The OTHER sessions saved under this SAME project (never the requested
-    /// one) — helps recover from a typo in `session` instead of silently
-    /// starting fresh (e.g. `"task-1234"` saved, `"task-1235"` requested by
-    /// mistake). Populated on a hit as well as on a miss: a typo that lands
-    /// on another real session is the case the caller can least detect on its
-    /// own. Empty only when the project has no other session.
-    #[serde(default)]
-    pub other_sessions: Vec<String>,
 }
 
 /// Input of the `list_working_contexts` tool.
@@ -429,8 +423,8 @@ impl McpServer {
 
     #[tool(
         name = "compile_context",
-        description = "Compile context fragments into a token-budgeted, provenance-audited prompt context — deterministically, with no LLM call. Duplicates are dropped, repeated log lines collapse, code/URLs/numbers/negative constraints survive verbatim, over-budget content becomes retrievable ctx://source/ handles instead of silently vanishing, and `memory_scope` pulls relevant stored memories into the result. Each fragment's own `metadata` is capped at 64 KiB serialized. A fragment may set `path` (an absolute filesystem path) instead of inline `content` to ingest a file by reference — exactly one of `path`, `content`, or `media` per fragment; requires the server to be started with VELESDB_MEMORY_INGEST_ROOTS set to an allowlist of directories, and the resolved file must be plain UTF-8 text under 1 MiB. Returns the assembled content plus one auditable decision per fragment (rule id, reason, risk), the sources, the retrieval handles, token-savings insights, and `warnings` — a mechanical shortlist of externalized fragments relevant enough to the query that they are worth a second look, so checking `decisions` by hand is only needed when `warnings` is non-empty and still ambiguous. `policy.slim_response` (default false) empties `sections`/`decisions` from the response — keep it off when you need the audit trail, or re-compile without it later (compilation is deterministic). `policy.ids_as_strings` (default false) rewrites every id field of the response into a decimal string, for MCP clients without u64-safe JSON number parsing.",
-        input_schema = wire_safe_input_schema::<CompileRequest>(),
+        description = "Compile context fragments into a token-budgeted, provenance-audited prompt context — deterministically, with no LLM call. Duplicates are dropped, repeated log lines collapse, code/URLs/numbers/negative constraints survive verbatim, over-budget content becomes retrievable ctx://source/ handles instead of silently vanishing, and `memory_scope` pulls relevant stored memories into the result. Each fragment's own `metadata` is capped at 64 KiB serialized. A fragment may set `path` (an absolute filesystem path) instead of inline `content` to ingest a file by reference — `path` is exclusive and cannot be combined with `content` or `media`, while `content` and `media` MAY travel together (the content is then the image's caption, and the only text lexical relevance can read); a fragment carrying none of the three is refused. Path ingestion requires the server to be started with VELESDB_MEMORY_INGEST_ROOTS set to an allowlist of directories, and the resolved file must be plain UTF-8 text under 1 MiB. Returns the assembled content plus one auditable decision per fragment (rule id, reason, risk), the sources, the retrieval handles, token-savings insights, and `warnings` — a mechanical shortlist of externalized fragments relevant enough to the query that they are worth a second look. An empty `warnings` is NOT a clean bill of health: only `retrieve` decisions at or above a relevance floor ever qualify, so a `preserve` fragment the packer could only fit partially, and an abstracted one, are real losses that never appear there — `decisions` stays the exhaustive record, and `risk` is the cheap second signal. `policy.slim_response` (default false) empties `sections`/`decisions` from the response — keep it off when you need the audit trail, or re-compile without it later (compilation is deterministic). `policy.ids_as_strings` (default false) rewrites every id field of the response into a decimal string, for MCP clients without u64-safe JSON number parsing.",
+        input_schema = wire_safe_input_schema::<CompileRequest>(&["id"]),
         output_schema = wire_safe_output_schema::<CompiledContext>()
     )]
     async fn compile_context(
@@ -466,7 +460,7 @@ impl McpServer {
     #[tool(
         name = "compile_transcript",
         description = "One-call shortcut over compile_context for a raw agent-session transcript: deterministically segments it into turns (plain marker-based — System:/User:/Human:/Assistant:/AI:/Tool:/### User/### Assistant — or JSONL, one line per turn) and, within each turn, into code/log/body sub-segments (fenced code blocks stay atomic; runs of 8+ log-like lines collapse the same way abstract.log_dedup would), then compiles the result exactly like compile_context. Exactly one of `transcript` (inline) or `path` (an absolute filesystem path, same VELESDB_MEMORY_INGEST_ROOTS allowlist as compile_context's `path` fragments but capped at 8 MiB) must be set. `segmentation.format` forces plain or jsonl instead of auto-detecting; a forced jsonl format that fails to parse is a hard error, never a silent fallback. The first turn is tagged cache-eligible when it looks like a system prompt (segmentation.cache_system_turn, default true). Returns `context` (byte-compatible with compile_context's output) plus `segmentation` — the detected format and one audit entry (turn, role, kind, byte range, fragment_id) per segment, so a caller can see exactly how the transcript was cut before trusting the compiled result.",
-        input_schema = wire_safe_input_schema::<CompileTranscriptParams>(),
+        input_schema = wire_safe_input_schema::<CompileTranscriptParams>(&[]),
         output_schema = wire_safe_output_schema::<CompileTranscriptResult>()
     )]
     async fn compile_transcript(
@@ -558,7 +552,7 @@ impl McpServer {
     #[tool(
         name = "explain_compilation",
         description = "Explain why one fragment of a compile_context request was preserved, abstracted, externalized, dropped, or cached. Compilation is deterministic, so the request is re-compiled (with event/source recording off) and the fragment's exact decision (rule id, reason, relevance, risk, handle) is returned — no server-side state needed. Caveat: with a memory_scope the re-compile recalls from CURRENT memory, so decisions about pulled memories reflect the memory as it is now, not as it was; a `path` fragment is likewise re-read from disk, so the decision reflects the file's CURRENT content, not necessarily what the original compile_context call saw. Pass `fragment_index` (0-based position in request.fragments) instead of relying on `fragment_id` alone when fragments are byte-identical — a shared content-addressed id otherwise always resolves to the deduplication survivor's decision. `policy.ids_as_strings` on the request rewrites the response's id fields into decimal strings, like compile_context.",
-        input_schema = wire_safe_input_schema::<ExplainCompilationParams>(),
+        input_schema = wire_safe_input_schema::<ExplainCompilationParams>(&["id", "fragment_id"]),
         output_schema = wire_safe_output_schema::<ContextDecision>()
     )]
     async fn explain_compilation(
@@ -618,8 +612,8 @@ impl McpServer {
         // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
         // or les SDK MCP valident structuredContent contre ce schema.
         output_schema = wire_safe_output_schema::<SaveWorkingContextResult>(),
-        description = "Persist this session's distilled working state (goal, active constraints, verified facts, open hypotheses, decisions, exact evidence, pending actions) under a project + session id — so a LATER session (a fresh agent run, a new conversation, a resumed process) can pick up exactly where this one left off instead of re-deriving context from scratch. Call this near the end of a session, or whenever the working state changes meaningfully. Saving again under the same project+session replaces the previous state (idempotent upsert) — so an entirely empty `working` is REFUSED rather than allowed to wipe what a previous save stored; fill at least one field. Serialized size is capped at 1 MiB. Returns the stored fact's id.",
-        input_schema = wire_safe_input_schema::<SaveWorkingContextParams>()
+        description = "Persist this session's distilled working state (goal, active constraints, verified facts, open hypotheses, decisions, exact evidence, pending actions) under a project + session id — so a LATER session (a fresh agent run, a new conversation, a resumed process) can pick up exactly where this one left off instead of re-deriving context from scratch. Call this near the end of a session, or whenever the working state changes meaningfully. Saving again under the same project+session replaces the previous state (idempotent upsert) — so an entirely empty `working` is REFUSED rather than allowed to wipe what a previous save stored; fill at least one field. Serialized size is capped at 1 MiB. Returns the stored fact's id. IF THIS CALL TIMES OUT, THE SAVE MAY NOT HAVE HAPPENED — a timeout is not a slow success, and over the HTTP transport it usually means the request never reached this tool at all. Do not assume it was written: call `list_working_contexts` and check that this session's `saved_at` actually advanced, then re-send the identical call if it did not. Re-sending is safe — the write is an upsert on project + session, so it replaces rather than duplicates.",
+        input_schema = wire_safe_input_schema::<SaveWorkingContextParams>(&["fragment_id", "memory_id"])
     )]
     async fn save_working_context(
         &self,
@@ -637,7 +631,10 @@ impl McpServer {
         .await
         .map_err(join_error)?
         .map_err(to_error)?;
-        Ok(Json(SaveWorkingContextResult { id }))
+        Ok(Json(SaveWorkingContextResult {
+            id,
+            id_str: id.to_string(),
+        }))
     }
 
     #[tool(
@@ -645,47 +642,50 @@ impl McpServer {
         // Sans declaration explicite, rmcp derive un schema de sortie qui
         // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
         // or les SDK MCP valident structuredContent contre ce schema.
-        output_schema = wire_safe_output_schema::<LoadWorkingContextResult>(),
+        output_schema = wire_safe_output_schema::<LoadedWorkingContext>(),
         description = "Resume a session: load back the working context previously saved by save_working_context under the same project + session id — the goal, constraints, verified facts, open hypotheses, decisions, exact evidence, and pending actions a PRIOR session left off with. Call this at the START of a new session before doing anything else, so work continues instead of restarting. `found: false` (with `working: null`) means nothing was ever saved under that exact project + session — not an error, but check `other_sessions`: if it lists a similarly-named session, `session` was likely a typo, not a genuinely fresh start. `other_sessions` is always filled in, on a hit too: if it lists a session that looks more like the one you meant, you may have just resumed the WRONG session. Use `list_working_contexts` to browse a project's sessions up front."
     )]
     async fn load_working_context(
         &self,
         Parameters(params): Parameters<LoadWorkingContextParams>,
-    ) -> Result<Json<LoadWorkingContextResult>, ErrorData> {
+    ) -> Result<Json<Value>, ErrorData> {
         let LoadWorkingContextParams { project, session } = params;
         let service = Arc::clone(&self.service);
-        let lookup_project = project.clone();
-        let lookup_session = session.clone();
-        let working = tokio::task::spawn_blocking(move || {
-            service.load_working_context(&lookup_project, &lookup_session)
-        })
-        .await
-        .map_err(join_error)?
-        .map_err(to_error)?;
-        let found = working.is_some();
-        // Listed on a HIT too, not just on a miss: a typo that lands on
-        // another REAL session returns `found: true`, and the caller has no
-        // other way to notice it resumed the wrong work. Costs one extra
-        // O(1) index read per successful load.
-        let other_sessions: Vec<String> = {
-            let service = Arc::clone(&self.service);
-            tokio::task::spawn_blocking(move || service.list_working_contexts(&project))
+        // L'enveloppe entiere — `found`, `working`, `other_sessions` — est
+        // composee par le pont, pas ici : les deux regles de politique
+        // ("lister meme sur un hit", "ne jamais reemettre la session
+        // demandee") sont les memes pour cet outil et pour les trois
+        // bindings, et une regle recopiee par surface diverge en silence.
+        let loaded =
+            tokio::task::spawn_blocking(move || service.resume_working_context(&project, &session))
                 .await
                 .map_err(join_error)?
-                .map_err(to_error)?
-                .into_iter()
-                .map(|s| s.session)
-                // Never propose the session just requested: the field is
-                // named `other_sessions`, so echoing the requested id back is
-                // a contradiction the caller cannot act on.
-                .filter(|candidate| candidate != &session)
-                .collect()
-        };
-        Ok(Json(LoadWorkingContextResult {
-            found,
-            working,
-            other_sessions,
-        }))
+                .map_err(to_error)?;
+        // Les ids sortent en CHAINE decimale, sans option, contrairement au
+        // compilateur ou `ids_as_strings` est un choix de l'appelant.
+        //
+        // Ici il n'y a pas de choix a offrir : cet outil est la moitie
+        // LECTURE d'un aller-retour dont la moitie ECRITURE
+        // (`save_working_context`) n'annonce plus qu'une forme, la chaine —
+        // depuis que le schema d'entree ne peut plus publier d'union. Rendre
+        // un nombre la ou le jumeau n'accepte qu'une chaine oblige le client
+        // a convertir ; et sur un client JSON a nombres flottants, la valeur
+        // est deja arrondie a la LECTURE, donc il reecrit un id faux avec
+        // l'exactitude apparente d'une chaine. Un contexte de travail existe
+        // pour survivre a une perte de contexte : sa trace de provenance ne
+        // peut pas se rompre en silence entre deux sessions.
+        //
+        // Le schema de sortie annonce deja `["integer", "string"]` sur ces
+        // champs (`widen_id_properties`), donc emettre la branche chaine est
+        // valide au sens du schema publie : aucun SDK ne rejette la reponse.
+        let mut value = serde_json::to_value(loaded).map_err(|err| {
+            ErrorData::internal_error(
+                format!("Failed to serialize structured content: {err}"),
+                None,
+            )
+        })?;
+        stringify_id_fields(&mut value);
+        Ok(Json(value))
     }
 
     #[tool(

@@ -103,7 +103,7 @@ fn a_silent_ollama_is_bounded_instead_of_hanging_forever() {
 /// The server here accepts, never reads, and closes: the kernel answers
 /// unread bytes in the receive queue with an RST — the portable stand-in for
 /// `SO_LINGER=0`, which would need a dependency this crate does not carry.
-/// 1 initial attempt + the 2 replays of `OLLAMA_RETRIES`.
+/// 1 initial attempt + the 2 replays of `HTTP_RETRIES`.
 const EXPECTED_ATTEMPTS: usize = 3;
 
 /// A listener that accepts `EXPECTED_ATTEMPTS` connections and closes each one

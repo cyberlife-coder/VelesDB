@@ -7,15 +7,21 @@ documentation claims, and flags roadmap items misrepresented as delivered.
 Exit codes:
   0 — no gaps or misrepresentations found
   1 — at least one MISSING, UNDOC, or ROADMAP gap detected
+  2 — the audit could not run (unreadable tree); NOT a refusal
 """
 
 from __future__ import annotations
 
+import argparse
 import os
 import re
 import sys
 from pathlib import Path
 from typing import NamedTuple
+
+#: Default tree to audit. `--root` overrides it so the guard can be pointed at a
+#: fixture tree and be SEEN refusing (#1715); the default keeps CI byte-identical.
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # ---------------------------------------------------------------------------
 # Capability taxonomy
@@ -478,9 +484,7 @@ def _format_crate_report(result: AuditResult) -> tuple[list[str], int]:
 # Main
 # ---------------------------------------------------------------------------
 
-def main() -> int:
-    root = Path(__file__).resolve().parent.parent
-
+def run(root: Path) -> int:
     print("=== VelesDB Feature Claims Audit ===")
     print()
 
@@ -523,6 +527,19 @@ def main() -> int:
     print(f"Audit {verdict}")
 
     return 0 if overall_ok else 1
+
+
+def main(argv: "list[str] | None" = None) -> int:
+    parser = argparse.ArgumentParser(description="Audit feature claims against the code.")
+    parser.add_argument("--root", default=str(REPO_ROOT), help="repository root to scan")
+    args = parser.parse_args(argv)
+    # An unreadable tree answers 2, never 1: a guard that COULD NOT RUN is not a
+    # guard that refused, and the refusal-vector harness asserts exactly 1.
+    try:
+        return run(Path(args.root).resolve())
+    except (OSError, RuntimeError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

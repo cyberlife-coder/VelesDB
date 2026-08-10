@@ -80,13 +80,13 @@ New to the codebase? Start with these documents (in order):
 | Crate | Purpose |
 |-------|---------|
 | `velesdb-core` | Core engine: HNSW, SIMD, VelesQL, collections, storage |
-| `velesdb-server` | Axum REST API server (47 endpoints, OpenAPI optional) |
+| `velesdb-server` | Axum REST API server (54 endpoints, 61 operations; OpenAPI optional) |
 | `velesdb-cli` | Interactive REPL for VelesQL |
 | `velesdb-python` | PyO3 bindings with NumPy support |
 | `velesdb-wasm` | Browser-side vector search (no `persistence` feature) |
 | `velesdb-mobile` | iOS/Android bindings via UniFFI |
 | `velesdb-migrate` | Schema/data migration tooling |
-| `velesdb-memory` | MCP agent-memory server (`MemoryService` wedge: remember/recall/why) |
+| `velesdb-memory` | MCP agent-memory server. Three tool families, not one: durable memory (`remember`/`recall`/`why`/`relate`/`feedback`…), the deterministic context compiler (`compile_context`, `compile_transcript`, `explain_compilation`, `retrieve_context_source`, `context_savings`, `suggest_budget`), and cross-session working-context resumption (`save_working_context`, `load_working_context`, `list_working_contexts`) |
 | `velesdb-node` | Node.js binding of the memory wedge (napi-rs; `@wiscale/velesdb-memory-node`) |
 | `tauri-plugin-velesdb` | Tauri desktop integration |
 
@@ -102,8 +102,15 @@ All new/modified code must satisfy these limits (enforced by Codacy and CI):
 | Code duplication | **< 2%** | jscpd |
 | Unsafe blocks | Must have `// SAFETY:` comment | CI (`verify_unsafe_safety_template.py`) |
 | TODO format | Must carry an issue tag: `[EPIC-XXX/US-YYY]`, `(PREFIX-NNN)`, `#123`, or `#issue` | CI (`check-todo-annotations.py`) |
-| `.unwrap()` | Forbidden in production code | Code review |
+| `.unwrap()` | Forbidden in production code | CI (`check_prod_unwraps.py`) |
 | Recall@10 | **>= 0.95** (if search path modified) | CI + local validation |
+
+Every guard script this repository runs is declared in
+[`scripts/guards.json`](scripts/guards.json): which workflow and job invokes it,
+whether its failure blocks a merge, and whether it runs strict or advisory. Adding
+a `scripts/check-*.py` (or `verify-`/`gate-`) without an entry there fails
+`scripts/tests/test_ci_gate_reachability.py` — the registry is checked against the
+workflows *and* against the filesystem, so it cannot quietly shrink.
 
 ### Concurrency Rules
 
@@ -119,9 +126,9 @@ Run this sequence **before every push** (CI runs on every PR — running it loca
 # 1. Format
 cargo fmt --all
 
-# 2. Lint (strict — mirrors CI)
+# 2. Lint (strict — mirrors CI; node and python are linted separately, see AGENTS.md)
 cargo clippy --workspace --all-targets --features persistence,gpu,update-check \
-  --exclude velesdb-python -- -D warnings -D clippy::pedantic
+  --exclude velesdb-python --exclude velesdb-node -- -D warnings -D clippy::pedantic
 
 # 3. Tests
 cargo test -p velesdb-core --features persistence -- --test-threads=1
@@ -148,9 +155,11 @@ ignores silently — an un-executable hook does not fail, it simply never runs.
 
 The bare equivalent is `git config core.hooksPath .githooks`.
 
-Three hooks then apply: `commit-msg` rejects AI-attributed authors and AI
-attribution trailers, `pre-commit` validates the change, and `pre-push` runs the
-full local gate.
+Four hooks then apply: `commit-msg` rejects AI-attributed authors and AI
+attribution trailers, `pre-commit` validates the change, `pre-push` runs the
+full local gate — only on direct pushes to `develop`/`main`; feature-branch
+pushes are waved through and CI is the gate — and `post-merge` warns when a
+merge moved the repo ahead of your installed skills.
 
 > **Note (SSH pushes):** the pre-push hook runs the full validation (~15 min) while
 > git already holds the connection to GitHub open; if that SSH connection dies in
@@ -189,9 +198,9 @@ cargo build --workspace
 cargo test --workspace --features persistence,gpu,update-check \
   --exclude velesdb-python -- --test-threads=1
 
-# Lint (strict — mirrors CI)
+# Lint (strict — mirrors CI; node and python are linted separately, see AGENTS.md)
 cargo clippy --workspace --all-targets --features persistence,gpu,update-check \
-  --exclude velesdb-python -- -D warnings -D clippy::pedantic
+  --exclude velesdb-python --exclude velesdb-node -- -D warnings -D clippy::pedantic
 
 # Run the server locally
 cargo run --bin velesdb-server -- --data-dir ./data
@@ -202,6 +211,77 @@ cargo run --bin velesdb-server -- --data-dir ./data
 ```bash
 cargo bench -p velesdb-core --features internal-bench -- --noplot
 ```
+
+### Agent Skills — installing, checking, re-syncing
+
+This repository is the source of truth for three agent skills:
+`skills/velesdb-context-optimizer`, `skills/velesdb-learning-loop` and
+`crates/velesdb-memory/skill/velesdb-memory`. An agent does not load them from
+here — it loads a copy installed under `~/.claude/skills`.
+
+That third copy is invisible to CI, which cannot read your home directory, and
+it drifted: measured on 2026-08-02, the installed `velesdb-memory` skill was 67
+lines behind and stated the **wrong argument order** for the Node binding's
+`recallFusedDated`. Nothing anywhere reported a fault; an agent simply read
+stale instructions.
+
+```bash
+# Install (or re-sync) the managed skills into ~/.claude/skills
+python3 scripts/sync-skills.py --install
+
+# Report drift; exits non-zero when an installed copy differs
+python3 scripts/sync-skills.py --check
+
+# Same, but an ABSENT managed skill also fails (what the post-merge hook runs)
+python3 scripts/sync-skills.py --check --strict
+
+# Regenerate the copies bundled into the npm package after editing a source
+python3 scripts/sync-skills.py --bundle
+```
+
+Each managed skill is reported as one of **three** states, never two:
+
+| state | meaning | `--check` | `--check --strict` |
+|---|---|---|---|
+| `in step` | the agent reads the right thing | green | green |
+| `drifted` | the agent reads the **wrong** thing | **exit 1** | **exit 1** |
+| `absent` | the agent reads **nothing** | reported, exit 0 | **exit 1** |
+
+- **Only the managed skills are touched.** Any other skill installed in that
+  directory is left exactly as it is — the tool works from an explicit pair
+  list, never a scan.
+- **`LOCAL.md` is yours.** A managed skill may hold a machine-local layer under
+  that name: never committed, never a copy of the shipped `SKILL.md`. It is
+  preserved across an `--install` and never reported as drift. Nothing else
+  extra is forgiven — a stale file from an older version is still `unexpected`.
+- **The npm copies are generated.** `crates/velesdb-node/skills/` ships inside
+  the package; `--bundle` rewrites it from the same registry. Two byte-identity
+  guards stay red until you run it.
+- **`--strict` widens what ABSENCE costs, and nothing else.** Plain `--check`
+  forgives it because a contributor who never installed these must not have
+  their work refused over a machine-local state; it still says so, since
+  silence would leave you unable to tell "installed and correct" from "not
+  there at all".
+- **The copy is atomic.** The new tree is built beside the target and moved
+  into place by rename, so an agent reading a SKILL.md during an install sees
+  the whole old version or the whole new one — never half of each.
+- `.githooks/post-merge` runs `--check --strict` and prints a notice when a
+  merge has just moved the repository ahead of your install. It deliberately
+  does **not** block: `--check` compares against the working tree, so gating a
+  commit would force you to install unmerged work into your global skills.
+  Hooks are also bypassable, which is why the command stays runnable by hand —
+  and why `scripts/tests/test_sync_skills.py` exercises the mechanism in CI.
+- **A versioned hook is not a protection until git is pointed at it.** Run
+  `./scripts/setup-hooks.sh` (or `.\scripts\setup-hooks.ps1`) once per clone;
+  it sets `core.hooksPath` and restores the executable bit a fresh checkout can
+  drop. Verify with `git rev-parse --git-path hooks`, which prints the path git
+  actually uses. A test now holds both activation scripts against the contents
+  of `.githooks/`, so a hook added without being described there turns red —
+  that check found `setup-hooks.ps1` had never mentioned `commit-msg`, the hook
+  enforcing the no-AI-attribution rule.
+
+Set `CLAUDE_SKILLS_DIR` to point both commands at a different directory (the
+test suite uses it to run without touching a real install).
 
 ## Pull Request Process
 
@@ -274,11 +354,14 @@ Contributors are recognized in:
 
 ## Release Process
 
-VelesDB uses **3 simplified GitHub Actions workflows**:
+CI spans 21 workflow files; the merge gate is the **`CI Success`** summary job,
+whose `needs:` list in [`ci.yml`](.github/workflows/ci.yml) is the authoritative
+inventory (mapped guard-by-guard in [`scripts/guards.json`](scripts/guards.json)).
+The three you interact with most:
 
 | Workflow | Purpose |
 |----------|---------|
-| `ci.yml` | Tests, lint, security |
+| `ci.yml` | Tests, lint, security, and the `CI Success` gate |
 | `release.yml` | Full publish (binaries, crates.io, PyPI, npm) |
 | `bench-regression.yml` | Benchmarks |
 

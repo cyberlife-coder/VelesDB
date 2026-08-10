@@ -1157,6 +1157,85 @@ fn test_recall_where_description_documents_type_strict_comparisons() {
     );
 }
 
+/// Whether `haystack` names `field` as a WORD, not as an accidental substring.
+///
+/// A plain `contains` is not enough, and the measurement says so: across the
+/// twenty published tools it lets `feedback`'s `id` pass on the strength of
+/// "con-f-**id**-ence", and `entity`'s `relations` on "relation-ships". A
+/// guard weaker than its own statement is worse than none, because it reads
+/// as coverage.
+///
+/// Backticks, spaces and punctuation are all boundaries here; only ASCII
+/// alphanumerics and `_` continue a word — so `ids` does NOT match inside
+/// `ids_str`, and each field has to be named on its own.
+fn description_names_field(haystack: &str, field: &str) -> bool {
+    let continues_word = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+    let bytes = haystack.as_bytes();
+    haystack.match_indices(field).any(|(start, _)| {
+        let end = start + field.len();
+        let opens = start == 0 || !continues_word(bytes[start - 1]);
+        let closes = end == bytes.len() || !continues_word(bytes[end]);
+        opens && closes
+    })
+}
+
+/// #1747. `remember_extracted`'s published `outputSchema` carries three root
+/// fields, and one of them — `skipped_over_cap` — exists PRECISELY to make a
+/// silent loss visible: facts the extractor produced and this tool dropped for
+/// exceeding the per-fact text cap. Its own doc-comment argues the point: "a
+/// skip the caller cannot see is indistinguishable from the model extracting
+/// fewer facts".
+///
+/// The description used to say only "Returns the stored facts' ids". So the
+/// one surface a model reads BEFORE deciding to call never mentioned the field
+/// whose whole purpose is to be read — the omission defeated the reason the
+/// field was added (#1692).
+///
+/// The field names are DERIVED from the published schema rather than kept as a
+/// second hard-coded list here: a root field added tomorrow is caught without
+/// anyone remembering this test exists.
+///
+/// Scope, stated so it is not overclaimed: this pins ONE tool. Fourteen of the
+/// twenty published tools would fail the same check today, and closing that
+/// class is its own piece of work (#1695).
+#[test]
+fn test_remember_extracted_description_names_every_published_output_field() {
+    let tool = McpServer::remember_extracted_tool_attr();
+    let description = tool
+        .description
+        .clone()
+        .expect("remember_extracted must declare a description");
+    let schema = tool
+        .output_schema
+        .as_ref()
+        .expect("remember_extracted declares an explicit output_schema");
+    let properties = schema
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+        .expect("its output schema is an object schema carrying `properties`");
+
+    assert!(
+        !properties.is_empty(),
+        "the published output schema must expose root properties, else this \
+         test would pass vacuously"
+    );
+
+    let missing: Vec<&str> = properties
+        .keys()
+        .filter(|field| !description_names_field(&description, field))
+        .map(String::as_str)
+        .collect();
+
+    assert!(
+        missing.is_empty(),
+        "remember_extracted's description must name every root field of its \
+         published outputSchema. Missing: {missing:?}. A field the description \
+         omits is a field the model never learns to read, and `skipped_over_cap` \
+         omitted is a silent data loss — the caller believes everything it sent \
+         was stored. Description was: {description}"
+    );
+}
+
 /// Issue: real MCP client harnesses (observed 2026-07-24 with Claude Code)
 /// degrade a parameter whose advertised schema carries no DIRECT `type`
 /// keyword — `anyOf`-wrapped optionals and `$ref`-only structs both come out
@@ -1307,4 +1386,318 @@ fn unrelate_params_accept_string_or_number_ids_on_the_wire() {
     .expect("string and number ids must both deserialize");
     assert_eq!(params.from, u64::MAX);
     assert_eq!(params.to, 42);
+}
+
+/// #1734, and this is the test that has to cross the REAL wiring rather than a
+/// seam written for it.
+///
+/// The defect was never in the library: `OutlineExtractor` always worked, and
+/// `McpServer::with_extractor` always accepted it. What was broken is that the
+/// only code able to CHOOSE `outline` sat inside the daemon's
+/// `#[cfg(feature = "extract")]` block, so on a default build two of the twenty
+/// published tools were dead — `remember_extracted` refused outright, and
+/// `entity` answered `found: false` for every name, entity hubs being born only
+/// of extraction.
+///
+/// So this test deliberately calls [`crate::select_extractor`] — the same
+/// function `main.rs` now calls — instead of constructing `OutlineExtractor`
+/// directly. Building the extractor by hand here would prove only that the
+/// library works, which was never in doubt. The one step it does not cover is
+/// `std::env::var` itself, which is a process-global read the daemon does once.
+#[tokio::test]
+async fn an_outline_configured_server_builds_a_hub_that_entity_finds() {
+    let dir = TempDir::new().expect("create tempdir");
+    let embedder: DynEmbedder = Box::new(HashEmbedder::new(crate::DEFAULT_DIMENSION));
+    let service = MemoryService::open(dir.path(), embedder).expect("open memory store");
+
+    // The selection, through the real function. `Ready` is the whole point:
+    // outline needs no configuration, no network and no optional dependency,
+    // which is why it can be chosen in a build that has none of them.
+    let crate::ExtractorSelection::Ready(extractor) =
+        crate::select_extractor("outline").expect("`outline` must be an accepted backend name")
+    else {
+        panic!("`outline` must be usable as-is, with no remote configuration");
+    };
+    let srv = McpServer::new(service).with_extractor(extractor);
+
+    // Tool 1 of the two that were dead: it used to answer "extraction backend
+    // not configured" no matter what the operator set.
+    let Json(stored) = srv
+        .remember_extracted(Parameters(RememberExtractedParams {
+            text: "fact: Theo has a sister called Camille | Theo, Camille\n\
+                   edge: Camille | soeur de | Theo\n\
+                   attr: Theo | age | 15"
+                .to_owned(),
+            metadata: None,
+        }))
+        .await
+        .expect("remember_extracted must work on an outline-configured server");
+    assert_eq!(
+        stored.ids.len(),
+        1,
+        "the passage carries exactly one `fact:` directive, so exactly one \
+         fact must be stored (`edge:` and `attr:` build the graph around it, \
+         they are not facts of their own)"
+    );
+
+    // Tool 2: `entity` answered `found: false` for EVERY name, because hubs are
+    // salted so that no caller fact can create one — they are born only of
+    // extraction. If this passes, the cascade is closed.
+    let Json(theo) = srv
+        .entity(Parameters(EntityParams {
+            name: "Theo".to_owned(),
+        }))
+        .await
+        .expect("entity");
+    assert!(
+        theo.found,
+        "entity must find the hub that remember_extracted just created — \
+         this is the second of the two behaviours #1734 reported dead"
+    );
+    let outgoing: Vec<&str> = theo
+        .relations
+        .iter()
+        .map(|r| r.predicate.as_str())
+        .collect();
+    let incoming: Vec<&str> = theo
+        .relations_in
+        .iter()
+        .map(|r| r.predicate.as_str())
+        .collect();
+    // Asserted on EITHER side on purpose, and the reason is written here so the
+    // looseness is not mistaken for carelessness. What #1734 is about is that
+    // the edge reaches the graph at all: before the fix no extractor could be
+    // selected, so there was no edge on either side.
+    //
+    // Which side it lands on is a SEPARATE question, and an open one: measured
+    // here, `edge: Camille | soeur de | Theo` lands in Theo's OUTGOING edges
+    // and leaves his incoming empty, while `incoming_entity_relations`'s own
+    // doc uses this exact example to say the opposite. Pinning either direction
+    // in this test would freeze an answer nobody has established yet — so it is
+    // tracked on its own instead.
+    assert!(
+        incoming.contains(&"soeur de") || outgoing.contains(&"soeur de"),
+        "the `edge:` directive must reach the graph — outgoing {outgoing:?}, \
+         incoming {incoming:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Autograph wiring at SERVER level (#1846/#1851)
+// ---------------------------------------------------------------------------
+//
+// `McpServer::new` does three load-bearing things when the service carries an
+// autograph extractor: it spawns the background worker (sized
+// `limits::MAX_AUTOGRAPH_QUEUE`), it keeps the returned
+// `AutographWorkerHandle` so the SERVER's own drop bounds shutdown, and it
+// falls back inline with a warning if the spawn is refused. The service-level
+// suite (tests/autograph_async_bdd.rs) proves the worker itself; nothing
+// proved the server WIRED it — a regression to the pre-#1851 construction
+// (no spawn, enrichment inline on the tool path) passes every service test
+// and hangs every MCP client on the model's generation time.
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+use crate::extract::{ExtractError, ExtractedFact, ExtractedRelation, Extraction, Extractor};
+
+/// The gate idiom from `tests/autograph_async_bdd.rs`: `extract_graph` blocks
+/// until the test RELEASES it, so every timing claim below is an event,
+/// never a sleep. `entered` flips BEFORE the block — the observable
+/// "job is in flight" event — and `completed` after it.
+struct GatedServerExtractor {
+    gate: Mutex<Receiver<()>>,
+    entered: AtomicUsize,
+    completed: AtomicUsize,
+}
+
+impl GatedServerExtractor {
+    fn new() -> (Arc<Self>, SyncSender<()>) {
+        let (tx, rx) = sync_channel::<()>(64);
+        (
+            Arc::new(Self {
+                gate: Mutex::new(rx),
+                entered: AtomicUsize::new(0),
+                completed: AtomicUsize::new(0),
+            }),
+            tx,
+        )
+    }
+}
+
+impl Extractor for GatedServerExtractor {
+    fn extract(&self, _text: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
+        Ok(Vec::new())
+    }
+
+    fn extract_graph(&self, _text: &str) -> Result<Extraction, ExtractError> {
+        self.entered.fetch_add(1, Ordering::SeqCst);
+        self.gate
+            .lock()
+            .expect("gate lock")
+            .recv()
+            .map_err(|_| ExtractError::Backend("gate closed".to_owned()))?;
+        self.completed.fetch_add(1, Ordering::SeqCst);
+        Ok(Extraction {
+            facts: Vec::new(),
+            relations: vec![ExtractedRelation {
+                subject: "alice martin".to_owned(),
+                predicate: "travaille chez".to_owned(),
+                object: "wiscale".to_owned(),
+            }],
+            attributes: Vec::new(),
+        })
+    }
+}
+
+/// A server over a service that carries the gated extractor as autograph,
+/// plus the release channel. The [`TempDir`] must outlive everything.
+fn gated_server() -> (
+    TempDir,
+    McpServer,
+    Arc<GatedServerExtractor>,
+    SyncSender<()>,
+) {
+    let dir = TempDir::new().expect("create tempdir");
+    let embedder: DynEmbedder = Box::new(HashEmbedder::new(crate::DEFAULT_DIMENSION));
+    let (extractor, release) = GatedServerExtractor::new();
+    let service = MemoryService::open(dir.path(), embedder)
+        .expect("open memory store")
+        .with_autograph(extractor.clone());
+    (dir, McpServer::new(service), extractor, release)
+}
+
+/// Poll until `probe` answers true — the event, not the clock (#1793).
+fn wait_for(deadline: Duration, mut probe: impl FnMut() -> bool) -> bool {
+    let end = Instant::now() + deadline;
+    loop {
+        if probe() {
+            return true;
+        }
+        if Instant::now() >= end {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[tokio::test]
+async fn remember_tool_answers_while_the_autograph_gate_is_still_shut() {
+    let (_dir, srv, _extractor, release) = gated_server();
+
+    // The wiring itself, before any call: the constructor must have spawned
+    // the worker and kept its handle. Without the handle there is no queue,
+    // and without the queue `remember` runs the enrichment inline. The field
+    // is underscore-prefixed in prod because only Drop reads it — this
+    // assertion is the one legitimate reader.
+    #[allow(clippy::used_underscore_binding)]
+    let handle_stored = srv._autograph_worker.is_some();
+    assert!(
+        handle_stored,
+        "constructing the server over an autograph-carrying service must \
+         spawn the background worker and STORE its handle — the handle is \
+         what makes the server's drop bound shutdown"
+    );
+    assert!(
+        srv.service.autograph_queue_open(),
+        "the spawned worker's queue must be open, so remember enqueues \
+         instead of running the enrichment on the response path"
+    );
+
+    // The extractor is GATED shut: an inline autograph could not return at
+    // all. The tool must answer on the write's own budget.
+    let started = Instant::now();
+    let Json(_stored) = srv
+        .remember(Parameters(RememberParams {
+            fact: "Alice Martin travaille chez Wiscale.".to_owned(),
+            links: Vec::new(),
+            metadata: None,
+            ttl_seconds: None,
+        }))
+        .await
+        .expect("remember");
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "the remember TOOL must answer with the extractor gate still SHUT — \
+         it took {elapsed:?}, so the enrichment sat on the server's response \
+         path, the exact pre-#1851 behaviour"
+    );
+
+    // Deferred is not dropped: release the enrichment and require the entity
+    // TOOL to see the wired edge within a bounded wait (an event poll).
+    release.send(()).expect("release the gated extraction");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let Json(profile) = srv
+            .entity(Parameters(EntityParams {
+                name: "alice martin".to_owned(),
+            }))
+            .await
+            .expect("entity");
+        if profile.found && !profile.relations.is_empty() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the deferred enrichment must eventually wire alice martin's \
+             edge — deferred is not dropped"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test]
+async fn dropping_the_server_bounds_shutdown_and_skips_queued_jobs() {
+    let (_dir, srv, extractor, release) = gated_server();
+    let service = Arc::clone(&srv.service);
+
+    // Three writes: job 0 is dequeued by the worker and BLOCKS on the gate;
+    // jobs 1 and 2 sit in the queue. `entered == 1` is the event proving
+    // job 0 is IN FLIGHT before the drop — not a wall-clock guess.
+    for i in 0..3 {
+        srv.remember(Parameters(RememberParams {
+            fact: format!("fait en rafale numero {i}"),
+            links: Vec::new(),
+            metadata: None,
+            ttl_seconds: None,
+        }))
+        .await
+        .expect("remember");
+    }
+    assert!(
+        wait_for(Duration::from_secs(5), || {
+            extractor.entered.load(Ordering::SeqCst) == 1
+        }),
+        "the worker must have dequeued job 0 and be blocked on the gate"
+    );
+
+    // Drop the server on a side thread: the handle it stores is the ONLY
+    // thing that closes the queue and joins the worker.
+    let started = Instant::now();
+    let joiner = std::thread::spawn(move || drop(srv));
+    assert!(
+        wait_for(Duration::from_secs(5), || !service.autograph_queue_open()),
+        "dropping the server must close the autograph queue via the stored \
+         worker handle"
+    );
+    release.send(()).expect("release the in-flight job");
+    joiner.join().expect("join the dropping thread");
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "shutdown is BOUNDED: it waits for at most the ONE in-flight \
+         generation, never the queue behind it"
+    );
+    assert_eq!(
+        extractor.completed.load(Ordering::SeqCst),
+        1,
+        "only the in-flight job is wired on shutdown"
+    );
+    assert_eq!(
+        service.autograph_dropped(),
+        2,
+        "the two still-queued jobs are SKIPPED and counted, not waited out"
+    );
 }

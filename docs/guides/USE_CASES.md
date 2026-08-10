@@ -201,7 +201,7 @@ LIMIT 30
 ```typescript
 import { VelesDB } from '@wiscale/velesdb-sdk';
 
-const db = new VelesDB({ baseUrl: 'http://localhost:8080' });
+const db = new VelesDB({ backend: 'rest', url: 'http://localhost:8080' });
 
 const response = await db.query('knowledge_graph', `
     MATCH (start:Concept)-[*1..3]->(discovered:Concept)
@@ -389,26 +389,26 @@ LIMIT 10
 
 ```python
 # Get user's preference vector (average of liked items)
-user_likes = db.query("items", f"""
+items = db.get_collection("items")
+user_likes = items.match_query("""
     MATCH (u:User)-[:LIKED]->(i:Item)
-    WHERE u.id = '{user_id}'
+    WHERE u.id = $user_id
     LIMIT 100
-""")
+""", params={"user_id": user_id})
 
-# Compute preference centroid
-preference_vector = compute_centroid([item['embedding'] for item in user_likes])
+# Compute preference centroid from the matched item payloads
+preference_vector = compute_centroid([m['bindings']['embedding'] for m in user_likes])
 
 # Find recommendations
-recommendations = db.query("items", """
-    SELECT i.id, i.name, i.category
-    FROM items i
-    WHERE similarity(i.embedding, $pref) > 0.7
-      AND i.id NOT IN $already_liked
-    ORDER BY similarity(i.embedding, $pref) DESC
+recommendations = items.query("""
+    SELECT id, name, category
+    FROM items
+    WHERE vector NEAR $pref
+      AND id NOT IN $already_liked
     LIMIT 20
 """, params={
     "pref": preference_vector,
-    "already_liked": [item['id'] for item in user_likes]
+    "already_liked": [m['node_id'] for m in user_likes]
 })
 ```
 
@@ -457,28 +457,29 @@ LIMIT 5
 ### Python Example
 
 ```python
+companies = db.get_collection("companies")
+
 def check_duplicate(new_company: dict) -> list:
     """Check if company already exists in database."""
     embedding = embed(f"{new_company['name']} {new_company['description']}")
     
-    duplicates = db.query("companies", """
-        SELECT id, name, domain
-        FROM companies
-        WHERE similarity(embedding, $emb) > 0.95
-        LIMIT 5
-    """, params={"emb": embedding})
-    
-    return duplicates
+    # Keep only near-exact matches (score > 0.95)
+    candidates = companies.search(embedding, top_k=5)
+    return [c for c in candidates if c['score'] > 0.95]
 
 # Usage
 new_company = {"name": "OpenAI Inc", "description": "AI research company"}
 matches = check_duplicate(new_company)
 
 if matches:
-    print(f"Potential duplicates found: {[m['name'] for m in matches]}")
+    print(f"Potential duplicates found: {[m['payload']['name'] for m in matches]}")
 else:
     # Safe to insert
-    db.insert("companies", new_company)
+    companies.upsert([{
+        "id": next_company_id(),
+        "vector": embed(f"{new_company['name']} {new_company['description']}"),
+        "payload": new_company,
+    }])
 ```
 
 ### Performance
@@ -534,7 +535,8 @@ import matplotlib.pyplot as plt
 
 topic_vector = embed("artificial intelligence breakthroughs")
 
-trends = db.query("articles", """
+articles = db.get_collection("articles")
+trends = articles.query("""
     SELECT DATE(published_at) as day, 
            COUNT(*) as count,
            AVG(sentiment_score) as sentiment
@@ -606,7 +608,8 @@ LIMIT 50
 def analyze_impact(component_id: str, max_depth: int = 5) -> dict:
     """Analyze the impact of changing a component."""
     
-    affected = db.query("components", f"""
+    components = db.get_collection("components")
+    affected = components.match_query(f"""
         MATCH (source:Component)-[:DEPENDS_ON*1..{max_depth}]->(affected:Component)
         WHERE source.id = $cid
         LIMIT 500
@@ -615,12 +618,12 @@ def analyze_impact(component_id: str, max_depth: int = 5) -> dict:
     # Group by depth and criticality
     impact_report = {
         "total_affected": len(affected),
-        "critical": [a for a in affected if a['criticality'] == 'critical'],
+        "critical": [a for a in affected if a['bindings']['criticality'] == 'critical'],
         "by_type": {}
     }
     
     for a in affected:
-        t = a['type']
+        t = a['bindings']['type']
         impact_report["by_type"][t] = impact_report["by_type"].get(t, 0) + 1
     
     return impact_report
@@ -697,35 +700,34 @@ LIMIT 15
 ```python
 class AgentMemory:
     def __init__(self, db, user_id: str):
-        self.db = db
+        self.messages = db.get_collection("messages")
         self.user_id = user_id
+        self.next_id = 0
     
     def store_message(self, role: str, content: str, conversation_id: str):
         """Store a message with its embedding."""
-        embedding = embed(content)
-        self.db.insert("messages", {
-            "role": role,
-            "content": content,
-            "embedding": embedding,
-            "conversation_id": conversation_id,
-            "timestamp": datetime.now().isoformat()
-        })
+        self.next_id += 1
+        self.messages.upsert([{
+            "id": self.next_id,
+            "vector": embed(content),
+            "payload": {
+                "role": role,
+                "content": content,
+                "conversation_id": conversation_id,
+                "user_id": self.user_id,
+                "timestamp": datetime.now().isoformat(),
+            },
+        }])
     
     def retrieve_context(self, query: str, limit: int = 10) -> list:
         """Retrieve relevant past messages for context."""
         query_embedding = embed(query)
         
-        return self.db.query("messages", """
-            MATCH (c:Conversation)-[:HAS_MESSAGE]->(m:Message)
-            WHERE c.user_id = $uid
-              AND similarity(m.embedding, $q) > 0.6
-            ORDER BY m.timestamp DESC
-            LIMIT $lim
-        """, params={
-            "uid": self.user_id,
-            "q": query_embedding,
-            "lim": limit
-        })
+        return self.messages.search(
+            query_embedding,
+            top_k=limit,
+            filter={"user_id": self.user_id},
+        )
     
     def build_prompt_context(self, current_query: str) -> str:
         """Build context string for LLM prompt."""
@@ -733,7 +735,7 @@ class AgentMemory:
         
         context_parts = []
         for msg in reversed(relevant):  # Chronological order
-            context_parts.append(f"[{msg['role']}]: {msg['content']}")
+            context_parts.append(f"[{msg['payload']['role']}]: {msg['payload']['content']}")
         
         return "\n".join(context_parts)
 
@@ -780,7 +782,7 @@ Current question: Can you check the shipping?
 
 ## Next Steps
 
-- **Tutorial**: [Build a Mini Recommender Engine](./TUTORIALS/MINI_RECOMMENDER.md)
+- **Tutorial**: [Build a Mini Recommender Engine](./tutorials/MINI_RECOMMENDER.md)
 - **Reference**: [VelesQL Specification](../VELESQL_SPEC.md)
 - **Integration**: [SDK Examples](../../examples/)
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Documentation freshness guards.
 
-Three independent guards, all runnable separately so a guard that is still
+Five independent guards, all runnable separately so a guard that is still
 red on the current tree can be wired as a warning while the others block:
 
 ``stamp``
@@ -26,6 +26,20 @@ red on the current tree can be wired as a warning while the others block:
     inside doc snippets, and ``velesdb-memory-vX.Y.Z`` git-tag references.
     Dependency pins are allowed to be shorter than the full triple
     (``velesdb-core = "4.0"`` is fine for 4.0.0) but never to disagree.
+
+``tracked``
+    Every document an entry document designates is itself tracked by git. A
+    path that exists and a path a clone receives are not the same path: the
+    guard reads the index, not the filesystem.
+
+``decisions``
+    Every markdown file directly under ``docs/decisions/`` is listed in
+    ``docs/decisions/README.md``, AND every relative row of that index
+    resolves to a file that exists. ``index`` covers neither: it stops at the
+    root of ``docs/``, and it only ever asks doc-to-index, so a row pointing
+    at nothing has always been legal. A missing ``docs/decisions/`` is a
+    precondition (exit 2), never a silent pass — otherwise deleting the
+    directory would disarm the guard while CI stayed green.
 
 This script deliberately does NOT replace ``scripts/check-version-sync.py``:
 that one pins a curated list of files to exact readers for the release bump.
@@ -53,6 +67,12 @@ DOCS_INDEX = "README.md"
 # Keep this list empty unless there is a structural reason: the index itself
 # obviously cannot link to itself.
 ROOT_DOC_EXEMPTIONS: "frozenset[str]" = frozenset({DOCS_INDEX})
+
+# One decision per file, under docs/decisions/, presented by its own index.
+DECISIONS_SUBDIR = "decisions"
+
+# Same structural reason as above: an index cannot be a row of itself.
+DECISION_DOC_EXEMPTIONS: "frozenset[str]" = frozenset({DOCS_INDEX})
 
 # Directories whose docs legitimately pin OLD versions (historical migration
 # notes, archived releases). Paths are relative to the repository root.
@@ -168,13 +188,57 @@ def read_memory_version(root: Path) -> str:
 
 
 def root_docs(root: Path) -> "list[Path]":
-    """Markdown files directly under docs/, excluding structural exemptions."""
+    """TRACKED markdown files directly under docs/, minus structural exemptions.
+
+    Tracked, not on disk — and that distinction is the arbitration of the
+    guard-against-guard conflict on `docs/CORE_PREMIUM_SPLIT.md`.
+
+    This guard used to glob the filesystem. It therefore demanded that
+    `docs/README.md` link a document that existed on exactly one machine: for
+    every clone and every CI run, obeying it meant publishing a BROKEN LINK.
+    A guard that reasons about untracked files reasons about a state nobody
+    else can observe, and it was actively enforcing the lie that
+    `--guard tracked` correctly refused.
+
+    So `index` yields: existence precedes navigation. A document has to be in
+    the repository before there is any sense in demanding it be in the table
+    of contents. Fall back to the filesystem outside a work tree, where the
+    question has no answer — an empty sweep would pass vacuously.
+    """
     docs_dir = root / DOCS_DIRNAME
-    return sorted(
-        p
-        for p in docs_dir.glob("*.md")
-        if p.name not in ROOT_DOC_EXEMPTIONS
+    on_disk = sorted(
+        path for path in docs_dir.glob("*.md")
+        if path.name not in ROOT_DOC_EXEMPTIONS
     )
+    tracked = tracked_files(root)
+    if tracked is None:
+        return on_disk
+    return [
+        path for path in on_disk
+        if path.relative_to(root).as_posix() in tracked
+    ]
+
+
+def decision_docs(root: Path) -> "list[Path]":
+    """TRACKED markdown files directly under docs/decisions/, minus the index.
+
+    Non-recursive on purpose. A decision is atomic, so it is one file; a
+    subdirectory is another index's business, and sweeping into it would make
+    this index answer for documents it does not present. Tracked rather than
+    on-disk, for the reason spelled out in `root_docs`.
+    """
+    decisions_dir = root / DOCS_DIRNAME / DECISIONS_SUBDIR
+    on_disk = sorted(
+        path for path in decisions_dir.glob("*.md")
+        if path.name not in DECISION_DOC_EXEMPTIONS
+    )
+    tracked = tracked_files(root)
+    if tracked is None:
+        return on_disk
+    return [
+        path for path in on_disk
+        if path.relative_to(root).as_posix() in tracked
+    ]
 
 
 def scanned_doc_files(root: Path) -> "list[Path]":
@@ -191,26 +255,44 @@ def scanned_doc_files(root: Path) -> "list[Path]":
     root_readme = root / "README.md"
     if root_readme.is_file():
         out.append(root_readme)
+    # A crate's own README is the page a user lands on from crates.io, npm or
+    # PyPI — its version claim is the FIRST one anybody reads, and it was
+    # outside every sweep. Measured on 4.2.0: seven of the nine stamped READMEs
+    # still announced `Applies to: velesdb-core 4.1.0`, one two minors behind.
+    # `check-version-sync.py` pins exactly two of them (:43, :46), which is why
+    # those two were the only correct ones.
+    out.extend(sorted((root / "crates").glob("*/README.md")))
+    return out
+
+
+def index_links(index: Path) -> "list[tuple[str, Path, int]]":
+    """Every relative link of an index, as (raw target, resolved path, line).
+
+    `index_link_targets` only ever needed the resolved set, so that is all it
+    returned. Asking whether a row points at NOTHING needs the raw text to
+    quote back and the line to point at, and a set of paths carries neither.
+    """
+    text = index.read_text(encoding="utf-8")
+    out: "list[tuple[str, Path, int]]" = []
+    for match in list(MD_INLINE_LINK_RE.finditer(text)) + list(MD_REF_LINK_RE.finditer(text)):
+        raw = match.group(1).strip()
+        if not raw or raw.startswith(("#", "mailto:")) or "://" in raw:
+            continue
+        target = raw.split("#", 1)[0].split("?", 1)[0]
+        if not target:
+            continue
+        try:
+            resolved = (index.parent / target).resolve()
+        except (OSError, ValueError):  # pragma: no cover - defensive
+            continue
+        out.append((target, resolved, line_of(text, match.start())))
     return out
 
 
 def index_link_targets(root: Path) -> "set[Path]":
     """Resolved filesystem targets of every relative link in docs/README.md."""
     index = root / DOCS_DIRNAME / DOCS_INDEX
-    text = index.read_text(encoding="utf-8")
-    targets: "set[Path]" = set()
-    for match in list(MD_INLINE_LINK_RE.finditer(text)) + list(MD_REF_LINK_RE.finditer(text)):
-        raw = match.group(1).strip()
-        if not raw or raw.startswith(("#", "mailto:")) or "://" in raw:
-            continue
-        raw = raw.split("#", 1)[0].split("?", 1)[0]
-        if not raw:
-            continue
-        try:
-            targets.add((index.parent / raw).resolve())
-        except (OSError, ValueError):  # pragma: no cover - defensive
-            continue
-    return targets
+    return {resolved for _raw, resolved, _line in index_links(index)}
 
 
 def pin_agrees(pin: str, actual: str) -> bool:
@@ -290,6 +372,57 @@ def guard_index(root: Path) -> "tuple[list[str], list[str]]":
     return failures, info
 
 
+def guard_decisions(root: Path) -> "tuple[list[str], list[str]]":
+    """Both directions, because `index` only ever checked one.
+
+    `index` asks doc-to-index: is every document presented? It never asks
+    index-to-doc, so a row pointing at a file that does not exist has always
+    been legal there. Under docs/decisions/ neither question was asked at all,
+    since that guard stops at the root of docs/.
+    """
+    failures: "list[str]" = []
+    info: "list[str]" = []
+    index = root / DOCS_DIRNAME / DECISIONS_SUBDIR / DOCS_INDEX
+    index_name = rel(root, index)
+    links = index_links(index)
+    listed = {resolved for _raw, resolved, _line in links}
+    docs = decision_docs(root)
+
+    for path in docs:
+        name = rel(root, path)
+        if path.resolve() in listed:
+            info.append(f"  ok  {name}")
+            continue
+        failures.append(
+            f"{name}: not listed in {index_name}. Add a row such as "
+            f"`| [Title](./{path.name}) | one-line summary |` to the table."
+        )
+
+    for raw, resolved, line in links:
+        if not _inside(root, resolved) or resolved.exists():
+            continue
+        failures.append(
+            f"{index_name}:{line}: lists `{raw}`, which does not exist. "
+            "Either add the decision file or remove the row."
+        )
+
+    info.insert(
+        0,
+        f"Scanned {len(docs)} decision file(s) in {DOCS_DIRNAME}/{DECISIONS_SUBDIR}/ "
+        f"against {len(links)} relative link(s) in {index_name}.",
+    )
+    return failures, info
+
+
+def _inside(root: Path, path: Path) -> bool:
+    """A link climbing out of the repository is nobody's business here."""
+    try:
+        path.relative_to(root.resolve())
+    except ValueError:
+        return False
+    return True
+
+
 def guard_versions(root: Path) -> "tuple[list[str], list[str]]":
     failures: "list[str]" = []
     info: "list[str]" = []
@@ -324,10 +457,128 @@ def guard_versions(root: Path) -> "tuple[list[str], list[str]]":
     return failures, info
 
 
+#: Documents an agent or a contributor is told to read FIRST. Everything they
+#: designate as normative has to be reachable from a clone, or the instruction
+#: is unfollowable.
+#:
+#: Root-level, not under docs/: these are the entry points a reader meets
+#: before any documentation index.
+#: `docs/README.md` is here for the other half of the same arbitration: it is
+#: the index `guard_index` fills, so it is the document most likely to be
+#: pointed at an untracked file by someone obeying that guard. Leaving it out
+#: is what let the original conflict exist at all.
+ENTRY_DOCUMENTS = (
+    "AGENTS.md",
+    "CLAUDE.md",
+    "CONTRIBUTING.md",
+    "README.md",
+    "docs/README.md",
+)
+
+#: A relative markdown link, minus anchors, mail and network schemes.
+ENTRY_LINK_RE = re.compile(r"\[[^\]]*\]\((?!https?://|mailto:|#)([^)#\s]+)")
+
+
+def tracked_files(root: Path) -> "set[str] | None":
+    """Paths git tracks under `root`, or None when `root` is not a work tree.
+
+    None is not an empty set. An empty set would make the guard refuse every
+    link at once, on a tree where the question has no meaning — which is how a
+    guard learns to be ignored.
+    """
+    import subprocess
+
+    try:
+        listing = subprocess.run(  # noqa: S603 - fixed argv, no shell
+            ["git", "-C", str(root), "ls-files"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return {line for line in listing.splitlines() if line}
+
+
+def _is_tracked(relative: str, resolved: Path, tracked: "set[str]") -> bool:
+    """Whether a link target is reachable from a clone.
+
+    A DIRECTORY is satisfied by any tracked file under it: `git ls-files`
+    lists files, never directories, so comparing a directory path against that
+    set reports every `[the memory crate](crates/velesdb-memory)` as missing.
+    Seven of them, on the first run of this guard — a false positive, not a
+    finding, and exactly the shape that teaches a reader to ignore a guard.
+    """
+    if resolved.is_dir():
+        prefix = relative.rstrip("/") + "/"
+        return any(path.startswith(prefix) for path in tracked)
+    return relative in tracked
+
+
+def guard_tracked(root: Path) -> "tuple[list[str], list[str]]":
+    """Every document an entry document designates is itself tracked.
+
+    The defect this closes, measured on this repository: `CLAUDE.md`,
+    `AGENTS.md` and `docs/CORE_PREMIUM_SPLIT.md` — which calls itself the
+    "single source of truth" for the open-core boundary — were excluded, two
+    of them through `.git/info/exclude`, a file that is not versioned and that
+    no reviewer can see. The rule "velesdb-core must never reference any
+    premium crate" appeared ZERO times in tracked markdown, while twelve
+    tracked files (the commit-msg hook, the guard registry, a workflow) sent
+    the reader to a document no clone has.
+
+    A contract only its author can read is not a contract.
+    """
+    failures: "list[str]" = []
+    info: "list[str]" = []
+    tracked = tracked_files(root)
+    if tracked is None:
+        info.append("  (skipped -- not a git work tree)")
+        return failures, info
+
+    present = [name for name in ENTRY_DOCUMENTS if (root / name).is_file()]
+    if not present:
+        failures.append(
+            "no entry document found at the root: this guard would sweep "
+            f"nothing. Expected one of {', '.join(ENTRY_DOCUMENTS)}."
+        )
+        return failures, info
+
+    for name in present:
+        if name not in tracked:
+            failures.append(
+                f"{name}: an entry document that is NOT tracked. Every reader "
+                "is told to start here, and no clone has it."
+            )
+            continue
+        text = (root / name).read_text(encoding="utf-8", errors="replace")
+        targets = sorted({match.group(1) for match in ENTRY_LINK_RE.finditer(text)})
+        for target in targets:
+            resolved = (root / name).parent / target
+            try:
+                relative = resolved.resolve().relative_to(root.resolve()).as_posix()
+            except ValueError:
+                continue  # Escapes the tree; another repository's business.
+            if not resolved.exists():
+                failures.append(f"{name}: links `{target}`, which does not exist.")
+            elif not _is_tracked(relative, resolved, tracked):
+                failures.append(
+                    f"{name}: links `{target}`, which exists but is NOT tracked "
+                    "— absent from every clone, every CI run and every worktree."
+                )
+        info.append(f"  ok  {name} ({len(targets)} relative link(s))")
+    return failures, info
+
+
 GUARDS = {
     "stamp": (guard_stamp, "every doc at the root of docs/ carries a `Last updated: YYYY-MM-DD` stamp"),
     "index": (guard_index, "every doc at the root of docs/ is linked from docs/README.md"),
     "versions": (guard_versions, "no hardcoded doc version contradicts the Cargo manifests"),
+    "tracked": (guard_tracked, "every document an entry document designates is itself tracked"),
+    "decisions": (
+        guard_decisions,
+        "every docs/decisions/ file is listed in its index, and every row of that index resolves",
+    ),
 }
 
 
@@ -384,8 +635,23 @@ def main(argv: "list[str] | None" = None) -> int:
     names = sorted(GUARDS) if "all" in selected else sorted(set(selected))
 
     root = Path(args.root).resolve()
-    if not (root / DOCS_DIRNAME / DOCS_INDEX).is_file():
+    # The docs index is a precondition of the `index` and `stamp` guards, which
+    # read it; it is NOT one of `tracked`, which reads the entry documents at
+    # the root. Enforcing it globally made `--guard tracked --root <tree>`
+    # answer 2 on a tree that had no reason to carry a docs index — and 2 is a
+    # guard that COULD NOT RUN, not a refusal. A refusal vector must be able to
+    # exercise one guard without staging the preconditions of the others.
+    if {"index", "stamp"} & set(names) and not (root / DOCS_DIRNAME / DOCS_INDEX).is_file():
         print(f"ERROR: {root}/{DOCS_DIRNAME}/{DOCS_INDEX} not found", file=sys.stderr)
+        return 2
+    # Deleting docs/decisions/ must not read as "nothing to report". A silent 0
+    # there would leave CI green, the registry still announcing the subguard and
+    # the workflow step still running while measuring nothing — a disarm one
+    # notch below the one `subguards` was written to catch. `warn` does not
+    # soften it either: a precondition is not a finding.
+    decisions_index = root / DOCS_DIRNAME / DECISIONS_SUBDIR / DOCS_INDEX
+    if "decisions" in names and not decisions_index.is_file():
+        print(f"ERROR: {decisions_index} not found", file=sys.stderr)
         return 2
     try:
         return run(root, names, args.mode, args.verbose)

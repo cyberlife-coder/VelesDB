@@ -100,6 +100,29 @@ pub(crate) fn resolve_aggregate_collection(
         })
 }
 
+/// The refuse-or-proceed phase of [`aggregate`], one rule per step: the
+/// query parses, it IS an aggregation (row/search/graph belong on
+/// `/query`), and it names exactly one resolvable collection. Split out so
+/// the handler charges the error metric in ONE place instead of once per
+/// refusal arm.
+#[allow(clippy::result_large_err)]
+fn prepare_aggregation(
+    req: &QueryRequest,
+) -> Result<(velesdb_core::velesql::Query, String), axum::response::Response> {
+    let parsed = parse_and_validate(&req.query)?;
+    if parsed.is_match_query() || !parsed.select.is_aggregation_query() {
+        return Err(velesql_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "VELESQL_AGGREGATION_ERROR",
+            "Only aggregation queries are accepted on /aggregate",
+            "Use /query for row/search/graph queries; use /aggregate for GROUP BY/aggregate workloads.",
+            Some(serde_json::json!({ "endpoint": "/aggregate" })),
+        ));
+    }
+    let collection_name = resolve_aggregate_collection(&parsed, req)?;
+    Ok((parsed, collection_name))
+}
+
 /// Execute an aggregation-only VelesQL query.
 ///
 /// This endpoint is explicit and stable for GROUP BY / HAVING / aggregate workloads.
@@ -115,7 +138,6 @@ pub(crate) fn resolve_aggregate_collection(
         (status = 404, description = "Collection not found", body = crate::types::VelesqlErrorResponse)
     )
 )]
-#[allow(clippy::unused_async)]
 pub async fn aggregate(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     Json(req): Json<QueryRequest>,
@@ -123,33 +145,20 @@ pub async fn aggregate(
     let start = std::time::Instant::now();
     state.operational_metrics.inc_queries();
 
-    let parsed = match parse_and_validate(&req.query) {
-        Ok(q) => q,
+    let (parsed, collection_name) = match prepare_aggregation(&req) {
+        Ok(prepared) => prepared,
         Err(resp) => {
             state.operational_metrics.inc_errors();
             return resp;
         }
     };
 
-    if parsed.is_match_query() || !parsed.select.is_aggregation_query() {
-        state.operational_metrics.inc_errors();
-        return velesql_error(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "VELESQL_AGGREGATION_ERROR",
-            "Only aggregation queries are accepted on /aggregate",
-            "Use /query for row/search/graph queries; use /aggregate for GROUP BY/aggregate workloads.",
-            Some(serde_json::json!({ "endpoint": "/aggregate" })),
-        );
-    }
-
-    let collection_name = resolve_aggregate_collection(&parsed, &req);
-    let collection_name = match collection_name {
-        Ok(name) => name,
-        Err(resp) => {
-            state.operational_metrics.inc_errors();
-            return resp;
-        }
-    };
-
-    execute_aggregation_query(&state, &collection_name, &parsed, &req.params, start)
+    // The aggregation scan is synchronous core code — run it on the
+    // blocking pool so the async workers stay responsive.
+    let state_clone = Arc::clone(&state);
+    crate::handlers::helpers::run_blocking(move || {
+        execute_aggregation_query(&state_clone, &collection_name, &parsed, &req.params, start)
+    })
+    .await
+    .unwrap_or_else(|resp| resp)
 }

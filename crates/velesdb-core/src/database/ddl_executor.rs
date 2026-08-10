@@ -7,7 +7,7 @@
 //! INSERT NODE) live in the sibling [`dml_executor`](super::dml_executor)
 //! module.
 
-use crate::collection::graph::{EdgeType, GraphSchema, NodeType, ValueType};
+use crate::collection::graph::{EdgeRemoval, EdgeType, GraphSchema, NodeType, ValueType};
 use crate::collection::Collection;
 use crate::velesql::{
     AlterCollectionStatement, AnalyzeStatement, CreateCollectionKind, CreateIndexStatement,
@@ -203,12 +203,32 @@ impl Database {
     }
 
     /// Truncates a graph collection: removes all edges then all nodes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any edge or node removal fails. Edges and nodes are
+    /// held to the SAME policy — before #1749 the edge half swallowed its
+    /// failures while the node half propagated them, so a partial TRUNCATE
+    /// could report `Ok`.
+    ///
+    /// TRUNCATE is not atomic and makes no rollback promise: removals that
+    /// succeeded before the failure stay applied, and the error says how many
+    /// those were. Nodes are deliberately left in place when an edge removal
+    /// fails — deleting them anyway is what turns a surviving edge into a
+    /// dangling one pointing at ids that no longer exist.
     fn truncate_graph(gc: &crate::collection::GraphCollection) -> Result<Vec<SearchResult>> {
         // Remove all edges first (edges reference nodes).
         let edges = gc.get_edges(None);
-        let edge_count = edges.len();
-        for edge in &edges {
-            let _ = gc.remove_edge(edge.id());
+        let (edge_count, failure) =
+            remove_edges_reporting_failure(edges.iter().map(crate::GraphEdge::id), |id| {
+                gc.remove_edge_detailed(id)
+            });
+        if let Some((edge_id, reason)) = failure {
+            return Err(Error::Storage(format!(
+                "TRUNCATE removed {edge_count} of {} edges, then failed on edge {edge_id}: \
+                 {reason}. The nodes were left in place; the collection is NOT empty.",
+                edges.len()
+            )));
         }
         // Remove all node payloads.
         let node_ids = gc.all_node_ids();
@@ -377,6 +397,34 @@ fn build_typed_schema(definitions: &[SchemaDefinition]) -> GraphSchema {
     }
 
     schema
+}
+
+/// Removes every id via the injected `remove` closure, returning how many were
+/// actually removed together with the FIRST genuine failure, if any.
+///
+/// Every id is attempted even after a failure — the loop never short-circuits —
+/// so a failure partway through still lets the remaining ids be removed rather
+/// than stranding them. [`EdgeRemoval::Absent`] is deliberately NOT a failure:
+/// removing an edge that is already gone is a documented no-op that callers
+/// rely on.
+pub(super) fn remove_edges_reporting_failure(
+    ids: impl Iterator<Item = u64>,
+    mut remove: impl FnMut(u64) -> EdgeRemoval,
+) -> (usize, Option<(u64, String)>) {
+    let mut removed = 0usize;
+    let mut first_failure: Option<(u64, String)> = None;
+    for id in ids {
+        match remove(id) {
+            EdgeRemoval::Removed => removed += 1,
+            EdgeRemoval::Absent => {}
+            EdgeRemoval::Failed(reason) => {
+                if first_failure.is_none() {
+                    first_failure = Some((id, reason));
+                }
+            }
+        }
+    }
+    (removed, first_failure)
 }
 
 /// Parses and validates a single `ALTER COLLECTION SET` option into a typed

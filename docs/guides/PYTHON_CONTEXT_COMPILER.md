@@ -37,7 +37,7 @@ compiled["insights"]   # {"tokens_in", "tokens_out", "tokens_saved", ...} -- loc
 
 # What did not fit stays recoverable, byte for byte:
 handle = compiled["sources"][0]["handle"]        # "ctx://source/18021940868160883968"
-mem.retrieve_context_source(handle)              # -> {"content": str, "media"?: ...}
+mem.retrieve_context_source(handle)              # -> {"content": str, "handle": str, "media": ... | None}
 
 # Aggregate savings across every compile_context call (optionally per project):
 mem.context_savings(project="veles")             # {"events", "tokens_saved", ...}
@@ -49,8 +49,18 @@ wid = mem.save_working_context("veles", "session-1", {
     "verified_facts": [], "open_hypotheses": [], "decisions": [],
     "exact_evidence": [], "pending_actions": ["run smoke tests"],
 })
-mem.load_working_context("veles", "session-1")   # -> the same dict, or None if never saved
+# -> {"found": True, "working": {...the same dict...}, "other_sessions": [...]}
+mem.load_working_context("veles", "session-1")
 ```
+
+**Breaking (`velesdb-memory` 0.12.0, relayed by the next `velesdb` wheel)**:
+`load_working_context` used to return the bare dict, or `None`. Read
+`["working"]` for that value. The version is the memory crate's, not the
+`velesdb` package's — the wheel is on the 4.x line and has no 0.12.0. `found: False` means nothing was
+saved under that EXACT project + session — but check `other_sessions` before
+concluding "fresh start": a similarly-named entry there means `session` was a
+typo, and it is listed on a hit too (a typo landing on another real session
+returns `found: True`).
 
 `mem.explain_compilation(request, fragment_id, fragment_index=None)` replays the
 decision trail for a single fragment of a previous request.
@@ -121,4 +131,4 @@ shapes), see [CONTEXT_COMPILER.md](CONTEXT_COMPILER.md).
 
 ---
 
-Last updated: 2026-07-25 · Applies to: velesdb-core 4.2.0
+Last updated: 2026-07-25 · Applies to: velesdb-core 5.0.0

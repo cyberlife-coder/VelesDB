@@ -1,6 +1,11 @@
 name: Doc Contract
 
+# Called by ci.yml on pull requests (see the note in gate-contracts.yml). The
+# `pull_request` trigger is deliberately gone: `CI Success` is the only required
+# check, so this contract now reports inside it rather than beside it. The
+# `push` filter below still applies to direct pushes on main/develop.
 on:
+  workflow_call:
   push:
     branches: [main, develop]
     paths:
@@ -8,22 +13,23 @@ on:
       - 'docs/**'
       - 'Cargo.toml'
       - 'crates/velesdb-memory/Cargo.toml'
+      # The MCP tools themselves. Editing context_tools.rs alone triggered
+      # NOTHING here, which is exactly how a return contract changes while
+      # every page describing it stays behind.
+      - 'crates/velesdb-memory/src/**'
+      - 'crates/velesdb-node/README.md'
+      - 'crates/velesdb-node/skills/**'
       - 'crates/velesdb-server/src/**'
+      # Surfaces that republish the same contract to the same model, and
+      # were outside this filter entirely.
+      - 'sdks/**'
+      - 'integrations/**'
+      - 'skills/**'
       - 'scripts/check-doc-contract.sh'
       - 'scripts/check-doc-freshness.py'
+      - 'scripts/check-mcp-doc-contract.py'
       - 'scripts/tests/test_check_doc_freshness.py'
-      - '.github/workflows/doc-contract.yml'
-  pull_request:
-    branches: [main, develop]
-    paths:
-      - 'README.md'
-      - 'docs/**'
-      - 'Cargo.toml'
-      - 'crates/velesdb-memory/Cargo.toml'
-      - 'crates/velesdb-server/src/**'
-      - 'scripts/check-doc-contract.sh'
-      - 'scripts/check-doc-freshness.py'
-      - 'scripts/tests/test_check_doc_freshness.py'
+      - 'scripts/tests/test_check_mcp_doc_contract.py'
       - '.github/workflows/doc-contract.yml'
 
 permissions:
@@ -35,9 +41,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Blocking on the pinned endpoints (/query/explain, /aggregate); the
-      # full 34-route sweep reports as warnings until the four routes named in
-      # the script header are documented, then set DOC_CONTRACT_MODE=strict.
+      # Blocking on the pinned endpoints (/query/explain, /aggregate) and,
+      # since #1707, on the full 34-route sweep too (DOC_CONTRACT_MODE
+      # defaults to strict in the script).
       - name: Check README/runtime contract
         run: bash scripts/check-doc-contract.sh
 
@@ -57,18 +63,35 @@ jobs:
       - name: Date stamp on every root doc (blocking)
         run: python3 scripts/check-doc-freshness.py --guard stamp --mode strict
 
-      # WARNING ONLY for now. 11 root docs are not reachable from
+      # Was `--mode warn` for eleven root docs said to be unreachable from
       # docs/README.md (ANN_SOTA_AUDIT, ARCHITECTURE, BUSINESS_MODEL,
       # CONCURRENCY_MODEL, CORE_WIRING_DEBT, FAQ, FUZZING, GPU_ACCELERATION,
-      # LICENSING, SOUNDNESS, STORAGE_FORMAT). Flip `--mode warn` to
-      # `--mode strict` in the same commit that finishes the docs/README.md
-      # index — do NOT flip it before, or every PR turns red on debt it did
-      # not create.
-      - name: Every root doc linked from docs/README.md (warning)
-        run: python3 scripts/check-doc-freshness.py --guard index --mode warn
+      # LICENSING, SOUNDNESS, STORAGE_FORMAT). Measured: all eleven ARE linked
+      # today, and `--guard index --mode strict` exits 0 on this tree. The debt
+      # was paid and nobody flipped the switch, so a stale comment kept a
+      # working guard disarmed — the very defect this campaign is about.
+      - name: Every root doc linked from docs/README.md
+        run: python3 scripts/check-doc-freshness.py --guard index --mode strict
+
+      # Every document an entry document designates must be reachable from a
+      # clone. `CLAUDE.md`, `AGENTS.md` and `docs/CORE_PREMIUM_SPLIT.md` — the
+      # self-declared single source of truth for the open-core boundary — were
+      # excluded, two of them through `.git/info/exclude`, which is not
+      # versioned and which no reviewer can see.
+      - name: Every designated document is tracked
+        run: python3 scripts/check-doc-freshness.py --guard tracked --mode strict
 
       # The five stale claims this guard was warning about are fixed, so it
       # blocks from here on: a doc pin that contradicts the Cargo manifests is
       # a broken copy-paste for whoever follows it.
       - name: Hardcoded doc versions vs Cargo manifests
         run: python3 scripts/check-doc-freshness.py --guard versions --mode strict
+
+      # BLOCKING from the day docs/decisions/ was created, because the two
+      # shapes it refuses were reachable by nobody else: `index` sweeps only the
+      # root of docs/, and it asks doc-to-index without ever asking
+      # index-to-doc, so a row pointing at a missing file was legal everywhere.
+      # Deleting the directory answers 2, not 0 — a guard that could not run is
+      # not a guard that found nothing.
+      - name: Every decision is indexed and every index row resolves
+        run: python3 scripts/check-doc-freshness.py --guard decisions --mode strict

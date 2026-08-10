@@ -51,13 +51,26 @@ use session_limit::BoundedSessionManager;
 pub const DEFAULT_HTTP_BIND: &str = "127.0.0.1:18090";
 
 /// Default max size (bytes) of a single `/mcp` HTTP request body when
-/// `VELESDB_MEMORY_HTTP_MAX_BODY_BYTES` is unset — 16 MiB. Generous headroom
-/// above the largest single field cap enforced deeper in the stack
-/// ([`crate::limits::MAX_TRANSCRIPT_BYTES`], 8 MiB) to cover JSON-RPC framing
-/// and multi-field payloads, while still bounding the raw allocation an
+/// `VELESDB_MEMORY_HTTP_MAX_BODY_BYTES` is unset — the full media budget the
+/// core itself accepts, plus text-and-framing headroom. 80 MiB at today's
+/// terms, but DERIVED rather than chosen: the previous hand-picked 16 MiB
+/// reasoned only about text ([`crate::limits::MAX_TRANSCRIPT_BYTES`], 8 MiB)
+/// and silently sat 48 MiB under [`crate::limits::MAX_TOTAL_MEDIA_BYTES`] —
+/// a `compile_context` call the core accepts (a screenshot-heavy session
+/// within its published 64 MiB media budget, each payload under
+/// [`crate::limits::MAX_MEDIA_BYTES`]) was refused by this transport alone,
+/// while the same call succeeded over stdio, which has no body cap (#1746).
+/// Deriving keeps the question answered: the next media-budget adjustment
+/// moves this cap with it instead of re-opening the same gap.
+///
+/// The headroom term covers JSON-RPC framing and every text field riding
+/// beside the media: twice the largest single text cap — the same "generous
+/// headroom above the largest field" rule the old constant applied, kept as
+/// a rule instead of a number. The result still bounds the raw allocation an
 /// unauthenticated-by-design loopback client can force before any
 /// application-level check ever runs (see [`RequestBodyLimit`] in [`router`]).
-pub const DEFAULT_HTTP_MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
+pub const DEFAULT_HTTP_MAX_BODY_BYTES: usize =
+    crate::limits::MAX_TOTAL_MEDIA_BYTES + 2 * crate::limits::MAX_TRANSCRIPT_BYTES;
 
 /// Resolve the `/mcp` request body limit from
 /// `VELESDB_MEMORY_HTTP_MAX_BODY_BYTES`. Unset, unparseable, or `0` falls
@@ -94,6 +107,63 @@ pub fn http_max_sessions_from_env() -> usize {
         .unwrap_or(DEFAULT_HTTP_MAX_SESSIONS)
 }
 
+/// Default idle timeout before a session is retired — 60 minutes, where
+/// `rmcp`'s own default is 5.
+///
+/// This is a MITIGATION, and it is worth being exact about what it does and
+/// does not fix (#1727).
+///
+/// When a session is retired, the next request carrying its id gets a `404`,
+/// which a client is expected to answer by re-initializing. A client that
+/// mishandles that `404` instead surfaces it as a timeout, and the call never
+/// reaches the tool — so a `save_working_context` on that call writes NOTHING
+/// while the caller sees only "timed out". That client-side mishandling is the
+/// actual defect behind #1727; it lives outside this repository, and no server
+/// change can correct it.
+///
+/// What the server CAN do is stop presenting the client with the situation it
+/// mishandles. Five minutes is shorter than the ordinary silences of an agent
+/// that compiles, waits on CI, or thinks — a CI wait alone already approaches
+/// 30 minutes — so the old default let a routine pause expire the session.
+/// Sixty minutes puts the timeout beyond those normal silences.
+///
+/// It does not eliminate the case: a longer silence still expires, and a
+/// timeout STILL never proves the write succeeded. After any timeout, confirm
+/// with `list_working_contexts` that `saved_at` actually advanced before
+/// treating the save as done, and re-send if it did not. `save_working_context`
+/// upserts on `project` + `session`, so re-sending replaces rather than
+/// duplicates.
+pub const DEFAULT_HTTP_KEEP_ALIVE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
+/// Resolve the session idle timeout from
+/// `VELESDB_MEMORY_HTTP_KEEP_ALIVE_SECS`. Unset, unparseable, or `0` falls
+/// back to [`DEFAULT_HTTP_KEEP_ALIVE`] — `0` would retire every session
+/// instantly, bricking the daemon.
+///
+/// Configurable rather than hard-coded because the right value depends on how
+/// long the clients on this machine actually go quiet, which the daemon cannot
+/// know.
+#[must_use]
+pub fn http_keep_alive_from_env() -> std::time::Duration {
+    keep_alive_from_raw(
+        std::env::var("VELESDB_MEMORY_HTTP_KEEP_ALIVE_SECS")
+            .ok()
+            .as_deref(),
+    )
+}
+
+/// The parsing half of [`http_keep_alive_from_env`], taking the raw value
+/// instead of reading it.
+///
+/// Split out so the rules can be tested without setting a process-wide env
+/// var: `cargo test` runs a crate's tests in parallel, so a test that mutated
+/// the environment would race every other test in the same process.
+fn keep_alive_from_raw(raw: Option<&str>) -> std::time::Duration {
+    raw.and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|&secs| secs > 0)
+        .map_or(DEFAULT_HTTP_KEEP_ALIVE, std::time::Duration::from_secs)
+}
+
 /// Build the axum [`Router`] serving the MCP streamable-HTTP transport at
 /// `/mcp` and a plain liveness probe at `/health` (used by the installer
 /// script and CI to confirm the daemon is up without speaking MCP itself).
@@ -116,12 +186,18 @@ pub fn http_max_sessions_from_env() -> usize {
 ///   ([`http_max_body_bytes_from_env`]).
 /// - [`BoundedSessionManager`] bounds concurrent sessions
 ///   ([`http_max_sessions_from_env`]).
+///
+/// Sessions are retired after [`http_keep_alive_from_env`] of silence — 60
+/// minutes by default rather than rmcp's 5, so an agent's normal pauses do not
+/// expire the session out from under it. See [`DEFAULT_HTTP_KEEP_ALIVE`] for
+/// what that mitigates and, just as importantly, what it does not.
 pub fn router(server: McpServer, cancellation_token: CancellationToken) -> Router {
-    router_with_limits(
+    router_with_limits_and_keep_alive(
         server,
         cancellation_token,
         http_max_body_bytes_from_env(),
         http_max_sessions_from_env(),
+        Some(http_keep_alive_from_env()),
     )
 }
 
@@ -133,6 +209,10 @@ pub fn router(server: McpServer, cancellation_token: CancellationToken) -> Route
 /// wants a tiny `max_body_bytes`/`max_sessions` to actually exercise a
 /// rejection would otherwise race every other test reading the same
 /// variables in the same process.
+///
+/// Uses [`DEFAULT_HTTP_KEEP_ALIVE`] directly — the constant, not the env var,
+/// for the same no-shared-global reason. Tests that need a different idle
+/// timeout call [`router_with_limits_and_keep_alive`].
 #[doc(hidden)]
 pub fn router_with_limits(
     server: McpServer,
@@ -140,16 +220,101 @@ pub fn router_with_limits(
     max_body_bytes: usize,
     max_sessions: usize,
 ) -> Router {
-    let session_manager = BoundedSessionManager::new(LocalSessionManager::default(), max_sessions);
+    router_with_limits_and_keep_alive(
+        server,
+        cancellation_token,
+        max_body_bytes,
+        max_sessions,
+        Some(DEFAULT_HTTP_KEEP_ALIVE),
+    )
+}
+
+/// [`router_with_limits`], but with the session idle timeout passed explicitly.
+///
+/// `keep_alive` is how long a session may sit with no traffic before rmcp
+/// retires it; `None` keeps rmcp's own default. A session that is retired this
+/// way is gone: the next request carrying its id gets a `404`, which a client
+/// is expected to answer by re-initializing.
+///
+/// Exposed so tests can inject a very short timeout (~100–200 ms) and observe
+/// a full expire-and-reuse cycle without waiting minutes of wall-clock time.
+#[doc(hidden)]
+pub fn router_with_limits_and_keep_alive(
+    server: McpServer,
+    cancellation_token: CancellationToken,
+    max_body_bytes: usize,
+    max_sessions: usize,
+    keep_alive: Option<std::time::Duration>,
+) -> Router {
+    let mut inner = LocalSessionManager::default();
+    if let Some(keep_alive) = keep_alive {
+        inner.session_config.keep_alive = Some(keep_alive);
+    }
+    let session_manager = BoundedSessionManager::new(inner, max_sessions);
     let mcp_service: StreamableHttpService<McpServer, BoundedSessionManager<LocalSessionManager>> =
         StreamableHttpService::new(
             move || Ok(server.clone()),
             Arc::new(session_manager),
             StreamableHttpServerConfig::default().with_cancellation_token(cancellation_token),
         );
+    // `route_layer` scopes the trace middleware to the routes added SO FAR —
+    // `/mcp` and nothing else. `/health`, added after, stays untraced on
+    // purpose: the installer and CI poll it, and a heartbeat line per poll
+    // would bury the requests an incident reader is looking for.
     Router::new()
         .nest_service("/mcp", RequestBodyLimit::new(mcp_service, max_body_bytes))
+        .route_layer(axum::middleware::from_fn(trace_mcp_http))
         .route("/health", get(health))
+}
+
+/// One transport-level trace event per `/mcp` request (#1780): HTTP method,
+/// `mcp-session-id`, response status, duration — never the body.
+///
+/// This is the event that tells the three outside-identical incident cases
+/// apart (#1727 was mis-diagnosed twice for lack of it): a request that
+/// **never arrived** leaves no line at all; one that arrived and was
+/// **refused** (unknown/expired session) leaves its `404`; one that was
+/// **handled** leaves its `2xx` — with the tool-level event (`crate::mcp`)
+/// alongside. The duration is measured to the response HEAD, so a streaming
+/// (SSE) response doesn't hold the event hostage until the stream closes.
+async fn trace_mcp_http(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let method = request.method().clone();
+    let session = session_from_headers(request.headers());
+    let started = std::time::Instant::now();
+    let response = next.run(request).await;
+    // `%`-Display fields and a pinned target, for the reasons given at the
+    // tool-level event (`crate::mcp`'s `log_tool_call`): unquoted grep-able
+    // values, and log lines stable across module refactors.
+    tracing::info!(
+        target: "velesdb_memory::http",
+        %method,
+        session = %session.as_deref().unwrap_or(crate::logging::NO_SESSION),
+        status = response.status().as_u16(),
+        elapsed_ms = crate::logging::elapsed_millis(started),
+        "mcp http request"
+    );
+    response
+}
+
+/// The streamable-HTTP session header [`session_from_headers`] reads. Only
+/// that one derivation consumes it; it lives here, beside it, rather than in
+/// `crate::logging`'s shared-vocabulary set, which this feature-gated module
+/// could not contribute to in an HTTP-less build anyway.
+pub(crate) const MCP_SESSION_HEADER: &str = "mcp-session-id";
+
+/// The `mcp-session-id` a request carries, if any — the ONE derivation both
+/// trace points share: the middleware above reads it off the live request,
+/// the tool-level event (`crate::mcp`) off the `Parts` rmcp injects into the
+/// request's extensions. Centralized so the two can never diverge on
+/// anything beyond where the headers came from.
+pub(crate) fn session_from_headers(headers: &axum::http::HeaderMap) -> Option<String> {
+    headers
+        .get(MCP_SESSION_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
 }
 
 /// Liveness probe: 200 OK with no body semantics beyond "the process is up
@@ -232,4 +397,69 @@ fn spawn_tls_connection(
             .serve_connection_with_upgrades(io, hyper_service)
             .await;
     });
+}
+
+#[cfg(test)]
+mod body_cap_tests {
+    use super::DEFAULT_HTTP_MAX_BODY_BYTES;
+    use crate::limits::{MAX_TOTAL_MEDIA_BYTES, MAX_TRANSCRIPT_BYTES};
+
+    /// The daemon's default transport cap must carry every request the core
+    /// itself accepts: the full published media budget plus the largest
+    /// single text field, with framing on top (#1746). Asserted as a
+    /// RELATION between the constants, not as a number — the next adjustment
+    /// to either side must re-face this invariant instead of a stale figure.
+    #[test]
+    fn the_default_body_cap_carries_the_full_media_budget() {
+        assert!(
+            DEFAULT_HTTP_MAX_BODY_BYTES >= MAX_TOTAL_MEDIA_BYTES + MAX_TRANSCRIPT_BYTES,
+            "a request the core accepts (up to {MAX_TOTAL_MEDIA_BYTES} bytes of media \
+             plus up to {MAX_TRANSCRIPT_BYTES} bytes of text) must not be refused by \
+             the transport alone — stdio has no such cap, so a tighter HTTP default \
+             makes the SAME call succeed or fail depending on how the client connected \
+             (got {DEFAULT_HTTP_MAX_BODY_BYTES})"
+        );
+    }
+}
+
+#[cfg(test)]
+mod keep_alive_tests {
+    use super::{keep_alive_from_raw, DEFAULT_HTTP_KEEP_ALIVE};
+    use std::time::Duration;
+
+    #[test]
+    fn unset_falls_back_to_the_sixty_minute_default() {
+        assert_eq!(keep_alive_from_raw(None), DEFAULT_HTTP_KEEP_ALIVE);
+        assert_eq!(
+            DEFAULT_HTTP_KEEP_ALIVE,
+            Duration::from_secs(3600),
+            "the default must stay well beyond an agent's normal silences — a CI \
+             wait alone already approaches 30 minutes"
+        );
+    }
+
+    #[test]
+    fn a_valid_value_is_honoured() {
+        assert_eq!(
+            keep_alive_from_raw(Some("900")),
+            Duration::from_secs(900),
+            "the timeout must be configurable, not hard-coded"
+        );
+        assert_eq!(
+            keep_alive_from_raw(Some("  120  ")),
+            Duration::from_secs(120)
+        );
+    }
+
+    #[test]
+    fn unparseable_or_zero_falls_back_instead_of_bricking_the_daemon() {
+        // Zero would retire every session the instant it was created, so the
+        // daemon would answer 404 to every second request. Falling back is the
+        // only safe reading of a nonsense value.
+        assert_eq!(keep_alive_from_raw(Some("0")), DEFAULT_HTTP_KEEP_ALIVE);
+        assert_eq!(keep_alive_from_raw(Some("")), DEFAULT_HTTP_KEEP_ALIVE);
+        assert_eq!(keep_alive_from_raw(Some("soon")), DEFAULT_HTTP_KEEP_ALIVE);
+        assert_eq!(keep_alive_from_raw(Some("-30")), DEFAULT_HTTP_KEEP_ALIVE);
+        assert_eq!(keep_alive_from_raw(Some("1.5")), DEFAULT_HTTP_KEEP_ALIVE);
+    }
 }

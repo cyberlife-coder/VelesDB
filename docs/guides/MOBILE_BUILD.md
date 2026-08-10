@@ -107,11 +107,13 @@ Then add `VelesDB.xcframework` to the Xcode target and add
 `bindings/swift/velesdb_mobile.swift` to the app's sources (it is plain Swift that
 calls the C ABI declared in `velesdb_mobileFFI.h`).
 
-A VERIFIER: `xcodebuild -create-xcframework` expects the directory passed to
-`-headers` to expose a module map under the name it looks for; UniFFI emits
-`velesdb_mobileFFI.modulemap`, so a rename to `module.modulemap` inside the headers
-directory may be required. This has not been executed in this repository — check the
-`xcodebuild` output on your machine before assuming the layout above is complete.
+Unverified on current toolchain: `xcodebuild -create-xcframework` expects the
+directory passed to `-headers` to expose a module map under the name it looks for;
+UniFFI emits `velesdb_mobileFFI.modulemap` (see
+`crates/velesdb-mobile/examples/generate_bindings.sh`), so a rename to
+`module.modulemap` inside the headers directory may be required. This step has not
+been executed in this repository — check the `xcodebuild` output on your machine
+before assuming the layout above is complete.
 
 ## 4. Android: shared libraries, jniLibs, JNA
 
@@ -136,9 +138,9 @@ app/src/main/jniLibs/armeabi-v7a/libvelesdb_mobile.so
 app/src/main/jniLibs/x86_64/libvelesdb_mobile.so
 ```
 
-`cargo-ndk`'s `-o <dir>` flag writes that layout directly (A VERIFIER on your
-`cargo-ndk` version: `cargo ndk -o app/src/main/jniLibs -t arm64-v8a build --release
--p velesdb-mobile`).
+`cargo-ndk`'s `-o <dir>` flag writes that layout directly (unverified on current
+toolchain — confirm with your `cargo-ndk` version: `cargo ndk -o app/src/main/jniLibs
+-t arm64-v8a build --release -p velesdb-mobile`).
 
 Two Gradle-side requirements come from the generated Kotlin itself:
 
@@ -173,4 +175,4 @@ Expected on a host with default features: `123 passed` (lib target), `8 passed`
 
 ---
 
-Last updated: 2026-07-25 · Applies to: velesdb-core 4.2.0
+Last updated: 2026-08-08 · Applies to: velesdb-core 5.0.0

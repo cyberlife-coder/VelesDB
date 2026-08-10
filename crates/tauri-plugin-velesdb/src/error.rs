@@ -46,6 +46,11 @@ pub enum Error {
         source: velesdb_core::config::ConfigError,
     },
 
+    /// A blocking task could not be joined (it panicked or the async
+    /// runtime is shutting down).
+    #[error("Blocking task failed: {0}")]
+    TaskJoin(String),
+
     /// Serialization error.
     #[error("Serialization error: {0}")]
     Serialization(String),
@@ -72,6 +77,7 @@ impl From<Error> for CommandError {
             Error::NotFound(_) => "NOT_FOUND",
             Error::DimensionMismatch { .. } => "DIMENSION_MISMATCH",
             Error::InvalidConfig(_) | Error::ConfigLoad { .. } => "INVALID_CONFIG",
+            Error::TaskJoin(_) => "TASK_JOIN",
             Error::Serialization(_) => "SERIALIZATION_ERROR",
             Error::Io(_) => "VELES-011",
         };

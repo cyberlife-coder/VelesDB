@@ -20,6 +20,7 @@ use crate::types::{
 };
 use crate::AppState;
 
+use crate::handlers::helpers::run_blocking;
 use aggregation::execute_aggregation_query;
 use explain::condition_has_vector_search;
 use velesql_helpers::{parse_and_validate, velesql_collection_not_found, velesql_error};
@@ -74,7 +75,6 @@ fn is_ast_routed_dml(parsed: &Query) -> bool {
         (status = 404, description = "Collection not found", body = crate::types::VelesqlErrorResponse)
     )
 )]
-#[allow(clippy::unused_async)]
 pub async fn query(
     State(state): State<Arc<AppState>>,
     Json(req): Json<QueryRequest>,
@@ -90,14 +90,32 @@ pub async fn query(
         }
     };
 
+    // Query execution calls synchronous core code (locks, and fsync on the
+    // DML/DDL paths) — run it on the blocking pool so the async workers stay
+    // responsive, mirroring the points/search handler discipline.
+    let state_clone = Arc::clone(&state);
+    run_blocking(move || dispatch_parsed_query(&state_clone, &parsed, &req, start))
+        .await
+        .unwrap_or_else(|resp| resp)
+}
+
+/// Synchronous post-parse dispatch for [`query`]: routes the parsed query to
+/// the mutation, aggregation, or standard execution path and builds the
+/// response. Runs on the blocking pool.
+fn dispatch_parsed_query(
+    state: &Arc<AppState>,
+    parsed: &Query,
+    req: &QueryRequest,
+    start: std::time::Instant,
+) -> axum::response::Response {
     // DDL/Introspection/Admin/graph-mutation bypass: these extract collection from
     // the SQL AST, not from the request body.  INSERT INTO, UPSERT, and UPDATE flow
     // through the standard path because they return meaningful result rows.
-    if requires_mutation_dispatch(&parsed) {
-        return execute_mutation_query(&state, &parsed, &req.params, start);
+    if requires_mutation_dispatch(parsed) {
+        return execute_mutation_query(state, parsed, &req.params, start);
     }
 
-    let collection_name = match resolve_collection_name(&parsed, &req) {
+    let collection_name = match resolve_collection_name(parsed, req) {
         Ok(name) => name,
         Err(resp) => {
             state.operational_metrics.inc_errors();
@@ -107,10 +125,10 @@ pub async fn query(
 
     // BUG-1 FIX: Detect aggregation queries and route to execute_aggregate
     if parsed.select.is_aggregation_query() {
-        return execute_aggregation_query(&state, &collection_name, &parsed, &req.params, start);
+        return execute_aggregation_query(state, &collection_name, parsed, &req.params, start);
     }
 
-    let results = match execute_standard_query(&state, &parsed, &collection_name, &req) {
+    let results = match execute_standard_query(state, parsed, &collection_name, req) {
         Ok(r) => r,
         Err(resp) => {
             state.operational_metrics.inc_errors();
@@ -118,7 +136,7 @@ pub async fn query(
         }
     };
 
-    build_query_response(&state, start, results, &parsed.select.columns)
+    build_query_response(state, start, results, &parsed.select.columns)
 }
 
 /// Execute a DDL, graph/delete DML, introspection, admin, or TRAIN query.

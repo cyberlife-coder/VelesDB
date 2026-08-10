@@ -1,7 +1,21 @@
 name: PR Governance
 
+# Called by ci.yml on pull requests (see the note in gate-contracts.yml). Its
+# three checks — Git Flow, branch freshness, AI attribution — used to report
+# BESIDE the only required check instead of inside it, so none of them could
+# block a merge (#1698). Branch freshness in particular is this repository's
+# replacement for branch protection's `strict` (decision #1639), and was
+# therefore protected by nobody.
+#
+# `branches-ignore` rather than no `pull_request:` at all: ci.yml is filtered
+# to `branches: [main, develop]`, so folding without this would have silently
+# dropped the "PR targets '<x>', which is not a valid Git Flow integration
+# branch" refusal for every other target. Fold + this filter = the same
+# coverage as before, with the main/develop half now required.
 on:
+  workflow_call:
   pull_request:
+    branches-ignore: [main, develop]
     types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
@@ -13,8 +27,20 @@ jobs:
     name: Git Flow & Freshness Checks
     runs-on: ubuntu-latest
     steps:
+      # ci.yml also runs on `push` and `workflow_dispatch`, where there is no
+      # pull_request payload at all: every step below would then read an empty
+      # base ref and fail on nothing. Conditioning the steps (rather than the
+      # caller job) keeps the job's result `success` instead of `skipped` —
+      # `CI Success` demands `== "success"` exactly, and a skip would fail the
+      # chain on every push to develop.
+      - name: No pull request to govern
+        if: ${{ github.event_name != 'pull_request' }}
+        run: |
+          echo "event '${{ github.event_name }}' carries no pull_request payload:"
+          echo "Git Flow, branch freshness and attribution have nothing to assert."
+
       - name: Block archive branches as PR source
-        if: ${{ startsWith(github.event.pull_request.head.ref, 'archive/') }}
+        if: ${{ github.event_name == 'pull_request' && startsWith(github.event.pull_request.head.ref, 'archive/') }}
         env:
           BRANCH_NAME: ${{ github.event.pull_request.head.ref }}
         run: |
@@ -22,6 +48,7 @@ jobs:
           exit 1
 
       - name: Enforce Git Flow branch rules
+        if: ${{ github.event_name == 'pull_request' }}
         env:
           SOURCE_REF: ${{ github.event.pull_request.head.ref }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
@@ -81,12 +108,14 @@ jobs:
           fi
 
       - name: Checkout head branch
+        if: ${{ github.event_name == 'pull_request' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
       - name: Verify branch includes latest base branch
+        if: ${{ github.event_name == 'pull_request' }}
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
@@ -99,19 +128,16 @@ jobs:
           fi
 
       - name: Reject AI-attributed commits
+        if: ${{ github.event_name == 'pull_request' }}
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           # Commits introduced by this PR must be authored as the human
           # maintainer, with no AI/assistant identity or attribution trailers.
+          # The rule lives in ONE place, tested: the two inline copies knew
+          # `claude|anthropic` and nothing else, so Codex, Copilot, Cursor
+          # and unlisted bots walked through (#1699). Infrastructure
+          # automation is admitted by name there, never by a wildcard —
+          # dependabot[bot] has 149 legitimate commits here.
           git fetch origin "${BASE_REF}" --depth=200
-          range="origin/${BASE_REF}..HEAD"
-          ident=$(git log "$range" --format='%H %an <%ae> | %cn <%ce>' | grep -iE 'claude|anthropic' || true)
-          trailers=$(git log "$range" --format='%B' | grep -iE 'co-authored-by:.*(claude|anthropic)|generated with.*claude|claude\.ai/code|🤖' || true)
-          if [ -n "$ident" ] || [ -n "$trailers" ]; then
-            echo "::error::AI attribution is not allowed. Re-author commits as the maintainer and strip any Co-Authored-By / Generated-with / 🤖 trailers."
-            [ -n "$ident" ] && { echo "Offending author/committer identity:"; echo "$ident"; }
-            [ -n "$trailers" ] && { echo "Offending message lines:"; echo "$trailers"; }
-            exit 1
-          fi
-          echo "OK: no AI attribution in PR commits."
+          python3 scripts/check-ai-attribution.py "origin/${BASE_REF}..HEAD"

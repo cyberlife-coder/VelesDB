@@ -18,9 +18,10 @@ from collections import Counter
 GLYPH = {"full": "✅", "partial": "⚠️", "absent": "❌", "na": "·"}
 
 # canonical column order + display labels (extend if new components appear)
-ORDER = ["server", "cli", "python", "wasm", "mobile", "migrate", "tauri",
-         "ts-sdk", "langchain", "llamaindex", "haystack", "common", "docs"]
+ORDER = ["server", "cli", "python", "node", "wasm", "memory", "mobile", "migrate",
+         "tauri", "ts-sdk", "langchain", "llamaindex", "haystack", "common", "docs"]
 LABELS = {"server": "Server", "cli": "CLI", "python": "Python", "wasm": "WASM",
+          "node": "Node", "memory": "Memory",
           "mobile": "Mobile", "migrate": "Migrate", "tauri": "Tauri", "ts-sdk": "TS SDK",
           "langchain": "LangChain", "llamaindex": "LlamaIndex", "haystack": "Haystack",
           "common": "int/common", "docs": "Docs"}

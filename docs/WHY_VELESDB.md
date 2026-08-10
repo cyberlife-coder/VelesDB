@@ -102,7 +102,7 @@ See [BENCHMARKS.md](./BENCHMARKS.md) for detailed numbers and methodology.
 | Rust (native) | `velesdb-core` | Stable |
 | REST API | `velesdb-server` | Stable |
 | Python | `velesdb-python` (PyO3) | Stable |
-| TypeScript | `@velesdb/sdk` | Stable |
+| TypeScript | `@wiscale/velesdb-sdk` | Stable |
 | Browser (WASM) | `velesdb-wasm` | Stable |
 | iOS / Android | `velesdb-mobile` (UniFFI) | Stable |
 | Tauri Desktop | `tauri-plugin-velesdb` | Stable |
@@ -128,4 +128,4 @@ See [BENCHMARKS.md](./BENCHMARKS.md) for detailed numbers and methodology.
 - You only need simple vector search without graph or column queries (ChromaDB)
 
 ---
-Last updated: 2026-07-25 · Applies to: velesdb-core 4.2.0
+Last updated: 2026-08-08 · Applies to: velesdb-core 5.0.0

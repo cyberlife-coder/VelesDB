@@ -30,6 +30,11 @@
 /// context compiler, which stays clock-free and deterministic. Internal:
 /// nothing outside the crate needs to read the clock directly.
 mod clock;
+/// The ONE `ColumnFilter` conformance table both `MemoryStore` backends run,
+/// so the native (`VelesQL`-translating) and WASM (payload-testing) paths
+/// cannot drift apart again (#1759). Deliberately NOT target-gated: the WASM
+/// backend is one of the two that must run it.
+pub mod column_filter_conformance;
 /// The optional TOML configuration file: one place to set every knob, with
 /// `command line > environment > file > default` precedence. Native-only —
 /// it reads the filesystem.
@@ -45,7 +50,15 @@ pub mod context;
 /// question answering, shipped as product behavior rather than a harness prompt.
 pub mod dated_context;
 pub mod embedder;
+/// Which embedding model filled a store, and whether the configured one can
+/// still read it. Gated on `persistence` because an unrecorded store is a
+/// directory on disk — see the module docs for why the *backend* is
+/// deliberately not part of the record.
+#[cfg(feature = "persistence")]
+pub mod embedding_provenance;
 pub mod error;
+#[cfg(feature = "persistence")]
+pub mod export;
 pub mod extract;
 /// Vector+graph score fusion — the ranking layer behind
 /// [`service::MemoryService::recall_fused`]. Internal: callers reach it only
@@ -58,25 +71,54 @@ mod fusion;
 /// the crate README's "HTTP transport (multi-client)" section.
 #[cfg(feature = "http")]
 pub mod http;
+/// Synchronous retry + actionable failure reporting shared by the two blocking
+/// Ollama call sites ([`embedder`] and [`extract`]). Internal: it exists to make
+/// those two backends resilient, not to be a general-purpose retry API.
+#[cfg(any(feature = "ollama", feature = "extract"))]
+mod http_retry;
 /// Content-addressed memory ids — internal; ids surface through the service API.
 pub(crate) mod id;
 /// Resource caps (DoS limits) shared by every adapter — the single source of
 /// truth for fact size, recall limit, and `why` hop depth.
 pub mod limits;
+/// Per-request observability, gated by `VELESDB_MEMORY_LOG` (#1780): silent
+/// by default, stderr only, never a payload. Rides the `mcp` feature with
+/// the server it observes.
+#[cfg(feature = "mcp")]
+pub mod logging;
 /// The MCP server transport. Gated behind the default `mcp` feature so library
 /// consumers (e.g. the language bindings) can depend on the memory core without
 /// pulling the `rmcp`/`tokio` server stack.
 #[cfg(feature = "mcp")]
 pub mod mcp;
+/// Read-only diagnosis of a store an embedding-model change made unopenable,
+/// and the feasibility proof the rebuild depends on (#1762). Never writes to
+/// the store it inspects.
+#[cfg(feature = "persistence")]
+pub mod migration;
 /// The domain data model — the value types the memory layer exchanges
 /// (`Link`, `Recollection`, `ColumnFilter`, `Explanation`, …), separate from the
 /// service that computes them.
 pub mod model;
-/// Synchronous retry + actionable failure reporting shared by the two blocking
-/// Ollama call sites ([`embedder`] and [`extract`]). Internal: it exists to make
-/// those two backends resilient, not to be a general-purpose retry API.
+
+/// Authenticated JSON over HTTP: the transport under every remote inference
+/// backend, with no knowledge of role or vendor.
 #[cfg(any(feature = "ollama", feature = "extract"))]
-mod ollama_retry;
+pub mod http_client;
+
+/// The OpenAI-compatible protocol — paths, bodies, responses — over
+/// [`http_client`].
+#[cfg(any(feature = "ollama", feature = "extract"))]
+mod openai;
+/// Is a configured remote inference backend actually reachable? (#1751 D2)
+///
+/// Gated exactly like [`openai`], which it builds its URL with, and like the
+/// `ureq` agent it probes through: without either role's feature there is no
+/// remote backend to be unreachable, and no transport to ask with. Declaring
+/// it unconditionally compiled here and nowhere else — the default build has
+/// neither dependency.
+#[cfg(any(feature = "ollama", feature = "extract"))]
+pub mod reachability;
 /// Optional second-stage re-scoring of a fused recall pool (bring your own
 /// cross-encoder/LLM). Never wired in by default — see [`rerank::Reranker`].
 pub mod rerank;
@@ -121,24 +163,29 @@ const _: () = assert!(
 #[cfg(feature = "context")]
 pub use context::ContextCompiler;
 pub use dated_context::{format_dated_context, DatedContext};
-pub use embedder::{DynEmbedder, EmbedError, Embedder, HashEmbedder};
-#[cfg(feature = "ollama")]
-pub use embedder::{OllamaEmbedder, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL};
-pub use error::{ErrorCategory, MemoryError};
-#[cfg(feature = "extract")]
-pub use extract::OllamaExtractor;
-pub use extract::{
-    DynExtractor, ExtractError, ExtractedAttribute, ExtractedFact, ExtractedRelation, Extraction,
-    Extractor,
+pub use embedder::{
+    select_embedder, DynEmbedder, EmbedError, Embedder, EmbedderSelection, HashEmbedder,
 };
+#[cfg(feature = "ollama")]
+pub use embedder::{OllamaEmbedder, OpenAiEmbedder, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL};
+pub use error::{ErrorCategory, MemoryError};
+pub use extract::{
+    select_extractor, DynExtractor, ExtractError, ExtractedAttribute, ExtractedFact,
+    ExtractedRelation, Extraction, Extractor, ExtractorSelection, OutlineExtractor,
+};
+#[cfg(feature = "extract")]
+pub use extract::{OllamaExtractor, OpenAiExtractor};
+#[cfg(any(feature = "ollama", feature = "extract"))]
+pub use http_client::{Auth, HttpJsonClient};
 #[cfg(feature = "mcp")]
 pub use mcp::McpServer;
 pub use model::{
-    ColumnFilter, ColumnOp, EntityProfile, EntityRelation, Explanation, FusionOptions, Link,
-    MemoryEdge, MemoryNode, Recollection, UnrelateOutcome,
+    column_value_matches, BoundedMemoryEdges, ColumnFilter, ColumnOp, EntityProfile,
+    EntityRelation, Explanation, FusionOptions, Link, MemoryEdge, MemoryNode, Recollection,
+    RememberedExtraction, UnrelateOutcome,
 };
 pub use rerank::{DynReranker, RerankError, Reranker};
-pub use service::{MemoryService, Metadata};
+pub use service::{AutographWorkerHandle, MemoryService, Metadata};
 #[cfg(feature = "persistence")]
 pub use storage::NativeStore;
 pub use storage::{MemoryStore, AUTO_DATE_FIELD};

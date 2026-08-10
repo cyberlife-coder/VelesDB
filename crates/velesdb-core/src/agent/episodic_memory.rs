@@ -23,8 +23,6 @@ pub struct EpisodicMemory {
     dimension: usize,
     ttl: Arc<MemoryTtl>,
     temporal_index: Arc<TemporalIndex>,
-    /// Edge-id allocator for [`Self::relate`] (seeded past existing edges).
-    next_edge_id: std::sync::atomic::AtomicU64,
 }
 
 impl EpisodicMemory {
@@ -71,18 +69,12 @@ impl EpisodicMemory {
             MemoryKind::Episodic,
         )?;
 
-        let next_edge_id = memory_helpers::seed_edge_counter(&memory_helpers::get_collection(
-            &db,
-            &collection_name,
-        )?);
-
         Ok(Self {
             collection_name,
             db,
             dimension: actual_dimension,
             ttl,
             temporal_index,
-            next_edge_id,
         })
     }
     fn rebuild_temporal_index(
@@ -233,7 +225,6 @@ impl EpisodicMemory {
                 collection_name: &self.collection_name,
                 ttl: &self.ttl,
                 kind: MemoryKind::Episodic,
-                next_edge_id: &self.next_edge_id,
             },
             from_id,
             to_id,
@@ -278,6 +269,50 @@ impl EpisodicMemory {
             id,
             &self.ttl,
             MemoryKind::Episodic,
+        )
+    }
+
+    /// Returns at most `cap` outgoing relations of an event, plus whether its
+    /// total degree exceeded the scan — work and transient allocation O(cap),
+    /// never O(degree) (#1820).
+    ///
+    /// # Errors
+    ///
+    /// Returns `CollectionError` when the collection cannot be resolved.
+    pub fn relations_bounded(
+        &self,
+        id: u64,
+        cap: usize,
+    ) -> Result<super::BoundedRelations, AgentMemoryError> {
+        memory_helpers::relations_of_bounded(
+            &self.db,
+            &self.collection_name,
+            id,
+            &self.ttl,
+            MemoryKind::Episodic,
+            cap,
+        )
+    }
+
+    /// Returns at most `cap` incoming relations of an event, plus whether its
+    /// total incoming degree exceeded the scan — the mirror of
+    /// [`Self::relations_bounded`].
+    ///
+    /// # Errors
+    ///
+    /// Returns `CollectionError` when the collection cannot be resolved.
+    pub fn incoming_relations_bounded(
+        &self,
+        id: u64,
+        cap: usize,
+    ) -> Result<super::BoundedRelations, AgentMemoryError> {
+        memory_helpers::incoming_relations_of_bounded(
+            &self.db,
+            &self.collection_name,
+            id,
+            &self.ttl,
+            MemoryKind::Episodic,
+            cap,
         )
     }
 

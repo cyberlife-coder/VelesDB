@@ -3,6 +3,11 @@
 A practical reference for configuring VelesDB to balance recall, latency, memory, and
 durability for your workload.
 
+This guide is the numeric home for the mode defaults, HNSW parameters, and
+quantization trade-offs. For what the search modes *mean* and when to pick which,
+see [Search Modes](SEARCH_MODES.md); for how each quantization method works
+internally (training, persistence), see [Quantization](QUANTIZATION.md).
+
 ---
 
 ## Quantization Modes
@@ -12,13 +17,20 @@ VelesDB supports five storage modes via the `StorageMode` enum
 
 ### When to Use Each Mode
 
-| Mode | Aliases | Compression | Recall Impact | Training Required | Best For |
-|------|---------|-------------|---------------|-------------------|----------|
-| `Full` (default) | `f32` | 1x (baseline) | Perfect | No | Small datasets (<100K), high-precision needs |
-| `SQ8` | `int8` | 4x | ~1-2% recall loss | No | Medium datasets (100K-10M), general purpose |
-| `Binary` | `bit` | 32x | ~10-15% recall loss | No | Edge/IoT, fingerprints, memory-constrained |
-| `ProductQuantization` | | 8-32x | ~5-15% recall loss | Yes | Large datasets, aggressive compression |
-| `RaBitQ` | | 32x | ~5-10% recall loss | Yes (rotation matrix) | High compression with better recall than Binary |
+| Mode | Aliases | Compression | Recall@10 (768D) | Training Required | Training time | Best For |
+|------|---------|-------------|------------------|-------------------|---------------|----------|
+| `Full` (default) | `f32` | 1x (baseline) | 99.4% | No | - | Small datasets (<100K), maximum precision |
+| `SQ8` | `int8` | 4x | ~97.5% | No | - | Medium datasets (100K-10M), general purpose, Edge |
+| `ProductQuantization` (m=8) | | ~48x | ~85% | Yes | ~5s/100K | Large datasets, limited memory |
+| `ProductQuantization` + rescore | | ~48x | ~93% | Yes | ~5s/100K | Recall/memory trade-off |
+| `ProductQuantization` + OPQ | | ~48x | ~88% | Yes | ~10s/100K | Correlated data |
+| `Binary` | `bit` | 32x | ~85% | No | - | Edge/IoT, fingerprints, memory-constrained |
+| `RaBitQ` | | 32x | ~90-93% | Yes (rotation matrix) | ~2s/100K | High compression with better recall than Binary |
+
+> Search-path wiring differs per mode: in the collection query path only RaBitQ
+> and PQ are wired up today, while SQ8/Binary are capacity modes at the
+> collection level. See the status callouts in
+> [Quantization — capacity vs search-path](QUANTIZATION.md#capacity-mode-vs-search-path-mode).
 
 ### SQ8 (Scalar Quantization 8-bit)
 
@@ -83,6 +95,9 @@ can improve results for specific workloads.
 |-----------|----------------------|-------------------|
 | <= 256 | 24 | 300 |
 | >= 257 | 32 | 400 |
+
+> Source of truth for these values:
+> `crates/velesdb-core/src/index/hnsw/params.rs` (`HnswParams::auto`).
 
 ### Dataset-Size-Aware Parameters
 
@@ -202,12 +217,16 @@ parameter with dynamic scaling based on the requested result count `k`.
 
 | Variant | Base ef_search | Scaling | Approx. Recall | Use Case |
 |---------|---------------|---------|----------------|----------|
-| `Fast` | 64 | max(64, k*2) | ~92% | Real-time serving, low latency |
-| `Balanced` (default) | 128 | max(128, k*4) | ~99% | General purpose, production |
+| `Fast` | 96 | max(96, k*3) | ~95% | Real-time serving, low latency |
+| `Balanced` (default) | 160 | max(160, k*5) | ~99.5% | General purpose, production |
 | `Accurate` | 512 | max(512, k*16) | ~100% | Analytics, batch processing |
 | `Perfect` | 4096 | max(4096, k*100) | 100% | Ground truth, evaluation |
+| `AutoTune` | size-aware | `auto_ef_range(count, dim, k)`; falls back to max(160, k*5) without collection info | ~99% | Hands-off default at any scale (see [AutoTune Mode](#autotune-mode-v172)) |
 | `Custom(n)` | n | n | Varies | Fine-grained control |
 | `Adaptive { min_ef, max_ef }` | min_ef | escalates to max_ef | 95%+ | Mixed workloads, latency-sensitive |
+
+> Source of truth for these values:
+> `crates/velesdb-core/src/index/hnsw/params.rs` (`SearchQuality::ef_search`).
 
 ### Adaptive Search
 
@@ -257,10 +276,17 @@ configuration level.
 
 | Variant | ef_search | Use Case |
 |---------|-----------|----------|
-| `Fast` | 64 | Real-time serving |
-| `Balanced` (default) | 128 | General purpose |
+| `Fast` | 96 | Real-time serving |
+| `Balanced` (default) | 160 | General purpose |
 | `Accurate` | 512 | Analytics |
-| `Perfect` | exhaustive | Ground truth |
+| `Perfect` | bruteforce (full scan) | Ground truth |
+
+> Source of truth for these values:
+> `crates/velesdb-core/src/config.rs` (`SearchMode::ef_search`).
+>
+> `SearchMode::Perfect` switches the **engine** to an exhaustive bruteforce scan
+> (`ef_search = usize::MAX` sentinel), unlike `SearchQuality::Perfect`, which
+> stays on the HNSW graph with an exhaustive candidate pool.
 
 ### AutoTune Mode (v1.7.2)
 
@@ -534,7 +560,7 @@ built-in search handles alignment internally.
 
 3. **ef_search scales with k**: `SearchQuality` automatically scales `ef_search` with
    the number of requested results. Requesting `k=100` with `Balanced` uses
-   `max(128, 400)` = 400, not 128.
+   `max(160, 500)` = 500, not 160.
 
 4. **Quantize after tuning**: Get your HNSW parameters right with `StorageMode::Full`
    first, then switch to SQ8/Binary and verify recall is acceptable.
@@ -600,3 +626,7 @@ processes 768 floats at >35 GFLOP/s per core.
 order-of-magnitude references, not exact targets. For reproducible comparisons,
 run `cargo bench` locally with `RUSTFLAGS="-C target-cpu=native"` and compare
 against your own baseline.
+
+---
+
+*VelesDB Documentation -- Last updated: 2026-08-08 · Applies to: velesdb-core 5.0.0*

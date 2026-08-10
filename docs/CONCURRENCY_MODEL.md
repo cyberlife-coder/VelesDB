@@ -112,14 +112,40 @@ When multiple locks are needed, acquire them in this order:
 
 ### Global Lock Order (HNSW + Storage)
 
-The rank ordinals below are **not a documentation-only convention**: they are
-first-class, typed ranks defined by the `LockRank` newtype in
-`crates/velesdb-core/src/lock_rank.rs`. `LockRank` derives a total ordering
-over its ordinals, and the debug-only `assert_lock_order` helper panics on any
-out-of-order acquisition in debug builds (compiling to nothing in release, so
-there is zero release overhead). This section is the **single authoritative
-record** of the total rank ordering; the code constants and this table are kept
-in lock-step and MUST NOT diverge.
+The rank ordinals below mirror the typed `LockRank` newtype defined in
+`crates/velesdb-core/src/lock_rank.rs`, which derives a total ordering over its
+ordinals. That newtype and its public `assert_lock_order` helper are a *typed
+vocabulary* for the intended order, **not a wired runtime check**:
+`assert_lock_order` has **zero production call sites** — it is exercised only by
+`lock_rank_tests.rs` and `tests/concurrency_lock_order.rs`. No production
+binary, debug or release, calls it, so it never fires on a real acquisition.
+
+Enforcement in practice, by build and by tier:
+
+- **Production (release) binaries have no runtime lock-order check at all.**
+  This is zero-overhead by design — no thread-local stack and no atomic on the
+  hot search path.
+- **The HNSW tier** has a debug-only, *warn-only*, *partial* tracker — a
+  private mechanism separate from `assert_lock_order`. The `record_lock_acquire`
+  function in
+  `crates/velesdb-core/src/index/hnsw/native/graph/locking.rs` is
+  `#[cfg(debug_assertions)]`; on an out-of-order acquisition it increments an
+  atomic violation counter and emits a `tracing::warn!` — it **never panics**.
+  It is also partial: only the `GpuVectorsSnapshot`, `Vectors`, and `Layers`
+  ranks are ever recorded. `Columnar` and `Neighbors` are `#[allow(dead_code)]`
+  with no `record_lock_acquire` call site, so 2 of the 5 core ranks are
+  untracked even in debug.
+- **The collection tier** — `Collection`'s own field order (`config`,
+  `vector_storage`, `payload_storage`, ...; the `=== LOCK ORDERING ===` block
+  in `crates/velesdb-core/src/collection/types.rs`, and the "Collection-level
+  lock order" section below) — is **convention-only, backed by no assertion of
+  any kind.** This is the tier whose vector/payload pair actually deadlocked
+  (2026-07); its lock-order correctness rests on code review plus the regression
+  tests, not on any runtime mechanism.
+
+The ordinal table below is the human-readable record of the intended order; it
+is not enforced by a compiled assertion at acquisition time. The code constants
+and this table are still kept in lock-step and MUST NOT diverge.
 
 For HNSW index operations that touch the GPU snapshot cache, vector storage,
 the PDX columnar layout, graph layers, and neighbor lists, the global lock
@@ -139,9 +165,12 @@ gpu_vectors_snapshot (rank 5) → vectors (rank 10) → columnar (rank 15)
 | `neighbors` | 30 | `LockRank::NEIGHBORS` | Per-node neighbor lists (`RwLock`) | Fine-grained, acquired last |
 
 **Rule**: Never acquire a lower-rank lock while holding a higher-rank lock.
-For example, acquiring `vectors` while holding `neighbors` is forbidden.
-`assert_lock_order(previously_held, about_to_acquire)` encodes this rule
-directly and fires a debug assertion when it is violated.
+For example, acquiring `vectors` while holding `neighbors` is forbidden. The
+typed `assert_lock_order(previously_held, about_to_acquire)` helper *expresses*
+this rule but is **not wired into any acquisition path** (see the enforcement
+note above). In debug builds the HNSW tier's `record_lock_acquire` will *warn*
+(never panic) on a violation — and only among the tracked ranks
+(`GpuVectorsSnapshot` / `Vectors` / `Layers`).
 
 ### Reserved Premium Rank Range [40, 59]
 
@@ -399,13 +428,32 @@ falling back to per-shard lookup — debouncing trades a slightly slower fallbac
 read for avoiding a full rebuild on every interleaved read/write. A completed
 rebuild clears the dirty flag and resets the counter to 0.
 
-**Thread safety** (ConcurrentEdgeStore): The snapshot is stored under the
-same `RwLock` as the shard data. A read lock on the snapshot shard is
-sufficient for BFS access. Write operations acquire write locks and
-invalidate the snapshot as part of the same critical section. The deferred
-rebuild path acquires `edge_ids` **read-only** (never write) and releases
-per-shard read locks promptly, so it never violates the `edge_ids → shards`
-ordering and the caller must not hold an `edge_ids` write lock across it.
+**Thread safety** (ConcurrentEdgeStore): The read snapshot is **not** stored
+under the shard `RwLock`s. It lives in a lock-free `ArcSwap<CsrSnapshot>`
+(`csr_snapshot`) paired with an `AtomicBool` dirty flag (`csr_dirty`) and an
+`AtomicU64` write counter (`pending_writes`). Readers `load()` the current
+`Arc<CsrSnapshot>` with zero contention. Every mutation (`add_edge`,
+`remove_edge`, `remove_node_edges`) sets `csr_dirty` and bumps `pending_writes`;
+the rebuild is deferred (issue #905 debounce) and `store`s a fresh snapshot into
+the `ArcSwap`. Two rebuild paths clear the dirty flag under different
+guarantees, and both are correct:
+
+- `build_read_snapshot()` (`snapshot.rs`) holds `edge_ids.read()` for the whole
+  build **and across the flag clear** — it walks every edge under that one read
+  guard, `store`s the snapshot, and only afterwards resets `pending_writes` to 0
+  and clears `csr_dirty`, all while still holding the guard. No writer can
+  interleave, so a blanket reset is sound.
+- `ensure_csr_fresh()` (`query.rs`) holds **no** such lock. It therefore *clears
+  the dirty flag first* (`csr_dirty.swap(false, AcqRel)`), snapshots the observed
+  `pending_writes` **before** reading the shards, rebuilds, then subtracts only
+  that observed count (`fetch_update` with `saturating_sub`). A concurrent
+  `fetch_add` landing during the rebuild is preserved rather than clobbered, so
+  the next reader still observes the snapshot as due for rebuild.
+
+The deferred rebuild path acquires `edge_ids` **read-only** (never write) and
+releases per-shard read locks promptly, so it never violates the
+`edge_ids → shards` ordering and the caller must not hold an `edge_ids` write
+lock across it.
 
 ## Performance vs Safety Tradeoffs
 
@@ -888,4 +936,4 @@ invariants, see [SOUNDNESS.md: HNSW Batch Insertion Ordering](SOUNDNESS.md#hnsw-
 
 ---
 
-*Last updated: 2026-06-12 · Applies to: velesdb-core 4.2.0 (previous revision noted: HNSW persisted-graph reload at open; storage compaction concurrency)*
+*Last updated: 2026-08-09 · Applies to: velesdb-core 5.0.0 (this revision: corrected the lock-order enforcement section — `assert_lock_order` is unwired in production, the HNSW tracker is debug-only, warn-only and partial, the collection tier is convention-only — and the CSR snapshot thread-safety section to describe the lock-free `ArcSwap` + dirty-flag protocol; previous revision noted: HNSW persisted-graph reload at open; storage compaction concurrency)*

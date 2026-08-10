@@ -25,7 +25,7 @@ pub async fn sparse_search<R: Runtime>(
     let start = std::time::Instant::now();
 
     let results = state
-        .with_db(|db| {
+        .run_db(move |db| {
             let coll = require_vector_collection(&db, &request.collection)?;
 
             let core_sv = parse_sparse_vector(&request.sparse_vector)?;
@@ -34,6 +34,7 @@ pub async fn sparse_search<R: Runtime>(
             let search_results = coll.sparse_search(&core_sv, request.top_k, &idx_name)?;
             Ok(map_core_results(search_results))
         })
+        .await
         .map_err(CommandError::from)?;
 
     Ok(timed_search_response(results, start))
@@ -49,7 +50,7 @@ pub async fn hybrid_sparse_search<R: Runtime>(
     let start = std::time::Instant::now();
 
     let results = state
-        .with_db(|db| {
+        .run_db(move |db| {
             let coll = require_vector_collection(&db, &request.collection)?;
 
             let core_sv = parse_sparse_vector(&request.sparse_vector)?;
@@ -59,6 +60,7 @@ pub async fn hybrid_sparse_search<R: Runtime>(
                 coll.hybrid_sparse_search(&request.vector, &core_sv, request.top_k, "", &strategy)?;
             Ok(map_core_results(search_results))
         })
+        .await
         .map_err(CommandError::from)?;
 
     Ok(timed_search_response(results, start))
@@ -73,7 +75,7 @@ pub async fn sparse_upsert<R: Runtime>(
 ) -> std::result::Result<usize, CommandError> {
     let collection_name = request.collection.clone();
     let count = state
-        .with_db(|db| {
+        .run_db(move |db| {
             let coll = require_collection(&db, &request.collection)?;
 
             let mut points = Vec::with_capacity(request.points.len());
@@ -95,6 +97,7 @@ pub async fn sparse_upsert<R: Runtime>(
             coll.upsert(points)?;
             Ok(count)
         })
+        .await
         .map_err(CommandError::from)?;
 
     emit_collection_updated(&app, &collection_name, "sparse_upsert", count);

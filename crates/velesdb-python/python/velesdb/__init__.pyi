@@ -2329,7 +2329,10 @@ class MemoryService:
                 Keys starting with ``_veles_`` are reserved.
             ttl_seconds: Optional durable time-to-live in seconds. The fact
                 expires (and stops being recalled) after this delay, surviving a
-                restart. Omit (or ``0``) for a permanent memory.
+                restart. Omit for a permanent memory, including when re-storing a
+                fact that already had an expiry — only what this call supplies is
+                applied. An explicit ``0`` is REFUSED, because a caller writing
+                ``0`` means "expire now", not "never".
 
         Returns:
             Stable integer id for the stored fact.
@@ -2356,9 +2359,12 @@ class MemoryService:
 
         Returns:
             List of ``{"id": int, "score": float, "content": str,
-            "metadata": Optional[Dict[str, Any]]}`` dicts, ordered by
-            descending similarity score. ``metadata`` is always ``None``
-            here (only :meth:`recall_where` populates it).
+            "metadata": Optional[Dict[str, Any]]}`` dicts. Ranking blends
+            similarity with each fact's learned confidence (see
+            :meth:`feedback`), so the order is not pure similarity —
+            ``score`` is always the raw similarity, never the blended
+            value. ``metadata`` carries whatever the fact was stored
+            with, or ``None`` if it has none.
         """
         ...
 
@@ -2384,6 +2390,12 @@ class MemoryService:
             "metadata": Optional[Dict[str, Any]]}`` dicts, ordered by
             descending similarity score. ``metadata`` is the fact's stored
             metadata dict, or ``None`` if it carried none.
+
+            Your own stored facts ONLY: entity hubs and the context compiler's
+            artefacts (stored sources, compilation events, working contexts
+            and their index) are internal scaffolding and never come back,
+            whatever the predicate — including a ``"ne"`` one, which matches
+            facts lacking the field entirely.
 
         Raises:
             ValueError: If an unknown filter ``op`` is given.
@@ -2537,7 +2549,11 @@ class MemoryService:
 
         Returns:
             ``{"nodes": [{"id": int, "content": str, "hop": int}, ...],
-               "edges": [{"from": int, "to": int, "relation": str}, ...]}``
+               "edges": [{"from": int, "to": int, "relation": str}, ...],
+               "truncated": bool}``.
+            ``truncated`` is ``True`` when a width budget cut the walk — a
+            subgraph sitting exactly at a cap is otherwise indistinguishable
+            from a complete one.
         """
         ...
 
@@ -2558,35 +2574,65 @@ class MemoryService:
             ``{"found": bool, "id": int, "name": str,
                "attributes": Dict[str, Any],
                "relations": [{"predicate": str, "target_id": int,
-                              "target": str}, ...]}``.
+                              "target": str}, ...],
+               "relations_in": [...the same shape...],
+               "relations_truncated": bool,
+               "relations_in_truncated": bool}``.
             ``found`` is ``False`` when nothing has ever mentioned that name;
             ``name`` still echoes the query in its canonical (trimmed,
             lowercased) form, so several lookups can be told apart.
+
+            ``relations`` are the edges LEAVING the entity, ``relations_in``
+            those pointing AT it — there, ``target_id``/``target`` name the
+            far end the edge comes FROM. Without the second list a question
+            is only answerable from one side: the graph holds
+            ``camille --sister of--> theo``, so reading Theo's outgoing edges
+            never finds Camille. Both are present on a miss too, empty.
+
+            The ``*_truncated`` booleans say when the matching list is a
+            PARTIAL view cut by a response budget — a list holding exactly
+            the cap is otherwise indistinguishable from a cut one.
         """
         ...
 
     def remember_extracted(
         self,
         text: str,
-        model: str,
+        model: Optional[str] = None,
         url: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
-    ) -> List[int]:
-        """Extract atomic facts from ``text`` via Ollama and store them.
+        extractor: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Extract atomic facts from ``text`` and store them.
 
-        Automatically builds the fact↔topic graph. Requires a running Ollama
-        server with ``model`` available.
+        Automatically builds the entity graph the passage states.
 
         Args:
             text: Raw text to extract facts from.
-            model: Ollama model to use for extraction.
+            model: Ollama model, required by the ``"ollama"`` backend and
+                ignored by ``"outline"``.
             url: Ollama server URL (default: ``http://localhost:11434``).
             metadata: Optional metadata applied to every extracted fact.
+            extractor: Which backend to use, ``"ollama"`` (default) or
+                ``"outline"``. ``"outline"`` is deterministic and
+                network-free — it reads the structure the passage STATES, one
+                directive per line (``edge:``, ``attr:``, ``fact:``) — and
+                stands to ``"ollama"`` exactly as the ``"hash"`` embedder
+                does, so this method's whole contract is reachable with no
+                model running.
 
         Returns:
-            List of stable ids for the stored facts.
+            ``{"ids": List[int], "skipped_over_cap": int}``.
+
+            This used to return a bare list of ids, which could not say why
+            it was short: nothing distinguished a passage holding three facts
+            from one holding twelve of which nine were dropped for exceeding
+            the embeddable cap. The dict is the breaking change that ends
+            that silence (issue #1692).
 
         Raises:
+            ValueError: If ``extractor`` names an unknown backend, or the
+                ``"ollama"`` backend was selected without a ``model``.
             RuntimeError: If Ollama is unreachable or extraction fails.
         """
         ...
@@ -2787,18 +2833,38 @@ class MemoryService:
         """
         ...
 
-    def load_working_context(
-        self, project: str, session: str
-    ) -> Optional[Dict[str, Any]]:
-        """The working context previously saved under ``project`` + ``session``.
+    def load_working_context(self, project: str, session: str) -> Dict[str, Any]:
+        """The resumption envelope for ``project`` + ``session``.
+
+        **BREAKING** (``velesdb-memory`` 0.12.0, relayed by the next
+        ``velesdb`` wheel): returns the three-field envelope instead of the
+        bare working context (or ``None``). The bare form collapsed two
+        different answers into one — a project that never saved anything, and
+        a typo in ``session`` that missed a session which does exist. Read
+        ``["working"]`` for the previous return value.
+
+        Deliberately NOT written as ``.. versionchanged:: 0.12.0``: Sphinx and
+        IDE tooltips render that directive as "Changed in version 0.12.0" of
+        THIS package, and this package is ``velesdb``, on the 4.x line. A
+        reader pinned to 4.2.0 would compare 4.2.0 > 0.12.0, conclude the
+        change was already behind them, keep an ``is None`` check that can
+        never fire again, and restart on top of live work. 0.12.0 is the
+        memory crate's version; the wheel has no such release.
 
         Args:
             project: Project facet.
             session: Session identifier.
 
         Returns:
-            The same dict shape passed to :meth:`save_working_context`, or
-            ``None`` when nothing was saved under this ``project``/``session``.
+            ``{"found": bool, "working": dict | None, "other_sessions":
+            [str]}``. ``working`` is the same dict shape passed to
+            :meth:`save_working_context`, or ``None`` when nothing was saved
+            under this exact ``project``/``session``. ``other_sessions``
+            lists the OTHER sessions of the same project — never the
+            requested one — and is filled in on a HIT too: a typo that lands
+            on another real session is the case a caller can least detect on
+            its own. Ids stay native Python ints, unlike the JS bindings'
+            decimal strings.
         """
         ...
 

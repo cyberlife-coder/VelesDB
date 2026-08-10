@@ -219,6 +219,11 @@ The same wedge in the other bindings is listed in the
 | Context compiler | `compileContext`, `compileTranscript`, `explainCompilation`, `contextSavings`, `retrieveContextSource`, `suggestBudget` |
 | Session resumption | `saveWorkingContext`, `loadWorkingContext`, `listWorkingContexts` |
 
+`loadWorkingContext` resolves the `{found, working, other_sessions}` envelope
+the MCP tool serves — **breaking in 0.12.0**, where it used to resolve the bare
+working context or `null`; read `.working` for that value, and
+`.other_sessions` to tell a genuine fresh start from a typo in `session`.
+
 Three contracts hold across all of them: every method returns a `Promise` and
 runs off the event-loop thread; every id crosses as a **decimal string** (a JS
 `number` loses precision above 2^53); every rejection is an `Error` whose
@@ -232,14 +237,17 @@ compiler surface, media fragments, working contexts, resource caps) is in the
 ## Bundled agent skills
 
 Wiring the API gives your agent the *methods*; it does not tell it *when* to
-use them. Two skills ship inside the package for that — `velesdb-memory` (the
-recall → remember → relate → why → feedback loop) and
-`velesdb-context-optimizer` (the compression workflow, including when *not* to
-compress):
+use them. Three skills ship inside the package for that — `velesdb-memory` (the
+recall → remember → relate → why → feedback loop), `velesdb-context-optimizer`
+(the compression workflow, including when *not* to compress) and
+`velesdb-learning-loop` (the discipline that makes those two compound: recall
+before designing, check recurrence before storing a fix, and never write to
+memory by reflex):
 
 ```bash
 cp -r node_modules/@wiscale/velesdb-memory-node/skills/velesdb-memory ~/.claude/skills/
 cp -r node_modules/@wiscale/velesdb-memory-node/skills/velesdb-context-optimizer ~/.claude/skills/
+cp -r node_modules/@wiscale/velesdb-memory-node/skills/velesdb-learning-loop ~/.claude/skills/
 ```
 
 That `cp` is a snapshot, not a live link: re-run it after every `npm update`.
@@ -316,4 +324,4 @@ Questions: contact@wiscale.fr.
 
 ---
 
-`velesdb-node v0.11.2` (npm `@wiscale/velesdb-memory-node@0.11.1`) · Last updated: 2026-07-25 · Applies to: velesdb-core 4.1.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)
+`velesdb-node v0.12.0` (npm `@wiscale/velesdb-memory-node@0.12.0`) · Last updated: 2026-07-30 · Applies to: velesdb-core 5.0.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)

@@ -132,30 +132,41 @@ pub struct HttpConfig {
 }
 
 /// `[embedder]` — how text becomes vectors.
+///
+/// **No `api_token` field, deliberately** — see [`TOKEN_HINT`]. The two roles
+/// carry the same four settings under the same names on purpose: an operator
+/// who has configured one has configured the other.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EmbedderConfig {
-    /// `hash` or `ollama` (`VELESDB_MEMORY_EMBEDDER`).
+    /// `hash`, `ollama` or `openai` (`VELESDB_MEMORY_EMBEDDER`).
     pub backend: Option<String>,
-    /// Ollama model (`VELESDB_MEMORY_OLLAMA_MODEL`).
+    /// Embedding model (`VELESDB_MEMORY_EMBEDDER_MODEL`).
     pub model: Option<String>,
-    /// Ollama base URL (`VELESDB_MEMORY_OLLAMA_URL`).
+    /// Base URL, origin and port, no path (`VELESDB_MEMORY_EMBEDDER_URL`).
     pub url: Option<String>,
     /// How long Ollama keeps the model resident
     /// (`VELESDB_MEMORY_OLLAMA_KEEP_ALIVE`).
+    ///
+    /// The one setting here that keeps a product name, and legitimately: it is
+    /// a field of Ollama's own wire protocol, not a role-level knob an
+    /// OpenAI-compatible server would know what to do with.
     pub keep_alive: Option<String>,
 }
 
 /// `[extractor]` — the backend that reads facts, relations and attributes out
 /// of raw text for `remember_extracted`.
+///
+/// **No `api_token` field, deliberately** — see [`TOKEN_HINT`].
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExtractorConfig {
-    /// `ollama`, or absent for none (`VELESDB_MEMORY_EXTRACTOR`).
+    /// `outline`, `ollama`, `openai`, or absent for none
+    /// (`VELESDB_MEMORY_EXTRACTOR`).
     pub backend: Option<String>,
     /// Generative model (`VELESDB_MEMORY_EXTRACTOR_MODEL`).
     pub model: Option<String>,
-    /// Base URL (`VELESDB_MEMORY_EXTRACTOR_URL`).
+    /// Base URL, origin and port, no path (`VELESDB_MEMORY_EXTRACTOR_URL`).
     pub url: Option<String>,
 }
 
@@ -217,12 +228,99 @@ pub fn load(path: &Path) -> Result<LoadedConfig, ConfigError> {
     })?;
     let file: ConfigFile = toml::from_str(&text).map_err(|err| ConfigError::Parse {
         path: path.to_path_buf(),
-        message: err.to_string(),
+        message: describe_parse_failure(&err.to_string()),
     })?;
     Ok(LoadedConfig {
         path: path.to_path_buf(),
         values: file.into_env(path)?,
     })
+}
+
+/// Where an API token belongs, quoted verbatim by the refusal that rejects one
+/// found in the file.
+///
+/// `deny_unknown_fields` already refuses an `api_token` key, since no section
+/// declares one. What it cannot do is say where the operator should put the
+/// token they legitimately have — so the refusal is rewritten to carry this.
+pub const TOKEN_HINT: &str = "an API token is read from the environment only, never from a \
+     file: set VELESDB_MEMORY_EMBEDDER_API_TOKEN or \
+     VELESDB_MEMORY_EXTRACTOR_API_TOKEN instead. A credential in a TOML is one \
+     `git add .` away from a public history, and no pre-commit secret scan can \
+     police a file it has never seen.";
+
+/// Render a TOML parse failure, redacting it when it concerns a credential.
+///
+/// `toml`'s own error quotes the offending source line back — which is exactly
+/// the right thing for `mdoel = "bge-m3"` and exactly the wrong thing for
+/// `api_token = "sk-…"`: the daemon would print the secret to stderr, where a
+/// launch agent's log file keeps it. So a failure naming `api_token` loses the
+/// snippet and gains [`TOKEN_HINT`]; every other failure is untouched.
+fn describe_parse_failure(rendered: &str) -> String {
+    if rendered.contains("api_token") {
+        return format!("unknown field `api_token` — {TOKEN_HINT}");
+    }
+    rendered.to_owned()
+}
+
+/// One setting reachable under two environment-variable names: the canonical,
+/// role-named one and a legacy alias kept working for compatibility.
+///
+/// See [`resolve_alias`] for the precedence rule.
+pub struct AliasResolution {
+    /// The value to use, or `None` when neither name is set.
+    pub value: Option<String>,
+    /// Both names are set to **different** values. The caller is expected to
+    /// gather these and emit a single [`alias_conflict_notice`].
+    pub conflicting: bool,
+}
+
+/// Resolve a setting the caller can name two ways: canonical wins, the legacy
+/// alias is the fallback (C1).
+///
+/// The embedding role's URL and model were named after a *product*
+/// (`VELESDB_MEMORY_OLLAMA_URL`) while the extraction role's were named after
+/// the *role* (`VELESDB_MEMORY_EXTRACTOR_URL`). Once a non-Ollama backend can
+/// serve either role, a variable that says `OLLAMA` while pointing at oMLX is
+/// a lie the operator has to hold in their head. This closes the asymmetry
+/// without breaking a single existing setup: the alias keeps working, and only
+/// a genuine disagreement between the two is worth a word.
+///
+/// Canonical wins **whatever the source** — including a role-named value that
+/// came from the config file against a legacy one exported by the shell, which
+/// is the one case where this rule and [`apply`]'s "environment outranks the
+/// file" point different ways. That case is not silent: it is precisely what
+/// [`alias_conflict_notice`] reports.
+#[must_use]
+pub fn resolve_alias(canonical: Option<&str>, legacy: Option<&str>) -> AliasResolution {
+    AliasResolution {
+        conflicting: matches!((canonical, legacy), (Some(role), Some(old)) if role != old),
+        value: canonical.or(legacy).map(str::to_owned),
+    }
+}
+
+/// One line naming every variable whose legacy alias disagrees with it, or
+/// `None` when nothing disagrees.
+///
+/// **One notice, however many settings conflict.** A warning per variable is
+/// how a startup log becomes noise an operator learns to scroll past, and the
+/// operator's next action is the same for all of them. This is also
+/// deliberately not a deprecation warning: the aliases are supported, and
+/// shouting at someone whose setup works is how a message gets filtered out
+/// before the day it finally matters.
+#[must_use]
+pub fn alias_conflict_notice(conflicts: &[(&str, &str)]) -> Option<String> {
+    if conflicts.is_empty() {
+        return None;
+    }
+    let pairs = conflicts
+        .iter()
+        .map(|(canonical, legacy)| format!("{canonical} over {legacy}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!(
+        "[velesdb-memory] set under two names with different values — using {pairs}. \
+         The role-named variable wins; unset the other to silence this."
+    ))
 }
 
 /// Export `values` into the process environment, skipping any variable that is
@@ -278,8 +376,12 @@ impl ConfigFile {
         set("VELESDB_MEMORY_TLS_DIR", self.http.tls_dir);
 
         set("VELESDB_MEMORY_EMBEDDER", self.embedder.backend);
-        set("VELESDB_MEMORY_OLLAMA_MODEL", self.embedder.model);
-        set("VELESDB_MEMORY_OLLAMA_URL", self.embedder.url);
+        // The role-named variables, not the `VELESDB_MEMORY_OLLAMA_*` aliases:
+        // the section is named after the role, so what it writes should be too.
+        // The aliases stay readable from the environment (see
+        // [`resolve_alias`]) for setups that already export them.
+        set("VELESDB_MEMORY_EMBEDDER_MODEL", self.embedder.model);
+        set("VELESDB_MEMORY_EMBEDDER_URL", self.embedder.url);
         set("VELESDB_MEMORY_OLLAMA_KEEP_ALIVE", self.embedder.keep_alive);
 
         set("VELESDB_MEMORY_EXTRACTOR", self.extractor.backend);

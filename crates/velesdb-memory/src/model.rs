@@ -41,6 +41,39 @@ where
     }
 }
 
+/// [`deserialize_id`]'s `Option`-shaped sibling for OPTIONAL id fields
+/// (`list_memories.cursor`): absent and `null` mean `None`, anything else
+/// takes the same number-or-decimal-string rule. Feature-independent like
+/// its sibling and for the same reason — `crate::context::wire`'s
+/// equivalent lives behind the `context` feature, and an `mcp`-only build
+/// must still parse the cursor.
+///
+/// Gated on `mcp` — its one consumer is the tool DTO layer — because the
+/// wasm build (`context` alone, `-D warnings`) rejects it as dead code
+/// otherwise. `deserialize_id` above stays ungated only because [`Link`]'s
+/// own deserialization uses it feature-free.
+#[cfg(feature = "mcp")]
+pub(crate) fn deserialize_optional_id<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    let expected = "expected a u64 number, a decimal u64 string, or null";
+    match Value::deserialize(deserializer)? {
+        Value::Null => Ok(None),
+        Value::Number(number) => number
+            .as_u64()
+            .map(Some)
+            .ok_or_else(|| Error::custom(format!("invalid id {number} ({expected})"))),
+        Value::String(text) => text
+            .trim()
+            .parse()
+            .map(Some)
+            .map_err(|_| Error::custom(format!("invalid id '{text}' ({expected})"))),
+        other => Err(Error::custom(format!("invalid id {other} ({expected})"))),
+    }
+}
+
 /// A typed link from a freshly remembered fact to an existing memory.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
@@ -116,6 +149,68 @@ impl ColumnOp {
             Self::Gt => ">",
             Self::Ge => ">=",
         }
+    }
+}
+
+/// Whether a STORED value satisfies `op` against a filter's `target`.
+///
+/// The single definition of what a [`ColumnFilter`] means once its field has
+/// been found, so a backend that evaluates payloads directly and one that
+/// translates to `VelesQL` cannot answer differently. `ne` on an absent field
+/// diverged between the two for the API's whole life precisely because each
+/// carried its own copy of this rule (#1759).
+///
+/// **A `null` satisfies nothing**, whatever the operator — a comparison
+/// against null is not true, as in SQL, and `ne` is no exception. Querying for
+/// null-ness is what `IsNull`/`IsNotNull` are for at the `VelesQL` layer. The
+/// caller is responsible for the *absent* case: no value here means no match.
+///
+/// Comparison is numeric when both sides are numbers, lexicographic when both
+/// are strings, and equality-only otherwise — an ordering over two unrelated
+/// JSON shapes has no meaning, so it is false rather than arbitrary.
+#[must_use]
+pub fn column_value_matches(stored: &Value, op: ColumnOp, target: &Value) -> bool {
+    if stored.is_null() {
+        return false;
+    }
+    if let (Some(left), Some(right)) = (stored.as_f64(), target.as_f64()) {
+        return compare_f64(op, left, right);
+    }
+    if let (Some(left), Some(right)) = (stored.as_str(), target.as_str()) {
+        return compare_ordered(op, &left, &right);
+    }
+    match op {
+        ColumnOp::Eq => stored == target,
+        ColumnOp::Ne => stored != target,
+        ColumnOp::Lt | ColumnOp::Le | ColumnOp::Gt | ColumnOp::Ge => false,
+    }
+}
+
+/// The numeric arm of [`column_value_matches`], split out for its one real
+/// difference from the ordered arm: equality is epsilon-based, so `Eq`/`Ne`
+/// cannot be expressed through `PartialOrd` without changing what a
+/// float-rounded stored value matches.
+fn compare_f64(op: ColumnOp, left: f64, right: f64) -> bool {
+    match op {
+        ColumnOp::Eq => (left - right).abs() < f64::EPSILON,
+        ColumnOp::Ne => (left - right).abs() >= f64::EPSILON,
+        ColumnOp::Lt => left < right,
+        ColumnOp::Le => left <= right,
+        ColumnOp::Gt => left > right,
+        ColumnOp::Ge => left >= right,
+    }
+}
+
+/// The ordered arm of [`column_value_matches`]: any type whose native
+/// comparisons ARE the predicate semantics (strings today).
+fn compare_ordered<T: PartialOrd>(op: ColumnOp, left: &T, right: &T) -> bool {
+    match op {
+        ColumnOp::Eq => left == right,
+        ColumnOp::Ne => left != right,
+        ColumnOp::Lt => left < right,
+        ColumnOp::Le => left <= right,
+        ColumnOp::Gt => left > right,
+        ColumnOp::Ge => left >= right,
     }
 }
 
@@ -267,6 +362,24 @@ pub struct MemoryEdge {
     pub relation: String,
 }
 
+/// At most `cap` edges of one memory point, plus the honest signal that the
+/// point carries more — returned by the bounded accessors of
+/// [`MemoryStore`](crate::storage::MemoryStore) (#1820).
+///
+/// `truncated` is a separate field because `edges.len() == cap` cannot carry
+/// the signal: a node with exactly `cap` edges is indistinguishable from a
+/// truncated one. It compares the node's TOTAL stored degree against the
+/// scan cap, so expired far ends dropped inside the scanned window (never
+/// replaced — the O(cap) bound is the contract) can leave `edges.len() <
+/// cap` with `truncated == true` as a normal outcome.
+#[derive(Debug, Clone)]
+pub struct BoundedMemoryEdges {
+    /// At most `cap` edges, in storage index order.
+    pub edges: Vec<MemoryEdge>,
+    /// Whether the node's total stored degree exceeded the scan cap.
+    pub truncated: bool,
+}
+
 /// Outcome of [`MemoryService::unrelate`](crate::service::MemoryService::unrelate):
 /// idempotent by design, so an absent edge is a `found: false` answer, not an
 /// error — a cleanup must be replayable.
@@ -275,7 +388,11 @@ pub struct MemoryEdge {
 pub struct UnrelateOutcome {
     /// Whether at least one matching edge existed and was removed.
     pub found: bool,
-    /// How many matching edges were removed (parallel duplicates included).
+    /// How many matching edges were removed.
+    ///
+    /// `relate` is idempotent per (from, relation, to), so anything it wrote
+    /// removes as 0 or 1. Higher counts mean parallel edges predating that
+    /// guarantee, or a direct graph write that bypassed `relate`.
     pub removed: usize,
 }
 
@@ -320,12 +437,23 @@ pub struct EntityProfile {
     pub name: String,
     /// Attributes learned about this entity, reserved keys stripped.
     pub attributes: crate::service::Metadata,
-    /// Typed edges leaving this entity (bipartite scaffolding excluded).
+    /// Typed edges leaving this entity (bipartite scaffolding excluded), at
+    /// most [`crate::limits::MAX_ENTITY_RELATIONS`] of them.
     pub relations: Vec<EntityRelation>,
-    /// Typed edges pointing AT this entity (bipartite scaffolding excluded).
+    /// Typed edges pointing AT this entity (bipartite scaffolding excluded),
+    /// at most [`crate::limits::MAX_ENTITY_RELATIONS`] of them.
     /// Here [`EntityRelation::target_id`]/[`EntityRelation::target`] name the
     /// far end the edge comes FROM — its source.
     pub relations_in: Vec<EntityRelation>,
+    /// Whether `relations` is a PARTIAL view: true when the resolution cap
+    /// ([`crate::limits::MAX_ENTITY_RELATIONS`]) or the raw scan window
+    /// ([`crate::limits::MAX_ENTITY_SCAN_EDGES`]) cut the outgoing side. A
+    /// list holding exactly the cap is otherwise indistinguishable from a
+    /// cut one (#1820).
+    pub relations_truncated: bool,
+    /// Whether `relations_in` is a PARTIAL view — the incoming mirror of
+    /// [`Self::relations_truncated`].
+    pub relations_in_truncated: bool,
 }
 
 /// The connected answer to a `why` question: the best-matching seed memory plus
@@ -338,8 +466,37 @@ pub struct Explanation {
     pub nodes: Vec<MemoryNode>,
     /// Typed edges connecting the nodes.
     pub edges: Vec<MemoryEdge>,
+    /// Whether a width budget cut this walk before it exhausted the
+    /// reachable graph (#1820). A subgraph sitting exactly at a cap
+    /// ([`crate::limits::MAX_WHY_NODES`], [`crate::limits::MAX_WHY_EDGES`],
+    /// [`crate::limits::MAX_WHY_NODE_DEGREE`]) is otherwise
+    /// indistinguishable from a complete one — counts at a ceiling were the
+    /// only signal, and they are ambiguous by construction.
+    ///
+    /// True when a node's degree exceeded the per-node budget, or when the
+    /// node/edge budget stopped the walk while unexpanded work remained.
+    /// The latter is conservative: expanding the rest is exactly what the
+    /// budget forbids, so whether it held anything unseen is unknowable —
+    /// and a rare cautious `true` is harmless where a false "complete" is
+    /// the defect this field exists to close.
+    pub truncated: bool,
 }
 
 #[cfg(test)]
 #[path = "model_tests.rs"]
 mod tests;
+
+/// One audited fact, as `list_memories` returns it: the caller-facing shape
+/// of a [`crate::storage::RawListedFact`] after the service applied its
+/// visibility policy (hub filtering, reserved-key stripping).
+#[derive(Debug, Clone)]
+pub struct ListedMemory {
+    /// Stable id of the memory.
+    pub id: u64,
+    /// Stored fact content.
+    pub content: String,
+    /// Metadata as the policy leaves it: business keys (plus the
+    /// auto-stamped date) by default, the raw payload under
+    /// `include_internal`. `None` when nothing survives.
+    pub metadata: Option<crate::service::Metadata>,
+}

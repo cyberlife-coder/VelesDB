@@ -55,9 +55,9 @@ No Rust toolchain? `npm i @wiscale/velesdb-memory-node`, or grab a prebuilt `.mc
 <details>
 <summary><strong>Other paths — always-on hooks, shared daemon, Rust, Docker, WASM, REST</strong></summary>
 
-**Memory used *continuously*, not just available:** [`integrations/agent-hooks/`](integrations/agent-hooks/README.md) wires four Claude Code hooks — `SessionStart`/`Stop`/`PreCompact` resume and save the working context automatically, and `PostToolUse` compiles an oversized tool result *before* it enters the transcript. One global install covers every project.
+**Memory used *continuously*, not just available:** [`integrations/agent-hooks/`](integrations/agent-hooks/README.md) wires five Claude Code hooks — `SessionStart`/`Stop`/`PreCompact` resume and save the working context, `PreToolUse` requires successful recall before an opted-in repository edit, and `PostToolUse` both records that recall and compiles an oversized tool result *before* it enters the transcript. One global install covers every project without enabling the edit guard outside explicitly configured repositories.
 
-**One memory shared by several clients** (Claude Code, Claude Desktop, Windsurf, Devin CLI): [`scripts/install-memory-daemon.sh`](crates/velesdb-memory/README.md#http-transport-multi-client) runs `velesdb-memory` as a single local daemon — HTTPS by default, with a natively generated local CA.
+**One memory shared by several clients** (Claude Code, Codex CLI, Claude Desktop, Windsurf, Devin CLI): [`scripts/install-memory-daemon.sh`](crates/velesdb-memory/README.md#http-transport-multi-client) runs `velesdb-memory` as a single local daemon — HTTPS by default, with a natively generated local CA.
 
 **Cargo (Rust + REST server):** `cargo install velesdb-server velesdb-cli` — **Docker** (multi-arch linux/amd64 + linux/arm64): `docker run -d -p 8080:8080 -v velesdb_data:/data --name velesdb ghcr.io/cyberlife-coder/velesdb:latest`, then `curl http://localhost:8080/health`.
 
@@ -224,12 +224,12 @@ Tool parity per surface is published honestly — including where a surface is s
 | Category | Key Endpoints |
 |----------|--------------|
 | **Collections** | `POST /collections`, `GET /collections`, `GET/DELETE /collections/{name}` |
-| **Points** | `/collections/{name}/points`, `/collections/{name}/points/scroll`, `/collections/{name}/stream/insert`, `/collections/{name}/points/{id}/relations`, `/collections/{name}/points/{id}/ttl`, `/collections/{name}/relations` |
+| **Points** | `/collections/{name}/points`, `/collections/{name}/points/raw`, `/collections/{name}/points/scroll`, `/collections/{name}/stream/insert`, `/collections/{name}/stream/enable`, `/collections/{name}/points/{id}/relations`, `/collections/{name}/points/{id}/ttl`, `/collections/{name}/relations` |
 | **Search** | `/collections/{name}/search`, `/collections/{name}/search/batch`, `/collections/{name}/search/hybrid`, `/collections/{name}/search/text`, `/collections/{name}/search/multi`, `/collections/{name}/search/ids`, `/collections/{name}/match` |
 | **Graph** | `/collections/{name}/graph/edges`, `/collections/{name}/graph/edges/{id}`, `/collections/{name}/graph/edges/count`, `/collections/{name}/graph/traverse`, `/collections/{name}/graph/traverse/stream`, `/collections/{name}/graph/traverse/parallel`, `/collections/{name}/graph/nodes`, `/collections/{name}/graph/nodes/{id}/degree`, `/collections/{name}/graph/nodes/{id}/edges`, `/collections/{name}/graph/nodes/{id}/payload`, `/collections/{name}/graph/search` |
 | **Indexes** | `GET/POST /collections/{name}/indexes`, `DELETE /collections/{name}/indexes/{label}/{property}`, `/collections/{name}/index/rebuild` |
 | **VelesQL** | `/query`, `/aggregate`, `/query/explain` |
-| **Admin** | `/health`, `/ready`, `/metrics`, `/guardrails`, `/collections/{name}/stats`, `/collections/{name}/config`, `/collections/{name}/flush`, `/collections/{name}/analyze`, `/collections/{name}/empty`, `/collections/{name}/sanity` |
+| **Admin** | `/health`, `/ready`, `/metrics`, `/guardrails`, `/collections/{name}/stats`, `/collections/{name}/config`, `/collections/{name}/flush`, `/collections/{name}/analyze`, `/collections/{name}/empty`, `/collections/{name}/sanity`, `/collections/{name}/compact`, `/collections/{name}/vacuum` |
 
 > **Full API reference:** [docs/reference/api-reference.md](docs/reference/api-reference.md) | **OpenAPI spec:** [docs/openapi.yaml](docs/openapi.yaml) | **Server security:** [docs/guides/SERVER_SECURITY.md](docs/guides/SERVER_SECURITY.md)
 

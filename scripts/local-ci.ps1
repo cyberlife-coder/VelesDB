@@ -55,7 +55,12 @@ try {
 # ============================================================================
 Write-Step "Check 2: Linting (clippy)"
 try {
-    cargo clippy --all-targets --all-features -- -D warnings -D clippy::pedantic 2>&1 | Out-Host
+    # Mot pour mot ci.yml:217-219. La forme --all-features sans exclusion
+    # divergeait : elle rend rc=101 sur velesdb-node, que la CI lint
+    # separement (ci.yml:226) avec ses propres regles.
+    cargo clippy --workspace --all-targets --features persistence,gpu,update-check `
+        --exclude velesdb-python --exclude velesdb-node `
+        -- -D warnings -D clippy::pedantic 2>&1 | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "Clippy failed" }
     Write-Success "Clippy OK"
 } catch {
@@ -138,9 +143,16 @@ try {
 # ============================================================================
 Write-Step "Check: Codacy CLI static analysis"
 try {
+    # The repo path inside WSL is machine-specific: set VELESDB_WSL_REPO_PATH
+    # to your clone's /mnt/... path, or the step derives it from the current
+    # directory. Never hardcode a personal drive here.
+    $wslRepoPath = $env:VELESDB_WSL_REPO_PATH
+    if (-not $wslRepoPath) {
+        $wslRepoPath = wsl -- wslpath -a "$(Get-Location)" 2>$null
+    }
     $wslCheck = wsl -- bash -c "which codacy-cli 2>/dev/null" 2>&1
-    if ($LASTEXITCODE -eq 0) {
-        $codacyOutput = wsl -- bash -c "cd /mnt/d/Projets-dev/velesDB/velesdb-core && codacy-cli analyze 2>&1"
+    if ($LASTEXITCODE -eq 0 -and $wslRepoPath) {
+        $codacyOutput = wsl -- bash -c "cd '$wslRepoPath' && codacy-cli analyze 2>&1"
         if ($LASTEXITCODE -ne 0) { throw "Codacy CLI failed" }
         $findingsLine = $codacyOutput | Select-String "findings\." | Select-Object -Last 1
         if ($findingsLine -match "0 findings") {
@@ -151,7 +163,7 @@ try {
             $errors += "CodacyCLI"
         }
     } else {
-        Write-Warn "Codacy CLI not installed in WSL - skipping"
+        Write-Warn "Codacy CLI not available in WSL (or repo path unresolved) - skipping"
         Write-Output "   Install: https://docs.codacy.com/related-tools/local-analysis/client-side-tools/"
     }
 } catch {
@@ -262,7 +274,10 @@ if ($Quick) {
     if (-not $SkipTests) {
         Write-Step "Check 6: Tests"
         try {
-            cargo test --all-features --workspace 2>&1 | Out-Host
+            # --test-threads=1 : plusieurs suites de ce depot partagent un
+            # store sous flock et se declarent mutuellement en echec en
+            # parallele. La CI le passe, cette copie ne le passait pas.
+            cargo test --all-features --workspace -- --test-threads=1 2>&1 | Out-Host
             if ($LASTEXITCODE -ne 0) { throw "Tests failed" }
             Write-Success "Tests OK"
         } catch {

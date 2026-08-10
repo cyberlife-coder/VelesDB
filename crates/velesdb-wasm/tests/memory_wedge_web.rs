@@ -212,15 +212,14 @@ fn compile_context_memory_scope_pulls_stored_memories() {
 const PNG_1X1_B64: &str =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
-/// Regression this attrapes: `WasmStore`'s `MemoryStore` impl diverges from
-/// the native file-backed one (different metadata batch/get paths) — a
-/// media-specific bug there (e.g. the atomic-packing rule never matching, or
-/// the media source never getting a handle) would show up only on wasm,
-/// never in the native `context_memory_bdd` suite.
-#[wasm_bindgen_test]
-fn compile_context_with_media_fragment_decides_atomic_preserve_and_mints_a_handle() {
-    let svc = WasmMemoryService::new(16);
-    let request = js_sys::JSON::parse(&format!(
+/// The one media-carrying compile request every media test starts from.
+///
+/// Shared rather than repeated so the tests below differ only in what they
+/// ASSERT: a caption or a byte payload that drifted between two copies would
+/// silently turn two tests of the same behaviour into tests of two different
+/// ones, and neither would say so.
+fn media_compile_request() -> JsValue {
+    js_sys::JSON::parse(&format!(
         r#"{{
             "query": "a screenshot of the failing build",
             "token_budget": 4000,
@@ -230,9 +229,28 @@ fn compile_context_with_media_fragment_decides_atomic_preserve_and_mints_a_handl
             ]
         }}"#
     ))
-    .unwrap();
+    .expect("the media compile request is valid JSON")
+}
 
-    let compiled = svc.compile_context(request).unwrap();
+/// The `ctx://source/` handle minted for a compiled context's first source.
+fn first_source_handle(compiled: &JsValue) -> String {
+    let sources = js_sys::Reflect::get(compiled, &"sources".into()).unwrap();
+    let source = js_sys::Reflect::get(&sources, &0.into()).unwrap();
+    js_sys::Reflect::get(&source, &"handle".into())
+        .unwrap()
+        .as_string()
+        .expect("every compiled source gets an addressable ctx://source/ handle")
+}
+
+/// Regression this attrapes: `WasmStore`'s `MemoryStore` impl diverges from
+/// the native file-backed one (different metadata batch/get paths) — a
+/// media-specific bug there (e.g. the atomic-packing rule never matching, or
+/// the media source never getting a handle) would show up only on wasm,
+/// never in the native `context_memory_bdd` suite.
+#[wasm_bindgen_test]
+fn compile_context_with_media_fragment_decides_atomic_preserve_and_mints_a_handle() {
+    let svc = WasmMemoryService::new(16);
+    let compiled = svc.compile_context(media_compile_request()).unwrap();
     let decisions = js_sys::Reflect::get(&compiled, &"decisions".into()).unwrap();
     let first = js_sys::Reflect::get(&decisions, &0.into()).unwrap();
     let rule_id = js_sys::Reflect::get(&first, &"rule_id".into()).unwrap();
@@ -244,12 +262,7 @@ fn compile_context_with_media_fragment_decides_atomic_preserve_and_mints_a_handl
     let action = js_sys::Reflect::get(&first, &"action".into()).unwrap();
     assert_eq!(action.as_string().as_deref(), Some("preserve"));
 
-    let sources = js_sys::Reflect::get(&compiled, &"sources".into()).unwrap();
-    let source = js_sys::Reflect::get(&sources, &0.into()).unwrap();
-    let handle = js_sys::Reflect::get(&source, &"handle".into())
-        .unwrap()
-        .as_string()
-        .expect("the media fragment gets an addressable ctx://source/ handle");
+    let handle = first_source_handle(&compiled);
     assert!(handle.starts_with("ctx://source/"));
 }
 
@@ -294,12 +307,7 @@ fn retrieve_context_source_resolves_a_text_only_source() {
     ))
     .unwrap();
     let compiled = svc.compile_context(request).unwrap();
-    let sources = js_sys::Reflect::get(&compiled, &"sources".into()).unwrap();
-    let source = js_sys::Reflect::get(&sources, &0.into()).unwrap();
-    let handle = js_sys::Reflect::get(&source, &"handle".into())
-        .unwrap()
-        .as_string()
-        .unwrap();
+    let handle = first_source_handle(&compiled);
     assert!(handle.starts_with("ctx://source/"));
 
     let resolved = svc.retrieve_context_source(&handle).unwrap();
@@ -333,24 +341,8 @@ fn retrieve_context_source_resolves_a_text_only_source() {
 #[wasm_bindgen_test]
 fn retrieve_context_source_round_trips_a_media_source() {
     let svc = WasmMemoryService::new(16);
-    let request = js_sys::JSON::parse(&format!(
-        r#"{{
-            "query": "a screenshot of the failing build",
-            "token_budget": 4000,
-            "fragments": [
-                {{"content": "the failing build, before the fix",
-                  "media": {{"mime": "image/png", "bytes_b64": "{PNG_1X1_B64}"}}}}
-            ]
-        }}"#
-    ))
-    .unwrap();
-    let compiled = svc.compile_context(request).unwrap();
-    let sources = js_sys::Reflect::get(&compiled, &"sources".into()).unwrap();
-    let source = js_sys::Reflect::get(&sources, &0.into()).unwrap();
-    let handle = js_sys::Reflect::get(&source, &"handle".into())
-        .unwrap()
-        .as_string()
-        .unwrap();
+    let compiled = svc.compile_context(media_compile_request()).unwrap();
+    let handle = first_source_handle(&compiled);
 
     let resolved = svc.retrieve_context_source(&handle).unwrap();
     let media = js_sys::Reflect::get(&resolved, &"media".into()).unwrap();
@@ -373,6 +365,17 @@ fn retrieve_context_source_round_trips_a_media_source() {
     );
 }
 
+/// The `code` carried by a structured rejection. Every error assertion in
+/// this file goes through this one reader: a rejection that crossed as a bare
+/// string (or with a non-string `code`) fails here rather than in each test
+/// with its own copy of the idiom.
+fn error_code(err: &JsValue) -> String {
+    js_sys::Reflect::get(err, &"code".into())
+        .unwrap()
+        .as_string()
+        .expect("a rejection must carry a string `code`")
+}
+
 /// An unknown handle rejects with a structured `{code: "NOT_FOUND"}` error,
 /// mirroring the Node binding's contract, never panicking across the
 /// boundary.
@@ -382,11 +385,7 @@ fn retrieve_context_source_unknown_handle_rejects_with_not_found() {
     let err = svc
         .retrieve_context_source("ctx://source/999999999999999999")
         .unwrap_err();
-    let code = js_sys::Reflect::get(&err, &"code".into())
-        .unwrap()
-        .as_string()
-        .unwrap();
-    assert_eq!(code, "NOT_FOUND");
+    assert_eq!(error_code(&err), "NOT_FOUND");
 }
 
 // --- saveWorkingContext / loadWorkingContext / listWorkingContexts (#1517) --
@@ -428,15 +427,25 @@ fn save_then_load_working_context_round_trips_within_session() {
     let loaded = svc.load_working_context("veles", "session-a").unwrap();
     assert!(
         !loaded.is_instance_of::<js_sys::Map>(),
-        "loaded working context must be a plain object"
+        "the load envelope must be a plain object"
     );
-    let goal = js_sys::Reflect::get(&loaded, &"goal".into())
+    assert_eq!(
+        js_sys::Reflect::get(&loaded, &"found".into())
+            .unwrap()
+            .as_bool(),
+        Some(true),
+        "the envelope reports the hit"
+    );
+    let working_back = js_sys::Reflect::get(&loaded, &"working".into()).unwrap();
+    let goal = js_sys::Reflect::get(&working_back, &"goal".into())
         .unwrap()
         .as_string()
         .unwrap();
     assert_eq!(goal, "ship the canary fix");
 
-    let decisions = js_sys::Reflect::get(&loaded, &"decisions".into()).unwrap();
+    // `stringifyIdFields` runs at the ROOT of the envelope, so it must still
+    // reach this id one level deeper, under `working`.
+    let decisions = js_sys::Reflect::get(&working_back, &"decisions".into()).unwrap();
     let first = js_sys::Reflect::get(&decisions, &0.into()).unwrap();
     let fragment_id = js_sys::Reflect::get(&first, &"fragment_id".into())
         .unwrap()
@@ -444,26 +453,107 @@ fn save_then_load_working_context_round_trips_within_session() {
         .expect("fragment_id must cross back as a decimal string, not a number");
     assert_eq!(fragment_id, "18446744073709551615", "u64::MAX round-trips");
 
-    let pending = js_sys::Reflect::get(&loaded, &"pending_actions".into()).unwrap();
+    let pending = js_sys::Reflect::get(&working_back, &"pending_actions".into()).unwrap();
     let first_action = js_sys::Reflect::get(&pending, &0.into())
         .unwrap()
         .as_string()
         .unwrap();
     assert_eq!(first_action, "roll back if error rate spikes");
+
+    let others = js_sys::Reflect::get(&loaded, &"other_sessions".into()).unwrap();
+    assert_eq!(
+        js_sys::Reflect::get(&others, &"length".into())
+            .unwrap()
+            .as_f64(),
+        Some(0.0),
+        "the only saved session is the requested one, which is never echoed back"
+    );
 }
 
-/// Nothing saved under a project + session pair loads back as `null` in JS —
-/// mirroring the Node binding's `loadWorkingContext` contract — never an
-/// error, and never a forged/leaked value from an unrelated slot.
+/// Nothing saved under a project + session pair loads back as
+/// `{found: false, working: null, other_sessions: []}` — mirroring the Node
+/// binding's `loadWorkingContext` contract — never an error, and never a
+/// forged/leaked value from an unrelated slot.
 #[wasm_bindgen_test]
-fn load_working_context_returns_null_when_nothing_saved() {
+fn load_working_context_reports_found_false_when_nothing_saved() {
     let svc = WasmMemoryService::new(16);
     let loaded = svc
         .load_working_context("veles", "never-saved-session")
         .unwrap();
+    assert_eq!(
+        js_sys::Reflect::get(&loaded, &"found".into())
+            .unwrap()
+            .as_bool(),
+        Some(false),
+        "an unsaved project+session pair is found:false, not an error"
+    );
     assert!(
-        loaded.is_null(),
-        "an unsaved project+session pair must load back as null"
+        js_sys::Reflect::get(&loaded, &"working".into())
+            .unwrap()
+            .is_null(),
+        "and its `working` member is null"
+    );
+}
+
+/// The whole reason the bare `WorkingContext | null` return was replaced: a
+/// miss and a TYPO look identical from the outside, and only
+/// `other_sessions` tells them apart. Without it a caller silently starts
+/// fresh on top of work sitting right there under a neighbouring id.
+#[wasm_bindgen_test]
+fn load_working_context_surfaces_the_sibling_sessions_a_typo_missed() {
+    let svc = WasmMemoryService::new(16);
+    let minimal = js_sys::JSON::parse(r#"{"goal":"the real session"}"#).unwrap();
+    svc.save_working_context("veles", "task-1234", minimal)
+        .unwrap();
+
+    let typo = svc.load_working_context("veles", "task-1235").unwrap();
+    assert_eq!(
+        js_sys::Reflect::get(&typo, &"found".into())
+            .unwrap()
+            .as_bool(),
+        Some(false)
+    );
+    let others = js_sys::Reflect::get(&typo, &"other_sessions".into()).unwrap();
+    let first = js_sys::Reflect::get(&others, &0.into())
+        .unwrap()
+        .as_string()
+        .expect("the near-miss session is what makes the typo recoverable");
+    assert_eq!(first, "task-1234");
+}
+
+/// Populated on a HIT as well: a typo landing on another REAL session
+/// returns `found: true`, the case a caller can least detect on its own.
+/// The requested session is never echoed back.
+#[wasm_bindgen_test]
+fn load_working_context_lists_other_sessions_on_a_hit_too() {
+    let svc = WasmMemoryService::new(16);
+    let minimal = js_sys::JSON::parse(r#"{"goal":"resume me"}"#).unwrap();
+    svc.save_working_context("veles", "session-a", minimal.clone())
+        .unwrap();
+    svc.save_working_context("veles", "session-b", minimal)
+        .unwrap();
+
+    let loaded = svc.load_working_context("veles", "session-a").unwrap();
+    assert_eq!(
+        js_sys::Reflect::get(&loaded, &"found".into())
+            .unwrap()
+            .as_bool(),
+        Some(true)
+    );
+    let others = js_sys::Reflect::get(&loaded, &"other_sessions".into()).unwrap();
+    assert_eq!(
+        js_sys::Reflect::get(&others, &"length".into())
+            .unwrap()
+            .as_f64(),
+        Some(1.0),
+        "exactly the OTHER session, never the requested one"
+    );
+    assert_eq!(
+        js_sys::Reflect::get(&others, &0.into())
+            .unwrap()
+            .as_string()
+            .unwrap(),
+        "session-b"
     );
 }
 
@@ -562,11 +652,7 @@ fn compile_transcript_rejects_an_empty_transcript() {
     let request =
         js_sys::JSON::parse(r#"{"query": "q", "transcript": "", "token_budget": 1000}"#).unwrap();
     let err = svc.compile_transcript(request).unwrap_err();
-    let code = js_sys::Reflect::get(&err, &"code".into())
-        .unwrap()
-        .as_string()
-        .unwrap();
-    assert_eq!(code, "INVALID_INPUT");
+    assert_eq!(error_code(&err), "INVALID_INPUT");
 }
 
 /// `contextSavings` aggregates a `compileTranscript` call exactly like a
@@ -635,5 +721,204 @@ fn suggest_budget_looks_up_known_and_unknown_models() {
     assert!(
         window.is_null(),
         "an unknown model must report window: null, never a guess"
+    );
+}
+
+// --- unrelate / entity ------------------------------------------------------
+//
+// Both surfaces shipped with native coverage only, so nothing observed the
+// shape they hand to a JS caller. "It did not panic" says nothing about that
+// shape: a `usize` can cross as a BigInt no arithmetic accepts, a `bool` as a
+// truthy string, an empty `Vec` as `undefined` no `.map()` survives, and a
+// `serde_json::Map` as an ES2015 `Map` whose keys `JSON.stringify` drops.
+// Only a real JS runtime can tell those apart.
+
+/// `{found, removed}` read off an `unrelate` result, asserting on the way that
+/// the envelope is a plain object and that BOTH keys crossed as their JS
+/// primitive type. `as_bool`/`as_f64` return `None` for anything else — a
+/// truthy string, a BigInt, a missing key — so a drift fails here.
+///
+/// Shared by the removal and its replay: two copies could assert two
+/// different shapes of the same contract without either saying so.
+fn unrelate_outcome(result: &JsValue) -> (bool, f64) {
+    assert!(
+        !result.is_instance_of::<js_sys::Map>(),
+        "unrelate must resolve to a plain object, not an ES2015 Map"
+    );
+    let found = js_sys::Reflect::get(result, &"found".into()).unwrap();
+    let removed = js_sys::Reflect::get(result, &"removed".into()).unwrap();
+    (
+        found
+            .as_bool()
+            .expect("`found` must be present and cross as a real JS boolean, never undefined"),
+        removed
+            .as_f64()
+            .expect("`removed` must be present and cross as a JS number, never a BigInt or string"),
+    )
+}
+
+/// `unrelate` marshalling: the outcome envelope crosses as a plain object
+/// whose `found` is a genuine boolean and whose `removed` is a genuine number,
+/// and the documented idempotence marshals as KEYS PRESENT AND FALSE on the
+/// replay — `{found: false, removed: 0}`, not two `undefined`s a caller would
+/// read as a successful removal. A self-edge still rejects with a structured
+/// code instead of resolving to a silent no-op.
+#[wasm_bindgen_test]
+fn unrelate_marshals_a_plain_object_with_a_boolean_found_and_a_numeric_removed() {
+    let svc = WasmMemoryService::new(16);
+    let remember = |fact: &str| {
+        svc.remember(fact, JsValue::UNDEFINED, JsValue::UNDEFINED, None)
+            .unwrap()
+    };
+    let cause = remember("the canary deploy shipped an unbounded query");
+    let effect = remember("the error rate spiked at 14:02");
+    svc.relate(&cause, &effect, "causes").unwrap();
+
+    let (found, removed) = unrelate_outcome(&svc.unrelate(&cause, &effect, "causes").unwrap());
+    assert!(found, "removing the edge just created must report found");
+    assert_eq!(removed, 1.0, "exactly one edge was removed");
+
+    let (found, removed) = unrelate_outcome(&svc.unrelate(&cause, &effect, "causes").unwrap());
+    assert!(!found, "the replay must report found: false, not throw");
+    assert_eq!(removed, 0.0, "the replay removed nothing");
+
+    let err = svc.unrelate(&cause, &cause, "causes").unwrap_err();
+    assert_eq!(error_code(&err), "INVALID_INPUT", "a self-edge is refused");
+}
+
+/// `entity` marshalling on a MISS — the only answer this binding can give
+/// today (entity hubs are written by extraction, which WASM does not expose),
+/// and therefore the shape every JS caller meets first. The empty profile must
+/// still be fully typed on the wire: `id` a decimal STRING (the repository's
+/// id contract, so no id ever passes through a JS number), `attributes` a
+/// plain empty object rather than an ES2015 `Map` or `undefined`, and
+/// `relations` a real `[]` — a `Vec` that crossed as `undefined` would break
+/// `profile.relations.map(...)` in the caller, which no native test can see.
+#[wasm_bindgen_test]
+fn entity_miss_marshals_an_empty_profile_with_a_string_id() {
+    let svc = WasmMemoryService::new(16);
+    let profile = svc.entity("Ada Lovelace").unwrap();
+    assert!(
+        !profile.is_instance_of::<js_sys::Map>(),
+        "the entity profile must be a plain object, not an ES2015 Map"
+    );
+
+    let found = js_sys::Reflect::get(&profile, &"found".into()).unwrap();
+    assert_eq!(
+        found.as_bool(),
+        Some(false),
+        "a miss reports a real boolean false, never a falsy stand-in"
+    );
+    let id = js_sys::Reflect::get(&profile, &"id".into()).unwrap();
+    assert_eq!(
+        id.as_string().as_deref(),
+        Some("0"),
+        "ids cross as decimal strings on every path, misses included"
+    );
+    let name = js_sys::Reflect::get(&profile, &"name".into()).unwrap();
+    assert_eq!(
+        name.as_string().as_deref(),
+        Some("ada lovelace"),
+        "a miss echoes the canonicalized query so lookups stay pairable"
+    );
+
+    let attributes = js_sys::Reflect::get(&profile, &"attributes".into()).unwrap();
+    assert!(
+        !attributes.is_instance_of::<js_sys::Map>(),
+        "attributes must be a plain object: JSON.stringify drops a Map's keys"
+    );
+    let attributes: js_sys::Object = attributes
+        .dyn_into()
+        .expect("attributes must be an object, never undefined");
+    assert_eq!(
+        js_sys::Object::keys(&attributes).length(),
+        0,
+        "a miss carries no attributes"
+    );
+
+    let relations = js_sys::Reflect::get(&profile, &"relations".into()).unwrap();
+    assert!(
+        js_sys::Array::is_array(&relations),
+        "an empty Vec must cross as [], not undefined"
+    );
+    let relations: js_sys::Array = relations.unchecked_into();
+    assert_eq!(relations.length(), 0, "a miss carries no relations");
+}
+
+// --- rememberExtracted, the write side `entity` was missing -------------------
+//
+// This binding used to be EXEMPTED from `remember_extracted` in the parity
+// guard, on the grounds that `OllamaExtractor` was the crate's only
+// `Extractor` and would put a network call in the bundle. A deterministic,
+// dependency-free backend annulled that reason (issues #1690, #1692), so the
+// method is here — and with it, the first `entity` HIT this binding can
+// produce.
+
+/// The whole point of the field: an edge LEAVES camille, so it is invisible
+/// from theo's outgoing list and visible only in `relationsIn`. A binding
+/// that relayed `relationsIn` by copying `relations` would pass a miss test
+/// and fail this one.
+#[wasm_bindgen_test]
+fn remember_extracted_marshals_the_envelope_and_makes_an_entity_hit_reachable() {
+    let svc = WasmMemoryService::new(16);
+    let outcome = svc
+        .remember_extracted(
+            "edge: Camille | sister of | Theo",
+            JsValue::NULL,
+            Some("outline".to_owned()),
+        )
+        .expect("the outline backend needs no model");
+
+    let skipped = js_sys::Reflect::get(&outcome, &"skippedOverCap".into()).unwrap();
+    assert_eq!(
+        skipped.as_f64(),
+        Some(0.0),
+        "the skip count crosses as a real number under its camelCase name"
+    );
+    let ids = js_sys::Reflect::get(&outcome, &"ids".into()).unwrap();
+    assert!(
+        ids.is_instance_of::<js_sys::Array>(),
+        "`ids` stays an array inside the envelope"
+    );
+
+    let profile = svc.entity("Theo").unwrap();
+    let found = js_sys::Reflect::get(&profile, &"found".into()).unwrap();
+    assert_eq!(
+        found.as_bool(),
+        Some(true),
+        "extraction created the hub, so this binding can finally report a hit"
+    );
+    let incoming = js_sys::Reflect::get(&profile, &"relationsIn".into()).unwrap();
+    let incoming: js_sys::Array = incoming.unchecked_into();
+    assert_eq!(
+        incoming.length(),
+        1,
+        "the edge points AT theo, so it can only be seen here"
+    );
+    let outgoing = js_sys::Reflect::get(&profile, &"relations".into()).unwrap();
+    let outgoing: js_sys::Array = outgoing.unchecked_into();
+    assert_eq!(
+        outgoing.length(),
+        0,
+        "and it must NOT be duplicated into the outgoing list"
+    );
+}
+
+/// A backend this bundle does not carry is refused BY NAME. Silently falling
+/// back would let a caller who asked for a generative model believe they got
+/// one, and quietly get something else.
+#[wasm_bindgen_test]
+fn remember_extracted_refuses_a_backend_this_bundle_does_not_carry() {
+    let svc = WasmMemoryService::new(16);
+    let err = svc
+        .remember_extracted("fact: anything", JsValue::NULL, Some("ollama".to_owned()))
+        .expect_err("ollama is not available in the WASM bundle");
+    let message = js_sys::Reflect::get(&err, &"message".into())
+        .ok()
+        .and_then(|m| m.as_string())
+        .unwrap_or_default();
+    assert!(
+        message.contains("unknown extractor 'ollama'"),
+        "the refusal names the backend that was asked for, got: {message}"
     );
 }

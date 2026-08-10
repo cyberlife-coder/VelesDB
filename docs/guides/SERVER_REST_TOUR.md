@@ -373,7 +373,7 @@ curl -X POST http://localhost:8080/v1/query/explain \
   "query_type": "select",
   "collection": "demo",
   "plan": [
-    {"step": 1, "operation": "VectorSearch", "description": "HNSW nearest-neighbor scan, ef_search=128, limit=5"}
+    {"step": 1, "operation": "VectorSearch", "description": "HNSW nearest-neighbor scan, ef_search=160, limit=5"}
   ],
   "estimated_cost": {
     "uses_index": true,
@@ -519,20 +519,20 @@ public when API keys are configured.
 `/v1/health` always answers `200` while the process is up:
 
 ```json
-{"status": "ok", "version": "4.2.0"}
+{"status": "ok", "version": "5.0.0"}
 ```
 
 `/v1/ready` answers `200` once every collection is loaded from disk:
 
 ```json
-{"status": "ready", "version": "4.2.0"}
+{"status": "ready", "version": "5.0.0"}
 ```
 
 …and `503` until then, which is what makes it usable as a Kubernetes
 readiness probe:
 
 ```json
-{"status": "not_ready", "version": "4.2.0"}
+{"status": "not_ready", "version": "5.0.0"}
 ```
 
 ---
@@ -579,4 +579,4 @@ Numbers match the canonical contract in
 
 ---
 
-Last updated: 2026-07-25 · Applies to: velesdb-core 4.2.0
+Last updated: 2026-08-08 · Applies to: velesdb-core 5.0.0

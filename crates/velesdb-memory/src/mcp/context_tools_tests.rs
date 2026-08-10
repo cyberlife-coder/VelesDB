@@ -72,6 +72,17 @@ fn decision_of(value: serde_json::Value) -> ContextDecision {
     serde_json::from_value(value).expect("valid ContextDecision wire value")
 }
 
+/// Same for `load_working_context`, which returns the wire `Value` too since
+/// 2026-07-29: its ids leave as decimal strings, so that the ONLY form
+/// `save_working_context` announces is the form its reading half hands back.
+/// Deserializing here is exactly what a Rust MCP client does — and it is why
+/// the round trip is checked on the WIRE in `tests/mcp_schema_bdd.rs` as
+/// well: `serde_json` decodes a `u64` exactly, the float-lossy client this
+/// contract exists for does not.
+fn loaded_working_of(value: serde_json::Value) -> LoadedWorkingContext {
+    serde_json::from_value(value).expect("valid LoadedWorkingContext wire value")
+}
+
 #[tokio::test]
 async fn test_compile_context_tool_returns_compiled_context_and_insights() {
     // Given a server and a compile request with a duplicate
@@ -455,42 +466,96 @@ fn test_compile_context_input_schema_advertises_string_fragment_id() {
     // fragments[].id accepts a decimal string on input (see
     // wire::deserialize_optional_id) — a client generating requests from the
     // advertised schema must be able to discover that.
+    //
+    // Annonce `"string"` TOUT COURT depuis le 2026-07-29, la ou le schema
+    // disait `["integer", "string", "null"]` : les harnais clients observes
+    // aplatissent une liste de formes en `{}`, si bien que la version
+    // « complete » du contrat le detruisait au lieu de le publier. La chaine
+    // est la forme qui traverse un client JSON a nombres flottants sans
+    // perdre les bits d'un id au-dela de 2^53 — c'est donc elle qu'on
+    // annonce. Le serveur, lui, accepte toujours les deux.
     let tool = McpServer::compile_context_tool_attr();
     let schema = serde_json::to_value(&tool.input_schema).expect("schema serializes");
 
     let id_type = &published_fragment_property(&schema, "id")["type"];
-    let types = id_type
-        .as_array()
-        .unwrap_or_else(|| panic!("fragments[].id must type a list of forms, got {id_type}"));
-    for expected in ["integer", "string", "null"] {
-        assert!(
-            types.contains(&serde_json::json!(expected)),
-            "fragments[].id must advertise {expected} on input, got {id_type}"
-        );
-    }
+    assert_eq!(
+        id_type,
+        &serde_json::json!("string"),
+        "fragments[].id must advertise exactly one scalar type on input, got {id_type}"
+    );
+}
+
+#[tokio::test]
+async fn test_explain_compilation_accepts_the_string_fragment_id_compile_context_emitted() {
+    // Given a fragment whose id exceeds 2^53, compiled with
+    // `policy.ids_as_strings` — the option that exists precisely so a
+    // float-lossy client gets its ids intact.
+    let (_dir, srv) = server();
+    let mut big = fragment("a fact whose id is past the safe integer range");
+    big.id = Some(ID_ABOVE_JS_SAFE_INTEGER);
+    let mut req = request("deploy", vec![big], 10_000);
+    req.policy = Some(CompilePolicy {
+        ids_as_strings: true,
+        ..CompilePolicy::default()
+    });
+    let Json(compiled) = srv
+        .compile_context(Parameters(req.clone()))
+        .await
+        .expect("compile_context");
+    let emitted = compiled["decisions"][0]["fragment_id"].clone();
+    assert!(
+        emitted.is_string(),
+        "precondition: ids_as_strings emits fragment_id as a string, got {emitted}"
+    );
+
+    // When the caller asks WHY that fragment was decided the way it was,
+    // relaying the id exactly as it was handed out…
+    let arguments = serde_json::json!({
+        "request": serde_json::to_value(&req).expect("the request serializes"),
+        "fragment_id": emitted,
+    });
+
+    // …then the tool that produced the string must accept it back. It did
+    // not until 2026-07-29: `fragment_id` was a bare `u64`, so the ONLY form
+    // that survives a float-lossy client was the one form it refused, and
+    // the tool was unreachable by its own documented selector.
+    let params: ExplainCompilationParams = serde_json::from_value(arguments)
+        .expect("explain_compilation accepts the decimal-string fragment_id it emits");
+    assert_eq!(params.fragment_id, ID_ABOVE_JS_SAFE_INTEGER);
+
+    let Json(decision) = srv
+        .explain_compilation(Parameters(params))
+        .await
+        .expect("explain_compilation resolves the fragment");
+    // The answer is stringified too — the request carried `ids_as_strings`,
+    // so the whole loop stays in the one form a float-lossy client can hold.
+    assert_eq!(
+        decision["fragment_id"],
+        serde_json::json!(ID_ABOVE_JS_SAFE_INTEGER.to_string()),
+        "the decision returned is the one for that exact fragment: {decision}"
+    );
 }
 
 #[test]
-fn test_explain_compilation_input_schema_keeps_top_level_fragment_id_strict() {
-    // The widening is scoped to fragments[].id: the tool's own fragment_id
-    // parameter is deserialized as a strict u64 (a string is rejected), so
-    // its advertised type must stay integer-only — announcing a string there
-    // would over-promise.
+fn test_explain_compilation_input_schema_announces_the_string_fragment_id() {
+    // `fragment_id` selects a decision by an id `compile_context` may hand
+    // out as a decimal string (`policy.ids_as_strings`), so it carries the
+    // id contract and must ANNOUNCE the form that survives a float-lossy
+    // client. It was published `integer` — the one form the caller cannot
+    // produce past 2^53 — until 2026-07-29.
     let tool = McpServer::explain_compilation_tool_attr();
     let schema = serde_json::to_value(&tool.input_schema).expect("schema serializes");
 
     assert_eq!(
         schema["properties"]["fragment_id"]["type"],
-        serde_json::json!("integer"),
-        "top-level fragment_id stays integer-only"
+        serde_json::json!("string"),
+        "top-level fragment_id announces the decimal-string form"
     );
-    // …while the nested fragments[].id is widened, like compile_context's.
+    // …while the nested fragments[].id announces the string form it accepts.
     let id_type = &published_fragment_property(&schema, "id")["type"];
-    let types = id_type
-        .as_array()
-        .unwrap_or_else(|| panic!("fragments[].id must type a list of forms, got {id_type}"));
-    assert!(
-        types.contains(&serde_json::json!("string")),
+    assert_eq!(
+        id_type,
+        &serde_json::json!("string"),
         "request.fragments[].id must advertise string on input, got {id_type}"
     );
 }
@@ -842,6 +907,7 @@ async fn test_save_working_context_tool_then_load_round_trips() {
         }))
         .await
         .expect("load_working_context");
+    let loaded = loaded_working_of(loaded);
     let recovered = loaded
         .working
         .expect("a previously saved working context must load back");
@@ -863,6 +929,7 @@ async fn test_load_working_context_tool_none_when_never_saved() {
         }))
         .await
         .expect("load_working_context");
+    let loaded = loaded_working_of(loaded);
 
     // Then there is nothing to resume
     assert!(loaded.working.is_none());
@@ -899,6 +966,7 @@ async fn test_save_working_context_tool_is_idempotent_upsert() {
         }))
         .await
         .expect("load_working_context");
+    let loaded = loaded_working_of(loaded);
     assert_eq!(loaded.working.expect("saved").goal, state.goal);
 }
 
@@ -922,6 +990,7 @@ async fn test_load_working_context_tool_reports_found_true_on_hit() {
         }))
         .await
         .expect("load_working_context");
+    let loaded = loaded_working_of(loaded);
 
     // Then `found` is true, and `other_sessions` is empty because this
     // project genuinely has no OTHER session — not because a hit suppresses
@@ -954,6 +1023,7 @@ async fn test_load_working_context_tool_surfaces_other_sessions_on_a_hit_too() {
         }))
         .await
         .expect("load_working_context");
+    let loaded = loaded_working_of(loaded);
 
     // Then the OTHER session is still surfaced. An agent that mistypes a
     // session id into another REAL session gets `found: true` and resumes
@@ -996,6 +1066,7 @@ async fn test_load_working_context_tool_reports_found_false_and_other_sessions_o
         }))
         .await
         .expect("load_working_context");
+    let loaded = loaded_working_of(loaded);
 
     // Then `found` is false, `working` is null, and the real session is
     // surfaced so the caller can recover from the typo.
@@ -1333,6 +1404,7 @@ async fn test_load_working_context_never_suggests_the_session_it_just_denied() {
         }))
         .await
         .expect("load_working_context");
+    let loaded = loaded_working_of(loaded);
 
     // Then the answer must not contradict itself: the field is named
     // `other_sessions` and documented as OTHER sessions, so proposing the

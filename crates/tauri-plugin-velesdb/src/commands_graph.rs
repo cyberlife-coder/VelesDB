@@ -33,7 +33,7 @@ pub async fn create_graph_collection<R: Runtime>(
     };
 
     let result = state
-        .with_db(|db| {
+        .run_db(move |db| {
             if let Some(dim) = request.dimension {
                 let metric = parse_metric(&request.metric)?;
                 db.create_graph_collection_with_embeddings(&request.name, schema, dim, metric)?;
@@ -48,6 +48,7 @@ pub async fn create_graph_collection<R: Runtime>(
                 storage_mode: "graph".to_string(),
             })
         })
+        .await
         .map_err(CommandError::from)?;
 
     Ok(result)
@@ -107,7 +108,7 @@ pub async fn add_edge<R: Runtime>(
     request: AddEdgeRequest,
 ) -> std::result::Result<(), CommandError> {
     state
-        .with_db(|db| {
+        .run_db(move |db| {
             let coll = require_graph_collection(&db, &request.collection)?;
             let edge = build_edge(
                 request.id,
@@ -119,6 +120,7 @@ pub async fn add_edge<R: Runtime>(
             coll.add_edge(edge)?;
             Ok(())
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -132,7 +134,7 @@ pub async fn add_edges_batch<R: Runtime>(
     request: AddEdgesBatchRequest,
 ) -> std::result::Result<u64, CommandError> {
     state
-        .with_db(|db| {
+        .run_db(move |db| {
             let coll = require_graph_collection(&db, &request.collection)?;
             let edges = request
                 .edges
@@ -142,6 +144,7 @@ pub async fn add_edges_batch<R: Runtime>(
             let added = coll.add_edges_batch(edges)?;
             Ok(u64::try_from(added).unwrap_or(u64::MAX))
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -153,7 +156,7 @@ pub async fn get_edges<R: Runtime>(
     request: GetEdgesRequest,
 ) -> std::result::Result<Vec<EdgeOutput>, CommandError> {
     state
-        .with_db(|db| {
+        .run_db(move |db| {
             let coll = require_graph_collection(&db, &request.collection)?;
 
             let edges = if let Some(label) = &request.label {
@@ -177,6 +180,7 @@ pub async fn get_edges<R: Runtime>(
                 })
                 .collect())
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -188,7 +192,7 @@ pub async fn traverse_graph<R: Runtime>(
     request: TraverseGraphRequest,
 ) -> std::result::Result<Vec<TraversalOutput>, CommandError> {
     state
-        .with_db(|db| {
+        .run_db(move |db| {
             let coll = require_graph_collection(&db, &request.collection)?;
 
             let config =
@@ -202,6 +206,7 @@ pub async fn traverse_graph<R: Runtime>(
 
             Ok(to_traversal_outputs(results))
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -213,7 +218,7 @@ pub async fn get_node_degree<R: Runtime>(
     request: GetNodeDegreeRequest,
 ) -> std::result::Result<NodeDegreeOutput, CommandError> {
     state
-        .with_db(|db| {
+        .run_db(move |db| {
             let coll = require_graph_collection(&db, &request.collection)?;
 
             let (in_degree, out_degree) = coll.node_degree(request.node_id);
@@ -224,6 +229,7 @@ pub async fn get_node_degree<R: Runtime>(
                 out_degree,
             })
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -235,7 +241,7 @@ pub async fn traverse_graph_parallel<R: Runtime>(
     request: TraverseGraphParallelRequest,
 ) -> std::result::Result<Vec<TraversalOutput>, CommandError> {
     state
-        .with_db(|db| {
+        .run_db(move |db| {
             let coll = require_graph_collection(&db, &request.collection)?;
 
             let config =
@@ -245,6 +251,7 @@ pub async fn traverse_graph_parallel<R: Runtime>(
 
             Ok(to_traversal_outputs(results))
         })
+        .await
         .map_err(CommandError::from)
 }
 

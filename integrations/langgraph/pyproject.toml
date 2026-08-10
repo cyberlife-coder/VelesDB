@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "langgraph-velesdb"
-version = "4.2.0"
+version = "5.0.0"
 description = "LangGraph memory tools for VelesDB: drop the why() knowledge-graph memory wedge into any LangGraph agent."
 readme = "README.md"
 license = {text = "MIT"}
@@ -25,14 +25,18 @@ classifiers = [
 requires-python = ">=3.10"
 dependencies = [
     "langchain-core>=0.3.0,<2.0.0",
-    # 3.12.0 is the highest velesdb release published to PyPI as of this
-    # writing. It ships forget/recall_where/recall_fused, but not yet
+    # The floor is deliberately kept at 3.12.0 pending the 5.0.0 release
+    # that carries the `load_working_context` envelope (CHANGELOG
+    # [Unreleased]): later velesdb releases exist on PyPI, but the version
+    # that makes raising the floor meaningful has not shipped yet, and floors
+    # move with the 5.0.0 release train. 3.12.0 ships
+    # forget/recall_where/recall_fused, but not yet
     # MemoryService.feedback/save_working_context/load_working_context, nor
     # the automatic `_veles_date` metadata stamp (velesdb-memory 0.11.0) —
-    # those tools will raise AttributeError, and recall_where/recall_fused's
-    # `metadata` stays empty for auto-dating, until velesdb publishes past
-    # 3.12.0. See README.md's "Compatibility" section.
-    "velesdb>=3.12.0",
+    # those tools return {"error": ...} or report the drift at call time, and
+    # recall_where/recall_fused's `metadata` stays empty for auto-dating,
+    # until the 5.0.0 release. See README.md's "Compatibility" section.
+    "velesdb>=5.0.0",
 ]
 
 [project.optional-dependencies]

@@ -1,309 +1,301 @@
-# Code Signing - Guide de Configuration
+# Code Signing - Setup Guide
 
-Ce document explique comment configurer la signature de code pour les releases VelesDB.
+This document explains how to configure code signing for VelesDB releases.
 
-## Vue d'ensemble
+## Overview
 
-| Plateforme | Outil | Certificat requis |
-|------------|-------|-------------------|
-| Windows | SignTool | OV ou EV Code Signing |
+| Platform | Tool | Required certificate |
+|----------|------|----------------------|
+| Windows | SignTool | OV or EV Code Signing |
 | macOS | codesign + notarytool | Developer ID Application |
 
-## 1. Obtenir les certificats
+## 1. Obtain the certificates
 
 ### Windows (OV Certificate)
 
-Fournisseurs recommandés :
-- **DigiCert** : ~$474/an (OV), ~$699/an (EV)
-- **Sectigo** : ~$299/an (OV), ~$399/an (EV)
-- **GlobalSign** : ~$329/an (OV)
+Recommended providers:
+- **DigiCert**: ~$474/year (OV), ~$699/year (EV)
+- **Sectigo**: ~$299/year (OV), ~$399/year (EV)
+- **GlobalSign**: ~$329/year (OV)
 
-Processus :
-1. Créer un compte sur le site du fournisseur
-2. Fournir les documents d'entreprise (Kbis, etc.)
-3. Validation par téléphone (1-3 jours)
-4. Télécharger le certificat `.pfx`
+Process:
+1. Create an account on the provider's site
+2. Provide the company documents (registration certificate, etc.)
+3. Phone validation (1-3 days)
+4. Download the `.pfx` certificate
 
 ### macOS (Apple Developer ID)
 
-1. S'inscrire au **Apple Developer Program** ($99/an)
+1. Enroll in the **Apple Developer Program** ($99/year)
    - https://developer.apple.com/programs/
-2. Dans le portail, créer un certificat **Developer ID Application**
-3. Exporter depuis Keychain Access en `.p12`
+2. In the portal, create a **Developer ID Application** certificate
+3. Export it from Keychain Access as `.p12`
 
-## 2. Configurer les secrets GitHub
+## 2. Configure the GitHub secrets
 
-### Encoder les certificats en Base64
+### Encode the certificates as Base64
 
 ```powershell
-# Windows - Encoder le .pfx
+# Windows - Encode the .pfx
 [Convert]::ToBase64String([IO.File]::ReadAllBytes("certificate.pfx")) | Set-Clipboard
 ```
 
 ```bash
-# macOS/Linux - Encoder le .p12
+# macOS/Linux - Encode the .p12
 base64 -i certificate.p12 | pbcopy
 ```
 
-### Secrets à configurer
+### Secrets to configure
 
-Aller dans : **Settings > Secrets and variables > Actions**
+Go to: **Settings > Secrets and variables > Actions**
 
 #### Windows
 
-| Secret | Description |
-|--------|-------------|
-| `WINDOWS_SIGNING_CERT_BASE64` | Certificat .pfx encodé en base64 |
-| `WINDOWS_SIGNING_CERT_PASSWORD` | Mot de passe du .pfx |
-| `WINDOWS_SIGNING_TIMESTAMP_URL` | (Optionnel) URL timestamp, défaut: `http://timestamp.digicert.com` |
+| Secret | Description | Example |
+|--------|-------------|---------|
+| `WINDOWS_SIGNING_CERT_BASE64` | Base64-encoded .pfx certificate | `MIIJ...` |
+| `WINDOWS_SIGNING_CERT_PASSWORD` | Password of the .pfx | `MySecretPass123` |
+| `WINDOWS_SIGNING_TIMESTAMP_URL` | (Optional) Timestamp URL, default: `http://timestamp.digicert.com` | `http://timestamp.digicert.com` |
 
 #### macOS
 
-| Secret | Description |
-|--------|-------------|
-| `APPLE_DEVELOPER_ID_APPLICATION` | Ex: `Developer ID Application: VelesDB Inc (ABCD1234)` |
-| `APPLE_CERTIFICATE_BASE64` | Certificat .p12 encodé en base64 |
-| `APPLE_CERTIFICATE_PASSWORD` | Mot de passe du .p12 |
-| `APPLE_ID` | Email du compte Apple Developer |
-| `APPLE_ID_PASSWORD` | **App-specific password** (pas le mdp du compte!) |
-| `APPLE_TEAM_ID` | Team ID (10 caractères, visible dans le portail) |
+| Secret | Description | Example |
+|--------|-------------|---------|
+| `APPLE_DEVELOPER_ID_APPLICATION` | Full signing identity | `Developer ID Application: VelesDB Inc (ABCD1234)` |
+| `APPLE_CERTIFICATE_BASE64` | Base64-encoded .p12 certificate | `MIIKrA...` |
+| `APPLE_CERTIFICATE_PASSWORD` | Password of the .p12 | `MyP12Pass` |
+| `APPLE_ID` | Apple Developer account email | `contact@wiscale.fr` |
+| `APPLE_ID_PASSWORD` | **App-specific password** (not the account password!) | `xxxx-xxxx-xxxx-xxxx` |
+| `APPLE_TEAM_ID` | Team ID (10 characters, visible in the portal) | `ABCD1234EF` |
 
-### Créer un App-Specific Password (Apple)
+### Create an App-Specific Password (Apple)
 
-1. Aller sur https://appleid.apple.com/
-2. Se connecter
+1. Go to https://appleid.apple.com/
+2. Sign in
 3. Security > App-Specific Passwords > Generate
-4. Nommer le password (ex: "GitHub Actions")
-5. Copier et stocker dans le secret `APPLE_ID_PASSWORD`
+4. Name the password (e.g. "GitHub Actions")
+5. Copy it and store it in the `APPLE_ID_PASSWORD` secret
 
-## 3. État actuel
+## 3. Current state
 
-> ⚠️ **SIGNATURES DÉSACTIVÉES** - Les workflows sont prêts mais non actifs.
+> ⚠️ **SIGNING NOT IMPLEMENTED** - There is no `code-signing.yml` workflow in
+> `.github/workflows/` today, and `release.yml` has no signing job. Everything
+> below describes what must be **created** to enable signing; nothing is merely
+> "switched on".
 
-| Fichier | État | Action requise |
-|---------|------|----------------|
-| `code-signing.yml` | ✅ Prêt | Configurer secrets |
-| `release.yml` | ✅ Intégré | Changer `if: false` → `if: true` |
+| Item | State | Action required |
+|------|-------|-----------------|
+| `code-signing.yml` | ❌ Does not exist | Create the reusable workflow |
+| `release.yml` signing job | ❌ Does not exist | Add a `sign-release` job that calls the new workflow |
 
----
+## 4. Implement and enable signing
 
-## 4. Activer les signatures
+### Step 1: Configure the GitHub secrets
 
-### Étape 1 : Configurer les secrets GitHub
+Configure the Windows and macOS secrets exactly as listed in
+[section 2](#2-configure-the-github-secrets); that table is the single source
+of truth for secret names.
 
-Aller dans : **Repository → Settings → Secrets and variables → Actions**
+### Step 2: Create `.github/workflows/code-signing.yml`
 
-#### Windows (OV Certificate ~$300/an)
+Create a reusable workflow (`workflow_call` trigger, plus `workflow_dispatch`
+with a `dry_run` input for manual testing) that:
 
-| Secret | Description | Exemple |
-|--------|-------------|---------|
-| `WINDOWS_SIGNING_CERT_BASE64` | Certificat .pfx encodé base64 | `MIIJ...` |
-| `WINDOWS_SIGNING_CERT_PASSWORD` | Mot de passe du .pfx | `MySecretPass123` |
-| `WINDOWS_SIGNING_TIMESTAMP_URL` | (Optionnel) URL timestamp | `http://timestamp.digicert.com` |
+- downloads the release binaries as artifacts,
+- decodes the Base64 secrets to certificate files,
+- signs Windows binaries with SignTool and macOS binaries with
+  `codesign` + `notarytool`,
+- re-uploads the signed artifacts,
+- gates actual signing behind a `CODE_SIGNING_ENABLED` environment variable so
+  a dry run can validate the plumbing without certificates.
 
-#### macOS (Apple Developer $99/an)
+### Step 3: Wire it into `release.yml`
 
-| Secret | Description | Exemple |
-|--------|-------------|---------|
-| `APPLE_DEVELOPER_ID_APPLICATION` | Identity complète | `Developer ID Application: VelesDB Inc (ABCD1234)` |
-| `APPLE_CERTIFICATE_BASE64` | Certificat .p12 encodé base64 | `MIIKrA...` |
-| `APPLE_CERTIFICATE_PASSWORD` | Mot de passe du .p12 | `MyP12Pass` |
-| `APPLE_ID` | Email Apple Developer | `contact@wiscale.fr` |
-| `APPLE_ID_PASSWORD` | **App-specific password** | `xxxx-xxxx-xxxx-xxxx` |
-| `APPLE_TEAM_ID` | Team ID (10 caractères) | `ABCD1234EF` |
-
-### Étape 2 : Activer dans release.yml
+Add a signing job between the build and the release creation:
 
 ```yaml
-# .github/workflows/release.yml - Ligne ~171
+# .github/workflows/release.yml
 sign-release:
   name: Sign Release Binaries
   needs: [validate, build-release]
-  if: true  # ← Changer false → true
   uses: ./.github/workflows/code-signing.yml
+  secrets: inherit
 ```
 
-### Étape 3 : Mettre à jour les dépendances
+Then make the release job depend on it:
 
 ```yaml
-# .github/workflows/release.yml - Ligne ~183
 create-release:
   name: Create GitHub Release
   runs-on: ubuntu-latest
-  needs: [validate, build-release, sign-release]  # ← Ajouter sign-release
+  needs: [validate, build-release, sign-release]
 ```
 
-### Étape 4 : Activer dans code-signing.yml
+## 5. Manual test
 
-```yaml
-# .github/workflows/code-signing.yml - Ligne ~71
-env:
-  CODE_SIGNING_ENABLED: 'true'  # ← Changer false → true
-```
+Before enabling in production, once the workflow exists, test it manually:
+
+1. Go to **Actions → Code Signing → Run workflow**
+2. Select `dry_run: false`
+3. Check the logs
 
 ---
 
-## 5. Test manuel
-
-Avant d'activer en production, tester manuellement :
-
-1. Aller dans **Actions → Code Signing → Run workflow**
-2. Sélectionner `dry_run: false`
-3. Vérifier les logs
-
----
-
-## 6. Vérifier les signatures
+## 6. Verify the signatures
 
 ### Windows
 
 ```powershell
-# Vérifier la signature
+# Verify the signature
 signtool verify /pa /v velesdb-server.exe
 
-# Voir les détails
+# Show details
 signtool verify /pa /all /v velesdb-server.exe
 ```
 
 ### macOS
 
 ```bash
-# Vérifier la signature
+# Verify the signature
 codesign --verify --verbose velesdb-server
 
-# Vérifier la notarization
+# Verify the notarization
 spctl --assess --verbose velesdb-server
 xcrun stapler validate velesdb.dmg
 ```
 
-## Troubleshooting
+## 7. Troubleshooting
 
-### Windows : "SignTool not found"
+### Windows: "SignTool not found"
 
-Le runner Windows inclut SignTool. Si absent :
+Windows runners include SignTool. If missing:
 ```yaml
 - name: Install Windows SDK
   run: choco install windows-sdk-10.0
 ```
 
-### macOS : "No identity found"
+### macOS: "No identity found"
 
-Vérifier :
-1. Le certificat est bien importé dans le keychain
-2. L'identity match exactement `APPLE_DEVELOPER_ID_APPLICATION`
-3. Le certificat n'est pas expiré
+Check that:
+1. The certificate is imported into the keychain
+2. The identity exactly matches `APPLE_DEVELOPER_ID_APPLICATION`
+3. The certificate is not expired
 
-### Notarization échoue
+### Notarization fails
 
-Erreurs communes :
-- **"Invalid credentials"** : Vérifier `APPLE_ID_PASSWORD` (doit être app-specific)
-- **"Hardened Runtime"** : Ajouter `--options runtime` à codesign
-- **"Unsigned code"** : Toutes les libs dynamiques doivent être signées
+Common errors:
+- **"Invalid credentials"**: check `APPLE_ID_PASSWORD` (must be app-specific)
+- **"Hardened Runtime"**: add `--options runtime` to codesign
+- **"Unsigned code"**: all dynamic libraries must be signed
 
-## 6. Gestion des certificats
+## 8. Certificate management
 
-### Durée de vie et renouvellement
+### Lifetime and renewal
 
-| Type | Durée | Renouvellement |
-|------|-------|----------------|
-| OV Windows | 1-3 ans | 30 jours avant expiration |
-| EV Windows | 1-3 ans | Nécessite nouveau hardware token |
-| Apple Developer ID | 5 ans | Automatique si compte actif |
+| Type | Lifetime | Renewal |
+|------|----------|---------|
+| OV Windows | 1-3 years | 30 days before expiry |
+| EV Windows | 1-3 years | Requires a new hardware token |
+| Apple Developer ID | 5 years | Automatic while the account is active |
 
-### Checklist de renouvellement
+### Renewal checklist
 
-- [ ] Recevoir notification d'expiration (60 jours avant)
-- [ ] Commander nouveau certificat
-- [ ] Mettre à jour le secret `*_CERT_BASE64` dans GitHub
-- [ ] Tester avec un dry run
-- [ ] Archiver l'ancien certificat (ne pas supprimer immédiatement)
+- [ ] Receive the expiry notification (60 days ahead)
+- [ ] Order the new certificate
+- [ ] Update the `*_CERT_BASE64` secret in GitHub
+- [ ] Test with a dry run
+- [ ] Archive the old certificate (do not delete it immediately)
 
-### Stockage sécurisé des certificats
+### Secure certificate storage
 
-**⚠️ Ne JAMAIS :**
-- Commiter les certificats dans le repo
-- Partager les mots de passe par email/Slack
-- Utiliser le même certificat pour dev et prod
+**⚠️ NEVER:**
+- Commit certificates into the repo
+- Share passwords by email/Slack
+- Use the same certificate for dev and prod
 
-**✅ Bonnes pratiques :**
-- Stocker les originaux dans un password manager (1Password, Bitwarden)
-- Utiliser des secrets GitHub avec accès restreint
-- Documenter qui a accès aux certificats
-- Rotation des mots de passe lors du départ d'un employé
+**✅ Good practices:**
+- Store the originals in a password manager (1Password, Bitwarden)
+- Use GitHub secrets with restricted access
+- Document who has access to the certificates
+- Rotate passwords when an employee leaves
 
-### Révocation d'urgence
+### Emergency revocation
 
-Si un certificat est compromis :
+If a certificate is compromised:
 
-1. **Windows** : Contacter le fournisseur (DigiCert, Sectigo) pour révocation
-2. **macOS** : Dans le portail Apple Developer, révoquer le certificat
-3. **GitHub** : Supprimer immédiatement les secrets compromis
-4. **Communication** : Informer les utilisateurs de re-télécharger
+1. **Windows**: contact the provider (DigiCert, Sectigo) for revocation
+2. **macOS**: revoke the certificate in the Apple Developer portal
+3. **GitHub**: delete the compromised secrets immediately
+4. **Communication**: tell users to re-download
 
 ---
 
-## 7. Linux - Analyse
+## 9. Linux - Analysis
 
-### Signature de code sur Linux
+### Code signing on Linux
 
-Linux n'a **pas de système de signature centralisé** comme Windows/macOS. Les options sont :
+Linux has **no centralized signing system** like Windows/macOS. The options are:
 
-| Méthode | Usage | Recommandé pour VelesDB |
-|---------|-------|-------------------------|
-| **GPG signing** | Signer les binaires/tarballs | ✅ Oui |
-| **Package signing** | .deb (apt), .rpm (yum) | ✅ Si distribution packages |
-| **AppImage signing** | Applications desktop | ❌ Non (VelesDB = serveur) |
+| Method | Usage | Recommended for VelesDB |
+|--------|-------|-------------------------|
+| **GPG signing** | Sign binaries/tarballs | ✅ Yes |
+| **Package signing** | .deb (apt), .rpm (yum) | ✅ If distributing packages |
+| **AppImage signing** | Desktop applications | ❌ No (VelesDB = server) |
 
-### Recommandation pour VelesDB
+### Recommendation for VelesDB
 
-**→ GPG signing des releases** : Simple, gratuit, standard dans l'écosystème Linux.
+**→ GPG-sign the releases**: simple, free, standard in the Linux ecosystem.
 
-Les utilisateurs Linux :
-- Sont habitués à vérifier les signatures GPG
-- Font confiance aux checksums SHA256
-- Utilisent souvent des package managers (qui ont leur propre signing)
+Linux users:
+- Are used to verifying GPG signatures
+- Trust SHA256 checksums
+- Often use package managers (which have their own signing)
 
-### Implémentation GPG (optionnel)
+### GPG implementation (optional)
 
-Si tu veux ajouter GPG signing :
+To add GPG signing:
 
 ```yaml
-# Dans release.yml
+# In release.yml
 - name: Sign with GPG
   run: |
     echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --import
     gpg --detach-sign --armor velesdb-linux-x86_64.tar.gz
 ```
 
-Secrets requis :
-- `GPG_PRIVATE_KEY` : Clé GPG privée (armored)
-- `GPG_PASSPHRASE` : Passphrase de la clé
+Required secrets:
+- `GPG_PRIVATE_KEY`: private GPG key (armored)
+- `GPG_PASSPHRASE`: passphrase of the key
 
 ---
 
-## 8. Priorité de signature recommandée
+## 10. Recommended signing priority
 
-| Priorité | Plateforme | Raison |
-|----------|------------|--------|
-| 🥇 **1** | Windows | SmartScreen bloque les .exe non signés |
-| 🥈 **2** | macOS | Gatekeeper bloque les apps non notarisées |
-| 🥉 **3** | Linux | GPG optionnel, checksums suffisants |
+| Priority | Platform | Reason |
+|----------|----------|--------|
+| 🥇 **1** | Windows | SmartScreen blocks unsigned .exe files |
+| 🥈 **2** | macOS | Gatekeeper blocks non-notarized apps |
+| 🥉 **3** | Linux | GPG optional, checksums sufficient |
 
-### Coût total estimé (année 1)
+### Estimated total cost (year 1)
 
-| Élément | Coût |
-|---------|------|
-| Certificat OV Windows | ~$300 |
+| Item | Cost |
+|------|------|
+| OV Windows certificate | ~$300 |
 | Apple Developer Program | $99 |
-| GPG | Gratuit |
-| **Total** | **~$400/an** |
+| GPG | Free |
+| **Total** | **~$400/year** |
 
 ---
 
-## Références
+## References
 
 - [Microsoft SignTool](https://docs.microsoft.com/en-us/windows/win32/seccrypto/signtool)
 - [Apple Code Signing](https://developer.apple.com/documentation/security/code_signing_services)
 - [Apple Notarization](https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution)
 - [GPG Signing](https://www.gnupg.org/gph/en/manual/x135.html)
 - [Linux Package Signing](https://wiki.debian.org/SecureApt)
+
+---
+
+Last updated: 2026-08-08 · Applies to: VelesDB 4.3.0

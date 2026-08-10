@@ -24,8 +24,6 @@ pub struct SemanticMemory {
     dimension: usize,
     ttl: Arc<MemoryTtl>,
     stored_ids: RwLock<HashSet<u64>>,
-    /// Edge-id allocator for [`Self::relate`] (seeded past existing edges).
-    next_edge_id: std::sync::atomic::AtomicU64,
 }
 
 impl SemanticMemory {
@@ -68,18 +66,12 @@ impl SemanticMemory {
             MemoryKind::Semantic,
         )?;
 
-        let next_edge_id = memory_helpers::seed_edge_counter(&memory_helpers::get_collection(
-            &db,
-            &collection_name,
-        )?);
-
         Ok(Self {
             collection_name,
             db,
             dimension,
             ttl,
             stored_ids,
-            next_edge_id,
         })
     }
 
@@ -207,13 +199,34 @@ impl SemanticMemory {
         Ok(())
     }
 
-    /// Copies the reserved system keys (`_veles_*`: durable TTL, RL confidence,
-    /// entity tags) of the live prior version of `id` into `payload`, so a
-    /// content re-store (`remember`) does not silently wipe learned state.
+    /// Copies the reserved system keys (`_veles_*`: RL confidence, entity
+    /// tags) of the live prior version of `id` into `payload`, so a content
+    /// re-store (`remember`) does not silently wipe LEARNED state.
     ///
     /// Only keys `payload` does not already carry are copied — that guard,
     /// and it alone, is what keeps a carried-forward value from shadowing
     /// something the caller meant.
+    ///
+    /// # The durable TTL is deliberately NOT carried forward
+    ///
+    /// [`EXPIRES_AT_KEY`] is excluded, and that exclusion is the whole point
+    /// of the distinction this function draws. An RL confidence and an entity
+    /// tag are state the SYSTEM learned; an expiry is an intent the CALLER
+    /// expressed. Only the properties the current call supplies are applied,
+    /// so a historical expiry is never inherited implicitly.
+    ///
+    /// It used to be carried forward, which left no published way to promote
+    /// a TTL'd fact back to permanent: `remember` without `ttl_seconds` — the
+    /// exact call five binding surfaces document as "omit it for a permanent
+    /// memory" — quietly reinstated the old expiry, and the only escape was
+    /// `forget` plus a re-create, which mints a new id and breaks every edge
+    /// pointing at it.
+    ///
+    /// That is the same betrayal of intent [`crate::agent`]'s zero-TTL refusal
+    /// was introduced to stop, read in the other direction: there, an explicit
+    /// `0` silently became permanent; here, an omitted TTL silently stayed
+    /// temporary. Both are the caller's stated intent being overridden without
+    /// a signal.
     ///
     /// The ordering with `attach_expiry` is deliberately NOT part of the
     /// argument: `attach_expiry` is a no-op on `None` and an unconditional
@@ -247,6 +260,13 @@ impl SemanticMemory {
             return;
         };
         for (k, v) in prior {
+            // The expiry is a caller intent, not learned state: see this
+            // function's docs. Excluding it here is what makes `remember`
+            // without a TTL mean "permanent" on an existing fact, exactly as
+            // every binding surface documents it.
+            if k == memory_helpers::EXPIRES_AT_KEY {
+                continue;
+            }
             if k.starts_with("_veles_") && !obj.contains_key(k) {
                 obj.insert(k.clone(), v.clone());
             }
@@ -362,7 +382,6 @@ impl SemanticMemory {
                 collection_name: &self.collection_name,
                 ttl: &self.ttl,
                 kind: MemoryKind::Semantic,
-                next_edge_id: &self.next_edge_id,
             },
             from_id,
             to_id,
@@ -407,6 +426,55 @@ impl SemanticMemory {
             id,
             &self.ttl,
             MemoryKind::Semantic,
+        )
+    }
+
+    /// Returns at most `cap` outgoing relations of a fact, plus whether its
+    /// total degree exceeded the scan — work and transient allocation
+    /// O(cap), never O(degree) (#1820).
+    ///
+    /// Prefer this over [`Self::relations`] wherever the caller keeps only a
+    /// bounded prefix: on a super-node (an entity hub mentioned by thousands
+    /// of facts) the unbounded accessor materializes the whole degree before
+    /// the caller's own cap can apply.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CollectionError` when the collection cannot be resolved.
+    pub fn relations_bounded(
+        &self,
+        id: u64,
+        cap: usize,
+    ) -> Result<super::BoundedRelations, AgentMemoryError> {
+        memory_helpers::relations_of_bounded(
+            &self.db,
+            &self.collection_name,
+            id,
+            &self.ttl,
+            MemoryKind::Semantic,
+            cap,
+        )
+    }
+
+    /// Returns at most `cap` incoming relations of a fact, plus whether its
+    /// total incoming degree exceeded the scan — the mirror of
+    /// [`Self::relations_bounded`].
+    ///
+    /// # Errors
+    ///
+    /// Returns `CollectionError` when the collection cannot be resolved.
+    pub fn incoming_relations_bounded(
+        &self,
+        id: u64,
+        cap: usize,
+    ) -> Result<super::BoundedRelations, AgentMemoryError> {
+        memory_helpers::incoming_relations_of_bounded(
+            &self.db,
+            &self.collection_name,
+            id,
+            &self.ttl,
+            MemoryKind::Semantic,
+            cap,
         )
     }
 
@@ -667,6 +735,20 @@ impl SemanticMemory {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.stored_ids.read().is_empty()
+    }
+
+    /// Returns the total number of graph edges in this memory's collection,
+    /// without materializing them.
+    ///
+    /// The observable difference between a memory whose `why()` can walk
+    /// somewhere and one where it degrades to plain similarity search: zero
+    /// edges means nothing ever wired the graph.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the collection cannot be accessed.
+    pub fn edge_count(&self) -> Result<usize, AgentMemoryError> {
+        Ok(memory_helpers::get_collection(&self.db, &self.collection_name)?.edge_count())
     }
 
     /// Removes all facts and their tracking entries.

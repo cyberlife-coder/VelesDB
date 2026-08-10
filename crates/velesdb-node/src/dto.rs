@@ -8,7 +8,7 @@ use napi_derive::napi;
 use serde_json::Value;
 use velesdb_memory::{
     EntityProfile, EntityRelation, Explanation, MemoryEdge, MemoryNode, Recollection,
-    UnrelateOutcome,
+    RememberedExtraction, UnrelateOutcome,
 };
 
 use crate::convert::id_to_string;
@@ -140,6 +140,9 @@ pub struct ExplanationJs {
     pub nodes: Vec<MemoryNodeJs>,
     /// Typed edges connecting the nodes.
     pub edges: Vec<MemoryEdgeJs>,
+    /// Whether a width budget cut the walk — a subgraph sitting exactly at
+    /// a cap is otherwise indistinguishable from a complete one (#1820).
+    pub truncated: bool,
 }
 
 impl From<Explanation> for ExplanationJs {
@@ -147,11 +150,16 @@ impl From<Explanation> for ExplanationJs {
         Self {
             nodes: e.nodes.into_iter().map(MemoryNodeJs::from).collect(),
             edges: e.edges.into_iter().map(MemoryEdgeJs::from).collect(),
+            truncated: e.truncated,
         }
     }
 }
 
-/// One typed edge leaving an entity (output of `entity`).
+/// One typed edge touching an entity (output of `entity`).
+///
+/// Which end `targetId`/`target` name depends on the list it came from: in
+/// `relations` it is the far end the edge points AT, in `relationsIn` it is
+/// the far end the edge comes FROM.
 #[napi(object)]
 pub struct EntityRelationJs {
     /// The edge label the passage stated, e.g. `"father_of"`.
@@ -189,6 +197,22 @@ pub struct EntityProfileJs {
     pub attributes: Value,
     /// Typed edges leaving this entity (`mentions` scaffolding excluded).
     pub relations: Vec<EntityRelationJs>,
+    /// Typed edges pointing AT this entity (`mentions` scaffolding excluded).
+    /// Here each edge's `targetId`/`target` name the far end it comes FROM.
+    ///
+    /// Without these, a question is only answerable from one side: the graph
+    /// holds `camille --sister of--> theo`, so reading Theo's outgoing edges
+    /// never finds Camille. The edge exists, it simply leaves the other node.
+    /// Nothing is inferred — the converse of a kinship label would need a
+    /// gender the graph does not hold; this reports only what is stored.
+    pub relations_in: Vec<EntityRelationJs>,
+    /// Whether `relations` is a PARTIAL view — true when a response budget
+    /// cut the outgoing side. A list holding exactly the cap is otherwise
+    /// indistinguishable from a cut one (#1820).
+    pub relations_truncated: bool,
+    /// Whether `relationsIn` is a PARTIAL view — the incoming mirror of
+    /// `relationsTruncated`.
+    pub relations_in_truncated: bool,
 }
 
 impl EntityProfileJs {
@@ -203,6 +227,9 @@ impl EntityProfileJs {
                 name: velesdb_memory::service::canonical_entity_name(queried),
                 attributes: Value::Object(serde_json::Map::new()),
                 relations: Vec::new(),
+                relations_in: Vec::new(),
+                relations_truncated: false,
+                relations_in_truncated: false,
             };
         };
         Self {
@@ -215,6 +242,41 @@ impl EntityProfileJs {
                 .into_iter()
                 .map(EntityRelationJs::from)
                 .collect(),
+            relations_in: profile
+                .relations_in
+                .into_iter()
+                .map(EntityRelationJs::from)
+                .collect(),
+            relations_truncated: profile.relations_truncated,
+            relations_in_truncated: profile.relations_in_truncated,
+        }
+    }
+}
+
+/// Outcome of `rememberExtracted` (output): the ids stored, and how many
+/// facts were dropped for exceeding the embeddable cap.
+///
+/// An envelope rather than the bare id array this binding used to return,
+/// because a shorter list cannot say WHY it is shorter: nothing distinguished
+/// "the passage held three facts" from "it held twelve and nine were dropped
+/// for their size". That is a silence about lost data, not a missing
+/// convenience (issue #1692).
+#[napi(object)]
+pub struct RememberedExtractionJs {
+    /// Decimal-string ids of the stored facts, in extraction order.
+    pub ids: Vec<String>,
+    /// How many extracted facts were skipped for exceeding the cap.
+    pub skipped_over_cap: u32,
+}
+
+impl From<RememberedExtraction> for RememberedExtractionJs {
+    fn from(outcome: RememberedExtraction) -> Self {
+        Self {
+            ids: outcome.ids.into_iter().map(id_to_string).collect(),
+            // A passage yielding more than u32::MAX skipped facts is not
+            // reachable through any call this binding can make; saturating
+            // keeps the report from ever reading LOW if that ever changes.
+            skipped_over_cap: u32::try_from(outcome.skipped_over_cap).unwrap_or(u32::MAX),
         }
     }
 }
@@ -246,7 +308,7 @@ impl From<UnrelateOutcome> for UnrelateJs {
 
 /// Result of [`compileContext`](crate::MemoryStore::compile_context): the
 /// top-level fields are typed; the nested trees (`decisions`, `sources`, …)
-/// are plain JSON objects in exactly the MCP wire shape (snake_case keys),
+/// are plain JSON objects in exactly the MCP wire shape (`snake_case` keys),
 /// with every id field already converted to a decimal string.
 #[napi(object)]
 pub struct CompiledContextJs {
@@ -264,4 +326,14 @@ pub struct CompiledContextJs {
     pub insights: Value,
     /// Overall fidelity risk: "low" | "medium" | "high".
     pub risk: String,
+    /// Mechanical, low-noise heads-up over `decisions`, wire shape: every
+    /// externalized fragment relevant enough to the query that the caller
+    /// should double-check it was not needed.
+    ///
+    /// Not cosmetic — it is the signal that a compilation degraded something.
+    /// A caller compiling under a tight budget saw none of it and believed
+    /// their context complete. An EMPTY list is not a clean bill of health
+    /// either: `warnings_for` only reports retrieved fragments above a
+    /// relevance floor, so `decisions` remains the exhaustive record.
+    pub warnings: Value,
 }

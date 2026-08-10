@@ -427,7 +427,11 @@ impl Collection {
         let parsed = parse_velesql(query_str)?;
         validate_query(&parsed)?;
         let indexed = self.inner.config().indexed_fields.iter().cloned().collect();
-        let stats = self.inner.analyze().ok();
+        // `analyze()` computes fresh statistics (cardinality, size histograms)
+        // by walking the column store — the same work as `Database.analyze_collection`,
+        // which crosses the 1-second mark on large collections. Release the GIL
+        // so other Python threads keep running while the plan is calibrated.
+        let stats = py.detach(|| self.inner.analyze().ok());
         Ok(build_explain_dict(py, &parsed, &indexed, stats.as_ref()))
     }
 

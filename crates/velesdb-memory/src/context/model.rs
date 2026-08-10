@@ -119,9 +119,12 @@ pub struct ContextFragment {
     #[serde(default)]
     pub content: String,
     /// Read this file's content from disk in place of an inline `content`
-    /// (V2b-1 path ingestion): exactly one of `path`, non-empty `content`,
-    /// or `media` is accepted — a fragment carrying `path` together with
-    /// `content` or `media` is rejected. Requires the server to be started
+    /// (V2b-1 path ingestion). `path` is EXCLUSIVE — it is resolved into
+    /// `content` before the compiler core runs, so a fragment carrying
+    /// `path` together with `content` or `media` is rejected. `content` and
+    /// `media` together are fine, and are the intended shape for an image
+    /// and its caption. A fragment carrying none of the three is rejected
+    /// as well. Requires the server to be started
     /// with `VELESDB_MEMORY_INGEST_ROOTS` set (a colon/semicolon-separated
     /// allowlist of directories, platform `PATH`-list syntax); otherwise
     /// every `path` fragment fails with an explicit "ingestion disabled"
@@ -427,8 +430,25 @@ pub struct SourceReference {
     pub fragment_id: u64,
     /// Recoverable address of the original content (`ctx://source/<id>`).
     pub handle: String,
+    // Un doc-comment de CHAMP est publie tel quel dans la description du
+    // schema annonce (`docs/reference/mcp-tools.json`) : l'archeologie va donc
+    // ici, en commentaire ordinaire, et le contrat seul va au-dessus.
+    //
+    // Aller-retour casse jusqu'au 2026-07-29, trouve en interrogeant le
+    // serveur plutot qu'en relisant le code : `memory_id` fait partie des
+    // `super::wire::ID_KEYS`, donc une reponse sous
+    // `CompilePolicy::ids_as_strings` l'emet en CHAINE — et
+    // `save_working_context` la refusait, alors que c'est precisement la forme
+    // qu'un client a en main lorsqu'il resoumet une `SourceReference` recue
+    // d'un contexte compile.
     /// The memory backing this source, when it came from recall (US-002).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Accepts a JSON number OR a decimal string on input, exactly like
+    /// `fragment_id` just above.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::wire::deserialize_optional_id"
+    )]
     pub memory_id: Option<u64>,
 }
 
@@ -476,10 +496,16 @@ pub struct ContextDecision {
 /// [`CompiledContext::warnings`] so a caller can check "was anything
 /// relevant cut?" without scanning every entry of `decisions` by hand
 /// (V2a-2 quick win). Only [`ContextAction::Retrieve`] decisions at or
-/// above the relevance threshold qualify — a [`ContextAction::Drop`] in
-/// this compiler is always a byte-identical duplicate whose content
-/// survives through its kept twin (see `dup_verdict`), so it is never a
-/// real loss and never warns.
+/// above the relevance threshold qualify.
+///
+/// **An empty list is not a clean bill of health** (#1703 DC-4). Several
+/// real losses never warn: a [`ContextAction::Preserve`] the packer could
+/// only fit partially, an [`ContextAction::Abstract`], and two of
+/// `dup_verdict`'s [`ContextAction::Drop`] shapes — a media duplicate whose
+/// caption diverges from its twin's, and a duplicate whose twin was itself
+/// not fully emitted. Both say so in their own reason strings. `decisions`
+/// remains the exhaustive record; this list is a low-noise shortcut over it,
+/// not a substitute for it.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub struct ContextWarning {
@@ -592,6 +618,40 @@ impl WorkingContext {
             && self.exact_evidence.is_empty()
             && self.pending_actions.is_empty()
     }
+}
+
+/// What a working-context lookup returns, on every surface: the MCP
+/// `load_working_context` tool AND the Node/Python/WASM bindings.
+///
+/// An envelope (not a bare `Option<WorkingContext>`): the MCP spec requires
+/// the output schema's root to be an object, so a nullable root is rejected
+/// by rmcp.
+///
+/// It lives here — in the shared model — rather than in the `mcp` module
+/// because the `mcp` module is a Cargo feature the bindings do not enable:
+/// a type declared there is unreachable from them, and each binding would
+/// have to re-declare the envelope AND re-derive its two policy rules ("list
+/// on a hit too", "never re-emit the requested session"). Four copies of a
+/// rule is four chances for it to diverge in silence. Built once, by
+/// [`MemoryService::resume_working_context`](crate::MemoryService::resume_working_context).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub struct LoadedWorkingContext {
+    /// `true` when a working context was found under this exact project +
+    /// session. Wire-additive alongside `working` (added V2a-1): a client
+    /// that only reads `working` sees no change.
+    pub found: bool,
+    /// The previously saved working context, or `null` when nothing was ever
+    /// saved under that project + session (a fresh start, not an error).
+    pub working: Option<WorkingContext>,
+    /// The OTHER sessions saved under this SAME project (never the requested
+    /// one) — helps recover from a typo in `session` instead of silently
+    /// starting fresh (e.g. `"task-1234"` saved, `"task-1235"` requested by
+    /// mistake). Populated on a hit as well as on a miss: a typo that lands
+    /// on another real session is the case the caller can least detect on its
+    /// own. Empty only when the project has no other session.
+    #[serde(default)]
+    pub other_sessions: Vec<String>,
 }
 
 /// One session recorded in a project's working-context index (V2a-1's

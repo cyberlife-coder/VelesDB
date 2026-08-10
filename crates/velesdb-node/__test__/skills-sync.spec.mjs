@@ -1,10 +1,10 @@
 // Guards the skills bundled into the @wiscale/velesdb-memory-node npm package
-// (package.json "files": ["skills/"]) against silent drift from their
-// sources of truth elsewhere in the repo. There is no build step, symlink,
-// or CI check that keeps these copies in sync — they are committed,
-// hand-copied duplicates (velesdb-memory added in PR #1496) — so this test
-// is the only thing that notices when a source SKILL.md changes but the
-// bundled copy does not.
+// (package.json "files": ["skills/"]) against silent drift from their sources
+// of truth elsewhere in the repo. The copies are committed artefacts, produced
+// by `python3 scripts/sync-skills.py --bundle` from the same skill registry
+// the installer uses — no symlink, and nothing regenerates them on build, so
+// this test is what notices when a source SKILL.md changes and the bundled
+// copy does not.
 //
 // Pure Node fs, no napi addon needed: `node --test __test__/skills-sync.spec.mjs`
 // runs standalone without `napi build` first.
@@ -46,6 +46,11 @@ const PAIRS = [
     copy: join(NODE_SKILLS_DIR, 'velesdb-context-optimizer'),
   },
   {
+    name: 'velesdb-learning-loop',
+    source: join(REPO_ROOT, 'skills', 'velesdb-learning-loop'),
+    copy: join(NODE_SKILLS_DIR, 'velesdb-learning-loop'),
+  },
+  {
     name: 'velesdb-memory',
     source: join(REPO_ROOT, 'crates', 'velesdb-memory', 'skill', 'velesdb-memory'),
     copy: join(NODE_SKILLS_DIR, 'velesdb-memory'),
@@ -66,7 +71,7 @@ for (const { name, source, copy } of PAIRS) {
     const sourceFiles = listFiles(source)
     const copyFiles = listFiles(copy)
 
-    const resync = `cp -r ${relative(REPO_ROOT, source)}/. ${relative(REPO_ROOT, copy)}/`
+    const resync = 'python3 scripts/sync-skills.py --bundle'
 
     const onlyInSource = sourceFiles.filter((f) => !copyFiles.includes(f))
     const onlyInCopy = copyFiles.filter((f) => !sourceFiles.includes(f))

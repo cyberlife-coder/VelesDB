@@ -198,16 +198,35 @@ class _MemoryToolkit:
         ``session`` by ``save_working_context``.
 
         Call this at the very start of a new run, before doing anything else,
-        to resume a prior session instead of restarting from scratch. Returns
-        ``None`` when nothing was ever saved under that exact
-        ``project``/``session`` pair — not an error, just a fresh start.
+        to resume a prior session instead of restarting from scratch.
 
-        If the installed ``velesdb`` predates this method, returns
+        ``load_working_context`` returns ``{"found": bool, "working": dict |
+        None, "other_sessions": [str]}``. ``found: false`` (with
+        ``working: null``) means nothing was
+        ever saved under that EXACT project + session — not an error, but do
+        not conclude "fresh start" yet: check ``other_sessions``. If it lists
+        a similarly-named session, ``session`` was a typo and the work you
+        wanted is sitting right there. ``other_sessions`` is filled in on a
+        HIT too, so if one of them looks more like the session you meant, you
+        may have just resumed the WRONG one.
+
+        If the installed ``velesdb`` predates this method, or predates the
+        envelope and still returns the bare working context, returns
         ``{"error": "..."}`` instead of raising, telling you to upgrade.
         """
         if not hasattr(self._mem, "load_working_context"):
             return _unsupported("load_working_context")
-        return self._mem.load_working_context(project, session)
+        loaded = self._mem.load_working_context(project, session)
+        # Presence is not shape. `hasattr` passes on every wheel this
+        # package's floor admits, including the ones that return the BARE
+        # working context (or ``None``) — and the docstring above, which the
+        # model reads as this tool's description, promises the envelope
+        # unconditionally. Relaying the bare form would have the model read
+        # ``loaded["working"]`` (KeyError) or ``loaded.get("found")`` -> None
+        # -> falsy, concluding "fresh start" on top of live work.
+        if not isinstance(loaded, dict) or not isinstance(loaded.get("found"), bool):
+            return _shape_drift("load_working_context")
+        return loaded
 
 
 def _resolve_service(
@@ -242,4 +261,26 @@ def _unsupported(method: str) -> dict[str, str]:
     """
     return {
         "error": f"{method} requires velesdb > 3.12.0 — upgrade with `pip install -U velesdb`"
+    }
+
+
+def _shape_drift(method: str) -> dict[str, str]:
+    """Actionable tool-error payload for a ``MemoryService`` method that EXISTS
+    on the installed ``velesdb`` but still returns its pre-envelope shape.
+
+    A distinct failure from :func:`_unsupported`, and one no ``hasattr`` can
+    see: the method is there, so every presence check passes, and only the
+    returned VALUE gives the version skew away. Reported rather than relayed,
+    because the docstrings this package renders to a model describe the
+    envelope — handing back the bare form makes those descriptions lie, and
+    the model acts on them.
+    """
+    return {
+        "error": (
+            f"{method} returned the pre-envelope shape: the installed velesdb has the "
+            "method but predates the {found, working, other_sessions} envelope this "
+            "package documents. Reading `found` on that value yields None, so a "
+            "resumable session would look like a fresh start — upgrade velesdb to a "
+            "release that returns the envelope."
+        )
     }

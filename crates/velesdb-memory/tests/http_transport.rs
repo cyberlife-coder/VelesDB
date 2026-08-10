@@ -47,6 +47,31 @@ struct TestServer {
     _store_dir: tempfile::TempDir,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TestServerConfig {
+    max_body_bytes: usize,
+    max_sessions: usize,
+    keep_alive: std::time::Duration,
+}
+
+impl TestServerConfig {
+    fn generic(max_body_bytes: usize, max_sessions: usize) -> Self {
+        Self {
+            max_body_bytes,
+            max_sessions,
+            keep_alive: velesdb_memory::http::DEFAULT_HTTP_KEEP_ALIVE,
+        }
+    }
+
+    fn with_keep_alive(max_sessions: usize, keep_alive: std::time::Duration) -> Self {
+        Self {
+            max_body_bytes: velesdb_memory::http::DEFAULT_HTTP_MAX_BODY_BYTES,
+            max_sessions,
+            keep_alive,
+        }
+    }
+}
+
 /// Cancel the server's token and wait for its task to actually finish —
 /// every test must call this before returning so a failed/hung shutdown
 /// surfaces as a test failure instead of a silently leaked task.
@@ -78,6 +103,20 @@ async fn spawn_http_server() -> TestServer {
 /// default, and process-wide env vars are shared mutable state that would
 /// race every other test in this binary reading the same variables.
 async fn spawn_http_server_with_limits(max_body_bytes: usize, max_sessions: usize) -> TestServer {
+    spawn_configured(TestServerConfig::generic(max_body_bytes, max_sessions)).await
+}
+
+/// The one place a test server is actually built.
+///
+/// The three spawners above differ in exactly which knob they pin and in
+/// nothing else — same scratch store, same OS-assigned loopback port, same
+/// gracefully-cancellable axum task. Keeping two copies of that body meant a
+/// change to the shutdown path had to be made twice or silently diverge, so
+/// they now all funnel here. `keep_alive` is deliberately mandatory: generic
+/// fixtures pin [`velesdb_memory::http::DEFAULT_HTTP_KEEP_ALIVE`] explicitly,
+/// while expiry tests inject their own duration. No fixture can silently fall
+/// back to rmcp's shorter default.
+async fn spawn_configured(config: TestServerConfig) -> TestServer {
     let store_dir = tempfile::tempdir().expect("create scratch store dir");
     let embedder: DynEmbedder = Box::new(HashEmbedder::new(DEFAULT_DIMENSION));
     let service =
@@ -85,11 +124,12 @@ async fn spawn_http_server_with_limits(max_body_bytes: usize, max_sessions: usiz
     let server = McpServer::new(service);
 
     let ct = CancellationToken::new();
-    let app = velesdb_memory::http::router_with_limits(
+    let app = velesdb_memory::http::router_with_limits_and_keep_alive(
         server,
         ct.child_token(),
-        max_body_bytes,
-        max_sessions,
+        config.max_body_bytes,
+        config.max_sessions,
+        Some(config.keep_alive),
     );
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -184,7 +224,11 @@ async fn initialize_round_trip_succeeds_over_http() {
     let info = client
         .peer_info()
         .expect("server must advertise its info during initialize");
-    assert_eq!(info.server_info.name, "velesdb-memory");
+    let server_info = info
+        .server_info
+        .as_ref()
+        .expect("server must name itself during initialize");
+    assert_eq!(server_info.name, "velesdb-memory");
 
     shutdown(server).await;
 }
@@ -407,4 +451,274 @@ async fn audit_shared_session_concurrent_calls_are_bounded() {
     tokio::time::timeout(std::time::Duration::from_secs(5), shutdown(server))
         .await
         .expect("shared-session server shutdown exceeded five seconds");
+}
+
+// ===========================================================================
+// Session lifecycle: an idle-expired session must return its slot (#1778)
+// ===========================================================================
+
+/// [`spawn_http_server_with_limits`], but with the session idle timeout
+/// injected — so an expire-and-reuse cycle takes milliseconds instead of the
+/// five minutes rmcp defaults to.
+async fn spawn_http_server_with_keep_alive(
+    max_sessions: usize,
+    keep_alive: std::time::Duration,
+) -> TestServer {
+    spawn_configured(TestServerConfig::with_keep_alive(max_sessions, keep_alive)).await
+}
+
+const INITIALIZE_BODY: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"slot-probe","version":"0"}}}"#;
+
+/// `initialize` over raw HTTP, returning the new session id, or `None` when
+/// the server refused to create one.
+///
+/// Deliberately NOT rmcp's client: that one keeps a stream open and sends an
+/// explicit `DELETE` when dropped, which is precisely the well-behaved close
+/// this test must avoid — the defect under test is what happens when a
+/// session dies of pure inactivity instead.
+async fn try_raw_initialize(addr: SocketAddr) -> Option<String> {
+    let response = reqwest::Client::new()
+        .post(format!("http://{addr}/mcp"))
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .body(INITIALIZE_BODY)
+        .send()
+        .await
+        .expect("initialize POST reaches the server");
+    if !response.status().is_success() {
+        return None;
+    }
+    response
+        .headers()
+        .get("mcp-session-id")
+        .and_then(|value| value.to_str().ok())
+        .map(std::borrow::ToOwned::to_owned)
+}
+
+/// Status code the server answers for a `tools/list` carrying `session_id`.
+async fn status_for_session(addr: SocketAddr, session_id: &str) -> reqwest::StatusCode {
+    reqwest::Client::new()
+        .post(format!("http://{addr}/mcp"))
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .header("Mcp-Session-Id", session_id)
+        .body(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)
+        .send()
+        .await
+        .expect("tools/list POST reaches the server")
+        .status()
+}
+
+fn status_proves_session_is_alive(status: reqwest::StatusCode) -> bool {
+    status == reqwest::StatusCode::OK
+}
+
+/// A keep-alive no test can outlive, for the cases that need a session ALIVE.
+///
+/// The same value the two-slot test below already relies on, named once so the
+/// intent is visible: "nothing may expire while this test runs".
+const KEEP_ALIVE_OUTLIVES_THE_TEST: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// A keep-alive every test outlives, for the cases that need a session DEAD.
+const KEEP_ALIVE_EXPIRES_PROMPTLY: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// Comfortably past [`KEEP_ALIVE_EXPIRES_PROMPTLY`]. Waiting LONGER than this
+/// can only make the session deader, which is why this direction is safe to
+/// wait on and the other one is not.
+const PAST_EXPIRY: std::time::Duration = std::time::Duration::from_millis(700);
+
+#[test]
+fn contract_generic_http_fixture_pins_product_keep_alive() {
+    let config = TestServerConfig::generic(1, 1);
+    assert_eq!(
+        config.keep_alive,
+        velesdb_memory::http::DEFAULT_HTTP_KEEP_ALIVE,
+        "generic HTTP fixtures must exercise the product's keep-alive default"
+    );
+}
+
+#[test]
+fn contract_live_session_status_accepts_only_ok() {
+    assert!(status_proves_session_is_alive(reqwest::StatusCode::OK));
+    for status in [
+        reqwest::StatusCode::BAD_REQUEST,
+        reqwest::StatusCode::NOT_FOUND,
+        reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+    ] {
+        assert!(
+            !status_proves_session_is_alive(status),
+            "{status} must not prove that the session is alive"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_session_cap_holds_while_a_slot_is_occupied() {
+    // This assertion needs the session ALIVE, so the keep-alive must outlive
+    // the test — it cannot be the short one. Sharing one short clock with the
+    // expiry test below is what made this flake on loaded CI runners (#1793):
+    // the cap check landed AFTER the 150 ms expiry, the slot was legitimately
+    // free, and the refusal that never came was read as a broken cap.
+    // Reproduced deterministically by sleeping 200 ms before the check.
+    let server = spawn_http_server_with_keep_alive(1, KEEP_ALIVE_OUTLIVES_THE_TEST).await;
+
+    let first = try_raw_initialize(server.addr)
+        .await
+        .expect("the first session must be created");
+    assert!(
+        try_raw_initialize(server.addr).await.is_none(),
+        "the cap must hold while the only slot is genuinely occupied"
+    );
+
+    // The positive control. Without it, an `initialize` that refused
+    // unconditionally would satisfy the assertion above while proving nothing
+    // about the cap.
+    assert_eq!(
+        delete_session(server.addr, &first).await,
+        202,
+        "a well-behaved client's DELETE must be ACCEPTED (202) — termination is \
+         acknowledged, not performed synchronously"
+    );
+    assert!(
+        try_raw_initialize(server.addr).await.is_some(),
+        "once the slot is released the cap must let a new session in — a cap \
+         that never admits anyone is not a cap, it is an outage"
+    );
+
+    shutdown(server).await;
+}
+
+/// How long the slot-return poll may wait before declaring the slot lost.
+/// A PASS never pays it: the expected sequence (150 ms keep-alive + rmcp's
+/// per-session worker noticing) completes in well under a second, and the
+/// poll returns the instant it does. Only a genuinely stuck slot — the very
+/// defect this test exists to catch — runs the deadline out.
+const SLOT_RETURN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Interval between slot-return attempts — long enough not to hammer the
+/// server, short enough that a pass is detected promptly.
+const SLOT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(25);
+
+#[tokio::test]
+async fn an_idle_expired_session_returns_its_slot() {
+    // `max_sessions = 1` makes the accounting observable: whether the slot
+    // came back is exactly whether a second session can be created.
+    //
+    // The slot's return is an EVENT, not a point on the wall clock: after
+    // the keep-alive elapses, rmcp's per-session worker still has to run
+    // before `close_session` frees the slot — and on a loaded runner that
+    // task can lag past any fixed sleep. This test's previous shape slept
+    // 700 ms and asserted once, which is exactly how it flaked twice on an
+    // unchanged `develop` (#1793). So it now waits for the event itself:
+    // poll "can a second session be created?" under a deadline. A slow
+    // runner delays the event; it cannot un-happen it — waiting longer only
+    // ever helps, and a pass never waits longer than the event takes.
+    //
+    // Deliberately NOT polled: anything touching the first session. Any
+    // request against it counts as activity and refreshes its idle timer, so
+    // a "wait until it answers 404" loop would keep it alive forever — the
+    // livelock is the reason death is observed only through the slot.
+    let server = spawn_http_server_with_keep_alive(1, KEEP_ALIVE_EXPIRES_PROMPTLY).await;
+
+    let first = try_raw_initialize(server.addr)
+        .await
+        .expect("the first session must be created");
+
+    // Let it die of pure inactivity — no DELETE, no close, just silence,
+    // while polling the one observable that has no side effect on it.
+    let deadline = tokio::time::Instant::now() + SLOT_RETURN_DEADLINE;
+    let second = loop {
+        if let Some(id) = try_raw_initialize(server.addr).await {
+            break Some(id);
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "a session that died of inactivity must return its slot within \
+             {SLOT_RETURN_DEADLINE:?} — otherwise the daemon locks itself out \
+             after `max_sessions` idle expiries"
+        );
+        tokio::time::sleep(SLOT_POLL_INTERVAL).await;
+    };
+
+    // The slot came back, so the worker has closed the first session — from
+    // here the checks are deterministic, no timing left in them.
+    assert_ne!(
+        second.as_deref(),
+        Some(first.as_str()),
+        "the reused slot must be a NEW session"
+    );
+    let expired_status = status_for_session(server.addr, &first).await;
+    assert_eq!(
+        expired_status,
+        reqwest::StatusCode::NOT_FOUND,
+        "a closed session must be gone, and say so"
+    );
+
+    shutdown(server).await;
+}
+
+/// The positive control for the test above, and the reason its 404 means
+/// "expired" rather than "sessions always 404".
+///
+/// Same wait, same request, only the keep-alive differs — so a 404 here would
+/// prove the expiry assertion above is measuring the wrong thing.
+#[tokio::test]
+async fn a_session_under_a_long_keep_alive_survives_the_same_wait() {
+    let server = spawn_http_server_with_keep_alive(1, KEEP_ALIVE_OUTLIVES_THE_TEST).await;
+
+    let first = try_raw_initialize(server.addr)
+        .await
+        .expect("the first session must be created");
+    tokio::time::sleep(PAST_EXPIRY).await;
+
+    let status = status_for_session(server.addr, &first).await;
+    assert!(
+        status_proves_session_is_alive(status),
+        "a session whose keep-alive has NOT elapsed must answer 200 OK, got {status}"
+    );
+
+    shutdown(server).await;
+}
+
+/// Explicitly terminate `session_id` the way a well-behaved client does.
+async fn delete_session(addr: SocketAddr, session_id: &str) -> u16 {
+    reqwest::Client::new()
+        .delete(format!("http://{addr}/mcp"))
+        .header("Mcp-Session-Id", session_id)
+        .send()
+        .await
+        .expect("DELETE reaches the server")
+        .status()
+        .as_u16()
+}
+
+#[tokio::test]
+async fn closing_one_session_frees_exactly_one_slot() {
+    // Two slots, and a keep_alive long enough that nothing expires during the
+    // test — the only thing that may free a slot here is the explicit DELETE.
+    let server = spawn_http_server_with_keep_alive(2, std::time::Duration::from_secs(30)).await;
+
+    let a = try_raw_initialize(server.addr).await.expect("session A");
+    let _b = try_raw_initialize(server.addr).await.expect("session B");
+    assert!(
+        try_raw_initialize(server.addr).await.is_none(),
+        "with both slots occupied the third session must be refused"
+    );
+
+    // Close A explicitly. The session worker ALSO finishes and closes the
+    // session on its own — so the accounting sees two closes for one session.
+    delete_session(server.addr, &a).await;
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+
+    assert!(
+        try_raw_initialize(server.addr).await.is_some(),
+        "closing A must free A's slot"
+    );
+    assert!(
+        try_raw_initialize(server.addr).await.is_none(),
+        "closing ONE session must free exactly ONE slot — B still holds the other, \
+         so this fourth session must be refused"
+    );
+
+    shutdown(server).await;
 }

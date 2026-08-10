@@ -234,8 +234,9 @@ pub enum MemoryError {
     /// working directory is unpredictable, so only absolute paths are
     /// accepted), a path that does not exist or is not a plain file
     /// (directories are rejected), a `path` fragment combined with
-    /// non-empty `content` or a `media` payload (exactly one of `path`,
-    /// `content`, `media` is accepted), or a file whose bytes are not valid
+    /// non-empty `content` or a `media` payload (`path` is exclusive,
+    /// though `content` and `media` may travel together), a fragment
+    /// carrying none of the three, or a file whose bytes are not valid
     /// UTF-8.
     #[cfg(feature = "context")]
     #[error("cannot ingest path: {0}")]

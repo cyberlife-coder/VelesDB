@@ -13,7 +13,9 @@ use crate::AppState;
 use velesdb_core::index::HnswParams;
 use velesdb_core::{DistanceMetric, StorageMode};
 
-use super::helpers::{auto_core_error_response, error_response, get_collection_or_404};
+use super::helpers::{
+    auto_core_error_response, error_response, get_collection_or_404, run_blocking,
+};
 
 /// List all collections.
 #[utoipa::path(
@@ -54,15 +56,18 @@ pub async fn create_collection(
         Err(resp) => return resp,
     };
 
-    let result = match dispatch_create(&state, &req, metric, storage_mode) {
-        Ok(r) => r,
-        Err(resp) => return resp,
-    };
-
-    match result {
-        Ok(()) => create_collection_success_response(&req),
-        Err(e) => auto_core_error_response(&e),
-    }
+    // Collection creation is synchronous core code (registry locks + disk
+    // I/O + fsync) — run it on the blocking pool.
+    let state_clone = Arc::clone(&state);
+    run_blocking(
+        move || match dispatch_create(&state_clone, &req, metric, storage_mode) {
+            Ok(Ok(())) => create_collection_success_response(&req),
+            Ok(Err(e)) => auto_core_error_response(&e),
+            Err(resp) => resp,
+        },
+    )
+    .await
+    .unwrap_or_else(|resp| resp)
 }
 
 /// Parse a distance metric string into the core enum.
@@ -481,13 +486,18 @@ pub async fn delete_collection(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    match state.db.delete_collection(&name) {
-        Ok(()) => Json(serde_json::json!({
+    // Collection deletion is synchronous core code (registry locks + disk
+    // I/O) — run it on the blocking pool.
+    let state_clone = Arc::clone(&state);
+    let coll_name = name.clone();
+    match run_blocking(move || state_clone.db.delete_collection(&coll_name)).await {
+        Ok(Ok(())) => Json(serde_json::json!({
             "message": "Collection deleted",
             "name": name
         }))
         .into_response(),
-        Err(e) => auto_core_error_response(&e),
+        Ok(Err(e)) => auto_core_error_response(&e),
+        Err(resp) => resp,
     }
 }
 

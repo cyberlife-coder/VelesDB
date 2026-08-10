@@ -324,6 +324,41 @@ impl EdgeStore {
         self.resolve_edge_ids(self.incoming.get(&node_id))
     }
 
+    /// Gets at most `cap` outgoing edges from a node.
+    ///
+    /// The bound is applied to the index BEFORE any edge is resolved, so the
+    /// work and the allocation are O(cap) — never O(degree). This is what
+    /// makes reading a super-node affordable: [`Self::get_outgoing`] on a
+    /// million-edge node materializes a million entries even when the caller
+    /// keeps only the first 64 (#1820).
+    #[must_use]
+    pub fn get_outgoing_bounded(&self, node_id: u64, cap: usize) -> Vec<&GraphEdge> {
+        self.resolve_edge_ids_bounded(self.outgoing.get(&node_id), cap)
+    }
+
+    /// Gets at most `cap` incoming edges to a node — the mirror of
+    /// [`Self::get_outgoing_bounded`], with the same O(cap) guarantee.
+    #[must_use]
+    pub fn get_incoming_bounded(&self, node_id: u64, cap: usize) -> Vec<&GraphEdge> {
+        self.resolve_edge_ids_bounded(self.incoming.get(&node_id), cap)
+    }
+
+    /// [`Self::resolve_edge_ids`] with the id list truncated FIRST — the cap
+    /// bounds the scan itself, not just the result. A dangling id inside the
+    /// scanned window (defensively skipped, as in the unbounded resolver) is
+    /// not replaced by scanning further: the O(cap) guarantee outranks
+    /// returning exactly `cap` entries.
+    #[inline]
+    fn resolve_edge_ids_bounded(&self, ids: Option<&Vec<u64>>, cap: usize) -> Vec<&GraphEdge> {
+        ids.map(|ids| {
+            ids.iter()
+                .take(cap)
+                .filter_map(|id| self.edges.get(id))
+                .collect()
+        })
+        .unwrap_or_default()
+    }
+
     /// Gets outgoing edges filtered by label using composite index - O(k) where k = result count.
     ///
     /// Uses the `outgoing_by_label` composite index for fast lookup instead of

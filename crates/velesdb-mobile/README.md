@@ -142,9 +142,13 @@ Field-by-field reference: [`velesdb.toml` guide](../../docs/guides/CONFIGURATION
 
 ## Examples
 
-This crate ships no `examples/` directory. The runnable, always-compiled references are
-its own tests — `crates/velesdb-mobile/tests/coverage_native.rs` drives the real
-binding types (`VelesDatabase`, `VelesCollection`, `MobileGraphStore`) as plain Rust.
+The [`examples/`](./examples/) directory holds a bindings-generation script
+(`generate_bindings.sh`), Swift and Kotlin quickstart walkthroughs, and an
+engine-only `velesdb.toml` — see [its README](./examples/README.md) for what is
+and is not compiled by CI. The runnable, always-compiled references are the
+crate's own tests — `crates/velesdb-mobile/tests/coverage_native.rs` drives the
+real binding types (`VelesDatabase`, `VelesCollection`, `MobileGraphStore`) as
+plain Rust.
 
 Swift and Kotlin snippets for every API group live in the
 [Mobile API guide](../../docs/guides/MOBILE_API.md).
@@ -220,4 +224,4 @@ the VelesDB engine and are governed by that license.
 
 ---
 
-`velesdb-mobile v4.1.0` · Last updated: 2026-07-23 · Applies to: velesdb-core 4.1.0 · [Report a docs error](https://github.com/cyberlife-coder/velesdb/issues)
+`velesdb-mobile v5.0.0` · Last updated: 2026-08-10 · Applies to: velesdb-core 5.0.0 · [Report a docs error](https://github.com/cyberlife-coder/velesdb/issues)

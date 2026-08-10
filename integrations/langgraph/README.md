@@ -89,13 +89,14 @@ tools["recall_fused"].invoke({"query": "what changed this week", "date_field": "
 
 ## Compatibility
 
-This package requires `velesdb>=3.12.0`, the highest version published to
-PyPI at the time of writing. `feedback`, `save_working_context`,
-`load_working_context`, and the automatic `_veles_date` metadata stamp landed
-in `velesdb`/`velesdb-memory` *after* the 3.12.0 release cut and are not yet
-in a published wheel. On a plain 3.12.0 install those three tools detect the
-missing binding method at call time and return an error payload instead of
-raising, e.g.:
+This package declares a floor of `velesdb>=5.0.0` — the release that
+carries the `load_working_context` `{found, working, other_sessions}`
+envelope this toolkit relays, plus `feedback`, `save_working_context` and
+the automatic `_veles_date` metadata stamp. The floor moved from 3.12.0
+with the 5.0.0 train, exactly as the changelog mandated: it could not be
+raised in advance because the version that carries the envelope did not
+exist yet. The call-time detection below remains as a net for an
+environment that pins an older wheel by hand, e.g.:
 
 ```json
 {"error": "feedback requires velesdb > 3.12.0 — upgrade with `pip install -U velesdb`"}
@@ -105,8 +106,23 @@ so a single unsupported call surfaces to the agent as a normal tool result it
 can react to, instead of an uncaught `AttributeError` killing the whole graph
 run. `recall_where`/`recall_fused` still work, but their `metadata` stays
 empty for auto-dating until you upgrade. `forget` works on 3.12.0 too, but
-returns `None` instead of a `True`/`False` existed-or-not signal. The floor
-will be bumped again once a `velesdb` release past 3.12.0 ships.
+returns `None` instead of a `True`/`False` existed-or-not signal. Upgrading
+past 3.12.0 (`pip install -U velesdb`) removes all of these degradations.
+
+**A second failure mode, which no version floor can express.**
+`load_working_context` returns `{found, working, other_sessions}` — the
+envelope this toolkit's docstring describes to the model. Wheels published
+*before* that change have the method and return the **bare** working context
+(or `None`), so the presence check above passes and the description becomes
+false: the model reads `found` as `None`, treats a resumable session as a
+fresh start, and restarts on top of live work. The tool therefore inspects
+what it got back and reports the drift as a normal error payload:
+
+```json
+{"error": "load_working_context returned the pre-envelope shape: the installed velesdb has the method but predates the {found, working, other_sessions} envelope this package documents. ..."}
+```
+
+Presence is not shape, and `hasattr` only ever proved presence.
 
 `list_working_contexts` (browse saved sessions for a project) is not exposed
 here: it exists on the WASM and MCP surfaces but not yet on the `velesdb`

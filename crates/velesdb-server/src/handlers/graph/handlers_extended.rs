@@ -13,6 +13,7 @@ use axum::{
 use velesdb_core::collection::graph::TraversalConfig;
 use velesdb_core::observer::QueryOperationKind;
 
+use crate::handlers::helpers::run_blocking_typed;
 use crate::types::ErrorResponse;
 use crate::AppState;
 
@@ -43,7 +44,8 @@ pub async fn remove_edge(
     State(state): State<Arc<AppState>>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     let coll = graph_preamble(&state, &name)?;
-    if coll.remove_edge(edge_id) {
+    // Edge removal takes write locks and persists — run it on the blocking pool.
+    if run_blocking_typed(move || coll.remove_edge(edge_id)).await? {
         Ok(StatusCode::NO_CONTENT)
     } else {
         // PR #586 Devin fix: emit `VELES-020 EdgeNotFound` with the
@@ -80,9 +82,9 @@ pub async fn get_edge_count(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<EdgeCountResponse>, (StatusCode, Json<ErrorResponse>)> {
     let coll = graph_read_preamble(&state, &name, QueryOperationKind::GraphTraversal)?;
-    Ok(Json(EdgeCountResponse {
-        count: coll.edge_count(),
-    }))
+    // Edge counting takes edge-store shard locks — run it on the blocking pool.
+    let count = run_blocking_typed(move || coll.edge_count()).await?;
+    Ok(Json(EdgeCountResponse { count }))
 }
 
 /// List all node IDs in the graph.
@@ -103,7 +105,8 @@ pub async fn list_nodes(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<NodeListResponse>, (StatusCode, Json<ErrorResponse>)> {
     let coll = graph_read_preamble(&state, &name, QueryOperationKind::GraphTraversal)?;
-    let node_ids = coll.all_node_ids();
+    // Node enumeration takes node-store locks — run it on the blocking pool.
+    let node_ids = run_blocking_typed(move || coll.all_node_ids()).await?;
     let count = node_ids.len();
     Ok(Json(NodeListResponse { node_ids, count }))
 }
@@ -130,7 +133,9 @@ pub async fn get_node_edges(
 ) -> Result<Json<EdgesResponse>, (StatusCode, Json<ErrorResponse>)> {
     let coll = graph_read_preamble(&state, &name, QueryOperationKind::GraphTraversal)?;
 
-    let raw_edges = match params.direction.to_lowercase().as_str() {
+    // Edge listing takes edge-store shard locks — run it on the blocking pool.
+    let direction = params.direction.to_lowercase();
+    let raw_edges = run_blocking_typed(move || match direction.as_str() {
         "in" => coll.get_incoming(node_id),
         "both" => {
             let mut all = coll.get_outgoing(node_id);
@@ -138,7 +143,8 @@ pub async fn get_node_edges(
             all
         }
         _ => coll.get_outgoing(node_id),
-    };
+    })
+    .await?;
 
     let edges: Vec<EdgeResponse> = raw_edges
         .into_iter()
@@ -183,7 +189,9 @@ pub async fn upsert_node_payload(
     Json(request): Json<UpsertNodePayloadRequest>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     let coll = graph_preamble(&state, &name)?;
-    coll.upsert_node_payload(node_id, &request.payload)
+    // Payload upsert takes write locks and persists — run it on the blocking pool.
+    run_blocking_typed(move || coll.upsert_node_payload(node_id, &request.payload))
+        .await?
         .map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -216,15 +224,18 @@ pub async fn get_node_payload(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<NodePayloadResponse>, (StatusCode, Json<ErrorResponse>)> {
     let coll = graph_read_preamble(&state, &name, QueryOperationKind::GraphTraversal)?;
-    let payload = coll.get_node_payload(node_id).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to get payload: {e}"),
-                code: None,
-            }),
-        )
-    })?;
+    // Payload lookup takes storage locks — run it on the blocking pool.
+    let payload = run_blocking_typed(move || coll.get_node_payload(node_id))
+        .await?
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to get payload: {e}"),
+                    code: None,
+                }),
+            )
+        })?;
     Ok(Json(NodePayloadResponse { node_id, payload }))
 }
 
@@ -257,11 +268,16 @@ pub async fn traverse_parallel(
 
     let coll = graph_read_preamble(&state, &name, QueryOperationKind::GraphTraversal)?;
 
+    let limit = request.limit;
     let config = TraversalConfig::with_range(1, request.max_depth)
-        .with_limit(request.limit)
+        .with_limit(limit)
         .with_rel_types(request.rel_types);
 
-    let raw_results = coll.traverse_bfs_parallel(&request.sources, &config);
+    // Parallel traversal is synchronous, rayon-dispatching core code — run
+    // it on the blocking pool so the async workers stay responsive.
+    let sources = request.sources;
+    let raw_results =
+        run_blocking_typed(move || coll.traverse_bfs_parallel(&sources, &config)).await?;
 
     let results: Vec<super::types::TraversalResultItem> = raw_results
         .into_iter()
@@ -274,7 +290,7 @@ pub async fn traverse_parallel(
 
     let depth_reached = results.iter().map(|r| r.depth).max().unwrap_or(0);
     let visited = results.len();
-    let has_more = visited >= request.limit;
+    let has_more = visited >= limit;
 
     Ok(Json(TraverseResponse {
         results,
@@ -339,17 +355,20 @@ pub async fn graph_search(
         }
     }
 
-    let search_results = coll
-        .search_by_embedding(&request.vector, request.top_k)
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Graph search failed: {e}"),
-                    code: None,
-                }),
-            )
-        })?;
+    // Embedding search is CPU-bound, lock-taking core code — run it on the
+    // blocking pool so the async workers stay responsive.
+    let search_results =
+        run_blocking_typed(move || coll.search_by_embedding(&request.vector, request.top_k))
+            .await?
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: format!("Graph search failed: {e}"),
+                        code: None,
+                    }),
+                )
+            })?;
 
     let results: Vec<GraphSearchResultItem> = search_results
         .into_iter()

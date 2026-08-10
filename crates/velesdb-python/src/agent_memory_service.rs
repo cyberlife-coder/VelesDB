@@ -15,14 +15,15 @@ use std::collections::HashMap;
 use velesdb_memory::context::{
     build_transcript_compile_request, suggest_token_budget, CompilePolicy, CompileRequest,
     CompiledContext, ContextCompiler, ContextDecision, ContextSavings, ContextSource,
-    TranscriptCompileInput, WorkingContext, WorkingContextSession,
+    LoadedWorkingContext, TranscriptCompileInput, WorkingContext, WorkingContextSession,
 };
 use velesdb_memory::service::canonical_entity_name;
 use velesdb_memory::{
     format_dated_context, limits, ColumnFilter, ColumnOp, DatedContext, DynEmbedder, EntityProfile,
-    ErrorCategory, Explanation, FusionOptions, HashEmbedder, Link, MemoryEdge, MemoryError,
-    MemoryNode, MemoryService, Metadata, OllamaEmbedder, OllamaExtractor, Recollection,
-    DEFAULT_DIMENSION, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL,
+    EntityRelation, ErrorCategory, Explanation, FusionOptions, HashEmbedder, Link, MemoryEdge,
+    MemoryError, MemoryNode, MemoryService, Metadata, OllamaEmbedder, OllamaExtractor,
+    OutlineExtractor, Recollection, RememberedExtraction, DEFAULT_DIMENSION, DEFAULT_OLLAMA_MODEL,
+    DEFAULT_OLLAMA_URL,
 };
 
 use crate::collection::query::convert_params;
@@ -120,6 +121,49 @@ fn build_embedder(kind: &str, url: Option<String>, model: Option<String>) -> PyR
     }
 }
 
+/// Build the requested extractor and run it, releasing the GIL for the call.
+///
+/// Same contract as [`build_embedder`], including the `ValueError` on an
+/// unknown name: a caller who asked for a backend that does not exist must be
+/// told so, never handed a different one. `"outline"` is deterministic and
+/// network-free and ignores `model`/`url`; `"ollama"` needs a `model`.
+///
+/// A free function rather than a method, so it stays out of the `impl` block
+/// the binding-parity guard reads as this binding's published surface.
+fn extract_with(
+    py: Python<'_>,
+    svc: &MemoryService<DynEmbedder>,
+    text: &str,
+    model: Option<String>,
+    url: Option<String>,
+    extractor: Option<String>,
+    metadata: Option<Metadata>,
+) -> PyResult<RememberedExtraction> {
+    match extractor.as_deref().unwrap_or("ollama") {
+        "outline" => py.detach(|| {
+            svc.remember_extracted(text, &OutlineExtractor, metadata.as_ref())
+                .map_err(to_py_err)
+        }),
+        "ollama" => {
+            let model = model.ok_or_else(|| {
+                PyValueError::new_err(
+                    "the 'ollama' extractor needs a model (or pass extractor='outline' for \
+                     the offline backend)",
+                )
+            })?;
+            let url = url.unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_owned());
+            let backend = OllamaExtractor::new(url, model);
+            py.detach(|| {
+                svc.remember_extracted(text, &backend, metadata.as_ref())
+                    .map_err(to_py_err)
+            })
+        }
+        other => Err(PyValueError::new_err(format!(
+            "unknown extractor '{other}' (expected 'ollama' or 'outline')"
+        ))),
+    }
+}
+
 /// Convert a Python metadata/filter dict into the engine's [`Metadata`] map,
 /// reusing the crate's `Py` → `serde_json::Value` conversion.
 fn to_metadata(
@@ -196,11 +240,21 @@ fn explanation_to_dict(py: Python<'_>, e: &Explanation) -> PyResult<Py<PyAny>> {
     let out = PyDict::new(py);
     out.set_item(PyString::intern(py, "nodes"), nodes)?;
     out.set_item(PyString::intern(py, "edges"), edges)?;
+    out.set_item(PyString::intern(py, "truncated"), e.truncated)?;
     Ok(out.into())
 }
 
-/// An [`EntityProfile`] lookup as `{found, id, name, attributes, relations}`,
-/// where each relation is `{predicate, target_id, target}`.
+/// An [`EntityProfile`] lookup as
+/// `{found, id, name, attributes, relations, relations_in,
+/// relations_truncated, relations_in_truncated}`, where each edge
+/// is `{predicate, target_id, target}`.
+///
+/// `relations` are the edges LEAVING the entity, `relations_in` those
+/// pointing AT it — in that list, `target_id`/`target` name the far end the
+/// edge comes FROM. Both are present on a MISS too, as empty lists: a shape
+/// that changed with the outcome would force every caller to branch, and the
+/// parity guard cannot catch it, since it reads a declaration and never an
+/// execution path.
 ///
 /// Takes the *queried* name, not just the outcome, because a miss carries no
 /// name of its own: echoing the query back through
@@ -221,10 +275,30 @@ fn entity_profile_to_value(queried: &str, profile: Option<EntityProfile>) -> ser
             "name": canonical_entity_name(queried),
             "attributes": {},
             "relations": [],
+            "relations_in": [],
+            "relations_truncated": false,
+            "relations_in_truncated": false,
         });
     };
-    let relations: Vec<serde_json::Value> = profile
-        .relations
+    serde_json::json!({
+        "found": true,
+        "id": profile.id,
+        "name": profile.name,
+        "attributes": serde_json::Value::Object(profile.attributes),
+        "relations": entity_relations_to_value(profile.relations),
+        "relations_in": entity_relations_to_value(profile.relations_in),
+        "relations_truncated": profile.relations_truncated,
+        "relations_in_truncated": profile.relations_in_truncated,
+    })
+}
+
+/// One side of an entity's edges, as `[{predicate, target_id, target}, …]`.
+///
+/// Shared by both directions so the two lists can never drift into different
+/// shapes — the failure a caller would meet as "the same edge looks different
+/// depending on which end I asked from".
+fn entity_relations_to_value(relations: Vec<EntityRelation>) -> Vec<serde_json::Value> {
+    relations
         .into_iter()
         .map(|r| {
             serde_json::json!({
@@ -233,14 +307,7 @@ fn entity_profile_to_value(queried: &str, profile: Option<EntityProfile>) -> ser
                 "target": r.target,
             })
         })
-        .collect();
-    serde_json::json!({
-        "found": true,
-        "id": profile.id,
-        "name": profile.name,
-        "attributes": serde_json::Value::Object(profile.attributes),
-        "relations": relations,
-    })
+        .collect()
 }
 
 /// The shared `Vec<Recollection>` → Python list-of-dicts marshalling of every
@@ -293,6 +360,14 @@ fn fusion_options_from_dict(options: Option<&Bound<'_, PyDict>>) -> PyResult<Fus
 #[pyclass(name = "MemoryService")]
 pub struct PyMemoryService {
     svc: MemoryService<DynEmbedder>,
+    /// The embedder identity resolved at construction — what
+    /// `memory_status` reports as RUNNING. The service itself only ever
+    /// sees `&[f32]`, so the constructor is the one place that knows.
+    embedder_model: String,
+    embedder_dimension: usize,
+    /// Where the store lives, for the provenance block of `memory_status`
+    /// (#1751's on-disk record).
+    store_dir: std::path::PathBuf,
 }
 
 #[pymethods]
@@ -311,15 +386,30 @@ impl PyMemoryService {
         ollama_url: Option<String>,
         ollama_model: Option<String>,
     ) -> PyResult<Self> {
+        let embedder_model = match embedder {
+            "hash" => "hash".to_owned(),
+            _ => ollama_model
+                .clone()
+                .unwrap_or_else(|| DEFAULT_OLLAMA_MODEL.to_owned()),
+        };
         let emb = build_embedder(embedder, ollama_url, ollama_model)?;
+        let embedder_dimension = emb.dimension();
         let svc = MemoryService::open(&path, emb).map_err(to_py_err)?;
-        Ok(Self { svc })
+        Ok(Self {
+            svc,
+            embedder_model,
+            embedder_dimension,
+            store_dir: std::path::PathBuf::from(path),
+        })
     }
 
     /// Store a fact; returns its stable id. `links` is a list of `(target_id,
     /// relation)` tuples; `metadata` is an optional dict for later filtering.
     /// `ttl_seconds` makes the fact expire after that many seconds (a durable TTL
-    /// that survives restarts); omit it (or `0`) for a permanent memory.
+    /// that survives restarts); omit it for a permanent memory, including when
+    /// re-storing a fact that already had an expiry — only what this call
+    /// supplies is applied. An explicit `0` is REFUSED, because a caller
+    /// writing `0` means "expire now", not "never".
     #[pyo3(signature = (fact, links = None, metadata = None, ttl_seconds = None))]
     fn remember(
         &self,
@@ -376,6 +466,12 @@ impl PyMemoryService {
     /// queryable. `filters` is a list of `(field, op, value)` tuples where `op`
     /// is one of `eq`/`ne`/`lt`/`le`/`gt`/`ge`. Returns `{id, score, content, metadata}`
     /// (`metadata` is the fact's stored dict, or `None` if it carried none).
+    ///
+    /// Returns your own stored facts ONLY: entity hubs and the context compiler's
+    /// artefacts (stored sources, compilation events, working contexts and
+    /// their index) are internal scaffolding and never come back, whatever the
+    /// predicate — including a `ne` one, which matches facts lacking the field
+    /// entirely.
     #[pyo3(signature = (query, filters, k = 10))]
     fn recall_where(
         &self,
@@ -491,7 +587,10 @@ impl PyMemoryService {
     }
 
     /// Explain a decision: the best-matching memory plus its connected subgraph
-    /// (multi-hop). Returns `{nodes, edges}` — the wedge a plain recall misses.
+    /// (multi-hop). Returns `{nodes, edges, truncated}` — the wedge a plain
+    /// recall misses. `truncated` is `True` when a width budget cut the walk:
+    /// a subgraph sitting exactly at a cap is otherwise indistinguishable
+    /// from a complete one.
     ///
     /// `max_hops` is silently capped at 10 to prevent unbounded traversal on
     /// dense graphs (same limit as the MCP server).
@@ -515,51 +614,81 @@ impl PyMemoryService {
 
     /// Look up everything the memory graph knows about a NAMED ENTITY (a
     /// person, a place, an organisation): the attributes merged onto its hub
-    /// and the typed edges leaving it. Answers a question ABOUT a thing
-    /// ("how old is X", "who is X's father") rather than about the sentences
-    /// mentioning it, which is all `recall` can return — entity hubs are
-    /// deliberately invisible to `recall`, so without this the attributes
-    /// `remember_extracted` builds would be unreachable.
+    /// and the typed edges touching it, in BOTH directions. Answers a
+    /// question ABOUT a thing ("how old is X", "who is X's father") rather
+    /// than about the sentences mentioning it, which is all `recall` can
+    /// return — entity hubs are deliberately invisible to `recall`, so
+    /// without this the attributes `remember_extracted` builds would be
+    /// unreachable.
     ///
     /// Args:
     ///     name: matched case-insensitively (the id is content-addressed, so
     ///         it is stable across sessions).
     ///
     /// Returns:
-    ///     `{found, id, name, attributes, relations}`, each relation being
-    ///     `{predicate, target_id, target}`. `found` is `False` when nothing
-    ///     has ever mentioned that name; `name` still echoes the query in its
-    ///     canonical (trimmed, lowercased) form, so several lookups can be
-    ///     told apart.
+    ///     `{found, id, name, attributes, relations, relations_in,
+    ///     relations_truncated, relations_in_truncated}`, each
+    ///     edge being `{predicate, target_id, target}`. `found` is `False`
+    ///     when nothing has ever mentioned that name; `name` still echoes the
+    ///     query in its canonical (trimmed, lowercased) form, so several
+    ///     lookups can be told apart. The `*_truncated` booleans say when a
+    ///     list is a PARTIAL view cut by a response budget — a list holding
+    ///     exactly the cap is otherwise indistinguishable from a cut one.
+    ///
+    ///     `relations` are the edges LEAVING the entity, `relations_in` those
+    ///     pointing AT it — there, `target_id`/`target` name the far end the
+    ///     edge comes FROM. Without the second list a question is only
+    ///     answerable from one side: the graph holds
+    ///     `camille --sister of--> theo`, so reading Theo's outgoing edges
+    ///     never finds Camille.
     fn entity(&self, py: Python<'_>, name: &str) -> PyResult<Py<PyAny>> {
         let profile = py.detach(|| self.svc.entity_profile(name).map_err(to_py_err))?;
         Ok(json_to_python(py, &entity_profile_to_value(name, profile)))
     }
 
-    /// Extract atomic facts from raw `text` with a local Ollama model and store
-    /// them, auto-building the fact↔topic graph. Returns the stored facts' ids.
-    #[pyo3(signature = (text, model, url = None, metadata = None))]
+    /// Extract atomic facts from raw `text` and store them, auto-building the
+    /// entity graph they state.
+    ///
+    /// Args:
+    ///     text: the passage to extract from.
+    ///     model: the local generative model, required by the `"ollama"`
+    ///         backend and ignored by `"outline"`.
+    ///     url: the Ollama base URL (`"ollama"` only).
+    ///     metadata: merged onto every stored fact.
+    ///     extractor: which backend to use, `"ollama"` (default) or
+    ///         `"outline"`. `"outline"` is deterministic and network-free —
+    ///         it reads the structure the passage STATES, one directive per
+    ///         line (`edge:`, `attr:`, `fact:`) — and stands to `"ollama"`
+    ///         exactly as the `"hash"` embedder does, so the whole contract
+    ///         of this method is reachable with no model running.
+    ///
+    /// Returns:
+    ///     `{"ids": [int, ...], "skipped_over_cap": int}`.
+    ///
+    ///     This used to return a bare list of ids, and that list could not
+    ///     say why it was short: nothing distinguished a passage that held
+    ///     three facts from one that held twelve of which nine were dropped
+    ///     for exceeding the embeddable cap. The dict is the breaking change
+    ///     that ends that silence (issue #1692).
+    #[pyo3(signature = (text, model = None, url = None, metadata = None, extractor = None))]
     fn remember_extracted(
         &self,
         py: Python<'_>,
         text: &str,
-        model: String,
+        model: Option<String>,
         url: Option<String>,
         metadata: Option<HashMap<String, Py<PyAny>>>,
-    ) -> PyResult<Vec<u64>> {
+        extractor: Option<String>,
+    ) -> PyResult<Py<PyAny>> {
         let metadata = to_metadata(py, metadata)?;
-        let url = url.unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_owned());
-        let extractor = OllamaExtractor::new(url, model);
-        // The binding's return stays a plain id list (its published Python
-        // signature); the skip count the service now reports has no slot
-        // here — an over-cap fact is simply absent from the ids, exactly as
-        // before, when it aborted the whole call instead.
-        py.detach(|| {
-            self.svc
-                .remember_extracted(text, &extractor, metadata.as_ref())
-                .map(|outcome| outcome.ids)
-                .map_err(to_py_err)
-        })
+        let outcome = extract_with(py, &self.svc, text, model, url, extractor, metadata)?;
+        Ok(json_to_python(
+            py,
+            &serde_json::json!({
+                "ids": outcome.ids,
+                "skipped_over_cap": outcome.skipped_over_cap,
+            }),
+        ))
     }
 
     /// Compile context fragments into a token-budgeted, provenance-audited
@@ -745,24 +874,121 @@ impl PyMemoryService {
         })
     }
 
-    /// The working context previously saved under `project` + `session` (see
-    /// [`save_working_context`](Self::save_working_context)), or `None` when
-    /// there is none.
+    /// The resumption envelope for `project` + `session` (see
+    /// [`save_working_context`](Self::save_working_context)) — the same
+    /// wire shape as the MCP `load_working_context` tool and the Node/WASM
+    /// bindings.
+    ///
+    /// **BREAKING (0.12.0)**: this used to return the bare working context
+    /// (or `None`), which collapsed two different answers into one — a
+    /// project that never saved anything, and a typo in `session` that
+    /// missed a session which does exist. `other_sessions` is what tells
+    /// them apart, and it is filled in on a HIT too: a typo landing on
+    /// another REAL session returns `found=True`, the case a caller can
+    /// least detect on its own. Read `["working"]` for the previous return
+    /// value.
+    ///
+    /// Returns:
+    ///     ``{"found": bool, "working": dict | None, "other_sessions":
+    ///     [str]}``. Ids stay native Python ints here (unlimited precision),
+    ///     unlike the JS bindings' decimal strings.
+    /// The server's health, in the SAME envelope the MCP `memory_status`
+    /// tool returns: which embedder RUNS (`embedder["semantic"] is False`
+    /// means the offline `hash` default — recall matches surface form, not
+    /// meaning), what the store was FILLED by per its on-disk provenance
+    /// record, the extraction wiring (this binding passes its extractor per
+    /// `remember_extracted` call, so nothing is pre-attached and the
+    /// autograph fields report the service's actual state), and the corpus
+    /// size — `memory["edges"] == 0` is the observable "why() has nothing
+    /// to walk" state.
+    fn memory_status(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let (recorded, facts, edges) = py.detach(|| {
+            let recorded = velesdb_memory::embedding_provenance::read(&self.store_dir)
+                .ok()
+                .flatten();
+            (recorded, self.svc.fact_count(), self.svc.edge_count())
+        });
+        let provenance = match recorded {
+            Some(record) => serde_json::json!({
+                "recorded": true, "model": record.model, "dimension": record.dimension
+            }),
+            None => serde_json::json!({
+                "recorded": false, "model": null, "dimension": null
+            }),
+        };
+        let status = serde_json::json!({
+            "embedder": {
+                "model": self.embedder_model,
+                "dimension": self.embedder_dimension,
+                "semantic": self.embedder_model != "hash",
+            },
+            "provenance": provenance,
+            "extraction": {
+                "configured": self.svc.has_autograph(),
+                "autograph_active": self.svc.autograph_queue_open(),
+                "autograph_dropped": self.svc.autograph_dropped(),
+            },
+            "memory": { "facts": facts, "edges": edges },
+        });
+        Ok(json_to_python(py, &status))
+    }
+
+    /// Audit the store page by page — the SAME walk and envelope as the MCP
+    /// `list_memories` tool: ids ascending, TTL-expired facts skipped,
+    /// metadata under recall's visibility rule unless `include_internal`.
+    /// `cursor` is the previous page's `next_cursor`; `None` ends the walk.
+    /// A filtered page may come back sparse — keep following the cursor,
+    /// the walk stays exhaustive.
+    #[pyo3(signature = (cursor = None, limit = 50, filter = None, include_internal = false))]
+    fn list_memories(
+        &self,
+        py: Python<'_>,
+        cursor: Option<u64>,
+        limit: usize,
+        filter: Option<HashMap<String, Py<PyAny>>>,
+        include_internal: bool,
+    ) -> PyResult<Py<PyAny>> {
+        let filter = to_metadata(py, filter)?;
+        let (memories, next) = py.detach(|| {
+            self.svc
+                .list(cursor, limit, filter.as_ref(), include_internal)
+                .map_err(to_py_err)
+        })?;
+        let entries: Vec<serde_json::Value> = memories
+            .into_iter()
+            .map(|memory| {
+                serde_json::json!({
+                    "id": memory.id,
+                    "id_str": memory.id.to_string(),
+                    "content": memory.content,
+                    "metadata": memory.metadata,
+                })
+            })
+            .collect();
+        let page = serde_json::json!({
+            "memories": entries,
+            "next_cursor": next.map(|id| id.to_string()),
+        });
+        Ok(json_to_python(py, &page))
+    }
+
     fn load_working_context(
         &self,
         py: Python<'_>,
         project: &str,
         session: &str,
     ) -> PyResult<Py<PyAny>> {
-        let working = py.detach(|| {
+        // Annotated, not inferred: `binding_parity_bdd` reads this type name
+        // to prove the binding relays the SERVER's own envelope rather than a
+        // shape it recomposed by hand — and the compiler makes that proof
+        // real. The doc comment above describes the envelope; only this
+        // enforces it.
+        let loaded: LoadedWorkingContext = py.detach(|| {
             self.svc
-                .load_working_context(project, session)
+                .resume_working_context(project, session)
                 .map_err(to_py_err)
         })?;
-        match working {
-            None => Ok(py.None()),
-            Some(working) => Ok(serde_to_python!(py, &working, "working context")),
-        }
+        Ok(serde_to_python!(py, &loaded, "loaded working context"))
     }
 
     /// Every session ever saved under `project`'s working-context index,

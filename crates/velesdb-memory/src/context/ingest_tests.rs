@@ -7,14 +7,9 @@ use std::fs;
 use std::path::Path;
 
 use super::{resolve_one, IngestRoots};
-use crate::context::model::{CompilePolicy, CompileRequest, ContextFragment};
-use crate::context::ContextCompiler;
-use crate::embedder::HashEmbedder;
+use crate::context::model::ContextFragment;
 use crate::error::MemoryError;
 use crate::limits::{MAX_INGEST_FILES, MAX_INGEST_FILE_BYTES, MAX_TOTAL_INGEST_BYTES};
-use crate::service::MemoryService;
-
-const DIM: usize = 384;
 
 fn path_fragment(path: &str) -> ContextFragment {
     ContextFragment {
@@ -176,7 +171,64 @@ fn ingest_rejects_path_plus_content() {
     let mut fragments = vec![fragment];
     let err = super::resolve_fragments(&mut fragments, None).expect_err("path + content");
     match err {
-        MemoryError::IngestPath(msg) => assert!(msg.contains("never more than one"), "{msg}"),
+        MemoryError::IngestPath(msg) => assert!(msg.contains("never both"), "{msg}"),
+        other => panic!("expected IngestPath, got {other:?}"),
+    }
+}
+
+/// #1703 DC-3, the half the published prose got BACKWARDS. Every surface
+/// used to say "exactly one of `path`, `content`, `media`", and a caller
+/// who believed it sent a screenshot with no caption — losing the only text
+/// lexical relevance can read for that fragment. `content` + `media` is the
+/// supported shape, and the compiler bills both (`image_tokens` plus the
+/// caption's estimate), so this test names the promise the description now
+/// makes rather than re-stating the rule the code happens to implement.
+#[test]
+fn content_and_media_may_travel_together_as_the_description_promises() {
+    let fragment = ContextFragment {
+        id: None,
+        content: "the login screen after the timeout".to_owned(),
+        path: None,
+        kind: None,
+        priority: None,
+        metadata: None,
+        media: Some(crate::context::model::MediaRef {
+            mime: "image/png".to_owned(),
+            bytes_b64: "iVBORw0KGgo=".to_owned(),
+        }),
+    };
+    let mut fragments = vec![fragment];
+
+    // No roots configured: the shape rule runs first and unconditionally, so
+    // acceptance here is the shape rule's verdict, not ingestion's.
+    super::resolve_fragments(&mut fragments, None)
+        .expect("a captioned image is a supported fragment shape, not a violation");
+    assert_eq!(fragments[0].content, "the login screen after the timeout");
+    assert!(
+        fragments[0].media.is_some(),
+        "the media must survive intact"
+    );
+}
+
+/// #1703 DC-3, the SECOND hole the issue did not see. The old shape check
+/// was an implication (`path` set AND something else set), never an
+/// exclusion, so a fragment carrying none of the three sailed through and
+/// contributed an empty section. A caller's typo became a silent no-op.
+#[test]
+fn a_fragment_carrying_none_of_the_three_is_refused() {
+    let mut fragments = vec![ContextFragment {
+        id: None,
+        content: String::new(),
+        path: None,
+        kind: None,
+        priority: None,
+        metadata: None,
+        media: None,
+    }];
+    let err = super::resolve_fragments(&mut fragments, None)
+        .expect_err("an empty fragment carries nothing to compile");
+    match err {
+        MemoryError::IngestPath(msg) => assert!(msg.contains("carries none"), "{msg}"),
         other => panic!("expected IngestPath, got {other:?}"),
     }
 }
@@ -220,8 +272,21 @@ fn ingest_caps_file_count_and_total_bytes() {
     }
 }
 
+// The one test of this module that opens the file-backed store: gated on
+// `persistence` so the lib test target still compiles under `context`
+// alone (#1765) — every other case here exercises pure path resolution.
+#[cfg(feature = "persistence")]
 #[test]
 fn path_fragment_compiles_and_round_trips_source_handle() {
+    // Local to the one gated test: hoisting these to the module would leave
+    // them unused — an error under the CI's -Dwarnings — whenever `context`
+    // builds without `persistence` (#1765).
+    use crate::context::model::{CompilePolicy, CompileRequest};
+    use crate::context::ContextCompiler;
+    use crate::embedder::HashEmbedder;
+    use crate::service::MemoryService;
+    const DIM: usize = 384;
+
     let store_dir = tempfile::TempDir::new().expect("tempdir");
     let service =
         MemoryService::open(store_dir.path(), HashEmbedder::new(DIM)).expect("open memory store");

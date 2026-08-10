@@ -25,7 +25,7 @@ Detailed guides for using VelesDB features. **[Full guides index →](./guides/R
 | [Installation options](./guides/INSTALL_OPTIONS.md) | Decision aid: which install path to pick for core vs. agent memory |
 | [Configuration](./guides/CONFIGURATION.md) | `velesdb.toml` configuration reference |
 | [Search Modes](./guides/SEARCH_MODES.md) | Understanding Fast/Balanced/Accurate/Perfect modes |
-| [CLI & REPL](./guides/CLI_REPL.md) | Command-line interface and interactive shell |
+| [CLI reference](./guides/CLI_COMMAND_REFERENCE.md) / [REPL](./guides/CLI_REPL_REFERENCE.md) | Command-line interface and interactive shell |
 | [Quantization](./guides/QUANTIZATION.md) | Vector compression (SQ8, PQ, Binary, RaBitQ) |
 | [Tuning Guide](./guides/TUNING_GUIDE.md) | HNSW parameter tuning and performance optimization |
 | [Agent Memory](./guides/AGENT_MEMORY.md) | AI agent memory: semantic, episodic, procedural, TTL, snapshots |
@@ -39,7 +39,6 @@ Detailed guides for using VelesDB features. **[Full guides index →](./guides/R
 | [Concurrency & Locking](./guides/CONCURRENCY_LOCKING.md) | Concurrent access and file-locking behavior |
 | [Write Concurrency](./guides/WRITE_CONCURRENCY.md) | Single-writer-per-collection model, batching patterns, Enterprise tier |
 | [Use Cases](./guides/USE_CASES.md) | Common use cases and recommended configurations |
-| [Migration v1.6](./guides/MIGRATION_v1.6.md) / [v1.7](./guides/MIGRATION_v1.7.md) | Version migration guides |
 | [Migration v3.3.0](./guides/MIGRATION_v3.3.0.md) | Error codes, REST statuses and query results that changed in 3.3.0. |
 | [Migration v4.0.0](./guides/MIGRATION_v4.0.0.md) | The 4.0.0 breaking changes — start with the WASM `weighted` reordering, which is silent. |
 | [Troubleshooting](./NEW_USER_TROUBLESHOOTING.md) | Solutions for common issues new users encounter |
@@ -70,7 +69,7 @@ In-depth technical documentation. **[Full reference index →](./reference/READM
 | Reference | Description |
 |-----------|-------------|
 | [Architecture](./reference/ARCHITECTURE.md) | System design and internals |
-| [VelesQL Specification](./VELESQL_SPEC.md) | Query language grammar and syntax (v3.12.0, canonical) |
+| [VelesQL Specification](./VELESQL_SPEC.md) | Query language grammar and syntax (v3.10.0, canonical) |
 | [VelesQL Cheat Sheet](./reference/VELESQL_CHEATSHEET.md) | One-page quick reference: search, filter, graph MATCH, fusion, sparse, EXPLAIN |
 | [VelesQL Contract](./reference/VELESQL_CONTRACT.md) | Canonical REST contract (`/query`, `/match`, error model) |
 | [VelesQL Conformance](./reference/VELESQL_CONFORMANCE_MATRIX.md) | Cross-ecosystem conformance matrix |
@@ -97,8 +96,7 @@ For contributors and developers:
 
 | Guide | Description |
 |-------|-------------|
-| [Coding Rules](./contributing/CODING_RULES.md) | Code style and conventions |
-| [TDD Rules](./contributing/TDD_RULES.md) | Test-driven development practices |
+| [Coding Rules](./contributing/CODING_RULES.md) | Code style, conventions and the TDD workflow |
 | [Benchmarking Guide](./contributing/BENCHMARKING_GUIDE.md) | How to run and interpret benchmarks |
 | [Code Signing](./contributing/CODE_SIGNING.md) | Release signing process |
 | [Project Structure](./contributing/PROJECT_STRUCTURE.md) | Codebase organization |
@@ -148,7 +146,7 @@ the remaining debt is. Read these when you need the *why* behind a behaviour.
 
 | Document | Description |
 |----------|-------------|
-| [Architecture](./ARCHITECTURE.md) | How the engine is put together, layer by layer. |
+| [Tech-debt registry](./TECH_DEBT_REGISTRY.md) | Deferred architectural decisions and known open items. |
 | [Concurrency model](./CONCURRENCY_MODEL.md) | Which operations run in parallel, and the locks that make that safe. |
 | [Storage format](./STORAGE_FORMAT.md) | The on-disk layout and its compatibility rules. |
 | [Soundness](./SOUNDNESS.md) | The invariants the engine relies on, and why they hold. |
@@ -157,6 +155,7 @@ the remaining debt is. Read these when you need the *why* behind a behaviour.
 | [ANN state-of-the-art audit](./ANN_SOTA_AUDIT.md) | How the index compares to published ANN work. |
 | [Core wiring debt](./CORE_WIRING_DEBT.md) | Known gaps between what core exposes and what the surfaces use. |
 | [Core / Premium split](./CORE_PREMIUM_SPLIT.md) | Where the open-core boundary sits, and the contract both repos read identically. |
+| [Decisions](./decisions/README.md) | One decision per file: what was decided, why, and the code, PR or CI job that proves it. |
 
 ---
 
@@ -181,4 +180,4 @@ the remaining debt is. Read these when you need the *why* behind a behaviour.
 *VelesDB — the explainable, local-first memory engine for AI agents. (Microsecond vector search is the proof, not the pitch.)*
 
 ---
-Last updated: 2026-07-25 · Applies to: velesdb-core 4.2.0
+Last updated: 2026-08-08 · Applies to: velesdb-core 5.0.0

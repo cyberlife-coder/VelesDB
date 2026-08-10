@@ -7,7 +7,7 @@
 //! conversion in [`crate::error`].
 //!
 //! All commands route through the single persistent [`AgentMemory`] handle held
-//! in [`VelesDbState`] (see `state::with_memory`), so the in-memory TTL registry,
+//! in [`VelesDbState`] (see `state::run_memory`), so the in-memory TTL registry,
 //! temporal index, and snapshot manager survive across invocations. Re-opening a
 //! fresh memory per command silently dropped the TTL registry, which is why TTL,
 //! auto-expire, and snapshot versioning previously had no effect.
@@ -38,11 +38,12 @@ pub async fn semantic_store<R: Runtime>(
     request: SemanticStoreRequest,
 ) -> std::result::Result<(), CommandError> {
     state
-        .with_memory(|mem| {
+        .run_memory(move |mem| {
             mem.semantic()
                 .store(request.id, &request.content, &request.embedding)?;
             Ok(())
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -54,7 +55,7 @@ pub async fn semantic_store_with_ttl<R: Runtime>(
     request: SemanticStoreWithTtlRequest,
 ) -> std::result::Result<(), CommandError> {
     state
-        .with_memory(|mem| {
+        .run_memory(move |mem| {
             mem.semantic().store_with_ttl(
                 request.id,
                 &request.content,
@@ -63,6 +64,7 @@ pub async fn semantic_store_with_ttl<R: Runtime>(
             )?;
             Ok(())
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -74,13 +76,14 @@ pub async fn semantic_query<R: Runtime>(
     request: SemanticQueryRequest,
 ) -> std::result::Result<Vec<SemanticQueryResult>, CommandError> {
     state
-        .with_memory(|mem| {
+        .run_memory(move |mem| {
             let results = mem.semantic().query(&request.embedding, request.top_k)?;
             Ok(results
                 .into_iter()
                 .map(|(id, score, content)| SemanticQueryResult { id, score, content })
                 .collect())
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -92,10 +95,11 @@ pub async fn semantic_delete<R: Runtime>(
     request: SemanticDeleteRequest,
 ) -> std::result::Result<(), CommandError> {
     state
-        .with_memory(|mem| {
+        .run_memory(move |mem| {
             mem.semantic().delete(request.id)?;
             Ok(())
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -106,7 +110,8 @@ pub async fn semantic_dimension<R: Runtime>(
     state: State<'_, VelesDbState>,
 ) -> std::result::Result<usize, CommandError> {
     state
-        .with_memory(|mem| Ok(mem.semantic().dimension()))
+        .run_memory(move |mem| Ok(mem.semantic().dimension()))
+        .await
         .map_err(CommandError::from)
 }
 
@@ -117,7 +122,8 @@ pub async fn semantic_serialize<R: Runtime>(
     state: State<'_, VelesDbState>,
 ) -> std::result::Result<Vec<u8>, CommandError> {
     state
-        .with_memory(|mem| Ok(mem.semantic().serialize()?))
+        .run_memory(move |mem| Ok(mem.semantic().serialize()?))
+        .await
         .map_err(CommandError::from)
 }
 
@@ -129,10 +135,11 @@ pub async fn semantic_deserialize<R: Runtime>(
     data: Vec<u8>,
 ) -> std::result::Result<(), CommandError> {
     state
-        .with_memory(|mem| {
+        .run_memory(move |mem| {
             mem.semantic().deserialize(&data)?;
             Ok(())
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -148,7 +155,7 @@ pub async fn episodic_record<R: Runtime>(
     request: EpisodicRecordRequest,
 ) -> std::result::Result<(), CommandError> {
     state
-        .with_memory(|mem| {
+        .run_memory(move |mem| {
             mem.episodic().record(
                 request.event_id,
                 &request.content,
@@ -157,6 +164,7 @@ pub async fn episodic_record<R: Runtime>(
             )?;
             Ok(())
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -168,12 +176,13 @@ pub async fn episodic_recent<R: Runtime>(
     request: EpisodicRecentRequest,
 ) -> std::result::Result<Vec<EpisodicResult>, CommandError> {
     state
-        .with_memory(|mem| {
+        .run_memory(move |mem| {
             let results = mem
                 .episodic()
                 .recent(request.limit, request.since_timestamp)?;
             Ok(results.into_iter().map(to_episodic_result).collect())
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -185,7 +194,7 @@ pub async fn episodic_recall_similar<R: Runtime>(
     request: EpisodicRecallSimilarRequest,
 ) -> std::result::Result<Vec<EpisodicSimilarResult>, CommandError> {
     state
-        .with_memory(|mem| {
+        .run_memory(move |mem| {
             let results = mem
                 .episodic()
                 .recall_similar(&request.embedding, request.top_k)?;
@@ -199,6 +208,7 @@ pub async fn episodic_recall_similar<R: Runtime>(
                 })
                 .collect())
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -210,12 +220,13 @@ pub async fn episodic_older_than<R: Runtime>(
     request: EpisodicOlderThanRequest,
 ) -> std::result::Result<Vec<EpisodicResult>, CommandError> {
     state
-        .with_memory(|mem| {
+        .run_memory(move |mem| {
             let results = mem
                 .episodic()
                 .older_than(request.timestamp, request.limit)?;
             Ok(results.into_iter().map(to_episodic_result).collect())
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -227,10 +238,11 @@ pub async fn episodic_delete<R: Runtime>(
     request: EpisodicDeleteRequest,
 ) -> std::result::Result<(), CommandError> {
     state
-        .with_memory(|mem| {
+        .run_memory(move |mem| {
             mem.episodic().delete(request.event_id)?;
             Ok(())
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -241,7 +253,8 @@ pub async fn episodic_serialize<R: Runtime>(
     state: State<'_, VelesDbState>,
 ) -> std::result::Result<Vec<u8>, CommandError> {
     state
-        .with_memory(|mem| Ok(mem.episodic().serialize()?))
+        .run_memory(move |mem| Ok(mem.episodic().serialize()?))
+        .await
         .map_err(CommandError::from)
 }
 
@@ -253,10 +266,11 @@ pub async fn episodic_deserialize<R: Runtime>(
     data: Vec<u8>,
 ) -> std::result::Result<(), CommandError> {
     state
-        .with_memory(|mem| {
+        .run_memory(move |mem| {
             mem.episodic().deserialize(&data)?;
             Ok(())
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -272,7 +286,7 @@ pub async fn procedural_learn<R: Runtime>(
     request: ProceduralLearnRequest,
 ) -> std::result::Result<(), CommandError> {
     state
-        .with_memory(|mem| {
+        .run_memory(move |mem| {
             mem.procedural().learn(
                 request.procedure_id,
                 &request.name,
@@ -282,6 +296,7 @@ pub async fn procedural_learn<R: Runtime>(
             )?;
             Ok(())
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -293,7 +308,7 @@ pub async fn procedural_recall<R: Runtime>(
     request: ProceduralRecallRequest,
 ) -> std::result::Result<Vec<ProceduralMatchResult>, CommandError> {
     state
-        .with_memory(|mem| {
+        .run_memory(move |mem| {
             let results = mem.procedural().recall(
                 &request.embedding,
                 request.top_k,
@@ -301,6 +316,7 @@ pub async fn procedural_recall<R: Runtime>(
             )?;
             Ok(results.into_iter().map(to_match_result).collect())
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -312,11 +328,12 @@ pub async fn procedural_reinforce<R: Runtime>(
     request: ProceduralReinforceRequest,
 ) -> std::result::Result<(), CommandError> {
     state
-        .with_memory(|mem| {
+        .run_memory(move |mem| {
             mem.procedural()
                 .reinforce(request.procedure_id, request.success)?;
             Ok(())
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -327,10 +344,11 @@ pub async fn procedural_list_all<R: Runtime>(
     state: State<'_, VelesDbState>,
 ) -> std::result::Result<Vec<ProceduralMatchResult>, CommandError> {
     state
-        .with_memory(|mem| {
+        .run_memory(move |mem| {
             let results = mem.procedural().list_all()?;
             Ok(results.into_iter().map(to_match_result).collect())
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -342,10 +360,11 @@ pub async fn procedural_delete<R: Runtime>(
     request: ProceduralDeleteRequest,
 ) -> std::result::Result<(), CommandError> {
     state
-        .with_memory(|mem| {
+        .run_memory(move |mem| {
             mem.procedural().delete(request.procedure_id)?;
             Ok(())
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -356,7 +375,8 @@ pub async fn procedural_serialize<R: Runtime>(
     state: State<'_, VelesDbState>,
 ) -> std::result::Result<Vec<u8>, CommandError> {
     state
-        .with_memory(|mem| Ok(mem.procedural().serialize()?))
+        .run_memory(move |mem| Ok(mem.procedural().serialize()?))
+        .await
         .map_err(CommandError::from)
 }
 
@@ -368,10 +388,11 @@ pub async fn procedural_deserialize<R: Runtime>(
     data: Vec<u8>,
 ) -> std::result::Result<(), CommandError> {
     state
-        .with_memory(|mem| {
+        .run_memory(move |mem| {
             mem.procedural().deserialize(&data)?;
             Ok(())
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -390,7 +411,7 @@ pub async fn memory_set_ttl<R: Runtime>(
     request: MemoryTtlRequest,
 ) -> std::result::Result<(), CommandError> {
     state
-        .with_memory(|mem| {
+        .run_memory(move |mem| {
             match request.kind {
                 MemoryKindDto::Semantic => mem.set_semantic_ttl(request.id, request.ttl_seconds),
                 MemoryKindDto::Episodic => mem.set_episodic_ttl(request.id, request.ttl_seconds),
@@ -400,6 +421,7 @@ pub async fn memory_set_ttl<R: Runtime>(
             }
             Ok(())
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -410,7 +432,8 @@ pub async fn memory_auto_expire<R: Runtime>(
     state: State<'_, VelesDbState>,
 ) -> std::result::Result<ExpireResultDto, CommandError> {
     state
-        .with_memory(|mem| Ok(ExpireResultDto::from(mem.auto_expire()?)))
+        .run_memory(move |mem| Ok(ExpireResultDto::from(mem.auto_expire()?)))
+        .await
         .map_err(CommandError::from)
 }
 
@@ -422,7 +445,8 @@ pub async fn memory_evict_low_confidence<R: Runtime>(
     request: EvictLowConfidenceRequest,
 ) -> std::result::Result<usize, CommandError> {
     state
-        .with_memory(|mem| Ok(mem.evict_low_confidence_procedures(request.min_confidence)?))
+        .run_memory(move |mem| Ok(mem.evict_low_confidence_procedures(request.min_confidence)?))
+        .await
         .map_err(CommandError::from)
 }
 
@@ -437,7 +461,8 @@ pub async fn memory_snapshot<R: Runtime>(
     state: State<'_, VelesDbState>,
 ) -> std::result::Result<u64, CommandError> {
     state
-        .with_memory(|mem| Ok(mem.snapshot()?))
+        .run_memory(move |mem| Ok(mem.snapshot()?))
+        .await
         .map_err(CommandError::from)
 }
 
@@ -448,7 +473,8 @@ pub async fn memory_load_latest_snapshot<R: Runtime>(
     state: State<'_, VelesDbState>,
 ) -> std::result::Result<u64, CommandError> {
     state
-        .with_memory(|mem| Ok(mem.load_latest_snapshot()?))
+        .run_memory(move |mem| Ok(mem.load_latest_snapshot()?))
+        .await
         .map_err(CommandError::from)
 }
 
@@ -460,10 +486,11 @@ pub async fn memory_load_snapshot_version<R: Runtime>(
     request: LoadSnapshotVersionRequest,
 ) -> std::result::Result<(), CommandError> {
     state
-        .with_memory(|mem| {
+        .run_memory(move |mem| {
             mem.load_snapshot_version(request.version)?;
             Ok(())
         })
+        .await
         .map_err(CommandError::from)
 }
 
@@ -474,7 +501,8 @@ pub async fn memory_list_snapshot_versions<R: Runtime>(
     state: State<'_, VelesDbState>,
 ) -> std::result::Result<Vec<u64>, CommandError> {
     state
-        .with_memory(|mem| Ok(mem.list_snapshot_versions()?))
+        .run_memory(move |mem| Ok(mem.list_snapshot_versions()?))
+        .await
         .map_err(CommandError::from)
 }
 
@@ -489,9 +517,10 @@ pub async fn memory_query_semantic<R: Runtime>(
     state: State<'_, VelesDbState>,
     request: MemoryQueryRequest,
 ) -> std::result::Result<Vec<HybridResult>, CommandError> {
-    run_memory_query(&state, |mem| {
+    run_memory_query(&state, move |mem| {
         mem.query_semantic(&request.sql, &request.params)
     })
+    .await
 }
 
 /// Executes a `VelesQL` query against episodic memory.
@@ -501,9 +530,10 @@ pub async fn memory_query_episodic<R: Runtime>(
     state: State<'_, VelesDbState>,
     request: MemoryQueryRequest,
 ) -> std::result::Result<Vec<HybridResult>, CommandError> {
-    run_memory_query(&state, |mem| {
+    run_memory_query(&state, move |mem| {
         mem.query_episodic(&request.sql, &request.params)
     })
+    .await
 }
 
 /// Executes a `VelesQL` query against procedural memory.
@@ -513,34 +543,37 @@ pub async fn memory_query_procedural<R: Runtime>(
     state: State<'_, VelesDbState>,
     request: MemoryQueryRequest,
 ) -> std::result::Result<Vec<HybridResult>, CommandError> {
-    run_memory_query(&state, |mem| {
+    run_memory_query(&state, move |mem| {
         mem.query_procedural(&request.sql, &request.params)
     })
+    .await
 }
 
 /// Runs a memory `VelesQL` query and maps the rows into `HybridResult` DTOs.
 ///
 /// RF-DEDUP: shared by the semantic / episodic / procedural bridge commands.
-fn run_memory_query<F>(
+async fn run_memory_query<F>(
     state: &VelesDbState,
     query: F,
 ) -> std::result::Result<Vec<HybridResult>, CommandError>
 where
     F: FnOnce(
-        &velesdb_core::agent::AgentMemory,
-    ) -> std::result::Result<
-        Vec<velesdb_core::SearchResult>,
-        velesdb_core::agent::AgentMemoryError,
-    >,
+            &velesdb_core::agent::AgentMemory,
+        ) -> std::result::Result<
+            Vec<velesdb_core::SearchResult>,
+            velesdb_core::agent::AgentMemoryError,
+        > + Send
+        + 'static,
 {
     state
-        .with_memory(|mem| {
+        .run_memory(move |mem| {
             let rows = query(mem).map_err(Error::from)?;
             Ok(rows
                 .iter()
                 .map(crate::commands_query::search_result_to_hybrid)
                 .collect())
         })
+        .await
         .map_err(CommandError::from)
 }
 

@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash /home/you/.codex/hooks/velesdb-memory/session-start.sh",
+            "command": "bash '/home/you/.codex/hooks/velesdb-memory/session-start.sh'",
             "timeout": 10,
             "statusMessage": "velesdb-memory: resume working context"
           }
@@ -17,9 +17,35 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash /home/you/.codex/hooks/velesdb-memory/stop.sh",
+            "command": "bash '/home/you/.codex/hooks/velesdb-memory/stop.sh'",
             "timeout": 10,
             "statusMessage": "velesdb-memory: save working context"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "^(apply_patch|Edit|Write)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash '/home/you/.codex/hooks/velesdb-memory/pre-tool-use.sh'",
+            "timeout": 10,
+            "statusMessage": "velesdb-memory: require recall before edit"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^mcp__velesdb[-_]memory__(recall|recall_fused|recall_where|compile_context|entity|why)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash '/home/you/.codex/hooks/velesdb-memory/post-tool-use.sh'",
+            "timeout": 10,
+            "statusMessage": "velesdb-memory: record successful recall"
           }
         ]
       }

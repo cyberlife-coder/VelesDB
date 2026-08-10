@@ -31,10 +31,31 @@ class MockWasmMemoryService {
     now: '2026-01-03',
   }));
   relate = vi.fn(() => '5');
+  unrelate = vi.fn(() => ({ found: true, removed: 1 }));
+  // The camelCase wire shape the wasm binding actually serves: `relationsIn`
+  // beside `targetId`, never a snake_case key next to a camelCase one. A mock
+  // spelling it `relations_in` would keep this suite green over a binding it
+  // no longer describes.
+  entity = vi.fn(() => ({
+    found: true,
+    id: '12297829382473034410',
+    name: 'theo durand',
+    attributes: { age: 15 },
+    relations: [],
+    relationsIn: [
+      { predicate: 'sister of', targetId: '43', target: 'Entity: camille durand' },
+    ],
+    // Asymmetric on purpose: a mock repeating one value for both would keep
+    // a SDK that mirrored the two flags green.
+    relationsTruncated: true,
+    relationsInTruncated: false,
+  }));
+  rememberExtracted = vi.fn(() => ({ ids: ['1'], skippedOverCap: 0 }));
   forget = vi.fn(() => true);
   why = vi.fn(() => ({
     nodes: [{ id: '1', content: 'we chose parking_lot', hop: 0 }],
     edges: [],
+    truncated: false,
   }));
   compileContext = vi.fn(() => ({
     content: 'compiled',
@@ -98,10 +119,17 @@ class MockWasmMemoryService {
     content: 'the original fragment text',
   }));
   saveWorkingContext = vi.fn(() => '42');
+  // The mock returns the THREE-field envelope the wasm binding now serves,
+  // not the bare working context — a mock that keeps the old shape would let
+  // this suite stay green over a binding it no longer describes.
   loadWorkingContext = vi.fn(() => ({
-    goal: 'ship the canary fix',
-    decisions: [{ fragment_id: '18446744073709551615', rule_id: 'media.atomic' }],
-    pending_actions: ['roll back if error rate spikes'],
+    found: true,
+    working: {
+      goal: 'ship the canary fix',
+      decisions: [{ fragment_id: '18446744073709551615', rule_id: 'media.atomic' }],
+      pending_actions: ['roll back if error rate spikes'],
+    },
+    other_sessions: ['session-b'],
   }));
   listWorkingContexts = vi.fn(() => ({
     sessions: [{ session: 'session-a', saved_at: 1731000000 }],
@@ -183,11 +211,11 @@ describe('MemoryService', () => {
         const stale = new MemoryService();
         const rejection = stale.init();
         await expect(rejection).rejects.toBeInstanceOf(ConnectionError);
-        await expect(rejection).rejects.toThrow(/>= 3\.8\.0/);
+        await expect(rejection).rejects.toThrow(/>= 4\.2\.0/);
         // A retry after the failed init runs a fresh load (the memoized
         // in-flight promise is cleared on settle) and must fail the same
         // way — never spuriously resolve with a null inner store.
-        await expect(stale.init()).rejects.toThrow(/>= 3\.8\.0/);
+        await expect(stale.init()).rejects.toThrow(/>= 4\.2\.0/);
         expect(stale.isInitialized()).toBe(false);
       } finally {
         mockWasmModule.MemoryService = saved;
@@ -279,6 +307,57 @@ describe('MemoryService', () => {
       await expect(memory.forget('1')).resolves.toBe(true);
       lastMockInstance!.forget.mockReturnValueOnce(false);
       await expect(memory.forget('999')).resolves.toBe(false);
+    });
+
+    // The three below were absent from this SDK for its whole life while the
+    // wasm binding exposed them (issue #1721). Nothing caught it because the
+    // parity guard's declared perimeter held three Rust crates and no
+    // TypeScript surface at all.
+    it('unrelate() returns what was actually removed', async () => {
+      await expect(memory.unrelate('1', '2', 'decided_in')).resolves.toEqual({
+        found: true,
+        removed: 1,
+      });
+      expect(lastMockInstance!.unrelate).toHaveBeenCalledWith('1', '2', 'decided_in');
+    });
+
+    it('entity() relays BOTH edge directions under their camelCase names', async () => {
+      const profile = await memory.entity('Theo Durand');
+      expect(profile.found).toBe(true);
+      // The assertion that matters: an edge LEAVING camille is invisible from
+      // theo's outgoing list and reachable only here. Reading `relations`
+      // alone is the exact question this field exists to answer.
+      expect(profile.relationsIn).toEqual([
+        { predicate: 'sister of', targetId: '43', target: 'Entity: camille durand' },
+      ]);
+      expect(profile.relations).toEqual([]);
+      // A budget cut must reach the SDK caller: an empty `relations` that was
+      // TRUNCATED means "more exist", and reads identically to a genuinely
+      // empty one without this flag.
+      expect(profile.relationsTruncated).toBe(true);
+      expect(profile.relationsInTruncated).toBe(false);
+      expect(lastMockInstance!.entity).toHaveBeenCalledWith('Theo Durand');
+    });
+
+    it('rememberExtracted() returns the envelope, not a bare id array', async () => {
+      await expect(memory.rememberExtracted('edge: Camille | sister of | Theo')).resolves.toEqual({
+        ids: ['1'],
+        skippedOverCap: 0,
+      });
+      // `extractor` reaches the binding as `undefined`, which the binding
+      // reads as its documented default — the SDK does not second-guess it.
+      expect(lastMockInstance!.rememberExtracted).toHaveBeenCalledWith(
+        'edge: Camille | sister of | Theo',
+        undefined,
+        undefined
+      );
+    });
+
+    it('a wasm build too old to carry a method is named, not left to TypeError', async () => {
+      // The capability guard's whole reason for existing: without it this
+      // surfaces as `x is not a function` from inside wrapWasmCall.
+      delete (lastMockInstance as unknown as Record<string, unknown>).entity;
+      await expect(memory.entity('Theo Durand')).rejects.toThrow(/does not implement entity\(\)/);
     });
 
     it('compileContext() delegates the request and returns the wire shape', async () => {
@@ -467,18 +546,65 @@ describe('MemoryService', () => {
       expect(id).toBe('42');
     });
 
-    it('loadWorkingContext() returns the mocked working context, decimal ids intact', async () => {
+    it('loadWorkingContext() returns the envelope, decimal ids intact under working', async () => {
       const loaded = await memory.loadWorkingContext('veles', 'session-a');
       expect(lastMockInstance!.loadWorkingContext).toHaveBeenCalledWith('veles', 'session-a');
-      expect(loaded?.goal).toBe('ship the canary fix');
-      const decisions = loaded?.decisions as Array<{ fragment_id: string }>;
+      expect(loaded.found).toBe(true);
+      expect(loaded.working?.goal).toBe('ship the canary fix');
+      const decisions = loaded.working?.decisions as Array<{ fragment_id: string }>;
       expect(decisions[0].fragment_id).toBe('18446744073709551615');
     });
 
-    it('loadWorkingContext() returns null when nothing was saved', async () => {
-      lastMockInstance!.loadWorkingContext.mockReturnValueOnce(null);
+    it('loadWorkingContext() surfaces other_sessions on a hit, so a typo is detectable', async () => {
+      // Populated on a HIT too: a typo landing on another REAL session
+      // returns found:true, the case a caller can least detect on its own.
+      const loaded = await memory.loadWorkingContext('veles', 'session-a');
+      expect(loaded.other_sessions).toEqual(['session-b']);
+    });
+
+    it('loadWorkingContext() reports found:false with a null working when nothing was saved', async () => {
+      lastMockInstance!.loadWorkingContext.mockReturnValueOnce({
+        found: false,
+        working: null,
+        other_sessions: ['task-1234'],
+      });
       const loaded = await memory.loadWorkingContext('veles', 'never-saved-session');
-      expect(loaded).toBeNull();
+      expect(loaded.found).toBe(false);
+      expect(loaded.working).toBeNull();
+      // A miss and a TYPO are indistinguishable without this — the whole
+      // reason the bare `WorkingContext | null` return was replaced.
+      expect(loaded.other_sessions).toEqual(['task-1234']);
+    });
+
+    // The SDK's dependency floor on `@wiscale/velesdb-wasm` admits published
+    // builds that predate the envelope. On those, `loadWorkingContext` EXISTS
+    // — so `ensureCapability`, which only checks presence, passes — and hands
+    // back the bare working context. A blind `as LoadedWorkingContext` cast
+    // would then give the caller `found: undefined`, falsy, and the agent
+    // starts over on top of work that was sitting right there: precisely the
+    // silent loss this envelope exists to prevent, reintroduced by a version
+    // skew rather than by a missing field. Presence is not shape.
+    it('loadWorkingContext() rejects when the resolved wasm build returns the BARE working context', async () => {
+      const bare = { goal: 'ship the canary fix', decisions: [] };
+      lastMockInstance!.loadWorkingContext.mockReturnValueOnce(bare);
+      await expect(memory.loadWorkingContext('veles', 'session-a')).rejects.toThrow(
+        ConnectionError
+      );
+      // The message must name the CAUSE — a wasm build older than this SDK —
+      // because the caller's only remedy is to upgrade that dependency.
+      lastMockInstance!.loadWorkingContext.mockReturnValueOnce(bare);
+      await expect(memory.loadWorkingContext('veles', 'session-a')).rejects.toThrow(
+        /predates the .*envelope/
+      );
+    });
+
+    it('loadWorkingContext() rejects when the resolved wasm build returns bare null', async () => {
+      // The pre-envelope MISS: `null`, which a cast turns into a crash on the
+      // caller's first property read instead of an actionable error.
+      lastMockInstance!.loadWorkingContext.mockReturnValueOnce(null);
+      await expect(memory.loadWorkingContext('veles', 'never-saved-session')).rejects.toThrow(
+        ConnectionError
+      );
     });
 
     it('listWorkingContexts() delegates the project and returns the sessions', async () => {

@@ -6,6 +6,8 @@
 //! a deterministic, network-free `Extractor`: feed it a paragraph, and `why()`
 //! reaches a sibling fact through a shared topic with no manual `relate()`.
 
+#![cfg(feature = "persistence")]
+
 use serde_json::Value;
 use tempfile::TempDir;
 use velesdb_memory::{
@@ -291,5 +293,139 @@ fn an_oversized_fact_is_skipped_not_fatal() {
     assert_eq!(
         outcome.skipped_over_cap, 1,
         "the caller is told exactly how many facts were dropped, and why"
+    );
+}
+
+// --- The always-available backend: `OutlineExtractor` -------------------------
+//
+// These prove the two contracts that had NO offline proof before it existed,
+// because reaching them meant reaching a generative model over the network:
+// the HIT branch of `entity_profile.relations_in`, and a non-zero
+// `skipped_over_cap`. Both were declared KNOWN_GAP in the binding parity guard
+// on that basis (issues #1690, #1692).
+
+/// An entity hub is only ever born of extraction, so before this backend the
+/// INCOMING half of a profile was unreachable without a live model — which is
+/// precisely why every binding could drop `relations_in` unnoticed.
+#[test]
+fn an_outlined_edge_reaches_the_far_end_as_an_incoming_relation() {
+    let (_dir, svc) = service();
+    svc.remember_extracted(
+        "fact: Camille works at Wiscale. | camille, wiscale\n\
+         edge: Camille | works at | Wiscale",
+        &velesdb_memory::OutlineExtractor,
+        None,
+    )
+    .expect("an outlined passage extracts without a model");
+
+    let far_end = svc
+        .entity_profile("Wiscale")
+        .expect("read the profile")
+        .expect("the outlined object is a known entity");
+    let names: Vec<&str> = far_end
+        .relations_in
+        .iter()
+        .map(|relation| relation.predicate.as_str())
+        .collect();
+    assert_eq!(
+        names,
+        vec!["works at"],
+        "the edge LEAVES camille, so it can only be seen from wiscale by looking at what \
+         points AT it — the whole point of `relations_in`"
+    );
+    assert!(
+        far_end.relations.is_empty(),
+        "and it must NOT show up as outgoing: that is the confusion the field exists to end"
+    );
+}
+
+/// The mirror of the assertion above, from the other end. Without it, a
+/// binding that relayed `relations_in` by copying `relations` would pass.
+#[test]
+fn the_outlined_subject_keeps_the_edge_as_outgoing() {
+    let (_dir, svc) = service();
+    svc.remember_extracted(
+        "edge: Camille | works at | Wiscale",
+        &velesdb_memory::OutlineExtractor,
+        None,
+    )
+    .expect("extract");
+
+    let subject = svc
+        .entity_profile("camille")
+        .expect("read the profile")
+        .expect("the outlined subject is a known entity");
+    assert_eq!(subject.relations.len(), 1, "outgoing, from this end");
+    assert!(
+        subject.relations_in.is_empty(),
+        "nothing points at camille here"
+    );
+}
+
+/// The oversized fact comes from the INPUT, not from a fabricated backend:
+/// that is what makes this a proof about `remember_extracted` rather than
+/// about a test double.
+#[test]
+fn an_outlined_fact_past_the_cap_is_counted_not_fatal() {
+    let (_dir, svc) = service();
+    let outcome = svc
+        .remember_extracted(
+            &format!(
+                "fact: Camille ships the parser. | camille\n\
+                 fact: {}\n\
+                 edge: Camille | works at | Wiscale",
+                "x".repeat(4096)
+            ),
+            &velesdb_memory::OutlineExtractor,
+            None,
+        )
+        .expect("one oversized fact must not fail the whole call");
+    assert_eq!(outcome.ids.len(), 1, "the sound fact is stored");
+    assert_eq!(
+        outcome.skipped_over_cap, 1,
+        "and the caller is told the other one was dropped for its size"
+    );
+}
+
+/// A directive the backend cannot read is an error, never a silently dropped
+/// line: a graph that quietly loses half of what it was handed is worse than
+/// one that refuses.
+#[test]
+fn a_malformed_directive_refuses_instead_of_dropping_the_line() {
+    let (_dir, svc) = service();
+    let err = svc
+        .remember_extracted(
+            "edge: Camille | works at",
+            &velesdb_memory::OutlineExtractor,
+            None,
+        )
+        .expect_err("a two-field `edge:` is not an edge");
+    assert!(
+        format!("{err}").contains("3 `|`-separated fields, 2 given"),
+        "the refusal names what was wrong with the line, got: {err}"
+    );
+}
+
+/// Attributes keep their JSON type on the way in, because `recall_where`
+/// comparisons are type-strict — an age arriving as `"15"` would silently
+/// never match a numeric filter.
+#[test]
+fn an_outlined_attribute_keeps_its_json_type() {
+    let (_dir, svc) = service();
+    svc.remember_extracted(
+        "attr: Theo Durand | age | 15",
+        &velesdb_memory::OutlineExtractor,
+        None,
+    )
+    .expect("extract");
+
+    let profile = svc
+        .entity_profile("Theo Durand")
+        .expect("read the profile")
+        .expect("the outlined entity is known");
+    assert_eq!(
+        profile.attributes.get("age"),
+        Some(&Value::from(15)),
+        "a number stays a number"
     );
 }

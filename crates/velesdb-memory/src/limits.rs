@@ -57,8 +57,78 @@ pub fn metadata_bytes(meta: &Metadata) -> usize {
 /// cap `k`, so the adapters do).
 pub const MAX_RECALL_LIMIT: usize = 1_000;
 
-/// Cap on `why` hop depth — prevents exponential graph fan-out.
+/// Cap on `why`/`recall_fused` hop depth. Bounds DEPTH only: an entity hub
+/// reached at any hop is, by construction, a super-node whose degree scales
+/// with the whole store, so this alone does not bound how much a walk
+/// returns — see [`MAX_WHY_NODE_DEGREE`] and [`MAX_WHY_NODES`] for the width
+/// budget (issue #1743: a hub dumped its entire neighborhood, full fact
+/// content included, into a single response).
 pub const MAX_WHY_HOPS: usize = 10;
+
+/// Maximum outgoing edges a `why`/`recall_fused` graph walk follows from any
+/// ONE node. Without this, expanding a single entity hub pushes one edge
+/// (and, for each unseen target, a full-content node) per fact that ever
+/// mentioned it — the walk's cost is then `O(store size)` at a single hop,
+/// no matter how shallow [`MAX_WHY_HOPS`] is set.
+pub const MAX_WHY_NODE_DEGREE: usize = 64;
+
+/// Maximum number of nodes one `why`/`recall_fused` graph walk may collect,
+/// seed included. [`MAX_WHY_NODE_DEGREE`] bounds any single node's
+/// contribution; this bounds the walk's total size across every node it
+/// expands, so many hubs each under the per-node cap still cannot together
+/// grow a response past a fixed ceiling.
+///
+/// An exact ceiling, enforced at the push site: the expansion that reaches it
+/// stops mid-node. Checking only between expansions read as the same
+/// guarantee but let the crossing expansion finish its whole degree first —
+/// a measured 522 nodes of a documented 500.
+pub const MAX_WHY_NODES: usize = 500;
+
+/// Maximum edges one `why`/`recall_fused` graph walk may record.
+///
+/// [`MAX_WHY_NODES`] alone does not bound a response: every edge FOLLOWED is
+/// recorded even when its target is already visited, so a dense subgraph far
+/// under the node budget can still return on the order of
+/// `nodes x MAX_WHY_NODE_DEGREE` edges — tens of thousands at the caps, a
+/// multi-megabyte response, which is the other half of what issue #1743
+/// asked to bound ("nombre maximal de noeuds et d'aretes retournes"). Four
+/// edges per node of budget covers a spanning forest (which needs fewer than
+/// one edge per node) plus three cross-links per node on top — a fixed
+/// ceiling on the response, not a tuning knob.
+pub const MAX_WHY_EDGES: usize = MAX_WHY_NODES * 4;
+
+/// Bound on the background autograph queue (#1846): how many just-stored
+/// facts may wait for their graph enrichment before new enrichments are
+/// DROPPED (counted by `MemoryService::autograph_dropped`, logged, never
+/// blocking the write path). 64 outstanding generations is already minutes
+/// of extractor work — a burst deeper than this is the extractor falling
+/// behind for good, and stalling `remember` behind it is exactly what
+/// #1846 removed. The fact itself is always stored; a dropped enrichment
+/// is rebuilt by re-remembering.
+pub const MAX_AUTOGRAPH_QUEUE: usize = 64;
+
+/// Maximum typed edges an `entity` profile resolves and returns PER
+/// DIRECTION (`relations` and `relations_in` each) — the same width grammar
+/// as [`MAX_WHY_NODE_DEGREE`], on the surface #1743 never covered: resolving
+/// an entity followed every non-scaffolding edge of its hub, full target
+/// content included, so `entity("X")` on a name mentioned by thousands of
+/// facts was a constructible multi-megabyte response (#1820). Truncation is
+/// REPORTED (`relations_truncated`/`relations_in_truncated` on the profile),
+/// never silent: a profile with exactly this many edges is otherwise
+/// indistinguishable from a cut one.
+pub const MAX_ENTITY_RELATIONS: usize = 64;
+
+/// Maximum RAW edges an `entity` profile may scan per direction while
+/// looking for its [`MAX_ENTITY_RELATIONS`] typed ones. A hub's edges are
+/// mostly bipartite scaffolding (`mentions`/`about`, one per mentioning
+/// fact), filtered out AFTER the store hands them over — so the resolution
+/// cap alone would leave the scan O(degree), and a scan capped at the
+/// resolution cap would return scaffolding-only windows on any busy hub.
+/// Two named numbers, one per concern: this one bounds the transient scan
+/// (the #1743 cost class), the other bounds the resolved response. A typed
+/// edge sitting past this window is not found — that blindness is declared
+/// by the same truncation flags, not masked.
+pub const MAX_ENTITY_SCAN_EDGES: usize = 4_096;
 
 /// Maximum accepted size of a single context-compiler fragment (1 MiB, the
 /// same ceiling as [`MAX_FACT_BYTES`]) — prevents a single fragment from

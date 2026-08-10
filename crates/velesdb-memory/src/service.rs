@@ -59,7 +59,12 @@ mod memory_bridge;
 /// and rejected from caller-supplied metadata/filters (see [`is_reserved_key`]).
 /// Hubs are internal graph scaffolding — they connect facts that share a topic —
 /// so they are excluded from unfiltered recall and from `why` seeds.
-const HUB_FIELD: &str = "_veles_hub";
+///
+/// Re-exported from [`crate::storage`] rather than spelled out again here: it
+/// is one of the five markers [`crate::storage::INTERNAL_MARKER_FIELDS`]
+/// excludes from `recall_where`, and a second literal could drift from that
+/// list without any test noticing.
+use crate::storage::HUB_FIELD;
 /// Salt mixed into a hub's stable id so the hub id space is disjoint from
 /// natural fact ids: a caller fact whose text happens to equal a hub's display
 /// content (`Entity: rust`) can never collide with, or overwrite, the hub.
@@ -91,12 +96,79 @@ pub struct MemoryService<E: Embedder, S: MemoryStore = NativeStore> {
     store: S,
     embedder: E,
     autograph: Option<crate::extract::DynExtractor>,
+    autograph_queue: AutographQueue,
 }
 #[cfg(not(feature = "persistence"))]
 pub struct MemoryService<E: Embedder, S: MemoryStore> {
     store: S,
     embedder: E,
     autograph: Option<crate::extract::DynExtractor>,
+    autograph_queue: AutographQueue,
+}
+
+/// One deferred autograph: the stored fact a background worker will read for
+/// entities, edges and attributes (#1846).
+// The fields are read only on the worker path, which `spawn_autograph_worker`
+// cfg-gates off wasm32 (no threads there) — without this the wasm check dies
+// on dead_code under -D warnings.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+struct AutographJob {
+    fact_id: u64,
+    fact: String,
+}
+
+/// The decoupling state of [`MemoryService::autograph`] (#1846).
+///
+/// Empty by default: every construction path starts with autograph running
+/// INLINE, exactly as before — the WASM binding has no threads, library
+/// consumers keep the synchronous contract, and every existing test stays
+/// meaningful. [`MemoryService::spawn_autograph_worker`] fills `tx`, after
+/// which `remember` only ENQUEUES: the caller stops paying the generation on
+/// its response path — 46 s measured for a 12-word fact on the production
+/// daemon, versus a 0.12 s embedding — and the worker wires the graph behind.
+///
+/// `dropped` counts enrichments refused by a FULL queue or skipped by a
+/// closing worker. Non-negotiably visible: a burst that outruns the
+/// extractor loses graph structure, and a loss nobody can see is the exact
+/// defect class #1820 closed for responses.
+///
+/// `closing` is the shutdown latch: the handle's drop raises it BEFORE
+/// removing the sender, so the worker finishes the job in flight and SKIPS
+/// what is still queued (counted, one aggregated warning) instead of
+/// draining a queue of generations — 64 × a 46 s model would hold the
+/// daemon's exit for tens of minutes. Re-armed by each spawn.
+#[derive(Default)]
+// `closing` is read only by the worker/drop path, absent on wasm32 — same
+// rationale as `AutographJob` above.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+struct AutographQueue {
+    tx: parking_lot::Mutex<Option<std::sync::mpsc::SyncSender<AutographJob>>>,
+    dropped: std::sync::atomic::AtomicU64,
+    closing: std::sync::atomic::AtomicBool,
+}
+
+/// Join guard for the background autograph worker.
+///
+/// Dropping it raises the closing latch, takes the sender out of the
+/// service, and JOINS the worker: the job in flight completes, the
+/// still-queued ones are SKIPPED — counted in the drop counter, one
+/// aggregated warning — and only then does the drop return. Tests get
+/// determinism; the daemon's shutdown waits for at most ONE generation,
+/// never a queue of them.
+pub struct AutographWorkerHandle {
+    close_queue: Option<Box<dyn FnOnce() + Send + Sync>>,
+    join: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for AutographWorkerHandle {
+    fn drop(&mut self) {
+        if let Some(close) = self.close_queue.take() {
+            close();
+        }
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+    }
 }
 
 #[cfg(feature = "persistence")]
@@ -113,6 +185,7 @@ impl<E: Embedder> MemoryService<E, NativeStore> {
             store,
             embedder,
             autograph: None,
+            autograph_queue: AutographQueue::default(),
         })
     }
 }
@@ -126,6 +199,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             store,
             embedder,
             autograph: None,
+            autograph_queue: AutographQueue::default(),
         }
     }
 
@@ -134,10 +208,16 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// and wires them — so the knowledge graph builds itself from ordinary
     /// `remember` calls, with no separate [`Self::remember_extracted`].
     ///
-    /// Opt-in, and off unless this is called. It costs one generation per
-    /// `remember`, which is a real latency and availability change: a memory
-    /// write that silently depends on a local model being up is not a default
-    /// anyone should inherit.
+    /// Opt-in, and off unless this is called. It runs in one of two modes:
+    /// **inline** by default — the enrichment costs one generation per
+    /// `remember`, on the caller's write path, which is a real latency and
+    /// availability change: a memory write that silently depends on a local
+    /// model being up is not a default anyone should inherit — or
+    /// **decoupled** when [`Self::spawn_autograph_worker`] is active, where
+    /// `remember` returns as soon as the fact is durably stored and the
+    /// derived edges lag by one generation (an `entity`/`why` read issued
+    /// immediately after may not see them yet; the fact itself is always
+    /// immediately readable).
     ///
     /// The caller's fact is stored **verbatim and first**. Autograph only
     /// *adds* structure around it; it never rewrites or replaces what the
@@ -331,12 +411,234 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
 
     /// Run [`Self::autograph`] only when this write path asked for it — the
     /// branch lives here rather than in the write path itself.
+    ///
+    /// With a worker spawned ([`Self::spawn_autograph_worker`]), the job is
+    /// ENQUEUED and this returns immediately: the enrichment leaves the
+    /// caller's response path (#1846). A FULL queue drops the job, counted
+    /// in [`Self::autograph_dropped`] — losing structure is recoverable by
+    /// re-remembering, stalling every write behind a slow model is not. A
+    /// disconnected queue (worker gone) falls back inline, so the graph
+    /// keeps building even if the worker died.
     fn autograph_if(&self, run: bool, fact_id: u64, fact: &str) {
-        if run {
-            self.autograph(fact_id, fact);
+        if !run {
+            return;
+        }
+        let guard = self.autograph_queue.tx.lock();
+        if let Some(tx) = guard.as_ref() {
+            use std::sync::mpsc::TrySendError;
+            match tx.try_send(AutographJob {
+                fact_id,
+                fact: fact.to_owned(),
+            }) {
+                Ok(()) => return,
+                Err(TrySendError::Full(_)) => {
+                    self.autograph_queue
+                        .dropped
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    #[cfg(feature = "mcp")]
+                    tracing::warn!(
+                        fact_id,
+                        "autograph queue full: enrichment dropped — the fact is \
+                         stored, its graph structure is not; re-remembering \
+                         rebuilds it"
+                    );
+                    return;
+                }
+                Err(TrySendError::Disconnected(_)) => {
+                    // fall through to the inline path below
+                }
+            }
+        }
+        drop(guard);
+        self.autograph(fact_id, fact);
+    }
+
+    /// How many autograph enrichments a FULL queue refused since this
+    /// service was built (#1846). The facts themselves were stored; only
+    /// their graph wiring was skipped, and re-remembering a fact rebuilds it.
+    #[must_use]
+    pub fn autograph_dropped(&self) -> u64 {
+        self.autograph_queue
+            .dropped
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Whether the background autograph queue is OPEN — a worker is spawned
+    /// and `remember` enqueues instead of running the enrichment inline.
+    /// Turns false the moment a worker handle's drop closes the queue.
+    #[must_use]
+    pub fn autograph_queue_open(&self) -> bool {
+        self.autograph_queue.tx.lock().is_some()
+    }
+
+    /// Whether an autograph extractor is configured at all.
+    #[must_use]
+    pub fn has_autograph(&self) -> bool {
+        self.autograph.is_some()
+    }
+
+    /// The total number of live tracked facts, internal entity hubs included
+    /// — the store's [`MemoryStore::count`], relayed for `memory_status`.
+    #[must_use]
+    pub fn fact_count(&self) -> usize {
+        self.store.count()
+    }
+
+    /// The total number of graph edges, when the backend can say —
+    /// [`MemoryStore::edge_count`], relayed for `memory_status`. `None`
+    /// means "cannot say", never "zero": the two answers tell a caller
+    /// different things about `why()`.
+    #[must_use]
+    pub fn edge_count(&self) -> Option<usize> {
+        self.store.edge_count()
+    }
+
+    /// One page of the store's facts, for auditing — "what does my agent
+    /// know?" — which `recall` structurally cannot answer: it ranks by
+    /// resemblance to a query, and what resembles nothing you thought to
+    /// ask stays invisible.
+    ///
+    /// The store hands back raw pages ([`MemoryStore::list`]); the
+    /// visibility policy is applied here, once, for every backend: internal
+    /// entity hubs are skipped unless `include_internal` (they are the
+    /// graph's scaffolding, not the user's facts), reserved `_veles_*` keys
+    /// are stripped exactly as `recall` strips them (the auto-stamped date
+    /// survives — an audit legitimately asks WHEN), and `filter` keeps only
+    /// facts whose metadata equals every given key. A filtered page may
+    /// come back sparse — the cursor still advances over what was skipped,
+    /// so the WALK stays exhaustive.
+    ///
+    /// # Errors
+    /// Returns [`MemoryError`] if the backend cannot enumerate or the walk
+    /// fails.
+    pub fn list(
+        &self,
+        cursor: Option<u64>,
+        limit: usize,
+        filter: Option<&Metadata>,
+        include_internal: bool,
+    ) -> Result<(Vec<crate::model::ListedMemory>, Option<u64>), MemoryError> {
+        let limit = crate::limits::clamp_recall_limit(limit.max(1));
+        let (page, next) = self.store.list(cursor, limit)?;
+        let memories = page
+            .into_iter()
+            .filter_map(|fact| audited(fact, filter, include_internal))
+            .collect();
+        Ok((memories, next))
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<E, S> MemoryService<E, S>
+where
+    E: Embedder + Send + Sync + 'static,
+    S: MemoryStore + Send + Sync + 'static,
+{
+    /// The autograph worker's whole life, run on the spawned thread: ends
+    /// when every sender is gone — i.e. when the handle's drop takes the
+    /// sender back out of the service. Once the closing latch is up,
+    /// still-queued jobs are SKIPPED: the exit pays for the job in flight,
+    /// never for the queue.
+    fn autograph_worker_loop(&self, rx: &std::sync::mpsc::Receiver<AutographJob>) {
+        let mut skipped_on_close: u64 = 0;
+        for job in rx {
+            if self
+                .autograph_queue
+                .closing
+                .load(std::sync::atomic::Ordering::Acquire)
+            {
+                skipped_on_close += 1;
+                continue;
+            }
+            self.autograph(job.fact_id, &job.fact);
+        }
+        if skipped_on_close > 0 {
+            self.autograph_queue
+                .dropped
+                .fetch_add(skipped_on_close, std::sync::atomic::Ordering::Relaxed);
+            // ONE aggregated line, not one per job (#1834's rule).
+            #[cfg(feature = "mcp")]
+            tracing::warn!(
+                skipped = skipped_on_close,
+                "autograph worker closing: queued enrichments skipped — \
+                 the facts are stored, their graph structure is not; \
+                 re-remembering rebuilds it"
+            );
         }
     }
 
+    /// Move autograph off the response path: spawn ONE background worker
+    /// consuming a bounded queue, so `remember` returns as soon as the fact
+    /// is durably stored and the graph is wired behind (#1846).
+    ///
+    /// Measured motivation: with the production extractor, an inline
+    /// autograph held every `remember` for 46-52 s while the embedding cost
+    /// 0.12 s — and the MCP client timed out mid-generation, making a stored
+    /// fact indistinguishable from a lost one (#1839).
+    ///
+    /// The read-after-write contract changes, deliberately and visibly: an
+    /// `entity()` issued right after `remember` may not see the new edges
+    /// yet. The fact itself is always readable immediately — only the
+    /// DERIVED structure lags by one generation.
+    ///
+    /// One worker on purpose: the store is single-writer, and a second
+    /// in-flight generation would only add contention, not throughput.
+    /// `capacity` bounds the queue ([`crate::limits::MAX_AUTOGRAPH_QUEUE`]
+    /// is the daemon's choice); a full queue DROPS new enrichments, counted
+    /// by [`Self::autograph_dropped`] and logged — never silent, never
+    /// blocking the write path.
+    ///
+    /// # Errors
+    /// Returns [`MemoryError::Extract`] when a worker is already spawned for
+    /// this service — two workers would race the single-writer store for no
+    /// gain — or when the OS refuses the thread.
+    pub fn spawn_autograph_worker(
+        self: &std::sync::Arc<Self>,
+        capacity: usize,
+    ) -> Result<AutographWorkerHandle, MemoryError> {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<AutographJob>(capacity);
+        {
+            let mut guard = self.autograph_queue.tx.lock();
+            if guard.is_some() {
+                return Err(MemoryError::Extract(crate::extract::ExtractError::Backend(
+                    "autograph worker already spawned for this service".to_owned(),
+                )));
+            }
+            *guard = Some(tx);
+            // Re-arm the shutdown latch under the same lock that installs
+            // the sender: a previous worker's close must not poison this one
+            // into skipping every job it will ever receive.
+            self.autograph_queue
+                .closing
+                .store(false, std::sync::atomic::Ordering::Release);
+        }
+        let worker_service = std::sync::Arc::clone(self);
+        let join = std::thread::Builder::new()
+            .name("velesdb-autograph".to_owned())
+            .spawn(move || worker_service.autograph_worker_loop(&rx))
+            .map_err(|err| {
+                MemoryError::Extract(crate::extract::ExtractError::Backend(format!(
+                    "spawn autograph worker: {err}"
+                )))
+            })?;
+        let closer_service = std::sync::Arc::clone(self);
+        Ok(AutographWorkerHandle {
+            close_queue: Some(Box::new(move || {
+                // Latch FIRST, sender out second: the worker observes the
+                // latch no later than the queue's end, so it cannot start
+                // draining jobs the shutdown meant to skip.
+                closer_service
+                    .autograph_queue
+                    .closing
+                    .store(true, std::sync::atomic::Ordering::Release);
+                closer_service.autograph_queue.tx.lock().take();
+            })),
+            join: Some(join),
+        })
+    }
+}
+
+impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// Autograph one just-stored fact: read the entities, entity→entity edges
     /// and attributes it states, and wire them around it.
     ///
@@ -359,30 +661,48 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         let Ok(mut extraction) = extractor.extract_graph(fact) else {
             return;
         };
+        // Privacy invariant: autograph derives structure FROM a stored fact, so
+        // if the fact no longer exists, none of its derived structure may be
+        // created. With a background worker a job can sit queued for
+        // minutes-to-hours and its generation runs for tens of seconds, so a
+        // `forget` issued in between must win — a permanent deletion cannot be
+        // undone by a stale enrichment resurrecting the entity hubs. Re-check
+        // once the generation has returned, before any wiring: this closes the
+        // whole queue-plus-generation window, the common case, completely.
+        if !self.fact_exists(fact_id) {
+            return;
+        }
         crate::extract::orient_kinship(fact, &mut extraction.relations);
         let mut entity_ids: HashMap<String, u64> = HashMap::new();
-        let mut edges: HashSet<(u64, u64)> = HashSet::new();
-        let mut seeded: HashSet<u64> = HashSet::new();
+        let mut edges: HashSet<(u64, u64, String)> = HashSet::new();
         // The caller's fact is the node the topics attach to — the extracted
         // facts are NOT stored as separate memories here, which is what
         // separates autograph from `remember_extracted`: one `remember` call
         // must still produce exactly one caller-visible memory.
         for extracted in &extraction.facts {
-            let _ = self.wire_entities(
-                fact_id,
-                &extracted.entities,
-                &mut entity_ids,
-                &mut edges,
-                &mut seeded,
-            );
+            let _ = self.wire_entities(fact_id, &extracted.entities, &mut entity_ids, &mut edges);
         }
-        let _ = self.wire_relations(
-            &extraction.relations,
-            &mut entity_ids,
-            &mut edges,
-            &mut seeded,
-        );
+        // A concurrent `forget` can still race the wiring writes above between
+        // the first check and here. Re-check once more before the hub↔hub and
+        // attribute writes — neither of which references the source fact, so
+        // `ensure_exists` cannot catch a retired fact for them — leaving a
+        // residual window of a single already-committed generation, not the
+        // whole job.
+        if !self.fact_exists(fact_id) {
+            return;
+        }
+        let _ = self.wire_relations(&extraction.relations, &mut entity_ids, &mut edges);
         let _ = self.wire_attributes(&extraction.attributes, &mut entity_ids);
+    }
+
+    /// Cheap "is this fact still stored?" probe gating [`Self::autograph`]'s
+    /// wiring: the same `store.get` existence check [`Self::forget`] and
+    /// [`Self::ensure_exists`] use. A store read error answers `false` —
+    /// autograph must never fabricate structure for a fact it cannot prove is
+    /// still there, and a missing (or unprovable) fact is a clean skip, never
+    /// an error on this deliberately-infallible path.
+    fn fact_exists(&self, fact_id: u64) -> bool {
+        matches!(self.store.get(fact_id), Ok(Some(_)))
     }
 
     /// Create each outgoing link from `fact_id`.
@@ -437,21 +757,10 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         let mut extraction = extractor.extract_graph(text)?;
         crate::extract::orient_kinship(text, &mut extraction.relations);
         let mut entity_ids: HashMap<String, u64> = HashMap::new();
-        let mut edges: HashSet<(u64, u64)> = HashSet::new();
-        let mut seeded: HashSet<u64> = HashSet::new();
-        let outcome = self.store_extracted_facts(
-            &extraction.facts,
-            metadata,
-            &mut entity_ids,
-            &mut edges,
-            &mut seeded,
-        )?;
-        self.wire_relations(
-            &extraction.relations,
-            &mut entity_ids,
-            &mut edges,
-            &mut seeded,
-        )?;
+        let mut edges: HashSet<(u64, u64, String)> = HashSet::new();
+        let outcome =
+            self.store_extracted_facts(&extraction.facts, metadata, &mut entity_ids, &mut edges)?;
+        self.wire_relations(&extraction.relations, &mut entity_ids, &mut edges)?;
         self.wire_attributes(&extraction.attributes, &mut entity_ids)?;
         Ok(outcome)
     }
@@ -486,26 +795,38 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         // Reserved system keys (the hub flag itself) are scaffolding, not
         // attributes the caller ever wrote — strip them exactly as every other
         // caller-facing read path does.
+        let (relations, relations_truncated) = self.outgoing_entity_relations(id)?;
+        let (relations_in, relations_in_truncated) = self.incoming_entity_relations(id)?;
         Ok(Some(EntityProfile {
             id,
             name: key,
             attributes: strip_reserved_keys(self.store.get_metadata(id)?).unwrap_or_default(),
-            relations: self.outgoing_entity_relations(id)?,
-            relations_in: self.incoming_entity_relations(id)?,
+            relations,
+            relations_in,
+            relations_truncated,
+            relations_in_truncated,
         }))
     }
 
-    /// The typed edges leaving `id`, resolved to their target's content.
+    /// The typed edges leaving `id`, resolved to their target's content, and
+    /// whether that list is a partial view.
     ///
     /// Scaffolding edges (`mentions`, and `about` for symmetry — a hub never
     /// has an outgoing `about`) are dropped: they point at the facts that
     /// tagged this entity, not at a statement *about* it.
-    fn outgoing_entity_relations(&self, id: u64) -> Result<Vec<EntityRelation>, MemoryError> {
-        self.resolve_entity_relations(self.store.relations(id)?, |edge| edge.to)
+    fn outgoing_entity_relations(
+        &self,
+        id: u64,
+    ) -> Result<(Vec<EntityRelation>, bool), MemoryError> {
+        let scanned = self
+            .store
+            .relations_bounded(id, crate::limits::MAX_ENTITY_SCAN_EDGES)?;
+        self.resolve_entity_relations(scanned, |edge| edge.to)
     }
 
     /// The typed edges pointing at `id`, resolved to their SOURCE's content —
-    /// for an incoming edge the far end is where it comes *from*.
+    /// for an incoming edge the far end is where it comes *from* — and
+    /// whether that list is a partial view.
     ///
     /// Without these, a question is only answerable from one side: the graph
     /// holds `camille --soeur de--> theo`, so reading Theo's outgoing edges
@@ -515,22 +836,40 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// [`Self::outgoing_entity_relations`]'s: `about` edges are dropped (they
     /// are the fact → hub half of the `about`/`mentions` pair), and `mentions`
     /// with them for symmetry.
-    fn incoming_entity_relations(&self, id: u64) -> Result<Vec<EntityRelation>, MemoryError> {
-        self.resolve_entity_relations(self.store.incoming_relations(id)?, |edge| edge.from)
+    fn incoming_entity_relations(
+        &self,
+        id: u64,
+    ) -> Result<(Vec<EntityRelation>, bool), MemoryError> {
+        let scanned = self
+            .store
+            .incoming_relations_bounded(id, crate::limits::MAX_ENTITY_SCAN_EDGES)?;
+        self.resolve_entity_relations(scanned, |edge| edge.from)
     }
 
     /// Shared resolver for both edge directions: skip the bipartite
     /// scaffolding labels, resolve each edge's far end (`far_end` picks which
-    /// endpoint that is) to its stored content.
+    /// endpoint that is) to its stored content — at most
+    /// [`crate::limits::MAX_ENTITY_RELATIONS`] of them — and say whether the
+    /// result is a partial view (#1820).
+    ///
+    /// Truncated when either budget bit: the store's raw scan window
+    /// ([`crate::limits::MAX_ENTITY_SCAN_EDGES`]) left edges unread, or a
+    /// typed edge past the resolution cap was seen and dropped. Both cuts
+    /// are the same honest signal — "there is more than this view shows".
     fn resolve_entity_relations(
         &self,
-        edges: Vec<MemoryEdge>,
+        scanned: crate::model::BoundedMemoryEdges,
         far_end: impl Fn(&MemoryEdge) -> u64,
-    ) -> Result<Vec<EntityRelation>, MemoryError> {
+    ) -> Result<(Vec<EntityRelation>, bool), MemoryError> {
         let mut relations = Vec::new();
-        for edge in edges {
+        let mut truncated = scanned.truncated;
+        for edge in scanned.edges {
             if edge.relation == MENTIONS_RELATION || edge.relation == ABOUT_RELATION {
                 continue;
+            }
+            if relations.len() >= crate::limits::MAX_ENTITY_RELATIONS {
+                truncated = true;
+                break;
             }
             let far = far_end(&edge);
             let content = self.store.get(far)?.map(|(content, _)| content);
@@ -540,7 +879,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
                 target: content.unwrap_or_default(),
             });
         }
-        Ok(relations)
+        Ok((relations, truncated))
     }
 
     /// Wire each extracted `subject -[predicate]-> object` triple as a typed
@@ -564,8 +903,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         &self,
         relations: &[ExtractedRelation],
         entity_ids: &mut HashMap<String, u64>,
-        edges: &mut HashSet<(u64, u64)>,
-        seeded: &mut HashSet<u64>,
+        edges: &mut HashSet<(u64, u64, String)>,
     ) -> Result<(), MemoryError> {
         for relation in relations {
             if validate_relation(&relation.predicate).is_err() {
@@ -576,7 +914,6 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             if subject_id == object_id {
                 continue;
             }
-            self.seed_existing_edges(subject_id, edges, seeded)?;
             self.add_edge(subject_id, object_id, &relation.predicate, edges)?;
         }
         Ok(())
@@ -634,8 +971,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         facts: &[crate::extract::ExtractedFact],
         metadata: Option<&Metadata>,
         entity_ids: &mut HashMap<String, u64>,
-        edges: &mut HashSet<(u64, u64)>,
-        seeded: &mut HashSet<u64>,
+        edges: &mut HashSet<(u64, u64, String)>,
     ) -> Result<RememberedExtraction, MemoryError> {
         let mut ids = Vec::with_capacity(facts.len());
         let mut skipped_over_cap = 0;
@@ -659,7 +995,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
                 Err(error) => return Err(error),
             };
             ids.push(fact_id);
-            self.wire_entities(fact_id, &fact.entities, entity_ids, edges, seeded)?;
+            self.wire_entities(fact_id, &fact.entities, entity_ids, edges)?;
         }
         Ok(RememberedExtraction {
             ids,
@@ -676,14 +1012,13 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         fact_id: u64,
         entities: &[String],
         entity_ids: &mut HashMap<String, u64>,
-        edges: &mut HashSet<(u64, u64)>,
-        seeded: &mut HashSet<u64>,
+        edges: &mut HashSet<(u64, u64, String)>,
     ) -> Result<(), MemoryError> {
         for entity in entities {
             // Skip blank or punctuation-only topics: they would persist as junk
             // hubs (`Entity: -`) yet can never carry a meaningful multi-hop link.
             if entity.chars().any(char::is_alphanumeric) {
-                self.wire_entity(fact_id, entity, entity_ids, edges, seeded)?;
+                self.wire_entity(fact_id, entity, entity_ids, edges)?;
             }
         }
         Ok(())
@@ -696,52 +1031,34 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         fact_id: u64,
         entity: &str,
         entity_ids: &mut HashMap<String, u64>,
-        edges: &mut HashSet<(u64, u64)>,
-        seeded: &mut HashSet<u64>,
+        edges: &mut HashSet<(u64, u64, String)>,
     ) -> Result<(), MemoryError> {
         let entity_id = self.entity_hub(entity, entity_ids)?;
         if entity_id == fact_id {
             return Ok(());
         }
-        // Fold already-persisted edges into the dedup set so re-ingesting the
-        // same text never creates duplicate parallel edges (core `relate` does
-        // not dedup by endpoint+label, only by edge id).
-        self.seed_existing_edges(fact_id, edges, seeded)?;
-        self.seed_existing_edges(entity_id, edges, seeded)?;
         self.add_edge(fact_id, entity_id, ABOUT_RELATION, edges)?;
         self.add_edge(entity_id, fact_id, MENTIONS_RELATION, edges)?;
         Ok(())
     }
 
     /// Create the edge `from -> to` labelled `label`, unless `edges` already
-    /// records that endpoint pair (in-call and persisted dedup).
+    /// records that triple for this call (in-call dedup only). `relate`
+    /// derives the edge id from `(from, relation, to)`
+    /// ([`crate::wire::hash_edge_id`] upstream in core) and is itself an O(1)
+    /// idempotent no-op against an already-persisted edge, so there is
+    /// nothing left to preload from the store — a prior preload here made
+    /// every write to a hub with `k` existing edges cost O(k), turning `n`
+    /// writes to the same hub into O(n²).
     fn add_edge(
         &self,
         from: u64,
         to: u64,
         label: &str,
-        edges: &mut HashSet<(u64, u64)>,
+        edges: &mut HashSet<(u64, u64, String)>,
     ) -> Result<(), MemoryError> {
-        if edges.insert((from, to)) {
+        if edges.insert((from, to, label.to_string())) {
             self.relate(from, to, label)?;
-        }
-        Ok(())
-    }
-
-    /// Load `node`'s already-persisted outgoing edges into `edges` once per call
-    /// (tracked by `seeded`), so the dedup set reflects the stored graph and a
-    /// repeated ingest is idempotent rather than edge-duplicating.
-    fn seed_existing_edges(
-        &self,
-        node: u64,
-        edges: &mut HashSet<(u64, u64)>,
-        seeded: &mut HashSet<u64>,
-    ) -> Result<(), MemoryError> {
-        if !seeded.insert(node) {
-            return Ok(());
-        }
-        for edge in self.store.relations(node)? {
-            edges.insert((node, edge.to));
         }
         Ok(())
     }
@@ -921,6 +1238,20 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// Filter *values* are bound as query parameters (never interpolated), so
     /// they cannot inject; filter *field names* are validated to be plain
     /// identifiers. Results come back in similarity order.
+    ///
+    /// **Caller memories only.** The store also holds internal scaffolding —
+    /// the entity hubs of [`Self::remember_extracted`] and the context
+    /// compiler's four artefact classes (stored sources, compilation events,
+    /// working contexts, and the per-project working-context index). They sit
+    /// in the same collection as caller facts and are excluded from every
+    /// result here, whatever the predicate.
+    ///
+    /// That exclusion is applied by the backend against
+    /// [`crate::storage::INTERNAL_MARKER_FIELDS`]; it is NOT a consequence of
+    /// those facts being unfilterable. A caller cannot write a filter naming a
+    /// reserved key, but `field ne value` MATCHES a fact that has no such
+    /// field at all — and scaffolding has none of the caller's columns, so
+    /// before #1737 every `ne` predicate returned all of it.
     ///
     /// # Errors
     /// Returns [`MemoryError::InvalidFilter`] if a filter field is not a plain
@@ -1173,13 +1504,28 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
                 hop: 0,
             }],
             edges: Vec::new(),
+            truncated: false,
         };
         let mut visited: HashSet<u64> = HashSet::from([seed_id]);
         let mut frontier = vec![seed_id];
         let mut next: Vec<u64> = Vec::new();
-        for hop in 1..=max_hops {
+        'hops: for hop in 1..=max_hops {
             next.clear();
             for node_id in frontier.drain(..) {
+                // Both width budgets, checked here AND inside `expand`: this
+                // check alone would let the expansion that crosses the line
+                // finish its node — up to MAX_WHY_NODE_DEGREE nodes past the
+                // "ceiling", which a review measured at 522 of a promised 500.
+                if explanation.nodes.len() >= crate::limits::MAX_WHY_NODES
+                    || explanation.edges.len() >= crate::limits::MAX_WHY_EDGES
+                {
+                    // Unexpanded frontier work remained — the response is a
+                    // partial view and must SAY so (#1820); whether the rest
+                    // held anything unseen is exactly what the budget forbids
+                    // finding out, so the cautious true is the honest one.
+                    explanation.truncated = true;
+                    break 'hops; // width budget spent — depth left in max_hops is moot
+                }
                 self.expand(node_id, hop, &mut explanation, &mut visited, &mut next)?;
             }
             if next.is_empty() {
@@ -1190,7 +1536,10 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         Ok(explanation)
     }
 
-    /// Expand a single node: enqueue unseen targets and record edges. An edge is
+    /// Expand a single node: enqueue unseen targets and record edges, following
+    /// at most [`crate::limits::MAX_WHY_NODE_DEGREE`] outgoing edges — an entity
+    /// hub's degree scales with the whole store, so an unbounded walk here would
+    /// dump its entire neighborhood into one response (issue #1743). An edge is
     /// only recorded once its target is a resolved node, so the subgraph never
     /// contains an edge pointing at a node absent from `nodes` (e.g. a forgotten
     /// target whose edge outlived it).
@@ -1202,7 +1551,31 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         visited: &mut HashSet<u64>,
         next: &mut Vec<u64>,
     ) -> Result<(), MemoryError> {
-        for edge in self.store.relations(node_id)? {
+        // The bounded read pushes the per-node budget into the store's own
+        // index scan: the old full fetch materialized a super-node's whole
+        // degree before `.take()` could apply — O(store size) transient
+        // allocation at a single hop, the cost half of #1743 that #1820
+        // closes. The store also reports whether the degree exceeded the
+        // budget, which is what makes the cut OBSERVABLE.
+        let bounded = self
+            .store
+            .relations_bounded(node_id, crate::limits::MAX_WHY_NODE_DEGREE)?;
+        if bounded.truncated {
+            explanation.truncated = true;
+        }
+        for edge in bounded.edges {
+            // The budgets are ceilings, not suggestions: once either is spent,
+            // this node's expansion stops MID-NODE rather than finishing. The
+            // caller's check between nodes cannot provide that — an expansion
+            // that crosses the line would otherwise add its whole degree.
+            if explanation.nodes.len() >= crate::limits::MAX_WHY_NODES
+                || explanation.edges.len() >= crate::limits::MAX_WHY_EDGES
+            {
+                // An edge was in hand and not followed — an exact cut, not
+                // a conservative one.
+                explanation.truncated = true;
+                break;
+            }
             let target = edge.to;
             if !visited.contains(&target) {
                 let Some((content, _embedding)) = self.store.get(target)? else {
@@ -1288,6 +1661,39 @@ pub(crate) fn positive_ttl(ttl_seconds: Option<u64>) -> Option<u64> {
 /// `name: ""` when nothing matched left a caller running several lookups
 /// unable to pair a response with its question (issue #1654). Hit and miss go
 /// through this one function, so the two can never drift.
+/// The audit's per-fact visibility policy, in one place: `None` skips the
+/// fact (internal scaffolding under the default view, or a metadata filter
+/// miss), `Some` carries what the caller may see — reserved keys stripped
+/// exactly as recall strips them, or the raw payload under
+/// `include_internal`.
+fn audited(
+    fact: crate::storage::RawListedFact,
+    filter: Option<&Metadata>,
+    include_internal: bool,
+) -> Option<crate::model::ListedMemory> {
+    if !include_internal && crate::storage::is_internal_scaffolding(&fact.payload) {
+        return None;
+    }
+    let matches = filter.is_none_or(|wanted| {
+        wanted
+            .iter()
+            .all(|(key, value)| fact.payload.get(key) == Some(value))
+    });
+    if !matches {
+        return None;
+    }
+    let metadata = if include_internal {
+        (!fact.payload.is_empty()).then_some(fact.payload)
+    } else {
+        strip_reserved_keys(Some(fact.payload))
+    };
+    Some(crate::model::ListedMemory {
+        id: fact.id,
+        content: fact.content,
+        metadata,
+    })
+}
+
 #[must_use]
 pub fn canonical_entity_name(name: &str) -> String {
     name.trim().to_lowercase()

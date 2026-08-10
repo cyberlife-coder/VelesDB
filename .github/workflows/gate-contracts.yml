@@ -9,10 +9,13 @@ name: Gate Contracts
 # Deliberately not path-filtered. A filter is how a gate quietly stops
 # running: these suites cost seconds, so they run on every change.
 
+# On a pull request this runs as a job of ci.yml, not on its own: `CI Success`
+# is the only required check, so a gate outside its `needs` could be red while
+# the merge button stayed green. The `pull_request` trigger is deliberately
+# absent — keeping it would run every suite twice per PR.
 on:
+  workflow_call:
   push:
-    branches: [main, develop]
-  pull_request:
     branches: [main, develop]
 
 permissions:

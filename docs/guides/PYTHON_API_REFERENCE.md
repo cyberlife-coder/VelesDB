@@ -30,7 +30,8 @@ used throughout the VelesDB Python documentation. The older multi-keyword
 **deprecated since v1.15** — it emits a `DeprecationWarning`.
 `SearchOptions` accepts `vector`, `sparse_vector`, `top_k`, `filter`,
 `sparse_index_name` and `include_vectors`, plus a fluent builder
-(`SearchOptions().with_vector(v).with_top_k(10)`).
+(`SearchOptions().with_vector(v).with_top_k(10)`). The `vector` argument
+accepts numpy arrays (`dtype=np.float32`) as well as Python lists.
 
 ## Database
 
@@ -49,6 +50,12 @@ collection = db.create_collection(
     "tuned",
     dimension=768,
     hnsw=HnswOptions(m=48, ef_construction=600),
+)
+# Auto-tuned HNSW for an expected dataset size
+collection = db.create_collection(
+    "big",
+    dimension=128,
+    hnsw=HnswOptions.for_dataset_size(128, 1_000_000),
 )
 
 # Get existing collection
@@ -439,4 +446,4 @@ see [PYTHON_PERFORMANCE.md](PYTHON_PERFORMANCE.md).
 
 ---
 
-Last updated: 2026-07-25 · Applies to: velesdb-core 4.2.0
+Last updated: 2026-08-08 · Applies to: velesdb-core 5.0.0

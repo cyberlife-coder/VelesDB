@@ -7,6 +7,7 @@
 [![npm](https://img.shields.io/npm/v/%40wiscale%2Fvelesdb-memory-node?logo=npm&label=npm)](https://www.npmjs.com/package/@wiscale/velesdb-memory-node)
 [![PyPI](https://img.shields.io/pypi/v/velesdb?logo=pypi&logoColor=white&label=PyPI)](https://pypi.org/project/velesdb/)
 [![MCP registry](https://img.shields.io/badge/MCP_registry-io.github.cyberlife--coder%2Fvelesdb--memory-1f6feb?logo=modelcontextprotocol&logoColor=white)](https://registry.modelcontextprotocol.io)
+[![MCP Toplist](https://mcptoplist.com/badge/io.github.cyberlife-coder%2Fvelesdb-memory.svg)](https://mcptoplist.com/server/io.github.cyberlife-coder%2Fvelesdb-memory)
 [![License](https://img.shields.io/badge/license-VelesDB_Core_1.0_(source--available)-e8702a)](https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE)
 
 > **Portability**: ✅ the server and all of its tools work in any MCP client
@@ -67,7 +68,11 @@ It is written to a local file store. No model call, no network.
 
 **2. It finds them by meaning, not keywords.** `recall` matches on sense, so
 asking about *"which port did we settle on"* finds that fact even though the
-words differ. This uses a local embedding model of your choosing.
+words differ. This uses a local embedding model of your choosing — and the
+honest caveat is that until you pick one, the out-of-the-box default is a
+deterministic offline embedder that matches **surface form, not meaning**
+(great for zero-dependency demos, wrong for real recall). Picking a real
+model is one env var, no rebuild: [two commands, below](#real-semantic-recall-in-5-minutes).
 
 **3. It connects them, which is the part that matters.** Facts are linked to
 the topics they mention. `why` starts from the best match and then *walks those
@@ -78,14 +83,16 @@ ones sharing no words with your question. A plain search cannot do that.
 > flat and `why` behaves like a search. Point `remember_extracted` at a
 > paragraph and it splits it into facts and wires the links for you.
 
-**4. It compresses what is too big, at the right moment.** Four [agent
+**4. It compresses what is too big, at the right moment.** Five [agent
 hooks](../../integrations/agent-hooks/README.md) fire automatically in Claude
 Code: two remind it to save and reload its state around a session, one does the
-same before a compaction, and `PostToolUse` is the one that *replaces* an
-oversized tool result with a compiled view — so the payload
-never enters the conversation at all. Nothing is deleted: the untouched
-original is written to a file and its path is quoted in the replacement, so the
-agent can read the full thing whenever the summary is not enough.
+same before a compaction, `PreToolUse` requires successful recall before an
+opted-in repository edit, and `PostToolUse` is the one that *replaces* an
+oversized `Bash` result with a schema-compatible compiled view — so the bulky
+text never enters the conversation when Claude accepts the replacement.
+Nothing is deleted: the complete original Bash output object is serialized as
+JSON and its path is quoted in the replacement, so the agent can read the full
+thing whenever the compiled view is not enough.
 
 ## Use cases
 
@@ -102,7 +109,7 @@ agent can read the full thing whenever the summary is not enough.
 |---|---|---|
 | Rust | 1.90 | Only to install or build. The binary itself has no runtime dependency. |
 | An MCP client | — | Claude Code, Claude Desktop, Codex CLI, Cursor, Cline, Zed, opencode, Windsurf, Devin CLI. |
-| Ollama | any | **Optional** — only for real semantic recall (`--features ollama`). The default embedder is offline and dependency-free. |
+| Ollama, **or any OpenAI-compatible server** | any | **Optional** — only for real semantic recall and for model-based extraction. Both backends are compiled into the default binary: enabling one is a runtime env-var switch (`VELESDB_MEMORY_EMBEDDER`), never a rebuild. The default embedder is offline and dependency-free. `openai` names a protocol, not a vendor: oMLX, llama.cpp, LM Studio, vLLM and hosted providers all speak it, and each is reached by URL rather than by a backend name of its own. See [MCP_SERVER_SETUP.md](../../docs/guides/MCP_SERVER_SETUP.md#embedding-backend). |
 | Node.js | any LTS | **Optional** — only for the Claude Desktop stdio→HTTPS bridge. |
 
 ## Installation
@@ -149,6 +156,40 @@ writable. (`_veles_date` is stamped automatically — see
 Every other client — Cursor, Zed, Codex CLI, Claude Desktop, Windsurf, Devin
 CLI — is one config block away in
 [MCP server setup](../../docs/guides/MCP_SERVER_SETUP.md#configure-your-client-stdio).
+
+## Real semantic recall in 5 minutes
+
+The 60-second setup above runs the offline `hash` embedder: deterministic,
+zero-dependency — and **lexical**, not semantic. Both semantic backends are
+compiled into the binary you just installed, so upgrading is configuration,
+not a rebuild. With [Ollama](https://ollama.com) installed, the recommended
+model is `bge-m3` (multilingual, 1024-dim):
+
+```bash
+ollama pull bge-m3
+claude mcp add velesdb-memory \
+  --env VELESDB_MEMORY_PATH="$HOME/.velesdb-memory" \
+  --env VELESDB_MEMORY_EMBEDDER=ollama \
+  --env VELESDB_MEMORY_EMBEDDER_MODEL=bge-m3 \
+  -- ~/.cargo/bin/velesdb-memory
+```
+
+No Ollama? Any OpenAI-compatible server (oMLX, llama.cpp, LM Studio, vLLM)
+works with `VELESDB_MEMORY_EMBEDDER=openai` and a URL — the model still runs
+on your machine, and memory still never leaves it. All options:
+[embedding backend](../../docs/guides/MCP_SERVER_SETUP.md#embedding-backend).
+
+Two things to know when switching:
+
+- **Your agent can check.** The `memory_status` tool reports which embedder
+  actually runs and whether recall is semantic — ask *"call memory_status"*
+  and read `embedder.semantic`. The server also flags a degraded (hash) run
+  in its instructions to every connecting client.
+- **Your memories survive the switch.** The store records which model filled
+  it; on a mismatch the server refuses to serve nonsense and names the
+  migration command (`velesdb-memory migrate-embeddings`, dry-run first),
+  which re-embeds every fact under its original id. Switching embedders
+  never costs you your memories.
 
 ## See the wedge (offline, one command)
 
@@ -217,11 +258,11 @@ end-to-end *extraction* comparison on the real
 
 ## What the server exposes
 
-18 MCP tools in the default build, in three families:
+22 MCP tools in the default build, in three families:
 
 | Family | Tools |
 |---|---|
-| Durable memory | `remember`, `recall`, `recall_where`, `recall_fused`, `relate`, `unrelate`, `forget`, `entity`, `why`, `feedback`, `remember_extracted` |
+| Durable memory | `remember`, `recall`, `recall_where`, `recall_fused`, `relate`, `unrelate`, `forget`, `entity`, `why`, `feedback`, `remember_extracted`, `memory_status`, `list_memories` |
 | Context compiler | `compile_context`, `compile_transcript`, `explain_compilation`, `retrieve_context_source`, `context_savings`, `suggest_budget` |
 | Session resumption | `save_working_context`, `load_working_context`, `list_working_contexts` |
 
@@ -239,6 +280,7 @@ capabilities (`query`, `create_collection`, `upsert`, `traverse`).
 | [MCP tool reference](../../docs/reference/MCP_TOOLS.md) | one section per tool: parameters, returns, limits, error model |
 | [Context compiler](../../docs/guides/CONTEXT_COMPILER.md) | budgets, preservation rules, `risk`, retrieval handles, media, `path` ingestion, transcripts, the `compile-stdin` CLI and the `PostToolUse` hook |
 | [Agent Memory SDK](../../docs/guides/AGENT_MEMORY.md) | the *other* path: the embedded, language-native `AgentMemory` API |
+| [Migrating embedding models](../../docs/guides/MIGRATE_EMBEDDINGS.md) | `migrate-embeddings` end to end: regimes, the journal, crash recovery, the switch, and what it costs |
 | [`BENCHMARK.md`](BENCHMARK.md) | every published retrieval number, its method, and how to reproduce it |
 | [`POSITIONING.md`](POSITIONING.md) | honest comparison against Mem0 and Zep/Graphiti, and where local-first is a hard requirement |
 | [`CHANGELOG.md`](CHANGELOG.md) | what changed in each release |
@@ -253,9 +295,9 @@ in [`BENCHMARK.md`](BENCHMARK.md).
 | Environment | Status | Note |
 |---|---|---|
 | Any MCP client | Supported | stdio by default; streamable-HTTP with `--features http`. |
-| Claude Code | Supported | `claude mcp add`, stdio or `--transport http`. Also the only harness with the `PostToolUse` replacing hook. |
-| Claude Desktop | Supported, with a caveat | Its config file accepts stdio only; for the shared daemon the installers wire an `mcp-remote` stdio→HTTPS bridge, which needs Node.js. |
-| Codex CLI | Supported | `codex mcp add`, or a `[mcp_servers.*]` table. Two lifecycle hooks ship: `SessionStart` (resume the rolling working context, and compile what a compaction is about to lose) and `Stop` (save it before finishing). `PreCompact`/`PostCompact` are not wired — they have no documented output channel that reaches the model. |
+| Claude Code | Supported, with a caveat | `claude mcp add`, stdio or `--transport http`. Also the only harness with the `PostToolUse` replacing hook. Over HTTP, its native client does not re-initialize on an expired-session `404` *within* a call: that one call surfaces as a timeout and writes nothing, and the **next** call re-initializes and succeeds (proven from the daemon's own request log — see the [idle-sessions guide](../../docs/guides/MCP_SERVER_SETUP.md#idle-sessions-and-why-a-timeout-is-not-a-failed-write)). After any timeout, verify the write before trusting it. |
+| Claude Desktop | Supported, with a caveat | Its config file accepts stdio only; for the shared daemon the installers wire a pinned `mcp-remote` stdio→HTTPS bridge, whose current dependency tree needs Node.js 20.18.1 or newer. That bridge does not yet recover transparently from an idle-expired session; restart Desktop after such a timeout. |
+| Codex CLI | Supported | `codex mcp add`, or a `[mcp_servers.*]` table. The shared-daemon installers require Codex 0.113+ and use its native Streamable HTTP transport so an expired-session `404` is re-initialized instead of hanging behind a bridge. Four lifecycle hooks ship: `SessionStart` resumes rolling context, `PreToolUse`/`PostToolUse` require a successful recall before an opted-in `apply_patch`, and `Stop` saves context with the learning-loop checklist. `PreCompact`/`PostCompact` are not wired — they have no documented context channel; `SessionStart` handles the post-compaction continuation. |
 | Windsurf | Supported | stdio (`mcp_config.json`) or `serverUrl` against the daemon. One advisory `pre_user_prompt` hook is wired; it is shown to the user, not injected into the model context. |
 
 Other verified clients: Cursor, Cline, Zed, opencode, Devin CLI.
@@ -320,4 +362,4 @@ Questions: contact@wiscale.fr.
 
 ---
 
-`velesdb-memory v0.11.2` · Last updated: 2026-07-25 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)
+`velesdb-memory v0.12.0` · Last updated: 2026-08-08 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)

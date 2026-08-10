@@ -7,7 +7,7 @@ recall actually improve the answers — apples-to-apples, same embeddings, same
 fact budget, same judge?
 
 It runs on [LoCoMo](https://github.com/snap-research/locomo) (`locomo10.json`):
-10 conversations, ~300 turns each over up to 19 sessions, with 1 986 annotated
+10 conversations, ~300 turns each over up to 32 sessions, with 1 986 annotated
 QA pairs across five categories (multi-hop, temporal, open-domain, single-hop,
 adversarial).
 
@@ -29,8 +29,12 @@ cargo run --release -p velesdb-memory --features ollama --example locomo -- --ex
 ```
 
 Flags: `--conversations N`, `--max-qa N` (cap per conversation), `--k` (fact
-budget, default 8), `--graph-slots` (slots reserved for graph facts in graph
-mode, default 4), `--hops` (default 2), `--model`, `--dataset`.
+budget, default 8), `--hops` (default 2), `--graph-boost` (default 0.15),
+`--seed-breadth`, `--model`, `--embed-model`, `--dataset`, `--dump FILE`,
+`--only CATEGORY`. Mode switches: `--explanation`, `--retrieval`, `--diagnose`,
+`--full-context`, `--extract-v2`. Toggles: `--multihop-only`, `--idf-weight`,
+`--date-context`, `--date-route`, `--temporal-scaffold`, `--cot`, `--bm25`,
+`--claude-judge`, `--claude-gen`, `--use-shipped-api`.
 
 Every LLM call is content-addressed and cached under `examples/locomo/cache/`,
 so an interrupted run resumes for free and re-runs spend no GPU. The full run is

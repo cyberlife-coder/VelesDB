@@ -64,8 +64,8 @@ use serde_json::{Map, Number, Value};
 use super::{positive_ttl, MemoryService, Metadata, HUB_FIELD};
 use crate::context::model::{
     CompilePolicy, CompileRequest, CompiledContext, ContextDecision, ContextFragment,
-    ContextSavings, ContextSource, ImportanceWeights, MediaRef, MemoryScope, WorkingContext,
-    WorkingContextIndex, WorkingContextSession,
+    ContextSavings, ContextSource, ImportanceWeights, LoadedWorkingContext, MediaRef, MemoryScope,
+    WorkingContext, WorkingContextIndex, WorkingContextSession,
 };
 use crate::context::{media, provenance, ContextCompiler};
 use crate::embedder::Embedder;
@@ -93,14 +93,26 @@ const WORKING_INDEX_ID_SALT: &str = "veles-ctx-working-index:";
 const EVENT_ANCHOR: &str = "veles context compilation event";
 
 /// Reserved metadata keys of the bridge's system facts. Reserved (`_veles_`)
-/// on purpose: callers can neither set them (forgery) nor filter on them, so
-/// system facts are invisible to every caller-facing recall path and
+/// on purpose: callers can neither set them (forgery) nor filter on them, and
 /// [`MemoryService::context_savings`] aggregates only genuine events (it
 /// filters at the storage layer, below the caller-facing validation).
-const CTX_EVENT_FIELD: &str = "_veles_ctx_event";
+///
+/// Being unfilterable was once claimed here to make these facts "invisible to
+/// every caller-facing recall path". It did not (#1737). A caller cannot
+/// filter ON a reserved key, but `field != value` MATCHES a fact that has no
+/// such field — and a system fact has none of the caller's columns, so every
+/// `!=` predicate swept all of them in. Invisibility is now an exclusion
+/// [`crate::storage::INTERNAL_MARKER_FIELDS`] states and each backend
+/// applies, not a side effect of the naming rule.
+///
+/// The four markers below are therefore imported rather than redeclared: they
+/// ARE entries of that list, and a local copy could drift from it silently.
+use crate::storage::{
+    CTX_EVENT_FIELD, CTX_SOURCE_FIELD, CTX_WORKING_FIELD, CTX_WORKING_INDEX_FIELD,
+};
+
 const CTX_PROJECT_FIELD: &str = "_veles_ctx_project";
 const CTX_MODEL_FIELD: &str = "_veles_ctx_model";
-const CTX_SOURCE_FIELD: &str = "_veles_ctx_source";
 /// A stored source's media payload (US-009, PR2): `{"mime", "bytes_b64"}`,
 /// the exact [`MediaRef`] shape, set only when the source fragment carried
 /// one. Reserved like every other `_veles_ctx_*` key — a caller can neither
@@ -112,10 +124,6 @@ const CTX_SOURCE_MEDIA_FIELD: &str = "_veles_ctx_source_media";
 /// and this module (unlike `NativeStore`) must keep compiling under `context`
 /// alone (e.g. `velesdb-wasm`, which never enables `persistence`).
 const EXPIRES_AT_FIELD: &str = "_veles_expires_at";
-const CTX_WORKING_FIELD: &str = "_veles_ctx_working";
-/// Marks a project's working-context index fact (V2a-1's
-/// `list_working_contexts`), symmetric to [`CTX_WORKING_FIELD`].
-const CTX_WORKING_INDEX_FIELD: &str = "_veles_ctx_working_index";
 const CTX_SESSION_FIELD: &str = "_veles_ctx_session";
 const CTX_TOKENS_IN_FIELD: &str = "_veles_ctx_tokens_in";
 const CTX_TOKENS_OUT_FIELD: &str = "_veles_ctx_tokens_out";
@@ -150,7 +158,7 @@ static EVENT_SEQ: AtomicU64 = AtomicU64::new(0);
 /// `HashMap<String, _>` keyed by caller-supplied project names is an unbounded
 /// slow leak for no measurable gain. Per-project striping is the obvious
 /// upgrade if index writes ever become hot.
-static WORKING_INDEX_WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static WORKING_INDEX_WRITE: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
 impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// [`ContextCompiler::compile`] with this service's memory folded in:
@@ -659,8 +667,22 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         }
         let mut request = request.clone();
         let mut policy = request.policy.take().unwrap_or_default();
+        // Three options neutralised for one reason: an explanation must not
+        // inherit the side effects, nor the presentation, of the compilation it
+        // explains. The caller asked "why this fragment?", not "compile this".
         policy.record_events = false;
         policy.store_sources = false;
+        // `slim_response` empties `sections` and `decisions` to save tokens
+        // (see `apply_slim`). Applied here it would not trim the answer, it
+        // would DELETE it: `decisions` is cleared, the lookup below finds
+        // nothing, and the caller is told `FragmentNotFound` about a fragment
+        // that compiled perfectly well (#1745).
+        //
+        // The option exists to save tokens, so a caller under a tight budget
+        // turns it on by default — and lost the audit tool exactly when they
+        // most needed it, with a message that sent them looking for a typo in
+        // an id that was correct.
+        policy.slim_response = false;
         request.policy = Some(policy);
         let compiled =
             self.compile_context(&ContextCompiler::new(CompilePolicy::default()), &request)?;
@@ -836,6 +858,91 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             .map_err(|err| MemoryError::WorkingContextCodec(err.to_string()))
     }
 
+    /// The full resumption envelope for `project` + `session`: what
+    /// [`Self::load_working_context`] found, plus the OTHER sessions saved
+    /// under the same project so a typo in `session` is recoverable.
+    ///
+    /// This is the ONE place the three policy rules live:
+    ///
+    /// 1. `other_sessions` is listed on a HIT too, not just on a miss — a
+    ///    typo that lands on another REAL session returns `found: true`, and
+    ///    the caller has no other way to notice it resumed the wrong work.
+    ///    Costs one extra O(1) index read per successful load.
+    /// 2. The requested `session` is never echoed back: the field is named
+    ///    `other_sessions`, so returning the requested id would be a
+    ///    contradiction the caller cannot act on.
+    /// 3. An unreadable index is fatal on a MISS and survivable on a HIT —
+    ///    see [`Self::other_sessions_for`].
+    ///
+    /// Every surface (the `load_working_context` MCP tool and the Node,
+    /// Python and WASM bindings) calls this rather than recomposing the
+    /// envelope from [`Self::load_working_context`] +
+    /// [`Self::list_working_contexts`]: four recompositions are four copies
+    /// of those rules, and a copy that stops matching the others fails
+    /// silently — the caller still gets a well-formed envelope, just a
+    /// different one.
+    ///
+    /// # Errors
+    /// Propagates [`Self::load_working_context`]'s errors (a corrupt or
+    /// unparseable stored payload), and [`Self::list_working_contexts`]'s (a
+    /// corrupt index, or a storage failure) **on a miss only** — rule 3.
+    pub fn resume_working_context(
+        &self,
+        project: &str,
+        session: &str,
+    ) -> Result<LoadedWorkingContext, MemoryError> {
+        let working = self.load_working_context(project, session)?;
+        let other_sessions = self.other_sessions_for(project, session, working.is_some())?;
+        Ok(LoadedWorkingContext {
+            found: working.is_some(),
+            working,
+            other_sessions,
+        })
+    }
+
+    /// The project's OTHER sessions, and what to do when the index that holds
+    /// them cannot be read.
+    ///
+    /// The two answers differ because `other_sessions` plays a different part
+    /// on each path:
+    ///
+    /// - **On a hit** it is a HINT — "you asked for `alpha`, note that
+    ///   `alpha-2` also exists, you may have resumed the wrong one". The
+    ///   answer the caller actually asked for is already in hand and intact.
+    ///   Failing the whole call here would turn a fault in one auxiliary fact
+    ///   into a total loss of resumption for EVERY session of the project,
+    ///   including the many that read back perfectly — which is why an
+    ///   unreadable index degrades to an empty hint instead. Nothing is
+    ///   swallowed: the corruption stays loudly reachable through
+    ///   [`Self::list_working_contexts`], published on every surface.
+    /// - **On a miss** it is the ONLY signal there is. `[]` then reads as the
+    ///   positive assertion "nothing else was ever saved under this project",
+    ///   and an agent told that starts over on top of work sitting right next
+    ///   to where it looked — the exact failure this envelope exists to
+    ///   prevent. An assertion we cannot support must not be manufactured, so
+    ///   the error propagates.
+    ///
+    /// # Errors
+    /// Propagates [`Self::list_working_contexts`]'s errors when `found` is
+    /// false.
+    fn other_sessions_for(
+        &self,
+        project: &str,
+        session: &str,
+        found: bool,
+    ) -> Result<Vec<String>, MemoryError> {
+        let listed = match self.list_working_contexts(project) {
+            Ok(listed) => listed,
+            Err(_) if found => return Ok(Vec::new()),
+            Err(err) => return Err(err),
+        };
+        Ok(listed
+            .into_iter()
+            .map(|entry| entry.session)
+            .filter(|candidate| candidate != session)
+            .collect())
+    }
+
     /// The sessions of `sessions` whose working-context fact is still there,
     /// in the same order. One batched metadata lookup for the whole set — not
     /// a store scan, but not free either (see
@@ -952,13 +1059,20 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// the same lock and in the same read-modify-write that was already
     /// paid for. Reads never mutate it.
     fn update_working_index(&self, project: &str, session: &str) -> Result<(), MemoryError> {
+        // The index slot's embedding derives from the PROJECT NAME alone,
+        // never from the index content, so it is computed here, BEFORE the
+        // lock: an embedder can be a network round-trip (or a hung one), and
+        // holding the global write lock across it stalls every working-index
+        // write in the process behind one slow call. Racing saves may embed
+        // concurrently, but they embed the same text, so whichever vector
+        // lands is equivalent — no re-check under the lock is needed. The
+        // index CONTENT read-modify-write stays entirely under the lock.
+        let embedding = self
+            .embedder
+            .embed(&format!("working context index {project}"))?;
         // Read-modify-write of a single shared fact: held for the whole
         // sequence, otherwise a concurrent save silently erases this entry.
-        // The guarded data is `()`, so a poisoned lock carries no broken
-        // invariant — recover rather than propagate someone else's panic.
-        let _guard = WORKING_INDEX_WRITE
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = WORKING_INDEX_WRITE.lock();
         // A corrupt index must not brick saving for the whole project. The
         // read path surfaces the error — that is where a human can act on it
         // — but propagating it here would make every future save of every
@@ -984,24 +1098,28 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         index.sessions = self.live_sessions(project, index.sessions)?;
         let content = serde_json::to_string(&index)
             .map_err(|err| MemoryError::WorkingContextCodec(err.to_string()))?;
-        self.write_working_index(project, &content)
+        self.write_working_index(project, &content, &embedding)
     }
 
     /// Persist a serialized index into `project`'s reserved index slot —
     /// always with the [`CTX_WORKING_INDEX_FIELD`] marker, since an index
     /// written without it would be treated as a squatter and read back as
     /// empty. Only [`Self::update_working_index`] (which holds
-    /// [`WORKING_INDEX_WRITE`]) calls this.
-    fn write_working_index(&self, project: &str, content: &str) -> Result<(), MemoryError> {
+    /// [`WORKING_INDEX_WRITE`] and supplies the slot `embedding` it computed
+    /// before taking that lock) calls this: nothing in here may call the
+    /// embedder, or the lock would again be held across a network hop.
+    fn write_working_index(
+        &self,
+        project: &str,
+        content: &str,
+        embedding: &[f32],
+    ) -> Result<(), MemoryError> {
         let slot = working_index_id(project);
-        let embedding = self
-            .embedder
-            .embed(&format!("working context index {project}"))?;
         let meta = system_meta(&[
             (CTX_WORKING_INDEX_FIELD, Value::Bool(true)),
             (CTX_PROJECT_FIELD, Value::String(project.to_owned())),
         ]);
-        self.store_fact(slot, content, &embedding, Some(&meta), None)?;
+        self.store_fact(slot, content, embedding, Some(&meta), None)?;
         Ok(())
     }
 }

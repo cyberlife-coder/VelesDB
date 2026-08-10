@@ -191,7 +191,11 @@ impl Collection {
         old_payloads: &[Option<serde_json::Value>],
         sparse_batch: &BTreeMap<String, Vec<(u64, crate::index::sparse::SparseVector)>>,
     ) -> Result<()> {
-        self.storage.config.write().point_count = self.storage.vector_storage.read().len();
+        // Two statements so the guards never overlap: the one-liner form
+        // evaluates the RHS first, holding vector_storage (rank 2) while
+        // acquiring config (rank 1) — a decreed-order inversion.
+        let point_count = self.storage.vector_storage.read().len();
+        self.storage.config.write().point_count = point_count;
         self.apply_sparse_batch_bulk(sparse_batch)?;
         // Incremental histogram maintenance (Bug #47 + Bug #49): dedup by id
         // so only the final payload counts, then atomic decrement + increment.
@@ -292,13 +296,17 @@ impl Collection {
         }
 
         // Issue #425: BM25 skip — when no point has a payload AND the BM25
-        // index is empty, skip the text index loop entirely. The bulk path
-        // inserts fresh points (no old documents to remove), so the loop
-        // body would be a no-op for every point.
+        // index is empty, skip the text index work entirely. The bulk path
+        // inserts fresh points (no old documents to remove), so it would be a
+        // no-op for every point.
+        //
+        // Issue #1797: this used to call `update_text_index` PER POINT, and
+        // that helper opens the BM25 WAL, writes one frame and `sync_all()`s it
+        // on every call — one durability barrier per document, which capped
+        // bulk insertion of text-bearing points at roughly one fsync each. The
+        // batch below writes every frame under a single open + flush + fsync.
         if !entries.is_empty() || !self.storage.text_index.is_empty() {
-            for point in points {
-                self.update_text_index(point)?;
-            }
+            self.bulk_update_text_index(points)?;
         }
 
         // Issue #486: Update label index for bulk-inserted points.

@@ -18,7 +18,7 @@ velesdb repl ./my_db    # explicit path
 ```
 
 ```
-VelesDB v4.0.0 - VelesQL REPL
+VelesDB v4.3.0 - VelesQL REPL
 Database: ./data
 Type .help for commands, .quit to exit
 
@@ -287,4 +287,4 @@ executed successfully.`, `Admin statement executed successfully.`, or
 
 ---
 
-Last updated: 2026-07-25 · Applies to: velesdb-core 4.2.0
+Last updated: 2026-08-08 · Applies to: velesdb-core 5.0.0

@@ -21,12 +21,14 @@ The tool surface is feature-gated at build time:
 
 | Feature | Default? | Tools it adds |
 |---|---|---|
-| `mcp` | yes | `remember`, `recall`, `recall_where`, `recall_fused`, `feedback`, `relate`, `unrelate`, `forget`, `entity`, `why`, `remember_extracted` |
+| `mcp` | yes | `remember`, `recall`, `recall_where`, `recall_fused`, `feedback`, `relate`, `unrelate`, `forget`, `entity`, `why`, `remember_extracted`, `memory_status`, `list_memories` |
 | `context` | yes | `compile_context`, `compile_transcript`, `explain_compilation`, `retrieve_context_source`, `context_savings`, `save_working_context`, `load_working_context`, `list_working_contexts`, `suggest_budget` |
 | `extract` | no | none — it enables the *backend* `remember_extracted` needs (see that tool) |
 
-`default = ["mcp", "persistence", "context"]`, so a plain
-`cargo install velesdb-memory` advertises all **20** tools. They are served by
+`default = ["mcp", "persistence", "context", "ollama", "extract"]` (the last
+two carry the HTTP backends for embedding and extraction — runtime-switched,
+off until their env vars opt in), so a plain `cargo install velesdb-memory`
+advertises all **22** tools. They are served by
 one MCP server: the context router is combined into the memory router in
 `McpServer::new`, never a second server.
 
@@ -40,17 +42,24 @@ License.
 Memory ids and fragment ids are `u64` and routinely exceed 2^53, where a JSON
 number silently loses precision in any JavaScript-based client.
 
-- Every memory tool that returns an id also returns a decimal-string twin:
-  `id_str`, `edge_id_str`, `ids_str`, `from_str`/`to_str`. **Relay the string
-  form**, not the number.
-- Every memory tool that accepts an id (`relate`/`unrelate`'s `from`/`to`,
-  `forget`'s and `feedback`'s `id`, `remember`'s `links[].target`) accepts a
-  JSON number *or*
-  a decimal string, and advertises both in its input schema.
-- The compiler tools instead take a per-request switch:
+- Every tool that returns an id also returns a decimal-string twin: `id_str`,
+  `edge_id_str`, `ids_str`, `from_str`/`to_str`, `target_id_str`. **Relay the
+  string form**, not the number.
+- Every tool that accepts an id (`relate`/`unrelate`'s `from`/`to`, `forget`'s
+  and `feedback`'s `id`, `remember`'s `links[].target`,
+  `explain_compilation`'s `fragment_id`, `save_working_context`'s nested
+  `fragment_id`/`memory_id`) accepts a JSON number *or* a decimal string. Its
+  input schema **advertises only the string**: a client harness flattens a
+  two-form `type` into "anything", which destroys the contract instead of
+  publishing it, so the schema names the one form that survives a
+  float-lossy client. The server still accepts both.
+- The compiler tools additionally take a per-request switch:
   `policy.ids_as_strings: true` rewrites every id field of that response
   (`fragment_id`, `content_hash`, `memory_id`, `fragment_ids`) into decimal
   strings. Default `false`, so existing clients see today's numeric response.
+  `load_working_context` is the exception that needs no switch: it always
+  answers in decimal strings, because it is the reading half of a round trip
+  whose writing half (`save_working_context`) advertises only that form.
 
 ---
 
@@ -62,13 +71,17 @@ Store a fact in durable local memory.
 
 | Parameter | Type | Required | Notes |
 |---|---|---|---|
-| `fact` | string | yes | The text to store. Capped at 1 MiB (`MAX_FACT_BYTES`). |
+| `fact` | string | yes | The text to store. Capped at 2048 bytes (`MAX_EMBEDDABLE_TEXT_BYTES`) — roughly what the embedding model's context window holds; a longer fact is refused with its size, never silently truncated. (The wider 1 MiB `MAX_FACT_BYTES` allocation cap applies to `remember_extracted`'s raw `text` and to stored context-compiler sources, not to a single fact.) |
 | `links` | array of `{target, relation}` | no | Typed edges created at write time; `target` accepts a number or a decimal string. |
 | `metadata` | object | no | Free-form structured metadata for later filtering. Capped at 64 KiB serialized (`MAX_METADATA_BYTES`). |
 | `ttl_seconds` | integer | no | Durable expiry that survives a restart. Omit for a permanent fact; falls back to the server's `VELESDB_MEMORY_DEFAULT_TTL`. |
 
 Returns `{ id, id_str }`. The id is derived from the fact's content, so
 re-remembering identical text is idempotent — same id, updated in place.
+
+When the server runs autograph through its async worker, edges derived from a
+`remember` land asynchronously: an `entity` or `why` read immediately after
+may not see them yet — the fact itself is always immediately readable.
 
 ```jsonc
 remember { "fact": "we chose parking_lot to avoid lock poisoning",
@@ -112,8 +125,8 @@ from every read.
 
 ## `recall`
 
-Semantic (vector) retrieval, most similar first, with an optional exact-match
-metadata filter served by the ColumnStore.
+Semantic (vector) retrieval with an optional exact-match metadata filter
+served by the ColumnStore.
 
 | Parameter | Type | Required | Notes |
 |---|---|---|---|
@@ -122,8 +135,9 @@ metadata filter served by the ColumnStore.
 | `filter` | object | no | Exact-match metadata, e.g. `{"project":"veles","status":"resolved"}`. |
 
 Returns `{ memories: [ { id, id_str, score, content, metadata } ] }`. Ranking
-also folds in each fact's learned confidence, so `feedback` changes future
-`recall` order.
+blends similarity with each fact's learned confidence, so `feedback` changes
+future `recall` order; the returned `score` stays the raw similarity, never
+the blended value.
 
 ```jsonc
 recall { "query": "billing retries", "limit": 5, "filter": { "project": "checkout" } }
@@ -141,10 +155,23 @@ comparisons, not just equality.
 | `limit` | integer | no | Default 10, capped at 1000. |
 | `filters` | array of `{field, op, value}` | yes | `op` ∈ `eq`, `ne`, `lt`, `le`, `gt`, `ge`. All predicates are ANDed. |
 
+`recall_where` returns `{ memories }`, most similar first — the same envelope
+as `recall`, each memory carrying its id (`id_str` for float-lossy clients),
+content, score and metadata.
+
 **Comparisons are type-strict, with no runtime coercion.** A filter value of
 `20230601` (a JSON number) never matches a fact stored as `{"ts":
 "20230601"}` (a JSON string) — same value, different JSON type, no match and
 no error. Store comparable values numerically at `remember` time.
+
+**Your own memories only.** The store also holds internal scaffolding in the
+same collection: the entity hubs behind `entity`/`why`, and the context
+compiler's artefacts (stored sources, compilation events, working contexts
+and their per-project index). None of it is ever returned here, whatever the
+predicate. This is enforced by the engine, not implied by those facts being
+unfilterable: `ne` matches a fact that has no such field **at all**, and
+scaffolding carries none of your columns, so every `ne` predicate used to
+sweep all of it in.
 
 ```jsonc
 recall_where { "query": "incidents",
@@ -183,7 +210,7 @@ Create a typed, directional edge between two existing memories.
 | `to` | integer or decimal string | yes | The memory the link points **to**. |
 | `relation` | string | yes | Label, read as `from` *relation* `to` (`caused_by`, `depends_on`, `authored_by`, `supersedes`, …). |
 
-Returns `{ edge_id, edge_id_str }`. Idempotent per `(from, relation, to)`.
+Returns `{ edge_id, edge_id_str }`. Idempotent per `(from, relation, to)`: the id is derived from the triple, so a repeated call answers the edge already there rather than adding a parallel one.
 
 **Direction matters.** Traversal follows OUTGOING edges only: point `from` at
 the memory you will later ask `why` about, and `to` at its evidence
@@ -245,16 +272,33 @@ attributes merged onto its node and the typed edges leaving it.
 |---|---|---|---|
 | `name` | string | yes | Matched case-insensitively (trimmed, lowercased). |
 
-Returns `{ found, id, id_str, name, attributes, relations }`. `found: false`
-means nothing has ever mentioned that entity; `name` always echoes the
-canonicalized queried name so parallel lookups stay pairable. `relations` are
-the typed edges **leaving** the entity, with the bipartite `mentions`
-scaffolding excluded.
+Returns `{ found, id, id_str, name, attributes, relations, relations_in,
+relations_truncated, relations_in_truncated }`.
+`found: false` means nothing has ever mentioned that entity; `name` always
+echoes the canonicalized queried name so parallel lookups stay pairable.
+`relations` are the typed edges **leaving** the entity; `relations_in` those
+**pointing at** it, each naming its source. Both matter, and reading only one
+loses half the graph: the store holds `camille --soeur de--> theo`, so "who is
+Theo's sister?" is answered by his `relations_in`, never by his `relations`.
+The bipartite `mentions` scaffolding is excluded from both.
+
+Each direction is budget-bounded: at most 64 resolved edges
+(`MAX_ENTITY_RELATIONS`) found within a scan window of 4096 raw edges
+(`MAX_ENTITY_SCAN_EDGES`) — an entity mentioned by thousands of facts would
+otherwise be a constructible multi-megabyte response. A cut is REPORTED, not
+silent: `relations_truncated` / `relations_in_truncated` say when the
+matching list is a partial view, since a list holding exactly the cap is
+otherwise indistinguishable from a cut one.
+
+With the async autograph worker active, edges derived from a `remember` land
+asynchronously, so an `entity` read immediately after that `remember` may not
+see them yet — the fact itself is always immediately readable.
 
 ```jsonc
 entity { "name": "Theo Durand" }
 → { "found": true, "name": "theo durand", "attributes": { "age": 15 },
-    "relations": [ { "predicate": "frere de", … } ] }
+    "relations": [ { "predicate": "frere de", … } ],
+    "relations_in": [ { "predicate": "soeur de", "source": "camille", … } ] }
 ```
 
 ## `why`
@@ -268,8 +312,16 @@ subgraph** reachable from it through typed links.
 | `max_hops` | integer | no | Default 2 (`DEFAULT_WHY_HOPS`), capped at 10 (`MAX_WHY_HOPS`). |
 | `filter` | object | no | Exact-match metadata filter scoping the seed, e.g. `{"project":"veles"}`. |
 
-Returns `{ nodes: [ { id, id_str, content, hop } ], edges: [ { from, from_str, to, to_str, relation } ] }`
+Returns `{ nodes: [ { id, id_str, content, hop } ], edges: [ { from, from_str, to, to_str, relation } ], truncated }`
 — the seed is `hop: 0`.
+
+The walk is width-bounded as well as depth-bounded: at most 64 outgoing edges
+are followed from any one node (`MAX_WHY_NODE_DEGREE`), at most 500 nodes
+(`MAX_WHY_NODES`) and 2000 edges (`MAX_WHY_EDGES`) are returned per walk. A
+walk that hits a budget SAYS so: `truncated: true` means a cap cut the walk
+before it exhausted the reachable graph — the signal counts alone cannot
+carry, a subgraph sitting exactly at a cap being indistinguishable from a
+complete one. The same budgets bound the graph half of `recall_fused`.
 
 This is what a pure vector search cannot do: it surfaces the PR, the ticket,
 or the benchmark reachable through typed links **even when they share no
@@ -305,10 +357,69 @@ the fact↔topic graph, so `why` can connect them with no manual `relate`.
 | `text` | string | yes | Raw text. Capped at 1 MiB (`MAX_FACT_BYTES`). |
 | `metadata` | object | no | Applied to every extracted fact. |
 
-Returns `{ ids, ids_str }` in extraction order.
+Returns `{ ids, ids_str, skipped_over_cap }`, the ids in extraction order.
+`skipped_over_cap` counts facts the extractor produced and this tool DROPPED
+for exceeding the 2048-byte embeddable-text cap. It is always present, and it
+is the only way to tell a drop from the model simply extracting fewer facts —
+read it, or you will believe you stored a passage you stored only part of.
 
-**Opt-in.** The server must be built with `--features extract` *and* started
-with `VELESDB_MEMORY_EXTRACTOR` set. Without a backend the tool returns an
+## `memory_status`
+
+Report the server's health and configuration — the answers a user otherwise
+discovers only through degraded recall. Takes no parameters.
+
+Returns `{ embedder, provenance, extraction, memory }`:
+
+- `embedder` — `{ model, dimension, semantic }`: what is RUNNING.
+  `semantic: false` means the offline `hash` default — recall matches surface
+  form, not meaning, and switching to a semantic embedder is an env-var
+  change, never a rebuild. All three are `null` when the host embedded the
+  server without declaring an identity.
+- `provenance` — `{ recorded, model, dimension }`: what the store was FILLED
+  by, per its on-disk record (#1751). `recorded: false` on a store predating
+  the record; the mismatch check then degrades to dimension alone.
+- `extraction` — `{ configured, autograph_active, autograph_dropped }`:
+  `remember_extracted` works iff `configured`; the two autograph fields
+  report the background enrichment worker and its counted drops.
+- `memory` — `{ facts, edges }`: corpus size. `edges: 0` is the meaningful
+  reading — nothing ever wired the graph, so `why` has nothing to walk and
+  degrades to plain search. `edges: null` means the backend cannot count
+  without materializing (not the same statement as `0`).
+
+Call it at session start, and whenever recall quality or `why`'s evidence
+trails surprise you.
+
+## `list_memories`
+
+Audit the store: walk every stored fact, page by page — the question
+`recall` structurally cannot answer, because recall ranks by resemblance to
+a query and what resembles nothing you thought to ask stays invisible.
+
+| Parameter | Type | Required | Notes |
+|---|---|---|---|
+| `cursor` | integer or decimal string | no | The previous page's `next_cursor`. Omit to start the walk. |
+| `limit` | integer | no | Page size (default 50, clamped server-side). |
+| `filter` | object | no | Keep only facts whose metadata equals every given key. A filtered page may come back sparse — keep following `next_cursor`; the walk stays exhaustive. |
+| `include_internal` | boolean | no | Also list graph scaffolding and reserved `_veles_*` keys, verbatim. Default `false`. |
+
+Returns `{ memories, next_cursor }`: `memories` entries carry
+`{ id, id_str, content, metadata }`, ids ascending — two audits of the same
+store see the same order — with metadata under `recall`'s visibility rule
+(business keys plus the auto-stamped `_veles_date`). `next_cursor` is a
+decimal string to pass back as `cursor`; `null` ends the walk. Ids exceed
+2^53 — relay `id_str`.
+
+For a full-store backup in one command — including a store whose configured
+embedder no longer matches, which the daemon refuses to SERVE but which
+stays yours to READ — use the CLI instead (stop the daemon first; it holds
+the store's single-writer lock):
+
+```bash
+velesdb-memory export --output memories.jsonl   # --include-internal for a verbatim backup
+```
+
+**Opt-in at runtime.** The backend is compiled into the default build; the
+server must be started with `VELESDB_MEMORY_EXTRACTOR` set. Without a backend the tool returns an
 explicit "extraction backend not configured" error rather than silently doing
 nothing. Configuration: [MCP server setup →
 auto-extraction](../guides/MCP_SERVER_SETUP.md#auto-extraction-backend-opt-in).
@@ -389,10 +500,13 @@ with event and source recording off.
 | Parameter | Type | Required | Notes |
 |---|---|---|---|
 | `request` | `CompileRequest` | yes | The exact request to explain. |
-| `fragment_id` | integer | yes | The fragment whose decision to return. |
+| `fragment_id` | string (or integer) | yes | The fragment whose decision to return. Relay the value `compile_context` handed you — under `policy.ids_as_strings` that is a decimal string, and this tool accepts it unchanged. |
 | `fragment_index` | integer | no | 0-based position in `request.fragments`. **Takes priority** over `fragment_id` when given. |
 
-Returns one `ContextDecision`: `{ action, rule_id, reason, relevance, risk, content_hash, handle? }`.
+Returns one `ContextDecision`: `{ fragment_id, memory_id, action, rule_id, reason, relevance, risk, content_hash, handle? }`.
+`fragment_id` is the content-derived id the decision was recorded under, and
+`memory_id` is set only when the fragment was pulled from memory rather than
+supplied inline.
 
 Pass `fragment_index` when fragments may be byte-identical: they share a
 content-addressed `fragment_id`, so a plain id lookup always resolves to the
@@ -426,7 +540,9 @@ Aggregate the recorded savings of past `compile_context` calls.
 |---|---|---|---|
 | `project` | string | no | Restrict the aggregation to one project facet. |
 
-Returns `{ events, tokens_in, tokens_out, tokens_saved, truncated, … }`.
+Returns `{ events, tokens_in, tokens_out, tokens_saved, cost_saved_micros_by_currency, truncated }`.
+`cost_saved_micros_by_currency` totals the saving per currency, in millionths
+of a unit, so no rounding happens before you read it.
 `truncated: true` means the sweep hit the recall cap. Figures are **local
 estimates** recorded per compilation — metadata only, never content — not a
 provider's billed count.
@@ -463,10 +579,10 @@ up instead of re-deriving it.
 `WorkingContext` is
 `{ goal?, active_constraints[], verified_facts[], open_hypotheses[], decisions[], exact_evidence[], pending_actions[] }`.
 
-Returns `{ id }` — the stored system fact backing this context. Saving again
-under the same `project` + `session` replaces the previous state (idempotent
-upsert), and refreshes the entry in the project index rather than duplicating
-it.
+Returns `{ id, id_str }` — the stored system fact backing this context; relay
+`id_str` if you intend to `forget` it. Saving again under the same `project` +
+`session` replaces the previous state (idempotent upsert), and refreshes the
+entry in the project index rather than duplicating it.
 
 ## `load_working_context`
 
@@ -481,6 +597,13 @@ Returns `{ found, working, other_sessions }`. `found: false` with
 `working: null` means nothing was ever saved under that exact pair — not an
 error, but check `other_sessions`: a similarly-named entry there usually means
 `session` was a typo rather than a genuinely fresh start.
+
+Ids inside `working` (`fragment_id`, `memory_id`) come back as **decimal
+strings**, unconditionally — the exact bytes `save_working_context` accepts,
+so an agent can enrich what it loaded and save it back without converting
+anything. Relaying them as numbers would round every id past 2^53 on a
+float-lossy client, silently breaking the provenance trail of the very tool
+that exists to survive a lost session.
 
 ## `list_working_contexts`
 
@@ -545,4 +668,4 @@ so the MCP taxonomy cannot drift from the bindings':
 
 ---
 
-Last updated: 2026-07-25 · Applies to: velesdb-memory 0.11.6
+Last updated: 2026-08-09 · Applies to: velesdb-memory 0.12.0

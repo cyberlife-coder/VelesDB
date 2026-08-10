@@ -1,0 +1,3596 @@
+{
+  "tools": [
+    {
+      "description": "Compile context fragments into a token-budgeted, provenance-audited prompt context — deterministically, with no LLM call. Duplicates are dropped, repeated log lines collapse, code/URLs/numbers/negative constraints survive verbatim, over-budget content becomes retrievable ctx://source/ handles instead of silently vanishing, and `memory_scope` pulls relevant stored memories into the result. Each fragment's own `metadata` is capped at 64 KiB serialized. A fragment may set `path` (an absolute filesystem path) instead of inline `content` to ingest a file by reference — `path` is exclusive and cannot be combined with `content` or `media`, while `content` and `media` MAY travel together (the content is then the image's caption, and the only text lexical relevance can read); a fragment carrying none of the three is refused. Path ingestion requires the server to be started with VELESDB_MEMORY_INGEST_ROOTS set to an allowlist of directories, and the resolved file must be plain UTF-8 text under 1 MiB. Returns the assembled content plus one auditable decision per fragment (rule id, reason, risk), the sources, the retrieval handles, token-savings insights, and `warnings` — a mechanical shortlist of externalized fragments relevant enough to the query that they are worth a second look. An empty `warnings` is NOT a clean bill of health: only `retrieve` decisions at or above a relevance floor ever qualify, so a `preserve` fragment the packer could only fit partially, and an abstracted one, are real losses that never appear there — `decisions` stays the exhaustive record, and `risk` is the cheap second signal. `policy.slim_response` (default false) empties `sections`/`decisions` from the response — keep it off when you need the audit trail, or re-compile without it later (compilation is deterministic). `policy.ids_as_strings` (default false) rewrites every id field of the response into a decimal string, for MCP clients without u64-safe JSON number parsing.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "fragments": {
+            "description": "The context fragments to compile.",
+            "items": {
+              "description": "One unit of caller-supplied context to compile.",
+              "properties": {
+                "content": {
+                  "default": "",
+                  "description": "The fragment text. `#[serde(default)]` (V2b-1): a `path` fragment\ncarries no `content` on the wire — the adapter resolves `path` into\n`content` in a pre-pass before the pure compiler core ever sees the\nrequest, so this stays the only field the core reads.",
+                  "type": "string"
+                },
+                "id": {
+                  "description": "Caller-side identifier. When absent, the compiler derives a stable\ncontent-addressed id (see [`super::fragment_id`]). Accepts a JSON\nnumber or a decimal string on input (see\n[`super::wire::deserialize_optional_id`]) — a caller that got a\n`fragment_id` back as a string (e.g. under\n[`CompilePolicy::ids_as_strings`]) can resubmit it unchanged.",
+                  "type": "string"
+                },
+                "kind": {
+                  "description": "Free-form kind hint (`\"code\"`, `\"log\"`, `\"prose\"`, …) — classification\nworks without it, but honors it when present.",
+                  "type": "string"
+                },
+                "media": {
+                  "description": "Inline media payload (US-009, PR1). `None` (the default) keeps every\npre-0.9.0 request wire-compatible. When set, the fragment packs as one\natomic piece — see [`MediaRef`].",
+                  "properties": {
+                    "bytes_b64": {
+                      "description": "The raw media bytes, base64-encoded (standard alphabet, padded).\nCapped at [`crate::limits::MAX_MEDIA_BYTES`] and validated for\nwell-formedness at compile time — a request carrying an oversized or\nmalformed payload is rejected before any other work.",
+                      "type": "string"
+                    },
+                    "mime": {
+                      "description": "Declared MIME type (e.g. `\"image/png\"`, `\"image/jpeg\"`). Only PNG and\nJPEG headers are sniffed for dimensions; any other value (or an\nunreadable header) falls back to a deterministic, safe over-count\n(see [`super::estimator::ImageTokenEstimator`]) — never rejected for\nan unrecognized mime alone.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "mime",
+                    "bytes_b64"
+                  ],
+                  "type": "object"
+                },
+                "metadata": {
+                  "additionalProperties": true,
+                  "description": "Caller metadata. Recognized keys: `\"verbatim\": true` forces\n[`ContextAction::Preserve`]; `\"cache\": true` forces\n[`ContextAction::Cache`].",
+                  "type": "object"
+                },
+                "path": {
+                  "description": "Read this file's content from disk in place of an inline `content`\n(V2b-1 path ingestion). `path` is EXCLUSIVE — it is resolved into\n`content` before the compiler core runs, so a fragment carrying\n`path` together with `content` or `media` is rejected. `content` and\n`media` together are fine, and are the intended shape for an image\nand its caption. A fragment carrying none of the three is rejected\nas well. Requires the server to be started\nwith `VELESDB_MEMORY_INGEST_ROOTS` set (a colon/semicolon-separated\nallowlist of directories, platform `PATH`-list syntax); otherwise\nevery `path` fragment fails with an explicit \"ingestion disabled\"\nerror. The path must be absolute and resolve (after following\nsymlinks) to a plain file under one of the configured roots, no\nlarger than [`crate::limits::MAX_INGEST_FILE_BYTES`] and valid UTF-8.\nThe **pure compiler core never reads this field** — resolution is an\nadapter-side I/O pre-pass (see the crate's `context::ingest`\nmodule); a `path` fragment that reaches [`super::ContextCompiler`]\nunresolved is rejected with\n[`crate::error::MemoryError::IngestDisabled`].",
+                  "type": "string"
+                },
+                "priority": {
+                  "description": "Caller priority, higher packs first (default `0`).",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "memory_scope": {
+            "description": "Which memories may be pulled in (US-002; ignored by the memoryless core).",
+            "properties": {
+              "graph_boost": {
+                "description": "Fusion weight added to graph-reached memories (default 0.15). Raise\nit (e.g. `0.5`–`0.8`) when pulling from curated fact chains built\nwith `relate`: evidence that shares **no vocabulary** with the query\ncan then out-rank lexically-noisy near-misses — the tri-engine's\nanswer to the purely lexical relevance of caller fragments.",
+                "format": "double",
+                "type": "number"
+              },
+              "hops": {
+                "description": "Graph-walk depth of the fused recall (default 2). Deeper hops reach\nlonger cause/fix chains from the vector seed.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "k": {
+                "description": "How many memories to consider (adapter-clamped).",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "project": {
+                "description": "Restrict recalled memories to this project facet.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "policy": {
+            "description": "Per-request policy override; `None` uses the compiler's policy.",
+            "properties": {
+              "chunk": {
+                "default": {
+                  "boundary": "paragraph",
+                  "max_chunk_bytes": 2048,
+                  "overlap_bytes": 0
+                },
+                "description": "How oversized fragments are split before packing. Only\n[`ChunkPolicy::max_chunk_bytes`] and [`ChunkPolicy::boundary`] apply\nhere — the compiler forces `overlap_bytes` to `0`, since it emits\npieces by concatenation and an overlap prefix would duplicate content\nreported as verbatim. `overlap_bytes` is honoured only by the\nstandalone [`crate::context::chunk::chunk_text`] API.",
+                "properties": {
+                  "boundary": {
+                    "default": "paragraph",
+                    "description": "Preferred cut points.\n- \"paragraph\": Cut at blank lines (`\\n\\n`), falling back to hard splits inside an\noversized paragraph.\n- \"sentence\": Cut after sentence enders (`.`, `!`, `?` followed by whitespace).\n- \"fixed\": Cut at the byte ceiling only (char-aligned).",
+                    "enum": [
+                      "paragraph",
+                      "sentence",
+                      "fixed"
+                    ],
+                    "type": "string"
+                  },
+                  "max_chunk_bytes": {
+                    "default": 2048,
+                    "description": "Soft byte ceiling per chunk (fences may exceed it, see module doc).",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "overlap_bytes": {
+                    "default": 0,
+                    "description": "Bytes of the previous chunk to repeat at the start of the next one\n(char-aligned). `0` keeps chunks disjoint.",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "type": "object"
+              },
+              "disabled_rules": {
+                "default": [],
+                "description": "Rule ids to disable (e.g. `\"abstract.log_dedup\"`). Disabled rules are\nskipped during classification; their fragments fall through to the\nnext matching rule.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "event_ttl_seconds": {
+                "description": "TTL applied to compilation events (`None` keeps them).",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "ids_as_strings": {
+                "default": false,
+                "description": "Wire-compat opt-in for the MCP context tools (`compile_context`,\n`explain_compilation`): when `true`, every [`super::wire::ID_KEYS`]\nfield of the RESPONSE (`fragment_id`, `content_hash`, `memory_id`,\n`fragment_ids`) is rewritten into its decimal-string form, through\nthe exact same tree walk the Node and WASM bindings already apply on\nevery response ([`super::wire::stringify_id_fields`]). A raw MCP\nclient — one that talks JSON-RPC directly, without either binding —\nparses ids as JS `number`s (IEEE-754 doubles), which silently lose\nprecision above 2^53; string ids round-trip exactly. Default\n`false`: existing MCP clients keep today's byte-identical numeric\nresponse unless they opt in.",
+                "type": "boolean"
+              },
+              "importance": {
+                "default": {
+                  "confidence": 0.2,
+                  "recency": 0.1
+                },
+                "description": "Memory bridge only: usage-driven importance blend over the pulled\nmemories (RL confidence + batch-relative recency). The struct-level\n`#[serde(default)]` keeps 0.8.0 requests wire-compatible.",
+                "properties": {
+                  "confidence": {
+                    "default": 0.2,
+                    "description": "Weight of the learned RL confidence (`_veles_rl_*`, fed by\n[`feedback`](crate::MemoryService::feedback)). A memory with no\nfeedback history counts as the neutral `0.5`, contributing exactly\n`0`. Default `0.2`.",
+                    "format": "double",
+                    "type": "number"
+                  },
+                  "recency": {
+                    "default": 0.1,
+                    "description": "Weight of the batch-relative recency term. Inert unless\n[`Self::recency_field`] is also set. Default `0.1`.",
+                    "format": "double",
+                    "type": "number"
+                  },
+                  "recency_field": {
+                    "description": "Caller metadata key holding each memory's **numeric** timestamp-like\nvalue. `None` (the default) disables the recency term completely —\nthere is no standard key to guess. The scale must be monotone and\nhomogeneous across the batch (e.g. `YYYYMMDD` integers as in\n[`crate::format_dated_context`], or an epoch); it is documented, not\nverified at run time. Values are min-max normalised over the pulled\nmemories that carry the key; a memory without the key contributes `0`\n(never penalised), and a degenerate batch (`max == min`) contributes\n`0` for all.",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "near_dup_dedup": {
+                "default": true,
+                "description": "Collapse near-duplicates (case/whitespace variants) in addition to\nexact duplicates. Default `true`.",
+                "type": "boolean"
+              },
+              "normalize_log_timestamps": {
+                "default": false,
+                "description": "Opt-in, deterministic: before `abstract.log_dedup` groups a `kind =\n\"log\"` fragment's repeated lines, mask each line's volatile prefix\n(ISO/syslog timestamps, bracketed hex/pid counters) with **fixed**\npatterns — never a caller-supplied regex, so the collapse stays\nreproducible — so lines identical modulo timestamp collapse into one\nannotated line instead of surviving as distinct entries. The emitted\nline is still the first occurrence's exact bytes; only the grouping\nkey changes. Default `false`: masking is opt-in because it changes\nwhat \"duplicate\" means for logs, so callers who rely on the previous\nbyte-exact grouping keep it unless they ask. See the crate README's\n\"Normalizing timestamped logs\" section for the exact patterns.",
+                "type": "boolean"
+              },
+              "pricing": {
+                "description": "Caller-supplied pricing table so the insights also report the\nestimated cost avoided for [`super::model::CompileRequest::target_model`] — the\n**wire channel** for cost accounting (MCP and the bindings cannot\nreach the Rust-only [`super::ContextCompiler::with_pricing`] builder).\nTakes precedence over a builder-injected table. `None` (default)\nreports tokens only.",
+                "properties": {
+                  "currency": {
+                    "description": "ISO-4217 currency code of every rate in the table (e.g. `\"EUR\"`).",
+                    "type": "string"
+                  },
+                  "models": {
+                    "additionalProperties": {
+                      "description": "Pricing of one model, in integer micro-units per **million** input tokens\n(e.g. a `3 USD / 1M tokens` rate is `3_000_000`).",
+                      "properties": {
+                        "input_micros_per_million_tokens": {
+                          "description": "Micro-units of the table's currency per million input tokens.",
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "input_micros_per_million_tokens"
+                      ],
+                      "type": "object"
+                    },
+                    "description": "Rates keyed by model name (a `BTreeMap` so iteration — and therefore\nevery serialized output — is deterministically ordered).",
+                    "type": "object"
+                  },
+                  "version": {
+                    "description": "Caller-side version tag of this table (recorded in insights so a cost\nfigure is always traceable to the prices that produced it).",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "version",
+                  "currency",
+                  "models"
+                ],
+                "type": "object"
+              },
+              "record_events": {
+                "default": true,
+                "description": "Memory bridge only: record a compilation event (metadata and hashes,\n**never fragment content**) so savings stay aggregatable. Default\n`true`; set `false` to opt out entirely.",
+                "type": "boolean"
+              },
+              "response_reserve_tokens": {
+                "default": 0,
+                "description": "Tokens kept aside for the model's answer; the compiler packs into\n`token_budget − response_reserve_tokens`. Default `0`: the caller\nknows their generation length, the compiler does not guess it.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "slim_response": {
+                "default": false,
+                "description": "Quick win (V2a-2): when `true`, `sections` and `decisions` are\nemptied out of the response after compilation — `content`,\n`insights`, `risk`, `warnings`, `sources`, and `retrieval_handles`\nare unaffected. The full audit trail (`sections`/`decisions`) is\nstill recoverable: re-compile the same request without\n`slim_response` (compilation is deterministic, so nothing is lost,\nonly not sent this time). Default `false`.",
+                "type": "boolean"
+              },
+              "source_ttl_seconds": {
+                "description": "TTL applied to stored sources (`None` keeps them until forgotten).",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "store_sources": {
+                "default": true,
+                "description": "Memory bridge only: store each distinct fragment's original (as an\ninternal system fact, invisible to normal recall) so its\n`ctx://source/<hash>` handle round-trips. Default `true`.",
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          },
+          "project": {
+            "description": "Project facet, recorded in provenance and used by the memory bridge.",
+            "type": "string"
+          },
+          "query": {
+            "description": "What the agent is working on — drives relevance scoring.",
+            "type": "string"
+          },
+          "target_model": {
+            "description": "Target model name — selects the row of the pricing table\n([`CompilePolicy::pricing`] on the wire, or the Rust\n[`super::ContextCompiler::with_pricing`] builder) for cost insights.\nWithout a table, insights report tokens only.",
+            "type": "string"
+          },
+          "token_budget": {
+            "description": "Hard token ceiling for the assembled content.",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "query",
+          "fragments",
+          "token_budget"
+        ],
+        "type": "object"
+      },
+      "name": "compile_context",
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "content": {
+            "description": "The assembled context, ready to inject into a prompt.",
+            "type": "string"
+          },
+          "decisions": {
+            "description": "One decision per input fragment (duplicates included). Emptied by\n[`CompilePolicy::slim_response`].",
+            "items": {
+              "description": "The auditable record of what happened to one fragment and why.",
+              "properties": {
+                "action": {
+                  "description": "What was done.",
+                  "oneOf": [
+                    {
+                      "const": "preserve",
+                      "description": "Emitted verbatim — critical content (code, constraints, exact values).",
+                      "type": "string"
+                    },
+                    {
+                      "const": "abstract",
+                      "description": "Emitted as a deterministic structured reduction (never a generative\nsummary) — e.g. repeated log lines collapsed with a count.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "retrieve",
+                      "description": "Not emitted, but recoverable through its `ctx://source/<id>` handle.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "drop",
+                      "description": "Not emitted and not externalized — redundant content (duplicates).",
+                      "type": "string"
+                    },
+                    {
+                      "const": "cache",
+                      "description": "Emitted verbatim at the front of the output, forming a stable prefix\nthat maximizes provider prompt-cache hits across compilations.",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "content_hash": {
+                  "description": "Content hash of the *original* fragment text (FNV-1a 64, the crate's\n[`stable id`](super::fragment_id)) — lets an auditor prove which exact\nbytes the decision covered even when the caller supplied its own id.",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "string"
+                  ]
+                },
+                "fragment_id": {
+                  "description": "The fragment this decision is about (caller id, or content-derived).",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "string"
+                  ]
+                },
+                "handle": {
+                  "description": "Recoverable address of the original content, when not fully emitted.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "memory_id": {
+                  "description": "The memory backing this fragment, when it came from recall (US-002).",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "string",
+                    "null"
+                  ]
+                },
+                "reason": {
+                  "description": "Human-readable explanation of the decision.",
+                  "type": "string"
+                },
+                "relevance": {
+                  "description": "Lexical relevance of the fragment to the request query, in `[0, 1]`.",
+                  "format": "float",
+                  "type": "number"
+                },
+                "risk": {
+                  "description": "Fidelity risk this single decision contributes.",
+                  "oneOf": [
+                    {
+                      "const": "low",
+                      "description": "Nothing was lost: everything fit, only exact duplicates were dropped.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "medium",
+                      "description": "Recoverable reductions happened: abstractions, or non-critical\nfragments externalized behind retrieval handles.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "high",
+                      "description": "Critical content (a preserve-classified fragment) could not be packed\n— the caller should consider retrieving it or raising the budget.",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "rule_id": {
+                  "description": "The stable id of the rule that decided (e.g. `\"preserve.code_fence\"`).",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "fragment_id",
+                "content_hash",
+                "action",
+                "rule_id",
+                "relevance",
+                "risk",
+                "reason"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "insights": {
+            "description": "Token (and optional cost) savings of this compilation.",
+            "properties": {
+              "currency": {
+                "description": "Currency of the cost figure, from the pricing table.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "estimated_cost_saved_micros": {
+                "description": "Estimated cost avoided, in micro-units of [`Self::currency`] — only\nwhen a pricing table was injected *and* it prices the target model.",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "pricing_version": {
+                "description": "Version tag of the pricing table that produced the cost figure.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tokens_in": {
+                "description": "Estimated tokens of all input fragments combined.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "tokens_out": {
+                "description": "Estimated tokens of the assembled output.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "tokens_saved": {
+                "description": "`tokens_in − tokens_out` (saturating) — the local *estimate* of what\nthis compilation avoided sending; not billed tokens.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "tokens_saved_by_rule": {
+                "additionalProperties": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "description": "Tokens saved attributed to the rule that saved them, keyed by rule id\n(`BTreeMap` for deterministic serialization order).",
+                "type": "object"
+              }
+            },
+            "required": [
+              "tokens_in",
+              "tokens_out",
+              "tokens_saved",
+              "tokens_saved_by_rule"
+            ],
+            "type": "object"
+          },
+          "retrieval_handles": {
+            "description": "Handles for the fragments that were externalized, not emitted.",
+            "items": {
+              "description": "A not-emitted fragment the caller can fetch back on demand.",
+              "properties": {
+                "estimated_tokens": {
+                  "description": "Estimated token cost of re-injecting the full original.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "fragment_id": {
+                  "description": "The fragment behind the handle.",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "string"
+                  ]
+                },
+                "handle": {
+                  "description": "Recoverable address of the original content (`ctx://source/<id>`).",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "handle",
+                "fragment_id",
+                "estimated_tokens"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "risk": {
+            "description": "Overall fidelity risk (the max over all decisions).",
+            "oneOf": [
+              {
+                "const": "low",
+                "description": "Nothing was lost: everything fit, only exact duplicates were dropped.",
+                "type": "string"
+              },
+              {
+                "const": "medium",
+                "description": "Recoverable reductions happened: abstractions, or non-critical\nfragments externalized behind retrieval handles.",
+                "type": "string"
+              },
+              {
+                "const": "high",
+                "description": "Critical content (a preserve-classified fragment) could not be packed\n— the caller should consider retrieving it or raising the budget.",
+                "type": "string"
+              }
+            ]
+          },
+          "sections": {
+            "description": "The output split into ordered blocks (cache prefix first). Emptied by\n[`CompilePolicy::slim_response`].",
+            "items": {
+              "description": "One contiguous block of the assembled output.",
+              "properties": {
+                "content": {
+                  "description": "The block's text (verbatim slice of [`CompiledContext::content`]).",
+                  "type": "string"
+                },
+                "fragment_ids": {
+                  "description": "Ids of the fragments emitted into this block, in emission order.",
+                  "items": {
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "string"
+                    ]
+                  },
+                  "type": "array"
+                },
+                "kind": {
+                  "description": "Which block this is.",
+                  "oneOf": [
+                    {
+                      "const": "cache",
+                      "description": "The stable, cache-marked prefix.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "body",
+                      "description": "The main compiled body.",
+                      "type": "string"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "content",
+                "fragment_ids"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "sources": {
+            "description": "One source pointer per distinct fragment.",
+            "items": {
+              "description": "A pointer from a compiled output back to one original fragment.",
+              "properties": {
+                "fragment_id": {
+                  "description": "The fragment this source refers to. Accepts a JSON number OR a\ndecimal string on input: a `fragment_id` is an FNV-1a 64 content hash\n(see [`ContextDecision::content_hash`]), so it is almost always above\n2^53 — a float-lossy JSON client that reads one back from a compiled\ncontext and resubmits it inside a working context would otherwise\ncorrupt it silently. Same accepted-forms rule as issue #1468's ids;\nthe serialized (output) shape is unchanged.",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "string"
+                  ]
+                },
+                "handle": {
+                  "description": "Recoverable address of the original content (`ctx://source/<id>`).",
+                  "type": "string"
+                },
+                "memory_id": {
+                  "description": "The memory backing this source, when it came from recall (US-002).\nAccepts a JSON number OR a decimal string on input, exactly like\n`fragment_id` just above.",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "fragment_id",
+                "handle"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "warnings": {
+            "default": [],
+            "description": "Mechanical, low-noise heads-up over `decisions` (V2a-2 quick win):\nevery externalized fragment relevant enough to the query that a\ncaller should double-check it was not needed. `#[serde(default)]` so\na pre-0.10.0 caller reading an older stored/replayed response still\ndeserializes (defaults to empty).",
+            "items": {
+              "description": "A mechanical heads-up over one decision, surfaced in\n[`CompiledContext::warnings`] so a caller can check \"was anything\nrelevant cut?\" without scanning every entry of `decisions` by hand\n(V2a-2 quick win). Only [`ContextAction::Retrieve`] decisions at or\nabove the relevance threshold qualify.\n\n**An empty list is not a clean bill of health** (#1703 DC-4). Several\nreal losses never warn: a [`ContextAction::Preserve`] the packer could\nonly fit partially, an [`ContextAction::Abstract`], and two of\n`dup_verdict`'s [`ContextAction::Drop`] shapes — a media duplicate whose\ncaption diverges from its twin's, and a duplicate whose twin was itself\nnot fully emitted. Both say so in their own reason strings. `decisions`\nremains the exhaustive record; this list is a low-noise shortcut over it,\nnot a substitute for it.",
+              "properties": {
+                "action": {
+                  "description": "What happened to it (always [`ContextAction::Retrieve`] today).",
+                  "oneOf": [
+                    {
+                      "const": "preserve",
+                      "description": "Emitted verbatim — critical content (code, constraints, exact values).",
+                      "type": "string"
+                    },
+                    {
+                      "const": "abstract",
+                      "description": "Emitted as a deterministic structured reduction (never a generative\nsummary) — e.g. repeated log lines collapsed with a count.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "retrieve",
+                      "description": "Not emitted, but recoverable through its `ctx://source/<id>` handle.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "drop",
+                      "description": "Not emitted and not externalized — redundant content (duplicates).",
+                      "type": "string"
+                    },
+                    {
+                      "const": "cache",
+                      "description": "Emitted verbatim at the front of the output, forming a stable prefix\nthat maximizes provider prompt-cache hits across compilations.",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "fragment_id": {
+                  "description": "The fragment this warning is about.",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "string"
+                  ]
+                },
+                "reason": {
+                  "description": "The matching `decisions` entry's `reason`, copied verbatim.",
+                  "type": "string"
+                },
+                "relevance": {
+                  "description": "Lexical relevance to the request query, in `[0, 1]` — the same value\nas the matching `decisions` entry.",
+                  "format": "float",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "fragment_id",
+                "action",
+                "relevance",
+                "reason"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "content",
+          "sections",
+          "decisions",
+          "sources",
+          "retrieval_handles",
+          "insights",
+          "risk"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "One-call shortcut over compile_context for a raw agent-session transcript: deterministically segments it into turns (plain marker-based — System:/User:/Human:/Assistant:/AI:/Tool:/### User/### Assistant — or JSONL, one line per turn) and, within each turn, into code/log/body sub-segments (fenced code blocks stay atomic; runs of 8+ log-like lines collapse the same way abstract.log_dedup would), then compiles the result exactly like compile_context. Exactly one of `transcript` (inline) or `path` (an absolute filesystem path, same VELESDB_MEMORY_INGEST_ROOTS allowlist as compile_context's `path` fragments but capped at 8 MiB) must be set. `segmentation.format` forces plain or jsonl instead of auto-detecting; a forced jsonl format that fails to parse is a hard error, never a silent fallback. The first turn is tagged cache-eligible when it looks like a system prompt (segmentation.cache_system_turn, default true). Returns `context` (byte-compatible with compile_context's output) plus `segmentation` — the detected format and one audit entry (turn, role, kind, byte range, fragment_id) per segment, so a caller can see exactly how the transcript was cut before trusting the compiled result.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "path": {
+            "description": "Read the transcript from this absolute filesystem path instead of\ninline `transcript` — the same `VELESDB_MEMORY_INGEST_ROOTS`\nallowlist and security pipeline as a `compile_context` fragment's\n`path` (V2b-1), except capped at\n[`crate::limits::MAX_TRANSCRIPT_BYTES`] (8 MiB) instead of the\nordinary 1 MiB fragment ceiling — the transcript is segmented into\nsub-1-MiB pieces immediately after this read.",
+            "type": "string"
+          },
+          "policy": {
+            "description": "Per-request compile policy override, same as `compile_context`'s\n`policy`.",
+            "properties": {
+              "chunk": {
+                "default": {
+                  "boundary": "paragraph",
+                  "max_chunk_bytes": 2048,
+                  "overlap_bytes": 0
+                },
+                "description": "How oversized fragments are split before packing. Only\n[`ChunkPolicy::max_chunk_bytes`] and [`ChunkPolicy::boundary`] apply\nhere — the compiler forces `overlap_bytes` to `0`, since it emits\npieces by concatenation and an overlap prefix would duplicate content\nreported as verbatim. `overlap_bytes` is honoured only by the\nstandalone [`crate::context::chunk::chunk_text`] API.",
+                "properties": {
+                  "boundary": {
+                    "default": "paragraph",
+                    "description": "Preferred cut points.\n- \"paragraph\": Cut at blank lines (`\\n\\n`), falling back to hard splits inside an\noversized paragraph.\n- \"sentence\": Cut after sentence enders (`.`, `!`, `?` followed by whitespace).\n- \"fixed\": Cut at the byte ceiling only (char-aligned).",
+                    "enum": [
+                      "paragraph",
+                      "sentence",
+                      "fixed"
+                    ],
+                    "type": "string"
+                  },
+                  "max_chunk_bytes": {
+                    "default": 2048,
+                    "description": "Soft byte ceiling per chunk (fences may exceed it, see module doc).",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "overlap_bytes": {
+                    "default": 0,
+                    "description": "Bytes of the previous chunk to repeat at the start of the next one\n(char-aligned). `0` keeps chunks disjoint.",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "type": "object"
+              },
+              "disabled_rules": {
+                "default": [],
+                "description": "Rule ids to disable (e.g. `\"abstract.log_dedup\"`). Disabled rules are\nskipped during classification; their fragments fall through to the\nnext matching rule.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "event_ttl_seconds": {
+                "description": "TTL applied to compilation events (`None` keeps them).",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "ids_as_strings": {
+                "default": false,
+                "description": "Wire-compat opt-in for the MCP context tools (`compile_context`,\n`explain_compilation`): when `true`, every [`super::wire::ID_KEYS`]\nfield of the RESPONSE (`fragment_id`, `content_hash`, `memory_id`,\n`fragment_ids`) is rewritten into its decimal-string form, through\nthe exact same tree walk the Node and WASM bindings already apply on\nevery response ([`super::wire::stringify_id_fields`]). A raw MCP\nclient — one that talks JSON-RPC directly, without either binding —\nparses ids as JS `number`s (IEEE-754 doubles), which silently lose\nprecision above 2^53; string ids round-trip exactly. Default\n`false`: existing MCP clients keep today's byte-identical numeric\nresponse unless they opt in.",
+                "type": "boolean"
+              },
+              "importance": {
+                "default": {
+                  "confidence": 0.2,
+                  "recency": 0.1
+                },
+                "description": "Memory bridge only: usage-driven importance blend over the pulled\nmemories (RL confidence + batch-relative recency). The struct-level\n`#[serde(default)]` keeps 0.8.0 requests wire-compatible.",
+                "properties": {
+                  "confidence": {
+                    "default": 0.2,
+                    "description": "Weight of the learned RL confidence (`_veles_rl_*`, fed by\n[`feedback`](crate::MemoryService::feedback)). A memory with no\nfeedback history counts as the neutral `0.5`, contributing exactly\n`0`. Default `0.2`.",
+                    "format": "double",
+                    "type": "number"
+                  },
+                  "recency": {
+                    "default": 0.1,
+                    "description": "Weight of the batch-relative recency term. Inert unless\n[`Self::recency_field`] is also set. Default `0.1`.",
+                    "format": "double",
+                    "type": "number"
+                  },
+                  "recency_field": {
+                    "description": "Caller metadata key holding each memory's **numeric** timestamp-like\nvalue. `None` (the default) disables the recency term completely —\nthere is no standard key to guess. The scale must be monotone and\nhomogeneous across the batch (e.g. `YYYYMMDD` integers as in\n[`crate::format_dated_context`], or an epoch); it is documented, not\nverified at run time. Values are min-max normalised over the pulled\nmemories that carry the key; a memory without the key contributes `0`\n(never penalised), and a degenerate batch (`max == min`) contributes\n`0` for all.",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "near_dup_dedup": {
+                "default": true,
+                "description": "Collapse near-duplicates (case/whitespace variants) in addition to\nexact duplicates. Default `true`.",
+                "type": "boolean"
+              },
+              "normalize_log_timestamps": {
+                "default": false,
+                "description": "Opt-in, deterministic: before `abstract.log_dedup` groups a `kind =\n\"log\"` fragment's repeated lines, mask each line's volatile prefix\n(ISO/syslog timestamps, bracketed hex/pid counters) with **fixed**\npatterns — never a caller-supplied regex, so the collapse stays\nreproducible — so lines identical modulo timestamp collapse into one\nannotated line instead of surviving as distinct entries. The emitted\nline is still the first occurrence's exact bytes; only the grouping\nkey changes. Default `false`: masking is opt-in because it changes\nwhat \"duplicate\" means for logs, so callers who rely on the previous\nbyte-exact grouping keep it unless they ask. See the crate README's\n\"Normalizing timestamped logs\" section for the exact patterns.",
+                "type": "boolean"
+              },
+              "pricing": {
+                "description": "Caller-supplied pricing table so the insights also report the\nestimated cost avoided for [`super::model::CompileRequest::target_model`] — the\n**wire channel** for cost accounting (MCP and the bindings cannot\nreach the Rust-only [`super::ContextCompiler::with_pricing`] builder).\nTakes precedence over a builder-injected table. `None` (default)\nreports tokens only.",
+                "properties": {
+                  "currency": {
+                    "description": "ISO-4217 currency code of every rate in the table (e.g. `\"EUR\"`).",
+                    "type": "string"
+                  },
+                  "models": {
+                    "additionalProperties": {
+                      "description": "Pricing of one model, in integer micro-units per **million** input tokens\n(e.g. a `3 USD / 1M tokens` rate is `3_000_000`).",
+                      "properties": {
+                        "input_micros_per_million_tokens": {
+                          "description": "Micro-units of the table's currency per million input tokens.",
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "input_micros_per_million_tokens"
+                      ],
+                      "type": "object"
+                    },
+                    "description": "Rates keyed by model name (a `BTreeMap` so iteration — and therefore\nevery serialized output — is deterministically ordered).",
+                    "type": "object"
+                  },
+                  "version": {
+                    "description": "Caller-side version tag of this table (recorded in insights so a cost\nfigure is always traceable to the prices that produced it).",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "version",
+                  "currency",
+                  "models"
+                ],
+                "type": "object"
+              },
+              "record_events": {
+                "default": true,
+                "description": "Memory bridge only: record a compilation event (metadata and hashes,\n**never fragment content**) so savings stay aggregatable. Default\n`true`; set `false` to opt out entirely.",
+                "type": "boolean"
+              },
+              "response_reserve_tokens": {
+                "default": 0,
+                "description": "Tokens kept aside for the model's answer; the compiler packs into\n`token_budget − response_reserve_tokens`. Default `0`: the caller\nknows their generation length, the compiler does not guess it.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "slim_response": {
+                "default": false,
+                "description": "Quick win (V2a-2): when `true`, `sections` and `decisions` are\nemptied out of the response after compilation — `content`,\n`insights`, `risk`, `warnings`, `sources`, and `retrieval_handles`\nare unaffected. The full audit trail (`sections`/`decisions`) is\nstill recoverable: re-compile the same request without\n`slim_response` (compilation is deterministic, so nothing is lost,\nonly not sent this time). Default `false`.",
+                "type": "boolean"
+              },
+              "source_ttl_seconds": {
+                "description": "TTL applied to stored sources (`None` keeps them until forgotten).",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "store_sources": {
+                "default": true,
+                "description": "Memory bridge only: store each distinct fragment's original (as an\ninternal system fact, invisible to normal recall) so its\n`ctx://source/<hash>` handle round-trips. Default `true`.",
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          },
+          "project": {
+            "description": "Project facet, recorded in provenance.",
+            "type": "string"
+          },
+          "query": {
+            "description": "What the agent is working on — drives relevance scoring, exactly like\n`compile_context`'s `query`.",
+            "type": "string"
+          },
+          "segmentation": {
+            "description": "Tuning knobs for the transcript segmentation step itself (format,\nmerge threshold, system-turn caching). `None` uses\n[`SegmentationPolicy::default`].",
+            "properties": {
+              "cache_system_turn": {
+                "default": true,
+                "description": "When `true` (the default) and [`SegmentationPolicy::format`]\ndetermines the FIRST turn's role is `\"system\"` (case-insensitive),\nevery segment of that turn is marked `metadata.cache = true` — the\nsame signal `compile_context`'s `cache.stable_prefix` rule reads, so\na system prompt turn becomes the compiled output's stable,\ncache-friendly prefix without the caller hand-annotating it.",
+                "type": "boolean"
+              },
+              "format": {
+                "default": "auto",
+                "description": "Which format to assume (see [`SegmentFormat`]). Default [`SegmentFormat::Auto`].\n- \"auto\": Detect `jsonl` vs `plain` from the transcript itself (the default).\n- \"plain\": Force plain-text, marker-based turn splitting — a transcript that\nhappens to also be valid JSONL is still segmented as plain text.\n- \"jsonl\": Force one-line-one-turn JSONL parsing — a line that does not parse as\na `{role, content}` object is a hard error, never a silent fallback.",
+                "enum": [
+                  "auto",
+                  "plain",
+                  "jsonl"
+                ],
+                "type": "string"
+              },
+              "min_segment_bytes": {
+                "default": 256,
+                "description": "Segments under this many bytes merge into an adjacent segment of the\nsame turn and kind (see the module docs' step 4). Default `256`.",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "target_model": {
+            "description": "Target model name, for cost insights.",
+            "type": "string"
+          },
+          "token_budget": {
+            "description": "Hard token ceiling for the assembled content, same as\n`compile_context`'s `token_budget`.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "transcript": {
+            "description": "The raw transcript text (plain, marker-based, or JSONL). Exactly one\nof `transcript` or `path` must be set.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query",
+          "token_budget"
+        ],
+        "type": "object"
+      },
+      "name": "compile_transcript",
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "context": {
+            "description": "The compiled context — byte-compatible with `compile_context`'s\noutput.",
+            "properties": {
+              "content": {
+                "description": "The assembled context, ready to inject into a prompt.",
+                "type": "string"
+              },
+              "decisions": {
+                "description": "One decision per input fragment (duplicates included). Emptied by\n[`CompilePolicy::slim_response`].",
+                "items": {
+                  "description": "The auditable record of what happened to one fragment and why.",
+                  "properties": {
+                    "action": {
+                      "description": "What was done.",
+                      "oneOf": [
+                        {
+                          "const": "preserve",
+                          "description": "Emitted verbatim — critical content (code, constraints, exact values).",
+                          "type": "string"
+                        },
+                        {
+                          "const": "abstract",
+                          "description": "Emitted as a deterministic structured reduction (never a generative\nsummary) — e.g. repeated log lines collapsed with a count.",
+                          "type": "string"
+                        },
+                        {
+                          "const": "retrieve",
+                          "description": "Not emitted, but recoverable through its `ctx://source/<id>` handle.",
+                          "type": "string"
+                        },
+                        {
+                          "const": "drop",
+                          "description": "Not emitted and not externalized — redundant content (duplicates).",
+                          "type": "string"
+                        },
+                        {
+                          "const": "cache",
+                          "description": "Emitted verbatim at the front of the output, forming a stable prefix\nthat maximizes provider prompt-cache hits across compilations.",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "content_hash": {
+                      "description": "Content hash of the *original* fragment text (FNV-1a 64, the crate's\n[`stable id`](super::fragment_id)) — lets an auditor prove which exact\nbytes the decision covered even when the caller supplied its own id.",
+                      "minimum": 0,
+                      "type": [
+                        "integer",
+                        "string"
+                      ]
+                    },
+                    "fragment_id": {
+                      "description": "The fragment this decision is about (caller id, or content-derived).",
+                      "minimum": 0,
+                      "type": [
+                        "integer",
+                        "string"
+                      ]
+                    },
+                    "handle": {
+                      "description": "Recoverable address of the original content, when not fully emitted.",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "memory_id": {
+                      "description": "The memory backing this fragment, when it came from recall (US-002).",
+                      "minimum": 0,
+                      "type": [
+                        "integer",
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "reason": {
+                      "description": "Human-readable explanation of the decision.",
+                      "type": "string"
+                    },
+                    "relevance": {
+                      "description": "Lexical relevance of the fragment to the request query, in `[0, 1]`.",
+                      "format": "float",
+                      "type": "number"
+                    },
+                    "risk": {
+                      "description": "Fidelity risk this single decision contributes.",
+                      "oneOf": [
+                        {
+                          "const": "low",
+                          "description": "Nothing was lost: everything fit, only exact duplicates were dropped.",
+                          "type": "string"
+                        },
+                        {
+                          "const": "medium",
+                          "description": "Recoverable reductions happened: abstractions, or non-critical\nfragments externalized behind retrieval handles.",
+                          "type": "string"
+                        },
+                        {
+                          "const": "high",
+                          "description": "Critical content (a preserve-classified fragment) could not be packed\n— the caller should consider retrieving it or raising the budget.",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "rule_id": {
+                      "description": "The stable id of the rule that decided (e.g. `\"preserve.code_fence\"`).",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "fragment_id",
+                    "content_hash",
+                    "action",
+                    "rule_id",
+                    "relevance",
+                    "risk",
+                    "reason"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "insights": {
+                "description": "Token (and optional cost) savings of this compilation.",
+                "properties": {
+                  "currency": {
+                    "description": "Currency of the cost figure, from the pricing table.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "estimated_cost_saved_micros": {
+                    "description": "Estimated cost avoided, in micro-units of [`Self::currency`] — only\nwhen a pricing table was injected *and* it prices the target model.",
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "pricing_version": {
+                    "description": "Version tag of the pricing table that produced the cost figure.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "tokens_in": {
+                    "description": "Estimated tokens of all input fragments combined.",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "tokens_out": {
+                    "description": "Estimated tokens of the assembled output.",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "tokens_saved": {
+                    "description": "`tokens_in − tokens_out` (saturating) — the local *estimate* of what\nthis compilation avoided sending; not billed tokens.",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "tokens_saved_by_rule": {
+                    "additionalProperties": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "description": "Tokens saved attributed to the rule that saved them, keyed by rule id\n(`BTreeMap` for deterministic serialization order).",
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "tokens_in",
+                  "tokens_out",
+                  "tokens_saved",
+                  "tokens_saved_by_rule"
+                ],
+                "type": "object"
+              },
+              "retrieval_handles": {
+                "description": "Handles for the fragments that were externalized, not emitted.",
+                "items": {
+                  "description": "A not-emitted fragment the caller can fetch back on demand.",
+                  "properties": {
+                    "estimated_tokens": {
+                      "description": "Estimated token cost of re-injecting the full original.",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "fragment_id": {
+                      "description": "The fragment behind the handle.",
+                      "minimum": 0,
+                      "type": [
+                        "integer",
+                        "string"
+                      ]
+                    },
+                    "handle": {
+                      "description": "Recoverable address of the original content (`ctx://source/<id>`).",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "handle",
+                    "fragment_id",
+                    "estimated_tokens"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "risk": {
+                "description": "Overall fidelity risk (the max over all decisions).",
+                "oneOf": [
+                  {
+                    "const": "low",
+                    "description": "Nothing was lost: everything fit, only exact duplicates were dropped.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "medium",
+                    "description": "Recoverable reductions happened: abstractions, or non-critical\nfragments externalized behind retrieval handles.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "high",
+                    "description": "Critical content (a preserve-classified fragment) could not be packed\n— the caller should consider retrieving it or raising the budget.",
+                    "type": "string"
+                  }
+                ]
+              },
+              "sections": {
+                "description": "The output split into ordered blocks (cache prefix first). Emptied by\n[`CompilePolicy::slim_response`].",
+                "items": {
+                  "description": "One contiguous block of the assembled output.",
+                  "properties": {
+                    "content": {
+                      "description": "The block's text (verbatim slice of [`CompiledContext::content`]).",
+                      "type": "string"
+                    },
+                    "fragment_ids": {
+                      "description": "Ids of the fragments emitted into this block, in emission order.",
+                      "items": {
+                        "minimum": 0,
+                        "type": [
+                          "integer",
+                          "string"
+                        ]
+                      },
+                      "type": "array"
+                    },
+                    "kind": {
+                      "description": "Which block this is.",
+                      "oneOf": [
+                        {
+                          "const": "cache",
+                          "description": "The stable, cache-marked prefix.",
+                          "type": "string"
+                        },
+                        {
+                          "const": "body",
+                          "description": "The main compiled body.",
+                          "type": "string"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "content",
+                    "fragment_ids"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "sources": {
+                "description": "One source pointer per distinct fragment.",
+                "items": {
+                  "description": "A pointer from a compiled output back to one original fragment.",
+                  "properties": {
+                    "fragment_id": {
+                      "description": "The fragment this source refers to. Accepts a JSON number OR a\ndecimal string on input: a `fragment_id` is an FNV-1a 64 content hash\n(see [`ContextDecision::content_hash`]), so it is almost always above\n2^53 — a float-lossy JSON client that reads one back from a compiled\ncontext and resubmits it inside a working context would otherwise\ncorrupt it silently. Same accepted-forms rule as issue #1468's ids;\nthe serialized (output) shape is unchanged.",
+                      "minimum": 0,
+                      "type": [
+                        "integer",
+                        "string"
+                      ]
+                    },
+                    "handle": {
+                      "description": "Recoverable address of the original content (`ctx://source/<id>`).",
+                      "type": "string"
+                    },
+                    "memory_id": {
+                      "description": "The memory backing this source, when it came from recall (US-002).\nAccepts a JSON number OR a decimal string on input, exactly like\n`fragment_id` just above.",
+                      "minimum": 0,
+                      "type": [
+                        "integer",
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "fragment_id",
+                    "handle"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "warnings": {
+                "default": [],
+                "description": "Mechanical, low-noise heads-up over `decisions` (V2a-2 quick win):\nevery externalized fragment relevant enough to the query that a\ncaller should double-check it was not needed. `#[serde(default)]` so\na pre-0.10.0 caller reading an older stored/replayed response still\ndeserializes (defaults to empty).",
+                "items": {
+                  "description": "A mechanical heads-up over one decision, surfaced in\n[`CompiledContext::warnings`] so a caller can check \"was anything\nrelevant cut?\" without scanning every entry of `decisions` by hand\n(V2a-2 quick win). Only [`ContextAction::Retrieve`] decisions at or\nabove the relevance threshold qualify.\n\n**An empty list is not a clean bill of health** (#1703 DC-4). Several\nreal losses never warn: a [`ContextAction::Preserve`] the packer could\nonly fit partially, an [`ContextAction::Abstract`], and two of\n`dup_verdict`'s [`ContextAction::Drop`] shapes — a media duplicate whose\ncaption diverges from its twin's, and a duplicate whose twin was itself\nnot fully emitted. Both say so in their own reason strings. `decisions`\nremains the exhaustive record; this list is a low-noise shortcut over it,\nnot a substitute for it.",
+                  "properties": {
+                    "action": {
+                      "description": "What happened to it (always [`ContextAction::Retrieve`] today).",
+                      "oneOf": [
+                        {
+                          "const": "preserve",
+                          "description": "Emitted verbatim — critical content (code, constraints, exact values).",
+                          "type": "string"
+                        },
+                        {
+                          "const": "abstract",
+                          "description": "Emitted as a deterministic structured reduction (never a generative\nsummary) — e.g. repeated log lines collapsed with a count.",
+                          "type": "string"
+                        },
+                        {
+                          "const": "retrieve",
+                          "description": "Not emitted, but recoverable through its `ctx://source/<id>` handle.",
+                          "type": "string"
+                        },
+                        {
+                          "const": "drop",
+                          "description": "Not emitted and not externalized — redundant content (duplicates).",
+                          "type": "string"
+                        },
+                        {
+                          "const": "cache",
+                          "description": "Emitted verbatim at the front of the output, forming a stable prefix\nthat maximizes provider prompt-cache hits across compilations.",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "fragment_id": {
+                      "description": "The fragment this warning is about.",
+                      "minimum": 0,
+                      "type": [
+                        "integer",
+                        "string"
+                      ]
+                    },
+                    "reason": {
+                      "description": "The matching `decisions` entry's `reason`, copied verbatim.",
+                      "type": "string"
+                    },
+                    "relevance": {
+                      "description": "Lexical relevance to the request query, in `[0, 1]` — the same value\nas the matching `decisions` entry.",
+                      "format": "float",
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "fragment_id",
+                    "action",
+                    "relevance",
+                    "reason"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "content",
+              "sections",
+              "decisions",
+              "sources",
+              "retrieval_handles",
+              "insights",
+              "risk"
+            ],
+            "type": "object"
+          },
+          "segmentation": {
+            "description": "How the transcript was cut into fragments before compilation.",
+            "properties": {
+              "format_detected": {
+                "description": "`\"plain\"` or `\"jsonl\"` — the format actually used, never `\"auto\"`\neven when the request asked for it.",
+                "oneOf": [
+                  {
+                    "const": "auto",
+                    "description": "Detect `jsonl` vs `plain` from the transcript itself (the default).",
+                    "type": "string"
+                  },
+                  {
+                    "const": "plain",
+                    "description": "Force plain-text, marker-based turn splitting — a transcript that\nhappens to also be valid JSONL is still segmented as plain text.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "jsonl",
+                    "description": "Force one-line-one-turn JSONL parsing — a line that does not parse as\na `{role, content}` object is a hard error, never a silent fallback.",
+                    "type": "string"
+                  }
+                ]
+              },
+              "merged_segments": {
+                "description": "How many segments [`SegmentationPolicy::min_segment_bytes`] merging\neliminated.",
+                "format": "uint",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "segments": {
+                "description": "Every segment, in transcript order, with byte ranges that partition\nthe transcript exactly — no gaps, no overlaps, even for a `jsonl`\nline whose decoded `content` alone exceeds\n[`crate::limits::MAX_FRAGMENT_BYTES`] (1 MiB) and gets re-split into\nseveral segments (`compile_context` still gets sub-1-MiB fragments):\neach child's range is a proportional, non-overlapping share of the\noriginal JSON line's raw span rather than a byte-exact one, since a\nJSONL line's decoded text has no byte-aligned mapping back into the\nraw (JSON-escaped) source bytes (see `resplit_body` in\n`context::segment`). An extreme edge case (one transcript line over\n1 MiB of decoded content), but even then every segment keeps a\ndistinct, non-overlapping range.",
+                "items": {
+                  "description": "One entry of [`SegmentationReport::segments`] — the audit trail of how\n`compile_transcript` cut the transcript up, independent of what\n`compile_context` then did with the resulting fragments.",
+                  "properties": {
+                    "byte_end": {
+                      "description": "End byte offset (exclusive) in the original transcript. Same caveat\nas `byte_start`.",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "byte_start": {
+                      "description": "Start byte offset (inclusive) in the original transcript. For a\n`jsonl` transcript this is a slice of the raw JSON line's span, not\nan offset into the decoded `content` — a JSONL line's decoded text\nhas no byte-exact mapping back into the raw (JSON-escaped) source\nbytes, so when a single line's decoded content is re-split (over\n[`crate::limits::MAX_FRAGMENT_BYTES`]) each child's range is a\nproportional, non-overlapping share of the line's raw range rather\nthan a byte-precise one. Every segment's range is still distinct and\nnon-overlapping (see [`SegmentationReport::segments`]'s struct docs).",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "fragment_id": {
+                      "description": "The id this segment's fragment carries into `context.decisions` —\ncontent-addressed, same formula as every other `compile_context`\nfragment with no caller-supplied `id`.",
+                      "minimum": 0,
+                      "type": [
+                        "integer",
+                        "string"
+                      ]
+                    },
+                    "index": {
+                      "description": "Position of this segment in `segmentation.segments`, in transcript\norder.",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "kind": {
+                      "description": "`\"body\"`, `\"code\"`, or `\"log\"`.",
+                      "oneOf": [
+                        {
+                          "const": "body",
+                          "description": "Ordinary text — [`ContextFragment::kind`] stays `None`, so the\nexisting classification rules (code fence, URL, negative constraint,\nvalue density, …) decide its fate exactly as for `compile_context`.",
+                          "type": "string"
+                        },
+                        {
+                          "const": "code",
+                          "description": "A triple-backtick-fenced block, cut out atomically by\n[`super::chunk::fence_segments`]. Tagged `kind = \"code\"` so\n[`super::classify::classify`]'s `preserve.code_fence` rule matches\neven for a fence whose content does not itself literally contain\n`` ``` `` (defense in depth; it usually does).",
+                          "type": "string"
+                        },
+                        {
+                          "const": "log",
+                          "description": "A run of at least [`MIN_LOG_RUN_LINES`] log-like lines. Tagged\n`kind = \"log\"` so `abstract.log_dedup` can consider it for\nrepeated-line collapsing exactly like a caller-declared `kind: \"log\"`\nfragment in `compile_context`.",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "role": {
+                      "description": "The turn's role, when one was determined. `null` for a `plain`\ntranscript with no matching marker at all.",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "turn": {
+                      "description": "Which turn (0-based) this segment belongs to.",
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "index",
+                    "turn",
+                    "kind",
+                    "byte_start",
+                    "byte_end",
+                    "fragment_id"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "format_detected",
+              "segments",
+              "merged_segments"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "context",
+          "segmentation"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "Aggregate the token (and cost) savings of past compile_context calls, optionally per project. Figures are local estimates recorded per compilation (metadata only, never content); `truncated` reports when the sweep hit the recall cap.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "project": {
+            "description": "Restrict the aggregation to this project facet.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "context_savings",
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cost_saved_micros_by_currency": {
+            "additionalProperties": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "description": "Estimated cost avoided, in micro-units, keyed by currency (events\npriced under different pricing tables never silently mix).",
+            "type": "object"
+          },
+          "events": {
+            "description": "Number of compilation events aggregated.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tokens_in": {
+            "description": "Sum of estimated input tokens across events.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tokens_out": {
+            "description": "Sum of estimated output tokens across events.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tokens_saved": {
+            "description": "Sum of estimated tokens saved across events.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "truncated": {
+            "description": "`true` when the aggregation hit the recall cap\n([`crate::limits::MAX_RECALL_LIMIT`]) — older events beyond the cap\nwere not folded in.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "events",
+          "tokens_in",
+          "tokens_out",
+          "tokens_saved",
+          "cost_saved_micros_by_currency",
+          "truncated"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "Look up everything the memory graph knows about a NAMED ENTITY (a person, a place, an organisation): the attributes it carries, the typed edges leaving it (`relations`) and the typed edges pointing AT it (`relations_in`). Both directions come back, because a question is only answerable from one side: with `camille --sister of--> theo` recorded, asking what Theo's OUTGOING edges say never finds Camille — she is in his `relations_in`. Use this for questions ABOUT a thing rather than about a sentence — \"how old is Theo\", \"who is Theo's father\", \"where does he live\" — where `recall` would only return sentences that happen to mention the name. Entities and their edges are built automatically by `remember_extracted`, which reads relationships (`X is the father of Y`) and properties (`Y is 15`) out of plain text; attributes land in ColumnStore metadata with their JSON type preserved, so a number stays a number. The name is matched case-insensitively, so `\"Theo Durand\"` and `\"theo durand\"` are the same entity — the id is content-addressed, so it is stable across sessions. Returns `found: false` when nothing has ever mentioned that name; `name` is echoed back in its canonical (trimmed, lowercased) form either way, so several lookups can be told apart. With the async autograph worker active, edges derived from a `remember` land asynchronously: an entity read immediately after that remember may not see them yet — the fact itself is always immediately readable. Ids exceed 2^53 — always relay them as strings (`id_str`).",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "name": {
+            "description": "Entity name to look up. Matched case-insensitively.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "name": "entity",
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "attributes": {
+            "additionalProperties": true,
+            "description": "Attributes learned about this entity, reserved keys stripped.",
+            "type": "object"
+          },
+          "found": {
+            "description": "Whether an entity is known under that name at all.",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "Stable, content-addressed id of the entity (`0` when not found).",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id_str": {
+            "description": "Decimal-string twin of `id` (issue #1468).",
+            "type": "string"
+          },
+          "name": {
+            "description": "Canonical (trimmed, lowercased) entity name. Always filled in — on a\nMISS it echoes the *queried* name, canonicalized exactly as a hit's\nwould be, so a caller running several lookups can pair each response\nwith its question (issue #1654).",
+            "type": "string"
+          },
+          "relations": {
+            "description": "Typed edges leaving this entity.",
+            "items": {
+              "description": "Wire shape of one typed edge leaving an entity, with the `target_id_str`\ntwin (issue #1468).",
+              "properties": {
+                "predicate": {
+                  "description": "The edge label the passage stated (e.g. `\"pere de\"`, `\"soeur de\"`).",
+                  "type": "string"
+                },
+                "target": {
+                  "description": "Stored content of the far end — for an entity, `Entity: <name>`.",
+                  "type": "string"
+                },
+                "target_id": {
+                  "description": "Stable id of the entity (or fact) on the far end.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "target_id_str": {
+                  "description": "Decimal-string twin of `target_id` (issue #1468).",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "predicate",
+                "target_id",
+                "target_id_str",
+                "target"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "relations_in": {
+            "description": "Typed edges pointing AT this entity, each naming its SOURCE.\n\nWithout these, a question is only answerable from one side: the graph\nholds `camille --soeur de--> theo`, so asking what Theo's outgoing\nedges say never finds Camille. The edge exists, it simply leaves the\nother node. Nothing is inferred here — the converse of a kinship\nlabel needs the gender, which the graph does not hold; this reports\nonly what is stored.",
+            "items": {
+              "description": "Wire shape of one typed edge leaving an entity, with the `target_id_str`\ntwin (issue #1468).",
+              "properties": {
+                "predicate": {
+                  "description": "The edge label the passage stated (e.g. `\"pere de\"`, `\"soeur de\"`).",
+                  "type": "string"
+                },
+                "target": {
+                  "description": "Stored content of the far end — for an entity, `Entity: <name>`.",
+                  "type": "string"
+                },
+                "target_id": {
+                  "description": "Stable id of the entity (or fact) on the far end.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "target_id_str": {
+                  "description": "Decimal-string twin of `target_id` (issue #1468).",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "predicate",
+                "target_id",
+                "target_id_str",
+                "target"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "relations_in_truncated": {
+            "description": "Whether `relations_in` is a PARTIAL view — the incoming mirror of\n`relations_truncated`.",
+            "type": "boolean"
+          },
+          "relations_truncated": {
+            "description": "Whether `relations` is a PARTIAL view — true when a response budget\ncut the outgoing side. A list holding exactly the cap is otherwise\nindistinguishable from a cut one (#1820).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "found",
+          "id",
+          "id_str",
+          "name",
+          "attributes",
+          "relations",
+          "relations_in",
+          "relations_truncated",
+          "relations_in_truncated"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "Explain why one fragment of a compile_context request was preserved, abstracted, externalized, dropped, or cached. Compilation is deterministic, so the request is re-compiled (with event/source recording off) and the fragment's exact decision (rule id, reason, relevance, risk, handle) is returned — no server-side state needed. Caveat: with a memory_scope the re-compile recalls from CURRENT memory, so decisions about pulled memories reflect the memory as it is now, not as it was; a `path` fragment is likewise re-read from disk, so the decision reflects the file's CURRENT content, not necessarily what the original compile_context call saw. Pass `fragment_index` (0-based position in request.fragments) instead of relying on `fragment_id` alone when fragments are byte-identical — a shared content-addressed id otherwise always resolves to the deduplication survivor's decision. `policy.ids_as_strings` on the request rewrites the response's id fields into decimal strings, like compile_context.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "fragment_id": {
+            "description": "The fragment whose decision to return. Looked up by matching\n`ContextDecision::fragment_id`, UNLESS `fragment_index` is also\ngiven (see there) — still required even then, since it is the only\ndisambiguator when `fragment_index` is absent. Accepts a JSON number\nOR a decimal string, so a `fragment_id` received under\n[`CompilePolicy::ids_as_strings`] can be relayed back unchanged.",
+            "type": "string"
+          },
+          "fragment_index": {
+            "description": "Optional, 0-based position of the fragment in `request.fragments`.\nWhen given, TAKES PRIORITY over `fragment_id` for locating the\ndecision: `compile_context` records exactly one decision per input\nfragment, in order, so `decisions[fragment_index]` is unambiguous\neven when several fragments are byte-identical and therefore share\nthe same content-addressed `fragment_id` — a plain `fragment_id`\nlookup always returns the FIRST such decision (the deduplication\nsurvivor), never a dropped twin's. Absent (the default): behavior is\nunchanged, the decision is found by `fragment_id` alone.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "request": {
+            "description": "The compile request to explain (compilation is deterministic, so\nre-submitting the request reproduces the exact decisions).",
+            "properties": {
+              "fragments": {
+                "description": "The context fragments to compile.",
+                "items": {
+                  "description": "One unit of caller-supplied context to compile.",
+                  "properties": {
+                    "content": {
+                      "default": "",
+                      "description": "The fragment text. `#[serde(default)]` (V2b-1): a `path` fragment\ncarries no `content` on the wire — the adapter resolves `path` into\n`content` in a pre-pass before the pure compiler core ever sees the\nrequest, so this stays the only field the core reads.",
+                      "type": "string"
+                    },
+                    "id": {
+                      "description": "Caller-side identifier. When absent, the compiler derives a stable\ncontent-addressed id (see [`super::fragment_id`]). Accepts a JSON\nnumber or a decimal string on input (see\n[`super::wire::deserialize_optional_id`]) — a caller that got a\n`fragment_id` back as a string (e.g. under\n[`CompilePolicy::ids_as_strings`]) can resubmit it unchanged.",
+                      "type": "string"
+                    },
+                    "kind": {
+                      "description": "Free-form kind hint (`\"code\"`, `\"log\"`, `\"prose\"`, …) — classification\nworks without it, but honors it when present.",
+                      "type": "string"
+                    },
+                    "media": {
+                      "description": "Inline media payload (US-009, PR1). `None` (the default) keeps every\npre-0.9.0 request wire-compatible. When set, the fragment packs as one\natomic piece — see [`MediaRef`].",
+                      "properties": {
+                        "bytes_b64": {
+                          "description": "The raw media bytes, base64-encoded (standard alphabet, padded).\nCapped at [`crate::limits::MAX_MEDIA_BYTES`] and validated for\nwell-formedness at compile time — a request carrying an oversized or\nmalformed payload is rejected before any other work.",
+                          "type": "string"
+                        },
+                        "mime": {
+                          "description": "Declared MIME type (e.g. `\"image/png\"`, `\"image/jpeg\"`). Only PNG and\nJPEG headers are sniffed for dimensions; any other value (or an\nunreadable header) falls back to a deterministic, safe over-count\n(see [`super::estimator::ImageTokenEstimator`]) — never rejected for\nan unrecognized mime alone.",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "mime",
+                        "bytes_b64"
+                      ],
+                      "type": "object"
+                    },
+                    "metadata": {
+                      "additionalProperties": true,
+                      "description": "Caller metadata. Recognized keys: `\"verbatim\": true` forces\n[`ContextAction::Preserve`]; `\"cache\": true` forces\n[`ContextAction::Cache`].",
+                      "type": "object"
+                    },
+                    "path": {
+                      "description": "Read this file's content from disk in place of an inline `content`\n(V2b-1 path ingestion). `path` is EXCLUSIVE — it is resolved into\n`content` before the compiler core runs, so a fragment carrying\n`path` together with `content` or `media` is rejected. `content` and\n`media` together are fine, and are the intended shape for an image\nand its caption. A fragment carrying none of the three is rejected\nas well. Requires the server to be started\nwith `VELESDB_MEMORY_INGEST_ROOTS` set (a colon/semicolon-separated\nallowlist of directories, platform `PATH`-list syntax); otherwise\nevery `path` fragment fails with an explicit \"ingestion disabled\"\nerror. The path must be absolute and resolve (after following\nsymlinks) to a plain file under one of the configured roots, no\nlarger than [`crate::limits::MAX_INGEST_FILE_BYTES`] and valid UTF-8.\nThe **pure compiler core never reads this field** — resolution is an\nadapter-side I/O pre-pass (see the crate's `context::ingest`\nmodule); a `path` fragment that reaches [`super::ContextCompiler`]\nunresolved is rejected with\n[`crate::error::MemoryError::IngestDisabled`].",
+                      "type": "string"
+                    },
+                    "priority": {
+                      "description": "Caller priority, higher packs first (default `0`).",
+                      "maximum": 255,
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "memory_scope": {
+                "description": "Which memories may be pulled in (US-002; ignored by the memoryless core).",
+                "properties": {
+                  "graph_boost": {
+                    "description": "Fusion weight added to graph-reached memories (default 0.15). Raise\nit (e.g. `0.5`–`0.8`) when pulling from curated fact chains built\nwith `relate`: evidence that shares **no vocabulary** with the query\ncan then out-rank lexically-noisy near-misses — the tri-engine's\nanswer to the purely lexical relevance of caller fragments.",
+                    "format": "double",
+                    "type": "number"
+                  },
+                  "hops": {
+                    "description": "Graph-walk depth of the fused recall (default 2). Deeper hops reach\nlonger cause/fix chains from the vector seed.",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "k": {
+                    "description": "How many memories to consider (adapter-clamped).",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "project": {
+                    "description": "Restrict recalled memories to this project facet.",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "policy": {
+                "description": "Per-request policy override; `None` uses the compiler's policy.",
+                "properties": {
+                  "chunk": {
+                    "default": {
+                      "boundary": "paragraph",
+                      "max_chunk_bytes": 2048,
+                      "overlap_bytes": 0
+                    },
+                    "description": "How oversized fragments are split before packing. Only\n[`ChunkPolicy::max_chunk_bytes`] and [`ChunkPolicy::boundary`] apply\nhere — the compiler forces `overlap_bytes` to `0`, since it emits\npieces by concatenation and an overlap prefix would duplicate content\nreported as verbatim. `overlap_bytes` is honoured only by the\nstandalone [`crate::context::chunk::chunk_text`] API.",
+                    "properties": {
+                      "boundary": {
+                        "default": "paragraph",
+                        "description": "Preferred cut points.\n- \"paragraph\": Cut at blank lines (`\\n\\n`), falling back to hard splits inside an\noversized paragraph.\n- \"sentence\": Cut after sentence enders (`.`, `!`, `?` followed by whitespace).\n- \"fixed\": Cut at the byte ceiling only (char-aligned).",
+                        "enum": [
+                          "paragraph",
+                          "sentence",
+                          "fixed"
+                        ],
+                        "type": "string"
+                      },
+                      "max_chunk_bytes": {
+                        "default": 2048,
+                        "description": "Soft byte ceiling per chunk (fences may exceed it, see module doc).",
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "overlap_bytes": {
+                        "default": 0,
+                        "description": "Bytes of the previous chunk to repeat at the start of the next one\n(char-aligned). `0` keeps chunks disjoint.",
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "disabled_rules": {
+                    "default": [],
+                    "description": "Rule ids to disable (e.g. `\"abstract.log_dedup\"`). Disabled rules are\nskipped during classification; their fragments fall through to the\nnext matching rule.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "event_ttl_seconds": {
+                    "description": "TTL applied to compilation events (`None` keeps them).",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "ids_as_strings": {
+                    "default": false,
+                    "description": "Wire-compat opt-in for the MCP context tools (`compile_context`,\n`explain_compilation`): when `true`, every [`super::wire::ID_KEYS`]\nfield of the RESPONSE (`fragment_id`, `content_hash`, `memory_id`,\n`fragment_ids`) is rewritten into its decimal-string form, through\nthe exact same tree walk the Node and WASM bindings already apply on\nevery response ([`super::wire::stringify_id_fields`]). A raw MCP\nclient — one that talks JSON-RPC directly, without either binding —\nparses ids as JS `number`s (IEEE-754 doubles), which silently lose\nprecision above 2^53; string ids round-trip exactly. Default\n`false`: existing MCP clients keep today's byte-identical numeric\nresponse unless they opt in.",
+                    "type": "boolean"
+                  },
+                  "importance": {
+                    "default": {
+                      "confidence": 0.2,
+                      "recency": 0.1
+                    },
+                    "description": "Memory bridge only: usage-driven importance blend over the pulled\nmemories (RL confidence + batch-relative recency). The struct-level\n`#[serde(default)]` keeps 0.8.0 requests wire-compatible.",
+                    "properties": {
+                      "confidence": {
+                        "default": 0.2,
+                        "description": "Weight of the learned RL confidence (`_veles_rl_*`, fed by\n[`feedback`](crate::MemoryService::feedback)). A memory with no\nfeedback history counts as the neutral `0.5`, contributing exactly\n`0`. Default `0.2`.",
+                        "format": "double",
+                        "type": "number"
+                      },
+                      "recency": {
+                        "default": 0.1,
+                        "description": "Weight of the batch-relative recency term. Inert unless\n[`Self::recency_field`] is also set. Default `0.1`.",
+                        "format": "double",
+                        "type": "number"
+                      },
+                      "recency_field": {
+                        "description": "Caller metadata key holding each memory's **numeric** timestamp-like\nvalue. `None` (the default) disables the recency term completely —\nthere is no standard key to guess. The scale must be monotone and\nhomogeneous across the batch (e.g. `YYYYMMDD` integers as in\n[`crate::format_dated_context`], or an epoch); it is documented, not\nverified at run time. Values are min-max normalised over the pulled\nmemories that carry the key; a memory without the key contributes `0`\n(never penalised), and a degenerate batch (`max == min`) contributes\n`0` for all.",
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "near_dup_dedup": {
+                    "default": true,
+                    "description": "Collapse near-duplicates (case/whitespace variants) in addition to\nexact duplicates. Default `true`.",
+                    "type": "boolean"
+                  },
+                  "normalize_log_timestamps": {
+                    "default": false,
+                    "description": "Opt-in, deterministic: before `abstract.log_dedup` groups a `kind =\n\"log\"` fragment's repeated lines, mask each line's volatile prefix\n(ISO/syslog timestamps, bracketed hex/pid counters) with **fixed**\npatterns — never a caller-supplied regex, so the collapse stays\nreproducible — so lines identical modulo timestamp collapse into one\nannotated line instead of surviving as distinct entries. The emitted\nline is still the first occurrence's exact bytes; only the grouping\nkey changes. Default `false`: masking is opt-in because it changes\nwhat \"duplicate\" means for logs, so callers who rely on the previous\nbyte-exact grouping keep it unless they ask. See the crate README's\n\"Normalizing timestamped logs\" section for the exact patterns.",
+                    "type": "boolean"
+                  },
+                  "pricing": {
+                    "description": "Caller-supplied pricing table so the insights also report the\nestimated cost avoided for [`super::model::CompileRequest::target_model`] — the\n**wire channel** for cost accounting (MCP and the bindings cannot\nreach the Rust-only [`super::ContextCompiler::with_pricing`] builder).\nTakes precedence over a builder-injected table. `None` (default)\nreports tokens only.",
+                    "properties": {
+                      "currency": {
+                        "description": "ISO-4217 currency code of every rate in the table (e.g. `\"EUR\"`).",
+                        "type": "string"
+                      },
+                      "models": {
+                        "additionalProperties": {
+                          "description": "Pricing of one model, in integer micro-units per **million** input tokens\n(e.g. a `3 USD / 1M tokens` rate is `3_000_000`).",
+                          "properties": {
+                            "input_micros_per_million_tokens": {
+                              "description": "Micro-units of the table's currency per million input tokens.",
+                              "minimum": 0,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "input_micros_per_million_tokens"
+                          ],
+                          "type": "object"
+                        },
+                        "description": "Rates keyed by model name (a `BTreeMap` so iteration — and therefore\nevery serialized output — is deterministically ordered).",
+                        "type": "object"
+                      },
+                      "version": {
+                        "description": "Caller-side version tag of this table (recorded in insights so a cost\nfigure is always traceable to the prices that produced it).",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "version",
+                      "currency",
+                      "models"
+                    ],
+                    "type": "object"
+                  },
+                  "record_events": {
+                    "default": true,
+                    "description": "Memory bridge only: record a compilation event (metadata and hashes,\n**never fragment content**) so savings stay aggregatable. Default\n`true`; set `false` to opt out entirely.",
+                    "type": "boolean"
+                  },
+                  "response_reserve_tokens": {
+                    "default": 0,
+                    "description": "Tokens kept aside for the model's answer; the compiler packs into\n`token_budget − response_reserve_tokens`. Default `0`: the caller\nknows their generation length, the compiler does not guess it.",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "slim_response": {
+                    "default": false,
+                    "description": "Quick win (V2a-2): when `true`, `sections` and `decisions` are\nemptied out of the response after compilation — `content`,\n`insights`, `risk`, `warnings`, `sources`, and `retrieval_handles`\nare unaffected. The full audit trail (`sections`/`decisions`) is\nstill recoverable: re-compile the same request without\n`slim_response` (compilation is deterministic, so nothing is lost,\nonly not sent this time). Default `false`.",
+                    "type": "boolean"
+                  },
+                  "source_ttl_seconds": {
+                    "description": "TTL applied to stored sources (`None` keeps them until forgotten).",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "store_sources": {
+                    "default": true,
+                    "description": "Memory bridge only: store each distinct fragment's original (as an\ninternal system fact, invisible to normal recall) so its\n`ctx://source/<hash>` handle round-trips. Default `true`.",
+                    "type": "boolean"
+                  }
+                },
+                "type": "object"
+              },
+              "project": {
+                "description": "Project facet, recorded in provenance and used by the memory bridge.",
+                "type": "string"
+              },
+              "query": {
+                "description": "What the agent is working on — drives relevance scoring.",
+                "type": "string"
+              },
+              "target_model": {
+                "description": "Target model name — selects the row of the pricing table\n([`CompilePolicy::pricing`] on the wire, or the Rust\n[`super::ContextCompiler::with_pricing`] builder) for cost insights.\nWithout a table, insights report tokens only.",
+                "type": "string"
+              },
+              "token_budget": {
+                "description": "Hard token ceiling for the assembled content.",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "query",
+              "fragments",
+              "token_budget"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "request",
+          "fragment_id"
+        ],
+        "type": "object"
+      },
+      "name": "explain_compilation",
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "action": {
+            "description": "What was done.",
+            "oneOf": [
+              {
+                "const": "preserve",
+                "description": "Emitted verbatim — critical content (code, constraints, exact values).",
+                "type": "string"
+              },
+              {
+                "const": "abstract",
+                "description": "Emitted as a deterministic structured reduction (never a generative\nsummary) — e.g. repeated log lines collapsed with a count.",
+                "type": "string"
+              },
+              {
+                "const": "retrieve",
+                "description": "Not emitted, but recoverable through its `ctx://source/<id>` handle.",
+                "type": "string"
+              },
+              {
+                "const": "drop",
+                "description": "Not emitted and not externalized — redundant content (duplicates).",
+                "type": "string"
+              },
+              {
+                "const": "cache",
+                "description": "Emitted verbatim at the front of the output, forming a stable prefix\nthat maximizes provider prompt-cache hits across compilations.",
+                "type": "string"
+              }
+            ]
+          },
+          "content_hash": {
+            "description": "Content hash of the *original* fragment text (FNV-1a 64, the crate's\n[`stable id`](super::fragment_id)) — lets an auditor prove which exact\nbytes the decision covered even when the caller supplied its own id.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "fragment_id": {
+            "description": "The fragment this decision is about (caller id, or content-derived).",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "handle": {
+            "description": "Recoverable address of the original content, when not fully emitted.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "memory_id": {
+            "description": "The memory backing this fragment, when it came from recall (US-002).",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "description": "Human-readable explanation of the decision.",
+            "type": "string"
+          },
+          "relevance": {
+            "description": "Lexical relevance of the fragment to the request query, in `[0, 1]`.",
+            "format": "float",
+            "type": "number"
+          },
+          "risk": {
+            "description": "Fidelity risk this single decision contributes.",
+            "oneOf": [
+              {
+                "const": "low",
+                "description": "Nothing was lost: everything fit, only exact duplicates were dropped.",
+                "type": "string"
+              },
+              {
+                "const": "medium",
+                "description": "Recoverable reductions happened: abstractions, or non-critical\nfragments externalized behind retrieval handles.",
+                "type": "string"
+              },
+              {
+                "const": "high",
+                "description": "Critical content (a preserve-classified fragment) could not be packed\n— the caller should consider retrieving it or raising the budget.",
+                "type": "string"
+              }
+            ]
+          },
+          "rule_id": {
+            "description": "The stable id of the rule that decided (e.g. `\"preserve.code_fence\"`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fragment_id",
+          "content_hash",
+          "action",
+          "rule_id",
+          "relevance",
+          "risk",
+          "reason"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "Reinforce a recalled memory with an outcome: `success=true` if the fact was useful, `false` if it was noise. This durably updates the fact's learned confidence, which `recall` uses to re-rank future results — over repeated feedback, useful facts drift up and noise drifts down, so the memory improves with use without retraining the model. Returns the fact's new confidence in [0,1].",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "description": "Id of the recalled memory to reinforce (as returned by\n`recall`/`remember`). Accepts a JSON number or a decimal string —\nrelay `id_str` to avoid float-precision loss above 2^53 (issue\n#1468).",
+            "type": "string"
+          },
+          "success": {
+            "description": "`true` if the memory was useful (reinforce it), `false` if it was noise\n(weaken it).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "success"
+        ],
+        "type": "object"
+      },
+      "name": "feedback",
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "confidence": {
+            "description": "The memory's new learned confidence in `[0.0, 1.0]` after this feedback.",
+            "format": "float",
+            "type": "number"
+          },
+          "id": {
+            "description": "Id of the reinforced memory.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id_str": {
+            "description": "Decimal-string twin of `id` (issue #1468) — see\n[`RememberResult::id_str`].",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "id_str",
+          "confidence"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "Permanently delete a memory by its `id` (as returned by `remember` or `recall`), removing the fact and its graph links. The deletion is durable and cannot be undone — use it to retract or correct stored knowledge. For automatic time-based expiry instead, set a TTL when calling `remember`. Returns the requested id plus `found`: `true` if a memory actually existed and was deleted, `false` if nothing was stored under that id (a stale id or a typo) — a no-op, not an error, but distinguishable from a real deletion.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "description": "Id of the memory to permanently delete (as returned by `remember` or\n`recall`). Accepts a JSON number or a decimal string — relay `id_str`\nto avoid float-precision loss above 2^53 (issue #1468).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "forget",
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "found": {
+            "description": "Whether a memory actually existed under `id` and was deleted.\n`false` means nothing was stored there — a stale id or a typo, not a\nsecond successful deletion — so a caller can tell the two apart.",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "Id that was requested for deletion.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id_str": {
+            "description": "Decimal-string twin of `id` (issue #1468) — see\n[`RememberResult::id_str`].",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "id_str",
+          "found"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "AUDIT the store: walk every stored fact, page by page — the question `recall` structurally cannot answer, because recall ranks by resemblance to a query and what resembles nothing you thought to ask stays invisible. Use it when the user asks what the memory contains ('what do you know about me / this project?'), to review or clean up before sharing a store, or to back up its contents. Returns `memories` (ids ascending — two audits of the same store see the same order; each entry carries `id`, `id_str`, `content`, `metadata`) and `next_cursor`: pass it back as `cursor` for the next page, `null` means the walk is complete. `filter` keeps only facts whose metadata equals every given key (e.g. {\"project\": \"acme\"}); a filtered page may come back sparse — KEEP following `next_cursor`, the walk stays exhaustive. Metadata follows recall's visibility rule (business keys plus the auto-stamped `_veles_date`; internal graph scaffolding excluded) unless `include_internal` is set, which lists everything verbatim. Ids exceed 2^53 — always relay them as strings (`id_str`, and `next_cursor` is already a string).",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cursor": {
+            "description": "Resume the walk strictly after this id — the `next_cursor` of the\nprevious page. Omit to start from the beginning. Accepts a JSON\nnumber or a decimal string (issue #1468).",
+            "type": "string"
+          },
+          "filter": {
+            "additionalProperties": true,
+            "description": "Keep only facts whose metadata equals every given key, e.g.\n`{\"project\": \"acme\"}`. A filtered page may come back sparse — keep\nfollowing `next_cursor`; the walk stays exhaustive.",
+            "type": "object"
+          },
+          "include_internal": {
+            "default": false,
+            "description": "Also list internal graph scaffolding (entity hubs) and reserved\n`_veles_*` keys, verbatim. Default `false`: the audit shows the\nuser's facts as `recall` would show them.",
+            "type": "boolean"
+          },
+          "limit": {
+            "description": "Page size (default 50). Clamped server-side.",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "list_memories",
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "memories": {
+            "description": "This page of the walk, ids ascending.",
+            "items": {
+              "description": "One entry of [`ListMemoriesResult`].",
+              "properties": {
+                "content": {
+                  "description": "Stored fact content.",
+                  "type": "string"
+                },
+                "id": {
+                  "description": "Stable id of the memory.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "id_str": {
+                  "description": "Decimal-string twin of `id` (issue #1468) — see\n[`RememberResult::id_str`].",
+                  "type": "string"
+                },
+                "metadata": {
+                  "additionalProperties": true,
+                  "description": "Metadata under the same visibility policy as `recall` (business keys\nplus the auto-stamped `_veles_date`), or the raw payload when\n`include_internal` was set. `null` when nothing survives.",
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "id_str",
+                "content"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "description": "Pass as `cursor` to get the next page; `null` means the walk is\ncomplete.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "memories"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "List every session saved under a project via save_working_context, most-recently-saved first — so an agent can discover what is resumable before guessing a session id at load_working_context, or recover from a typo. Empty (not an error) when the project never saved anything.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "project": {
+            "description": "Project facet to list saved working-context sessions for (same\nconvention as `save_working_context`'s `project`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project"
+        ],
+        "type": "object"
+      },
+      "name": "list_working_contexts",
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "sessions": {
+            "description": "Every session saved under this project, most-recently-saved first.\nEmpty (not an error) when the project never saved anything.",
+            "items": {
+              "description": "One session recorded in a project's working-context index (V2a-1's\n`list_working_contexts` quick win).",
+              "properties": {
+                "saved_at": {
+                  "description": "Unix seconds this session was last saved — updated on every\n`save_working_context` call under this project + session, not just\nthe first (a resave never duplicates the entry).",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "session": {
+                  "description": "The session id, as passed to `save_working_context`.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "session",
+                "saved_at"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "sessions"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "Resume a session: load back the working context previously saved by save_working_context under the same project + session id — the goal, constraints, verified facts, open hypotheses, decisions, exact evidence, and pending actions a PRIOR session left off with. Call this at the START of a new session before doing anything else, so work continues instead of restarting. `found: false` (with `working: null`) means nothing was ever saved under that exact project + session — not an error, but check `other_sessions`: if it lists a similarly-named session, `session` was likely a typo, not a genuinely fresh start. `other_sessions` is always filled in, on a hit too: if it lists a session that looks more like the one you meant, you may have just resumed the WRONG session. Use `list_working_contexts` to browse a project's sessions up front.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "project": {
+            "description": "Project facet the working context was saved under.",
+            "type": "string"
+          },
+          "session": {
+            "description": "Session identifier the working context was saved under.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project",
+          "session"
+        ],
+        "type": "object"
+      },
+      "name": "load_working_context",
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "found": {
+            "description": "`true` when a working context was found under this exact project +\nsession. Wire-additive alongside `working` (added V2a-1): a client\nthat only reads `working` sees no change.",
+            "type": "boolean"
+          },
+          "other_sessions": {
+            "default": [],
+            "description": "The OTHER sessions saved under this SAME project (never the requested\none) — helps recover from a typo in `session` instead of silently\nstarting fresh (e.g. `\"task-1234\"` saved, `\"task-1235\"` requested by\nmistake). Populated on a hit as well as on a miss: a typo that lands\non another real session is the case the caller can least detect on its\nown. Empty only when the project has no other session.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "working": {
+            "anyOf": [
+              {
+                "description": "The distilled working state of an agent session — small enough to carry\nacross sessions, structured enough to resume from. Persisted and reloaded\nby the memory bridge (US-002) under `type = working_context` metadata.",
+                "properties": {
+                  "active_constraints": {
+                    "default": [],
+                    "description": "Constraints currently in force (never compressed away).",
+                    "items": {
+                      "description": "One asserted fact inside a [`WorkingContext`].",
+                      "properties": {
+                        "source": {
+                          "anyOf": [
+                            {
+                              "description": "A pointer from a compiled output back to one original fragment.",
+                              "properties": {
+                                "fragment_id": {
+                                  "description": "The fragment this source refers to. Accepts a JSON number OR a\ndecimal string on input: a `fragment_id` is an FNV-1a 64 content hash\n(see [`ContextDecision::content_hash`]), so it is almost always above\n2^53 — a float-lossy JSON client that reads one back from a compiled\ncontext and resubmits it inside a working context would otherwise\ncorrupt it silently. Same accepted-forms rule as issue #1468's ids;\nthe serialized (output) shape is unchanged.",
+                                  "minimum": 0,
+                                  "type": [
+                                    "integer",
+                                    "string"
+                                  ]
+                                },
+                                "handle": {
+                                  "description": "Recoverable address of the original content (`ctx://source/<id>`).",
+                                  "type": "string"
+                                },
+                                "memory_id": {
+                                  "description": "The memory backing this source, when it came from recall (US-002).\nAccepts a JSON number OR a decimal string on input, exactly like\n`fragment_id` just above.",
+                                  "minimum": 0,
+                                  "type": [
+                                    "integer",
+                                    "string",
+                                    "null"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "fragment_id",
+                                "handle"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "Where the fact came from, when known."
+                        },
+                        "text": {
+                          "description": "The fact text.",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "text"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "decisions": {
+                    "default": [],
+                    "description": "Decisions taken so far.",
+                    "items": {
+                      "description": "A lightweight pointer to a past [`ContextDecision`].",
+                      "properties": {
+                        "fragment_id": {
+                          "description": "The fragment the decision was about. Accepts a JSON number OR a\ndecimal string on input, for the same reason as\n[`SourceReference::fragment_id`].",
+                          "minimum": 0,
+                          "type": [
+                            "integer",
+                            "string"
+                          ]
+                        },
+                        "rule_id": {
+                          "description": "The rule that decided.",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "fragment_id",
+                        "rule_id"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "exact_evidence": {
+                    "default": [],
+                    "description": "Exact evidence the session relies on (verbatim, addressable).",
+                    "items": {
+                      "description": "A pointer from a compiled output back to one original fragment.",
+                      "properties": {
+                        "fragment_id": {
+                          "description": "The fragment this source refers to. Accepts a JSON number OR a\ndecimal string on input: a `fragment_id` is an FNV-1a 64 content hash\n(see [`ContextDecision::content_hash`]), so it is almost always above\n2^53 — a float-lossy JSON client that reads one back from a compiled\ncontext and resubmits it inside a working context would otherwise\ncorrupt it silently. Same accepted-forms rule as issue #1468's ids;\nthe serialized (output) shape is unchanged.",
+                          "minimum": 0,
+                          "type": [
+                            "integer",
+                            "string"
+                          ]
+                        },
+                        "handle": {
+                          "description": "Recoverable address of the original content (`ctx://source/<id>`).",
+                          "type": "string"
+                        },
+                        "memory_id": {
+                          "description": "The memory backing this source, when it came from recall (US-002).\nAccepts a JSON number OR a decimal string on input, exactly like\n`fragment_id` just above.",
+                          "minimum": 0,
+                          "type": [
+                            "integer",
+                            "string",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "fragment_id",
+                        "handle"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "goal": {
+                    "description": "What the session is trying to achieve.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "open_hypotheses": {
+                    "default": [],
+                    "description": "Hypotheses still open.",
+                    "items": {
+                      "description": "One asserted fact inside a [`WorkingContext`].",
+                      "properties": {
+                        "source": {
+                          "anyOf": [
+                            {
+                              "description": "A pointer from a compiled output back to one original fragment.",
+                              "properties": {
+                                "fragment_id": {
+                                  "description": "The fragment this source refers to. Accepts a JSON number OR a\ndecimal string on input: a `fragment_id` is an FNV-1a 64 content hash\n(see [`ContextDecision::content_hash`]), so it is almost always above\n2^53 — a float-lossy JSON client that reads one back from a compiled\ncontext and resubmits it inside a working context would otherwise\ncorrupt it silently. Same accepted-forms rule as issue #1468's ids;\nthe serialized (output) shape is unchanged.",
+                                  "minimum": 0,
+                                  "type": [
+                                    "integer",
+                                    "string"
+                                  ]
+                                },
+                                "handle": {
+                                  "description": "Recoverable address of the original content (`ctx://source/<id>`).",
+                                  "type": "string"
+                                },
+                                "memory_id": {
+                                  "description": "The memory backing this source, when it came from recall (US-002).\nAccepts a JSON number OR a decimal string on input, exactly like\n`fragment_id` just above.",
+                                  "minimum": 0,
+                                  "type": [
+                                    "integer",
+                                    "string",
+                                    "null"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "fragment_id",
+                                "handle"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "Where the fact came from, when known."
+                        },
+                        "text": {
+                          "description": "The fact text.",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "text"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "pending_actions": {
+                    "default": [],
+                    "description": "Actions still to do.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "verified_facts": {
+                    "default": [],
+                    "description": "Facts that were verified, with their sources.",
+                    "items": {
+                      "description": "One asserted fact inside a [`WorkingContext`].",
+                      "properties": {
+                        "source": {
+                          "anyOf": [
+                            {
+                              "description": "A pointer from a compiled output back to one original fragment.",
+                              "properties": {
+                                "fragment_id": {
+                                  "description": "The fragment this source refers to. Accepts a JSON number OR a\ndecimal string on input: a `fragment_id` is an FNV-1a 64 content hash\n(see [`ContextDecision::content_hash`]), so it is almost always above\n2^53 — a float-lossy JSON client that reads one back from a compiled\ncontext and resubmits it inside a working context would otherwise\ncorrupt it silently. Same accepted-forms rule as issue #1468's ids;\nthe serialized (output) shape is unchanged.",
+                                  "minimum": 0,
+                                  "type": [
+                                    "integer",
+                                    "string"
+                                  ]
+                                },
+                                "handle": {
+                                  "description": "Recoverable address of the original content (`ctx://source/<id>`).",
+                                  "type": "string"
+                                },
+                                "memory_id": {
+                                  "description": "The memory backing this source, when it came from recall (US-002).\nAccepts a JSON number OR a decimal string on input, exactly like\n`fragment_id` just above.",
+                                  "minimum": 0,
+                                  "type": [
+                                    "integer",
+                                    "string",
+                                    "null"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "fragment_id",
+                                "handle"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "Where the fact came from, when known."
+                        },
+                        "text": {
+                          "description": "The fact text.",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "text"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The previously saved working context, or `null` when nothing was ever\nsaved under that project + session (a fresh start, not an error)."
+          }
+        },
+        "required": [
+          "found"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "Report this memory server's health and configuration: which embedder is running and whether recall is SEMANTIC (`embedder.semantic: false` means the offline `hash` default — recall matches surface form, not meaning, and configuring a semantic embedder is an env-var switch, no rebuild), what embedder the store was filled by per its on-disk provenance record, whether an extraction backend is configured (`remember_extracted` works iff `extraction.configured`), whether the background autograph worker is active and how many enrichments a full queue dropped, and the corpus size — `memory.facts` and `memory.edges`. Read `memory.edges` when `why` seems to add nothing over `recall`: `0` means no fact was ever linked (by `relate`, `remember`'s `links`, or extraction), so `why` HAS no graph to walk and degrades to plain search — that is a wiring gap, not a defect. Call this at session start, or whenever recall quality or `why`'s evidence trails surprise you, and tell the user when the server runs degraded. Takes no parameters.",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "memory_status",
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "embedder": {
+            "description": "Which embedder is running and whether recall is semantic.",
+            "properties": {
+              "dimension": {
+                "description": "The vector width the embedder produces. Reported with the model so a\nmismatch diagnosis never needs a second call.",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "model": {
+                "description": "The model identifier actually running — `hash` for the built-in\noffline embedder, otherwise as configured (`bge-m3`, `all-minilm`).\n`null` when the host embedded this server without declaring one\n(a binding constructing [`McpServer`](super::McpServer) directly).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "semantic": {
+                "description": "Whether recall is SEMANTIC. `false` means the `hash` embedder: recall\nmatches surface form, not meaning — the single most common \"why is\nrecall bad?\" answer, now readable by the agent instead of dying on a\nswallowed stderr. `null` when no identity was declared.",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "extraction": {
+            "description": "Extraction and autograph wiring.",
+            "properties": {
+              "autograph_active": {
+                "description": "Whether the background autograph worker is consuming the queue\n(#1846): `remember`'s graph enrichment runs behind the response.",
+                "type": "boolean"
+              },
+              "autograph_dropped": {
+                "description": "Enrichments refused by a FULL queue since startup — the facts were\nstored, only their wiring was skipped (#1846's counted-drop rule).",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "configured": {
+                "description": "Whether an extraction backend is attached — `remember_extracted`\nworks iff this is `true`.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "configured",
+              "autograph_active",
+              "autograph_dropped"
+            ],
+            "type": "object"
+          },
+          "memory": {
+            "description": "Corpus and graph size.",
+            "properties": {
+              "edges": {
+                "description": "Total graph edges, or `null` when the backend cannot say without\nmaterializing them. `0` is the meaningful value: it is the state in\nwhich `why()` degrades to plain similarity search.",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "facts": {
+                "description": "Live tracked facts, internal entity hubs included.",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "facts"
+            ],
+            "type": "object"
+          },
+          "provenance": {
+            "description": "What embedder the store was filled by, per its on-disk record.",
+            "properties": {
+              "dimension": {
+                "description": "The recorded vector width, when there is a record.",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "model": {
+                "description": "The recorded model, when there is a record.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "recorded": {
+                "description": "Whether the store carries an embedding-provenance record (#1751).\n`false` on a store that predates the record or was filled outside the\ndaemon — the check then degrades to dimension alone.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "recorded"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "embedder",
+          "provenance",
+          "extraction",
+          "memory"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "Recall memories semantically similar to a query (vector). Ranking blends similarity with each fact's learned confidence (see `feedback`), so the order is not pure similarity — the returned `score` is always the raw similarity, never the blended value. Optionally narrow to exact-match metadata via `filter` (ColumnStore), e.g. {\"project\":\"veles\",\"status\":\"resolved\"}. Ids exceed 2^53 — always relay them as strings (`id_str`); passing a JSON-number id read from a previous response will fail on float-lossy clients.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "filter": {
+            "additionalProperties": true,
+            "description": "Optional exact-match metadata filter (e.g.\n`{\"project\": \"veles\", \"status\": \"resolved\"}`).",
+            "type": "object"
+          },
+          "limit": {
+            "description": "Maximum number of memories to return (default 10).",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "query": {
+            "description": "Natural-language query to match semantically.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "name": "recall",
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "memories": {
+            "description": "Recalled memories, best match first. The two tools returning this\nshape rank differently: `recall` blends similarity with learned\nconfidence (see `feedback`), while `recall_where` with filters\norders by pure similarity. Each `score` is the raw similarity,\nnever a blended value.",
+            "items": {
+              "description": "Wire shape of one recalled memory: [`Recollection`] plus the `id_str`\ntwin (issue #1468). Built via `From<Recollection>` at the serialization\nboundary so the domain type itself stays untouched.",
+              "properties": {
+                "content": {
+                  "description": "Stored fact content.",
+                  "type": "string"
+                },
+                "id": {
+                  "description": "Stable id of the memory.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "id_str": {
+                  "description": "Decimal-string twin of `id` — always relay THIS to `relate`/`forget`/\n`feedback`, never `id` itself: a u64 above 2^53 loses precision\nthrough a float-lossy JSON client (issue #1468). Additive: `id` is\nunchanged and stays present for 0.9.x callers.",
+                  "type": "string"
+                },
+                "metadata": {
+                  "additionalProperties": true,
+                  "description": "Caller-supplied structured metadata stored with the fact, reserved\nsystem keys excluded — the exact field [`Recollection::metadata`]\ncarries, forwarded unchanged.",
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "score": {
+                  "description": "Similarity score (higher is closer).",
+                  "format": "float",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "id",
+                "id_str",
+                "score",
+                "content"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "memories"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "Fused vector + graph recall: like `recall`, but also walks the graph from the top vector hit and folds any connected fact into the ranking — the tri-engine ranking (vector similarity + ColumnStore filter + graph reach) measured on multi-hop and temporal benchmarks. Reach for this when an answer needs a fact the query doesn't mention directly but a stored `relate`/extracted link connects (multi-hop reasoning, temporal chains). `hops`/`graph_boost` tune the graph reach and `pool` the depth of the vector candidate pool fusion re-ranks; omit them for the proven defaults. Optionally narrow with an exact-match `filter`. Set `date_field` (the metadata key holding a YYYYMMDD date) to also get a `dated_context` timeline and a `now` anchor for temporal questions. Most relevant first.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "date_field": {
+            "description": "Name of the metadata field holding each fact's date as a `YYYYMMDD`\ninteger (e.g. `\"ts\"`, `\"occurred_at\"`). When set, the result adds a\n`dated_context` timeline (facts date-prefixed and ordered oldest-first)\nplus a `now` anchor — the representation that lifts temporal reasoning.\nOmit for plain results.",
+            "type": "string"
+          },
+          "filter": {
+            "additionalProperties": true,
+            "description": "Optional exact-match metadata filter (e.g.\n`{\"project\": \"veles\", \"status\": \"resolved\"}`).",
+            "type": "object"
+          },
+          "graph_boost": {
+            "description": "Weight added to a graph-reached fact's normalised vector score\n(default 0.15). Raise to trust the graph more, lower to trust vector\nsimilarity more.",
+            "format": "double",
+            "type": "number"
+          },
+          "hops": {
+            "description": "Graph hops walked from the top vector hit (default 2). Higher reaches\nfurther but adds noise; capped at the `why` hop ceiling.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "limit": {
+            "description": "Maximum number of memories to return (default 10). Multi-hop reasoning\nbenefits from a larger budget (~32-64); simple and temporal recall\nsaturate early, where a larger budget only adds tokens.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pool": {
+            "description": "Depth of the oversampled vector candidate pool fusion re-ranks before\nthe `limit` cutoff (default: `limit` scaled up, floored at 64). That\ndefault is already deep enough for a graph-reached fact to surface;\nwiden it to give a reranker more to work with, narrow it to confine\nfusion to the strongest vector hits. Capped at 1000, the same ceiling\n`limit` carries — NOT the one `hops` carries, which is 10.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "query": {
+            "description": "Natural-language query to match semantically.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "name": "recall_fused",
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "dated_context": {
+            "description": "Chronological, date-prefixed rendering of `memories` (`- [YYYY-MM-DD]\ncontent` per line, oldest first, undated facts last). Present only when\n`date_field` was set.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "memories": {
+            "description": "Recalled memories, most relevant first.",
+            "items": {
+              "description": "Wire shape of one recalled memory: [`Recollection`] plus the `id_str`\ntwin (issue #1468). Built via `From<Recollection>` at the serialization\nboundary so the domain type itself stays untouched.",
+              "properties": {
+                "content": {
+                  "description": "Stored fact content.",
+                  "type": "string"
+                },
+                "id": {
+                  "description": "Stable id of the memory.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "id_str": {
+                  "description": "Decimal-string twin of `id` — always relay THIS to `relate`/`forget`/\n`feedback`, never `id` itself: a u64 above 2^53 loses precision\nthrough a float-lossy JSON client (issue #1468). Additive: `id` is\nunchanged and stays present for 0.9.x callers.",
+                  "type": "string"
+                },
+                "metadata": {
+                  "additionalProperties": true,
+                  "description": "Caller-supplied structured metadata stored with the fact, reserved\nsystem keys excluded — the exact field [`Recollection::metadata`]\ncarries, forwarded unchanged.",
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "score": {
+                  "description": "Similarity score (higher is closer).",
+                  "format": "float",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "id",
+                "id_str",
+                "score",
+                "content"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "now": {
+            "description": "The most recent date across `memories` (`YYYY-MM-DD`), the \"now\" anchor.\nPresent only when `date_field` was set and at least one fact is dated.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "memories"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "Fused recall: semantically similar memories (vector) constrained by structured ColumnStore predicates over metadata — ranges and comparisons, not just equality. Each filter is {field, op (eq/ne/lt/le/gt/ge), value}, ANDed. Use for time-windowed or numeric-scoped recall, e.g. facts about a topic with `ts` in a date range. Comparisons are TYPE-STRICT, with no runtime coercion: a filter value of 20230601 (a JSON number) never matches a fact stored with metadata {\"ts\": \"20230601\"} (a JSON string) — same value, different JSON type, no match, no error. Store comparable values like dates NUMERICALLY at `remember` time (e.g. 20230601, not \"20230601\") so `recall_where` filters actually match them. Most similar first. Returns your own memories ONLY: entity hubs and the context compiler's artefacts (stored sources, compilation events, working contexts and their index) are internal scaffolding and never come back, whatever the predicate — including a `ne` one, which matches facts that lack the field entirely.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "filters": {
+            "description": "Structured `ColumnStore` predicates (ranges/comparisons) combined with AND,\ne.g. a date window `[{\"field\":\"ts\",\"op\":\"ge\",\"value\":20230101},\n{\"field\":\"ts\",\"op\":\"le\",\"value\":20231231}]`. Each `op` is one of\n`eq`/`ne`/`lt`/`le`/`gt`/`ge`. **Type-strict, no coercion** (issue\n#1473): `value` is compared to the stored metadata's JSON type\nas-is — a numeric `20230101` never matches a fact stored with\n`{\"ts\": \"20230101\"}` (a string). Store comparable values (dates,\ncounters) NUMERICALLY at `remember` time so these filters match them.",
+            "items": {
+              "description": "A structured predicate over a memory's metadata column, for the fused\nvector+`ColumnStore` recall\n[`MemoryService::recall_where`](crate::service::MemoryService::recall_where).\nUnlike the exact-match filter on\n[`MemoryService::recall`](crate::service::MemoryService::recall), this supports\nranges and comparisons (e.g. `timestamp >= …`), so temporal and numeric facets\nbecome queryable, not just equal-matchable.",
+              "properties": {
+                "field": {
+                  "description": "Metadata field name (alphanumeric/underscore).",
+                  "type": "string"
+                },
+                "op": {
+                  "description": "Comparison operator.\n- \"eq\": `=`\n- \"ne\": `!=`\n- \"lt\": `<`\n- \"le\": `<=`\n- \"gt\": `>`\n- \"ge\": `>=`",
+                  "enum": [
+                    "eq",
+                    "ne",
+                    "lt",
+                    "le",
+                    "gt",
+                    "ge"
+                  ],
+                  "type": "string"
+                },
+                "value": {
+                  "description": "Value to compare against.\n\nThe comparison is TYPE-STRICT with no coercion, so the JSON type sent\nhere is part of the query: `20260601` (number) never matches a fact\nstored as `\"20260601\"` (string) — same value, no match, and **no\nerror**. A wrong type here is therefore the one mistake this API\ncannot report; it just returns nothing.\n\nWhich is why the advertised type is spelled out rather than left as\nthe empty schema `serde_json::Value` would produce. `{}` says \"send\nanything\", on the single field where sending the wrong thing fails\nsilently.",
+                  "type": [
+                    "number",
+                    "string",
+                    "boolean"
+                  ]
+                }
+              },
+              "required": [
+                "field",
+                "op",
+                "value"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "limit": {
+            "description": "Maximum number of memories to return (default 10).",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "query": {
+            "description": "Natural-language query to match semantically.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "name": "recall_where",
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "memories": {
+            "description": "Recalled memories, best match first. The two tools returning this\nshape rank differently: `recall` blends similarity with learned\nconfidence (see `feedback`), while `recall_where` with filters\norders by pure similarity. Each `score` is the raw similarity,\nnever a blended value.",
+            "items": {
+              "description": "Wire shape of one recalled memory: [`Recollection`] plus the `id_str`\ntwin (issue #1468). Built via `From<Recollection>` at the serialization\nboundary so the domain type itself stays untouched.",
+              "properties": {
+                "content": {
+                  "description": "Stored fact content.",
+                  "type": "string"
+                },
+                "id": {
+                  "description": "Stable id of the memory.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "id_str": {
+                  "description": "Decimal-string twin of `id` — always relay THIS to `relate`/`forget`/\n`feedback`, never `id` itself: a u64 above 2^53 loses precision\nthrough a float-lossy JSON client (issue #1468). Additive: `id` is\nunchanged and stays present for 0.9.x callers.",
+                  "type": "string"
+                },
+                "metadata": {
+                  "additionalProperties": true,
+                  "description": "Caller-supplied structured metadata stored with the fact, reserved\nsystem keys excluded — the exact field [`Recollection::metadata`]\ncarries, forwarded unchanged.",
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "score": {
+                  "description": "Similarity score (higher is closer).",
+                  "format": "float",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "id",
+                "id_str",
+                "score",
+                "content"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "memories"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "Create a typed, directional link between two memories (`from` → `to`) labeled by `relation`. These links are the graph edges that `why` and `recall_fused` later traverse to surface connected facts that share no words with the query — build the graph with `relate` so multi-hop reasoning works (e.g. link a decision to its cause, a fact to its source, a task to the person it concerns). Direction matters: traversal follows OUTGOING edges only, so point `from` at the memory you will later ask `why` about and `to` at its evidence (decision → cause, fact → source) — an edge pointing INTO a memory is invisible to `why(that memory)`. Idempotent per (from, relation, to); `from` and `to` must be DIFFERENT memories — a self-loop states nothing and only adds noise to `why`'s evidence trail, so it is refused. Returns the edge id as `edge_id`, plus `edge_id_str` for clients without u64-safe JSON number parsing — the one already there when this exact relation exists, since the call is idempotent. Ids exceed 2^53 — always relay them as strings (`edge_id_str`); passing a JSON-number id read from a previous response will fail on float-lossy clients.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "from": {
+            "description": "Source memory id — the link points FROM here (as returned by\n`remember`/`recall`). Accepts a JSON number or a decimal string:\nalways relay a previous response's `id_str` here — a plain JSON\nnumber above 2^53 loses precision on a float-lossy client (issue\n#1468).",
+            "type": "string"
+          },
+          "relation": {
+            "description": "Directional relationship label, read as `from` <relation> `to`.\nExamples: `caused_by`, `depends_on`, `authored_by`, `supersedes`.",
+            "type": "string"
+          },
+          "to": {
+            "description": "Target memory id — the link points TO here (as returned by\n`remember`/`recall`). Same string-or-number contract as `from`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "relation"
+        ],
+        "type": "object"
+      },
+      "name": "relate",
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "edge_id": {
+            "description": "Id of the created edge.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "edge_id_str": {
+            "description": "Decimal-string twin of `edge_id` (issue #1468) — see\n[`RememberResult::id_str`].",
+            "type": "string"
+          }
+        },
+        "required": [
+          "edge_id",
+          "edge_id_str"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "Store a fact in durable local memory. Optionally link it to existing memories (graph) and tag it with structured metadata like project/author/type/status/date (ColumnStore) for later filtering — metadata is capped at 64 KiB serialized. A fact is capped at 2048 bytes: that is roughly what the embedding model's context window holds, and a longer one is REFUSED with its size, not silently mangled — split a long passage into several atomic facts, or compile it with `compile_context` and remember a summary. Set `ttl_seconds` to make the fact expire after a delay (a durable TTL that survives restarts); omit it for a permanent memory — `ttl_seconds: 0` is refused, not read as \"never\". Returns the fact's stable id. With the async autograph worker active, edges derived from a remember land asynchronously: an `entity`/`why` read immediately after may not see them yet — the fact itself is always immediately readable. Ids exceed 2^53 — always relay them as strings (`id_str`); passing a JSON-number id read from a previous response will fail on float-lossy clients.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "fact": {
+            "description": "The fact to store in memory.",
+            "type": "string"
+          },
+          "links": {
+            "description": "Optional typed links from this fact to existing memories.",
+            "items": {
+              "description": "A typed link from a freshly remembered fact to an existing memory.",
+              "properties": {
+                "relation": {
+                  "description": "Relationship label (e.g. `\"decided_in\"`, `\"references\"`, `\"depends_on\"`).",
+                  "type": "string"
+                },
+                "target": {
+                  "description": "Id of the memory being linked to. Accepts a JSON number or a decimal\nstring — ids can exceed 2^53, where float-lossy JSON clients (JS\n`number`) round a plain integer, so a caller relaying an `id_str`\nvalue straight from a previous response must be able to resubmit it\nas-is (see issue #1468).",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "target",
+                "relation"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "description": "Optional structured metadata for later filtering (e.g.\n`{\"project\": \"veles\", \"author\": \"julien\", \"status\": \"open\"}`).",
+            "type": "object"
+          },
+          "ttl_seconds": {
+            "description": "Optional time-to-live in seconds. When set, the fact expires (and stops\nbeing recalled) after this many seconds — a durable TTL that survives a\nrestart. Omit for a permanent memory. Falls back to the server's\n`VELESDB_MEMORY_DEFAULT_TTL` when unset.",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "fact"
+        ],
+        "type": "object"
+      },
+      "name": "remember",
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "description": "Stable id assigned to the remembered fact.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id_str": {
+            "description": "Decimal-string twin of `id` — always relay THIS to `relate`/`forget`/\n`feedback`, never `id` itself: a u64 above 2^53 loses precision\nthrough a float-lossy JSON client (issue #1468). Additive: `id` is\nunchanged, so 0.9.x callers are unaffected.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "id_str"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "Store a passage of raw text by extracting its atomic facts and auto-building the fact↔topic graph, so `why` can later connect them with no manual links. Requires the server to be started with an extraction backend (set VELESDB_MEMORY_EXTRACTOR — compiled into the default build, no rebuild). Returns `ids` — the stored facts' ids, in extraction order — plus `ids_str`, their decimal-string twins: ids exceed 2^53, so always relay those on clients without u64-safe JSON number parsing. It also returns `skipped_over_cap`, and you should read it: that is how many facts the extractor DID produce out of your text and this tool did NOT store, because each was longer than the per-fact text limit. A non-zero `skipped_over_cap` means part of what you sent was extracted and then dropped — without that number, a short `ids` list is indistinguishable from a passage that simply held fewer facts.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "metadata": {
+            "additionalProperties": true,
+            "description": "Optional structured metadata applied to every extracted fact.",
+            "type": "object"
+          },
+          "text": {
+            "description": "Raw text to extract atomic facts from and store as a connected graph.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "name": "remember_extracted",
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "ids": {
+            "description": "Stable ids of the stored facts, in extraction order.",
+            "items": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "ids_str": {
+            "description": "Decimal-string twins of `ids`, same order (issue #1468) — see\n[`RememberResult::id_str`].",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "skipped_over_cap": {
+            "description": "Extracted facts DROPPED for exceeding the embeddable text cap\n(2048 bytes). Additive and always present: a skip the caller cannot\nsee is indistinguishable from the model extracting fewer facts, and\nthis tool exists precisely so the caller does not have to verify what\nit stored.",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ids",
+          "ids_str",
+          "skipped_over_cap"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "Fetch back the exact original content behind a ctx://source/<hash> handle from a compiled context — what compile_context externalized or partially packed is recoverable, not lost.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "handle": {
+            "description": "A `ctx://source/<hash>` handle from a compiled context.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "type": "object"
+      },
+      "name": "retrieve_context_source",
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "content": {
+            "description": "The original fragment content, byte for byte.",
+            "type": "string"
+          },
+          "handle": {
+            "description": "The handle that was resolved.",
+            "type": "string"
+          },
+          "media": {
+            "anyOf": [
+              {
+                "description": "Inline media payload attached to a [`ContextFragment`] (US-009, PR1:\nscreenshots/images only). `ContextFragment::content` stays the\ntext/caption — often empty for a bare screenshot — while the pixels live\nhere, base64-encoded so the JSON wire never needs a binary frame.\n\nThe fragment packs atomically (see [`super::pieces`] in the compiler)\nand its token cost comes from [`super::estimator::ImageTokenEstimator`].\nA media fragment that cannot fit the budget is externalized behind a\n`ctx://source` handle exactly like text (US-009, PR2: the memory bridge\npersists the bytes behind it — see\n[`crate::MemoryService::retrieve_context_source`]); the memoryless core\ncompiler mints the same handle either way, since it never knows whether\na resolver is attached. See the crate README's \"media fragments\"\nsection.",
+                "properties": {
+                  "bytes_b64": {
+                    "description": "The raw media bytes, base64-encoded (standard alphabet, padded).\nCapped at [`crate::limits::MAX_MEDIA_BYTES`] and validated for\nwell-formedness at compile time — a request carrying an oversized or\nmalformed payload is rejected before any other work.",
+                    "type": "string"
+                  },
+                  "mime": {
+                    "description": "Declared MIME type (e.g. `\"image/png\"`, `\"image/jpeg\"`). Only PNG and\nJPEG headers are sniffed for dimensions; any other value (or an\nunreadable header) falls back to a deterministic, safe over-count\n(see [`super::estimator::ImageTokenEstimator`]) — never rejected for\nan unrecognized mime alone.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mime",
+                  "bytes_b64"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The original media payload, when the fragment carried one (US-009,\nPR2). Absent for every text-only source — the exact pre-PR2 shape."
+          }
+        },
+        "required": [
+          "handle",
+          "content"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "Persist this session's distilled working state (goal, active constraints, verified facts, open hypotheses, decisions, exact evidence, pending actions) under a project + session id — so a LATER session (a fresh agent run, a new conversation, a resumed process) can pick up exactly where this one left off instead of re-deriving context from scratch. Call this near the end of a session, or whenever the working state changes meaningfully. Saving again under the same project+session replaces the previous state (idempotent upsert) — so an entirely empty `working` is REFUSED rather than allowed to wipe what a previous save stored; fill at least one field. Serialized size is capped at 1 MiB. Returns the stored fact's id. IF THIS CALL TIMES OUT, THE SAVE MAY NOT HAVE HAPPENED — a timeout is not a slow success, and over the HTTP transport it usually means the request never reached this tool at all. Do not assume it was written: call `list_working_contexts` and check that this session's `saved_at` actually advanced, then re-send the identical call if it did not. Re-sending is safe — the write is an upsert on project + session, so it replaces rather than duplicates.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "project": {
+            "description": "Project facet this working context belongs to (matches `remember`'s\n`project` metadata convention).",
+            "type": "string"
+          },
+          "session": {
+            "description": "Session identifier — pick something stable for the agent run you want\nto resume later (e.g. a conversation id).",
+            "type": "string"
+          },
+          "working": {
+            "description": "The distilled state to persist: goal, active constraints, verified\nfacts, open hypotheses, decisions taken, exact evidence, and pending\nactions.",
+            "properties": {
+              "active_constraints": {
+                "default": [],
+                "description": "Constraints currently in force (never compressed away).",
+                "items": {
+                  "description": "One asserted fact inside a [`WorkingContext`].",
+                  "properties": {
+                    "source": {
+                      "description": "Where the fact came from, when known.",
+                      "properties": {
+                        "fragment_id": {
+                          "description": "The fragment this source refers to. Accepts a JSON number OR a\ndecimal string on input: a `fragment_id` is an FNV-1a 64 content hash\n(see [`ContextDecision::content_hash`]), so it is almost always above\n2^53 — a float-lossy JSON client that reads one back from a compiled\ncontext and resubmits it inside a working context would otherwise\ncorrupt it silently. Same accepted-forms rule as issue #1468's ids;\nthe serialized (output) shape is unchanged.",
+                          "type": "string"
+                        },
+                        "handle": {
+                          "description": "Recoverable address of the original content (`ctx://source/<id>`).",
+                          "type": "string"
+                        },
+                        "memory_id": {
+                          "description": "The memory backing this source, when it came from recall (US-002).\nAccepts a JSON number OR a decimal string on input, exactly like\n`fragment_id` just above.",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "fragment_id",
+                        "handle"
+                      ],
+                      "type": "object"
+                    },
+                    "text": {
+                      "description": "The fact text.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "text"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "decisions": {
+                "default": [],
+                "description": "Decisions taken so far.",
+                "items": {
+                  "description": "A lightweight pointer to a past [`ContextDecision`].",
+                  "properties": {
+                    "fragment_id": {
+                      "description": "The fragment the decision was about. Accepts a JSON number OR a\ndecimal string on input, for the same reason as\n[`SourceReference::fragment_id`].",
+                      "type": "string"
+                    },
+                    "rule_id": {
+                      "description": "The rule that decided.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "fragment_id",
+                    "rule_id"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "exact_evidence": {
+                "default": [],
+                "description": "Exact evidence the session relies on (verbatim, addressable).",
+                "items": {
+                  "description": "A pointer from a compiled output back to one original fragment.",
+                  "properties": {
+                    "fragment_id": {
+                      "description": "The fragment this source refers to. Accepts a JSON number OR a\ndecimal string on input: a `fragment_id` is an FNV-1a 64 content hash\n(see [`ContextDecision::content_hash`]), so it is almost always above\n2^53 — a float-lossy JSON client that reads one back from a compiled\ncontext and resubmits it inside a working context would otherwise\ncorrupt it silently. Same accepted-forms rule as issue #1468's ids;\nthe serialized (output) shape is unchanged.",
+                      "type": "string"
+                    },
+                    "handle": {
+                      "description": "Recoverable address of the original content (`ctx://source/<id>`).",
+                      "type": "string"
+                    },
+                    "memory_id": {
+                      "description": "The memory backing this source, when it came from recall (US-002).\nAccepts a JSON number OR a decimal string on input, exactly like\n`fragment_id` just above.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "fragment_id",
+                    "handle"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "goal": {
+                "description": "What the session is trying to achieve.",
+                "type": "string"
+              },
+              "open_hypotheses": {
+                "default": [],
+                "description": "Hypotheses still open.",
+                "items": {
+                  "description": "One asserted fact inside a [`WorkingContext`].",
+                  "properties": {
+                    "source": {
+                      "description": "Where the fact came from, when known.",
+                      "properties": {
+                        "fragment_id": {
+                          "description": "The fragment this source refers to. Accepts a JSON number OR a\ndecimal string on input: a `fragment_id` is an FNV-1a 64 content hash\n(see [`ContextDecision::content_hash`]), so it is almost always above\n2^53 — a float-lossy JSON client that reads one back from a compiled\ncontext and resubmits it inside a working context would otherwise\ncorrupt it silently. Same accepted-forms rule as issue #1468's ids;\nthe serialized (output) shape is unchanged.",
+                          "type": "string"
+                        },
+                        "handle": {
+                          "description": "Recoverable address of the original content (`ctx://source/<id>`).",
+                          "type": "string"
+                        },
+                        "memory_id": {
+                          "description": "The memory backing this source, when it came from recall (US-002).\nAccepts a JSON number OR a decimal string on input, exactly like\n`fragment_id` just above.",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "fragment_id",
+                        "handle"
+                      ],
+                      "type": "object"
+                    },
+                    "text": {
+                      "description": "The fact text.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "text"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "pending_actions": {
+                "default": [],
+                "description": "Actions still to do.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "verified_facts": {
+                "default": [],
+                "description": "Facts that were verified, with their sources.",
+                "items": {
+                  "description": "One asserted fact inside a [`WorkingContext`].",
+                  "properties": {
+                    "source": {
+                      "description": "Where the fact came from, when known.",
+                      "properties": {
+                        "fragment_id": {
+                          "description": "The fragment this source refers to. Accepts a JSON number OR a\ndecimal string on input: a `fragment_id` is an FNV-1a 64 content hash\n(see [`ContextDecision::content_hash`]), so it is almost always above\n2^53 — a float-lossy JSON client that reads one back from a compiled\ncontext and resubmits it inside a working context would otherwise\ncorrupt it silently. Same accepted-forms rule as issue #1468's ids;\nthe serialized (output) shape is unchanged.",
+                          "type": "string"
+                        },
+                        "handle": {
+                          "description": "Recoverable address of the original content (`ctx://source/<id>`).",
+                          "type": "string"
+                        },
+                        "memory_id": {
+                          "description": "The memory backing this source, when it came from recall (US-002).\nAccepts a JSON number OR a decimal string on input, exactly like\n`fragment_id` just above.",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "fragment_id",
+                        "handle"
+                      ],
+                      "type": "object"
+                    },
+                    "text": {
+                      "description": "The fact text.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "text"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "project",
+          "session",
+          "working"
+        ],
+        "type": "object"
+      },
+      "name": "save_working_context",
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "description": "Id of the stored system fact backing this working context.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id_str": {
+            "description": "Decimal-string twin of `id`, same contract as\n[`crate::mcp::dto::RememberResult::id_str`]: the id is content-addressed\n(FNV-1a 64), so it is past 2^53 and a float-lossy JSON client rounds\n`id` on arrival. This was the ONE tool handing back an id without its\ntwin while `forget`/`feedback` accept only the decimal string — the\ncaller had no way to build the form the schema demands.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "id_str"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "Suggest a starting token_budget for compile_context, for a named target model — looked up in a static, committed model-name to context-window table (dated \"as of\", NEVER a network call). Pass `reserve_tokens` (default 0) to reserve room for the response, mirroring compile_context's own `policy.response_reserve_tokens`. `window`/`suggested_budget` come back null when the model is not in the table — an honest \"unknown\", never a guess; extend the table in a new release instead of relying on this for an unlisted model.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "reserve_tokens": {
+            "description": "Tokens to reserve for the response, subtracted from the model's\nwindow (default `0`) — mirrors\n[`CompilePolicy::response_reserve_tokens`].",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "target_model": {
+            "description": "The model name to look up in the static window table (e.g.\n`\"claude-sonnet-4-5\"`). Matched case-insensitively.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target_model"
+        ],
+        "type": "object"
+      },
+      "name": "suggest_budget",
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "source": {
+            "description": "Always the static table's provenance, dated — never \"measured\" or\n\"fetched\": this is a committed snapshot, not a live lookup.",
+            "type": "string"
+          },
+          "suggested_budget": {
+            "description": "`window - reserve_tokens` (saturating at 0) — `None` when `window`\nis `None`. Mirrors the role of\n[`CompilePolicy::response_reserve_tokens`](super::CompilePolicy::response_reserve_tokens)\non `compile_context`'s own budget.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "window": {
+            "description": "The model's context window, in tokens — `None` when `target_model`\nis not in the static table.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "Remove the typed link `from` -relation-> `to` — `relate`'s exact undo, so a mistaken edge no longer costs the facts at its endpoints. Only the edge is removed: the two memories, and any entity, are untouched. Idempotent: removing an absent edge answers `found: false` instead of erroring, so a cleanup can be replayed safely; `removed` counts the edges actually deleted. It refuses exactly what `relate` refuses (empty relation, `from` == `to`). Scope: the store does not distinguish a link you created with `relate` from one auto-derived from a passage, so `unrelate` removes both alike — to correct an auto-derived link, prefer `forget` + `remember` of the source fact, otherwise remembering the same passage again can rebuild the edge removed here. Same id wire contract as `relate`: pass ids as decimal strings (`id_str`) — a JSON-number id above 2^53 loses precision on float-lossy clients.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "from": {
+            "description": "Source memory id of the link to remove — the side it points FROM.\nAccepts a JSON number or a decimal string: always relay a previous\nresponse's `id_str` here (issue #1468).",
+            "type": "string"
+          },
+          "relation": {
+            "description": "Directional relationship label of the link to remove, exactly as it\nwas given to `relate`.",
+            "type": "string"
+          },
+          "to": {
+            "description": "Target memory id of the link to remove — the side it points TO. Same\nstring-or-number contract as `from`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "relation"
+        ],
+        "type": "object"
+      },
+      "name": "unrelate",
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "found": {
+            "description": "Whether at least one matching edge existed and was removed. `false`\nmeans no such edge — a replayed cleanup or a typo, not an error.",
+            "type": "boolean"
+          },
+          "removed": {
+            "description": "How many matching edges were removed.",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "found",
+          "removed"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "Explain a decision: find the best-matching memory (optionally scoped by a metadata `filter`, e.g. the current project) and return the connected subgraph of related memories reachable through typed links — fusing vector, ColumnStore, and graph to surface context a plain similarity search misses.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "decision": {
+            "description": "The decision (or fact) to explain.",
+            "type": "string"
+          },
+          "filter": {
+            "additionalProperties": true,
+            "description": "Optional exact-match metadata filter to scope the seed (e.g.\n`{\"project\": \"veles\"}`).",
+            "type": "object"
+          },
+          "max_hops": {
+            "description": "How many hops of typed links to follow (default 2).",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "decision"
+        ],
+        "type": "object"
+      },
+      "name": "why",
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "edges": {
+            "description": "Typed edges connecting the nodes.",
+            "items": {
+              "description": "Wire shape of one edge in a `why` subgraph: [`MemoryEdge`] plus the\n`from_str`/`to_str` twins (issue #1468).",
+              "properties": {
+                "from": {
+                  "description": "Source memory id.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "from_str": {
+                  "description": "Decimal-string twin of `from` (issue #1468) — see\n[`RecollectionDto::id_str`].",
+                  "type": "string"
+                },
+                "relation": {
+                  "description": "Relationship label.",
+                  "type": "string"
+                },
+                "to": {
+                  "description": "Target memory id.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "to_str": {
+                  "description": "Decimal-string twin of `to` (issue #1468) — see\n[`RecollectionDto::id_str`].",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "from",
+                "from_str",
+                "to",
+                "to_str",
+                "relation"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "nodes": {
+            "description": "Memories in the subgraph, seed first.",
+            "items": {
+              "description": "Wire shape of one node in a `why` subgraph: [`MemoryNode`] plus the\n`id_str` twin (issue #1468).",
+              "properties": {
+                "content": {
+                  "description": "Stored fact content.",
+                  "type": "string"
+                },
+                "hop": {
+                  "description": "Distance in hops from the seed memory (the seed is hop `0`).",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "id": {
+                  "description": "Stable id of the memory.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "id_str": {
+                  "description": "Decimal-string twin of `id` (issue #1468) — see\n[`RecollectionDto::id_str`].",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "id_str",
+                "content",
+                "hop"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "description": "Whether a width budget cut the walk — a subgraph sitting exactly at\na cap is otherwise indistinguishable from a complete one (#1820).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "nodes",
+          "edges",
+          "truncated"
+        ],
+        "type": "object"
+      }
+    }
+  ]
+}

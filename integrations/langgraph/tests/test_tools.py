@@ -181,16 +181,78 @@ def test_save_and_load_working_context_round_trips():
     loaded = tools["load_working_context"].invoke(
         {"project": "veles", "session": "session-1"}
     )
-    assert loaded["goal"] == "ship issue 1546"
+    assert loaded["found"] is True
+    assert loaded["working"]["goal"] == "ship issue 1546"
 
 
-def test_load_working_context_returns_none_when_nothing_was_saved():
+def test_load_working_context_reports_found_false_when_nothing_was_saved():
     tools = _tools_by_name()
 
     loaded = tools["load_working_context"].invoke(
         {"project": "veles", "session": "no-such-session"}
     )
-    assert loaded is None
+    assert loaded["found"] is False
+    assert loaded["working"] is None
+
+
+def test_load_working_context_surfaces_the_sibling_sessions_a_typo_missed():
+    """The reason the tool returns an envelope and not a bare state: told only
+    "nothing saved", the agent starts fresh on top of work that exists under a
+    neighbouring session id."""
+    tools = _tools_by_name()
+    tools["save_working_context"].invoke(
+        {"project": "veles", "session": "task-1234", "working": {"goal": "the real one"}}
+    )
+
+    typo = tools["load_working_context"].invoke(
+        {"project": "veles", "session": "task-1235"}
+    )
+
+    assert typo["found"] is False
+    assert typo["other_sessions"] == ["task-1234"]
+
+
+class _BareEnvelopeService:
+    """A ``velesdb`` old enough to predate the envelope but new enough to HAVE
+    the method — the state of every wheel this package's floor admits.
+
+    ``hasattr`` passes on it, so a presence check waves it through and the
+    docstring's promise of ``{"found": ..., "working": ..., "other_sessions":
+    ...}`` becomes a lie the model acts on.
+    """
+
+    def load_working_context(self, project, session):  # noqa: ARG002
+        return {"goal": "the real one", "pending_actions": []}
+
+
+class _BareNoneService:
+    """The same old wheel on a MISS: bare ``None``, which the docstring says
+    cannot happen."""
+
+    def load_working_context(self, project, session):  # noqa: ARG002
+        return None
+
+
+def test_load_working_context_reports_a_shape_drift_instead_of_a_bare_dict():
+    # The docstring is rendered to the LLM as the tool description; it promises
+    # the envelope unconditionally. `hasattr` only proves the method EXISTS —
+    # it cannot see that an older wheel returns the bare working context. Left
+    # unchecked, the model reads `loaded["working"]` and gets a KeyError, or
+    # reads `.get("found")` -> None -> falsy and restarts on top of live work.
+    tools = {t.name: t for t in make_memory_tools(service=_BareEnvelopeService())}
+
+    result = tools["load_working_context"].invoke({"project": "veles", "session": "s1"})
+
+    assert "error" in result, f"a bare dict must be reported, not relayed; got {result!r}"
+    assert "upgrade" in result["error"].lower()
+
+
+def test_load_working_context_reports_a_shape_drift_instead_of_a_bare_none():
+    tools = {t.name: t for t in make_memory_tools(service=_BareNoneService())}
+
+    result = tools["load_working_context"].invoke({"project": "veles", "session": "s1"})
+
+    assert "error" in result, f"a bare None must be reported, not relayed; got {result!r}"
 
 
 def _tools_on_pre_0_11_binding():

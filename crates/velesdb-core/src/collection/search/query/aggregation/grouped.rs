@@ -11,6 +11,7 @@
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_sign_loss)]
 
+use super::super::match_exec::MatchStorageGuards;
 use super::super::where_eval::GraphMatchEvalCache;
 use super::GroupKey;
 use crate::collection::types::Collection;
@@ -66,10 +67,17 @@ impl Collection {
         let filter = Self::build_static_filter(where_clause, use_runtime, params)?;
         let (columns_vec, has_count_star) = Self::prepare_agg_columns(aggregations);
 
-        // LOCK ORDER: vector_storage(2) before payload_storage(3) — was
+        // LOCK ORDER: metric snapshot (config, rank 1) first, then
+        // vector_storage(2) before payload_storage(3) — the pair was
         // reversed here. See .investigation/http-deadlock-2026-07-22/.
+        let metric = self.storage.config.read().metric;
         let vector_storage = self.storage.vector_storage.read();
         let payload_storage = self.storage.payload_storage.read();
+        let match_guards = MatchStorageGuards {
+            metric,
+            vector_guard: &vector_storage,
+            payload_guard: &payload_storage,
+        };
         let ids = vector_storage.ids();
         let mut graph_cache = GraphMatchEvalCache::default();
         let mut groups: HashMap<GroupKey, Aggregator> = HashMap::new();
@@ -83,6 +91,7 @@ impl Collection {
                     params,
                     needs_vector_eval,
                     graph_cache: &mut graph_cache,
+                    match_guards: &match_guards,
                 };
                 self.runtime_where_passes(id, payload.as_ref(), &mut rt_ctx)?
             } else if let Some(ref f) = filter {

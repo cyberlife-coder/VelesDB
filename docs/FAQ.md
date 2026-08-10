@@ -1,6 +1,6 @@
 # VelesDB Frequently Asked Questions
 
-Last updated: 2026-06-12 · Applies to: velesdb-core 4.2.0
+Last updated: 2026-08-08 · Applies to: velesdb-core 5.0.0
 
 ---
 
@@ -35,11 +35,11 @@ VelesDB uses a **two minor-version deprecation window**:
 2. **Supported in version X+1**: The deprecated API still works but emits warnings.
 3. **Removed in version X+2**: The deprecated API is removed entirely.
 
-For example, the legacy `Collection` type was deprecated in v1.4 and is marked `#[deprecated]` since v1.6.0. It still compiles and works but emits warnings. Migrate to the typed APIs (`VectorCollection`, `GraphCollection`, `MetadataCollection`) at your convenience — removal is planned for v2.0.
+For example, the legacy `Collection` type was deprecated in v1.4 and marked `#[deprecated]` in v1.6.0. It has since been removed from the public Rust API: it survives only as a crate-internal executor type behind the typed APIs (`VectorCollection`, `GraphCollection`, `MetadataCollection`), which are the supported surface.
 
 ### Are on-disk formats stable?
 
-On-disk format stability is guaranteed within a major version. If a format change is required in a minor release (as happened in v1.5 with the bincode-to-postcard migration), a migration path is provided. See `docs/guides/MIGRATION_v1.6.md` and `docs/guides/MIGRATION_v1.7.md` for recent migration guides.
+On-disk format stability is guaranteed within a major version. If a format change is required in a minor release (as happened in v1.5 with the bincode-to-postcard migration), a migration path is provided. Migration guides ship in `docs/guides/` — the most recent is [`MIGRATION_v4.0.0.md`](guides/MIGRATION_v4.0.0.md).
 
 ---
 
@@ -176,8 +176,8 @@ coll.stream_insert([
 
 ### Query limitations
 
-- VelesQL parses subqueries but does not execute them yet. CTEs are not supported.
-- `INSERT` and `UPDATE` are parsed by VelesQL but runtime execution is not yet implemented (use the programmatic API). `DELETE` is planned.
+- VelesQL executes scalar (non-correlated) subqueries by resolving them to a literal before the outer query runs; correlated subqueries (referencing an outer column) are rejected at validation (V010). CTEs are not supported.
+- `INSERT`, `UPSERT`, `UPDATE`, and `DELETE` all execute at runtime (INSERT/UPDATE stable since VelesQL 3.2, DELETE since 3.3 — see `docs/VELESQL_SPEC.md`).
 - Graph traversal in VelesQL is limited to `MATCH` patterns; recursive CTEs are not available.
 
 ---
@@ -246,9 +246,10 @@ VelesQL is a SQL-like query language with vector and graph extensions. It suppor
 | `NEAR_FUSED` (multi-vector fusion) | Yes | No |
 | `SPARSE_NEAR` (sparse vector search) | Yes | No |
 | `TRAIN QUANTIZER ON ...` | Yes | No |
-| Subqueries / CTEs | No | Yes |
-| `INSERT` / `UPDATE` | Parsed (no runtime execution) | Yes |
-| `DELETE` | Planned | Yes |
+| Scalar subqueries | Yes (non-correlated only, executed and substituted as a literal; correlated rejected) | Yes |
+| CTEs | No | Yes |
+| `INSERT` / `UPDATE` | Yes | Yes |
+| `DELETE` | Yes | Yes |
 | `CREATE TABLE` / DDL | No | Yes |
 | Window functions (`ROW_NUMBER`, `RANK`, `DENSE_RANK` with `OVER`, `PARTITION BY`, `ORDER BY`) | Yes (v1.13.0) | Yes |
 | Stored procedures | No | Yes |

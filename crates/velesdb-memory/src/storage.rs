@@ -23,7 +23,7 @@ use velesdb_core::agent::AgentMemory;
 use velesdb_core::{Database, SearchResult};
 
 use crate::error::MemoryError;
-use crate::model::{ColumnFilter, MemoryEdge, Recollection};
+use crate::model::{BoundedMemoryEdges, ColumnFilter, MemoryEdge, Recollection};
 use crate::service::Metadata;
 
 /// The storage primitives [`crate::service::MemoryService`] needs: write,
@@ -152,6 +152,29 @@ pub trait MemoryStore {
     /// and comparisons, not just equality) — the engine behind
     /// [`crate::service::MemoryService::recall_where`].
     ///
+    /// # Absent and null fields
+    ///
+    /// **A filter is satisfied only by a fact that HAS the field with a
+    /// non-null value.** A fact missing the field, or storing `null` in it, is
+    /// never returned — and `ne` is no exception, exactly as a SQL comparison
+    /// against `NULL` is never true.
+    ///
+    /// | field state | `field != target` | `field == target` | `<` `<=` `>` `>=` |
+    /// |---|---|---|---|
+    /// | absent | no match | no match | no match |
+    /// | present, `null` | no match | no match | no match |
+    /// | present, equal | no match | match | per the comparison |
+    /// | present, different | **match** | no match | per the comparison |
+    ///
+    /// This is stated because it did not hold: `ne` on an absent field matched
+    /// on the native backend and never matched on WASM, for the API's whole
+    /// life, because nothing compared them (#1759). Every backend is now held
+    /// to one shared table —
+    /// [`crate::column_filter_conformance`] — run against both.
+    ///
+    /// Null-ness is not expressible through [`ColumnFilter`]; querying for it
+    /// is what `IsNull`/`IsNotNull` are for at the `VelesQL` layer.
+    ///
     /// # Errors
     /// Returns [`MemoryError::InvalidFilter`] if a filter field is not a
     /// plain identifier or a filter value is non-scalar, or [`MemoryError`]
@@ -182,6 +205,32 @@ pub trait MemoryStore {
     /// Returns [`MemoryError`] if storage access fails.
     fn incoming_relations(&self, id: u64) -> Result<Vec<MemoryEdge>, MemoryError>;
 
+    /// At most `cap` outgoing edges of `id`, plus whether its total degree
+    /// exceeded the scan — the bounded twin of [`Self::relations`] (#1820).
+    ///
+    /// The contract is on COST, not just shape: an implementation must keep
+    /// work and transient allocation O(cap), never O(degree) — a super-node
+    /// (an entity hub mentioned by thousands of facts) is exactly where this
+    /// accessor is reached for. `truncated` is a separate signal because
+    /// `edges.len() == cap` cannot carry it: a node with exactly `cap` edges
+    /// is indistinguishable from a truncated one.
+    ///
+    /// # Errors
+    /// Returns [`MemoryError`] if storage access fails.
+    fn relations_bounded(&self, id: u64, cap: usize) -> Result<BoundedMemoryEdges, MemoryError>;
+
+    /// At most `cap` incoming edges of `id`, plus whether its total incoming
+    /// degree exceeded the scan — the mirror of [`Self::relations_bounded`],
+    /// same O(cap) cost contract.
+    ///
+    /// # Errors
+    /// Returns [`MemoryError`] if storage access fails.
+    fn incoming_relations_bounded(
+        &self,
+        id: u64,
+        cap: usize,
+    ) -> Result<BoundedMemoryEdges, MemoryError>;
+
     /// Remove the edge with `edge_id`. Returns `true` when it existed —
     /// idempotent: removing an absent edge is `Ok(false)`, never an error.
     ///
@@ -192,6 +241,81 @@ pub trait MemoryStore {
     /// The total number of live (non-expired) tracked facts, including
     /// internal entity hubs — used as a corpus-size proxy for idf weighting.
     fn count(&self) -> usize;
+
+    /// The total number of graph edges, when the backend can answer without
+    /// materializing them — the observable difference between a store whose
+    /// `why()` can walk somewhere and one where it degrades to plain
+    /// similarity search.
+    ///
+    /// Defaulted to `None` ("cannot say") rather than required, deliberately:
+    /// a backend outside this crate (velesdb-wasm's in-memory store) must
+    /// keep compiling when this surface grows, and a wrong-but-cheap answer
+    /// here would flag healthy graphs as flat. `memory_status` reports the
+    /// distinction to the caller instead of papering over it.
+    fn edge_count(&self) -> Option<usize> {
+        None
+    }
+
+    /// One cursor page of the store's live facts, ids ascending: up to
+    /// `limit` entries strictly after `cursor` (`None` starts the walk),
+    /// plus the cursor for the next page (`None` ends it). Payloads come
+    /// back RAW — reserved keys and scaffolding markers included — because
+    /// the policy of what a caller may see (hub filtering, key stripping)
+    /// belongs to the service layer, in one place, for every backend.
+    ///
+    /// TTL-expired facts are skipped, not listed: an audit must show what
+    /// the store will still serve, and a fact past its expiry is not it.
+    ///
+    /// Defaulted to a refusal rather than required, same reasoning as
+    /// [`Self::edge_count`]: an out-of-crate backend keeps compiling, and
+    /// its `list_memories` answers with this error instead of a wrong walk.
+    ///
+    /// # Errors
+    /// Returns [`MemoryError`] if the backend cannot enumerate at all, or if
+    /// the walk fails.
+    fn list(
+        &self,
+        cursor: Option<u64>,
+        limit: usize,
+    ) -> Result<(Vec<RawListedFact>, Option<u64>), MemoryError> {
+        let _ = (cursor, limit);
+        Err(MemoryError::InvalidFilter(
+            "this storage backend does not support listing".to_owned(),
+        ))
+    }
+}
+
+/// One fact as [`MemoryStore::list`] hands it to the service layer: content
+/// split out, everything else — reserved keys and scaffolding markers
+/// included — still in `payload` so the service can apply its visibility
+/// policy exactly once for every backend.
+#[derive(Debug, Clone)]
+pub struct RawListedFact {
+    /// Stable id of the fact.
+    pub id: u64,
+    /// The stored fact text (the payload's `content` key).
+    pub content: String,
+    /// The rest of the stored payload, verbatim.
+    pub payload: Metadata,
+}
+
+#[cfg(feature = "persistence")]
+impl RawListedFact {
+    /// The one place a stored payload is split into content + the rest —
+    /// shared by [`MemoryStore::list`] and the JSONL export so the two
+    /// reading surfaces can never disagree on what a fact's content IS.
+    pub(crate) fn from_raw(fact: &crate::migration::RawFact) -> Self {
+        let mut payload: Metadata = serde_json::from_str(&fact.payload).unwrap_or_default();
+        let content = match payload.remove("content") {
+            Some(Value::String(text)) => text,
+            _ => String::new(),
+        };
+        Self {
+            id: fact.id,
+            content,
+            payload,
+        }
+    }
 }
 
 /// The default [`MemoryStore`]: the native, file-backed engine
@@ -201,6 +325,10 @@ pub trait MemoryStore {
 #[cfg(feature = "persistence")]
 pub struct NativeStore {
     memory: AgentMemory,
+    /// Kept beside `memory` (which owns its own clone) for the read paths
+    /// that speak to the engine directly — [`MemoryStore::list`] walks the
+    /// collection cursor, which `AgentMemory` does not re-expose.
+    db: Arc<Database>,
 }
 
 #[cfg(feature = "persistence")]
@@ -211,8 +339,8 @@ impl NativeStore {
     /// Returns [`MemoryError`] if the store cannot be opened.
     pub fn open<P: AsRef<Path>>(path: P, dimension: usize) -> Result<Self, MemoryError> {
         let db = Arc::new(Database::open(path)?);
-        let memory = AgentMemory::with_dimension(db, dimension)?;
-        Ok(Self { memory })
+        let memory = AgentMemory::with_dimension(Arc::clone(&db), dimension)?;
+        Ok(Self { memory, db })
     }
 }
 
@@ -338,10 +466,14 @@ impl MemoryStore for NativeStore {
         // Field names are validated by `build_fused_query`; ensure each one is
         // indexed so the planner uses a bitmap prefilter instead of an O(n)
         // post-filter scan. Idempotent and incrementally maintained thereafter.
-        for filter in filters {
+        for field in filters
+            .iter()
+            .map(|filter| filter.field.as_str())
+            .chain(INTERNAL_MARKER_FIELDS.iter().copied())
+        {
             self.memory
                 .semantic()
-                .ensure_index(&filter.field)
+                .ensure_index(field)
                 .map_err(MemoryError::from)?;
         }
         let results = self
@@ -368,6 +500,26 @@ impl MemoryStore for NativeStore {
         ))
     }
 
+    fn relations_bounded(&self, id: u64, cap: usize) -> Result<BoundedMemoryEdges, MemoryError> {
+        let bounded = self.memory.semantic().relations_bounded(id, cap)?;
+        Ok(BoundedMemoryEdges {
+            edges: to_memory_edges(bounded.edges),
+            truncated: bounded.truncated,
+        })
+    }
+
+    fn incoming_relations_bounded(
+        &self,
+        id: u64,
+        cap: usize,
+    ) -> Result<BoundedMemoryEdges, MemoryError> {
+        let bounded = self.memory.semantic().incoming_relations_bounded(id, cap)?;
+        Ok(BoundedMemoryEdges {
+            edges: to_memory_edges(bounded.edges),
+            truncated: bounded.truncated,
+        })
+    }
+
     fn unrelate(&self, edge_id: u64) -> Result<bool, MemoryError> {
         self.memory
             .semantic()
@@ -377,6 +529,32 @@ impl MemoryStore for NativeStore {
 
     fn count(&self) -> usize {
         self.memory.semantic().count()
+    }
+
+    fn edge_count(&self) -> Option<usize> {
+        // A collection-access failure here means the store is unusable for
+        // every other call too; for a status readout "cannot say" is the
+        // honest degradation, not an error path of its own.
+        self.memory.semantic().edge_count().ok()
+    }
+
+    fn list(
+        &self,
+        cursor: Option<u64>,
+        limit: usize,
+    ) -> Result<(Vec<RawListedFact>, Option<u64>), MemoryError> {
+        // The migration module's cursor walk, reused verbatim: id-keyed,
+        // ascending, exclusive, and it skips TTL-expired points — exactly
+        // the audit contract (#1762 built it to enumerate a store with full
+        // fidelity, which is what an audit is).
+        let (facts, next) = crate::migration::scroll_page(
+            &self.db,
+            self.memory.semantic().collection_name(),
+            cursor,
+            limit,
+        )?;
+        let listed = facts.iter().map(RawListedFact::from_raw).collect();
+        Ok((listed, next))
     }
 }
 
@@ -415,6 +593,21 @@ impl NativeStore {
         for (index, filter) in filters.iter().enumerate() {
             validate_column_filter(filter)?;
             let key = format!("p{index}");
+            // `ne` is spelled out rather than left to `!=` alone. Core's
+            // `Condition::Neq` is `is_none_or`, so a bare `field != $p` also
+            // matches a fact that HAS no such field — which made `ne` mean two
+            // different things on the two backends (#1759). Requiring the
+            // field first pins the published contract here, at the adapter,
+            // instead of redefining `!=` for all of `VelesQL` — that is a
+            // product-wide semantic break, deliberately out of scope.
+            //
+            // `IS NOT NULL` is false for an absent field AND for an explicit
+            // `null`, which is exactly the contract: a comparison against null
+            // is never true, as in SQL. `IsNull`/`IsNotNull` stay the operators
+            // dedicated to null-ness.
+            if matches!(filter.op, crate::model::ColumnOp::Ne) {
+                let _ = write!(predicate, " AND {} IS NOT NULL", filter.field);
+            }
             let _ = write!(
                 predicate,
                 " AND {} {} ${key}",
@@ -422,6 +615,30 @@ impl NativeStore {
                 filter.op.as_sql()
             );
             params.insert(key, filter.value.clone());
+        }
+        // Exclude internal scaffolding INSIDE the query rather than after it:
+        // the engine applies `LIMIT k`, so a post-filter would quietly return
+        // fewer than `k` caller facts whenever artefacts crowd the ranking.
+        //
+        // `!=` is what excludes here, and it works for the same reason the
+        // leak existed: `Condition::Neq` is `is_none_or`, so a fact that has
+        // no such column at all MATCHES. Applied to a marker, that keeps every
+        // caller fact (none carries one) and drops exactly the class that
+        // does. These names are compile-time constants, never caller input,
+        // so they go straight into the text without passing through
+        // `validate_column_filter` — whose job is to reject a CALLER filter
+        // naming a reserved key.
+        //
+        // The asymmetry with the caller loop above is DELIBERATE and load-
+        // bearing: a caller's `ne` now carries an `IS NOT NULL`, this exclusion
+        // must NOT. It depends on the absent field matching — that is how it
+        // keeps every caller fact while dropping the marked ones. Giving these
+        // markers the same treatment would exclude every caller fact instead,
+        // since none of them carries a marker column at all.
+        for (index, marker) in INTERNAL_MARKER_FIELDS.iter().enumerate() {
+            let key = format!("m{index}");
+            let _ = write!(predicate, " AND {marker} != ${key}");
+            params.insert(key, json!(true));
         }
         let sql = format!(
             "SELECT * FROM {} WHERE {predicate} LIMIT {k}",
@@ -458,6 +675,50 @@ pub const AUTO_DATE_FIELD: &str = "_veles_date";
 /// and every backend enforce it through this one predicate.
 pub(crate) fn is_reserved_key(key: &str) -> bool {
     key != AUTO_DATE_FIELD && (key == "content" || key.starts_with("_veles_"))
+}
+
+/// Marks an entity hub minted by `remember_extracted` — graph scaffolding,
+/// never a fact the caller stored.
+pub const HUB_FIELD: &str = "_veles_hub";
+/// Marks a compilation event recorded for `context_savings`.
+pub const CTX_EVENT_FIELD: &str = "_veles_ctx_event";
+/// Marks a stored compilation source, served back by `retrieve_context_source`.
+pub const CTX_SOURCE_FIELD: &str = "_veles_ctx_source";
+/// Marks a saved working context, served back by `load_working_context`.
+pub const CTX_WORKING_FIELD: &str = "_veles_ctx_working";
+/// Marks a project's working-context index, read by `list_working_contexts`.
+pub const CTX_WORKING_INDEX_FIELD: &str = "_veles_ctx_working_index";
+
+/// Every marker that identifies a stored fact as internal scaffolding rather
+/// than a caller memory. Facts of these five classes live in the same
+/// collection as caller facts and are written by exactly one path each; the
+/// markers are declared here, and imported by those paths, so the write and
+/// the exclusion cannot drift apart.
+///
+/// The discriminant is the PRESENCE of one of these keys — deliberately NOT
+/// the `_veles_` prefix. [`AUTO_DATE_FIELD`] (`_veles_date`) is reserved too
+/// and is stamped onto ordinary CALLER facts, so a prefix test would hide the
+/// entire store instead of the scaffolding.
+pub const INTERNAL_MARKER_FIELDS: &[&str] = &[
+    HUB_FIELD,
+    CTX_EVENT_FIELD,
+    CTX_SOURCE_FIELD,
+    CTX_WORKING_FIELD,
+    CTX_WORKING_INDEX_FIELD,
+];
+
+/// Whether a raw payload belongs to one of the five internal classes.
+///
+/// `pub` and shared for the same reason as [`validate_column_filter`]: a
+/// caller-facing recall path must not depend on which backend answered it.
+/// A backend that can test the payload directly should use this; one that
+/// pushes the predicate into a query builds the equivalent there — the
+/// authority on *which* markers count is this list either way.
+#[must_use]
+pub fn is_internal_scaffolding(payload: &Metadata) -> bool {
+    INTERNAL_MARKER_FIELDS
+        .iter()
+        .any(|marker| payload.contains_key(*marker))
 }
 
 /// Drop reserved system keys from a raw payload, and collapse an

@@ -17,6 +17,36 @@ FAILED=0
 pass() { printf 'ok - %s\n' "$1"; }
 fail() { printf 'not ok - %s\n' "$1"; FAILED=1; }
 
+# Assert that a block of text injected into a MODEL's context describes
+# load_working_context's return value correctly.
+#
+# Asserting only that the text mentions the tool NAME — which is all this
+# harness did while every one of these three scripts still carried the stale
+# "if it returns null, nothing was saved yet" instruction — cannot catch the
+# defect that matters here. The tool never returns null: its output schema is
+# an object whose only required key is 'found'. A model told to look for null
+# never detects a miss, never reads other_sessions, and starts fresh on top of
+# work that a one-character typo in the session id hid from it.
+#
+# So the check has two halves, and the negative one is what survives a revert:
+# the envelope's fields must be named, AND the null instruction must be gone.
+assert_envelope_contract() {
+  label="$1"
+  text="$2"
+  for field in found working other_sessions; do
+    if printf '%s' "$text" | grep -q "$field"; then
+      pass "$label: names '$field'"
+    else
+      fail "$label: names '$field'"
+    fi
+  done
+  if printf '%s' "$text" | grep -qi "returns null"; then
+    fail "$label: must not tell the model a null result means nothing was saved"
+  else
+    pass "$label: does not tell the model to expect a null result"
+  fi
+}
+
 if ! command -v jq >/dev/null 2>&1; then
   echo "jq is required to run this test harness" >&2
   exit 1
@@ -31,6 +61,18 @@ trap cleanup EXIT
 # never see stale sentinels from a previous run or a real session.
 export TMPDIR="$TMP_TEST_DIR/tmp"
 mkdir -p "$TMPDIR"
+HOOK_STATE_DIR="$TMPDIR/velesdb-agent-hooks-${UID}"
+mkdir -m 700 "$HOOK_STATE_DIR"
+
+# An archived original is the only recovery path for a memoryless
+# `compile-stdin` result. Session startup must therefore never age it out behind
+# the transcript's back: retention is a separate product policy, not a hook
+# side effect. Make this file old enough that the former seven-day purge would
+# delete it, then require both its path and bytes to survive SessionStart.
+archive_control="$HOOK_STATE_DIR/tool-output/still-referenced.txt"
+mkdir -p "$(dirname "$archive_control")"
+printf 'original bytes still referenced by a transcript' > "$archive_control"
+touch -t 202001010000 "$archive_control"
 
 PROJECT_DIR="$TMP_TEST_DIR/project"
 mkdir -p "$PROJECT_DIR"
@@ -48,6 +90,13 @@ session_start_payload="$(jq -n --arg cwd "$PROJECT_DIR" --arg sid "$SESSION_ID" 
 
 session_start_out="$(printf '%s' "$session_start_payload" | bash "$HOOKS_DIR/session-start.sh")"
 
+if [ -f "$archive_control" ] \
+  && [ "$(cat "$archive_control")" = "original bytes still referenced by a transcript" ]; then
+  pass "SessionStart: never purges the only archived original"
+else
+  fail "SessionStart: never purges the only archived original"
+fi
+
 if printf '%s' "$session_start_out" | jq -e '.hookSpecificOutput.hookEventName == "SessionStart"' >/dev/null; then
   pass "SessionStart: hookSpecificOutput.hookEventName is SessionStart"
 else
@@ -59,6 +108,9 @@ if printf '%s' "$session_start_out" | jq -e '.hookSpecificOutput.additionalConte
 else
   fail "SessionStart: additionalContext mentions load_working_context"
 fi
+
+assert_envelope_contract "SessionStart: additionalContext" \
+  "$(printf '%s' "$session_start_out" | jq -r '.hookSpecificOutput.additionalContext')"
 
 if printf '%s' "$session_start_out" | jq -e '.hookSpecificOutput.additionalContext | contains("test-project")' >/dev/null; then
   pass "SessionStart: additionalContext uses project from .velesdb-hooks.json"
@@ -186,6 +238,8 @@ else
   fail "Windsurf pre_user_prompt: first call mentions load_working_context"
 fi
 
+assert_envelope_contract "Windsurf pre_user_prompt: first call" "$windsurf_out_1"
+
 if printf '%s' "$windsurf_out_1" | grep -q "save_working_context"; then
   pass "Windsurf pre_user_prompt: first call also mentions save_working_context (no separate Stop event)"
 else
@@ -236,6 +290,9 @@ if printf '%s' "$codex_session_start_out" | jq -e '.hookSpecificOutput.additiona
 else
   fail "Codex SessionStart: additionalContext asks for load_working_context on the configured project"
 fi
+
+assert_envelope_contract "Codex SessionStart: additionalContext" \
+  "$(printf '%s' "$codex_session_start_out" | jq -r '.hookSpecificOutput.additionalContext')"
 
 if printf '%s' "$codex_session_start_out" | jq -e '.hookSpecificOutput.additionalContext | contains("COMPACTION") | not' >/dev/null; then
   pass "Codex SessionStart: source=startup does not mention compaction"
@@ -333,7 +390,78 @@ cat > "$FAKE_BIN_DIR/fake-old" <<'FAKE'
 sleep 30
 FAKE
 
-chmod +x "$FAKE_BIN_DIR/fake-ok" "$FAKE_BIN_DIR/fake-fail" "$FAKE_BIN_DIR/fake-old"
+# Behaves like a corpus the compiler cannot fit without dropping something it
+# classifies as CRITICAL — a code fence, an exact value, a URL. No budget
+# rescues it; the real 584 KB thread-stack sample under
+# .investigation/http-deadlock-2026-07-22/ measures `high` at 2 000, 4 000,
+# 8 000 and 16 000.
+cat > "$FAKE_BIN_DIR/fake-high" <<'FAKE'
+#!/usr/bin/env bash
+cat >/dev/null
+printf '{"content":"LOSSY SUMMARY","tokens_in":4000,"tokens_out":300,"tokens_saved":3700,"risk":"high"}\n'
+FAKE
+
+# Behaves like a corpus that is merely CRAMPED rather than incompressible: the
+# first budget loses something critical, twice the budget does not. That is the
+# common case — the real 268 KB cargo log measures `high` at 2 000 and `medium`
+# at 4 000 — and it is why the hook escalates before it refuses.
+cat > "$FAKE_BIN_DIR/fake-escalate" <<'FAKE'
+#!/usr/bin/env bash
+cat >/dev/null
+# argv: compile-stdin --budget N --query ...
+if [ "${3:-0}" -ge 4000 ]; then
+  printf '{"content":"ROOMIER SUMMARY","tokens_in":4000,"tokens_out":600,"tokens_saved":3400,"risk":"medium"}\n'
+else
+  printf '{"content":"CRAMPED SUMMARY","tokens_in":4000,"tokens_out":300,"tokens_saved":3700,"risk":"high"}\n'
+fi
+FAKE
+
+# Proves both halves of the fail-closed wire contract. The capability probe
+# gets a valid low-risk response, so these binaries cannot pass merely because
+# the hook disabled them before the real compilation. The queried invocation
+# then returns content whose risk is absent, unknown, or the wrong JSON type.
+cat > "$FAKE_BIN_DIR/fake-risk-contract" <<'FAKE'
+#!/usr/bin/env bash
+cat >/dev/null
+case " $* " in
+  *" --query "*)
+    case "${FAKE_FINAL_RISK_MODE:-missing}" in
+      missing)
+        printf '{"content":"UNVERIFIED SUMMARY","tokens_in":4000,"tokens_out":300,"tokens_saved":3700}\n'
+        ;;
+      unknown)
+        printf '{"content":"UNVERIFIED SUMMARY","tokens_in":4000,"tokens_out":300,"tokens_saved":3700,"risk":"critical"}\n'
+        ;;
+      malformed)
+        printf '{"content":"UNVERIFIED SUMMARY","tokens_in":4000,"tokens_out":300,"tokens_saved":3700,"risk":{"level":"medium"}}\n'
+        ;;
+    esac
+    ;;
+  *)
+    printf '{"content":"PROBE","tokens_in":4,"tokens_out":1,"tokens_saved":3,"risk":"low"}\n'
+    ;;
+esac
+FAKE
+
+cat > "$FAKE_BIN_DIR/fake-low" <<'FAKE'
+#!/usr/bin/env bash
+cat >/dev/null
+printf '{"content":"LOSSLESS SUMMARY","tokens_in":4000,"tokens_out":300,"tokens_saved":3700,"risk":"low"}\n'
+FAKE
+
+# Faithful but pointless: the compiler fit the corpus, yet its gross saving is
+# smaller than the replacement footer. Shipping this would increase the next
+# paid prompt even though `risk` is low.
+cat > "$FAKE_BIN_DIR/fake-no-savings" <<'FAKE'
+#!/usr/bin/env bash
+cat >/dev/null
+printf '{"content":"ALMOST THE ORIGINAL","tokens_in":4000,"tokens_out":3900,"tokens_saved":100,"risk":"low"}\n'
+FAKE
+
+chmod +x "$FAKE_BIN_DIR/fake-ok" "$FAKE_BIN_DIR/fake-fail" "$FAKE_BIN_DIR/fake-old" \
+  "$FAKE_BIN_DIR/fake-high" "$FAKE_BIN_DIR/fake-escalate" \
+  "$FAKE_BIN_DIR/fake-risk-contract" "$FAKE_BIN_DIR/fake-low" \
+  "$FAKE_BIN_DIR/fake-no-savings"
 
 big_output="$(head -c 40000 < /dev/zero | tr '\0' 'x')"
 
@@ -341,7 +469,9 @@ post_tool_payload() {
   # $1 tool_name, $2 session suffix, $3 response text
   jq -n --arg cwd "$PROJECT_DIR" --arg sid "$SESSION_ID-$2" --arg tool "$1" --arg body "$3" \
     '{session_id: $sid, cwd: $cwd, hook_event_name: "PostToolUse", tool_name: $tool,
-      tool_input: {command: "echo"}, tool_use_id: "toolu_test", tool_response: $body}'
+      tool_input: {command: "echo"}, tool_use_id: "toolu_test",
+      tool_response: {stdout: $body, stderr: "", interrupted: false,
+        isImage: false, noOutputExpected: false}}'
 }
 
 # A tool NOT on the allowlist must be left strictly alone, however big it is.
@@ -363,6 +493,51 @@ else
   fail "PostToolUse: output below the threshold is passed through untouched"
 fi
 
+# Private state is an optimization dependency, never a reason to suppress the
+# host's real result. A file at the state-directory path makes that storage
+# unsafe; the hook must still return a schema-valid identity response.
+unsafe_tmp="$TMP_TEST_DIR/unsafe-optimizer-state"
+mkdir -p "$unsafe_tmp"
+printf 'not a private directory\n' > "$unsafe_tmp/velesdb-agent-hooks-${UID}"
+unsafe_state_out="$(post_tool_payload "Bash" "unsafe-state" "$big_output" \
+  | TMPDIR="$unsafe_tmp" VELESDB_HOOK_MIN_BYTES=1 \
+    VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-ok" \
+    bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
+if [ "$(printf '%s' "$unsafe_state_out" | jq -c .)" = "{}" ]; then
+  pass "PostToolUse: unsafe private state falls back to untouched output"
+else
+  fail "PostToolUse: unsafe private state falls back to untouched output"
+fi
+
+# Older predictable compiler-output names were opened through shell
+# redirection, so a final symlink could truncate its target. Keep hostile
+# links at both former paths and require the new private mktemp files to leave
+# them and their victims byte-identical.
+hostile_suffix="private-output-links"
+hostile_session="$SESSION_ID-$hostile_suffix"
+probe_bin_key="$(printf '%s' "$FAKE_BIN_DIR/fake-ok" | cksum | tr ' ' '-')"
+probe_session_key="$(printf '%s' "$hostile_session" | cksum | tr ' ' '-')"
+result_key="$(printf '%s' "${hostile_session}-toolu_test" | cksum | tr ' ' '-')"
+legacy_probe_out="$HOOK_STATE_DIR/compile-stdin-probe-out-${probe_bin_key}-${probe_session_key}.marker"
+legacy_result="$HOOK_STATE_DIR/compile-stdin-result-${result_key}.marker"
+probe_victim="$TMP_TEST_DIR/probe-victim.txt"
+result_victim="$TMP_TEST_DIR/result-victim.txt"
+printf 'DO NOT OVERWRITE PROBE\n' > "$probe_victim"
+printf 'DO NOT OVERWRITE RESULT\n' > "$result_victim"
+ln -s "$probe_victim" "$legacy_probe_out"
+ln -s "$result_victim" "$legacy_result"
+hostile_link_out="$(post_tool_payload "Bash" "$hostile_suffix" "$big_output" \
+  | VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-ok" \
+    bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
+if printf '%s' "$hostile_link_out" | jq -e '.hookSpecificOutput.updatedToolOutput' >/dev/null \
+  && [ -L "$legacy_probe_out" ] && [ -L "$legacy_result" ] \
+  && [ "$(cat "$probe_victim")" = "DO NOT OVERWRITE PROBE" ] \
+  && [ "$(cat "$result_victim")" = "DO NOT OVERWRITE RESULT" ]; then
+  pass "PostToolUse: private mktemp outputs cannot follow predictable hostile links"
+else
+  fail "PostToolUse: private mktemp outputs cannot follow predictable hostile links"
+fi
+
 # The nominal case: an allowlisted tool, over the threshold, capable binary.
 big_out="$(post_tool_payload "Bash" "big" "$big_output" \
   | VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-ok" bash "$HOOKS_DIR/post-tool-use.sh")"
@@ -373,28 +548,230 @@ else
   fail "PostToolUse: replaces the result with hookEventName PostToolUse"
 fi
 
-if printf '%s' "$big_out" | jq -e '.hookSpecificOutput.updatedToolOutput | contains("COMPILED SUMMARY")' >/dev/null; then
-  pass "PostToolUse: updatedToolOutput carries the compiled content"
+if printf '%s' "$big_out" | jq -e '
+  .hookSpecificOutput.updatedToolOutput
+  | (type == "object")
+    and (.stdout | contains("COMPILED SUMMARY"))
+    and (.stderr == "")
+    and (.interrupted == false)
+    and (.isImage == false)
+    and (.noOutputExpected == false)
+' >/dev/null; then
+  pass "PostToolUse: updatedToolOutput preserves the documented Bash shape"
 else
-  fail "PostToolUse: updatedToolOutput carries the compiled content"
+  fail "PostToolUse: updatedToolOutput preserves the documented Bash shape"
 fi
 
-# Rule 1 — nothing is deleted: the replacement must point at the untouched
-# original, and that file must actually hold it.
-archive_path="$(printf '%s' "$big_out" \
-  | jq -r '.hookSpecificOutput.updatedToolOutput' \
-  | sed -n 's/.*original is at \(.*\); Read it.*/\1/p')"
+# Built-in replacement is schema-checked by Claude. A string-shaped Bash
+# response or an image result is not safely replaceable and must never reach
+# the compiler, even if it is large.
+invalid_bash_payload="$(jq -n --arg cwd "$PROJECT_DIR" --arg sid "$SESSION_ID-bad-shape" \
+  --arg body "$big_output" \
+  '{session_id: $sid, cwd: $cwd, hook_event_name: "PostToolUse", tool_name: "Bash",
+    tool_input: {command: "echo"}, tool_use_id: "toolu_bad", tool_response: $body}')"
+invalid_bash_out="$(printf '%s' "$invalid_bash_payload" \
+  | VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-ok" bash "$HOOKS_DIR/post-tool-use.sh")"
+if [ "$(printf '%s' "$invalid_bash_out" | jq -c .)" = "{}" ]; then
+  pass "PostToolUse: an invalid Bash output shape is never replaced"
+else
+  fail "PostToolUse: an invalid Bash output shape is never replaced"
+fi
+
+image_bash_payload="$(printf '%s' "$(post_tool_payload "Bash" "image" "$big_output")" \
+  | jq '.tool_response.isImage = true')"
+image_bash_out="$(printf '%s' "$image_bash_payload" \
+  | VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-ok" bash "$HOOKS_DIR/post-tool-use.sh")"
+if [ "$(printf '%s' "$image_bash_out" | jq -c .)" = "{}" ]; then
+  pass "PostToolUse: a Bash image result is never flattened into text"
+else
+  fail "PostToolUse: a Bash image result is never flattened into text"
+fi
+
+low_out="$(post_tool_payload "Bash" "low" "$big_output" \
+  | VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-low" bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
+if printf '%s' "$low_out" | jq -e '.hookSpecificOutput.updatedToolOutput.stdout | contains("LOSSLESS SUMMARY")' >/dev/null; then
+  pass "PostToolUse: a risk=low compilation IS shipped (second positive control)"
+else
+  fail "PostToolUse: a risk=low compilation IS shipped (second positive control)"
+fi
+
+no_savings_out="$(post_tool_payload "Bash" "no-savings" "$big_output" \
+  | VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-no-savings" \
+    bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
+if [ "$(printf '%s' "$no_savings_out" | jq -c .)" = "{}" ]; then
+  pass "PostToolUse: faithful compilation without net token savings passes through"
+else
+  fail "PostToolUse: faithful compilation without net token savings passes through"
+fi
+
+# Environment knobs feed watchdog bounds, arithmetic, and compiler arguments.
+# Invalid expressions must be data, never shell arithmetic, and must fall back
+# before replacing the host result.
+for invalid_knob in \
+  VELESDB_HOOK_MIN_BYTES \
+  VELESDB_HOOK_PROBE_TIMEOUT \
+  VELESDB_HOOK_TOKEN_BUDGET \
+  VELESDB_HOOK_TOKEN_BUDGET_MAX \
+  VELESDB_HOOK_MIN_SAVED_TOKENS
+do
+  invalid_out="$(post_tool_payload "Bash" "invalid-$invalid_knob" "$big_output" \
+    | env "$invalid_knob=1+1" VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-ok" \
+      bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
+  if [ "$(printf '%s' "$invalid_out" | jq -c .)" = "{}" ]; then
+    pass "PostToolUse: invalid $invalid_knob fails closed to passthrough"
+  else
+    fail "PostToolUse: invalid $invalid_knob fails closed to passthrough"
+  fi
+done
+
+for bad_risk in missing unknown malformed; do
+  bad_risk_out="$(post_tool_payload "Bash" "risk-$bad_risk" "$big_output" \
+    | FAKE_FINAL_RISK_MODE="$bad_risk" \
+      VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-risk-contract" \
+      bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
+  if [ "$(printf '%s' "$bad_risk_out" | jq -c .)" = "{}" ]; then
+    pass "PostToolUse: risk=$bad_risk is refused instead of shipping unverifiable content"
+  else
+    fail "PostToolUse: risk=$bad_risk is refused instead of shipping unverifiable content"
+  fi
+done
+
+# --- Rule 5: fidelity ------------------------------------------------------
+# `risk: high` is not "the summary reads badly". It is the compiler reporting
+# that a fragment it classifies as critical did not survive verbatim — and on
+# this path there is no store behind the `ctx://source/…` handles it mints, so
+# the temp file is the ONLY way back. Shipping that in place of the real result
+# is how a hook meant to save tokens costs a diagnosis.
+high_out="$(post_tool_payload "Bash" "high" "$big_output" \
+  | VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-high" bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
+if [ "$(printf '%s' "$high_out" | jq -c .)" = "{}" ]; then
+  pass "PostToolUse: a risk=high compilation is refused, leaving the result untouched"
+else
+  fail "PostToolUse: a risk=high compilation is refused, leaving the result untouched"
+fi
+
+# The positive control for the refusal above. Without it, a hook that refused
+# EVERYTHING would satisfy it while never compressing anything — the same
+# assertion passing for the opposite reason. `fake-ok` reports `medium`, and
+# `$big_out` above shows it IS shipped.
+if printf '%s' "$big_out" | jq -e '.hookSpecificOutput.updatedToolOutput.stdout | contains("COMPILED SUMMARY")' >/dev/null; then
+  pass "PostToolUse: a risk=medium compilation IS shipped (control for the refusal)"
+else
+  fail "PostToolUse: a risk=medium compilation IS shipped (control for the refusal)"
+fi
+
+# Escalate before refusing: the budget is usually what is too tight, not the
+# content that is incompressible.
+esc_out="$(post_tool_payload "Bash" "escalate" "$big_output" \
+  | VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-escalate" bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
+if printf '%s' "$esc_out" | jq -e '.hookSpecificOutput.updatedToolOutput.stdout | contains("ROOMIER SUMMARY")' >/dev/null; then
+  pass "PostToolUse: risk=high at the first budget retries at the ceiling and ships that"
+else
+  fail "PostToolUse: risk=high at the first budget retries at the ceiling and ships that"
+fi
+
+# ...and the cramped first attempt must NOT be what reaches the model, or the
+# escalation would be decorative.
+if printf '%s' "$esc_out" | jq -e '.hookSpecificOutput.updatedToolOutput.stdout | contains("CRAMPED SUMMARY") | not' >/dev/null; then
+  pass "PostToolUse: the refused first attempt never reaches the model"
+else
+  fail "PostToolUse: the refused first attempt never reaches the model"
+fi
+
+# A ceiling equal to the starting budget means there is no second attempt to
+# make, so the first `high` is final. This is what makes the ceiling a real
+# bound rather than a suggestion.
+noesc_out="$(post_tool_payload "Bash" "noesc" "$big_output" \
+  | VELESDB_HOOK_TOKEN_BUDGET=2000 VELESDB_HOOK_TOKEN_BUDGET_MAX=2000 \
+    VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-escalate" bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
+if [ "$(printf '%s' "$noesc_out" | jq -c .)" = "{}" ]; then
+  pass "PostToolUse: a ceiling equal to the budget forbids the retry and refuses"
+else
+  fail "PostToolUse: a ceiling equal to the budget forbids the retry and refuses"
+fi
+
+# The model must be told which fidelity it is reading. A compiled view that
+# looks identical whether it lost something or not is one the model cannot
+# reason about.
+if printf '%s' "$big_out" | jq -e '.hookSpecificOutput.updatedToolOutput.stdout | contains("fidelity risk medium")' >/dev/null; then
+  pass "PostToolUse: the footer names the fidelity risk of what it shipped"
+else
+  fail "PostToolUse: the footer names the fidelity risk of what it shipped"
+fi
+
+# --- Against the REAL binary -----------------------------------------------
+# Everything above drives fake binaries, which is right for the decision logic
+# but proves nothing about the contract the two sides actually share: that the
+# compiler emits a `risk` field the hook can read, spelled the way the hook
+# expects. A rename on either side would leave every test above green.
+#
+# Two corpora, both generated here so the harness stays hermetic, both measured
+# against the current-checkout binary supplied explicitly by CI:
+#   * URLs and hex checksums — content the classifier calls CRITICAL. Dropping
+#     any of it is `high`, and stays `high` well past the ceiling.
+#   * identical heartbeat lines — the repetitive case abstraction handles
+#     cleanly, and reports `medium`.
+real_bin="${VELESDB_MEMORY_BIN_REAL:-}"
+if [ -n "$real_bin" ]; then
+  if [ ! -x "$real_bin" ]; then
+    fail "PostToolUse/real: VELESDB_MEMORY_BIN_REAL names an executable checkout binary"
+  elif ! printf 'probe\n' | "$real_bin" compile-stdin --budget 4096 2>/dev/null \
+    | jq -e '.risk == "low" or .risk == "medium" or .risk == "high"' >/dev/null 2>&1; then
+    fail "PostToolUse/real: the checkout binary exposes an explicit fidelity risk"
+  else
+
+    critical_corpus="$(awk 'BEGIN { for (i = 0; i < 200; i++)
+      printf "2026-08-04T00:%02d:00Z ERROR shard=%d url=https://example.invalid/api/v1/resource/%d checksum=0x%08x elapsed=%dms\n", i % 60, i, i, i, i * 7 }')"
+    repetitive_corpus="$(awk 'BEGIN { for (i = 0; i < 400; i++)
+      print "INFO  worker heartbeat ok, queue depth nominal, nothing to report" }')"
+
+    real_high="$(post_tool_payload "Bash" "realhigh" "$critical_corpus" \
+      | VELESDB_MEMORY_BIN="$real_bin" bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
+    if [ "$(printf '%s' "$real_high" | jq -c .)" = "{}" ]; then
+      pass "PostToolUse/real: the real compiler's risk=high verdict is honoured"
+    else
+      fail "PostToolUse/real: the real compiler's risk=high verdict is honoured"
+    fi
+
+    real_ok="$(post_tool_payload "Bash" "realok" "$repetitive_corpus" \
+      | VELESDB_MEMORY_BIN="$real_bin" bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
+    if printf '%s' "$real_ok" | jq -e '.hookSpecificOutput.updatedToolOutput.stdout | contains("fidelity risk")' >/dev/null; then
+      pass "PostToolUse/real: a compressible corpus is still compressed by the real compiler"
+    else
+      fail "PostToolUse/real: a compressible corpus is still compressed by the real compiler"
+    fi
+  fi
+else
+  printf '# INFO - real-binary contract runs in CI against target/debug/velesdb-memory\n'
+fi
+
+# Rule 1 — nothing is deleted: serialize the complete original Bash output
+# object, including stderr, trailing newlines and version-specific fields.
+archive_stdout="${big_output}"$'\n'
+archive_stderr=$'warning: retained verbatim\n'
+archive_payload="$(jq -n --arg cwd "$PROJECT_DIR" --arg sid "$SESSION_ID-archive" \
+  --arg out "$archive_stdout" --arg err "$archive_stderr" \
+  '{session_id: $sid, cwd: $cwd, hook_event_name: "PostToolUse", tool_name: "Bash",
+    tool_input: {command: "build"}, tool_use_id: "toolu_archive",
+    tool_response: {stdout: $out, stderr: $err, interrupted: false,
+      isImage: false, noOutputExpected: false}}')"
+archive_out="$(printf '%s' "$archive_payload" \
+  | VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-ok" bash "$HOOKS_DIR/post-tool-use.sh")"
+archive_path="$(printf '%s' "$archive_out" \
+  | jq -r '.hookSpecificOutput.updatedToolOutput.stdout' \
+  | sed -n 's/.*serialized as JSON at \(.*\); Read it.*/\1/p')"
 if [ -n "$archive_path" ] && [ -f "$archive_path" ]; then
-  pass "PostToolUse: the replacement quotes a real path to the original"
+  pass "PostToolUse: the replacement quotes a real path to the original object"
 else
-  fail "PostToolUse: the replacement quotes a real path to the original"
+  fail "PostToolUse: the replacement quotes a real path to the original object"
 fi
 
-if [ -n "$archive_path" ] && [ -f "$archive_path" ] \
-  && [ "$(wc -c < "$archive_path" | tr -d ' ')" = "$(printf '%s' "$big_output" | wc -c | tr -d ' ')" ]; then
-  pass "PostToolUse: the archived original is byte-complete"
+expected_archive="$(printf '%s' "$archive_payload" | jq -S -c '.tool_response')"
+actual_archive="$(jq -S -c . "$archive_path" 2>/dev/null || true)"
+if [ -n "$archive_path" ] && [ "$actual_archive" = "$expected_archive" ]; then
+  pass "PostToolUse: the archived Bash object is semantically complete"
 else
-  fail "PostToolUse: the archived original is byte-complete"
+  fail "PostToolUse: the archived Bash object is semantically complete"
 fi
 
 # A failing compilation must never cost the agent its tool result.
@@ -467,7 +844,7 @@ fi
 cat > "$FAKE_BIN_DIR/fake-record" <<FAKE
 #!/usr/bin/env bash
 cat > "$TMP_TEST_DIR/received.txt"
-printf '{"content":"COMPILED","tokens_in":4000,"tokens_out":300,"tokens_saved":3700}\n'
+printf '{"content":"COMPILED","tokens_in":4000,"tokens_out":300,"tokens_saved":3700,"risk":"medium"}\n'
 FAKE
 chmod +x "$FAKE_BIN_DIR/fake-record"
 
@@ -479,7 +856,8 @@ $noisy_lines"
 jq -n --arg cwd "$PROJECT_DIR" --arg sid "$SESSION_ID-obj" --arg body "$buried" \
   '{session_id: $sid, cwd: $cwd, hook_event_name: "PostToolUse", tool_name: "Bash",
     tool_input: {command: "cargo build"}, tool_use_id: "toolu_obj",
-    tool_response: {stdout: $body, stderr: ""}}' \
+    tool_response: {stdout: $body, stderr: "", interrupted: false,
+      isImage: false, noOutputExpected: false}}' \
   | VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-record" bash "$HOOKS_DIR/post-tool-use.sh" >/dev/null
 
 received_lines="$(wc -l < "$TMP_TEST_DIR/received.txt" | tr -d ' ')"
@@ -506,6 +884,27 @@ if command -v shellcheck >/dev/null 2>&1; then
   fi
 else
   echo "note - shellcheck not installed, skipping static analysis check"
+fi
+
+# No model-facing text anywhere in this directory may describe
+# load_working_context as returning null.
+# ---------------------------------------------------------------------------
+# The three hook scripts are not the only text this directory injects into a
+# model's context: codex/README.md ships a ready-made AGENTS.md block that
+# users are told to paste verbatim, and it is the documented fallback for
+# anyone who cannot install hooks. It carried the stale "a null result means
+# nothing was saved yet" instruction for its whole life, because the checks
+# above only ever read what the SCRIPTS printed. Scanning the tree — prose
+# included — is what makes the next model-facing surface arrive covered
+# instead of arriving stale.
+# `--exclude-dir=test` keeps this harness from matching its own explanation
+# above; nothing under test/ is ever injected into a model's context.
+stale_null_claims="$(grep -rniE 'null result|returns null' "$ROOT" \
+  --include='*.sh' --include='*.md' --exclude-dir=test || true)"
+if [ -z "$stale_null_claims" ]; then
+  pass "no agent-facing text tells a model load_working_context can return null"
+else
+  fail "agent-facing text still promises a null result: $stale_null_claims"
 fi
 
 if [ "$FAILED" -ne 0 ]; then

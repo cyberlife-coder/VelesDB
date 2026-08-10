@@ -888,11 +888,15 @@ for t in threads: t.join()
 
 ## Rust API
 
-The Rust API is more complete than the Python bindings:
+The Rust API (`velesdb_core::agent`) is more complete than the Python
+bindings. It requires the default `persistence` feature — the `agent` module is
+gated behind it. The default embedding dimension is **384**, configurable with
+`AgentMemory::with_dimension(db, dim)`. The snippets below use `?`, so paste
+them inside `fn main() -> Result<(), Box<dyn std::error::Error>> { ... Ok(()) }`.
 
 ```rust
 use std::sync::Arc;
-use velesdb_core::{Database, agent::AgentMemory};
+use velesdb_core::{Database, agent::{AgentMemory, EvictionConfig}};
 
 let db = Arc::new(Database::open("./agent_data")?);
 let memory = AgentMemory::new(Arc::clone(&db))?;
@@ -918,10 +922,15 @@ memory.procedural().delete(1)?;
 
 // TTL
 memory.set_semantic_ttl(1, 3600);    // 1 hour
-memory.auto_expire();                 // purge expired entries
+let stats = memory.auto_expire()?;    // purge expired entries -> ExpireResult
 
-// Snapshots
-let memory = memory.with_snapshots("./snapshots", 10)?;
+// Evict low-confidence procedures
+let evicted = memory.evict_low_confidence_procedures(0.3)?;
+
+// Snapshots and eviction tuning (builders)
+let memory = memory
+    .with_snapshots("./snapshots", 10)
+    .with_eviction_config(EvictionConfig::default());
 memory.snapshot()?;
 memory.load_latest_snapshot()?;
 ```
@@ -942,6 +951,23 @@ memory.load_latest_snapshot()?;
 >   only through `AgentMemory.semantic` (shared, snapshot-backed TTL).
 > - **TypeScript** is REST-backed with no in-process engine, so none of this
 >   applies.
+
+### Rust types
+
+| Type | Description |
+|------|-------------|
+| `AgentMemory` | Unified interface; holds `SemanticMemory`, `EpisodicMemory`, `ProceduralMemory` |
+| `SemanticMemory` | `store(id, content, embedding)`, `query(embedding, k)` returning `Vec<(id, score, content)>` |
+| `EpisodicMemory` | `record(id, description, timestamp, embedding)`, `recent(limit, since)`, `recall_similar(embedding, k)` |
+| `ProceduralMemory` | `learn(id, name, steps, embedding, confidence)`, `recall(embedding, k, min_confidence)`, `reinforce(id, success)` |
+| `ProcedureMatch` | Recall result: `id`, `name`, `steps: Vec<String>`, `confidence: f32`, `score: f32` |
+| `EvictionConfig` | `consolidation_age_threshold: u64`, `min_confidence_threshold: f32`, `max_entries_per_cycle: usize` |
+| `SnapshotManager` | `new(dir, max_snapshots)` — versioned state persistence with automatic rotation |
+| `TemporalIndex` | B-tree temporal index for O(log N) time-range queries |
+| `ExpireResult` | Returned by `auto_expire()`: `semantic_expired`, `episodic_expired`, `procedural_expired`, `episodic_consolidated`, `procedural_evicted`, `consolidation_truncated` |
+
+Full signatures live on [docs.rs](https://docs.rs/velesdb-core). For dated
+recall on top of these subsystems, see [Temporal memory](./TEMPORAL_MEMORY.md).
 
 ### API Availability by Binding
 
@@ -1050,20 +1076,22 @@ Each recall returns `SearchResult[]` = `{ id, score, payload?, vector? }`:
 
 Wiring an MCP server gives an agent the *tools*; it does not make the agent
 call them. [`integrations/agent-hooks/`](../../integrations/agent-hooks/README.md)
-closes that gap with four real Claude Code hooks:
+ships five real Claude Code hooks:
 
 | Hook | What it does | Mechanism |
 |---|---|---|
 | `SessionStart` | tells the model to call `load_working_context` as its first action | `hookSpecificOutput.additionalContext` — advisory |
-| `Stop` | blocks the **first** stop per session with a reason: call `save_working_context` before stopping | `{"decision":"block","reason":…}` — advisory |
+| `Stop` | in an opted-in repository, blocks on the first Stop and after each later covered edit batch with the four-step checklist and `save_working_context`; otherwise keeps the legacy first-Stop save reminder | `{"decision":"block","reason":…}` plus repository/session first-Stop markers, independent session-wide records for every edited repository, and an atomic pending/delivered manifest that preserves the complete batch across an interrupted hook |
 | `PreCompact` | blocks the **first** compaction per session with a reason: `compile_transcript` + `save_working_context` first | `decision` + `reason` — advisory |
+| `PreToolUse` | refuses `Edit`/`Write` in an opted-in repository until a successful recall has been observed | exit 2 with an actionable reason — binding for the covered edit path |
 | `PostToolUse` | compiles an oversized tool result and **replaces** it | `hookSpecificOutput.updatedToolOutput` |
 
 ### `PostToolUse` — the only hook that replaces content
 
-The first three can only *nudge*: they hand the model a reason string and hope
-it calls the right tool, so whether the context actually shrinks stays the
-model's decision. `PostToolUse` is different — its output schema carries
+The three advisory hooks ask the model to call a tool; whether the context
+actually shrinks stays the model's decision. `PreToolUse` enforces
+recall-before-edit but does not compile content. `PostToolUse` is different —
+its output schema carries
 replacement content, so an oversized tool result is compiled **once**, before
 it ever enters the transcript, and the bulky original is therefore never
 re-sent on any later turn. In one measured run a 10,331-byte tool result was
@@ -1074,13 +1102,16 @@ compile-stdin`), because the session's own MCP server already holds the
 store's single-writer `flock`. Its safety rules, each covered by
 [`integrations/agent-hooks/test/hooks.test.sh`](../../integrations/agent-hooks/test/hooks.test.sh):
 
-- **Nothing is deleted.** The untouched original is archived under
-  `$TMPDIR/velesdb-agent-hooks/tool-output/` and its path is quoted in the
-  replacement, so the agent can `Read` it back whenever the compiled view is
-  not enough.
-- **Strict allowlist.** `Bash`, `Grep`, `WebFetch` by default. `Read` and
-  `Edit` are deliberately excluded and must stay excluded — their value *is*
-  the exact bytes.
+- **Nothing is deleted.** The complete original Bash output object is
+  serialized as JSON under `$TMPDIR/velesdb-agent-hooks-$UID/tool-output/` and its
+  path is quoted in the replacement, so the agent can `Read` it back whenever
+  the compiled view is not enough.
+- **Strict schema allowlist.** Only `Bash` is enabled: its structured output is
+  documented and contract-tested. `Grep` and `WebFetch` remain disabled until
+  their host schemas are pinned; `Read` and `Edit` stay excluded because their
+  value *is* the exact bytes.
+- **Positive net gain.** A faithful compilation is still refused unless its
+  gross token saving covers every footer byte plus a 128-token margin.
 - **Identity fallback everywhere.** Missing `jq`, a missing or too-old binary,
   a compilation error, an empty compiled result — each one leaves the tool
   result exactly as it was.
@@ -1131,3 +1162,7 @@ Yes. The SDK is covered end-to-end by Rust and Python test suites, including sna
 
 > **Source code**: [`crates/velesdb-core/src/agent/`](../../crates/velesdb-core/src/agent/)
 > **Python bindings**: [`crates/velesdb-python/src/agent.rs`](../../crates/velesdb-python/src/agent.rs)
+
+---
+
+Last updated: 2026-08-08 · Applies to: velesdb-core 5.0.0

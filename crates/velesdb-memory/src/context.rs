@@ -81,9 +81,9 @@ pub use insights::{CompilationInsights, ModelPricing, PricingTable};
 pub use model::{
     CompilePolicy, CompileRequest, CompiledContext, CompiledSection, ContextAction,
     ContextDecision, ContextDecisionRef, ContextFact, ContextFragment, ContextSavings,
-    ContextSource, ContextWarning, FidelityRisk, ImportanceWeights, MediaRef, MemoryScope,
-    RetrievalHandle, SectionKind, SourceReference, WorkingContext, WorkingContextIndex,
-    WorkingContextSession,
+    ContextSource, ContextWarning, FidelityRisk, ImportanceWeights, LoadedWorkingContext, MediaRef,
+    MemoryScope, RetrievalHandle, SectionKind, SourceReference, WorkingContext,
+    WorkingContextIndex, WorkingContextSession,
 };
 pub use model_windows::{model_window, suggest_token_budget, SuggestedBudget};
 pub use relevance::DeterministicReranker;
@@ -972,10 +972,20 @@ const WARNING_RELEVANCE_THRESHOLD: f32 = 0.35;
 /// pulled fragment's `relevance`/`reason` — a warning must never quote a
 /// stale value.
 ///
-/// Deliberately scoped to `Retrieve` only, not `Drop`: every `Drop` this
-/// compiler emits is `dup_verdict`'s byte-identical duplicate, whose content
-/// survives through its kept twin — never a real loss, so including it
-/// would just be noise on every dedup.
+/// Deliberately scoped to `Retrieve` only, and that scope is NARROWER than
+/// "everything that was lost". The old justification here — "every `Drop` is
+/// a byte-identical duplicate whose content survives through its kept twin"
+/// — is false, and `dup_verdict` contradicts it in its own reason strings: a
+/// media duplicate whose caption diverges loses that caption, and a
+/// duplicate whose twin was itself not fully emitted loses the remainder.
+/// A partially packed `Preserve` and an `Abstract` are real losses too, and
+/// neither appears here either.
+///
+/// So the floor is a NOISE control, not a completeness claim: an empty
+/// `warnings` does not mean nothing was lost. `decisions` stays the
+/// exhaustive record and `risk` the cheap summary. [`ContextWarning`] and
+/// every published tool description now say this instead of promising the
+/// shortcut (#1703 DC-4).
 pub(crate) fn warnings_for(decisions: &[ContextDecision]) -> Vec<ContextWarning> {
     decisions
         .iter()
@@ -1099,6 +1109,92 @@ mod chunk_policy_tests {
             effective.max_chunk_bytes >= MIN_CHUNK_BYTES,
             "caller max_chunk_bytes=1 bypassed the {MIN_CHUNK_BYTES}-byte floor, got {}",
             effective.max_chunk_bytes
+        );
+    }
+}
+
+/// #1703 DC-4. The published descriptions used to say that checking
+/// `decisions` by hand was "only needed when `warnings` is non-empty". These
+/// tests NAME that promise so it cannot be re-made silently: they pin the
+/// shapes that are real losses AND produce no warning, which is exactly what
+/// made the old shortcut false.
+///
+/// They are deliberately written against [`warnings_for`] rather than a full
+/// compilation: the claim is about the filter, and a fixture that had to
+/// drive a packer into a partial `Preserve` would pin the packer's tuning
+/// instead of the contract.
+#[cfg(test)]
+mod warning_completeness_tests {
+    use super::{warnings_for, WARNING_RELEVANCE_THRESHOLD};
+    use crate::context::model::{ContextAction, ContextDecision, FidelityRisk};
+
+    fn decision(action: ContextAction, relevance: f32, reason: &str) -> ContextDecision {
+        ContextDecision {
+            fragment_id: 1,
+            content_hash: 0,
+            action,
+            rule_id: "test".to_owned(),
+            relevance,
+            risk: FidelityRisk::Medium,
+            reason: reason.to_owned(),
+            memory_id: None,
+            handle: None,
+        }
+    }
+
+    #[test]
+    fn an_empty_warnings_list_is_not_a_clean_bill_of_health() {
+        // Every one of these is a REAL loss for the caller, and not one of
+        // them clears the `Retrieve`-only filter. A caller who trusted the
+        // old shortcut shipped all four believing nothing was cut.
+        let decisions = vec![
+            decision(
+                ContextAction::Preserve,
+                0.9,
+                "packed 2/9 chunks — the rest did not fit",
+            ),
+            decision(ContextAction::Abstract, 0.9, "summarised"),
+            decision(
+                ContextAction::Drop,
+                0.9,
+                "duplicate — image survives through it; this fragment's differing caption does not",
+            ),
+            decision(
+                ContextAction::Drop,
+                0.9,
+                "duplicate — but that twin was not fully emitted — recover via the handle",
+            ),
+        ];
+
+        assert!(
+            warnings_for(&decisions).is_empty(),
+            "the filter is Retrieve-only, so these four losses must NOT warn — \
+             if this ever starts warning, the published descriptions that now \
+             say 'an empty warnings is not a clean bill of health' become the \
+             stale ones and must be revisited"
+        );
+    }
+
+    #[test]
+    fn the_relevance_floor_silences_a_retrieve_that_is_still_a_loss() {
+        // The second half of the same lie: even the ONE action that can warn
+        // stays silent below the floor.
+        let below = decision(
+            ContextAction::Retrieve,
+            WARNING_RELEVANCE_THRESHOLD - 0.01,
+            "externalized behind a handle",
+        );
+        assert!(warnings_for(std::slice::from_ref(&below)).is_empty());
+
+        let at_floor = decision(
+            ContextAction::Retrieve,
+            WARNING_RELEVANCE_THRESHOLD,
+            "externalized behind a handle",
+        );
+        assert_eq!(
+            warnings_for(std::slice::from_ref(&at_floor)).len(),
+            1,
+            "the floor is inclusive — at exactly the threshold it must warn"
         );
     }
 }

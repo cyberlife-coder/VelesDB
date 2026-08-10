@@ -112,7 +112,11 @@ impl From<Recollection> for RecollectionDto {
 /// Result of the `recall` tool.
 #[derive(Serialize, JsonSchema)]
 pub(super) struct RecallResult {
-    /// Recalled memories, most similar first.
+    /// Recalled memories, best match first. The two tools returning this
+    /// shape rank differently: `recall` blends similarity with learned
+    /// confidence (see `feedback`), while `recall_where` with filters
+    /// orders by pure similarity. Each `score` is the raw similarity,
+    /// never a blended value.
     pub(super) memories: Vec<RecollectionDto>,
 }
 
@@ -471,6 +475,13 @@ pub(super) struct EntityProfileDto {
     /// label needs the gender, which the graph does not hold; this reports
     /// only what is stored.
     pub(super) relations_in: Vec<EntityRelationDto>,
+    /// Whether `relations` is a PARTIAL view — true when a response budget
+    /// cut the outgoing side. A list holding exactly the cap is otherwise
+    /// indistinguishable from a cut one (#1820).
+    pub(super) relations_truncated: bool,
+    /// Whether `relations_in` is a PARTIAL view — the incoming mirror of
+    /// `relations_truncated`.
+    pub(super) relations_in_truncated: bool,
 }
 
 impl EntityProfileDto {
@@ -492,6 +503,8 @@ impl EntityProfileDto {
                 attributes: Metadata::new(),
                 relations: Vec::new(),
                 relations_in: Vec::new(),
+                relations_truncated: false,
+                relations_in_truncated: false,
             };
         };
         Self {
@@ -510,6 +523,8 @@ impl EntityProfileDto {
                 .into_iter()
                 .map(EntityRelationDto::from)
                 .collect(),
+            relations_truncated: profile.relations_truncated,
+            relations_in_truncated: profile.relations_in_truncated,
         }
     }
 }
@@ -522,6 +537,9 @@ pub(super) struct ExplanationDto {
     pub(super) nodes: Vec<MemoryNodeDto>,
     /// Typed edges connecting the nodes.
     pub(super) edges: Vec<MemoryEdgeDto>,
+    /// Whether a width budget cut the walk — a subgraph sitting exactly at
+    /// a cap is otherwise indistinguishable from a complete one (#1820).
+    pub(super) truncated: bool,
 }
 
 impl From<Explanation> for ExplanationDto {
@@ -537,6 +555,7 @@ impl From<Explanation> for ExplanationDto {
                 .into_iter()
                 .map(MemoryEdgeDto::from)
                 .collect(),
+            truncated: explanation.truncated,
         }
     }
 }
@@ -566,4 +585,130 @@ pub(super) struct RememberExtractedResult {
     /// this tool exists precisely so the caller does not have to verify what
     /// it stored.
     pub(super) skipped_over_cap: usize,
+}
+
+/// The `embedder` block of [`MemoryStatusResult`].
+#[derive(Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct EmbedderStatus {
+    /// The model identifier actually running — `hash` for the built-in
+    /// offline embedder, otherwise as configured (`bge-m3`, `all-minilm`).
+    /// `null` when the host embedded this server without declaring one
+    /// (a binding constructing [`McpServer`](super::McpServer) directly).
+    pub(super) model: Option<String>,
+    /// The vector width the embedder produces. Reported with the model so a
+    /// mismatch diagnosis never needs a second call.
+    pub(super) dimension: Option<usize>,
+    /// Whether recall is SEMANTIC. `false` means the `hash` embedder: recall
+    /// matches surface form, not meaning — the single most common "why is
+    /// recall bad?" answer, now readable by the agent instead of dying on a
+    /// swallowed stderr. `null` when no identity was declared.
+    pub(super) semantic: Option<bool>,
+}
+
+/// The `provenance` block of [`MemoryStatusResult`].
+#[derive(Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct ProvenanceStatus {
+    /// Whether the store carries an embedding-provenance record (#1751).
+    /// `false` on a store that predates the record or was filled outside the
+    /// daemon — the check then degrades to dimension alone.
+    pub(super) recorded: bool,
+    /// The recorded model, when there is a record.
+    pub(super) model: Option<String>,
+    /// The recorded vector width, when there is a record.
+    pub(super) dimension: Option<usize>,
+}
+
+/// The `extraction` block of [`MemoryStatusResult`].
+#[derive(Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct ExtractionStatus {
+    /// Whether an extraction backend is attached — `remember_extracted`
+    /// works iff this is `true`.
+    pub(super) configured: bool,
+    /// Whether the background autograph worker is consuming the queue
+    /// (#1846): `remember`'s graph enrichment runs behind the response.
+    pub(super) autograph_active: bool,
+    /// Enrichments refused by a FULL queue since startup — the facts were
+    /// stored, only their wiring was skipped (#1846's counted-drop rule).
+    pub(super) autograph_dropped: u64,
+}
+
+/// The `memory` block of [`MemoryStatusResult`].
+#[derive(Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct MemoryCounts {
+    /// Live tracked facts, internal entity hubs included.
+    pub(super) facts: usize,
+    /// Total graph edges, or `null` when the backend cannot say without
+    /// materializing them. `0` is the meaningful value: it is the state in
+    /// which `why()` degrades to plain similarity search.
+    pub(super) edges: Option<usize>,
+}
+
+/// Result of the `memory_status` tool.
+#[derive(Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct MemoryStatusResult {
+    /// Which embedder is running and whether recall is semantic.
+    pub(super) embedder: EmbedderStatus,
+    /// What embedder the store was filled by, per its on-disk record.
+    pub(super) provenance: ProvenanceStatus,
+    /// Extraction and autograph wiring.
+    pub(super) extraction: ExtractionStatus,
+    /// Corpus and graph size.
+    pub(super) memory: MemoryCounts,
+}
+
+/// Parameters for the `list_memories` tool.
+#[derive(Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct ListMemoriesParams {
+    /// Resume the walk strictly after this id — the `next_cursor` of the
+    /// previous page. Omit to start from the beginning. Accepts a JSON
+    /// number or a decimal string (issue #1468).
+    #[serde(default, deserialize_with = "crate::model::deserialize_optional_id")]
+    pub(super) cursor: Option<u64>,
+    /// Page size (default 50). Clamped server-side.
+    #[serde(default)]
+    pub(super) limit: Option<usize>,
+    /// Keep only facts whose metadata equals every given key, e.g.
+    /// `{"project": "acme"}`. A filtered page may come back sparse — keep
+    /// following `next_cursor`; the walk stays exhaustive.
+    #[serde(default, deserialize_with = "super::wire::lenient")]
+    pub(super) filter: Option<Metadata>,
+    /// Also list internal graph scaffolding (entity hubs) and reserved
+    /// `_veles_*` keys, verbatim. Default `false`: the audit shows the
+    /// user's facts as `recall` would show them.
+    #[serde(default, deserialize_with = "super::wire::lenient")]
+    pub(super) include_internal: bool,
+}
+
+/// One entry of [`ListMemoriesResult`].
+#[derive(Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct ListedMemoryDto {
+    /// Stable id of the memory.
+    pub(super) id: u64,
+    /// Decimal-string twin of `id` (issue #1468) — see
+    /// [`RememberResult::id_str`].
+    pub(super) id_str: String,
+    /// Stored fact content.
+    pub(super) content: String,
+    /// Metadata under the same visibility policy as `recall` (business keys
+    /// plus the auto-stamped `_veles_date`), or the raw payload when
+    /// `include_internal` was set. `null` when nothing survives.
+    pub(super) metadata: Option<Metadata>,
+}
+
+/// Result of the `list_memories` tool.
+#[derive(Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct ListMemoriesResult {
+    /// This page of the walk, ids ascending.
+    pub(super) memories: Vec<ListedMemoryDto>,
+    /// Pass as `cursor` to get the next page; `null` means the walk is
+    /// complete.
+    pub(super) next_cursor: Option<String>,
 }

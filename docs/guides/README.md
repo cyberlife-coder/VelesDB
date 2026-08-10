@@ -27,11 +27,11 @@ each guide links back.
 | [Core: sparse vectors and fusion](./CORE_SPARSE_AND_FUSION.md) | Named sparse vectors (SPLADE, BM25, tag sets) beside dense embeddings, and result fusion |
 | [Core: streaming inserts](./CORE_STREAMING_INSERTS.md) | Bounded-channel ingestion, backpressure and the delta buffer for continuously arriving data |
 | [Core: query plan cache](./CORE_QUERY_PLAN_CACHE.md) | The two-tier LRU plan cache that lets repeated queries skip parsing and planning |
-| [Core: Agent Memory SDK (Rust)](./CORE_AGENT_MEMORY_RUST.md) | The `velesdb_core::agent` memory subsystems for chatbots, RAG and autonomous agents |
+| [Core: Agent Memory SDK (Rust)](./AGENT_MEMORY.md#rust-api) | The `velesdb_core::agent` memory subsystems for chatbots, RAG and autonomous agents — the Rust API section of the Agent Memory guide |
 | [Core: performance numbers](./CORE_PERFORMANCE.md) | The measured figures, with their methodology and hardware |
-| [Search Modes](./SEARCH_MODES.md) | Understanding Fast/Balanced/Accurate/Perfect modes |
-| [Quantization](./QUANTIZATION.md) | Vector compression (SQ8, PQ, Binary, RaBitQ) |
-| [Tuning Guide](./TUNING_GUIDE.md) | HNSW parameter tuning and performance optimization |
+| [Search Modes](./SEARCH_MODES.md) | What Fast/Balanced/Accurate/Perfect/Adaptive mean and when to pick which |
+| [Quantization](./QUANTIZATION.md) | Vector compression mechanisms (SQ8, PQ, Binary, RaBitQ): internals, training, persistence |
+| [Tuning Guide](./TUNING_GUIDE.md) | The numeric reference: mode defaults, HNSW parameters, quantization trade-offs, memory estimation |
 | [Graph Patterns](./GRAPH_PATTERNS.md) | Graph modeling and `MATCH` pattern recipes |
 | [Multi-Model Queries](./MULTIMODEL_QUERIES.md) | Combining vector, graph, and structured data in one VelesQL query |
 | [Concurrency & Locking](./CONCURRENCY_LOCKING.md) | Concurrent access and file-locking behavior |
@@ -50,7 +50,6 @@ each guide links back.
 
 | Guide | Description |
 |-------|-------------|
-| [CLI & REPL](./CLI_REPL.md) | Command-line interface and interactive shell |
 | [CLI command reference](./CLI_COMMAND_REFERENCE.md) | `velesdb`: every subcommand and flag, import/export formats, packaging, error reference |
 | [REPL reference](./CLI_REPL_REFERENCE.md) | `velesdb repl`: dot-commands, session commands and settings, output formats |
 | [VelesQL cookbook (CLI & REPL)](./CLI_VELESQL_COOKBOOK.md) | Runnable VelesQL snippets: vector, hybrid, sparse, temporal, graph, aggregation, JOIN |
@@ -116,14 +115,14 @@ version migration guides below.
 | [Migrate: CLI and configuration](./MIGRATE_CLI.md) | Command surface and the full YAML schema |
 | [Migrate: source reference](./MIGRATE_SOURCES.md) | Per-source configuration for every shipped connector |
 | [Migrate: operations](./MIGRATE_OPERATIONS.md) | Throughput tuning, secret handling and troubleshooting |
+| [Migrate: embeddings](./MIGRATE_EMBEDDINGS.md) | Rebuilding a `velesdb-memory` store against a new embedding model |
 
 ## Version migration guides
 
 | Guide | Description |
 |-------|-------------|
-| [Migration v1.6](./MIGRATION_v1.6.md) | Version migration guide |
-| [Migration v1.7](./MIGRATION_v1.7.md) | Version migration guide |
 | [Migration v3.3.0](./MIGRATION_v3.3.0.md) | VelesQL correctness + cross-surface parity release migration guide |
+| [Migration v4.0.0](./MIGRATION_v4.0.0.md) | Hardening + API-cleanup release migration guide |
 
 ## Tutorials
 

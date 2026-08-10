@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Verify that all package manifests share the same version as the Cargo workspace."""
 
+import argparse
 import json
 import re
 import sys
@@ -41,6 +42,9 @@ TARGETS: "list[tuple[str, str]]" = [
     # Was a shields.io `version-X.Y.Z-blue` badge; the refactor replaced it with
     # the canonical `Applies to: velesdb-core X.Y.Z` footer, as in 60 other docs.
     ("crates/velesdb-python/README.md", "applies_to_stamp"),
+    # Same footer, same reason, on the README npm publishes with the node
+    # binding. Its core stamp was found at 4.1.0 against a 4.2.0 workspace.
+    ("crates/velesdb-node/README.md", "applies_to_stamp"),
     ("demos/rag-pdf-demo/pyproject.toml", "toml"),
     ("sdks/typescript/package.json", "json"),
     # The TS SDK's npm lockfile carries its own root "version" string that
@@ -153,6 +157,19 @@ TARGETS: "list[tuple[str, str]]" = [
     # `**VelesDB version:** X.Y.Z` label.
     ("docs/VELESQL_SPEC.md", "applies_to_stamp"),
     ("docs/reference/VELESQL_CHEATSHEET.md", "md_version_label"),
+    # Every workspace-versioned crate README carries a hand-maintained
+    # `` `velesdb-<crate> vX.Y.Z` `` footer — the page crates.io/npm renders.
+    # The 2026-08 audit found all seven of these stale (v4.0/v4.1 in a 4.3.0
+    # tree) because nothing policed them; velesdb-core's footer carries no
+    # crate-version half, so its `Applies to:` stamp is pinned instead.
+    ("crates/velesdb-cli/README.md", "crate_footer_stamp"),
+    ("crates/velesdb-migrate/README.md", "crate_footer_stamp"),
+    ("crates/velesdb-mobile/README.md", "crate_footer_stamp"),
+    ("crates/velesdb-python/README.md", "crate_footer_stamp"),
+    ("crates/velesdb-server/README.md", "crate_footer_stamp"),
+    ("crates/velesdb-wasm/README.md", "crate_footer_stamp"),
+    ("crates/tauri-plugin-velesdb/README.md", "crate_footer_stamp"),
+    ("crates/velesdb-core/README.md", "applies_to_stamp"),
 ]
 
 # velesdb-memory is versioned independently of the workspace (it ships its own
@@ -173,11 +190,30 @@ MEMORY_TARGETS: "list[tuple[str, str]]" = [
     ("crates/velesdb-node/package.json", "json"),
     ("crates/velesdb-node/package-lock.json", "json"),
     ("crates/velesdb-node/package-lock.json", "npm_lock_pkg"),
+    # The README SHIPS: package.json lists it in `files`, so it is the page
+    # npmjs.com renders for the version being published. Its footer was found
+    # announcing `velesdb-node v0.11.2` / `@wiscale/velesdb-memory-node@0.11.1`
+    # in a tree already bumped to 0.12.0 — a published page telling readers to
+    # install a version older than the one they are reading about. Neither
+    # gate saw it: check-doc-freshness only sweeps `docs/**` plus the root
+    # README, and this file had no entry here.
+    ("crates/velesdb-node/README.md", "node_readme_stamp"),
+    # The parity matrix's header names TWO versions —
+    # `Last updated: YYYY-MM-DD (vA.B.C; velesdb-memory X.Y.Z)`. Only the
+    # first was ever read: `doc_last_updated_version` captures `(v4.2.0` and
+    # stops, so the memory half sat at 0.11.0 while the body of the same file
+    # documented a 0.12.0 change. The document contradicted itself about which
+    # release it describes, and passed both gates doing it.
+    ("docs/reference/ECOSYSTEM_PARITY.md", "doc_last_updated_memory_version"),
+    # Same footer, same audit finding, on the memory crate's own README
+    # (found announcing v0.11.2 in a 0.12.0 tree). velesdb-node's footer is
+    # already policed above by the two-version `node_readme_stamp` reader.
+    ("crates/velesdb-memory/README.md", "crate_footer_stamp"),
 ]
 
 
-def _read_memory_crate_version() -> str:
-    cargo_toml = (REPO_ROOT / "crates/velesdb-memory/Cargo.toml").read_text(encoding="utf-8")
+def _read_memory_crate_version(root: Path) -> str:
+    cargo_toml = (root / "crates/velesdb-memory/Cargo.toml").read_text(encoding="utf-8")
     match = re.search(r"^version\s*=\s*\"([^\"]+)\"", cargo_toml, re.MULTILINE)
     if not match:
         raise RuntimeError("Could not find version field in crates/velesdb-memory/Cargo.toml")
@@ -198,8 +234,8 @@ def _read_mcp_server_json_versions(path: Path) -> str:
     return versions[0] if len(uniq) == 1 else "/".join(versions)
 
 
-def _read_cargo_version() -> str:
-    cargo_toml = (REPO_ROOT / "Cargo.toml").read_text(encoding="utf-8")
+def _read_cargo_version(root: Path) -> str:
+    cargo_toml = (root / "Cargo.toml").read_text(encoding="utf-8")
     section_idx = cargo_toml.find("[workspace.package]")
     if section_idx == -1:
         raise RuntimeError("Could not find [workspace.package] section in Cargo.toml")
@@ -295,6 +331,48 @@ def _read_doc_toml_header(path: Path) -> str:
     return match.group(1)
 
 
+def _read_doc_last_updated_memory_version(path: Path) -> str:
+    """The `velesdb-memory X.Y.Z` half of a `Last updated: ... (vA.B.C;
+    velesdb-memory X.Y.Z)` header.
+
+    Separate from `_read_doc_last_updated_version`, which stops at the
+    workspace version in the same parenthetical: one reader can only return
+    one value, and the unread half is the one that drifts.
+    """
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r"Last updated:[^\n]*velesdb-memory\s+(\d+\.\d+\.\d+)", text)
+    if not match:
+        raise RuntimeError(
+            f"No `Last updated: ... (v...; velesdb-memory X.Y.Z)` header in {path}"
+        )
+    return match.group(1)
+
+
+def _read_node_readme_stamp(path: Path) -> str:
+    """Both versions the velesdb-node README footer announces:
+    `velesdb-node vX.Y.Z` and the npm `@wiscale/velesdb-memory-node@X.Y.Z`.
+
+    They name the same artifact and must therefore agree with each other AND
+    with the crate. Disagreement is reported here rather than returned,
+    because the caller compares a single value: returning either one alone
+    would let the other drift unseen — which is exactly how the footer came to
+    advertise `v0.11.2` of a package it called `@0.11.1`.
+    """
+    text = path.read_text(encoding="utf-8")
+    crate = re.search(r"`velesdb-node v(\d+\.\d+\.\d+)`", text)
+    npm = re.search(r"@wiscale/velesdb-memory-node@(\d+\.\d+\.\d+)", text)
+    if not crate or not npm:
+        raise RuntimeError(
+            f"No `velesdb-node vX.Y.Z` + `@wiscale/velesdb-memory-node@X.Y.Z` footer in {path}"
+        )
+    if crate.group(1) != npm.group(1):
+        raise RuntimeError(
+            f"{path}: the footer announces velesdb-node v{crate.group(1)} but npm package "
+            f"@{npm.group(1)} — one artifact, two versions"
+        )
+    return crate.group(1)
+
+
 def _read_applies_to_stamp(path: Path) -> str:
     """Pull the version out of the canonical documentation footer,
     `Applies to: velesdb-core X.Y.Z`.
@@ -315,6 +393,25 @@ def _read_applies_to_stamp(path: Path) -> str:
         raise RuntimeError(f"No `Applies to: velesdb-core X.Y.Z` stamp in {path}")
     uniq = set(matches)
     return matches[0] if len(uniq) == 1 else "/".join(matches)
+
+
+def _read_crate_footer_stamp(path: Path) -> str:
+    """The `` `<crate> vX.Y.Z` `` half of a crate README footer.
+
+    The 2026-08 audit found EIGHT of these footers announcing 4.0/4.1/0.11-era
+    versions in a 4.3.0/0.12.0 tree: they are hand-maintained, they ship (the
+    README is the page crates.io/npm/PyPI renders), and nothing policed them —
+    `check-doc-freshness` sweeps `docs/**` plus the root README only, and this
+    script pinned just the python/node stamps. The crate name is taken from
+    the README's parent directory, so a copy-pasted footer naming the wrong
+    crate fails as loudly as a stale version.
+    """
+    crate = path.parent.name
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r"`" + re.escape(crate) + r" v(\d+\.\d+\.\d+)`", text)
+    if not match:
+        raise RuntimeError(f"No `{crate} vX.Y.Z` footer stamp in {path}")
+    return match.group(1)
 
 
 def _read_doc_version_badge(path: Path) -> str:
@@ -506,6 +603,9 @@ _READERS = {
     "yaml_openapi": _read_yaml_openapi_version,
     "doc_health_snippet": _read_doc_health_snippet,
     "applies_to_stamp": _read_applies_to_stamp,
+    "crate_footer_stamp": _read_crate_footer_stamp,
+    "node_readme_stamp": _read_node_readme_stamp,
+    "doc_last_updated_memory_version": _read_doc_last_updated_memory_version,
     "dockerfile_label": _read_dockerfile_label,
     "py_init_version": _read_py_init_version,
     "wasm_cdn_url": _read_wasm_cdn_url,
@@ -528,13 +628,23 @@ _READERS = {
 }
 
 
-def main() -> int:
-    expected = _read_cargo_version()
-    print(f"Workspace version (Cargo.toml): {expected}")
+def _compare_targets(
+    root: Path,
+    targets: "list[tuple[str, str]]",
+    expected: str,
+    mismatches: "list[str]",
+) -> None:
+    """Compare every stamp in `targets` against `expected`, appending findings.
 
-    mismatches: list[str] = []
-    for rel_path, fmt in TARGETS:
-        path = REPO_ROOT / rel_path
+    The two sweeps were the same loop written twice, which is how they drifted:
+    the workspace sweep resolved its reader through `_READERS.get` and raised a
+    RuntimeError on an unknown format, while the memory sweep indexed
+    `_READERS[fmt]` directly and raised a KeyError — an uncaught KeyError exits
+    1 through a traceback, which is indistinguishable from a refusal. One loop,
+    one behaviour.
+    """
+    for rel_path, fmt in targets:
+        path = root / rel_path
         if not path.exists():
             print(f"  SKIP  {rel_path} (file not found)")
             continue
@@ -552,20 +662,17 @@ def main() -> int:
                 f"{rel_path} [{fmt}]: expected {expected}, found {actual}"
             )
 
-    memory_expected = _read_memory_crate_version()
+
+def run(root: Path) -> int:
+    expected = _read_cargo_version(root)
+    print(f"Workspace version (Cargo.toml): {expected}")
+
+    mismatches: list[str] = []
+    _compare_targets(root, TARGETS, expected, mismatches)
+
+    memory_expected = _read_memory_crate_version(root)
     print(f"\nvelesdb-memory version (crates/velesdb-memory/Cargo.toml): {memory_expected}")
-    for rel_path, fmt in MEMORY_TARGETS:
-        path = REPO_ROOT / rel_path
-        if not path.exists():
-            print(f"  SKIP  {rel_path} (file not found)")
-            continue
-        actual = _READERS[fmt](path)
-        status = "OK   " if actual == memory_expected else "MISMATCH"
-        print(f"  {status}  {rel_path} [{fmt}]: {actual}")
-        if actual != memory_expected:
-            mismatches.append(
-                f"{rel_path} [{fmt}]: expected {memory_expected}, found {actual}"
-            )
+    _compare_targets(root, MEMORY_TARGETS, memory_expected, mismatches)
 
     if mismatches:
         print("\nVersion mismatch(es) detected:")
@@ -575,6 +682,21 @@ def main() -> int:
 
     print("\nAll versions match.")
     return 0
+
+
+def main(argv: "list[str] | None" = None) -> int:
+    parser = argparse.ArgumentParser(description="Check version stamps stay in sync.")
+    parser.add_argument("--root", default=str(REPO_ROOT), help="repository root to scan")
+    args = parser.parse_args(argv)
+    # A tree this guard cannot read answers 2, never 1. Both anchor files are
+    # read unguarded (`Cargo.toml`, the memory crate manifest), and a missing
+    # one used to surface as a FileNotFoundError traceback — which also exits 1
+    # and would have passed for a refusal it never made.
+    try:
+        return run(Path(args.root).resolve())
+    except (OSError, RuntimeError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

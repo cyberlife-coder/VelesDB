@@ -3,19 +3,27 @@ use super::{Collection, HashSet, QuerySearchOptions, Result, SearchResult, MAX_L
 impl Collection {
     // Metadata index query strategy is in metadata_query.rs
 
-    pub(crate) fn evaluate_graph_match_anchor_ids(
+    pub(in crate::collection::search::query) fn evaluate_graph_match_anchor_ids(
         &self,
         predicate: &crate::velesql::GraphMatchPredicate,
         params: &std::collections::HashMap<String, serde_json::Value>,
         from_aliases: &[String],
+        guards: Option<&super::match_exec::MatchStorageGuards<'_>>,
     ) -> Result<HashSet<u64>> {
         let anchor_alias = Self::resolve_anchor_alias(predicate, from_aliases)?;
         let clause = Self::build_anchor_match_clause(predicate);
 
         // Anchor evaluation needs the full unordered match set (it collects bound
         // ids into a set), so use the raw primitive rather than the ORDER BY/LIMIT
-        // entry point.
-        let matches = self.execute_match_with_context(&clause, params, None)?;
+        // entry point. A caller that already holds the vector/payload guards
+        // (the aggregation runtime WHERE loop evaluating MATCH-in-WHERE) passes
+        // them through so the nested MATCH does not re-acquire either lock —
+        // a nested read acquisition on the same thread deadlocks once a writer
+        // queues (parking_lot task-fair semantics).
+        let matches = match guards {
+            Some(g) => self.execute_match_with_guards(&clause, params, None, g)?,
+            None => self.execute_match_with_context(&clause, params, None)?,
+        };
         let mut ids = HashSet::with_capacity(matches.len());
         for m in matches {
             if let Some(id) = m.bindings.get(&anchor_alias) {

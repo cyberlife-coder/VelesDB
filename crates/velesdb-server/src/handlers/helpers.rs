@@ -20,6 +20,46 @@ pub(crate) fn error_response(status: StatusCode, message: String) -> axum::respo
         .into_response()
 }
 
+/// Runs a synchronous, potentially lock-taking or fsync-bearing core call on
+/// the blocking pool so it cannot starve the async runtime workers.
+///
+/// Mirrors the established discipline in `points::upsert_points` and
+/// `search::workers`: the closure is moved onto `tokio::task::spawn_blocking`
+/// and a panic or cancellation of the blocking task maps to the canonical
+/// 500 "Task panicked" response.
+pub(crate) async fn run_blocking<T, F>(work: F) -> Result<T, axum::response::Response>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    tokio::task::spawn_blocking(work).await.map_err(|e| {
+        error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Task panicked: {e}"),
+        )
+    })
+}
+
+/// Same as [`run_blocking`] but for handlers whose error type is the
+/// `(StatusCode, Json<ErrorResponse>)` tuple used by the graph endpoints.
+pub(crate) async fn run_blocking_typed<T, F>(
+    work: F,
+) -> Result<T, (StatusCode, Json<ErrorResponse>)>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    tokio::task::spawn_blocking(work).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Task panicked: {e}"),
+                code: None,
+            }),
+        )
+    })
+}
+
 /// Build an error response from a [`velesdb_core::Error`], including the
 /// VELES-XXX code in the JSON body.
 ///

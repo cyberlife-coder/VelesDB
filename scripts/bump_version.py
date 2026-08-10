@@ -41,7 +41,23 @@ TARGETS: "list[tuple[str, str]]" = [
     ("examples/wasm-browser-demo/index.html", "wasm_cdn_url"),
     ("docs/guides/CONFIGURATION.md", "doc_toml_header"),
     ("docs/guides/SERVER_REST_TOUR.md", "doc_health_snippet"),
+    # Every STAMPED crate README, not one of them. A crate README is the page
+    # a user lands on from crates.io, npm or PyPI, so its `Applies to:` stamp
+    # is the first version claim anybody reads. Only velesdb-python was
+    # rewritten here, and measured on 4.2.0 the other seven still said 4.1.0.
+    # Enumerated rather than globbed on purpose: bump_version refuses a target
+    # whose pattern matches nothing (format drift), so a crate README without
+    # a stamp — velesdb-memory today — must be a deliberate absence, not a
+    # glob's silent inclusion.
+    ("crates/tauri-plugin-velesdb/README.md", "applies_to_stamp"),
+    ("crates/velesdb-cli/README.md", "applies_to_stamp"),
+    ("crates/velesdb-core/README.md", "applies_to_stamp"),
+    ("crates/velesdb-migrate/README.md", "applies_to_stamp"),
+    ("crates/velesdb-mobile/README.md", "applies_to_stamp"),
+    ("crates/velesdb-node/README.md", "applies_to_stamp"),
     ("crates/velesdb-python/README.md", "applies_to_stamp"),
+    ("crates/velesdb-server/README.md", "applies_to_stamp"),
+    ("crates/velesdb-wasm/README.md", "applies_to_stamp"),
     ("demos/rag-pdf-demo/pyproject.toml", "toml"),
     ("sdks/typescript/package.json", "json"),
     ("sdks/typescript/package-lock.json", "npm_lock"),
@@ -188,6 +204,18 @@ def bump_file(path: Path, fmt: str, ver: str, date: "datetime.date") -> int:
         text, n = _sub_first(text, r"(?m)^(\*\*v)" + VERSION_RE + r"(\*\*)", r"\g<1>" + ver + r"\g<2>")
     elif fmt == "cargo_pin":
         text, n = _sub_all(text, r"(velesdb-(?:core|server|cli)@)" + VERSION_RE, r"\g<1>" + ver)
+    elif fmt == "cargo_dep_pin":
+        # `velesdb-core = "X.Y.Z"` in a TOML snippet — a different shape from
+        # `cargo_pin`'s `velesdb-core@X.Y.Z`, which is the shell/cargo-install
+        # form. The guard checks both under `cargo-pin-core`; only one had a
+        # rewrite rule, so four doc snippets survived every bump.
+        # Both spellings the guard matches: the bare `velesdb-core = "X.Y.Z"`
+        # and the table `velesdb-core = { version = "X.Y.Z", features = [...] }`.
+        text, n = _sub_all(
+            text,
+            r'(velesdb-core\s*=\s*(?:\{[^}\n]*?version\s*=\s*)?")' + VERSION_RE + r'(")',
+            r"\g<1>" + ver + r"\g<2>",
+        )
     elif fmt == "ghcr_image":
         text, n = _sub_all(text, r"(ghcr\.io/cyberlife-coder/velesdb:)" + VERSION_RE, r"\g<1>" + ver)
     elif fmt == "fastapi_app_version":
@@ -239,6 +267,60 @@ def bump_cargo_workspace(ver: str) -> int:
     return n + m
 
 
+def swept_stamp_targets() -> "list[tuple[str, str]]":
+    """Every file the version GUARD sweeps, as `applies_to_stamp` targets.
+
+    Not an enumeration. `TARGETS` is a hand-kept list; the guard
+    (`check-doc-freshness.py --guard versions`) is a SWEEP over `docs/**/*.md`,
+    the root README and every `crates/*/README.md`. A list can never keep up
+    with a sweep, and measured, it did not: bumping to 5.0.0 rewrote 66
+    locations and left the guard red on **53** more — a strict, required guard,
+    on the release commit.
+
+    So the two read the same set. Widening the guard's sweep widens the bump on
+    its own, and the release stops depending on someone remembering to append a
+    line here.
+
+    The guard module is loaded rather than reimplemented for the same reason: a
+    second copy of the sweep is a second thing that can drift.
+    """
+    import importlib.util
+
+    guard_path = REPO_ROOT / "scripts" / "check-doc-freshness.py"
+    spec = importlib.util.spec_from_file_location("check_doc_freshness", guard_path)
+    if spec is None or spec.loader is None:  # pragma: no cover - defensive
+        raise RuntimeError(f"cannot load {guard_path}")
+    guard = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(guard)
+
+    # Keyed by (file, RULE), never by file alone: one document can carry two
+    # different claims, and skipping it wholesale because TARGETS already names
+    # it under another rule leaves the second claim behind. Measured — that is
+    # exactly what kept docs/getting-started.md and SERVER_REST_TOUR.md red,
+    # both already listed under `doc_health_snippet`.
+    enumerated = set(TARGETS)
+    #: The guard's OWN claim name -> the rewrite rule that repairs it. The
+    #: detection is the guard's regex, never a marker string of our own:
+    #: hand-written markers drifted twice while writing this. `velesdb-core = "`
+    #: misses the table form `velesdb-core = { version = "…" }`, which the
+    #: guard matches and which survived every bump in docs/GPU_ACCELERATION.md.
+    RULE_FOR_CLAIM = {
+        "applies-to-core": "applies_to_stamp",
+        "cargo-pin-core": "cargo_dep_pin",
+    }
+    swept = []
+    for path in guard.scanned_doc_files(REPO_ROOT):
+        rel = path.relative_to(REPO_ROOT).as_posix()
+        text = path.read_text(encoding="utf-8")
+        for claim in guard.VERSION_CLAIMS:
+            rule = RULE_FOR_CLAIM.get(claim.name)
+            if rule is None:
+                continue  # velesdb-memory claims move on their own cadence.
+            if claim.pattern.search(text) and (rel, rule) not in enumerated:
+                swept.append((rel, rule))
+    return sorted(swept)
+
+
 def main() -> int:
     if len(sys.argv) not in (2, 3) or not re.fullmatch(VERSION_RE, sys.argv[1]):
         # Strict X.Y.Z only: the rewrite patterns target a bare `\d+\.\d+\.\d+`,
@@ -256,7 +338,8 @@ def main() -> int:
     total = bump_cargo_workspace(ver)
     print(f"  Cargo.toml [workspace.package] + dep pins: {total} change(s)")
     misses: "list[str]" = []
-    for rel, fmt in TARGETS:
+    targets = TARGETS + swept_stamp_targets()
+    for rel, fmt in targets:
         path = REPO_ROOT / rel
         if not path.exists():
             print(f"  SKIP {rel} (missing)")

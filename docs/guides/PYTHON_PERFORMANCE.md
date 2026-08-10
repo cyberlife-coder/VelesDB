@@ -141,8 +141,8 @@ sufficient. Use `accurate` or `perfect` only for offline evaluation.
 
 | Profile | ef_search (top-10) | Recall | Typical latency |
 |---------|-------------------|--------|-----------------|
-| `"fast"` | 64 | ~92% | Lowest |
-| `"balanced"` | 128 | ~99% | Default |
+| `"fast"` | 96 | ~95% | Lowest |
+| `"balanced"` | 160 | ~99.5% | Default |
 | `"accurate"` | 512 | ~100% | 4x slower than balanced |
 | `"perfect"` | 4 096 | 100% | Exhaustive — evaluation only |
 | `"autotune"` | Adaptive | ~95%+ | Scales with collection size |
@@ -424,20 +424,9 @@ print(f"Latency: {(time.perf_counter_ns() - t0) / 1_000:.1f} µs")
 t0 = time.perf_counter_ns()
 results = collection.search_request(velesdb.SearchOptions(vector=query.tolist(), top_k=10))
 print(f"{(time.perf_counter_ns() - t0) / 1_000:.1f} µs")  # 3-10x the steady-state
-
-# Correct: warm up, then measure over many iterations
-for _ in range(5):
-    collection.search_request(velesdb.SearchOptions(vector=query.tolist(), top_k=10))
-
-times = [
-    time.perf_counter_ns()
-    - (t0 := time.perf_counter_ns())
-    or (collection.search_request(velesdb.SearchOptions(vector=query.tolist(), top_k=10)), time.perf_counter_ns() - t0)[1]
-    for _ in range(100)
-]
 ```
 
-A cleaner version of the same pattern:
+Correct: warm up, then measure over many iterations:
 
 ```python
 for _ in range(5):  # warm up
@@ -459,9 +448,13 @@ for _ in range(100):  # measure
 | `dtype=np.float32` on all vectors | 1 line | 5–15% on search latency |
 | `upsert_bulk_numpy()` instead of dict loop | 3 lines | 1.5–3x insert throughput |
 | Batch size 1 000–5 000 | 1 constant | Eliminates per-call overhead |
-| `search_with_quality("fast")` vs default | 1 argument | 2x lower latency at ~92% recall |
+| `search_with_quality("fast")` vs default | 1 argument | 2x lower latency at ~95% recall |
 | `batch_search()` for multiple queries | Refactor | Eliminates N-1 GIL cycles per batch |
 | `ThreadPoolExecutor` for parallel search | ~10 lines | Near-linear scaling up to core count |
 
 See also: [TUNING_GUIDE.md](TUNING_GUIDE.md) for HNSW parameter tuning and
 [SEARCH_MODES.md](SEARCH_MODES.md) for the full `SearchQuality` reference.
+
+---
+
+Last updated: 2026-08-08 · Applies to: velesdb-core 5.0.0

@@ -9,6 +9,319 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`openai`: an OpenAI-compatible backend for BOTH roles (#1751).** Set
+  `VELESDB_MEMORY_EMBEDDER=openai` or `VELESDB_MEMORY_EXTRACTOR=openai` to
+  reach oMLX, llama.cpp's server, LM Studio, vLLM or a hosted provider. The
+  value names a **protocol, not a vendor**: reaching a different server is a
+  different URL, never a new backend name — which is what stops the selector
+  from growing a vendor list.
+
+  Neither the URL nor the model has a default here, deliberately: guessing
+  either would pick one of those servers for the operator. Both roles are
+  configured independently — embedding on a local Ollama while extracting on
+  an OpenAI-compatible server is a supported combination.
+
+  The daemon now dispatches on the backend name the library hands it. It
+  previously matched `NeedsRemoteConfig(_)` and built an Ollama client
+  regardless, in **two** places (`attach_extractor` and the autograph path),
+  so a second backend would have been selected and then silently ignored —
+  asking for `openai` answered `VELESDB_MEMORY_EXTRACTOR=ollama requires …`.
+
+- **Role-named configuration for the embedding role.** `VELESDB_MEMORY_EMBEDDER_URL`,
+  `_MODEL` and `_API_TOKEN` mirror the extraction role's variables, which were
+  role-named from the start. `VELESDB_MEMORY_OLLAMA_URL` / `_MODEL` keep
+  working as aliases, so no existing setup changes; when both names are set to
+  **different** values the role-named one wins and the daemon says so **once**
+  at startup. `velesdb-memory.toml`'s `[embedder]` section now writes the
+  role-named variables.
+
+- **API tokens, environment-only.** `VELESDB_MEMORY_EMBEDDER_API_TOKEN` /
+  `VELESDB_MEMORY_EXTRACTOR_API_TOKEN`. No token means **no `Authorization`
+  header at all** — not an empty one, which a server rejects as a bad
+  credential rather than a missing one; a token set to an empty string is
+  refused at startup for the same reason. There is deliberately **no
+  `api_token` field in the config file**, and one written there is refused:
+  a credential at rest in a versionable file is one `git add .` away from a
+  public history. The refusal is rewritten rather than passed through, because
+  the TOML parser quotes the offending line back — which would have printed
+  the secret to stderr.
+
+- **The store records which embedding model filled it.**
+  `embedding-provenance.json`, beside the store. `velesdb-core` already refuses
+  a collection whose dimension differs, which catches the loud half of the
+  problem; two different models of the **same** width open fine and return
+  noise (this crate's `hash` embedder is 384-dimensional, and so is
+  `all-minilm`). The **backend is not recorded** — it is a transport, and the
+  same model served by Ollama, oMLX or a hosted API produces the same vectors,
+  so refusing on it would block a valid migration. The record is written only
+  for a store holding **no facts**, never over existing data where one open
+  with the wrong model would carve a provenance every later check would trust.
+  A store created before this stays unrecorded, and its check degrades to the
+  dimension alone — saying so explicitly rather than letting a successful open
+  read as a verified match. Deleting the file is safe; the store is untouched.
+
+- **`OutlineExtractor`: a deterministic, network-free extraction backend.**
+  Until now `OllamaExtractor` was the crate's only `Extractor`, so every
+  contract `remember_extracted` publishes was reachable only through a
+  network call — which is why `skipped_over_cap` and the incoming half of an
+  entity profile had no test on any binding, and were declared known gaps
+  instead. This backend reads the structure a passage STATES rather than
+  inferring it, one directive per line:
+
+  ```text
+  edge: Camille | sister of | Theo
+  attr: Theo Durand | age | 15
+  fact: Camille ships the parser. | camille
+  ```
+
+  It stands to `OllamaExtractor` exactly as `HashEmbedder` does to
+  `OllamaEmbedder`: a public, documented, offline choice — not a test double.
+  A malformed directive is an `ExtractError::Parse`, never a silently dropped
+  line. Selected by name through the new `extractor` parameter on the
+  bindings' `remember_extracted` (`"ollama"` by default, `"outline"` for this
+  one); an unknown name is refused rather than silently substituted.
+
+- **WASM gains `rememberExtracted`.** Its exemption in the parity guard was
+  justified by `OllamaExtractor` being the crate's only `Extractor` — a
+  reason the backend above annuls. Note that nothing mechanical caught this:
+  the stale-exemption check asks whether a binding started publishing the
+  tool, never whether the exemption's REASON is still true.
+
+- **TypeScript SDK gains `entity`, `unrelate` and `rememberExtracted`**, the
+  methods it had been missing for its whole life (#1721), and enters a
+  guard's perimeter for the first time.
+
+### Fixed
+
+- **`why`/`recall_fused`'s graph walk had no width budget: a hub could dump its
+  entire neighborhood, full fact content included, into one response (#1743).**
+  The only existing guard, `MAX_WHY_HOPS`, bounds traversal *depth* — its own
+  comment claimed it "prevents exponential graph fan-out", which was false: an
+  entity hub is a super-node by construction (degree scales with the whole
+  store), so a single hop through one could still return thousands of
+  full-content nodes. Two width caps now bound the walk directly:
+  `MAX_WHY_NODE_DEGREE` (64) limits how many outgoing edges are followed from
+  any one node, and `MAX_WHY_NODES` (500) caps the total nodes a walk collects
+  across every hop. Both apply to `why` and `recall_fused` alike — they share
+  the same internal traversal. `MAX_WHY_HOPS`'s comment now says what it
+  actually bounds. Review hardening on the same fix: the node ceiling is now
+  exact — enforced at the push site, where checking only between expansions
+  let the crossing expansion overshoot to a measured 522 of the documented
+  500 — and `MAX_WHY_EDGES` (2000) caps the edges a walk records, the half of
+  #1743's ask ("nodes AND edges") the first cut left unbounded: 60
+  fully-connected nodes returned 3 540 edges against a node count of 60.
+
+- **`recall_fused`'s graph reach is no longer quadratic in a hub's fan-out
+  (#1742).** `reach_weight` used to rescan every edge the traversal collected,
+  once per reached node, to find the `mentions` edges pointing at it —
+  O(hub degree) work repeated for each of O(hub degree) nodes. A user
+  accumulating facts about the same entity (the product's nominal use case,
+  not an edge case) paid a cost growing with the square of their history on
+  that topic. `mentions` edges are now indexed by target once per call
+  (`fact_id -> [hub_id, ...]`), turning the whole pass into O(edges + nodes).
+  Weighting is unchanged — a fact reached through several hubs still ranks by
+  the rarest (highest-idf) one — locked in by a new test
+  (`recall_fused_weighs_a_dual_hub_fact_by_its_rarest_hub`) and tracked going
+  forward by `benches/fused_recall_benchmark.rs`.
+
+- **TypeScript SDK: `CompileContextFragment` gains `priority`.** The wire has
+  accepted it since the context compiler shipped, and this SDK never declared
+  it — so a TypeScript caller could reach `compileContext` and not express the
+  one input that controls what a tight budget drops. Found by deriving both
+  field lists from source rather than reading either one.
+
+  A new parity check in `tests/binding_parity_bdd.rs` holds the SDK's fragment
+  against the canonical `ContextFragment`, so a field added to one and not the
+  other turns red. Method parity already proved a tool was *reachable*; this
+  proves its *input* can be expressed.
+
+  **`path` stays undeclared, on every binding, by decision.** Resolving a path
+  fragment is a server-side I/O pre-pass gated on `VELESDB_MEMORY_INGEST_ROOTS`,
+  an operator-configured allowlist — the WASM binding has neither a filesystem
+  nor that setting, and neither `velesdb-node` nor `velesdb-python` resolves
+  paths. Declaring it would publish a field that always fails. The exemption is
+  written down next to the check, with its reason, because an absence by
+  decision and an absence by oversight look identical from the outside.
+
+- **A base URL carrying the `/v1` prefix no longer doubles it (#1751).**
+  Servers advertise their OpenAI-compatible endpoint *with* the version prefix
+  — oMLX's console shows `http://127.0.0.1:8019/v1` beside a copy button — and
+  concatenating `/v1/embeddings` onto that produced `/v1/v1/embeddings` and a
+  `404` whose cause was invisible from the message. Both spellings now reach
+  the same endpoint. A trailing `/v1` is stripped only when something precedes
+  it, so a host genuinely named `v1` is not truncated to `http:/`.
+
+### Changed
+
+- **BREAKING — `remember_extracted` returns an envelope**, `{ids,
+  skipped_over_cap}` (`{ids, skippedOverCap}` on the JS surfaces), where Node
+  returned `Array<string>` and Python `List[int]`. **Migration**: read
+  `.ids` / `["ids"]`. A bare list could not say why it was short — nothing
+  distinguished a passage holding three facts from one holding twelve of
+  which nine were dropped for exceeding the embeddable cap. That is a silence
+  about lost data, not a missing convenience (#1692).
+
+- **BREAKING (Python) — `model` is now optional** on `remember_extracted`,
+  since it configures the `"ollama"` backend only. Selecting `"ollama"`
+  without one raises `ValueError` naming the alternative.
+
+- **`entity` relays `relations_in` on all three bindings** (#1690). Without
+  it a question was only answerable from one side: the graph holds
+  `camille --sister of--> theo`, so reading Theo's outgoing edges never found
+  Camille. WASM's `EntityProfileOut` gained `rename_all = "camelCase"` in the
+  same change — a no-op on its five single-word fields, and the only way
+  `relationsIn` does not cross as a snake_case key beside the `targetId` of
+  the object inside it.
+
+- **The Node binding relays `compile_context.warnings`** (#1691), and
+  `compiled_envelope` now drains its input and asserts nothing was left
+  behind. The comment that used to bless the loss — "the envelope is the
+  binding's contract, not a mirror of the domain type" — was the reading that
+  caused it, and is rewritten.
+
+- **All six `KNOWN_GAP` entries are gone** from `SHAPE_DIVERGENCES`, deleted
+  by the fixes above; it now holds deliberate unwraps only. The constant
+  itself is kept, unused, so the next honest admission has wording to reach
+  for. Worth stating plainly: nothing caps how many gaps may be declared, and
+  adding a seventh would have been exactly as green as fixing six.
+
+## [0.12.0] - 2026-07-30
+
+### Changed
+
+- **BREAKING — `load_working_context` returns the same three-field envelope on
+  every surface.** The MCP tool has served `{found, working, other_sessions}`
+  since V2a-1. The three bindings — Node `loadWorkingContext`, Python
+  `load_working_context`, WASM `loadWorkingContext` — and the TypeScript SDK
+  returned only the working context, or `null`/`None`. They now return the
+  whole envelope.
+
+  **Migration**: read `.working` (JS/Rust) or `["working"]` (Python) where you
+  used the returned value directly. A `null`/`None` check becomes a `found`
+  check.
+
+  Why this is worth a breaking change rather than a new method: the bare form
+  gave one answer to two different questions. "Nothing was ever saved here"
+  and "you typed `task-1235`, and `task-1234` is right there" arrived
+  identical, so an agent resuming a session silently started over on top of
+  work that existed. `other_sessions` names the near-misses, and it is filled
+  in on a **hit** as well — a typo that lands on another real session returns
+  `found: true`, which is the case a caller can least detect on its own.
+
+  The drift was pre-existing, not introduced here: the bindings, the declared
+  type stubs, the guides, the READMEs, the LangGraph tool docstring rendered
+  to a model, the three agent-hook scripts injected into a model's context,
+  and the ready-made `AGENTS.md` block in `integrations/agent-hooks/codex/`
+  all announced `WorkingContext | null`. Every one found is corrected — that
+  `AGENTS.md` block last, because the first sweep listed only files naming the
+  tool and missed prose describing its RESULT.
+
+  A count is not a guard, so two of those surfaces are now swept mechanically:
+  `integrations/agent-hooks/test/hooks.test.sh` fails on any `.sh` or `.md`
+  under that tree that still tells a model to expect a null result, and
+  asserts the three envelope field names inside each injected context. It
+  previously asserted only that the tool's NAME appeared — which the stale
+  wording satisfied exactly as well as the correct one.
+
+### Added
+
+- **`MemoryService::resume_working_context(project, session)`** — composes
+  `load_working_context` + `list_working_contexts` and owns the three policy
+  rules in one place: list on a hit too, never re-emit the requested session,
+  and treat an unreadable index as fatal on a MISS but survivable on a HIT.
+  Every surface calls it; nothing recomposes the envelope.
+
+  That third rule matters because reading the index is new work on this path
+  for the three bindings, which previously only read the session's own fact.
+  Propagating its failure unconditionally would have made a corrupt project
+  index deny resumption for **every** session of that project, including the
+  many that read back perfectly — a fault in an auxiliary hint costing the
+  answer the caller actually asked for. On a hit the hint therefore degrades
+  to an empty list; the corruption stays reachable through
+  `list_working_contexts`, published on every surface. On a **miss** it stays
+  fatal: there, `other_sessions: []` is the positive claim "nothing else was
+  ever saved here", and an agent told that starts over on top of live work.
+- **`LoadedWorkingContext`** in `velesdb_memory::context`, re-exported from
+  `context.rs`. The envelope type used to be `pub(super)` inside the
+  `mcp` module — a Cargo feature the bindings do not enable — so it could not
+  be relayed at all.
+- **Shape parity is now guarded, not just method-name parity.**
+  `tests/binding_parity_bdd.rs` reads each tool's `output_schema` ROOT KEYS
+  off the LIVE server and requires every binding to relay them — by naming the
+  server's own output type, by naming the field, or by declaring the drop in
+  the new `SHAPE_DIVERGENCES` table (twin of `EXEMPTIONS`, with the same
+  staleness check). The old guard compared method NAMES only, which is why
+  this defect lived: the method was there, under the right name, and nothing
+  looked at what it returned. The guard's limit is written in the file's
+  header — it is a text search over source, so it proves DECLARATION, never
+  MARSHALLING.
+
+  It found three further divergences on its first run, declared as known gaps
+  (six entries, since two of them span more than one binding): all three
+  bindings drop `entity.relations_in` (added server-side by #1681), the Node
+  binding's `CompiledContextJs` drops `compile_context.warnings`, and both the
+  Node and Python bindings drop `remember_extracted.skipped_over_cap`. None is
+  a deliberate unwrap — each one really does lose the field.
+
+  For `load_working_context` the text search is **not** accepted as proof.
+  Every one of the three bindings satisfied it through prose alone — two
+  doc comments and a `ts_return_type` string — on the one tool whose silent
+  shape drift is the reason the guard exists; each of those bindings carried
+  such a comment throughout the months it was broken, so a text search would
+  have been green the entire time. `envelope_tools_are_relayed_by_type_never_
+  by_prose_alone` now requires the strong route for it: each binding binds the
+  relayed value as `let loaded: LoadedWorkingContext = …`, which the compiler
+  enforces and prose cannot fake.
+
+- **Shape-drift detection across package boundaries.** Presence checks
+  (`ensureCapability` in the TS SDK, `hasattr` in the LangGraph toolkit) prove
+  a method EXISTS; they cannot see that an older resolved build returns the
+  pre-envelope shape. Both dependency floors admit exactly such builds, so the
+  skew is reachable by an ordinary install. Each surface now inspects the
+  returned value and fails loudly — a `ConnectionError` naming the cause in
+  the SDK, an `{"error": …}` tool payload in LangGraph — instead of casting
+  the bare form into the new type, where `found` reads as `undefined`/`None`,
+  is falsy, and sends the agent back to a fresh start on top of live work.
+
+
+### Fixed
+
+- **`explain_compilation` refused the `fragment_id` it had just emitted.**
+  `compile_context` rewrites every id of its response into a decimal string
+  when the request carries `policy.ids_as_strings` — the option that exists
+  so a float-lossy JSON client keeps its ids intact. `explain_compilation`,
+  whose whole job is to explain the decision behind one of those ids, took
+  `fragment_id` as a strict `u64` and rejected the string with
+  `invalid type: string "…", expected u64`. The fallback was no better: a
+  `fragment_id` is an FNV-1a 64 content hash, so it is past 2^53 in ~99.95 %
+  of cases and a JavaScript client has already rounded it on arrival. Both
+  forms failed, which made the tool unreachable by its own documented
+  selector on exactly the clients the id contract was written for. It now
+  accepts a number or a decimal string, and advertises the string.
+
+- **The two halves of a working-context round trip disagreed.**
+  `save_working_context` advertises its nested `fragment_id`/`memory_id` as
+  decimal strings (an input schema may announce only one form), while
+  `load_working_context` answered with JSON numbers. An agent that resumed a
+  session, enriched what it loaded and saved it back therefore had to
+  convert — and on a float-lossy client the value was already rounded at read
+  time, so it stored a corrupted id with the apparent exactness of a string.
+  `load_working_context` now answers in decimal strings, the exact bytes its
+  writing half accepts. The advertised output schema already typed those
+  fields `["integer", "string"]`, so no SDK-side validation changes.
+
+### Added
+
+- **`save_working_context` returns `id_str`.** It was the one tool handing
+  back an id without its decimal-string twin, while `forget`/`feedback`
+  advertise only the string form — leaving no way to relay the id it had just
+  returned. A test now derives the rule from the published surface (a name
+  the input side wants as a string and the output side answers as an
+  `integer` must carry an `_str` twin) instead of relying on the convention
+  being remembered.
+
 ## [0.11.6] — 2026-07-29
 
 ### Added

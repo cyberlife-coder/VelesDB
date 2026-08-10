@@ -2,8 +2,13 @@
 
 Canonical contract for VelesQL server endpoints and payloads.
 
-- Contract version: `3.8.0`
-- Last updated: `2026-07-06`
+- Document revision: `3.8.1`
+- Contract version emitted at runtime: `3.0.0` — the value of
+  `VELESQL_CONTRACT_VERSION` (`crates/velesdb-core/src/api_types/mod.rs`),
+  returned as `meta.velesql_contract_version` in every response. The document
+  revision tracks edits to this file; only the runtime constant appears on the
+  wire.
+- Last updated: `2026-08-08`
 
 This document is the normative REST contract baseline for VelesQL.
 When behavior differs between docs and runtime, runtime must be fixed or this
@@ -55,7 +60,7 @@ Success response shape:
   "result": [{ "category": "tech", "count": 42 }],
   "timing_ms": 1.12,
   "meta": {
-    "velesql_contract_version": "3.3.0",
+    "velesql_contract_version": "3.0.0",
     "count": 1
   }
 }
@@ -93,7 +98,7 @@ Success response shape:
   "took_ms": 1,
   "rows_returned": 1,
   "meta": {
-    "velesql_contract_version": "3.3.0",
+    "velesql_contract_version": "3.0.0",
     "count": 1
   }
 }
@@ -134,7 +139,7 @@ DDL success response shape (standard `QueryResponse` with zero rows):
   "took_ms": 2,
   "rows_returned": 0,
   "meta": {
-    "velesql_contract_version": "3.3.0",
+    "velesql_contract_version": "3.0.0",
     "count": 0
   }
 }
@@ -169,7 +174,7 @@ Success response shape:
   "took_ms": 4,
   "count": 1,
   "meta": {
-    "velesql_contract_version": "3.3.0"
+    "velesql_contract_version": "3.0.0"
   }
 }
 ```

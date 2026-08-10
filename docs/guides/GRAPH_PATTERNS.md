@@ -1,6 +1,6 @@
 # Graph Patterns Guide
 
-*Version 4.2.0 -- May 2026*
+*Version 5.0.0 -- May 2026*
 
 Practical guide for using VelesQL `MATCH` graph patterns in VelesDB.
 
@@ -37,12 +37,16 @@ curl -X POST http://localhost:8080/collections/knowledge/points \
 ```
 
 ```rust
-collection.upsert(1, &[0.1, 0.2, 0.3, 0.4], json!({
-    "_labels": ["Document"], "title": "HNSW Overview"
-}))?;
-collection.upsert(2, &[0.5, 0.6, 0.7, 0.8], json!({
-    "_labels": ["Person"], "name": "Alice"
-}))?;
+use velesdb_core::point::Point;
+
+collection.upsert(vec![
+    Point::new(1, vec![0.1, 0.2, 0.3, 0.4], Some(json!({
+        "_labels": ["Document"], "title": "HNSW Overview"
+    }))),
+    Point::new(2, vec![0.5, 0.6, 0.7, 0.8], Some(json!({
+        "_labels": ["Person"], "name": "Alice"
+    }))),
+])?;
 ```
 
 A point can have multiple labels: `"_labels": ["Document", "Published", "Reviewed"]`.
@@ -91,7 +95,11 @@ curl -X POST http://localhost:8080/collections/knowledge/graph/edges \
 ```
 
 ```rust
-collection.add_edge(1, 2, "AUTHORED_BY", json!({"year": 2026}))?;
+use velesdb_core::collection::graph::GraphEdge;
+
+let edge = GraphEdge::new(1, 1, 2, "AUTHORED_BY")?
+    .with_properties(HashMap::from([("year".to_string(), json!(2026))]));
+collection.add_edge(edge)?;
 ```
 
 ---

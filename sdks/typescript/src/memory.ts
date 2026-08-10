@@ -15,6 +15,12 @@
 
 import { ConnectionError, NotFoundError, ValidationError, VelesDBError } from './types';
 
+// The wasm capability floor this SDK's memory surface requires. MUST match
+// package.json's `@wiscale/velesdb-wasm` range — the runtime check in
+// `runInit` quotes it, and a literal that drifts from the manifest is how
+// the error message came to name ^3.8.0 against a ^4.1.0 manifest.
+const WASM_MEMORY_FLOOR = '4.2.0';
+
 // ---------------------------------------------------------------------------
 // Public types — mirror crates/velesdb-node/index.d.ts's Js DTOs
 // ---------------------------------------------------------------------------
@@ -79,6 +85,26 @@ export interface CompileContextFragment {
   content: string;
   /** Classification hint (`"code"`, `"log"`, `"screenshot"`, …). */
   kind?: string;
+  /**
+   * Caller priority; higher packs first. Defaults to `0`.
+   *
+   * The knob that decides what survives a tight budget: relevance ordering
+   * anchors on the query, and this overrides it for fragments the caller
+   * already knows must be kept ahead of the rest.
+   *
+   * The wire has accepted it since the compiler shipped; this SDK simply never
+   * declared it, so a TypeScript caller could reach `compileContext` and not
+   * express the one input that controls what it drops.
+   */
+  priority?: number;
+  // No `path` here, and its absence is a DECISION, not an oversight — see the
+  // note on the canonical fragment in
+  // `crates/velesdb-memory/src/context/model.rs`. Resolving a `path` fragment
+  // is a server-side I/O pre-pass gated on `VELESDB_MEMORY_INGEST_ROOTS`, an
+  // operator-configured allowlist of directories. This SDK runs on the WASM
+  // binding, which has neither a filesystem nor that setting, so a declared
+  // `path` would be a field that always fails. No binding declares it — the
+  // MCP daemon is the only surface that can honour one.
   /** Fragment flags, e.g. `{ verbatim: true }` or `{ cache: true }`. */
   metadata?: Record<string, unknown>;
   /**
@@ -318,6 +344,38 @@ export interface WorkingContextSession {
   saved_at: number;
 }
 
+/**
+ * What {@link MemoryService.loadWorkingContext} resolves to — the same
+ * three-field envelope the MCP `load_working_context` tool serves.
+ *
+ * **BREAKING (`velesdb-memory` 0.12.0, relayed by the next
+ * `@wiscale/velesdb-sdk` release)**: `loadWorkingContext` used to resolve
+ * `WorkingContext | null`. That bare form collapsed two different answers
+ * into one — a project that never saved anything, and a typo in `session`
+ * that missed a session which does exist. Read {@link working} for the
+ * previous return value.
+ *
+ * The version named is the memory crate's. This package is on the 4.x line
+ * and will never have a 0.12.0, so "breaking in 0.12.0" unqualified would
+ * read to anyone pinned at 4.x as a change already behind them.
+ */
+export interface LoadedWorkingContext {
+  /** `true` when a working context was found under this exact project + session. */
+  found: boolean;
+  /**
+   * The previously saved working context, or `null` when nothing was ever
+   * saved under that project + session (a fresh start, not an error).
+   */
+  working: WorkingContext | null;
+  /**
+   * The OTHER sessions saved under this SAME project — never the requested
+   * one. Filled in on a HIT as well as on a miss: a typo that lands on
+   * another real session is the case a caller can least detect on its own.
+   * Empty only when the project has no other session.
+   */
+  other_sessions: string[];
+}
+
 /** Result of {@link MemoryService.listWorkingContexts}. */
 export interface ListWorkingContextsResult {
   /** Every session saved under this project, most-recently-saved first. */
@@ -387,6 +445,75 @@ export interface MemoryExplanation {
   nodes: MemoryNode[];
   /** Typed edges connecting the nodes. */
   edges: MemoryEdge[];
+  /**
+   * `true` when a width budget cut the walk before it exhausted the reachable
+   * graph. Counts alone cannot say it: a subgraph sitting exactly at a cap is
+   * indistinguishable from a complete one.
+   */
+  truncated: boolean;
+}
+
+/** What {@link MemoryService.unrelate} actually removed. */
+export interface MemoryUnrelateOutcome {
+  /** Whether at least one matching edge existed and was removed. */
+  found: boolean;
+  /** How many matching edges were removed (parallel duplicates included). */
+  removed: number;
+}
+
+/**
+ * One typed edge touching an entity. Which end `targetId`/`target` name
+ * depends on the list it came from: in {@link MemoryEntityProfile.relations}
+ * it is the far end the edge points AT, in
+ * {@link MemoryEntityProfile.relationsIn} the far end it comes FROM.
+ */
+export interface MemoryEntityRelation {
+  /** The edge label the passage stated, e.g. `"sister of"`. */
+  predicate: string;
+  /** Decimal-string id of the entity (or fact) on the far end. */
+  targetId: string;
+  /** Stored content of the far end — for an entity hub, `Entity: <name>`. */
+  target: string;
+}
+
+/** Everything the auto-built graph knows about one named entity. */
+export interface MemoryEntityProfile {
+  /** Whether an entity is known under that name at all. */
+  found: boolean;
+  /** Decimal-string, content-addressed id of the entity (`"0"` on a miss). */
+  id: string;
+  /** Canonical (trimmed, lowercased) entity name — filled in hit or miss. */
+  name: string;
+  /** Attributes learned about this entity, reserved keys stripped. */
+  attributes: Record<string, unknown>;
+  /** Typed edges LEAVING this entity. */
+  relations: MemoryEntityRelation[];
+  /**
+   * Typed edges pointing AT this entity. Without them a question is only
+   * answerable from one side: the graph holds `camille --sister of--> theo`,
+   * so reading Theo's outgoing edges never finds Camille.
+   */
+  relationsIn: MemoryEntityRelation[];
+  /**
+   * `true` when {@link MemoryEntityProfile.relations} is a PARTIAL view — a
+   * response budget cut the outgoing side. A list holding exactly the cap is
+   * otherwise indistinguishable from a cut one.
+   */
+  relationsTruncated: boolean;
+  /** `true` when {@link MemoryEntityProfile.relationsIn} is a partial view. */
+  relationsInTruncated: boolean;
+}
+
+/** Outcome of {@link MemoryService.rememberExtracted}. */
+export interface RememberedExtraction {
+  /** Decimal-string ids of the stored facts, in extraction order. */
+  ids: string[];
+  /**
+   * How many extracted facts were dropped for exceeding the embeddable cap.
+   * Without it a shorter `ids` cannot say why it is short — a silence about
+   * lost data, not a missing convenience.
+   */
+  skippedOverCap: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -409,6 +536,9 @@ interface WasmMemoryServiceInstance {
     opts: unknown
   ): unknown;
   relate(from: string, to: string, relation: string): string;
+  unrelate(from: string, to: string, relation: string): unknown;
+  entity(name: string): unknown;
+  rememberExtracted(text: string, metadata: unknown, extractor?: string | null): unknown;
   forget(id: string): boolean;
   why(decision: string, maxHops: number | null | undefined, filter: unknown): unknown;
   compileContext(request: unknown): unknown;
@@ -448,8 +578,8 @@ interface WasmErrorLike {
  * subgraph). Runs entirely in-process (browser or Node) via WebAssembly —
  * no server, no network.
  *
- * Two methods available on the Node (`@wiscale/velesdb-memory-node`) and
- * Python bindings are deliberately absent here (issue #1547's audit):
+ * One method available on the Node (`@wiscale/velesdb-memory-node`) and
+ * Python bindings is deliberately absent here (issue #1547's audit):
  *
  * - `feedback` (RL Memory re-ranking): the underlying
  *   `MemoryService::feedback` lives behind `velesdb-memory`'s
@@ -457,10 +587,10 @@ interface WasmErrorLike {
  *   durable learned confidence is meaningless for a store that disappears
  *   on page reload (see `crates/velesdb-wasm/src/memory_service.rs`'s
  *   module doc). Not a missing binding; an intentional boundary.
- * - `rememberExtracted`: it needs a generative model (the only
- *   `Extractor` implementation in `velesdb-memory` calls out to Ollama),
- *   which would pull a network dependency into the WASM bundle by
- *   default. A JS-provided extractor callback is a natural v2 addition.
+ *
+ * `rememberExtracted` (once on that absent list) IS available: it runs the
+ * deterministic `outline` extractor in-process; generative backends are
+ * refused by name so no network dependency enters the WASM bundle.
  *
  * @example
  * ```typescript
@@ -514,14 +644,14 @@ export class MemoryService {
       );
     }
     // Capability floor, checked at runtime because a stale lockfile can
-    // resolve a wasm build older than the declared range (^3.8.0, the
-    // floor this SDK's full memory surface — media fragments,
-    // retrieveContextSource — needs; the wedge itself first shipped in
+    // resolve a wasm build older than the declared range
+    // (WASM_MEMORY_FLOOR — keep it equal to package.json's
+    // @wiscale/velesdb-wasm floor; the wedge itself first shipped in
     // 3.6.0). Fail with the actionable cause, not a generic load error.
     if (typeof mod.MemoryService !== 'function') {
       throw new ConnectionError(
         'The resolved @wiscale/velesdb-wasm build does not ship MemoryService — ' +
-          'the memory wedge requires @wiscale/velesdb-wasm >= 3.8.0 ' +
+          `the memory wedge requires @wiscale/velesdb-wasm >= ${WASM_MEMORY_FLOOR} ` +
           '(update the dependency in your lockfile)'
       );
     }
@@ -564,26 +694,30 @@ export class MemoryService {
 
   /**
    * Runtime capability guard for a `WasmMemoryService` method that shipped
-   * AFTER the class's own base floor (`runInit()`'s `MemoryService`
-   * presence check, >= 3.8.0): `compileTranscript`, `explainCompilation`,
-   * `contextSavings`, and `suggestBudget` need a @wiscale/velesdb-wasm
-   * release newer than 3.12.0. A resolved build that has the `MemoryService`
-   * class but not yet this specific method would otherwise fail with a raw,
-   * unhelpful `TypeError: x is not a function` from deep inside
-   * `wrapWasmCall` — this throws with the same actionable-cause contract
-   * `runInit()`'s own capability check uses instead, so every version-floor
-   * failure in this file reads the same way regardless of which method hit
-   * it.
+   * AFTER the class's own base floor (`runInit()`'s `MemoryService` presence
+   * check). A resolved build that has the `MemoryService` class but not this
+   * specific method would otherwise fail with a raw, unhelpful
+   * `TypeError: x is not a function` from deep inside `wrapWasmCall` — this
+   * throws with the same actionable-cause contract `runInit()`'s own
+   * capability check uses, so every version-floor failure in this file reads
+   * the same way regardless of which method hit it.
+   *
+   * `since` is the CALLER's floor rather than a constant in here. It used to
+   * be one message naming a fixed group of four methods and a fixed version,
+   * which was true when written and became false the moment a fifth method
+   * needed a later release. A guard whose explanation drifts away from what
+   * it guards is worse than none — it sends the reader to the wrong version.
    */
-  private ensureCapability(method: keyof WasmMemoryServiceInstance): WasmMemoryServiceInstance {
+  private ensureCapability(
+    method: keyof WasmMemoryServiceInstance,
+    since: string
+  ): WasmMemoryServiceInstance {
     const svc = this.ensureInitialized();
     if (typeof svc[method] !== 'function') {
       throw new ConnectionError(
         `The resolved @wiscale/velesdb-wasm build does not implement ${method}() — ` +
-          'this method needs a @wiscale/velesdb-wasm release newer than 3.12.0 ' +
-          '(the compileTranscript/explainCompilation/contextSavings/suggestBudget ' +
-          'surface ships in the next @wiscale/velesdb-wasm release after 3.12.0; ' +
-          'update the dependency once it is available)'
+          `this method needs a @wiscale/velesdb-wasm release newer than ${since}; ` +
+          'update the dependency to one that carries it'
       );
     }
     return svc;
@@ -593,7 +727,10 @@ export class MemoryService {
    * Store a fact; resolves to its decimal-string id (idempotent on
    * identical content). `links` are edges to existing memories; `metadata`
    * is optional structured data for later filtering; `ttlSeconds` makes the
-   * fact expire after that many seconds (omit, or `0`, for permanent).
+   * fact expire after that many seconds. Omit it for a permanent memory,
+   * including when re-storing a fact that already had an expiry — only what
+   * this call supplies is applied. An explicit `0` is REFUSED, because a
+   * caller writing `0` means "expire now", not "never".
    */
   remember(
     fact: string,
@@ -648,6 +785,12 @@ export class MemoryService {
    * Fused vector + `ColumnStore` recall: like {@link recall} but `filters`
    * support ranges/comparisons (`gt`, `le`, …), so temporal/numeric facets
    * become queryable.
+   *
+   * Returns your own stored facts ONLY: entity hubs and the context compiler's
+   * artefacts (stored sources, compilation events, working contexts and their
+   * index) are internal scaffolding and never come back, whatever the
+   * predicate — including a `ne` one, which matches facts lacking the field
+   * entirely.
    */
   recallWhere(
     query: string,
@@ -711,6 +854,82 @@ export class MemoryService {
   }
 
   /**
+   * Remove a typed edge between two memories — the inverse of
+   * {@link relate}. Resolves to `{found, removed}`.
+   *
+   * Idempotent by design: an edge that was not there reports
+   * `found: false` rather than throwing, so a cleanup can be replayed.
+   * `removed` counts the edges genuinely deleted, since two facts can carry
+   * several parallel edges under one label.
+   *
+   * Not to be confused with `VelesDBClient.unrelate`, which deletes a GRAPH
+   * edge inside a collection — a different store and a different shape. The
+   * name collision is the same one that kept this class standalone rather
+   * than folded into `IVelesDBBackend`.
+   */
+  unrelate(from: string, to: string, relation: string): Promise<MemoryUnrelateOutcome> {
+    return wrapWasmCall(
+      () =>
+        this.ensureCapability('unrelate', '4.2.0').unrelate(
+          from,
+          to,
+          relation
+        ) as MemoryUnrelateOutcome
+    );
+  }
+
+  /**
+   * Look up everything the memory graph knows about a NAMED ENTITY (a
+   * person, a place, an organisation): the attributes merged onto its hub
+   * and the typed edges touching it, in BOTH directions.
+   *
+   * Answers a question ABOUT a thing ("how old is X", "who is X's father")
+   * rather than about the sentences mentioning it, which is all
+   * {@link recall} can return — entity hubs are deliberately invisible to
+   * recall, so without this the attributes {@link rememberExtracted} builds
+   * are unreachable.
+   *
+   * `name` is matched case-insensitively; `found: false` means nothing has
+   * ever mentioned that name, and `name` still echoes the canonicalized
+   * query so several lookups can be told apart.
+   */
+  entity(name: string): Promise<MemoryEntityProfile> {
+    return wrapWasmCall(
+      () => this.ensureCapability('entity', '4.2.0').entity(name) as MemoryEntityProfile
+    );
+  }
+
+  /**
+   * Extract atomic facts from `text` and store them, auto-building the
+   * entity graph they state. Resolves to `{ids, skippedOverCap}`.
+   *
+   * `extractor` defaults to `"outline"`, the deterministic, network-free
+   * backend: it reads the structure the passage STATES, one directive per
+   * line (`edge: subject | predicate | object`, `attr: entity | key | json`,
+   * `fact: text | topic, topic`). It is the only backend the WASM bundle
+   * carries — a generative one would mean a network call in the bundle this
+   * binding exists to avoid — and any other name is refused rather than
+   * silently substituted.
+   *
+   * This is the WRITE side of {@link entity}: entity hubs are born only of
+   * extraction.
+   */
+  rememberExtracted(
+    text: string,
+    metadata?: Record<string, unknown>,
+    extractor?: string
+  ): Promise<RememberedExtraction> {
+    return wrapWasmCall(
+      () =>
+        this.ensureCapability('rememberExtracted', '4.2.0').rememberExtracted(
+          text,
+          metadata,
+          extractor
+        ) as RememberedExtraction
+    );
+  }
+
+  /**
    * Delete a memory by id. Resolves to whether a memory actually existed
    * under that id and was deleted — `false` means nothing was stored there
    * (a stale id or a typo), not a second successful deletion.
@@ -770,7 +989,7 @@ export class MemoryService {
   compileTranscript(request: CompileTranscriptRequest): Promise<CompileTranscriptResult> {
     return wrapWasmCall(
       () =>
-        this.ensureCapability('compileTranscript').compileTranscript(
+        this.ensureCapability('compileTranscript', '3.12.0').compileTranscript(
           request
         ) as CompileTranscriptResult
     );
@@ -794,7 +1013,7 @@ export class MemoryService {
   ): Promise<ContextDecision> {
     return wrapWasmCall(
       () =>
-        this.ensureCapability('explainCompilation').explainCompilation(
+        this.ensureCapability('explainCompilation', '3.12.0').explainCompilation(
           request,
           fragmentId,
           fragmentIndex
@@ -811,7 +1030,7 @@ export class MemoryService {
    */
   contextSavings(project?: string): Promise<ContextSavings> {
     return wrapWasmCall(
-      () => this.ensureCapability('contextSavings').contextSavings(project) as ContextSavings
+      () => this.ensureCapability('contextSavings', '3.12.0').contextSavings(project) as ContextSavings
     );
   }
 
@@ -825,7 +1044,7 @@ export class MemoryService {
    */
   suggestBudget(targetModel: string, reserveTokens?: number): Promise<SuggestedBudget> {
     return wrapWasmCall(() => {
-      const svc = this.ensureCapability('suggestBudget');
+      const svc = this.ensureCapability('suggestBudget', '3.12.0');
       // Same validation as remember()'s ttlSeconds (see that method's
       // comment for the full rationale): BigInt(1.5) throws a raw
       // RangeError, a negative value dies as an opaque wasm-bindgen u64
@@ -892,18 +1111,30 @@ export class MemoryService {
   }
 
   /**
-   * The working context previously saved under `project` + `session` —
-   * `null` when there is none, the start-of-session mirror of
-   * {@link saveWorkingContext} (#1517, option 2).
+   * The resumption envelope for `project` + `session` — the start-of-session
+   * mirror of {@link saveWorkingContext} (#1517, option 2): `{found,
+   * working, other_sessions}`, the same shape the MCP `load_working_context`
+   * tool serves.
+   *
+   * **BREAKING (`velesdb-memory` 0.12.0, relayed by the next
+   * `@wiscale/velesdb-sdk` release)**: this used to resolve
+   * `WorkingContext | null`. Read `.working` for the previous value, and
+   * `.other_sessions` for what the bare form could not express — that
+   * `session` may have been a typo which missed a session that does exist.
+   * See {@link LoadedWorkingContext}.
+   *
+   * **Rejects** with a {@link ConnectionError} when the resolved
+   * `@wiscale/velesdb-wasm` build predates the envelope and hands back the
+   * bare form. The floor in `package.json` admits such builds, and the
+   * method exists on them, so nothing else would notice.
    *
    * **In-memory semantics**: see {@link saveWorkingContext}'s doc comment —
    * this only ever resolves what THIS session's in-memory store still
    * holds; nothing persists across a page reload.
    */
-  loadWorkingContext(project: string, session: string): Promise<WorkingContext | null> {
-    return wrapWasmCall(
-      () =>
-        this.ensureInitialized().loadWorkingContext(project, session) as WorkingContext | null
+  loadWorkingContext(project: string, session: string): Promise<LoadedWorkingContext> {
+    return wrapWasmCall(() =>
+      asLoadedWorkingContext(this.ensureInitialized().loadWorkingContext(project, session))
     );
   }
 
@@ -921,6 +1152,38 @@ export class MemoryService {
       () => this.ensureInitialized().listWorkingContexts(project) as ListWorkingContextsResult
     );
   }
+}
+
+/**
+ * Narrow what the wasm build actually returned to {@link
+ * LoadedWorkingContext}, or fail loudly saying why.
+ *
+ * This exists because `ensureCapability` cannot help here. It checks that a
+ * method is PRESENT, and a `@wiscale/velesdb-wasm` build predating the
+ * envelope has `loadWorkingContext` — it just returns the bare working
+ * context (or `null`). That is a shape drift across a package boundary, and
+ * this SDK's floor on `@wiscale/velesdb-wasm` admits published builds on the
+ * wrong side of it, so the skew is reachable by an ordinary `npm install`.
+ *
+ * A bare `as LoadedWorkingContext` cast would let it through silently: `found`
+ * reads as `undefined`, which is falsy, so a caller doing the documented
+ * `if (loaded.found)` concludes "fresh start" and restarts on top of work that
+ * was sitting right there — the exact loss the envelope was introduced to
+ * prevent, reintroduced by a version skew. `found`'s type is the discriminator
+ * because it is the one field present on every envelope and on no bare working
+ * context.
+ */
+function asLoadedWorkingContext(value: unknown): LoadedWorkingContext {
+  if (typeof (value as LoadedWorkingContext | null)?.found === 'boolean') {
+    return value as LoadedWorkingContext;
+  }
+  throw new ConnectionError(
+    'The resolved @wiscale/velesdb-wasm build predates the {found, working, ' +
+      'other_sessions} envelope that loadWorkingContext() now returns — it handed back ' +
+      'the bare working context instead. Reading `.found` on that value yields undefined, ' +
+      'so a resumable session would look like a fresh start. Upgrade ' +
+      '@wiscale/velesdb-wasm to a release matching this SDK.'
+  );
 }
 
 /**

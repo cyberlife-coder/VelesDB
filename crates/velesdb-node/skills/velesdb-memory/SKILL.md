@@ -3,7 +3,7 @@ name: velesdb-memory
 description: >
   Use durable, explainable, self-improving memory across a coding session via the
   velesdb-memory MCP server. Trigger whenever the velesdb-memory MCP tools
-  (remember/recall/recall_fused/relate/why/feedback/forget/remember_extracted/entity)
+  (remember/recall/recall_fused/relate/why/feedback/forget/remember_extracted/entity/memory_status)
   are available and the
   work would benefit from remembering decisions, recalling prior context, or
   answering "why did we do X". Use it at the START of a task (recall what's known),
@@ -12,6 +12,12 @@ description: >
   Use remember_extracted when a passage states relationships or properties of
   named people/places/things, and entity(name) to answer a question ABOUT such a
   thing rather than about the sentences that mention it.
+  Use it ACROSS sessions too: list_working_contexts to discover what a project
+  already has, load_working_context to pick up a previous session's hand-off,
+  and save_working_context to leave one. When a load returns found:false, or
+  when you do not know the exact session name, list the project's contexts
+  before concluding that no earlier work exists — a mistyped id looks exactly
+  like a fresh start.
   Especially relevant for: multi-session projects, architecture/config decisions,
   incident postmortems, "why is this value/setting like this", onboarding to an
   unfamiliar codebase, and any place a fact learned now must survive to a later
@@ -39,6 +45,15 @@ Server setup: [velesdb-memory README](https://github.com/cyberlife-coder/VelesDB
 
 ## The loop (run it every task)
 
+0. **Know what you are running on — once per session.** Call `memory_status`
+   at the start of the first task. Read three things: `embedder.semantic`
+   (`false` = the offline `hash` default — recall matches surface form, and
+   the USER should be told if recall quality matters, since fixing it is one
+   env var); `memory.edges` (`0` = the graph is flat, so `why` degrades to
+   plain search until something wires links); `extraction.configured`
+   (whether `remember_extracted` will work at all). Do not re-poll it every
+   turn — it answers configuration questions, not content ones.
+
 1. **Recall before you act.** At the start of a task, retrieve what's already
    known before doing anything else.
    - `recall(query)` for semantic look-up of facts.
@@ -58,8 +73,9 @@ Server setup: [velesdb-memory README](https://github.com/cyberlife-coder/VelesDB
      `_veles_date` — today's date as a `YYYYMMDD` integer — unless you already set
      it, so `recall_fused(date_field="_veles_date")` gives you a chronological
      `dated_context` timeline (plus a `now` anchor) with zero setup on your part
-     (Node binding: the dated variant is its own method,
-     `recallFusedDated(query, k, filter, opts, "_veles_date")`).
+     (Node binding: the dated variant is its own method, and it takes the date
+     field SECOND, not last:
+     `recallFusedDated(query, "_veles_date", k, filter, opts)`).
      Set `_veles_date` explicitly only to override the default — e.g. to date a
      fact by when an incident actually happened, not when you recorded it; once
      set, the server never overwrites it. Store any OTHER comparable value
@@ -126,6 +142,77 @@ Server setup: [velesdb-memory README](https://github.com/cyberlife-coder/VelesDB
    improves without any retraining. Give feedback on the memory you actually
    used, not on everything.
 
+## Resuming a session: list → load → work → save
+
+The loop above runs *inside* one session. A **working context** is what crosses
+between them: a distilled hand-off — goal, active constraints, verified facts,
+open hypotheses, decisions, evidence handles, pending actions — stored under a
+`project` and a `session` id and read back by whoever comes next, which is
+usually you, tomorrow, with none of today's context.
+
+This is memory, not compression. `save_working_context` embeds and stores; it
+returns a fact id. The compression skill (`velesdb-context-optimizer`) shrinks
+one prompt with a pure function and keeps nothing — a different mechanism for a
+different problem. It points here when a distilled context deserves to survive.
+
+**1. `list_working_contexts` — discover before you assume.**
+Run it when you do not know the exact session name, and whenever a load comes
+back empty. Session ids are chosen by hand (`"rolling"`, a task id, a
+conversation id), which means they are mistyped by hand too.
+
+**2. `load_working_context(project, session)` — read the hand-off.**
+It returns `{found, working, other_sessions}`.
+
+- `found: true` — adopt `working.goal`, re-assert `active_constraints`, trust
+  `verified_facts`, and continue from `pending_actions` instead of re-deriving
+  them. Fetch `exact_evidence` handles with `retrieve_context_source` when you
+  need the actual bytes.
+- `found: false` (with `working: null`) — **this is not proof that no earlier
+  work exists.** It says nothing was ever saved under *that exact pair*. Read
+  `other_sessions`, or call `list_working_contexts`, before you say "fresh
+  start": a similarly-named session in that list means the id was a typo and
+  the work is sitting one character away from where you looked.
+- `other_sessions` is filled in **on a hit too**. If one of them looks more
+  like the session you meant, you may have just resumed the *wrong* one — the
+  failure that reads as success.
+
+**3. Work**, running the loop above: recall, remember, relate, feedback.
+
+**4. `save_working_context(project, session, working)` — leave a hand-off.**
+Near the end of a session, or whenever the state changes meaningfully. Keep it
+distilled: this is the note, not the transcript. Saving again under the same
+project and session **replaces** the previous state, so a resumed session
+should re-save rather than accumulate. An entirely empty `working` is refused
+instead of being allowed to wipe what the last save stored.
+
+```json
+{"tool": "list_working_contexts", "arguments": {"project": "veles"}}
+```
+
+```json
+{"tool": "load_working_context", "arguments": {"project": "veles", "session": "task-1234"}}
+```
+
+```json
+{"tool": "save_working_context", "arguments": {
+  "project": "veles", "session": "task-1234",
+  "working": {
+    "goal": "fix the failing canary deploy",
+    "active_constraints": [{"text": "never restart the primary during a rebalance"}],
+    "verified_facts": [{"text": "the canary fails only on arm64 runners"}],
+    "pending_actions": ["bisect the arm64-only failure", "re-run the canary"]
+  }
+}}
+```
+
+**Field shapes are not uniform, and guessing costs a confusing error.**
+`active_constraints`, `verified_facts` and `open_hypotheses` are lists of
+`{text, source?}` objects; `decisions` and `exact_evidence` are typed structs
+where `fragment_id` is required; **`pending_actions` is a plain list of
+strings.** Sending `pending_actions: [{"text": "..."}]` fails with a `missing
+field fragment_id` that never names the field actually at fault. Follow the
+example above literally rather than inventing one shape for every field.
+
 ## Entities: let the graph build itself
 
 Steps 2 and 3 build the graph by hand, one `relate` at a time. That is the right
@@ -154,7 +241,15 @@ get wrong. Entity nodes are deliberately invisible to `recall` and
 and evict a real fact from your results. So:
 
 - *"What does the memory say about Theo?"* → `entity("Theo Durand")` — returns his
-  attributes and every typed edge leaving him.
+  attributes and every typed edge touching him, in BOTH directions:
+  `relations` leave him, `relations_in` point AT him. Ask only the first and
+  the graph looks half empty — it holds `camille --sister of--> theo`, so
+  Theo's outgoing edges never mention Camille. Each side is budget-bounded:
+  `relations_truncated` / `relations_in_truncated` tell you the list is a
+  PARTIAL view, which a list sitting exactly at the cap cannot tell you by
+  itself. Same rule on `why`: its `truncated` says a width budget cut the
+  walk, so an answer built on a cut subgraph is never mistaken for a
+  complete one.
 - *"Which notes mention Theo?"* → `recall("Theo Durand")` — returns sentences.
 
 Use `entity` for questions **about a thing**, `recall` for questions **about what
@@ -166,9 +261,21 @@ age stored as `"15"` will never match `age >= 15` — no error, just silence. Th
 is the same trap as the date field in step 2, and it is the single most common
 way a memory system looks like it is working while returning nothing.
 
-`remember_extracted` needs an extraction backend
-(`[extractor] backend = "ollama"`); without one the tool reports itself as
-unconfigured rather than silently storing less.
+`remember_extracted` needs an extraction backend; without one the tool reports
+itself as unconfigured rather than silently storing less. Two exist, and they
+are **not** interchangeable:
+
+- `"ollama"` runs a local generative model that **infers** the facts, entity
+  edges and attributes a passage states. It needs that model running — the
+  backend itself is compiled into the default binary, no rebuild.
+- `"outline"` is deterministic and fully offline — no model, no network, and no
+  extra build feature. But it only reads structure you write out **explicitly**,
+  one directive per line (`fact:`, `edge:`, `attr:`). Hand it free prose and you
+  get plain facts with no graph around them.
+
+Pick `"outline"` when you control the input format, or to get a graph at all
+without running a model. Pick `"ollama"` when the input is prose nobody is
+going to reformat.
 
 ## Concrete scenarios
 
@@ -209,16 +316,43 @@ code — memory that survived the process restart is exactly the point.
 
 ## Setup notes (know your embedder)
 
-Recall quality depends entirely on the embedding backend the server was built and
-launched with:
+Recall quality depends entirely on the embedding backend the server was
+launched with — and you never have to guess which one that is:
+`memory_status` names it and answers `embedder.semantic` directly.
 
 - **`hash` (default in the prebuilt binary): lexical, NOT semantic.** It matches on
   shared words, so recall of paraphrases is weak. Good enough to demo the *graph*
   (`why` still works — it follows links, not similarity), but for real semantic
   recall configure a semantic embedder.
-- **`ollama`:** real on-device semantic recall. Requires a build with
-  `--features ollama`, a running Ollama, and `ollama pull all-minilm`; set
-  `VELESDB_MEMORY_EMBEDDER=ollama`.
+- **`ollama`:** real on-device semantic recall. Compiled into the default
+  binary; requires only a running Ollama and a pulled embedding model
+  (`ollama pull bge-m3`); set `VELESDB_MEMORY_EMBEDDER=ollama`.
+- **`openai`:** any OpenAI-compatible server — oMLX, llama.cpp, LM Studio,
+  vLLM, or a hosted provider. Also compiled into the default binary. `openai`
+  names a **protocol, not a vendor**: reaching a
+  different server is a different URL, never a new backend name. It therefore
+  has **no default URL and no default model** — set
+  `VELESDB_MEMORY_EMBEDDER_URL` and `_MODEL` yourself.
+
+The extraction role takes the same three-way choice — `outline`, `ollama`,
+`openai` — under `VELESDB_MEMORY_EXTRACTOR`, and **the two roles are
+configured independently**: nothing requires them to share a backend, a server
+or a token. Embedding on a local Ollama while extracting on an
+OpenAI-compatible server is a supported combination.
+
+The base URL may be written **with or without** the `/v1` suffix. Server
+consoles advertise the version-prefixed form (`http://127.0.0.1:8019/v1`)
+beside a copy button, so pasting it works instead of producing
+`/v1/v1/embeddings` and a `404`.
+
+**A store is fixed to one embedding MODEL, not to one backend.** The store
+records the model that filled it (`embedding-provenance.json`) and refuses to
+open under a different one — including a different model of the same width,
+which the dimension check alone cannot see. Changing only the *transport* is
+safe: the same model over Ollama or over an OpenAI-compatible API produces the
+same vectors, so the backend is deliberately not part of the record. A store
+created before this recording existed stays unrecorded and is checked on the
+dimension alone, and says so.
 
 ### Configure it in a file, not in a plist
 
@@ -233,10 +367,18 @@ default_ttl = 0                # seconds; 0 = permanent
 [embedder]
 backend = "ollama"             # `hash` is lexical, not semantic — see above
 model = "bge-m3"
+# url = "http://127.0.0.1:8019"  # required by "openai"; defaulted by "ollama"
 
 [extractor]
-backend = "ollama"             # required for remember_extracted / entities
-model = "qwen3.6:35b-mlx"
+backend = "ollama"             # or "outline"/"openai" — see above
+model = "qwen3.6:35b-mlx"      # required by "ollama" and "openai"; "outline" needs none
+# url = "http://127.0.0.1:8019"  # required by "openai"; defaulted by "ollama"
+
+# There is deliberately NO api_token field, in either section. A token is read
+# from VELESDB_MEMORY_EMBEDDER_API_TOKEN / VELESDB_MEMORY_EXTRACTOR_API_TOKEN
+# and from nowhere else — a credential at rest in a versionable file is one
+# `git add .` away from a public history. Writing one here is refused at
+# startup, and the refusal does not echo the line back.
 
 [graph]
 autograph = false              # true = every `remember` also wires entities
@@ -247,6 +389,22 @@ With `autograph = true` you stop having to choose the right tool: a plain
 **and** wires the graph around it. It costs one generation per `remember`, so
 it is opt-in — and if the model is down the write still succeeds, losing only
 the enrichment, never the fact.
+
+The daemon runs that enrichment through an async worker: with it active,
+edges derived from a `remember` land asynchronously, so an `entity` or `why`
+read immediately after may not see them yet — the fact itself is always
+immediately readable.
+
+That degradation is silent **in flight**, on purpose. It is no longer silent
+**forever**: at startup the daemon asks the configured extraction backend
+whether it is there, and prints one line naming the role, the URL and the model
+when it is not — unreachable, credential refused, or answering without that
+model in its listing, which are three different mornings. It never refuses to
+boot over it (an unreachable server is transient, and a daemon that will not
+start because a model server came up second is worse than the silence), never
+falls back to another backend, and says nothing at all when everything is fine.
+The probe reads the server's model listing, so it costs milliseconds and loads
+no model.
 
 Precedence is **command line > environment > file > default**, so a value pinned
 in the file can still be overridden for one run

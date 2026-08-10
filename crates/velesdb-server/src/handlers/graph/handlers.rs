@@ -16,7 +16,7 @@ use axum::{
 use velesdb_core::collection::graph::{GraphEdge, TraversalConfig};
 use velesdb_core::observer::QueryOperationKind;
 
-use crate::handlers::helpers::auto_core_error_response;
+use crate::handlers::helpers::{auto_core_error_response, run_blocking, run_blocking_typed};
 use crate::types::ErrorResponse;
 use crate::AppState;
 
@@ -155,8 +155,10 @@ pub async fn get_edges(
 
     let coll = graph_read_preamble(&state, &name, QueryOperationKind::GraphTraversal)?;
 
-    let edges: Vec<EdgeResponse> = coll
-        .get_edges(Some(&label))
+    // Edge listing takes graph store locks — run it on the blocking pool.
+    let raw_edges = run_blocking_typed(move || coll.get_edges(Some(&label))).await?;
+
+    let edges: Vec<EdgeResponse> = raw_edges
         .into_iter()
         .map(|e| EdgeResponse {
             id: e.id(),
@@ -169,6 +171,22 @@ pub async fn get_edges(
 
     let count = edges.len();
     Ok(Json(EdgesResponse { edges, count }))
+}
+
+/// The write-result match [`add_edge`] and [`add_edges_batch`] share: the
+/// blocking-pool outcome routed through `auto_core_error_response` (so e.g.
+/// `EdgeExists` surfaces as 409 + VELES-019, never a 500 string), success
+/// shaped by the caller. One copy, so the two handlers cannot drift on the
+/// error route.
+fn created_or_core_error<T>(
+    outcome: Result<Result<T, velesdb_core::Error>, axum::response::Response>,
+    success: impl FnOnce(T) -> axum::response::Response,
+) -> axum::response::Response {
+    match outcome {
+        Ok(Ok(value)) => success(value),
+        Ok(Err(e)) => auto_core_error_response(&e),
+        Err(resp) => resp,
+    }
 }
 
 /// Add an edge to a collection's graph.
@@ -199,12 +217,12 @@ pub async fn add_edge(
         Err(resp) => return resp.into_response(),
     };
 
-    // Route the core error through `auto_core_error_response` so e.g.
+    // Edge insertion takes write locks and persists — run it on the blocking
+    // pool. Route the core error through `auto_core_error_response` so e.g.
     // `EdgeExists` surfaces as 409 + VELES-019 instead of a generic 500 string.
-    match coll.add_edge(edge) {
-        Ok(()) => StatusCode::CREATED.into_response(),
-        Err(e) => auto_core_error_response(&e),
-    }
+    created_or_core_error(run_blocking(move || coll.add_edge(edge)).await, |()| {
+        StatusCode::CREATED.into_response()
+    })
 }
 
 /// Converts an [`AddEdgeRequest`] into a core [`GraphEdge`], validating the
@@ -274,12 +292,13 @@ pub async fn add_edges_batch(
         Err(resp) => return resp.into_response(),
     };
 
-    // Route the core error through `auto_core_error_response` so e.g.
-    // `EdgeExists` surfaces as 409 + VELES-019 instead of a generic 500 string.
-    match coll.add_edges_batch(edges) {
-        Ok(added) => (StatusCode::CREATED, Json(AddEdgesBatchResponse { added })).into_response(),
-        Err(e) => auto_core_error_response(&e),
-    }
+    // Batch edge insertion takes write locks and persists — run it on the
+    // blocking pool. Route the core error through `auto_core_error_response`
+    // so e.g. `EdgeExists` surfaces as 409 + VELES-019 instead of a 500 string.
+    created_or_core_error(
+        run_blocking(move || coll.add_edges_batch(edges)).await,
+        |added| (StatusCode::CREATED, Json(AddEdgesBatchResponse { added })).into_response(),
+    )
 }
 
 /// Traverse the graph using BFS or DFS from a source node.
@@ -302,13 +321,9 @@ pub async fn traverse_graph(
 ) -> Result<Json<TraverseResponse>, (StatusCode, Json<ErrorResponse>)> {
     let coll = graph_read_preamble(&state, &name, QueryOperationKind::GraphTraversal)?;
 
-    let config = TraversalConfig::with_range(1, request.max_depth)
-        .with_limit(request.limit)
-        .with_rel_types(request.rel_types);
-
-    let raw_results = match request.strategy.to_lowercase().as_str() {
-        "bfs" => coll.traverse_bfs(request.source, &config),
-        "dfs" => coll.traverse_dfs(request.source, &config),
+    let use_bfs = match request.strategy.to_lowercase().as_str() {
+        "bfs" => true,
+        "dfs" => false,
         _ => {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -323,6 +338,23 @@ pub async fn traverse_graph(
         }
     };
 
+    let limit = request.limit;
+    let source = request.source;
+    let config = TraversalConfig::with_range(1, request.max_depth)
+        .with_limit(limit)
+        .with_rel_types(request.rel_types);
+
+    // Traversal is synchronous, lock-taking core code — run it on the
+    // blocking pool so the async workers stay responsive.
+    let raw_results = run_blocking_typed(move || {
+        if use_bfs {
+            coll.traverse_bfs(source, &config)
+        } else {
+            coll.traverse_dfs(source, &config)
+        }
+    })
+    .await?;
+
     let results: Vec<super::types::TraversalResultItem> = raw_results
         .into_iter()
         .map(|r| super::types::TraversalResultItem {
@@ -334,7 +366,7 @@ pub async fn traverse_graph(
 
     let depth_reached = results.iter().map(|r| r.depth).max().unwrap_or(0);
     let visited = results.len();
-    let has_more = visited >= request.limit;
+    let has_more = visited >= limit;
 
     Ok(Json(TraverseResponse {
         results,
@@ -366,7 +398,8 @@ pub async fn get_node_degree(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<DegreeResponse>, (StatusCode, Json<ErrorResponse>)> {
     let coll = graph_read_preamble(&state, &name, QueryOperationKind::GraphTraversal)?;
-    let (in_degree, out_degree) = coll.node_degree(node_id);
+    // Degree lookup takes edge-store shard locks — run it on the blocking pool.
+    let (in_degree, out_degree) = run_blocking_typed(move || coll.node_degree(node_id)).await?;
     Ok(Json(DegreeResponse {
         in_degree,
         out_degree,

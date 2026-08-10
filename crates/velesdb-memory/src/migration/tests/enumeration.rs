@@ -1,0 +1,736 @@
+use super::*;
+
+// ---------------------------------------------------------------------------
+// THE GATE
+// ---------------------------------------------------------------------------
+
+#[test]
+fn raw_enumeration_has_no_gaps_or_duplicates_across_pages() {
+    let (dir, _ttl_meta) = seeded();
+    let db = database(&dir);
+
+    let facts = enumerate_collection(&db, "_semantic_memory", PAGE).expect("enumerate");
+
+    let ids: Vec<u64> = facts.iter().map(|f| f.id).collect();
+    let unique: BTreeSet<u64> = ids.iter().copied().collect();
+    assert_eq!(
+        ids.len(),
+        unique.len(),
+        "a page walk must not return a fact twice, got {ids:?}"
+    );
+    let expected: BTreeSet<u64> = (1..=SEEDED).chain(std::iter::once(100)).collect();
+    assert_eq!(
+        unique, expected,
+        "every seeded fact must come back exactly once; a missing id is a fact \
+         the rebuild would silently drop"
+    );
+}
+
+#[test]
+fn raw_enumeration_carries_content_ordinary_and_reserved_metadata() {
+    let (dir, _ttl_meta) = seeded();
+    let db = database(&dir);
+
+    let facts = enumerate_collection(&db, "_semantic_memory", PAGE).expect("enumerate");
+    let first = facts
+        .iter()
+        .find(|f| f.id == 1)
+        .expect("fact 1 must be enumerated");
+    let payload: Value = serde_json::from_str(&first.payload).expect("payload is json");
+
+    assert_eq!(
+        payload.get("content").and_then(Value::as_str),
+        Some("fact number 1"),
+        "content must survive the scan verbatim: {payload}"
+    );
+    assert_eq!(
+        payload.get("project").and_then(Value::as_str),
+        Some("veles"),
+        "ordinary metadata must survive the scan: {payload}"
+    );
+    assert_eq!(
+        payload.get("_veles_hub").and_then(Value::as_bool),
+        Some(true),
+        "RESERVED metadata must survive the scan — the rebuild has to put it \
+         back, and a scan that strips it makes that impossible: {payload}"
+    );
+}
+
+#[test]
+fn raw_enumeration_carries_the_absolute_expiry() {
+    let (dir, ttl_meta) = seeded();
+    let db = database(&dir);
+
+    let expected = ttl_meta
+        .get("_veles_expires_at")
+        .expect("the storage layer records an absolute expiry")
+        .clone();
+
+    let facts = enumerate_collection(&db, "_semantic_memory", PAGE).expect("enumerate");
+    let ttl_fact = facts
+        .iter()
+        .find(|f| f.id == 100)
+        .expect("the ttl fact must be enumerated");
+    let payload: Value = serde_json::from_str(&ttl_fact.payload).expect("payload is json");
+
+    assert_eq!(
+        payload.get("_veles_expires_at"),
+        Some(&expected),
+        "the expiry must come back as the SAME absolute instant — recomputing a \
+         duration from migration time would silently extend every fact's life"
+    );
+}
+
+#[test]
+fn an_empty_collection_enumerates_as_empty_rather_than_failing() {
+    // Empty is not the same as absent: the other two collections are opened at
+    // the same dimension and so take part in the refusal, which means the
+    // rebuild has to recreate them even with nothing in them.
+    let (dir, _ttl_meta) = seeded();
+    let db = database(&dir);
+
+    for collection in AGENT_COLLECTIONS
+        .iter()
+        .filter(|c| **c != "_semantic_memory")
+    {
+        let facts = enumerate_collection(&db, collection, PAGE)
+            .unwrap_or_else(|e| panic!("{collection} must be inventoriable, got {e}"));
+        assert_eq!(
+            facts,
+            Vec::<RawFact>::new(),
+            "{collection} holds nothing yet must still answer"
+        );
+    }
+}
+
+/// The positive control. Without it, an `enumerate_collection` that returned an
+/// empty vector for everything would satisfy the gap-and-duplicate test above.
+#[test]
+fn the_gate_would_notice_an_enumeration_that_returns_nothing() {
+    let (dir, _ttl_meta) = seeded();
+    let db = database(&dir);
+
+    let facts = enumerate_collection(&db, "_semantic_memory", PAGE).expect("enumerate");
+    assert!(
+        !facts.is_empty(),
+        "a seeded collection that enumerates empty means the scan does not work, \
+         not that the store is empty"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// GATE 2 — complete, deterministic paging
+//
+// Correctness and cost are proven separately: a walk can be exhaustive and
+// still be unusable at scale. The tests below settle correctness; the cost
+// profile is measured on its own, further down.
+// ---------------------------------------------------------------------------
+
+/// A store seeded with [`SCRAMBLED`], plus the count the engine itself reports.
+///
+/// The count is captured while the store is alive because the exclusive lock
+/// forbids holding both handles, and it is the independent witness the page
+/// walk is checked against — comparing a walk to a list this same module built
+/// would only prove the module agrees with itself.
+pub(super) fn scrambled_store() -> (tempfile::TempDir, BTreeSet<u64>, usize) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let counted;
+    {
+        let store = NativeStore::open(dir.path(), DIM).expect("open store");
+        for id in SCRAMBLED {
+            store
+                .store_with_metadata(
+                    *id,
+                    &format!("fact {id}"),
+                    &EMBEDDING,
+                    &meta(&[("project", Value::from("veles"))]),
+                )
+                .expect("seed");
+        }
+        counted = store.count();
+    }
+    (dir, SCRAMBLED.iter().copied().collect(), counted)
+}
+
+#[test]
+fn every_page_size_yields_the_same_complete_set() {
+    let (dir, expected, _) = scrambled_store();
+    let db = database(&dir);
+
+    // 1 and 2 divide nothing; 3 leaves a remainder; 7 is one short of the
+    // total; 99 exceeds it, so the walk must stop on a short page.
+    for page in [1usize, 2, 3, 7, 99] {
+        let facts = enumerate_collection(&db, "_semantic_memory", page)
+            .unwrap_or_else(|e| panic!("page {page}: {e}"));
+        let ids: Vec<u64> = facts.iter().map(|f| f.id).collect();
+        let unique: BTreeSet<u64> = ids.iter().copied().collect();
+        assert_eq!(
+            ids.len(),
+            unique.len(),
+            "page {page}: duplicate ids {ids:?}"
+        );
+        assert_eq!(
+            unique, expected,
+            "page {page}: the union of pages must be exactly the seeded set"
+        );
+    }
+}
+
+#[test]
+fn the_walk_agrees_with_the_engines_own_count() {
+    let (dir, expected, counted) = scrambled_store();
+    let db = database(&dir);
+
+    let facts = enumerate_collection(&db, "_semantic_memory", 3).expect("enumerate");
+    assert_eq!(
+        facts.len(),
+        counted,
+        "the walk must return as many facts as the collection reports holding"
+    );
+    assert_eq!(
+        counted,
+        expected.len(),
+        "the fixture and the engine must agree"
+    );
+}
+
+#[test]
+fn repeated_walks_return_the_same_order() {
+    let (dir, _, _) = scrambled_store();
+    let db = database(&dir);
+
+    let first: Vec<u64> = enumerate_collection(&db, "_semantic_memory", 3)
+        .expect("enumerate")
+        .iter()
+        .map(|f| f.id)
+        .collect();
+    for run in 2..=4 {
+        let again: Vec<u64> = enumerate_collection(&db, "_semantic_memory", 3)
+            .expect("enumerate")
+            .iter()
+            .map(|f| f.id)
+            .collect();
+        assert_eq!(
+            first, again,
+            "run {run} returned a different order; a resumable walk cannot be \
+             built on an order that varies between executions"
+        );
+    }
+    let ascending: Vec<u64> = {
+        let mut sorted = first.clone();
+        sorted.sort_unstable();
+        sorted
+    };
+    assert_eq!(
+        first, ascending,
+        "the walk must come back in ascending id order — that is the property \
+         `ORDER BY id` is there to provide, and the natural scan order does NOT \
+         have it (measured: ids came back out of order without it)"
+    );
+}
+
+#[test]
+fn resuming_at_a_recorded_offset_skips_nothing_and_repeats_nothing() {
+    let (dir, expected, _) = scrambled_store();
+    let db = database(&dir);
+    let page = 3usize;
+
+    // Walk the first page, record where a checkpoint would resume, then finish
+    // from there — the shape a rebuild interrupted after one batch would take.
+    let head = enumerate_page(&db, "_semantic_memory", page, 0);
+    let mut seen: Vec<u64> = head.iter().map(|f| f.id).collect();
+    let mut offset = head.len();
+    loop {
+        let next = enumerate_page(&db, "_semantic_memory", page, offset);
+        if next.is_empty() {
+            break;
+        }
+        offset += next.len();
+        seen.extend(next.iter().map(|f| f.id));
+    }
+
+    let unique: BTreeSet<u64> = seen.iter().copied().collect();
+    assert_eq!(seen.len(), unique.len(), "resume duplicated ids: {seen:?}");
+    assert_eq!(
+        unique, expected,
+        "a walk resumed from a recorded offset must cover exactly the same set"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// THE SOURCE VECTOR — what makes the `reuse` regime possible at all (#1815)
+// ---------------------------------------------------------------------------
+
+/// A store whose facts carry vectors that are all DIFFERENT from one another.
+///
+/// The shared `seeded()` fixture writes one constant embedding into every fact,
+/// which is right for the questions it was built for and useless for this one:
+/// a read path that returned a placeholder, the first fact's vector, or the
+/// same buffer every time would agree with a constant fixture perfectly.
+fn seeded_with_distinct_vectors() -> (tempfile::TempDir, Vec<(u64, Vec<f32>)>) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let written: Vec<(u64, Vec<f32>)> = SCRAMBLED
+        .iter()
+        .enumerate()
+        .map(|(i, &id)| {
+            let step = f32::from(u8::try_from(i).expect("the fixture is eight facts long"));
+            (id, vec![step, 1.0 - step, step * 0.5, -step])
+        })
+        .collect();
+    {
+        let store = NativeStore::open(dir.path(), DIM).expect("open store");
+        for (id, vector) in &written {
+            store
+                .store_with_metadata(*id, &format!("fact number {id}"), vector, &meta(&[]))
+                .expect("seed fact");
+        }
+    }
+    (dir, written)
+}
+
+#[test]
+fn both_read_paths_return_each_fact_s_own_vector() {
+    // Without this, `RawFact::source_vector` is a field that compiles. The
+    // `reuse` regime writes exactly these floats back into the destination, so
+    // "the right shape arrived" is not the question — "fact 999's vector, and
+    // not fact 3's" is.
+    let (dir, written) = seeded_with_distinct_vectors();
+    let db = database(&dir);
+
+    let by_cursor = super::enumerate_by_cursor(&db, "_semantic_memory", PAGE).expect("cursor");
+    let by_offset = super::enumerate_collection(&db, "_semantic_memory", PAGE).expect("offset");
+
+    let vectors = |facts: &[RawFact]| -> std::collections::BTreeMap<u64, Vec<f32>> {
+        facts
+            .iter()
+            .map(|f| (f.id, f.source_vector.clone()))
+            .collect()
+    };
+    let cursor_vectors = vectors(&by_cursor);
+    let expected: std::collections::BTreeMap<u64, Vec<f32>> = written.into_iter().collect();
+
+    assert_eq!(
+        cursor_vectors, expected,
+        "the cursor must return the vector each fact was written with"
+    );
+    assert_eq!(
+        vectors(&by_offset),
+        expected,
+        "the independent scan must agree with the cursor, vector for vector"
+    );
+}
+
+#[test]
+fn a_reused_vector_survives_the_round_trip_into_a_destination() {
+    // The `reuse` regime in one assertion: read a fact out, put it back with
+    // its OWN vector, read it out of the destination and get the same floats.
+    // A store that normalised or quantised on write would fail here, and that
+    // is the point — it is the property reuse depends on, not an assumption
+    // about how the engine stores what it is given.
+    let (source_dir, _written) = seeded_with_distinct_vectors();
+    let source = database(&source_dir);
+    let facts = super::enumerate_by_cursor(&source, "_semantic_memory", PAGE).expect("read out");
+    drop(source);
+    // Without this, an enumeration that returned nothing would make every
+    // comparison below compare two empty maps and report success.
+    assert_eq!(
+        facts.len(),
+        SCRAMBLED.len(),
+        "the source must yield every seeded fact, or this test proves nothing"
+    );
+
+    let dest_dir = tempfile::tempdir().expect("tempdir");
+    {
+        let _store = NativeStore::open(dest_dir.path(), DIM).expect("open destination");
+    }
+    let destination = velesdb_core::Database::open(dest_dir.path()).expect("open destination db");
+    for fact in &facts {
+        let vector = fact.source_vector.clone();
+        assert_eq!(
+            super::reinsert(&destination, "_semantic_memory", fact, &vector).expect("reinsert"),
+            Reinsertion::Inserted,
+            "fact {} must land on a free id",
+            fact.id
+        );
+    }
+
+    let rebuilt =
+        super::enumerate_by_cursor(&destination, "_semantic_memory", PAGE).expect("read back");
+    let by_id = |facts: &[RawFact]| -> std::collections::BTreeMap<u64, Vec<f32>> {
+        facts
+            .iter()
+            .map(|f| (f.id, f.source_vector.clone()))
+            .collect()
+    };
+
+    assert_eq!(
+        by_id(&rebuilt),
+        by_id(&facts),
+        "a vector carried across under `reuse` must arrive unchanged"
+    );
+}
+
+/// One page, at an explicit offset — the unit a checkpoint resumes from.
+pub(super) fn enumerate_page(
+    db: &velesdb_core::Database,
+    collection: &str,
+    page: usize,
+    offset: usize,
+) -> Vec<super::RawFact> {
+    super::enumerate_page(db, collection, page, offset).expect("page")
+}
+
+// ---------------------------------------------------------------------------
+// THE GUARD — a rebuild must not come back to LIMIT/OFFSET
+// ---------------------------------------------------------------------------
+
+/// Both walks must exclude exactly the SAME expired facts.
+///
+/// They filter with the same predicate (`is_payload_expired`) and the same clock
+/// function (`now_unix_secs`), but at two different sites: `collection/core/scroll.rs`
+/// for the cursor, `search/query/similarity_filter.rs` for the scan. The predicate
+/// is therefore not where they can disagree.
+///
+/// Pagination is. `execute_scan_query` collects the first `limit + offset` LIVE
+/// points in PHYSICAL order and only then lets `ORDER BY id` sort them, so
+/// excluding an expired point shifts the physical window and not merely the
+/// sorted list. With ids that are neither contiguous nor written in ascending
+/// order, and expired facts interleaved so that no page boundary lands on a run
+/// of one kind, a walk that paged by position would show a gap or a repeat here.
+///
+/// `expired_points_are_not_resurrected` already pins the cursor side. This is
+/// the missing half: that the independent verification path agrees with it.
+#[test]
+fn both_walks_exclude_exactly_the_same_expired_facts() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut live: Vec<u64> = Vec::new();
+    let mut expired: Vec<u64> = Vec::new();
+    {
+        let store = NativeStore::open(dir.path(), DIM).expect("open store");
+        for (n, id) in SCRAMBLED.iter().copied().enumerate() {
+            if n % 2 == 0 {
+                store
+                    .store_with_metadata(id, &format!("live {id}"), &EMBEDDING, &meta(&[]))
+                    .expect("seed live");
+                live.push(id);
+            } else {
+                expired.push(id);
+            }
+        }
+    }
+    // A past instant, not `now`: the published zero-ttl route stamps
+    // `expires_at = now` and the predicate is `exp <= now`, which is expired but
+    // sits on the second boundary. A fixture must not race the clock.
+    for id in &expired {
+        super::preservation::seed_raw(dir.path(), *id, &format!("expired {id}"), Some(1_000_000));
+    }
+
+    let db = velesdb_core::Database::open(dir.path()).expect("open source");
+    let ids = |facts: Vec<RawFact>| -> Vec<u64> { facts.iter().map(|f| f.id).collect() };
+    let by_cursor = ids(enumerate_by_cursor(&db, "_semantic_memory", PAGE).expect("cursor walk"));
+    let by_offset = ids(enumerate_collection(&db, "_semantic_memory", PAGE).expect("offset walk"));
+    drop(db);
+
+    let mut only_live = live.clone();
+    only_live.sort_unstable();
+    assert_eq!(
+        by_cursor, only_live,
+        "positive control: the cursor must return every LIVE id and nothing else, \
+         or the comparison below would only prove two empty walks agree"
+    );
+    assert_eq!(
+        by_offset, by_cursor,
+        "the two walks disagree on which facts are expired; a rebuild verified by \
+         one and performed by the other would carry, or drop, exactly this difference"
+    );
+
+    // The other regime, on the SAME fixture shape. Without it the agreement above
+    // could hold because both walks return the live set for a reason that has
+    // nothing to do with expiry — and the comparison would never be seen doing
+    // work. Here the two must agree on a set that is strictly LARGER.
+    let future = tempfile::tempdir().expect("tempdir");
+    {
+        let store = NativeStore::open(future.path(), DIM).expect("open store");
+        for id in &live {
+            store
+                .store_with_metadata(*id, &format!("live {id}"), &EMBEDDING, &meta(&[]))
+                .expect("seed live");
+        }
+    }
+    for id in &expired {
+        super::preservation::seed_raw(
+            future.path(),
+            *id,
+            &format!("not yet expired {id}"),
+            Some(4_000_000_000),
+        );
+    }
+    let db = velesdb_core::Database::open(future.path()).expect("open source");
+    let future_cursor =
+        ids(enumerate_by_cursor(&db, "_semantic_memory", PAGE).expect("cursor walk"));
+    let future_offset =
+        ids(enumerate_collection(&db, "_semantic_memory", PAGE).expect("offset walk"));
+
+    let mut everything = SCRAMBLED.to_vec();
+    everything.sort_unstable();
+    assert_eq!(
+        future_cursor, everything,
+        "control: under a FUTURE expiry every seeded fact must come back, so the \
+         exclusion above was about the expiry and not about the raw write path"
+    );
+    assert_eq!(
+        future_offset, future_cursor,
+        "the two walks must also agree when nothing is expired"
+    );
+    println!(
+        "  past expiry:   {} live / {} expired over pages of {PAGE} -> both walks {by_cursor:?}",
+        live.len(),
+        expired.len()
+    );
+    println!(
+        "  future expiry: all {} seeded -> both walks {future_cursor:?}",
+        everything.len()
+    );
+}
+
+/// Files allowed to name the `OFFSET` walk, because they DEFINE it or exercise
+/// it as the independent verification path.
+const OFFSET_WALK_OWNERS: &[&str] = &[
+    "migration.rs",
+    "migration/enumeration.rs",
+    "migration/tests/enumeration.rs",
+    "migration/tests/mod.rs",
+    "migration/tests/performance.rs",
+];
+
+/// Whether a source text reaches for the bounded `OFFSET` walk.
+///
+/// A type-level guard would not hold here: in Rust a child module sees its
+/// ancestor's private items, so a future `migration::rebuild` could construct
+/// whatever "cursor-only" newtype this module defined. The enforceable line is
+/// therefore contractual — and a contract nobody checks is decoration, so it is
+/// checked below, with a positive control proving the check can fail.
+fn uses_the_offset_walk(source: &str) -> bool {
+    let (code, strings) = code_and_string_contents(source);
+    code.contains("enumerate_collection")
+        || code.contains("enumerate_page")
+        || strings.contains("OFFSET")
+}
+
+/// Split `source` into what the compiler reads as CODE and what it reads as
+/// STRING-LITERAL contents, dropping comments entirely.
+///
+/// The previous matcher searched the raw text, so a comment DOCUMENTING the
+/// danger ("// the bounded OFFSET walk is not used here") tripped the guard —
+/// it punished exactly the writing-down this repository wants. Proven red on
+/// 2026-08-05 by injecting that comment into `migration/strategy.rs`. The
+/// walk's names are only reachable as code, and `OFFSET` only does harm
+/// inside a query string, so each is searched where it can act.
+fn code_and_string_contents(source: &str) -> (String, String) {
+    let chars: Vec<char> = source.chars().collect();
+    let (mut code, mut strings) = (String::new(), String::new());
+    let mut i = 0;
+    while i < chars.len() {
+        let pair = (chars[i], chars.get(i + 1).copied());
+        i = match pair {
+            ('/', Some('/')) => skip_line_comment(&chars, i),
+            ('/', Some('*')) => skip_block_comment(&chars, i),
+            ('r', Some('"' | '#')) => consume_raw_string(&chars, i, &mut strings, &mut code),
+            ('"', _) => consume_string(&chars, i, &mut strings),
+            ('\'', _) => consume_char_or_lifetime(&chars, i, &mut code),
+            (c, _) => {
+                code.push(c);
+                i + 1
+            }
+        };
+    }
+    (code, strings)
+}
+
+fn skip_line_comment(chars: &[char], mut i: usize) -> usize {
+    while i < chars.len() && chars[i] != '\n' {
+        i += 1;
+    }
+    i
+}
+
+/// Rust block comments nest; a non-nesting skip would resume "code" too early.
+fn skip_block_comment(chars: &[char], mut i: usize) -> usize {
+    let mut depth = 1;
+    i += 2;
+    while i < chars.len() && depth > 0 {
+        match (chars[i], chars.get(i + 1).copied()) {
+            ('/', Some('*')) => {
+                depth += 1;
+                i += 2;
+            }
+            ('*', Some('/')) => {
+                depth -= 1;
+                i += 2;
+            }
+            _ => i += 1,
+        }
+    }
+    i
+}
+
+fn consume_string(chars: &[char], mut i: usize, strings: &mut String) -> usize {
+    i += 1;
+    while i < chars.len() {
+        match chars[i] {
+            '\\' => {
+                i += 2; // the escaped char cannot close the literal
+            }
+            '"' => return i + 1,
+            c => {
+                strings.push(c);
+                i += 1;
+            }
+        }
+    }
+    i
+}
+
+/// `r"..."` / `r#"..."#`: no escapes, closed by `"` plus the opening hashes.
+fn consume_raw_string(
+    chars: &[char],
+    start: usize,
+    strings: &mut String,
+    code: &mut String,
+) -> usize {
+    let mut i = start + 1;
+    let mut hashes = 0;
+    while chars.get(i) == Some(&'#') {
+        hashes += 1;
+        i += 1;
+    }
+    if chars.get(i) != Some(&'"') {
+        // `r` was an ordinary identifier character after all.
+        code.push('r');
+        return start + 1;
+    }
+    i += 1;
+    while i < chars.len() {
+        if chars[i] == '"' && (1..=hashes).all(|h| chars.get(i + h) == Some(&'#')) {
+            return i + 1 + hashes;
+        }
+        strings.push(chars[i]);
+        i += 1;
+    }
+    i
+}
+
+/// A `'` opens a char literal (`'x'`, `'\n'`) or a lifetime (`'a`). Telling
+/// them apart matters because `'"'` would otherwise open a phantom string.
+fn consume_char_or_lifetime(chars: &[char], i: usize, code: &mut String) -> usize {
+    match (chars.get(i + 1).copied(), chars.get(i + 2).copied()) {
+        (Some('\\'), _) => {
+            let mut j = i + 2;
+            while j < chars.len() && chars[j] != '\'' {
+                j += 1;
+            }
+            j + 1
+        }
+        (Some(_), Some('\'')) => i + 3,
+        _ => {
+            code.push('\'');
+            i + 1
+        }
+    }
+}
+
+/// Every Rust source that belongs to the migration facade or one of its
+/// descendants.
+fn migration_sources(src: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut sources = vec![src.join("migration.rs")];
+    collect_migration_sources(&src.join("migration"), &mut sources);
+    sources.sort();
+    sources
+}
+
+fn collect_migration_sources(dir: &std::path::Path, sources: &mut Vec<std::path::PathBuf>) {
+    for entry in std::fs::read_dir(dir).expect("read migration module") {
+        let entry = entry.expect("migration entry");
+        let path = entry.path();
+        if entry.metadata().expect("migration metadata").is_dir() {
+            collect_migration_sources(&path, sources);
+        } else if path.extension().and_then(std::ffi::OsStr::to_str) == Some("rs") {
+            sources.push(path);
+        }
+    }
+}
+
+/// No migration module beyond the verification path may page by `OFFSET`.
+///
+/// The walk is correct only below 100 000 facts and goes silently empty above
+/// it, so a rebuild that used it would drop the tail of any large store and
+/// report success. `scroll_page` is the supported route.
+///
+/// The owner list is explicit and the traversal is recursive: splitting this
+/// module cannot make a future migration source invisible to the guard.
+#[test]
+fn no_migration_module_beyond_verification_reaches_for_the_offset_walk() {
+    // Positive controls: the check must be able to fail, on each of the ways
+    // source code actually reaches the walk.
+    assert!(
+        uses_the_offset_walk("let facts = enumerate_page(&db, c, 10, 0);"),
+        "the guard must catch a call into the OFFSET walk"
+    );
+    assert!(
+        uses_the_offset_walk(
+            r#"let sql = format!("SELECT * FROM {c} ORDER BY id LIMIT {p} OFFSET {o}");"#
+        ),
+        "the guard must catch OFFSET inside an ordinary string literal"
+    );
+    assert!(
+        uses_the_offset_walk(r##"let sql = r#"LIMIT 10 OFFSET 20"#;"##),
+        "the guard must catch OFFSET inside a raw string literal"
+    );
+    // Negative controls: what the guard must NOT punish. The first two are the
+    // defect this matcher replaced — the raw-substring version reddened on a
+    // comment DOCUMENTING the danger, proven by injecting exactly this line
+    // into `migration/strategy.rs` (2026-08-05).
+    assert!(
+        !uses_the_offset_walk(
+            "// Note: the bounded OFFSET walk (enumerate_page) is not used here."
+        ),
+        "documenting the danger in a line comment must not trip the guard"
+    );
+    assert!(
+        !uses_the_offset_walk("/* enumerate_collection pages by OFFSET — see the owners */"),
+        "documenting the danger in a block comment must not trip the guard"
+    );
+    assert!(
+        !uses_the_offset_walk("const OFFSET_LIKE_IDENT: usize = 3;"),
+        "an identifier merely containing OFFSET is code, not a query"
+    );
+    assert!(
+        !uses_the_offset_walk(r#"let quote = '"'; // then a comment with OFFSET"#),
+        "a quote CHAR literal must not open a phantom string that swallows the line"
+    );
+    assert!(
+        !uses_the_offset_walk("let batch = scroll_page(&db, c, cursor, 1024)?;"),
+        "the guard must not fire on the cursor route"
+    );
+
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut scanned: Vec<String> = Vec::new();
+    for path in migration_sources(&src) {
+        let relative = path
+            .strip_prefix(&src)
+            .expect("migration source under src/")
+            .to_string_lossy()
+            .replace('\\', "/");
+        if OFFSET_WALK_OWNERS.contains(&relative.as_str()) {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).expect("read migration source");
+        assert!(
+            !uses_the_offset_walk(&text),
+            "{relative} reaches for the bounded OFFSET walk; a rebuild must page by \
+             cursor (`scroll_page`), which carries no 100 000-fact ceiling"
+        );
+        scanned.push(relative);
+    }
+    println!("  guard armed; migration modules scanned beyond the walk's owners: {scanned:?}");
+}

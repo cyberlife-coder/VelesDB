@@ -7,11 +7,11 @@ description: >
   repeated context, long logs, or accumulated conversation turns; when token
   costs need to drop measurably; or when the user says "compress my context",
   "optimize my prompt", "reduce token usage", "context is too big", or asks
-  why part of their context was dropped; or when a session should be
-  resumable later (save the working context at the end, load it back at the
-  start of the next one). Requires the velesdb-memory MCP server (tools:
-  compile_context, compile_transcript, context_savings, explain_compilation,
-  retrieve_context_source, save_working_context, load_working_context).
+  why part of their context was dropped. Requires the velesdb-memory MCP
+  server (tools: compile_context, compile_transcript, context_savings,
+  explain_compilation, retrieve_context_source). Making a session RESUMABLE is
+  a different job and belongs to the velesdb-memory skill, which owns the
+  working-context tools; this one hands a distilled context over to it.
 ---
 
 # VelesDB context optimizer
@@ -39,10 +39,16 @@ fragments first: `{query, token_budget, transcript}` (or `path`, same
 `path`, capped at 8 MiB). It deterministically segments the transcript into
 turns and sub-turns (fenced code stays atomic, log runs collapse, the system
 turn is cache-tagged automatically) and compiles the result exactly like
-`compile_context` — same `content`/`decisions`/`insights`/`risk`/`warnings`
-output, plus a `segmentation` audit report (`format_detected`, one entry per
-segment with turn/role/kind/byte range/`fragment_id`, `merged_segments`).
-Steps 4-10 below apply unchanged to its output. Force
+`compile_context`. **It returns two top-level keys, `{context, segmentation}` —
+not the compiled fields directly.** The `content`/`decisions`/`insights`/
+`risk`/`warnings`/`retrieval_handles` of `compile_context` all live one level
+down, under `context`; `segmentation` is the audit report beside it
+(`format_detected`, one entry per segment with turn/role/kind/byte
+range/`fragment_id`, `merged_segments`).
+Steps 4-10 below are written for a `compile_context` result, so when you
+apply them to a `compile_transcript` result read every one of those fields
+under `context` — `context.warnings`, `context.content`,
+`context.retrieval_handles`, `context.insights.tokens_saved`. Force
 `segmentation.format: "plain"` or `"jsonl"` when auto-detection would guess
 wrong (e.g. a transcript that happens to also parse as JSONL, or prose that
 cites `"User:"` and would otherwise falsely open a turn); a forced format
@@ -60,8 +66,8 @@ with steps 1-3.
 
 ## Oversized tool results — usually not your job
 
-A tool result that blew up (a 300 KB build log, a wide `grep`, a fetched
-page) is the single biggest source of context bloat, and it is worth
+A tool result that blew up (especially a 300 KB `Bash` build log) is the
+single biggest source of context bloat, and it is worth
 compressing *once*, at the moment it arrives — every later turn re-sends it
 otherwise. But you are usually not the one who should do it: the
 `PostToolUse` hook shipped in `integrations/agent-hooks/` compresses it
@@ -69,11 +75,12 @@ before it ever reaches you, using `velesdb-memory compile-stdin` (the
 store-free CLI form of this compiler) and replacing the tool result in
 place. When that hook is installed you will see results ending in a
 `--- velesdb: compiled N tokens down to M …` footer quoting the path of the
-untouched original — `Read` that path when the compiled view is not enough.
+complete original Bash output object serialized as JSON — `Read` that path
+when the compiled view is not enough.
 
 Compress a tool result *yourself* only when the hook is not installed, or
-when it deliberately skipped the tool (`Read`/`Edit` outputs are never
-compressed — the exact bytes are the point). In that case treat the output
+when it deliberately skipped the tool (only the documented `Bash` output
+shape is currently enabled). In that case treat the output
 as a transcript and call `compile_transcript` on it. Never re-compress
 something that already carries the footer above: it has been compiled once
 already, and compiling a compilation only loses fidelity.
@@ -187,40 +194,23 @@ tokens — `content`, `insights`, `risk`, `warnings`, `sources`, and
 `retrieval_handles` are unaffected, and the full audit trail is one
 re-compile away (deterministic, so nothing is actually lost).
 
-## Inter-session resumption (save at the end, load at the start)
+## A distilled context can outlive the prompt — see the memory skill
 
-Compression keeps one prompt small; `save_working_context` /
-`load_working_context` keep the *session itself* resumable:
+Compression keeps one prompt small. It does not make the *session* resumable,
+and the two are different mechanisms: the compiler is a pure function that
+keeps nothing, while a working context is a fact that is embedded and stored.
 
-- **At the START of a session**, call `load_working_context` with the
-  project and a stable session id (e.g. the conversation/task id). If it
-  returns a non-null `working`, a prior session left off here: adopt its
-  `goal`, re-assert `active_constraints`, trust `verified_facts` (re-fetch
-  `exact_evidence` handles with `retrieve_context_source` when you need the
-  bytes), and continue from `pending_actions` instead of re-deriving
-  everything. A `null` means a fresh start, not an error.
-- **At the END of a session** (or whenever the state changes meaningfully),
-  call `save_working_context` with the distilled state: `goal`,
-  `active_constraints`, `verified_facts` (with sources), `open_hypotheses`,
-  `decisions`, `exact_evidence`, `pending_actions`. Keep it small — this is
-  the hand-off note, not the transcript. Saving again under the same
-  project + session replaces the previous state (idempotent upsert).
+So when you have just distilled a context worth surviving the session — the
+goal, what is settled, what is next — hand it to the memory side rather than
+re-deriving it tomorrow. `save_working_context` is the handoff;
+`load_working_context` reads it back at the start of the next session, and
+neither is documented here: the **`velesdb-memory` skill** owns the
+working-context tools, the field shapes, and the discovery step that keeps an
+unknown session name from being mistaken for an absence of prior work.
 
-```json
-{"tool": "save_working_context", "arguments": {
-  "project": "veles", "session": "task-1234",
-  "working": {
-    "goal": "fix the failing canary deploy",
-    "active_constraints": [{"text": "never restart the primary during a rebalance"}],
-    "verified_facts": [{"text": "the canary fails only on arm64 runners"}],
-    "pending_actions": ["bisect the arm64-only failure", "re-run the canary"]
-  }
-}}
-```
-
-```json
-{"tool": "load_working_context", "arguments": {"project": "veles", "session": "task-1234"}}
-```
+One rule is worth repeating rather than looking up: **an empty load is not
+proof of a fresh start.** Ask the memory skill's discovery step before you
+conclude anything from it.
 
 ## Screenshots and images
 

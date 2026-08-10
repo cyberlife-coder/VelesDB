@@ -42,7 +42,7 @@
 #                            dimension differs from that store is rejected — see VELES-004)
 #   --ttl=SECONDS            Default TTL for new facts (default: prompted, empty = permanent)
 #   --yes                    Assume yes to interactive prompts (e.g. `ollama pull`)
-#   --skip-client=NAME       Skip wiring a client (repeatable): claude-code|claude-desktop|windsurf|devin
+#   --skip-client=NAME       Skip wiring a client (repeatable): claude-code|codex|claude-desktop|windsurf|devin
 #   --skip-ca-trust          Skip trusting the local CA in the login keychain
 #   --wire-only              Skip build/daemon setup: only (re-)verify CA trust and re-wire the
 #                            clients against an already-installed daemon (no prompts, fast)
@@ -109,6 +109,7 @@ WIRE_ONLY=0
 FROM_RELEASE=0
 FROM_RELEASE_TAG=""
 SKIP_CHECKSUM=0
+CODEX_WIRING_STATUS="not attempted"
 
 PLIST_LABEL="com.velesdb.memory"
 PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
@@ -579,6 +580,23 @@ setup_daemon() {
     TTL_PLIST_ENTRY="    <key>VELESDB_MEMORY_DEFAULT_TTL</key><string>$TTL</string>"
   fi
 
+  # Per-request observability (#1780). The deployed daemon logs by default —
+  # its stderr already lands in ~/Library/Logs/velesdb-memory/daemon.err.log,
+  # and a daemon that says nothing is undiagnosable (#1727 cost two wrong
+  # diagnoses that way). The default filter below is the payload-safe incident
+  # preset declared in crates/velesdb-memory/src/logging.rs
+  # (INCIDENT_PRESET — a crate test refuses drift between these two
+  # files): per-request events plus rmcp's session lifecycle, never request
+  # content. Export VELESDB_MEMORY_LOG before running this installer to pick
+  # another filter, or export it EMPTY to deploy a silent daemon — the same
+  # blank-means-silence contract the daemon itself applies to the variable
+  # (hence `-`, not `:-`: only an UNSET variable gets the default).
+  LOG_FILTER="${VELESDB_MEMORY_LOG-info,rmcp::service=error,rmcp::transport::worker=debug,rmcp::transport::streamable_http_server=debug}"
+  LOG_PLIST_ENTRY=""
+  if [ -n "${LOG_FILTER// /}" ]; then
+    LOG_PLIST_ENTRY="    <key>VELESDB_MEMORY_LOG</key><string>$LOG_FILTER</string>"
+  fi
+
   cat > "$PLIST_PATH" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -601,6 +619,7 @@ setup_daemon() {
     <key>VELESDB_MEMORY_OLLAMA_MODEL</key><string>$OLLAMA_MODEL</string>
 $EXTRACTOR_PLIST_ENTRY
 $TTL_PLIST_ENTRY
+$LOG_PLIST_ENTRY
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
@@ -784,6 +803,60 @@ wire_claude_code() {
   fi
 }
 
+# Codex 0.113 introduced a native Streamable HTTP MCP client which reacts to
+# an expired-session 404 by establishing a fresh session. Keep this path
+# native: putting mcp-remote in front would reintroduce the bridge whose
+# expired-session handling this installer is meant to avoid.
+wire_codex() {
+  if should_skip "codex"; then
+    CODEX_WIRING_STATUS="skipped (--skip-client)"
+    echo -e "${YELLOW}⏭  Skipping Codex (--skip-client).${NC}"
+    return 0
+  fi
+  if ! command -v codex >/dev/null 2>&1; then
+    CODEX_WIRING_STATUS="not wired (CLI not detected)"
+    echo -e "${YELLOW}⏭  'codex' CLI not found — skipping Codex wiring.${NC}"
+    return 0
+  fi
+
+  local version_output
+  if ! version_output="$(codex --version 2>&1)"; then
+    CODEX_WIRING_STATUS="not wired (version check failed)"
+    echo -e "${YELLOW}⚠️  Could not read the Codex version — leaving its MCP configuration untouched.${NC}"
+    return 0
+  fi
+  local major="" minor=""
+  if [[ "$version_output" =~ [Cc]odex(-cli)?[[:space:]]+v?([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+    major="${BASH_REMATCH[2]}"
+    minor="${BASH_REMATCH[3]}"
+  elif [[ "$version_output" =~ ^[[:space:]]*v?([0-9]+)\.([0-9]+)\.([0-9]+)[[:space:]]*$ ]]; then
+    major="${BASH_REMATCH[1]}"
+    minor="${BASH_REMATCH[2]}"
+  else
+    CODEX_WIRING_STATUS="not wired (unrecognized version)"
+    echo -e "${YELLOW}⚠️  Unrecognized Codex version ('$version_output') — native HTTP requires Codex 0.113 or newer; skipping safely.${NC}"
+    return 0
+  fi
+
+  if [ "$major" -eq 0 ] && [ "$minor" -lt 113 ]; then
+    CODEX_WIRING_STATUS="not wired (requires >= 0.113)"
+    echo -e "${YELLOW}⚠️  Codex $major.$minor is too old for reliable native HTTP session recovery (minimum 0.113) — skipping.${NC}"
+    return 0
+  fi
+
+  local url="https://127.0.0.1:$PORT/mcp"
+  # `codex mcp add` updates the named entry in place. Deliberately do NOT
+  # remove it first: if validation or the write fails, the user's existing
+  # configuration remains available.
+  if codex mcp add velesdb-memory --url "$url" >/dev/null 2>&1; then
+    CODEX_WIRING_STATUS="wired (native HTTP)"
+    echo -e "${GREEN}✅ Codex wired through native Streamable HTTP → $url${NC}"
+  else
+    CODEX_WIRING_STATUS="not wired (add failed)"
+    echo -e "${RED}❌ Failed to wire Codex; no existing velesdb-memory entry was removed first.${NC}"
+  fi
+}
+
 # wire_json_client NAME CONFIG_PATH JQ_FILTER REQUIRE_EXISTING_DIR [JQ_ARGS...]
 # REQUIRE_EXISTING_DIR=1 skips (rather than creating) the client's config
 # directory when absent — used for Claude Desktop and Devin, whose directories
@@ -859,33 +932,57 @@ wire_claude_desktop() {
   local ca_cert="$TLS_DIR/ca-cert.pem"
   local url="https://127.0.0.1:$PORT/mcp"
 
-  # Resolve the bridge command. A globally-installed mcp-remote wins (no npx
-  # startup cost); otherwise npx fetches/caches it on first launch. Absolute
-  # paths on purpose: Desktop launched from Finder/Dock inherits launchd's
-  # minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin), which contains neither
-  # Homebrew nor nvm — a bare "npx" there fails with ENOENT. Same reason the
-  # entry's env carries an explicit PATH: both mcp-remote and npx are
-  # `#!/usr/bin/env node` scripts, so node's directory must be reachable too.
+  # Always run the audited bridge version through npx. A globally installed
+  # `mcp-remote` has unknown version and transport defaults, so it is ignored.
+  # Absolute paths on purpose: Desktop launched from Finder/Dock inherits
+  # launchd's minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin), which contains
+  # neither Homebrew nor nvm — a bare "npx" there fails with ENOENT. The
+  # entry's env also carries an explicit PATH because npx is a
+  # `#!/usr/bin/env node` script.
   local bridge_cmd="" node_bin=""
-  local -a bridge_args=()
-  if command -v mcp-remote >/dev/null 2>&1; then
-    bridge_cmd="$(command -v mcp-remote)"
-    bridge_args=("$url")
-  elif command -v npx >/dev/null 2>&1; then
+  local -a bridge_args=("-y" "mcp-remote@0.1.38" "$url" "--transport" "http-only")
+  if command -v npx >/dev/null 2>&1; then
     bridge_cmd="$(command -v npx)"
-    bridge_args=("-y" "mcp-remote" "$url")
   fi
   node_bin="$(command -v node 2>/dev/null || true)"
 
   if [ -z "$bridge_cmd" ] || [ -z "$node_bin" ]; then
     echo ""
     echo -e "${YELLOW}⚠️  Claude Desktop needs a stdio→HTTPS bridge (mcp-remote), which needs Node.js —${NC}"
-    echo -e "${YELLOW}   'mcp-remote'/'npx'/'node' not found on PATH. Two ways to finish:${NC}"
+    echo -e "${YELLOW}   'npx'/'node' not found on PATH. Two ways to finish:${NC}"
     echo -e "${YELLOW}   a) install Node.js (e.g. \`brew install node\`) and re-run: $0 --wire-only${NC}"
     echo -e "${YELLOW}   b) or use Desktop's UI: Settings → Connectors → Add custom connector, paste:${NC}"
     echo "        $url"
     echo -e "${YELLOW}      (no API key needed — but this path requires the CA-trust step above to have${NC}"
     echo -e "${YELLOW}      succeeded, and Desktop's own TLS stack may still refuse a local CA).${NC}"
+    return 0
+  fi
+
+  local node_version node_major node_minor node_patch
+  if ! node_version="$("$node_bin" --version 2>&1)"; then
+    echo -e "${YELLOW}⚠️  Could not establish the Node.js version — leaving Claude Desktop untouched.${NC}"
+    echo -e "${YELLOW}   mcp-remote@0.1.38 currently requires Node.js >=20.18.1.${NC}"
+    return 0
+  fi
+  if [[ ! "$node_version" =~ ^v?([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+    echo -e "${YELLOW}⚠️  Could not establish the Node.js version — leaving Claude Desktop untouched.${NC}"
+    echo -e "${YELLOW}   mcp-remote@0.1.38 currently requires Node.js >=20.18.1.${NC}"
+    return 0
+  fi
+  node_major=$((10#${BASH_REMATCH[1]}))
+  node_minor=$((10#${BASH_REMATCH[2]}))
+  node_patch=$((10#${BASH_REMATCH[3]}))
+  if (( node_major < 20 \
+    || (node_major == 20 && node_minor < 18) \
+    || (node_major == 20 && node_minor == 18 && node_patch < 1) )); then
+    echo -e "${YELLOW}⚠️  Node.js $node_version is too old for mcp-remote@0.1.38 (minimum 20.18.1).${NC}"
+    echo -e "${YELLOW}   Upgrade Node.js and re-run $0 --wire-only; Claude Desktop was left untouched.${NC}"
+    return 0
+  fi
+
+  if [ "${NODE_TLS_REJECT_UNAUTHORIZED:-}" = "0" ]; then
+    echo -e "${RED}❌ Refusing to wire Claude Desktop while NODE_TLS_REJECT_UNAUTHORIZED=0 disables TLS verification.${NC}"
+    echo -e "${YELLOW}   Unset it and re-run $0 --wire-only; NODE_EXTRA_CA_CERTS is the supported trust path.${NC}"
     return 0
   fi
 
@@ -918,7 +1015,7 @@ wire_claude_desktop() {
     --arg path "$(dirname "$node_bin"):/usr/bin:/bin" \
     --args \
     '{command: $cmd, args: $ARGS.positional, env: {NODE_EXTRA_CA_CERTS: $ca, PATH: $path}}' \
-    "${bridge_args[@]}")"
+    -- "${bridge_args[@]}")"
 
   wire_json_client "claude-desktop" "$DESKTOP_CONFIG" \
     '.mcpServers["velesdb-memory"] = $entry' 1 \
@@ -953,6 +1050,9 @@ do_uninstall() {
 
   if command -v claude >/dev/null 2>&1; then
     claude mcp remove velesdb-memory -s user >/dev/null 2>&1 || true
+  fi
+  if command -v codex >/dev/null 2>&1; then
+    codex mcp remove velesdb-memory >/dev/null 2>&1 || true
   fi
 
   if command -v jq >/dev/null 2>&1; then
@@ -995,7 +1095,11 @@ print_summary() {
   else
     echo -e "  Daemon:    ${YELLOW}not started (non-macOS)${NC}"
   fi
-  for client in claude-code claude-desktop windsurf devin; do
+  for client in claude-code codex claude-desktop windsurf devin; do
+    if [ "$client" = "codex" ]; then
+      echo "  codex: $CODEX_WIRING_STATUS"
+      continue
+    fi
     if should_skip "$client"; then
       echo "  $client: skipped (--skip-client)"
     else
@@ -1026,6 +1130,7 @@ main() {
     fi
     trust_local_ca "$TLS_DIR/ca-cert.pem"
     wire_claude_code
+    wire_codex
     wire_claude_desktop
     wire_windsurf
     wire_devin
@@ -1046,6 +1151,7 @@ main() {
   fi
   setup_daemon
   wire_claude_code
+  wire_codex
   wire_claude_desktop
   wire_windsurf
   wire_devin

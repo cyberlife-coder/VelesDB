@@ -18,7 +18,6 @@ the full documentation map.
 | [Native HNSW](./NATIVE_HNSW.md) | VelesDB's custom native HNSW implementation |
 | [Error Codes](./ERROR_CODES.md) | Reference of VelesDB error codes |
 | [Known Limitations](./KNOWN_LIMITATIONS.md) | Internal technical limitations of VelesDB Core |
-| [Operations Runbook](./OPERATIONS_RUNBOOK.md) | Hybrid query engine operations runbook |
 
 ## Machine-readable contracts
 

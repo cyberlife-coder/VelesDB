@@ -2,10 +2,10 @@
 
 This guide will help you get VelesDB up and running in just a few minutes.
 
-> **5-minute onboarding (measured 2026-04-29)**
+> **5-minute onboarding (measured 2026-05-01)**
 >
 > The four supported install paths were timed in fresh Docker containers
-> against the published v1.13.7 packages. Median time from `<install
+> against the published v1.14.2 packages. Median time from `<install
 > command>` to first vector search result:
 >
 > | Path | Median | Worst case |
@@ -96,7 +96,7 @@ Expected response:
 ```json
 {
   "status": "ok",
-  "version": "4.2.0"
+  "version": "5.0.0"
 }
 ```
 
@@ -301,4 +301,4 @@ curl -X POST http://localhost:8080/query \
 - **GitHub Discussions**: Ask questions and share ideas
 
 ---
-Last updated: 2026-07-25 · Applies to: velesdb-core 4.2.0
+Last updated: 2026-08-08 · Applies to: velesdb-core 5.0.0

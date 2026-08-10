@@ -673,6 +673,19 @@ impl Collection {
                 index.index_from_payload(id, &payload);
             }
         }
+        // ONE aggregated line for the whole rebuild, not one per node: on a
+        // memory store every hashed u64 id exceeds u32::MAX, so the per-node
+        // form described the NOMINAL state 788 times per startup and buried
+        // the incident log #1780 exists to keep readable (#1834). Per-node
+        // detail stays available at DEBUG.
+        let skipped = index.unindexable_labeled();
+        if skipped > 0 {
+            tracing::warn!(
+                skipped,
+                "LabelIndex: {skipped} labeled node(s) exceed u32::MAX and are not \
+                 indexed — label lookups fall back to a full scan"
+            );
+        }
         index
     }
 

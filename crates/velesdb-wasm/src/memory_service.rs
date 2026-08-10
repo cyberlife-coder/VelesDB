@@ -22,8 +22,8 @@
 //! convention (which exists there to keep CPU work off Node's event loop —
 //! not a concern in a single-threaded WASM heap).
 //!
-//! Two methods available on the Node/Python bindings are deliberately absent
-//! here, both re-confirmed by issue #1547's audit:
+//! One method available on the Node/Python bindings is deliberately absent
+//! here, re-confirmed by issue #1547's audit:
 //!
 //! - `feedback` (RL Memory): [`MemoryService::feedback`] lives in the
 //!   `persistence`-gated `reinforce` module
@@ -33,10 +33,13 @@
 //!   it would mean enabling `persistence` for the `wasm32` target, pulling
 //!   in `NativeStore`/filesystem code this binding exists specifically to
 //!   avoid. Not a "missing binding"; an intentional architectural boundary.
-//! - `rememberExtracted`: it needs a generative model (`OllamaExtractor` is
-//!   the only [`velesdb_memory::extract::Extractor`] impl in the crate),
-//!   which would pull a network dependency into the WASM bundle by default.
-//!   A JS-provided extractor callback is a natural v2 addition.
+//!
+//! `rememberExtracted` used to be the second, on the grounds that
+//! `OllamaExtractor` was the crate's only [`velesdb_memory::extract::Extractor`]
+//! impl and would drag a network call into the bundle. That reason stopped
+//! being true when [`velesdb_memory::OutlineExtractor`] landed — deterministic
+//! and dependency-free — so the method is exposed here with that backend, and
+//! ollama refused by name (issue #1692).
 //!
 //! `compileTranscript` accepts only an inline `transcript` string, never the
 //! MCP tool's `path` field — this binding has no filesystem, so a `path`
@@ -47,13 +50,15 @@ use serde_json::Value;
 use wasm_bindgen::prelude::*;
 
 use velesdb_memory::context::{
-    suggest_token_budget, CompilePolicy, CompileRequest, ContextCompiler, SegmentationReport,
+    suggest_token_budget, CompilePolicy, CompileRequest, CompiledContext, ContextCompiler,
+    ContextDecision, ContextSavings, LoadedWorkingContext, SegmentationReport, SuggestedBudget,
     WorkingContext, WorkingContextSession,
 };
 use velesdb_memory::service::canonical_entity_name;
 use velesdb_memory::{
     ColumnFilter, ColumnOp, EntityProfile, EntityRelation, Explanation, FusionOptions,
-    HashEmbedder, MemoryEdge, MemoryError, MemoryNode, MemoryService, Metadata, Recollection,
+    HashEmbedder, MemoryEdge, MemoryError, MemoryNode, MemoryService, Metadata, OutlineExtractor,
+    Recollection,
 };
 
 use crate::memory_store::WasmStore;
@@ -304,9 +309,26 @@ struct UnrelateOut {
     removed: usize,
 }
 
-/// One typed edge leaving an entity (output of
+/// Outcome of [`WasmMemoryService::remember_extracted`]: the ids stored, and
+/// how many facts were dropped for exceeding the embeddable cap.
+///
+/// An envelope rather than a bare id array, because a shorter list is
+/// otherwise indistinguishable from a passage that simply held fewer facts —
+/// a silence about lost data.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RememberedExtractionOut {
+    ids: Vec<String>,
+    skipped_over_cap: usize,
+}
+
+/// One typed edge touching an entity (output of
 /// [`WasmMemoryService::entity`]). `targetId` crosses as a decimal string
 /// for the same reason every other id here does.
+///
+/// Which end `targetId`/`target` name depends on the list it came from: in
+/// `relations` it is the far end the edge points AT, in `relationsIn` it is
+/// the far end the edge comes FROM.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct EntityRelationOut {
@@ -330,13 +352,34 @@ impl From<EntityRelation> for EntityRelationOut {
 /// attributes yet" from "nothing has ever mentioned this name"; on a miss
 /// the other fields carry their empty values and `name` still echoes the
 /// canonicalized query, so several lookups can be told apart.
+///
+/// `rename_all` is a no-op on the five single-word fields that predate
+/// `relationsIn` — it is here so the one multi-word field crosses in the same
+/// case as `EntityRelationOut::targetId` sitting inside it, instead of a
+/// snake_case key next to a camelCase one in the very same object.
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct EntityProfileOut {
     found: bool,
     id: String,
     name: String,
     attributes: Value,
+    /// Typed edges leaving this entity (bipartite scaffolding excluded).
     relations: Vec<EntityRelationOut>,
+    /// Typed edges pointing AT this entity (bipartite scaffolding excluded).
+    /// Here each edge's `targetId`/`target` name the far end it comes FROM.
+    ///
+    /// Without these, a question is only answerable from one side: the graph
+    /// holds `camille --sister of--> theo`, so asking what Theo's outgoing
+    /// edges say never finds Camille.
+    relations_in: Vec<EntityRelationOut>,
+    /// Whether `relations` is a PARTIAL view — true when a response budget
+    /// cut the outgoing side. A list holding exactly the cap is otherwise
+    /// indistinguishable from a cut one (#1820).
+    relations_truncated: bool,
+    /// Whether `relationsIn` is a PARTIAL view — the incoming mirror of
+    /// `relationsTruncated`.
+    relations_in_truncated: bool,
 }
 
 impl EntityProfileOut {
@@ -351,6 +394,9 @@ impl EntityProfileOut {
                 name: canonical_entity_name(queried),
                 attributes: Value::Object(serde_json::Map::new()),
                 relations: Vec::new(),
+                relations_in: Vec::new(),
+                relations_truncated: false,
+                relations_in_truncated: false,
             };
         };
         Self {
@@ -363,6 +409,13 @@ impl EntityProfileOut {
                 .into_iter()
                 .map(EntityRelationOut::from)
                 .collect(),
+            relations_in: profile
+                .relations_in
+                .into_iter()
+                .map(EntityRelationOut::from)
+                .collect(),
+            relations_truncated: profile.relations_truncated,
+            relations_in_truncated: profile.relations_in_truncated,
         }
     }
 }
@@ -371,6 +424,9 @@ impl EntityProfileOut {
 struct ExplanationOut {
     nodes: Vec<MemoryNodeOut>,
     edges: Vec<MemoryEdgeOut>,
+    /// Whether a width budget cut the walk — a subgraph sitting exactly at
+    /// a cap is otherwise indistinguishable from a complete one (#1820).
+    truncated: bool,
 }
 
 impl From<Explanation> for ExplanationOut {
@@ -378,6 +434,7 @@ impl From<Explanation> for ExplanationOut {
         Self {
             nodes: e.nodes.into_iter().map(MemoryNodeOut::from).collect(),
             edges: e.edges.into_iter().map(MemoryEdgeOut::from).collect(),
+            truncated: e.truncated,
         }
     }
 }
@@ -456,7 +513,10 @@ impl WasmMemoryService {
     /// Store a fact; resolves to its decimal-string id. `links` is an array
     /// of `{target, relation}` edges to existing memories; `metadata` is an
     /// optional plain object; `ttlSeconds` makes the fact expire after that
-    /// many seconds (omit, or `0`, for a permanent memory).
+    /// many seconds. Omit it for a permanent memory, including when re-storing
+    /// a fact that already had an expiry — only what this call supplies is
+    /// applied. An explicit `0` is REFUSED, because a caller writing `0` means
+    /// "expire now", not "never".
     #[wasm_bindgen(js_name = remember)]
     pub fn remember(
         &self,
@@ -505,6 +565,12 @@ impl WasmMemoryService {
 
     /// Fused vector + `ColumnStore` recall: like [`Self::recall`] but
     /// `filters` support ranges/comparisons (`gt`, `le`, …).
+    ///
+    /// Returns your own stored facts ONLY: entity hubs and the context compiler's
+    /// artefacts (stored sources, compilation events, working contexts and
+    /// their index) are internal scaffolding and never come back, whatever the
+    /// predicate — including a `ne` one, which matches facts lacking the field
+    /// entirely.
     #[wasm_bindgen(js_name = recallWhere)]
     pub fn recall_where(
         &self,
@@ -624,8 +690,10 @@ impl WasmMemoryService {
     }
 
     /// Explain a decision: the best-matching memory plus its connected
-    /// subgraph. Resolves to `{nodes, edges}`. `maxHops` (default 2) is
-    /// capped at 10.
+    /// subgraph. Resolves to `{nodes, edges, truncated}` — `truncated` is
+    /// `true` when a width budget cut the walk, since a subgraph sitting
+    /// exactly at a cap is otherwise indistinguishable from a complete one.
+    /// `maxHops` (default 2) is capped at 10.
     #[wasm_bindgen(js_name = why)]
     pub fn why(
         &self,
@@ -653,24 +721,71 @@ impl WasmMemoryService {
     /// the graph carries would be unreachable.
     ///
     /// `name` is matched case-insensitively (the id is content-addressed, so
-    /// it is stable). Returns `{found, id, name, attributes, relations}`,
-    /// each relation `{predicate, targetId, target}`. `found: false` means
-    /// nothing has ever mentioned that name; `name` still echoes the query
-    /// canonicalized, so several lookups can be told apart.
+    /// it is stable). Returns
+    /// `{found, id, name, attributes, relations, relationsIn,
+    /// relationsTruncated, relationsInTruncated}`, each edge
+    /// `{predicate, targetId, target}`. `found: false` means nothing has ever
+    /// mentioned that name; `name` still echoes the query canonicalized, so
+    /// several lookups can be told apart. The two `*Truncated` booleans say
+    /// when a response budget cut the matching side — a list holding exactly
+    /// the cap is otherwise indistinguishable from a cut one.
     ///
-    /// **Read side of a graph this binding cannot yet write.** Entity hubs
-    /// are created exclusively by extraction (`remember_extracted`, or a
-    /// `remember` on a service carrying an autograph extractor), and this
-    /// binding deliberately exposes neither — extraction needs a generative
-    /// model (see the module docs). So today `entity` here answers
-    /// `found: false` for every name, and it exists so the read side is
-    /// already correct and uniform with Node/Python the day the documented
-    /// JS-provided extractor callback lands. It never lies: a miss is
-    /// reported as a miss.
+    /// `relations` are the typed edges LEAVING the entity, `relationsIn`
+    /// those pointing AT it — each naming, in `targetId`/`target`, the far
+    /// end it comes FROM. Without the second list a question is only
+    /// answerable from one side: the graph holds
+    /// `camille --sister of--> theo`, so reading Theo's outgoing edges never
+    /// finds Camille.
+    ///
+    /// Entity hubs are created exclusively by extraction, so this answered
+    /// `found: false` for every name until `rememberExtracted` landed on this
+    /// binding alongside it.
     #[wasm_bindgen(js_name = entity)]
     pub fn entity(&self, name: &str) -> Result<JsValue, JsValue> {
         let profile = self.inner.entity_profile(name).map_err(to_js_err)?;
         to_js(&EntityProfileOut::from_lookup(name, profile))
+    }
+
+    /// Extract atomic facts from `text` and wire the entity graph they state,
+    /// with no manual `relate()`. Resolves to
+    /// `{ids, skippedOverCap}` — the stored ids as decimal strings, and how
+    /// many facts were dropped for exceeding the embeddable cap.
+    ///
+    /// `extractor` names the backend, defaulting to `"outline"` — the
+    /// deterministic, network-free one, which reads the structure the passage
+    /// STATES instead of inferring it (one directive per line: `edge:`,
+    /// `attr:`, `fact:`, see
+    /// [`velesdb_memory::OutlineExtractor`]). `"ollama"` is deliberately
+    /// absent here and refused by name rather than silently ignored: it is a
+    /// network call, and keeping it out of the bundle is the reason this
+    /// binding exists.
+    ///
+    /// This is the WRITE side of `entity`. Entity hubs are born only of
+    /// extraction, so before this method the read side answered `found:
+    /// false` for every name on this binding.
+    #[wasm_bindgen(js_name = rememberExtracted)]
+    pub fn remember_extracted(
+        &self,
+        text: &str,
+        metadata: JsValue,
+        extractor: Option<String>,
+    ) -> Result<JsValue, JsValue> {
+        let kind = extractor.unwrap_or_else(|| "outline".to_owned());
+        if kind != "outline" {
+            return Err(invalid_input(format!(
+                "unknown extractor '{kind}' (this binding offers 'outline' only: a generative \
+                 backend would put a network call in the WASM bundle)"
+            )));
+        }
+        let metadata = to_metadata(metadata)?;
+        let outcome = self
+            .inner
+            .remember_extracted(text, &OutlineExtractor, metadata.as_ref())
+            .map_err(to_js_err)?;
+        to_js(&RememberedExtractionOut {
+            ids: outcome.ids.into_iter().map(id_to_string).collect(),
+            skipped_over_cap: outcome.skipped_over_cap,
+        })
     }
 
     /// Compile context fragments into a token-budgeted, provenance-audited
@@ -689,7 +804,11 @@ impl WasmMemoryService {
         parse_fragment_id_strings(&mut request)?;
         let request: CompileRequest = serde_json::from_value(request)
             .map_err(|e| invalid_input(format!("invalid compile request: {e}")))?;
-        let compiled = self
+        // Annotated, not inferred: this binding relays the SERVER'S own
+        // `CompiledContext` untouched, and naming the type is what makes that
+        // checkable — `tests/binding_parity_bdd.rs` reads it to know the
+        // shape cannot lose a field, now or when the type grows one.
+        let compiled: CompiledContext = self
             .inner
             .compile_context(&ContextCompiler::new(CompilePolicy::default()), &request)
             .map_err(to_js_err)?;
@@ -746,7 +865,9 @@ impl WasmMemoryService {
     /// events live only in this session's [`WasmStore`].
     #[wasm_bindgen(js_name = contextSavings)]
     pub fn context_savings(&self, project: Option<String>) -> Result<JsValue, JsValue> {
-        let savings = self
+        // Type annotated for the same reason as `compile_context`: the
+        // relayed shape is the server's own `ContextSavings`.
+        let savings: ContextSavings = self
             .inner
             .context_savings(project.as_deref())
             .map_err(to_js_err)?;
@@ -778,7 +899,9 @@ impl WasmMemoryService {
         let request: CompileRequest = serde_json::from_value(request)
             .map_err(|e| invalid_input(format!("invalid compile request: {e}")))?;
         let fragment_id = parse_id(fragment_id)?;
-        let decision = self
+        // Type annotated for the same reason as `compile_context`: the
+        // relayed shape is the server's own `ContextDecision`.
+        let decision: ContextDecision = self
             .inner
             .explain_compilation(&request, fragment_id, fragment_index)
             .map_err(to_js_err)?;
@@ -802,7 +925,10 @@ impl WasmMemoryService {
         target_model: &str,
         reserve_tokens: Option<u64>,
     ) -> Result<JsValue, JsValue> {
-        let budget = suggest_token_budget(target_model, reserve_tokens.unwrap_or(0));
+        // Type annotated for the same reason as `compile_context`: the
+        // relayed shape is the server's own `SuggestedBudget`.
+        let budget: SuggestedBudget =
+            suggest_token_budget(target_model, reserve_tokens.unwrap_or(0));
         to_js(&budget)
     }
 
@@ -869,28 +995,42 @@ impl WasmMemoryService {
             .map_err(to_js_err)
     }
 
-    /// The working context previously saved under `project` + `session` —
-    /// `null` in JS when there is none, the start-of-session mirror of
-    /// [`Self::save_working_context`] (#1517, option 2).
+    /// The resumption envelope for `project` + `session` — the
+    /// start-of-session mirror of [`Self::save_working_context`] (#1517,
+    /// option 2), same shape as the MCP `load_working_context` tool:
+    /// `{found, working, other_sessions}`.
+    ///
+    /// **BREAKING (0.12.0)**: this used to resolve the bare working context
+    /// (or `null`), which collapsed two different answers into one — a
+    /// project that never saved anything, and a typo in `session` that
+    /// missed a session which does exist. `other_sessions` is what tells
+    /// them apart, and it is filled in on a HIT too: a typo landing on
+    /// another REAL session returns `found: true`, the case a caller can
+    /// least detect on its own. Read `.working` for the previous return
+    /// value.
     ///
     /// **In-memory semantics**: see [`Self::save_working_context`]'s doc
     /// comment — this only ever resolves what THIS session's [`WasmStore`]
     /// still holds; nothing persists across a page reload.
     #[wasm_bindgen(js_name = loadWorkingContext)]
     pub fn load_working_context(&self, project: &str, session: &str) -> Result<JsValue, JsValue> {
-        let loaded = self
+        // Annotated, not inferred: `binding_parity_bdd` reads this type name
+        // to prove the binding relays the SERVER's own envelope rather than a
+        // shape it recomposed by hand — and the compiler makes that proof
+        // real. The doc comment above describes the envelope; only this
+        // enforces it.
+        let loaded: LoadedWorkingContext = self
             .inner
-            .load_working_context(project, session)
+            .resume_working_context(project, session)
             .map_err(to_js_err)?;
-        match loaded {
-            Some(working) => {
-                let mut value = serde_json::to_value(&working)
-                    .map_err(|e| structured_js_error(CODE_INTERNAL, &format!("serialize: {e}")))?;
-                stringify_id_fields(&mut value);
-                to_js(&value)
-            }
-            None => Ok(JsValue::NULL),
-        }
+        let mut value = serde_json::to_value(&loaded)
+            .map_err(|e| structured_js_error(CODE_INTERNAL, &format!("serialize: {e}")))?;
+        // Applied at the ROOT of the envelope, not to `working` alone: the
+        // walk descends by KEY NAME, so it still reaches
+        // `working.decisions[].fragment_id` and
+        // `working.exact_evidence[].fragment_id` one level deeper.
+        stringify_id_fields(&mut value);
+        to_js(&value)
     }
 
     /// Every session ever saved under `project`'s working-context index,

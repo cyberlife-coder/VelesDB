@@ -3,7 +3,7 @@
 //! `unrelate` / `forget` / `why` / `entity` / `feedback` / `rememberExtracted` / `compileContext` /
 //! `compileTranscript` / `contextSavings` / `explainCompilation` /
 //! `retrieveContextSource` / `saveWorkingContext` / `loadWorkingContext` /
-//! `listWorkingContexts` / `suggestBudget`.
+//! `listWorkingContexts` / `suggestBudget` / `memoryStatus` / `listMemories`.
 //!
 //! It wraps the exact same hardened Rust the MCP server and the `PyO3` binding use
 //! (no logic is reimplemented), mirroring `crates/velesdb-python/src/agent_memory_service.rs`
@@ -48,16 +48,17 @@ use napi::bindgen_prelude::AsyncTask;
 use napi_derive::napi;
 use serde_json::Value;
 use velesdb_memory::context::{
-    suggest_token_budget, CompilePolicy, CompileRequest, ContextCompiler, WorkingContext,
+    suggest_token_budget, CompilePolicy, CompileRequest, ContextCompiler, LoadedWorkingContext,
+    WorkingContext,
 };
 use velesdb_memory::{
-    DynEmbedder, HashEmbedder, MemoryService, OllamaEmbedder, OllamaExtractor, DEFAULT_DIMENSION,
-    DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL,
+    DynEmbedder, Embedder, HashEmbedder, MemoryService, OllamaEmbedder, OllamaExtractor,
+    OutlineExtractor, DEFAULT_DIMENSION, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL,
 };
 
 use crate::dto::{
     ColumnFilterJs, CompiledContextJs, DatedRecallJs, EntityProfileJs, ExplanationJs,
-    FusionOptionsJs, LinkJs, RecollectionJs, UnrelateJs,
+    FusionOptionsJs, LinkJs, RecollectionJs, RememberedExtractionJs, UnrelateJs,
 };
 use crate::error::{invalid_input, to_napi_err, CODE_INTERNAL};
 use crate::tasks::{Job, JsonOut};
@@ -94,6 +95,14 @@ fn build_embedder(
 #[napi(js_name = "MemoryService")]
 pub struct MemoryStore {
     inner: Arc<MemoryService<DynEmbedder>>,
+    /// The embedder identity resolved at [`Self::open`] — what
+    /// [`Self::memory_status`] reports as RUNNING. The service itself only
+    /// ever sees `&[f32]`, so the factory is the one place that knows.
+    embedder_model: String,
+    embedder_dimension: usize,
+    /// Where the store lives, for the provenance block of
+    /// [`Self::memory_status`] (#1751's on-disk record).
+    store_dir: std::path::PathBuf,
 }
 
 #[napi]
@@ -115,10 +124,20 @@ impl MemoryStore {
         ollama_model: Option<String>,
     ) -> napi::Result<Self> {
         let kind = embedder.as_deref().unwrap_or("hash");
+        let embedder_model = match kind {
+            "hash" => "hash".to_owned(),
+            _ => ollama_model
+                .clone()
+                .unwrap_or_else(|| DEFAULT_OLLAMA_MODEL.to_owned()),
+        };
         let emb = build_embedder(kind, ollama_url, ollama_model)?;
+        let embedder_dimension = emb.dimension();
         let svc = MemoryService::open(&path, emb).map_err(to_napi_err)?;
         Ok(Self {
             inner: Arc::new(svc),
+            embedder_model,
+            embedder_dimension,
+            store_dir: std::path::PathBuf::from(path),
         })
     }
 
@@ -131,8 +150,10 @@ impl MemoryStore {
     /// Store a fact; resolves to its decimal-string id. `links` are
     /// `{target, relation}` edges to existing memories; `metadata` is an optional
     /// object for later filtering. `ttlSeconds` makes the fact expire after that
-    /// many seconds (a durable TTL that survives restarts); omit it (or `0`) for
-    /// a permanent memory.
+    /// many seconds (a durable TTL that survives restarts); omit it for a
+    /// permanent memory, including when re-storing a fact that already had an
+    /// expiry — only what this call supplies is applied. An explicit `0` is
+    /// REFUSED, because a caller writing `0` means "expire now", not "never".
     #[napi(ts_return_type = "Promise<string>")]
     pub fn remember(
         &self,
@@ -175,6 +196,12 @@ impl MemoryStore {
     /// Fused vector + `ColumnStore` recall: like [`recall`](Self::recall) but the
     /// `filters` support ranges/comparisons (`gt`, `le`, …), so temporal/numeric
     /// facets become queryable. Mirrors the `PyO3` `recall_where` surface.
+    ///
+    /// Returns your own stored facts ONLY: entity hubs and the context compiler's
+    /// artefacts (stored sources, compilation events, working contexts and
+    /// their index) are internal scaffolding and never come back, whatever
+    /// the predicate — including a `ne` one, which matches facts lacking the
+    /// field entirely.
     #[napi(
         js_name = "recallWhere",
         ts_return_type = "Promise<Array<RecollectionJs>>"
@@ -324,7 +351,10 @@ impl MemoryStore {
     }
 
     /// Explain a decision: the best-matching memory plus its connected subgraph.
-    /// Resolves to `{nodes, edges}`. `maxHops` (default 2) is capped at 10.
+    /// Resolves to `{nodes, edges, truncated}` — `truncated` is `true` when a
+    /// width budget cut the walk, since a subgraph sitting exactly at a cap is
+    /// otherwise indistinguishable from a complete one. `maxHops` (default 2)
+    /// is capped at 10.
     #[napi(ts_return_type = "Promise<ExplanationJs>")]
     pub fn why(
         &self,
@@ -344,16 +374,28 @@ impl MemoryStore {
 
     /// Look up everything the memory graph knows about a NAMED ENTITY (a
     /// person, a place, an organisation): the attributes merged onto its hub
-    /// and the typed edges leaving it. Use it for a question ABOUT a thing
-    /// ("how old is X", "who is X's father") rather than about the sentences
-    /// mentioning it, which is all [`recall`](Self::recall) can return —
-    /// entity hubs are deliberately invisible to recall, so without this the
-    /// attributes `rememberExtracted` builds are unreachable.
+    /// and the typed edges touching it, in BOTH directions. Use it for a
+    /// question ABOUT a thing ("how old is X", "who is X's father") rather
+    /// than about the sentences mentioning it, which is all
+    /// [`recall`](Self::recall) can return — entity hubs are deliberately
+    /// invisible to recall, so without this the attributes
+    /// `rememberExtracted` builds are unreachable.
     ///
     /// `name` is matched case-insensitively (the id is content-addressed, so
     /// it is stable across sessions). Resolves to `{found, id, name,
-    /// attributes, relations}`; `found: false` means nothing has ever
+    /// attributes, relations, relationsIn, relationsTruncated,
+    /// relationsInTruncated}`; `found: false` means nothing has ever
     /// mentioned that name, and `name` still echoes the canonicalized query.
+    /// The two `*Truncated` booleans say when a response budget cut the
+    /// matching side — a list holding exactly the cap is otherwise
+    /// indistinguishable from a cut one.
+    ///
+    /// `relations` are the typed edges LEAVING the entity, `relationsIn`
+    /// those pointing AT it — each naming, in `targetId`/`target`, the far
+    /// end it comes FROM. Without the second list a question is only
+    /// answerable from one side: the graph holds
+    /// `camille --sister of--> theo`, so reading Theo's outgoing edges never
+    /// finds Camille.
     #[napi(ts_return_type = "Promise<EntityProfileJs>")]
     pub fn entity(&self, name: String) -> AsyncTask<Job<EntityProfileJs>> {
         let svc = Arc::clone(&self.inner);
@@ -499,12 +541,23 @@ impl MemoryStore {
         }))
     }
 
-    /// The working context previously saved under `project` + `session`,
-    /// `null` when there is none — the start-of-session mirror of
-    /// [`Self::save_working_context`].
+    /// The resumption envelope for `project` + `session` — the
+    /// start-of-session mirror of [`Self::save_working_context`], same shape
+    /// as the MCP `load_working_context` tool: `{found, working,
+    /// other_sessions}`.
+    ///
+    /// **BREAKING (0.12.0)**: this used to resolve the bare working context
+    /// (or `null`), which collapsed two different answers into one — a
+    /// project that never saved anything, and a typo in `session` that
+    /// missed a session which does exist. `other_sessions` is what tells
+    /// them apart, and it is filled in on a HIT too: a typo landing on
+    /// another REAL session returns `found: true`, the case a caller can
+    /// least detect on its own. Read `.working` for the previous return
+    /// value. Pure delegation to [`velesdb_memory`]'s bridge — the envelope
+    /// is composed by `resume_working_context`, zero logic in the binding.
     #[napi(
         js_name = "loadWorkingContext",
-        ts_return_type = "Promise<object | null>"
+        ts_return_type = "Promise<{ found: boolean; working: object | null; other_sessions: Array<string> }>"
     )]
     pub fn load_working_context(
         &self,
@@ -513,19 +566,22 @@ impl MemoryStore {
     ) -> AsyncTask<Job<JsonOut>> {
         let svc = Arc::clone(&self.inner);
         AsyncTask::new(Job::new(move || {
-            let loaded = svc
-                .load_working_context(&project, &session)
+            // Annotated, not inferred: `binding_parity_bdd` reads this type
+            // name to prove the binding relays the SERVER's own envelope
+            // rather than a shape it recomposed by hand — and the compiler
+            // makes that proof real. A doc comment describing `{found,
+            // working, other_sessions}` proves nothing; this does.
+            let loaded: LoadedWorkingContext = svc
+                .resume_working_context(&project, &session)
                 .map_err(to_napi_err)?;
-            match loaded {
-                Some(working) => {
-                    let mut value = serde_json::to_value(working).map_err(|err| {
-                        invalid_input(format!("working context serialization: {err}"))
-                    })?;
-                    convert::stringify_id_fields(&mut value);
-                    Ok(JsonOut(value))
-                }
-                None => Ok(JsonOut(Value::Null)),
-            }
+            let mut value = serde_json::to_value(loaded)
+                .map_err(|err| invalid_input(format!("working context serialization: {err}")))?;
+            // Applied at the ROOT of the envelope, not to `working` alone:
+            // the walk descends by KEY NAME, so it still reaches
+            // `working.decisions[].fragment_id` and
+            // `working.exact_evidence[].fragment_id` one level deeper.
+            convert::stringify_id_fields(&mut value);
+            Ok(JsonOut(value))
         }))
     }
 
@@ -629,34 +685,165 @@ impl MemoryStore {
         }))
     }
 
-    /// Extract atomic facts from raw `text` with a local Ollama `model` and store
-    /// them, auto-building the fact↔topic graph. Resolves to the stored ids.
+    /// Extract atomic facts from raw `text` and store them, auto-building the
+    /// entity graph they state. Resolves to `{ids, skippedOverCap}`.
+    ///
+    /// `extractor` names the backend, defaulting to `"ollama"`:
+    ///
+    /// - `"ollama"` calls the local generative `model` (required for this
+    ///   backend) at `url`, and reads structure out of prose.
+    /// - `"outline"` is deterministic and network-free: it reads the
+    ///   structure the passage STATES, one directive per line (`edge:`,
+    ///   `attr:`, `fact:`), and ignores `model`/`url`. Same relationship as
+    ///   the `"hash"` embedder has to `"ollama"` on
+    ///   [`open`](Self::open) — an offline, reproducible choice, so the whole
+    ///   contract of this method is reachable without a model running.
+    ///
+    /// This used to resolve to a bare `Array<string>` of ids, and that array
+    /// The server's health, in the SAME envelope the MCP `memory_status`
+    /// tool returns: which embedder RUNS (`embedder.semantic: false` is the
+    /// offline `hash` default — recall matches surface form, not meaning),
+    /// what the store was FILLED by per its on-disk provenance record
+    /// (#1751), the extraction wiring (this binding passes its extractor
+    /// per `rememberExtracted` call, so nothing is pre-attached and the
+    /// autograph fields report the service's actual state), and the corpus
+    /// size — `memory.edges: 0` is the observable "`why()` has nothing to
+    /// walk" state.
+    #[napi(
+        js_name = "memoryStatus",
+        ts_return_type = "Promise<{ embedder: { model: string | null; dimension: number | null; semantic: boolean | null }; provenance: { recorded: boolean; model: string | null; dimension: number | null }; extraction: { configured: boolean; autograph_active: boolean; autograph_dropped: number }; memory: { facts: number; edges: number | null } }>"
+    )]
+    pub fn memory_status(&self) -> AsyncTask<Job<JsonOut>> {
+        let svc = Arc::clone(&self.inner);
+        let model = self.embedder_model.clone();
+        let dimension = self.embedder_dimension;
+        let store_dir = self.store_dir.clone();
+        AsyncTask::new(Job::new(move || {
+            let recorded = velesdb_memory::embedding_provenance::read(&store_dir)
+                .ok()
+                .flatten();
+            let provenance = match recorded {
+                Some(record) => serde_json::json!({
+                    "recorded": true, "model": record.model, "dimension": record.dimension
+                }),
+                None => serde_json::json!({
+                    "recorded": false, "model": null, "dimension": null
+                }),
+            };
+            Ok(JsonOut(serde_json::json!({
+                "embedder": {
+                    "model": model,
+                    "dimension": dimension,
+                    "semantic": model != "hash",
+                },
+                "provenance": provenance,
+                "extraction": {
+                    "configured": svc.has_autograph(),
+                    "autograph_active": svc.autograph_queue_open(),
+                    "autograph_dropped": svc.autograph_dropped(),
+                },
+                "memory": {
+                    "facts": svc.fact_count(),
+                    "edges": svc.edge_count(),
+                },
+            })))
+        }))
+    }
+
+    /// Audit the store page by page — the SAME walk and envelope as the MCP
+    /// `list_memories` tool: ids ascending, TTL-expired facts skipped,
+    /// metadata under recall's visibility rule unless `includeInternal`.
+    /// `cursor` is the previous page's `next_cursor` (a decimal string);
+    /// `null` ends the walk. A `filter` page may come back sparse — keep
+    /// following the cursor, the walk stays exhaustive.
+    #[napi(
+        js_name = "listMemories",
+        ts_return_type = "Promise<{ memories: Array<{ id: string; content: string; metadata: object | null }>; next_cursor: string | null }>"
+    )]
+    pub fn list_memories(
+        &self,
+        cursor: Option<String>,
+        limit: Option<u32>,
+        filter: Option<Value>,
+        include_internal: Option<bool>,
+    ) -> AsyncTask<Job<JsonOut>> {
+        let svc = Arc::clone(&self.inner);
+        AsyncTask::new(Job::new(move || {
+            let cursor = match cursor {
+                Some(raw) => Some(raw.trim().parse::<u64>().map_err(|_| {
+                    invalid_input(format!("cursor must be a decimal u64 string, got '{raw}'"))
+                })?),
+                None => None,
+            };
+            let filter = convert::to_metadata(filter)?;
+            let (memories, next) = svc
+                .list(
+                    cursor,
+                    limit.unwrap_or(50) as usize,
+                    filter.as_ref(),
+                    include_internal.unwrap_or(false),
+                )
+                .map_err(to_napi_err)?;
+            let entries: Vec<serde_json::Value> = memories
+                .into_iter()
+                .map(|memory| {
+                    serde_json::json!({
+                        "id": memory.id.to_string(),
+                        "content": memory.content,
+                        "metadata": memory.metadata,
+                    })
+                })
+                .collect();
+            Ok(JsonOut(serde_json::json!({
+                "memories": entries,
+                "next_cursor": next.map(|id| id.to_string()),
+            })))
+        }))
+    }
+
+    /// could not say why it was short: nothing distinguished a passage that
+    /// held three facts from one that held twelve of which nine were dropped
+    /// for exceeding the embeddable cap. The envelope is the breaking change
+    /// that ends that silence (issue #1692).
     #[napi(
         js_name = "rememberExtracted",
-        ts_return_type = "Promise<Array<string>>"
+        ts_return_type = "Promise<RememberedExtractionJs>"
     )]
     pub fn remember_extracted(
         &self,
         text: String,
-        model: String,
+        model: Option<String>,
         url: Option<String>,
         metadata: Option<Value>,
-    ) -> AsyncTask<Job<Vec<String>>> {
+        extractor: Option<String>,
+    ) -> AsyncTask<Job<RememberedExtractionJs>> {
         let svc = Arc::clone(&self.inner);
         AsyncTask::new(Job::new(move || {
             guards::check_fact(&text)?;
             let metadata = convert::to_metadata(metadata)?;
-            let url = url.unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_owned());
-            let extractor = OllamaExtractor::new(url, model);
-            // The binding's return stays an id array (its published N-API
-            // shape); the skip count the service now reports has no slot
-            // here yet — an over-cap fact is simply absent from the ids,
-            // exactly as before this call could distinguish the two.
-            let ids = svc
-                .remember_extracted(&text, &extractor, metadata.as_ref())
-                .map_err(to_napi_err)?
-                .ids;
-            Ok(ids.into_iter().map(convert::id_to_string).collect())
+            let outcome = match extractor.as_deref().unwrap_or("ollama") {
+                "outline" => svc.remember_extracted(&text, &OutlineExtractor, metadata.as_ref()),
+                "ollama" => {
+                    let model = model.ok_or_else(|| {
+                        invalid_input(
+                            "the 'ollama' extractor needs a `model` (or pass \
+                                       extractor: 'outline' for the offline backend)",
+                        )
+                    })?;
+                    let url = url.unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_owned());
+                    svc.remember_extracted(
+                        &text,
+                        &OllamaExtractor::new(url, model),
+                        metadata.as_ref(),
+                    )
+                }
+                other => {
+                    return Err(invalid_input(format!(
+                        "unknown extractor '{other}' (expected 'ollama' or 'outline')"
+                    )))
+                }
+            };
+            Ok(RememberedExtractionJs::from(outcome.map_err(to_napi_err)?))
         }))
     }
 }

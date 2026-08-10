@@ -4,12 +4,16 @@
 
 | Version | Supported |
 |---------|-----------|
-| 3.12.x  | Yes       |
-| 3.11.x  | Security fixes only |
-| 3.10.x  | Security fixes only |
-| < 3.10  | No        |
+| 4.3.x   | Yes       |
+| 4.2.x   | Security fixes only |
+| 4.1.x   | Security fixes only |
+| < 4.1   | No        |
 
 > VelesDB ships weekly; this table is updated at every minor release. The latest minor always receives full support, and the two previous minors receive security fixes.
+>
+> `velesdb-memory` (the MCP memory server) follows its own release line,
+> decoupled from the engine's: only its **latest published release** is
+> supported.
 
 ## Reporting a Vulnerability
 
@@ -19,7 +23,11 @@ If you discover a security vulnerability in VelesDB, please report it responsibl
 
 ### How to Report
 
-Send an email to **security@wiscale.fr** with:
+Send an email to **contact@wiscale.fr** with a subject line starting with
+**`[SECURITY][VelesDB]`** — this exact marker is what routes your report to
+security triage; a report without it may sit unread in a general inbox.
+
+Include:
 
 1. A description of the vulnerability
 2. Steps to reproduce (proof of concept if possible)
@@ -43,11 +51,15 @@ The following components are in scope:
 |-----------|----------------|
 | Core engine | `crates/velesdb-core/` |
 | HTTP server | `crates/velesdb-server/` |
+| MCP memory server (incl. its HTTP daemon) | `crates/velesdb-memory/` |
+| Embedding migration tool | `crates/velesdb-migrate/` |
 | Python bindings | `crates/velesdb-python/` |
+| Node.js bindings | `crates/velesdb-node/` |
 | WASM bindings | `crates/velesdb-wasm/` |
 | Mobile bindings | `crates/velesdb-mobile/` |
 | CLI | `crates/velesdb-cli/` |
 | TypeScript SDK | `sdks/typescript/` |
+| Tauri plugin | `crates/tauri-plugin-velesdb/` |
 
 ### What Qualifies as a Vulnerability
 

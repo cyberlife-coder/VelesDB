@@ -55,6 +55,25 @@ def is_cfg_test_gate(stripped: str) -> bool:
     return re.search(r"\btest\b", without_strings) is not None
 
 
+def is_doc_fence_marker(stripped: str) -> bool:
+    """True if a `///` line opens/closes a rustdoc example fence.
+
+    A genuine fence marker has the triple backtick as the first thing after
+    the `///` prefix (optionally followed by a language tag, e.g.
+    `/// ```rust`). A ``` occurring elsewhere on the line is prose, not a
+    fence — e.g. an inline code span that double-backtick-escapes a literal
+    triple backtick, as in `` `` ``` `` `` (segment.rs:112, chunk.rs:87),
+    used when a doc comment needs to talk *about* fence syntax without
+    opening one. The old substring check (`"```" in stripped`) toggled on
+    that occurrence and, finding no closing fence for the rest of the file,
+    stayed stuck open — silently exempting every remaining line (including
+    unrelated functions) from the unwrap/expect scan.
+    """
+    if not stripped.startswith("///"):
+        return False
+    return stripped[3:].lstrip().startswith("```")
+
+
 def is_production_file(path: Path) -> bool:
     name = path.name
     if name.endswith("_tests.rs") or name.endswith("_test.rs"):
@@ -63,6 +82,16 @@ def is_production_file(path: Path) -> bool:
     if "/tests/" in norm or "/benches/" in norm:
         return False
     return True
+
+
+def braces_outside_strings(stripped: str) -> int:
+    """Net brace depth of a line, ignoring braces inside string literals and
+    behind a `//` comment. Coarse (a line-based scanner cannot be more), but
+    the error mode is benign: a miscount extends or shortens the SKIPPED
+    region, and the skipped region is test code."""
+    masked = re.sub(r'"(?:[^"\\]|\\.)*"', '""', stripped)
+    masked = masked.split("//", 1)[0]
+    return masked.count("{") - masked.count("}")
 
 
 def scan_file(path: Path) -> list[tuple[int, str]]:
@@ -76,18 +105,19 @@ def scan_file(path: Path) -> list[tuple[int, str]]:
     in_block_comment = False
     in_doc_example = False
     in_cfg_test = False
+    # Skip-the-block state for #[cfg(test)]-gated items. The old code did
+    # `break` on the first marker instead (#1700): production code AFTER a
+    # test module was never read — 33 914 lines across 51 files — and the
+    # break sat BEFORE comment tracking, so a marker merely QUOTED in a
+    # /* */ comment blinded the whole file.
+    awaiting_gated_item = False
+    gated_depth = 0
 
     for line_no, line in enumerate(lines, start=1):
         stripped = line.strip()
 
-        # Stop scanning once we reach a test module gate (bare #[cfg(test)] or
-        # a composite like #[cfg(all(test, feature = "..."))]). Test modules
-        # live at the end of a file by convention, so everything after is test
-        # code.
-        if is_cfg_test_gate(stripped):
-            break
-
-        # Track block comments
+        # Track block comments FIRST: a #[cfg(test)] spelled inside /* */ is
+        # prose, not a gate.
         if in_block_comment:
             if "*/" in stripped:
                 in_block_comment = False
@@ -96,12 +126,39 @@ def scan_file(path: Path) -> list[tuple[int, str]]:
             in_block_comment = True
             continue
 
+        # Inside a #[cfg(test)]-gated item: follow braces to its end, then
+        # resume scanning. Everything after the item is read again.
+        if gated_depth > 0:
+            gated_depth += braces_outside_strings(stripped)
+            continue
+        if awaiting_gated_item:
+            # Attribute stack between the gate and its item.
+            if stripped.startswith("#["):
+                continue
+            masked = re.sub(r'"(?:[^"\\]|\\.)*"', '""', stripped).split("//", 1)[0]
+            depth = masked.count("{") - masked.count("}")
+            if depth > 0:
+                awaiting_gated_item = False
+                gated_depth = depth
+            elif "{" in masked or stripped.endswith(";"):
+                # The whole item on one line (`mod t { ... }`), or a gated
+                # item with no body (`mod tests;`, a gated `use`): this line
+                # IS the item, nothing more to skip.
+                awaiting_gated_item = False
+            continue
+
+        # A test gate (bare #[cfg(test)] or composite like
+        # #[cfg(all(test, feature = "..."))]) skips ITS item, not the rest
+        # of the file.
+        if is_cfg_test_gate(stripped):
+            awaiting_gated_item = True
+            continue
+
         # Skip single-line comments
         if stripped.startswith("//"):
             # Track doc example fences
-            if stripped.startswith("///"):
-                if "```" in stripped:
-                    in_doc_example = not in_doc_example
+            if is_doc_fence_marker(stripped):
+                in_doc_example = not in_doc_example
             continue
 
         # Skip lines inside doc examples
@@ -124,10 +181,24 @@ def scan_file(path: Path) -> list[tuple[int, str]]:
     return violations
 
 
-def main() -> int:
+def main(argv: "list[str] | None" = None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[1])
+    parser.add_argument(
+        "--root",
+        default=".",
+        help="directory holding the crates/ tree to scan (default: cwd). "
+        "What makes the guard's refusal provable as a PROCESS: a refusal "
+        "vector materialises a tree and hands it over (#1715).",
+    )
+    args = parser.parse_args(argv)
+    root = Path(args.root)
+
     all_violations: list[str] = []
 
     for scan_dir in SCAN_DIRS:
+        scan_dir = root / scan_dir
         if not scan_dir.exists():
             continue
         for path in sorted(scan_dir.rglob("*.rs")):

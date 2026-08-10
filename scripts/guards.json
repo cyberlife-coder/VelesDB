@@ -1,0 +1,741 @@
+{
+  "_purpose": [
+    "The declared set of repository guards. Before this file existed, the set was",
+    "implicit in the YAML text of .github/workflows/ and in GitHub's branch",
+    "protection settings, and the two were never confronted: removing a guard's",
+    "`run:` line from ci.yml turned nothing red (issue #1702), and a guard that",
+    "runs in a workflow nobody requires is decorative at merge time (#1698).",
+    "",
+    "scripts/tests/test_ci_gate_reachability.py confronts this file with the",
+    "workflows AND with the filesystem. The filesystem half is what makes the",
+    "registry impossible to shrink silently: every guard-shaped script under",
+    "scripts/ must appear here, either under `guards` or under `unwired` with a",
+    "written reason. Deleting an entry does not remove the obligation — the script",
+    "is still on disk, so the suite demands an accounting for it."
+  ],
+  "_schema": {
+    "script": "repo-relative path, the identity of the guard — the workflow itself when the guard is inline steps (see `inline_steps`)",
+    "inline_steps": "present when the guard is written as steps inside `workflow` rather than as a script under scripts/: the exact `- name:` of each step that must exist in `job`. The wiring test then reads those steps instead of hunting for a `run:` line naming a script. Without it, the three checks of pr-governance.yml — Git Flow, branch freshness, AI attribution — were real guards that the declared set simply did not mention.",
+    "workflow": "the workflow file whose job invokes it",
+    "job": "the job key inside that workflow",
+    "required": "true when a failure of `job` must fail the single required check (CI Success)",
+    "mode": "strict = a finding fails the build; warn = it does not (see exit_condition)",
+    "exit_condition": "mandatory when mode is warn: what has to happen for it to become strict",
+    "self_test": "unittest module that proves the guard refuses; null when none exists",
+    "self_test_required": "true when that module runs inside a required job",
+    "blind_spot": "known limit of the guard's reach, with the issue tracking it",
+    "required_via": "when the guard lives outside ci.yml: the ci.yml job that calls its workflow, and through which it becomes required",
+    "must_refuse": "executable refusal vectors, run by scripts/tests/test_guard_refusal_vectors.py: each materialises `files` under a temp dir, invokes the guard with `argv` (`{root}` is substituted), and demands exit 1 — then demands exit 0 on `accepts`, the same tree repaired. Exit 1 and not merely non-zero: a guard that crashes exits 2, and a crash is not a refusal.",
+    "refusal_untested": "mandatory when a strict, required guard declares no `must_refuse`: why no vector exists yet, and the issue tracking it. A guard nobody has seen refuse is the defect of this campaign; this field keeps that visible instead of absent.",
+    "repo": "optional inside a must_refuse vector: turns the materialised tree into a git work tree and tracks the paths it names, keyed like the trees (`files`, `accepts`). For guards that ask git rather than the filesystem — is this path tracked, who authored this commit — where a plain temp directory erases the very distinction they exist to make. Two further keys, both optional and both keyed like the trees: `author` (`Name <email>`) and `message`. Without them a guard that reads WHO authored a commit could not be handed two trees differing in the only field it looks at; they default to the harness identity, so vectors written before they existed are unchanged.",
+    "subguards": "for a guard exposing a `--guard <name>` selector: every selector that must actually be invoked in `job`. Without it, a script cited once for another selector satisfies the wiring test, and a sub-guard can be dropped from CI while the registry keeps announcing it — measured, that disarm stayed green.",
+    "not_a_gate": "scripts a workflow runs that CANNOT refuse — no non-zero exit path. Surfaced by the reverse sweep (workflows -> registry) and kept out of `guards` so the registry never overstates what it covers. The `reason` is mandatory and the no-failure-path claim is verified against the source."
+  },
+  "_json_not_yaml": [
+    "gate-contracts.yml runs these suites with a bare actions/setup-python and",
+    "installs nothing, so importing PyYAML here would be an ImportError in CI — a",
+    "guard that cannot run. json is stdlib everywhere. Same reasoning that keeps",
+    "the workflow parsers in test_ci_gate_reachability.py regex-based."
+  ],
+  "guards": [
+    {
+      "script": "scripts/check_prod_unwraps.py",
+      "purpose": "No .unwrap()/.expect() in production code (QUALITY_BAR Gate 3).",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "lint",
+      "required": true,
+      "mode": "strict",
+      "self_test": "scripts.tests.test_check_prod_unwraps",
+      "self_test_required": true,
+      "blind_spot": {
+        "issue": null,
+        "summary": "None known. #1700 is closed: a #[cfg(test)] gate now skips ITS item by following braces instead of stopping the file, and block-comment tracking runs first so a marker quoted in /* */ no longer blinds it. Measured after the fix: the 33 914 formerly unread lines contain zero production unwrap/expect."
+      },
+      "must_refuse": [
+        {
+          "vector": "a production unwrap AFTER a #[cfg(test)] module — the 33 914-line blindness of #1700",
+          "files": {
+            "crates/velesdb-core/src/lib.rs": "#[cfg(test)]\nmod tests {\n    fn t() { x.unwrap(); }\n}\npub fn prod() { y.unwrap(); }\n"
+          },
+          "accepts": {
+            "crates/velesdb-core/src/lib.rs": "#[cfg(test)]\nmod tests {\n    fn t() { x.unwrap(); }\n}\npub fn prod() { y.unwrap_or_default(); }\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        },
+        {
+          "vector": "a marker merely QUOTED in a /* */ comment must not blind the file",
+          "files": {
+            "crates/velesdb-core/src/lib.rs": "/*\n * #[cfg(test)]\n */\npub fn prod() { y.unwrap(); }\n"
+          },
+          "accepts": {
+            "crates/velesdb-core/src/lib.rs": "/*\n * #[cfg(test)]\n */\npub fn prod() { y.unwrap_or_default(); }\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        }
+      ]
+    },
+    {
+      "script": "scripts/verify_unsafe_safety_template.py",
+      "purpose": "Every unsafe block carries a // SAFETY: comment (Gate 4).",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "lint",
+      "required": true,
+      "mode": "strict",
+      "self_test": null,
+      "self_test_required": false,
+      "must_refuse": [
+        {
+          "vector": "an unsafe block with no SAFETY comment in front of it",
+          "files": {
+            "src/lib.rs": "pub fn write(target: *mut u8) {\n    unsafe {\n        *target = 1;\n    }\n}\n"
+          },
+          "accepts": {
+            "src/lib.rs": "pub fn write(target: *mut u8) {\n    // SAFETY: the caller upholds the invariants below.\n    // - `target` is non-null, aligned and valid for one byte of writes\n    // - no other reference aliases `target` for the duration of this call\n    // Reason: the caller owns the allocation and cannot express that in the type.\n    unsafe {\n        *target = 1;\n    }\n}\n"
+          },
+          "argv": [
+            "--files",
+            "{root}/src/lib.rs"
+          ]
+        }
+      ],
+      "blind_spot": {
+        "issue": null,
+        "summary": "Runs only on production .rs files changed by the PR, so it never re-reads unsafe blocks that predate it."
+      }
+    },
+    {
+      "script": "scripts/check-todo-annotations.py",
+      "purpose": "TODO/FIXME/HACK follow the // TODO(EPIC-XXX): governance format.",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "lint",
+      "required": true,
+      "mode": "strict",
+      "self_test": null,
+      "self_test_required": false,
+      "must_refuse": [
+        {
+          "vector": "a TODO carrying no EPIC/US tag and no issue number",
+          "files": {
+            "src/lib.rs": "// TODO: rewrite this once the index lands\npub fn f() {}\n"
+          },
+          "accepts": {
+            "src/lib.rs": "// TODO(EPIC-042): rewrite this once the index lands\npub fn f() {}\n"
+          },
+          "argv": [
+            "--files",
+            "{root}/src/lib.rs"
+          ]
+        },
+        {
+          "vector": "a FIXME carrying no tag — the verb changes, the obligation does not",
+          "files": {
+            "src/lib.rs": "// FIXME: the cast overflows above 2^53\npub fn f() {}\n"
+          },
+          "accepts": {
+            "src/lib.rs": "// FIXME(#1468): the cast overflows above 2^53\npub fn f() {}\n"
+          },
+          "argv": [
+            "--files",
+            "{root}/src/lib.rs"
+          ]
+        }
+      ],
+      "blind_spot": {
+        "issue": null,
+        "summary": "Diff-scoped to changed velesdb-core production files, like the unsafe guard."
+      }
+    },
+    {
+      "script": "scripts/check-version-sync.py",
+      "purpose": "Version equality across policed manifests (REL-07), at PR time.",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "lint",
+      "required": true,
+      "mode": "strict",
+      "self_test": "scripts.tests.test_check_version_sync",
+      "self_test_required": true,
+      "blind_spot": {
+        "issue": null,
+        "summary": "None known. Its self-test is reached by gate-contracts.yml's `unittest discover`, which the fold made required through the `gate-contracts` caller job."
+      },
+      "must_refuse": [
+        {
+          "vector": "a manifest stamped 9.9.9 against a 1.0.0 workspace — the drift this guard exists for",
+          "files": {
+            "Cargo.toml": "[workspace.package]\nversion = \"1.0.0\"\n\n[workspace.dependencies]\nvelesdb-core = { path = \"crates/velesdb-core\", version = \"1.0.0\" }\n",
+            "crates/velesdb-memory/Cargo.toml": "version = \"1.0.0\"\n",
+            "crates/velesdb-python/pyproject.toml": "[project]\nversion = \"9.9.9\"\n"
+          },
+          "accepts": {
+            "Cargo.toml": "[workspace.package]\nversion = \"1.0.0\"\n\n[workspace.dependencies]\nvelesdb-core = { path = \"crates/velesdb-core\", version = \"1.0.0\" }\n",
+            "crates/velesdb-memory/Cargo.toml": "version = \"1.0.0\"\n",
+            "crates/velesdb-python/pyproject.toml": "[project]\nversion = \"1.0.0\"\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        }
+      ]
+    },
+    {
+      "script": "scripts/check-feature-claims.py",
+      "purpose": "Documented feature claims match real exports.",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "lint",
+      "required": true,
+      "mode": "strict",
+      "self_test": "scripts.tests.test_check_feature_claims",
+      "self_test_required": true,
+      "blind_spot": {
+        "issue": null,
+        "summary": "Breaks (reports column_store MISSING) if any string literal in velesdb-python/src uses a backslash line-continuation."
+      },
+      "must_refuse": [
+        {
+          "vector": "a roadmap entry still marked in-progress, which the audit must not let a README present as shipped",
+          "files": {
+            "ROADMAP.md": "## EPIC-010 Agent Memory SDK — in progress\n"
+          },
+          "accepts": {
+            "ROADMAP.md": "## EPIC-010 Agent Memory SDK — delivered\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        }
+      ]
+    },
+    {
+      "script": "scripts/check-perf-claims.py",
+      "purpose": "Performance numbers stay consistent across documents.",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "lint",
+      "required": true,
+      "mode": "strict",
+      "self_test": "scripts.tests.test_check_perf_claims",
+      "self_test_required": true,
+      "blind_spot": {
+        "issue": null,
+        "summary": "Can reach exit 1 again (#1701 closed): the grouping key no longer contains its own value, so two documents claiming different numbers for one benchmark collide and are compared. Measured limit, not a defect: this repository's corpus yields ZERO comparable groups, so a green run here says nothing about the guard — which is exactly why its refusal is proven below on a corpus of its own. The Criterion front stays out of the exit code by design."
+      },
+      "must_refuse": [
+        {
+          "vector": "two documents claiming 38.6 us and 120.0 us for the same benchmark",
+          "files": {
+            "README.md": "## HNSW Search\n\n| Benchmark | Latency |\n|---|---|\n| **HNSW search k=10** | 38.6 µs |\n",
+            "docs/BENCHMARKS.md": "## HNSW Search\n\n| Benchmark | Latency |\n|---|---|\n| **HNSW search k=10** | 120.0 µs |\n"
+          },
+          "accepts": {
+            "README.md": "## HNSW Search\n\n| Benchmark | Latency |\n|---|---|\n| **HNSW search k=10** | 38.6 µs |\n",
+            "docs/BENCHMARKS.md": "## HNSW Search\n\n| Benchmark | Latency |\n|---|---|\n| **HNSW search k=10** | 39.0 µs |\n"
+          },
+          "argv": [
+            "--no-criterion",
+            "--root",
+            "{root}"
+          ]
+        }
+      ]
+    },
+    {
+      "script": "scripts/check-mcp-doc-contract.py",
+      "purpose": "Documented MCP return shapes match the published outputSchema.",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "mcp-doc-contract",
+      "required": true,
+      "mode": "strict",
+      "self_test": "scripts.tests.test_check_mcp_doc_contract",
+      "self_test_required": true,
+      "blind_spot": {
+        "issue": 1695,
+        "summary": "POLICED_TOOLS holds 14 of the 20 published tools, and SURFACE_GLOBS still misses the Python and WASM binding sources. The six left out — compile_context, entity, recall, remember, remember_extracted, why — are named in the module header with what blocks them: each is waiting on the nested-shape treatment (#1695 lots 2-3), because they carry literals the guard would report as drift that are really a sibling's shape, an input schema, an MCP client config file or another API's dict — entity alone has twelve, six of them LangChain dictionaries. They go in by batches, each batch verified by a mutation that must make the guard refuse."
+      },
+      "refusal_untested": "Takes --root, and the REFUSED half is cheap. The blocker is the ACCEPTED control, and it is structural: _structural_failures short-circuits before any drift check unless every pinned surface of every policed tool is present AND carries a declaration the attribution rule credits to that tool. With the registry at fourteen tools that is 17 distinct files, one of which (docs/reference/MCP_TOOLS.md) must carry fourteen correct declarations at once. The cost scales with the registry, so a fixture written for this batch has to be rewritten at the next one — the same argument that deferred it from the attribution rule, now transposed to the registry. Refusal IS proven meanwhile, three ways: ModeTests drives main(['--root', ...]) to exit 1 and back to 0; the synthetic suite pins every rule RED-first; and RealRepositoryTests runs the shipped registry against this tree. What is missing is only the subprocess vector over the SHIPPED registry. Tracked by #1715.",
+      "subguards": [
+        "return-shape"
+      ]
+    },
+    {
+      "script": "scripts/check-skill-private-references.py",
+      "purpose": "No versioned skill points at something only the private repository holds.",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "mcp-doc-contract",
+      "required": true,
+      "mode": "strict",
+      "self_test": "scripts.tests.test_check_skill_private_references",
+      "self_test_required": true,
+      "must_refuse": [
+        {
+          "vector": "a versioned skill sending the reader to a standard held in the closed repository",
+          "files": {
+            "skills/demo/SKILL.md": "# Demo\n\nBefore declaring premium coverage done, cross-check the axes.\n"
+          },
+          "accepts": {
+            "skills/demo/SKILL.md": "# Demo\n\nBefore declaring coverage done, cross-check the axes.\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        },
+        {
+          "vector": "the bundled npm copy naming the private repository — that copy is the one that leaves the machine",
+          "files": {
+            "crates/velesdb-node/skills/demo/SKILL.md": "# Demo\n\nSee velesdb-private for the enforcing policy.\n"
+          },
+          "accepts": {
+            "crates/velesdb-node/skills/demo/SKILL.md": "# Demo\n\nSee the architecture reference for the boundary.\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        },
+        {
+          "vector": "a tree holding no versioned skill at all — deleting skills/ is the cheapest way to retire this guard while leaving it in the workflow",
+          "files": {
+            "docs/README.md": "nothing to scan here\n"
+          },
+          "accepts": {
+            "docs/README.md": "nothing to scan here\n",
+            "skills/demo/SKILL.md": "# Demo\n\nUse recall before proposing an approach.\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        }
+      ],
+      "blind_spot": {
+        "issue": null,
+        "summary": "Reads the two declared markers and nothing else. It does NOT catch a bare issue or pull-request number belonging to the closed repository: the learning-loop skill arrived citing one three times, and no property of the text separates it from the public `#1455` and `#1473` two other skills cite usefully — a guess would either block those or catch nothing. That half was closed by rewriting the passages, not by this guard. Scope is the skill directories only, by design: docs/CORE_PREMIUM_SPLIT.md documents the split on purpose."
+      }
+    },
+    {
+      "script": "scripts/check-doc-contract.sh",
+      "purpose": "Every runtime route of the server is documented in the root README.",
+      "workflow": ".github/workflows/doc-contract.yml",
+      "job": "contract",
+      "required": true,
+      "mode": "strict",
+      "self_test": null,
+      "self_test_required": false,
+      "blind_spot": {
+        "issue": null,
+        "summary": "None known. #1707 is closed: the four routes (/collections/{name}/compact, points/raw, stream/enable, vacuum) are now documented in README.md, and DOC_CONTRACT_MODE's default flipped to strict in the same commit, so a full-sweep finding fails the build like the pinned routes always did."
+      },
+      "must_refuse": [
+        {
+          "vector": "a route added under the server crate without a matching README backtick entry — the four-route gap of #1707",
+          "files": {
+            "crates/velesdb-server/src/routes.rs": "pub fn build_router() {\n    Router::new()\n        .route(\"/query/explain\", post(explain))\n        .route(\"/aggregate\", post(aggregate))\n        .route(\"/collections/{name}/vacuum\", post(vacuum_collection));\n}\n",
+            "README.md": "# Test fixture\n\nAPI: `/query/explain`, `/aggregate`\n"
+          },
+          "accepts": {
+            "crates/velesdb-server/src/routes.rs": "pub fn build_router() {\n    Router::new()\n        .route(\"/query/explain\", post(explain))\n        .route(\"/aggregate\", post(aggregate))\n        .route(\"/collections/{name}/vacuum\", post(vacuum_collection));\n}\n",
+            "README.md": "# Test fixture\n\nAPI: `/query/explain`, `/aggregate`, `/collections/{name}/vacuum`\n"
+          },
+          "argv": []
+        }
+      ],
+      "required_via": "doc-contract"
+    },
+    {
+      "script": "scripts/check-doc-freshness.py",
+      "purpose": "Doc stamps, index, version references, the tracked-contract rule and the decisions index stay honest (five guards).",
+      "workflow": ".github/workflows/doc-contract.yml",
+      "job": "freshness",
+      "required": true,
+      "mode": "strict",
+      "self_test": "scripts.tests.test_check_doc_freshness",
+      "self_test_required": true,
+      "blind_spot": {
+        "issue": null,
+        "summary": "None known. The `index` guard ran in warn mode over eleven root docs a comment called unreachable; measured, all eleven are linked and strict exits 0, so the comment had kept a working guard disarmed. All four guards are strict from here. `tracked` reads git, not the filesystem: a path that exists and a path a clone receives are not the same path. `decisions` sweeps docs/decisions/ only, non-recursively: a subdirectory is another index's business. Three limits it does not reach: docs/decisions/README.md is itself required by nothing, since `index` only sweeps the root of docs/; an index listing nothing, in a directory holding only that index, passes vacuously; and a listed file that exists but is untracked is `tracked`'s jurisdiction, not this one's."
+      },
+      "required_via": "doc-contract",
+      "must_refuse": [
+        {
+          "vector": "an entry document designating a file that exists but is NOT tracked — the shape that hid CLAUDE.md, AGENTS.md and CORE_PREMIUM_SPLIT.md behind .git/info/exclude",
+          "files": {
+            "AGENTS.md": "# Entry\n\nRead the [boundary contract](docs/BOUNDARY.md) before any change.\n",
+            "docs/BOUNDARY.md": "# Boundary\n\nvelesdb-core must never reference any premium crate.\n"
+          },
+          "accepts": {
+            "AGENTS.md": "# Entry\n\nRead the [boundary contract](docs/BOUNDARY.md) before any change.\n",
+            "docs/BOUNDARY.md": "# Boundary\n\nvelesdb-core must never reference any premium crate.\n"
+          },
+          "repo": {
+            "files": [
+              "AGENTS.md"
+            ],
+            "accepts": [
+              "AGENTS.md",
+              "docs/BOUNDARY.md"
+            ]
+          },
+          "argv": [
+            "--guard",
+            "tracked",
+            "--mode",
+            "strict",
+            "--root",
+            "{root}"
+          ]
+        },
+        {
+          "vector": "a decision file present in docs/decisions/ that the index does not list — the orphan `index` cannot see, because it only sweeps the root of docs/",
+          "files": {
+            "docs/README.md": "# Docs\n\n- [Decisions](./decisions/README.md)\n",
+            "docs/decisions/README.md": "# Decisions\n\nOne decision per file. Back to the [docs index](../README.md).\n\n| Decision | Summary |\n|----------|---------|\n| [Storage engine](./storage-engine.md) | why the LSM tree |\n",
+            "docs/decisions/storage-engine.md": "# Storage engine\n\nStatus: accepted\n",
+            "docs/decisions/wal-fsync-policy.md": "# WAL fsync policy\n\nStatus: accepted\n"
+          },
+          "accepts": {
+            "docs/README.md": "# Docs\n\n- [Decisions](./decisions/README.md)\n",
+            "docs/decisions/README.md": "# Decisions\n\nOne decision per file. Back to the [docs index](../README.md).\n\n| Decision | Summary |\n|----------|---------|\n| [Storage engine](./storage-engine.md) | why the LSM tree |\n| [WAL fsync policy](./wal-fsync-policy.md) | why fsync on commit |\n",
+            "docs/decisions/storage-engine.md": "# Storage engine\n\nStatus: accepted\n",
+            "docs/decisions/wal-fsync-policy.md": "# WAL fsync policy\n\nStatus: accepted\n"
+          },
+          "argv": [
+            "--guard",
+            "decisions",
+            "--mode",
+            "strict",
+            "--root",
+            "{root}"
+          ]
+        },
+        {
+          "vector": "the decisions index listing a file that does not exist — the dead link `index` structurally cannot catch, since it only checks doc-to-index and never index-to-doc",
+          "files": {
+            "docs/README.md": "# Docs\n\n- [Decisions](./decisions/README.md)\n",
+            "docs/decisions/README.md": "# Decisions\n\nOne decision per file. Back to the [docs index](../README.md).\n\n| Decision | Summary |\n|----------|---------|\n| [Storage engine](./storage-engine.md) | why the LSM tree |\n| [WAL fsync policy](./wal-fsync-policy.md) | why fsync on commit |\n",
+            "docs/decisions/storage-engine.md": "# Storage engine\n\nStatus: accepted\n"
+          },
+          "accepts": {
+            "docs/README.md": "# Docs\n\n- [Decisions](./decisions/README.md)\n",
+            "docs/decisions/README.md": "# Decisions\n\nOne decision per file. Back to the [docs index](../README.md).\n\n| Decision | Summary |\n|----------|---------|\n| [Storage engine](./storage-engine.md) | why the LSM tree |\n| [WAL fsync policy](./wal-fsync-policy.md) | why fsync on commit |\n",
+            "docs/decisions/storage-engine.md": "# Storage engine\n\nStatus: accepted\n",
+            "docs/decisions/wal-fsync-policy.md": "# WAL fsync policy\n\nStatus: accepted\n"
+          },
+          "argv": [
+            "--guard",
+            "decisions",
+            "--mode",
+            "strict",
+            "--root",
+            "{root}"
+          ]
+        }
+      ],
+      "subguards": [
+        "stamp",
+        "index",
+        "versions",
+        "tracked",
+        "decisions"
+      ]
+    },
+    {
+      "script": "scripts/check-promise-contract.py",
+      "purpose": "The promise-contract registry stays valid.",
+      "workflow": ".github/workflows/promise-contract.yml",
+      "job": "contract",
+      "required": true,
+      "mode": "strict",
+      "self_test": "scripts.tests.test_check_promise_contract",
+      "self_test_required": true,
+      "blind_spot": {
+        "issue": null,
+        "summary": "None known. Folded into CI Success's needs and chain via the `promise-contract` caller job, so a failure now blocks the merge."
+      },
+      "required_via": "promise-contract",
+      "must_refuse": [
+        {
+          "vector": "a capacity-mode doc promising sq8 buys search throughput — the overclaim Requirement 10.4 exists to refuse",
+          "files": {
+            "Cargo.toml": "[workspace.package]\nversion = \"1.0.0\"\n",
+            "docs/guides/QUANTIZATION.md": "# Quantization\n\nsq8 delivers higher throughput.\n",
+            "docs/VELESQL_SPEC.md": "# VelesQL\n",
+            "crates/velesdb-core/src/quantization/mod.rs": "//! Quantization.\n",
+            "docs/reference/promise-contract.json": "{\n  \"claims\": [\n    {\n      \"id\": \"quantization-is-documented\",\n      \"file\": \"docs/guides/QUANTIZATION.md\",\n      \"must_contain\": \"# Quantization\",\n      \"executable\": false,\n      \"measured_on\": \"2026-07-31\",\n      \"measured_machine\": \"fixture\",\n      \"measured_version\": \"1.0.0\"\n    }\n  ]\n}\n"
+          },
+          "accepts": {
+            "Cargo.toml": "[workspace.package]\nversion = \"1.0.0\"\n",
+            "docs/guides/QUANTIZATION.md": "# Quantization\n\nsq8 delivers no higher throughput.\n",
+            "docs/VELESQL_SPEC.md": "# VelesQL\n",
+            "crates/velesdb-core/src/quantization/mod.rs": "//! Quantization.\n",
+            "docs/reference/promise-contract.json": "{\n  \"claims\": [\n    {\n      \"id\": \"quantization-is-documented\",\n      \"file\": \"docs/guides/QUANTIZATION.md\",\n      \"must_contain\": \"# Quantization\",\n      \"executable\": false,\n      \"measured_on\": \"2026-07-31\",\n      \"measured_machine\": \"fixture\",\n      \"measured_version\": \"1.0.0\"\n    }\n  ]\n}\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        }
+      ]
+    },
+    {
+      "script": "scripts/check-python.sh",
+      "purpose": "Python integration checks (dangerous hash(), non-determinism, bandit, flake8 complexity).",
+      "workflow": ".github/workflows/propagation-guard.yml",
+      "job": "integrations-python",
+      "required": true,
+      "mode": "strict",
+      "self_test": null,
+      "self_test_required": false,
+      "blind_spot": {
+        "issue": null,
+        "summary": "Entirely cwd-relative (PYTHON_DIRS) with no --root and no cd of its own: run from a subdirectory it scans nothing and exits 0 — measured from docs/. Harmless in CI, which runs it from the root, and it is what lets the refusal harness drive it with an empty argv. Only checks 1, 3 and 4 can raise ERRORS; 2 and 5 warn and can never refuse."
+      },
+      "required_via": "propagation-guard",
+      "must_refuse": [
+        {
+          "vector": "a builtin hash() used to derive a token — non-deterministic across processes, which is the whole point of check 1",
+          "files": {
+            "integrations/langchain/src/velesdb_langchain/store.py": "def token_for(doc):\n    return hash(doc)\n"
+          },
+          "accepts": {
+            "integrations/langchain/src/velesdb_langchain/store.py": "import hashlib\n\n\ndef token_for(doc):\n    return hashlib.sha256(doc).hexdigest()\n"
+          },
+          "argv": []
+        }
+      ]
+    },
+    {
+      "script": "scripts/check_binary_size.py",
+      "purpose": "Release binaries stay within their size ceilings.",
+      "workflow": ".github/workflows/binary-size.yml",
+      "job": "binary-size",
+      "required": true,
+      "mode": "strict",
+      "self_test": null,
+      "self_test_required": false,
+      "blind_spot": {
+        "issue": null,
+        "summary": "The vector below proves the MISSING half only. The OVER-CEILING half is not vector-testable: the smallest ceiling is 9 MiB, so a fixture exceeding one would mean carrying 9 MiB of literal bytes in this registry. That half is exercised for real on every release, against the binaries the release build produced."
+      },
+      "required_via": "binary-size",
+      "must_refuse": [
+        {
+          "vector": "a release that built only two of its three binaries — the gate must not pass on a binary it never weighed",
+          "files": {
+            "velesdb-server": "stub\n",
+            "velesdb": "stub\n"
+          },
+          "accepts": {
+            "velesdb-server": "stub\n",
+            "velesdb": "stub\n",
+            "velesdb-migrate": "stub\n"
+          },
+          "argv": [
+            "--target-dir",
+            "{root}"
+          ]
+        }
+      ]
+    },
+    {
+      "script": "scripts/run-production-gates.sh",
+      "purpose": "Meta-runner chaining the production gates.",
+      "workflow": ".github/workflows/production-gates.yml",
+      "job": "gates",
+      "required": true,
+      "mode": "strict",
+      "self_test": null,
+      "self_test_required": false,
+      "blind_spot": {
+        "issue": null,
+        "summary": "None known. Folded into CI Success's needs and chain via the `production-gates` caller job, so a failure now blocks the merge."
+      },
+      "required_via": "production-gates",
+      "refusal_untested": "Measured, and NOT for the reason previously written here. Under the harness (cwd = a temp tree) its first line, `bash scripts/check-doc-contract.sh`, cannot be found and the runner exits 127 — not 1, so it would fail the vector contract even though it did stop. And the positive control is out of reach in principle: gates 3 to 5 are `cargo test` invocations against velesdb-core (velesql_planner_golden, crash_recovery_tests, wal_recovery_tests), so exit 0 requires a real crate and a full build, not a materialised tree. Its refusal is genuinely its members'; each of those now carries its own vector. Tracked by #1715."
+    },
+    {
+      "script": ".github/workflows/pr-governance.yml",
+      "inline_steps": [
+        "Block archive branches as PR source",
+        "Enforce Git Flow branch rules",
+        "Verify branch includes latest base branch"
+      ],
+      "purpose": "Git Flow branch rules, freshness of the branch against its base, and no AI-attributed commit.",
+      "workflow": ".github/workflows/pr-governance.yml",
+      "job": "governance",
+      "required": true,
+      "mode": "strict",
+      "self_test": null,
+      "self_test_required": false,
+      "blind_spot": {
+        "issue": null,
+        "summary": "No self-test materialises a PR these steps must reject: Git Flow and branch freshness read a pull_request payload no local tree reproduces. The attribution check is no longer inline — it moved to scripts/check-ai-attribution.py, which is tested (#1699 closed)."
+      },
+      "required_via": "pr-governance",
+      "refusal_untested": "Not a script but three inline steps, and the two that remain here read a `pull_request` payload — the source branch name and its merge-base with the base branch — that no materialised tree reproduces: there is no pull request to describe. The third check, AI attribution, is no longer inline (it moved to scripts/check-ai-attribution.py) and now carries an executable vector of its own. Tracked by #1715."
+    },
+    {
+      "script": "scripts/check-ai-attribution.py",
+      "purpose": "No commit is authored by, or attributed to, an AI assistant (CLAUDE.md #5).",
+      "workflow": ".github/workflows/pr-governance.yml",
+      "job": "governance",
+      "required": true,
+      "mode": "strict",
+      "self_test": "scripts.tests.test_check_ai_attribution",
+      "self_test_required": true,
+      "must_refuse": [
+        {
+          "vector": "a commit whose author identity is an assistant, against the same tree authored by a person whose name merely starts the same way",
+          "files": {
+            "NOTES.md": "placeholder\n"
+          },
+          "accepts": {
+            "NOTES.md": "placeholder\n"
+          },
+          "repo": {
+            "files": [
+              "NOTES.md"
+            ],
+            "accepts": [
+              "NOTES.md"
+            ],
+            "author": {
+              "files": "Claude <claude@anthropic.com>",
+              "accepts": "Claudette <claudette@example.com>"
+            }
+          },
+          "argv": [
+            "HEAD",
+            "--root",
+            "{root}"
+          ]
+        }
+      ],
+      "blind_spot": {
+        "issue": null,
+        "summary": "Reads the RAW identity (%an <%ae>, never %aN): a .mailmap line in this repository already maps anthropic to the maintainer, and the mapped name would launder the case being looked for. Admission is by whole identity, so an impostor of an admitted bot does not inherit it."
+      },
+      "required_via": "pr-governance"
+    },
+    {
+      "script": ".github/workflows/ci.yml",
+      "inline_steps": [
+        "Build napi addon + run Node tests"
+      ],
+      "purpose": "The Node binding's functional gate: build the napi addon (debug profile) and run every __test__/*.spec.mjs suite via `npm test`.",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "node-binding-tests",
+      "required": true,
+      "mode": "strict",
+      "self_test": null,
+      "self_test_required": false,
+      "blind_spot": {
+        "issue": null,
+        "summary": "The pin holds the step by its `- name:`, so the wiring test proves the step exists in the job and is not disarmed — it cannot prove the step's shell body still runs `npm test`. A body rewritten to a no-op under the same name stays green. Same limit as every inline guard, pr-governance's included."
+      },
+      "refusal_untested": "Not a script but a workflow step whose body is `npm install` + `npx napi build --platform` + `npm test` against the real crate: exit 1 needs a failing Node test and exit 0 a full addon build, neither reachable from a materialised temp tree. Its refusal is its test suite's. Measured before this entry existed: deleting the step's one `run:` block turned nothing red — the audit finding this entry closes. Tracked by #1715."
+    },
+    {
+      "script": ".github/workflows/ci.yml",
+      "inline_steps": [
+        "Build napi addon + run Node tests (Windows)"
+      ],
+      "purpose": "The Windows leg of the Node binding gate (#1515): the same napi build, then `node --test __test__/index.spec.mjs` — the file that carries the three Windows-only regressions (#1509, #1510, #1511).",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "node-binding-tests-windows",
+      "required": true,
+      "mode": "strict",
+      "self_test": null,
+      "self_test_required": false,
+      "blind_spot": {
+        "issue": null,
+        "summary": "The step is `if:`-guarded by the node-windows-changed path filter, so on a PR that leaves crates/velesdb-node/** untouched it no-ops by design (the cost tradeoff is written above the job). The wiring test proves the step exists and is not disarmed, not that any given PR executed it — and not that its shell body still runs the spec file."
+      },
+      "refusal_untested": "Same shape as the Linux leg: a workflow step whose body builds the addon on windows-latest and runs one spec file — no materialised tree can reach either exit. It runs only when the path filter says the addon changed, which is the documented tradeoff, not a disarm. Deleting the step was measured green before this entry pinned it. Tracked by #1715."
+    },
+    {
+      "script": ".github/workflows/ci.yml",
+      "inline_steps": [
+        "Run wasm-bindgen tests (Node)"
+      ],
+      "purpose": "The WASM functional gate: `wasm-pack test --node crates/velesdb-wasm` runs the wasm-bindgen suites (tests/*.rs gated on target_arch = \"wasm32\") that compile to empty binaries under the native test job and are invisible to `cargo check`.",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "wasm-check",
+      "required": true,
+      "mode": "strict",
+      "self_test": null,
+      "self_test_required": false,
+      "blind_spot": {
+        "issue": null,
+        "summary": "The pin holds the step by its `- name:`; a body rewritten away from `wasm-pack test` under the same name stays green. And the step covers only the wasm32-gated suites — the host-run quantization parity step in the same job is not pinned here, though it is also named coverage the `test` job already runs transitively."
+      },
+      "refusal_untested": "A workflow step whose body is a wasm-pack build-and-test of the real crate under a Node runner: exit 1 needs a failing wasm-bindgen test, exit 0 a full wasm32 build — neither reachable from a materialised temp tree. Its refusal is the suite's own (memory_wedge_web.rs and siblings). This step was the one-line deletion that turned nothing red until this entry pinned it. Tracked by #1715."
+    },
+    {
+      "script": "scripts/compare_perf.py",
+      "purpose": "A benchmark that regresses past its threshold fails the build (perf-smoke).",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "perf-smoke",
+      "required": true,
+      "mode": "strict",
+      "self_test": null,
+      "self_test_required": false,
+      "must_refuse": [
+        {
+          "vector": "a benchmark 3x slower than its baseline, past the declared threshold",
+          "files": {
+            "current.json": "{\n  \"benchmarks\": {\n    \"hnsw_search_k10\": {\n      \"mean_ns\": 120000\n    }\n  }\n}\n",
+            "baseline.json": "{\n  \"benchmarks\": {\n    \"hnsw_search_k10\": {\n      \"mean_ns\": 38600\n    }\n  },\n  \"threshold_percent\": 15\n}\n"
+          },
+          "accepts": {
+            "current.json": "{\n  \"benchmarks\": {\n    \"hnsw_search_k10\": {\n      \"mean_ns\": 39000\n    }\n  }\n}\n",
+            "baseline.json": "{\n  \"benchmarks\": {\n    \"hnsw_search_k10\": {\n      \"mean_ns\": 38600\n    }\n  },\n  \"threshold_percent\": 15\n}\n"
+          },
+          "argv": [
+            "--current",
+            "{root}/current.json",
+            "--baseline",
+            "{root}/baseline.json",
+            "--threshold",
+            "15"
+          ]
+        }
+      ],
+      "blind_spot": {
+        "issue": null,
+        "summary": "Found by the reverse sweep, not by the name pattern: it exits 1 on a regression and runs in the required perf-smoke job, yet matched no guard-shaped name and was absent from this registry entirely. A benchmark absent from `current` is not compared — an empty result set exits 0 (compare_perf.py:119)."
+      }
+    }
+  ],
+  "unwired": [
+    {
+      "script": "scripts/check-crates-io-versions.sh",
+      "reason": "Release-time only, by design: it checks a version collision on crates.io before publishing (release.yml:345, release-memory.yml:187). There is nothing for it to assert on a pull request.",
+      "issue": null
+    },
+    {
+      "script": "scripts/perf_phase_gate.py",
+      "reason": "Invoked by no workflow. QUALITY_BAR.md:220 and docs/contributing/BENCHMARKING_GUIDE.md:274-289 describe it as if it were active, which is the defect: either wire it or say in both documents that it is a manual tool.",
+      "issue": 1708
+    },
+    {
+      "script": "scripts/bump_version.py",
+      "reason": "Release-time only, by design: release.yml:124 runs it to rewrite the version stamps before publishing. There is nothing for it to assert on a pull request. Same class as check-crates-io-versions.sh.",
+      "issue": null
+    }
+  ],
+  "not_a_gate": [
+    {
+      "script": "scripts/export_smoke_criterion.py",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "perf-smoke",
+      "reason": "Produces the artefact compare_perf.py then judges (ci.yml:1108, one step before). It has no non-zero exit path at all — measured — so it cannot refuse anything, and declaring it a guard would overstate the registry. The claim is checked: the suite reads its source and fails this entry if a failure path ever appears."
+    }
+  ]
+}

@@ -46,6 +46,12 @@ on:
   # path-filtered.
   pull_request:
     branches: [main, develop]
+    # `ready_for_review` is NOT in the default set ([opened, synchronize,
+    # reopened]). pr-governance.yml declared it before being folded in below,
+    # so leaving `types:` implicit here would have silently narrowed it: a
+    # draft turned "ready" with no new commit would never be re-governed.
+    # Pinned by scripts/tests/test_ci_gate_reachability.py.
+    types: [opened, synchronize, reopened, ready_for_review]
   # Manual trigger so coverage can be refreshed on demand (e.g. after a
   # config-only commit to main that skipped the path-filtered CI, leaving the
   # Codacy coverage badge stale).
@@ -137,12 +143,18 @@ jobs:
       # `dep:ureq` but not `ollama`, while extract.rs calls a helper gated on
       # `ollama`. Each optional feature of velesdb-memory is therefore checked
       # in isolation.
+      #
+      # `--all-targets` is part of the contract, not an embellishment: without
+      # it this step never compiles the test and example targets, and sixteen
+      # BDD suites plus six examples sat broken under `context`/`ollama`/
+      # `extract` alone with this step green (#1765) — a target that cannot
+      # fail the build is not guarded by it.
       - name: Check each velesdb-memory feature in isolation
         run: |
           set -eu
           for feat in mcp http context persistence ollama extract; do
             echo "::group::--features $feat"
-            cargo check -p velesdb-memory --no-default-features --features "$feat"
+            cargo check -p velesdb-memory --no-default-features --features "$feat" --all-targets
             echo "::endgroup::"
           done
 
@@ -156,6 +168,23 @@ jobs:
       # prompt-building: none opens a socket, so no service is needed.
       - name: Test the velesdb-memory extract feature
         run: cargo test -p velesdb-memory --features extract,ollama,persistence
+
+      # Same hole as the step above, left open for the whole HTTP transport:
+      # six `[[test]]` targets declare `required-features = ["http"]` and no
+      # `cargo test` anywhere passed it, so fourteen tests had never run on CI
+      # — TLS termination, the graceful SIGTERM drain, the store-lock `flock`
+      # guard and a twenty-way concurrency stress among them.
+      #
+      # That is not a peripheral build: `--http` is how a daemon serves
+      # several MCP clients from ONE process instead of each fighting over the
+      # store's single-writer lock, so it is what a multi-client setup
+      # actually runs.
+      #
+      # `scripts/tests/test_test_target_reachability.py` now fails when any
+      # gated target is reachable by no command here, so this cannot silently
+      # reopen — for `http` or for the next feature.
+      - name: Test the velesdb-memory http transport
+        run: cargo test -p velesdb-memory --features http
 
       # velesdb-memory publishes independently, and `cargo publish` verifies
       # the tarball against velesdb-core AS PUBLISHED ON CRATES.IO — not the
@@ -430,6 +459,16 @@ jobs:
           cargo build -p velesdb-memory
           python3 crates/velesdb-memory/examples/context_savings/real_measures/mcp_e2e.py
 
+      # The fast hook harness also runs in mcp-doc-contract without a Rust
+      # toolchain. This second invocation owns the real wire check: it points
+      # at the binary built from this checkout immediately above, never at an
+      # arbitrary installation on PATH. Missing or renamed `risk` is a hard
+      # failure inside the harness, not a skip that reads like a pass.
+      - name: Agent hook contract against current checkout binary
+        run: bash integrations/agent-hooks/test/hooks.test.sh
+        env:
+          VELESDB_MEMORY_BIN_REAL: ${{ github.workspace }}/target/debug/velesdb-memory
+
   # ===========================================================================
   # Security Audit (parallèle - outils pré-compilés)
   # ===========================================================================
@@ -499,7 +538,7 @@ jobs:
       # to empty binaries under the native test job and are invisible to the
       # cargo check above — without this step they never run in CI at all.
       - name: Install wasm-pack
-        uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf # v2.85.2
+        uses: taiki-e/install-action@6a1bd70eaac3c8bdf093356838d7ee09fda951cf # v2.85.5
         with:
           tool: wasm-pack
 
@@ -534,6 +573,106 @@ jobs:
 
       - name: Check OpenAPI snapshots are up to date
         run: git diff --exit-code docs/openapi.json docs/openapi.yaml
+
+  # ===========================================================================
+  # MCP Doc Contract
+  # The prose twin of openapi-drift above: openapi-drift keeps the committed
+  # REST spec equal to the code; this keeps every surface that DESCRIBES an
+  # MCP tool's return equal to the outputSchema the server publishes, as
+  # captured in docs/reference/mcp-tools.json.
+  #
+  # It lives HERE, in ci.yml, and not in doc-contract.yml or
+  # gate-contracts.yml, for a reason that WAS decisive and no longer is:
+  # neither of those was in "CI Success"'s needs, and "CI Success" is the only
+  # required check on develop and main — so nothing they found could block a
+  # merge. doc-contract.yml's path filter was ALSO blind to
+  # crates/velesdb-memory/src, sdks/, integrations/ and skills/, the very
+  # directories this guard reads. A gate that is never triggered, or triggered
+  # but not required, protects nothing. (That filter is widened in the same
+  # change, so the doc-contract workflow stops missing those paths on push
+  # too.)
+  #
+  # Since the fold of #1698 and #1710, BOTH of those workflows are called from
+  # ci.yml and read by the "CI Success" chain, so `gate-contracts.yml`'s
+  # `unittest discover -s scripts/tests` IS required — every suite under that
+  # directory now blocks a merge, including the ones no job names. This job
+  # stays as it is: naming its suites explicitly costs seconds and survives
+  # someone narrowing the discover.
+  #
+  # No toolchain, no build: pure Python over committed text, seconds.
+  # ===========================================================================
+  mcp-doc-contract:
+    name: MCP Doc Contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      # Self-test first, same order as doc-contract.yml's freshness job: the
+      # guard is pinned RED-then-GREEN on a synthetic repository (drift,
+      # deleted declaration, empty registry, unreachable pin, empty sweep)
+      # before it is trusted to judge the real tree.
+      - name: Self-test the guard
+        run: python3 -m unittest scripts.tests.test_check_mcp_doc_contract
+
+      # Proves this very job is REQUIRED and BLOCKING, which are two
+      # different things: in "CI Success"'s needs, read by the [[ ... ]]
+      # chain that follows, comparing `== "success"`, failing through a
+      # branch that exits non-zero, on a job with no continue-on-error — and
+      # invoking the guard below WITHOUT `--mode warn`. Half-wiring it, or
+      # leaving warn mode on, reports red on the PR page and blocks nothing;
+      # check-doc-contract.sh's header records four routes that entered this
+      # repository undocumented exactly that way.
+      - name: Self-test the CI wiring
+        run: python3 -m unittest scripts.tests.test_ci_gate_reachability
+
+      # The bundled npm copies of the two skills, byte for byte. The blocking
+      # comparison is crates/velesdb-node/__test__/skills-sync.spec.mjs under
+      # node-binding-tests — this one costs milliseconds and no toolchain, so
+      # it also pins the two hand-written pair registries against each other,
+      # which nothing did.
+      - name: Bundled skill copies are byte-identical
+        run: python3 -m unittest scripts.tests.test_skill_copies_are_identical
+
+      # A skill ships twice: in this repository and inside the npm package.
+      # Whoever loads it has the open core and nothing else, so a passage
+      # pointing at something only the closed repository holds is unactionable
+      # where it is read. Self-test first, RED-then-GREEN on a synthetic tree,
+      # same order as the guard above it.
+      - name: Self-test the private-reference guard
+        run: python3 -m unittest scripts.tests.test_check_skill_private_references
+
+      - name: Versioned skills carry no private reference
+        run: python3 scripts/check-skill-private-references.py
+
+      # Which skill owns cross-session resumption. The working-context tools
+      # were documented in the COMPRESSION skill and not once in the memory
+      # one, so an agent loading the skill named after memory was never told
+      # a previous session could be read back — and nobody was told to
+      # discover sessions, so a mistyped id read as "no previous work".
+      - name: Resumption is owned by the memory skill
+        run: python3 -m unittest scripts.tests.test_skill_resumption_ownership
+
+      # The agent-hook installer, and — finally — the hook harness itself.
+      # `hooks.test.sh` was referenced by six documents and executed by ZERO
+      # workflows: the exact shape of #1698, a gate nobody invokes. The suite
+      # above it holds the wiring, so deleting this step turns that suite red
+      # rather than turning the harness silent.
+      - name: Self-test the agent-hook installer
+        run: python3 -m unittest scripts.tests.test_sync_agent_hooks
+
+      - name: Agent hook harness
+        run: bash integrations/agent-hooks/test/hooks.test.sh
+
+      # BLOCKING. Verified green on the whole tree (16 pinned surfaces, 20
+      # declarations of load_working_context's envelope — including the three
+      # agent session hooks and the napi `ts_return_type` shipped as the
+      # .d.ts) when this job was added.
+      - name: MCP return contract vs docs/reference/mcp-tools.json
+        run: python3 scripts/check-mcp-doc-contract.py --verbose
 
   # ===========================================================================
   # Bench-sift1m Compile Check
@@ -905,7 +1044,7 @@ jobs:
       # `cargo install` from source — faster and avoids the compile/network
       # flakes that lost the runner mid-job on earlier release runs.
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf # v2.85.2
+        uses: taiki-e/install-action@6a1bd70eaac3c8bdf093356838d7ee09fda951cf # v2.85.5
         with:
           tool: cargo-llvm-cov
 
@@ -1102,7 +1241,7 @@ jobs:
         continue-on-error: true
 
       - name: Set up JDK 17
-        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: 'zulu'
           java-version: '17'
@@ -1114,12 +1253,235 @@ jobs:
           SONAR_HOST_URL: https://sonarcloud.io
 
   # ===========================================================================
+  # Gates folded in from their own workflows
+  #
+  # These six ran as standalone workflows on `pull_request`, and `CI Success` is
+  # the ONLY required check on develop — so each could be red while the merge
+  # button stayed green. Requiring them through GitHub's branch-protection list
+  # instead would keep the required set unversioned and unreadable by any guard,
+  # which is the defect one level up. Calling them from here puts the required
+  # set in reviewable YAML, and scripts/guards.json holds them to it.
+  #
+  # `workflow_call` ignores the callee's own `paths:` filters, so these now run
+  # on every PR. Measured cost: 0.2 to 5.5 min each, against CI's ~29 min
+  # critical path — they finish long before this job can start, so the wait is
+  # unchanged. Filtering them conditionally instead would make a skipped job
+  # report `skipped`, forcing the chain below to accept anything other than
+  # `success` — the "skipped = green" ambiguity this fold exists to remove.
+  # ===========================================================================
+  gate-contracts:
+    name: Gate Contracts
+    uses: ./.github/workflows/gate-contracts.yml
+
+  doc-contract:
+    name: Doc Contract
+    uses: ./.github/workflows/doc-contract.yml
+
+  promise-contract:
+    name: Promise Contract
+    uses: ./.github/workflows/promise-contract.yml
+
+  production-gates:
+    name: Production Gates
+    uses: ./.github/workflows/production-gates.yml
+
+  propagation-guard:
+    name: Propagation Guard
+    uses: ./.github/workflows/propagation-guard.yml
+
+  binary-size:
+    name: Binary Size Gate
+    uses: ./.github/workflows/binary-size.yml
+
+  # ===========================================================================
+  # Perf Gate (E2E) — QUALITY_BAR.md Gates 1 & 2, folded into `CI Success`.
+  #
+  # This gate ran for months as a standalone path-filtered workflow
+  # (perf-gate-e2e.yml), which meant it could go red on a search-path PR
+  # without holding the merge: it was never in ci-success's `needs`. Folding
+  # it in uses the same two-job pattern as the Windows node leg above —
+  # required checks must always run (#1465), so the filter job decides and
+  # every step of the gate job is conditioned on its output; a PR that does
+  # not touch the search hot path gets a green no-op, not an absent check.
+  # The nightly 100K-scale recall validation stays in perf-gate-e2e.yml.
+  # ===========================================================================
+  perf-path-changed:
+    name: Perf Gate (E2E) — path filter
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: a shallow (depth-1) PR checkout only fetches the
+          # merge commit itself, not the base commit `git diff` needs below.
+          fetch-depth: 0
+
+      - name: Determine if the search hot path changed
+        id: filter
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE_SHA="${{ github.event.before }}"
+          fi
+          if [[ -z "$BASE_SHA" || "$BASE_SHA" == "0000000000000000000000000000000000000000" ]]; then
+            BASE_SHA="$(git rev-list --max-parents=0 HEAD)"
+          fi
+          if git diff --name-only "$BASE_SHA" "${{ github.sha }}" | grep -qE '^crates/velesdb-core/src/(index|simd_native|quantization|fusion|wal|storage)/|^crates/velesdb-python/|^benchmarks/velesdb_benchmark\.py$|^\.github/workflows/ci\.yml$'; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "search hot path changed — perf gate will run."
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+            echo "search hot path unchanged — perf gate will no-op (cost guard)."
+          fi
+
+  perf-gate-e2e:
+    name: Perf Gate (E2E) — recall ≥ 0.95 + p50 sanity floor (10K/384D)
+    runs-on: ubuntu-latest
+    needs: [test, perf-path-changed]
+    timeout-minutes: 30
+    env:
+      # Loose order-of-magnitude floor: GitHub-hosted runners are ~3-4×
+      # slower and noisier than the i9-14900KF reference machine, so the
+      # 450 µs contract p50 is gated locally and in release engineering;
+      # this floor catches algorithmic regressions without runner-noise
+      # false positives.
+      P50_MAX_US: 1500
+      RECALL_MIN: 0.95
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.perf-path-changed.outputs.relevant == 'true'
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
+        if: needs.perf-path-changed.outputs.relevant == 'true'
+        with:
+          toolchain: "1.90"
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: needs.perf-path-changed.outputs.relevant == 'true'
+        with:
+          python-version: "3.11"
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        if: needs.perf-path-changed.outputs.relevant == 'true'
+        with:
+          shared-key: "velesdb-perf-gate"
+
+      - name: Build velesdb-python (release wheel)
+        if: needs.perf-path-changed.outputs.relevant == 'true'
+        run: |
+          python -m pip install --upgrade pip "maturin>=1.7,<2" numpy
+          # Release build is mandatory for a perf gate — debug builds are
+          # 10×+ slower and force a meaningless threshold. We build a
+          # release wheel and pip-install it; `maturin develop` would
+          # complain about installing into the system interpreter in CI,
+          # and pip's PEP 517 path does not currently forward `--release`
+          # cleanly (see commentary in §test for the history).
+          cd crates/velesdb-python
+          maturin build --release --interpreter python3.11
+          pip install --force-reinstall ../../target/wheels/velesdb-*.whl
+
+      - name: Run benchmark (10K vectors, 384D, --recall, --json)
+        if: needs.perf-path-changed.outputs.relevant == 'true'
+        run: |
+          python benchmarks/velesdb_benchmark.py \
+            --datasets 10000 \
+            --dimension 384 \
+            --recall \
+            --json \
+            --output perf-report.json
+
+      - name: Gate report on recall and p50 floor
+        if: needs.perf-path-changed.outputs.relevant == 'true'
+        id: gate
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+
+          with open("perf-report.json") as f:
+              report = json.load(f)
+
+          p50_max_us = int(os.environ["P50_MAX_US"])
+          recall_min = float(os.environ["RECALL_MIN"])
+
+          # Find the 10K result block.
+          ten_k = next(
+              (r for r in report["results"] if r.get("num_vectors") == 10_000),
+              None,
+          )
+          if ten_k is None:
+              sys.exit("FAIL: no 10K result block in report")
+
+          p50 = ten_k["search_p50_us"]
+          p99 = ten_k["search_p99_us"]
+          recall = report.get("recall", {}).get("recall_at_10_mean", 0.0)
+
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+          lines = [
+              "## Perf Gate (E2E) — 10K / 384D / WAL ON",
+              "",
+              f"- search p50: **{p50} µs** (CI floor: {p50_max_us} µs, contract on i9-14900KF: 450 µs)",
+              f"- search p99: {p99} µs",
+              f"- recall@10: **{recall:.4f}** (gate: ≥ {recall_min})",
+              "",
+          ]
+          if summary_path:
+              with open(summary_path, "a") as s:
+                  s.write("\n".join(lines) + "\n")
+          for line in lines:
+              print(line)
+
+          failed = []
+          if recall < recall_min:
+              failed.append(f"recall@10 {recall:.4f} < {recall_min}")
+          if p50 > p50_max_us:
+              failed.append(f"p50 {p50} µs > CI floor {p50_max_us} µs")
+          if failed:
+              sys.exit("FAIL: " + "; ".join(failed))
+          print("PASS")
+          PY
+
+      - name: Upload perf report
+        if: needs.perf-path-changed.outputs.relevant == 'true' && always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: perf-report-${{ github.sha }}
+          path: perf-report.json
+          retention-days: 30
+
+      - name: Skipped — search hot path unchanged
+        if: needs.perf-path-changed.outputs.relevant != 'true'
+        shell: bash
+        # Block scalar, not a plain one: on a plain `run:` line a bare `#`
+        # starts a YAML comment, which truncated this echo before its closing
+        # quote and failed every no-op leg with `unexpected EOF` (#1857-era).
+        run: |
+          echo "Search hot path unchanged; perf gate no-ops green (required checks must always run, #1465)."
+
+  # Last of the fold, and the one #1698 named: Git Flow, branch freshness and
+  # the AI-attribution guard ran beside the required check, so none of them
+  # could block a merge. Freshness matters most — it is the in-house
+  # replacement for branch protection's `strict` (decision #1639), which is
+  # off, so until this job existed nothing at all held a PR to its base.
+  #
+  # `permissions:` is explicit because a called workflow cannot exceed its
+  # caller: ci.yml grants `contents: read` at the top level, and
+  # pr-governance.yml declares `pull-requests: read` too.
+  pr-governance:
+    name: PR Governance
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/pr-governance.yml
+
+  # ===========================================================================
   # Summary (léger)
   # ===========================================================================
   ci-success:
     name: CI Success
     runs-on: ubuntu-latest
-    needs: [lint, test, security, wasm-check, openapi-drift, velesql-conformance, perf-smoke, bench-sift1m-compile, python-sdk-tests, python-integrations, node-binding-tests, node-binding-tests-windows, sonarcloud]
+    needs: [lint, test, security, wasm-check, openapi-drift, mcp-doc-contract, velesql-conformance, perf-smoke, bench-sift1m-compile, perf-gate-e2e, python-sdk-tests, python-integrations, node-binding-tests, node-binding-tests-windows, gate-contracts, doc-contract, promise-contract, production-gates, propagation-guard, binary-size, pr-governance, sonarcloud]
     if: always()
     steps:
       # sonarcloud is intentionally absent from the gate below: it is an
@@ -1131,12 +1493,21 @@ jobs:
           [[ "${{ needs.test.result }}" == "success" ]] && \
           [[ "${{ needs.wasm-check.result }}" == "success" ]] && \
           [[ "${{ needs.openapi-drift.result }}" == "success" ]] && \
+          [[ "${{ needs.mcp-doc-contract.result }}" == "success" ]] && \
           [[ "${{ needs.velesql-conformance.result }}" == "success" ]] && \
           [[ "${{ needs.perf-smoke.result }}" == "success" ]] && \
           [[ "${{ needs.bench-sift1m-compile.result }}" == "success" ]] && \
+          [[ "${{ needs.perf-gate-e2e.result }}" == "success" ]] && \
           [[ "${{ needs.python-sdk-tests.result }}" == "success" ]] && \
           [[ "${{ needs.python-integrations.result }}" == "success" ]] && \
           [[ "${{ needs.node-binding-tests.result }}" == "success" ]] && \
           [[ "${{ needs.node-binding-tests-windows.result }}" == "success" ]] && \
+          [[ "${{ needs.gate-contracts.result }}" == "success" ]] && \
+          [[ "${{ needs.doc-contract.result }}" == "success" ]] && \
+          [[ "${{ needs.promise-contract.result }}" == "success" ]] && \
+          [[ "${{ needs.production-gates.result }}" == "success" ]] && \
+          [[ "${{ needs.propagation-guard.result }}" == "success" ]] && \
+          [[ "${{ needs.binary-size.result }}" == "success" ]] && \
+          [[ "${{ needs.pr-governance.result }}" == "success" ]] && \
           [[ "${{ needs.security.result }}" == "success" ]] && \
           echo "✅ CI passed" || { echo "❌ CI failed"; exit 1; }

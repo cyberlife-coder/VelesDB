@@ -51,9 +51,10 @@ def test_why_returns_the_connected_subgraph(mem):
 
 # --- entity -----------------------------------------------------------------
 # The read path for questions ABOUT a named thing. Entity hubs are only ever
-# created by extraction (remember_extracted), which needs a running Ollama, so
-# what is exercised offline is the miss contract — the first one a caller hits,
-# and the one that must never raise.
+# created by extraction, which used to mean a running Ollama — so this file
+# could exercise the MISS contract and nothing else, and the hit shape went
+# unchecked for as long as that held. The `"outline"` extractor took the
+# network out of that path, so both branches are covered below.
 
 
 def test_entity_unknown_name_reports_a_miss_and_echoes_the_canonical_query(mem):
@@ -64,7 +65,11 @@ def test_entity_unknown_name_reports_a_miss_and_echoes_the_canonical_query(mem):
     # several lookups can be paired with their question.
     assert profile["name"] == "alex martin"
     assert profile["attributes"] == {}
+    # BOTH edge lists are present on a miss, empty. A shape that changed with
+    # the outcome would force every caller to branch, and the binding parity
+    # guard cannot see it — it reads a declaration, never an execution path.
     assert profile["relations"] == []
+    assert profile["relations_in"] == []
 
 
 def test_entity_does_not_surface_a_mentioning_sentence(mem):
@@ -329,3 +334,113 @@ def test_unrelate_refuses_exactly_what_relate_refuses(mem):
         mem.unrelate(a, b, "")
     with pytest.raises(ValueError):
         mem.unrelate(a, a, "decided_in")
+
+
+# --- remember_extracted, and the entity HIT it makes reachable ---------------
+# Before the `"outline"` backend these had no offline proof at all: the only
+# Extractor in the crate called a generative model over the network, so both
+# `skipped_over_cap` and the incoming half of a profile were declared KNOWN
+# GAPs in the binding parity guard rather than tested (issues #1690, #1692).
+
+
+def test_outlined_edge_reaches_the_far_end_as_an_incoming_relation(mem):
+    mem.remember_extracted(
+        "edge: Camille | sister of | Theo",
+        extractor="outline",
+    )
+    theo = mem.entity("Theo")
+    assert theo["found"] is True
+    # The edge LEAVES camille, so it is invisible from theo's outgoing list
+    # and reachable only here. A binding relaying `relations_in` by copying
+    # `relations` would pass the miss test above and fail this one.
+    assert [r["predicate"] for r in theo["relations_in"]] == ["sister of"]
+    assert theo["relations"] == []
+
+    camille = mem.entity("Camille")
+    assert [r["predicate"] for r in camille["relations"]] == ["sister of"]
+    assert camille["relations_in"] == []
+
+
+def test_remember_extracted_reports_what_it_dropped(mem):
+    outcome = mem.remember_extracted(
+        "fact: Camille ships the parser. | camille\n"
+        "fact: " + "x" * 4096 + "\n"
+        "edge: Camille | works at | Wiscale",
+        extractor="outline",
+    )
+    # An envelope, not a bare list: a shorter list of ids cannot say whether
+    # the passage held fewer facts or lost some to the embeddable cap.
+    assert outcome["ids"] and len(outcome["ids"]) == 1
+    assert outcome["skipped_over_cap"] == 1
+
+
+def test_remember_extracted_keeps_an_attribute_json_type(mem):
+    mem.remember_extracted("attr: Theo Durand | age | 15", extractor="outline")
+    # `recall_where` comparisons are type-strict, so an age arriving as the
+    # string "15" would silently never match a numeric filter.
+    assert mem.entity("Theo Durand")["attributes"]["age"] == 15
+
+
+def test_unknown_extractor_raises_value_error(mem):
+    # Mirrors test_unknown_embedder_raises_value_error: a caller who asked for
+    # a backend that does not exist is told so, never handed another one.
+    with pytest.raises(ValueError, match="unknown extractor"):
+        mem.remember_extracted("fact: anything", extractor="nope")
+
+
+def test_ollama_extractor_without_a_model_raises_value_error(mem):
+    # `model` became optional when `extractor` landed; the ollama backend
+    # still needs one, and says which flag to reach for instead.
+    with pytest.raises(ValueError, match="needs a model"):
+        mem.remember_extracted("fact: anything")
+
+
+def test_a_malformed_outline_directive_refuses_instead_of_dropping_the_line(mem):
+    # A graph that quietly loses half of what it was handed is worse than one
+    # that refuses.
+    with pytest.raises(Exception, match=r"3 `\|`-separated fields, 2 given"):
+        mem.remember_extracted("edge: Camille | works at", extractor="outline")
+
+
+def test_memory_status_reports_the_hash_default_as_not_semantic(mem):
+    """The binding's status mirrors the MCP envelope, with the binding's
+    own truths: the constructor resolved the embedder, nothing is
+    pre-attached for extraction, and the counts are live."""
+    before = mem.memory_status()
+    assert before["embedder"]["model"] == "hash"
+    assert before["embedder"]["semantic"] is False
+    assert before["provenance"]["recorded"] is False
+    assert before["extraction"]["configured"] is False
+    assert before["memory"]["facts"] == 0
+    assert before["memory"]["edges"] == 0
+
+    a = mem.remember("le port est 6333")
+    b = mem.remember("l'incident est INC-42")
+    mem.relate(a, b, "explique")
+
+    after = mem.memory_status()
+    assert after["memory"]["facts"] == 2
+    assert after["memory"]["edges"] >= 1
+
+
+def test_list_memories_walks_the_store_exhaustively(mem):
+    """Cursor pagination sees every fact exactly once, ids ascending, and a
+    metadata filter narrows without erroring on a miss."""
+    for i in range(5):
+        mem.remember(f"fait numero {i}", metadata={"project": "acme"})
+
+    seen = []
+    cursor = None
+    for _ in range(16):
+        page = mem.list_memories(cursor=cursor, limit=2)
+        seen.extend(page["memories"])
+        if page["next_cursor"] is None:
+            break
+        cursor = int(page["next_cursor"])
+    assert len(seen) == 5
+    ids = [entry["id"] for entry in seen]
+    assert ids == sorted(ids), "ids come back ascending"
+    assert all(entry["metadata"]["project"] == "acme" for entry in seen)
+
+    filtered = mem.list_memories(filter={"project": "globex"})
+    assert filtered["memories"] == []

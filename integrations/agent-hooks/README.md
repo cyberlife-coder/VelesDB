@@ -12,12 +12,12 @@ gives it the *tools*. It does not make the agent actually call
 `load_working_context` at the start of every session or
 `save_working_context` before every one ends — that only happens if the
 agent remembers to, which it won't reliably do on its own. This directory
-closes that gap **completely** for [Claude Code](claude-code/) (four tested
-hooks), **for the load/save loop** on [Codex CLI](codex/) (two tested hooks;
-the compaction and tool-result steps are blocked by the Codex hook API, not
-by unwritten work), and **partially** for [Windsurf](windsurf/) (one tested
-hook, with a delivery caveat). The parity table below says exactly what
-exists where, and why each gap is a gap.
+automates load/save, recall-before-edit, pre-compaction advice, and tool-result
+compression for [Claude Code](claude-code/) (five tested hooks); load/save and
+recall-before-edit for [Codex CLI](codex/) (four tested hooks; tool-result
+replacement remains unavailable); and a partial reminder for
+[Windsurf](windsurf/) (one tested hook, with a delivery caveat). The parity
+table below says exactly what exists where, and why each gap is a gap.
 
 ## Parity across harnesses
 
@@ -28,7 +28,8 @@ Claude Code equivalent · ❌ = not shipped, with the reason spelled out.
 | Loop step | Claude Code | Windsurf | Codex CLI |
 |---|---|---|---|
 | Load working context at session start | ✅ `session-start.sh` on `SessionStart` | ⚠️ `pre-user-prompt.sh` on `pre_user_prompt`, once per `trajectory_id` — advisory text, see the delivery caveat below | ✅ `codex/hooks/session-start.sh` on `SessionStart`, via `additionalContext` |
-| Save working context before the session ends | ✅ `stop.sh` on `Stop`, blocking the first stop per session | ⚠️ no end-of-session event is used: the *same* first-prompt reminder also asks for the save, hours in advance | ✅ `codex/hooks/stop.sh` on `Stop`, blocking the first stop per session |
+| Save/checkpoint working context | ✅ first Stop plus every later covered edit batch when opted in; otherwise the first Stop keeps the legacy save reminder | ⚠️ no end-of-session event is used: the *same* first-prompt reminder also asks for the save, hours in advance | ✅ same session-and-edit checkpoint as Claude; otherwise the first Stop keeps the legacy save reminder |
+| Require successful recall before the first repository edit | ✅ `pre-tool-use.sh` refuses `Edit`/`Write`; `post-tool-use.sh` marks only a successful VelesDB recall | ❌ not implemented | ✅ `codex/hooks/pre-tool-use.sh` refuses `apply_patch`; its PostToolUse partner applies the same success rule |
 | Compile the transcript before compaction | ✅ `pre-compact.sh` on `PreCompact` | ❌ Windsurf documents no compaction event. A VERIFIER: whether Cascade compacts at all in a way any hook can observe | ⚠️ **no pre-compaction hook is possible.** `PreCompact`/`PostCompact` support neither `additionalContext` nor a documented `decision`/`reason`, so nothing a hook prints there reaches the model. `codex/hooks/session-start.sh` compensates *after the fact* on `source == "compact"` |
 | Replace an oversized tool result | ✅ `post-tool-use.sh` via `hookSpecificOutput.updatedToolOutput` | ❌ **API gap.** Windsurf post-hooks cannot alter or block a result — "post-hooks cannot block since the action has already occurred" — and no documented field replaces one | ❌ **API gap as documented.** Codex `PostToolUse` can add `additionalContext`, or `decision: "block"` to substitute feedback for the result, but documents no equivalent of `updatedToolOutput` — it cannot hand back a *compiled* version of the real output |
 
@@ -61,17 +62,18 @@ integration as a user-facing nudge, not an enforced loop.
 
 ### What Codex can and cannot do
 
-The Codex hooks reference (checked 2026-07-25) lists `SessionStart`,
+The Codex hooks reference (checked 2026-08-04) lists `SessionStart`,
 `SessionEnd`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PreCompact`,
 `PostCompact`, `UserPromptSubmit`, `SubagentStart`, `SubagentStop` and `Stop`,
 configured from `~/.codex/hooks.json`, `<repo>/.codex/hooks.json` or a
 `[hooks]` table in `config.toml`, with a Claude-Code-shaped
 `event → matcher → handler` structure. The stdin payload carries
 `session_id`, `transcript_path`, `cwd`, `hook_event_name`, `model` and
-`permission_mode`, plus `source` on `SessionStart` and `stop_hook_active` /
-`last_assistant_message` on `Stop` — the same field names Claude Code uses,
-which is why [`codex/hooks/`](codex/hooks/) can share the sentinel and
-config-resolution logic verbatim.
+`permission_mode`, plus event-specific fields such as `source` on
+`SessionStart`, `tool_name`/`tool_input`/`tool_response` on tool events, and
+`stop_hook_active`/`last_assistant_message` on `Stop`. The common field names
+match Claude Code, which is why [`codex/hooks/`](codex/hooks/) can share the
+sentinel and config-resolution logic.
 
 Two limits shape what is shipped there, and both are documented, not guessed:
 
@@ -87,12 +89,14 @@ Two limits shape what is shipped there, and both are documented, not guessed:
   discards the result rather than compressing it. So the one hook that makes
   Claude Code sessions structurally cheaper has no Codex counterpart.
 
-A VERIFIER, on a real Codex build: that the payload fields arrive as
-documented, whether the hook `command` string is shell-expanded (the install
-instructions assume it is not), and the minimum Codex CLI version that ships
-hooks — the reference states none.
+This was also measured on a real `codex-cli 0.146.0-alpha.9.2` build with the
+stable `hooks` feature: strict config accepted the hook table, `PostToolUse`
+received both a real shell call and a real MCP call, and the MCP payload carried
+`tool_name`, `tool_input`, `tool_response`, `tool_use_id`, and
+`isError: false`. That establishes the success-side sentinel design; the
+scripts still fail closed for missing or error responses.
 
-**Sources checked 2026-07-25** (living documents — re-check before relying on
+**Sources checked 2026-08-04** (living documents — re-check before relying on
 any ❌ above): Cascade hooks reference,
 <https://docs.devin.ai/desktop/cascade/hooks> (`docs.windsurf.com` redirects
 there); Codex hooks reference, <https://learn.chatgpt.com/docs/hooks>
@@ -100,11 +104,38 @@ there); Codex hooks reference, <https://learn.chatgpt.com/docs/hooks>
 
 ## Install — Claude Code
 
-Both variants need `bash` and `jq` on `PATH` — the hooks refuse to run
-without `jq` rather than silently emitting malformed JSON.
+Both variants need `bash` and `jq` on `PATH`. The installer refuses to create
+an inert hook tree without `jq`, and the drift check reports if an installed
+tree later loses it. If the dependency disappears at runtime, `PreToolUse`
+exits with the host's blocking code before any covered edit; the other
+lifecycle reminders may still be treated as failed hooks by the host.
 
 **Global (recommended for continuous CLI usage — every project, one-time
-setup):**
+setup).** One command does both halves — the scripts and the five
+`settings.json` entries:
+
+```bash
+python3 scripts/sync-agent-hooks.py --install
+```
+
+It touches only entries whose command contains `.claude/hooks/velesdb-memory/`,
+merges at hook granularity (a foreign hook may share a group with ours), backs
+`settings.json` up before writing, replaces it atomically, and never prints its
+contents. Three more modes are worth knowing:
+
+```bash
+python3 scripts/sync-agent-hooks.py --check --strict   # in step / drifted / absent, per artefact
+python3 scripts/sync-agent-hooks.py --install --dry-run # say what would change, write nothing
+python3 scripts/sync-agent-hooks.py --uninstall         # remove ours, and only ours
+```
+
+An installed copy that drifts from this repository is the failure mode this
+exists for: the hooks a session runs live outside any repository, and measured
+on 2026-08-02 they had diverged in *both* directions at once — the repository
+ahead on the model-facing text, the install ahead on function.
+
+<details>
+<summary>Doing it by hand</summary>
 
 ```bash
 mkdir -p ~/.claude/hooks/velesdb-memory
@@ -121,30 +152,38 @@ be relative to for a global install):
 {
   "hooks": {
     "SessionStart": [
-      { "hooks": [{ "type": "command", "command": "bash /Users/you/.claude/hooks/velesdb-memory/session-start.sh" }] }
+      { "hooks": [{ "type": "command", "command": "bash '/Users/you/.claude/hooks/velesdb-memory/session-start.sh'" }] }
     ],
     "Stop": [
-      { "hooks": [{ "type": "command", "command": "bash /Users/you/.claude/hooks/velesdb-memory/stop.sh" }] }
+      { "hooks": [{ "type": "command", "command": "bash '/Users/you/.claude/hooks/velesdb-memory/stop.sh'" }] }
     ],
     "PreCompact": [
-      { "hooks": [{ "type": "command", "command": "bash /Users/you/.claude/hooks/velesdb-memory/pre-compact.sh" }] }
+      { "hooks": [{ "type": "command", "command": "bash '/Users/you/.claude/hooks/velesdb-memory/pre-compact.sh'" }] }
+    ],
+    "PreToolUse": [
+      { "matcher": "^(Edit|Write)$", "hooks": [{ "type": "command", "command": "bash '/Users/you/.claude/hooks/velesdb-memory/pre-tool-use.sh'" }] }
     ],
     "PostToolUse": [
-      { "hooks": [{ "type": "command", "command": "bash /Users/you/.claude/hooks/velesdb-memory/post-tool-use.sh" }] }
+      { "hooks": [{ "type": "command", "command": "bash '/Users/you/.claude/hooks/velesdb-memory/post-tool-use.sh'" }] }
     ]
   }
 }
 ```
 
+</details>
+
 `PostToolUse` additionally needs a `velesdb-memory` binary on `PATH` that
 knows the `compile-stdin` subcommand. Until you have one, the hook is
-inert — it detects the missing capability and passes every tool result
-through untouched, so installing it early costs nothing.
+an identity transform — it detects the missing capability and passes every
+tool result through untouched. The hook process still has a small local
+latency cost even though it saves no paid-model tokens on that path.
 
 Works with zero further setup (each project defaults to
 `project = basename(cwd)`, `session = "rolling"`) — drop a
 `.velesdb-hooks.json` (format below) in a project root only where you want a
-deliberate project label instead of the directory name.
+deliberate project label instead of the directory name. The blocking
+recall-before-edit guard is stricter: it stays disabled unless that file sets
+`enforce_learning_loop` to `true`.
 
 **Per-project** (vendor the scripts into one repo, e.g. to check them in for
 teammates):
@@ -210,17 +249,17 @@ section before relying on it.
 ## Install — Codex CLI
 
 ```bash
-mkdir -p ~/.codex/hooks/velesdb-memory
-cp /path/to/velesdb/integrations/agent-hooks/codex/hooks/*.sh ~/.codex/hooks/velesdb-memory/
-cp -r /path/to/velesdb/integrations/agent-hooks/codex/hooks/lib ~/.codex/hooks/velesdb-memory/
-chmod +x ~/.codex/hooks/velesdb-memory/*.sh
+python3 scripts/sync-agent-hooks.py --install --client codex
 ```
 
-Merge [`codex/hooks-snippet.json`](codex/hooks-snippet.json) into
-`~/.codex/hooks.json` (or `<repo>/.codex/hooks.json`), replacing `/home/you`
-with your real home directory — write absolute paths, since Codex spawns the
-command directly. The equivalent `config.toml` form, the MCP server wiring,
-and the full rationale for what is *not* shipped are in
+The installer atomically copies the four scripts and reconciles only entries
+whose command contains `.codex/hooks/velesdb-memory/`; foreign hooks remain
+untouched. Codex requires review of changed non-managed hooks: open `/hooks`,
+inspect these definitions, and trust them. The installer never bypasses that
+security step. Use `--client all` to reconcile Claude and Codex together.
+
+The equivalent manual snippet and `config.toml` form, the MCP server wiring,
+and the full rationale for the remaining tool-output gap are in
 [`codex/README.md`](codex/README.md).
 
 Same `.velesdb-hooks.json` config format as Claude Code (below); the Codex
@@ -259,10 +298,11 @@ embeddings, no clock — and velesdb-memory's `context` feature is
 `persistence`-free by design. So a hook *can* compile text in a separate
 process, as long as that process never opens a store. That is precisely what
 `velesdb-memory compile-stdin` does: it short-circuits in `main` before the
-store open, the same way `--version` does. `PostToolUse` below is the one
-hook that uses it; the other three still only ever drive the model.
+store open, the same way `--version` does. `PostToolUse` below is the one hook
+that uses it. The three advisory hooks drive the model; `PreToolUse` can deny
+an edit but does not compile content.
 
-## The four Claude Code hooks
+## The five Claude Code hooks
 
 (Windsurf's one wired hook, `pre_user_prompt`, is documented in its own
 install section above — it folds the same load/save loop into one event.)
@@ -270,13 +310,14 @@ install section above — it folds the same load/save loop into one event.)
 | Event | What it does | Mechanism |
 |---|---|---|
 | `SessionStart` | Fires on every session start (new, resume, clear, or post-compact). Emits `additionalContext` telling the model to call `load_working_context(project, session)` as its first action if it hasn't already. | `hookSpecificOutput.additionalContext` — supported by `SessionStart`. |
-| `Stop` | Fires when Claude is about to stop responding. The **first** `Stop` per session is blocked with a reason telling the model to call `save_working_context(project, session)` with the distilled state before stopping; every later `Stop` in the same session passes through untouched. | `{"decision":"block","reason":"..."}`, gated by a sentinel file in `$TMPDIR` (or `/tmp`) keyed by the payload's `session_id`, so the reminder fires once, not on every turn. |
-| `PreCompact` | Fires before the transcript is compacted (manual or auto-triggered). The **first** `PreCompact` per session is blocked with a reason telling the model to `compile_transcript` the about-to-be-compacted transcript (deterministic compression, not lossy compaction) and `save_working_context` first; later ones pass through. | Same block-once-then-pass pattern as `Stop`, separate sentinel key. |
-| `PostToolUse` | Fires after every tool call. When an **allowlisted** tool returns more than the size threshold, the result is compiled through `velesdb-memory compile-stdin` and the compiled view replaces it. Everything else passes through untouched. | `hookSpecificOutput.updatedToolOutput` — the only hook output that replaces what the model sees, rather than advising it. |
+| `Stop` | Fires whenever Claude is about to stop responding, not only at final session exit. In an opted-in repository it blocks on the first Stop and after each later covered edit batch with the four-step checklist and `save_working_context`; each continuation passes. Without enforcement it retains the legacy first-Stop save reminder. | `{"decision":"block","reason":"..."}` plus repository-and-session first-Stop markers, a session-wide queue carrying every edited repository identity, and an atomic pending/delivered manifest that makes an interrupted checklist recoverable. |
+| `PreCompact` | Fires before the transcript is compacted (manual or auto-triggered). The **first** `PreCompact` per session is blocked with a reason telling the model to `compile_transcript` the about-to-be-compacted transcript (deterministic compression, not lossy compaction) and `save_working_context` first; later ones pass through. | Its own block-once-then-pass sentinel, separate from edit checkpoints. |
+| `PreToolUse` | In an opted-in project, refuses the first `Edit`/`Write` until the same host session has completed a successful VelesDB recall in that repository. | Exit 2 with an actionable reason; the refused target is queued so a successful recall remains bound to it even if the host `cwd` is elsewhere. |
+| `PostToolUse` | Marks a successful VelesDB recall for the edit guard. Separately, when a schema-valid `Bash` result exceeds the size threshold, compiles it through `velesdb-memory compile-stdin` and replaces the view only if fidelity and net-savings gates pass. | Success-gated sentinel plus shape-preserving `hookSpecificOutput.updatedToolOutput` for compression. |
 
-**Design note — the only hook that reduces the payload itself.** The other
-three can only ask the model to call a tool; whether the context actually
-shrinks is the model's decision. `PostToolUse` is different: its output
+**Design note — the only hook that reduces the payload itself.** The three
+lifecycle continuations can only ask the model to call a tool; whether context
+actually shrinks is the model's decision. `PostToolUse` is different: its output
 schema replaces the tool result before it ever enters the transcript. A
 300 KB `Bash` result compiled here is 300 KB that never gets re-sent on
 every later turn — the compression is structural, not advisory.
@@ -284,10 +325,10 @@ every later turn — the compression is structural, not advisory.
 Because it runs on *every* tool call and *replaces* content, its safety
 rules are strict, and each is covered by `test/hooks.test.sh`:
 
-- **Nothing is deleted.** The untouched original is written under
-  `$TMPDIR/velesdb-agent-hooks/tool-output/` and its path is quoted in the
-  replacement, so the agent can `Read` it back — the out-of-store equivalent
-  of a retrieval handle.
+- **Nothing is deleted.** The complete original Bash output object is
+  serialized as JSON under `$TMPDIR/velesdb-agent-hooks-$UID/tool-output/` and its
+  path is quoted in the replacement, so the agent can `Read` it back — the
+  out-of-store equivalent of a retrieval handle.
 - **Identity fallback everywhere.** Missing `jq`, missing binary, a binary
   too old to know `compile-stdin`, a compilation error, an empty compiled
   result — each emits `{}` and leaves the tool result exactly as it was.
@@ -296,17 +337,52 @@ rules are strict, and each is covered by `test/hooks.test.sh`:
   watchdog (no `timeout`, absent from stock macOS) bounds the call, and a
   cached capability probe tells old binaries from new ones without guessing
   versions.
-- **Allowlist, not denylist.** Default `Bash,Grep,WebFetch`. `Read` and
-  `Edit` are deliberately excluded and must stay excluded: their value *is*
-  the exact bytes.
+- **Schema allowlist, not denylist.** Only `Bash` is enabled because Claude's
+  `{stdout, stderr, interrupted, isImage}` output is documented and pinned by
+  fixtures. `Grep` and `WebFetch` stay off until their schemas are verified;
+  `Read` and `Edit` stay excluded because their value *is* the exact bytes.
+- **Positive net gain.** `risk: low` or `medium` is necessary, not sufficient:
+  the compiler's gross saving must also cover every footer byte plus a
+  configurable net margin. Otherwise the original passes through.
 
 | Env var | Default | Meaning |
 |---|---|---|
-| `VELESDB_HOOK_COMPRESS_TOOLS` | `Bash,Grep,WebFetch` | Comma-separated tool allowlist. |
+| `VELESDB_HOOK_COMPRESS_TOOLS` | `Bash` | May disable `Bash`; naming another tool does not opt an unverified output schema into replacement. |
 | `VELESDB_HOOK_MIN_BYTES` | `12000` | Below this, pass through — compiling would cost more than it saves. |
+| `VELESDB_HOOK_MIN_SAVED_TOKENS` | `128` | Conservative minimum net saving after counting each footer byte as one token. |
 | `VELESDB_HOOK_TOKEN_BUDGET` | `2000` | Token budget handed to `compile-stdin`. |
+| `VELESDB_HOOK_TOKEN_BUDGET_MAX` | twice `VELESDB_HOOK_TOKEN_BUDGET` | Ceiling a `risk: high` compilation may retry at. Set it equal to the budget to forbid the retry. |
 | `VELESDB_MEMORY_BIN` | `velesdb-memory` on `PATH` | Binary to invoke. |
 | `VELESDB_HOOK_PROBE_TIMEOUT` | `10` | Seconds the capability probe may take. |
+
+**Fidelity.** A compilation the compiler reports as `risk: high` is **refused**,
+not shipped: `high` means at least one fragment it classifies as critical — a
+code fence, a negative constraint, an exact value, a URL — did not survive
+verbatim. The hook retries once at the ceiling first, because the budget is
+usually what is too tight rather than the content being incompressible; a
+268 KB cargo log measures `high` at 2 000 tokens and `medium` at 4 000. When
+the ceiling does not rescue it — a 584 KB thread-stack sample stays `high` at
+2 000, 4 000, 8 000 and 16 000 — the tool result is left byte-identical and the
+reason goes to stderr.
+
+The wire check is fail-closed too: only explicit `risk: low` and
+`risk: medium` results may replace a tool result. A missing field, an unknown
+enum value, or a value of the wrong JSON type leaves the original untouched.
+
+Claude also ignores a replacement whose value does not match the built-in
+tool's output shape. The hook therefore preserves the complete host-provided
+`Bash` object and changes only `stdout`/`stderr`; the fixture follows the
+[current Claude hooks contract](https://code.claude.com/docs/en/hooks#posttooluse-decision-control).
+
+Archiving the original is not a substitute for this. On the `compile-stdin`
+path the compiler runs with no store and no bridge, so the `ctx://source/…`
+handles it mints resolve to **nothing**; the temp file is the only way back,
+and a model that was never told to look will not look.
+
+This gate lives where the compression does, so it is Claude Code only. Codex
+cannot host the compression hook at all (see the parity table above), and there
+the same discipline exists only as guidance in the `velesdb-context-optimizer`
+skill.
 
 **Design note — why `PreCompact` blocks instead of using
 `additionalContext`:** the original plan for this feature assumed
@@ -322,13 +398,16 @@ compacting).
 
 ## `.velesdb-hooks.json` config format
 
-Place at your project root (the hooks walk up from the payload's `cwd`
-looking for it, up to 20 directories):
+Place at your project root. Lifecycle hooks walk up from the payload's `cwd`;
+the edit guard instead walks from Claude's `file_path` or every Codex patch
+target (`Add`, `Update`, `Delete`, and `Move`), falling back to `cwd` only when
+the documented target is absent. Every lookup is bounded to 20 directories:
 
 ```json
 {
   "project": "my-project",
-  "session": "rolling"
+  "session": "rolling",
+  "enforce_learning_loop": true
 }
 ```
 
@@ -340,10 +419,27 @@ looking for it, up to 20 directories):
   `save_working_context` accumulate one continuously-updated state across
   every Claude Code session on this project, instead of fragmenting into
   one throwaway slot per session that nothing else ever reads back.
+- `enforce_learning_loop` — explicit opt-in for recall-before-edit and the
+  four-step Stop checklist. Defaults to `false`; missing or malformed config
+  must never block an unrelated repository.
 
-Both fields are optional — with no config file at all, the hooks still
-work (defaulting `project` to the directory name and `session` to
-`"rolling"`), just with a less deliberately-chosen `project` label.
+When the target repository differs from `cwd`, the refused edit records that
+repository as pending. The next successful supported VelesDB recall in the
+same host session promotes it only when the target is unambiguous: the recall
+runs from that root, explicitly filters that project, or it is the sole pending
+target from an unconfigured cwd. A multi-repository patch may therefore need
+one refused-attempt/recall cycle per unseen repository. After the edit passes,
+independent per-repository records let concurrent hooks feed a session-wide
+`Stop` checkpoint without losing an identity.
+
+Policy discovery canonicalizes the nearest existing parent directory. A final
+symlink that crosses an opted-in repository boundary is refused even after
+recall; invoke the edit through its physical path instead.
+
+All three fields are optional. With no config file, load/save and compiler
+guidance still work (defaulting `project` to the directory name and `session`
+to `"rolling"`), but recall-before-edit remains disabled. This keeps a global
+hook install from blocking unrelated repositories.
 
 ## Testing
 
@@ -352,15 +448,16 @@ bash test/hooks.test.sh
 ```
 
 Simulates the stdin payload each harness documents for each event and asserts
-the exact JSON the script prints back (including the block-once/pass-after
-behaviour of `Stop` and `PreCompact`, and the Codex `source == "compact"`
-branch). It also shellchecks every script and rejects hardcoded home paths.
+the exact JSON the script prints back (including edit-triggered Stop
+checkpoints, `PreCompact`'s block-once/pass-after behaviour, and the Codex
+`source == "compact"` branch). It also shellchecks every script and rejects
+hardcoded home paths.
 Run it after touching any script in `claude-code/hooks/`, `windsurf/hooks/`
 or `codex/hooks/`.
 
-What it cannot do: prove that a harness really sends those fields. The
-Claude Code assertions are backed by hooks that have been run for real; the
-Windsurf and Codex ones are backed only by the vendors' published contracts.
+What it cannot do: prove every harness version sends those fields. The Claude
+Code assertions are backed by hooks run for real; Codex MCP and shell payloads
+were measured on the version recorded above; Windsurf remains contract-only.
 
 ## Why `PreCompact` only nudges `compile_transcript`, never calls it directly
 

@@ -75,7 +75,7 @@ struct PendingBatch {
 ///
 /// # Examples
 ///
-/// ```rust,no_run
+/// ```ignore (crate-internal API — doctests compile as an external crate)
 /// use velesdb_core::config::WalBatchConfig;
 /// use velesdb_core::storage::wal_batcher::WalBatcher;
 ///

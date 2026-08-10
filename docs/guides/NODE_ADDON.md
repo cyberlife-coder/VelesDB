@@ -9,7 +9,7 @@ and a 60-second first success. This guide is the reference behind it.
 
 ## Contents
 
-- [The 18-method surface](#the-18-method-surface)
+- [The 21-method surface](#the-21-method-surface)
 - [Three contracts that apply to every method](#three-contracts-that-apply-to-every-method)
 - [Choosing an embedder](#choosing-an-embedder)
 - [Auto-extraction (`rememberExtracted`)](#auto-extraction-rememberextracted)
@@ -20,7 +20,7 @@ and a 60-second first success. This guide is the reference behind it.
 - [Need the full engine?](#need-the-full-engine)
 - [Resource caps](#resource-caps)
 
-## The 18-method surface
+## The 21-method surface
 
 `MemoryService.open(path, embedder?, ollamaUrl?, ollamaModel?)` is the only
 constructor (a static factory). Everything else is an instance method, and
@@ -28,8 +28,8 @@ every instance method returns a `Promise`.
 
 | Family | Methods |
 |---|---|
-| Durable memory | `remember`, `recall`, `recallWhere`, `recallFused`, `recallFusedDated`, `relate`, `forget`, `why`, `feedback`, `rememberExtracted` |
-| Context compiler | `compileContext`, `compileTranscript`, `explainCompilation`, `contextSavings`, `retrieveContextSource` |
+| Durable memory | `remember`, `recall`, `recallWhere`, `recallFused`, `recallFusedDated`, `relate`, `unrelate`, `forget`, `entity`, `why`, `feedback`, `rememberExtracted` |
+| Context compiler | `compileContext`, `compileTranscript`, `explainCompilation`, `contextSavings`, `retrieveContextSource`, `suggestBudget` |
 | Session resumption | `saveWorkingContext`, `loadWorkingContext`, `listWorkingContexts` |
 
 That list is pinned by a test — `__test__/index.spec.mjs` asserts the exact
@@ -223,13 +223,23 @@ await store.saveWorkingContext('veles', 'session-1', {
   pending_actions: ['load this back from a fresh MemoryService'],
 })
 
-const resumed = await store.loadWorkingContext('veles', 'session-1') // null when nothing was saved
+// `{found, working, other_sessions}` — the same envelope the MCP tool serves.
+const resumed = await store.loadWorkingContext('veles', 'session-1')
 const { sessions } = await store.listWorkingContexts('veles')        // [] when the project never saved
 ```
 
+**Breaking in 0.12.0**: `loadWorkingContext` used to resolve the bare working
+context, or `null`. Read `resumed.working` for that value. The bare form
+collapsed two different answers into one — a project that never saved
+anything, and a typo in `session` that missed a session which *does* exist.
+`resumed.other_sessions` is what tells them apart, and it is filled in on a
+hit too: a typo landing on another real session returns `found: true`, the
+case a caller can least detect on its own.
+
 Saving again under the same `project` + `session` replaces the previous state
 (idempotent upsert). Id fields nested inside the working context follow the
-same decimal-string contract in both directions.
+same decimal-string contract in both directions — including the ones under
+`resumed.working`, one level deeper than before.
 
 ## Bundled agent skills
 
@@ -240,10 +250,12 @@ methods — wiring the API alone gives it the verbs, not the loop:
 |---|---|
 | `skills/velesdb-memory` | recall before acting → remember decisions with metadata **and** links → `relate` as relationships appear → `why` to explain → `feedback` to reinforce |
 | `skills/velesdb-context-optimizer` | the full compression workflow, including when *not* to compress |
+| `skills/velesdb-learning-loop` | the discipline over both: recall before designing, check recurrence before storing a fix, correct a wrong memory instead of adding beside it, and never write by reflex |
 
 ```bash
 cp -r node_modules/@wiscale/velesdb-memory-node/skills/velesdb-memory ~/.claude/skills/
 cp -r node_modules/@wiscale/velesdb-memory-node/skills/velesdb-context-optimizer ~/.claude/skills/
+cp -r node_modules/@wiscale/velesdb-memory-node/skills/velesdb-learning-loop ~/.claude/skills/
 ```
 
 **Keep them fresh.** That `cp` is a snapshot, not a live link — re-run it
@@ -308,4 +320,4 @@ silently reduced instead.
 
 ---
 
-Last updated: 2026-07-25 · Applies to: velesdb-core 4.2.0
+Last updated: 2026-08-09 · Applies to: velesdb-core 5.0.0

@@ -19,7 +19,7 @@ use super::*;
 use crate::context::model::CompilePolicy;
 use crate::context::{fragment_id, ContextAction};
 use crate::embedder::HashEmbedder;
-use crate::model::MemoryEdge;
+use crate::model::{BoundedMemoryEdges, MemoryEdge};
 use crate::storage::NativeStore;
 
 const DIM: usize = 384;
@@ -455,6 +455,91 @@ fn test_explain_compilation_fragment_index_out_of_bounds_is_rejected() {
     ));
 }
 
+/// #1745. `slim_response` empties `sections` and `decisions` from a
+/// `compile_context` response — a PRESENTATION option, for a caller who wants
+/// the compiled content without its audit trail.
+///
+/// `explain_compilation` asks for exactly ONE decision. Letting that option
+/// through does not trim its answer, it deletes it: `apply_slim` clears
+/// `decisions`, the lookup then finds nothing, and the caller gets
+/// `FragmentNotFound` for a fragment that was compiled perfectly well.
+///
+/// The message is what makes this worse than a limitation. A caller told
+/// "fragment not found" reasonably concludes they passed the wrong id and
+/// goes looking in the wrong place.
+///
+/// And the option exists to SAVE TOKENS, so a caller under a tight budget
+/// turns it on by default — losing the audit tool exactly when they most need
+/// it.
+#[test]
+fn test_explain_compilation_ignores_slim_response() {
+    let (_dir, svc) = open_service();
+    let wanted = fragment_id("a fact");
+    let slim = CompilePolicy {
+        slim_response: true,
+        ..CompilePolicy::default()
+    };
+    let req = explain_request(vec![fragment("a fact"), fragment("other")], Some(slim));
+
+    let decision = svc
+        .explain_compilation(&req, wanted, None)
+        .expect("slim_response is a presentation option; it must not hide the decision");
+
+    // Not merely "no error": the decision must be the one that was ASKED for,
+    // and it must carry the explanation. An empty reason or a neighbour's
+    // decision would satisfy `is_ok()` while telling the caller nothing.
+    assert_eq!(
+        decision.fragment_id, wanted,
+        "the decision must belong to the fragment that was asked about"
+    );
+    assert!(matches!(decision.action, ContextAction::Preserve));
+    assert!(
+        !decision.reason.is_empty(),
+        "an explanation with no reason explains nothing"
+    );
+    assert!(
+        !decision.rule_id.is_empty(),
+        "the rule that produced the decision is half the explanation"
+    );
+}
+
+/// The other half of the same guard. The fix works by FORCING a policy field,
+/// so this pins that the nominal path — the one every caller already uses —
+/// is untouched: same decision, same action, same rule, whether the option is
+/// absent or explicitly off.
+#[test]
+fn test_explain_compilation_without_slim_response_is_unchanged() {
+    let (_dir, svc) = open_service();
+    let wanted = fragment_id("a fact");
+    let explicit_off = CompilePolicy {
+        slim_response: false,
+        ..CompilePolicy::default()
+    };
+
+    let baseline = svc
+        .explain_compilation(
+            &explain_request(vec![fragment("a fact"), fragment("other")], None),
+            wanted,
+            None,
+        )
+        .expect("explain_compilation with no policy at all");
+    let with_flag_off = svc
+        .explain_compilation(
+            &explain_request(
+                vec![fragment("a fact"), fragment("other")],
+                Some(explicit_off),
+            ),
+            wanted,
+            None,
+        )
+        .expect("explain_compilation with slim_response explicitly false");
+
+    assert_eq!(with_flag_off.fragment_id, baseline.fragment_id);
+    assert_eq!(with_flag_off.action, baseline.action);
+    assert_eq!(with_flag_off.rule_id, baseline.rule_id);
+    assert_eq!(with_flag_off.reason, baseline.reason);
+}
+
 #[test]
 fn test_explain_compilation_fragment_index_disambiguates_byte_identical_twins() {
     // Two byte-identical fragments share the same content-addressed
@@ -657,6 +742,22 @@ macro_rules! delegate_untouched_store_methods {
             self.inner.incoming_relations(id)
         }
 
+        fn relations_bounded(
+            &self,
+            id: u64,
+            cap: usize,
+        ) -> Result<BoundedMemoryEdges, MemoryError> {
+            self.inner.relations_bounded(id, cap)
+        }
+
+        fn incoming_relations_bounded(
+            &self,
+            id: u64,
+            cap: usize,
+        ) -> Result<BoundedMemoryEdges, MemoryError> {
+            self.inner.incoming_relations_bounded(id, cap)
+        }
+
         fn unrelate(&self, edge_id: u64) -> Result<bool, MemoryError> {
             self.inner.unrelate(edge_id)
         }
@@ -792,6 +893,71 @@ fn test_working_index_with_marker_but_no_body_is_an_error_not_an_empty_list() {
         listed.is_err(),
         "a marked-but-bodyless index is corruption and must surface as an \
          error; got {listed:?}"
+    );
+}
+
+/// A service whose project index is corrupt but whose per-session facts are
+/// intact — the state both tests below start from.
+fn service_with_torn_index(
+    dir: &tempfile::TempDir,
+    project: &str,
+) -> MemoryService<HashEmbedder, TornBodyStore> {
+    let native = NativeStore::open(dir.path(), DIM).expect("open native store");
+    MemoryService::with_store(
+        TornBodyStore {
+            inner: native,
+            torn: working_index_id(project),
+        },
+        HashEmbedder::new(DIM),
+    )
+}
+
+#[test]
+fn test_resume_returns_an_intact_context_even_when_the_project_index_is_corrupt() {
+    // Given a project whose index body is gone but whose saved session is fine
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let svc = service_with_torn_index(&dir, "veles");
+    svc.save_working_context("veles", "alpha", &minimal_working())
+        .expect("save_working_context");
+
+    // When resuming that very session
+    let resumed = svc.resume_working_context("veles", "alpha");
+
+    // Then the caller gets what it asked for. `other_sessions` is a HINT for
+    // spotting a typo, not the answer: letting its index deny an intact
+    // payload turns a fault in an auxiliary fact into a total loss of
+    // resumption for EVERY session of the project, including the ones that
+    // read back perfectly. The corruption stays loudly reachable through
+    // `list_working_contexts`, which every surface publishes.
+    let resumed = resumed.expect("a corrupt index must not deny an intact working context");
+    assert!(resumed.found, "the session's own fact is intact");
+    assert!(resumed.working.is_some(), "and must be handed back");
+    assert!(
+        resumed.other_sessions.is_empty(),
+        "the hint is unavailable, so it is empty — not fabricated"
+    );
+}
+
+#[test]
+fn test_resume_still_fails_on_a_miss_when_the_project_index_is_corrupt() {
+    // Given the same corrupt index, and a session id that was never saved
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let svc = service_with_torn_index(&dir, "veles");
+    svc.save_working_context("veles", "alpha", &minimal_working())
+        .expect("save_working_context");
+
+    // When resuming a session that does not exist
+    let resumed = svc.resume_working_context("veles", "typo");
+
+    // Then it is an ERROR, and must stay one. On a miss `other_sessions` is
+    // the ONLY signal the caller has: an empty list is the positive assertion
+    // "nothing else was ever saved here", and an agent told that starts over
+    // on top of `alpha`. Degrading a miss the way a hit degrades would
+    // manufacture exactly the silent restart this envelope exists to prevent.
+    assert!(
+        resumed.is_err(),
+        "a miss must never assert 'no other session' from an index it could \
+         not read; got {resumed:?}"
     );
 }
 

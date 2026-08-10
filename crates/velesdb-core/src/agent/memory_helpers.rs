@@ -366,70 +366,97 @@ pub(super) fn ensure_live(
     get_point_or_not_found(collection, collection_name, id)
 }
 
-/// Seeds a relation edge-id counter past every existing edge id.
+/// Decides what an edge already sitting on the derived id MEANS.
 ///
-/// One pass over the edge-id registry (no edge cloning).
-pub(super) fn seed_edge_counter(collection: &Collection) -> std::sync::atomic::AtomicU64 {
-    let next = collection
-        .max_edge_id()
-        .map_or(1, |max| max.saturating_add(1));
-    std::sync::atomic::AtomicU64::new(next)
+/// Two cases, and they must not be confused. The same triple is this call's
+/// idempotent answer — return the id that is already there. A different triple
+/// is a 64-bit FNV-1a collision, and it is REPORTED rather than absorbed:
+/// returning the colliding edge's id would answer a relation nobody asked for,
+/// and dropping the write would lose one. A named failure beats both.
+fn resolve_existing_edge(
+    existing: &crate::collection::graph::GraphEdge,
+    edge_id: u64,
+    endpoints: (u64, u64),
+    rel_type: &str,
+) -> Result<u64, AgentMemoryError> {
+    let (from_id, to_id) = endpoints;
+    if existing.source() == from_id && existing.target() == to_id && existing.label() == rel_type {
+        return Ok(edge_id);
+    }
+    Err(AgentMemoryError::CollectionError(format!(
+        "edge id {edge_id} derived from ({from_id}, {rel_type}, {to_id}) is already held by \
+         ({}, {}, {}) — a hash collision, not a duplicate relation",
+        existing.source(),
+        existing.label(),
+        existing.target(),
+    )))
 }
 
-/// Maximum number of edge-ID allocation attempts before giving up.
+/// Adds a relation edge between two memory points, deriving its id from the
+/// triple with [`crate::wire::hash_edge_id`] — the derivation `VelesQL` DML
+/// (`database/dml_executor.rs`) and the WASM engine (`graph_store.rs`) already
+/// use, so one logical edge carries one id in every `VelesDB` engine.
 ///
-/// Each iteration either succeeds or advances the counter by one, so
-/// this caps the worst-case number of counter increments. Exhaustion
-/// indicates an unusually dense pre-existing edge space (e.g. a
-/// corrupted counter seed) and is surfaced as a `CollectionError`.
-const MAX_EDGE_ID_RETRIES: u32 = 1_000;
-
-/// Adds a relation edge between two memory points, allocating a fresh edge
-/// id from `next_edge_id` (skipping ids taken by direct graph writes; the
-/// `EdgeExists` retry covers the residual allocation race).
+/// **That derivation IS the idempotence `relate` publishes.** The same
+/// `(from, relation, to)` computes the same id, and the edge store already
+/// refuses a duplicate id inside the `edge_ids` write guard it holds across
+/// its whole check-and-insert. So there is no scan of the source node's
+/// out-edges, no second index to maintain, and — decisively — no window
+/// between a lookup and the write: the atomicity is the one the store already
+/// guarantees. A per-call scan could not have been made atomic here at all,
+/// since nothing in this module can hold the store's locks.
 ///
-/// Returns `CollectionError` when [`MAX_EDGE_ID_RETRIES`] consecutive ids
-/// are all already taken — this should never happen in practice.
+/// # Errors
+///
+/// Returns `NotFound` when an endpoint was deleted concurrently, and
+/// `CollectionError` when the derived id is already held by a DIFFERENT
+/// triple — see [`edge_id_collision`].
 pub(super) fn add_relation_edge(
     collection: &Collection,
-    next_edge_id: &std::sync::atomic::AtomicU64,
     endpoints: (u64, u64),
     rel_type: &str,
     properties: Option<&serde_json::Map<String, serde_json::Value>>,
 ) -> Result<u64, AgentMemoryError> {
     let (from_id, to_id) = endpoints;
-    for _ in 0..MAX_EDGE_ID_RETRIES {
-        let edge_id = next_edge_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if collection.edge_exists(edge_id) {
-            continue; // taken by a direct graph write — no junk WAL entry
-        }
-        let mut edge = crate::collection::graph::GraphEdge::new(edge_id, from_id, to_id, rel_type)
-            .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
-        if let Some(props) = properties {
-            let map: std::collections::HashMap<String, serde_json::Value> =
-                props.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-            edge = edge.with_properties(map);
-        }
-        match collection.add_edge(edge) {
-            Ok(()) => return Ok(edge_id),
-            // Lost the residual allocation race — try the next id.
-            Err(crate::error::Error::EdgeExists(_)) => {}
-            // The endpoint was deleted between `ensure_live` and this write
-            // (the same check-then-add race `verify_relation_endpoints`
-            // compensates for after a successful write) — surface the same
-            // `NotFound` contract, not a generic `CollectionError`/Internal.
-            Err(crate::error::Error::NodeNotFound(id)) => {
-                return Err(AgentMemoryError::NotFound(format!(
-                    "a relation endpoint ({id}) was deleted concurrently"
-                )))
-            }
-            Err(e) => return Err(AgentMemoryError::CollectionError(e.to_string())),
-        }
+    let edge_id = crate::wire::hash_edge_id(from_id, to_id, rel_type);
+    // Already there: answer with the same id and write nothing — not even a
+    // WAL entry for an edge the store would refuse a line later.
+    if let Some(existing) = collection.get_edge(edge_id) {
+        return resolve_existing_edge(&existing, edge_id, endpoints, rel_type);
     }
-    Err(AgentMemoryError::CollectionError(
-        "edge id allocation exhausted after too many retries (possible id-space corruption)"
-            .to_string(),
-    ))
+    let mut edge = crate::collection::graph::GraphEdge::new(edge_id, from_id, to_id, rel_type)
+        .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
+    if let Some(props) = properties {
+        let map: std::collections::HashMap<String, serde_json::Value> =
+            props.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        edge = edge.with_properties(map);
+    }
+    match collection.add_edge(edge) {
+        Ok(()) => Ok(edge_id),
+        // A concurrent writer won the insert between the read above and this
+        // one. Whoever won holds the SAME derived id, so re-read and let the
+        // triple decide — that is what makes two simultaneous identical
+        // `relate` calls both answer the one edge instead of writing two.
+        Err(crate::error::Error::EdgeExists(_)) => collection.get_edge(edge_id).map_or_else(
+            // Removed again between the refusal and this read: nothing was
+            // written and nothing survives, the same outcome as an endpoint
+            // deleted mid-write.
+            || {
+                Err(AgentMemoryError::NotFound(format!(
+                    "the relation ({from_id}, {rel_type}, {to_id}) was removed while being written"
+                )))
+            },
+            |existing| resolve_existing_edge(&existing, edge_id, endpoints, rel_type),
+        ),
+        // The endpoint was deleted between `ensure_live` and this write
+        // (the same check-then-add race `verify_relation_endpoints`
+        // compensates for after a successful write) — surface the same
+        // `NotFound` contract, not a generic `CollectionError`/Internal.
+        Err(crate::error::Error::NodeNotFound(id)) => Err(AgentMemoryError::NotFound(format!(
+            "a relation endpoint ({id}) was deleted concurrently"
+        ))),
+        Err(e) => Err(AgentMemoryError::CollectionError(e.to_string())),
+    }
 }
 
 /// Compensates the `relate()` check-then-add window: when an endpoint was
@@ -605,7 +632,6 @@ pub(super) struct MemorySubsystem<'a> {
     pub collection_name: &'a str,
     pub ttl: &'a super::ttl::MemoryTtl,
     pub kind: super::ttl::MemoryKind,
-    pub next_edge_id: &'a std::sync::atomic::AtomicU64,
 }
 
 /// Adds a durable relation edge between two live memory points.
@@ -636,13 +662,7 @@ pub(super) fn relate_memory_points(
             id,
         )?;
     }
-    let edge_id = add_relation_edge(
-        &collection,
-        subsystem.next_edge_id,
-        (from_id, to_id),
-        rel_type,
-        properties,
-    )?;
+    let edge_id = add_relation_edge(&collection, (from_id, to_id), rel_type, properties)?;
     // Close the check-then-add window: an endpoint deleted concurrently
     // (its cascade may have run before our edge landed) must not leave a
     // dangling, WAL-durable edge behind.
@@ -674,6 +694,39 @@ pub(super) fn relations_of(
         .collect())
 }
 
+/// Bounded twin of [`relations_of`] (#1820): resolves at most `cap` stored
+/// edges — work and transient allocation O(cap), never O(degree) — and says
+/// whether the point's total degree exceeded the scan.
+///
+/// The TTL filter runs on the scanned window only: an expired edge inside it
+/// is dropped without scanning further, because the O(cap) bound is the
+/// contract. `truncated` compares the TOTAL stored degree (read under the
+/// same shard guard as the edges) against `cap`, so a caller can tell
+/// "exactly `cap` edges" from "cut at `cap`" — the ambiguity the unbounded
+/// accessor structurally cannot resolve.
+///
+/// # Errors
+///
+/// Returns `CollectionError` when the collection cannot be resolved.
+pub(super) fn relations_of_bounded(
+    db: &Database,
+    collection_name: &str,
+    id: u64,
+    ttl: &super::ttl::MemoryTtl,
+    kind: super::ttl::MemoryKind,
+    cap: usize,
+) -> Result<super::BoundedRelations, AgentMemoryError> {
+    let collection = get_collection(db, collection_name)?;
+    let (edges, total) = collection.get_outgoing_edges_bounded(id, cap);
+    Ok(super::BoundedRelations {
+        edges: edges
+            .into_iter()
+            .filter(|edge| !ttl.is_expired(kind, edge.target()))
+            .collect(),
+        truncated: total > cap,
+    })
+}
+
 /// Returns the incoming relation edges of a memory point, filtering out edges
 /// whose source is TTL-expired in the given subsystem.
 ///
@@ -699,6 +752,33 @@ pub(super) fn incoming_relations_of(
         .into_iter()
         .filter(|edge| !ttl.is_expired(kind, edge.source()))
         .collect())
+}
+
+/// Bounded twin of [`incoming_relations_of`] — the incoming mirror of
+/// [`relations_of_bounded`], with the same O(cap) scan contract and the same
+/// window-only TTL filtering (here on `source()`, the far end of an incoming
+/// edge).
+///
+/// # Errors
+///
+/// Returns `CollectionError` when the collection cannot be resolved.
+pub(super) fn incoming_relations_of_bounded(
+    db: &Database,
+    collection_name: &str,
+    id: u64,
+    ttl: &super::ttl::MemoryTtl,
+    kind: super::ttl::MemoryKind,
+    cap: usize,
+) -> Result<super::BoundedRelations, AgentMemoryError> {
+    let collection = get_collection(db, collection_name)?;
+    let (edges, total) = collection.get_incoming_edges_bounded(id, cap);
+    Ok(super::BoundedRelations {
+        edges: edges
+            .into_iter()
+            .filter(|edge| !ttl.is_expired(kind, edge.source()))
+            .collect(),
+        truncated: total > cap,
+    })
 }
 
 /// Removes a relation edge from a memory collection.

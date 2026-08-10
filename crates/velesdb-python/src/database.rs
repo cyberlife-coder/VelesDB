@@ -530,7 +530,14 @@ impl Database {
     ///     >>> db.train_pq("documents", m=8, k=256)
     ///     >>> db.train_pq("documents", m=16, k=128, opq=True)
     #[pyo3(signature = (collection_name, m=8, k=256, opq=false))]
-    fn train_pq(&self, collection_name: &str, m: usize, k: usize, opq: bool) -> PyResult<String> {
+    fn train_pq(
+        &self,
+        py: Python<'_>,
+        collection_name: &str,
+        m: usize,
+        k: usize,
+        opq: bool,
+    ) -> PyResult<String> {
         // Validate collection_name to prevent VelesQL injection via string interpolation.
         if !collection_name
             .chars()
@@ -552,10 +559,16 @@ impl Database {
             PyValueError::new_err(format!("Failed to construct TRAIN query: {}", e.message))
         })?;
 
-        let empty_params = std::collections::HashMap::new();
-        let results = self
-            .inner
-            .execute_query(&parsed, &empty_params)
+        // Drop the GIL for the training run: k-means codebook fitting is
+        // CPU-bound Rust work that scales with the collection size and easily
+        // reaches multi-second latency — holding the GIL for that long would
+        // freeze every other Python thread.
+        let inner = Arc::clone(&self.inner);
+        let results = py
+            .detach(move || {
+                let empty_params = std::collections::HashMap::new();
+                inner.execute_query(&parsed, &empty_params)
+            })
             .map_err(core_err)?;
 
         Ok(format!("PQ training complete: {} results", results.len()))
