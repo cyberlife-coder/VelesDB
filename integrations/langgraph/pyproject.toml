@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "langgraph-velesdb"
-version = "4.3.0"
+version = "5.0.0"
 description = "LangGraph memory tools for VelesDB: drop the why() knowledge-graph memory wedge into any LangGraph agent."
 readme = "README.md"
 license = {text = "MIT"}
@@ -36,7 +36,7 @@ dependencies = [
     # those tools return {"error": ...} or report the drift at call time, and
     # recall_where/recall_fused's `metadata` stays empty for auto-dating,
     # until the 5.0.0 release. See README.md's "Compatibility" section.
-    "velesdb>=3.12.0",
+    "velesdb>=5.0.0",
 ]
 
 [project.optional-dependencies]

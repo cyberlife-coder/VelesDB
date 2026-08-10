@@ -89,14 +89,14 @@ tools["recall_fused"].invoke({"query": "what changed this week", "date_field": "
 
 ## Compatibility
 
-This package declares a floor of `velesdb>=3.12.0`; 4.x releases are
-published to PyPI, so a fresh install resolves to a current wheel.
-`feedback`, `save_working_context`, `load_working_context`, and the
-automatic `_veles_date` metadata stamp landed in `velesdb`/`velesdb-memory`
-*after* the 3.12.0 release cut, so they are available on current wheels but
-absent on an install pinned at the floor. On a plain 3.12.0 install those
-three tools detect the missing binding method at call time and return an
-error payload instead of raising, e.g.:
+This package declares a floor of `velesdb>=5.0.0` — the release that
+carries the `load_working_context` `{found, working, other_sessions}`
+envelope this toolkit relays, plus `feedback`, `save_working_context` and
+the automatic `_veles_date` metadata stamp. The floor moved from 3.12.0
+with the 5.0.0 train, exactly as the changelog mandated: it could not be
+raised in advance because the version that carries the envelope did not
+exist yet. The call-time detection below remains as a net for an
+environment that pins an older wheel by hand, e.g.:
 
 ```json
 {"error": "feedback requires velesdb > 3.12.0 — upgrade with `pip install -U velesdb`"}
