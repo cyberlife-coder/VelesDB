@@ -308,7 +308,7 @@ impl From<UnrelateOutcome> for UnrelateJs {
 
 /// Result of [`compileContext`](crate::MemoryStore::compile_context): the
 /// top-level fields are typed; the nested trees (`decisions`, `sources`, …)
-/// are plain JSON objects in exactly the MCP wire shape (snake_case keys),
+/// are plain JSON objects in exactly the MCP wire shape (`snake_case` keys),
 /// with every id field already converted to a decimal string.
 #[napi(object)]
 pub struct CompiledContextJs {

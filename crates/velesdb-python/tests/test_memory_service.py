@@ -400,3 +400,47 @@ def test_a_malformed_outline_directive_refuses_instead_of_dropping_the_line(mem)
     # that refuses.
     with pytest.raises(Exception, match=r"3 `\|`-separated fields, 2 given"):
         mem.remember_extracted("edge: Camille | works at", extractor="outline")
+
+
+def test_memory_status_reports_the_hash_default_as_not_semantic(mem):
+    """The binding's status mirrors the MCP envelope, with the binding's
+    own truths: the constructor resolved the embedder, nothing is
+    pre-attached for extraction, and the counts are live."""
+    before = mem.memory_status()
+    assert before["embedder"]["model"] == "hash"
+    assert before["embedder"]["semantic"] is False
+    assert before["provenance"]["recorded"] is False
+    assert before["extraction"]["configured"] is False
+    assert before["memory"]["facts"] == 0
+    assert before["memory"]["edges"] == 0
+
+    a = mem.remember("le port est 6333")
+    b = mem.remember("l'incident est INC-42")
+    mem.relate(a, b, "explique")
+
+    after = mem.memory_status()
+    assert after["memory"]["facts"] == 2
+    assert after["memory"]["edges"] >= 1
+
+
+def test_list_memories_walks_the_store_exhaustively(mem):
+    """Cursor pagination sees every fact exactly once, ids ascending, and a
+    metadata filter narrows without erroring on a miss."""
+    for i in range(5):
+        mem.remember(f"fait numero {i}", metadata={"project": "acme"})
+
+    seen = []
+    cursor = None
+    for _ in range(16):
+        page = mem.list_memories(cursor=cursor, limit=2)
+        seen.extend(page["memories"])
+        if page["next_cursor"] is None:
+            break
+        cursor = int(page["next_cursor"])
+    assert len(seen) == 5
+    ids = [entry["id"] for entry in seen]
+    assert ids == sorted(ids), "ids come back ascending"
+    assert all(entry["metadata"]["project"] == "acme" for entry in seen)
+
+    filtered = mem.list_memories(filter={"project": "globex"})
+    assert filtered["memories"] == []

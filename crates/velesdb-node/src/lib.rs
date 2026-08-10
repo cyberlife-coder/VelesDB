@@ -3,7 +3,7 @@
 //! `unrelate` / `forget` / `why` / `entity` / `feedback` / `rememberExtracted` / `compileContext` /
 //! `compileTranscript` / `contextSavings` / `explainCompilation` /
 //! `retrieveContextSource` / `saveWorkingContext` / `loadWorkingContext` /
-//! `listWorkingContexts` / `suggestBudget`.
+//! `listWorkingContexts` / `suggestBudget` / `memoryStatus` / `listMemories`.
 //!
 //! It wraps the exact same hardened Rust the MCP server and the `PyO3` binding use
 //! (no logic is reimplemented), mirroring `crates/velesdb-python/src/agent_memory_service.rs`
@@ -52,8 +52,8 @@ use velesdb_memory::context::{
     WorkingContext,
 };
 use velesdb_memory::{
-    DynEmbedder, HashEmbedder, MemoryService, OllamaEmbedder, OllamaExtractor, OutlineExtractor,
-    DEFAULT_DIMENSION, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL,
+    DynEmbedder, Embedder, HashEmbedder, MemoryService, OllamaEmbedder, OllamaExtractor,
+    OutlineExtractor, DEFAULT_DIMENSION, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL,
 };
 
 use crate::dto::{
@@ -95,6 +95,14 @@ fn build_embedder(
 #[napi(js_name = "MemoryService")]
 pub struct MemoryStore {
     inner: Arc<MemoryService<DynEmbedder>>,
+    /// The embedder identity resolved at [`Self::open`] — what
+    /// [`Self::memory_status`] reports as RUNNING. The service itself only
+    /// ever sees `&[f32]`, so the factory is the one place that knows.
+    embedder_model: String,
+    embedder_dimension: usize,
+    /// Where the store lives, for the provenance block of
+    /// [`Self::memory_status`] (#1751's on-disk record).
+    store_dir: std::path::PathBuf,
 }
 
 #[napi]
@@ -116,10 +124,20 @@ impl MemoryStore {
         ollama_model: Option<String>,
     ) -> napi::Result<Self> {
         let kind = embedder.as_deref().unwrap_or("hash");
+        let embedder_model = match kind {
+            "hash" => "hash".to_owned(),
+            _ => ollama_model
+                .clone()
+                .unwrap_or_else(|| DEFAULT_OLLAMA_MODEL.to_owned()),
+        };
         let emb = build_embedder(kind, ollama_url, ollama_model)?;
+        let embedder_dimension = emb.dimension();
         let svc = MemoryService::open(&path, emb).map_err(to_napi_err)?;
         Ok(Self {
             inner: Arc::new(svc),
+            embedder_model,
+            embedder_dimension,
+            store_dir: std::path::PathBuf::from(path),
         })
     }
 
@@ -682,6 +700,107 @@ impl MemoryStore {
     ///   contract of this method is reachable without a model running.
     ///
     /// This used to resolve to a bare `Array<string>` of ids, and that array
+    /// The server's health, in the SAME envelope the MCP `memory_status`
+    /// tool returns: which embedder RUNS (`embedder.semantic: false` is the
+    /// offline `hash` default — recall matches surface form, not meaning),
+    /// what the store was FILLED by per its on-disk provenance record
+    /// (#1751), the extraction wiring (this binding passes its extractor
+    /// per `rememberExtracted` call, so nothing is pre-attached and the
+    /// autograph fields report the service's actual state), and the corpus
+    /// size — `memory.edges: 0` is the observable "`why()` has nothing to
+    /// walk" state.
+    #[napi(
+        js_name = "memoryStatus",
+        ts_return_type = "Promise<{ embedder: { model: string | null; dimension: number | null; semantic: boolean | null }; provenance: { recorded: boolean; model: string | null; dimension: number | null }; extraction: { configured: boolean; autograph_active: boolean; autograph_dropped: number }; memory: { facts: number; edges: number | null } }>"
+    )]
+    pub fn memory_status(&self) -> AsyncTask<Job<JsonOut>> {
+        let svc = Arc::clone(&self.inner);
+        let model = self.embedder_model.clone();
+        let dimension = self.embedder_dimension;
+        let store_dir = self.store_dir.clone();
+        AsyncTask::new(Job::new(move || {
+            let recorded = velesdb_memory::embedding_provenance::read(&store_dir)
+                .ok()
+                .flatten();
+            let provenance = match recorded {
+                Some(record) => serde_json::json!({
+                    "recorded": true, "model": record.model, "dimension": record.dimension
+                }),
+                None => serde_json::json!({
+                    "recorded": false, "model": null, "dimension": null
+                }),
+            };
+            Ok(JsonOut(serde_json::json!({
+                "embedder": {
+                    "model": model,
+                    "dimension": dimension,
+                    "semantic": model != "hash",
+                },
+                "provenance": provenance,
+                "extraction": {
+                    "configured": svc.has_autograph(),
+                    "autograph_active": svc.autograph_queue_open(),
+                    "autograph_dropped": svc.autograph_dropped(),
+                },
+                "memory": {
+                    "facts": svc.fact_count(),
+                    "edges": svc.edge_count(),
+                },
+            })))
+        }))
+    }
+
+    /// Audit the store page by page — the SAME walk and envelope as the MCP
+    /// `list_memories` tool: ids ascending, TTL-expired facts skipped,
+    /// metadata under recall's visibility rule unless `includeInternal`.
+    /// `cursor` is the previous page's `next_cursor` (a decimal string);
+    /// `null` ends the walk. A `filter` page may come back sparse — keep
+    /// following the cursor, the walk stays exhaustive.
+    #[napi(
+        js_name = "listMemories",
+        ts_return_type = "Promise<{ memories: Array<{ id: string; content: string; metadata: object | null }>; next_cursor: string | null }>"
+    )]
+    pub fn list_memories(
+        &self,
+        cursor: Option<String>,
+        limit: Option<u32>,
+        filter: Option<Value>,
+        include_internal: Option<bool>,
+    ) -> AsyncTask<Job<JsonOut>> {
+        let svc = Arc::clone(&self.inner);
+        AsyncTask::new(Job::new(move || {
+            let cursor = match cursor {
+                Some(raw) => Some(raw.trim().parse::<u64>().map_err(|_| {
+                    invalid_input(format!("cursor must be a decimal u64 string, got '{raw}'"))
+                })?),
+                None => None,
+            };
+            let filter = convert::to_metadata(filter)?;
+            let (memories, next) = svc
+                .list(
+                    cursor,
+                    limit.unwrap_or(50) as usize,
+                    filter.as_ref(),
+                    include_internal.unwrap_or(false),
+                )
+                .map_err(to_napi_err)?;
+            let entries: Vec<serde_json::Value> = memories
+                .into_iter()
+                .map(|memory| {
+                    serde_json::json!({
+                        "id": memory.id.to_string(),
+                        "content": memory.content,
+                        "metadata": memory.metadata,
+                    })
+                })
+                .collect();
+            Ok(JsonOut(serde_json::json!({
+                "memories": entries,
+                "next_cursor": next.map(|id| id.to_string()),
+            })))
+        }))
+    }
+
     /// could not say why it was short: nothing distinguished a passage that
     /// held three facts from one that held twelve of which nine were dropped
     /// for exceeding the embeddable cap. The envelope is the breaking change
