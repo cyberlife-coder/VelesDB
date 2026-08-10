@@ -367,6 +367,24 @@ pub(super) fn diagnose_copy(
     ))
 }
 
+/// The strategy resolution of [`report_from_inventory`]: what the caller
+/// asked for, arbitrated against what the store's provenance and dimension
+/// actually permit.
+fn resolved_strategy(
+    target: &TargetContract,
+    inventory: &inventory::StoreInventory,
+) -> crate::migration::strategy::Resolution {
+    resolve(
+        target.strategy,
+        assess(
+            &inventory.source_provenance,
+            inventory.source_dimension,
+            &target.model,
+            target.dimension,
+        ),
+    )
+}
+
 fn report_from_inventory(
     source: &Path,
     target: &TargetContract,
@@ -374,6 +392,7 @@ fn report_from_inventory(
     copy: &DiagnosticCopy,
     inventory: inventory::StoreInventory,
 ) -> DiagnosisReport {
+    let resolution = resolved_strategy(target, &inventory);
     let capabilities = capabilities::capability_map(
         &inventory.source_provenance,
         inventory.source_dimension,
@@ -384,15 +403,6 @@ fn report_from_inventory(
         copy,
     );
     let blockers = capabilities::blockers_for(&capabilities, &inventory.collections);
-    let resolution = resolve(
-        target.strategy,
-        assess(
-            &inventory.source_provenance,
-            inventory.source_dimension,
-            &target.model,
-            target.dimension,
-        ),
-    );
     DiagnosisReport {
         format_version: DIAGNOSIS_FORMAT_VERSION,
         source_path: source.to_path_buf(),

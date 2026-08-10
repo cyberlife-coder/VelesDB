@@ -601,19 +601,32 @@ fn run_export(argv: &[String], flags: &[String]) -> Result<(), Box<dyn std::erro
         .or_else(|| std::env::var("VELESDB_MEMORY_PATH").ok())
         .unwrap_or_else(default_store_path);
     let store = std::path::Path::new(&store);
-    let (output, include_internal) = (options.output, options.include_internal);
-    let written = if let Some(path) = output {
-        let mut file = std::io::BufWriter::new(std::fs::File::create(&path)?);
+    let written = write_export(store, options.output.as_deref(), options.include_internal)?;
+    eprintln!("[velesdb-memory] exported {written} memories");
+    Ok(())
+}
+
+/// The destination half of [`run_export`]: a named file (buffered, flushed)
+/// or stdout (locked — on this subcommand stdout carries data, not MCP).
+fn write_export(
+    store: &std::path::Path,
+    output: Option<&str>,
+    include_internal: bool,
+) -> Result<u64, Box<dyn std::error::Error>> {
+    if let Some(path) = output {
+        let mut file = std::io::BufWriter::new(std::fs::File::create(path)?);
         let written = velesdb_memory::export::export_jsonl(store, &mut file, include_internal)?;
         std::io::Write::flush(&mut file)?;
-        written
+        Ok(written)
     } else {
         let stdout = std::io::stdout();
         let mut lock = stdout.lock();
-        velesdb_memory::export::export_jsonl(store, &mut lock, include_internal)?
-    };
-    eprintln!("[velesdb-memory] exported {written} memories");
-    Ok(())
+        Ok(velesdb_memory::export::export_jsonl(
+            store,
+            &mut lock,
+            include_internal,
+        )?)
+    }
 }
 
 /// The `export` subcommand's parsed flags — split from [`run_export`] so
