@@ -4,7 +4,7 @@ This roadmap commits to **what we are building**, **why**, and **when**. It is u
 
 It is intentionally narrow. Items not on this roadmap are tracked as `roadmap` issues but **not committed** until they reach a milestone here.
 
-> **Last updated:** 2026-08-08 — covers v4.3.0 (current) — the workspace manifest version; the latest published 4.x packages are 4.2.0, `velesdb-memory` 0.12.0. The v1.x-era horizon framing is retired: everything those horizons shipped is compressed into the Delivered table, and the next commitments are derived from the repo's own registers ([`CHANGELOG.md`](CHANGELOG.md) [Unreleased], [`docs/CORE_WIRING_DEBT.md`](docs/CORE_WIRING_DEBT.md), [`docs/reference/KNOWN_LIMITATIONS.md`](docs/reference/KNOWN_LIMITATIONS.md)).
+> **Last updated:** 2026-08-08 — covers v5.0.0 (current) — the workspace manifest version; the latest published 4.x packages are 4.2.0, `velesdb-memory` 0.12.0. The v1.x-era horizon framing is retired: everything those horizons shipped is compressed into the Delivered table, and the next commitments are derived from the repo's own registers ([`CHANGELOG.md`](CHANGELOG.md) [Unreleased], [`docs/CORE_WIRING_DEBT.md`](docs/CORE_WIRING_DEBT.md), [`docs/reference/KNOWN_LIMITATIONS.md`](docs/reference/KNOWN_LIMITATIONS.md)).
 
 ---
 

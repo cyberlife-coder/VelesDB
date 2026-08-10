@@ -7,6 +7,106 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+_Nothing yet — the 5.0.0 train departed here._
+
+## [5.0.0] — 2026-08-10
+
+### Added — the concurrency sweep and the inspection surface (2026-08-09/10)
+
+- **`memory_status` — the server's health becomes readable inside the protocol
+  (#1863).** The hash-embedder warning went to stderr of a stdio server, and
+  every mainstream MCP client swallows that stream: a user on the default
+  build experienced "recall is bad", never saw why, and could not ask. One
+  tool now reports which embedder RUNS and whether recall is semantic, what
+  the store was FILLED by per its on-disk provenance record, the extraction
+  and autograph wiring, and the corpus size — `memory.edges: 0` is the
+  observable "why() has nothing to walk" state. `get_info` additionally
+  appends a degraded-mode note to the server instructions when the declared
+  embedder is `hash` — the one channel a client is required to read.
+- **`list_memories` and `velesdb-memory export` — the store becomes auditable
+  (#1866).** "What does my agent know?" is the question `recall` structurally
+  cannot answer: it ranks by resemblance to a query, and what resembles
+  nothing you thought to ask stays invisible. `list_memories` walks every
+  live fact page by page (ids ascending, TTL-expired skipped, metadata under
+  recall's visibility rule, a metadata filter that never breaks the walk);
+  the `export` CLI subcommand writes the same walk as JSONL and is
+  deliberately **embedder-free** — no embedder is built and no provenance
+  check runs, so the one store the daemon refuses to SERVE (a provenance
+  mismatch) is still the user's to READ. It also refuses a missing store
+  path outright rather than letting the engine create an empty one there.
+- **The bindings hold the same inspection surface (#1867).** `memoryStatus`/
+  `listMemories` on Node and `memory_status`/`list_memories` on Python return
+  the same envelopes as the MCP tools, built from the same service accessors;
+  the four parity exemptions recorded on the way were DELETED, which the
+  stale-exemption guard enforces the moment a binding implements a tool it
+  was exempted from. WASM keeps its structural exemptions.
+- **The embedder-switch journey is pinned end to end (#1864).** Each layer
+  already carried its own proof (provenance refuses; the journaled migration
+  re-embeds under original ids; recall works) but no suite walked the CHAIN.
+  One integration test now does: facts under `hash`, the flip refused WITH
+  the `migrate-embeddings` pointer, the pointed-at migration re-embedding
+  and switching over at the source's own path, and the original fact
+  recalled through the new embedder under its original id.
+
+### Changed
+
+- **The semantic backends ship in every artifact — the choice is
+  runtime-only (#1862).** `ollama` and `extract` joined the default features:
+  `cargo install velesdb-memory` and the `.mcpb` registry bundle (the
+  one-click path whose users cannot rebuild) now carry both HTTP backends,
+  so switching to real semantic recall or model-based extraction is an
+  env-var change, never a rebuild. The runtime default stays `hash` — fully
+  offline, nothing contacted unless the user opts in. Cost: one small HTTP
+  client, +482 KiB measured. An ungated runtime pin fails every
+  default-features suite if either feature leaves the defaults again.
+- **The onboarding tells the truth and recommends `bge-m3` (#1865).** README
+  step 2 carries the honest caveat inline (the out-of-the-box default matches
+  surface form, not meaning), a "Real semantic recall in 5 minutes" section
+  lands right after the 60-second setup, `MCP_SERVER_SETUP.md` names `bge-m3`
+  as the recommended model, and the memory skill gains loop step 0: read
+  `memory_status` once per session and tell the user when the server runs
+  degraded.
+- **No operation may wedge another — the stall-class sweep (#1861).** 22
+  server handlers that ran lock-taking, fsync-bearing core calls inline on
+  the tokio workers moved to the blocking pool (a `/health` probe behind 64
+  concurrent INSERTs: waited for all 64 before, answers mid-wave at 17–24 ms
+  after); batch delete pays one durability barrier per store instead of ~3
+  fsyncs per point (8000-point delete: 45.4 s with a reader stalled 45.3 s →
+  141 ms with the reader at 33 ms), keeping the delete-frame-before-punch
+  invariant at batch granularity; the Tauri plugin stops serializing itself
+  (all commands through `spawn_blocking`, state guards held only to clone an
+  `Arc`); the working-index mutex no longer spans the embedding call; and
+  Python's `train_pq`/`Collection.explain` release the GIL like the crate's
+  other long paths.
+- **Extraction generation is bounded (#1858).** Neither extraction backend
+  capped completion tokens; the real graph-extraction prompt on a twelve-word
+  sentence measured 3 933 tokens and 1 min 59 s unbounded, 14.9 s capped.
+  `MAX_GENERATION_TOKENS = 512` now rides both backends (`num_predict` /
+  `max_tokens`).
+
+### Fixed
+
+- **The lock audit's blocking findings — three deadlocks and a
+  forget-resurrection, at the root (#1860).** `MobileGraphStore::save`'s
+  ABBA ordering; MATCH's vector/payload lock inversion made impossible by
+  construction (`MatchStorageGuards` — the compiler now rejects the wrong
+  order); a permanently forgotten fact no longer resurrected by its stale
+  autograph enrichment (the queued job re-checks liveness under the write
+  path); and the application-level lock-ordering doc corrected where it
+  overstated its guarantees. Plus the parity audit's corrections (#1859):
+  caller-facing docs, guard pins and missing regression tests.
+
+### Removed
+
+- **`WalBatcher` leaves the public Rust API (#1861).** Zero call sites in
+  the tree (`CORE_WIRING_DEBT` entry 1) yet shipped as public surface users
+  could build on going into 5.0.0. Demoted to `pub(crate)`; code and tests
+  kept intact pending the declared premium transfer. *Migration*: no known
+  external users; a caller who did construct it should hold their own
+  batching in front of `Database` writes, or ask for the surface back with
+  the use case attached.
+
+
 ### Removed
 
 - **`scripts/run-failure-injection-harness.sh` (#1708).** Zero references
@@ -7076,7 +7176,8 @@ still genuinely pending is:
 > product), not part of the open-source Community roadmap — see the
 > "Scope & boundaries" section of the README.
 
-[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v4.0.0...HEAD
+[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v5.0.0...HEAD
+[5.0.0]: https://github.com/cyberlife-coder/VelesDB/compare/v4.2.0...v5.0.0
 [4.0.0]: https://github.com/cyberlife-coder/VelesDB/compare/v3.12.0...v4.0.0
 [1.16.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.16.0
 [1.15.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.15.0
