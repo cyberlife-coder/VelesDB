@@ -751,15 +751,9 @@ fn log_piece(source: &RawPiece, range: Range<usize>) -> RawPiece {
 fn merge_tiny(pieces: Vec<RawPiece>, min_bytes: usize) -> Vec<RawPiece> {
     let mut merged: Vec<RawPiece> = Vec::new();
     for piece in pieces {
-        let mergeable = merged.last().is_some_and(|last: &RawPiece| {
-            last.turn == piece.turn
-                && last.kind == piece.kind
-                && last.content_override.is_none()
-                && piece.content_override.is_none()
-                && last.range.end == piece.range.start
-                && last.range.len() + piece.range.len() <= MAX_FRAGMENT_BYTES
-                && (last.range.len() < min_bytes || piece.range.len() < min_bytes)
-        });
+        let mergeable = merged
+            .last()
+            .is_some_and(|last| can_absorb(last, &piece, min_bytes));
         // `mergeable` is only true when `merged` is non-empty, but branch on
         // the `Option` rather than assume it: a future edit to `mergeable`
         // that breaks the invariant then drops nothing silently and panics
@@ -770,6 +764,20 @@ fn merge_tiny(pieces: Vec<RawPiece>, min_bytes: usize) -> Vec<RawPiece> {
         }
     }
     merged
+}
+
+/// [`merge_tiny`]'s absorption predicate, one clause per rule the doc above
+/// it narrates: same turn and kind, neither side override-bearing, byte
+/// ranges adjacent, the combined size under [`MAX_FRAGMENT_BYTES`], and at
+/// least one side actually tiny.
+fn can_absorb(last: &RawPiece, next: &RawPiece, min_bytes: usize) -> bool {
+    last.turn == next.turn
+        && last.kind == next.kind
+        && last.content_override.is_none()
+        && next.content_override.is_none()
+        && last.range.end == next.range.start
+        && last.range.len() + next.range.len() <= MAX_FRAGMENT_BYTES
+        && (last.range.len() < min_bytes || next.range.len() < min_bytes)
 }
 
 // --- Assembly ------------------------------------------------------------

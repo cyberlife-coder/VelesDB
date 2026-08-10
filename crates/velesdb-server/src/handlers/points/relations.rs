@@ -96,6 +96,25 @@ pub struct SetTtlRequest {
 // Handler implementations
 // ---------------------------------------------------------------------------
 
+/// The `properties` coercion of [`relate_points`]: an object passes through,
+/// `null` means none, anything else is the caller's error — split out so the
+/// handler reads as its three phases (resolve, coerce, insert).
+#[allow(clippy::result_large_err)]
+fn relation_properties(
+    value: &serde_json::Value,
+) -> Result<std::collections::HashMap<String, serde_json::Value>, axum::response::Response> {
+    match value {
+        serde_json::Value::Object(map) => {
+            Ok(map.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+        }
+        serde_json::Value::Null => Ok(std::collections::HashMap::new()),
+        _ => Err(error_response(
+            StatusCode::BAD_REQUEST,
+            "properties must be an object or null".to_string(),
+        )),
+    }
+}
+
 /// Create a relation edge between two points in a collection.
 ///
 /// Works on vector, graph, and metadata collections alike.
@@ -123,17 +142,9 @@ pub async fn relate_points(
         Err(r) => return r,
     };
 
-    let properties: std::collections::HashMap<String, serde_json::Value> = match req.properties {
-        serde_json::Value::Object(ref map) => {
-            map.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
-        }
-        serde_json::Value::Null => std::collections::HashMap::new(),
-        _ => {
-            return error_response(
-                StatusCode::BAD_REQUEST,
-                "properties must be an object or null".to_string(),
-            )
-        }
+    let properties = match relation_properties(&req.properties) {
+        Ok(map) => map,
+        Err(resp) => return resp,
     };
 
     // Edge allocation + insertion take write locks and persist — run them on
