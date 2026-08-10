@@ -4,11 +4,12 @@ Guide simplifié pour publier une nouvelle version de VelesDB.
 
 ## Workflow Architecture
 
-VelesDB utilise **3 workflows GitHub Actions** :
+VelesDB utilise **4 workflows GitHub Actions** :
 
 | Workflow | Trigger | Fonction |
 |----------|---------|----------|
 | `ci.yml` | Push/PR sur main | Tests, lint, security audit |
+| `tag-release.yml` | Déclenchement manuel sur develop/main | Création gardée du tag quand le push Git direct est impossible |
 | `release.yml` | Tag `v*` | Publication complète |
 | `bench-regression.yml` | Push sur main | Benchmarks de régression |
 
@@ -20,7 +21,7 @@ VelesDB utilise **3 workflows GitHub Actions** :
 # Apply the bump to every policed manifest (X.Y.Z = target release version)
 python3 scripts/bump_version.py X.Y.Z
 # Regenerate the OpenAPI snapshots (derived from the crate version)
-cargo test -p velesdb-server --features openapi generate_openapi_spec_files -- --test-threads=1
+cargo test -p velesdb-server --features openapi generate_openapi_spec_files -- --include-ignored --test-threads=1
 cargo build  # refresh Cargo.lock
 python3 scripts/check-version-sync.py  # must report: All versions match
 ```
@@ -69,6 +70,28 @@ de version n'est nécessaire.
 git tag -a vX.Y.Z -m "vX.Y.Z - Description"
 git push origin vX.Y.Z
 ```
+
+Le push Git direct reste le chemin principal : il déclenche automatiquement
+`release.yml` sur le nouveau tag.
+
+#### Solution de repli depuis GitHub Actions
+
+Certaines sessions distantes peuvent pousser une branche mais pas un ref de
+tag. Dans ce cas, utiliser le workflow permanent `tag-release.yml` :
+
+1. Ouvrir **Actions → Create Release Tag → Run workflow**.
+2. Sélectionner `develop` ou `main` comme branche du workflow.
+3. Saisir le tag `vX.Y.Z`, le SHA complet du commit dont le CI est vert sur
+   `main`, et le message du tag annoté.
+
+Le workflow refuse un SHA qui n'est pas dans l'historique de `main` et un tag
+qui existe déjà. Après avoir poussé le tag, il déclenche explicitement
+`release.yml` sur ce tag : un tag créé avec `GITHUB_TOKEN` ne déclenche pas à
+lui seul un workflow écoutant `push.tags`.
+
+Si le tag a été créé mais que ce second déclenchement échoue, relancer
+manuellement **Release** avec le tag comme ref et `X.Y.Z` comme version. Ne pas
+recréer ni déplacer le tag.
 
 ### 6. The `release.yml` workflow publishes automatically
 

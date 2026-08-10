@@ -1,0 +1,68 @@
+name: Create Release Tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (for example v5.1.0 or v5.1.0-rc.1)'
+        required: true
+        type: string
+      sha:
+        description: 'Full SHA of the CI-green commit on main'
+        required: true
+        type: string
+      message:
+        description: 'Annotated tag message'
+        required: true
+        type: string
+
+concurrency:
+  group: create-release-tag-${{ inputs.tag }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  create-tag:
+    name: Create tag and start release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Refuse dispatches outside develop or main
+        env:
+          DISPATCH_REF: ${{ github.ref }}
+        run: |
+          case "$DISPATCH_REF" in
+            refs/heads/develop|refs/heads/main) ;;
+            *)
+              echo "::error::Run this workflow from develop or main, not $DISPATCH_REF"
+              exit 1
+              ;;
+          esac
+
+      - name: Configure annotated-tag identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Create and push guarded tag
+        env:
+          TAG: ${{ inputs.tag }}
+          SHA: ${{ inputs.sha }}
+          MESSAGE: ${{ inputs.message }}
+        run: bash scripts/create-release-tag.sh "$TAG" "$SHA" "$MESSAGE"
+
+      - name: Dispatch release workflow on the new tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          gh workflow run release.yml \
+            --ref "$TAG" \
+            --field version="${TAG#v}"

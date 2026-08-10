@@ -715,6 +715,11 @@
   ],
   "unwired": [
     {
+      "script": "scripts/create-release-tag.sh",
+      "reason": "Release-time only, by design: tag-release.yml runs it to guard an operator-requested tag after main CI is green. A pull request has no release tag to assert; scripts.tests.test_create_release_tag proves both refusal guards and the positive control against a real bare remote.",
+      "issue": null
+    },
+    {
       "script": "scripts/check-crates-io-versions.sh",
       "reason": "Release-time only, by design: it checks a version collision on crates.io before publishing (release.yml:345, release-memory.yml:187). There is nothing for it to assert on a pull request.",
       "issue": null
