@@ -43,9 +43,13 @@ if ctx is None: start_fresh()           if not out["found"]:
 The TypeScript SDK and the LangGraph toolkit detect a version skew at call
 time and reject with an actionable error rather than handing back an object
 whose `found` is `undefined` — but that guard is a net. Upgrade the
-packages together; the floors now enforce it
-(`@wiscale/velesdb-wasm: ^5.0.0` in the SDK, `velesdb>=5.0.0` in
-LangGraph).
+packages together. The LangGraph floor enforces it now
+(`velesdb>=5.0.0`); the SDK's `@wiscale/velesdb-wasm` floor moves to
+`^5.0.0` in the first SDK release AFTER npm carries the 5.0.0 wasm bundle —
+a floor CI must be able to resolve cannot name a version that does not
+exist yet, which is the same constraint the changelog recorded when it
+deferred the raise to this train. Until then the runtime guard is the
+enforcement.
 
 ---
 
