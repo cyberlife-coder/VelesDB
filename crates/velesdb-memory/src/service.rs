@@ -534,6 +534,39 @@ where
     E: Embedder + Send + Sync + 'static,
     S: MemoryStore + Send + Sync + 'static,
 {
+    /// The autograph worker's whole life, run on the spawned thread: ends
+    /// when every sender is gone — i.e. when the handle's drop takes the
+    /// sender back out of the service. Once the closing latch is up,
+    /// still-queued jobs are SKIPPED: the exit pays for the job in flight,
+    /// never for the queue.
+    fn autograph_worker_loop(&self, rx: &std::sync::mpsc::Receiver<AutographJob>) {
+        let mut skipped_on_close: u64 = 0;
+        for job in rx {
+            if self
+                .autograph_queue
+                .closing
+                .load(std::sync::atomic::Ordering::Acquire)
+            {
+                skipped_on_close += 1;
+                continue;
+            }
+            self.autograph(job.fact_id, &job.fact);
+        }
+        if skipped_on_close > 0 {
+            self.autograph_queue
+                .dropped
+                .fetch_add(skipped_on_close, std::sync::atomic::Ordering::Relaxed);
+            // ONE aggregated line, not one per job (#1834's rule).
+            #[cfg(feature = "mcp")]
+            tracing::warn!(
+                skipped = skipped_on_close,
+                "autograph worker closing: queued enrichments skipped — \
+                 the facts are stored, their graph structure is not; \
+                 re-remembering rebuilds it"
+            );
+        }
+    }
+
     /// Move autograph off the response path: spawn ONE background worker
     /// consuming a bounded queue, so `remember` returns as soon as the fact
     /// is durably stored and the graph is wired behind (#1846).
@@ -582,38 +615,7 @@ where
         let worker_service = std::sync::Arc::clone(self);
         let join = std::thread::Builder::new()
             .name("velesdb-autograph".to_owned())
-            .spawn(move || {
-                // Ends when every sender is gone — i.e. when the handle's
-                // drop takes the sender back out of the service. Once the
-                // closing latch is up, still-queued jobs are SKIPPED: the
-                // exit pays for the job in flight, never for the queue.
-                let mut skipped_on_close: u64 = 0;
-                for job in rx {
-                    if worker_service
-                        .autograph_queue
-                        .closing
-                        .load(std::sync::atomic::Ordering::Acquire)
-                    {
-                        skipped_on_close += 1;
-                        continue;
-                    }
-                    worker_service.autograph(job.fact_id, &job.fact);
-                }
-                if skipped_on_close > 0 {
-                    worker_service
-                        .autograph_queue
-                        .dropped
-                        .fetch_add(skipped_on_close, std::sync::atomic::Ordering::Relaxed);
-                    // ONE aggregated line, not one per job (#1834's rule).
-                    #[cfg(feature = "mcp")]
-                    tracing::warn!(
-                        skipped = skipped_on_close,
-                        "autograph worker closing: queued enrichments skipped — \
-                         the facts are stored, their graph structure is not; \
-                         re-remembering rebuilds it"
-                    );
-                }
-            })
+            .spawn(move || worker_service.autograph_worker_loop(&rx))
             .map_err(|err| {
                 MemoryError::Extract(crate::extract::ExtractError::Backend(format!(
                     "spawn autograph worker: {err}"

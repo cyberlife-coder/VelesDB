@@ -45,56 +45,64 @@ impl TryFrom<UncheckedDiagnosisReport> for DiagnosisReport {
     type Error = String;
 
     fn try_from(unchecked: UncheckedDiagnosisReport) -> Result<Self, Self::Error> {
-        let UncheckedDiagnosisReport {
-            format_version,
-            source_path,
-            source_fingerprint,
-            source_dimension,
-            source_provenance,
-            target_model,
-            target_dimension,
-            requested_strategy,
-            resolution,
-            collections,
-            facts,
-            edges,
-            working_contexts,
-            reserved_metadata,
-            ttl_summary,
-            bytes_on_disk,
-            diagnostic_staging_required,
-            diagnostic_staging_available,
-            disk_headroom,
-            same_filesystem,
-            capabilities,
-            blockers,
-        } = unchecked;
-        let report = Self {
-            format_version,
-            source_path,
-            source_fingerprint,
-            source_dimension,
-            source_provenance,
-            target_model,
-            target_dimension,
-            requested_strategy,
-            resolution,
-            collections,
-            facts,
-            edges,
-            working_contexts,
-            reserved_metadata,
-            ttl_summary,
-            bytes_on_disk,
-            diagnostic_staging_required,
-            diagnostic_staging_available,
-            disk_headroom,
-            same_filesystem,
-            capabilities,
-            blockers,
-        };
+        let report = assemble(unchecked);
         report.validate()?;
         Ok(report)
+    }
+}
+
+/// The field-by-field mirror of [`TryFrom`], kept as a FULL destructure on
+/// purpose: a field added to [`UncheckedDiagnosisReport`] without its
+/// assignment here fails to compile, which is the one-sided-drift guard the
+/// mirror-struct pattern exists for.
+fn assemble(unchecked: UncheckedDiagnosisReport) -> DiagnosisReport {
+    let UncheckedDiagnosisReport {
+        format_version,
+        source_path,
+        source_fingerprint,
+        source_dimension,
+        source_provenance,
+        target_model,
+        target_dimension,
+        requested_strategy,
+        resolution,
+        collections,
+        facts,
+        edges,
+        working_contexts,
+        reserved_metadata,
+        ttl_summary,
+        bytes_on_disk,
+        diagnostic_staging_required,
+        diagnostic_staging_available,
+        disk_headroom,
+        same_filesystem,
+        capabilities,
+        blockers,
+    } = unchecked;
+    DiagnosisReport {
+        format_version,
+        source_path,
+        source_fingerprint,
+        source_dimension,
+        source_provenance,
+        target_model,
+        target_dimension,
+        requested_strategy,
+        resolution,
+        collections,
+        facts,
+        edges,
+        working_contexts,
+        reserved_metadata,
+        ttl_summary,
+        bytes_on_disk,
+        diagnostic_staging_required,
+        diagnostic_staging_available,
+        disk_headroom,
+        same_filesystem,
+        capabilities,
+        blockers,
     }
 }
 
