@@ -5,10 +5,10 @@
 //! Configure the store directory with `VELESDB_MEMORY_PATH` (default
 //! `~/.velesdb-memory`) and the embedding
 //! backend with `VELESDB_MEMORY_EMBEDDER` (`hash` | `ollama` | `openai`). Set
-//! `VELESDB_MEMORY_EXTRACTOR` to enable the `remember_extracted` tool (text →
-//! fact↔topic graph): `outline` reads directives you write explicitly and needs
-//! no model and no extra feature, while `ollama` and `openai` infer them with a
-//! generative model and need `--features extract`.
+//! `VELESDB_MEMORY_EXTRACTOR` to set `remember_extracted`'s default backend
+//! (calls may override it): `outline` reads directives you write explicitly
+//! and needs no model and no extra feature, while `ollama` and `openai` infer
+//! them with a generative model and need `--features extract`.
 //!
 //! Each role carries its own `_URL`, `_MODEL` and `_API_TOKEN`, and the two are
 //! configured independently — embedding on a local Ollama while extracting on
@@ -1098,7 +1098,9 @@ fn attach_extractor(
 ) -> Result<McpServer, Box<dyn std::error::Error>> {
     match velesdb_memory::select_extractor(backend)? {
         ExtractorSelection::Disabled => Ok(server),
-        ExtractorSelection::Ready(extractor) => Ok(server.with_extractor(extractor)),
+        ExtractorSelection::Ready(extractor) => {
+            Ok(server.with_named_extractor(backend, extractor)?)
+        }
         // **This is the seam #1751 turns on.** The arm used to read
         // `NeedsRemoteConfig(_)` and call `build_ollama_extractor()`: the
         // library named the backend the operator asked for, and the daemon
@@ -1107,7 +1109,7 @@ fn attach_extractor(
         // observable — the wrong client would have been built, silently, for
         // every name.
         ExtractorSelection::NeedsRemoteConfig(backend) => {
-            Ok(server.with_extractor(build_remote_extractor(backend)?))
+            Ok(server.with_named_extractor(backend, build_remote_extractor(backend)?)?)
         }
     }
 }
