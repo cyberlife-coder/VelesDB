@@ -449,6 +449,18 @@ const SHAPE_DIVERGENCES: &[ShapeDivergence] = &[
         field: "id_str",
         reason: ID_TWIN,
     },
+    ShapeDivergence {
+        binding: TYPESCRIPT_SDK,
+        tool: "entity",
+        field: "id_str",
+        reason: ID_TWIN,
+    },
+    ShapeDivergence {
+        binding: TYPESCRIPT_SDK,
+        tool: "remember_extracted",
+        field: "ids_str",
+        reason: ID_TWIN,
+    },
 ];
 
 /// The shape divergence covering `(binding, tool, field)`, if one is declared.
@@ -568,6 +580,54 @@ fn method_name(trimmed: &str) -> Option<String> {
 const SDK_SOURCE: &str = "sdks/typescript/src/memory.ts";
 const SDK_CLASS: &str = "export class MemoryService {";
 const SDK_INTERFACE: &str = "interface WasmMemoryServiceInstance {";
+const TYPESCRIPT_SDK: &str = "typescript-sdk";
+
+/// One SDK method whose return is not a local interface, so root-field
+/// inspection is impossible. The exact type and the reason are both pinned:
+/// changing the method to a local interface makes the entry stale and red.
+struct SdkShapeSkip {
+    tool: &'static str,
+    return_type: &'static str,
+    reason: &'static str,
+}
+
+const SDK_SHAPE_SKIPS: &[SdkShapeSkip] = &[
+    SdkShapeSkip {
+        tool: "forget",
+        return_type: "boolean",
+        reason: FORGET_BOOL,
+    },
+    SdkShapeSkip {
+        tool: "recall",
+        return_type: "MemoryRecollection[]",
+        reason: SINGLE_MEMBER,
+    },
+    SdkShapeSkip {
+        tool: "recall_fused",
+        return_type: "MemoryRecollection[]",
+        reason: DATED_SPLIT,
+    },
+    SdkShapeSkip {
+        tool: "recall_where",
+        return_type: "MemoryRecollection[]",
+        reason: SINGLE_MEMBER,
+    },
+    SdkShapeSkip {
+        tool: "relate",
+        return_type: "string",
+        reason: ID_TWIN,
+    },
+    SdkShapeSkip {
+        tool: "remember",
+        return_type: "string",
+        reason: ID_TWIN,
+    },
+    SdkShapeSkip {
+        tool: "save_working_context",
+        return_type: "string",
+        reason: ID_TWIN,
+    },
+];
 
 /// The identifier of a TypeScript method declaration, if the line is one.
 ///
@@ -670,6 +730,189 @@ fn sdk_gaps(
         ));
     }
     gaps
+}
+
+/// Public SDK method regions, starting at the declaration and ending before
+/// the next public declaration. Private helpers are intentionally absorbed
+/// into their caller's region; only the signature is inspected below.
+fn sdk_method_regions() -> BTreeMap<String, String> {
+    let path = workspace_root().join(SDK_SOURCE);
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("read {SDK_SOURCE} ({}): {err}", path.display()));
+    let mut lines = source.lines().skip_while(|line| line.trim() != SDK_CLASS);
+    assert!(
+        lines.next().is_some(),
+        "{SDK_SOURCE} no longer contains `{SDK_CLASS}`"
+    );
+    let block: Vec<&str> = lines.take_while(|line| *line != "}").collect();
+    let starts: Vec<(usize, String)> = block
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| typescript_method(line).map(|name| (index, name.to_owned())))
+        .collect();
+    let mut regions = BTreeMap::new();
+    for (position, (start, name)) in starts.iter().enumerate() {
+        let end = starts
+            .get(position + 1)
+            .map_or(block.len(), |(index, _)| *index);
+        regions.insert(name.clone(), block[*start..end].join("\n"));
+    }
+    regions
+}
+
+/// The `X` inside one method declaration's `Promise<X>`, including nested
+/// generic brackets. Non-Promise methods return `None`.
+fn promise_return_type(region: &str) -> Option<String> {
+    let flat = region.split_whitespace().collect::<Vec<_>>().join(" ");
+    let (_, tail) = flat.split_once("): Promise<")?;
+    let mut depth = 1_u32;
+    for (index, character) in tail.char_indices() {
+        match character {
+            '<' => depth += 1,
+            '>' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        if depth == 0 {
+            return Some(tail[..index].trim().to_owned());
+        }
+    }
+    None
+}
+
+/// Declared Promise return type of every public SDK method.
+fn sdk_return_types() -> BTreeMap<String, String> {
+    sdk_method_regions()
+        .into_iter()
+        .filter_map(|(name, region)| {
+            promise_return_type(&region).map(|return_type| (name, return_type))
+        })
+        .collect()
+}
+
+fn typescript_interface_name(line: &str) -> Option<&str> {
+    let declaration = line
+        .strip_prefix("export interface ")
+        .or_else(|| line.strip_prefix("interface "))?;
+    let name = declaration
+        .split(|character: char| character.is_whitespace() || character == '{')
+        .next()?;
+    (!name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_')).then_some(name)
+}
+
+fn typescript_field(line: &str) -> Option<String> {
+    let declaration = line.strip_prefix("  ")?;
+    if declaration.starts_with(' ') {
+        return None;
+    }
+    let (name, _) = declaration.split_once(':')?;
+    let name = name.trim_end_matches('?');
+    name.chars()
+        .all(|c| c.is_alphanumeric() || c == '_')
+        .then(|| name.to_owned())
+}
+
+/// Root fields of every interface declared locally in `memory.ts`.
+fn sdk_interfaces() -> BTreeMap<String, BTreeSet<String>> {
+    let path = workspace_root().join(SDK_SOURCE);
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("read {SDK_SOURCE} ({}): {err}", path.display()));
+    let lines: Vec<&str> = source.lines().collect();
+    let declarations: Vec<(usize, &str)> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| typescript_interface_name(line).map(|name| (index, name)))
+        .collect();
+    declarations
+        .into_iter()
+        .map(|(start, name)| {
+            let fields = lines[start + 1..]
+                .iter()
+                .take_while(|line| **line != "}")
+                .filter_map(|line| typescript_field(line))
+                .collect();
+            (name.to_owned(), fields)
+        })
+        .collect()
+}
+
+fn sdk_shape_skip_for(tool: &str, return_type: &str) -> Option<&'static SdkShapeSkip> {
+    SDK_SHAPE_SKIPS
+        .iter()
+        .find(|skip| skip.tool == tool && skip.return_type == return_type)
+}
+
+fn sdk_names_field(fields: &BTreeSet<String>, wire_field: &str) -> bool {
+    fields.contains(wire_field) || fields.contains(&js_name(wire_field))
+}
+
+fn sdk_output_gaps(
+    tool: &str,
+    output_fields: &BTreeSet<String>,
+    sdk_fields: &BTreeSet<String>,
+) -> Vec<String> {
+    output_fields
+        .iter()
+        .filter(|field| {
+            !sdk_names_field(sdk_fields, field)
+                && shape_divergence_for(TYPESCRIPT_SDK, tool, field).is_none()
+        })
+        .map(|field| {
+            format!("  {tool}.{field} is not named by the TypeScript SDK return interface")
+        })
+        .collect()
+}
+
+fn sdk_shape_findings(tools: &[rmcp::model::Tool], upstream: &BTreeSet<String>) -> Vec<String> {
+    let returns = sdk_return_types();
+    let interfaces = sdk_interfaces();
+    let mut findings = Vec::new();
+    for tool in tools {
+        let name = tool.name.as_ref();
+        if !upstream.contains(name) {
+            continue;
+        }
+        let Some(return_type) = returns.get(&js_name(name)) else {
+            continue; // Method absence is the name guard's responsibility.
+        };
+        if let Some(fields) = interfaces.get(return_type) {
+            findings.extend(sdk_output_gaps(name, &output_root_fields(tool), fields));
+        } else if sdk_shape_skip_for(name, return_type).is_none() {
+            findings.push(format!(
+                "  {name} returns non-local `{return_type}` without an explicit SDK_SHAPE_SKIPS decision"
+            ));
+        }
+    }
+    findings
+}
+
+fn stale_sdk_skip_reason(
+    skip: &SdkShapeSkip,
+    tools: &BTreeSet<String>,
+    upstream: &BTreeSet<String>,
+    returns: &BTreeMap<String, String>,
+    interfaces: &BTreeMap<String, BTreeSet<String>>,
+) -> Option<String> {
+    if skip.reason.trim().is_empty() {
+        return Some("the reason is empty".to_owned());
+    }
+    if !tools.contains(skip.tool) || !upstream.contains(skip.tool) {
+        return Some("the tool no longer reaches the TypeScript SDK".to_owned());
+    }
+    let method = js_name(skip.tool);
+    let Some(actual) = returns.get(&method) else {
+        return Some(format!(
+            "the SDK no longer declares `{method}` with a Promise return"
+        ));
+    };
+    if actual != skip.return_type {
+        return Some(format!(
+            "the return changed from `{}` to `{actual}`",
+            skip.return_type
+        ));
+    }
+    interfaces
+        .contains_key(actual)
+        .then(|| format!("`{actual}` is now a local interface and must be checked"))
 }
 
 /// The source region publishing each method of `binding`, keyed by method
@@ -1201,6 +1444,9 @@ async fn no_shape_divergence_is_stale() {
 /// does. Split out of [`no_shape_divergence_is_stale`] to keep both under
 /// the repository's cyclomatic-complexity gate.
 fn stale_shape_reason(tools: &[rmcp::model::Tool], divergence: &ShapeDivergence) -> Option<String> {
+    if divergence.binding == TYPESCRIPT_SDK {
+        return stale_sdk_shape_reason(tools, divergence);
+    }
     if !BINDINGS.iter().any(|b| b.name == divergence.binding) {
         return Some(format!("unknown binding `{}`", divergence.binding));
     }
@@ -1235,6 +1481,39 @@ fn stale_shape_reason(tools: &[rmcp::model::Tool], divergence: &ShapeDivergence)
     let declared = region_with_named_structs(&window, &binding_structs(binding));
     names_identifier(&declared, divergence.field)
         .then(|| format!("the binding now names `{}`", divergence.field))
+}
+
+fn stale_sdk_shape_reason(
+    tools: &[rmcp::model::Tool],
+    divergence: &ShapeDivergence,
+) -> Option<String> {
+    let Some(tool) = tools
+        .iter()
+        .find(|tool| tool.name.as_ref() == divergence.tool)
+    else {
+        return Some(format!("`{}` is no longer an MCP tool", divergence.tool));
+    };
+    if !output_root_fields(tool).contains(divergence.field) {
+        return Some(format!(
+            "`{}` no longer has a root output field `{}`",
+            divergence.tool, divergence.field
+        ));
+    }
+    let method = js_name(divergence.tool);
+    let returns = sdk_return_types();
+    let Some(return_type) = returns.get(&method) else {
+        return Some(format!(
+            "the SDK no longer declares `{method}` with a Promise return"
+        ));
+    };
+    let interfaces = sdk_interfaces();
+    let Some(fields) = interfaces.get(return_type) else {
+        return Some(format!(
+            "`{method}` now returns non-local `{return_type}`; use SDK_SHAPE_SKIPS"
+        ));
+    };
+    sdk_names_field(fields, divergence.field)
+        .then(|| format!("the SDK now names `{}`", divergence.field))
 }
 
 // ===========================================================================
@@ -1409,6 +1688,116 @@ async fn the_typescript_sdk_relays_every_tool_that_reaches_the_wasm_binding() {
         gaps.len(),
         gaps.join("\n"),
         SDK_SOURCE,
+    );
+    client.cancel().await.expect("close the MCP session");
+}
+
+/// The shape half of the same server -> WASM -> SDK chain. A local
+/// `Promise<X>` must name every root field of the live server schema in
+/// `interface X`, accepting the SDK's camelCase spelling. Non-local returns
+/// are allowed only through an exact, reasoned [`SdkShapeSkip`].
+#[tokio::test]
+async fn the_typescript_sdk_relays_every_checkable_output_shape() {
+    let (_store, client) = connected().await;
+    let tools = client.list_all_tools().await.expect("list tools");
+    let wasm = BINDINGS
+        .iter()
+        .find(|binding| binding.name == "velesdb-wasm")
+        .expect("velesdb-wasm is a declared binding");
+    let findings = sdk_shape_findings(&tools, &published_methods(wasm));
+
+    assert!(
+        findings.is_empty(),
+        "{} TypeScript SDK output-shape finding(s):\n{}\n\nA local Promise<X> return must name \
+         every root key of the live MCP output schema in interface X (snake_case or camelCase). \
+         Fix the SDK field, declare a deliberate field loss in SHAPE_DIVERGENCES WITH its \
+         reason, or pin an uncheckable non-local return in SDK_SHAPE_SKIPS WITH its reason.",
+        findings.len(),
+        findings.join("\n"),
+    );
+    client.cancel().await.expect("close the MCP session");
+}
+
+#[test]
+fn the_sdk_shape_parser_reads_real_returns_and_interfaces() {
+    let returns = sdk_return_types();
+    assert_eq!(
+        returns.get("why").map(String::as_str),
+        Some("MemoryExplanation")
+    );
+    assert_eq!(returns.get("remember").map(String::as_str), Some("string"));
+    let interfaces = sdk_interfaces();
+    let explanation = interfaces
+        .get("MemoryExplanation")
+        .expect("parse MemoryExplanation");
+    assert!(explanation.contains("nodes") && explanation.contains("truncated"));
+}
+
+/// Mutation vector: stripping one field from a synthetic local return must
+/// produce one finding and name the exact tool.field that disappeared.
+#[test]
+fn the_sdk_shape_check_names_the_field_a_stripped_interface_lost() {
+    let output = ["edges", "nodes", "truncated"]
+        .map(str::to_owned)
+        .into_iter()
+        .collect();
+    let stripped = ["edges", "nodes"].map(str::to_owned).into_iter().collect();
+    let gaps = sdk_output_gaps("why", &output, &stripped);
+
+    assert_eq!(
+        gaps.len(),
+        1,
+        "exactly the stripped field is reported: {gaps:?}"
+    );
+    assert!(gaps[0].contains("why.truncated"), "got: {}", gaps[0]);
+}
+
+#[test]
+fn the_sdk_shape_check_is_silent_for_a_complete_interface() {
+    let output = ["edges", "nodes", "truncated"]
+        .map(str::to_owned)
+        .into_iter()
+        .collect();
+    assert!(
+        sdk_output_gaps("why", &output, &output).is_empty(),
+        "a complete local return interface must produce no finding",
+    );
+}
+
+#[test]
+fn the_sdk_shape_check_accepts_the_camel_case_wire_spelling() {
+    let output = ["relations_in"].map(str::to_owned).into_iter().collect();
+    let sdk = ["relationsIn"].map(str::to_owned).into_iter().collect();
+    assert!(sdk_output_gaps("entity", &output, &sdk).is_empty());
+}
+
+#[tokio::test]
+async fn no_sdk_shape_skip_is_stale() {
+    let (_store, client) = connected().await;
+    let listed = client.list_all_tools().await.expect("list tools");
+    let tools = listed
+        .iter()
+        .map(|tool| tool.name.to_string())
+        .collect::<BTreeSet<_>>();
+    let wasm = BINDINGS
+        .iter()
+        .find(|binding| binding.name == "velesdb-wasm")
+        .expect("velesdb-wasm is a declared binding");
+    let upstream = published_methods(wasm);
+    let returns = sdk_return_types();
+    let interfaces = sdk_interfaces();
+    let stale: Vec<String> = SDK_SHAPE_SKIPS
+        .iter()
+        .filter_map(|skip| {
+            stale_sdk_skip_reason(skip, &tools, &upstream, &returns, &interfaces)
+                .map(|reason| format!("  {} -> {}: {reason}", skip.tool, skip.return_type))
+        })
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "{} stale SDK_SHAPE_SKIPS entry(ies):\n{}",
+        stale.len(),
+        stale.join("\n"),
     );
     client.cancel().await.expect("close the MCP session");
 }
