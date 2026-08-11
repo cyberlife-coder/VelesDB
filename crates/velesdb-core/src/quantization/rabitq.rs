@@ -12,6 +12,8 @@
 //! | Compression ratio | 1x | 32x |
 
 use crate::error::Error;
+#[cfg(feature = "persistence")]
+use crate::storage::atomic_write::atomic_write;
 use serde::{Deserialize, Serialize};
 
 /// Scalar correction factors for a `RaBitQ`-encoded vector.
@@ -373,11 +375,13 @@ impl RaBitQIndex {
                 format!("failed to serialize RaBitQ index: {e}"),
             ))
         })?;
-        let tmp_path = dir.join("rabitq.idx.tmp");
         let final_path = dir.join("rabitq.idx");
-        std::fs::write(&tmp_path, &data)?;
-        std::fs::rename(&tmp_path, &final_path)?;
-        Ok(())
+        atomic_write(&final_path, &data).map_err(|e| {
+            Error::Io(std::io::Error::new(
+                e.kind(),
+                format!("failed to write RaBitQ index: {e}"),
+            ))
+        })
     }
 
     /// Load `RaBitQ` index from `<dir>/rabitq.idx`. Returns `None` if file doesn't exist.

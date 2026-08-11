@@ -337,6 +337,9 @@ impl Collection {
         if sparse_batch.is_empty() {
             return Ok(());
         }
+        // Keep WAL append and in-memory apply indivisible with respect to
+        // compaction, which takes this lock exclusively through the reset.
+        let mut indexes = self.query.sparse_indexes.write();
         #[cfg(feature = "persistence")]
         {
             self.append_sparse_wal_entries(sparse_batch.iter().flat_map(|(point_id, sv_map)| {
@@ -345,7 +348,6 @@ impl Collection {
                     .map(move |(name, sv)| (name.as_str(), *point_id, sv))
             }))?;
         }
-        let mut indexes = self.query.sparse_indexes.write();
         for (point_id, sv_map) in sparse_batch {
             for (name, sv) in sv_map {
                 let idx = indexes.entry(name.clone()).or_default();

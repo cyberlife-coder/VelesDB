@@ -6,22 +6,34 @@
 //!
 //! ```text
 //! <collection_dir>/
-//!   sparse.wal        # Write-ahead log (length-prefixed entries)
-//!   sparse.idx        # Compacted posting lists (raw PostingEntry bytes)
-//!   sparse.terms      # Term dictionary (postcard-serialized Vec<TermEntry>)
-//!   sparse.meta       # Metadata (postcard-serialized SparseMeta)
+//!   sparse.snapshot   # Durable manifest selecting one complete slot
+//!   sparse.wal        # Generation-tagged write-ahead log
+//!   sparse.{idx,terms,meta}        # Snapshot slot 0 / legacy layout
+//!   .sparse.next.{idx,terms,meta}  # Hidden snapshot slot 1
 //! ```
+//!
+//! Databases without `sparse.snapshot` keep loading directly from the legacy
+//! slot-0 files, so the format upgrade requires no migration.
 
 use std::io::{BufWriter, Write};
 use std::path::Path;
+
+#[cfg(test)]
+use std::cell::Cell;
 
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 
 use super::inverted_index::{FrozenSegment, SparseInvertedIndex};
-use super::persistence_wal::{read_le_f32, read_le_u64};
+use super::persistence_generation::{
+    active_snapshot, prepare_snapshot, publish_snapshot, SnapshotPaths,
+};
+use super::persistence_wal::{
+    read_le_f32, read_le_u64, reset_wal, sync_wal, wal_replay_for_generation,
+};
 use super::types::PostingEntry;
 use crate::error::{Error, Result};
+use crate::storage::atomic_write::{atomic_write, atomic_write_with};
 
 // Re-export WAL operations for backward compatibility.
 pub use super::persistence_wal::{wal_append_delete, wal_append_upsert, wal_replay};
@@ -128,63 +140,67 @@ pub fn compact(dir: &Path, index: &SparseInvertedIndex) -> Result<()> {
 
 /// Compacts the in-memory index to disk using the given file prefix.
 ///
-/// Files written: `{prefix}.idx`, `{prefix}.terms`, `{prefix}.meta`.
-/// Truncates `{prefix}.wal` after successful compaction.
+/// Writes the inactive snapshot slot, commits it through `{prefix}.snapshot`,
+/// then durably resets `{prefix}.wal` to the committed generation.
 ///
 /// # Errors
 ///
 /// Returns an error if disk writes fail or if the index's internal posting map is
 /// inconsistent (a term ID present in the sorted key list is absent from the map).
 fn compact_with_prefix(dir: &Path, prefix: &str, index: &SparseInvertedIndex) -> Result<()> {
+    sync_wal(&dir.join(format!("{prefix}.wal")))?;
     let merged = index.get_merged_postings_for_compaction();
-
     let mut term_ids: Vec<u32> = merged.keys().copied().collect();
     term_ids.sort_unstable();
 
-    let term_entries = write_idx_tmp(dir, prefix, &term_ids, &merged)?;
-    write_terms_tmp(dir, prefix, &term_entries)?;
-    write_meta_tmp(dir, prefix, index.doc_count(), &term_ids)?;
-    atomic_rename_compacted_files(dir, prefix)?;
-    truncate_wal(dir, prefix)?;
-
+    let pending = prepare_snapshot(dir, prefix)?;
+    check_publication_boundary(PublicationBoundary::IndexPromotion)?;
+    let term_entries = write_idx_snapshot(&pending.paths.idx, &term_ids, &merged)?;
+    check_publication_boundary(PublicationBoundary::TermsPromotion)?;
+    write_terms_snapshot(&pending.paths.terms, &term_entries)?;
+    check_publication_boundary(PublicationBoundary::MetaPromotion)?;
+    write_meta_snapshot(&pending.paths.meta, index.doc_count(), &term_ids)?;
+    check_publication_boundary(PublicationBoundary::CommitPoint)?;
+    publish_snapshot(dir, prefix, &pending)?;
+    check_publication_boundary(PublicationBoundary::WalTruncation)?;
+    reset_wal(&dir.join(format!("{prefix}.wal")), pending.generation())?;
     Ok(())
 }
 
 /// Writes the posting index file and returns the term dictionary entries.
-fn write_idx_tmp(
-    dir: &Path,
-    prefix: &str,
+fn write_idx_snapshot(
+    path: &Path,
     term_ids: &[u32],
     merged: &FxHashMap<u32, (Vec<PostingEntry>, f32)>,
 ) -> Result<Vec<TermEntry>> {
-    let idx_tmp = dir.join(format!("{prefix}.idx.tmp"));
-    let mut idx_file = BufWriter::new(
-        std::fs::File::create(&idx_tmp)
-            .map_err(|e| Error::SparseIndexError(format!("compact idx create: {e}")))?,
-    );
+    atomic_write_with(path, |writer| write_idx_contents(writer, term_ids, merged))
+        .map_err(|e| Error::SparseIndexError(format!("compact idx publish: {e}")))
+}
 
-    let mut term_entries: Vec<TermEntry> = Vec::with_capacity(term_ids.len());
-    let mut current_offset: u64 = 0;
-
+fn write_idx_contents(
+    writer: &mut BufWriter<std::fs::File>,
+    term_ids: &[u32],
+    merged: &FxHashMap<u32, (Vec<PostingEntry>, f32)>,
+) -> Result<Vec<TermEntry>> {
+    let mut entries = Vec::with_capacity(term_ids.len());
+    let mut offset = 0_u64;
     for &term_id in term_ids {
         let (postings, max_weight) = lookup_term(term_id, merged)?;
-        write_postings(&mut idx_file, postings)?;
-
-        let byte_len = (postings.len() * POSTING_DISK_SIZE) as u64;
-        term_entries.push(TermEntry {
-            term_id,
-            offset: current_offset,
-            #[allow(clippy::cast_possible_truncation)]
-            len: postings.len() as u32,
-            max_weight: *max_weight,
-        });
-        current_offset += byte_len;
+        write_postings(writer, postings)?;
+        entries.push(term_entry(term_id, postings, *max_weight, offset));
+        offset += (postings.len() * POSTING_DISK_SIZE) as u64;
     }
+    Ok(entries)
+}
 
-    idx_file
-        .flush()
-        .map_err(|e| Error::SparseIndexError(format!("compact idx flush: {e}")))?;
-    Ok(term_entries)
+fn term_entry(term_id: u32, postings: &[PostingEntry], max_weight: f32, offset: u64) -> TermEntry {
+    TermEntry {
+        term_id,
+        offset,
+        #[allow(clippy::cast_possible_truncation)]
+        len: postings.len() as u32,
+        max_weight,
+    }
 }
 
 fn lookup_term(
@@ -209,17 +225,15 @@ fn write_postings(w: &mut BufWriter<std::fs::File>, postings: &[PostingEntry]) -
 }
 
 /// Writes the term dictionary file.
-fn write_terms_tmp(dir: &Path, prefix: &str, term_entries: &[TermEntry]) -> Result<()> {
-    let terms_tmp = dir.join(format!("{prefix}.terms.tmp"));
+fn write_terms_snapshot(path: &Path, term_entries: &[TermEntry]) -> Result<()> {
     let terms_data = postcard::to_allocvec(term_entries)
         .map_err(|e| Error::SparseIndexError(format!("compact terms serialize: {e}")))?;
-    std::fs::write(&terms_tmp, &terms_data)
-        .map_err(|e| Error::SparseIndexError(format!("compact terms write: {e}")))
+    atomic_write(path, &terms_data)
+        .map_err(|e| Error::SparseIndexError(format!("compact terms publish: {e}")))
 }
 
 /// Writes the metadata file.
-fn write_meta_tmp(dir: &Path, prefix: &str, doc_count: u64, term_ids: &[u32]) -> Result<()> {
-    let meta_tmp = dir.join(format!("{prefix}.meta.tmp"));
+fn write_meta_snapshot(path: &Path, doc_count: u64, term_ids: &[u32]) -> Result<()> {
     let meta = SparseMeta {
         version: 1,
         doc_count,
@@ -228,34 +242,59 @@ fn write_meta_tmp(dir: &Path, prefix: &str, doc_count: u64, term_ids: &[u32]) ->
     };
     let meta_data = postcard::to_allocvec(&meta)
         .map_err(|e| Error::SparseIndexError(format!("compact meta serialize: {e}")))?;
-    std::fs::write(&meta_tmp, &meta_data)
-        .map_err(|e| Error::SparseIndexError(format!("compact meta write: {e}")))
+    atomic_write(path, &meta_data)
+        .map_err(|e| Error::SparseIndexError(format!("compact meta publish: {e}")))
 }
 
-/// Atomically renames `.tmp` files to their final names.
-fn atomic_rename_compacted_files(dir: &Path, prefix: &str) -> Result<()> {
-    for ext in &["idx", "terms", "meta"] {
-        std::fs::rename(
-            dir.join(format!("{prefix}.{ext}.tmp")),
-            dir.join(format!("{prefix}.{ext}")),
-        )
-        .map_err(|e| Error::SparseIndexError(format!("compact {ext} rename: {e}")))?;
-    }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum PublicationBoundary {
+    IndexPromotion,
+    TermsPromotion,
+    MetaPromotion,
+    CommitPoint,
+    WalTruncation,
+}
+
+#[cfg(not(test))]
+#[allow(clippy::unnecessary_wraps)] // Test builds return injected boundary failures.
+fn check_publication_boundary(_boundary: PublicationBoundary) -> Result<()> {
     Ok(())
 }
 
-/// Truncates the WAL file after successful compaction.
-fn truncate_wal(dir: &Path, prefix: &str) -> Result<()> {
-    let wal_path = dir.join(format!("{prefix}.wal"));
-    if wal_path.exists() {
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .open(&wal_path)
-            .map_err(|e| Error::SparseIndexError(format!("compact wal truncate: {e}")))?;
-        file.set_len(0)
-            .map_err(|e| Error::SparseIndexError(format!("compact wal truncate: {e}")))?;
+#[cfg(test)]
+thread_local! {
+    static PUBLICATION_FAULT: Cell<Option<PublicationBoundary>> = const { Cell::new(None) };
+}
+
+#[cfg(test)]
+fn check_publication_boundary(boundary: PublicationBoundary) -> Result<()> {
+    PUBLICATION_FAULT.with(|fault| {
+        if fault.get() == Some(boundary) {
+            fault.set(None);
+            return Err(Error::SparseIndexError(format!(
+                "fault injected at {boundary:?}"
+            )));
+        }
+        Ok(())
+    })
+}
+
+#[cfg(test)]
+pub(super) struct PublicationFaultGuard(Option<PublicationBoundary>);
+
+#[cfg(test)]
+impl PublicationFaultGuard {
+    pub(super) fn inject(boundary: PublicationBoundary) -> Self {
+        let previous = PUBLICATION_FAULT.with(|fault| fault.replace(Some(boundary)));
+        Self(previous)
     }
-    Ok(())
+}
+
+#[cfg(test)]
+impl Drop for PublicationFaultGuard {
+    fn drop(&mut self) {
+        PUBLICATION_FAULT.with(|fault| fault.set(self.0));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -284,16 +323,15 @@ pub fn load_from_disk(dir: &Path) -> Result<Option<SparseInvertedIndex>> {
 /// Returns an error if files exist but cannot be read, deserialized, or contain
 /// corrupt byte sequences that cannot be converted to the expected fixed-size arrays.
 fn load_from_disk_with_prefix(dir: &Path, prefix: &str) -> Result<Option<SparseInvertedIndex>> {
-    let meta_path = dir.join(format!("{prefix}.meta"));
-    if !meta_path.exists() {
+    let Some(snapshot) = active_snapshot(dir, prefix)? else {
         return load_wal_only(dir, prefix);
-    }
+    };
 
-    let meta = load_and_validate_meta(&meta_path)?;
-    let index = load_compacted_index(dir, prefix, &meta)?;
+    let meta = load_and_validate_meta(&snapshot.paths.meta)?;
+    let index = load_compacted_index(&snapshot.paths, &meta)?;
 
     let wal_path = dir.join(format!("{prefix}.wal"));
-    let replayed = wal_replay(&wal_path, &index)?;
+    let replayed = wal_replay_for_generation(&wal_path, &index, snapshot.wal_generation)?;
     if replayed >= COMPACTION_REPLAY_THRESHOLD {
         compact_with_prefix(dir, prefix, &index)?;
     }
@@ -334,13 +372,8 @@ fn load_and_validate_meta(meta_path: &Path) -> Result<SparseMeta> {
 }
 
 /// Loads the compacted index from term dictionary and posting index files.
-fn load_compacted_index(
-    dir: &Path,
-    prefix: &str,
-    meta: &SparseMeta,
-) -> Result<SparseInvertedIndex> {
-    let terms_path = dir.join(format!("{prefix}.terms"));
-    let terms_data = std::fs::read(&terms_path)
+fn load_compacted_index(paths: &SnapshotPaths, meta: &SparseMeta) -> Result<SparseInvertedIndex> {
+    let terms_data = std::fs::read(&paths.terms)
         .map_err(|e| Error::SparseIndexError(format!("load terms read: {e}")))?;
     let term_entries: Vec<TermEntry> = postcard::from_bytes(&terms_data)
         .map_err(|e| Error::SparseIndexError(format!("load terms deserialize: {e}")))?;
@@ -356,8 +389,7 @@ fn load_compacted_index(
         )));
     }
 
-    let idx_path = dir.join(format!("{prefix}.idx"));
-    let idx_data = std::fs::read(&idx_path)
+    let idx_data = std::fs::read(&paths.idx)
         .map_err(|e| Error::SparseIndexError(format!("load idx read: {e}")))?;
 
     let postings = build_postings_from_idx(&idx_data, &term_entries)?;

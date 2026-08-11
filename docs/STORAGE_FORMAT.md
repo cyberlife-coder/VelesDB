@@ -1,7 +1,7 @@
 # VelesDB Storage Format Specification
 
-**Version**: 1.0.0  
-Last updated: 2026-08-08 · Applies to: velesdb-core 5.0.0  
+**Version**: 1.0.0<br>
+Last updated: 2026-08-12 · Applies to: velesdb-core 5.0.0<br>
 **Status**: Stable
 
 ## Overview
@@ -31,7 +31,10 @@ collection_directory/
 ├── property_index.bin   # Graph property index (graph collections)
 ├── bm25.snapshot        # BM25 full-text index snapshot (when text-indexed)
 ├── bm25.wal             # BM25 WAL (when text-indexed)
-└── sparse[-name].{wal,idx,terms,meta}  # Sparse index files (when sparse-indexed)
+├── sparse[-name].snapshot             # Sparse generation manifest (commit point)
+├── sparse[-name].wal                  # Generation-tagged sparse WAL
+├── sparse[-name].{idx,terms,meta}      # Sparse slot 0 / legacy layout
+└── .sparse[-name].next.{idx,terms,meta} # Hidden sparse slot 1
 ```
 
 ## Configuration File (config.json)
@@ -243,6 +246,29 @@ Binary snapshot of the payload index for fast cold-start recovery.
 ### Snapshot Threshold
 
 Default: 10 MB of WAL since last snapshot triggers automatic snapshot creation.
+
+## Sparse Index Snapshots
+
+Sparse compaction publishes `idx`, `terms`, and `meta` as one logical
+generation. It first fsyncs the current WAL, writes every file into the
+inactive slot through the durable atomic-replacement primitive, and then
+atomically replaces the small `.snapshot` manifest. The manifest is the sole
+commit point and records both the active slot and its non-zero generation.
+
+Only after that manifest replacement is durable is the sparse WAL reset to a
+generation header. Replay applies a WAL only when its generation matches the
+committed snapshot, so a crash cannot combine files or mutations from
+different generations. A crash before the commit keeps the previous slot plus
+its WAL authoritative; a crash after it uses the new complete slot and ignores
+the now-stale WAL until the durable reset completes. Before a later mutation
+is appended, the writer verifies the WAL header and durably realigns any stale
+WAL to the committed generation.
+
+Collections without a `.snapshot` manifest remain backward compatible: the
+unprefixed or named `idx`/`terms`/`meta` files are loaded as the legacy slot,
+and the headerless WAL is replayed as before. The first manifested compaction
+uses the hidden slot so loss of that first manifest still leaves the legacy
+slot and WAL available.
 
 ## Endianness
 

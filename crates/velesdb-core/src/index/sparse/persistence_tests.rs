@@ -179,8 +179,11 @@ fn test_meta_contains_correct_values() {
     }
     compact(dir.path(), &index).unwrap();
 
-    // Read meta directly
-    let meta_data = std::fs::read(dir.path().join("sparse.meta")).unwrap();
+    // Read metadata from the slot selected by the durable manifest.
+    let active = super::persistence_generation::active_snapshot(dir.path(), "sparse")
+        .unwrap()
+        .unwrap();
+    let meta_data = std::fs::read(active.paths.meta).unwrap();
     let meta: SparseMeta = postcard::from_bytes(&meta_data).unwrap();
     assert_eq!(meta.version, 1);
     assert_eq!(meta.doc_count, 25);
@@ -264,8 +267,92 @@ fn test_compaction_truncates_wal() {
 
     compact(dir.path(), &index).unwrap();
 
-    // WAL should be truncated
-    assert_eq!(std::fs::metadata(&wal_path).unwrap().len(), 0);
+    // The old records are gone; the durable generation header is logically empty.
+    let replayed = wal_replay(&wal_path, &SparseInvertedIndex::new()).unwrap();
+    assert_eq!(replayed, 0);
+}
+
+fn compacted_index_with_pending_wal() -> (
+    tempfile::TempDir,
+    SparseInvertedIndex,
+    std::path::PathBuf,
+    Vec<u8>,
+) {
+    let dir = tempdir().unwrap();
+    let wal_path = dir.path().join("sparse.wal");
+    let index = SparseInvertedIndex::new();
+    let first = make_vector(vec![(1, 1.0)]);
+    wal_append_upsert(&wal_path, 1, &first).unwrap();
+    index.insert(1, &first);
+    compact(dir.path(), &index).unwrap();
+
+    let second = make_vector(vec![(2, 2.0)]);
+    wal_append_upsert(&wal_path, 2, &second).unwrap();
+    index.insert(2, &second);
+    let wal_before = std::fs::read(&wal_path).unwrap();
+    (dir, index, wal_path, wal_before)
+}
+
+fn assert_recovery_after_fault(boundary: PublicationBoundary) {
+    let (dir, index, wal_path, wal_before) = compacted_index_with_pending_wal();
+    let _fault = PublicationFaultGuard::inject(boundary);
+    compact(dir.path(), &index).expect_err("publication boundary must fail");
+
+    assert_eq!(std::fs::read(wal_path).unwrap(), wal_before);
+    let loaded = load_from_disk(dir.path()).unwrap().unwrap();
+    assert_eq!(loaded.doc_count(), 2);
+    assert_eq!(loaded.get_all_postings(1)[0].doc_id, 1);
+    assert_eq!(loaded.get_all_postings(2)[0].doc_id, 2);
+}
+
+#[test]
+fn every_publication_boundary_preserves_a_recoverable_generation() {
+    for boundary in [
+        PublicationBoundary::IndexPromotion,
+        PublicationBoundary::TermsPromotion,
+        PublicationBoundary::MetaPromotion,
+        PublicationBoundary::CommitPoint,
+        PublicationBoundary::WalTruncation,
+    ] {
+        assert_recovery_after_fault(boundary);
+    }
+}
+
+#[test]
+fn current_layout_loads_without_a_manifest() {
+    let dir = tempdir().unwrap();
+    let index = SparseInvertedIndex::new();
+    index.insert(7, &make_vector(vec![(3, 1.5)]));
+    compact(dir.path(), &index).unwrap();
+
+    for extension in ["idx", "terms", "meta"] {
+        std::fs::rename(
+            dir.path().join(format!(".sparse.next.{extension}")),
+            dir.path().join(format!("sparse.{extension}")),
+        )
+        .unwrap();
+    }
+    std::fs::remove_file(dir.path().join("sparse.snapshot")).unwrap();
+    std::fs::write(dir.path().join("sparse.wal"), []).unwrap();
+
+    let loaded = load_from_disk(dir.path()).unwrap().unwrap();
+    assert_eq!(loaded.doc_count(), 1);
+    assert_eq!(loaded.get_all_postings(3)[0].doc_id, 7);
+}
+
+#[test]
+fn manifest_selects_one_complete_snapshot_slot() {
+    let dir = tempdir().unwrap();
+    let index = SparseInvertedIndex::new();
+    index.insert(1, &make_vector(vec![(1, 1.0)]));
+    compact(dir.path(), &index).unwrap();
+    index.insert(2, &make_vector(vec![(2, 2.0)]));
+    compact(dir.path(), &index).unwrap();
+
+    std::fs::write(dir.path().join(".sparse.next.meta"), b"inactive-corruption").unwrap();
+    let loaded = load_from_disk(dir.path()).unwrap().unwrap();
+    assert_eq!(loaded.doc_count(), 2);
+    assert_eq!(loaded.get_all_postings(2)[0].doc_id, 2);
 }
 
 /// #897: a compacted `sparse.meta` whose `term_count` disagrees with the decoded
@@ -285,7 +372,11 @@ fn test_load_rejects_term_count_mismatch() {
 
     // Overwrite the metadata header with an inflated `term_count` that no longer
     // matches the on-disk term dictionary.
-    let meta_path = dir.path().join("sparse.meta");
+    let meta_path = super::persistence_generation::active_snapshot(dir.path(), "sparse")
+        .unwrap()
+        .unwrap()
+        .paths
+        .meta;
     let meta = super::persistence::SparseMeta {
         version: 1,
         doc_count: 10,

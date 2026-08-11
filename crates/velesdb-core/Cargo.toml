@@ -76,7 +76,17 @@ features = ["std", "serde"]
 # EPIC-033/US-003: Windows hole-punch (FSCTL_SET_ZERO_DATA)
 [target.'cfg(target_os = "windows")'.dependencies.windows-sys]
 version = "0.61"
-features = ["Win32_Foundation", "Win32_System_Ioctl", "Win32_System_IO"]
+features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Ioctl",
+    "Win32_System_IO",
+]
+
+[target.'cfg(windows)'.dependencies.atomicwrites]
+# Safe wrapper around MoveFileExW(REPLACE_EXISTING | WRITE_THROUGH), keeping
+# the crate's own code free of unsafe while retaining a durable replacement.
+version = "0.4.4"
 
 # EPIC-033/US-003: Linux hole-punch (fallocate)
 [target.'cfg(target_os = "linux")'.dependencies.libc]

@@ -334,9 +334,11 @@ impl Collection {
 
     /// Deletes IDs from sparse indexes with WAL-before-apply.
     fn delete_from_sparse_indexes(&self, ids: &[u64]) -> Result<()> {
+        // Hold one exclusive guard from WAL append through apply so compaction
+        // cannot snapshot between the two phases and then discard the record.
+        let indexes = self.query.sparse_indexes.write();
         #[cfg(feature = "persistence")]
         {
-            let indexes = self.query.sparse_indexes.read();
             for name in indexes.keys() {
                 let wal_path =
                     crate::index::sparse::persistence::wal_path_for_name(&self.storage.path, name);
@@ -345,7 +347,6 @@ impl Collection {
                 }
             }
         }
-        let indexes = self.query.sparse_indexes.read();
         for idx in indexes.values() {
             for &id in ids {
                 idx.delete(id);

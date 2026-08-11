@@ -3,14 +3,19 @@
 //! Extracted from `persistence.rs` to reduce NLOC below the 500 threshold.
 
 use super::inverted_index::SparseInvertedIndex;
+use super::persistence_generation::committed_generation_for_wal;
 use super::types::SparseVector;
 use crate::error::{Error, Result};
+use crate::storage::atomic_write::{atomic_write, sync_parent_directory};
 
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Read, Write};
 use std::path::Path;
 
 const WAL_OP_UPSERT: u8 = 0x01;
 const WAL_OP_DELETE: u8 = 0x02;
+const WAL_HEADER_MAGIC: [u8; 4] = *b"VSWL";
+const WAL_HEADER_VERSION: u8 = 1;
+const WAL_HEADER_LEN: usize = 13;
 
 // ---------------------------------------------------------------------------
 // Byte-parsing helpers
@@ -112,12 +117,40 @@ fn compute_upsert_entry_len(nnz: u32) -> Result<u32> {
 
 /// Opens a WAL file for appending with buffered I/O.
 fn open_wal_writer(wal_path: &Path) -> Result<BufWriter<std::fs::File>> {
+    if let Some(generation) = committed_generation_for_wal(wal_path)? {
+        align_wal_generation(wal_path, generation)?;
+    }
     let file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(wal_path)
         .map_err(|e| Error::SparseIndexError(format!("WAL open failed: {e}")))?;
     Ok(BufWriter::new(file))
+}
+
+/// Prevents post-compaction writes from extending a stale WAL generation.
+fn align_wal_generation(wal_path: &Path, expected: u64) -> Result<()> {
+    if read_wal_generation(wal_path)? != Some(expected) {
+        reset_wal(wal_path, expected)?;
+    }
+    Ok(())
+}
+
+fn read_wal_generation(wal_path: &Path) -> Result<Option<u64>> {
+    let file = match std::fs::File::open(wal_path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(Error::SparseIndexError(format!(
+                "WAL generation read open failed: {error}"
+            )))
+        }
+    };
+    let mut bytes = Vec::with_capacity(WAL_HEADER_LEN);
+    file.take(WAL_HEADER_LEN as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| Error::SparseIndexError(format!("WAL generation read failed: {error}")))?;
+    read_wal_header(&bytes).map(|header| header.map(|(generation, _)| generation))
 }
 
 /// Writes bytes to a WAL writer, mapping I/O errors to `SparseIndexError`.
@@ -155,12 +188,64 @@ pub fn wal_replay(wal_path: &Path, index: &SparseInvertedIndex) -> Result<u64> {
     let Some(data) = data else {
         return Ok(0);
     };
+    let start = read_wal_header(&data)?.map_or(0, |(_, offset)| offset);
+    replay_wal_bytes(&data, start, index)
+}
 
-    let mut pos = 0usize;
-    let mut count = 0u64;
+pub(super) fn wal_replay_for_generation(
+    wal_path: &Path,
+    index: &SparseInvertedIndex,
+    expected_generation: Option<u64>,
+) -> Result<u64> {
+    let Some(data) = read_wal_file(wal_path)? else {
+        return Ok(0);
+    };
+    let header = read_wal_header(&data)?;
+    let Some(expected) = expected_generation else {
+        if header.is_some() {
+            return Err(Error::SparseIndexError(
+                "sparse WAL has a generation header but no snapshot manifest".to_string(),
+            ));
+        }
+        return replay_wal_bytes(&data, 0, index);
+    };
+    match header {
+        Some((generation, offset)) if generation == expected => {
+            replay_wal_bytes(&data, offset, index)
+        }
+        Some(_) | None => Ok(0),
+    }
+}
+
+pub(super) fn reset_wal(wal_path: &Path, generation: u64) -> Result<()> {
+    atomic_write(wal_path, &wal_header(generation))
+        .map_err(|e| Error::SparseIndexError(format!("sparse WAL durable reset: {e}")))
+}
+
+pub(super) fn sync_wal(wal_path: &Path) -> Result<()> {
+    let file = match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(wal_path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(Error::SparseIndexError(format!(
+                "compact WAL sync open: {error}"
+            )))
+        }
+    };
+    file.sync_all()
+        .and_then(|()| sync_parent_directory(wal_path))
+        .map_err(|error| Error::SparseIndexError(format!("compact WAL sync: {error}")))
+}
+
+fn replay_wal_bytes(data: &[u8], mut pos: usize, index: &SparseInvertedIndex) -> Result<u64> {
+    let mut count = 0_u64;
 
     while pos < data.len() {
-        let Some((body_start, total_len)) = read_wal_entry_header(&data, pos) else {
+        let Some((body_start, total_len)) = read_wal_entry_header(data, pos) else {
             break;
         };
         pos += 4;
@@ -176,7 +261,7 @@ pub fn wal_replay(wal_path: &Path, index: &SparseInvertedIndex) -> Result<u64> {
         let op = data[pos];
         pos += 1;
 
-        let advanced = replay_single_entry(&data, op, pos, body_start, total_len, index)?;
+        let advanced = replay_single_entry(data, op, pos, body_start, total_len, index)?;
         if let Some((new_pos, counted)) = advanced {
             pos = new_pos;
             count += counted;
@@ -188,6 +273,38 @@ pub fn wal_replay(wal_path: &Path, index: &SparseInvertedIndex) -> Result<u64> {
     }
 
     Ok(count)
+}
+
+fn wal_header(generation: u64) -> [u8; WAL_HEADER_LEN] {
+    let mut header = [0_u8; WAL_HEADER_LEN];
+    header[..4].copy_from_slice(&WAL_HEADER_MAGIC);
+    header[4] = WAL_HEADER_VERSION;
+    header[5..].copy_from_slice(&generation.to_le_bytes());
+    header
+}
+
+fn read_wal_header(data: &[u8]) -> Result<Option<(u64, usize)>> {
+    if !data.starts_with(&WAL_HEADER_MAGIC) {
+        return Ok(None);
+    }
+    if data.len() < WAL_HEADER_LEN {
+        return Err(Error::SparseIndexError(
+            "sparse WAL generation header is truncated".to_string(),
+        ));
+    }
+    if data[4] != WAL_HEADER_VERSION {
+        return Err(Error::SparseIndexError(format!(
+            "unsupported sparse WAL header version: {}",
+            data[4]
+        )));
+    }
+    let generation = read_le_u64(data, 5, "sparse WAL generation bytes")?;
+    if generation == 0 {
+        return Err(Error::SparseIndexError(
+            "sparse WAL generation must be non-zero".to_string(),
+        ));
+    }
+    Ok(Some((generation, WAL_HEADER_LEN)))
 }
 
 /// Reads the WAL file, returning `None` for missing files.
