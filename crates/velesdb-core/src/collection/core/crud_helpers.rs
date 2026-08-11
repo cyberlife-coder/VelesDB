@@ -118,7 +118,9 @@ impl Collection {
                 .ok();
                 #[cfg(feature = "persistence")]
                 if let Some(ref pq) = trained {
-                    let _ = pq.save_codebook(&self.storage.path);
+                    if let Err(e) = pq.save_codebook(&self.storage.path) {
+                        tracing::warn!("PQ codebook save failed: {e}");
+                    }
                 }
                 *quantizer_guard = trained;
                 backfill_samples = buffer.drain(..).collect();

@@ -48,8 +48,10 @@ pub fn merge_with_delta(
 /// Merges HNSW search results (as [`crate::ScoredResult`]) with delta buffer
 /// results.
 ///
-/// Zero-allocation variant that avoids the `ScoredResult` → `(u64, f32)` →
-/// `ScoredResult` round-trip in the search pipeline.
+/// Takes and returns `ScoredResult` directly so callers on the `ScoredResult`
+/// search pipeline don't need a separate conversion pass around the merge;
+/// internally this still merges on `(id, score)` tuples to share the sort/
+/// truncate logic with [`merge_with_delta`].
 #[must_use]
 pub fn merge_with_delta_scored(
     hnsw_results: Vec<crate::scored_result::ScoredResult>,

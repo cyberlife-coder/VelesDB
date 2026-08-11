@@ -184,6 +184,10 @@ fn write_idx_tmp(
     idx_file
         .flush()
         .map_err(|e| Error::SparseIndexError(format!("compact idx flush: {e}")))?;
+    idx_file
+        .get_ref()
+        .sync_all()
+        .map_err(|e| Error::SparseIndexError(format!("compact idx fsync: {e}")))?;
     Ok(term_entries)
 }
 
@@ -208,13 +212,30 @@ fn write_postings(w: &mut BufWriter<std::fs::File>, postings: &[PostingEntry]) -
     Ok(())
 }
 
+/// Writes `data` to `path`, fsyncing before returning so the bytes survive a
+/// crash prior to the caller's later rename over the final file.
+fn write_tmp_fsync(path: &Path, data: &[u8], context: &str) -> Result<()> {
+    let file = std::fs::File::create(path)
+        .map_err(|e| Error::SparseIndexError(format!("{context} create: {e}")))?;
+    let mut writer = BufWriter::new(file);
+    writer
+        .write_all(data)
+        .map_err(|e| Error::SparseIndexError(format!("{context} write: {e}")))?;
+    writer
+        .flush()
+        .map_err(|e| Error::SparseIndexError(format!("{context} flush: {e}")))?;
+    writer
+        .get_ref()
+        .sync_all()
+        .map_err(|e| Error::SparseIndexError(format!("{context} fsync: {e}")))
+}
+
 /// Writes the term dictionary file.
 fn write_terms_tmp(dir: &Path, prefix: &str, term_entries: &[TermEntry]) -> Result<()> {
     let terms_tmp = dir.join(format!("{prefix}.terms.tmp"));
     let terms_data = postcard::to_allocvec(term_entries)
         .map_err(|e| Error::SparseIndexError(format!("compact terms serialize: {e}")))?;
-    std::fs::write(&terms_tmp, &terms_data)
-        .map_err(|e| Error::SparseIndexError(format!("compact terms write: {e}")))
+    write_tmp_fsync(&terms_tmp, &terms_data, "compact terms")
 }
 
 /// Writes the metadata file.
@@ -228,8 +249,7 @@ fn write_meta_tmp(dir: &Path, prefix: &str, doc_count: u64, term_ids: &[u32]) ->
     };
     let meta_data = postcard::to_allocvec(&meta)
         .map_err(|e| Error::SparseIndexError(format!("compact meta serialize: {e}")))?;
-    std::fs::write(&meta_tmp, &meta_data)
-        .map_err(|e| Error::SparseIndexError(format!("compact meta write: {e}")))
+    write_tmp_fsync(&meta_tmp, &meta_data, "compact meta")
 }
 
 /// Atomically renames `.tmp` files to their final names.

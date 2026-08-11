@@ -5,6 +5,7 @@
 //! the storage concern from the core PQ algorithm.
 
 use crate::error::Error;
+use crate::storage::atomic_write::atomic_write;
 use serde::{Deserialize, Serialize};
 
 use super::pq::ProductQuantizer;
@@ -20,7 +21,8 @@ const MAX_PQ_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
 
 /// RF-2: Serializes `value` with postcard and atomically writes to `dir/filename`.
 ///
-/// Write goes to `.tmp` suffix first, then renamed for crash safety.
+/// Delegates to [`atomic_write`] (write-tmp-fsync-rename) so a crash between
+/// the rename and the OS flushing dirty pages cannot leave a torn file.
 fn postcard_save_atomic<T: Serialize>(
     dir: &std::path::Path,
     filename: &str,
@@ -33,11 +35,13 @@ fn postcard_save_atomic<T: Serialize>(
             format!("failed to serialize {label}: {e}"),
         ))
     })?;
-    let tmp_path = dir.join(format!("{filename}.tmp"));
     let final_path = dir.join(filename);
-    std::fs::write(&tmp_path, &data)?;
-    std::fs::rename(&tmp_path, &final_path)?;
-    Ok(())
+    atomic_write(&final_path, &data).map_err(|e| {
+        Error::Io(std::io::Error::new(
+            e.kind(),
+            format!("failed to write {label}: {e}"),
+        ))
+    })
 }
 
 /// RF-2: Loads and deserializes a postcard file from `dir/filename`.

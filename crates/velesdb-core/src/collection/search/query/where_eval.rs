@@ -10,6 +10,10 @@ use crate::point::SearchResult;
 use crate::velesql::{CompareOp, Condition, GraphMatchPredicate};
 use std::collections::HashSet;
 
+/// Tolerance for `=`/`!=` comparisons against a similarity score threshold.
+/// Scores are floating-point, so exact equality is never the intent here.
+const SCORE_EQ_EPSILON: f32 = 0.001;
+
 /// Per-query evaluation cache shared across all result rows.
 ///
 /// Holds graph-predicate anchor sets and (#904) the `Filter` built for each
@@ -309,8 +313,8 @@ impl Collection {
                 CompareOp::Gte => score >= threshold,
                 CompareOp::Lt => score < threshold,
                 CompareOp::Lte => score <= threshold,
-                CompareOp::Eq => (score - threshold).abs() < 0.001,
-                CompareOp::NotEq => (score - threshold).abs() >= 0.001,
+                CompareOp::Eq => (score - threshold).abs() < SCORE_EQ_EPSILON,
+                CompareOp::NotEq => (score - threshold).abs() >= SCORE_EQ_EPSILON,
             }
         } else {
             match op {
@@ -318,8 +322,8 @@ impl Collection {
                 CompareOp::Gte => score <= threshold,
                 CompareOp::Lt => score > threshold,
                 CompareOp::Lte => score >= threshold,
-                CompareOp::Eq => (score - threshold).abs() < 0.001,
-                CompareOp::NotEq => (score - threshold).abs() >= 0.001,
+                CompareOp::Eq => (score - threshold).abs() < SCORE_EQ_EPSILON,
+                CompareOp::NotEq => (score - threshold).abs() >= SCORE_EQ_EPSILON,
             }
         }
     }
