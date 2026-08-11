@@ -7,26 +7,20 @@
 
 use std::io::{self, Write};
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(test)]
 use std::cell::Cell;
 
-/// Process-global counter making temp file names unique within a process.
-static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-
 /// Writes `data` to `final_path` atomically.
 ///
-/// Serializes to a uniquely-named sibling temp file (same directory → same
-/// filesystem, so the replacement is atomic and cannot fail with `EXDEV`),
-/// fsyncs it, replaces the target, then persists that namespace change. Unix
-/// uses a parent-directory fsync; Windows uses `MOVEFILE_WRITE_THROUGH`.
+/// Serializes to a securely-created, uniquely-named sibling temp file (same
+/// directory → same filesystem, so the replacement is atomic and cannot fail
+/// with `EXDEV`), fsyncs it, replaces the target, then persists that namespace
+/// change. Unix uses a parent-directory fsync; Windows uses
+/// `MOVEFILE_WRITE_THROUGH`.
 /// A crash mid-write therefore leaves either the previous complete file or the
 /// replacement, never a torn file. The temp file is best-effort removed if any
 /// step fails.
-///
-/// The temp name embeds PID + thread id + a process-global counter so
-/// concurrent writers (intra- and inter-process) never collide on it.
 ///
 /// # Errors
 ///
@@ -51,21 +45,21 @@ pub(crate) fn atomic_write_with<T, E>(
 where
     E: From<io::Error>,
 {
-    let seq = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let pid = std::process::id();
-    let tid = std::thread::current().id();
-    let file_name = final_path.file_name().unwrap_or_default().to_string_lossy();
-    let tmp_path = final_path.with_file_name(format!("{file_name}.tmp.{pid}.{tid:?}.{seq}"));
+    let (file, tmp_path) = create_temporary_file(final_path)?;
+    atomic_write_inner(file, tmp_path.as_ref(), final_path, write)
+}
 
-    let result = atomic_write_inner(&tmp_path, final_path, write);
-    if result.is_err() {
-        // Best-effort cleanup of the temp file on failure.
-        let _ = std::fs::remove_file(&tmp_path);
-    }
-    result
+fn create_temporary_file(final_path: &Path) -> io::Result<(std::fs::File, tempfile::TempPath)> {
+    let file_name = final_path.file_name().unwrap_or_default().to_string_lossy();
+    let prefix = format!("{file_name}.tmp.");
+    tempfile::Builder::new()
+        .prefix(&prefix)
+        .tempfile_in(parent_directory(final_path))
+        .map(tempfile::NamedTempFile::into_parts)
 }
 
 fn atomic_write_inner<T, E>(
+    file: std::fs::File,
     tmp_path: &Path,
     final_path: &Path,
     write: impl FnOnce(&mut std::io::BufWriter<std::fs::File>) -> Result<T, E>,
@@ -73,7 +67,6 @@ fn atomic_write_inner<T, E>(
 where
     E: From<io::Error>,
 {
-    let file = std::fs::File::create(tmp_path)?;
     let mut writer = std::io::BufWriter::new(file);
     let value = write(&mut writer)?;
     writer.flush()?;
@@ -112,7 +105,6 @@ pub(crate) fn sync_parent_directory(_final_path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
 fn parent_directory(path: &Path) -> &Path {
     path.parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -230,6 +222,11 @@ mod tests {
         let _fault = FaultGuard::inject(AtomicWriteBoundary::TemporaryFileSync);
         assert!(atomic_write(&path, b"replacement").is_err());
         assert_eq!(std::fs::read(path).expect("test: read"), b"previous");
+        let leftovers = std::fs::read_dir(dir.path())
+            .expect("test: read dir")
+            .filter_map(std::result::Result::ok)
+            .any(|entry| entry.file_name().to_string_lossy().contains(".tmp."));
+        assert!(!leftovers, "failed writes must remove their temp file");
     }
 
     #[cfg(unix)]
