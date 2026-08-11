@@ -568,6 +568,10 @@ pub(super) struct RememberExtractedParams {
     /// Optional structured metadata applied to every extracted fact.
     #[serde(default, deserialize_with = "super::wire::lenient")]
     pub(super) metadata: Option<Metadata>,
+    /// Per-call backend (`outline`, `ollama`, or `openai`). Omit it to use the
+    /// backend configured when the daemon started.
+    #[serde(default)]
+    pub(super) extractor: Option<String>,
 }
 
 /// Result of the `remember_extracted` tool.
@@ -624,8 +628,8 @@ pub(super) struct ProvenanceStatus {
 #[derive(Serialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub(super) struct ExtractionStatus {
-    /// Whether an extraction backend is attached — `remember_extracted`
-    /// works iff this is `true`.
+    /// Whether a default extraction backend is attached. When false, callers
+    /// can still request the always-available `outline` backend explicitly.
     pub(super) configured: bool,
     /// Whether the background autograph worker is consuming the queue
     /// (#1846): `remember`'s graph enrichment runs behind the response.

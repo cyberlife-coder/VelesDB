@@ -332,7 +332,7 @@ Other verified clients: Cursor, Cline, Zed, opencode, Devin CLI.
 |---|---|---|
 | `Storage(DatabaseLocked)` | Two processes opened the same store — usually a second client, or a stray stdio process next to the daemon. | Run one `--http` daemon and point every client at it, or give the second client its own `VELESDB_MEMORY_PATH`. |
 | The server never starts from a JSON/TOML config | `~` is not expanded: those configs spawn the binary without a shell. | Use an absolute path, e.g. `/home/you/.cargo/bin/velesdb-memory`. |
-| `extraction backend not configured` from `remember_extracted` | Built without `--features extract`, or `VELESDB_MEMORY_EXTRACTOR` is unset. | See [auto-extraction](../../docs/guides/MCP_SERVER_SETUP.md#auto-extraction-backend-opt-in). |
+| `extraction backend not configured` from `remember_extracted` | The call omitted `extractor` and `VELESDB_MEMORY_EXTRACTOR` is unset. | Pass `extractor: "outline"`, or configure the daemon default; see [auto-extraction](../../docs/guides/MCP_SERVER_SETUP.md#auto-extraction-backend-opt-in). |
 | `IngestDisabled` on a `path` fragment | `VELESDB_MEMORY_INGEST_ROOTS` is unset or empty — path ingestion is off by default. | Start the server with an allowlist of absolute directories. |
 | `relate` / `forget` reports a missing id from a JS client | Ids exceed 2^53 and lose precision as JSON numbers. | Relay the `id_str` field, or set `"policy": {"ids_as_strings": true}` on compiler calls. |
 
