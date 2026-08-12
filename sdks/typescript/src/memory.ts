@@ -156,6 +156,8 @@ export interface CompiledContext {
   insights: unknown;
   /** Overall fidelity risk. */
   risk: 'low' | 'medium' | 'high';
+  /** Low-noise pointers to relevant fragments that were externalized; inspect `decisions` for the exhaustive audit. */
+  warnings: unknown;
   [key: string]: unknown;
 }
 

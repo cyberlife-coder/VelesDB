@@ -738,7 +738,15 @@ Env vars: `VELESDB_MEMORY_EXTRACTOR` (`outline`, `ollama` or `openai`),
 `VELESDB_MEMORY_EXTRACTOR_MODEL` (a generative model — required for `ollama`
 and `openai`, unused by `outline`), `VELESDB_MEMORY_EXTRACTOR_API_TOKEN`
 (optional; when unset, **no** `Authorization` header is sent). Without a
-backend the tool returns a clear "not configured" error.
+default backend, a call that omits `extractor` returns a clear "not configured"
+error.
+
+`VELESDB_MEMORY_EXTRACTOR` is the per-daemon **default**, not a session-wide
+lock. Each `remember_extracted` call may pass `extractor: "outline"`,
+`"ollama"`, or `"openai"`. The offline `outline` backend is always available;
+a requested remote backend must match the one configured at startup so it can
+reuse that backend's URL, model, and credential safely. This lets one daemon
+handle structured directives and free prose without a restart.
 
 `openai` is the same OpenAI-compatible protocol described under
 [Embedding backend](#embedding-backend), reached over

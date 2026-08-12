@@ -40,6 +40,7 @@ use crate::extract::DynExtractor;
 mod context_tools;
 
 mod dto;
+mod extractor_resolver;
 mod wire;
 use dto::{
     EmbedderStatus, EntityParams, EntityProfileDto, ExplanationDto, ExtractionStatus,
@@ -49,6 +50,7 @@ use dto::{
     RelateParams, RelateResult, RememberExtractedParams, RememberExtractedResult, RememberParams,
     RememberResult, UnrelateParams, UnrelateResult, WhyParams,
 };
+use extractor_resolver::{ExtractorResolveError, ExtractorResolver};
 
 /// Le constructeur de schema d'ENTREE, unique pour les vingt-deux outils :
 /// [`crate::schema::wire_safe_input_schema`].
@@ -77,10 +79,8 @@ pub struct McpServer {
     /// flight completes, still-queued ones are skipped and counted, so exit
     /// waits for at most ONE generation.
     _autograph_worker: Option<Arc<crate::service::AutographWorkerHandle>>,
-    /// Optional extraction backend powering `remember_extracted`. `None` unless
-    /// a backend is attached via [`Self::with_extractor`]; the tool then reports
-    /// extraction as unconfigured.
-    extractor: Option<DynExtractor>,
+    /// Daemon-level default and per-call selection for `remember_extracted`.
+    extractors: ExtractorResolver,
     /// Default time-to-live (seconds) applied to `remember`d facts that don't
     /// specify their own `ttl_seconds`. `None` (the default) stores permanently.
     /// Set from `VELESDB_MEMORY_DEFAULT_TTL` by the binary.
@@ -131,7 +131,7 @@ impl McpServer {
         Self {
             service,
             _autograph_worker: autograph_worker,
-            extractor: None,
+            extractors: ExtractorResolver::default(),
             default_ttl: None,
             embedder_identity: None,
             store_dir: None,
@@ -196,8 +196,22 @@ impl McpServer {
     /// Without it the tool reports that extraction is not configured.
     #[must_use]
     pub fn with_extractor(mut self, extractor: DynExtractor) -> Self {
-        self.extractor = Some(extractor);
+        self.extractors = ExtractorResolver::unnamed(extractor);
         self
+    }
+
+    /// Attach the named daemon-level default used when `remember_extracted`
+    /// omits its per-call `extractor` choice.
+    ///
+    /// # Errors
+    /// Returns an error when `backend` is unknown or disables extraction.
+    pub fn with_named_extractor(
+        mut self,
+        backend: impl Into<String>,
+        extractor: DynExtractor,
+    ) -> Result<Self, String> {
+        self.extractors = ExtractorResolver::named(backend.into(), extractor)?;
+        Ok(self)
     }
 
     /// Apply a default TTL (seconds) to `remember`d facts that don't carry their
@@ -515,34 +529,32 @@ impl McpServer {
         // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
         // or les SDK MCP valident structuredContent contre ce schema.
         output_schema = crate::schema::wire_safe_output_schema::<RememberExtractedResult>(),
-        description = "Store a passage of raw text by extracting its atomic facts and auto-building the fact↔topic graph, so `why` can later connect them with no manual links. Requires the server to be started with an extraction backend (set VELESDB_MEMORY_EXTRACTOR — compiled into the default build, no rebuild). Returns `ids` — the stored facts' ids, in extraction order — plus `ids_str`, their decimal-string twins: ids exceed 2^53, so always relay those on clients without u64-safe JSON number parsing. It also returns `skipped_over_cap`, and you should read it: that is how many facts the extractor DID produce out of your text and this tool did NOT store, because each was longer than the per-fact text limit. A non-zero `skipped_over_cap` means part of what you sent was extracted and then dropped — without that number, a short `ids` list is indistinguishable from a passage that simply held fewer facts."
+        description = "Store a passage of raw text by extracting its atomic facts and auto-building the fact↔topic graph, so `why` can later connect them with no manual links. Set `extractor` per call (`outline`, `ollama`, or `openai`), or omit it to use the daemon default from VELESDB_MEMORY_EXTRACTOR. `outline` is always available; a remote backend must be the one configured when the daemon started. Returns `ids` — the stored facts' ids, in extraction order — plus `ids_str`, their decimal-string twins: ids exceed 2^53, so always relay those on clients without u64-safe JSON number parsing. It also returns `skipped_over_cap`, and you should read it: that is how many facts the extractor DID produce out of your text and this tool did NOT store, because each was longer than the per-fact text limit. A non-zero `skipped_over_cap` means part of what you sent was extracted and then dropped — without that number, a short `ids` list is indistinguishable from a passage that simply held fewer facts."
     )]
     async fn remember_extracted(
         &self,
         Parameters(params): Parameters<RememberExtractedParams>,
     ) -> Result<Json<RememberExtractedResult>, ErrorData> {
-        if params.text.len() > MAX_FACT_BYTES {
+        let RememberExtractedParams {
+            text,
+            metadata,
+            extractor,
+        } = params;
+        if text.len() > MAX_FACT_BYTES {
             return Err(ErrorData::new(
                 ErrorCode::INVALID_PARAMS,
                 format!("text exceeds maximum size of {MAX_FACT_BYTES} bytes"),
                 None,
             ));
         }
-        let Some(extractor) = self.extractor.clone() else {
-            return Err(ErrorData::new(
-                ErrorCode::INTERNAL_ERROR,
-                "extraction backend not configured: start the server with \
-                 VELESDB_MEMORY_EXTRACTOR=outline for the offline deterministic \
-                 reader — it needs no model and no extra build feature — or \
-                 =ollama with a local generative model",
-                None,
-            ));
-        };
+        let extractor = self
+            .extractors
+            .resolve(extractor.as_deref())
+            .map_err(extractor_error)?;
         // Extraction makes a blocking network call (up to the extractor's
         // timeout), so run it off the async worker pool to keep the stdio loop
         // responsive to other tool calls and cancellations.
         let service = Arc::clone(&self.service);
-        let RememberExtractedParams { text, metadata } = params;
         let outcome = tokio::task::spawn_blocking(move || {
             service.remember_extracted(&text, &extractor, metadata.as_ref())
         })
@@ -563,7 +575,7 @@ impl McpServer {
         // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
         // or les SDK MCP valident structuredContent contre ce schema.
         output_schema = crate::schema::wire_safe_output_schema::<MemoryStatusResult>(),
-        description = "Report this memory server's health and configuration: which embedder is running and whether recall is SEMANTIC (`embedder.semantic: false` means the offline `hash` default — recall matches surface form, not meaning, and configuring a semantic embedder is an env-var switch, no rebuild), what embedder the store was filled by per its on-disk provenance record, whether an extraction backend is configured (`remember_extracted` works iff `extraction.configured`), whether the background autograph worker is active and how many enrichments a full queue dropped, and the corpus size — `memory.facts` and `memory.edges`. Read `memory.edges` when `why` seems to add nothing over `recall`: `0` means no fact was ever linked (by `relate`, `remember`'s `links`, or extraction), so `why` HAS no graph to walk and degrades to plain search — that is a wiring gap, not a defect. Call this at session start, or whenever recall quality or `why`'s evidence trails surprise you, and tell the user when the server runs degraded. Takes no parameters."
+        description = "Report this memory server's health and configuration: which embedder is running and whether recall is SEMANTIC (`embedder.semantic: false` means the offline `hash` default — recall matches surface form, not meaning, and configuring a semantic embedder is an env-var switch, no rebuild), what embedder the store was filled by per its on-disk provenance record, whether a default extraction backend is configured (`remember_extracted` may omit `extractor` iff `extraction.configured`; explicit `outline` remains available), whether the background autograph worker is active and how many enrichments a full queue dropped, and the corpus size — `memory.facts` and `memory.edges`. Read `memory.edges` when `why` seems to add nothing over `recall`: `0` means no fact was ever linked (by `relate`, `remember`'s `links`, or extraction), so `why` HAS no graph to walk and degrades to plain search — that is a wiring gap, not a defect. Call this at session start, or whenever recall quality or `why`'s evidence trails surprise you, and tell the user when the server runs degraded. Takes no parameters."
     )]
     async fn memory_status(&self) -> Result<Json<MemoryStatusResult>, ErrorData> {
         let embedder = match &self.embedder_identity {
@@ -610,7 +622,7 @@ impl McpServer {
                 // extractor is attached separately and reports through the
                 // two autograph fields, so an autograph-only configuration
                 // never claims a tool that would refuse.
-                configured: self.extractor.is_some(),
+                configured: self.extractors.default_is_configured(),
                 autograph_active: self.service.autograph_queue_open(),
                 autograph_dropped: self.service.autograph_dropped(),
             },
@@ -814,6 +826,22 @@ fn assert_every_input_slot_is_typed(router: &ToolRouter<McpServer>) {
         offenders.len(),
         offenders.join("\n")
     );
+}
+
+/// Preserve the existing server-fault code for a missing default while
+/// classifying an explicit, unusable backend name as caller input.
+fn extractor_error(error: ExtractorResolveError) -> ErrorData {
+    match error {
+        ExtractorResolveError::DefaultNotConfigured => ErrorData::new(
+            ErrorCode::INTERNAL_ERROR,
+            "extraction backend not configured: set VELESDB_MEMORY_EXTRACTOR, \
+             or pass extractor='outline' for the offline deterministic reader",
+            None,
+        ),
+        ExtractorResolveError::InvalidRequest(message) => {
+            ErrorData::new(ErrorCode::INVALID_PARAMS, message, None)
+        }
+    }
 }
 
 /// Map a `spawn_blocking` join failure (a panicked or cancelled tool task) to an

@@ -7,6 +7,8 @@ import re
 import sys
 from pathlib import Path
 
+from version_registry import memory_registry_mismatches
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # NOTE: TARGETS is a list of (path, format) tuples — NOT a dict — because
@@ -663,7 +665,7 @@ def _compare_targets(
             )
 
 
-def run(root: Path) -> int:
+def run(root: Path, check_memory_registries: bool = False) -> int:
     expected = _read_cargo_version(root)
     print(f"Workspace version (Cargo.toml): {expected}")
 
@@ -680,6 +682,16 @@ def run(root: Path) -> int:
             print(f"  - {m}")
         return 1
 
+    if check_memory_registries:
+        print("\nPublic velesdb-memory registries:")
+        registry_mismatches = memory_registry_mismatches(memory_expected)
+        if registry_mismatches:
+            print("Registry publication mismatch(es) detected:")
+            for mismatch in registry_mismatches:
+                print(f"  - {mismatch}")
+            return 1
+        print(f"  OK    crates.io and all npm packages publish {memory_expected}")
+
     print("\nAll versions match.")
     return 0
 
@@ -687,13 +699,18 @@ def run(root: Path) -> int:
 def main(argv: "list[str] | None" = None) -> int:
     parser = argparse.ArgumentParser(description="Check version stamps stay in sync.")
     parser.add_argument("--root", default=str(REPO_ROOT), help="repository root to scan")
+    parser.add_argument(
+        "--check-memory-registries",
+        action="store_true",
+        help="also require the public memory crate and npm packages to match",
+    )
     args = parser.parse_args(argv)
     # A tree this guard cannot read answers 2, never 1. Both anchor files are
     # read unguarded (`Cargo.toml`, the memory crate manifest), and a missing
     # one used to surface as a FileNotFoundError traceback — which also exits 1
     # and would have passed for a refusal it never made.
     try:
-        return run(Path(args.root).resolve())
+        return run(Path(args.root).resolve(), args.check_memory_registries)
     except (OSError, RuntimeError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
