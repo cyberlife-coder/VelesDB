@@ -24,6 +24,8 @@ import unittest
 from pathlib import Path
 
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "check-version-sync.py"
+if str(SCRIPT_PATH.parent) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_PATH.parent))
 
 
 def _load_script() -> types.ModuleType:
