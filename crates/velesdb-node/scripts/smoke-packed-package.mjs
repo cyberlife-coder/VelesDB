@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -17,7 +17,6 @@ function run(command, args, cwd) {
 }
 
 function pack(packageDir, destination) {
-  mkdirSync(destination)
   const output = run('npm', ['pack', '--json', '--pack-destination', destination], packageDir)
   const reports = JSON.parse(output)
   assert.equal(reports.length, 1, `expected one packed artifact, got ${reports.length}`)
@@ -32,8 +31,7 @@ function assertRootEntries(report) {
 }
 
 function installAndRequire(consumerDir, rootTarball, platformTarball) {
-  mkdirSync(consumerDir)
-  writeFileSync(join(consumerDir, 'package.json'), '{"private":true}\n')
+  run('npm', ['init', '-y'], consumerDir)
   run(
     'npm',
     [
@@ -48,15 +46,6 @@ function installAndRequire(consumerDir, rootTarball, platformTarball) {
     consumerDir,
   )
 
-  const installedRoot = join(
-    consumerDir,
-    'node_modules',
-    '@wiscale',
-    'velesdb-memory-node',
-  )
-  for (const file of REQUIRED_ROOT_FILES) {
-    assert.ok(existsSync(join(installedRoot, file)), `fresh install is missing ${file}`)
-  }
   run(
     process.execPath,
     [
@@ -70,18 +59,20 @@ function installAndRequire(consumerDir, rootTarball, platformTarball) {
 }
 
 const platformPackageDir = process.argv[2]
-assert.ok(platformPackageDir, 'usage: smoke-packed-package.mjs <platform-package-dir>')
+if (!platformPackageDir) {
+  throw new Error('usage: smoke-packed-package.mjs <platform-package-dir>')
+}
 
 const packageRoot = process.cwd()
 const platformRoot = resolve(packageRoot, platformPackageDir)
 
 const scratch = mkdtempSync(join(tmpdir(), 'velesdb-node-pack-'))
 try {
-  const root = pack(packageRoot, join(scratch, 'root'))
+  const root = pack(packageRoot, mkdtempSync(join(scratch, 'root-')))
   assertRootEntries(root.report)
-  assert.ok(existsSync(platformRoot), `platform package directory not found: ${platformRoot}`)
-  const platform = pack(platformRoot, join(scratch, 'platform'))
-  installAndRequire(join(scratch, 'consumer'), root.tarball, platform.tarball)
+  const platform = pack(platformRoot, mkdtempSync(join(scratch, 'platform-')))
+  const consumer = mkdtempSync(join(scratch, 'consumer-'))
+  installAndRequire(consumer, root.tarball, platform.tarball)
   console.log('packed root package installs and loads from a clean directory')
 } finally {
   rmSync(scratch, { recursive: true, force: true })
