@@ -338,7 +338,7 @@ fn test_remove_reverse_cleans_stale_idx_to_id() {
     assert_eq!(mappings.get_id(idx), Some(42));
 
     // remove_reverse only removes the reverse mapping (idx -> id)
-    mappings.remove_reverse(idx);
+    mappings.remove_reverse(idx, 42);
 
     // Forward mapping (id -> idx) must survive
     assert_eq!(mappings.get_idx(42), Some(idx));
@@ -354,7 +354,7 @@ fn test_remove_reverse_nonexistent_idx_is_noop() {
     mappings.register(42).expect("register");
 
     // Removing a reverse mapping for an idx that doesn't exist is a no-op
-    mappings.remove_reverse(999);
+    mappings.remove_reverse(999, 42);
 
     assert_eq!(mappings.len(), 1);
     assert_eq!(mappings.get_idx(42), Some(0));
@@ -375,7 +375,7 @@ fn test_remove_reverse_then_restore_fixes_divergence() {
     let correct_idx: usize = 5;
 
     // Step 3: remove stale reverse mapping
-    mappings.remove_reverse(stale_idx);
+    mappings.remove_reverse(stale_idx, 42);
     assert_eq!(mappings.get_id(stale_idx), None);
 
     // Step 4: restore with correct idx
@@ -384,6 +384,17 @@ fn test_remove_reverse_then_restore_fixes_divergence() {
     assert_eq!(mappings.get_id(correct_idx), Some(42));
     // Stale reverse mapping still gone
     assert_eq!(mappings.get_id(stale_idx), None);
+}
+
+#[test]
+fn test_remove_reverse_preserves_a_concurrently_corrected_owner() {
+    let mappings = ShardedMappings::new();
+    let idx = mappings.register(42).expect("register original owner");
+
+    mappings.restore(84, idx);
+    mappings.remove_reverse(idx, 42);
+
+    assert_eq!(mappings.get_id(idx), Some(84));
 }
 
 // -------------------------------------------------------------------------

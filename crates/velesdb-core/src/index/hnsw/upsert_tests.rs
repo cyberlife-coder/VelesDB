@@ -1,7 +1,9 @@
 //! Tests for `upsert` module — shared upsert-mapping logic.
 
 use super::sharded_mappings::ShardedMappings;
-use super::upsert::{rollback_upsert, upsert_mapping, upsert_mapping_batch};
+use super::upsert::{
+    reconcile_batch_mappings, rollback_upsert, upsert_mapping, upsert_mapping_batch,
+};
 
 // -------------------------------------------------------------------------
 // upsert_mapping_batch tests (issue #375)
@@ -88,6 +90,21 @@ fn test_upsert_mapping_batch_single_element() {
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].old_idx, None);
     assert_eq!(mappings.len(), 1);
+}
+
+#[test]
+fn test_crossed_reconciliations_preserve_both_reverse_mappings() {
+    let mappings = ShardedMappings::new();
+    let first = upsert_mapping(&mappings, 10);
+    let second = upsert_mapping(&mappings, 20);
+
+    reconcile_batch_mappings(&mappings, &[(10, first.clone())], &[second.idx]);
+    reconcile_batch_mappings(&mappings, &[(20, second.clone())], &[first.idx]);
+
+    assert_eq!(mappings.get_idx(10), Some(second.idx));
+    assert_eq!(mappings.get_id(second.idx), Some(10));
+    assert_eq!(mappings.get_idx(20), Some(first.idx));
+    assert_eq!(mappings.get_id(first.idx), Some(20));
 }
 
 // -------------------------------------------------------------------------
