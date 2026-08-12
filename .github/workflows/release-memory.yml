@@ -295,6 +295,16 @@ jobs:
           path: crates/velesdb-node/*.node
           if-no-files-found: error
 
+      - name: Upload generated root package entrypoints
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: node-package-entrypoints
+          path: |
+            crates/velesdb-node/index.js
+            crates/velesdb-node/index.d.ts
+          if-no-files-found: error
+
   # ===========================================================================
   # 4. Assemble per-platform packages and publish to npm
   # ===========================================================================
@@ -329,6 +339,12 @@ jobs:
           pattern: bindings-*
           merge-multiple: true
 
+      - name: Restore generated root package entrypoints
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: node-package-entrypoints
+          path: crates/velesdb-node
+
       - name: Stage native binaries into per-platform npm dirs
         # Each per-platform package is published separately, so it must carry the
         # VelesDB Core License text itself — `create-npm-dirs` does not copy it.
@@ -339,6 +355,9 @@ jobs:
           npx napi artifacts --output-dir ./artifacts
           for d in npm/*/; do cp LICENSE README.md "$d"; done
           ls -R ./npm
+
+      - name: Smoke-test the packed root package from a clean install
+        run: node scripts/smoke-packed-package.mjs npm/linux-x64-gnu
 
       - name: Publish to npm
         # `prepublishOnly` (napi prepublish -t npm) publishes the per-platform

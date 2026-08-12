@@ -744,6 +744,19 @@ jobs:
           npx napi build --platform
           npm test
 
+      # Mirror the release assembly before any tag exists: test the root
+      # tarball plus its native package from a clean npm install, never the
+      # build directory where generated entrypoints happen to be present.
+      - name: Smoke-test the packed Node package from a clean install
+        working-directory: crates/velesdb-node
+        run: |
+          mkdir -p artifacts
+          cp -- ./*.node artifacts/
+          npx napi create-npm-dirs
+          npx napi artifacts --output-dir ./artifacts
+          for d in npm/*/; do cp LICENSE README.md "$d"; done
+          node scripts/smoke-packed-package.mjs npm/linux-x64-gnu
+
       # EPIC-P-071/A1 non-regression gate: "the facts survive compilation".
       # Reuses the napi addon just built above (no second Rust build) — this
       # job is the cheapest place to run it: the "Tests" job never sets up

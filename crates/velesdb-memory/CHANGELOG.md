@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.7] — 2026-08-12
+
+### Fixed
+
+- **The Node.js package now ships its declared entrypoints.** The publication
+  workflow restores the generated `index.js` loader and `index.d.ts`
+  declarations before packing, then installs the root and native tarballs in
+  a clean directory and loads `MemoryService.open` through the public package
+  name. This is a packaging-only patch with no API or storage-format change.
+
 ## [0.11.6] — 2026-07-29
 
 ### Added
