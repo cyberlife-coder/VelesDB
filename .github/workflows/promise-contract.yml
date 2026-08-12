@@ -10,6 +10,7 @@ on:
     branches: [main, develop]
     paths:
       - 'README.md'
+      - 'docs/**/*.md'
       - 'crates/velesdb-core/README.md'
       - 'crates/velesdb-core/src/quantization/mod.rs'
       - 'docs/guides/QUANTIZATION.md'

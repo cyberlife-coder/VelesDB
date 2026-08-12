@@ -50,7 +50,7 @@ claude mcp add velesdb-memory -- ~/.cargo/bin/velesdb-memory    # any MCP client
 curl -L https://github.com/cyberlife-coder/VelesDB/releases/latest/download/velesdb-skills.tar.gz | tar -xz -C ~/.claude/skills/
 ```
 
-No Rust toolchain? `npm i @wiscale/velesdb-memory-node`, or grab a prebuilt `.mcpb` bundle from the [latest release](https://github.com/cyberlife-coder/VelesDB/releases/latest).
+No Rust toolchain? `npm i @wiscale/velesdb-memory-node`, or grab a prebuilt `.mcpb` bundle from the [official MCP Registry](https://registry.modelcontextprotocol.io/?q=velesdb-memory) (`io.github.cyberlife-coder/velesdb-memory`).
 
 <details>
 <summary><strong>Other paths — always-on hooks, shared daemon, Rust, Docker, WASM, REST</strong></summary>
@@ -210,7 +210,7 @@ No figure here is an estimate from a slide; each links to the log or script in t
 |---|---|---|
 | Try it in one file | [`velesdb`](https://pypi.org/project/velesdb/) (Python 3.9+) | Fastest onboarding path |
 | Embed the engine | [`velesdb-core`](https://crates.io/crates/velesdb-core) (Rust) | The engine itself |
-| Give my agent memory | [`velesdb-memory`](crates/velesdb-memory) | MCP server + context compiler, any MCP client; `.mcpb` bundles on the [MCP registry](https://registry.modelcontextprotocol.io) |
+| Give my agent memory | [`velesdb-memory`](crates/velesdb-memory) | MCP server + context compiler, any MCP client; `.mcpb` bundles on the [MCP Registry](https://registry.modelcontextprotocol.io/?q=velesdb-memory) |
 | Call it from Node | [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) | Memory wedge ([full engine via server + TS SDK](crates/velesdb-node/README.md#need-the-full-engine)) |
 | Run it in a browser | [`@wiscale/velesdb-sdk`](https://www.npmjs.com/package/@wiscale/velesdb-sdk) | WASM, ~674 KB gzipped, fully client-side |
 | Serve it over HTTP | [`velesdb-server`](https://crates.io/crates/velesdb-server) | 54 REST endpoints — [API reference](docs/reference/api-reference.md) · [OpenAPI](docs/openapi.yaml) · [server security](docs/guides/SERVER_SECURITY.md) |

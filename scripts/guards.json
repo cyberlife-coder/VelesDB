@@ -480,6 +480,29 @@
             "--root",
             "{root}"
           ]
+        },
+        {
+          "vector": "an .mcpb recommendation pointing at the repository-wide latest release instead of the independent memory release train",
+          "files": {
+            "Cargo.toml": "[workspace.package]\nversion = \"1.0.0\"\n",
+            "README.md": "Get the `.mcpb` bundle from https://github.com/cyberlife-coder/VelesDB/releases/latest.\n",
+            "docs/guides/QUANTIZATION.md": "# Quantization\n\nsq8 delivers no higher throughput.\n",
+            "docs/VELESQL_SPEC.md": "# VelesQL\n",
+            "crates/velesdb-core/src/quantization/mod.rs": "//! Quantization.\n",
+            "docs/reference/promise-contract.json": "{\n  \"claims\": [\n    {\n      \"id\": \"quantization-is-documented\",\n      \"file\": \"docs/guides/QUANTIZATION.md\",\n      \"must_contain\": \"# Quantization\",\n      \"executable\": false,\n      \"measured_on\": \"2026-07-31\",\n      \"measured_machine\": \"fixture\",\n      \"measured_version\": \"1.0.0\"\n    }\n  ]\n}\n"
+          },
+          "accepts": {
+            "Cargo.toml": "[workspace.package]\nversion = \"1.0.0\"\n",
+            "README.md": "Get the `.mcpb` bundle from https://registry.modelcontextprotocol.io/.\n",
+            "docs/guides/QUANTIZATION.md": "# Quantization\n\nsq8 delivers no higher throughput.\n",
+            "docs/VELESQL_SPEC.md": "# VelesQL\n",
+            "crates/velesdb-core/src/quantization/mod.rs": "//! Quantization.\n",
+            "docs/reference/promise-contract.json": "{\n  \"claims\": [\n    {\n      \"id\": \"quantization-is-documented\",\n      \"file\": \"docs/guides/QUANTIZATION.md\",\n      \"must_contain\": \"# Quantization\",\n      \"executable\": false,\n      \"measured_on\": \"2026-07-31\",\n      \"measured_machine\": \"fixture\",\n      \"measured_version\": \"1.0.0\"\n    }\n  ]\n}\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
         }
       ]
     },

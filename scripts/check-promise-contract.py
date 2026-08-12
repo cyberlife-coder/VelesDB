@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Validate docs promise contract registry against repository content.
 
-Three independent gates run here:
+Five independent gates run here:
 
 1. Registry gate — every claim in ``docs/reference/promise-contract.json`` must
    still be present in the file it points at, so benchmark/headline promises
@@ -25,16 +25,26 @@ Three independent gates run here:
    download) stay ``"executable": false`` — documentary only — and are
    explicitly skipped with a visible message naming the claim and the
    unverified command, rather than being silently ignored.
+4. Release-asset gate (issue #1885) — every documented
+   ``releases/latest/download/<asset>`` URL must resolve to HTTP 200. A release
+   train can otherwise take over ``latest`` without carrying assets promised
+   by the docs.
+5. MCPB-train gate (issue #1885) — ``.mcpb`` documentation must not link to
+   the repository-wide ``releases/latest`` page because memory bundles ship on
+   the independent ``velesdb-memory-vX.Y.Z`` train.
 """
 
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import json
 import pathlib
 import re
 import subprocess
 import sys
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 #: Default tree to check. `--root` overrides it so the guard can be pointed at a
 #: fixture tree and be SEEN refusing (#1715); the default keeps CI byte-identical.
@@ -81,6 +91,16 @@ NEGATION_WINDOW = 40
 # be fast local grep/file-comparison checks only — anything needing longer
 # than this has no business being marked "executable": true.
 EXECUTABLE_CLAIM_TIMEOUT_SECONDS = 30
+
+LATEST_RELEASE_ASSET_RE = re.compile(
+    r"https://github\.com/[\w.-]+/[\w.-]+/releases/latest/download/"
+    r"[^\s<>()\]`\"']+"
+)
+GENERIC_LATEST_RELEASE_URL = (
+    "https://github.com/cyberlife-coder/VelesDB/releases/latest"
+)
+MARKDOWN_EXCLUDED_PARTS = frozenset({".git", "node_modules", "target"})
+RELEASE_ASSET_TIMEOUT_SECONDS = 20
 
 
 def _doc_lines(rel_path: str, text: str) -> list[tuple[int, str]]:
@@ -259,6 +279,64 @@ def check_capacity_mode_overclaim(root: pathlib.Path) -> list[str]:
     return failed
 
 
+def _markdown_lines(root: pathlib.Path):
+    """Yield every human-facing Markdown line with its repository location."""
+    for path in sorted(root.rglob("*.md")):
+        if MARKDOWN_EXCLUDED_PARTS.intersection(path.relative_to(root).parts):
+            continue
+        rel_path = path.relative_to(root).as_posix()
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            yield rel_path, number, line
+
+
+def latest_release_asset_citations(root: pathlib.Path) -> dict[str, list[str]]:
+    """Map each documented ``releases/latest/download`` URL to its citations."""
+    citations: dict[str, list[str]] = {}
+    for rel_path, number, line in _markdown_lines(root):
+        for match in LATEST_RELEASE_ASSET_RE.finditer(line):
+            url = match.group(0).rstrip(".,;:")
+            citations.setdefault(url, []).append(f"{rel_path}:{number}")
+    return citations
+
+
+def check_mcpb_release_links(root: pathlib.Path) -> list[str]:
+    """Reject MCPB links to the unrelated repository-wide latest release."""
+    return [
+        f"[mcpb-release-train] {rel_path}:{number} links .mcpb to "
+        "repository-wide releases/latest"
+        for rel_path, number, line in _markdown_lines(root)
+        if ".mcpb" in line.lower() and GENERIC_LATEST_RELEASE_URL in line
+    ]
+
+
+def _probe_release_asset(item, opener) -> str | None:
+    url, locations = item
+    request = Request(url, method="HEAD", headers={"User-Agent": "VelesDB-doc-guard"})
+    try:
+        with opener(request, timeout=RELEASE_ASSET_TIMEOUT_SECONDS) as response:
+            status = getattr(response, "status", None)
+            status = response.getcode() if status is None else status
+    except HTTPError as exc:
+        status = exc.code
+    except (URLError, TimeoutError, OSError) as exc:
+        return f"[release-asset] {', '.join(locations)}: {url} is unreachable: {exc}"
+    if status == 200:
+        return None
+    return f"[release-asset] {', '.join(locations)}: {url} returned HTTP {status}"
+
+
+def check_latest_release_assets(root: pathlib.Path, opener=None) -> list[str]:
+    """Require every cited latest-release download to resolve to HTTP 200."""
+    citations = latest_release_asset_citations(root)
+    if not citations:
+        return []
+    open_url = opener or urlopen
+    workers = min(4, len(citations))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        results = pool.map(lambda item: _probe_release_asset(item, open_url), citations.items())
+    return sorted(result for result in results if result is not None)
+
+
 def run_validation_commands(
     claims: list[dict],
     root: pathlib.Path,
@@ -340,6 +418,8 @@ def _report(title: str, messages: "list[str]") -> None:
 def run(root: pathlib.Path) -> int:
     registry_failures = check_registry(root)
     overclaim_failures = check_capacity_mode_overclaim(root)
+    release_asset_failures = check_latest_release_assets(root)
+    mcpb_link_failures = check_mcpb_release_links(root)
 
     # Read the registry only if it is there. This used to be an unconditional
     # `json.loads(REGISTRY.read_text())`, which raised FileNotFoundError before
@@ -355,6 +435,8 @@ def run(root: pathlib.Path) -> int:
     _report("Provenance check failed — every claim must record its measurement:", provenance_failures)
     _report("Promise contract check failed:", registry_failures)
     _report("Anti-overclaim check failed (Requirement 10.4):", overclaim_failures)
+    _report("Latest-release asset check failed:", release_asset_failures)
+    _report("MCPB release-train check failed:", mcpb_link_failures)
     _report("Executable validation_command check failed:", execution_failures)
     _report("Documentary claims not auto-verified:", skipped)
 
@@ -365,12 +447,15 @@ def run(root: pathlib.Path) -> int:
     stale = stale_claims(claims, version)
     _report(f"Claims measured on an older release than {version} (re-measure):", stale)
 
-    if (
-        registry_failures
-        or overclaim_failures
-        or execution_failures
-        or provenance_failures
-    ):
+    failure_groups = (
+        registry_failures,
+        overclaim_failures,
+        release_asset_failures,
+        mcpb_link_failures,
+        execution_failures,
+        provenance_failures,
+    )
+    if any(failure_groups):
         return 1
 
     claim_count = len(claims)

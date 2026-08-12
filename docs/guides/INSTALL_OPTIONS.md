@@ -31,7 +31,7 @@ decision aid, not a replacement.
 ## Recommended paths
 
 - **Just want to try VelesDB as a Python developer?** `pip install velesdb` — zero build step, matches the README's 60-second quick start.
-- **Want your coding agent to have persistent memory, no Rust toolchain?** Grab the `.mcpb` bundle from the [latest release](https://github.com/cyberlife-coder/VelesDB/releases/latest), or `npm i @wiscale/velesdb-memory-node`.
+- **Want your coding agent to have persistent memory, no Rust toolchain?** Grab the `.mcpb` bundle from the [official MCP Registry](https://registry.modelcontextprotocol.io/?q=velesdb-memory) (`io.github.cyberlife-coder/velesdb-memory`), or `npm i @wiscale/velesdb-memory-node`.
 - **Running the full server in production?** Docker (`ghcr.io/cyberlife-coder/velesdb`) or `cargo install velesdb-server` if you need a native binary outside a container.
 - **Several MCP clients on the same machine, want one shared memory store?** `scripts/install-memory-daemon.sh` (macOS) or `scripts/install-memory-daemon.ps1` (Windows).
 
