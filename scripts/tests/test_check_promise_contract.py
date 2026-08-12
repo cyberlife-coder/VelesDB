@@ -27,7 +27,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "check-promise-contract.py"
 
@@ -188,6 +188,39 @@ class ReleaseLinkGuardTests(unittest.TestCase):
         self.assertEqual(len(failures), 1)
         self.assertIn("README.md:1", failures[0])
         self.assertIn("HTTP 404", failures[0])
+
+    def test_latest_asset_transient_network_error_is_retried(self) -> None:
+        url = (
+            "https://github.com/cyberlife-coder/VelesDB/releases/latest/"
+            "download/example.tar.gz"
+        )
+        attempts = 0
+
+        class Response:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        def opener(request, timeout):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise HTTPError(request.full_url, 502, "Bad Gateway", {}, None)
+            if attempts < cpc.RELEASE_ASSET_ATTEMPTS:
+                raise URLError("temporary disconnect")
+            return Response()
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "README.md").write_text(f"download {url}\n", encoding="utf-8")
+            failures = cpc.check_latest_release_assets(root, opener=opener)
+
+        self.assertEqual(failures, [])
+        self.assertEqual(attempts, cpc.RELEASE_ASSET_ATTEMPTS)
 
 
 class RealRegistryExecutableClaimsTests(unittest.TestCase):

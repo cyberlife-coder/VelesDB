@@ -37,7 +37,6 @@ Five independent gates run here:
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import ThreadPoolExecutor
 import json
 import pathlib
 import re
@@ -101,6 +100,7 @@ GENERIC_LATEST_RELEASE_URL = (
 )
 MARKDOWN_EXCLUDED_PARTS = frozenset({".git", "node_modules", "target"})
 RELEASE_ASSET_TIMEOUT_SECONDS = 20
+RELEASE_ASSET_ATTEMPTS = 3
 
 
 def _doc_lines(rel_path: str, text: str) -> list[tuple[int, str]]:
@@ -312,17 +312,23 @@ def check_mcpb_release_links(root: pathlib.Path) -> list[str]:
 def _probe_release_asset(item, opener) -> str | None:
     url, locations = item
     request = Request(url, method="HEAD", headers={"User-Agent": "VelesDB-doc-guard"})
-    try:
-        with opener(request, timeout=RELEASE_ASSET_TIMEOUT_SECONDS) as response:
-            status = getattr(response, "status", None)
-            status = response.getcode() if status is None else status
-    except HTTPError as exc:
-        status = exc.code
-    except (URLError, TimeoutError, OSError) as exc:
-        return f"[release-asset] {', '.join(locations)}: {url} is unreachable: {exc}"
-    if status == 200:
-        return None
-    return f"[release-asset] {', '.join(locations)}: {url} returned HTTP {status}"
+    for attempt in range(RELEASE_ASSET_ATTEMPTS):
+        try:
+            with opener(request, timeout=RELEASE_ASSET_TIMEOUT_SECONDS) as response:
+                status = getattr(response, "status", None)
+                status = response.getcode() if status is None else status
+        except HTTPError as exc:
+            status = exc.code
+        except (URLError, TimeoutError, OSError) as exc:
+            if attempt + 1 < RELEASE_ASSET_ATTEMPTS:
+                continue
+            return f"[release-asset] {', '.join(locations)}: {url} is unreachable: {exc}"
+        if status == 200:
+            return None
+        if status >= 500 and attempt + 1 < RELEASE_ASSET_ATTEMPTS:
+            continue
+        return f"[release-asset] {', '.join(locations)}: {url} returned HTTP {status}"
+    raise AssertionError("release-asset retry loop did not return")
 
 
 def check_latest_release_assets(root: pathlib.Path, opener=None) -> list[str]:
@@ -331,9 +337,7 @@ def check_latest_release_assets(root: pathlib.Path, opener=None) -> list[str]:
     if not citations:
         return []
     open_url = opener or urlopen
-    workers = min(4, len(citations))
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        results = pool.map(lambda item: _probe_release_asset(item, open_url), citations.items())
+    results = (_probe_release_asset(item, open_url) for item in citations.items())
     return sorted(result for result in results if result is not None)
 
 
