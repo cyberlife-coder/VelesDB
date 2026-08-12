@@ -44,7 +44,7 @@
     "build": "napi build --platform --profile release-node",
     "build:debug": "napi build --platform",
     "test": "node --test __test__/*.spec.mjs",
-    "prepublishOnly": "napi prepublish -t npm"
+    "prepublishOnly": "napi prepublish -t npm --no-gh-release"
   },
   "devDependencies": {
     "@napi-rs/cli": "^3.0.0"

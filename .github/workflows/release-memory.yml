@@ -360,9 +360,11 @@ jobs:
         run: node scripts/smoke-packed-package.mjs npm/linux-x64-gnu
 
       - name: Publish to npm
-        # `prepublishOnly` (napi prepublish -t npm) publishes the per-platform
+        # `prepublishOnly` publishes the per-platform
         # @wiscale/velesdb-memory-node-<triple> packages and injects them as
-        # optionalDependencies before the root package is published here. The
+        # optionalDependencies before the root package is published here. It
+        # passes `--no-gh-release`: this workflow owns no GitHub release and
+        # napi enables that unrelated side effect by default (#1903). The
         # already-published guard below mirrors release.yml so a re-run is idempotent
         # for the ROOT package.
         #
