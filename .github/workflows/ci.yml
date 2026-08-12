@@ -13,7 +13,7 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, 'hotfix/**']
     paths:
       - '*.md'
       - 'crates/**'
