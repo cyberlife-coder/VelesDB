@@ -7,7 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing yet — the 5.0.0 train departed here._
+### Fixed
+
+- **Python and Node bindings now read `VELESDB_MEMORY_EMBEDDER*` and gain the
+  `openai` backend (#1886).** The embedder was documented everywhere as an
+  environment-variable choice, but only the MCP daemon actually read one:
+  `MemoryService(path)` on Python and `MemoryService.open(path)` on Node
+  silently used the offline `hash` embedder regardless of
+  `VELESDB_MEMORY_EMBEDDER`, and `openai` did not exist as a binding-level
+  backend at all. Both bindings now resolve the backend through the same
+  `velesdb_memory::select_embedder`/`embedder_env_endpoint` the daemon uses
+  (moved into the library, `crates/velesdb-memory/src/remote_endpoint.rs`),
+  with an explicit constructor argument always winning over the environment.
+  `openai`'s URL and credential are read from the environment only — never a
+  constructor argument — matching the rule already enforced for the daemon.
+  *Migration*: Python's `embedder` constructor argument default changed from
+  the literal `"hash"` to `None`; passing `embedder="hash"` explicitly is
+  unaffected, and `None`/omitted now falls back to `VELESDB_MEMORY_EMBEDDER`
+  before defaulting to `hash`.
 
 ## [5.0.0] — 2026-08-10
 
