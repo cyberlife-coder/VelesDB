@@ -119,6 +119,11 @@ mod openai;
 /// neither dependency.
 #[cfg(any(feature = "ollama", feature = "extract"))]
 pub mod reachability;
+/// Where a remote embedding/extraction backend's URL, model and credential
+/// come from, resolved from the environment once so the daemon and the
+/// language bindings read the same variables the same way (#1886).
+#[cfg(any(feature = "ollama", feature = "extract"))]
+pub mod remote_endpoint;
 /// Optional second-stage re-scoring of a fused recall pool (bring your own
 /// cross-encoder/LLM). Never wired in by default — see [`rerank::Reranker`].
 pub mod rerank;
@@ -184,6 +189,10 @@ pub use model::{
     EntityRelation, Explanation, FusionOptions, Link, MemoryEdge, MemoryNode, Recollection,
     RememberedExtraction, UnrelateOutcome,
 };
+#[cfg(feature = "ollama")]
+pub use remote_endpoint::embedder_env_endpoint;
+#[cfg(any(feature = "ollama", feature = "extract"))]
+pub use remote_endpoint::{role_auth, RemoteEndpoint};
 pub use rerank::{DynReranker, RerankError, Reranker};
 pub use service::{AutographWorkerHandle, MemoryService, Metadata};
 #[cfg(feature = "persistence")]
