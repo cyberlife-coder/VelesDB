@@ -392,7 +392,36 @@ jobs:
           fi
 
   # ===========================================================================
-  # 5. Build the daemon binary for each platform (--features ollama,http,extract)
+  # 5. Verify the release is actually visible from both public registries
+  # ===========================================================================
+  verify-registries:
+    name: Verify public registries
+    runs-on: ubuntu-latest
+    needs: [validate, publish-crate, publish-npm]
+    if: |
+      always() &&
+      needs.validate.result == 'success' &&
+      needs.publish-crate.result == 'success' &&
+      needs.publish-npm.result == 'success'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Wait for crates.io and npm propagation
+        run: |
+          set -euo pipefail
+          for attempt in {1..12}; do
+            if python3 scripts/check-version-sync.py --check-memory-registries; then
+              echo "✅ Public registries publish every velesdb-memory ${{ needs.validate.outputs.version }} artifact"
+              exit 0
+            fi
+            echo "⚠️ Registry propagation incomplete (attempt $attempt/12)"
+            if [ "$attempt" -lt 12 ]; then sleep 15; fi
+          done
+          echo "❌ Public registry versions still disagree with the release manifest"
+          exit 1
+
+  # ===========================================================================
+  # 6. Build the daemon binary for each platform (--features ollama,http,extract)
   # ===========================================================================
   #
   # Same crate/bin as the default-feature .mcpb bundles in release-mcpb.yml,
@@ -502,7 +531,7 @@ jobs:
           if-no-files-found: error
 
   # ===========================================================================
-  # 6. Attach the daemon archives to the GitHub Release
+  # 7. Attach the daemon archives to the GitHub Release
   # ===========================================================================
   #
   # release-mcpb.yml separately creates/updates the SAME velesdb-memory-vX.Y.Z
