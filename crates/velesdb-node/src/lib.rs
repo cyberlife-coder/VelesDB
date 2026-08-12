@@ -52,8 +52,9 @@ use velesdb_memory::context::{
     WorkingContext,
 };
 use velesdb_memory::{
-    DynEmbedder, Embedder, HashEmbedder, MemoryService, OllamaEmbedder, OllamaExtractor,
-    OutlineExtractor, DEFAULT_DIMENSION, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL,
+    embedder_env_endpoint, select_embedder, DynEmbedder, Embedder, EmbedderSelection,
+    MemoryService, OllamaEmbedder, OllamaExtractor, OpenAiEmbedder, OutlineExtractor,
+    DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL,
 };
 
 use crate::dto::{
@@ -63,26 +64,67 @@ use crate::dto::{
 use crate::error::{invalid_input, to_napi_err, CODE_INTERNAL};
 use crate::tasks::{Job, JsonOut};
 
-/// Build the requested embedder. `"hash"` is deterministic and offline;
-/// `"ollama"` calls a local embedding model (real semantic recall).
+/// Resolve and build the requested embedder, returning it alongside the
+/// model name [`MemoryStore::memory_status`] reports.
+///
+/// `kind` is the factory's explicit `embedder` argument; when `None`,
+/// `VELESDB_MEMORY_EMBEDDER` takes over — the explicit argument always wins,
+/// the same precedence and the same [`velesdb_memory::select_embedder`] the
+/// daemon resolves the backend name through (#1886: previously this binding
+/// read no environment variable at all, so a shell that had semantic recall
+/// configured for the MCP daemon silently got the offline default here).
+/// `"hash"` is deterministic and offline; `"ollama"` and `"openai"` reach a
+/// local or remote embedding model for real semantic recall.
 fn build_embedder(
-    kind: &str,
+    kind: Option<&str>,
     url: Option<String>,
     model: Option<String>,
-) -> napi::Result<DynEmbedder> {
-    match kind {
-        "hash" => Ok(Box::new(HashEmbedder::new(DEFAULT_DIMENSION))),
-        "ollama" => {
-            let url = url.unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_owned());
-            let model = model.unwrap_or_else(|| DEFAULT_OLLAMA_MODEL.to_owned());
-            let embedder = OllamaEmbedder::new(url, model)
-                .map_err(|e| napi::Error::from_reason(format!("[{CODE_INTERNAL}] {e}")))?;
-            Ok(Box::new(embedder))
-        }
-        other => Err(invalid_input(format!(
-            "unknown embedder '{other}' (expected 'hash' or 'ollama')"
+) -> napi::Result<(DynEmbedder, String)> {
+    let backend_env = std::env::var("VELESDB_MEMORY_EMBEDDER").ok();
+    let selection = select_embedder(kind.or(backend_env.as_deref())).map_err(invalid_input)?;
+    match selection {
+        EmbedderSelection::Ready(name, embedder) => Ok((embedder, name.to_owned())),
+        EmbedderSelection::NeedsRemoteConfig("ollama") => build_ollama_embedder(url, model),
+        EmbedderSelection::NeedsRemoteConfig("openai") => build_openai_embedder(),
+        EmbedderSelection::NeedsRemoteConfig(other) => Err(napi::Error::from_reason(format!(
+            "[{CODE_INTERNAL}] the embedding backend '{other}' is accepted by velesdb-memory's \
+             selector but this binding has no builder for it — this is a bug in \
+             velesdb-memory, not a configuration error; please report it quoting this message"
         ))),
     }
+}
+
+/// Build the Ollama-backed embedder: an explicit argument wins, then the
+/// environment (honouring the legacy `VELESDB_MEMORY_OLLAMA_*` aliases, C1),
+/// then the built-in local defaults.
+fn build_ollama_embedder(
+    url: Option<String>,
+    model: Option<String>,
+) -> napi::Result<(DynEmbedder, String)> {
+    let (env_endpoint, _alias_conflict) = embedder_env_endpoint().map_err(invalid_input)?;
+    let url = url
+        .or(env_endpoint.url)
+        .unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_owned());
+    let model = model
+        .or(env_endpoint.model)
+        .unwrap_or_else(|| DEFAULT_OLLAMA_MODEL.to_owned());
+    let embedder = OllamaEmbedder::new(url, model.clone())
+        .map_err(|e| napi::Error::from_reason(format!("[{CODE_INTERNAL}] {e}")))?;
+    Ok((Box::new(embedder), model))
+}
+
+/// Build the OpenAI-compatible embedder. The URL, model and credential come
+/// from the environment only — never from a factory argument, so a caller can
+/// never end up with a token sitting in their own source file — see
+/// [`velesdb_memory::RemoteEndpoint::require`].
+fn build_openai_embedder() -> napi::Result<(DynEmbedder, String)> {
+    let (env_endpoint, _alias_conflict) = embedder_env_endpoint().map_err(invalid_input)?;
+    let (url, model, auth) = env_endpoint
+        .require("VELESDB_MEMORY_EMBEDDER")
+        .map_err(invalid_input)?;
+    let embedder = OpenAiEmbedder::new(url, model.clone(), auth)
+        .map_err(|e| napi::Error::from_reason(format!("[{CODE_INTERNAL}] {e}")))?;
+    Ok((Box::new(embedder), model))
 }
 
 /// Local-first agent memory with the `why()` graph wedge.
@@ -109,10 +151,15 @@ pub struct MemoryStore {
 impl MemoryStore {
     /// Open (or create) a memory store at `path`.
     ///
-    /// `embedder` is `"hash"` (default, offline) or `"ollama"` (real semantic
-    /// recall); `ollamaUrl`/`ollamaModel` apply when `embedder="ollama"`.
+    /// `embedder` is `"hash"` (default, offline), `"ollama"` or `"openai"`
+    /// (real semantic recall). Omit it to fall back to
+    /// `VELESDB_MEMORY_EMBEDDER` — an explicit value here always wins over the
+    /// environment. `ollamaUrl`/`ollamaModel` apply to `embedder="ollama"`
+    /// only; an explicit value wins over `VELESDB_MEMORY_EMBEDDER_URL`/`_MODEL`.
+    /// `embedder="openai"` reads its URL, model and credential from the
+    /// environment exclusively — see `crates/velesdb-memory/README.md`.
     ///
-    /// This factory is synchronous: with `embedder="ollama"` it performs a
+    /// This factory is synchronous: with a remote `embedder` it performs a
     /// one-time blocking probe of the embedding endpoint (as the `PyO3` binding
     /// does). The default `"hash"` embedder does no I/O. Per-operation methods
     /// are all async.
@@ -123,14 +170,7 @@ impl MemoryStore {
         ollama_url: Option<String>,
         ollama_model: Option<String>,
     ) -> napi::Result<Self> {
-        let kind = embedder.as_deref().unwrap_or("hash");
-        let embedder_model = match kind {
-            "hash" => "hash".to_owned(),
-            _ => ollama_model
-                .clone()
-                .unwrap_or_else(|| DEFAULT_OLLAMA_MODEL.to_owned()),
-        };
-        let emb = build_embedder(kind, ollama_url, ollama_model)?;
+        let (emb, embedder_model) = build_embedder(embedder.as_deref(), ollama_url, ollama_model)?;
         let embedder_dimension = emb.dimension();
         let svc = MemoryService::open(&path, emb).map_err(to_napi_err)?;
         Ok(Self {

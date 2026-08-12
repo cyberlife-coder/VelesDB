@@ -356,6 +356,7 @@ the fact↔topic graph, so `why` can connect them with no manual `relate`.
 |---|---|---|---|
 | `text` | string | yes | Raw text. Capped at 1 MiB (`MAX_FACT_BYTES`). |
 | `metadata` | object | no | Applied to every extracted fact. |
+| `extractor` | string | no | Per-call backend: `outline`, `ollama`, or `openai`. Omit to use the daemon default from `VELESDB_MEMORY_EXTRACTOR`. `outline` is always available; a remote name must match the backend configured when the daemon started. |
 
 Returns `{ ids, ids_str, skipped_over_cap }`, the ids in extraction order.
 `skipped_over_cap` counts facts the extractor produced and this tool DROPPED
@@ -379,8 +380,10 @@ Returns `{ embedder, provenance, extraction, memory }`:
   by, per its on-disk record (#1751). `recorded: false` on a store predating
   the record; the mismatch check then degrades to dimension alone.
 - `extraction` — `{ configured, autograph_active, autograph_dropped }`:
-  `remember_extracted` works iff `configured`; the two autograph fields
-  report the background enrichment worker and its counted drops.
+  `configured` says whether `remember_extracted` may omit its per-call
+  `extractor`; explicit `outline` remains available when it is `false`. The
+  two autograph fields report the background enrichment worker and its
+  counted drops.
 - `memory` — `{ facts, edges }`: corpus size. `edges: 0` is the meaningful
   reading — nothing ever wired the graph, so `why` has nothing to walk and
   degrades to plain search. `edges: null` means the backend cannot count
@@ -418,10 +421,11 @@ the store's single-writer lock):
 velesdb-memory export --output memories.jsonl   # --include-internal for a verbatim backup
 ```
 
-**Opt-in at runtime.** The backend is compiled into the default build; the
-server must be started with `VELESDB_MEMORY_EXTRACTOR` set. Without a backend the tool returns an
-explicit "extraction backend not configured" error rather than silently doing
-nothing. Configuration: [MCP server setup →
+**Default is opt-in at runtime.** The backends are compiled into the default
+build. Set `VELESDB_MEMORY_EXTRACTOR` to choose the backend used when a call
+omits `extractor`; without that default, an explicit `extractor: "outline"`
+still works, while an omitted or unconfigured remote choice returns an
+actionable error rather than silently doing nothing. Configuration: [MCP server setup →
 auto-extraction](../guides/MCP_SERVER_SETUP.md#auto-extraction-backend-opt-in).
 
 ---

@@ -720,33 +720,46 @@ async fn why_hop_depth_is_capped_at_max() {
 
 // --- Auto-extraction tool ---------------------------------------------------
 
+struct GraphStub;
+
+impl Extractor for GraphStub {
+    fn extract(&self, _text: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
+        Ok(vec![
+            ExtractedFact {
+                text: "Alice ships the parser in Rust.".to_owned(),
+                entities: vec!["rust".to_owned()],
+            },
+            ExtractedFact {
+                text: "Bob maintains the Rust toolchain.".to_owned(),
+                entities: vec!["rust".to_owned()],
+            },
+        ])
+    }
+}
+
+struct GenerativeStub;
+
+impl Extractor for GenerativeStub {
+    fn extract(&self, _text: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
+        Ok(vec![ExtractedFact {
+            text: "Generative interpretation".to_owned(),
+            entities: vec!["generative".to_owned()],
+        }])
+    }
+}
+
 #[tokio::test]
 async fn remember_extracted_builds_a_graph_through_the_server() {
-    use crate::extract::{ExtractError, ExtractedFact, Extractor};
-
-    struct Stub;
-    impl Extractor for Stub {
-        fn extract(&self, _text: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
-            Ok(vec![
-                ExtractedFact {
-                    text: "Alice ships the parser in Rust.".to_owned(),
-                    entities: vec!["rust".to_owned()],
-                },
-                ExtractedFact {
-                    text: "Bob maintains the Rust toolchain.".to_owned(),
-                    entities: vec!["rust".to_owned()],
-                },
-            ])
-        }
-    }
-
     let (_dir, srv) = server();
-    let srv = srv.with_extractor(Arc::new(Stub) as DynExtractor);
+    let srv = srv
+        .with_named_extractor("ollama", Arc::new(GraphStub) as DynExtractor)
+        .expect("ollama is a supported extractor name");
 
     let Json(res) = srv
         .remember_extracted(Parameters(RememberExtractedParams {
             text: "Alice and Bob work in Rust.".to_owned(),
             metadata: None,
+            extractor: None,
         }))
         .await
         .expect("remember_extracted");
@@ -766,6 +779,50 @@ async fn remember_extracted_builds_a_graph_through_the_server() {
         !why.nodes[0].content.starts_with("Entity:"),
         "seed is a fact, not a hub"
     );
+}
+
+#[tokio::test]
+async fn two_successive_calls_can_select_different_extractors() {
+    let (_dir, srv) = server();
+    let srv = srv
+        .with_named_extractor("ollama", Arc::new(GenerativeStub) as DynExtractor)
+        .expect("ollama is a supported extractor name");
+    let source = "fact: Deterministic directive | outline";
+
+    let Json(outlined) = srv
+        .remember_extracted(Parameters(RememberExtractedParams {
+            text: source.to_owned(),
+            metadata: None,
+            extractor: Some("outline".to_owned()),
+        }))
+        .await
+        .expect("the per-call outline backend must work");
+    let Json(generative) = srv
+        .remember_extracted(Parameters(RememberExtractedParams {
+            text: source.to_owned(),
+            metadata: None,
+            extractor: Some("ollama".to_owned()),
+        }))
+        .await
+        .expect("the configured remote backend must remain selectable");
+
+    assert_ne!(outlined.ids, generative.ids, "the extractions must differ");
+    let Json(listed) = srv
+        .list_memories(Parameters(ListMemoriesParams {
+            cursor: None,
+            limit: None,
+            filter: None,
+            include_internal: false,
+        }))
+        .await
+        .expect("list the two extracted facts");
+    let contents: Vec<&str> = listed
+        .memories
+        .iter()
+        .map(|memory| memory.content.as_str())
+        .collect();
+    assert!(contents.contains(&"Deterministic directive"));
+    assert!(contents.contains(&"Generative interpretation"));
 }
 
 #[tokio::test]
@@ -857,11 +914,42 @@ async fn remember_extracted_without_backend_returns_internal_error() {
         .remember_extracted(Parameters(RememberExtractedParams {
             text: "anything".to_owned(),
             metadata: None,
+            extractor: None,
         }))
         .await
         .map(|_| ())
         .expect_err("extraction with no backend must error");
     assert_eq!(err.code, ErrorCode::INTERNAL_ERROR);
+}
+
+#[tokio::test]
+async fn explicit_outline_works_without_a_daemon_default() {
+    let (_dir, srv) = server();
+    let Json(stored) = srv
+        .remember_extracted(Parameters(RememberExtractedParams {
+            text: "fact: A deterministic fact | outline".to_owned(),
+            metadata: None,
+            extractor: Some("outline".to_owned()),
+        }))
+        .await
+        .expect("explicit outline must not need a daemon default");
+    assert_eq!(stored.ids.len(), 1);
+}
+
+#[tokio::test]
+async fn unknown_per_call_extractor_returns_invalid_params() {
+    let (_dir, srv) = server();
+    let err = srv
+        .remember_extracted(Parameters(RememberExtractedParams {
+            text: "anything".to_owned(),
+            metadata: None,
+            extractor: Some("lmstudio".to_owned()),
+        }))
+        .await
+        .map(|_| ())
+        .expect_err("unknown extractor must be rejected");
+    assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+    assert!(err.message.contains("unknown extraction backend"));
 }
 
 // --- u64-id wire compatibility (issue #1468) --------------------------------
@@ -1037,6 +1125,7 @@ async fn remember_extracted_response_echoes_ids_str() {
         .remember_extracted(Parameters(RememberExtractedParams {
             text: "Alice works in Rust.".to_owned(),
             metadata: None,
+            extractor: None,
         }))
         .await
         .expect("remember_extracted");
@@ -1429,6 +1518,7 @@ async fn an_outline_configured_server_builds_a_hub_that_entity_finds() {
                    attr: Theo | age | 15"
                 .to_owned(),
             metadata: None,
+            extractor: None,
         }))
         .await
         .expect("remember_extracted must work on an outline-configured server");
