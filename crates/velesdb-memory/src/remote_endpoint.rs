@@ -11,6 +11,7 @@
 //! it was until #1886, simply never reading) the resolution the daemon
 //! already had.
 
+#[cfg(feature = "ollama")]
 use crate::config::{alias_conflict_notice, resolve_alias};
 use crate::http_client::Auth;
 
