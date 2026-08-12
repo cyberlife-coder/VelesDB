@@ -19,11 +19,11 @@ use velesdb_memory::context::{
 };
 use velesdb_memory::service::canonical_entity_name;
 use velesdb_memory::{
-    format_dated_context, limits, ColumnFilter, ColumnOp, DatedContext, DynEmbedder, EntityProfile,
-    EntityRelation, ErrorCategory, Explanation, FusionOptions, HashEmbedder, Link, MemoryEdge,
-    MemoryError, MemoryNode, MemoryService, Metadata, OllamaEmbedder, OllamaExtractor,
-    OutlineExtractor, Recollection, RememberedExtraction, DEFAULT_DIMENSION, DEFAULT_OLLAMA_MODEL,
-    DEFAULT_OLLAMA_URL,
+    embedder_env_endpoint, format_dated_context, limits, select_embedder, ColumnFilter, ColumnOp,
+    DatedContext, DynEmbedder, EmbedderSelection, EntityProfile, EntityRelation, ErrorCategory,
+    Explanation, FusionOptions, Link, MemoryEdge, MemoryError, MemoryNode, MemoryService, Metadata,
+    OllamaEmbedder, OllamaExtractor, OpenAiEmbedder, OutlineExtractor, Recollection,
+    RememberedExtraction, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL,
 };
 
 use crate::collection::query::convert_params;
@@ -103,22 +103,68 @@ fn to_column_filters(
         .collect()
 }
 
-/// Build the requested embedder. `"hash"` is deterministic and offline;
-/// `"ollama"` calls a local embedding model (real semantic recall).
-fn build_embedder(kind: &str, url: Option<String>, model: Option<String>) -> PyResult<DynEmbedder> {
-    match kind {
-        "hash" => Ok(Box::new(HashEmbedder::new(DEFAULT_DIMENSION))),
-        "ollama" => {
-            let url = url.unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_owned());
-            let model = model.unwrap_or_else(|| DEFAULT_OLLAMA_MODEL.to_owned());
-            let embedder = OllamaEmbedder::new(url, model)
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-            Ok(Box::new(embedder))
-        }
-        other => Err(PyValueError::new_err(format!(
-            "unknown embedder '{other}' (expected 'hash' or 'ollama')"
+/// Resolve and build the requested embedder, returning it alongside the
+/// model name `memory_status` reports.
+///
+/// `kind` is the constructor's explicit `embedder` argument; when `None`,
+/// `VELESDB_MEMORY_EMBEDDER` takes over — the explicit argument always wins,
+/// the same precedence and the same [`velesdb_memory::select_embedder`] the
+/// daemon resolves the backend name through (#1886: previously this binding
+/// read no environment variable at all, so a shell that had semantic recall
+/// configured for the MCP daemon silently got the offline default here).
+/// `"hash"` is deterministic and offline; `"ollama"` and `"openai"` reach a
+/// local or remote embedding model for real semantic recall.
+fn build_embedder(
+    kind: Option<&str>,
+    url: Option<String>,
+    model: Option<String>,
+) -> PyResult<(DynEmbedder, String)> {
+    let backend_env = std::env::var("VELESDB_MEMORY_EMBEDDER").ok();
+    let selection =
+        select_embedder(kind.or(backend_env.as_deref())).map_err(PyValueError::new_err)?;
+    match selection {
+        EmbedderSelection::Ready(name, embedder) => Ok((embedder, name.to_owned())),
+        EmbedderSelection::NeedsRemoteConfig("ollama") => build_ollama_embedder(url, model),
+        EmbedderSelection::NeedsRemoteConfig("openai") => build_openai_embedder(),
+        EmbedderSelection::NeedsRemoteConfig(other) => Err(PyRuntimeError::new_err(format!(
+            "the embedding backend '{other}' is accepted by velesdb-memory's selector but \
+             this binding has no builder for it — this is a bug in velesdb-memory, not a \
+             configuration error; please report it quoting this message"
         ))),
     }
+}
+
+/// Build the Ollama-backed embedder: an explicit argument wins, then the
+/// environment (honouring the legacy `VELESDB_MEMORY_OLLAMA_*` aliases, C1),
+/// then the built-in local defaults.
+fn build_ollama_embedder(
+    url: Option<String>,
+    model: Option<String>,
+) -> PyResult<(DynEmbedder, String)> {
+    let (env_endpoint, _alias_conflict) = embedder_env_endpoint().map_err(PyValueError::new_err)?;
+    let url = url
+        .or(env_endpoint.url)
+        .unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_owned());
+    let model = model
+        .or(env_endpoint.model)
+        .unwrap_or_else(|| DEFAULT_OLLAMA_MODEL.to_owned());
+    let embedder = OllamaEmbedder::new(url, model.clone())
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    Ok((Box::new(embedder), model))
+}
+
+/// Build the OpenAI-compatible embedder. The URL, model and credential come
+/// from the environment only — never from a constructor argument, so a
+/// caller can never end up with a token sitting in their own source file —
+/// see [`velesdb_memory::RemoteEndpoint::require`].
+fn build_openai_embedder() -> PyResult<(DynEmbedder, String)> {
+    let (env_endpoint, _alias_conflict) = embedder_env_endpoint().map_err(PyValueError::new_err)?;
+    let (url, model, auth) = env_endpoint
+        .require("VELESDB_MEMORY_EMBEDDER")
+        .map_err(PyValueError::new_err)?;
+    let embedder = OpenAiEmbedder::new(url, model.clone(), auth)
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    Ok((Box::new(embedder), model))
 }
 
 /// Build the requested extractor and run it, releasing the GIL for the call.
@@ -376,23 +422,22 @@ impl PyMemoryService {
     ///
     /// Args:
     ///     path: store directory (created if missing; memory never leaves it).
-    ///     embedder: "hash" (default, offline) or "ollama" (real semantic recall).
-    ///     ollama_url / ollama_model: used when embedder="ollama".
+    ///     embedder: "hash" (default, offline), "ollama" or "openai" (real
+    ///         semantic recall). Omit to fall back to `VELESDB_MEMORY_EMBEDDER`
+    ///         — an explicit value here always wins over the environment.
+    ///     ollama_url / ollama_model: apply to embedder="ollama" only; an
+    ///         explicit value wins over `VELESDB_MEMORY_EMBEDDER_URL`/`_MODEL`.
+    ///         embedder="openai" reads its URL, model and credential from the
+    ///         environment exclusively — see `crates/velesdb-memory/README.md`.
     #[new]
-    #[pyo3(signature = (path, embedder = "hash", ollama_url = None, ollama_model = None))]
+    #[pyo3(signature = (path, embedder = None, ollama_url = None, ollama_model = None))]
     fn new(
         path: String,
-        embedder: &str,
+        embedder: Option<&str>,
         ollama_url: Option<String>,
         ollama_model: Option<String>,
     ) -> PyResult<Self> {
-        let embedder_model = match embedder {
-            "hash" => "hash".to_owned(),
-            _ => ollama_model
-                .clone()
-                .unwrap_or_else(|| DEFAULT_OLLAMA_MODEL.to_owned()),
-        };
-        let emb = build_embedder(embedder, ollama_url, ollama_model)?;
+        let (emb, embedder_model) = build_embedder(embedder, ollama_url, ollama_model)?;
         let embedder_dimension = emb.dimension();
         let svc = MemoryService::open(&path, emb).map_err(to_py_err)?;
         Ok(Self {
