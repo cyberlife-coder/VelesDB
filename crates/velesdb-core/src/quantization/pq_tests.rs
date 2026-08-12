@@ -601,6 +601,22 @@ fn save_codebook_uses_atomic_write() {
 
 #[cfg(feature = "persistence")]
 #[test]
+fn save_codebook_propagates_shared_durability_failure() {
+    use crate::storage::atomic_write::{AtomicWriteBoundary, FaultGuard};
+
+    let vectors = vec![vec![1.0, 2.0, 3.0, 4.0], vec![5.0, 6.0, 7.0, 8.0]];
+    let pq = ProductQuantizer::train(&vectors, 2, 2).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+
+    let _fault = FaultGuard::inject(AtomicWriteBoundary::TemporaryFileSync);
+    let error = pq
+        .save_codebook(dir.path())
+        .expect_err("sync failure must propagate");
+    assert!(error.to_string().contains("TemporaryFileSync"));
+}
+
+#[cfg(feature = "persistence")]
+#[test]
 fn rotation_save_load_roundtrip() {
     let vectors = vec![vec![1.0, 2.0, 3.0, 4.0], vec![5.0, 6.0, 7.0, 8.0]];
     let mut pq = ProductQuantizer::train(&vectors, 2, 2).unwrap();
@@ -616,6 +632,23 @@ fn rotation_save_load_roundtrip() {
         .expect("rotation should exist");
 
     assert_eq!(loaded, pq.rotation.unwrap());
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn save_rotation_propagates_shared_durability_failure() {
+    use crate::storage::atomic_write::{AtomicWriteBoundary, FaultGuard};
+
+    let vectors = vec![vec![1.0, 2.0, 3.0, 4.0], vec![5.0, 6.0, 7.0, 8.0]];
+    let mut pq = ProductQuantizer::train(&vectors, 2, 2).unwrap();
+    pq.rotation = Some(vec![1.0; 16]);
+    let dir = tempfile::tempdir().unwrap();
+
+    let _fault = FaultGuard::inject(AtomicWriteBoundary::TemporaryFileSync);
+    let error = pq
+        .save_rotation(dir.path())
+        .expect_err("sync failure must propagate");
+    assert!(error.to_string().contains("TemporaryFileSync"));
 }
 
 #[cfg(feature = "persistence")]

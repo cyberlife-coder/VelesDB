@@ -472,6 +472,22 @@ fn rabitq_save_uses_atomic_write() {
     assert!(dir.path().join("rabitq.idx").exists());
 }
 
+#[cfg(feature = "persistence")]
+#[test]
+fn rabitq_save_propagates_shared_durability_failure() {
+    use crate::storage::atomic_write::{AtomicWriteBoundary, FaultGuard};
+
+    let vectors = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+    let index = RaBitQIndex::train(&vectors, 42).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+
+    let _fault = FaultGuard::inject(AtomicWriteBoundary::TemporaryFileSync);
+    let error = index
+        .save(dir.path())
+        .expect_err("sync failure must propagate");
+    assert!(error.to_string().contains("TemporaryFileSync"));
+}
+
 // ====================================================================
 // Phase 2: SIMD-dispatched popcount regression tests
 // ====================================================================

@@ -348,6 +348,8 @@ impl Collection {
         if sparse_batch.is_empty() {
             return Ok(());
         }
+        // Serialize WAL-before-apply with snapshot commit and WAL reset.
+        let mut indexes = self.query.sparse_indexes.write();
         #[cfg(feature = "persistence")]
         {
             self.append_sparse_wal_entries(sparse_batch.iter().flat_map(|(name, docs)| {
@@ -355,7 +357,6 @@ impl Collection {
                     .map(move |(point_id, sv)| (name.as_str(), *point_id, sv))
             }))?;
         }
-        let mut indexes = self.query.sparse_indexes.write();
         for (name, docs) in sparse_batch {
             let idx = indexes.entry(name.clone()).or_default();
             idx.insert_batch_chunk(docs);

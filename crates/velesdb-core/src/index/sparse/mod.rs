@@ -7,6 +7,11 @@
 pub mod persistence;
 #[cfg(test)]
 #[cfg(feature = "persistence")]
+mod persistence_durability_tests;
+#[cfg(feature = "persistence")]
+pub(crate) mod persistence_generation;
+#[cfg(test)]
+#[cfg(feature = "persistence")]
 mod persistence_tests;
 #[cfg(feature = "persistence")]
 pub(crate) mod persistence_wal;
