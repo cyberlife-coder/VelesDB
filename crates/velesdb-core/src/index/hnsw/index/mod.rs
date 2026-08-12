@@ -145,8 +145,9 @@ impl HnswIndex {
         if assigned_id != result.idx {
             // Remove stale reverse mapping before restoring the correct one.
             // upsert_mapping created idx_to_id[result.idx] = id, but the graph
-            // assigned a different node_id, so result.idx is now orphaned.
-            self.mappings.remove_reverse(result.idx);
+            // assigned a different node_id, so result.idx is now stale unless
+            // another concurrent correction already owns it.
+            self.mappings.remove_reverse(result.idx, id);
             self.mappings.restore(id, assigned_id);
         }
         true

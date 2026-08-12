@@ -271,11 +271,18 @@ impl ShardedMappings {
 
     /// Removes a stale reverse mapping (`idx` -> `id`) without touching the forward mapping.
     ///
-    /// Used when `insert_and_correct_mapping` detects a concurrent race: the
-    /// forward mapping `id -> idx` was already corrected by `restore()`, but the
-    /// old `idx_to_id[old_idx]` entry is still dangling.
-    pub fn remove_reverse(&self, idx: usize) {
-        self.idx_to_id.remove(&idx);
+    /// Removal is conditional because another concurrent insertion may already
+    /// have corrected this slot to its own ID. Deleting by index alone would
+    /// erase that valid mapping and make the other vector unreachable.
+    pub fn remove_reverse(&self, idx: usize, expected_id: u64) {
+        use dashmap::mapref::entry::Entry;
+
+        let Entry::Occupied(entry) = self.idx_to_id.entry(idx) else {
+            return;
+        };
+        if *entry.get() == expected_id {
+            entry.remove();
+        }
     }
 
     /// Removes an ID and returns its internal index if it existed.

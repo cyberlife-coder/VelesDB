@@ -127,7 +127,7 @@ pub(crate) fn reconcile_batch_mappings(
             // Graph assigned a different node ID than upsert_mapping expected.
             // Remove the stale reverse mapping (result.idx -> ext_id) and
             // establish the correct mapping (ext_id <-> assigned_id).
-            mappings.remove_reverse(result.idx);
+            mappings.remove_reverse(result.idx, *ext_id);
             mappings.restore(*ext_id, *assigned_id);
         }
     }
