@@ -28,6 +28,8 @@ curl -O https://raw.githubusercontent.com/cyberlife-coder/VelesDB/main/examples/
 python hello_velesdb.py
 ```
 
+To search your own text instead of hand-written vectors, install the opt-in local adapter (`pip install "velesdb[embed-sentence-transformers]"`) and run [`hello_velesdb_text.py`](examples/python/hello_velesdb_text.py); its first run downloads `all-MiniLM-L6-v2`.
+
 Expected output, byte-for-byte ([read the script](examples/python/hello_velesdb.py) — no server, no embedding model):
 
 ```
@@ -41,6 +43,8 @@ Query: "tech + music"
   score=0.707  Rust 1.89 release notes
   score=0.707  Miles Davis discography
 ```
+
+An embedding model determines the vector dimension, while your similarity semantics determine the metric. Both are fixed when a collection is created; to change either, create a new collection and re-index your documents.
 
 **Give your agent a persistent memory — three more commands:**
 
@@ -248,6 +252,7 @@ Tool parity per surface is published honestly — including where a surface is s
 | **Metadata filtering** | Typed ColumnStore + secondary indexes | JSON scan | JSON payload | SQL |
 | **Graph support** | Native (`MATCH` clause) | No | No | No |
 | **Query language** | VelesQL (SQL + NEAR + MATCH) | Python API | JSON API / gRPC | SQL + operators |
+| **Embeddings from text** | Opt-in [local / OpenAI adapters](crates/velesdb-python/python/velesdb/embed.py); no bundled model | [Embedding functions](https://docs.trychroma.com/docs/embeddings/embedding-functions), with a default local model in Python/TypeScript | Opt-in client-side [FastEmbed](https://qdrant.tech/documentation/fastembed/fastembed-semantic-search/) | None; bring vectors from an external model |
 | **Deployment** | Embedded / Server / WASM / Mobile | Server (Python) | Server (Rust) | Requires PostgreSQL |
 | **Binary size** | ~10 MB | ~500 MB (with deps) | ~50 MB | N/A (PG extension) |
 | **Browser / Mobile** | Yes / Yes | No | No | No |

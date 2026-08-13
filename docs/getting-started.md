@@ -44,6 +44,27 @@ Query: "tech + music"
 
 No server, no JSON, no embedding model. The full script is [`examples/python/hello_velesdb.py`](../examples/python/hello_velesdb.py) — read it, it is ~25 lines.
 
+### Next step: search your own text
+
+Use VelesDB's opt-in local adapter when your input is text rather than vectors:
+
+```bash
+pip install "velesdb[embed-sentence-transformers]"
+curl -O https://raw.githubusercontent.com/cyberlife-coder/VelesDB/main/examples/python/hello_velesdb_text.py
+python hello_velesdb_text.py
+```
+
+The first run downloads `all-MiniLM-L6-v2`; VelesDB does not bundle an embedding model. The example derives the collection dimension from the model, stores ordinary sentences, and searches them without a server or API key.
+
+Expected output:
+
+```
+Query: "How do I find documents with similar meaning?"
+  Semantic search finds documents with similar meaning.
+```
+
+The embedding model determines vector dimension, while your similarity semantics determine the metric. Both are fixed when the collection is created; to change either, create a new collection and re-index your documents.
+
 Want to keep going in Python? See [`examples/python/`](../examples/python/) for fusion, graph traversal, VelesQL, and hybrid queries.
 
 The rest of this page is the **REST API** path — useful if you want to drive VelesDB from a non-Python language, or run it as a shared service.
