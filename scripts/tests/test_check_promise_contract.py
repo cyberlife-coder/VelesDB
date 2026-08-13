@@ -23,9 +23,11 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
+from urllib.error import HTTPError, URLError
 
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "check-promise-contract.py"
 
@@ -109,6 +111,116 @@ class RunValidationCommandsTests(unittest.TestCase):
         self.assertEqual(executed, [])
         self.assertEqual(len(skipped), 1)
         self.assertEqual(failures, [])
+
+
+class ReleaseLinkGuardTests(unittest.TestCase):
+    """Issue #1885: release trains must not make documented downloads lie."""
+
+    def test_mcpb_link_to_repository_wide_latest_release_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "README.md").write_text(
+                "Get the `.mcpb` from "
+                "https://github.com/cyberlife-coder/VelesDB/releases/latest\n",
+                encoding="utf-8",
+            )
+            failures = cpc.check_mcpb_release_links(root)
+        self.assertEqual(len(failures), 1)
+        self.assertIn("README.md:1", failures[0])
+
+    def test_mcpb_link_to_registry_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "README.md").write_text(
+                "Get the `.mcpb` from https://registry.modelcontextprotocol.io/\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(cpc.check_mcpb_release_links(root), [])
+
+    def test_latest_asset_urls_are_deduplicated_and_must_return_200(self) -> None:
+        url = (
+            "https://github.com/cyberlife-coder/VelesDB/releases/latest/"
+            "download/example.tar.gz"
+        )
+        requests = []
+
+        class Response:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        def opener(request, timeout):
+            requests.append((request, timeout))
+            return Response()
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "README.md").write_text(f"download {url}\n", encoding="utf-8")
+            docs = root / "docs"
+            docs.mkdir()
+            (docs / "INSTALL.md").write_text(f"download {url}\n", encoding="utf-8")
+            failures = cpc.check_latest_release_assets(root, opener=opener)
+
+        self.assertEqual(failures, [])
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0][0].get_method(), "HEAD")
+        self.assertEqual(requests[0][0].full_url, url)
+        self.assertEqual(requests[0][1], cpc.RELEASE_ASSET_TIMEOUT_SECONDS)
+
+    def test_latest_asset_non_200_is_refused_with_citation(self) -> None:
+        url = (
+            "https://github.com/cyberlife-coder/VelesDB/releases/latest/"
+            "download/missing.zip"
+        )
+
+        def opener(request, timeout):
+            raise HTTPError(request.full_url, 404, "Not Found", {}, None)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "README.md").write_text(f"download {url}\n", encoding="utf-8")
+            failures = cpc.check_latest_release_assets(root, opener=opener)
+
+        self.assertEqual(len(failures), 1)
+        self.assertIn("README.md:1", failures[0])
+        self.assertIn("HTTP 404", failures[0])
+
+    def test_latest_asset_transient_network_error_is_retried(self) -> None:
+        url = (
+            "https://github.com/cyberlife-coder/VelesDB/releases/latest/"
+            "download/example.tar.gz"
+        )
+        attempts = 0
+
+        class Response:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        def opener(request, timeout):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise HTTPError(request.full_url, 502, "Bad Gateway", {}, None)
+            if attempts < cpc.RELEASE_ASSET_ATTEMPTS:
+                raise URLError("temporary disconnect")
+            return Response()
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "README.md").write_text(f"download {url}\n", encoding="utf-8")
+            failures = cpc.check_latest_release_assets(root, opener=opener)
+
+        self.assertEqual(failures, [])
+        self.assertEqual(attempts, cpc.RELEASE_ASSET_ATTEMPTS)
 
 
 class RealRegistryExecutableClaimsTests(unittest.TestCase):
