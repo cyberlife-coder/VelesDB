@@ -251,7 +251,7 @@ memory.recall('lock poisoning', 5, null);
 // => [ { id: "7771…", score: 0.5345…, content: "we chose parking_lot to avoid lock poisoning" },
 //      { id: "5225…", score: 0,       content: "PR #42 swaps the mutex for parking_lot" } ]
 
-const { nodes, edges } = memory.why('parking_lot', 2, null);
+const { nodes, edges, truncated } = memory.why('parking_lot', 2, null);
 ```
 
 Full surface, as enumerated from `MemoryService.prototype` in the published

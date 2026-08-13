@@ -1114,9 +1114,9 @@ export class MemoryService {
 
   /**
    * The resumption envelope for `project` + `session` — the start-of-session
-   * mirror of {@link saveWorkingContext} (#1517, option 2): `{found,
-   * working, other_sessions}`, the same shape the MCP `load_working_context`
-   * tool serves.
+   * mirror of {@link saveWorkingContext} (#1517, option 2).
+   * `loadWorkingContext` returns `{found, working, other_sessions}`, the same
+   * shape the MCP `load_working_context` tool serves.
    *
    * **BREAKING (`velesdb-memory` 0.12.0, relayed by the next
    * `@wiscale/velesdb-sdk` release)**: this used to resolve

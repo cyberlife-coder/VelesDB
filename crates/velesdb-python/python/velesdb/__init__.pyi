@@ -2658,7 +2658,8 @@ class MemoryService:
         Returns:
             Same shape as the MCP tool's output: ``{"content": str,
             "sections": [...], "decisions": [...], "sources": [...],
-            "retrieval_handles": [...], "insights": dict, "risk": str}``.
+            "retrieval_handles": [...], "insights": dict, "risk": str,
+            "warnings": [...]}``.
             Every u64 id (``fragment_id``, ``content_hash``, ``memory_id``,
             entries of ``fragment_ids``) is a native Python int (unlimited
             precision) — unlike the Node binding, which crosses ids as
@@ -2747,7 +2748,7 @@ class MemoryService:
             handle: A ``ctx://source/<hash>`` handle from a compiled context.
 
         Returns:
-            A dict shaped ``{"content": str, "media"?: ...}``, byte-for-byte
+            A dict shaped ``{"handle": str, "content": str, "media"?: ...}``, byte-for-byte
             the original fragment; ``media`` is present only when the
             fragment carried one.
 
