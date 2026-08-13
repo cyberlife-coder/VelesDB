@@ -137,6 +137,11 @@ mem.remember("Booked the aisle seat on Robert's flight", links=[(reason, "becaus
 mem.why("why the aisle seat on Robert's flight?")   # walks booking → reason — recall() can't
 ```
 
+> `MemoryService` defaults to the offline `hash` embedder: deterministic, but
+> **lexical rather than semantic**, so unrelated wording can score `0.000`.
+> Opening it now says so once on stderr. For meaning-based recall, pass
+> `embedder="ollama"`; follow [Real semantic recall in 5 minutes](crates/velesdb-memory/README.md#real-semantic-recall-in-5-minutes).
+
 ![recall() finds the booking but misses the reason; why() reaches it through typed links, across a session restart](examples/agent_memory/why_across_sessions.gif)
 
 Memories are permanent by default; `forget(id)` deletes one, `ttl_seconds` gives a fact a durable expiry. Every `remember` auto-stamps its storage day, so recency-weighted recall works with zero setup. Same wedge in **Python**, **Node**, the [**MCP server**](crates/velesdb-memory), and in-memory in the [**TypeScript SDK**](sdks/typescript).

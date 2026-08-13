@@ -33,6 +33,12 @@ mem.remember("Booked the aisle seat on Robert's flight", links=[(reason, "becaus
 mem.why("why the aisle seat on Robert's flight?")   # walks booking → reason — recall() can't
 ```
 
+> The default `embedder="hash"` is deterministic and offline, but **lexical,
+> not semantic**; a paraphrase with no shared words can therefore score
+> `0.000`. `MemoryService` reports this once on stderr when it opens. Pass
+> `embedder="ollama"` for meaning-based recall and follow
+> [Real semantic recall in 5 minutes](../../crates/velesdb-memory/README.md#real-semantic-recall-in-5-minutes).
+
 Full runnable demo:
 [`examples/agent_memory/why_across_sessions.py`](https://github.com/cyberlife-coder/VelesDB/blob/develop/examples/agent_memory/why_across_sessions.py).
 The same wedge ships for

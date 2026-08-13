@@ -170,6 +170,7 @@ pub use context::ContextCompiler;
 pub use dated_context::{format_dated_context, DatedContext};
 pub use embedder::{
     select_embedder, DynEmbedder, EmbedError, Embedder, EmbedderSelection, HashEmbedder,
+    HASH_EMBEDDER_NOTICE,
 };
 #[cfg(feature = "ollama")]
 pub use embedder::{OllamaEmbedder, OpenAiEmbedder, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL};

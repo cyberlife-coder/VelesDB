@@ -4,10 +4,33 @@ These exercise the Python binding over the same hardened Rust the MCP server use
 The offline `hash` embedder keeps them deterministic and network-free.
 """
 
+import json
+import os
+import subprocess
+import sys
 import tempfile
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 from velesdb import MemoryService
+
+
+class _EmbeddingHandler(BaseHTTPRequestHandler):
+    """Minimal Ollama-compatible probe endpoint for constructor tests."""
+
+    def do_POST(self):  # noqa: N802 - BaseHTTPRequestHandler API
+        length = int(self.headers.get("Content-Length", "0"))
+        self.rfile.read(length)
+        payload = json.dumps({"embedding": [0.1, 0.2, 0.3, 0.4]}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, _format, *_args):
+        """Keep the fixture silent so only binding stderr is asserted."""
 
 
 @pytest.fixture()
@@ -114,6 +137,63 @@ def test_unknown_link_target_raises_key_error(mem):
 def test_unknown_embedder_raises_value_error():
     with pytest.raises(ValueError):
         MemoryService(tempfile.mkdtemp(), embedder="nope")
+
+
+def test_open_with_hash_warns_once_and_names_the_semantic_argument(
+    tmp_path, capfd, monkeypatch
+):
+    monkeypatch.delenv("VELESDB_MEMORY_QUIET", raising=False)
+    MemoryService(str(tmp_path / "hash-store"), embedder="hash")
+
+    stderr = capfd.readouterr().err
+    assert stderr.count("NOT semantic") == 1
+    assert 'embedder="ollama"' in stderr
+    assert "VELESDB_MEMORY_QUIET=1" in stderr
+
+
+def test_quiet_environment_suppresses_the_hash_notice(tmp_path, capfd, monkeypatch):
+    monkeypatch.setenv("VELESDB_MEMORY_QUIET", "1")
+    MemoryService(str(tmp_path / "quiet-store"), embedder="hash")
+
+    assert "NOT semantic" not in capfd.readouterr().err
+
+
+def test_open_with_ollama_emits_no_degraded_hash_notice(tmp_path, monkeypatch):
+    monkeypatch.delenv("VELESDB_MEMORY_QUIET", raising=False)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _EmbeddingHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address
+        # The constructor's blocking Ollama probe currently holds the PyO3 GIL.
+        # Use a child so this process's Python server thread can answer it, and
+        # so the binding's exact stderr stays isolated for the assertion.
+        script = f"""
+from velesdb import MemoryService
+
+memory = MemoryService(
+    {json.dumps(str(tmp_path / "ollama-store"))},
+    embedder="ollama",
+    ollama_url={json.dumps(f"http://{host}:{port}")},
+    # The backend, not an arbitrary remote model name, decides semantics.
+    ollama_model="hash",
+)
+raise SystemExit(0 if memory.memory_status()["embedder"]["semantic"] else 1)
+"""
+        child = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            env=os.environ.copy(),
+            timeout=10,
+            check=False,
+        )
+        assert child.returncode == 0, child.stderr
+        assert "NOT semantic" not in child.stderr
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
 
 
 def test_why_huge_max_hops_is_silently_capped(mem):

@@ -33,6 +33,12 @@ pub trait Embedder {
     fn embed(&self, text: &str) -> Result<Vec<f32>, EmbedError>;
 }
 
+/// Transport-neutral part of the startup notice adapters emit for `hash`.
+/// The library itself never writes to stderr; each owning binary or language
+/// binding adds the configuration syntax its caller can actually use.
+pub const HASH_EMBEDDER_NOTICE: &str = "Using the offline 'hash' embedder: deterministic and \
+    fully offline, but NOT semantic — recall matches surface form, not meaning.";
+
 /// Deterministic, network-free embedder (token-hashing into L2-normalized
 /// buckets). Not semantically strong — its purpose is reproducible tests and
 /// offline behavior, exactly like the `fake_embed` used in the repo's
