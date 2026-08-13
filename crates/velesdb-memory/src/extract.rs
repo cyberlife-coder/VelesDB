@@ -16,7 +16,7 @@
 /// One extracted, graph-ready fact: a self-contained sentence plus the salient
 /// topics it concerns. The topics become shared graph hubs, so two facts about
 /// the same topic are reachable from one another even with no textual overlap.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ExtractedFact {
     /// The atomic, standalone fact (pronouns resolved, dates absolute).
     pub text: String,
@@ -38,7 +38,7 @@ pub struct ExtractedFact {
 /// [`ExtractedFact::entities`] (trimmed, lowercased), so they resolve to the
 /// SAME entity hub as the topics — the hub id is content-addressed, so this
 /// holds across separate calls and across sessions.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ExtractedRelation {
     /// Canonical lowercase entity the edge points *from*.
     pub subject: String,
@@ -58,7 +58,7 @@ pub struct ExtractedRelation {
 /// TYPE-STRICT with no coercion, so an age extracted as the string `"15"`
 /// would silently never match a numeric filter — the extraction contract
 /// therefore demands numbers stay numbers.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ExtractedAttribute {
     /// Canonical lowercase entity the attribute belongs to.
     pub entity: String,
@@ -73,7 +73,7 @@ pub struct ExtractedAttribute {
 ///
 /// [`Extractor::extract`] returns only the `facts` half; a backend that can
 /// also read relations and attributes overrides [`Extractor::extract_graph`].
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Extraction {
     /// The atomic, standalone facts, each with the topics it concerns.
     pub facts: Vec<ExtractedFact>,

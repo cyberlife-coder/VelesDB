@@ -133,10 +133,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         embedder_model,
         embedder_dimension,
     } = configured;
+    let store_path = std::path::PathBuf::from(store_path);
     let server = apply_ingest_roots(apply_default_ttl(
         build_server(service)?
             .with_embedder_identity(embedder_model, embedder_dimension)
-            .with_store_dir(store_path),
+            .with_store_dir(&store_path)
+            .with_extraction_jobs(&store_path)
+            .map_err(std::io::Error::other)?,
     )?)?;
 
     tokio::runtime::Runtime::new()?.block_on(async move {

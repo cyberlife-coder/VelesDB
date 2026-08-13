@@ -40,7 +40,7 @@
 //! `cargo test -p velesdb-memory --features extract,ollama,persistence`
 //! WITHOUT `--no-default-features`, so this file compiles and executes there
 //! as well. Verified by running it, not assumed: it passes, because the
-//! twenty tools are registered unconditionally — `remember_extracted` is
+//! twenty-three tools are registered unconditionally — `remember_extracted` is
 //! always advertised and merely answers "no extractor configured" until one
 //! is attached, so neither `extract` nor `ollama` adds or removes a tool.
 //!

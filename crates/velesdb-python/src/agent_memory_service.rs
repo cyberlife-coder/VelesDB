@@ -714,7 +714,7 @@ impl PyMemoryService {
     }
 
     /// Extract atomic facts from raw `text` and store them, auto-building the
-    /// entity graph they state.
+    /// entity graph the passage describes.
     ///
     /// Args:
     ///     text: the passage to extract from.

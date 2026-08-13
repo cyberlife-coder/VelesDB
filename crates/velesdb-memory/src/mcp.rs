@@ -40,19 +40,24 @@ use crate::extract::DynExtractor;
 mod context_tools;
 
 mod dto;
+mod extraction_job_model;
+mod extraction_job_store;
+mod extraction_jobs;
 mod extractor_resolver;
 mod wire;
 use dto::{
-    EmbedderStatus, EntityParams, EntityProfileDto, ExplanationDto, ExtractionStatus,
-    FeedbackParams, FeedbackResult, ForgetParams, ForgetResult, ListMemoriesParams,
-    ListMemoriesResult, ListedMemoryDto, MemoryCounts, MemoryStatusResult, ProvenanceStatus,
-    RecallFusedParams, RecallFusedResult, RecallParams, RecallResult, RecallWhereParams,
-    RelateParams, RelateResult, RememberExtractedParams, RememberExtractedResult, RememberParams,
-    RememberResult, UnrelateParams, UnrelateResult, WhyParams,
+    EmbedderStatus, EntityParams, EntityProfileDto, ExplanationDto, ExtractionJobStatusParams,
+    ExtractionJobStatusResult, ExtractionStatus, FeedbackParams, FeedbackResult, ForgetParams,
+    ForgetResult, ListMemoriesParams, ListMemoriesResult, ListedMemoryDto, MemoryCounts,
+    MemoryStatusResult, ProvenanceStatus, RecallFusedParams, RecallFusedResult, RecallParams,
+    RecallResult, RecallWhereParams, RelateParams, RelateResult, RememberExtractedParams,
+    RememberExtractedResult, RememberParams, RememberResult, UnrelateParams, UnrelateResult,
+    WhyParams,
 };
-use extractor_resolver::{ExtractorResolveError, ExtractorResolver};
+use extraction_jobs::{ExtractionJobs, JobError};
+use extractor_resolver::ExtractorResolver;
 
-/// Le constructeur de schema d'ENTREE, unique pour les vingt-deux outils :
+/// Le constructeur de schema d'ENTREE, unique pour les vingt-trois outils :
 /// [`crate::schema::wire_safe_input_schema`].
 ///
 /// `keys` nomme les proprietes que CET outil accepte en chaine decimale
@@ -80,7 +85,10 @@ pub struct McpServer {
     /// waits for at most ONE generation.
     _autograph_worker: Option<Arc<crate::service::AutographWorkerHandle>>,
     /// Daemon-level default and per-call selection for `remember_extracted`.
-    extractors: ExtractorResolver,
+    extractors: Arc<parking_lot::RwLock<ExtractorResolver>>,
+    /// Durable receipt/status state machine for `remember_extracted`.
+    /// Configured by the native daemon once its store path is known.
+    extraction_jobs: Option<ExtractionJobs>,
     /// Default time-to-live (seconds) applied to `remember`d facts that don't
     /// specify their own `ttl_seconds`. `None` (the default) stores permanently.
     /// Set from `VELESDB_MEMORY_DEFAULT_TTL` by the binary.
@@ -131,7 +139,8 @@ impl McpServer {
         Self {
             service,
             _autograph_worker: autograph_worker,
-            extractors: ExtractorResolver::default(),
+            extractors: Arc::new(parking_lot::RwLock::new(ExtractorResolver::default())),
+            extraction_jobs: None,
             default_ttl: None,
             embedder_identity: None,
             store_dir: None,
@@ -195,8 +204,8 @@ impl McpServer {
     /// Attach an extraction backend, enabling the `remember_extracted` tool.
     /// Without it the tool reports that extraction is not configured.
     #[must_use]
-    pub fn with_extractor(mut self, extractor: DynExtractor) -> Self {
-        self.extractors = ExtractorResolver::unnamed(extractor);
+    pub fn with_extractor(self, extractor: DynExtractor) -> Self {
+        *self.extractors.write() = ExtractorResolver::unnamed(extractor);
         self
     }
 
@@ -206,11 +215,35 @@ impl McpServer {
     /// # Errors
     /// Returns an error when `backend` is unknown or disables extraction.
     pub fn with_named_extractor(
-        mut self,
+        self,
         backend: impl Into<String>,
         extractor: DynExtractor,
     ) -> Result<Self, String> {
-        self.extractors = ExtractorResolver::named(backend.into(), extractor)?;
+        *self.extractors.write() = ExtractorResolver::named(backend.into(), extractor)?;
+        Ok(self)
+    }
+
+    /// Enable the durable extraction-job worker under the native store root.
+    ///
+    /// Call this after opening the store and before serving requests. Accepted
+    /// and in-flight records are recovered immediately; corrupt durable state
+    /// fails startup instead of silently losing a receipt.
+    ///
+    /// # Errors
+    /// Returns a descriptive error if the job directory cannot be created,
+    /// validated, read, or if the recovery worker cannot start.
+    pub fn with_extraction_jobs(
+        mut self,
+        store_root: impl AsRef<std::path::Path>,
+    ) -> Result<Self, String> {
+        self.extraction_jobs = Some(
+            ExtractionJobs::open(
+                store_root.as_ref(),
+                Arc::clone(&self.service),
+                Arc::clone(&self.extractors),
+            )
+            .map_err(|error| error.to_string())?,
+        );
         Ok(self)
     }
 
@@ -529,7 +562,7 @@ impl McpServer {
         // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
         // or les SDK MCP valident structuredContent contre ce schema.
         output_schema = crate::schema::wire_safe_output_schema::<RememberExtractedResult>(),
-        description = "Store a passage of raw text by extracting its atomic facts and auto-building the fact↔topic graph, so `why` can later connect them with no manual links. Set `extractor` per call (`outline`, `ollama`, or `openai`), or omit it to use the daemon default from VELESDB_MEMORY_EXTRACTOR. `outline` is always available; a remote backend must be the one configured when the daemon started. Returns `ids` — the stored facts' ids, in extraction order — plus `ids_str`, their decimal-string twins: ids exceed 2^53, so always relay those on clients without u64-safe JSON number parsing. It also returns `skipped_over_cap`, and you should read it: that is how many facts the extractor DID produce out of your text and this tool did NOT store, because each was longer than the per-fact text limit. A non-zero `skipped_over_cap` means part of what you sent was extracted and then dropped — without that number, a short `ids` list is indistinguishable from a passage that simply held fewer facts."
+        description = "Accept a passage for durable background extraction and return before model generation. Set `extractor` per call (`outline`, `ollama`, or `openai`), or omit it to use VELESDB_MEMORY_EXTRACTOR. Supply `idempotency_key` when retrying across a client timeout: the same key and payload reuse one job, while a changed payload is rejected. The receipt returns `request_id`, its initial `state` (`accepted`, or the persisted state of a reused request), and `reused`. Poll `extraction_status(request_id)` until `committed` or `failed`; accepted/running jobs survive process restart."
     )]
     async fn remember_extracted(
         &self,
@@ -539,6 +572,7 @@ impl McpServer {
             text,
             metadata,
             extractor,
+            idempotency_key,
         } = params;
         if text.len() > MAX_FACT_BYTES {
             return Err(ErrorData::new(
@@ -547,25 +581,63 @@ impl McpServer {
                 None,
             ));
         }
-        let extractor = self
-            .extractors
-            .resolve(extractor.as_deref())
-            .map_err(extractor_error)?;
-        // Extraction makes a blocking network call (up to the extractor's
-        // timeout), so run it off the async worker pool to keep the stdio loop
-        // responsive to other tool calls and cancellations.
-        let service = Arc::clone(&self.service);
-        let outcome = tokio::task::spawn_blocking(move || {
-            service.remember_extracted(&text, &extractor, metadata.as_ref())
+        let jobs = self.extraction_jobs.clone().ok_or_else(|| {
+            ErrorData::new(
+                ErrorCode::INTERNAL_ERROR,
+                "durable extraction jobs are not configured for this server",
+                None,
+            )
+        })?;
+        let receipt = tokio::task::spawn_blocking(move || {
+            jobs.submit(
+                &text,
+                metadata,
+                extractor.as_deref(),
+                idempotency_key.as_deref(),
+            )
         })
         .await
         .map_err(join_error)?
-        .map_err(to_error)?;
-        let ids_str = outcome.ids.iter().map(u64::to_string).collect();
+        .map_err(job_error)?;
         Ok(Json(RememberExtractedResult {
-            ids: outcome.ids,
+            request_id: receipt.request_id,
+            state: receipt.state,
+            reused: receipt.reused,
+        }))
+    }
+
+    #[tool(
+        name = "extraction_status",
+        output_schema = crate::schema::wire_safe_output_schema::<ExtractionJobStatusResult>(),
+        description = "Read one durable extraction job by the `request_id` returned from `remember_extracted`. Returns that `request_id`, its persisted `state` (`accepted`, `running`, `committed`, or `failed`), committed fact `ids` and their u64-safe decimal `ids_str` twins, `skipped_over_cap` after commit, and `error` after failure. While accepted/running, `ids` and `ids_str` are empty and both optional terminal fields are null."
+    )]
+    async fn extraction_status(
+        &self,
+        Parameters(params): Parameters<ExtractionJobStatusParams>,
+    ) -> Result<Json<ExtractionJobStatusResult>, ErrorData> {
+        let jobs = self.extraction_jobs.clone().ok_or_else(|| {
+            ErrorData::new(
+                ErrorCode::INTERNAL_ERROR,
+                "durable extraction jobs are not configured for this server",
+                None,
+            )
+        })?;
+        let view = tokio::task::spawn_blocking(move || jobs.status(&params.request_id))
+            .await
+            .map_err(join_error)?
+            .map_err(job_error)?;
+        let (ids, skipped_over_cap) = view.outcome.map_or_else(
+            || (Vec::new(), None),
+            |outcome| (outcome.ids, Some(outcome.skipped_over_cap)),
+        );
+        let ids_str = ids.iter().map(u64::to_string).collect();
+        Ok(Json(ExtractionJobStatusResult {
+            request_id: view.request_id,
+            state: view.state,
+            ids,
             ids_str,
-            skipped_over_cap: outcome.skipped_over_cap,
+            skipped_over_cap,
+            error: view.error,
         }))
     }
 
@@ -622,7 +694,7 @@ impl McpServer {
                 // extractor is attached separately and reports through the
                 // two autograph fields, so an autograph-only configuration
                 // never claims a tool that would refuse.
-                configured: self.extractors.default_is_configured(),
+                configured: self.extractors.read().default_is_configured(),
                 autograph_active: self.service.autograph_queue_open(),
                 autograph_dropped: self.service.autograph_dropped(),
             },
@@ -686,11 +758,12 @@ impl McpServer {
 /// "context")]` variant since the context-compiler tools only exist in that
 /// build.
 #[cfg(feature = "context")]
-const SERVER_INSTRUCTIONS: &str = "Local-first memory and context engineering for AI agents, three tool families: (1) durable memory — remember, remember_extracted, recall, recall_fused, recall_where, relate, unrelate, forget, feedback, entity, and why — explainable (why returns the evidence trail) and self-improving (feedback re-ranks future recall); remember_extracted reads the entities, typed edges and attributes a passage STATES and wires them into the graph, and entity(name) answers a question ABOUT a named thing rather than about the sentences mentioning it; memory_status reports the server's health — which embedder runs and whether recall is semantic, extraction wiring, and graph size; list_memories audits the store page by page — what recall cannot answer, because what resembles no query stays invisible; (2) the deterministic context compiler — compile_context, compile_transcript, explain_compilation, retrieve_context_source, context_savings, and suggest_budget — token-budgets and audits prompt context with no LLM call, ever; (3) cross-session working-context resumption — save_working_context, load_working_context, and list_working_contexts. compile_context/explain_compilation fragments accept a `path` instead of inline `content` to ingest a file by reference — disabled unless the server is started with VELESDB_MEMORY_INGEST_ROOTS set to an allowlist of directories (compile_transcript's own `path` field uses the same allowlist). compile_transcript is a one-call shortcut over compile_context for a raw agent-session transcript: it segments plain or JSONL text into turns before compiling, so an agent no longer needs to segment a transcript by hand. Nothing ever leaves the machine.";
+const SERVER_INSTRUCTIONS: &str = "Local-first memory and context engineering for AI agents, three tool families: (1) durable memory — remember, remember_extracted, extraction_status, recall, recall_fused, recall_where, relate, unrelate, forget, feedback, entity, and why — explainable (why returns the evidence trail) and self-improving (feedback re-ranks future recall); remember_extracted durably accepts a passage, then reads the entities, typed edges and attributes it STATES and wires them into the graph in the background: keep its request_id and poll extraction_status until committed or failed, reusing one idempotency_key across transport retries; entity(name) answers a question ABOUT a named thing rather than about the sentences mentioning it; memory_status reports the server's health — which embedder runs and whether recall is semantic, extraction wiring, and graph size; list_memories audits the store page by page — what recall cannot answer, because what resembles no query stays invisible; (2) the deterministic context compiler — compile_context, compile_transcript, explain_compilation, retrieve_context_source, context_savings, and suggest_budget — token-budgets and audits prompt context with no LLM call, ever; (3) cross-session working-context resumption — save_working_context, load_working_context, and list_working_contexts. compile_context/explain_compilation fragments accept a `path` instead of inline `content` to ingest a file by reference — disabled unless the server is started with VELESDB_MEMORY_INGEST_ROOTS set to an allowlist of directories (compile_transcript's own `path` field uses the same allowlist). compile_transcript is a one-call shortcut over compile_context for a raw agent-session transcript: it segments plain or JSONL text into turns before compiling, so an agent no longer needs to segment a transcript by hand. Nothing ever leaves the machine.";
 
 #[cfg(not(feature = "context"))]
 const SERVER_INSTRUCTIONS: &str = "Local-first memory for AI agents: remember facts, recall them \
      semantically, relate them, forget them, ask why a decision was made (connected subgraph), \
+     submit durable remember_extracted jobs and poll extraction_status to completion, \
      read memory_status for the server's health — embedder semantics, extraction wiring, \
      graph size — and audit the store page by page with list_memories.";
 
@@ -828,20 +901,17 @@ fn assert_every_input_slot_is_typed(router: &ToolRouter<McpServer>) {
     );
 }
 
-/// Preserve the existing server-fault code for a missing default while
-/// classifying an explicit, unusable backend name as caller input.
-fn extractor_error(error: ExtractorResolveError) -> ErrorData {
-    match error {
-        ExtractorResolveError::DefaultNotConfigured => ErrorData::new(
-            ErrorCode::INTERNAL_ERROR,
-            "extraction backend not configured: set VELESDB_MEMORY_EXTRACTOR, \
-             or pass extractor='outline' for the offline deterministic reader",
-            None,
-        ),
-        ExtractorResolveError::InvalidRequest(message) => {
-            ErrorData::new(ErrorCode::INVALID_PARAMS, message, None)
+#[allow(clippy::needless_pass_by_value)]
+fn job_error(error: JobError) -> ErrorData {
+    let code = match error {
+        JobError::Invalid(_) | JobError::Conflict | JobError::NotFound(_) => {
+            ErrorCode::INVALID_PARAMS
         }
-    }
+        JobError::AtCapacity | JobError::BackendNotConfigured | JobError::Storage(_) => {
+            ErrorCode::INTERNAL_ERROR
+        }
+    };
+    ErrorData::new(code, error.to_string(), None)
 }
 
 /// Map a `spawn_blocking` join failure (a panicked or cancelled tool task) to an

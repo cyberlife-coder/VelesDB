@@ -21,7 +21,7 @@ invariants that hold the design together.
 │                                                                            │
 │   src/main.rs ── env config (store path, embedder, extractor) ──┐          │
 │                                                                 ▼          │
-│   src/mcp.rs ── McpServer: 22 tools (memory + graph + context compiler)    │
+│   src/mcp.rs ── McpServer: 23 tools (memory + graph + context compiler)    │
 │     remember · recall · relate · forget · why · remember_extracted · …    │
 │        │                                                                   │
 │        ▼                                                                   │
@@ -66,7 +66,7 @@ Mermaid view (renders on GitHub):
 flowchart TD
   C["MCP clients (Claude Code, Cursor, Zed…)"] -- "stdio JSON-RPC" --> M
   subgraph VM["velesdb-memory (this crate)"]
-    M["mcp.rs · McpServer — 22 tools"] --> S["service.rs · MemoryService&lt;E&gt;"]
+    M["mcp.rs · McpServer — 23 tools"] --> S["service.rs · MemoryService&lt;E&gt;"]
     EMB["embedder.rs · Embedder (Hash | Ollama)"] --> S
     EXT["extract.rs · Extractor (Ollama | BYO)"] --> S
     S --> LB{{"License boundary: memory semantics only"}}
@@ -136,17 +136,27 @@ it. `remember_extracted` adds the missing commodity — it makes the graph
 *self-build* from raw text:
 
 ```
-remember_extracted(text, extractor, metadata?)
+remember_extracted(text, extractor, metadata?, idempotency_key?)
   │
-  1. extractor.extract(text) → [ {fact, topics[]} … ]      [Extractor: LLM or BYO]
-  2. for each fact:
+  1. validate + fingerprint request
+  2. atomically persist ACCEPTED snapshot
+  ├──────────────────────────────► {request_id, state, reused}  [immediate receipt]
+  │
+  │  serial durable worker
+  3. persist RUNNING
+  4. extractor.extract(text) → [ {fact, topics[]} … ]      [Extractor: LLM or BYO]
+  5. persist generated extraction before any graph write
+  6. for each fact:
        fact_id = remember(fact, metadata)                  [Vector + Column]
        for each topic:
          hub_id = hub(topic)   // salted id, reserved _veles_hub marker
          relate(fact_id, hub_id, "about")     ─┐ bidirectional,
          relate(hub_id, fact_id, "mentions")  ─┘ deduped vs persisted edges
+  7. atomically persist COMMITTED result and discard source/extraction
   ▼
-[fact_id …]   ·   facts sharing a topic are now reachable through its hub
+extraction_status(request_id) → [fact_id …]
+  · facts sharing a topic are now reachable through its hub
+  · FAILED is terminal and queryable with its error
 ```
 
 **Topic hubs** are the mechanism that connects facts across passages
@@ -172,6 +182,13 @@ scaffolding: marked with the reserved `_veles_hub` key and **excluded from
   can't push real facts out of `recall`/`why`.
 - **Idempotent ingestion** — `remember_extracted` folds already-persisted edges
   into its dedup set, so re-ingesting the same text doesn't duplicate edges.
+- **Durable acceptance** — an extraction receipt is returned only after its
+  `accepted` snapshot is atomically replaced and synced. A stable
+  `idempotency_key` cannot alias a changed payload.
+- **Deterministic recovery boundary** — generated model output is persisted
+  before graph writes. A restart replays that same output through
+  content-addressed facts and deduplicated edges; it regenerates only when no
+  model output was durably recorded.
 - **Local-first** — embeddings/extraction call a model the user already runs
   (Ollama); memory and text never leave the machine.
 

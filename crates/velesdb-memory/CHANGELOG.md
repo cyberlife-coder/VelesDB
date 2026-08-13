@@ -155,6 +155,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (MCP) — `remember_extracted` is now a durable asynchronous job
+  (#1839).** It returns `{request_id, state, reused}` immediately after an
+  `accepted` record is synced, rather than holding the transport open across
+  model generation and graph writes. Callers should supply one
+  `idempotency_key` per logical operation and poll the new
+  `extraction_status` tool for `{state, ids, ids_str, skipped_over_cap,
+  error}`. Identical retries reuse the persisted receipt; a changed payload
+  under the same key is rejected. Accepted/running jobs recover after restart,
+  and the generated extraction is persisted before writes so an interrupted
+  commit replays stable output. The Rust `MemoryService` and language-binding
+  methods remain synchronous and keep their existing return envelopes.
+
 - **BREAKING — `remember_extracted` returns an envelope**, `{ids,
   skipped_over_cap}` (`{ids, skippedOverCap}` on the JS surfaces), where Node
   returned `Array<string>` and Python `List[int]`. **Migration**: read

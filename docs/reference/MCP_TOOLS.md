@@ -349,20 +349,48 @@ useful facts up and noise down with no retraining. The compiler's
 
 ## `remember_extracted`
 
-Store a passage of raw text by extracting its atomic facts and auto-building
-the fact↔topic graph, so `why` can connect them with no manual `relate`.
+Durably accept a passage for background extraction and return before model
+generation. The worker extracts atomic facts and auto-builds the fact↔topic
+graph, so `why` can connect them with no manual `relate`.
 
 | Parameter | Type | Required | Notes |
 |---|---|---|---|
 | `text` | string | yes | Raw text. Capped at 1 MiB (`MAX_FACT_BYTES`). |
 | `metadata` | object | no | Applied to every extracted fact. |
 | `extractor` | string | no | Per-call backend: `outline`, `ollama`, or `openai`. Omit to use the daemon default from `VELESDB_MEMORY_EXTRACTOR`. `outline` is always available; a remote name must match the backend configured when the daemon started. |
+| `idempotency_key` | string | no | Retry key, at most 256 bytes. The same key and payload reuse one durable job; the same key with a changed payload is rejected. |
 
-Returns `{ ids, ids_str, skipped_over_cap }`, the ids in extraction order.
-`skipped_over_cap` counts facts the extractor produced and this tool DROPPED
-for exceeding the 2048-byte embeddable-text cap. It is always present, and it
-is the only way to tell a drop from the model simply extracting fewer facts —
-read it, or you will believe you stored a passage you stored only part of.
+Returns an immediate `{ request_id, state, reused }` receipt. A newly accepted
+job reports `state: "accepted"`; an identical retry may report the later
+persisted state and sets `reused: true`. Without an explicit key, an exact
+normalized request is still content-addressed and deduplicated.
+
+Acceptance is durable: `accepted` and `running` records are recovered after a
+restart. The generated extraction is itself persisted before the first memory
+write, so a restart during graph storage replays stable facts and edges rather
+than asking the model for a second interpretation. If the process dies while
+the model is still generating—before an output exists to persist—that
+generation is retried on restart. At most 64 non-terminal jobs are admitted.
+
+## `extraction_status`
+
+Read the durable result of `remember_extracted`.
+
+| Parameter | Type | Required | Notes |
+|---|---|---|---|
+| `request_id` | string | yes | The 64-character lowercase hexadecimal id from the receipt. |
+
+Returns `{ request_id, state, ids, ids_str, skipped_over_cap, error }`.
+`state` is one of `accepted`, `running`, `committed`, or `failed`. While work is
+pending, both id arrays are empty and the terminal fields are `null`. On
+`committed`, `ids` are in extraction order, `ids_str` are their u64-safe
+decimal twins, and `skipped_over_cap` counts facts the extractor produced but
+the store dropped for exceeding the 2048-byte embeddable-text cap. On `failed`,
+`error` explains the terminal failure.
+
+Terminal snapshots retain the request fingerprint and result, but discard the
+source text, metadata, and generated extraction. This preserves retry
+idempotence without retaining an extra copy of the passage indefinitely.
 
 ## `memory_status`
 
