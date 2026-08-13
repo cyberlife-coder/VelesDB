@@ -39,74 +39,8 @@ jobs:
           echo "event '${{ github.event_name }}' carries no pull_request payload:"
           echo "Git Flow, branch freshness and attribution have nothing to assert."
 
-      - name: Block archive branches as PR source
-        if: ${{ github.event_name == 'pull_request' && startsWith(github.event.pull_request.head.ref, 'archive/') }}
-        env:
-          BRANCH_NAME: ${{ github.event.pull_request.head.ref }}
-        run: |
-          echo "::error::PR source branch '${BRANCH_NAME}' is archived and cannot be merged."
-          exit 1
-
-      - name: Enforce Git Flow branch rules
-        if: ${{ github.event_name == 'pull_request' }}
-        env:
-          SOURCE_REF: ${{ github.event.pull_request.head.ref }}
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-        run: |
-          # Git Flow enforcement rules:
-          #
-          # → develop : feature/*, feat/*, fix/*, bugfix/*,
-          #             refactor/*, chore/*, docs/*, style/*,
-          #             perf/*, test/*, build/*, ci/*, dependabot/*
-          # → main    : develop, release/*, hotfix/*, support/*
-          #
-          # bugfix/* is the standard Git Flow alias for fix/* (bug fixes in develop).
-          # dependabot/* is created by GitHub's Dependabot bot and always targets
-          # develop per .github/dependabot.yml configuration — the prefix is
-          # controlled by Dependabot itself and is not renameable.
-          # support/* maintains older release lines and merges directly to main.
-          # Any other target branch is rejected.
-
-          allowed_to_develop() {
-            local src="$1"
-            case "$src" in
-              feature/*|feat/*|fix/*|bugfix/*|refactor/*|chore/*) return 0 ;;
-              docs/*|style/*|perf/*|test/*|build/*|ci/*) return 0 ;;
-              dependabot/*) return 0 ;;
-              *) return 1 ;;
-            esac
-          }
-
-          allowed_to_main() {
-            local src="$1"
-            case "$src" in
-              develop|release/*|hotfix/*|support/*) return 0 ;;
-              *) return 1 ;;
-            esac
-          }
-
-          if [ "$BASE_REF" = "develop" ]; then
-            if allowed_to_develop "$SOURCE_REF"; then
-              echo "OK: '${SOURCE_REF}' → develop (Git Flow valid)"
-            else
-              echo "::error::Git Flow violation: '${SOURCE_REF}' cannot target 'develop'."
-              echo "::error::Branches allowed to target 'develop': feature/*, feat/*, fix/*, bugfix/*, refactor/*, chore/*, docs/*, style/*, perf/*, test/*, build/*, ci/*, dependabot/*"
-              exit 1
-            fi
-          elif [ "$BASE_REF" = "main" ]; then
-            if allowed_to_main "$SOURCE_REF"; then
-              echo "OK: '${SOURCE_REF}' → main (Git Flow valid)"
-            else
-              echo "::error::Git Flow violation: '${SOURCE_REF}' cannot target 'main'."
-              echo "::error::Branches allowed to target 'main': develop, release/*, hotfix/*, support/*"
-              exit 1
-            fi
-          else
-            echo "::error::PR targets '${BASE_REF}', which is not a valid Git Flow integration branch."
-            echo "::error::Valid targets are 'main' and 'develop'."
-            exit 1
-          fi
-
+      # The policy is executable repository code now, so the checkout must
+      # precede even the source/target-only half of the guard.
       - name: Checkout head branch
         if: ${{ github.event_name == 'pull_request' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -114,18 +48,33 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
+      - name: Enforce PR source and Git Flow rules
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          SOURCE_REF: ${{ github.event.pull_request.head.ref }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          python3 scripts/check-pr-governance.py \
+            --guard git-flow \
+            --source-ref "$SOURCE_REF" \
+            --base-ref "$BASE_REF"
+
+      - name: Fetch latest base branch
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: git fetch origin "${BASE_REF}" --depth=1
+
       - name: Verify branch includes latest base branch
         if: ${{ github.event_name == 'pull_request' }}
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
-          git fetch origin "${BASE_REF}" --depth=1
-          if git merge-base --is-ancestor "origin/${BASE_REF}" HEAD; then
-            echo "OK: HEAD contains latest origin/${BASE_REF}."
-          else
-            echo "::error::Branch is behind origin/${BASE_REF}. Rebase/merge ${BASE_REF} before opening this PR."
-            exit 1
-          fi
+          python3 scripts/check-pr-governance.py \
+            --guard freshness \
+            --root . \
+            --base-ref "$BASE_REF" \
+            --base-commit "origin/${BASE_REF}"
 
       - name: Reject AI-attributed commits
         if: ${{ github.event_name == 'pull_request' }}

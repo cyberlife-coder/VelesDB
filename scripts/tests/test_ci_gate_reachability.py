@@ -940,7 +940,16 @@ class GuardRegistryDisarmTests(unittest.TestCase):
         for entry in self.registry["guards"]:
             if entry.get("inline_steps"):
                 return entry
-        raise AssertionError("no inline guard in the registry to mutate")
+        # #1715 extracted the final inline guards into executable scripts. Keep
+        # the parser/disarm contract alive against a real remaining workflow
+        # step so reintroducing an inline entry cannot make this capability
+        # silently rot merely because the registry currently needs none.
+        return {
+            "script": ".github/workflows/ci.yml",
+            "workflow": ".github/workflows/ci.yml",
+            "job": "wasm-check",
+            "inline_steps": ["Run wasm-bindgen tests (Node)"],
+        }
 
     def test_deleting_an_inline_step_from_its_workflow_is_detected(self) -> None:
         entry = self._inline_entry()

@@ -505,6 +505,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
       - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
         with:
           toolchain: ${{ env.RUST_VERSION }}
@@ -543,7 +547,7 @@ jobs:
           tool: wasm-pack
 
       - name: Run wasm-bindgen tests (Node)
-        run: wasm-pack test --node crates/velesdb-wasm
+        run: python3 scripts/run-wasm-bindgen-tests.py --root .
 
   # ===========================================================================
   # OpenAPI Drift Check
@@ -846,6 +850,10 @@ jobs:
         with:
           node-version: '20'
 
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
       - name: Install stable Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -877,11 +885,7 @@ jobs:
       # including new ones like skills-sync.spec.mjs — is picked up automatically;
       # see package.json's "test" script for the single source of truth on the glob.
       - name: Build napi addon + run Node tests
-        working-directory: crates/velesdb-node
-        run: |
-          npm install --no-audit --no-fund
-          npx napi build --platform
-          npm test
+        run: python3 scripts/run-node-binding-tests.py --root .
 
       # Mirror the release assembly before any tag exists: test the root
       # tarball plus its native package from a clean npm install, never the
@@ -995,6 +999,11 @@ jobs:
         with:
           node-version: '20'
 
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: needs.node-windows-changed.outputs.relevant == 'true'
+        with:
+          python-version: '3.12'
+
       - name: Install stable Rust toolchain
         if: needs.node-windows-changed.outputs.relevant == 'true'
         uses: dtolnay/rust-toolchain@stable
@@ -1011,12 +1020,7 @@ jobs:
       # file (not `npm test`) — see the job-level comment for why (#1509).
       - name: Build napi addon + run Node tests (Windows)
         if: needs.node-windows-changed.outputs.relevant == 'true'
-        working-directory: crates/velesdb-node
-        shell: bash
-        run: |
-          npm install --no-audit --no-fund
-          npx napi build --platform
-          node --test __test__/index.spec.mjs
+        run: python scripts/run-node-binding-tests-windows.py --root .
 
       - name: Skipped — crates/velesdb-node/** unchanged
         if: needs.node-windows-changed.outputs.relevant != 'true'
