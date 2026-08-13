@@ -7,7 +7,7 @@
 
 use super::resolve;
 use crate::collection::types::Collection;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::fusion::FusionStrategy;
 use crate::point::SearchResult;
 use crate::sparse_index::{search::sparse_search, SparseVector, DEFAULT_SPARSE_INDEX_NAME};
@@ -168,29 +168,6 @@ impl Collection {
         let (dense_results, sparse_results) =
             self.execute_both_branches(dense_vector, sparse_query, index_name, candidate_k, filter);
 
-        if dense_results.is_empty() && sparse_results.is_empty() {
-            return Ok(Vec::new());
-        }
-        if dense_results.is_empty() {
-            let scored: Vec<(u64, f32)> = sparse_results
-                .iter()
-                .map(|sd| (sd.doc_id, sd.score))
-                .collect();
-            return Ok(self.resolve_fused_results(&scored, k));
-        }
-        if sparse_results.is_empty() {
-            return Ok(self.resolve_fused_results(&dense_results, k));
-        }
-
-        let sparse_tuples: Vec<(u64, f32)> = sparse_results
-            .iter()
-            .map(|sd| (sd.doc_id, sd.score))
-            .collect();
-
-        let fused = strategy
-            .fuse(vec![dense_results, sparse_tuples])
-            .map_err(|e| Error::Config(format!("Fusion error: {e}")))?;
-
-        Ok(self.resolve_fused_results(&fused, k))
+        self.fuse_dense_sparse(dense_results, &sparse_results, k, strategy)
     }
 }
