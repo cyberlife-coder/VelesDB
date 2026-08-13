@@ -293,7 +293,7 @@ When reporting a fuzzing crash:
 ## Fuzzing Crash Report
 
 **Target**: fuzz_velesql_parser
-**Version**: velesdb-core 1.4.0
+**Version**: `<output of cargo pkgid velesdb-core>`
 **Date**: 2026-01-29
 
 ### Reproduction
@@ -324,4 +324,4 @@ thread 'main' panicked at ...
 
 ---
 
-*Last updated: 2026-03-20 · Applies to: velesdb-core 5.0.0 (introduced: EPIC-025)*
+*Last updated: 2026-08-13 · Applies to: velesdb-core 5.0.0 (introduced: EPIC-025)*

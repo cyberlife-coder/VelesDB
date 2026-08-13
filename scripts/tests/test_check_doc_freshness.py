@@ -330,6 +330,56 @@ class VersionGuardTests(FreshnessGuardTestCase):
         self.write("docs/guides/TUNING.md", stale)
         self.assertGuardFails("versions", "docs/guides/TUNING.md")
 
+    def test_stale_published_package_version_in_prose_is_refused(self) -> None:
+        self.write(
+            "docs/ALPHA.md",
+            ALPHA_CLEAN + "\nTimed against the published v3.12.0 packages.\n",
+        )
+        self.assertGuardFails(
+            "versions", "[published-packages-core]", "says 3.12.0"
+        )
+
+        self.write(
+            "docs/ALPHA.md",
+            ALPHA_CLEAN + "\nTested against the published v4.0.0 packages.\n",
+        )
+        self.assertGuardPasses("versions")
+
+    def test_unqualified_old_product_version_is_refused(self) -> None:
+        self.write("docs/ALPHA.md", ALPHA_CLEAN + "\nThis guide targets VelesDB v3.12.0.\n")
+        self.assertGuardFails("versions", "[prose-core-version]", "says 3.12.0")
+
+    def test_measurement_word_alone_does_not_exempt_an_old_version(self) -> None:
+        self.write(
+            "docs/ALPHA.md",
+            ALPHA_CLEAN + "\nTimed with VelesDB v3.12.0 on a four-core runner.\n",
+        )
+        self.assertGuardFails("versions", "[prose-core-version]", "says 3.12.0")
+
+    def test_explicit_historical_product_versions_are_retained(self) -> None:
+        historical = (
+            "\nFeature introduced in VelesDB v3.12.0.\n"
+            "Frozen reference run measured on velesdb-core@1.14.2.\n"
+        )
+        self.write("docs/ALPHA.md", ALPHA_CLEAN + historical)
+        self.assertGuardPasses("versions")
+
+    def test_memory_prose_uses_the_independent_memory_version(self) -> None:
+        self.write(
+            "docs/ALPHA.md",
+            ALPHA_CLEAN + "\nInstall velesdb-memory 0.11.0 for this guide.\n",
+        )
+        self.assertGuardFails(
+            "versions", "[prose-memory-version]", "velesdb-memory is 0.11.1"
+        )
+
+    def test_frozen_timing_report_keeps_its_measured_package_versions(self) -> None:
+        self.write(
+            "docs/quickstart/timing-results.md",
+            "Measured with velesdb-core@1.14.2 and published v1.14.2 packages.\n",
+        )
+        self.assertGuardPasses("versions")
+
 
 class ModeTests(FreshnessGuardTestCase):
     """`--mode warn` must report the very same problems without failing."""

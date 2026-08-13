@@ -112,8 +112,8 @@ aggregate `ORDER BY` over a `GROUP BY`), a default `LIMIT 10`,
 ## What is rejected, and how
 
 Every unsupported shape is a **loud rejection**. WASM never returns a
-quietly-wrong result for a query it cannot honour. Messages below are the
-actual strings thrown by `@wiscale/velesdb-wasm@4.0.0`.
+quietly-wrong result for a query it cannot honour. The messages below are a
+historical reference from `@wiscale/velesdb-wasm@4.0.0`.
 
 | Shape | Message |
 |---|---|
@@ -164,9 +164,11 @@ rejects bare `similarity()` and arithmetic `ORDER BY` — order by `depth` or
 
 ## Error surface: mixed, coerce before reading
 
-Error reporting is **partly structured** in 4.0.0. Some boundaries throw a real
+In the historical 4.0.0 release, error reporting was **partly structured**.
+Some boundaries threw a real
 JS `Error` carrying a non-enumerable, machine-readable `code`; others still
-throw a bare string. Verified against `@wiscale/velesdb-wasm@4.0.0`:
+threw a bare string. This historical reference was verified against
+the historical `@wiscale/velesdb-wasm@4.0.0` package:
 
 | Operation | Thrown value |
 |---|---|
@@ -240,4 +242,4 @@ version you run.
 
 ---
 
-Last updated: 2026-07-25 · Applies to: velesdb-core 5.0.0
+Last updated: 2026-08-13 · Applies to: velesdb-core 5.0.0
