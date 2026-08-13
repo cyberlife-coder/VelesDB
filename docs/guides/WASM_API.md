@@ -48,7 +48,7 @@ consequence of two different boundaries:
 | Ids returned by a **direct getter** (`ParsedQuery.limit`, `GraphStore.get_neighbors`, `GraphNode.id`) | `BigInt` / `BigUint64Array` | Direct `wasm-bindgen` return, no serde in between. |
 | Memory-wedge ids (`MemoryService`) | decimal **string** | Chosen so ids survive `JSON.stringify` without precision loss. |
 
-Concretely, verified against `@wiscale/velesdb-wasm@4.0.0`:
+This historical reference was verified against `@wiscale/velesdb-wasm@4.0.0`:
 
 ```javascript
 store.insert(1n, new Float32Array([1, 0, 0]));   // BigInt in
@@ -181,8 +181,8 @@ console.log(sq8.memory_usage()); // bytes actually held, per mode
 ```
 
 `memory_usage()` measured for a **single 768-dimension vector**, i.e. the
-per-vector cost including its 8-byte id (values reproduced with
-`@wiscale/velesdb-wasm@4.0.0`):
+per-vector cost including its 8-byte id (historical reference reproduced with
+the historical `@wiscale/velesdb-wasm@4.0.0` package):
 
 | Mode | Bytes per 768-D vector | Compression | Trade-off |
 |---|---|---|---|
@@ -254,8 +254,8 @@ memory.recall('lock poisoning', 5, null);
 const { nodes, edges, truncated } = memory.why('parking_lot', 2, null);
 ```
 
-Full surface, as enumerated from `MemoryService.prototype` in the published
-4.0.0 package:
+Historical surface, as enumerated from `MemoryService.prototype` in the
+published 4.0.0 package:
 
 | Group | Methods |
 |---|---|
@@ -317,12 +317,13 @@ with Promise-returning methods and the SDK's typed error hierarchy.
 
 `SemanticMemory` predates `MemoryService` and stores `(id, content, embedding)`
 triples. `store`, `len`, `dimension`, `delete`, `remove` and `clear` work, but
-**`query()` throws `Invalid search results` on every call** in 4.0.0: the
+**`query()` threw `Invalid search results` on every call** in the historical
+4.0.0 release: the
 implementation calls `JsValue::as_string()` on a value that
 `serde-wasm-bindgen` produced as an array, so the conversion always fails
 (`crates/velesdb-wasm/src/agent.rs`, `query`).
 
-Reproduced against `@wiscale/velesdb-wasm@4.0.0`:
+Historical reference reproduced against `@wiscale/velesdb-wasm@4.0.0`:
 
 ```javascript
 const sm = new SemanticMemory(4);
@@ -380,4 +381,4 @@ that runs VelesQL (`executeQuery`). See
 
 ---
 
-Last updated: 2026-07-25 · Applies to: velesdb-core 5.0.0
+Last updated: 2026-08-13 · Applies to: velesdb-core 5.0.0

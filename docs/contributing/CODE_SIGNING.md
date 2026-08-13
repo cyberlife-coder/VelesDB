@@ -298,4 +298,4 @@ Required secrets:
 
 ---
 
-Last updated: 2026-08-08 · Applies to: VelesDB 4.3.0
+Last updated: 2026-08-13 · Applies to: VelesDB 5.0.0

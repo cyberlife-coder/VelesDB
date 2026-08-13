@@ -410,7 +410,7 @@
     },
     {
       "script": "scripts/check-doc-freshness.py",
-      "purpose": "Doc stamps, index, version references, the tracked-contract rule and the decisions index stay honest (five guards).",
+      "purpose": "Doc stamps, index, declarative and prose version references, the tracked-contract rule and the decisions index stay honest (five guards).",
       "workflow": ".github/workflows/doc-contract.yml",
       "job": "freshness",
       "required": true,
@@ -419,10 +419,31 @@
       "self_test_required": true,
       "blind_spot": {
         "issue": null,
-        "summary": "None known. The `index` guard ran in warn mode over eleven root docs a comment called unreachable; measured, all eleven are linked and strict exits 0, so the comment had kept a working guard disarmed. All four guards are strict from here. `tracked` reads git, not the filesystem: a path that exists and a path a clone receives are not the same path. `decisions` sweeps docs/decisions/ only, non-recursively: a subdirectory is another index's business. Three limits it does not reach: docs/decisions/README.md is itself required by nothing, since `index` only sweeps the root of docs/; an index listing nothing, in a directory holding only that index, passes vacuously; and a listed file that exists but is untracked is `tracked`'s jurisdiction, not this one's."
+        "summary": "None known. The `index` guard ran in warn mode over eleven root docs a comment called unreachable; measured, all eleven are linked and strict exits 0, so the comment had kept a working guard disarmed. All five guards are strict from here. `tracked` reads git, not the filesystem: a path that exists and a path a clone receives are not the same path. `decisions` sweeps docs/decisions/ only, non-recursively: a subdirectory is another index's business. Three limits it does not reach: docs/decisions/README.md is itself required by nothing, since `index` only sweeps the root of docs/; an index listing nothing, in a directory holding only that index, passes vacuously; and a listed file that exists but is untracked is `tracked`'s jurisdiction, not this one's."
       },
       "required_via": "doc-contract",
       "must_refuse": [
+        {
+          "vector": "a current onboarding page naming packages from an older released VelesDB version in prose",
+          "files": {
+            "Cargo.toml": "[workspace.package]\nversion = \"5.0.0\"\n",
+            "crates/velesdb-memory/Cargo.toml": "[package]\nname = \"velesdb-memory\"\nversion = \"0.12.0\"\n",
+            "docs/getting-started.md": "# Getting started\n\nTimed against the published v4.3.0 packages.\n"
+          },
+          "accepts": {
+            "Cargo.toml": "[workspace.package]\nversion = \"5.0.0\"\n",
+            "crates/velesdb-memory/Cargo.toml": "[package]\nname = \"velesdb-memory\"\nversion = \"0.12.0\"\n",
+            "docs/getting-started.md": "# Getting started\n\nTimed against the published v5.0.0 packages.\n"
+          },
+          "argv": [
+            "--guard",
+            "versions",
+            "--mode",
+            "strict",
+            "--root",
+            "{root}"
+          ]
+        },
         {
           "vector": "an entry document designating a file that exists but is NOT tracked — the shape that hid CLAUDE.md, AGENTS.md and CORE_PREMIUM_SPLIT.md behind .git/info/exclude",
           "files": {

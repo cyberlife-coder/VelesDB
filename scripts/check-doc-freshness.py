@@ -21,11 +21,13 @@ red on the current tree can be wired as a warning while the others block:
     manifests. Two sources of truth:
       * ``[workspace.package].version`` in ``Cargo.toml``      -> velesdb-core
       * ``version`` in ``crates/velesdb-memory/Cargo.toml``    -> velesdb-memory
-    Four claim shapes are policed (see ``VERSION_CLAIMS``): the
-    ``Applies to: velesdb-<crate> X.Y.Z`` doc stamp, Cargo dependency pins
-    inside doc snippets, and ``velesdb-memory-vX.Y.Z`` git-tag references.
+    Declarative and prose claim shapes are policed (see ``VERSION_CLAIMS``):
+    ``Applies to`` stamps, Cargo dependency pins, memory git-tag references,
+    published-package prose, and product versions presented as current.
     Dependency pins are allowed to be shorter than the full triple
     (``velesdb-core = "4.0"`` is fine for 4.0.0) but never to disagree.
+    Explicitly historical prose (for example ``introduced in v1.2.0``) is
+    retained, while an unqualified old product version is refused.
 
 ``tracked``
     Every document an entry document designates is itself tracked by git. A
@@ -83,6 +85,13 @@ VERSION_SCAN_EXCLUDED_DIRS: "tuple[str, ...]" = (
 # Filename patterns that legitimately pin OLD versions wherever they live.
 VERSION_SCAN_EXCLUDED_NAMES = re.compile(r"^(MIGRATION_v|CHANGELOG)", re.IGNORECASE)
 
+# Point-in-time measurements that deliberately preserve old package versions.
+# Their entry page must link to them with a freshness caveat; changing the
+# captured versions would falsify the historical result rather than freshen it.
+VERSION_SCAN_EXCLUDED_FILES: "frozenset[str]" = frozenset(
+    {"docs/quickstart/timing-results.md"}
+)
+
 # `Last updated: 2026-07-25`, `**Last Updated**: 2026-06-12`,
 # `*Last updated: 2026-07-25 · ...*`, `> Last updated: ...`.
 STAMP_RE = re.compile(r"last\s+updated[*_]{0,2}\s*:\s*(\d{4}-\d{2}-\d{2})", re.IGNORECASE)
@@ -103,6 +112,7 @@ class VersionClaim:
         pattern: "re.Pattern[str]",
         exact: bool,
         description: str = "",
+        allow_historical: bool = False,
     ) -> None:
         self.name = name
         self.crate = crate
@@ -111,6 +121,20 @@ class VersionClaim:
         # exact=False -> the captured pin may be a prefix (4, 4.0, 4.0.0).
         self.exact = exact
         self.description = description
+        self.allow_historical = allow_historical
+
+
+# Old versions remain useful when the prose makes their historical role
+# explicit. A bare old product version has no such protection: readers see it
+# as the version this current page describes.
+HISTORICAL_VERSION_CONTEXT_RE = re.compile(
+    r"\b(?:"
+    r"before|since|introduced|fixed|resolved|removed|deprecated|legacy|"
+    r"up\s+to(?:\s+and\s+including)?|first\s+reproducible\s+run|"
+    r"frozen\s+reference|historical|shipped\s+(?:in|on|up\s+to)"
+    r")\b",
+    re.IGNORECASE,
+)
 
 
 VERSION_CLAIMS: "tuple[VersionClaim, ...]" = (
@@ -152,6 +176,37 @@ VERSION_CLAIMS: "tuple[VersionClaim, ...]" = (
         re.compile(r"velesdb-memory-v(\d+\.\d+\.\d+)"),
         exact=True,
         description="`velesdb-memory-vX.Y.Z` git tag reference",
+    ),
+    VersionClaim(
+        "published-packages-core",
+        "velesdb-core",
+        re.compile(r"\bpublished\s+v(\d+\.\d+\.\d+)\s+packages?\b", re.IGNORECASE),
+        exact=True,
+        description="published VelesDB package version in prose",
+    ),
+    VersionClaim(
+        "prose-core-version",
+        "velesdb-core",
+        re.compile(
+            r"\b(?:VelesDB|velesdb-(?:core|server|cli|wasm|python|migrate|mobile|sdk))"
+            r"\s*(?:@|v\s*)?(\d+\.\d+\.\d+)\b",
+            re.IGNORECASE,
+        ),
+        exact=True,
+        description="current VelesDB product version in prose",
+        allow_historical=True,
+    ),
+    VersionClaim(
+        "prose-memory-version",
+        "velesdb-memory",
+        re.compile(
+            r"\b(?:velesdb-memory(?:-node)?|velesdb-node)"
+            r"\s*(?:@|v\s*)?(\d+\.\d+\.\d+)\b",
+            re.IGNORECASE,
+        ),
+        exact=True,
+        description="current velesdb-memory product version in prose",
+        allow_historical=True,
     ),
 )
 
@@ -246,6 +301,9 @@ def scanned_doc_files(root: Path) -> "list[Path]":
     excluded_dirs = tuple((root / d).resolve() for d in VERSION_SCAN_EXCLUDED_DIRS)
     out: "list[Path]" = []
     for path in sorted((root / DOCS_DIRNAME).rglob("*.md")):
+        relative = path.relative_to(root).as_posix()
+        if relative in VERSION_SCAN_EXCLUDED_FILES:
+            continue
         resolved = path.resolve()
         if any(resolved.is_relative_to(d) for d in excluded_dirs):
             continue
@@ -314,6 +372,15 @@ def rel(root: Path, path: Path) -> str:
 
 def line_of(text: str, offset: int) -> int:
     return text.count("\n", 0, offset) + 1
+
+
+def is_historical_version_reference(text: str, match: "re.Match[str]") -> bool:
+    """Whether nearby prose explicitly frames a version as historical."""
+    line_start = text.rfind("\n", 0, match.start()) + 1
+    line_end = text.find("\n", match.end())
+    if line_end == -1:
+        line_end = len(text)
+    return HISTORICAL_VERSION_CONTEXT_RE.search(text[line_start:line_end]) is not None
 
 
 # --------------------------------------------------------------------------
@@ -446,6 +513,8 @@ def guard_versions(root: Path) -> "tuple[list[str], list[str]]":
                 found = match.group(1)
                 ok = found == actual if claim.exact else pin_agrees(found, actual)
                 if ok:
+                    continue
+                if claim.allow_historical and is_historical_version_reference(text, match):
                     continue
                 failures.append(
                     f"{name}:{line_of(text, match.start())}: {claim.description} "

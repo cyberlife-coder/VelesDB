@@ -2,23 +2,15 @@
 
 This guide will help you get VelesDB up and running in just a few minutes.
 
-> **5-minute onboarding (measured 2026-05-01)**
+> **Onboarding timing reference**
 >
-> The four supported install paths were timed in fresh Docker containers
-> against the published v1.14.2 packages. Median time from `<install
-> command>` to first vector search result:
->
-> | Path | Median | Worst case |
-> |------|--------|------------|
-> | `pip install velesdb numpy` (Python) | **4.95 s** | 5.66 s |
-> | `cargo add velesdb-core` (Rust)      | **25.40 s** | 30.25 s |
-> | `npm install @wiscale/velesdb-sdk` (TS WASM) | **0.48 s** | 0.74 s |
-> | `cargo install velesdb-server` (REST) | **45.84 s** | 46.29 s |
->
-> All four well under the 300 s "<5 min" goal of [#379](https://github.com/cyberlife-coder/VelesDB/issues/379). Methodology + honesty notes
-> (4 DX frictions documented openly) → [`docs/quickstart/timing-results.md`](quickstart/timing-results.md). Reproduce locally with `bash scripts/dx-timing/run_all.sh`.
+> The reproducible harness and its frozen 2026-05-01 reference run live in
+> [`docs/quickstart/timing-results.md`](quickstart/timing-results.md). Those
+> numbers describe that historical run; they are directionally useful, not
+> current absolute timings. Run `bash scripts/dx-timing/run_all.sh` in your
+> environment for fresh results.
 
-## Fastest path: Python (≈ 5 seconds)
+## Fastest path: Python
 
 If you just want to see VelesDB work, you only need Python ≥ 3.9.
 
@@ -78,10 +70,24 @@ The rest of this page is the **REST API** path — useful if you want to drive V
 
 ### Using Docker (Recommended)
 
-The easiest way to get started is with Docker:
+Pull the published multi-architecture image from GitHub Container Registry:
 
 ```bash
-# Build from the repository root, then run
+docker pull ghcr.io/cyberlife-coder/velesdb:latest
+docker run -d \
+  --name velesdb \
+  -p 8080:8080 \
+  -v velesdb_data:/data \
+  ghcr.io/cyberlife-coder/velesdb:latest
+```
+
+#### Build the image from source
+
+Use a local build when you need to test an unpublished checkout:
+
+```bash
+git clone https://github.com/cyberlife-coder/VelesDB.git
+cd VelesDB
 docker build -t velesdb .
 docker run -d \
   --name velesdb \
@@ -317,9 +323,9 @@ curl -X POST http://localhost:8080/query \
 
 ## Getting Help
 
-- **Discord**: Join our community for real-time support
-- **GitHub Issues**: Report bugs or request features
-- **GitHub Discussions**: Ask questions and share ideas
+- [**Discord**](https://discord.gg/velesdb): Join our community for real-time support
+- [**GitHub Issues**](https://github.com/cyberlife-coder/VelesDB/issues): Report bugs or request features
+- [**GitHub Discussions**](https://github.com/cyberlife-coder/VelesDB/discussions): Ask questions and share ideas
 
 ---
-Last updated: 2026-08-08 · Applies to: velesdb-core 5.0.0
+Last updated: 2026-08-13 · Applies to: velesdb-core 5.0.0
