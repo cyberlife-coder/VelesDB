@@ -83,9 +83,7 @@ fn build_embedder(
     let backend_env = std::env::var("VELESDB_MEMORY_EMBEDDER").ok();
     let selection = select_embedder(kind.or(backend_env.as_deref())).map_err(invalid_input)?;
     match selection {
-        EmbedderSelection::Ready(name, embedder) => {
-            Ok((embedder, name.to_owned(), name != "hash"))
-        }
+        EmbedderSelection::Ready(name, embedder) => Ok((embedder, name.to_owned(), name != "hash")),
         EmbedderSelection::NeedsRemoteConfig("ollama") => {
             build_ollama_embedder(url, model).map(|(embedder, model)| (embedder, model, true))
         }

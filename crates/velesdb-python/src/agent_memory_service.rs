@@ -123,9 +123,7 @@ fn build_embedder(
     let selection =
         select_embedder(kind.or(backend_env.as_deref())).map_err(PyValueError::new_err)?;
     match selection {
-        EmbedderSelection::Ready(name, embedder) => {
-            Ok((embedder, name.to_owned(), name != "hash"))
-        }
+        EmbedderSelection::Ready(name, embedder) => Ok((embedder, name.to_owned(), name != "hash")),
         EmbedderSelection::NeedsRemoteConfig("ollama") => {
             build_ollama_embedder(url, model).map(|(embedder, model)| (embedder, model, true))
         }
