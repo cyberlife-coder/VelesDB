@@ -45,6 +45,22 @@ Server setup: [velesdb-memory README](https://github.com/cyberlife-coder/VelesDB
 
 ## The loop (run it every task)
 
+Keep the MCP root envelopes distinct — nested item fields are not substitutes
+for these roots.
+
+`recall` returns `{memories}`.
+
+`remember` returns `{id, id_str}`.
+
+`why` returns `{nodes, edges, truncated}`.
+
+`entity` returns `{found, id, id_str, name, attributes, relations,
+relations_in, relations_truncated, relations_in_truncated}`.
+
+The asynchronous read side is equally explicit: `extraction_status` returns
+`{request_id, state, ids, ids_str, skipped_over_cap, error}`. Pending states
+leave the terminal fields empty; only `committed` carries final ids.
+
 0. **Know what you are running on — once per session.** Call `memory_status`
    at the start of the first task. Read three things: `embedder.semantic`
    (`false` = the offline `hash` default — recall matches surface form, and

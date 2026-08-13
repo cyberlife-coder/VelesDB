@@ -150,9 +150,10 @@ for (const hit of await store.recall(question, 2)) {
 }
 
 console.log('why  — vector seed + graph of typed links:')
-const { nodes, edges } = await store.why(question)
+const { nodes, edges, truncated } = await store.why(question)
 for (const node of nodes) console.log(`  hop ${node.hop}  ${node.content}`)
 console.log(`  ${edges.length} typed edge(s) walked`)
+if (truncated) console.log('  explanation truncated')
 ```
 
 Expected output, exactly:

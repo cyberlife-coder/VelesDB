@@ -20,33 +20,27 @@ back, so an agent read a resumable session as a fresh start.
 search. It proves what a surface *declares*, never what any code *returns*.
 A page can declare the right keys and the implementation still be wrong; the
 runtime side is `mcp_tools_drift.rs` + `binding_parity_bdd.rs`, not this.
-It also only sees *literal* shape declarations (``Returns `{a, b, c}` ``) —
-a TypeScript ``interface`` or a Rust ``struct`` is a type declaration, left to
-the binding-parity gate.
+It only sees explicit root-shape declarations: object literals such as
+``Returns `{a, b, c}` `` and enumerations such as ``returns `a`, `b`, and
+`c```; a TypeScript ``interface`` or a Rust ``struct`` is a type declaration,
+left to the binding-parity gate.
 
-**Second written limit: the registry is SIXTEEN tools of the twenty-two
-published, and the six still held out are ``compile_context``, ``entity``,
-``recall``, ``remember``, ``remember_extracted`` and ``why`` — each is waiting
-on the nested-shape treatment (#1695, lots 2-3) before its literals can be
-read without false drift.** The structure-aware attribution described below
-is what made widening possible at all — under proximity alone, 13 of
+**The registry covers every tool in the published capture.** It grew in three
+measured batches (#1695), each with a subprocess mutation that makes this
+guard refuse. The structure-aware attribution described below is what made
+that widening possible at all — under proximity alone, 13 of
 ``docs/reference/MCP_TOOLS.md``'s 19 declarations were charged to a
-neighbouring section, which is the "68 non-conformances" this header used to
-record. It is not enough for the rest: each tool still out carries literals
-this guard would report as drift that are really a sibling's shape, an input
-schema, an MCP client config file or another API's dict. ``entity`` alone has
-twelve, six of them LangChain dictionaries in files saturated with the word.
-They go in by batches, and #1695 says how: each batch verified by a mutation
-that must make the guard refuse. Say "this guard polices fourteen of the
-twenty published tools", never "every MCP tool".
+neighbouring section. Two more rules keep the full registry honest: nested
+objects/array items are not mistaken for a root envelope, and deliberate
+binding-level wire divergences are exact, reasoned, stale-checked entries
+rather than a blanket exemption.
 
-**Third: what the sweep reads is a measured list, not every file.** Adding
-``crates/velesdb-memory/src/**/*.rs``, ``crates/velesdb-wasm/src`` or the
-Python ``.pyi`` was tried and reintroduced false positives (a doc comment
-about ``list_working_contexts`` that names ``load_working_context`` closer to
-the literal than its own tool; ``use`` blocks; test fixtures). The Rust
-sources that ARE swept are listed one by one in ``SURFACE_GLOBS`` with the
-reason.
+**Third: what the sweep reads is a measured list, not every file.** The Node,
+Python and WASM memory-service facade sources and the shipped Python stub are
+included because they describe the MCP-equivalent methods. Unrelated database
+modules and co-located ``*_tests.rs`` fixtures are not documentation of that
+surface. The Rust sources that ARE swept are therefore listed one by one in
+``SURFACE_GLOBS`` with the reason.
 
 What counts as a declaration, deliberately narrow (a wider rule was measured
 first and produced ~110 false positives on this tree — input schemas, sibling
@@ -61,7 +55,10 @@ tools, unrelated JSON):
      140 characters before it, or a shape noun within 40 characters after it
      — the tree uses both phrasings ("returns `{a, b}`" and "the `{a, b}`
      envelope"). No other brace may sit between the anchor and the literal,
-  3. ATTRIBUTED by ``owning_tool`` to the tool most SPECIFICALLY named for
+  3. a prose enumeration such as ``returns `a`, `b`, and `c``` is recognized
+     too; requiring at least two individually quoted identifiers keeps casual
+     prose and example values out,
+  4. ATTRIBUTED by ``owning_tool`` to the tool most SPECIFICALLY named for
      it: by the line the literal sits on, failing that by the section heading
      above it, failing that by the nearest alias within 500 characters —
      among the aliases of EVERY tool the capture publishes.
@@ -104,11 +101,12 @@ shape, and is skipped. That exemption is exactly one key wide on purpose: it
 cannot hide a rename the way the intersection filter did.
 
 Anti-disarm, the failure mode ``scripts/check-doc-contract.sh`` was written
-against (an extraction that breaks and then passes vacuously): an empty tool
-registry, an empty file sweep, a tool absent from the capture, a tool with no
-pinned surfaces, a pinned surface the sweep cannot even reach, or a pinned
-surface that stopped declaring anything — every one of those FAILS. A guard
-that finds nothing is broken, never green.
+against (an extraction that breaks and then passes vacuously): an empty,
+duplicate or incomplete tool registry, an empty file sweep, a tool absent from
+the capture, a tool with no pinned surfaces, a pinned surface the sweep cannot
+reach or that stopped declaring anything, and a newly detected declaration
+that was not pinned — every one of those FAILS. A guard that finds nothing is
+broken, never green.
 
 Adding a tool: append a ``PolicedTool`` below, run with ``--verbose`` to see
 every declaration the sweep attributes to it, and pin the surfaces it found.
@@ -154,6 +152,32 @@ class PolicedTool:
         self.pinned_surfaces = pinned_surfaces
 
 
+class ShapeDivergence:
+    """One deliberate, exact non-MCP root shape on a binding surface.
+
+    The binding parity guard owns the implementation-level decision. This
+    table makes the matching *documentation* equally explicit: changing one
+    key stops matching and fails, while making the binding match MCP makes the
+    entry stale and also fails until it is removed.
+    """
+
+    def __init__(
+        self,
+        surface: str,
+        tool: str,
+        keys: "tuple[str, ...]",
+        reason: str,
+    ) -> None:
+        self.surface = surface
+        self.tool = tool
+        self.keys = tuple(sorted(keys))
+        self.reason = reason
+
+    @property
+    def identity(self) -> "tuple[str, str, tuple[str, ...]]":
+        return (self.surface, self.tool, self.keys)
+
+
 POLICED_TOOLS: "tuple[PolicedTool, ...]" = (
     # --- #1695 batch 1: the low-noise five --------------------------------
     PolicedTool(
@@ -177,27 +201,54 @@ POLICED_TOOLS: "tuple[PolicedTool, ...]" = (
     PolicedTool(
         "unrelate",
         ("UnrelateOutcome",),
-        ("docs/reference/MCP_TOOLS.md",),
+        (
+            "crates/velesdb-node/src/lib.rs",
+            "crates/velesdb-python/python/velesdb/__init__.pyi",
+            "crates/velesdb-python/src/agent_memory_service.rs",
+            "crates/velesdb-wasm/src/memory_service.rs",
+            "docs/guides/WASM_API.md",
+            "docs/reference/MCP_TOOLS.md",
+            "sdks/typescript/src/memory.ts",
+        ),
     ),
     PolicedTool(
         "compile_transcript",
         (),
         (
             "crates/velesdb-node/src/lib.rs",
+            "crates/velesdb-python/python/velesdb/__init__.pyi",
+            "crates/velesdb-python/src/agent_memory_service.rs",
+            "crates/velesdb-wasm/src/memory_service.rs",
             "docs/reference/MCP_TOOLS.md",
             "sdks/typescript/src/memory.ts",
+        ),
+    ),
+    # --- #1695 batch 2: nested envelopes and binding facades -------------
+    PolicedTool(
+        "compile_context",
+        ("CompiledContext",),
+        (
+            "crates/velesdb-python/python/velesdb/__init__.pyi",
+            "crates/velesdb-python/src/agent_memory_service.rs",
+            "crates/velesdb-node/skills/velesdb-context-optimizer/SKILL.md",
+            "docs/reference/MCP_TOOLS.md",
+            "skills/velesdb-context-optimizer/SKILL.md",
         ),
     ),
     PolicedTool(
         "context_savings",
         (),
-        ("docs/reference/MCP_TOOLS.md",),
+        (
+            "crates/velesdb-python/python/velesdb/__init__.pyi",
+            "docs/reference/MCP_TOOLS.md",
+        ),
     ),
     PolicedTool(
         "explain_compilation",
         (),
         (
             "crates/velesdb-node/src/lib.rs",
+            "crates/velesdb-python/python/velesdb/__init__.pyi",
             "docs/reference/MCP_TOOLS.md",
         ),
     ),
@@ -207,20 +258,61 @@ POLICED_TOOLS: "tuple[PolicedTool, ...]" = (
         ("docs/reference/MCP_TOOLS.md",),
     ),
     PolicedTool(
+        "entity",
+        ("MemoryEntityProfile", "EntityProfileOut"),
+        (
+            "crates/velesdb-memory/skill/velesdb-memory/SKILL.md",
+            "crates/velesdb-node/skills/velesdb-memory/SKILL.md",
+            "crates/velesdb-node/src/lib.rs",
+            "crates/velesdb-python/python/velesdb/__init__.pyi",
+            "crates/velesdb-python/src/agent_memory_service.rs",
+            "crates/velesdb-wasm/src/memory_service.rs",
+            "docs/guides/WASM_API.md",
+            "docs/reference/MCP_TOOLS.md",
+        ),
+    ),
+    PolicedTool(
+        "extraction_status",
+        (),
+        (
+            "crates/velesdb-memory/skill/velesdb-memory/SKILL.md",
+            "crates/velesdb-node/skills/velesdb-memory/SKILL.md",
+            "docs/reference/MCP_TOOLS.md",
+        ),
+    ),
+    PolicedTool(
         "list_memories",
         (),
-        ("docs/reference/MCP_TOOLS.md",),
+        (
+            "crates/velesdb-node/src/lib.rs",
+            "docs/reference/MCP_TOOLS.md",
+        ),
     ),
     PolicedTool(
         "memory_status",
         (),
-        ("docs/reference/MCP_TOOLS.md",),
+        (
+            "crates/velesdb-node/src/lib.rs",
+            "docs/reference/MCP_TOOLS.md",
+        ),
+    ),
+    PolicedTool(
+        "recall",
+        ("MemoryRecollection",),
+        (
+            "crates/velesdb-memory/skill/velesdb-memory/SKILL.md",
+            "crates/velesdb-node/skills/velesdb-memory/SKILL.md",
+            "docs/reference/MCP_TOOLS.md",
+        ),
     ),
     PolicedTool(
         "list_working_contexts",
         (),
         (
             "crates/velesdb-node/src/lib.rs",
+            "crates/velesdb-python/python/velesdb/__init__.pyi",
+            "crates/velesdb-python/src/agent_memory_service.rs",
+            "crates/velesdb-wasm/src/memory_service.rs",
             "docs/guides/NODE_ADDON.md",
             "docs/reference/MCP_TOOLS.md",
         ),
@@ -245,6 +337,7 @@ POLICED_TOOLS: "tuple[PolicedTool, ...]" = (
             # treats that string as EVIDENCE of a relay, never checks its
             # keys — its own header says so. Nothing else policed it.
             "crates/velesdb-node/src/lib.rs",
+            "crates/velesdb-python/python/velesdb/__init__.pyi",
             "docs/guides/NODE_ADDON.md",
             "docs/guides/PYTHON_CONTEXT_COMPILER.md",
             "docs/guides/WASM_API.md",
@@ -264,11 +357,14 @@ POLICED_TOOLS: "tuple[PolicedTool, ...]" = (
     ),
     PolicedTool(
         "recall_fused",
-        (),
+        ("recallFusedDated",),
         (
             "crates/velesdb-node/src/lib.rs",
+            "crates/velesdb-python/src/agent_memory_service.rs",
+            "crates/velesdb-wasm/src/memory_service.rs",
             "docs/reference/MCP_TOOLS.md",
             "integrations/langgraph/README.md",
+            "sdks/typescript/src/memory.ts",
         ),
     ),
     PolicedTool(
@@ -276,6 +372,9 @@ POLICED_TOOLS: "tuple[PolicedTool, ...]" = (
         (),
         (
             "crates/velesdb-node/src/lib.rs",
+            "crates/velesdb-python/python/velesdb/__init__.pyi",
+            "crates/velesdb-python/src/agent_memory_service.rs",
+            "crates/velesdb-wasm/src/memory_service.rs",
             "docs/guides/CONTEXT_COMPILER.md",
             "docs/guides/NODE_ADDON.md",
             "docs/guides/PYTHON_CONTEXT_COMPILER.md",
@@ -287,13 +386,128 @@ POLICED_TOOLS: "tuple[PolicedTool, ...]" = (
         (),
         ("docs/reference/MCP_TOOLS.md",),
     ),
+    # --- #1695 batch 3: writes, async extraction and explanations --------
+    PolicedTool(
+        "remember",
+        (),
+        (
+            "crates/velesdb-memory/skill/velesdb-memory/SKILL.md",
+            "crates/velesdb-node/skills/velesdb-memory/SKILL.md",
+            "docs/reference/MCP_TOOLS.md",
+        ),
+    ),
+    PolicedTool(
+        "remember_extracted",
+        ("rememberExtracted", "RememberedExtractionOut"),
+        (
+            "crates/velesdb-memory/skill/velesdb-memory/SKILL.md",
+            "crates/velesdb-node/skills/velesdb-memory/SKILL.md",
+            "crates/velesdb-node/src/lib.rs",
+            "crates/velesdb-python/python/velesdb/__init__.pyi",
+            "crates/velesdb-python/src/agent_memory_service.rs",
+            "crates/velesdb-wasm/src/memory_service.rs",
+            "docs/guides/WASM_API.md",
+            "docs/reference/MCP_TOOLS.md",
+            "sdks/typescript/src/memory.ts",
+        ),
+    ),
     PolicedTool(
         "suggest_budget",
         (),
         (
             "crates/velesdb-node/src/lib.rs",
+            "crates/velesdb-python/python/velesdb/__init__.pyi",
+            "crates/velesdb-python/src/agent_memory_service.rs",
             "docs/reference/MCP_TOOLS.md",
         ),
+    ),
+    PolicedTool(
+        "why",
+        ("ExplanationOut", "ExplanationJs"),
+        (
+            "crates/velesdb-memory/skill/velesdb-memory/SKILL.md",
+            "crates/velesdb-node/README.md",
+            "crates/velesdb-node/skills/velesdb-memory/SKILL.md",
+            "crates/velesdb-node/src/lib.rs",
+            "crates/velesdb-python/python/velesdb/__init__.pyi",
+            "crates/velesdb-python/src/agent_memory_service.rs",
+            "crates/velesdb-wasm/src/memory_service.rs",
+            "docs/guides/WASM_API.md",
+            "docs/reference/MCP_TOOLS.md",
+        ),
+    ),
+)
+
+
+ENTITY_ID_TWIN = (
+    "typed bindings expose the entity id once; MCP additionally publishes "
+    "id_str for float-lossy JSON clients"
+)
+SYNC_EXTRACTION = (
+    "in-process bindings finish extraction inline and return committed ids; "
+    "the MCP transport returns a durable background-job receipt (#1839)"
+)
+
+# Exact alternate root shapes, never a field-subtraction heuristic. Most
+# binding divergences unwrap to a scalar/list and therefore produce no root
+# object declaration at all. These are the two object-shaped exceptions that
+# remain. Every entry must match a live declaration and must differ from MCP.
+SHAPE_DIVERGENCES: "tuple[ShapeDivergence, ...]" = (
+    ShapeDivergence(
+        "crates/velesdb-node/src/lib.rs",
+        "entity",
+        (
+            "attributes", "found", "id", "name", "relations", "relations_in",
+            "relations_in_truncated", "relations_truncated",
+        ),
+        ENTITY_ID_TWIN,
+    ),
+    ShapeDivergence(
+        "crates/velesdb-python/python/velesdb/__init__.pyi",
+        "entity",
+        (
+            "attributes", "found", "id", "name", "relations", "relations_in",
+            "relations_in_truncated", "relations_truncated",
+        ),
+        ENTITY_ID_TWIN,
+    ),
+    ShapeDivergence(
+        "crates/velesdb-python/src/agent_memory_service.rs",
+        "entity",
+        (
+            "attributes", "found", "id", "name", "relations", "relations_in",
+            "relations_in_truncated", "relations_truncated",
+        ),
+        ENTITY_ID_TWIN,
+    ),
+    ShapeDivergence(
+        "crates/velesdb-wasm/src/memory_service.rs",
+        "entity",
+        (
+            "attributes", "found", "id", "name", "relations", "relations_in",
+            "relations_in_truncated", "relations_truncated",
+        ),
+        ENTITY_ID_TWIN,
+    ),
+    ShapeDivergence(
+        "docs/guides/WASM_API.md",
+        "entity",
+        (
+            "attributes", "found", "id", "name", "relations", "relations_in",
+            "relations_in_truncated", "relations_truncated",
+        ),
+        ENTITY_ID_TWIN,
+    ),
+    *(
+        ShapeDivergence(surface, "remember_extracted", ("ids", "skipped_over_cap"), SYNC_EXTRACTION)
+        for surface in (
+            "crates/velesdb-node/src/lib.rs",
+            "crates/velesdb-python/python/velesdb/__init__.pyi",
+            "crates/velesdb-python/src/agent_memory_service.rs",
+            "crates/velesdb-wasm/src/memory_service.rs",
+            "docs/guides/WASM_API.md",
+            "sdks/typescript/src/memory.ts",
+        )
     ),
 )
 
@@ -301,10 +515,9 @@ POLICED_TOOLS: "tuple[PolicedTool, ...]" = (
 # workflow's original blind spots: sdks/, integrations/ and skills/ describe
 # the same contract to the same model and were policed by nothing.
 #
-# The two non-prose entries are named FILE BY FILE, not by directory, and the
-# module header says why: sweeping `crates/**/src/**/*.rs` was measured and
-# put back false positives. These two carry a real declaration and produce
-# none.
+# Binding facades are named FILE BY FILE, not by directory. A whole-crate glob
+# mixes the MCP-equivalent MemoryService with database, graph and VelesQL APIs
+# that legitimately reuse verbs such as `recall` and `entity`.
 SURFACE_GLOBS: "tuple[str, ...]" = (
     "README.md",
     "docs/**/*.md",
@@ -320,6 +533,12 @@ SURFACE_GLOBS: "tuple[str, ...]" = (
     "crates/velesdb-node/skills/**/*.md",
     # The shipped TypeScript return type of the napi addon.
     "crates/velesdb-node/src/lib.rs",
+    # Python's executable doc comments and the stub users actually read.
+    "crates/velesdb-python/src/agent_memory_service.rs",
+    "crates/velesdb-python/python/velesdb/__init__.pyi",
+    # WASM's MCP-equivalent facade; co-located `*_tests.rs` are intentionally
+    # not swept (and `_is_scanned` protects future broad globs too).
+    "crates/velesdb-wasm/src/memory_service.rs",
     "integrations/**/*.md",
     "integrations/**/*.py",
     # The session-start hooks: prompt text handed to a model, every session.
@@ -337,6 +556,7 @@ SURFACE_EXCLUDED_PARTS: "tuple[str, ...]" = (
     "/__pycache__/",
 )
 SURFACE_EXCLUDED_NAMES = re.compile(r"^(CHANGELOG|MIGRATION_)", re.IGNORECASE)
+COLOCATED_TEST_RE = re.compile(r"(?:^|_)(?:test|tests)\.rs$", re.IGNORECASE)
 
 # Surfaces that document ANOTHER API sharing the MCP tools' verbs — the core
 # `AgentMemory` Rust API, the SDK's core-collection backends, the VelesQL
@@ -362,6 +582,10 @@ NON_MCP_SURFACES: "dict[str, str]" = {
     "integrations/common/src/velesdb_common/memory.py": (
         "the Python integrations' shared core-API helper — its recall "
         "returns core recollections, not the MCP envelope"
+    ),
+    "integrations/langchain/src/langchain_velesdb/graph_toolkit/": (
+        "LangChain's standalone graph extractor/loader API; its entity "
+        "records and node/edge counts are not MCP entity responses"
     ),
 }
 
@@ -432,6 +656,11 @@ ERROR_PAYLOAD_KEYS = frozenset({"error"})
 # grow can hide a rename.
 CALL_ENVELOPE_KEYS = frozenset({"tool", "arguments"})
 
+# Client configuration examples can sit under prose calling them an
+# "envelope" and near a tool name. They configure the MCP transport; they are
+# neither a call payload nor a tool result. Exact and intentionally tiny.
+CONFIG_ENVELOPE_KEYS = frozenset({"version", "mcpServers", "command", "env"})
+
 # `{@link Foo}` is a JSDoc cross-reference, not a shape. Masked (length
 # preserved, so every offset below stays valid against the raw text) before
 # anything else looks at braces.
@@ -473,6 +702,8 @@ def load_output_schema_keys(root: Path) -> "dict[str, list[str]]":
 def _is_scanned(root: Path, path: Path) -> bool:
     posix = "/" + path.relative_to(root).as_posix()
     if any(part in posix for part in SURFACE_EXCLUDED_PARTS):
+        return False
+    if COLOCATED_TEST_RE.search(path.name):
         return False
     return not SURFACE_EXCLUDED_NAMES.match(path.name)
 
@@ -699,6 +930,89 @@ def nearest_tool(positions: "list[tuple[int, str]]", offset: int) -> "str | None
     return min(candidates)[1] if candidates else None
 
 
+RUST_FUNCTION_RE = re.compile(
+    r"\b(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)"
+)
+PYTHON_FUNCTION_RE = re.compile(
+    r"^[ \t]*(?:async[ \t]+)?def[ \t]+([A-Za-z_][A-Za-z0-9_]*)",
+    re.MULTILINE,
+)
+TYPESCRIPT_METHOD_RE = re.compile(
+    r"^[ \t]*(?:public[ \t]+)?(?:async[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*\(",
+    re.MULTILINE,
+)
+
+
+def _tool_at_position(
+    positions: "list[tuple[int, str]]",
+    offset: int,
+) -> "str | None":
+    for position, tool in positions:
+        if position == offset:
+            return tool
+        if position > offset:
+            break
+    return None
+
+
+def source_tool(
+    text: str,
+    positions: "list[tuple[int, str]]",
+    offset: int,
+    surface: str,
+) -> "str | None":
+    """Method owning a binding doc comment/docstring, when structurally known."""
+    if surface.endswith((".py", ".pyi")):
+        owner: "str | None" = None
+        for match in PYTHON_FUNCTION_RE.finditer(text, 0, offset + 1):
+            owner = _tool_at_position(positions, match.start(1))
+        return owner
+
+    if surface.endswith(".rs"):
+        line_start = text.rfind("\n", 0, offset) + 1
+        prefix = text[line_start:offset].lstrip()
+        if not (prefix.startswith(("///", "//!", "#[")) or "ts_return_type" in prefix):
+            return None
+        match = RUST_FUNCTION_RE.search(text, offset, min(len(text), offset + 3000))
+        return _tool_at_position(positions, match.start(1)) if match else None
+
+    if surface.endswith(".ts"):
+        open_comment = text.rfind("/**", 0, offset)
+        close_comment = text.rfind("*/", 0, offset)
+        if open_comment <= close_comment:
+            return None
+        match = TYPESCRIPT_METHOD_RE.search(text, offset, min(len(text), offset + 3000))
+        return _tool_at_position(positions, match.start(1)) if match else None
+    return None
+
+
+BULLET_RE = re.compile(r"^[ \t]*[-*+][ \t]+", re.MULTILINE)
+
+
+def bullet_tool(
+    text: str,
+    positions: "list[tuple[int, str]]",
+    offset: int,
+    surface: str,
+) -> "str | None":
+    """Tool named at the start of the Markdown list item containing a shape."""
+    if not surface.endswith(".md"):
+        return None
+    bullets = list(BULLET_RE.finditer(text, 0, offset + 1))
+    if not bullets:
+        return None
+    start = bullets[-1].end()
+    line_end = text.find("\n", start)
+    if line_end < 0:
+        line_end = len(text)
+    candidates = [
+        (position, tool)
+        for position, tool in positions
+        if start <= position < line_end
+    ]
+    return min(candidates)[1] if candidates else None
+
+
 def _closer(
     best: "tuple[int, str] | None",
     candidate: "tuple[int, str]",
@@ -744,6 +1058,7 @@ def owning_tool(
     sections: "list[tuple[int, str | None]]",
     positions: "list[tuple[int, str]]",
     offset: int,
+    surface: str = "",
 ) -> "str | None":
     """The tool a literal is ABOUT: the one most SPECIFICALLY named for it.
 
@@ -766,7 +1081,9 @@ def owning_tool(
     overrides a vaguer one; that ordering is the whole rule.
     """
     return (
-        naming_tool(text, positions, offset)
+        source_tool(text, positions, offset, surface)
+        or bullet_tool(text, positions, offset, surface)
+        or naming_tool(text, positions, offset)
         or section_tool(sections, offset)
         or nearest_tool(positions, offset)
     )
@@ -778,15 +1095,98 @@ def owning_tool(
 
 
 def _is_return_declaration(text: str, start: int, end: int) -> bool:
-    """A return verb just before the literal, or a shape noun just after it."""
-    if RETURN_VERB_RE.search(text[max(0, start - VERB_LOOKBACK):start]):
+    """A return cue around the literal, unless it explicitly describes input.
+
+    ``shape`` on its own is ambiguous: ``the input shape {query, ...}`` is not
+    an output declaration. The closest role word on the same side decides;
+    explicit return verbs, arrows and ``ts_return_type`` remain unambiguous.
+    """
+    line_start = text.rfind("\n", 0, start) + 1
+    line_end = text.find("\n", end)
+    if line_end < 0:
+        line_end = len(text)
+    if re.search(r"\b(?:const|let|var)\s*$", text[line_start:start]) and re.match(
+        r"\s*=\s*(?:await\s+)?", text[end:line_end]
+    ):
         return True
-    return bool(SHAPE_NOUN_RE.match(text[end:end + NOUN_LOOKAHEAD]))
+
+    before = text[max(0, start - VERB_LOOKBACK):start]
+    immediate = text[max(0, start - 100):start]
+    input_cue_patterns = (
+        r"\b(?:input|request|arguments|options|metadata|working|filters?|links?)\b"
+        r"(?:\s+(?:json\s+)?(?:shape|object|dict|fields?)|\s*(?:=|:|\bis\b|\bare\b))"
+        r"[^{}\n]{0,50}$",
+        r"`(?:input|request|arguments|options|metadata|working|filter|links)`"
+        r"[\s/*(`]*$",
+        r"\b(?:input|request|working)\b[^{}\n]{0,45}\bshape\b[^{}\n]{0,20}$",
+    )
+    input_cues = [
+        match
+        for pattern in input_cue_patterns
+        for match in re.finditer(pattern, immediate, re.IGNORECASE)
+    ]
+    input_cues.sort(key=lambda match: match.start())
+    direct_returns = list(
+        re.finditer(
+            r"\b(?:returns?|resolves?|answers?\s+with|renvoie)\b|->|=>|ts_return_type",
+            immediate,
+            re.IGNORECASE,
+        )
+    )
+    if input_cues and (
+        not direct_returns or input_cues[-1].start() > direct_returns[-1].start()
+    ):
+        return False
+    anchor = RETURN_VERB_RE.search(before)
+    if anchor is not None:
+        cue = anchor.group(0).lower()
+        if not re.search(r"returns?|resolves?|answers?\s+with|renvoie|->|=>|ts_return_type", cue):
+            input_at = max(
+                before.lower().rfind(word)
+                for word in (
+                    "input", "request", "argument", "option", "metadata",
+                    "working", "filter", "link",
+                )
+            )
+            output_at = max(
+                before.lower().rfind(word)
+                for word in (
+                    "output", "result", "response", "return", "receipt",
+                    "resumption", "resolve", "serve", "produce", "yield",
+                )
+            )
+            if input_at > output_at:
+                return False
+        return True
+
+    after = text[end:end + NOUN_LOOKAHEAD]
+    noun = SHAPE_NOUN_RE.match(after)
+    if noun is None:
+        return False
+    role = after[: noun.end()].lower()
+    input_at = max(
+        role.rfind(word)
+        for word in (
+            "input", "request", "argument", "option", "metadata",
+            "working", "filter", "link",
+        )
+    )
+    output_at = max(
+        role.rfind(word)
+        for word in (
+            "output", "result", "response", "return", "receipt",
+            "resumption", "resolve", "serve", "produce", "yield",
+        )
+    )
+    return input_at <= output_at
 
 
 def _is_shape_literal(keys: "list[str]") -> bool:
     """Non-empty, all identifier-shaped, not a type name, not a known envelope."""
-    if not keys or set(keys) in (ERROR_PAYLOAD_KEYS, CALL_ENVELOPE_KEYS):
+    key_set = set(keys)
+    if not keys or key_set in (ERROR_PAYLOAD_KEYS, CALL_ENVELOPE_KEYS):
+        return False
+    if key_set <= CONFIG_ENVELOPE_KEYS:
         return False
     if all(TYPE_NAME_RE.match(key) for key in keys):
         return False
@@ -804,21 +1204,153 @@ def _declaration_at(text: str, start: int) -> "list[str] | None":
     return keys if _is_shape_literal(keys) else None
 
 
+LIST_ITEM_PREFIX_RE = re.compile(
+    r"(?:\[\s*|\b(?:list|array|slice|vector)\s+(?:of|containing)\s*[`'\"]*)$",
+    re.IGNORECASE,
+)
+PROSE_RETURN_RE = re.compile(
+    r"\b(?:returns?|resolves?|answers?\s+with|renvoie)\b",
+    re.IGNORECASE,
+)
+PROSE_KEY_RE = re.compile(r"(?<!`)`([A-Za-z_][A-Za-z0-9_]*)`(?!`)")
+PROSE_LIST_RE = re.compile(
+    r"^\s*(?:(?:the\s+)?(?:root\s+)?(?:fields?|keys?)\s+)?"
+    r"`[A-Za-z_][A-Za-z0-9_]*`"
+    r"(?:\s*(?:,\s*(?:and|or)?|/|and|or|plus)\s*"
+    r"`[A-Za-z_][A-Za-z0-9_]*`)+",
+    re.IGNORECASE,
+)
+PROSE_WINDOW = 200
+
+
+def _is_nested_item_literal(text: str, start: int, end: int) -> bool:
+    """Whether the object is an item shape, not the returned root object."""
+    if LIST_ITEM_PREFIX_RE.search(text[max(0, start - 100):start]):
+        return True
+    after = text[end:end + 50]
+    return bool(
+        re.match(
+            r"^[`'\"\s]*(?:edges?|items?|entries|objects?|records?)\b",
+            after,
+            re.IGNORECASE,
+        )
+    )
+
+
+def _is_executable_return_line(text: str, start: int, surface: str) -> bool:
+    """Code-level ``return {…}`` is implementation, not human-facing prose."""
+    if not surface.endswith((".rs", ".py", ".ts")):
+        return False
+    line_start = text.rfind("\n", 0, start) + 1
+    prefix = text[line_start:start].lstrip()
+    if surface.endswith(".rs") and (
+        prefix.startswith(("///", "//!", "//", "#["))
+        or "ts_return_type" in prefix
+    ):
+        return False
+    if surface.endswith(".rs"):
+        # The sweep reads Rust DOC COMMENTS and exported type strings, never
+        # executable object/function bodies. Those are implementation and are
+        # covered by binding parity, not a prose contract guard.
+        return True
+    if surface.endswith((".py", ".ts")) and prefix.startswith(("#", "//", "*", "/**")):
+        return False
+    if re.match(r"(?:pub\s+)?use\b", prefix):
+        return True
+    if re.search(r"\breturn\b", prefix):
+        return True
+    # Rust/Python/TypeScript interpolation braces inside a quoted string are
+    # not object literals. Attribute strings such as `ts_return_type` were
+    # returned above through their `#[...]` prefix.
+    unescaped_double = len(re.findall(r'(?<!\\)"', prefix)) % 2 == 1
+    unescaped_single = len(re.findall(r"(?<!\\)'", prefix)) % 2 == 1
+    return unescaped_double or unescaped_single
+
+
+def _literal_declarations(
+    text: str,
+    positions: "list[tuple[int, str]]",
+    sections: "list[tuple[int, str | None]]",
+    surface: str = "",
+) -> "list[tuple[int, str, list[str]]]":
+    """All attributed root-object literals, suppressing their nested braces."""
+    found: "list[tuple[int, str, list[str]]]" = []
+    consumed_until = -1
+    for match in BRACE_RE.finditer(text):
+        start = match.start()
+        if start < consumed_until or _is_executable_return_line(text, start, surface):
+            continue
+        end = brace_span(text, start)
+        if end is None or _is_nested_item_literal(text, start, end):
+            continue
+        if not _is_return_declaration(text, start, end):
+            continue
+        keys = declared_keys(text[start + 1:end - 1])
+        if not _is_shape_literal(keys):
+            # Known transport/error objects can contain nested objects. Once
+            # recognized as an envelope, none of their children is a root
+            # return declaration either.
+            if set(keys) in (
+                ERROR_PAYLOAD_KEYS,
+                CALL_ENVELOPE_KEYS,
+                CONFIG_ENVELOPE_KEYS,
+            ) or set(keys) <= CONFIG_ENVELOPE_KEYS:
+                consumed_until = end
+            continue
+        consumed_until = end
+        owner = owning_tool(text, sections, positions, start, surface)
+        if owner is not None:
+            found.append((start, owner, keys))
+    return found
+
+
+def _prose_declarations(
+    text: str,
+    positions: "list[tuple[int, str]]",
+    sections: "list[tuple[int, str | None]]",
+    surface: str = "",
+) -> "list[tuple[int, str, list[str]]]":
+    """Explicit ``returns `a`, `b`, and `c``` enumerations.
+
+    Two quoted identifiers are required. That recognizes an enumeration while
+    refusing to reinterpret example values (``returns id `D```) or a casual
+    mention of one field as a complete root contract.
+    """
+    found: "list[tuple[int, str, list[str]]]" = []
+    for verb in PROSE_RETURN_RE.finditer(text):
+        sentence = text[verb.end():verb.end() + PROSE_WINDOW]
+        # Object literals have the stronger parser above; do not double-count
+        # individually quoted words later in the same sentence.
+        if "{" in sentence:
+            continue
+        enumeration = PROSE_LIST_RE.match(sentence)
+        if enumeration is None:
+            continue
+        matches = list(PROSE_KEY_RE.finditer(enumeration.group(0)))
+        keys = [match.group(1) for match in matches]
+        if len(keys) < 2 or not _is_shape_literal(keys):
+            continue
+        offset = verb.end() + matches[0].start()
+        owner = owning_tool(text, sections, positions, offset, surface)
+        if owner is not None:
+            found.append((offset, owner, keys))
+    return found
+
+
 def find_declarations(
     text: str,
     tool_name: str,
     positions: "list[tuple[int, str]]",
     sections: "list[tuple[int, str | None]]",
     schema: "dict[str, list[str]] | None" = None,
+    surface: str = "",
 ) -> "list[tuple[int, list[str]]]":
     """Every return-shape declaration ATTRIBUTED to ``tool_name`` in ``text``."""
     found: "list[tuple[int, list[str]]]" = []
-    for match in BRACE_RE.finditer(text):
-        start = match.start()
-        if owning_tool(text, sections, positions, start) != tool_name:
-            continue
-        keys = _declaration_at(text, start)
-        if keys is None:
+    declarations = _literal_declarations(text, positions, sections, surface)
+    declarations.extend(_prose_declarations(text, positions, sections, surface))
+    for start, owner, keys in sorted(declarations):
+        if owner != tool_name:
             continue
         if schema and _is_another_tools_exact_shape(keys, tool_name, schema):
             # The literal IS another published tool's root shape, verbatim.
@@ -889,6 +1421,59 @@ def _drift_message(
     )
 
 
+def _divergence_for(
+    surface: str,
+    tool: str,
+    keys: "list[str]",
+) -> "ShapeDivergence | None":
+    folded = tuple(sorted({snake_case(key) for key in keys}))
+    for divergence in SHAPE_DIVERGENCES:
+        if (
+            divergence.surface == surface
+            and divergence.tool == tool
+            and tuple(snake_case(key) for key in divergence.keys) == folded
+        ):
+            return divergence
+    return None
+
+
+def _divergence_registry_failures(
+    schema: "dict[str, list[str]]",
+    swept: "set[str]",
+    matched: "set[tuple[str, str, tuple[str, ...]]]",
+) -> "list[str]":
+    """Refuse stale, vacuous or duplicate deliberate shape exceptions."""
+    failures: "list[str]" = []
+    identities: "set[tuple[str, str, tuple[str, ...]]]" = set()
+    policed = {tool.name for tool in POLICED_TOOLS}
+    for divergence in SHAPE_DIVERGENCES:
+        identity = divergence.identity
+        label = f"{divergence.surface}: SHAPE_DIVERGENCES `{divergence.tool}`"
+        if identity in identities:
+            failures.append(f"{label} duplicates an existing entry.")
+            continue
+        identities.add(identity)
+        if not divergence.reason.strip():
+            failures.append(f"{label} has no reason — an unexplained exemption is a bypass.")
+        if divergence.surface not in swept:
+            failures.append(f"{label} is outside the swept surface set.")
+        if divergence.tool not in schema or divergence.tool not in policed:
+            failures.append(f"{label} names an unpublished or unpoliced tool.")
+            continue
+        folded = {snake_case(key) for key in divergence.keys}
+        published = {snake_case(key) for key in schema[divergence.tool]}
+        if folded == published:
+            failures.append(
+                f"{label} now equals the MCP outputSchema — remove the stale divergence."
+            )
+        if identity not in matched:
+            failures.append(
+                f"{label} matches no live declaration — remove the stale divergence "
+                "or restore the documented binding contract."
+            )
+    return failures
+
+
 # --------------------------------------------------------------------------
 # Anti-disarm invariants
 # --------------------------------------------------------------------------
@@ -927,6 +1512,19 @@ def _structural_failures(
     problems: "list[str]" = []
     if not POLICED_TOOLS:
         problems.append("POLICED_TOOLS is EMPTY — this guard would verify nothing.")
+    registered = [tool.name for tool in POLICED_TOOLS]
+    duplicates = sorted({name for name in registered if registered.count(name) > 1})
+    if duplicates:
+        problems.append(
+            "POLICED_TOOLS contains duplicate tool(s): " + ", ".join(duplicates) + "."
+        )
+    missing = sorted(set(schema) - set(registered))
+    if missing:
+        problems.append(
+            "POLICED_TOOLS omits published tool(s): "
+            + ", ".join(missing)
+            + ". Every outputSchema must be policed."
+        )
     if len(build_alias_index(sorted(schema), POLICED_TOOLS)) < len(schema):
         problems.append(
             "the alias index is smaller than the capture: attribution would charge "
@@ -943,7 +1541,7 @@ def _structural_failures(
 
 
 def _coverage_failures(tool: PolicedTool, seen: "set[str]") -> "list[str]":
-    return [
+    failures = [
         f"{surface}: pinned as a surface describing `{tool.name}`'s return contract, "
         f"but no shape declaration was found in it. Restore a sentence naming the "
         f"tool and the literal it returns, or drop the pin from POLICED_TOOLS "
@@ -951,6 +1549,13 @@ def _coverage_failures(tool: PolicedTool, seen: "set[str]") -> "list[str]":
         for surface in tool.pinned_surfaces
         if surface not in seen
     ]
+    failures.extend(
+        f"{surface}: describes `{tool.name}`'s return contract but is not pinned. "
+        f"Add it to POLICED_TOOLS so deleting this declaration cannot silently "
+        f"reduce coverage. [return-shape]"
+        for surface in sorted(seen - set(tool.pinned_surfaces))
+    )
+    return failures
 
 
 # --------------------------------------------------------------------------
@@ -964,6 +1569,7 @@ def _check_tool(
     texts: "list[tuple[str, str]]",
     index: "dict[str, str]",
     schema: "dict[str, list[str]] | None" = None,
+    matched_divergences: "set[tuple[str, str, tuple[str, ...]]] | None" = None,
 ) -> "tuple[list[str], list[str]]":
     failures: "list[str]" = []
     info: "list[str]" = []
@@ -979,11 +1585,27 @@ def _check_tool(
         text = mask_jsdoc_links(raw)
         positions = alias_positions(text, index)
         sections = section_positions(text, set(index.values()))
-        for offset, keys in find_declarations(text, tool.name, positions, sections, schema):
+        for offset, keys in find_declarations(
+            text,
+            tool.name,
+            positions,
+            sections,
+            schema,
+            name,
+        ):
             seen.add(name)
             where = f"{name}:{line_of(raw, offset)}"
             if sorted({snake_case(key) for key in keys}) == published:
                 info.append(f"  ok  {where} [{tool.name}] {{{', '.join(keys)}}}")
+                continue
+            divergence = _divergence_for(name, tool.name, keys)
+            if divergence is not None:
+                if matched_divergences is not None:
+                    matched_divergences.add(divergence.identity)
+                info.append(
+                    f"  ok  {where} [{tool.name}] deliberate binding shape "
+                    f"{{{', '.join(keys)}}}: {divergence.reason}"
+                )
                 continue
             failures.append(_drift_message(where, tool, keys, schema_keys))
     failures.extend(_coverage_failures(tool, seen))
@@ -1009,6 +1631,7 @@ def guard_return_shape(root: Path) -> "tuple[list[str], list[str]]":
         for path in files
     ]
     failures: "list[str]" = []
+    matched_divergences: "set[tuple[str, str, tuple[str, ...]]]" = set()
     for prefix in NON_MCP_SURFACES:
         if not any(name == prefix or name.startswith(prefix) for name in swept):
             failures.append(
@@ -1017,9 +1640,17 @@ def guard_return_shape(root: Path) -> "tuple[list[str], list[str]]":
                 "drop it or fix the path."
             )
     for tool in POLICED_TOOLS:
-        tool_failures, tool_info = _check_tool(tool, schema[tool.name], texts, index, schema)
+        tool_failures, tool_info = _check_tool(
+            tool,
+            schema[tool.name],
+            texts,
+            index,
+            schema,
+            matched_divergences,
+        )
         failures.extend(tool_failures)
         info.extend(tool_info)
+    failures.extend(_divergence_registry_failures(schema, swept, matched_divergences))
     return failures, info
 
 

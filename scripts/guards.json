@@ -257,10 +257,6 @@
       "mode": "strict",
       "self_test": "scripts.tests.test_check_mcp_doc_contract",
       "self_test_required": true,
-      "blind_spot": {
-        "issue": 1695,
-        "summary": "POLICED_TOOLS holds 14 of the 20 published tools, and SURFACE_GLOBS still misses the Python and WASM binding sources. The six left out — compile_context, entity, recall, remember, remember_extracted, why — are named in the module header with what blocks them: each is waiting on the nested-shape treatment (#1695 lots 2-3), because they carry literals the guard would report as drift that are really a sibling's shape, an input schema, an MCP client config file or another API's dict — entity alone has twelve, six of them LangChain dictionaries. They go in by batches, each batch verified by a mutation that must make the guard refuse."
-      },
       "must_refuse": [
         {
           "vector": "the shipped MCP registry with feedback's documented confidence key renamed, against the untouched tracked repository",
@@ -273,6 +269,46 @@
                 "path": "docs/reference/MCP_TOOLS.md",
                 "old": "Returns `{ id, id_str, confidence }`",
                 "new": "Returns `{ id, id_str, certainty }`"
+              }
+            ],
+            "accepts": []
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        },
+        {
+          "vector": "batch 2: compile_context loses one published root field on the editable source skill",
+          "base": "repository",
+          "files": {},
+          "accepts": {},
+          "replace": {
+            "files": [
+              {
+                "path": "skills/velesdb-context-optimizer/SKILL.md",
+                "old": "`compile_context` returns `{content, sections, decisions, sources,\nretrieval_handles, insights, risk, warnings}`.",
+                "new": "`compile_context` returns `{content, sections, decisions, sources,\nretrieval_handles, insights, risk}`."
+              }
+            ],
+            "accepts": []
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        },
+        {
+          "vector": "batch 3: remember_extracted renames a field in its durable background-job receipt",
+          "base": "repository",
+          "files": {},
+          "accepts": {},
+          "replace": {
+            "files": [
+              {
+                "path": "crates/velesdb-memory/skill/velesdb-memory/SKILL.md",
+                "old": "returns `{request_id, state, reused}` before model generation.",
+                "new": "returns `{request_id, state, accepted}` before model generation."
               }
             ],
             "accepts": []

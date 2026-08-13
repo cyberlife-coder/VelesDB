@@ -469,9 +469,10 @@ impl MemoryStore {
     /// Compile context fragments into a token-budgeted, provenance-audited
     /// prompt context — deterministic, no LLM call; pure conversion around
     /// [`velesdb_memory`]'s context compiler (zero logic here). The request
-    /// and result use the same JSON shape as the MCP `compile_context` tool
-    /// (`{query, fragments, token_budget, memory_scope?, policy?, …}`), with
-    /// one binding-wide difference: every id field (`fragment_id`,
+    /// uses the MCP `compile_context` input shape
+    /// (`{query, fragments, token_budget, memory_scope?, policy?, …}`), and
+    /// the result relays the MCP output through `CompiledContextJs`. One
+    /// binding-wide difference remains: every id field (`fragment_id`,
     /// `content_hash`, `memory_id`, `fragment_ids`, and `fragments[].id` on
     /// input) crosses as a decimal string, like every other method here.
     #[napi(
@@ -746,21 +747,6 @@ impl MemoryStore {
         }))
     }
 
-    /// Extract atomic facts from raw `text` and store them, auto-building the
-    /// entity graph they state. Resolves to `{ids, skippedOverCap}`.
-    ///
-    /// `extractor` names the backend, defaulting to `"ollama"`:
-    ///
-    /// - `"ollama"` calls the local generative `model` (required for this
-    ///   backend) at `url`, and reads structure out of prose.
-    /// - `"outline"` is deterministic and network-free: it reads the
-    ///   structure the passage STATES, one directive per line (`edge:`,
-    ///   `attr:`, `fact:`), and ignores `model`/`url`. Same relationship as
-    ///   the `"hash"` embedder has to `"ollama"` on
-    ///   [`open`](Self::open) — an offline, reproducible choice, so the whole
-    ///   contract of this method is reachable without a model running.
-    ///
-    /// This used to resolve to a bare `Array<string>` of ids, and that array
     /// The server's health, in the SAME envelope the MCP `memory_status`
     /// tool returns: which embedder RUNS (`embedder.semantic: false` is the
     /// offline `hash` default — recall matches surface form, not meaning),
@@ -863,6 +849,21 @@ impl MemoryStore {
         }))
     }
 
+    /// Extract atomic facts from raw `text` and store them, auto-building the
+    /// entity graph they state. Resolves to `{ids, skippedOverCap}`.
+    ///
+    /// `extractor` names the backend, defaulting to `"ollama"`:
+    ///
+    /// - `"ollama"` calls the local generative `model` (required for this
+    ///   backend) at `url`, and reads structure out of prose.
+    /// - `"outline"` is deterministic and network-free: it reads the
+    ///   structure the passage STATES, one directive per line (`edge:`,
+    ///   `attr:`, `fact:`), and ignores `model`/`url`. Same relationship as
+    ///   the `"hash"` embedder has to `"ollama"` on
+    ///   [`open`](Self::open) — an offline, reproducible choice, so the whole
+    ///   contract of this method is reachable without a model running.
+    ///
+    /// This used to resolve to a bare `Array<string>` of ids, and that array
     /// could not say why it was short: nothing distinguished a passage that
     /// held three facts from one that held twelve of which nine were dropped
     /// for exceeding the embeddable cap. The envelope is the breaking change

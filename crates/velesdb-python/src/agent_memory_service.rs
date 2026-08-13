@@ -531,7 +531,8 @@ impl PyMemoryService {
     /// Fused vector + `ColumnStore` recall: like [`recall`](Self::recall) but the
     /// `filters` support ranges/comparisons, so numeric/temporal facets become
     /// queryable. `filters` is a list of `(field, op, value)` tuples where `op`
-    /// is one of `eq`/`ne`/`lt`/`le`/`gt`/`ge`. Returns `{id, score, content, metadata}`
+    /// is one of `eq`/`ne`/`lt`/`le`/`gt`/`ge`. Returns a list of
+    /// `{id, score, content, metadata}` items
     /// (`metadata` is the fact's stored dict, or `None` if it carried none).
     ///
     /// Returns your own stored facts ONLY: entity hubs and the context compiler's
@@ -765,7 +766,7 @@ impl PyMemoryService {
     /// JSON shape as the MCP tool's input (`{query, fragments, token_budget,
     /// project?, target_model?, memory_scope?, policy?}`); the result is the
     /// same shape as its output (`{content, sections, decisions, sources,
-    /// retrieval_handles, insights, risk}`). One documented difference from
+    /// retrieval_handles, insights, risk, warnings}`). One documented difference from
     /// the Node binding: every u64 id (`fragment_id`, `content_hash`,
     /// `memory_id`, entries of `fragment_ids`) crosses as a **native Python
     /// int** (unlimited precision), not a decimal string — both are faithful
@@ -855,7 +856,7 @@ impl PyMemoryService {
     /// carried one (US-009, PR2) — behind a `ctx://source/<hash>` handle
     /// from a [`compile_context`](Self::compile_context) result: what was
     /// externalized or partially packed is recoverable, not lost. Returns a
-    /// dict shaped `{content, media?}`, `media` present only for a source
+    /// dict shaped `{handle, content, media?}`, `media` present only for a source
     /// whose fragment carried one.
     fn retrieve_context_source(&self, py: Python<'_>, handle: &str) -> PyResult<Py<PyAny>> {
         let source: ContextSource =

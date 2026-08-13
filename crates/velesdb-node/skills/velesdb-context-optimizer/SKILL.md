@@ -27,6 +27,11 @@ code / URLs / numbers / negative constraints survive verbatim, and whatever
 does not fit the budget becomes a recoverable `ctx://source/` handle, never a
 silent loss. Same input, same output, byte for byte.
 
+`compile_context` returns `{content, sections, decisions, sources,
+retrieval_handles, insights, risk, warnings}`. Those are the root fields used
+throughout this skill; the transcript shortcut below nests that whole envelope
+under its own `context` field.
+
 ## Have a raw transcript? Skip steps 1-3.
 
 If what you are about to compress is a raw agent-session transcript (plain

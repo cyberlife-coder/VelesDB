@@ -99,9 +99,31 @@ Call `demo_tool` with the project and a stable session id. It returns
 `{found, working, other_sessions}`. When `found` is true, adopt the state.
 """
 
+SIBLING_CLEAN = """# Sibling tool
 
-def _tool(pinned: "tuple[str, ...]" = ("docs/reference/DEMO_TOOLS.md",)) -> "cmdc.PolicedTool":
+## `sibling_tool`
+
+Returns `{found, removed}`.
+"""
+
+
+def _tool(
+    pinned: "tuple[str, ...]" = (
+        "docs/reference/DEMO_TOOLS.md",
+        "skills/demo/SKILL.md",
+    ),
+) -> "cmdc.PolicedTool":
     return cmdc.PolicedTool("demo_tool", ("demoTool",), pinned)
+
+
+def _sibling_tool(
+    pinned: "tuple[str, ...]" = ("docs/reference/SIBLING_TOOLS.md",),
+) -> "cmdc.PolicedTool":
+    return cmdc.PolicedTool(
+        "sibling_tool",
+        ("siblingTool",),
+        pinned,
+    )
 
 
 class DocContractTestCase(unittest.TestCase):
@@ -112,9 +134,11 @@ class DocContractTestCase(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.write("docs/reference/mcp-tools.json", json.dumps(CAPTURE, indent=2))
         self.write("docs/reference/DEMO_TOOLS.md", REFERENCE_CLEAN)
+        self.write("docs/reference/SIBLING_TOOLS.md", SIBLING_CLEAN)
         self.write("skills/demo/SKILL.md", SKILL_CLEAN)
-        self.policed(_tool())
+        self.policed(_tool(), _sibling_tool())
         self.non_mcp()
+        self.shape_divergences()
 
     def write(self, rel_path: str, content: str) -> None:
         path = self.tmp / rel_path
@@ -134,6 +158,15 @@ class DocContractTestCase(unittest.TestCase):
         previous = cmdc.NON_MCP_SURFACES
         cmdc.NON_MCP_SURFACES = dict(entries or {})
         self.addCleanup(setattr, cmdc, "NON_MCP_SURFACES", previous)
+
+    def shape_divergences(
+        self,
+        *entries: "cmdc.ShapeDivergence",
+    ) -> None:
+        """Use only divergences declared by a synthetic fixture."""
+        previous = cmdc.SHAPE_DIVERGENCES
+        cmdc.SHAPE_DIVERGENCES = tuple(entries)
+        self.addCleanup(setattr, cmdc, "SHAPE_DIVERGENCES", previous)
 
     def assertGuardPasses(self) -> None:
         failures, _info = cmdc.guard_return_shape(self.tmp)
@@ -159,6 +192,15 @@ class ExactSiblingShapeTests(DocContractTestCase):
             REFERENCE_CLEAN
             + "\nUndo pairing: `demo_tool` pairs with `sibling_tool`, which "
             "returns `{found, removed}` for the undo.\n",
+        )
+        self.policed(
+            _tool(),
+            _sibling_tool(
+                (
+                    "docs/reference/SIBLING_TOOLS.md",
+                    "docs/reference/DEMO_TOOLS.md",
+                )
+            ),
         )
         self.assertGuardPasses()
 
@@ -196,6 +238,44 @@ class NonMcpSurfaceTests(DocContractTestCase):
     def test_a_stale_registry_entry_is_refused(self) -> None:
         self.non_mcp({"docs/guides/GONE.md": "matches nothing anymore"})
         self.assertGuardFails("stale exemption")
+
+
+class ShapeDivergenceTests(DocContractTestCase):
+    """A binding exception is one exact, live, reasoned shape — never a mask."""
+
+    SURFACE = "skills/demo/SKILL.md"
+
+    def divergence(
+        self,
+        keys: "tuple[str, ...]" = ("found", "working"),
+        reason: str = "the typed binding omits sibling-session discovery",
+    ) -> "cmdc.ShapeDivergence":
+        return cmdc.ShapeDivergence(self.SURFACE, "demo_tool", keys, reason)
+
+    def test_an_exact_reasoned_binding_shape_is_accepted(self) -> None:
+        self.write(self.SURFACE, "`demo_tool` returns `{found, working}`.\n")
+        self.shape_divergences(self.divergence())
+        self.assertGuardPasses()
+
+    def test_changing_one_divergent_key_is_refused(self) -> None:
+        self.write(self.SURFACE, "`demo_tool` returns `{found, sessions}`.\n")
+        self.shape_divergences(self.divergence())
+        self.assertGuardFails("unknown sessions", "matches no live declaration")
+
+    def test_a_divergence_that_no_longer_matches_is_stale(self) -> None:
+        self.shape_divergences(self.divergence())
+        self.assertGuardFails("matches no live declaration")
+
+    def test_a_divergence_equal_to_the_mcp_contract_is_stale(self) -> None:
+        self.shape_divergences(
+            self.divergence(tuple(ENVELOPE), "temporary transport exception")
+        )
+        self.assertGuardFails("now equals the MCP outputSchema")
+
+    def test_an_unexplained_divergence_is_refused(self) -> None:
+        self.write(self.SURFACE, "`demo_tool` returns `{found, working}`.\n")
+        self.shape_divergences(self.divergence(reason=""))
+        self.assertGuardFails("has no reason")
 
 
 class TrackedPerimeterTests(DocContractTestCase):
@@ -289,6 +369,38 @@ class TrackedPerimeterTests(DocContractTestCase):
             "outside a git repository the sweep falls back to the raw globs",
         )
 
+    def test_a_colocated_rust_test_is_excluded_from_a_broad_future_glob(self) -> None:
+        facade = "crates/velesdb-wasm/src/memory_service.rs"
+        fixture = "crates/velesdb-wasm/src/context_tools_tests.rs"
+        self.write(
+            facade,
+            "/// `demo_tool` returns `{found, working, other_sessions}`.\n"
+            "pub fn demo_tool() {}\n",
+        )
+        self.write(
+            fixture,
+            "/// `demo_tool` returns `{found, wrong}`.\n"
+            "fn demo_tool_fixture() {}\n",
+        )
+        previous = cmdc.SURFACE_GLOBS
+        cmdc.SURFACE_GLOBS = previous + ("crates/velesdb-wasm/src/*.rs",)
+        self.addCleanup(setattr, cmdc, "SURFACE_GLOBS", previous)
+        self.policed(
+            _tool(
+                (
+                    "docs/reference/DEMO_TOOLS.md",
+                    "skills/demo/SKILL.md",
+                    facade,
+                )
+            ),
+            _sibling_tool(),
+        )
+
+        swept = {p.relative_to(self.tmp).as_posix() for p in cmdc.surface_files(self.tmp)}
+        self.assertIn(facade, swept)
+        self.assertNotIn(fixture, swept)
+        self.assertGuardPasses()
+
 
 class ReturnShapeRuleTests(DocContractTestCase):
     def test_baseline_repository_passes(self) -> None:
@@ -317,10 +429,28 @@ class ReturnShapeRuleTests(DocContractTestCase):
         )
         self.assertGuardFails("unknown resumed_at")
 
+    def test_a_wrong_prose_enumeration_is_refused(self) -> None:
+        self.write(
+            "docs/reference/DEMO_TOOLS.md",
+            "# Tools\n\n## `demo_tool`\n\n"
+            "`demo_tool` returns `found`, `working`, and `sessions`.\n",
+        )
+        self.assertGuardFails("missing other_sessions", "unknown sessions")
+
     def test_an_unpinned_surface_is_policed_too(self) -> None:
         # The sweep is what catches a NEW surface nobody registered.
-        self.write("skills/demo/SKILL.md", SKILL_CLEAN.replace(", other_sessions", ""))
-        self.assertGuardFails("skills/demo/SKILL.md", "missing other_sessions")
+        self.write(
+            "docs/guides/EXTRA.md",
+            SKILL_CLEAN.replace(", other_sessions", ""),
+        )
+        self.assertGuardFails("docs/guides/EXTRA.md", "missing other_sessions")
+
+    def test_a_correct_new_surface_must_be_pinned(self) -> None:
+        self.write("docs/guides/EXTRA.md", SKILL_CLEAN)
+        self.assertGuardFails(
+            "docs/guides/EXTRA.md",
+            "describes `demo_tool`'s return contract but is not pinned",
+        )
 
     def test_a_TOTAL_rename_is_refused_and_not_silently_unseen(self) -> None:
         # The hole a wider rule closes: when recognition depended on the
@@ -345,6 +475,15 @@ class ReturnShapeRuleTests(DocContractTestCase):
             "docs/reference/DEMO_TOOLS.md",
             REFERENCE_CLEAN + "\n`sibling_tool` resolves `{found, removed}`.\n",
         )
+        self.policed(
+            _tool(),
+            _sibling_tool(
+                (
+                    "docs/reference/SIBLING_TOOLS.md",
+                    "docs/reference/DEMO_TOOLS.md",
+                )
+            ),
+        )
         self.assertGuardPasses()
 
     def test_declaration_removed_from_a_pinned_surface_fails(self) -> None:
@@ -363,6 +502,17 @@ class AntiDisarmTests(DocContractTestCase):
     def test_empty_registry_fails(self) -> None:
         self.policed()
         self.assertGuardFails("POLICED_TOOLS is EMPTY")
+
+    def test_a_published_tool_omitted_from_the_registry_fails(self) -> None:
+        self.policed(_tool())
+        self.assertGuardFails(
+            "POLICED_TOOLS omits published tool(s)",
+            "sibling_tool",
+        )
+
+    def test_a_duplicate_registry_entry_fails(self) -> None:
+        self.policed(_tool(), _tool(), _sibling_tool())
+        self.assertGuardFails("POLICED_TOOLS contains duplicate tool(s)", "demo_tool")
 
     def test_tool_absent_from_the_capture_fails(self) -> None:
         self.policed(cmdc.PolicedTool("ghost_tool", (), ("docs/reference/DEMO_TOOLS.md",)))
@@ -421,6 +571,15 @@ class OwnershipTests(DocContractTestCase):
             + "\n## `sibling_tool`\n\nThe exact undo of `demo_tool`'s edge.\n\n"
             + "Returns `{ found, removed }`.\n",
         )
+        self.policed(
+            _tool(),
+            _sibling_tool(
+                (
+                    "docs/reference/SIBLING_TOOLS.md",
+                    "docs/reference/DEMO_TOOLS.md",
+                )
+            ),
+        )
         self.assertGuardPasses()
 
     def test_a_subject_on_the_literals_own_line_overrides_the_section(self) -> None:
@@ -431,6 +590,15 @@ class OwnershipTests(DocContractTestCase):
         self.write(
             "docs/reference/DEMO_TOOLS.md",
             REFERENCE_CLEAN + "\n`sibling_tool` resolves `{found, removed}`.\n",
+        )
+        self.policed(
+            _tool(),
+            _sibling_tool(
+                (
+                    "docs/reference/SIBLING_TOOLS.md",
+                    "docs/reference/DEMO_TOOLS.md",
+                )
+            ),
         )
         self.assertGuardPasses()
 
@@ -470,7 +638,7 @@ class OwnershipTests(DocContractTestCase):
 class ExtractionTests(unittest.TestCase):
     """The narrow definition of "declaration", on real shapes from this tree."""
 
-    def _declarations(self, text: str) -> "list[list[str]]":
+    def _declarations(self, text: str, surface: str = "") -> "list[list[str]]":
         masked = cmdc.mask_jsdoc_links(text)
         index = cmdc.build_alias_index(["demo_tool", "sibling_tool"])
         positions = cmdc.alias_positions(masked, index)
@@ -478,7 +646,7 @@ class ExtractionTests(unittest.TestCase):
         return [
             keys
             for _offset, keys in cmdc.find_declarations(
-                masked, "demo_tool", positions, sections
+                masked, "demo_tool", positions, sections, surface=surface
             )
         ]
 
@@ -524,6 +692,20 @@ class ExtractionTests(unittest.TestCase):
             [["found", "working", "other_sessions"]],
         )
 
+    def test_explicit_prose_enumeration(self) -> None:
+        self.assertEqual(
+            self._declarations(
+                "`demo_tool` returns `found`, `working`, and `other_sessions`."
+            ),
+            [["found", "working", "other_sessions"]],
+        )
+
+    def test_one_quoted_field_is_not_a_complete_enumeration(self) -> None:
+        self.assertEqual(
+            self._declarations("`demo_tool` returns the `working` field when found."),
+            [],
+        )
+
     def test_jsdoc_continuation_star_is_not_part_of_the_key(self) -> None:
         # sdks/typescript/src/memory.ts wraps the literal across a `*` line.
         text = (
@@ -547,6 +729,10 @@ class ExtractionTests(unittest.TestCase):
             ' "other_sessions": [...]}\nmem.demo_tool("veles", "s1")'
         )
         self.assertEqual(self._declarations(text), [["found", "working", "other_sessions"]])
+
+    def test_a_list_item_object_is_not_a_root_envelope(self) -> None:
+        text = "`demo_tool` returns a list of `{id, score}` records."
+        self.assertEqual(self._declarations(text), [])
 
     def test_restructuredtext_line_wrap_inside_the_literal(self) -> None:
         # integrations/langgraph/src/langgraph_velesdb/tools.py wraps mid-literal.
@@ -589,6 +775,17 @@ class ExtractionTests(unittest.TestCase):
         # the two apart.
         text = "pub fn demo_tool(&self) -> AsyncTask<Job<JsonOut>> {\n    let svc = Arc::clone(&self.0);\n}"
         self.assertEqual(self._declarations(text), [])
+
+    def test_a_rust_doc_comment_belongs_to_the_following_method(self) -> None:
+        text = (
+            "/// Unlike `sibling_tool`, this returns "
+            "`{found, working, other_sessions}`.\n"
+            "pub fn demo_tool(&self) -> Result<()> { todo!() }\n"
+        )
+        self.assertEqual(
+            self._declarations(text, "crates/demo/src/lib.rs"),
+            [["found", "working", "other_sessions"]],
+        )
 
     def test_a_typescript_return_type_literal_is_read(self) -> None:
         # crates/velesdb-node/src/lib.rs ships this string as the .d.ts every
@@ -710,11 +907,15 @@ class RealRepositoryTests(unittest.TestCase):
         failures, _info = cmdc.guard_return_shape(REPO_ROOT)
         self.assertEqual(failures, [], "\n".join(failures))
 
-    def test_every_policed_tool_is_published_by_the_capture(self) -> None:
+    def test_registry_is_exactly_the_published_capture(self) -> None:
         schema = cmdc.load_output_schema_keys(REPO_ROOT)
+        self.assertEqual(
+            {tool.name for tool in cmdc.POLICED_TOOLS},
+            set(schema),
+            "adding or removing a published tool must update POLICED_TOOLS",
+        )
         for tool in cmdc.POLICED_TOOLS:
             with self.subTest(tool=tool.name):
-                self.assertIn(tool.name, schema)
                 self.assertTrue(schema[tool.name], "empty outputSchema")
 
     def test_load_working_context_is_policed(self) -> None:
@@ -723,44 +924,89 @@ class RealRepositoryTests(unittest.TestCase):
         self.assertIn("load_working_context", {tool.name for tool in cmdc.POLICED_TOOLS})
 
     def test_the_pinned_surfaces_are_EXACTLY_these(self) -> None:
-        # The guard refuses a tool with ZERO pins, and refused nothing in
-        # between: sixteen pins could be walked down to one, one deletion at
-        # a time, each looking like a small cleanup — and the guard's own
-        # failure message offers exactly that ("or drop the pin from
-        # POLICED_TOOLS on purpose"). The sweep cannot cover for a lost pin,
-        # because the sweep only ever sees declarations that are PRESENT;
-        # deleting the sentence is what the pin exists to catch.
+        # The sweep catches a wrong declaration, but deletion makes a surface
+        # disappear from `seen`. Pin EVERY declaration-bearing file measured
+        # by `--verbose`, so removing one sentence cannot make the gate green.
         #
         # Adding a surface is a one-line edit here. Removing one has to be
         # argued for in a diff that says so.
         #
-        # Pinned for EVERY policed tool, not just the first one: a registry
-        # that grows by batches (#1695) needs the counter to grow with it, or
-        # nine of the ten are back to being deletable one sentence at a time.
+        # Pinned for EVERY published tool and every current declaration: the
+        # registry grew in three batches (#1695), and its counter grew with it.
         expected = {
-            # #1695 batch 1 — each pinned at least on the tool reference.
             "feedback": {"docs/reference/MCP_TOOLS.md"},
             "recall_where": {"docs/reference/MCP_TOOLS.md"},
             "relate": {"docs/reference/MCP_TOOLS.md"},
-            "unrelate": {"docs/reference/MCP_TOOLS.md"},
-            "compile_transcript": {
+            "unrelate": {
                 "crates/velesdb-node/src/lib.rs",
+                "crates/velesdb-python/python/velesdb/__init__.pyi",
+                "crates/velesdb-python/src/agent_memory_service.rs",
+                "crates/velesdb-wasm/src/memory_service.rs",
+                "docs/guides/WASM_API.md",
                 "docs/reference/MCP_TOOLS.md",
                 "sdks/typescript/src/memory.ts",
             },
-            "context_savings": {"docs/reference/MCP_TOOLS.md"},
+            "compile_transcript": {
+                "crates/velesdb-node/src/lib.rs",
+                "crates/velesdb-python/python/velesdb/__init__.pyi",
+                "crates/velesdb-python/src/agent_memory_service.rs",
+                "crates/velesdb-wasm/src/memory_service.rs",
+                "docs/reference/MCP_TOOLS.md",
+                "sdks/typescript/src/memory.ts",
+            },
+            "compile_context": {
+                "crates/velesdb-node/skills/velesdb-context-optimizer/SKILL.md",
+                "crates/velesdb-python/python/velesdb/__init__.pyi",
+                "crates/velesdb-python/src/agent_memory_service.rs",
+                "docs/reference/MCP_TOOLS.md",
+                "skills/velesdb-context-optimizer/SKILL.md",
+            },
+            "context_savings": {
+                "crates/velesdb-python/python/velesdb/__init__.pyi",
+                "docs/reference/MCP_TOOLS.md",
+            },
             "explain_compilation": {
                 "crates/velesdb-node/src/lib.rs",
+                "crates/velesdb-python/python/velesdb/__init__.pyi",
                 "docs/reference/MCP_TOOLS.md",
             },
             "forget": {"docs/reference/MCP_TOOLS.md"},
+            "entity": {
+                "crates/velesdb-memory/skill/velesdb-memory/SKILL.md",
+                "crates/velesdb-node/skills/velesdb-memory/SKILL.md",
+                "crates/velesdb-node/src/lib.rs",
+                "crates/velesdb-python/python/velesdb/__init__.pyi",
+                "crates/velesdb-python/src/agent_memory_service.rs",
+                "crates/velesdb-wasm/src/memory_service.rs",
+                "docs/guides/WASM_API.md",
+                "docs/reference/MCP_TOOLS.md",
+            },
+            "extraction_status": {
+                "crates/velesdb-memory/skill/velesdb-memory/SKILL.md",
+                "crates/velesdb-node/skills/velesdb-memory/SKILL.md",
+                "docs/reference/MCP_TOOLS.md",
+            },
+            "list_memories": {
+                "crates/velesdb-node/src/lib.rs",
+                "docs/reference/MCP_TOOLS.md",
+            },
+            "memory_status": {
+                "crates/velesdb-node/src/lib.rs",
+                "docs/reference/MCP_TOOLS.md",
+            },
+            "recall": {
+                "crates/velesdb-memory/skill/velesdb-memory/SKILL.md",
+                "crates/velesdb-node/skills/velesdb-memory/SKILL.md",
+                "docs/reference/MCP_TOOLS.md",
+            },
             "list_working_contexts": {
                 "crates/velesdb-node/src/lib.rs",
+                "crates/velesdb-python/python/velesdb/__init__.pyi",
+                "crates/velesdb-python/src/agent_memory_service.rs",
+                "crates/velesdb-wasm/src/memory_service.rs",
                 "docs/guides/NODE_ADDON.md",
                 "docs/reference/MCP_TOOLS.md",
             },
-            "list_memories": {"docs/reference/MCP_TOOLS.md"},
-            "memory_status": {"docs/reference/MCP_TOOLS.md"},
             "load_working_context": {
                 # The two `velesdb-context-optimizer` copies used to be here.
                 # Resumption moved to the memory skill, and the pin moved with
@@ -770,6 +1016,7 @@ class RealRepositoryTests(unittest.TestCase):
                 "crates/velesdb-node/README.md",
                 "crates/velesdb-node/skills/velesdb-memory/SKILL.md",
                 "crates/velesdb-node/src/lib.rs",
+                "crates/velesdb-python/python/velesdb/__init__.pyi",
                 "docs/guides/NODE_ADDON.md",
                 "docs/guides/PYTHON_CONTEXT_COMPILER.md",
                 "docs/guides/WASM_API.md",
@@ -785,19 +1032,54 @@ class RealRepositoryTests(unittest.TestCase):
             },
             "recall_fused": {
                 "crates/velesdb-node/src/lib.rs",
+                "crates/velesdb-python/src/agent_memory_service.rs",
+                "crates/velesdb-wasm/src/memory_service.rs",
                 "docs/reference/MCP_TOOLS.md",
                 "integrations/langgraph/README.md",
+                "sdks/typescript/src/memory.ts",
             },
             "retrieve_context_source": {
                 "crates/velesdb-node/src/lib.rs",
+                "crates/velesdb-python/python/velesdb/__init__.pyi",
+                "crates/velesdb-python/src/agent_memory_service.rs",
+                "crates/velesdb-wasm/src/memory_service.rs",
                 "docs/guides/CONTEXT_COMPILER.md",
                 "docs/guides/NODE_ADDON.md",
                 "docs/guides/PYTHON_CONTEXT_COMPILER.md",
                 "docs/reference/MCP_TOOLS.md",
             },
             "save_working_context": {"docs/reference/MCP_TOOLS.md"},
+            "remember": {
+                "crates/velesdb-memory/skill/velesdb-memory/SKILL.md",
+                "crates/velesdb-node/skills/velesdb-memory/SKILL.md",
+                "docs/reference/MCP_TOOLS.md",
+            },
+            "remember_extracted": {
+                "crates/velesdb-memory/skill/velesdb-memory/SKILL.md",
+                "crates/velesdb-node/skills/velesdb-memory/SKILL.md",
+                "crates/velesdb-node/src/lib.rs",
+                "crates/velesdb-python/python/velesdb/__init__.pyi",
+                "crates/velesdb-python/src/agent_memory_service.rs",
+                "crates/velesdb-wasm/src/memory_service.rs",
+                "docs/guides/WASM_API.md",
+                "docs/reference/MCP_TOOLS.md",
+                "sdks/typescript/src/memory.ts",
+            },
             "suggest_budget": {
                 "crates/velesdb-node/src/lib.rs",
+                "crates/velesdb-python/python/velesdb/__init__.pyi",
+                "crates/velesdb-python/src/agent_memory_service.rs",
+                "docs/reference/MCP_TOOLS.md",
+            },
+            "why": {
+                "crates/velesdb-memory/skill/velesdb-memory/SKILL.md",
+                "crates/velesdb-node/README.md",
+                "crates/velesdb-node/skills/velesdb-memory/SKILL.md",
+                "crates/velesdb-node/src/lib.rs",
+                "crates/velesdb-python/python/velesdb/__init__.pyi",
+                "crates/velesdb-python/src/agent_memory_service.rs",
+                "crates/velesdb-wasm/src/memory_service.rs",
+                "docs/guides/WASM_API.md",
                 "docs/reference/MCP_TOOLS.md",
             },
         }
