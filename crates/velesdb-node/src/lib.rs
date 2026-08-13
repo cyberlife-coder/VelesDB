@@ -54,7 +54,7 @@ use velesdb_memory::context::{
 use velesdb_memory::{
     embedder_env_endpoint, select_embedder, DynEmbedder, Embedder, EmbedderSelection,
     MemoryService, OllamaEmbedder, OllamaExtractor, OpenAiEmbedder, OutlineExtractor,
-    DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL,
+    DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL, HASH_EMBEDDER_NOTICE,
 };
 
 use crate::dto::{
@@ -64,8 +64,8 @@ use crate::dto::{
 use crate::error::{invalid_input, to_napi_err, CODE_INTERNAL};
 use crate::tasks::{Job, JsonOut};
 
-/// Resolve and build the requested embedder, returning it alongside the
-/// model name [`MemoryStore::memory_status`] reports.
+/// Resolve and build the requested embedder, returning it alongside the model
+/// name and semantic flag [`MemoryStore::memory_status`] reports.
 ///
 /// `kind` is the factory's explicit `embedder` argument; when `None`,
 /// `VELESDB_MEMORY_EMBEDDER` takes over — the explicit argument always wins,
@@ -79,13 +79,19 @@ fn build_embedder(
     kind: Option<&str>,
     url: Option<String>,
     model: Option<String>,
-) -> napi::Result<(DynEmbedder, String)> {
+) -> napi::Result<(DynEmbedder, String, bool)> {
     let backend_env = std::env::var("VELESDB_MEMORY_EMBEDDER").ok();
     let selection = select_embedder(kind.or(backend_env.as_deref())).map_err(invalid_input)?;
     match selection {
-        EmbedderSelection::Ready(name, embedder) => Ok((embedder, name.to_owned())),
-        EmbedderSelection::NeedsRemoteConfig("ollama") => build_ollama_embedder(url, model),
-        EmbedderSelection::NeedsRemoteConfig("openai") => build_openai_embedder(),
+        EmbedderSelection::Ready(name, embedder) => {
+            Ok((embedder, name.to_owned(), name != "hash"))
+        }
+        EmbedderSelection::NeedsRemoteConfig("ollama") => {
+            build_ollama_embedder(url, model).map(|(embedder, model)| (embedder, model, true))
+        }
+        EmbedderSelection::NeedsRemoteConfig("openai") => {
+            build_openai_embedder().map(|(embedder, model)| (embedder, model, true))
+        }
         EmbedderSelection::NeedsRemoteConfig(other) => Err(napi::Error::from_reason(format!(
             "[{CODE_INTERNAL}] the embedding backend '{other}' is accepted by velesdb-memory's \
              selector but this binding has no builder for it — this is a bug in \
@@ -127,6 +133,18 @@ fn build_openai_embedder() -> napi::Result<(DynEmbedder, String)> {
     Ok((Box::new(embedder), model))
 }
 
+/// Surface the lexical fallback once per successfully opened Node instance.
+fn warn_hash_embedder_not_semantic(semantic: bool) {
+    if semantic || std::env::var_os("VELESDB_MEMORY_QUIET").is_some() {
+        return;
+    }
+    eprintln!(
+        "[velesdb-memory-node] {HASH_EMBEDDER_NOTICE} For real semantic recall \
+         reopen with MemoryService.open(path, \"ollama\") or configure \
+         VELESDB_MEMORY_EMBEDDER=ollama. Set VELESDB_MEMORY_QUIET=1 to silence this notice."
+    );
+}
+
 /// Local-first agent memory with the `why()` graph wedge.
 ///
 /// All methods are async (return a Promise) and run off the event-loop thread.
@@ -142,6 +160,7 @@ pub struct MemoryStore {
     /// ever sees `&[f32]`, so the factory is the one place that knows.
     embedder_model: String,
     embedder_dimension: usize,
+    embedder_semantic: bool,
     /// Where the store lives, for the provenance block of
     /// [`Self::memory_status`] (#1751's on-disk record).
     store_dir: std::path::PathBuf,
@@ -162,7 +181,8 @@ impl MemoryStore {
     /// This factory is synchronous: with a remote `embedder` it performs a
     /// one-time blocking probe of the embedding endpoint (as the `PyO3` binding
     /// does). The default `"hash"` embedder does no I/O. Per-operation methods
-    /// are all async.
+    /// are all async. Opening with `hash` emits one degraded-recall notice on
+    /// stderr; `VELESDB_MEMORY_QUIET=1` suppresses it for deliberate offline use.
     #[napi(factory)]
     pub fn open(
         path: String,
@@ -170,13 +190,16 @@ impl MemoryStore {
         ollama_url: Option<String>,
         ollama_model: Option<String>,
     ) -> napi::Result<Self> {
-        let (emb, embedder_model) = build_embedder(embedder.as_deref(), ollama_url, ollama_model)?;
+        let (emb, embedder_model, embedder_semantic) =
+            build_embedder(embedder.as_deref(), ollama_url, ollama_model)?;
         let embedder_dimension = emb.dimension();
         let svc = MemoryService::open(&path, emb).map_err(to_napi_err)?;
+        warn_hash_embedder_not_semantic(embedder_semantic);
         Ok(Self {
             inner: Arc::new(svc),
             embedder_model,
             embedder_dimension,
+            embedder_semantic,
             store_dir: std::path::PathBuf::from(path),
         })
     }
@@ -757,6 +780,7 @@ impl MemoryStore {
         let svc = Arc::clone(&self.inner);
         let model = self.embedder_model.clone();
         let dimension = self.embedder_dimension;
+        let semantic = self.embedder_semantic;
         let store_dir = self.store_dir.clone();
         AsyncTask::new(Job::new(move || {
             let recorded = velesdb_memory::embedding_provenance::read(&store_dir)
@@ -774,7 +798,7 @@ impl MemoryStore {
                 "embedder": {
                     "model": model,
                     "dimension": dimension,
-                    "semantic": model != "hash",
+                    "semantic": semantic,
                 },
                 "provenance": provenance,
                 "extraction": {

@@ -5,12 +5,17 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
+import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { MemoryService } from '../index.js'
+
+// Most tests deliberately use the lexical hash backend. Keep their output
+// quiet; the notice contract is exercised in isolated child processes below.
+process.env.VELESDB_MEMORY_QUIET = '1'
 
 /**
  * Remove a temp store dir, tolerating Windows lock semantics: the store's
@@ -55,6 +60,20 @@ function inChildProcess(dir, body) {
   const child = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8' })
   assert.equal(child.status, 0, `child process failed: ${child.stderr}`)
   return child.stdout.trim()
+}
+
+/** Run one addon script without blocking this process's mock HTTP server. */
+function runNodeChild(script, env) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, ['-e', script], { env })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
+    child.stdout.on('data', (chunk) => { stdout += chunk })
+    child.stderr.on('data', (chunk) => { stderr += chunk })
+    child.on('close', (status) => resolve({ status, stdout, stderr }))
+  })
 }
 
 /** Sleep, to cross a real one-second boundary (saved_at has second granularity). */
@@ -200,6 +219,80 @@ test('open defaults to the offline hash embedder when none is named', async () =
       'the default store must recall what it stored, offline',
     )
   } finally {
+    rmStoreDir(dir)
+  }
+})
+
+test('open with hash warns once and names the semantic argument', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'velesdb-node-'))
+  const env = { ...process.env }
+  delete env.VELESDB_MEMORY_QUIET
+  try {
+    const script = `
+      const { MemoryService } = require(${JSON.stringify(ADDON_ENTRY)})
+      MemoryService.open(${JSON.stringify(dir)})
+    `
+    const child = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8', env })
+    assert.equal(child.status, 0, child.stderr)
+    assert.equal((child.stderr.match(/NOT semantic/g) ?? []).length, 1)
+    assert.match(child.stderr, /MemoryService\.open\(path, "ollama"\)/)
+    assert.match(child.stderr, /VELESDB_MEMORY_QUIET=1/)
+  } finally {
+    rmStoreDir(dir)
+  }
+})
+
+test('quiet environment suppresses the hash notice', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'velesdb-node-'))
+  try {
+    const script = `
+      const { MemoryService } = require(${JSON.stringify(ADDON_ENTRY)})
+      MemoryService.open(${JSON.stringify(dir)}, 'hash')
+    `
+    const child = spawnSync(process.execPath, ['-e', script], {
+      encoding: 'utf8',
+      env: process.env,
+    })
+    assert.equal(child.status, 0, child.stderr)
+    assert.doesNotMatch(child.stderr, /NOT semantic/)
+  } finally {
+    rmStoreDir(dir)
+  }
+})
+
+test('open with ollama emits no degraded hash notice', async () => {
+  const server = createServer((request, response) => {
+    request.on('end', () => {
+      response.writeHead(200, { 'Content-Type': 'application/json' })
+      response.end(JSON.stringify({ embedding: [0.1, 0.2, 0.3, 0.4] }))
+    })
+    request.resume()
+  })
+  await new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', resolve)
+  })
+
+  const dir = mkdtempSync(join(tmpdir(), 'velesdb-node-'))
+  const env = { ...process.env }
+  delete env.VELESDB_MEMORY_QUIET
+  try {
+    const { port } = server.address()
+    const script = `
+      const { MemoryService } = require(${JSON.stringify(ADDON_ENTRY)})
+      // The backend, not an arbitrary remote model name, decides semantics.
+      const store = MemoryService.open(
+        ${JSON.stringify(dir)}, 'ollama', 'http://127.0.0.1:${port}', 'hash'
+      )
+      store.memoryStatus().then((status) => {
+        if (!status.embedder.semantic) process.exitCode = 1
+      })
+    `
+    const child = await runNodeChild(script, env)
+    assert.equal(child.status, 0, child.stderr)
+    assert.doesNotMatch(child.stderr, /NOT semantic/)
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
     rmStoreDir(dir)
   }
 })

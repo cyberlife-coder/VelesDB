@@ -2305,6 +2305,9 @@ class MemoryService:
             ollama_url: Ollama server URL (used when ``embedder="ollama"``).
             ollama_model: Ollama model name (used when ``embedder="ollama"``).
 
+        Opening with ``"hash"`` emits one degraded-recall notice on stderr.
+        Set ``VELESDB_MEMORY_QUIET=1`` to suppress it for deliberate offline use.
+
         Raises:
             ValueError: If ``embedder`` is not ``"hash"`` or ``"ollama"``.
             RuntimeError: If the store cannot be opened or the Ollama embedder

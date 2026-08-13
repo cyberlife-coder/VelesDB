@@ -1331,11 +1331,11 @@ fn warn_hash_embedder_not_semantic() {
         return;
     }
     eprintln!(
-        "[velesdb-memory] Using the default 'hash' embedder: deterministic and \
-         fully offline, but NOT semantic — recall matches surface form, not meaning. \
-         For real semantic recall set VELESDB_MEMORY_EMBEDDER=ollama or =openai \
+        "[velesdb-memory] {} For real semantic recall set \
+         VELESDB_MEMORY_EMBEDDER=ollama or =openai \
          (no rebuild needed; see crates/velesdb-memory/README.md for the model \
-         to pull). Set VELESDB_MEMORY_QUIET=1 to silence this notice."
+         to pull). Set VELESDB_MEMORY_QUIET=1 to silence this notice.",
+        velesdb_memory::HASH_EMBEDDER_NOTICE
     );
 }
 
