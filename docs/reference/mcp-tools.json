@@ -1972,6 +1972,79 @@
       }
     },
     {
+      "description": "Read one durable extraction job by the `request_id` returned from `remember_extracted`. Returns that `request_id`, its persisted `state` (`accepted`, `running`, `committed`, or `failed`), committed fact `ids` and their u64-safe decimal `ids_str` twins, `skipped_over_cap` after commit, and `error` after failure. While accepted/running, `ids` and `ids_str` are empty and both optional terminal fields are null.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "request_id": {
+            "description": "The `request_id` returned by `remember_extracted`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id"
+        ],
+        "type": "object"
+      },
+      "name": "extraction_status",
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "error": {
+            "description": "Terminal failure detail, present only in the `failed` state.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ids": {
+            "description": "Stored fact ids after commit; empty while pending or failed.",
+            "items": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "ids_str": {
+            "description": "Decimal-string twins of `ids` for float-lossy JSON clients.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "request_id": {
+            "description": "Stable job identifier.",
+            "type": "string"
+          },
+          "skipped_over_cap": {
+            "description": "Extracted facts dropped for exceeding the embeddable cap, present only\nafter commit.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "One of `accepted`, `running`, `committed`, or `failed`.",
+            "enum": [
+              "accepted",
+              "running",
+              "committed",
+              "failed"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "state",
+          "ids",
+          "ids_str"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "description": "Reinforce a recalled memory with an outcome: `success=true` if the fact was useful, `false` if it was noise. This durably updates the fact's learned confidence, which `recall` uses to re-rank future results — over repeated feedback, useful facts drift up and noise drifts down, so the memory improves with use without retraining the model. Returns the fact's new confidence in [0,1].",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -3034,12 +3107,16 @@
       }
     },
     {
-      "description": "Store a passage of raw text by extracting its atomic facts and auto-building the fact↔topic graph, so `why` can later connect them with no manual links. Set `extractor` per call (`outline`, `ollama`, or `openai`), or omit it to use the daemon default from VELESDB_MEMORY_EXTRACTOR. `outline` is always available; a remote backend must be the one configured when the daemon started. Returns `ids` — the stored facts' ids, in extraction order — plus `ids_str`, their decimal-string twins: ids exceed 2^53, so always relay those on clients without u64-safe JSON number parsing. It also returns `skipped_over_cap`, and you should read it: that is how many facts the extractor DID produce out of your text and this tool did NOT store, because each was longer than the per-fact text limit. A non-zero `skipped_over_cap` means part of what you sent was extracted and then dropped — without that number, a short `ids` list is indistinguishable from a passage that simply held fewer facts.",
+      "description": "Accept a passage for durable background extraction and return before model generation. Set `extractor` per call (`outline`, `ollama`, or `openai`), or omit it to use VELESDB_MEMORY_EXTRACTOR. Supply `idempotency_key` when retrying across a client timeout: the same key and payload reuse one job, while a changed payload is rejected. The receipt returns `request_id`, its initial `state` (`accepted`, or the persisted state of a reused request), and `reused`. Poll `extraction_status(request_id)` until `committed` or `failed`; accepted/running jobs survive process restart.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
           "extractor": {
             "description": "Per-call backend (`outline`, `ollama`, or `openai`). Omit it to use the\nbackend configured when the daemon started.",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "description": "Optional retry key. Reusing it with the same payload returns the same\ndurable job; reusing it with a different payload is rejected.",
             "type": "string"
           },
           "metadata": {
@@ -3061,31 +3138,29 @@
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
-          "ids": {
-            "description": "Stable ids of the stored facts, in extraction order.",
-            "items": {
-              "minimum": 0,
-              "type": "integer"
-            },
-            "type": "array"
+          "request_id": {
+            "description": "Stable 64-hex identifier used to query the durable job.",
+            "type": "string"
           },
-          "ids_str": {
-            "description": "Decimal-string twins of `ids`, same order (issue #1468) — see\n[`RememberResult::id_str`].",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
+          "reused": {
+            "description": "Whether an identical prior request was reused instead of enqueued.",
+            "type": "boolean"
           },
-          "skipped_over_cap": {
-            "description": "Extracted facts DROPPED for exceeding the embeddable text cap\n(2048 bytes). Additive and always present: a skip the caller cannot\nsee is indistinguishable from the model extracting fewer facts, and\nthis tool exists precisely so the caller does not have to verify what\nit stored.",
-            "minimum": 0,
-            "type": "integer"
+          "state": {
+            "description": "State observed when the receipt was produced.",
+            "enum": [
+              "accepted",
+              "running",
+              "committed",
+              "failed"
+            ],
+            "type": "string"
           }
         },
         "required": [
-          "ids",
-          "ids_str",
-          "skipped_over_cap"
+          "request_id",
+          "state",
+          "reused"
         ],
         "type": "object"
       }

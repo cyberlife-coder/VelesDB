@@ -36,6 +36,10 @@ toml = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { version = "0.11", optional = true }
 fs2 = { version = "0.4", optional = true }
+# Secure sibling temporary files for durable extraction-job snapshots. The
+# dependency follows `persistence`, so wasm/no-default consumers do not carry
+# filesystem code.
+tempfile = { version = "3", optional = true }
 # Pinned to rmcp's schemars (1.2.x) so domain types and MCP DTOs share one
 # JsonSchema derive — no duplicate wire/domain structs.
 schemars = "1"
@@ -162,6 +166,7 @@ persistence = [
     "velesdb-core/persistence",
     "dep:sha2",
     "dep:fs2",
+    "dep:tempfile",
     "dep:atomicwrites",
 ]
 # Real on-device semantic recall via a local Ollama or OpenAI-compatible
@@ -178,10 +183,13 @@ ollama = ["dep:ureq"]
 extract = ["dep:ureq"]
 
 [dev-dependencies]
-tempfile = "3"
 serde_json = { workspace = true }
 tokio = { workspace = true }
 criterion = { workspace = true }
+# Integration tests use scratch stores even when `persistence` is not one of
+# the features under test. Keep the production dependency optional while
+# making the test harness feature-independent.
+tempfile = { workspace = true }
 # tests/daemon_logging.rs (#1780) installs a capturing global subscriber to
 # assert the per-request events exist, carry the promised fields, and never
 # leak a payload. Dev-only copies of the optional prod deps above, so the

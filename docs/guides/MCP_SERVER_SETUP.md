@@ -748,6 +748,17 @@ a requested remote backend must match the one configured at startup so it can
 reuse that backend's URL, model, and credential safely. This lets one daemon
 handle structured directives and free prose without a restart.
 
+The MCP call is a durable asynchronous contract. It returns
+`{request_id, state, reused}` after the request is persisted, before the model
+runs. Give each logical client operation an `idempotency_key`, then poll
+`extraction_status({request_id})` until `committed` or `failed`. Retrying the
+same key and payload never launches a second extraction; changing the payload
+under that key is rejected. Accepted/running jobs resume after a daemon
+restart, and model output is persisted before graph writes so an interrupted
+commit replays the same extraction. The job snapshots live under
+`<VELESDB_MEMORY_PATH>/extraction-jobs/`; terminal snapshots drop the passage
+and retain only its digest and result.
+
 `openai` is the same OpenAI-compatible protocol described under
 [Embedding backend](#embedding-backend), reached over
 `/v1/chat/completions`:

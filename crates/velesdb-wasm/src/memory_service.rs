@@ -746,7 +746,7 @@ impl WasmMemoryService {
         to_js(&EntityProfileOut::from_lookup(name, profile))
     }
 
-    /// Extract atomic facts from `text` and wire the entity graph they state,
+    /// Extract atomic facts from `text` and wire the described entity graph,
     /// with no manual `relate()`. Resolves to
     /// `{ids, skippedOverCap}` — the stored ids as decimal strings, and how
     /// many facts were dropped for exceeding the embeddable cap.

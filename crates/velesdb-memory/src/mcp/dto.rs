@@ -18,6 +18,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use super::extraction_jobs::ExtractionJobState;
 use crate::model::{
     deserialize_id, ColumnFilter, EntityProfile, EntityRelation, Explanation, Link, MemoryEdge,
     MemoryNode, Recollection,
@@ -572,23 +573,48 @@ pub(super) struct RememberExtractedParams {
     /// backend configured when the daemon started.
     #[serde(default)]
     pub(super) extractor: Option<String>,
+    /// Optional retry key. Reusing it with the same payload returns the same
+    /// durable job; reusing it with a different payload is rejected.
+    #[serde(default)]
+    pub(super) idempotency_key: Option<String>,
 }
 
-/// Result of the `remember_extracted` tool.
+/// Immediate durable receipt from the `remember_extracted` tool.
 #[derive(Serialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub(super) struct RememberExtractedResult {
-    /// Stable ids of the stored facts, in extraction order.
+    /// Stable 64-hex identifier used to query the durable job.
+    pub(super) request_id: String,
+    /// State observed when the receipt was produced.
+    pub(super) state: ExtractionJobState,
+    /// Whether an identical prior request was reused instead of enqueued.
+    pub(super) reused: bool,
+}
+
+/// Parameters for the `extraction_status` tool.
+#[derive(Deserialize, JsonSchema)]
+pub(super) struct ExtractionJobStatusParams {
+    /// The `request_id` returned by `remember_extracted`.
+    pub(super) request_id: String,
+}
+
+/// Durable status and terminal result of one extraction job.
+#[derive(Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct ExtractionJobStatusResult {
+    /// Stable job identifier.
+    pub(super) request_id: String,
+    /// One of `accepted`, `running`, `committed`, or `failed`.
+    pub(super) state: ExtractionJobState,
+    /// Stored fact ids after commit; empty while pending or failed.
     pub(super) ids: Vec<u64>,
-    /// Decimal-string twins of `ids`, same order (issue #1468) — see
-    /// [`RememberResult::id_str`].
+    /// Decimal-string twins of `ids` for float-lossy JSON clients.
     pub(super) ids_str: Vec<String>,
-    /// Extracted facts DROPPED for exceeding the embeddable text cap
-    /// (2048 bytes). Additive and always present: a skip the caller cannot
-    /// see is indistinguishable from the model extracting fewer facts, and
-    /// this tool exists precisely so the caller does not have to verify what
-    /// it stored.
-    pub(super) skipped_over_cap: usize,
+    /// Extracted facts dropped for exceeding the embeddable cap, present only
+    /// after commit.
+    pub(super) skipped_over_cap: Option<usize>,
+    /// Terminal failure detail, present only in the `failed` state.
+    pub(super) error: Option<String>,
 }
 
 /// The `embedder` block of [`MemoryStatusResult`].

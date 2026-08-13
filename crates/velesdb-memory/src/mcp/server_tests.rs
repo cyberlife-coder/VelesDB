@@ -13,7 +13,36 @@ fn server() -> (TempDir, McpServer) {
     let dir = TempDir::new().expect("create tempdir");
     let embedder: DynEmbedder = Box::new(HashEmbedder::new(crate::DEFAULT_DIMENSION));
     let service = MemoryService::open(dir.path(), embedder).expect("open memory store");
-    (dir, McpServer::new(service))
+    let server = McpServer::new(service)
+        .with_extraction_jobs(dir.path())
+        .expect("start durable extraction jobs");
+    (dir, server)
+}
+
+async fn committed_extraction(
+    server: &McpServer,
+    receipt: RememberExtractedResult,
+) -> ExtractionJobStatusResult {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let Json(status) = server
+                .extraction_status(Parameters(ExtractionJobStatusParams {
+                    request_id: receipt.request_id.clone(),
+                }))
+                .await
+                .expect("query extraction status");
+            match status.state {
+                extraction_jobs::ExtractionJobState::Committed => return status,
+                extraction_jobs::ExtractionJobState::Failed => {
+                    panic!("extraction failed: {:?}", status.error)
+                }
+                extraction_jobs::ExtractionJobState::Accepted
+                | extraction_jobs::ExtractionJobState::Running => tokio::task::yield_now().await,
+            }
+        }
+    })
+    .await
+    .expect("extraction job reaches a terminal state")
 }
 
 /// Run a one-hop `why(DECISION)` through the server, returning the seed
@@ -748,6 +777,31 @@ impl Extractor for GenerativeStub {
     }
 }
 
+struct CountingExtractionStub {
+    calls: AtomicUsize,
+}
+
+struct FailingExtractionStub {
+    calls: AtomicUsize,
+}
+
+impl Extractor for FailingExtractionStub {
+    fn extract(&self, _text: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Err(ExtractError::Backend("model unavailable".to_owned()))
+    }
+}
+
+impl Extractor for CountingExtractionStub {
+    fn extract(&self, _text: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(vec![ExtractedFact {
+            text: "One idempotent extraction result.".to_owned(),
+            entities: Vec::new(),
+        }])
+    }
+}
+
 #[tokio::test]
 async fn remember_extracted_builds_a_graph_through_the_server() {
     let (_dir, srv) = server();
@@ -755,14 +809,16 @@ async fn remember_extracted_builds_a_graph_through_the_server() {
         .with_named_extractor("ollama", Arc::new(GraphStub) as DynExtractor)
         .expect("ollama is a supported extractor name");
 
-    let Json(res) = srv
+    let Json(receipt) = srv
         .remember_extracted(Parameters(RememberExtractedParams {
             text: "Alice and Bob work in Rust.".to_owned(),
             metadata: None,
             extractor: None,
+            idempotency_key: None,
         }))
         .await
         .expect("remember_extracted");
+    let res = committed_extraction(&srv, receipt).await;
     assert_eq!(res.ids.len(), 2, "both facts stored");
 
     // why reaches the sibling fact via the shared topic, seed is a real fact.
@@ -789,22 +845,26 @@ async fn two_successive_calls_can_select_different_extractors() {
         .expect("ollama is a supported extractor name");
     let source = "fact: Deterministic directive | outline";
 
-    let Json(outlined) = srv
+    let Json(outlined_receipt) = srv
         .remember_extracted(Parameters(RememberExtractedParams {
             text: source.to_owned(),
             metadata: None,
             extractor: Some("outline".to_owned()),
+            idempotency_key: None,
         }))
         .await
         .expect("the per-call outline backend must work");
-    let Json(generative) = srv
+    let Json(generative_receipt) = srv
         .remember_extracted(Parameters(RememberExtractedParams {
             text: source.to_owned(),
             metadata: None,
             extractor: Some("ollama".to_owned()),
+            idempotency_key: None,
         }))
         .await
         .expect("the configured remote backend must remain selectable");
+    let outlined = committed_extraction(&srv, outlined_receipt).await;
+    let generative = committed_extraction(&srv, generative_receipt).await;
 
     assert_ne!(outlined.ids, generative.ids, "the extractions must differ");
     let Json(listed) = srv
@@ -823,6 +883,92 @@ async fn two_successive_calls_can_select_different_extractors() {
         .collect();
     assert!(contents.contains(&"Deterministic directive"));
     assert!(contents.contains(&"Generative interpretation"));
+}
+
+#[tokio::test]
+async fn retry_key_runs_one_extraction_and_rejects_a_changed_payload() {
+    let (_dir, srv) = server();
+    let extractor = Arc::new(CountingExtractionStub {
+        calls: AtomicUsize::new(0),
+    });
+    let srv = srv.with_extractor(extractor.clone());
+    let submit = |text: &str| RememberExtractedParams {
+        text: text.to_owned(),
+        metadata: None,
+        extractor: None,
+        idempotency_key: Some("client-operation-42".to_owned()),
+    };
+
+    let Json(first) = srv
+        .remember_extracted(Parameters(submit("same passage")))
+        .await
+        .expect("first durable receipt");
+    let Json(retry) = srv
+        .remember_extracted(Parameters(submit("same passage")))
+        .await
+        .expect("retry must reuse the receipt");
+    assert_eq!(retry.request_id, first.request_id);
+    assert!(retry.reused);
+    let result = committed_extraction(&srv, first).await;
+    assert_eq!(result.ids.len(), 1);
+    assert_eq!(extractor.calls.load(Ordering::SeqCst), 1);
+
+    let error = srv
+        .remember_extracted(Parameters(submit("changed passage")))
+        .await
+        .map(|_| ())
+        .expect_err("one retry key cannot alias a changed payload");
+    assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+}
+
+#[tokio::test]
+async fn failed_extraction_is_terminal_queryable_and_not_retried() {
+    let (_dir, srv) = server();
+    let extractor = Arc::new(FailingExtractionStub {
+        calls: AtomicUsize::new(0),
+    });
+    let srv = srv.with_extractor(extractor.clone());
+    let params = || RememberExtractedParams {
+        text: "passage whose model call fails".to_owned(),
+        metadata: None,
+        extractor: None,
+        idempotency_key: Some("terminal-failure-proof".to_owned()),
+    };
+    let Json(receipt) = srv
+        .remember_extracted(Parameters(params()))
+        .await
+        .expect("the durable request is accepted before generation fails");
+    let status = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let Json(status) = srv
+                .extraction_status(Parameters(ExtractionJobStatusParams {
+                    request_id: receipt.request_id.clone(),
+                }))
+                .await
+                .expect("query failed extraction");
+            if status.state.is_terminal() {
+                return status;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("failed extraction reaches its terminal record");
+    assert_eq!(status.state, extraction_jobs::ExtractionJobState::Failed);
+    assert!(status.ids.is_empty());
+    assert!(status.skipped_over_cap.is_none());
+    assert!(status
+        .error
+        .as_deref()
+        .is_some_and(|error| error.contains("model unavailable")));
+
+    let Json(retry) = srv
+        .remember_extracted(Parameters(params()))
+        .await
+        .expect("same key and payload reuses terminal failure");
+    assert!(retry.reused);
+    assert_eq!(retry.state, extraction_jobs::ExtractionJobState::Failed);
+    assert_eq!(extractor.calls.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
@@ -915,6 +1061,7 @@ async fn remember_extracted_without_backend_returns_internal_error() {
             text: "anything".to_owned(),
             metadata: None,
             extractor: None,
+            idempotency_key: None,
         }))
         .await
         .map(|_| ())
@@ -925,14 +1072,16 @@ async fn remember_extracted_without_backend_returns_internal_error() {
 #[tokio::test]
 async fn explicit_outline_works_without_a_daemon_default() {
     let (_dir, srv) = server();
-    let Json(stored) = srv
+    let Json(receipt) = srv
         .remember_extracted(Parameters(RememberExtractedParams {
             text: "fact: A deterministic fact | outline".to_owned(),
             metadata: None,
             extractor: Some("outline".to_owned()),
+            idempotency_key: None,
         }))
         .await
         .expect("explicit outline must not need a daemon default");
+    let stored = committed_extraction(&srv, receipt).await;
     assert_eq!(stored.ids.len(), 1);
 }
 
@@ -944,6 +1093,7 @@ async fn unknown_per_call_extractor_returns_invalid_params() {
             text: "anything".to_owned(),
             metadata: None,
             extractor: Some("lmstudio".to_owned()),
+            idempotency_key: None,
         }))
         .await
         .map(|_| ())
@@ -1121,14 +1271,16 @@ async fn remember_extracted_response_echoes_ids_str() {
     }
     let (_dir, srv) = server();
     let srv = srv.with_extractor(Arc::new(Stub) as DynExtractor);
-    let Json(res) = srv
+    let Json(receipt) = srv
         .remember_extracted(Parameters(RememberExtractedParams {
             text: "Alice works in Rust.".to_owned(),
             metadata: None,
             extractor: None,
+            idempotency_key: None,
         }))
         .await
         .expect("remember_extracted");
+    let res = committed_extraction(&srv, receipt).await;
     assert_eq!(res.ids_str.len(), res.ids.len());
     for (id, id_str) in res.ids.iter().zip(res.ids_str.iter()) {
         assert_eq!(*id_str, id.to_string());
@@ -1249,7 +1401,7 @@ fn test_recall_where_description_documents_type_strict_comparisons() {
 /// Whether `haystack` names `field` as a WORD, not as an accidental substring.
 ///
 /// A plain `contains` is not enough, and the measurement says so: across the
-/// twenty published tools it lets `feedback`'s `id` pass on the strength of
+/// the published tools it lets `feedback`'s `id` pass on the strength of
 /// "con-f-**id**-ence", and `entity`'s `relations` on "relation-ships". A
 /// guard weaker than its own statement is worse than none, because it reads
 /// as coverage.
@@ -1268,25 +1420,21 @@ fn description_names_field(haystack: &str, field: &str) -> bool {
     })
 }
 
-/// #1747. `remember_extracted`'s published `outputSchema` carries three root
-/// fields, and one of them — `skipped_over_cap` — exists PRECISELY to make a
-/// silent loss visible: facts the extractor produced and this tool dropped for
-/// exceeding the per-fact text cap. Its own doc-comment argues the point: "a
-/// skip the caller cannot see is indistinguishable from the model extracting
-/// fewer facts".
+/// #1747/#1839. `remember_extracted`'s published `outputSchema` carries the
+/// durable receipt fields (`request_id`, `state`, `reused`). Each changes what
+/// a caller must do next: save the id, poll the state, and distinguish an
+/// accepted operation from an idempotent retry.
 ///
-/// The description used to say only "Returns the stored facts' ids". So the
-/// one surface a model reads BEFORE deciding to call never mentioned the field
-/// whose whole purpose is to be read — the omission defeated the reason the
-/// field was added (#1692).
+/// The older synchronous contract once omitted its loss counter from the
+/// description, proving that a field present only in a schema is not enough:
+/// the model reads the description before deciding how to close the loop.
 ///
 /// The field names are DERIVED from the published schema rather than kept as a
 /// second hard-coded list here: a root field added tomorrow is caught without
 /// anyone remembering this test exists.
 ///
-/// Scope, stated so it is not overclaimed: this pins ONE tool. Fourteen of the
-/// twenty published tools would fail the same check today, and closing that
-/// class is its own piece of work (#1695).
+/// Scope, stated so it is not overclaimed: this pins ONE tool. Closing the
+/// same class across the complete published surface is tracked by #1695.
 #[test]
 fn test_remember_extracted_description_names_every_published_output_field() {
     let tool = McpServer::remember_extracted_tool_attr();
@@ -1507,11 +1655,14 @@ async fn an_outline_configured_server_builds_a_hub_that_entity_finds() {
     else {
         panic!("`outline` must be usable as-is, with no remote configuration");
     };
-    let srv = McpServer::new(service).with_extractor(extractor);
+    let srv = McpServer::new(service)
+        .with_extractor(extractor)
+        .with_extraction_jobs(dir.path())
+        .expect("start durable extraction jobs");
 
     // Tool 1 of the two that were dead: it used to answer "extraction backend
     // not configured" no matter what the operator set.
-    let Json(stored) = srv
+    let Json(receipt) = srv
         .remember_extracted(Parameters(RememberExtractedParams {
             text: "fact: Theo has a sister called Camille | Theo, Camille\n\
                    edge: Camille | soeur de | Theo\n\
@@ -1519,9 +1670,11 @@ async fn an_outline_configured_server_builds_a_hub_that_entity_finds() {
                 .to_owned(),
             metadata: None,
             extractor: None,
+            idempotency_key: None,
         }))
         .await
         .expect("remember_extracted must work on an outline-configured server");
+    let stored = committed_extraction(&srv, receipt).await;
     assert_eq!(
         stored.ids.len(),
         1,
@@ -1657,6 +1810,48 @@ fn gated_server() -> (
         .expect("open memory store")
         .with_autograph(extractor.clone());
     (dir, McpServer::new(service), extractor, release)
+}
+
+#[tokio::test]
+async fn remember_extracted_receipt_does_not_wait_for_generation() {
+    let (_dir, srv) = server();
+    let (extractor, release) = GatedServerExtractor::new();
+    let srv = srv.with_extractor(extractor.clone());
+
+    let Json(receipt) = srv
+        .remember_extracted(Parameters(RememberExtractedParams {
+            text: "Alice works at Wiscale.".to_owned(),
+            metadata: None,
+            extractor: None,
+            idempotency_key: Some("immediate-receipt-proof".to_owned()),
+        }))
+        .await
+        .expect("durable acceptance must not wait for the extractor");
+    assert_eq!(receipt.state, extraction_jobs::ExtractionJobState::Accepted);
+    assert_eq!(
+        extractor.completed.load(Ordering::SeqCst),
+        0,
+        "the receipt must arrive while generation is still blocked"
+    );
+    assert!(
+        wait_for(Duration::from_secs(5), || extractor
+            .entered
+            .load(Ordering::SeqCst)
+            == 1),
+        "the background worker must start the accepted job"
+    );
+    let Json(running) = srv
+        .extraction_status(Parameters(ExtractionJobStatusParams {
+            request_id: receipt.request_id.clone(),
+        }))
+        .await
+        .expect("read the in-flight job");
+    assert_eq!(running.state, extraction_jobs::ExtractionJobState::Running);
+
+    release.send(()).expect("release extraction");
+    let status = committed_extraction(&srv, receipt).await;
+    assert_eq!(status.state, extraction_jobs::ExtractionJobState::Committed);
+    assert_eq!(extractor.completed.load(Ordering::SeqCst), 1);
 }
 
 /// Poll until `probe` answers true — the event, not the clock (#1793).

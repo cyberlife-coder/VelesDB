@@ -750,12 +750,36 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         extractor: &X,
         metadata: Option<&Metadata>,
     ) -> Result<RememberedExtraction, MemoryError> {
+        let extraction = Self::extract_passage(text, extractor)?;
+        self.store_extraction(&extraction, metadata)
+    }
+
+    /// Extract and orient one passage without writing any memory state.
+    ///
+    /// Kept separate from [`Self::store_extraction`] so the MCP durable-job
+    /// worker can persist the model output before the first graph write. A
+    /// restart after that boundary replays stable data instead of generating a
+    /// second, potentially different extraction.
+    pub(crate) fn extract_passage<X: Extractor>(
+        text: &str,
+        extractor: &X,
+    ) -> Result<crate::extract::Extraction, MemoryError> {
         let text = text.trim();
         if text.is_empty() {
             return Err(MemoryError::EmptyFact);
         }
         let mut extraction = extractor.extract_graph(text)?;
         crate::extract::orient_kinship(text, &mut extraction.relations);
+        Ok(extraction)
+    }
+
+    /// Store a previously generated extraction through the same idempotent
+    /// fact, hub, edge, and attribute primitives as [`Self::remember_extracted`].
+    pub(crate) fn store_extraction(
+        &self,
+        extraction: &crate::extract::Extraction,
+        metadata: Option<&Metadata>,
+    ) -> Result<RememberedExtraction, MemoryError> {
         let mut entity_ids: HashMap<String, u64> = HashMap::new();
         let mut edges: HashSet<(u64, u64, String)> = HashSet::new();
         let outcome =
