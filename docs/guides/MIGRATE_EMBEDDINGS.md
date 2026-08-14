@@ -17,6 +17,12 @@ velesdb-memory migrate-embeddings --store <dir> --destination <dir> [--strategy 
 
 ## Before you start
 
+Online migration is not implemented yet. Issue
+[#1796](https://github.com/cyberlife-coder/VelesDB/issues/1796) is governed by
+the accepted [online migration contract](../decisions/online-memory-migration-contract.md),
+which deliberately keeps this offline path as the only supported procedure
+until its crash, convergence and bounded-cutover gates are proven end to end.
+
 - **Stop the daemon.** The store is single-writer; a live daemon holds its
   `flock` and the migration refuses to open the source. Do not race it: a
   daemon started mid-migration can only lose.
