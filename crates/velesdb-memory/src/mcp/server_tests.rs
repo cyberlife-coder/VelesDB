@@ -1699,7 +1699,7 @@ fn unrelate_params_accept_string_or_number_ids_on_the_wire() {
 /// The defect was never in the library: `OutlineExtractor` always worked, and
 /// `McpServer::with_extractor` always accepted it. What was broken is that the
 /// only code able to CHOOSE `outline` sat inside the daemon's
-/// `#[cfg(feature = "extract")]` block, so on a default build two of the twenty
+/// `#[cfg(feature = "extractor-http")]` block, so on a default build two of the twenty
 /// published tools were dead — `remember_extracted` refused outright, and
 /// `entity` answered `found: false` for every name, entity hubs being born only
 /// of extraction.

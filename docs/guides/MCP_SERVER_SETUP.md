@@ -249,8 +249,8 @@ any URL that is not `https://`, even for `127.0.0.1`, so plain HTTP is no
 longer viable as the default.
 
 ```bash
-cargo install velesdb-memory --features http,ollama
-# → opt into `ollama` at BUILD time only if you want that embedder available;
+cargo install velesdb-memory --features http,embedder-http
+# → opt into HTTP embedders at BUILD time only if you want them available;
 #   VELESDB_MEMORY_EMBEDDER stays a runtime choice regardless.
 velesdb-memory --http
 # [velesdb-memory] HTTPS server listening on https://127.0.0.1:18090/mcp
@@ -613,8 +613,9 @@ places:
 
 ## Installing the daemon without a Rust toolchain
 
-Both installers default to `cargo install --features ollama,http`, which needs
-a Rust toolchain on the machine. Pass `--from-release[=TAG]` (`.sh`) or
+Both installers default to
+`cargo install --features embedder-http,extractor-http,http`, which needs a
+Rust toolchain on the machine. Pass `--from-release[=TAG]` (`.sh`) or
 `-FromRelease` / `-FromReleaseTag <TAG>` (`.ps1`, which has no PowerShell
 equivalent of the shell flag's optional inline value) to instead download a
 prebuilt `velesdb-memory-daemon-<target>.{tar.gz,zip}` archive from a

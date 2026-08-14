@@ -5,8 +5,8 @@
 //! ```text
 //! cargo run --release -p velesdb-memory --example bench_multihop
 //! # real semantic embedder (genuine scores), still local:
-//! cargo build --release -p velesdb-memory --features ollama && ollama pull all-minilm
-//! VELESDB_MEMORY_EMBEDDER=ollama cargo run --release -p velesdb-memory --features ollama --example bench_multihop
+//! cargo build --release -p velesdb-memory --features embedder-http && ollama pull all-minilm
+//! VELESDB_MEMORY_EMBEDDER=ollama cargo run --release -p velesdb-memory --features embedder-http --example bench_multihop
 //! ```
 //!
 //! ## Method
@@ -194,11 +194,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Deterministic `HashEmbedder` by default; a real on-device model via Ollama
-/// when built `--features ollama` with `VELESDB_MEMORY_EMBEDDER=ollama`.
-// Without the `ollama` feature this can't fail; the `Result` is for the on path.
+/// when built `--features embedder-http` with `VELESDB_MEMORY_EMBEDDER=ollama`.
+// Without the `embedder-http` feature this can't fail; the `Result` is for the on path.
 #[allow(clippy::unnecessary_wraps)]
 fn embedder() -> Result<DynEmbedder, Box<dyn std::error::Error>> {
-    #[cfg(feature = "ollama")]
+    #[cfg(feature = "embedder-http")]
     if std::env::var("VELESDB_MEMORY_EMBEDDER").as_deref() == Ok("ollama") {
         use velesdb_memory::{OllamaEmbedder, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL};
         return Ok(Box::new(OllamaEmbedder::new(
@@ -211,7 +211,7 @@ fn embedder() -> Result<DynEmbedder, Box<dyn std::error::Error>> {
 
 /// Human label for the active embedder, for the report header.
 fn embedder_label() -> &'static str {
-    #[cfg(feature = "ollama")]
+    #[cfg(feature = "embedder-http")]
     if std::env::var("VELESDB_MEMORY_EMBEDDER").as_deref() == Ok("ollama") {
         return "ollama / all-minilm (real semantic)";
     }

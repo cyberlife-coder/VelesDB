@@ -245,9 +245,9 @@ only a third of the answers; the graph recovers all of them, **+67 pp** with a
 real model. Run that arm yourself:
 
 ```bash
-cargo build --release -p velesdb-memory --features ollama && ollama pull all-minilm
+cargo build --release -p velesdb-memory --features embedder-http && ollama pull all-minilm
 VELESDB_MEMORY_EMBEDDER=ollama \
-  cargo run --release -p velesdb-memory --features ollama --example bench_multihop
+  cargo run --release -p velesdb-memory --features embedder-http --example bench_multihop
 ```
 
 `bench_multihop` measures the *engine's* contribution on controlled data with
@@ -316,7 +316,8 @@ Other verified clients: Cursor, Cline, Zed, opencode, Devin CLI.
 - **A store is fixed to one embedder.** The embedding dimension is probed from
   the model, so do not switch embedders on an existing store.
 - **Bring-your-own-links by default.** The graph is built by `relate` and
-  `links`; automatic extraction needs `--features extract` plus a local model.
+  `links`; automatic extraction needs `--features extractor-http` plus a local
+  model. The former `extract` feature remains a compatibility alias.
 - **`path` ingestion is off unless allowlisted** via
   `VELESDB_MEMORY_INGEST_ROOTS`.
 - **Binding parity is incomplete.** `compile_transcript` is MCP-only; the Node

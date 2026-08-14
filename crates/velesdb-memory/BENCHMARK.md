@@ -95,7 +95,7 @@ sentences and the title that connects them — not just an answer.
 ```sh
 ollama pull mxbai-embed-large
 # fetch HotpotQA dev (distractor) into examples/multihop/data/
-cargo run --release -p velesdb-memory --features ollama --example multihop -- \
+cargo run --release -p velesdb-memory --features embedder-http --example multihop -- \
   --questions 3000 --k 5 --idf --embed-model mxbai-embed-large
 ```
 
@@ -134,7 +134,7 @@ independently built datasets, not one.
 ```sh
 # convert 2Wiki dev (voidful/2WikiMultihopQA) into the column-oriented schema,
 # then run the SAME example used for HotpotQA — only --dataset changes:
-cargo run --release -p velesdb-memory --features ollama --example multihop -- \
+cargo run --release -p velesdb-memory --features embedder-http --example multihop -- \
   --dataset examples/multihop/data/twowiki_dev_1000.json --questions 1000 --k 5 --idf
 ```
 
@@ -350,18 +350,18 @@ ollama pull qwen3.6:35b-mlx          # any local chat model works; this is the d
 examples/locomo/fetch_dataset.sh     # fetches LoCoMo (research data, git-ignored)
 
 # 2. LLM-free retrieval recall (fast, no judge):
-cargo run --release -p velesdb-memory --features ollama --example locomo -- \
+cargo run --release -p velesdb-memory --features embedder-http --example locomo -- \
   --retrieval --embed-model mxbai-embed-large --k 32
 
 # 3. full answer-accuracy run (date-routed context, Claude judge):
-cargo run --release -p velesdb-memory --features ollama --example locomo -- \
+cargo run --release -p velesdb-memory --features embedder-http --example locomo -- \
   --embed-model mxbai-embed-large --date-context --date-route --k 32 --claude-judge
 
 # 4. does the fused ranking reproduce through the SHIPPED recall_fused API?
 #    compare these two on identical data (LLM-free, seconds each):
-cargo run --release -p velesdb-memory --features ollama --example locomo -- \
+cargo run --release -p velesdb-memory --features embedder-http --example locomo -- \
   --retrieval --idf-weight        # the harness's own fusion
-cargo run --release -p velesdb-memory --features ollama --example locomo -- \
+cargo run --release -p velesdb-memory --features embedder-http --example locomo -- \
   --retrieval --use-shipped-api   # the installed MemoryService::recall_fused
 ```
 

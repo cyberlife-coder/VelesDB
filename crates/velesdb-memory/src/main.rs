@@ -8,7 +8,7 @@
 //! `VELESDB_MEMORY_EXTRACTOR` to set `remember_extracted`'s default backend
 //! (calls may override it): `outline` reads directives you write explicitly
 //! and needs no model and no extra feature, while `ollama` and `openai` infer
-//! them with a generative model and need `--features extract`.
+//! them with a generative model and need `--features extractor-http`.
 //!
 //! Each role carries its own `_URL`, `_MODEL` and `_API_TOKEN`, and the two are
 //! configured independently — embedding on a local Ollama while extracting on
@@ -894,14 +894,14 @@ fn apply_autograph(
     }
 }
 
-/// Without the `extract` feature there is no remote extraction backend in this
+/// Without the `extractor-http` feature there is no remote extraction backend in this
 /// build, so there is nothing to be unreachable and no transport to ask with.
 ///
 /// A no-op rather than a `cfg` at the call site, matching how
 /// `build_remote_extractor` is paired a few lines below: the one arm that
 /// reaches both is easier to read with the condition next to the reason than
 /// wrapped around the code that uses it.
-#[cfg(not(feature = "extract"))]
+#[cfg(not(feature = "extractor-http"))]
 fn warn_if_extraction_backend_is_unreachable(_backend: &str) {}
 
 /// How long startup may spend asking whether the extraction backend is there.
@@ -909,7 +909,7 @@ fn warn_if_extraction_backend_is_unreachable(_backend: &str) {}
 /// Short on purpose: this runs before the daemon serves anything, and the
 /// answer is worth having only if getting it costs nothing. A stalled server
 /// is itself an answer, delivered by this timeout.
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 const EXTRACTION_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// Say once, at startup, when the configured extraction backend cannot be
@@ -926,7 +926,7 @@ const EXTRACTION_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_
 /// Never falls back to another backend. A daemon that quietly answered with a
 /// different engine than the one configured is the defect #1751's own gate
 /// comment calls a contradiction the operator cannot resolve.
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 fn warn_if_extraction_backend_is_unreachable(backend: &str) {
     use velesdb_memory::reachability::{probe_openai, warning_line, Reachability};
 
@@ -954,7 +954,7 @@ fn warn_if_extraction_backend_is_unreachable(backend: &str) {
 /// Resolves the same way the builders do — including Ollama's canonical local
 /// default — because a probe of a different address than the one that will be
 /// used answers a question nobody asked.
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 fn extraction_endpoint_for_probe(backend: &str) -> Option<(String, String)> {
     let endpoint = extractor_endpoint().ok()?;
     let url = match backend {
@@ -1081,7 +1081,7 @@ fn build_server(
 
 /// Attach the extraction backend named `backend` to `server`.
 ///
-/// **There is deliberately no `#[cfg(feature = "extract")]` on this function.**
+/// **There is deliberately no `#[cfg(feature = "extractor-http")]` on this function.**
 /// That gate used to sit on the whole selection, which is what made
 /// `OutlineExtractor` unreachable from the MCP server (#1734): the extractor
 /// needs no dependency and is linked into every build, but the only code that
@@ -1124,7 +1124,7 @@ fn attach_extractor(
 /// dispatch lives in the binary — so the two CAN drift. When they do, the
 /// operator gets a message naming the gap instead of an Ollama client quietly
 /// pointed at a server that speaks something else.
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 fn build_remote_extractor(
     backend: &str,
 ) -> Result<velesdb_memory::DynExtractor, Box<dyn std::error::Error>> {
@@ -1135,17 +1135,17 @@ fn build_remote_extractor(
     }
 }
 
-/// Without the `extract` feature there is no HTTP backend to build, whichever
+/// Without the `extractor-http` feature there is no HTTP backend to build, whichever
 /// one was asked for. The error names the offline alternative rather than only
 /// what is missing: since #1734, `outline` is a real answer in **every** build,
 /// so a user who only wanted a graph is one setting away instead of one
 /// rebuild away.
-#[cfg(not(feature = "extract"))]
+#[cfg(not(feature = "extractor-http"))]
 fn build_remote_extractor(
     backend: &str,
 ) -> Result<velesdb_memory::DynExtractor, Box<dyn std::error::Error>> {
     Err(format!(
-        "VELESDB_MEMORY_EXTRACTOR={backend} needs a build with `--features extract`; \
+        "VELESDB_MEMORY_EXTRACTOR={backend} needs a build with `--features extractor-http`; \
          for an offline deterministic graph with no rebuild, set \
          VELESDB_MEMORY_EXTRACTOR=outline instead"
     )
@@ -1168,7 +1168,7 @@ fn build_remote_extractor(
 ///
 /// # Errors
 /// An `_API_TOKEN` that is set but empty.
-#[cfg(feature = "ollama")]
+#[cfg(feature = "embedder-http")]
 fn embedder_endpoint() -> Result<velesdb_memory::RemoteEndpoint, Box<dyn std::error::Error>> {
     let (endpoint, notice) = velesdb_memory::embedder_env_endpoint()?;
     // Once, at startup, and only when the two genuinely disagree. Called from
@@ -1187,7 +1187,7 @@ fn embedder_endpoint() -> Result<velesdb_memory::RemoteEndpoint, Box<dyn std::er
 ///
 /// # Errors
 /// An `_API_TOKEN` that is set but empty.
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 fn extractor_endpoint() -> Result<velesdb_memory::RemoteEndpoint, Box<dyn std::error::Error>> {
     Ok(velesdb_memory::RemoteEndpoint {
         url: env_opt("VELESDB_MEMORY_EXTRACTOR_URL"),
@@ -1197,7 +1197,7 @@ fn extractor_endpoint() -> Result<velesdb_memory::RemoteEndpoint, Box<dyn std::e
 }
 
 /// A variable's value, or `None` when it is unset.
-#[cfg(any(feature = "ollama", feature = "extract"))]
+#[cfg(any(feature = "embedder-http", feature = "extractor-http"))]
 fn env_opt(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
@@ -1206,7 +1206,7 @@ fn env_opt(name: &str) -> Option<String> {
 ///
 /// Reachable only if `select_*` gains a name and the dispatch below is not
 /// updated with it — the exact drift a wildcard arm used to hide.
-#[cfg(any(feature = "ollama", feature = "extract"))]
+#[cfg(any(feature = "embedder-http", feature = "extractor-http"))]
 fn unwired_backend(role: &str, backend: &str) -> String {
     format!(
         "the {role} backend '{backend}' is accepted by velesdb-memory's selector but \
@@ -1217,7 +1217,7 @@ fn unwired_backend(role: &str, backend: &str) -> String {
 
 /// Build the Ollama-backed extractor from `VELESDB_MEMORY_EXTRACTOR_URL`
 /// (default local) and the required `VELESDB_MEMORY_EXTRACTOR_MODEL`.
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 fn build_ollama_extractor() -> Result<velesdb_memory::DynExtractor, Box<dyn std::error::Error>> {
     use std::sync::Arc;
     use velesdb_memory::extract::DEFAULT_OLLAMA_URL;
@@ -1238,7 +1238,7 @@ fn build_ollama_extractor() -> Result<velesdb_memory::DynExtractor, Box<dyn std:
 
 /// Build the OpenAI-compatible extractor from the extraction role's own
 /// `VELESDB_MEMORY_EXTRACTOR_URL`, `_MODEL` and optional `_API_TOKEN`.
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 fn build_openai_extractor() -> Result<velesdb_memory::DynExtractor, Box<dyn std::error::Error>> {
     use std::sync::Arc;
     use velesdb_memory::OpenAiExtractor;
@@ -1300,7 +1300,7 @@ fn build_embedder() -> Result<ConfiguredEmbedder, Box<dyn std::error::Error>> {
 /// lives in the library and this dispatch lives in the binary, so a name added
 /// to one and not the other must say so rather than fall back to whichever
 /// client happens to be first.
-#[cfg(feature = "ollama")]
+#[cfg(feature = "embedder-http")]
 fn build_remote_embedder(backend: &str) -> Result<ConfiguredEmbedder, Box<dyn std::error::Error>> {
     match backend {
         "ollama" => build_ollama_embedder(),
@@ -1309,14 +1309,12 @@ fn build_remote_embedder(backend: &str) -> Result<ConfiguredEmbedder, Box<dyn st
     }
 }
 
-/// Without the `ollama` feature this crate has no HTTP embedding backend at
-/// all, whichever one was asked for. The feature's name predates the protocol
-/// split and now under-describes what it carries — it is this crate's HTTP
-/// dependency for the embedding role, not a vendor.
-#[cfg(not(feature = "ollama"))]
+/// Without the `embedder-http` feature this crate has no HTTP embedding backend
+/// at all, whichever one was asked for.
+#[cfg(not(feature = "embedder-http"))]
 fn build_remote_embedder(backend: &str) -> Result<ConfiguredEmbedder, Box<dyn std::error::Error>> {
     Err(format!(
-        "the '{backend}' embedder requires building with `--features ollama` \
+        "the '{backend}' embedder requires building with `--features embedder-http` \
          (that feature carries the HTTP dependency for both remote embedding \
          backends); VELESDB_MEMORY_EMBEDDER=hash needs no rebuild"
     )
@@ -1345,7 +1343,7 @@ fn warn_hash_embedder_not_semantic() {
 /// Build the Ollama-backed embedder, defaulting both the URL and the model —
 /// unchanged behaviour, now reached through the role-named variables with the
 /// `VELESDB_MEMORY_OLLAMA_*` pair kept working as aliases.
-#[cfg(feature = "ollama")]
+#[cfg(feature = "embedder-http")]
 fn build_ollama_embedder() -> Result<ConfiguredEmbedder, Box<dyn std::error::Error>> {
     use velesdb_memory::{OllamaEmbedder, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL};
 
@@ -1364,7 +1362,7 @@ fn build_ollama_embedder() -> Result<ConfiguredEmbedder, Box<dyn std::error::Err
 
 /// Build the OpenAI-compatible embedder. Both the URL and the model are
 /// required — see [`velesdb_memory::RemoteEndpoint::require`].
-#[cfg(feature = "ollama")]
+#[cfg(feature = "embedder-http")]
 fn build_openai_embedder() -> Result<ConfiguredEmbedder, Box<dyn std::error::Error>> {
     use velesdb_memory::OpenAiEmbedder;
 

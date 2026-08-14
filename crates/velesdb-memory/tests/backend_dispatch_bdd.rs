@@ -23,7 +23,7 @@
 //!
 //! Categories: Nominal (≥60%), Edge (~20%), Negative (≥20%).
 
-#![cfg(all(feature = "extract", feature = "ollama"))]
+#![cfg(all(feature = "extractor-http", feature = "embedder-http"))]
 
 use std::process::{Command, Output};
 

@@ -35,14 +35,14 @@
 //! The `cfg` below is a CONJUNCTION, not an equality: every SUPERSET of
 //! `mcp` + `context` + `persistence` satisfies it too — so "under any other
 //! feature set this file compiles to nothing" would be false. One such
-//! superset already runs in CI: the `lint` job's "Test the velesdb-memory
-//! extract feature" step (`.github/workflows/ci.yml`) invokes
-//! `cargo test -p velesdb-memory --features extract,ollama,persistence`
-//! WITHOUT `--no-default-features`, so this file compiles and executes there
-//! as well. Verified by running it, not assumed: it passes, because the
-//! twenty-three tools are registered unconditionally — `remember_extracted` is
-//! always advertised and merely answers "no extractor configured" until one
-//! is attached, so neither `extract` nor `ollama` adds or removes a tool.
+//! superset already runs in CI: the `lint` job's "Test the velesdb-memory http
+//! transport" step (`.github/workflows/ci.yml`) invokes
+//! `cargo test -p velesdb-memory --features http` WITHOUT
+//! `--no-default-features`, so this file compiles and executes there as well.
+//! Verified by running it, not assumed: it passes, because the twenty-three
+//! tools are registered unconditionally — `remember_extracted` is always
+//! advertised and merely answers "no extractor configured" until one is
+//! attached, so neither role-named HTTP feature adds or removes a tool.
 //!
 //! The trap is therefore conditional, not present: the day a tool (or a DTO
 //! field reachable from a schema) sits behind a non-default feature, this

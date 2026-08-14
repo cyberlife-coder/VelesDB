@@ -23,11 +23,15 @@ The tool surface is feature-gated at build time:
 |---|---|---|
 | `mcp` | yes | `remember`, `recall`, `recall_where`, `recall_fused`, `feedback`, `relate`, `unrelate`, `forget`, `entity`, `why`, `remember_extracted`, `memory_status`, `list_memories` |
 | `context` | yes | `compile_context`, `compile_transcript`, `explain_compilation`, `retrieve_context_source`, `context_savings`, `save_working_context`, `load_working_context`, `list_working_contexts`, `suggest_budget` |
-| `extract` | no | none — it enables the *backend* `remember_extracted` needs (see that tool) |
+| `embedder-http` | yes | none — it enables the Ollama and OpenAI-compatible embedding backends |
+| `extractor-http` | yes | none — it enables the HTTP backends `remember_extracted` needs (see that tool) |
+| `ollama` | no | compatibility alias for `embedder-http` |
+| `extract` | no | compatibility alias for `extractor-http` |
 
-`default = ["mcp", "persistence", "context", "ollama", "extract"]` (the last
-two carry the HTTP backends for embedding and extraction — runtime-switched,
-off until their env vars opt in), so a plain `cargo install velesdb-memory`
+`default = ["mcp", "persistence", "context", "embedder-http",
+"extractor-http"]` (the last two carry the HTTP backends for embedding and
+extraction — runtime-switched, off until their env vars opt in), so a plain
+`cargo install velesdb-memory`
 advertises all **22** tools. They are served by
 one MCP server: the context router is combined into the memory router in
 `McpServer::new`, never a second server.

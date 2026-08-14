@@ -1,10 +1,11 @@
 //! Tests for [`super::select_embedder`] — the seam that resolves an embedding
 //! backend name to what the caller must do about it.
 //!
-//! Deliberately NOT gated on `feature = "ollama"` (unlike `embedder_tests.rs`,
+//! Deliberately NOT gated on `feature = "embedder-http"` (unlike
+//! `embedder_tests.rs`,
 //! which tests the Ollama client itself): the `hash` arm must resolve in every
-//! build, including the default one that has no HTTP backend compiled in. A
-//! test that only ran under `--features ollama` would leave the shipped
+//! build, including a feature-free one that has no HTTP backend compiled in. A
+//! test that only ran under `--features embedder-http` would leave the shipped
 //! binary's own path unexercised.
 
 use super::*;

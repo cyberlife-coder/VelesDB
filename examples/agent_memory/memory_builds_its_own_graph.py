@@ -2,7 +2,7 @@
 
 Local model, runs on your machine, nothing leaves it:
 
-    cd crates/velesdb-python && maturin develop --features extract   # build with extract
+    cd crates/velesdb-python && maturin develop --features extractor-http   # HTTP extractor
     ollama pull qwen3.6:27b-mlx && ollama pull all-minilm
     python examples/agent_memory/memory_builds_its_own_graph.py
 

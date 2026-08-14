@@ -11,7 +11,7 @@
 use super::*;
 
 #[test]
-#[cfg(feature = "ollama")]
+#[cfg(feature = "embedder-http")]
 fn an_embeddings_body_carries_the_model_and_the_input() {
     let body = embeddings_body("text-embedding-3-small", "hello world");
     let json: Value = serde_json::from_str(&body).expect("valid json");
@@ -20,7 +20,7 @@ fn an_embeddings_body_carries_the_model_and_the_input() {
 }
 
 #[test]
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 fn a_chat_body_pins_temperature_to_zero() {
     // Same reason the Ollama backend pins it: a backend that answers
     // differently to the same text turns one stored fact into two on a re-run.
@@ -33,7 +33,7 @@ fn a_chat_body_pins_temperature_to_zero() {
 }
 
 #[test]
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 fn a_chat_body_caps_completion_tokens() {
     // Unbounded, the real extraction prompt measured 3 933 completion tokens
     // for a twelve-word sentence — 1 min 59 s to store one fact (#1846).
@@ -43,7 +43,7 @@ fn a_chat_body_caps_completion_tokens() {
 }
 
 #[test]
-#[cfg(feature = "ollama")]
+#[cfg(feature = "embedder-http")]
 fn an_embeddings_response_yields_its_vector() {
     let vector =
         parse_embeddings_response(r#"{"data":[{"embedding":[0.25,-0.5]}]}"#).expect("parsed");
@@ -51,7 +51,7 @@ fn an_embeddings_response_yields_its_vector() {
 }
 
 #[test]
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 fn a_chat_response_yields_the_assistant_message() {
     let content =
         parse_chat_response(r#"{"choices":[{"message":{"content":"[]"}}]}"#).expect("parsed");
@@ -61,7 +61,7 @@ fn a_chat_response_yields_the_assistant_message() {
 // --- Negative ----------------------------------------------------------------
 
 #[test]
-#[cfg(feature = "ollama")]
+#[cfg(feature = "embedder-http")]
 fn an_error_envelope_is_reported_as_a_refusal_not_a_malformed_response() {
     // A server that answers 200 with `{"error":{...}}` is common enough that
     // reading past the envelope would report "no data[0].embedding" for a
@@ -79,7 +79,7 @@ fn an_error_envelope_is_reported_as_a_refusal_not_a_malformed_response() {
 }
 
 #[test]
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 fn a_non_json_response_names_what_came_back() {
     let err = parse_chat_response("<html>502 Bad Gateway</html>")
         .expect_err("HTML is not a chat completion");
@@ -90,7 +90,7 @@ fn a_non_json_response_names_what_came_back() {
 }
 
 #[test]
-#[cfg(feature = "ollama")]
+#[cfg(feature = "embedder-http")]
 fn a_missing_field_is_reported_rather_than_silently_empty() {
     let err = parse_embeddings_response(r#"{"data":[]}"#)
         .expect_err("an empty data array carries no vector");
@@ -101,7 +101,7 @@ fn a_missing_field_is_reported_rather_than_silently_empty() {
 }
 
 #[test]
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 fn a_long_payload_is_previewed_not_pasted_whole() {
     let payload = format!(r#"{{"junk":"{}"}}"#, "x".repeat(5_000));
     let err = parse_chat_response(&payload).expect_err("no content field");

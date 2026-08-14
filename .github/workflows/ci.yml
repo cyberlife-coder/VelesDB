@@ -139,35 +139,34 @@ jobs:
 
       # The workspace check above unifies features across crates, so a feature
       # that only compiles because a SIBLING feature happens to be on still
-      # passes it. `--features extract` alone did not compile: it pulls
-      # `dep:ureq` but not `ollama`, while extract.rs calls a helper gated on
-      # `ollama`. Each optional feature of velesdb-memory is therefore checked
-      # in isolation.
+      # passes it. Each optional feature of velesdb-memory is therefore checked
+      # in isolation. The role-named HTTP features are canonical; `ollama` and
+      # `extract` remain compatibility aliases and must keep compiling too.
       #
       # `--all-targets` is part of the contract, not an embellishment: without
       # it this step never compiles the test and example targets, and sixteen
-      # BDD suites plus six examples sat broken under `context`/`ollama`/
-      # `extract` alone with this step green (#1765) — a target that cannot
-      # fail the build is not guarded by it.
+      # BDD suites plus six examples sat broken under isolated features with
+      # this step green (#1765) — a target that cannot fail the build is not
+      # guarded by it.
       - name: Check each velesdb-memory feature in isolation
         run: |
           set -eu
-          for feat in mcp http context persistence ollama extract; do
+          for feat in mcp http context persistence embedder-http extractor-http ollama extract; do
             echo "::group::--features $feat"
             cargo check -p velesdb-memory --no-default-features --features "$feat" --all-targets
             echo "::endgroup::"
           done
 
-      # `extract` was CHECKED above but never TESTED: no `cargo test` in this
-      # workflow passes the feature, so its nineteen unit tests — the graph
-      # prompt contract and the reply parser among them — have never run on
-      # CI. A test that cannot fail the build is documentation, not a gate.
-      #
-      # Paired with `ollama` because `extract` alone does not compile (see the
-      # comment above). The tests reached this way are pure parsing and
-      # prompt-building: none opens a socket, so no service is needed.
-      - name: Test the velesdb-memory extract feature
-        run: cargo test -p velesdb-memory --features extract,ollama,persistence
+      # The extraction backend's unit tests are pure parsing and prompt
+      # building: none opens a socket. Run them under the canonical role name
+      # and its compatibility alias so neither path can silently stop enabling
+      # the implementation it promises.
+      - name: Test the velesdb-memory extraction features
+        run: |
+          cargo test -p velesdb-memory --lib --no-default-features --features extractor-http,persistence
+          cargo test -p velesdb-memory --lib --no-default-features --features extract,persistence
+          cargo test -p velesdb-memory --test default_build_carries_semantic_backends \
+            --no-default-features --features ollama,extract
 
       # Same hole as the step above, left open for the whole HTTP transport:
       # six `[[test]]` targets declare `required-features = ["http"]` and no

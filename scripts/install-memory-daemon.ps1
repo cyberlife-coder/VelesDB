@@ -308,12 +308,12 @@ function Initialize-Ollama {
 
 # ---- 4. Build (cargo) or install a prebuilt release archive -----------------
 function Build-Daemon {
-    Write-Warn 'Building velesdb-memory (--features ollama,http,extract)...'
+    Write-Warn 'Building velesdb-memory (--features embedder-http,http,extractor-http)...'
     # Always both features regardless of the runtime embedder choice above:
     # the hash/ollama switch stays a pure VELESDB_MEMORY_EMBEDDER runtime
     # choice, so flipping it later is a restart, never a rebuild.
     cargo install --path "$script:RepoRoot/crates/velesdb-memory" --bin velesdb-memory `
-        --features ollama,http,extract --force
+        --features embedder-http,http,extractor-http --force
     if ($LASTEXITCODE -ne 0) {
         Write-ErrorMsg 'cargo install failed.'
         exit 1

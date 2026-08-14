@@ -15,7 +15,7 @@
 //! single-answer subset (where vector already suffices).
 //!
 //! ```text
-//! cargo run --release -p velesdb-memory --features ollama --example colfilter -- \
+//! cargo run --release -p velesdb-memory --features embedder-http --example colfilter -- \
 //!   --embed-model mxbai-embed-large --k 5
 //! ```
 

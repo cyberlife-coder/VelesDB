@@ -8,21 +8,21 @@
 //! ollama pull all-minilm && ollama pull qwen3.6:35b-mlx
 //!
 //! # smoke (1 conversation), then the full run (all 10):
-//! cargo run --release -p velesdb-memory --features ollama --example locomo -- --conversations 1
-//! cargo run --release -p velesdb-memory --features ollama --example locomo
+//! cargo run --release -p velesdb-memory --features embedder-http --example locomo -- --conversations 1
+//! cargo run --release -p velesdb-memory --features embedder-http --example locomo
 //! # LLM-free explanation benchmark (does the graph connect scattered evidence?):
-//! cargo run --release -p velesdb-memory --features ollama --example locomo -- --explanation
+//! cargo run --release -p velesdb-memory --features embedder-http --example locomo -- --explanation
 //!
 //! # Full-context baseline (whole conversation, no retrieval) — the local
 //! # ceiling our budgeted retrieval trades tokens against:
-//! cargo run --release -p velesdb-memory --features ollama --example locomo -- --full-context
+//! cargo run --release -p velesdb-memory --features embedder-http --example locomo -- --full-context
 //!
 //! # LLM-free reproduction: does the SHIPPED recall_fused reproduce the fused
 //! # retrieval? Compare the harness fusion against the installed API on the same
 //! # data (single-seed, no BM25, idf-weighted to match recall_fused):
-//! cargo run --release -p velesdb-memory --features ollama --example locomo -- \
+//! cargo run --release -p velesdb-memory --features embedder-http --example locomo -- \
 //!     --retrieval --idf-weight                       # harness fusion
-//! cargo run --release -p velesdb-memory --features ollama --example locomo -- \
+//! cargo run --release -p velesdb-memory --features embedder-http --example locomo -- \
 //!     --retrieval --use-shipped-api                  # shipped recall_fused
 //! ```
 //!

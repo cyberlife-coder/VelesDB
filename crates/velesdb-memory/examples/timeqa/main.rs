@@ -12,8 +12,8 @@
 //! trusting any ablation (a parsing bug would be misattributed to the engine).
 //!
 //! ```text
-//! cargo run --release -p velesdb-memory --features ollama --example timeqa -- --validate
-//! cargo run --release -p velesdb-memory --features ollama --example timeqa -- --k 5 --embed-model mxbai-embed-large
+//! cargo run --release -p velesdb-memory --features embedder-http --example timeqa -- --validate
+//! cargo run --release -p velesdb-memory --features embedder-http --example timeqa -- --k 5 --embed-model mxbai-embed-large
 //! ```
 
 use std::error::Error;
