@@ -604,7 +604,7 @@ fn the_cursor_cost_per_fact_does_not_grow_like_the_offset_walk() {
 /// by the same amount, which is why the assertion below compares the two
 /// measurements to each other and not to any number written here.
 #[test]
-#[cfg(feature = "ollama")]
+#[cfg(feature = "embedder-http")]
 #[ignore = "needs a live embedding backend; run deliberately, on a machine at rest"]
 fn the_embedder_dominates_only_when_the_model_changes() {
     use crate::embedder::{Embedder, OllamaEmbedder};

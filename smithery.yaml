@@ -20,7 +20,7 @@ startCommand:
         description: >-
           Embedding backend. 'hash' is offline and zero-dependency (default).
           'ollama' gives real semantic recall via a local model and requires a
-          binary built with --features ollama plus a running Ollama.
+          binary built with --features embedder-http plus a running Ollama.
       ollamaModel:
         type: string
         default: all-minilm

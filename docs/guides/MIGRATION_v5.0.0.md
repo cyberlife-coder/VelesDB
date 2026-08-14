@@ -67,7 +67,8 @@ intact behind the visibility change.
 ## 3. Behavior notes that are NOT breaks
 
 - **`velesdb-memory`'s default build now carries both semantic backends**
-  (`ollama` + `extract` features). Nothing changes at runtime until
+  (`embedder-http` + `extractor-http` features; `ollama` + `extract` remain
+  compatibility aliases). Nothing changes at runtime until
   `VELESDB_MEMORY_EMBEDDER` / `VELESDB_MEMORY_EXTRACTOR` opt in — the
   default embedder is still the offline `hash`. A packager who wants the
   previous minimal binary builds with

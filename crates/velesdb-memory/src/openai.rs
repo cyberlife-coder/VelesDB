@@ -31,7 +31,7 @@ use serde_json::{json, Value};
 ///
 /// A trailing `/v1` is stripped only when something precedes it, so a host
 /// genuinely called `v1` (`http://v1`) is left alone.
-#[cfg(any(feature = "ollama", feature = "extract"))]
+#[cfg(any(feature = "embedder-http", feature = "extractor-http"))]
 pub(crate) fn base_url(configured: &str) -> String {
     let trimmed = configured.trim().trim_end_matches('/');
     match trimmed.strip_suffix("/v1") {
@@ -41,15 +41,15 @@ pub(crate) fn base_url(configured: &str) -> String {
 }
 
 /// Embeddings endpoint, relative to the caller's base URL.
-#[cfg(feature = "ollama")]
+#[cfg(feature = "embedder-http")]
 pub(crate) const EMBEDDINGS_PATH: &str = "/v1/embeddings";
 
 /// Chat-completions endpoint, relative to the caller's base URL.
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 pub(crate) const CHAT_COMPLETIONS_PATH: &str = "/v1/chat/completions";
 
 /// Body of an embeddings request.
-#[cfg(feature = "ollama")]
+#[cfg(feature = "embedder-http")]
 pub(crate) fn embeddings_body(model: &str, input: &str) -> String {
     json!({ "model": model, "input": input }).to_string()
 }
@@ -60,7 +60,7 @@ pub(crate) fn embeddings_body(model: &str, input: &str) -> String {
 /// that answers differently to the same text turns one stored fact into two
 /// on a re-run. `max_tokens` caps runaway generation the same way the Ollama
 /// backend's `num_predict` does — see `extract::MAX_GENERATION_TOKENS` (#1846).
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 pub(crate) fn chat_body(model: &str, prompt: &str, max_tokens: u32) -> String {
     json!({
         "model": model,
@@ -78,7 +78,7 @@ pub(crate) fn chat_body(model: &str, prompt: &str, max_tokens: u32) -> String {
 /// own `{"error":{"message":...}}` envelope when the server sent one — a
 /// server that answers `200` with an error body is common enough that reading
 /// past it would report "malformed response" for a perfectly clear refusal.
-#[cfg(feature = "ollama")]
+#[cfg(feature = "embedder-http")]
 pub(crate) fn parse_embeddings_response(payload: &str) -> Result<Vec<f32>, String> {
     let value = parse_json(payload)?;
     // Deserialized into a typed `Vec<f32>` rather than walked as `Value` and
@@ -104,13 +104,13 @@ pub(crate) fn parse_embeddings_response(payload: &str) -> Result<Vec<f32>, Strin
 }
 
 /// `{"data":[{"embedding":[...]}]}` — only the field this crate reads.
-#[cfg(feature = "ollama")]
+#[cfg(feature = "embedder-http")]
 #[derive(serde::Deserialize)]
 struct EmbeddingsResponse {
     data: Vec<EmbeddingDatum>,
 }
 
-#[cfg(feature = "ollama")]
+#[cfg(feature = "embedder-http")]
 #[derive(serde::Deserialize)]
 struct EmbeddingDatum {
     embedding: Vec<f32>,
@@ -121,7 +121,7 @@ struct EmbeddingDatum {
 ///
 /// # Errors
 /// As [`parse_embeddings_response`].
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 pub(crate) fn parse_chat_response(payload: &str) -> Result<String, String> {
     let value = parse_json(payload)?;
     value

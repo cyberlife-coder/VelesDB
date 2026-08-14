@@ -128,7 +128,7 @@ optional = true
 # pick only what they need. The cost of the two extra defaults is one small
 # HTTP client (`ureq`, no TLS); the least technical install paths were the
 # ones locked out of the product's own pitch without them (#1846 aftermath).
-default = ["mcp", "persistence", "context", "ollama", "extract"]
+default = ["mcp", "persistence", "context", "embedder-http", "extractor-http"]
 mcp = ["dep:rmcp", "dep:tokio", "dep:tracing", "dep:tracing-subscriber", "persistence"]
 # Streamable-HTTP transport (multi-client daemon mode, see the README's "HTTP
 # transport" section): lets several MCP clients share ONE `velesdb-memory`
@@ -170,17 +170,20 @@ persistence = [
     "dep:atomicwrites",
 ]
 # Real on-device semantic recall via a local Ollama or OpenAI-compatible
-# embeddings endpoint (the name predates the protocol split: this is the HTTP
-# dependency for the embedding ROLE, not a vendor). On by default — see the
-# `default` comment; nothing is contacted unless `VELESDB_MEMORY_EMBEDDER`
-# opts in at runtime.
-ollama = ["dep:ureq"]
+# embeddings endpoint. On by default — see the `default` comment; nothing is
+# contacted unless `VELESDB_MEMORY_EMBEDDER` opts in at runtime.
+embedder-http = ["dep:ureq"]
 # Batteries-included text → facts+entities extraction (Ollama or
 # OpenAI-compatible backends) so the fact↔entity graph self-builds. On by
 # default — same reasoning and same runtime opt-in (`VELESDB_MEMORY_EXTRACTOR`)
-# as `ollama`; the Extractor trait itself is always available feature-free for
-# bring-your-own-LLM.
-extract = ["dep:ureq"]
+# as `embedder-http`; the Extractor trait itself is always available
+# feature-free for bring-your-own-LLM.
+extractor-http = ["dep:ureq"]
+# Compatibility aliases retained for existing library consumers. New code
+# should use the role-named features above; both aliases enable exactly the
+# same implementation gates and dependencies.
+ollama = ["embedder-http"]
+extract = ["extractor-http"]
 
 [dev-dependencies]
 serde_json = { workspace = true }
@@ -249,12 +252,12 @@ path = "examples/context_savings/main.rs"
 required-features = ["context"]
 
 # Real-data LoCoMo benchmark. Needs a local Ollama (all-minilm + a generative
-# model), so it only builds with the `ollama` feature.
+# model), so it only builds with the `embedder-http` feature.
 [[example]]
 name = "locomo"
 path = "examples/locomo/main.rs"
 # `persistence` too: these examples open the file-backed store (#1765).
-required-features = ["ollama", "persistence"]
+required-features = ["embedder-http", "persistence"]
 
 [lib]
 name = "velesdb_memory"
@@ -338,22 +341,22 @@ required-features = ["persistence"]
 name = "multihop"
 path = "examples/multihop/main.rs"
 # `persistence` too: these examples open the file-backed store (#1765).
-required-features = ["ollama", "persistence"]
+required-features = ["embedder-http", "persistence"]
 
 [[example]]
 name = "colfilter"
 path = "examples/colfilter/main.rs"
 # `persistence` too: these examples open the file-backed store (#1765).
-required-features = ["ollama", "persistence"]
+required-features = ["embedder-http", "persistence"]
 
 [[example]]
 name = "timeqa"
 path = "examples/timeqa/main.rs"
 # `persistence` too: these examples open the file-backed store (#1765).
-required-features = ["ollama", "persistence"]
+required-features = ["embedder-http", "persistence"]
 
 [[example]]
 name = "triengine"
 path = "examples/triengine/main.rs"
 # `persistence` too: these examples open the file-backed store (#1765).
-required-features = ["ollama", "persistence"]
+required-features = ["embedder-http", "persistence"]

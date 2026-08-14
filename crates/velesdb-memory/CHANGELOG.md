@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Role-named HTTP inference features (#1766).** `embedder-http` enables the
+  Ollama and OpenAI-compatible embedding backends; `extractor-http` enables
+  their extraction counterparts. The former `ollama` and `extract` features
+  remain aliases for compatibility with existing consumers.
+
 - **`openai`: an OpenAI-compatible backend for BOTH roles (#1751).** Set
   `VELESDB_MEMORY_EMBEDDER=openai` or `VELESDB_MEMORY_EXTRACTOR=openai` to
   reach oMLX, llama.cpp's server, LM Studio, vLLM or a hosted provider. The

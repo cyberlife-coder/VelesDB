@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **HTTP inference features are named by role (#1766).** `embedder-http` and
+  `extractor-http` are now the canonical build features. The former `ollama`
+  and `extract` names remain compatibility aliases, so existing dependency
+  declarations continue to compile unchanged.
+
 ### Fixed
 
 - **Python and Node bindings now read `VELESDB_MEMORY_EMBEDDER*` and gain the

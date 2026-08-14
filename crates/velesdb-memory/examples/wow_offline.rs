@@ -46,13 +46,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Pick the embedder: deterministic `HashEmbedder` by default (offline,
 /// reproducible); a real on-device model via Ollama when built with
-/// `--features ollama` and `VELESDB_MEMORY_EMBEDDER=ollama` is set — that gives
+/// `--features embedder-http` and `VELESDB_MEMORY_EMBEDDER=ollama` is set — that gives
 /// genuine semantic scores instead of token hashes.
-// Without the `ollama` feature this can't fail (it always returns the hash
+// Without the `embedder-http` feature this can't fail (it always returns the hash
 // embedder), but the `Result` is part of the signature for the feature-on path.
 #[allow(clippy::unnecessary_wraps)]
 fn embedder() -> Result<DynEmbedder, Box<dyn std::error::Error>> {
-    #[cfg(feature = "ollama")]
+    #[cfg(feature = "embedder-http")]
     if std::env::var("VELESDB_MEMORY_EMBEDDER").as_deref() == Ok("ollama") {
         use velesdb_memory::{OllamaEmbedder, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL};
         return Ok(Box::new(OllamaEmbedder::new(

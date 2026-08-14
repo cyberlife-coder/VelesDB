@@ -12,7 +12,7 @@
 //!
 //! ```text
 //! ollama pull mxbai-embed-large
-//! cargo run --release -p velesdb-memory --features ollama --example multihop -- \
+//! cargo run --release -p velesdb-memory --features embedder-http --example multihop -- \
 //!   --embed-model mxbai-embed-large --k 8 --questions 300
 //! ```
 

@@ -47,7 +47,7 @@
 #   --wire-only              Skip build/daemon setup: only (re-)verify CA trust and re-wire the
 #                            clients against an already-installed daemon (no prompts, fast)
 #   --force-restart          Reload the daemon even if already running
-#   --from-release[=TAG]     Install the prebuilt daemon binary (--features ollama,http,extract) from a
+#   --from-release[=TAG]     Install the prebuilt daemon binary (--features embedder-http,http,extractor-http) from a
 #                            GitHub Release archive instead of `cargo install` (default TAG: the
 #                            latest published velesdb-memory-vX.Y.Z release). Needs no Rust
 #                            toolchain. Only active from the first release that publishes the
@@ -387,16 +387,16 @@ setup_ollama() {
 
 # ---- 4. Build --------------------------------------------------------------
 build_daemon() {
-  echo -e "${YELLOW}🔨 Building velesdb-memory (--features ollama,http,extract)...${NC}"
+  echo -e "${YELLOW}🔨 Building velesdb-memory (--features embedder-http,http,extractor-http)...${NC}"
   # Always both features regardless of the runtime embedder choice above:
   # the hash/ollama switch stays a pure VELESDB_MEMORY_EMBEDDER runtime
   # choice, so flipping it later is a restart, never a rebuild.
   cargo install --path "$REPO_ROOT/crates/velesdb-memory" --bin velesdb-memory \
-    --features ollama,http,extract --force
+    --features embedder-http,http,extractor-http --force
 }
 
 # ---- 4b. --from-release: install a prebuilt daemon binary, no cargo needed --
-# Mirrors build_daemon()'s guarantee (--features ollama,http,extract) without a Rust
+# Mirrors build_daemon()'s guarantee (--features embedder-http,http,extractor-http) without a Rust
 # toolchain, by downloading the same binary release-memory.yml's
 # build-daemon-archive job produces. Only active from the first release that
 # ships the archive onward (added after 0.11.0) — an older/pinned tag simply

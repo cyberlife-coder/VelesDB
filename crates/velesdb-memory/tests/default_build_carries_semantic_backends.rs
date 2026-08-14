@@ -13,8 +13,8 @@
 //!
 //! * The pin itself is the UNGATED runtime assertion below. Plain
 //!   `cargo test` builds test targets with the crate's default features, so
-//!   if `ollama` or `extract` ever leave the default set again, that test
-//!   goes red in every default-features suite run.
+//!   if `embedder-http` or `extractor-http` ever leave the default set again,
+//!   that test goes red in every default-features suite run.
 //! * The constructive proof (types reachable, selectors routing) sits in a
 //!   module gated on both features. It cannot live ungated: the CI feature
 //!   matrix `cargo check`s every optional feature IN ISOLATION with
@@ -26,8 +26,8 @@
 #[test]
 fn the_default_test_build_carries_the_semantic_backends() {
     assert!(
-        cfg!(feature = "ollama") && cfg!(feature = "extract"),
-        "`ollama` and `extract` must be default features: the default build \
+        cfg!(feature = "embedder-http") && cfg!(feature = "extractor-http"),
+        "`embedder-http` and `extractor-http` must be default features: the default build \
          is what `cargo install` and the .mcpb registry bundle ship, and \
          those users cannot rebuild — semantic recall and extraction must be \
          an env-var switch, never a compile-time privilege"
@@ -35,6 +35,16 @@ fn the_default_test_build_carries_the_semantic_backends() {
 }
 
 #[cfg(all(feature = "ollama", feature = "extract"))]
+#[test]
+fn compatibility_aliases_enable_the_role_features() {
+    assert!(
+        cfg!(feature = "embedder-http") && cfg!(feature = "extractor-http"),
+        "`ollama` and `extract` must remain aliases for `embedder-http` and \
+         `extractor-http`"
+    );
+}
+
+#[cfg(all(feature = "embedder-http", feature = "extractor-http"))]
 mod with_the_backends_present {
     use velesdb_memory::{
         select_embedder, select_extractor, Auth, EmbedderSelection, ExtractorSelection,

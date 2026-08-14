@@ -11,7 +11,7 @@
 //!
 //! Mirroring the [`crate::embedder`] pattern, the plug-point is dependency-free
 //! (bring your own LLM by implementing [`Extractor`]) while a batteries-included
-//! `OllamaExtractor` backend lives behind the `extract` feature.
+//! `OllamaExtractor` backend lives behind the `extractor-http` feature.
 
 /// One extracted, graph-ready fact: a self-contained sentence plus the salient
 /// topics it concerns. The topics become shared graph hubs, so two facts about
@@ -735,7 +735,7 @@ pub type DynExtractor = std::sync::Arc<dyn Extractor + Send + Sync>;
 // reason: without a dependency-free choice, every contract
 // `remember_extracted` publishes is reachable only through a network call, so
 // no binding can exercise it and no test can prove it. Deliberately NOT behind
-// `extract` — that feature exists to pull in the HTTP client, which this
+// `extractor-http` — that feature exists to pull in the HTTP client, which this
 // backend does not need.
 
 /// Deterministic, network-free extractor: it reads the structure a passage
@@ -905,7 +905,7 @@ impl std::fmt::Debug for ExtractorSelection {
 ///
 /// # Why this exists, and why it is in the library rather than the binary
 ///
-/// The selection used to live inside the daemon's `#[cfg(feature = "extract")]`
+/// The selection used to live inside the daemon's `#[cfg(feature = "extractor-http")]`
 /// block. That gate is what made [`OutlineExtractor`] unreachable from the MCP
 /// server (#1734): the extractor needs no dependency and is linked into every
 /// build, but the only code that could *choose* it was compiled away unless an
@@ -946,29 +946,29 @@ pub fn select_extractor(backend: &str) -> Result<ExtractorSelection, String> {
 
 // --- Optional batteries-included backend: a local Ollama generative model -----
 //
-// Enabled with `--features extract`. The default build omits this backend (and
-// its HTTP dependency) so the shipped binary stays tiny and fully offline. Like
-// the Ollama embedder, it calls a model the user already runs locally, so the
-// text never leaves the machine.
+// Enabled with `--features extractor-http`. A minimal `--no-default-features`
+// build omits this backend and its HTTP dependency. Like the Ollama embedder,
+// it calls a model the user already runs locally, so the text never leaves the
+// machine.
 
 /// Default Ollama base URL for the generative extraction endpoint.
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 pub const DEFAULT_OLLAMA_URL: &str = "http://localhost:11434";
 
 /// Per-request timeout. Generation is far slower and more stall-prone than an
 /// embedding call, so a wedged model fails the call instead of hanging forever.
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 const REQUEST_TIMEOUT_SECS: u64 = 300;
 
 /// Ceiling on establishing the TCP connection to Ollama. Short on purpose: a
 /// local daemon accepts at once or is not running, and `ureq`'s 30 s default
 /// would be paid once per replay.
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Ceiling on writing the request (prompt upload). Unlike the read bound, this
 /// one is applied to the socket at connect time and is genuinely in force.
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Ceiling on how many tokens one extraction call may generate.
@@ -980,7 +980,7 @@ const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 /// sentence's worth of triples needs, and turns the worst case into a
 /// bounded one instead of a tuning knob callers have to discover by timing
 /// out.
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 const MAX_GENERATION_TOKENS: u32 = 512;
 
 /// The knobs that actually configure the extractor, named in its failures.
@@ -991,7 +991,7 @@ const MAX_GENERATION_TOKENS: u32 = 512;
 /// path never consults — an "actionable" message that is actively wrong. There
 /// is no offline fallback to offer either: extraction is opt-in, and running
 /// without it is simply not passing an extractor.
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 const EXTRACT_LEVERS: crate::http_retry::FailureLevers<'static> =
     crate::http_retry::FailureLevers {
         url_var: "VELESDB_MEMORY_EXTRACTOR_URL",
@@ -1001,7 +1001,7 @@ const EXTRACT_LEVERS: crate::http_retry::FailureLevers<'static> =
 
 /// How one generation attempt failed — transport and body failures may be
 /// replayed, a complete response is the server's final word.
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 enum GenerateCall {
     /// The request never completed. Boxed: `ureq::Error::Status` carries a
     /// whole `Response`.
@@ -1011,7 +1011,7 @@ enum GenerateCall {
 }
 
 /// Replay policy for one generation attempt.
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 fn generate_is_retryable(err: &GenerateCall) -> bool {
     match err {
         GenerateCall::Transport(inner) => crate::http_retry::is_retryable(inner),
@@ -1021,7 +1021,7 @@ fn generate_is_retryable(err: &GenerateCall) -> bool {
 
 /// Turn a failed generation into a message that names the endpoint, the model,
 /// how many attempts were spent, and the variables that change the outcome.
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 fn describe_generate_failure(url: &str, model: &str, err: &GenerateCall, attempts: u32) -> String {
     let cause = match err {
         GenerateCall::Transport(inner) => inner.to_string(),
@@ -1043,7 +1043,7 @@ fn describe_generate_failure(url: &str, model: &str, err: &GenerateCall, attempt
 /// The caller picks the generative model (Ollama has no universal default for
 /// generation); `temperature` is pinned to `0` and `think` disabled for stable,
 /// reproducible output.
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 #[derive(Debug, Clone)]
 pub struct OllamaExtractor {
     base_url: String,
@@ -1051,7 +1051,7 @@ pub struct OllamaExtractor {
     agent: ureq::Agent,
 }
 
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 impl OllamaExtractor {
     /// Build an extractor targeting `model` on the Ollama server at `base_url`
     /// (e.g. [`DEFAULT_OLLAMA_URL`]).
@@ -1085,7 +1085,7 @@ impl OllamaExtractor {
 /// A free function because every generative backend produces the same reply
 /// and reads it the same way — only the transport differs. Leaving a copy in
 /// each `impl` would let two backends drift on what counts as a valid answer.
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 fn facts_from_reply(reply: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
     let raw =
         json_slice::<Vec<RawFact>>(reply).ok_or_else(|| ExtractError::Parse(truncate(reply)))?;
@@ -1093,14 +1093,14 @@ fn facts_from_reply(reply: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
 }
 
 /// [`facts_from_reply`]'s counterpart for [`Extractor::extract_graph`].
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 fn extraction_from_reply(reply: &str) -> Result<Extraction, ExtractError> {
     let raw = json_slice_object::<RawExtraction>(reply)
         .ok_or_else(|| ExtractError::Parse(truncate(reply)))?;
     Ok(raw.into_extraction())
 }
 
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 impl Extractor for OllamaExtractor {
     fn extract(&self, text: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
         facts_from_reply(&self.generate(&build_prompt(text))?)
@@ -1116,14 +1116,14 @@ impl Extractor for OllamaExtractor {
 /// A sibling of [`OllamaExtractor`], not a layer over it — the same shape the
 /// embedding role takes. The prompt stays here, on the role side: it is what
 /// this crate wants said, not something the protocol knows about.
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 #[derive(Debug)]
 pub struct OpenAiExtractor {
     client: crate::http_client::HttpJsonClient,
     model: String,
 }
 
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 impl OpenAiExtractor {
     /// Build an extractor targeting `model` on the server at `base_url`
     /// (origin and port, no path).
@@ -1177,7 +1177,7 @@ impl OpenAiExtractor {
     }
 }
 
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 impl Extractor for OpenAiExtractor {
     fn extract(&self, text: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
         facts_from_reply(&self.generate(&build_prompt(text))?)
@@ -1188,7 +1188,7 @@ impl Extractor for OpenAiExtractor {
     }
 }
 
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 impl OllamaExtractor {
     /// POST one prompt to Ollama's `/api/generate` and return the trimmed reply,
     /// replaying the call when the failure is transient.
@@ -1236,7 +1236,7 @@ impl OllamaExtractor {
 }
 
 /// The strict JSON contract the extraction prompt asks the model to honour.
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 #[derive(serde::Deserialize)]
 struct RawFact {
     fact: String,
@@ -1244,7 +1244,7 @@ struct RawFact {
     entities: Vec<String>,
 }
 
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 impl RawFact {
     /// Keep a fact only if it has text; trim and lowercase its topics, dropping
     /// blanks and duplicates so the same topic recurs as the same graph hub.
@@ -1268,13 +1268,13 @@ impl RawFact {
 /// Canonical form of an entity name: trimmed and lowercased. The one place
 /// the rule lives, so a name arriving as a topic, as a relation endpoint, or
 /// as an attribute owner always resolves to the SAME entity hub.
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 fn canonical_entity(name: &str) -> String {
     name.trim().to_lowercase()
 }
 
 /// The strict JSON contract the *graph* extraction prompt asks for.
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 #[derive(serde::Deserialize)]
 struct RawExtraction {
     #[serde(default)]
@@ -1285,7 +1285,7 @@ struct RawExtraction {
     attributes: Vec<RawAttribute>,
 }
 
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 #[derive(serde::Deserialize)]
 struct RawRelation {
     subject: String,
@@ -1293,7 +1293,7 @@ struct RawRelation {
     object: String,
 }
 
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 #[derive(serde::Deserialize)]
 struct RawAttribute {
     entity: String,
@@ -1301,7 +1301,7 @@ struct RawAttribute {
     value: serde_json::Value,
 }
 
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 impl RawExtraction {
     /// Canonicalize and drop the unusable: a relation missing an endpoint or a
     /// label, an attribute missing an owner or a name. A malformed item is
@@ -1328,7 +1328,7 @@ impl RawExtraction {
     }
 }
 
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 impl RawRelation {
     fn into_relation(self) -> Option<ExtractedRelation> {
         let subject = canonical_entity(&self.subject);
@@ -1347,7 +1347,7 @@ impl RawRelation {
     }
 }
 
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 impl RawAttribute {
     fn into_attribute(self) -> Option<ExtractedAttribute> {
         let entity = canonical_entity(&self.entity);
@@ -1372,7 +1372,7 @@ impl RawAttribute {
 /// type-strictly, so an age emitted as `"15"` would never match `age >= 15` —
 /// no error, just a silent miss, which is the worst possible failure mode for
 /// a memory system.
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 fn build_graph_prompt(text: &str) -> String {
     format!(
         "You are building a knowledge graph from the passage below.\n\n\
@@ -1421,7 +1421,7 @@ Return ONLY this JSON object, no prose, no markdown fence:\n\
 }
 
 /// Build the extraction prompt: the passage plus a strict JSON contract.
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 fn build_prompt(text: &str) -> String {
     format!(
         "You are building a memory graph from the passage below.\n\n\
@@ -1439,7 +1439,7 @@ Return ONLY a JSON array, no prose, each item exactly:\n\
 }
 
 /// Pull the `response` string out of Ollama's `/api/generate` JSON envelope.
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 fn parse_generate_response(body: &str) -> Result<String, ExtractError> {
     let value: serde_json::Value = serde_json::from_str(body)
         .map_err(|err| ExtractError::Backend(format!("invalid generate response: {err}")))?;
@@ -1451,7 +1451,7 @@ fn parse_generate_response(body: &str) -> Result<String, ExtractError> {
 }
 
 /// A short, single-line preview of model output for error messages.
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 fn truncate(text: &str) -> String {
     const LIMIT: usize = 120;
     let mut out = String::new();
@@ -1473,7 +1473,7 @@ fn truncate(text: &str) -> String {
 /// Parse `text` into `T`, first slicing out the outermost JSON array/object.
 /// Local models usually honour "return only JSON" but occasionally wrap it in
 /// fences or a sentence; slicing the first balanced span tolerates that.
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 fn json_slice<T: serde::de::DeserializeOwned>(text: &str) -> Option<T> {
     let slice = balanced_slice(text)?;
     serde_json::from_str::<T>(slice).ok()
@@ -1486,7 +1486,7 @@ fn json_slice<T: serde::de::DeserializeOwned>(text: &str) -> Option<T> {
 /// preferring arrays slices out the inner facts list and then fails to read it
 /// as the whole extraction. That failure is invisible to a stub-backed test —
 /// only a real model reply goes through this path.
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 fn json_slice_object<T: serde::de::DeserializeOwned>(text: &str) -> Option<T> {
     let slice = balanced_slice_preferring(text, b'{')?;
     serde_json::from_str::<T>(slice).ok()
@@ -1498,14 +1498,14 @@ fn json_slice_object<T: serde::de::DeserializeOwned>(text: &str) -> Option<T> {
 /// Prefers an array: the fact-only reply is a JSON list, and prose before it
 /// ("Result {ok}: [...]") may carry a stray `{` that would mis-slice the
 /// object span instead of the array.
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 fn balanced_slice(text: &str) -> Option<&str> {
     balanced_slice_preferring(text, b'[')
 }
 
 /// [`balanced_slice`] with the caller choosing which delimiter wins when both
 /// appear — the shape the caller actually expects at the top level.
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 fn balanced_slice_preferring(text: &str, preferred: u8) -> Option<&str> {
     let bytes = text.as_bytes();
     let fallback = if preferred == b'[' { b'{' } else { b'[' };
@@ -1530,7 +1530,7 @@ fn balanced_slice_preferring(text: &str, preferred: u8) -> Option<&str> {
 
 /// Advance the structural scan for one out-of-string byte; returns `true` once
 /// the outermost bracket has just closed (`depth` back to zero).
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 fn scan_structural(byte: u8, open: u8, close: u8, in_string: &mut bool, depth: &mut u32) -> bool {
     if byte == b'"' {
         *in_string = true;
@@ -1545,7 +1545,7 @@ fn scan_structural(byte: u8, open: u8, close: u8, in_string: &mut bool, depth: &
 
 /// Advance the in-string escape state for one byte; returns whether the scanner
 /// is still inside the string literal afterwards.
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 fn step_string(escaped: &mut bool, byte: u8) -> bool {
     match (*escaped, byte) {
         (true, _) => {
@@ -1565,7 +1565,7 @@ fn step_string(escaped: &mut bool, byte: u8) -> bool {
 #[path = "extractor_selection_tests.rs"]
 mod selection_tests;
 
-#[cfg(all(test, feature = "extract"))]
+#[cfg(all(test, feature = "extractor-http"))]
 mod tests {
     use super::*;
 
