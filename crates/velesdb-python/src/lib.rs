@@ -23,7 +23,7 @@
 //! ])
 //!
 //! # Search (canonical API; collection.search(...) is deprecated since v1.15)
-//! results = collection.search_request(SearchOptions(vector=[0.1, 0.2, ...], top_k=10))
+//! results = collection.search_request(SearchOptions(vector=[0.1, 0.2, ...], k=10))
 //! ```
 
 mod agent;
@@ -80,7 +80,7 @@ pub struct SearchResult {
 ///     >>> db = velesdb.Database("./my_data")
 ///     >>> collection = db.create_collection("docs", dimension=768)
 ///     >>> collection.upsert([{"id": 1, "vector": [...], "payload": {"title": "Doc"}}])
-///     >>> results = collection.search_request(SearchOptions(vector=[...], top_k=10))
+///     >>> results = collection.search_request(SearchOptions(vector=[...], k=10))
 #[pymodule]
 fn velesdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Database>()?;

@@ -181,13 +181,13 @@ def test_hybrid_fusion_changes_ordering(temp_db_path):
 
     # All-dense RSF: dense-dominant node 1 ranks first.
     dense_opts = velesdb.SearchOptions(
-        vector=dense, sparse_vector=sparse, top_k=3
+        vector=dense, sparse_vector=sparse, k=3
     ).with_fusion(velesdb.FusionStrategy.relative_score(1.0, 0.0))
     dense_first = [r["id"] for r in collection.search_request(dense_opts)][0]
 
     # All-sparse RSF: sparse-dominant node 2 ranks first.
     sparse_opts = velesdb.SearchOptions(
-        vector=dense, sparse_vector=sparse, top_k=3
+        vector=dense, sparse_vector=sparse, k=3
     ).with_fusion(velesdb.FusionStrategy.relative_score(0.0, 1.0))
     sparse_first = [r["id"] for r in collection.search_request(sparse_opts)][0]
 
@@ -213,13 +213,13 @@ def test_hybrid_fusion_default_unchanged(temp_db_path):
     omitted = sorted(
         r["id"]
         for r in collection.search_request(
-            velesdb.SearchOptions(vector=dense, sparse_vector=sparse, top_k=3)
+            velesdb.SearchOptions(vector=dense, sparse_vector=sparse, k=3)
         )
     )
     explicit_none = sorted(
         r["id"]
         for r in collection.search_request(
-            velesdb.SearchOptions(vector=dense, sparse_vector=sparse, top_k=3).with_fusion(None)
+            velesdb.SearchOptions(vector=dense, sparse_vector=sparse, k=3).with_fusion(None)
         )
     )
     # Same candidate set under the default fusion (RRF), regardless of tie order.

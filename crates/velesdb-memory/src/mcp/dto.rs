@@ -65,8 +65,14 @@ pub(super) struct RememberResult {
 pub(super) struct RecallParams {
     /// Natural-language query to match semantically.
     pub(super) query: String,
-    /// Maximum number of memories to return (default 10).
-    #[serde(default, deserialize_with = "super::wire::lenient")]
+    /// Maximum number of memories to return (default 10). `k` is canonical;
+    /// the deprecated `limit` spelling remains a wire alias for one version.
+    #[serde(
+        default,
+        rename = "k",
+        alias = "limit",
+        deserialize_with = "super::wire::lenient"
+    )]
     pub(super) limit: Option<usize>,
     /// Optional exact-match metadata filter (e.g.
     /// `{"project": "veles", "status": "resolved"}`).
@@ -136,8 +142,14 @@ impl RecallResult {
 pub(super) struct RecallWhereParams {
     /// Natural-language query to match semantically.
     pub(super) query: String,
-    /// Maximum number of memories to return (default 10).
-    #[serde(default, deserialize_with = "super::wire::lenient")]
+    /// Maximum number of memories to return (default 10). `k` is canonical;
+    /// the deprecated `limit` spelling remains a wire alias for one version.
+    #[serde(
+        default,
+        rename = "k",
+        alias = "limit",
+        deserialize_with = "super::wire::lenient"
+    )]
     pub(super) limit: Option<usize>,
     /// Structured `ColumnStore` predicates (ranges/comparisons) combined with AND,
     /// e.g. a date window `[{"field":"ts","op":"ge","value":20230101},
@@ -157,10 +169,16 @@ pub(super) struct RecallWhereParams {
 pub(super) struct RecallFusedParams {
     /// Natural-language query to match semantically.
     pub(super) query: String,
-    /// Maximum number of memories to return (default 10). Multi-hop reasoning
-    /// benefits from a larger budget (~32-64); simple and temporal recall
-    /// saturate early, where a larger budget only adds tokens.
-    #[serde(default, deserialize_with = "super::wire::lenient")]
+    /// Maximum number of memories to return (default 10). `k` is canonical;
+    /// the deprecated `limit` spelling remains a wire alias for one version.
+    /// Multi-hop reasoning benefits from a larger budget (~32-64); simple and
+    /// temporal recall saturate early, where a larger budget only adds tokens.
+    #[serde(
+        default,
+        rename = "k",
+        alias = "limit",
+        deserialize_with = "super::wire::lenient"
+    )]
     pub(super) limit: Option<usize>,
     /// Optional exact-match metadata filter (e.g.
     /// `{"project": "veles", "status": "resolved"}`).
@@ -176,11 +194,11 @@ pub(super) struct RecallFusedParams {
     #[serde(default, deserialize_with = "super::wire::lenient")]
     pub(super) graph_boost: Option<f64>,
     /// Depth of the oversampled vector candidate pool fusion re-ranks before
-    /// the `limit` cutoff (default: `limit` scaled up, floored at 64). That
+    /// the `k` cutoff (default: `k` scaled up, floored at 64). That
     /// default is already deep enough for a graph-reached fact to surface;
     /// widen it to give a reranker more to work with, narrow it to confine
     /// fusion to the strongest vector hits. Capped at 1000, the same ceiling
-    /// `limit` carries — NOT the one `hops` carries, which is 10.
+    /// `k` carries — NOT the one `hops` carries, which is 10.
     #[serde(default, deserialize_with = "super::wire::lenient")]
     pub(super) pool: Option<usize>,
     /// Name of the metadata field holding each fact's date as a `YYYYMMDD`

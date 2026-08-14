@@ -309,7 +309,7 @@ coll = db.get_collection("docs")
 
 results = coll.search_request(velesdb.SearchOptions(
     sparse_vector={42: 0.8, 156: 0.3, 891: 0.5},
-    top_k=10
+    k=10
 ))
 ```
 
@@ -367,7 +367,7 @@ When both the `vector` and `sparse_vector` fields are provided, VelesDB automati
 results = coll.search_request(velesdb.SearchOptions(
     vector=[0.1, 0.2, 0.3, ...],
     sparse_vector={42: 0.8, 156: 0.3},
-    top_k=10
+    k=10
 ))
 ```
 

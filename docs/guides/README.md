@@ -16,6 +16,7 @@ each guide links back.
 | [Configuration](./CONFIGURATION.md) | `velesdb.toml` configuration reference |
 | [Use Cases](./USE_CASES.md) | Common use cases and recommended configurations |
 | [Business Scenarios](./BUSINESS_SCENARIOS.md) | End-to-end business problems solved with single queries |
+| [API correspondence](./API_CORRESPONDENCE.md) | Rust, Python, TypeScript and MCP names for open, create, insert, search and recall |
 
 ## Core engine (Rust)
 

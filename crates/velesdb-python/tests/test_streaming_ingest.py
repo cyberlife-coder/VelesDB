@@ -52,7 +52,7 @@ def test_enable_streaming_then_stream_insert_lands_points(temp_db):
 
     # The drain task flushes asynchronously; wait until the points land.
     assert _wait_until(lambda: not collection.is_empty()), "streamed points never drained"
-    results = collection.search_request(SearchOptions(vector=[1.0, 0.0, 0.0, 0.0], top_k=1))
+    results = collection.search_request(SearchOptions(vector=[1.0, 0.0, 0.0, 0.0], k=1))
     assert results[0]["id"] == 1
 
 

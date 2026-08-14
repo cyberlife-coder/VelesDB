@@ -131,7 +131,7 @@ served by the ColumnStore.
 | Parameter | Type | Required | Notes |
 |---|---|---|---|
 | `query` | string | yes | Natural-language query. |
-| `limit` | integer | no | Default 10, capped at 1000 (`MAX_RECALL_LIMIT`). |
+| `k` | integer | no | Default 10, capped at 1000 (`MAX_RECALL_LIMIT`). |
 | `filter` | object | no | Exact-match metadata, e.g. `{"project":"veles","status":"resolved"}`. |
 
 Returns `{ memories: [ { id, id_str, score, content, metadata } ] }`. Ranking
@@ -140,7 +140,7 @@ future `recall` order; the returned `score` stays the raw similarity, never
 the blended value.
 
 ```jsonc
-recall { "query": "billing retries", "limit": 5, "filter": { "project": "checkout" } }
+recall { "query": "billing retries", "k": 5, "filter": { "project": "checkout" } }
 → { "memories": [ { "id": 9876543210, "id_str": "9876543210", "score": 0.59, "content": "…" } ] }
 ```
 
@@ -152,7 +152,7 @@ comparisons, not just equality.
 | Parameter | Type | Required | Notes |
 |---|---|---|---|
 | `query` | string | yes | Natural-language query. |
-| `limit` | integer | no | Default 10, capped at 1000. |
+| `k` | integer | no | Default 10, capped at 1000. |
 | `filters` | array of `{field, op, value}` | yes | `op` ∈ `eq`, `ne`, `lt`, `le`, `gt`, `ge`. All predicates are ANDed. |
 
 `recall_where` returns `{ memories }`, most similar first — the same envelope
@@ -188,17 +188,22 @@ filter + graph reach).
 | Parameter | Type | Required | Notes |
 |---|---|---|---|
 | `query` | string | yes | Natural-language query. |
-| `limit` | integer | no | Default 10, capped at 1000. Multi-hop questions benefit from ~32–64; simple and temporal recall saturate early. |
+| `k` | integer | no | Default 10, capped at 1000. Multi-hop questions benefit from ~32–64; simple and temporal recall saturate early. |
 | `filter` | object | no | Exact-match metadata filter. |
 | `hops` | integer | no | Graph hops walked from the top vector hit (default 2, capped at 10). |
 | `graph_boost` | number | no | Weight added to a graph-reached fact's normalised vector score (default 0.15). |
-| `pool` | integer | no | Depth of the oversampled vector candidate pool fusion re-ranks before the `limit` cutoff (default `max(limit × 8, 64)`, floored at 1, capped at 1000). Same knob as the Node/WASM `pool` and the Python `options={"pool": …}`. |
+| `pool` | integer | no | Depth of the oversampled vector candidate pool fusion re-ranks before the `k` cutoff (default `max(k × 8, 64)`, floored at 1, capped at 1000). Same knob as the Node/WASM `pool` and the Python `options={"pool": …}`. |
 | `date_field` | string | no | Metadata key holding each fact's `YYYYMMDD` date (e.g. the automatic `_veles_date`). |
 
 Returns `{ memories, dated_context?, now? }`. `dated_context` (a
 chronological `- [YYYY-MM-DD] content` rendering, oldest first, undated facts
 last) and the `now` anchor appear only when `date_field` was set and at least
 one fact carries a date.
+
+For `recall`, `recall_where`, and `recall_fused`, `k` is the advertised
+result-count parameter. The former `limit` spelling remains accepted as a
+deprecated wire alias for one compatibility version, but it is absent from
+the generated tool schemas. Sending both names is rejected.
 
 ## `relate`
 
