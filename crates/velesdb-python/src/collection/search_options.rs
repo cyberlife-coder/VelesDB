@@ -13,20 +13,21 @@
 //!
 //!   Keyword-constructor style:
 //!   ```python
-//!   opts = SearchOptions(vector=embedding, top_k=10, filter={"k": "v"})
+//!   opts = SearchOptions(vector=embedding, k=10, filter={"k": "v"})
 //!   results = collection.search_request(opts)
 //!   ```
 //!
 //!   Fluent builder style (chains return the same object):
 //!   ```python
 //!   results = collection.search_request(
-//!       SearchOptions().with_vector(embedding).with_top_k(10)
+//!       SearchOptions().with_vector(embedding).with_k(10)
 //!   )
 //!   ```
 //!
 //! v2.0 (breaking): `search()` kwargs path removed, `search_request()` is the
 //! single canonical entry point.
 
+use pyo3::exceptions::{PyDeprecationWarning, PyTypeError};
 use pyo3::prelude::*;
 
 use crate::FusionStrategy;
@@ -41,7 +42,7 @@ use crate::FusionStrategy;
 ///     >>> from velesdb import SearchOptions
 ///     >>> opts = SearchOptions(
 ///     ...     vector=my_embedding,
-///     ...     top_k=20,
+///     ...     k=20,
 ///     ...     filter={"category": "news"},
 ///     ... )
 ///     >>> results = collection.search_request(opts)
@@ -57,7 +58,7 @@ pub struct SearchOptions {
     pub sparse_vector: Option<Py<PyAny>>,
     /// Number of results to return (default: 10).
     #[pyo3(get, set)]
-    pub top_k: usize,
+    pub k: usize,
     /// Optional metadata filter dict.
     #[pyo3(get, set)]
     pub filter: Option<Py<PyAny>>,
@@ -99,7 +100,8 @@ impl SearchOptions {
     /// Args:
     ///     vector: Dense query vector.
     ///     sparse_vector: Sparse query (dict[int, float] or scipy sparse).
-    ///     top_k: Max results to return (default: 10).
+    ///     k: Max results to return (default: 10).
+    ///     top_k: Deprecated alias for ``k``.
     ///     filter: Metadata pre-filter dict.
     ///     sparse_index_name: Named sparse index to query.
     ///     include_vectors: Include raw vectors in results (default: False).
@@ -113,7 +115,8 @@ impl SearchOptions {
         vector = None,
         *,
         sparse_vector = None,
-        top_k = 10,
+        k = None,
+        top_k = None,
         filter = None,
         sparse_index_name = None,
         include_vectors = false,
@@ -122,33 +125,35 @@ impl SearchOptions {
         tenant = None,
     ))]
     pub fn new(
+        py: Python<'_>,
         vector: Option<Py<PyAny>>,
         sparse_vector: Option<Py<PyAny>>,
-        top_k: usize,
+        k: Option<usize>,
+        top_k: Option<usize>,
         filter: Option<Py<PyAny>>,
         sparse_index_name: Option<String>,
         include_vectors: bool,
         fusion: Option<FusionStrategy>,
         principal: Option<String>,
         tenant: Option<String>,
-    ) -> Self {
-        Self {
+    ) -> PyResult<Self> {
+        resolve_k(py, k, top_k).map(|k| Self {
             vector,
             sparse_vector,
-            top_k,
+            k,
             filter,
             sparse_index_name,
             include_vectors,
             fusion,
             principal,
             tenant,
-        }
+        })
     }
 
     fn __repr__(&self) -> String {
         format!(
-            "SearchOptions(top_k={}, include_vectors={}, sparse_index_name={:?})",
-            self.top_k, self.include_vectors, self.sparse_index_name,
+            "SearchOptions(k={}, include_vectors={}, sparse_index_name={:?})",
+            self.k, self.include_vectors, self.sparse_index_name,
         )
     }
 }
@@ -157,7 +162,7 @@ impl SearchOptions {
 /// Python object so calls can be chained:
 ///
 /// ```python
-/// opts = SearchOptions().with_vector(emb).with_top_k(20).with_filter({"lang": "en"})
+/// opts = SearchOptions().with_vector(emb).with_k(20).with_filter({"lang": "en"})
 /// ```
 ///
 /// The `Py<Self>` receiver pattern is the idiomatic PyO3 way to implement
@@ -182,9 +187,31 @@ impl SearchOptions {
     }
 
     /// Sets the number of results to return and returns `self`.
-    pub fn with_top_k(slf: Py<Self>, py: Python<'_>, top_k: usize) -> Py<Self> {
-        slf.bind(py).borrow_mut().top_k = top_k;
+    pub fn with_k(slf: Py<Self>, py: Python<'_>, k: usize) -> Py<Self> {
+        slf.bind(py).borrow_mut().k = k;
         slf
+    }
+
+    /// Deprecated alias for :py:meth:`with_k`.
+    pub fn with_top_k(slf: Py<Self>, py: Python<'_>, top_k: usize) -> PyResult<Py<Self>> {
+        warn_top_k(py)?;
+        slf.bind(py).borrow_mut().k = top_k;
+        Ok(slf)
+    }
+
+    /// Deprecated alias for the canonical ``k`` attribute.
+    #[getter(top_k)]
+    fn top_k(&self, py: Python<'_>) -> PyResult<usize> {
+        warn_top_k(py)?;
+        Ok(self.k)
+    }
+
+    /// Deprecated alias for the canonical ``k`` attribute.
+    #[setter(top_k)]
+    fn set_top_k(&mut self, py: Python<'_>, top_k: usize) -> PyResult<()> {
+        warn_top_k(py)?;
+        self.k = top_k;
+        Ok(())
     }
 
     /// Sets the metadata filter and returns `self`.
@@ -224,4 +251,27 @@ impl SearchOptions {
         slf.bind(py).borrow_mut().tenant = tenant;
         slf
     }
+}
+
+fn resolve_k(py: Python<'_>, k: Option<usize>, top_k: Option<usize>) -> PyResult<usize> {
+    match (k, top_k) {
+        (Some(_), Some(_)) => Err(PyTypeError::new_err(
+            "pass `k` or deprecated `top_k`, not both",
+        )),
+        (Some(value), None) => Ok(value),
+        (None, Some(value)) => {
+            warn_top_k(py)?;
+            Ok(value)
+        }
+        (None, None) => Ok(10),
+    }
+}
+
+fn warn_top_k(py: Python<'_>) -> PyResult<()> {
+    PyErr::warn(
+        py,
+        &py.get_type::<PyDeprecationWarning>(),
+        c"`top_k` is deprecated; use `k` instead. It will be removed after one compatibility version.",
+        2,
+    )
 }

@@ -28,9 +28,10 @@ which your IDE reads directly (`py.typed` is included in the wheel).
 used throughout the VelesDB Python documentation. The older multi-keyword
 `collection.search(vector=..., top_k=..., filter=...)` still works but is
 **deprecated since v1.15** — it emits a `DeprecationWarning`.
-`SearchOptions` accepts `vector`, `sparse_vector`, `top_k`, `filter`,
+`SearchOptions` accepts canonical `k`, plus `vector`, `sparse_vector`, `filter`,
 `sparse_index_name` and `include_vectors`, plus a fluent builder
-(`SearchOptions().with_vector(v).with_top_k(10)`). The `vector` argument
+(`SearchOptions().with_vector(v).with_k(10)`). The deprecated `top_k` spelling
+remains accepted as an alias for one compatibility version. The `vector` argument
 accepts numpy arrays (`dtype=np.float32`) as well as Python lists.
 
 ## Database
@@ -113,7 +114,7 @@ collection.upsert_bulk([
 ])
 
 # Vector search
-results = collection.search_request(velesdb.SearchOptions(vector=query_vector, top_k=10))
+results = collection.search_request(velesdb.SearchOptions(vector=query_vector, k=10))
 
 # Search with custom HNSW ef_search (trade speed for recall)
 results = collection.search_with_ef(vector=query_vector, top_k=10, ef_search=256)
@@ -133,14 +134,14 @@ from velesdb import FusionStrategy
 
 results = collection.multi_query_search(
     vectors=[query1, query2, query3],  # Multiple reformulations
-    top_k=10,
+    k=10,
     fusion=FusionStrategy.rrf(k=60)  # RRF, average, maximum, or weighted
 )
 
 # Weighted fusion (like SearchXP scoring)
 results = collection.multi_query_search(
     vectors=[v1, v2, v3],
-    top_k=10,
+    k=10,
     fusion=FusionStrategy.weighted(
         avg_weight=0.6,
         max_weight=0.3,
@@ -298,14 +299,14 @@ collection.upsert([
 # Sparse-only search (no dense vector needed)
 results = collection.search_request(velesdb.SearchOptions(
     sparse_vector={0: 1.0, 42: 2.0},
-    top_k=5,
+    k=5,
 ))
 
 # Hybrid dense + sparse search (fused with RRF k=60 by default)
 results = collection.search_request(velesdb.SearchOptions(
     vector=[0.15, 0.25, 0.35, 0.45],
     sparse_vector={0: 1.0, 42: 2.0},
-    top_k=10,
+    k=10,
 ))
 
 # Named sparse indexes (e.g., separate SPLADE and BM25 sparse models)
@@ -324,7 +325,7 @@ collection.upsert([
 results = collection.search_request(velesdb.SearchOptions(
     vector=[0.2, 0.3, 0.4, 0.5],
     sparse_vector={10: 1.5, 20: 0.8},
-    top_k=10,
+    k=10,
     sparse_index_name="splade",  # query a specific named sparse index
 ))
 ```
@@ -336,7 +337,7 @@ from scipy.sparse import csr_matrix
 import numpy as np
 
 sparse_query = csr_matrix(np.array([[0.0, 1.5, 0.0, 0.8]]))
-results = collection.search_request(velesdb.SearchOptions(sparse_vector=sparse_query, top_k=5))
+results = collection.search_request(velesdb.SearchOptions(sparse_vector=sparse_query, k=5))
 ```
 
 ## Fusion strategies

@@ -50,6 +50,7 @@ Each binding has its own reference guide; the
 
 | Binding | Reference |
 |---------|-----------|
+| Cross-surface | [API correspondence](./guides/API_CORRESPONDENCE.md) |
 | Rust (`velesdb-core`) | [Public API map](./guides/CORE_API_MAP.md) · [VelesQL](./guides/CORE_VELESQL_REFERENCE.md) |
 | Python | [API reference](./guides/PYTHON_API_REFERENCE.md) |
 | WASM (browser) | [JavaScript API](./guides/WASM_API.md) |

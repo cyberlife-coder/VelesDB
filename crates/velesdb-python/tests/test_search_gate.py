@@ -134,7 +134,7 @@ def test_search_request_deny_fails_closed():
     with _Db(observer=_deny_reads) as db:
         collection = _seed(db)
         with pytest.raises(Exception):
-            collection.search_request(SearchOptions(vector=QUERY, top_k=2))
+            collection.search_request(SearchOptions(vector=QUERY, k=2))
 
 
 def test_text_search_deny_fails_closed():
@@ -176,7 +176,7 @@ def test_policy_exception_fails_open_by_default():
     """A raising policy must NOT break the read in the default (fail-open) mode."""
     with _Db(observer=_raise_on_read) as db:
         collection = _seed(db)
-        results = collection.search_request(SearchOptions(vector=QUERY, top_k=2))
+        results = collection.search_request(SearchOptions(vector=QUERY, k=2))
         assert _ids(results) == {1, 2}
 
 
@@ -185,14 +185,14 @@ def test_policy_exception_fails_closed_under_strict():
     with _Db(observer=_raise_on_read, observer_strict=True) as db:
         collection = _seed(db)
         with pytest.raises(Exception):
-            collection.search_request(SearchOptions(vector=QUERY, top_k=2))
+            collection.search_request(SearchOptions(vector=QUERY, k=2))
 
 
 def test_bad_return_type_fails_open_by_default():
     """An uninterpretable return value is treated as allow by default."""
     with _Db(observer=_return_bad_type) as db:
         collection = _seed(db)
-        results = collection.search_request(SearchOptions(vector=QUERY, top_k=2))
+        results = collection.search_request(SearchOptions(vector=QUERY, k=2))
         assert _ids(results) == {1, 2}
 
 
@@ -201,14 +201,14 @@ def test_bad_return_type_fails_closed_under_strict():
     with _Db(observer=_return_bad_type, observer_strict=True) as db:
         collection = _seed(db)
         with pytest.raises(Exception):
-            collection.search_request(SearchOptions(vector=QUERY, top_k=2))
+            collection.search_request(SearchOptions(vector=QUERY, k=2))
 
 
 def test_explicit_allow_unaffected_by_strict():
     """None/allow from the policy still allows even under strict mode."""
     with _Db(observer=_scope_to_acme, observer_strict=True) as db:
         collection = _seed(db)
-        results = collection.search_request(SearchOptions(vector=QUERY, top_k=10))
+        results = collection.search_request(SearchOptions(vector=QUERY, k=10))
         # Scope still narrows to tenant 'acme' (id 1), proving strict didn't
         # turn an explicit allow-with-scope into a denial.
         assert _ids(results) == {1}
@@ -223,13 +223,13 @@ def test_search_scope_narrows_results():
     # Ungated: both points are returned.
     with _Db() as db:
         collection = _seed(db)
-        ungated = collection.search_request(SearchOptions(vector=QUERY, top_k=10))
+        ungated = collection.search_request(SearchOptions(vector=QUERY, k=10))
     assert _ids(ungated) == {1, 2}
 
     # Scoped to tenant == 'acme': only point 1 survives.
     with _Db(observer=_scope_to_acme) as db:
         collection = _seed(db)
-        scoped = collection.search_request(SearchOptions(vector=QUERY, top_k=10))
+        scoped = collection.search_request(SearchOptions(vector=QUERY, k=10))
     assert _ids(scoped) == {1}
 
 
@@ -285,7 +285,7 @@ def test_malformed_scope_filter_denies():
     with _Db(observer=bad_scope) as db:
         collection = _seed(db)
         with pytest.raises(Exception):
-            collection.search_request(SearchOptions(vector=QUERY, top_k=10))
+            collection.search_request(SearchOptions(vector=QUERY, k=10))
 
 
 # ---------------------------------------------------------------------------
@@ -306,7 +306,7 @@ def test_empty_scope_dict_denies():
     with _Db(observer=empty_scope) as db:
         collection = _seed(db)
         with pytest.raises(Exception):
-            collection.search_request(SearchOptions(vector=QUERY, top_k=10))
+            collection.search_request(SearchOptions(vector=QUERY, k=10))
 
 
 def test_tenant_only_scope_dict_denies():
@@ -320,7 +320,7 @@ def test_tenant_only_scope_dict_denies():
     with _Db(observer=tenant_only) as db:
         collection = _seed(db)
         with pytest.raises(Exception):
-            collection.search_request(SearchOptions(vector=QUERY, top_k=10))
+            collection.search_request(SearchOptions(vector=QUERY, k=10))
 
 
 def test_tenant_plus_filter_scope_narrows():
@@ -333,7 +333,7 @@ def test_tenant_plus_filter_scope_narrows():
 
     with _Db(observer=scoped) as db:
         collection = _seed(db)
-        results = collection.search_request(SearchOptions(vector=QUERY, top_k=10))
+        results = collection.search_request(SearchOptions(vector=QUERY, k=10))
     assert _ids(results) == {1}
 
 
@@ -348,7 +348,7 @@ def test_sparse_search_deny_fails_closed():
         collection = _seed(db)
         with pytest.raises(Exception):
             collection.search_request(
-                SearchOptions(sparse_vector={0: 1.0}, top_k=2)
+                SearchOptions(sparse_vector={0: 1.0}, k=2)
             )
 
 
@@ -437,7 +437,7 @@ def test_graph_search_by_embedding_scope_narrows():
 def test_no_observer_returns_all_results():
     with _Db() as db:
         collection = _seed(db)
-        results = collection.search_request(SearchOptions(vector=QUERY, top_k=10))
+        results = collection.search_request(SearchOptions(vector=QUERY, k=10))
     assert _ids(results) == {1, 2}
     # Nearest neighbour to QUERY is point 1 (exact match).
     assert results[0]["id"] == 1
@@ -457,7 +457,7 @@ def test_allow_observer_permits_read():
 
     with _Db(observer=notify_only) as db:
         collection = _seed(db)
-        results = collection.search_request(SearchOptions(vector=QUERY, top_k=10))
+        results = collection.search_request(SearchOptions(vector=QUERY, k=10))
     assert _ids(results) == {1, 2}
 
 
@@ -472,7 +472,7 @@ def test_query_request_fields_carry_search_operation():
 
     with _Db(observer=observe) as db:
         collection = _seed(db)
-        collection.search_request(SearchOptions(vector=QUERY, top_k=2))
+        collection.search_request(SearchOptions(vector=QUERY, k=2))
         collection.text_search("learning", top_k=2)
         collection.hybrid_search(QUERY, "learning", top_k=2)
 

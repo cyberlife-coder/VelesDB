@@ -1023,7 +1023,7 @@ async fn every_scalar_input_slot_accepts_the_form_it_announces() {
 ///
 /// The complement below cannot simply be "a slot announced `integer` refuses
 /// a string": measured on 2026-07-29, ten integer slots accept `"6"` —
-/// `recall.limit`, `why.max_hops`, `compile_transcript.token_budget`… — and
+/// `recall.k`, `why.max_hops`, `compile_transcript.token_budget`… — and
 /// that is not drift. It is `mcp::wire::lenient`, a deliberate, documented
 /// server-side fallback for the harness that stringifies an argument BECAUSE
 /// its view of the schema degraded. Removing it would break exactly the

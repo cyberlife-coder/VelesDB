@@ -1146,6 +1146,68 @@ fn output_root_fields(tool: &rmcp::model::Tool) -> BTreeSet<String> {
         .unwrap_or_default()
 }
 
+/// Root input property names from the live MCP schema.
+fn input_root_fields(tool: &rmcp::model::Tool) -> BTreeSet<String> {
+    tool.input_schema
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+        .map(|props| props.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// The parameter list of `method`'s Rust declaration inside its source region.
+fn input_window(region: &str, method: &str) -> String {
+    let Some(header) = region
+        .lines()
+        .position(|line| method_name(line.trim()).as_deref() == Some(method))
+    else {
+        return String::new();
+    };
+    let declaration = region.lines().skip(header).collect::<Vec<_>>().join("\n");
+    let Some(open) = declaration.find('(') else {
+        return String::new();
+    };
+    let Some(close) = matching_paren(&declaration[open..]).map(|offset| open + offset) else {
+        return String::new();
+    };
+    declaration[open + 1..close].to_owned()
+}
+
+#[tokio::test]
+async fn recall_count_input_is_k_on_the_server_and_every_binding() {
+    let (_store, client) = connected().await;
+    let tools = client.list_all_tools().await.expect("list tools");
+    let recall_tools = ["recall", "recall_where", "recall_fused"];
+    let mut gaps = Vec::new();
+    for name in recall_tools {
+        let tool = tools
+            .iter()
+            .find(|tool| tool.name.as_ref() == name)
+            .unwrap_or_else(|| panic!("live server no longer advertises `{name}`"));
+        let fields = input_root_fields(tool);
+        if !fields.contains("k") || fields.contains("limit") {
+            gaps.push(format!(
+                "  {name} advertises {fields:?}, expected canonical `k`"
+            ));
+        }
+        for binding in BINDINGS {
+            let regions = method_regions(binding);
+            let params = regions
+                .get(name)
+                .map_or_else(String::new, |region| input_window(region, name));
+            if !names_identifier(&params, "k") {
+                gaps.push(format!("  {}.{name} does not accept `k`", binding.name));
+            }
+        }
+    }
+    assert!(
+        gaps.is_empty(),
+        "shared recall count input drifted across surfaces:\n{}",
+        gaps.join("\n")
+    );
+    client.cancel().await.expect("close the MCP session");
+}
+
 /// The server source files declaring the tools, scanned for the Rust type
 /// each tool's `output_schema` is derived from.
 const SERVER_TOOL_SOURCES: &[&str] = &[

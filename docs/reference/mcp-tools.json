@@ -2701,8 +2701,8 @@
             "description": "Optional exact-match metadata filter (e.g.\n`{\"project\": \"veles\", \"status\": \"resolved\"}`).",
             "type": "object"
           },
-          "limit": {
-            "description": "Maximum number of memories to return (default 10).",
+          "k": {
+            "description": "Maximum number of memories to return (default 10). `k` is canonical;\nthe deprecated `limit` spelling remains a wire alias for one version.",
             "minimum": 0,
             "type": "integer"
           },
@@ -2793,13 +2793,13 @@
             "minimum": 0,
             "type": "integer"
           },
-          "limit": {
-            "description": "Maximum number of memories to return (default 10). Multi-hop reasoning\nbenefits from a larger budget (~32-64); simple and temporal recall\nsaturate early, where a larger budget only adds tokens.",
+          "k": {
+            "description": "Maximum number of memories to return (default 10). `k` is canonical;\nthe deprecated `limit` spelling remains a wire alias for one version.\nMulti-hop reasoning benefits from a larger budget (~32-64); simple and\ntemporal recall saturate early, where a larger budget only adds tokens.",
             "minimum": 0,
             "type": "integer"
           },
           "pool": {
-            "description": "Depth of the oversampled vector candidate pool fusion re-ranks before\nthe `limit` cutoff (default: `limit` scaled up, floored at 64). That\ndefault is already deep enough for a graph-reached fact to surface;\nwiden it to give a reranker more to work with, narrow it to confine\nfusion to the strongest vector hits. Capped at 1000, the same ceiling\n`limit` carries — NOT the one `hops` carries, which is 10.",
+            "description": "Depth of the oversampled vector candidate pool fusion re-ranks before\nthe `k` cutoff (default: `k` scaled up, floored at 64). That\ndefault is already deep enough for a graph-reached fact to surface;\nwiden it to give a reranker more to work with, narrow it to confine\nfusion to the strongest vector hits. Capped at 1000, the same ceiling\n`k` carries — NOT the one `hops` carries, which is 10.",
             "minimum": 0,
             "type": "integer"
           },
@@ -2924,8 +2924,8 @@
             },
             "type": "array"
           },
-          "limit": {
-            "description": "Maximum number of memories to return (default 10).",
+          "k": {
+            "description": "Maximum number of memories to return (default 10). `k` is canonical;\nthe deprecated `limit` spelling remains a wire alias for one version.",
             "minimum": 0,
             "type": "integer"
           },

@@ -170,18 +170,19 @@ class SearchOptions:
 
         opts = SearchOptions(
             vector=my_embedding,
-            top_k=20,
+            k=20,
             filter={"condition": {"type": "eq", "field": "lang", "value": "en"}},
         )
 
     Fluent builder style (each ``with_*`` method returns ``self``)::
 
-        opts = SearchOptions().with_vector(my_embedding).with_top_k(20)
+        opts = SearchOptions().with_vector(my_embedding).with_k(20)
 
     Attributes:
         vector: Dense query vector (list or numpy array).
         sparse_vector: Sparse query as dict[int, float] or scipy sparse.
-        top_k: Max results to return (default: 10).
+        k: Max results to return (default: 10).
+        top_k: Deprecated alias for ``k``.
         filter: Metadata pre-filter dict. Shape: ``{"condition": <cond>}`` where
             ``<cond>`` is ``{"type": <op>, "field": ..., ...}``. Operators:
             ``eq``/``neq``/``gt``/``gte``/``lt``/``lte`` (``field``+``value``),
@@ -200,12 +201,13 @@ class SearchOptions:
 
     Example:
         >>> cond = {"type": "eq", "field": "lang", "value": "en"}
-        >>> opts = SearchOptions(vector=my_embedding, top_k=20, filter={"condition": cond})
+        >>> opts = SearchOptions(vector=my_embedding, k=20, filter={"condition": cond})
         >>> results = collection.search_request(opts)
     """
 
     vector: Optional[Union[List[float], "np.ndarray"]]
     sparse_vector: Optional[Dict[int, float]]
+    k: int
     top_k: int
     filter: Optional[Dict[str, Any]]
     sparse_index_name: Optional[str]
@@ -219,7 +221,8 @@ class SearchOptions:
         vector: Optional[Union[List[float], "np.ndarray"]] = None,
         *,
         sparse_vector: Optional[Dict[int, float]] = None,
-        top_k: int = 10,
+        k: Optional[int] = None,
+        top_k: Optional[int] = None,
         filter: Optional[Dict[str, Any]] = None,
         sparse_index_name: Optional[str] = None,
         include_vectors: bool = False,
@@ -233,6 +236,7 @@ class SearchOptions:
     def with_sparse_vector(
         self, sparse_vector: Optional[Dict[int, float]]
     ) -> "SearchOptions": ...
+    def with_k(self, k: int) -> "SearchOptions": ...
     def with_top_k(self, top_k: int) -> "SearchOptions": ...
     def with_filter(self, filter: Optional[Dict[str, Any]]) -> "SearchOptions": ...
     def with_sparse_index_name(self, name: Optional[str]) -> "SearchOptions": ...
@@ -509,7 +513,7 @@ class Collection:
             List of dicts with ``id``, ``score``, and ``payload`` keys.
 
         Example:
-            >>> opts = SearchOptions(vector=my_embedding, top_k=20)
+            >>> opts = SearchOptions(vector=my_embedding, k=20)
             >>> results = collection.search_request(opts)
         """
         ...

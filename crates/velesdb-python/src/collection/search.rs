@@ -80,17 +80,17 @@ impl Collection {
             2,
         )?;
 
-        let opts = SearchOptions::new(
+        let opts = SearchOptions {
             vector,
             sparse_vector,
-            top_k,
+            k: top_k,
             filter,
             sparse_index_name,
             include_vectors,
-            None,
+            fusion: None,
             principal,
             tenant,
-        );
+        };
         self.search_request(py, &opts)
     }
 
@@ -108,7 +108,7 @@ impl Collection {
     ///     List of dicts with ``id``, ``score``, and ``payload`` keys.
     ///
     /// Example:
-    ///     >>> opts = SearchOptions(vector=my_emb, top_k=20, filter={"lang": "en"})
+    ///     >>> opts = SearchOptions(vector=my_emb, k=20, filter={"lang": "en"})
     ///     >>> results = collection.search_request(opts)
     #[pyo3(signature = (opts))]
     fn search_request(&self, py: Python<'_>, opts: &SearchOptions) -> PyResult<Vec<Py<PyAny>>> {
@@ -125,7 +125,7 @@ impl Collection {
             .transpose()?;
         let filter_obj = parse_optional_filter(py, opts.filter.as_ref().map(|f| f.clone_ref(py)))?;
 
-        let top_k = opts.top_k;
+        let top_k = opts.k;
         let sparse_index_name = opts.sparse_index_name.clone();
         let include_vectors = opts.include_vectors;
         let fusion = opts.fusion.as_ref().map(FusionStrategy::inner);

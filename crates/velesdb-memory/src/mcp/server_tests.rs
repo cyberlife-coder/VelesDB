@@ -1477,7 +1477,7 @@ fn test_remember_extracted_description_names_every_published_output_field() {
 /// degrade a parameter whose advertised schema carries no DIRECT `type`
 /// keyword — `anyOf`-wrapped optionals and `$ref`-only structs both come out
 /// untyped on the client side, and the harness then serializes the argument
-/// as a JSON-encoded STRING (`limit: "6"`, `filter: "{\"project\":...}"`),
+/// as a JSON-encoded STRING (`k: "6"`, `filter: "{\"project\":...}"`),
 /// which the server rejects. Same wire-contract class as issue #1468
 /// (u64 ids vs float-lossy clients): the schema must be harness-proof, not
 /// merely spec-correct.
@@ -1502,6 +1502,31 @@ fn test_recall_fused_input_schema_types_every_parameter_directly() {
     }
 }
 
+#[test]
+fn recall_family_advertises_k_as_the_canonical_count_parameter() {
+    let tools = [
+        McpServer::recall_tool_attr(),
+        McpServer::recall_where_tool_attr(),
+        McpServer::recall_fused_tool_attr(),
+    ];
+    for tool in tools {
+        let schema = serde_json::to_value(&tool.input_schema).expect("schema serializes");
+        let properties = schema["properties"]
+            .as_object()
+            .expect("recall input schema must have properties");
+        assert!(
+            properties.contains_key("k"),
+            "{} must advertise `k`",
+            tool.name
+        );
+        assert!(
+            !properties.contains_key("limit"),
+            "{} must keep `limit` as a wire alias, not the canonical schema field",
+            tool.name
+        );
+    }
+}
+
 /// Server-side tolerance half of the harness-proof contract: a client that
 /// DID stringify a scalar or object argument (today's Claude Code harness
 /// does exactly that for schema-degraded parameters) must still be served.
@@ -1510,7 +1535,7 @@ fn test_recall_fused_input_schema_types_every_parameter_directly() {
 fn test_recall_fused_params_accept_stringified_scalars_and_objects() {
     let params: RecallFusedParams = serde_json::from_value(serde_json::json!({
         "query": "q",
-        "limit": "6",
+        "k": "6",
         "hops": "2",
         "graph_boost": "0.15",
         "pool": "128",
@@ -1526,6 +1551,49 @@ fn test_recall_fused_params_accept_stringified_scalars_and_objects() {
         filter.get("project").and_then(|v| v.as_str()),
         Some("velesdb")
     );
+}
+
+#[test]
+fn recall_fused_accepts_k_and_the_deprecated_limit_alias() {
+    for (input, value) in [
+        (serde_json::json!({"query": "q", "k": 7}), 7),
+        (serde_json::json!({"query": "q", "limit": 8}), 8),
+    ] {
+        let params: RecallFusedParams = serde_json::from_value(input)
+            .expect("canonical and deprecated spellings must deserialize");
+        assert_eq!(params.limit, Some(value));
+    }
+}
+
+#[test]
+fn recall_and_recall_where_accept_the_deprecated_limit_alias() {
+    let recall: RecallParams = serde_json::from_value(serde_json::json!({
+        "query": "q",
+        "limit": 7
+    }))
+    .expect("recall must accept deprecated `limit`");
+    assert_eq!(recall.limit, Some(7));
+
+    let recall_where: RecallWhereParams = serde_json::from_value(serde_json::json!({
+        "query": "q",
+        "limit": 8,
+        "filters": []
+    }))
+    .expect("recall_where must accept deprecated `limit`");
+    assert_eq!(recall_where.limit, Some(8));
+}
+
+#[test]
+fn recall_fused_rejects_k_and_limit_together() {
+    let result = serde_json::from_value::<RecallFusedParams>(serde_json::json!({
+        "query": "q",
+        "k": 7,
+        "limit": 8
+    }));
+    let Err(error) = result else {
+        panic!("two spellings for one parameter must be ambiguous");
+    };
+    assert!(error.to_string().contains("duplicate field"), "{error}");
 }
 
 // ---------------------------------------------------------------------------

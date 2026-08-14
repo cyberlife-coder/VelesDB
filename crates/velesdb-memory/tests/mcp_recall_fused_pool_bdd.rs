@@ -11,7 +11,7 @@
 //! So this suite asserts on the EFFECT, not on acceptance. `pool` is the
 //! depth of the vector candidate pool fusion re-ranks: at `1` only the top
 //! vector hit may enter, so a store holding several facts must come back
-//! with a single memory even though `limit` allows ten. A tool that merely
+//! with a single memory even though `k` allows ten. A tool that merely
 //! swallowed the argument returns all of them, and the assertion names the
 //! count.
 //!
@@ -30,7 +30,7 @@ use velesdb_memory::mcp::McpServer;
 use velesdb_memory::{DynEmbedder, HashEmbedder, MemoryService, DEFAULT_DIMENSION};
 
 /// Facts with no `relate` edge between them, so nothing is graph-reached and
-/// the returned count is exactly the vector pool's depth capped by `limit` —
+/// the returned count is exactly the vector pool's depth capped by `k` —
 /// the property under test, with no fusion promotion blurring it.
 const FACTS: [&str; 6] = [
     "we chose parking_lot to avoid lock poisoning",
@@ -145,7 +145,7 @@ async fn a_narrowed_pool_admits_fewer_candidates_than_the_default() {
     assert_eq!(
         default_depth,
         FACTS.len(),
-        "with the proven default pool, `limit: 10` returns every stored fact"
+        "with the proven default pool, `k: 10` returns every stored fact"
     );
 
     let narrowed = fused_count(

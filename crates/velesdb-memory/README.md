@@ -142,7 +142,7 @@ remember { "fact": "we chose parking_lot to avoid lock poisoning",
            "metadata": { "project": "checkout" } }
 → { "id": 9876543210, "id_str": "9876543210" }
 
-recall { "query": "locking strategy", "limit": 5 }
+recall { "query": "locking strategy", "k": 5 }
 → { "memories": [ { "id": 9876543210, "id_str": "9876543210",
                     "score": 0.59,
                     "content": "we chose parking_lot to avoid lock poisoning",
