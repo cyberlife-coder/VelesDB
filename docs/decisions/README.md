@@ -18,3 +18,4 @@ looked right at the time survives.
 | [The shared daemon is reached over native HTTP](./native-http-over-bridge.md) | The bridge does not recover from an idle-expired session |
 | [A repository edit requires a successful causal recall first](./recall-before-edit.md) | Bound to the exact session and checkout, written only after success |
 | [Tool results are replaced on one host only](./no-auto-replacement-on-a-second-host.md) | Replacement needs an output contract; parity without one is a claim |
+| [Online memory migration is a daemon-owned dirty-state protocol](./online-memory-migration-contract.md) | A durable pre-mutation journal turns a live base copy into a named cutover snapshot |
