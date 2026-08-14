@@ -548,14 +548,14 @@
             "docs/guides/QUANTIZATION.md": "# Quantization\n\nsq8 delivers higher throughput.\n",
             "docs/VELESQL_SPEC.md": "# VelesQL\n",
             "crates/velesdb-core/src/quantization/mod.rs": "//! Quantization.\n",
-            "docs/reference/promise-contract.json": "{\n  \"claims\": [\n    {\n      \"id\": \"quantization-is-documented\",\n      \"file\": \"docs/guides/QUANTIZATION.md\",\n      \"must_contain\": \"# Quantization\",\n      \"executable\": false,\n      \"measured_on\": \"2026-07-31\",\n      \"measured_machine\": \"fixture\",\n      \"measured_version\": \"1.0.0\"\n    }\n  ]\n}\n"
+            "docs/reference/promise-contract.json": "{\n  \"claims\": [\n    {\n      \"id\": \"quantization-is-documented\",\n      \"file\": \"docs/guides/QUANTIZATION.md\",\n      \"must_contain\": \"# Quantization\",\n      \"executable\": false,\n      \"measured_on\": \"2026-07-31\",\n      \"measured_machine\": \"fixture\",\n      \"measured_version\": \"1.0.0\"\n    }\n  ],\n  \"claim_families\": [\n    {\n      \"id\": \"quantization_heading\",\n      \"canonical_claim_id\": \"quantization-is-documented\",\n      \"canonical_value\": \"Quantization\",\n      \"members\": [\n        {\n          \"file\": \"docs/guides/QUANTIZATION.md\",\n          \"value\": \"Quantization\",\n          \"must_contain\": \"# Quantization\"\n        },\n        {\n          \"file\": \"crates/velesdb-core/src/quantization/mod.rs\",\n          \"value\": \"Quantization\",\n          \"must_contain\": \"//! Quantization.\"\n        }\n      ]\n    }\n  ]\n}\n"
           },
           "accepts": {
             "Cargo.toml": "[workspace.package]\nversion = \"1.0.0\"\n",
             "docs/guides/QUANTIZATION.md": "# Quantization\n\nsq8 delivers no higher throughput.\n",
             "docs/VELESQL_SPEC.md": "# VelesQL\n",
             "crates/velesdb-core/src/quantization/mod.rs": "//! Quantization.\n",
-            "docs/reference/promise-contract.json": "{\n  \"claims\": [\n    {\n      \"id\": \"quantization-is-documented\",\n      \"file\": \"docs/guides/QUANTIZATION.md\",\n      \"must_contain\": \"# Quantization\",\n      \"executable\": false,\n      \"measured_on\": \"2026-07-31\",\n      \"measured_machine\": \"fixture\",\n      \"measured_version\": \"1.0.0\"\n    }\n  ]\n}\n"
+            "docs/reference/promise-contract.json": "{\n  \"claims\": [\n    {\n      \"id\": \"quantization-is-documented\",\n      \"file\": \"docs/guides/QUANTIZATION.md\",\n      \"must_contain\": \"# Quantization\",\n      \"executable\": false,\n      \"measured_on\": \"2026-07-31\",\n      \"measured_machine\": \"fixture\",\n      \"measured_version\": \"1.0.0\"\n    }\n  ],\n  \"claim_families\": [\n    {\n      \"id\": \"quantization_heading\",\n      \"canonical_claim_id\": \"quantization-is-documented\",\n      \"canonical_value\": \"Quantization\",\n      \"members\": [\n        {\n          \"file\": \"docs/guides/QUANTIZATION.md\",\n          \"value\": \"Quantization\",\n          \"must_contain\": \"# Quantization\"\n        },\n        {\n          \"file\": \"crates/velesdb-core/src/quantization/mod.rs\",\n          \"value\": \"Quantization\",\n          \"must_contain\": \"//! Quantization.\"\n        }\n      ]\n    }\n  ]\n}\n"
           },
           "argv": [
             "--root",
@@ -570,7 +570,7 @@
             "docs/guides/QUANTIZATION.md": "# Quantization\n\nsq8 delivers no higher throughput.\n",
             "docs/VELESQL_SPEC.md": "# VelesQL\n",
             "crates/velesdb-core/src/quantization/mod.rs": "//! Quantization.\n",
-            "docs/reference/promise-contract.json": "{\n  \"claims\": [\n    {\n      \"id\": \"quantization-is-documented\",\n      \"file\": \"docs/guides/QUANTIZATION.md\",\n      \"must_contain\": \"# Quantization\",\n      \"executable\": false,\n      \"measured_on\": \"2026-07-31\",\n      \"measured_machine\": \"fixture\",\n      \"measured_version\": \"1.0.0\"\n    }\n  ]\n}\n"
+            "docs/reference/promise-contract.json": "{\n  \"claims\": [\n    {\n      \"id\": \"quantization-is-documented\",\n      \"file\": \"docs/guides/QUANTIZATION.md\",\n      \"must_contain\": \"# Quantization\",\n      \"executable\": false,\n      \"measured_on\": \"2026-07-31\",\n      \"measured_machine\": \"fixture\",\n      \"measured_version\": \"1.0.0\"\n    }\n  ],\n  \"claim_families\": [\n    {\n      \"id\": \"quantization_heading\",\n      \"canonical_claim_id\": \"quantization-is-documented\",\n      \"canonical_value\": \"Quantization\",\n      \"members\": [\n        {\n          \"file\": \"docs/guides/QUANTIZATION.md\",\n          \"value\": \"Quantization\",\n          \"must_contain\": \"# Quantization\"\n        },\n        {\n          \"file\": \"crates/velesdb-core/src/quantization/mod.rs\",\n          \"value\": \"Quantization\",\n          \"must_contain\": \"//! Quantization.\"\n        }\n      ]\n    }\n  ]\n}\n"
           },
           "accepts": {
             "Cargo.toml": "[workspace.package]\nversion = \"1.0.0\"\n",
@@ -578,7 +578,7 @@
             "docs/guides/QUANTIZATION.md": "# Quantization\n\nsq8 delivers no higher throughput.\n",
             "docs/VELESQL_SPEC.md": "# VelesQL\n",
             "crates/velesdb-core/src/quantization/mod.rs": "//! Quantization.\n",
-            "docs/reference/promise-contract.json": "{\n  \"claims\": [\n    {\n      \"id\": \"quantization-is-documented\",\n      \"file\": \"docs/guides/QUANTIZATION.md\",\n      \"must_contain\": \"# Quantization\",\n      \"executable\": false,\n      \"measured_on\": \"2026-07-31\",\n      \"measured_machine\": \"fixture\",\n      \"measured_version\": \"1.0.0\"\n    }\n  ]\n}\n"
+            "docs/reference/promise-contract.json": "{\n  \"claims\": [\n    {\n      \"id\": \"quantization-is-documented\",\n      \"file\": \"docs/guides/QUANTIZATION.md\",\n      \"must_contain\": \"# Quantization\",\n      \"executable\": false,\n      \"measured_on\": \"2026-07-31\",\n      \"measured_machine\": \"fixture\",\n      \"measured_version\": \"1.0.0\"\n    }\n  ],\n  \"claim_families\": [\n    {\n      \"id\": \"quantization_heading\",\n      \"canonical_claim_id\": \"quantization-is-documented\",\n      \"canonical_value\": \"Quantization\",\n      \"members\": [\n        {\n          \"file\": \"docs/guides/QUANTIZATION.md\",\n          \"value\": \"Quantization\",\n          \"must_contain\": \"# Quantization\"\n        },\n        {\n          \"file\": \"crates/velesdb-core/src/quantization/mod.rs\",\n          \"value\": \"Quantization\",\n          \"must_contain\": \"//! Quantization.\"\n        }\n      ]\n    }\n  ]\n}\n"
           },
           "argv": [
             "--root",

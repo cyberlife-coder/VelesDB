@@ -30,6 +30,7 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "check-promise-contract.py"
+sys.path.insert(0, str(SCRIPT_PATH.parent))
 
 
 def _load_script() -> types.ModuleType:
@@ -111,6 +112,126 @@ class RunValidationCommandsTests(unittest.TestCase):
         self.assertEqual(executed, [])
         self.assertEqual(len(skipped), 1)
         self.assertEqual(failures, [])
+
+
+class ClaimFamilyTests(unittest.TestCase):
+    """Issue #1891: copied claims must stay equal to their canonical value."""
+
+    @staticmethod
+    def _registry(member_value: str = "~10 MB") -> dict:
+        return {
+            "claims": [
+                {
+                    "id": "binary_size",
+                    "file": "README.md",
+                    "must_contain": "~10 MB binary",
+                }
+            ],
+            "claim_families": [
+                {
+                    "id": "binary_size",
+                    "canonical_claim_id": "binary_size",
+                    "canonical_value": "~10 MB",
+                    "members": [
+                        {
+                            "file": "README.md",
+                            "value": "~10 MB",
+                            "must_contain": "~10 MB binary",
+                        },
+                        {
+                            "file": "docs/README.md",
+                            "value": member_value,
+                            "must_contain": f"{member_value} binary",
+                        },
+                    ],
+                }
+            ],
+        }
+
+    @staticmethod
+    def _write_docs(root: Path, secondary_value: str = "~10 MB") -> None:
+        (root / "README.md").write_text("One ~10 MB binary\n", encoding="utf-8")
+        (root / "docs").mkdir()
+        (root / "docs/README.md").write_text(
+            f"One {secondary_value} binary\n", encoding="utf-8"
+        )
+
+    def test_divergent_family_value_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_docs(root, "~9 MB")
+            failures = cpc.check_claim_families(self._registry("~9 MB"), root)
+
+        self.assertEqual(len(failures), 1)
+        self.assertIn("docs/README.md", failures[0])
+        self.assertIn("~9 MB", failures[0])
+        self.assertIn("~10 MB", failures[0])
+
+    def test_missing_declared_occurrence_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_docs(root, "~9 MB")
+            failures = cpc.check_claim_families(self._registry(), root)
+
+        self.assertEqual(len(failures), 1)
+        self.assertIn("expected substring not found", failures[0])
+        self.assertIn("docs/README.md", failures[0])
+
+    def test_family_with_one_distinct_file_is_refused_as_vacuous(self) -> None:
+        registry = self._registry()
+        registry["claim_families"][0]["members"][1]["file"] = "README.md"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_docs(root)
+            failures = cpc.check_claim_families(registry, root)
+
+        self.assertEqual(len(failures), 1)
+        self.assertIn("two distinct files", failures[0])
+
+    def test_family_missing_canonical_value_is_refused_by_schema(self) -> None:
+        registry = self._registry()
+        del registry["claim_families"][0]["canonical_value"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_docs(root)
+            failures = cpc.check_claim_families(registry, root)
+
+        self.assertEqual(len(failures), 1)
+        self.assertIn("missing non-empty 'canonical_value'", failures[0])
+
+    def test_duplicate_family_id_is_refused(self) -> None:
+        registry = self._registry()
+        registry["claim_families"].append(registry["claim_families"][0].copy())
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_docs(root)
+            failures = cpc.check_claim_families(registry, root)
+
+        self.assertEqual(len(failures), 1)
+        self.assertIn("Duplicate claim family id", failures[0])
+
+    def test_family_values_normalize_repeated_whitespace(self) -> None:
+        registry = self._registry("~10   MB")
+        registry["claim_families"][0]["members"][1]["must_contain"] = (
+            "~10 MB binary"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_docs(root)
+            failures = cpc.check_claim_families(registry, root)
+
+        self.assertEqual(failures, [])
+
+    def test_real_registry_has_non_vacuous_claim_families(self) -> None:
+        import json
+
+        data = json.loads(cpc.registry_path(cpc.ROOT).read_text(encoding="utf-8"))
+        families = data.get("claim_families", [])
+        self.assertEqual(
+            {family["id"] for family in families},
+            {"binary_size", "wasm_bundle_size", "rest_endpoint_count"},
+        )
+        self.assertEqual(cpc.check_claim_families(data, cpc.ROOT), [])
 
 
 class ReleaseLinkGuardTests(unittest.TestCase):
