@@ -199,23 +199,22 @@ fn cancellation_permit_requires_source_authority_and_epoch_ownership() {
 
 #[test]
 fn cancellation_phase_matrix_refuses_only_after_cutover_started() {
-    let scenarios: [(fn(&mut ConvergenceController), bool); 3] = [
-        (make_ready, true),
-        (make_nonconverging, true),
-        (make_activated, false),
-    ];
-    for (setup, allowed) in scenarios {
-        let root = tempfile::tempdir().expect("root");
-        let mut controller = open_controller(root.path());
-        setup(&mut controller);
-        let result = controller.cancel(true, EPOCH);
-        assert_eq!(result.is_ok(), allowed);
-        if !allowed {
-            assert_eq!(
-                controller.recovery_action(),
-                Some("complete or recover cutover before serving traffic")
-            );
-        }
+    assert_cancellation(make_ready, true);
+    assert_cancellation(make_nonconverging, true);
+    assert_cancellation(make_activated, false);
+}
+
+fn assert_cancellation(setup: fn(&mut ConvergenceController), allowed: bool) {
+    let root = tempfile::tempdir().expect("root");
+    let mut controller = open_controller(root.path());
+    setup(&mut controller);
+    let result = controller.cancel(true, EPOCH);
+    assert_eq!(result.is_ok(), allowed);
+    if !allowed {
+        assert_eq!(
+            controller.recovery_action(),
+            Some("complete or recover cutover before serving traffic")
+        );
     }
 }
 
