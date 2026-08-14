@@ -6,11 +6,13 @@ use parking_lot::RwLock;
 
 use crate::MemoryError;
 
+#[allow(dead_code)] // Internal until the control-surface slice exposes online migration.
+mod catchup;
 #[allow(dead_code)] // The catch-up slice consumes the journal before the control surface ships.
 mod journal;
 
 /// Idempotent source state that a migration must re-read after a mutation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum DirtyKey {
     Fact(u64),
     OutgoingEdges(u64),
@@ -200,6 +202,9 @@ mod tests {
             .map(|(name, _)| name)
     }
 }
+
+#[cfg(all(test, feature = "persistence"))]
+mod catchup_tests;
 
 #[cfg(test)]
 mod journal_tests;

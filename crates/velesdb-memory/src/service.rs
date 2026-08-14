@@ -37,6 +37,10 @@ use crate::storage::{is_reserved_key, strip_reserved_keys, MemoryStore, AUTO_DAT
 #[path = "fused_recall.rs"]
 mod fused_recall;
 
+#[cfg(feature = "persistence")]
+#[path = "online_migration.rs"]
+mod online_migration;
+
 /// [`MemoryService::feedback`] and the recall re-ranking it drives (RL Memory).
 /// A child module of `service`, like [`fused_recall`], so it uses
 /// `MemoryService`'s private `store` directly. Gated on `persistence`: it

@@ -28,6 +28,9 @@ use crate::model::{BoundedMemoryEdges, ColumnFilter, MemoryEdge, Recollection};
 use crate::mutation::{DirtyKey, MutationCapture, MutationObserver};
 use crate::service::Metadata;
 
+#[cfg(feature = "persistence")]
+mod migration;
+
 /// The storage primitives [`crate::service::MemoryService`] needs: write,
 /// vector search, graph edges, and by-id lookup. A backend that implements
 /// this trait can run the full wedge (`remember`/`recall`/`recall_fused`/
