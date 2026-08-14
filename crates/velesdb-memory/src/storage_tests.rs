@@ -77,7 +77,9 @@ fn store() -> (tempfile::TempDir, NativeStore) {
 fn every_native_mutation_is_classified_before_the_source_write() {
     let (_dir, store) = store();
     let observer = Arc::new(RecordingObserver::default());
-    store.set_mutation_observer(Some(observer.clone()));
+    store
+        .set_mutation_observer(Some(observer.clone()))
+        .expect("install observer");
     let mut metadata = Metadata::new();
     metadata.insert("tag".to_owned(), Value::from("test"));
 
@@ -116,7 +118,9 @@ fn observer_failure_prevents_the_source_mutation() {
     let (_dir, store) = store();
     let observer = Arc::new(RecordingObserver::default());
     *observer.failure.lock() = Some("journal unavailable".to_owned());
-    store.set_mutation_observer(Some(observer));
+    store
+        .set_mutation_observer(Some(observer))
+        .expect("install observer");
 
     let error = store
         .store(7, "must not persist", &[1.0, 0.0, 0.0, 0.0])
@@ -137,7 +141,9 @@ fn exclusive_capture_activation_waits_for_the_in_flight_request() {
         released: Mutex::new(false),
         wake: Condvar::new(),
     });
-    service.install_mutation_observer(Some(blocking.clone()));
+    service
+        .install_mutation_observer(Some(blocking.clone()))
+        .expect("install observer");
 
     let writer_service = Arc::clone(&service);
     let writer = std::thread::spawn(move || writer_service.remember("first", &[], None));
@@ -150,8 +156,8 @@ fn exclusive_capture_activation_waits_for_the_in_flight_request() {
     let activation_observer = Arc::clone(&next);
     let (activated_tx, activated_rx) = mpsc::channel();
     let activation = std::thread::spawn(move || {
-        activation_service.install_mutation_observer(Some(activation_observer));
-        let _ = activated_tx.send(());
+        let result = activation_service.install_mutation_observer(Some(activation_observer));
+        let _ = activated_tx.send(result);
     });
     assert!(activated_rx
         .recv_timeout(Duration::from_millis(50))
@@ -160,10 +166,16 @@ fn exclusive_capture_activation_waits_for_the_in_flight_request() {
     *blocking.released.lock() = true;
     blocking.wake.notify_all();
     writer.join().expect("writer thread").expect("remember");
+    let error = activated_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("activation result")
+        .expect_err("second observer");
+    assert!(error.to_string().contains("already active"), "{error}");
     activation.join().expect("activation thread");
 
     let second = service.remember("second", &[], None).expect("remember");
-    assert_eq!(*next.keys.lock(), vec![DirtyKey::Fact(second)]);
+    assert!(next.keys.lock().is_empty());
+    assert_ne!(second, 0);
 }
 
 #[test]
@@ -171,7 +183,9 @@ fn service_mutation_surfaces_reach_the_native_observer() {
     let dir = tempfile::tempdir().expect("tempdir");
     let service = MemoryService::open(dir.path(), HashEmbedder::new(4)).expect("open service");
     let observer = Arc::new(RecordingObserver::default());
-    service.install_mutation_observer(Some(observer.clone()));
+    service
+        .install_mutation_observer(Some(observer.clone()))
+        .expect("install observer");
     let mut metadata = Metadata::new();
     metadata.insert("kind".to_owned(), Value::from("contract"));
 
@@ -205,7 +219,9 @@ fn autograph_and_extraction_writes_are_captured() {
     let extraction_service =
         MemoryService::open(extraction_dir.path(), HashEmbedder::new(4)).expect("open service");
     let extraction_observer = Arc::new(RecordingObserver::default());
-    extraction_service.install_mutation_observer(Some(extraction_observer.clone()));
+    extraction_service
+        .install_mutation_observer(Some(extraction_observer.clone()))
+        .expect("install observer");
     extraction_service
         .remember_extracted("extracted fact", &OneEntityExtractor, None)
         .expect("remember extracted");
@@ -220,7 +236,9 @@ fn autograph_and_extraction_writes_are_captured() {
         .expect("open service")
         .with_autograph(Arc::new(OneEntityExtractor));
     let autograph_observer = Arc::new(RecordingObserver::default());
-    autograph_service.install_mutation_observer(Some(autograph_observer.clone()));
+    autograph_service
+        .install_mutation_observer(Some(autograph_observer.clone()))
+        .expect("install observer");
     autograph_service
         .remember("autograph fact", &[], None)
         .expect("remember autograph");
@@ -243,7 +261,9 @@ fn captured_link_failure_also_captures_the_rollback_delete() {
         key: DirtyKey::OutgoingEdges(source),
         seen: Mutex::new(Vec::new()),
     });
-    service.install_mutation_observer(Some(observer.clone()));
+    service
+        .install_mutation_observer(Some(observer.clone()))
+        .expect("install observer");
 
     let error = service
         .remember(
@@ -276,7 +296,9 @@ fn context_source_and_event_writes_are_captured() {
     let dir = tempfile::tempdir().expect("tempdir");
     let service = MemoryService::open(dir.path(), HashEmbedder::new(4)).expect("open service");
     let observer = Arc::new(RecordingObserver::default());
-    service.install_mutation_observer(Some(observer.clone()));
+    service
+        .install_mutation_observer(Some(observer.clone()))
+        .expect("install observer");
     let request = CompileRequest {
         query: "migration".to_owned(),
         fragments: vec![ContextFragment {

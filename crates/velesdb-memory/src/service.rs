@@ -202,10 +202,13 @@ impl<E: Embedder> MemoryService<E, NativeStore> {
         })
     }
 
-    #[allow(dead_code)] // The durable-journal slice supplies the first production observer.
-    pub(crate) fn install_mutation_observer(&self, observer: Option<Arc<dyn MutationObserver>>) {
+    #[allow(dead_code)] // The journal activation path remains internal until slice 6.
+    pub(crate) fn install_mutation_observer(
+        &self,
+        observer: Option<Arc<dyn MutationObserver>>,
+    ) -> Result<(), MemoryError> {
         let _generation = self.generation_gate.write();
-        self.store.set_mutation_observer(observer);
+        self.store.set_mutation_observer(observer)
     }
 }
 

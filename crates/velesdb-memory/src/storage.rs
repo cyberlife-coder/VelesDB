@@ -363,9 +363,12 @@ impl NativeStore {
         })
     }
 
-    #[allow(dead_code)] // Reached by the coordinator seam introduced in the same slice.
-    pub(crate) fn set_mutation_observer(&self, observer: Option<Arc<dyn MutationObserver>>) {
-        self.capture.replace(observer);
+    #[allow(dead_code)] // The journal activation path remains internal until slice 6.
+    pub(crate) fn set_mutation_observer(
+        &self,
+        observer: Option<Arc<dyn MutationObserver>>,
+    ) -> Result<(), MemoryError> {
+        self.capture.replace(observer)
     }
 
     fn unrelate_unobserved(&self, edge_id: u64) -> Result<bool, MemoryError> {
