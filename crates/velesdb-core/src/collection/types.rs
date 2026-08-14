@@ -523,7 +523,7 @@ pub(crate) struct StreamingState {
 /// planner, caches, stats) — state the engine builds and consults itself to
 /// decide *how* to execute. Limits change via configuration; engine state
 /// changes via execution.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub(crate) struct RuntimeGuards {
     /// Guard-rails for query execution (EPIC-048).
     pub(crate) guard_rails: Arc<GuardRails>,
