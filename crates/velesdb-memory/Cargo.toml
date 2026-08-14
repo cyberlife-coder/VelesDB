@@ -234,6 +234,13 @@ name = "fused_recall_benchmark"
 harness = false
 required-features = ["persistence"]
 
+# Latency and allocations of remember's autograph write path as one shared
+# entity hub accumulates facts (issue #1790).
+[[bench]]
+name = "autograph_write_benchmark"
+harness = false
+required-features = ["persistence"]
+
 # Reproducible before/after benchmark of the deterministic context compiler.
 # Offline and dependency-free — needs only the `context` feature.
 [[example]]
