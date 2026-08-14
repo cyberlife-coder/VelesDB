@@ -35,6 +35,7 @@ serde = { workspace = true }
 toml = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { version = "0.11", optional = true }
+getrandom = { version = "0.4", optional = true }
 fs2 = { version = "0.4", optional = true }
 # Secure sibling temporary files for durable extraction-job snapshots. The
 # dependency follows `persistence`, so wasm/no-default consumers do not carry
@@ -165,6 +166,7 @@ context = []
 persistence = [
     "velesdb-core/persistence",
     "dep:sha2",
+    "dep:getrandom",
     "dep:fs2",
     "dep:tempfile",
     "dep:atomicwrites",

@@ -6984,6 +6984,7 @@ dependencies = [
  "criterion",
  "fs2",
  "futures",
+ "getrandom 0.4.2",
  "hyper",
  "hyper-util",
  "parking_lot",

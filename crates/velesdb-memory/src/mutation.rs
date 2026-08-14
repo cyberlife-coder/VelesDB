@@ -6,6 +6,9 @@ use parking_lot::RwLock;
 
 use crate::MemoryError;
 
+#[allow(dead_code)] // The catch-up slice consumes the journal before the control surface ships.
+mod journal;
+
 /// Idempotent source state that a migration must re-read after a mutation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DirtyKey {
@@ -33,9 +36,19 @@ impl MutationCapture {
         }
     }
 
-    #[allow(dead_code)] // The durable-journal slice supplies the first production observer.
-    pub(crate) fn replace(&self, observer: Option<Arc<dyn MutationObserver>>) {
-        *self.observer.write() = observer;
+    #[allow(dead_code)] // The journal activation path remains internal until slice 6.
+    pub(crate) fn replace(
+        &self,
+        observer: Option<Arc<dyn MutationObserver>>,
+    ) -> Result<(), MemoryError> {
+        let mut installed = self.observer.write();
+        if installed.is_some() && observer.is_some() {
+            return Err(MemoryError::MigrationCapture(
+                "a mutation observer is already active".to_owned(),
+            ));
+        }
+        *installed = observer;
+        Ok(())
     }
 
     pub(crate) fn is_active(&self) -> bool {
@@ -150,7 +163,9 @@ mod tests {
         let activation_service = Arc::clone(&service);
         let (activated_tx, activated_rx) = mpsc::channel();
         let activation = std::thread::spawn(move || {
-            activation_service.install_mutation_observer(Some(Arc::new(NoopObserver)));
+            activation_service
+                .install_mutation_observer(Some(Arc::new(NoopObserver)))
+                .expect("activate observer");
             let _ = activated_tx.send(());
         });
 
@@ -163,9 +178,28 @@ mod tests {
         activation.join().expect("activation thread");
     }
 
+    #[test]
+    fn a_second_capture_epoch_is_refused() {
+        let capture = super::MutationCapture::default();
+        capture
+            .replace(Some(Arc::new(NoopObserver)))
+            .expect("first epoch");
+        let error = capture
+            .replace(Some(Arc::new(NoopObserver)))
+            .expect_err("second epoch");
+        assert!(error.to_string().contains("already active"), "{error}");
+        capture.replace(None).expect("remove observer");
+        capture
+            .replace(Some(Arc::new(NoopObserver)))
+            .expect("replacement after removal");
+    }
+
     fn method_name(line: &str) -> Option<&str> {
         line.strip_prefix("    fn ")?
             .split_once('(')
             .map(|(name, _)| name)
     }
 }
+
+#[cfg(test)]
+mod journal_tests;
