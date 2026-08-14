@@ -46,6 +46,17 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         filter: Option<&Metadata>,
         opts: FusionOptions,
     ) -> Result<Vec<Recollection>, MemoryError> {
+        let _generation = self.enter_generation();
+        self.recall_fused_inner(query, k, filter, opts)
+    }
+
+    fn recall_fused_inner(
+        &self,
+        query: &str,
+        k: usize,
+        filter: Option<&Metadata>,
+        opts: FusionOptions,
+    ) -> Result<Vec<Recollection>, MemoryError> {
         let query = query.trim();
         if query.is_empty() || k == 0 {
             return Ok(Vec::new());
@@ -112,7 +123,8 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         opts: FusionOptions,
         date_field: &str,
     ) -> Result<(Vec<Recollection>, crate::DatedContext), MemoryError> {
-        let hits = self.recall_fused(query, k, filter, opts)?;
+        let _generation = self.enter_generation();
+        let hits = self.recall_fused_inner(query, k, filter, opts)?;
         let ctx = crate::format_dated_context(&hits, date_field);
         Ok((hits, ctx))
     }
@@ -133,6 +145,18 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// Returns [`MemoryError`] if embedding, vector search, graph traversal,
     /// or `reranker` itself fails.
     pub fn recall_fused_reranked<R: Reranker>(
+        &self,
+        query: &str,
+        k: usize,
+        filter: Option<&Metadata>,
+        opts: FusionOptions,
+        reranker: &R,
+    ) -> Result<Vec<Recollection>, MemoryError> {
+        let _generation = self.enter_generation();
+        self.recall_fused_reranked_inner(query, k, filter, opts, reranker)
+    }
+
+    pub(super) fn recall_fused_reranked_inner<R: Reranker>(
         &self,
         query: &str,
         k: usize,

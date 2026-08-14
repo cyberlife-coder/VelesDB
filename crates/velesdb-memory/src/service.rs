@@ -3,6 +3,8 @@
 use std::collections::{HashMap, HashSet};
 #[cfg(feature = "persistence")]
 use std::path::Path;
+#[cfg(feature = "persistence")]
+use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
@@ -22,6 +24,8 @@ use crate::model::{
     ColumnFilter, EntityProfile, EntityRelation, Explanation, Link, MemoryEdge, MemoryNode,
     Recollection, RememberedExtraction, UnrelateOutcome,
 };
+#[cfg(feature = "persistence")]
+use crate::mutation::MutationObserver;
 #[cfg(feature = "persistence")]
 use crate::storage::NativeStore;
 use crate::storage::{is_reserved_key, strip_reserved_keys, MemoryStore, AUTO_DATE_FIELD};
@@ -97,6 +101,7 @@ pub struct MemoryService<E: Embedder, S: MemoryStore = NativeStore> {
     embedder: E,
     autograph: Option<crate::extract::DynExtractor>,
     autograph_queue: AutographQueue,
+    generation_gate: parking_lot::RwLock<()>,
 }
 #[cfg(not(feature = "persistence"))]
 pub struct MemoryService<E: Embedder, S: MemoryStore> {
@@ -104,6 +109,13 @@ pub struct MemoryService<E: Embedder, S: MemoryStore> {
     embedder: E,
     autograph: Option<crate::extract::DynExtractor>,
     autograph_queue: AutographQueue,
+}
+
+struct GenerationGuard<'a> {
+    #[cfg(feature = "persistence")]
+    _guard: parking_lot::RwLockReadGuard<'a, ()>,
+    #[cfg(not(feature = "persistence"))]
+    _lifetime: std::marker::PhantomData<&'a ()>,
 }
 
 /// One deferred autograph: the stored fact a background worker will read for
@@ -186,7 +198,14 @@ impl<E: Embedder> MemoryService<E, NativeStore> {
             embedder,
             autograph: None,
             autograph_queue: AutographQueue::default(),
+            generation_gate: parking_lot::RwLock::new(()),
         })
+    }
+
+    #[allow(dead_code)] // The durable-journal slice supplies the first production observer.
+    pub(crate) fn install_mutation_observer(&self, observer: Option<Arc<dyn MutationObserver>>) {
+        let _generation = self.generation_gate.write();
+        self.store.set_mutation_observer(observer);
     }
 }
 
@@ -200,6 +219,23 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             embedder,
             autograph: None,
             autograph_queue: AutographQueue::default(),
+            #[cfg(feature = "persistence")]
+            generation_gate: parking_lot::RwLock::new(()),
+        }
+    }
+
+    #[cfg(feature = "persistence")]
+    fn enter_generation(&self) -> GenerationGuard<'_> {
+        GenerationGuard {
+            _guard: self.generation_gate.read(),
+        }
+    }
+
+    #[cfg(not(feature = "persistence"))]
+    fn enter_generation(&self) -> GenerationGuard<'_> {
+        let _ = self;
+        GenerationGuard {
+            _lifetime: std::marker::PhantomData,
         }
     }
 
@@ -267,7 +303,8 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         links: &[Link],
         metadata: Option<&Metadata>,
     ) -> Result<u64, MemoryError> {
-        self.remember_with_ttl(fact, links, metadata, None)
+        let _generation = self.enter_generation();
+        self.remember_inner(fact, links, metadata, None, true)
     }
 
     /// Like [`Self::remember`], but the fact **expires after `ttl_seconds`**.
@@ -309,6 +346,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         metadata: Option<&Metadata>,
         ttl_seconds: Option<u64>,
     ) -> Result<u64, MemoryError> {
+        let _generation = self.enter_generation();
         self.remember_inner(fact, links, metadata, ttl_seconds, true)
     }
 
@@ -481,6 +519,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// — the store's [`MemoryStore::count`], relayed for `memory_status`.
     #[must_use]
     pub fn fact_count(&self) -> usize {
+        let _generation = self.enter_generation();
         self.store.count()
     }
 
@@ -490,6 +529,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// different things about `why()`.
     #[must_use]
     pub fn edge_count(&self) -> Option<usize> {
+        let _generation = self.enter_generation();
         self.store.edge_count()
     }
 
@@ -518,6 +558,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         filter: Option<&Metadata>,
         include_internal: bool,
     ) -> Result<(Vec<crate::model::ListedMemory>, Option<u64>), MemoryError> {
+        let _generation = self.enter_generation();
         let limit = crate::limits::clamp_recall_limit(limit.max(1));
         let (page, next) = self.store.list(cursor, limit)?;
         let memories = page
@@ -550,6 +591,7 @@ where
                 skipped_on_close += 1;
                 continue;
             }
+            let _generation = self.enter_generation();
             self.autograph(job.fact_id, &job.fact);
         }
         if skipped_on_close > 0 {
@@ -750,8 +792,9 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         extractor: &X,
         metadata: Option<&Metadata>,
     ) -> Result<RememberedExtraction, MemoryError> {
+        let _generation = self.enter_generation();
         let extraction = Self::extract_passage(text, extractor)?;
-        self.store_extraction(&extraction, metadata)
+        self.store_extraction_inner(&extraction, metadata)
     }
 
     /// Extract and orient one passage without writing any memory state.
@@ -775,7 +818,17 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
 
     /// Store a previously generated extraction through the same idempotent
     /// fact, hub, edge, and attribute primitives as [`Self::remember_extracted`].
+    #[cfg(feature = "mcp")]
     pub(crate) fn store_extraction(
+        &self,
+        extraction: &crate::extract::Extraction,
+        metadata: Option<&Metadata>,
+    ) -> Result<RememberedExtraction, MemoryError> {
+        let _generation = self.enter_generation();
+        self.store_extraction_inner(extraction, metadata)
+    }
+
+    fn store_extraction_inner(
         &self,
         extraction: &crate::extract::Extraction,
         metadata: Option<&Metadata>,
@@ -808,6 +861,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// # Errors
     /// Returns [`MemoryError`] if the store lookup fails.
     pub fn entity_profile(&self, name: &str) -> Result<Option<EntityProfile>, MemoryError> {
+        let _generation = self.enter_generation();
         let key = canonical_entity_name(name);
         if key.is_empty() {
             return Ok(None);
@@ -1082,7 +1136,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         edges: &mut HashSet<(u64, u64, String)>,
     ) -> Result<(), MemoryError> {
         if edges.insert((from, to, label.to_string())) {
-            self.relate(from, to, label)?;
+            self.relate_inner(from, to, label)?;
         }
         Ok(())
     }
@@ -1199,6 +1253,16 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         k: usize,
         filter: Option<&Metadata>,
     ) -> Result<Vec<Recollection>, MemoryError> {
+        let _generation = self.enter_generation();
+        self.recall_inner(query, k, filter)
+    }
+
+    fn recall_inner(
+        &self,
+        query: &str,
+        k: usize,
+        filter: Option<&Metadata>,
+    ) -> Result<Vec<Recollection>, MemoryError> {
         let query = query.trim();
         if query.is_empty() {
             return Ok(Vec::new());
@@ -1287,6 +1351,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         k: usize,
         filters: &[ColumnFilter],
     ) -> Result<Vec<Recollection>, MemoryError> {
+        let _generation = self.enter_generation();
         let query = query.trim();
         if query.is_empty() || k == 0 {
             return Ok(Vec::new());
@@ -1297,7 +1362,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         // scaffolding as results (same `[]` ≡ unfiltered convention as
         // `search`'s empty-map handling).
         if filters.is_empty() {
-            return self.recall(query, k, None);
+            return self.recall_inner(query, k, None);
         }
         let embedding = self.embedder.embed(query)?;
         self.store.query_columnar(&embedding, k, filters)
@@ -1320,6 +1385,11 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// [`MemoryError::UnknownMemory`] if either endpoint is missing, or
     /// a storage error if the edge cannot be created.
     pub fn relate(&self, from: u64, to: u64, relation: &str) -> Result<u64, MemoryError> {
+        let _generation = self.enter_generation();
+        self.relate_inner(from, to, relation)
+    }
+
+    fn relate_inner(&self, from: u64, to: u64, relation: &str) -> Result<u64, MemoryError> {
         validate_relation(relation)?;
         if from == to {
             return Err(MemoryError::SelfRelation(from));
@@ -1356,6 +1426,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         to: u64,
         relation: &str,
     ) -> Result<UnrelateOutcome, MemoryError> {
+        let _generation = self.enter_generation();
         validate_relation(relation)?;
         if from == to {
             return Err(MemoryError::SelfRelation(from));
@@ -1377,7 +1448,10 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     ) -> Result<usize, MemoryError> {
         let mut removed = 0usize;
         for edge in self.store.relations(from)? {
-            if edge.to == to && edge.relation == relation && self.store.unrelate(edge.id)? {
+            if edge.to == to
+                && edge.relation == relation
+                && self.store.unrelate_from(from, edge.id)?
+            {
                 removed += 1;
             }
         }
@@ -1402,6 +1476,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// # Errors
     /// Returns [`MemoryError`] if the existence check or the deletion fails.
     pub fn forget(&self, fact_id: u64) -> Result<bool, MemoryError> {
+        let _generation = self.enter_generation();
         let found = self.store.get(fact_id)?.is_some();
         // Read the fact's hubs BEFORE the delete: afterwards its edges are gone
         // and there is no way back to the entities it created.
@@ -1500,6 +1575,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         max_hops: usize,
         filter: Option<&Metadata>,
     ) -> Result<Explanation, MemoryError> {
+        let _generation = self.enter_generation();
         let decision = decision.trim();
         if decision.is_empty() {
             return Ok(Explanation::default());
