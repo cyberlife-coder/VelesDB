@@ -1,6 +1,6 @@
 # 📚 VelesDB Documentation
 
-> **VelesDB — the explainable, local-first memory engine for AI agents.** One ~9 MB binary fuses vector + graph + columnar under VelesQL; [`why()`](./guides/AGENT_MEMORY.md) returns the evidence path behind every recall. Zero cloud.
+> **VelesDB — the explainable, local-first memory engine for AI agents.** One ~10 MB binary fuses vector + graph + columnar under VelesQL; [`why()`](./guides/AGENT_MEMORY.md) returns the evidence path behind every recall. Zero cloud.
 
 Welcome to the VelesDB documentation. This guide will help you get started and make the most of VelesDB.
 

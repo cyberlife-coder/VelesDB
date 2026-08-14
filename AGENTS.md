@@ -1,6 +1,6 @@
 # AGENTS.md — VelesDB
 
-Local-first unified database (Vector + Graph + ColumnStore) under VelesQL. Rust workspace, single ~9 MB binary.
+Local-first unified database (Vector + Graph + ColumnStore) under VelesQL. Rust workspace, single ~10 MB binary.
 Authoritative docs (don't duplicate them here — read them): [QUALITY_BAR.md](QUALITY_BAR.md), [CONTRIBUTING.md](CONTRIBUTING.md), [ARCHITECTURE.md](docs/reference/ARCHITECTURE.md), [CONCURRENCY_MODEL.md](docs/CONCURRENCY_MODEL.md).
 
 ---

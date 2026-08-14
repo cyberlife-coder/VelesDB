@@ -45,6 +45,8 @@ import sys
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from promise_contract_families import check_claim_families
+
 #: Default tree to check. `--root` overrides it so the guard can be pointed at a
 #: fixture tree and be SEEN refusing (#1715); the default keeps CI byte-identical.
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -434,10 +436,12 @@ def run(root: pathlib.Path) -> int:
     data = json.loads(registry.read_text(encoding="utf-8")) if registry.exists() else {}
     claims = data.get("claims", [])
     provenance_failures = check_provenance(claims)
+    family_failures = check_claim_families(data, root)
     executed, skipped, execution_failures = run_validation_commands(claims, root)
 
     _report("Provenance check failed — every claim must record its measurement:", provenance_failures)
     _report("Promise contract check failed:", registry_failures)
+    _report("Claim propagation check failed:", family_failures)
     _report("Anti-overclaim check failed (Requirement 10.4):", overclaim_failures)
     _report("Latest-release asset check failed:", release_asset_failures)
     _report("MCPB release-train check failed:", mcpb_link_failures)
@@ -453,6 +457,7 @@ def run(root: pathlib.Path) -> int:
 
     failure_groups = (
         registry_failures,
+        family_failures,
         overclaim_failures,
         release_asset_failures,
         mcpb_link_failures,
