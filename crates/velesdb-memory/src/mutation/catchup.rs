@@ -1,11 +1,12 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crate::embedder::Embedder;
 use crate::storage::NativeStore;
 use crate::{MemoryError, MemoryService};
 
-use super::journal::DirtyJournal;
+use super::journal::{DirtyJournal, RECORD_BYTES};
 use super::DirtyKey;
 
 mod facts;
@@ -44,8 +45,14 @@ pub(crate) struct BaseCopyProgress {
 pub(crate) struct ReplayProgress {
     pub(crate) records: u64,
     pub(crate) dirty_keys: u64,
-    pub(crate) acknowledged_watermark: u64,
+    pub(crate) distinct_dirty_facts: u64,
+    pub(crate) distinct_edge_sources: u64,
+    pub(crate) input_watermark: u64,
+    pub(crate) output_watermark: u64,
     pub(crate) backlog: u64,
+    pub(crate) pending_journal_bytes: u64,
+    pub(crate) elapsed: Duration,
+    pub(crate) largest_apply_latency: Duration,
 }
 
 pub(crate) struct OnlineCatchUp<'a, E: Embedder> {
@@ -116,16 +123,28 @@ impl<'a, E: Embedder> OnlineCatchUp<'a, E> {
     }
 
     fn catch_up_locked(&self) -> Result<ReplayProgress, MemoryError> {
+        let started = Instant::now();
+        let input_watermark = self.journal.last_sequence();
         let acknowledged = self.journal.compacted_through();
         let records = self
             .journal
             .records_after(acknowledged, self.config.replay_batch)?;
         if records.is_empty() {
-            return Ok(self.replay_progress(0, 0, acknowledged));
+            return Ok(Self::replay_progress(
+                0,
+                DirtyCounts::default(),
+                input_watermark,
+                acknowledged,
+                started.elapsed(),
+                Duration::ZERO,
+            ));
         }
         let dirty: BTreeSet<DirtyKey> = records.iter().map(|record| record.key).collect();
+        let mut largest_apply_latency = Duration::ZERO;
         for key in &dirty {
+            let apply_started = Instant::now();
             self.sync_key(*key)?;
+            largest_apply_latency = largest_apply_latency.max(apply_started.elapsed());
         }
         self.maybe_fail(FaultPoint::BeforeWatermark)?;
         let watermark = records
@@ -133,7 +152,14 @@ impl<'a, E: Embedder> OnlineCatchUp<'a, E> {
             .map_or(acknowledged, |record| record.sequence);
         self.journal.compact_through(watermark)?;
         self.maybe_fail(FaultPoint::AfterWatermark)?;
-        Ok(self.replay_progress(records.len(), dirty.len(), watermark))
+        Ok(Self::replay_progress(
+            records.len(),
+            DirtyCounts::from_keys(&dirty),
+            input_watermark,
+            watermark,
+            started.elapsed(),
+            largest_apply_latency,
+        ))
     }
 
     pub(crate) fn finish(self) -> Result<(), MemoryError> {
@@ -257,12 +283,26 @@ impl<'a, E: Embedder> OnlineCatchUp<'a, E> {
         Ok(())
     }
 
-    fn replay_progress(&self, records: usize, dirty: usize, watermark: u64) -> ReplayProgress {
+    fn replay_progress(
+        records: usize,
+        dirty: DirtyCounts,
+        input_watermark: u64,
+        output_watermark: u64,
+        elapsed: Duration,
+        largest_apply_latency: Duration,
+    ) -> ReplayProgress {
+        let backlog = input_watermark.saturating_sub(output_watermark);
         ReplayProgress {
             records: to_u64(records),
-            dirty_keys: to_u64(dirty),
-            acknowledged_watermark: watermark,
-            backlog: self.journal.last_sequence().saturating_sub(watermark),
+            dirty_keys: dirty.facts.saturating_add(dirty.edge_sources),
+            distinct_dirty_facts: dirty.facts,
+            distinct_edge_sources: dirty.edge_sources,
+            input_watermark,
+            output_watermark,
+            backlog,
+            pending_journal_bytes: backlog.saturating_mul(RECORD_BYTES),
+            elapsed,
+            largest_apply_latency,
         }
     }
 
@@ -289,6 +329,26 @@ impl<'a, E: Embedder> OnlineCatchUp<'a, E> {
     #[allow(clippy::unnecessary_wraps, clippy::unused_self)]
     fn maybe_fail(&self, _point: FaultPoint) -> Result<(), MemoryError> {
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct DirtyCounts {
+    facts: u64,
+    edge_sources: u64,
+}
+
+impl DirtyCounts {
+    fn from_keys(keys: &BTreeSet<DirtyKey>) -> Self {
+        keys.iter().fold(Self::default(), |mut counts, key| {
+            match key {
+                DirtyKey::Fact(_) => counts.facts = counts.facts.saturating_add(1),
+                DirtyKey::OutgoingEdges(_) => {
+                    counts.edge_sources = counts.edge_sources.saturating_add(1);
+                }
+            }
+            counts
+        })
     }
 }
 
