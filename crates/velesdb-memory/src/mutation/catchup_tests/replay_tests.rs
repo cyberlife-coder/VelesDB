@@ -7,6 +7,8 @@ use serde_json::{json, Value};
 
 use super::{journal, FixedEmbedder, TestRig};
 use crate::mutation::catchup::{CatchUpConfig, OnlineCatchUp};
+use crate::mutation::controller::ConvergenceSample;
+use crate::mutation::journal::RECORD_BYTES;
 use crate::storage::NativeStore;
 use crate::{EmbedError, Embedder, MemoryService, Metadata};
 
@@ -27,7 +29,16 @@ fn repeated_overwrites_coalesce_and_apply_the_latest_source_state() {
     let progress = copy.catch_up_batch().expect("catch up");
     assert_eq!(progress.records, 3);
     assert_eq!(progress.dirty_keys, 1);
+    assert_eq!(progress.distinct_dirty_facts, 1);
+    assert_eq!(progress.distinct_edge_sources, 0);
+    assert_eq!(progress.input_watermark, 3);
+    assert_eq!(progress.output_watermark, 3);
     assert_eq!(progress.backlog, 0);
+    assert_eq!(progress.pending_journal_bytes, 0);
+    assert!(progress.elapsed >= progress.largest_apply_latency);
+    let sample = ConvergenceSample::from_replay(Duration::from_secs(1), progress);
+    assert_eq!(sample.input_watermark, progress.input_watermark);
+    assert_eq!(sample.output_watermark, progress.output_watermark);
     assert_eq!(
         rig.destination
             .migration_payload(id)
@@ -58,6 +69,8 @@ fn deletion_and_edge_replacement_converge_idempotently() {
 
     assert_eq!(progress.records, 3);
     assert_eq!(progress.dirty_keys, 2);
+    assert_eq!(progress.distinct_dirty_facts, 1);
+    assert_eq!(progress.distinct_edge_sources, 1);
     assert!(!rig
         .destination
         .migration_contains(deleted)
@@ -121,6 +134,12 @@ fn fuzzy_cursor_plus_bounded_replay_converges_to_current_state() {
         .migration_contains(deleted)
         .expect("deleted still present before replay"));
 
+    let first_replay = copy.catch_up_batch().expect("first catch-up batch");
+    assert!(first_replay.backlog > 0);
+    assert_eq!(
+        first_replay.pending_journal_bytes,
+        first_replay.backlog * RECORD_BYTES
+    );
     while copy.catch_up_batch().expect("catch-up batch").backlog != 0 {}
     assert_converged(&rig);
     copy.finish().expect("finish");
