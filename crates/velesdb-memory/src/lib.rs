@@ -100,6 +100,8 @@ pub mod migration;
 /// (`Link`, `Recollection`, `ColumnFilter`, `Explanation`, …), separate from the
 /// service that computes them.
 pub mod model;
+#[cfg(feature = "persistence")]
+mod mutation;
 
 /// Authenticated JSON over HTTP: the transport under every remote inference
 /// backend, with no knowledge of role or vendor.

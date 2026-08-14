@@ -69,6 +69,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// Returns [`MemoryError::UnknownMemory`] if `id` is not a live fact, or a
     /// storage error if the read-back or persist fails.
     pub fn feedback(&self, id: u64, success: bool) -> Result<f32, MemoryError> {
+        let _generation = self.enter_generation();
         // Raw payload (reserved keys included) so we can read the current RL
         // state the caller-facing metadata hides.
         let payload = self

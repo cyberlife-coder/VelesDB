@@ -178,6 +178,15 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         compiler: &ContextCompiler,
         request: &CompileRequest,
     ) -> Result<CompiledContext, MemoryError> {
+        let _generation = self.enter_generation();
+        self.compile_context_inner(compiler, request)
+    }
+
+    fn compile_context_inner(
+        &self,
+        compiler: &ContextCompiler,
+        request: &CompileRequest,
+    ) -> Result<CompiledContext, MemoryError> {
         let importance = compiler.effective_policy(request).importance.clone();
         let memories = self.context_memories(request, &importance)?;
         self.compile_with_memories(compiler, request, memories)
@@ -203,6 +212,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         request: &CompileRequest,
         reranker: &R,
     ) -> Result<CompiledContext, MemoryError> {
+        let _generation = self.enter_generation();
         let importance = compiler.effective_policy(request).importance.clone();
         let memories = self.context_memories_reranked(request, reranker, &importance)?;
         self.compile_with_memories(compiler, request, memories)
@@ -307,7 +317,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         let filter = scope_filter(scope);
         let opts = FusionOptions::from_knobs(scope.hops, scope.graph_boost, None);
         let ranked =
-            self.recall_fused_reranked(&request.query, k, filter.as_ref(), opts, reranker)?;
+            self.recall_fused_reranked_inner(&request.query, k, filter.as_ref(), opts, reranker)?;
         let count = ranked.len().max(1);
         let candidates = ranked
             .into_iter()
@@ -606,6 +616,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// Returns [`MemoryError::UnknownHandle`] when the handle is malformed
     /// or nothing is stored under it (never stored, expired, or forgotten).
     pub fn retrieve_context_source(&self, handle: &str) -> Result<ContextSource, MemoryError> {
+        let _generation = self.enter_generation();
         let unknown = || MemoryError::UnknownHandle(handle.to_owned());
         let hash = provenance::parse_handle(handle).ok_or_else(unknown)?;
         let slot = source_id(hash);
@@ -659,6 +670,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         fragment_id: u64,
         fragment_index: Option<usize>,
     ) -> Result<ContextDecision, MemoryError> {
+        let _generation = self.enter_generation();
         if let Some(index) = fragment_index {
             let len = request.fragments.len();
             if index >= len {
@@ -685,7 +697,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         policy.slim_response = false;
         request.policy = Some(policy);
         let compiled =
-            self.compile_context(&ContextCompiler::new(CompilePolicy::default()), &request)?;
+            self.compile_context_inner(&ContextCompiler::new(CompilePolicy::default()), &request)?;
         let decision = if let Some(index) = fragment_index {
             compiled.decisions.into_iter().nth(index)
         } else {
@@ -733,6 +745,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// # Errors
     /// Returns [`MemoryError`] if the underlying filtered recall fails.
     pub fn context_savings(&self, project: Option<&str>) -> Result<ContextSavings, MemoryError> {
+        let _generation = self.enter_generation();
         // Filter at the STORAGE layer on the reserved event marker: callers
         // can neither set nor query `_veles_*` keys, so only genuine bridge
         // events can ever match — a caller fact posing as an event counts
@@ -779,6 +792,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         session: &str,
         working: &WorkingContext,
     ) -> Result<u64, MemoryError> {
+        let _generation = self.enter_generation();
         if working.is_empty() {
             return Err(MemoryError::EmptyWorkingContext);
         }
@@ -830,6 +844,15 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// fact is corruption — reporting it as "nothing saved" would tell the
     /// caller the one thing that is certainly false), or a storage error.
     pub fn load_working_context(
+        &self,
+        project: &str,
+        session: &str,
+    ) -> Result<Option<WorkingContext>, MemoryError> {
+        let _generation = self.enter_generation();
+        self.load_working_context_inner(project, session)
+    }
+
+    fn load_working_context_inner(
         &self,
         project: &str,
         session: &str,
@@ -891,7 +914,8 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         project: &str,
         session: &str,
     ) -> Result<LoadedWorkingContext, MemoryError> {
-        let working = self.load_working_context(project, session)?;
+        let _generation = self.enter_generation();
+        let working = self.load_working_context_inner(project, session)?;
         let other_sessions = self.other_sessions_for(project, session, working.is_some())?;
         Ok(LoadedWorkingContext {
             found: working.is_some(),
@@ -931,7 +955,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         session: &str,
         found: bool,
     ) -> Result<Vec<String>, MemoryError> {
-        let listed = match self.list_working_contexts(project) {
+        let listed = match self.list_working_contexts_inner(project) {
             Ok(listed) => listed,
             Err(_) if found => return Ok(Vec::new()),
             Err(err) => return Err(err),
@@ -999,6 +1023,14 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// [`MemoryError::WorkingContextCodec`] if it does not parse or is
     /// corrupt (marked, but with no body).
     pub fn list_working_contexts(
+        &self,
+        project: &str,
+    ) -> Result<Vec<WorkingContextSession>, MemoryError> {
+        let _generation = self.enter_generation();
+        self.list_working_contexts_inner(project)
+    }
+
+    fn list_working_contexts_inner(
         &self,
         project: &str,
     ) -> Result<Vec<WorkingContextSession>, MemoryError> {

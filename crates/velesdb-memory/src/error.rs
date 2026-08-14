@@ -116,6 +116,12 @@ pub enum MemoryError {
     #[error("rerank error: {0}")]
     Rerank(#[from] RerankError),
 
+    /// The online-migration observer could not durably classify a mutation.
+    /// The source write has not run when this error is returned.
+    #[cfg(feature = "persistence")]
+    #[error("migration capture error: {0}")]
+    MigrationCapture(String),
+
     /// A fused-recall filter referenced a field name that is not a plain
     /// identifier, named a reserved key, or carried a non-scalar value.
     #[error("invalid filter field: {0}")]
@@ -298,7 +304,7 @@ impl MemoryError {
             Self::WorkingContextCodec(_) => ErrorCategory::Internal,
             Self::UnknownMemory(_) => ErrorCategory::NotFound,
             #[cfg(feature = "persistence")]
-            Self::Memory(_) => ErrorCategory::Internal,
+            Self::Memory(_) | Self::MigrationCapture(_) => ErrorCategory::Internal,
             Self::Storage(_) | Self::Embed(_) | Self::Extract(_) | Self::Rerank(_) => {
                 ErrorCategory::Internal
             }
