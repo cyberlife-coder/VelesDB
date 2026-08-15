@@ -242,6 +242,7 @@ mod tests {
             "sha256:source",
             "target",
             384,
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
             dir.path().join("destination"),
             "00112233445566778899aabbccddeeff",
         );

@@ -89,6 +89,7 @@ pub(super) fn journal(workspace: &Path, source: &Path, destination: &Path) -> Ar
         "sha256:source",
         "target-model",
         3,
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000",
         destination.to_owned(),
         "00112233445566778899aabbccddeeff",
     );

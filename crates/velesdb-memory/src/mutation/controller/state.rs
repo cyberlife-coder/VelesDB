@@ -23,6 +23,8 @@ pub(super) struct ControllerState {
     pub(super) last_observation: Option<ConvergenceSample>,
     pub(super) last_verdict: Option<super::ConvergenceVerdict>,
     pub(super) recovery_action: Option<String>,
+    #[serde(default)]
+    pub(super) measured_cutover: Option<std::time::Duration>,
 }
 
 pub(super) struct StateStore {
@@ -56,6 +58,7 @@ impl StateStore {
                 last_observation: None,
                 last_verdict: None,
                 recovery_action: None,
+                measured_cutover: None,
             };
             store.save(&state)?;
             state
@@ -180,6 +183,9 @@ fn validate_samples(samples: &[ConvergenceSample]) -> Result<(), MemoryError> {
 }
 
 fn validate_phase(state: &ControllerState) -> Result<(), MemoryError> {
+    if state.phase != ControllerPhase::Activated && state.measured_cutover.is_some() {
+        return Err(capture("cutover duration exists before activation"));
+    }
     match state.phase {
         ControllerPhase::CatchingUp
         | ControllerPhase::CutoverReady
@@ -226,7 +232,11 @@ fn validate_quiescing(
 }
 
 fn validate_activated(state: &ControllerState) -> Result<(), MemoryError> {
-    if !has_cutover_ready_window(state) {
+    if !has_cutover_ready_window(state)
+        || state
+            .measured_cutover
+            .is_none_or(|elapsed| elapsed > state.config.pause_budget)
+    {
         return Err(capture("invalid durable activated state"));
     }
     validate_recovery(state, &[None, Some(RECOVER_CUTOVER)])

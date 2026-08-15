@@ -54,6 +54,8 @@ class ReleaseTagScriptTests(unittest.TestCase):
         run(["git", "init", "--initial-branch=main", str(self.repo)], self.root)
         git(self.repo, "config", "user.name", "Release Test")
         git(self.repo, "config", "user.email", "release-test@example.invalid")
+        git(self.repo, "config", "commit.gpgSign", "false")
+        git(self.repo, "config", "tag.gpgSign", "false")
         git(self.repo, "remote", "add", "origin", str(self.remote))
         self.main_sha = commit_file(self.repo, "main.txt", "main\n", "seed main")
         git(self.repo, "push", "--set-upstream", "origin", "main")
