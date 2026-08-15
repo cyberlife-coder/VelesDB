@@ -11,7 +11,7 @@ use tracing::{debug, info, warn};
 
 use super::common::{
     build_numeric_offset_batch, check_response, create_http_client, extract_id_from_value,
-    json_type_name,
+    json_type_name, normalise_metric,
 };
 use super::{ExtractedBatch, ExtractedPoint, FieldInfo, SourceConnector, SourceSchema};
 use crate::config::SupabaseConfig;
@@ -46,13 +46,16 @@ impl SupabaseConnector {
     /// Unknown values are lowercased and returned verbatim so
     /// mismatch errors stay actionable rather than being masked.
     fn normalise_supabase_metric(raw: &str) -> String {
-        let lower = raw.to_ascii_lowercase();
-        match lower.as_str() {
-            "vector_cosine_ops" => "cosine".to_string(),
-            "l2" | "vector_l2_ops" => "euclidean".to_string(),
-            "ip" | "vector_ip_ops" => "dot".to_string(),
-            _ => lower,
-        }
+        normalise_metric(
+            raw,
+            &[
+                ("vector_cosine_ops", "cosine"),
+                ("l2", "euclidean"),
+                ("vector_l2_ops", "euclidean"),
+                ("ip", "dot"),
+                ("vector_ip_ops", "dot"),
+            ],
+        )
     }
 
     fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {

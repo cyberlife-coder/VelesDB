@@ -11,7 +11,8 @@ use tokio::sync::Mutex;
 
 use crate::config::RedisConfig;
 use crate::connectors::common::{
-    build_numeric_offset_batch, extract_payload_from_hashmap, parse_vector_from_json,
+    build_numeric_offset_batch, extract_payload_from_hashmap, normalise_metric,
+    parse_vector_from_json,
 };
 use crate::connectors::{ExtractedBatch, ExtractedPoint, FieldInfo, SourceConnector, SourceSchema};
 use crate::error::{Error, Result};
@@ -180,12 +181,7 @@ impl RedisConnector {
     /// `COSINE` → `cosine`. Unknown labels are lowercased and returned
     /// verbatim so mismatch errors stay actionable.
     fn normalise_redis_metric(raw: &str) -> String {
-        let lower = raw.to_ascii_lowercase();
-        match lower.as_str() {
-            "l2" => "euclidean".to_string(),
-            "ip" => "dot".to_string(),
-            _ => lower,
-        }
+        normalise_metric(raw, &[("l2", "euclidean"), ("ip", "dot")])
     }
 }
 

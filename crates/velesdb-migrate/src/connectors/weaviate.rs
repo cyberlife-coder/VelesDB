@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{debug, info};
 
-use super::common::{check_response, create_http_client};
+use super::common::{check_response, create_http_client, normalise_metric};
 use super::{ExtractedBatch, ExtractedPoint, FieldInfo, SourceConnector, SourceSchema};
 use crate::config::WeaviateConfig;
 use crate::error::{Error, Result};
@@ -38,11 +38,14 @@ impl WeaviateConnector {
     /// lowercased and returned verbatim so mismatch errors stay
     /// actionable.
     fn normalise_weaviate_metric(raw: &str) -> String {
-        let lower = raw.to_ascii_lowercase();
-        match lower.as_str() {
-            "l2-squared" | "l2_squared" | "l2" => "euclidean".to_string(),
-            _ => lower,
-        }
+        normalise_metric(
+            raw,
+            &[
+                ("l2-squared", "euclidean"),
+                ("l2_squared", "euclidean"),
+                ("l2", "euclidean"),
+            ],
+        )
     }
 
     /// Extract the distance metric from a class schema, preferring
