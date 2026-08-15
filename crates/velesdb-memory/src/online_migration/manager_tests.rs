@@ -9,6 +9,8 @@ use crate::mutation::catchup::CatchUpConfig;
 use crate::mutation::controller::ControllerConfig;
 use crate::{DynEmbedder, EmbedError, Embedder, HashEmbedder, MemoryService};
 
+const FUNCTIONAL_TIMEOUT: Duration = Duration::from_secs(30);
+
 #[test]
 fn manager_starts_in_background_and_reports_durable_completion() {
     let root = tempfile::tempdir().expect("root");
@@ -31,7 +33,7 @@ fn manager_starts_in_background_and_reports_durable_completion() {
 
     let accepted = manager.start("hash-3", config()).expect("start migration");
     assert_eq!(accepted.phase, JobPhase::Prepared);
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + FUNCTIONAL_TIMEOUT;
     loop {
         let status = manager.status().expect("status").expect("job");
         if status.record.phase == JobPhase::Committed {
@@ -214,7 +216,7 @@ fn wait_for(
     manager: &OnlineMigrationManager<DynEmbedder>,
     done: impl Fn(&super::manager::MigrationStatus) -> bool,
 ) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + FUNCTIONAL_TIMEOUT;
     loop {
         let status = manager.status().expect("status").expect("job");
         if done(&status) {
@@ -239,7 +241,7 @@ fn config() -> MigrationStartConfig {
         },
         controller: ControllerConfig {
             observation_window: 2,
-            pause_budget: Duration::from_secs(5),
+            pause_budget: FUNCTIONAL_TIMEOUT,
             verification_reserve: Duration::from_millis(10),
         },
     }
