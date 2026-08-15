@@ -461,6 +461,127 @@ class CasesFileTest(unittest.TestCase):
                 self.assertIn(passage["text"], prompt)
 
 
+# ---------------------------------------------------------------- language ----
+
+
+def scored_case(case_id, family, lang, fatal=0, major=0, seconds=1.0):
+    """A minimal scored case, shaped as `screen_case` returns one."""
+    failures = ([{"severity": "fatal", "label": "f", "type": "t"}] * fatal
+                + [{"severity": "major", "label": "m", "type": "t"}] * major)
+    return {
+        "id": case_id, "family": family, "lang": lang,
+        "passages": [{"seconds": seconds, "parse_ok": True, "truncated": False,
+                      "failures": failures}],
+        "cross_failures": [], "counts": bench.tally(failures),
+    }
+
+
+class LanguageVerdictTest(unittest.TestCase):
+    """The verdict a global score cannot give.
+
+    velesdb-memory is used in whatever language its user writes in, and the
+    extractor model is theirs to choose. A model strong in English and weak in
+    French does not merely score slightly lower — `works at` and `travaille
+    chez` become two graph predicates for one relation, and the graph fragments.
+    """
+
+    def test_an_english_only_failure_names_english_as_weaker(self):
+        results = [
+            scored_case("fr1", "nominal-fr", "fr"),
+            scored_case("fr2", "nominal-fr", "fr"),
+            scored_case("en1", "nominal-en", "en", major=3),
+            scored_case("en2", "nominal-en", "en"),
+        ]
+        gap = bench.mirror_gap(results)
+        self.assertEqual(gap["weaker"], "en")
+        self.assertEqual(gap["gap"], 3)
+
+    def test_a_fatal_outweighs_majors_in_the_gap(self):
+        """One fatal is not three majors: it means the graph is wrong, not poorer."""
+        results = [
+            scored_case("fr1", "nominal-fr", "fr", fatal=1),
+            scored_case("en1", "nominal-en", "en", major=5),
+        ]
+        gap = bench.mirror_gap(results)
+        self.assertEqual(gap["weaker"], "fr")
+
+    def test_a_balanced_model_names_no_weaker_side(self):
+        results = [
+            scored_case("fr1", "nominal-fr", "fr", major=1),
+            scored_case("en1", "nominal-en", "en", major=1),
+        ]
+        self.assertIsNone(bench.mirror_gap(results)["weaker"])
+
+    def test_the_gap_ignores_the_french_only_families(self):
+        """The suite is unbalanced on purpose; only the mirrors are comparable.
+
+        Edge and close-pair cases are French, so counting them would report
+        every model as 'weaker in French' regardless of what it did.
+        """
+        results = [
+            scored_case("fr1", "nominal-fr", "fr"),
+            scored_case("en1", "nominal-en", "en"),
+            scored_case("edge1", "edge", "fr", fatal=2),
+            scored_case("close1", "close-pair", "fr", major=4),
+        ]
+        gap = bench.mirror_gap(results)
+        self.assertEqual(gap["gap"], 0)
+        self.assertIsNone(gap["weaker"])
+
+    def test_by_language_still_reports_both_sides(self):
+        results = [scored_case("fr1", "nominal-fr", "fr", major=2),
+                   scored_case("en1", "nominal-en", "en")]
+        by_language = bench.totals_by_language(results)
+        self.assertEqual(by_language["fr"]["major"], 2)
+        self.assertEqual(by_language["en"]["major"], 0)
+
+    def test_the_report_carries_the_language_table(self):
+        results = {"campaign": "x", "environment": {}, "configurations": {
+            "m": {"totals": {"fatal": 0, "major": 3, "minor": 0, "parse_rate": 1.0,
+                             "truncated": 0, "p50_seconds": 1.0, "p95_seconds": 1.0},
+                  "mirror_gap": bench.mirror_gap([
+                      scored_case("fr1", "nominal-fr", "fr"),
+                      scored_case("en1", "nominal-en", "en", major=3)])}}}
+        rendered = bench.render_report(results)
+        self.assertIn("Language symmetry", rendered)
+        self.assertIn("| `m` |", rendered.split("Language symmetry")[1])
+        self.assertIn("en", rendered.split("Language symmetry")[1])
+
+
+class OtherLanguageTest(unittest.TestCase):
+    """A user writing in neither French nor English must be able to decide too.
+
+    The model is their choice (`VELESDB_MEMORY_EXTRACTOR_MODEL`); this suite
+    answers for French and English, and `--cases` is what makes the same verdict
+    reachable for any other language.
+    """
+
+    def test_an_alternate_cases_file_is_accepted(self):
+        cases = {"version": 1, "cases": [{
+            "id": "de-possessive", "family": "nominal-de", "lang": "de",
+            "passages": [{"text": "Marie Dupont hat eine Schwester, Camille Dupont.",
+                          "checks": [{"type": "relation_present",
+                                      "subject": "camille dupont",
+                                      "predicate_any": ["schwester"],
+                                      "object": "marie dupont",
+                                      "severity": "major", "label": "sibling edge missing"}]}],
+        }]}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "de.json"
+            path.write_text(json.dumps(cases), encoding="utf-8")
+            loaded = bench.load_cases(path)
+        self.assertEqual(loaded[0]["lang"], "de")
+        payload = {"relations": [{"subject": "camille dupont", "predicate": "schwester von",
+                                  "object": "marie dupont"}]}
+        self.assertEqual(bench.score_passage(payload, loaded[0]["passages"][0]["checks"]), [])
+
+    def test_a_suite_without_mirrors_reports_no_language_verdict(self):
+        """No mirrored families means no comparison — and it must say so, not invent one."""
+        gap = bench.mirror_gap([scored_case("de1", "nominal-de", "de", major=2)])
+        self.assertIsNone(gap["weaker"])
+        self.assertEqual(gap["gap"], 0)
+
+
 # --------------------------------------------------------------- warm-up ----
 
 

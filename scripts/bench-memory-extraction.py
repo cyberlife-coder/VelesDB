@@ -782,6 +782,55 @@ def totals_of(results: "list[dict]") -> dict:
     }
 
 
+def totals_by_language(results: "list[dict]") -> dict:
+    """Totals per passage language.
+
+    Reported, but NOT comparable across languages on its own: this suite is
+    deliberately unbalanced (the edge and close-pair families are French), so a
+    raw fr-vs-en total compares 15 cases against 4. Use `mirror_gap` for the
+    comparison that means something.
+    """
+    languages = sorted({case["lang"] for case in results})
+    return {
+        language: totals_of([case for case in results if case["lang"] == language])
+        for language in languages
+    }
+
+
+def totals_by_family(results: "list[dict]") -> dict:
+    families = sorted({case["family"] for case in results})
+    return {
+        family: totals_of([case for case in results if case["family"] == family])
+        for family in families
+    }
+
+
+def mirror_gap(results: "list[dict]") -> dict:
+    """Compare the two nominal families, which are case-for-case mirrors.
+
+    This is the language verdict. `nominal-fr` and `nominal-en` state the same
+    four situations in two languages, so their scores ARE comparable, and a
+    model that passes one and fails the other is visible here and nowhere else.
+    A good global score hides exactly this: it is what killed prompt v2, which
+    over-corrected towards French and looked fine on average.
+    """
+    french = totals_of([case for case in results if case["family"] == "nominal-fr"])
+    english = totals_of([case for case in results if case["family"] == "nominal-en"])
+    weighted = {
+        language: totals["fatal"] * 10 + totals["major"]
+        for language, totals in (("fr", french), ("en", english))
+    }
+    return {
+        "fr": french,
+        "en": english,
+        "weighted_fr": weighted["fr"],
+        "weighted_en": weighted["en"],
+        "gap": abs(weighted["fr"] - weighted["en"]),
+        "weaker": None if weighted["fr"] == weighted["en"] else
+                  ("fr" if weighted["fr"] > weighted["en"] else "en"),
+    }
+
+
 def screen(backend: object, template: str, cases: "list[dict]", runs: int = 1) -> dict:
     """Phase A over every case, `runs` times each, strictly sequentially."""
     results = []
@@ -791,7 +840,15 @@ def screen(backend: object, template: str, cases: "list[dict]", runs: int = 1) -
             scored["run"] = index + 1
             results.append(scored)
             _print_case_line(scored)
-    return {"phase": "screen", "runs": runs, "cases": results, "totals": totals_of(results)}
+    return {
+        "phase": "screen",
+        "runs": runs,
+        "cases": results,
+        "totals": totals_of(results),
+        "by_language": totals_by_language(results),
+        "by_family": totals_by_family(results),
+        "mirror_gap": mirror_gap(results),
+    }
 
 
 # ------------------------------------------------- phase B: the real server ----
@@ -1090,8 +1147,41 @@ def render_report(results: dict) -> str:
         "| configuration | fatal | major | minor | parse | cut | p50 | p95 | cold | warm-up |",
         "|---|---|---|---|---|---|---|---|---|---|",
     ]
-    lines += [_report_row(name, entry) for name, entry in results.get("configurations", {}).items()]
+    configurations = results.get("configurations", {})
+    lines += [_report_row(name, entry) for name, entry in configurations.items()]
+    lines += _language_section(configurations)
     return "\n".join(lines) + "\n"
+
+
+def _language_section(configurations: dict) -> "list[str]":
+    """The French/English verdict, on the mirrored families only.
+
+    Kept as its own table because the overall score cannot answer it: the suite
+    is deliberately unbalanced towards French, and only `nominal-fr` and
+    `nominal-en` state the same four situations twice.
+    """
+    lines = [
+        "",
+        "## Language symmetry (mirrored families only)",
+        "",
+        "`nominal-fr` and `nominal-en` state the same four situations in two",
+        "languages. A model that passes one and fails the other is disqualified",
+        "on that alone: `works at` and `travaille chez` are two graph predicates",
+        "for one relation, and the graph fragments accordingly.",
+        "",
+        "| configuration | fatal fr | major fr | fatal en | major en | gap | weaker |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for name, entry in configurations.items():
+        gap = entry.get("mirror_gap")
+        if not gap:
+            continue
+        lines.append(
+            f"| `{name}` | {gap['fr']['fatal']} | {gap['fr']['major']} | "
+            f"{gap['en']['fatal']} | {gap['en']['major']} | {gap['gap']} | "
+            f"{gap['weaker'] or 'balanced'} |"
+        )
+    return lines
 
 
 # --------------------------------------------------------------------- cli ----
@@ -1125,7 +1215,7 @@ def cmd_screen(args: argparse.Namespace) -> int:
     cap = read_generation_cap()
     template = read_graph_prompt_template()
     backend = build_backend(args, cap)
-    cases = load_cases()
+    cases = load_cases(Path(args.cases))
     prompt = build_graph_prompt(cases[0]["passages"][0]["text"], template)
     outcome = {
         "config": args.config,
@@ -1139,8 +1229,12 @@ def cmd_screen(args: argparse.Namespace) -> int:
           f"stabilised={outcome['warmup']['stabilised']}")
     outcome.update(screen(backend, template, cases, args.runs))
     totals = outcome["totals"]
+    gap = outcome["mirror_gap"]
     print(f"## {args.config}: fatal={totals['fatal']} major={totals['major']} "
           f"parse={totals['parse_rate'] * 100:.0f}% p95={totals['p95_seconds']:.1f}s")
+    print(f"## language: fr fatal={gap['fr']['fatal']} major={gap['fr']['major']} | "
+          f"en fatal={gap['en']['fatal']} major={gap['en']['major']} | "
+          f"gap={gap['gap']} weaker={gap['weaker'] or 'balanced'}")
     if args.out:
         Path(args.out).write_text(
             json.dumps(outcome, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -1172,7 +1266,7 @@ def cmd_endtoend(args: argparse.Namespace) -> int:
     daemon = DisposableDaemon(Path(args.binary), args.port, endtoend_env(args))
     daemon.start()
     try:
-        outcome = endtoend(daemon, load_cases())
+        outcome = endtoend(daemon, load_cases(Path(args.cases)))
     finally:
         daemon.stop()
     outcome["config"] = args.config
@@ -1216,6 +1310,13 @@ def _add_model_arguments(parser: argparse.ArgumentParser, config_required: bool)
     parser.add_argument("--backend", choices=["openai", "ollama", "outline"], default="openai")
     parser.add_argument("--url")
     parser.add_argument("--out")
+    # velesdb-memory is used in whatever language its user writes in, and the
+    # extractor model is THEIR choice (`VELESDB_MEMORY_EXTRACTOR_MODEL`). The
+    # shipped suite measures French and English because those are the two this
+    # campaign answers for; anyone else points this at their own cases and gets
+    # the same verdict for their own language.
+    parser.add_argument("--cases", default=str(CASES_FILE),
+                        help="scenario file; replace it to bench another language")
 
 
 def build_parser() -> argparse.ArgumentParser:
