@@ -109,7 +109,8 @@ fn job_record(
         },
         controller: ControllerConfig {
             observation_window: 2,
-            pause_budget: Duration::from_secs(5),
+            // Functional fixture; deadline refusal has dedicated controller tests.
+            pause_budget: Duration::from_secs(30),
             verification_reserve: Duration::from_millis(10),
         },
         workspace,
