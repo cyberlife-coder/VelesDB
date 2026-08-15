@@ -681,21 +681,89 @@ def warm_up(backend: object, prompt: str) -> dict:
     return {"rounds": len(latencies), "latencies": latencies, "stabilised": False}
 
 
-def cold_load(backend: object, model: str, prompt: str) -> dict:
+def storage_backing(path: "str | None") -> dict:
+    """Which device a model's weights actually sit on, and by what route.
+
+    Recorded because cold-load time is a property of the DISK as much as of the
+    model. Once a machine spreads its weights over an internal SSD and an
+    external one — measured here at ~2.7 GB/s against a few GB/s internally —
+    a 27 GB model costs about five seconds more from the slower device, and a
+    bench that ignores this reports a disk difference as a model difference.
+
+    A symlink is followed and reported: a model behind a link to an unplugged
+    volume is UNREACHABLE, which is a different outcome from a model that failed.
+    """
+    if not path:
+        return {"path": None, "reachable": False, "reason": "no path reported"}
+    target = Path(path)
+    record = {
+        "path": path,
+        "symlink": target.is_symlink(),
+        "resolved": str(target.resolve()) if target.exists() else None,
+        "reachable": target.exists(),
+    }
+    if not record["reachable"]:
+        record["reason"] = "path does not resolve (unplugged volume, or moved weights)"
+        return record
+    mount = subprocess.run(["df", "-P", str(target)], capture_output=True, text=True, check=False)
+    lines = mount.stdout.strip().splitlines()
+    if len(lines) > 1:
+        columns = lines[1].split()
+        record["device"] = columns[0]
+        record["mount"] = columns[-1]
+    return record
+
+
+# Sequential read of the devices this campaign uses, in MB/s. Only MEASURED
+# values belong here: an entry that is a guess would turn the page-cache verdict
+# below into a guess too. The internal SSD has no entry because purging the page
+# cache needs admin rights, so no clean figure was obtainable.
+DEVICE_THROUGHPUT_MBS: "dict[str, float]" = {}
+
+
+def page_cache_verdict(size_bytes: "int | None", seconds: float,
+                       throughput_mbs: "float | None") -> str:
+    """Did those weights come off the disk, or out of the page cache?
+
+    A machine with 64 GiB of RAM keeps a 28 GB model resident after its first
+    load, so every later "cold" load reads memory and reports a throughput no
+    SSD can reach. Rather than pretend, the implied throughput is compared with
+    what the device can actually do: far above it means the file was cached.
+
+    Without a measured figure for the device the answer is `unknown`, never a
+    guess — a mislabelled cold load is worse than an absent one.
+    """
+    if not size_bytes or seconds <= 0:
+        return "unknown"
+    if throughput_mbs is None:
+        return "unknown"
+    implied = (size_bytes / 1e6) / seconds
+    return "page-cache" if implied > throughput_mbs * 1.5 else "cold"
+
+
+def cold_load(backend: object, model: str, prompt: str, backing: "dict | None" = None,
+              size_bytes: "int | None" = None) -> dict:
     """Load the model and time the first real answer.
 
     A metric, not discarded warm-up: this is what a developer pays on the first
     `remember` after a restart, and it decides whether a model is usable at all
-    on a smaller machine.
+    on a smaller machine. It is reported with its conditions and NEVER ranks a
+    model — the disk it sits on and the state of the page cache move it more
+    than the model does.
     """
     started = time.monotonic()
     backend.set_loaded(model, True)
     load_seconds = time.monotonic() - started
     first = backend.generate(prompt)
+    device = (backing or {}).get("device")
     return {
         "load_seconds": load_seconds,
         "first_answer_seconds": first["seconds"],
         "cold_total_seconds": load_seconds + first["seconds"],
+        "storage": backing,
+        "cache_state": page_cache_verdict(
+            size_bytes, load_seconds, DEVICE_THROUGHPUT_MBS.get(device)
+        ),
     }
 
 
@@ -1119,9 +1187,19 @@ def _report_row(name: str, entry: dict) -> str:
         str(totals.get("truncated", 0)),
         f"{totals.get('p50_seconds', float('nan')):.1f}s",
         f"{totals.get('p95_seconds', float('nan')):.1f}s",
-        "n/a" if cold is None else f"{cold:.1f}s",
+        "n/a" if cold is None else f"{cold:.1f}s{_cache_mark(entry)}",
         f"{warm.get('rounds', '?')}{'' if warm.get('stabilised', True) else ' (unstable)'} |",
     ])
+
+
+def _cache_mark(entry: dict) -> str:
+    """Flag a cold-load figure that actually came out of the page cache.
+
+    Published unmarked, the number reads as a disk measurement; it is not one,
+    and on a machine whose RAM exceeds the model it usually is not.
+    """
+    state = entry.get("cold", {}).get("cache_state")
+    return {"page-cache": " ⚠cache", "unknown": " ?"}.get(state, "")
 
 
 def render_report(results: dict) -> str:
@@ -1211,17 +1289,48 @@ def build_backend(args: argparse.Namespace, cap: int) -> object:
     return OpenAiBackend(args.url or "http://127.0.0.1:8019", args.config, extractor_token(), cap)
 
 
+def model_record(residency: dict, model: str) -> dict:
+    """What the server says about one model: where its weights are, and how big."""
+    for entry in residency.get("models") or []:
+        if entry.get("id") == model:
+            return entry
+    return {}
+
+
+def preflight(residency: dict, model: str) -> dict:
+    """Refuse to bench a model whose weights are not reachable.
+
+    Weights spread across an internal and an external volume make this a real
+    outcome, not a theoretical one: a symlink into an unplugged disk yields a
+    model that is UNREACHABLE. Scoring that as a failed model would blame the
+    model for a cable.
+    """
+    record = model_record(residency, model)
+    backing = storage_backing(record.get("model_path"))
+    if record and not backing.get("reachable"):
+        raise RuntimeError(
+            f"{model}: weights unreachable at {backing.get('path')} "
+            f"({backing.get('reason')}) — this is a storage problem, not a model result"
+        )
+    return {"backing": backing, "estimated_size": record.get("estimated_size")}
+
+
 def cmd_screen(args: argparse.Namespace) -> int:
     cap = read_generation_cap()
     template = read_graph_prompt_template()
     backend = build_backend(args, cap)
     cases = load_cases(Path(args.cases))
     prompt = build_graph_prompt(cases[0]["passages"][0]["text"], template)
+    residency = backend.residency()
+    checked = preflight(residency, args.config)
     outcome = {
         "config": args.config,
         "generation_cap": cap,
-        "residency_before": backend.residency(),
-        "cold": cold_load(backend, args.config, prompt),
+        "residency_before": residency,
+        "storage": checked["backing"],
+        "estimated_size": checked["estimated_size"],
+        "cold": cold_load(backend, args.config, prompt,
+                          checked["backing"], checked["estimated_size"]),
         "warmup": warm_up(backend, prompt),
     }
     print(f"# {args.config}: cold {outcome['cold']['cold_total_seconds']:.1f}s, "

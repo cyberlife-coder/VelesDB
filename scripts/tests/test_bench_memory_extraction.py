@@ -582,6 +582,81 @@ class OtherLanguageTest(unittest.TestCase):
         self.assertEqual(gap["gap"], 0)
 
 
+# ----------------------------------------------------------------- storage ----
+
+
+class ColdLoadConditionsTest(unittest.TestCase):
+    """Cold-load time measures the disk and the page cache as much as the model.
+
+    Both defects are real on this machine: weights are being split between an
+    internal SSD and an external one measured at ~2.7 GB/s, and 64 GiB of RAM
+    keeps a 28 GB model resident after its first load — a second "cold" load
+    then reports a throughput no SSD can reach.
+    """
+
+    def test_a_speed_no_disk_can_reach_is_called_page_cache(self):
+        # 28 GB in 2.5 s = 11 200 MB/s, against a 2 703 MB/s device.
+        verdict = bench.page_cache_verdict(28_000_000_000, 2.5, 2703.0)
+        self.assertEqual(verdict, "page-cache")
+
+    def test_a_plausible_disk_speed_is_called_cold(self):
+        verdict = bench.page_cache_verdict(28_000_000_000, 11.0, 2703.0)
+        self.assertEqual(verdict, "cold")
+
+    def test_an_unmeasured_device_yields_unknown_not_a_guess(self):
+        """A mislabelled cold load is worse than an absent one."""
+        self.assertEqual(bench.page_cache_verdict(28_000_000_000, 2.5, None), "unknown")
+
+    def test_missing_size_yields_unknown(self):
+        self.assertEqual(bench.page_cache_verdict(None, 2.5, 2703.0), "unknown")
+
+    def test_the_report_marks_a_cached_figure(self):
+        results = {"campaign": "x", "environment": {}, "configurations": {
+            "m": {"totals": {"fatal": 0, "major": 0, "minor": 0, "parse_rate": 1.0,
+                             "truncated": 0, "p50_seconds": 1.0, "p95_seconds": 1.0},
+                  "cold": {"cold_total_seconds": 3.0, "cache_state": "page-cache"}}}}
+        self.assertIn("cache", bench.render_report(results))
+
+
+class StorageBackingTest(unittest.TestCase):
+    def test_a_real_path_reports_its_device(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            backing = bench.storage_backing(tmp)
+        self.assertTrue(backing["reachable"])
+        self.assertIn("device", backing)
+
+    def test_a_dead_symlink_is_unreachable_with_a_reason(self):
+        """A model behind a link to an unplugged volume is a cable problem."""
+        with tempfile.TemporaryDirectory() as tmp:
+            link = Path(tmp) / "model"
+            link.symlink_to(Path(tmp) / "absent-volume" / "weights")
+            backing = bench.storage_backing(str(link))
+        self.assertFalse(backing["reachable"])
+        self.assertIn("unplugged", backing["reason"])
+
+    def test_no_path_is_unreachable_not_an_exception(self):
+        self.assertFalse(bench.storage_backing(None)["reachable"])
+
+    def test_preflight_refuses_unreachable_weights(self):
+        """It must NOT be scored as a failing model."""
+        residency = {"models": [{"id": "m", "model_path": "/Volumes/absent/m",
+                                 "estimated_size": 1}]}
+        with self.assertRaises(RuntimeError) as raised:
+            bench.preflight(residency, "m")
+        self.assertIn("storage problem, not a model result", str(raised.exception))
+
+    def test_preflight_passes_a_reachable_model_and_carries_its_size(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            residency = {"models": [{"id": "m", "model_path": tmp, "estimated_size": 4242}]}
+            checked = bench.preflight(residency, "m")
+        self.assertEqual(checked["estimated_size"], 4242)
+        self.assertTrue(checked["backing"]["reachable"])
+
+    def test_a_backend_reporting_no_models_does_not_block_the_run(self):
+        """Ollama has no such endpoint; absence of a record is not a failure."""
+        self.assertEqual(bench.preflight({}, "m")["estimated_size"], None)
+
+
 # --------------------------------------------------------------- warm-up ----
 
 
