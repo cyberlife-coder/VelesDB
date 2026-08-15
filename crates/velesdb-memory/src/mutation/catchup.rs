@@ -10,10 +10,11 @@ use super::journal::{DirtyJournal, RECORD_BYTES};
 use super::DirtyKey;
 
 mod facts;
+mod verify;
 
 const MAX_BATCH: usize = 4_096;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct CatchUpConfig {
     pub(crate) fact_batch: usize,
     pub(crate) replay_batch: usize,
@@ -89,6 +90,29 @@ impl<'a, E: Embedder> OnlineCatchUp<'a, E> {
         })
     }
 
+    pub(crate) fn resume(
+        source: &'a MemoryService<E, NativeStore>,
+        destination: &'a NativeStore,
+        target_embedder: &'a dyn Embedder,
+        journal: Arc<DirtyJournal>,
+        config: CatchUpConfig,
+    ) -> Result<Self, MemoryError> {
+        let config = config.validated()?;
+        if !source.migration_capture_active() {
+            return Err(capture("online migration capture is not active"));
+        }
+        Ok(Self {
+            source,
+            destination,
+            target_embedder,
+            start_watermark: journal.last_sequence(),
+            journal,
+            config,
+            #[cfg(test)]
+            fault: std::sync::atomic::AtomicU8::new(0),
+        })
+    }
+
     pub(crate) fn copy_base(&self) -> Result<BaseCopyProgress, MemoryError> {
         self.copy_base_inner(&mut |_| Ok(()))
     }
@@ -119,16 +143,21 @@ impl<'a, E: Embedder> OnlineCatchUp<'a, E> {
     }
 
     pub(crate) fn catch_up_batch(&self) -> Result<ReplayProgress, MemoryError> {
-        self.source.migration_exclusive(|| self.catch_up_locked())
+        let input_watermark = self
+            .source
+            .migration_exclusive(|| Ok(self.journal.last_sequence()))?;
+        self.catch_up_through(input_watermark)
     }
 
-    fn catch_up_locked(&self) -> Result<ReplayProgress, MemoryError> {
+    fn catch_up_through(&self, input_watermark: u64) -> Result<ReplayProgress, MemoryError> {
         let started = Instant::now();
-        let input_watermark = self.journal.last_sequence();
         let acknowledged = self.journal.compacted_through();
         let records = self
             .journal
-            .records_after(acknowledged, self.config.replay_batch)?;
+            .records_after(acknowledged, self.config.replay_batch)?
+            .into_iter()
+            .take_while(|record| record.sequence <= input_watermark)
+            .collect::<Vec<_>>();
         if records.is_empty() {
             return Ok(Self::replay_progress(
                 0,
@@ -164,6 +193,15 @@ impl<'a, E: Embedder> OnlineCatchUp<'a, E> {
 
     pub(crate) fn finish(self) -> Result<(), MemoryError> {
         self.source.install_mutation_observer(None)
+    }
+
+    pub(crate) fn verify(&self) -> Result<(), MemoryError> {
+        verify::stores_match(
+            self.source.migration_store(),
+            self.destination,
+            self.config.fact_batch,
+            self.config.edge_cap,
+        )
     }
 
     fn copy_facts(

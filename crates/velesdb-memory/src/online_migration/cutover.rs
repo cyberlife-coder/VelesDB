@@ -19,7 +19,7 @@ pub(crate) struct LiveCutover<'a> {
     pub(crate) destination: &'a Path,
     pub(crate) target_model: &'a str,
     pub(crate) started_at: Duration,
-    pub(crate) completed_at: Duration,
+    pub(crate) now: &'a dyn Fn() -> Duration,
 }
 
 struct RetiredGeneration<E: Embedder> {
@@ -38,7 +38,7 @@ impl<E: Embedder> LiveGenerationSlot<E> {
         &self,
         mut cutover: LiveCutover<'_>,
         target_embedder: E,
-        seal: impl FnOnce(&MemoryService<E, NativeStore>) -> Result<(), MemoryError>,
+        seal: impl FnOnce(&MemoryService<E, NativeStore>, &E) -> Result<(), MemoryError>,
     ) -> Result<(), MemoryError> {
         let target_witness = crate::migration::target_embedder_witness(&target_embedder)?;
         let mut generation = self.generation.write();
@@ -64,7 +64,7 @@ fn take_retired<E: Embedder>(
     cutover: &mut LiveCutover<'_>,
     target_embedder: &E,
     target_witness: &str,
-    seal: impl FnOnce(&MemoryService<E, NativeStore>) -> Result<(), MemoryError>,
+    seal: impl FnOnce(&MemoryService<E, NativeStore>, &E) -> Result<(), MemoryError>,
 ) -> Result<RetiredGeneration<E>, MemoryError> {
     let active = generation
         .as_ref()
@@ -76,6 +76,9 @@ fn take_retired<E: Embedder>(
             .ok_or_else(|| super::unavailable("service generation disappeared"))?,
     );
     if let Err(error) = prove_source_handle_closed(cutover, retired.embedder.dimension()) {
+        return restore(generation, cutover, retired, error);
+    }
+    if let Err(error) = prepare_retired_source(cutover, target_embedder, target_witness) {
         return restore(generation, cutover, retired, error);
     }
     Ok(retired)
@@ -99,7 +102,7 @@ fn activate_or_restore<E: Embedder>(
     retired: RetiredGeneration<E>,
     target: MemoryService<E, NativeStore>,
 ) -> Result<(MemoryService<E, NativeStore>, RetiredGeneration<E>), MemoryError> {
-    if let Err(error) = cutover.controller.activate(cutover.completed_at) {
+    if let Err(error) = cutover.controller.activate((cutover.now)()) {
         drop(target);
         return restore(generation, cutover, retired, error);
     }
@@ -128,12 +131,12 @@ fn preflight<E: Embedder>(
     cutover: &mut LiveCutover<'_>,
     target_embedder: &E,
     target_witness: &str,
-    seal: impl FnOnce(&MemoryService<E, NativeStore>) -> Result<(), MemoryError>,
+    seal: impl FnOnce(&MemoryService<E, NativeStore>, &E) -> Result<(), MemoryError>,
 ) -> Result<(), MemoryError> {
     cutover
         .controller
         .ensure_cutover_start(cutover.started_at)?;
-    seal(&active.service)?;
+    seal(&active.service, target_embedder)?;
     ensure_journal_drained(cutover.journal)?;
     cutover.journal.verify_cutover_identity(&CutoverIdentity {
         source: cutover.source,
@@ -144,6 +147,15 @@ fn preflight<E: Embedder>(
         target_witness,
         epoch_id: cutover.controller.epoch_id(),
     })?;
+    cutover.controller.ensure_cutover_start((cutover.now)())?;
+    Ok(())
+}
+
+fn prepare_retired_source<E: Embedder>(
+    cutover: &LiveCutover<'_>,
+    target_embedder: &E,
+    target_witness: &str,
+) -> Result<(), MemoryError> {
     let workspace = prepare_live_switch(
         cutover.source,
         cutover.destination,
@@ -151,12 +163,12 @@ fn preflight<E: Embedder>(
         target_embedder.dimension(),
         target_witness,
     )?;
-    if workspace != cutover.journal.workspace() {
-        return Err(super::unavailable(
-            "cutover workspace disagrees with dirty journal",
-        ));
+    if workspace == cutover.journal.workspace() {
+        return Ok(());
     }
-    Ok(())
+    Err(super::unavailable(
+        "cutover workspace disagrees with dirty journal",
+    ))
 }
 
 fn ensure_journal_drained(journal: &DirtyJournal) -> Result<(), MemoryError> {

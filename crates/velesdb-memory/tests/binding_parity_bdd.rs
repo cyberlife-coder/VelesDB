@@ -164,7 +164,69 @@ struct Exemption {
     reason: &'static str,
 }
 
+const DAEMON_MIGRATION_ONLY: &str = "online migration owns the native daemon's live generation, process lock, durable control directory and environment-backed target factory; an in-process language binding owns none of that control plane, so exposing this MCP operation there would create a second unsafe migration authority";
+
 const EXEMPTIONS: &[Exemption] = &[
+    Exemption {
+        binding: "velesdb-node",
+        tool: "migration_start",
+        reason: DAEMON_MIGRATION_ONLY,
+    },
+    Exemption {
+        binding: "velesdb-node",
+        tool: "migration_status",
+        reason: DAEMON_MIGRATION_ONLY,
+    },
+    Exemption {
+        binding: "velesdb-node",
+        tool: "migration_cancel",
+        reason: DAEMON_MIGRATION_ONLY,
+    },
+    Exemption {
+        binding: "velesdb-node",
+        tool: "migration_recover",
+        reason: DAEMON_MIGRATION_ONLY,
+    },
+    Exemption {
+        binding: "velesdb-python",
+        tool: "migration_start",
+        reason: DAEMON_MIGRATION_ONLY,
+    },
+    Exemption {
+        binding: "velesdb-python",
+        tool: "migration_status",
+        reason: DAEMON_MIGRATION_ONLY,
+    },
+    Exemption {
+        binding: "velesdb-python",
+        tool: "migration_cancel",
+        reason: DAEMON_MIGRATION_ONLY,
+    },
+    Exemption {
+        binding: "velesdb-python",
+        tool: "migration_recover",
+        reason: DAEMON_MIGRATION_ONLY,
+    },
+    Exemption {
+        binding: "velesdb-wasm",
+        tool: "migration_start",
+        reason: DAEMON_MIGRATION_ONLY,
+    },
+    Exemption {
+        binding: "velesdb-wasm",
+        tool: "migration_status",
+        reason: DAEMON_MIGRATION_ONLY,
+    },
+    Exemption {
+        binding: "velesdb-wasm",
+        tool: "migration_cancel",
+        reason: DAEMON_MIGRATION_ONLY,
+    },
+    Exemption {
+        binding: "velesdb-wasm",
+        tool: "migration_recover",
+        reason: DAEMON_MIGRATION_ONLY,
+    },
     Exemption {
         binding: "velesdb-node",
         tool: "extraction_status",
@@ -1212,6 +1274,7 @@ async fn recall_count_input_is_k_on_the_server_and_every_binding() {
 /// each tool's `output_schema` is derived from.
 const SERVER_TOOL_SOURCES: &[&str] = &[
     "crates/velesdb-memory/src/mcp.rs",
+    "crates/velesdb-memory/src/mcp/advanced_tools.rs",
     "crates/velesdb-memory/src/mcp/context_tools.rs",
 ];
 
@@ -1235,7 +1298,7 @@ fn server_output_types() -> BTreeMap<String, String> {
     assert!(
         types.len() >= 20,
         "only {} tool output type(s) parsed out of the server source — the scan is broken, \
-         not the server (it publishes 23 tools)",
+         not the server (it publishes 27 tools)",
         types.len(),
     );
     types

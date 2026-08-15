@@ -18,7 +18,7 @@ use super::extractor_resolver::ExtractorResolver;
 use crate::embedder::DynEmbedder;
 use crate::extract::Extraction;
 use crate::model::RememberedExtraction;
-use crate::service::{MemoryService, Metadata};
+use crate::service::{LiveGenerationSlot, MemoryService, Metadata};
 
 #[derive(Default)]
 struct RuntimeState {
@@ -33,7 +33,7 @@ struct PreparedSubmission {
 }
 
 struct Shared {
-    service: Arc<MemoryService<DynEmbedder>>,
+    service: Arc<LiveGenerationSlot<DynEmbedder>>,
     extractors: Arc<RwLock<ExtractorResolver>>,
     store: JobStore,
     runtime: Mutex<RuntimeState>,
@@ -72,7 +72,7 @@ pub(super) struct ExtractionJobs {
 impl ExtractionJobs {
     pub(super) fn open(
         root: &Path,
-        service: Arc<MemoryService<DynEmbedder>>,
+        service: Arc<LiveGenerationSlot<DynEmbedder>>,
         extractors: Arc<RwLock<ExtractorResolver>>,
     ) -> Result<Self, JobError> {
         let store = JobStore::open(root)?;
@@ -400,7 +400,7 @@ fn execute_job(shared: &Shared, record: &mut JobRecord) -> Result<RememberedExtr
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         shared
             .service
-            .store_extraction(extraction, request.metadata.as_ref())
+            .run(|current| current.store_extraction(extraction, request.metadata.as_ref()))
     }));
     match result {
         Ok(Ok(outcome)) => Ok(outcome),

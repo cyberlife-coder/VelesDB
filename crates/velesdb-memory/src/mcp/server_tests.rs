@@ -3,6 +3,11 @@
 
 use super::*;
 use crate::embedder::HashEmbedder;
+use crate::limits::MAX_FACT_BYTES;
+use crate::mcp::dto::{
+    ExtractionJobStatusParams, ExtractionJobStatusResult, ListMemoriesParams, RecallFusedParams,
+    RememberExtractedParams, RememberExtractedResult, WhyParams,
+};
 use crate::model::{ColumnFilter, ColumnOp, Link};
 use crate::service::Metadata;
 use tempfile::TempDir;
@@ -1954,7 +1959,9 @@ async fn remember_tool_answers_while_the_autograph_gate_is_still_shut() {
          what makes the server's drop bound shutdown"
     );
     assert!(
-        srv.service.autograph_queue_open(),
+        srv.service
+            .inspect(MemoryService::autograph_queue_open)
+            .expect("active generation"),
         "the spawned worker's queue must be open, so remember enqueues \
          instead of running the enrichment on the response path"
     );
@@ -2032,7 +2039,11 @@ async fn dropping_the_server_bounds_shutdown_and_skips_queued_jobs() {
     let started = Instant::now();
     let joiner = std::thread::spawn(move || drop(srv));
     assert!(
-        wait_for(Duration::from_secs(5), || !service.autograph_queue_open()),
+        wait_for(Duration::from_secs(5), || {
+            service
+                .inspect(MemoryService::autograph_queue_open)
+                .is_ok_and(|open| !open)
+        }),
         "dropping the server must close the autograph queue via the stored \
          worker handle"
     );
@@ -2049,7 +2060,9 @@ async fn dropping_the_server_bounds_shutdown_and_skips_queued_jobs() {
         "only the in-flight job is wired on shutdown"
     );
     assert_eq!(
-        service.autograph_dropped(),
+        service
+            .inspect(MemoryService::autograph_dropped)
+            .expect("active generation"),
         2,
         "the two still-queued jobs are SKIPPED and counted, not waited out"
     );

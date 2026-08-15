@@ -374,6 +374,10 @@ impl NativeStore {
         self.capture.replace(observer)
     }
 
+    pub(crate) fn mutation_capture_active(&self) -> bool {
+        self.capture.is_active()
+    }
+
     fn unrelate_unobserved(&self, edge_id: u64) -> Result<bool, MemoryError> {
         self.memory
             .semantic()

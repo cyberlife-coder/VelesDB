@@ -2692,6 +2692,607 @@
       }
     },
     {
+      "description": "Durably request cancellation while the source remains authoritative. A running worker observes the request at its next bounded batch; a paused job is cancelled immediately. From quiescing onward cancellation refuses and reports the required recovery action instead of guessing a rollback.",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "migration_cancel",
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "configured": {
+            "type": "boolean"
+          },
+          "job": {
+            "anyOf": [
+              {
+                "properties": {
+                  "cancellation_requested": {
+                    "type": "boolean"
+                  },
+                  "destination": {
+                    "type": "string"
+                  },
+                  "epoch_id": {
+                    "type": "string"
+                  },
+                  "last_error": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "phase": {
+                    "type": "string"
+                  },
+                  "progress": {
+                    "properties": {
+                      "base_batches": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "base_edge_sets": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "base_facts": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "distinct_dirty_facts": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "distinct_edge_sources": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "estimated_pause_ms": {
+                        "minimum": 0,
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      },
+                      "input_watermark": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "measured_cutover_ms": {
+                        "minimum": 0,
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      },
+                      "output_watermark": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "pending_journal_bytes": {
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "base_facts",
+                      "base_edge_sets",
+                      "base_batches",
+                      "input_watermark",
+                      "output_watermark",
+                      "distinct_dirty_facts",
+                      "distinct_edge_sources",
+                      "pending_journal_bytes"
+                    ],
+                    "type": "object"
+                  },
+                  "recovery_action": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "running": {
+                    "type": "boolean"
+                  },
+                  "target_backend": {
+                    "type": "string"
+                  },
+                  "target_dimension": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "target_model": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "epoch_id",
+                  "phase",
+                  "running",
+                  "target_backend",
+                  "target_model",
+                  "target_dimension",
+                  "destination",
+                  "cancellation_requested",
+                  "progress"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "configured"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "Resume a durable prepared, capturing, base-copied, catching-up, non-converging or cutover-ready job after verifying the environment-backed target model, dimension and vector witness. Quiescing or activated jobs refuse here until crash-safe cutover recovery has restored a single authoritative generation.",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "migration_recover",
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "configured": {
+            "type": "boolean"
+          },
+          "job": {
+            "anyOf": [
+              {
+                "properties": {
+                  "cancellation_requested": {
+                    "type": "boolean"
+                  },
+                  "destination": {
+                    "type": "string"
+                  },
+                  "epoch_id": {
+                    "type": "string"
+                  },
+                  "last_error": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "phase": {
+                    "type": "string"
+                  },
+                  "progress": {
+                    "properties": {
+                      "base_batches": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "base_edge_sets": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "base_facts": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "distinct_dirty_facts": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "distinct_edge_sources": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "estimated_pause_ms": {
+                        "minimum": 0,
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      },
+                      "input_watermark": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "measured_cutover_ms": {
+                        "minimum": 0,
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      },
+                      "output_watermark": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "pending_journal_bytes": {
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "base_facts",
+                      "base_edge_sets",
+                      "base_batches",
+                      "input_watermark",
+                      "output_watermark",
+                      "distinct_dirty_facts",
+                      "distinct_edge_sources",
+                      "pending_journal_bytes"
+                    ],
+                    "type": "object"
+                  },
+                  "recovery_action": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "running": {
+                    "type": "boolean"
+                  },
+                  "target_backend": {
+                    "type": "string"
+                  },
+                  "target_dimension": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "target_model": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "epoch_id",
+                  "phase",
+                  "running",
+                  "target_backend",
+                  "target_model",
+                  "target_dimension",
+                  "destination",
+                  "cancellation_requested",
+                  "progress"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "configured"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "Start one daemon-owned online embedding migration in the background. The existing MCP transport remains the only control boundary; no listener or credential is persisted. `target_backend` selects a backend configured in this daemon's environment. `pause_budget_ms` is the maximum measured request pause. Returns immediately with durable job status; poll migration_status. Refuses a pre-existing destination or another non-terminal epoch.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "edge_cap": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "fact_batch": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "journal_max_bytes": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "observation_window": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pause_budget_ms": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "replay_batch": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "target_backend": {
+            "type": "string"
+          },
+          "verification_reserve_ms": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "target_backend",
+          "pause_budget_ms"
+        ],
+        "type": "object"
+      },
+      "name": "migration_start",
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "configured": {
+            "type": "boolean"
+          },
+          "job": {
+            "anyOf": [
+              {
+                "properties": {
+                  "cancellation_requested": {
+                    "type": "boolean"
+                  },
+                  "destination": {
+                    "type": "string"
+                  },
+                  "epoch_id": {
+                    "type": "string"
+                  },
+                  "last_error": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "phase": {
+                    "type": "string"
+                  },
+                  "progress": {
+                    "properties": {
+                      "base_batches": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "base_edge_sets": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "base_facts": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "distinct_dirty_facts": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "distinct_edge_sources": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "estimated_pause_ms": {
+                        "minimum": 0,
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      },
+                      "input_watermark": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "measured_cutover_ms": {
+                        "minimum": 0,
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      },
+                      "output_watermark": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "pending_journal_bytes": {
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "base_facts",
+                      "base_edge_sets",
+                      "base_batches",
+                      "input_watermark",
+                      "output_watermark",
+                      "distinct_dirty_facts",
+                      "distinct_edge_sources",
+                      "pending_journal_bytes"
+                    ],
+                    "type": "object"
+                  },
+                  "recovery_action": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "running": {
+                    "type": "boolean"
+                  },
+                  "target_backend": {
+                    "type": "string"
+                  },
+                  "target_dimension": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "target_model": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "epoch_id",
+                  "phase",
+                  "running",
+                  "target_backend",
+                  "target_model",
+                  "target_dimension",
+                  "destination",
+                  "cancellation_requested",
+                  "progress"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "configured"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "Read the durable online embedding migration phase, progress watermarks, convergence estimate, measured cutover, cancellation flag, last error and required recovery action. Returns immediately and performs no migration work.",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "migration_status",
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "configured": {
+            "type": "boolean"
+          },
+          "job": {
+            "anyOf": [
+              {
+                "properties": {
+                  "cancellation_requested": {
+                    "type": "boolean"
+                  },
+                  "destination": {
+                    "type": "string"
+                  },
+                  "epoch_id": {
+                    "type": "string"
+                  },
+                  "last_error": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "phase": {
+                    "type": "string"
+                  },
+                  "progress": {
+                    "properties": {
+                      "base_batches": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "base_edge_sets": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "base_facts": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "distinct_dirty_facts": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "distinct_edge_sources": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "estimated_pause_ms": {
+                        "minimum": 0,
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      },
+                      "input_watermark": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "measured_cutover_ms": {
+                        "minimum": 0,
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      },
+                      "output_watermark": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "pending_journal_bytes": {
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "base_facts",
+                      "base_edge_sets",
+                      "base_batches",
+                      "input_watermark",
+                      "output_watermark",
+                      "distinct_dirty_facts",
+                      "distinct_edge_sources",
+                      "pending_journal_bytes"
+                    ],
+                    "type": "object"
+                  },
+                  "recovery_action": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "running": {
+                    "type": "boolean"
+                  },
+                  "target_backend": {
+                    "type": "string"
+                  },
+                  "target_dimension": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "target_model": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "epoch_id",
+                  "phase",
+                  "running",
+                  "target_backend",
+                  "target_model",
+                  "target_dimension",
+                  "destination",
+                  "cancellation_requested",
+                  "progress"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "configured"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "description": "Recall memories semantically similar to a query (vector). Ranking blends similarity with each fact's learned confidence (see `feedback`), so the order is not pure similarity — the returned `score` is always the raw similarity, never the blended value. Optionally narrow to exact-match metadata via `filter` (ColumnStore), e.g. {\"project\":\"veles\",\"status\":\"resolved\"}. Ids exceed 2^53 — always relay them as strings (`id_str`); passing a JSON-number id read from a previous response will fail on float-lossy clients.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",

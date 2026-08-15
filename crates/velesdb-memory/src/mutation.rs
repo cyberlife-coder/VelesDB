@@ -7,7 +7,7 @@ use parking_lot::RwLock;
 use crate::MemoryError;
 
 #[allow(dead_code)] // Internal until the control-surface slice exposes online migration.
-mod catchup;
+pub(crate) mod catchup;
 #[allow(dead_code)] // Internal until the control-surface slice exposes online migration.
 pub(crate) mod controller;
 #[allow(dead_code)] // The catch-up slice consumes the journal before the control surface ships.

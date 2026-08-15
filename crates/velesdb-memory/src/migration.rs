@@ -76,6 +76,7 @@ pub use enumeration::{
     enumerate_by_cursor, enumerate_collection, enumerate_page, reinsert, reinsert_batch,
     scroll_page, BatchReinsertion, RawFact, Reinsertion, AGENT_COLLECTIONS,
 };
+pub(crate) use execute::journal_workspace;
 pub(crate) use execute::target_embedder_witness;
 pub use execute::{execute, ExecuteOutcome};
 pub use filesystem::{bytes_on_disk, fingerprint};
@@ -100,6 +101,37 @@ pub use switchover::{switch_over, SwitchOutcome, ARCHIVE_SUFFIX};
 #[cfg(test)]
 pub(crate) use validate::divergence_explained_by_expiry;
 pub use validate::{validate_destination, ValidationOutcome};
+
+/// Store generation that startup recovery proved authoritative.
+pub enum OnlineMigrationStartup {
+    /// No cutover recovery was required.
+    None,
+    /// A pre-activation crash was rolled back to the source generation.
+    SourceRestored { source_model: String },
+    /// A post-activation crash was completed forward to the target generation.
+    TargetActivated {
+        embedder: crate::DynEmbedder,
+        model: String,
+    },
+}
+
+/// Repair a crash-interrupted online cutover before the daemon opens its store.
+///
+/// The target factory reads environment-backed configuration; its credentials
+/// are never passed to or read from durable migration state.
+///
+/// # Errors
+/// Refuses corrupt or mismatched job/journal/controller state, an unrecognised
+/// filesystem layout, or a changed target model, dimension or vector witness.
+pub fn recover_online_migration_startup<F>(
+    source: &std::path::Path,
+    target_factory: F,
+) -> Result<OnlineMigrationStartup, crate::MemoryError>
+where
+    F: Fn(&str) -> Result<(crate::DynEmbedder, String), crate::MemoryError>,
+{
+    crate::service::recover_startup(source, target_factory)
+}
 
 /// The one conversion every migration module needs: a message become the
 /// engine's query error, become this crate's. Defined once — six private

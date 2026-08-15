@@ -103,7 +103,7 @@ fn validate_header(header: &JournalHeader) -> Result<(), MemoryError> {
             header.format_version
         )));
     }
-    validate_epoch_id(&header.identity.epoch_id)
+    validate_epoch_id(header.identity.epoch_id())
 }
 
 pub(super) fn scan_records(

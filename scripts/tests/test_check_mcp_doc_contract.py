@@ -994,6 +994,13 @@ class RealRepositoryTests(unittest.TestCase):
                 "crates/velesdb-node/src/lib.rs",
                 "docs/reference/MCP_TOOLS.md",
             },
+            "migration_start": {
+                "docs/guides/MIGRATE_EMBEDDINGS.md",
+                "docs/reference/MCP_TOOLS.md",
+            },
+            "migration_status": {"docs/reference/MCP_TOOLS.md"},
+            "migration_cancel": {"docs/reference/MCP_TOOLS.md"},
+            "migration_recover": {"docs/reference/MCP_TOOLS.md"},
             "recall": {
                 "crates/velesdb-memory/skill/velesdb-memory/SKILL.md",
                 "crates/velesdb-node/skills/velesdb-memory/SKILL.md",

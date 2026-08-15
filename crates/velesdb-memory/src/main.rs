@@ -50,83 +50,41 @@ use velesdb_memory::{DynEmbedder, ExtractorSelection, MemoryService, NativeStore
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
-
-    // Handled before anything else touches the filesystem or the embedder:
-    // `--version`/`-V` must work even when the store path is unwritable or
-    // absent (e.g. a fresh dev running it once to sanity-check the install),
-    // so it short-circuits ahead of the store open below.
-    if args
-        .get(1)
-        .is_some_and(|arg| arg == "--version" || arg == "-V")
-    {
-        println!("velesdb-memory {}", env!("CARGO_PKG_VERSION"));
-        return Ok(());
+    if let Some(result) = run_early_command(&args) {
+        return result;
     }
-
-    // Short-circuits for the same reason as `--version`: `compile-stdin` is
-    // the hook-facing surface (see `integrations/agent-hooks`). A PostToolUse
-    // hook runs SYNCHRONOUSLY after every tool call, in a process of its own,
-    // while the agent's own MCP server already holds the store's
-    // single-writer `flock` — so this path must never open the store. It
-    // doesn't have to: the compiler
-    // (`velesdb_memory::context::ContextCompiler::compile`) is pure — no
-    // store, no index, no clock — and the `context` feature is
-    // `persistence`-free by design.
-    if args.get(1).is_some_and(|arg| arg == "compile-stdin") {
-        return run_compile_stdin(&args[2..]);
-    }
-
-    // Short-circuits for a third reason: this one must NOT open the store even
-    // though it inspects one. A diagnosis reads a verified copy and never calls
-    // `Database::open` on the live directory, which is what lets an operator run
-    // it while their daemon is up (#1762's protocol allows exactly that, read
-    // only). Falling through to `build_configured_service` would take the
-    // single-writer `flock` and refuse against the very daemon whose store the
-    // operator is asking about.
-    if args.get(1).is_some_and(|arg| arg == "migrate-embeddings") {
-        return run_migrate_embeddings(&args, &args[2..]);
-    }
-
-    // Short-circuits like `migrate-embeddings`, for the mirror-image reason:
-    // this path opens the store WITHOUT building an embedder, so it must not
-    // fall through to the daemon's embedder probe and provenance check — an
-    // export must work on exactly the store those refuse (your data outlives
-    // your configuration). It does take the store's single-writer lock, so
-    // it runs against a stopped daemon; the lock refusal is already
-    // actionable (#1448).
-    if args.get(1).is_some_and(|arg| arg == "export") {
-        return run_export(&args, &args[2..]);
-    }
-
-    // Per-request observability (#1780), installed before anything below so
-    // the startup sequence itself (config file, embedder probe, store open)
-    // is already traceable. `VELESDB_MEMORY_LOG` unset stays byte-for-byte
-    // silent; env-only on purpose — the config file cannot carry it, since
-    // the file is only read further down and a boot problem is exactly what
-    // these logs must be able to see. Stderr only: on stdio, stdout carries
-    // the MCP protocol itself.
     apply_logging();
-
-    // Captured FIRST — before the (possibly seconds-long) embedder probe and
-    // store open — so a client that exits during our own startup still
-    // reparents us AFTER the baseline, and the watchdog sees the change. A
-    // baseline taken later would read the already-reparented pid and go
-    // permanently inert (review finding on #1449).
     #[cfg(unix)]
     let original_parent = std::os::unix::process::parent_id();
     #[cfg(not(unix))]
     let original_parent = 0_u32;
-    // All synchronous setup (config file, env probing, blocking HTTP to
-    // Ollama, disk open) happens in here, before the async runtime starts, so
-    // we never block a tokio worker thread on a synchronous operation.
     let configured = build_configured_service(&args)?;
-
-    // Read AFTER the config file has been applied, since the file can set
-    // `VELESDB_MEMORY_HTTP`. Same manual-parsing style as `--version` above
-    // (no `clap` for a two-flag CLI) — the transport choice only affects how
-    // the server is *served*, further down, since store opening (and its
-    // `flock`) is identical either way.
     let http_bind = requested_http_bind(&args);
+    let server = build_configured_server(configured)?;
+    tokio::runtime::Runtime::new()?.block_on(serve_selected_transport(
+        server,
+        http_bind,
+        original_parent,
+    ))
+}
+
+/// Commands that must not open the live store or build its embedder.
+fn run_early_command(args: &[String]) -> Option<Result<(), Box<dyn std::error::Error>>> {
+    match args.get(1).map(String::as_str) {
+        Some("--version" | "-V") => {
+            println!("velesdb-memory {}", env!("CARGO_PKG_VERSION"));
+            Some(Ok(()))
+        }
+        Some("compile-stdin") => Some(run_compile_stdin(&args[2..])),
+        Some("migrate-embeddings") => Some(run_migrate_embeddings(args, &args[2..])),
+        Some("export") => Some(run_export(args, &args[2..])),
+        _ => None,
+    }
+}
+
+fn build_configured_server(
+    configured: ConfiguredService,
+) -> Result<McpServer, Box<dyn std::error::Error>> {
     let ConfiguredService {
         service,
         store_path,
@@ -134,37 +92,47 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         embedder_dimension,
     } = configured;
     let store_path = std::path::PathBuf::from(store_path);
-    let server = apply_ingest_roots(apply_default_ttl(
+    apply_ingest_roots(apply_default_ttl(
         build_server(service)?
             .with_embedder_identity(embedder_model, embedder_dimension)
             .with_store_dir(&store_path)
+            .with_online_migration(&store_path, build_migration_target)?
             .with_extraction_jobs(&store_path)
             .map_err(std::io::Error::other)?,
-    )?)?;
+    )?)
+}
 
-    tokio::runtime::Runtime::new()?.block_on(async move {
-        match http_bind {
-            #[cfg(feature = "http")]
-            Some(request) => serve_http(server, request).await,
-            #[cfg(not(feature = "http"))]
-            Some(_never) => unreachable!(
-                "requested_http_bind only returns Some when built with --features http"
-            ),
-            None => {
-                // The orphan watchdog only makes sense for stdio: it exists to
-                // detect a *client process* dying without closing our stdin
-                // (#1448). An HTTP daemon has no such single-client lifecycle
-                // to watch — it's meant to outlive any one client — so it is
-                // never spawned in HTTP mode.
-                spawn_orphan_watchdog(original_parent);
-                let running = server
-                    .serve((tokio::io::stdin(), tokio::io::stdout()))
-                    .await?;
-                running.waiting().await?;
-                Ok::<(), Box<dyn std::error::Error>>(())
-            }
-        }
-    })
+async fn serve_stdio(
+    server: McpServer,
+    original_parent: u32,
+) -> Result<(), Box<dyn std::error::Error>> {
+    spawn_orphan_watchdog(original_parent);
+    let running = server
+        .serve((tokio::io::stdin(), tokio::io::stdout()))
+        .await?;
+    running.waiting().await?;
+    Ok(())
+}
+
+#[cfg(feature = "http")]
+async fn serve_selected_transport(
+    server: McpServer,
+    http_bind: Option<HttpServeRequest>,
+    original_parent: u32,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(request) = http_bind {
+        return serve_http(server, request).await;
+    }
+    serve_stdio(server, original_parent).await
+}
+
+#[cfg(not(feature = "http"))]
+async fn serve_selected_transport(
+    server: McpServer,
+    _http_bind: Option<String>,
+    original_parent: u32,
+) -> Result<(), Box<dyn std::error::Error>> {
+    serve_stdio(server, original_parent).await
 }
 
 /// Install the `VELESDB_MEMORY_LOG` subscriber, or exit with its actionable
@@ -555,7 +523,11 @@ fn build_configured_service(
 ) -> Result<ConfiguredService, Box<dyn std::error::Error>> {
     apply_config_file(args)?;
     let store_path = std::env::var("VELESDB_MEMORY_PATH").unwrap_or_else(|_| default_store_path());
-    let configured = build_embedder()?;
+    let recovery = velesdb_memory::migration::recover_online_migration_startup(
+        std::path::Path::new(&store_path),
+        build_migration_target,
+    )?;
+    let configured = embedder_after_startup_recovery(recovery)?;
     // Kept for `memory_status`, which reports the RUNNING embedder: the
     // `ConfiguredEmbedder` itself is consumed by the store-open path below,
     // and the service only ever sees `&[f32]` — this is the one place the
@@ -572,6 +544,28 @@ fn build_configured_service(
         embedder_model,
         embedder_dimension,
     })
+}
+
+fn embedder_after_startup_recovery(
+    recovery: velesdb_memory::migration::OnlineMigrationStartup,
+) -> Result<ConfiguredEmbedder, Box<dyn std::error::Error>> {
+    match recovery {
+        velesdb_memory::migration::OnlineMigrationStartup::None => build_embedder(),
+        velesdb_memory::migration::OnlineMigrationStartup::SourceRestored { source_model } => {
+            let configured = build_embedder()?;
+            if configured.model != source_model {
+                return Err(format!(
+                    "online migration restored source model '{source_model}', but startup configured '{}'",
+                    configured.model
+                )
+                .into());
+            }
+            Ok(configured)
+        }
+        velesdb_memory::migration::OnlineMigrationStartup::TargetActivated { embedder, model } => {
+            Ok(ConfiguredEmbedder { embedder, model })
+        }
+    }
 }
 
 /// A built service plus the resolved configuration `memory_status` reports:
@@ -1263,9 +1257,26 @@ fn build_openai_extractor() -> Result<velesdb_memory::DynExtractor, Box<dyn std:
 /// one, which stays a caller error rather than collapsing into the default.
 fn build_embedder() -> Result<ConfiguredEmbedder, Box<dyn std::error::Error>> {
     let backend = std::env::var("VELESDB_MEMORY_EMBEDDER");
+    build_embedder_selection(backend.as_deref().ok())
+}
+
+fn build_migration_target(
+    backend: &str,
+) -> Result<(DynEmbedder, String), velesdb_memory::MemoryError> {
+    let configured = build_embedder_selection(Some(backend)).map_err(|error| {
+        velesdb_memory::MemoryError::MigrationCapture(format!(
+            "cannot configure migration target '{backend}': {error}"
+        ))
+    })?;
+    Ok((configured.embedder, configured.model))
+}
+
+fn build_embedder_selection(
+    backend: Option<&str>,
+) -> Result<ConfiguredEmbedder, Box<dyn std::error::Error>> {
     // The library message is transport-neutral; the daemon adds the name of the
     // thing the reader actually has to edit.
-    let selection = velesdb_memory::select_embedder(backend.as_deref().ok())
+    let selection = velesdb_memory::select_embedder(backend)
         .map_err(|err| format!("VELESDB_MEMORY_EMBEDDER: {err}"))?;
     match selection {
         // Matched by name rather than by "ready implies hash": the startup

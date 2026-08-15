@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`velesdb-memory` can re-embed its live store online (#1796).** The daemon
+  now owns snapshot copy, bounded durable mutation capture, measured catch-up,
+  budgeted cutover, crash recovery, and safe cancellation through four MCP
+  tools. The offline `migrate-embeddings` command remains available when an
+  outage is acceptable.
+
 ### Changed
 
 - **HTTP inference features are named by role (#1766).** `embedder-http` and

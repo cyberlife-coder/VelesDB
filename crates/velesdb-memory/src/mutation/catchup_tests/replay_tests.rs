@@ -217,6 +217,58 @@ fn replay_waits_for_an_in_flight_mutation_before_acknowledging_it() {
     copy.finish().expect("finish");
 }
 
+#[test]
+fn replay_releases_the_service_gate_after_sealing_its_watermark() {
+    let rig = TestRig::new();
+    let id = rig.source.remember("alpha", &[], None).expect("seed");
+    let gate = Arc::new((Mutex::new(false), Condvar::new()));
+    let entered = Arc::new(Mutex::new(None));
+    let target = ReplayBlockingEmbedder {
+        gate: Arc::clone(&gate),
+        entered: Arc::clone(&entered),
+    };
+    let copy = OnlineCatchUp::start(
+        &rig.source,
+        &rig.destination,
+        &target,
+        Arc::clone(&rig.journal),
+        rig.config,
+    )
+    .expect("start");
+    copy.copy_base().expect("base");
+    rig.source.remember("alpha", &[], None).expect("dirty");
+    let (entered_tx, entered_rx) = mpsc::channel();
+    *entered.lock() = Some(entered_tx);
+    *gate.0.lock() = true;
+
+    std::thread::scope(|scope| {
+        let source = &rig.source;
+        let coordinator_gate = Arc::clone(&gate);
+        let coordinator = scope.spawn(move || {
+            entered_rx.recv().expect("replay entered target embedder");
+            std::thread::scope(|writers| {
+                let (written_tx, written_rx) = mpsc::channel();
+                let writer = writers.spawn(move || {
+                    let result = source.remember("beta", &[], None);
+                    let _ = written_tx.send(());
+                    result
+                });
+                let completed = written_rx.recv_timeout(Duration::from_millis(250)).is_ok();
+                *coordinator_gate.0.lock() = false;
+                coordinator_gate.1.notify_all();
+                writer.join().expect("writer thread").expect("write");
+                assert!(completed, "source write waited for replay embedding");
+            });
+        });
+        copy.catch_up_batch().expect("replay");
+        coordinator.join().expect("coordinator");
+    });
+
+    while copy.catch_up_batch().expect("drain").backlog != 0 {}
+    assert_eq!(content_of(&rig, id), "alpha");
+    copy.finish().expect("finish");
+}
+
 fn live_ids(source: &crate::MemoryService<super::FixedEmbedder>) -> Vec<u64> {
     let mut cursor = None;
     let mut ids = Vec::new();
@@ -289,6 +341,30 @@ fn content_of(rig: &TestRig, id: u64) -> String {
 struct BlockingEmbedder {
     gate: Arc<(Mutex<bool>, Condvar)>,
     entered: Arc<Mutex<Option<mpsc::Sender<()>>>>,
+}
+
+struct ReplayBlockingEmbedder {
+    gate: Arc<(Mutex<bool>, Condvar)>,
+    entered: Arc<Mutex<Option<mpsc::Sender<()>>>>,
+}
+
+impl Embedder for ReplayBlockingEmbedder {
+    fn dimension(&self) -> usize {
+        3
+    }
+
+    fn embed(&self, _text: &str) -> Result<Vec<f32>, EmbedError> {
+        let mut blocked = self.gate.0.lock();
+        if *blocked {
+            if let Some(entered) = self.entered.lock().take() {
+                let _ = entered.send(());
+            }
+            while *blocked {
+                self.gate.1.wait(&mut blocked);
+            }
+        }
+        Ok(vec![7.0, 8.0, 9.0])
+    }
 }
 
 impl Embedder for BlockingEmbedder {

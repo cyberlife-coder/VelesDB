@@ -21,7 +21,7 @@ pub(crate) struct ControllerConfig {
 }
 
 impl ControllerConfig {
-    fn validate(self) -> Result<Self, MemoryError> {
+    pub(crate) fn validate(self) -> Result<Self, MemoryError> {
         if !(2..=MAX_WINDOW).contains(&self.observation_window) {
             return Err(capture("controller observation window must be in 2..=64"));
         }
@@ -388,11 +388,11 @@ fn metrics(samples: &[ConvergenceSample]) -> ConvergenceMetrics {
 }
 
 fn pause_estimate(metrics: ConvergenceMetrics, reserve: Duration) -> Option<Duration> {
-    if metrics.replay_rate.records == 0 {
-        return None;
-    }
     if metrics.backlog_records == 0 {
         return metrics.largest_apply_latency.checked_add(reserve);
+    }
+    if metrics.replay_rate.records == 0 {
+        return None;
     }
     let net_replay = metrics
         .replay_rate

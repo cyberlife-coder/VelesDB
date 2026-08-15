@@ -297,6 +297,29 @@ POLICED_TOOLS: "tuple[PolicedTool, ...]" = (
         ),
     ),
     PolicedTool(
+        "migration_start",
+        (),
+        (
+            "docs/guides/MIGRATE_EMBEDDINGS.md",
+            "docs/reference/MCP_TOOLS.md",
+        ),
+    ),
+    PolicedTool(
+        "migration_status",
+        (),
+        ("docs/reference/MCP_TOOLS.md",),
+    ),
+    PolicedTool(
+        "migration_cancel",
+        (),
+        ("docs/reference/MCP_TOOLS.md",),
+    ),
+    PolicedTool(
+        "migration_recover",
+        (),
+        ("docs/reference/MCP_TOOLS.md",),
+    ),
+    PolicedTool(
         "recall",
         ("MemoryRecollection",),
         (

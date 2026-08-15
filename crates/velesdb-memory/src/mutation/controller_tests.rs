@@ -44,6 +44,20 @@ fn measured_net_drain_within_budget_becomes_cutover_ready() {
 }
 
 #[test]
+fn an_idle_empty_journal_becomes_cutover_ready_without_fake_replay() {
+    let root = tempfile::tempdir().expect("root");
+    let mut controller = open_controller(root.path());
+    controller.observe(sample(0, 0, 0)).expect("first");
+    controller.observe(sample(1, 0, 0)).expect("second");
+    let observation = controller.observe(sample(2, 0, 0)).expect("third");
+
+    assert_eq!(observation.metrics.backlog_records, 0);
+    assert_eq!(observation.metrics.replay_rate.records, 0);
+    assert_eq!(observation.estimated_pause, Some(Duration::from_millis(70)));
+    assert_eq!(observation.verdict, ConvergenceVerdict::CutoverReady);
+}
+
+#[test]
 fn growing_backlog_or_arrivals_matching_replay_is_non_converging() {
     let root = tempfile::tempdir().expect("root");
     let mut controller = open_controller(root.path());
