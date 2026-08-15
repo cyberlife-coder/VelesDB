@@ -1,4 +1,3 @@
-use std::fmt::Write as _;
 use std::fs::{File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -9,8 +8,12 @@ use super::{DirtyKey, MutationObserver};
 use crate::MemoryError;
 
 mod format;
+mod identity;
 mod io;
 mod platform;
+
+use identity::validate_epoch_id;
+pub(crate) use identity::{CutoverIdentity, EpochIdentity};
 
 use format::{
     encode_record, read_header, read_records, recover_torn_tail, scan_records, write_header,
@@ -23,111 +26,6 @@ use platform::{durability_barrier, promote};
 pub(super) const JOURNAL_FILE: &str = "online-migration-dirty.journal";
 const STAGING_FILE: &str = "online-migration-dirty.journal.tmp";
 const MAX_READ_BATCH: usize = 4_096;
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub(crate) struct EpochIdentity {
-    source_path: PathBuf,
-    source_provenance: String,
-    target_model: String,
-    target_dimension: usize,
-    target_witness: String,
-    destination_path: PathBuf,
-    epoch_id: String,
-}
-
-pub(crate) struct CutoverIdentity<'a> {
-    pub(crate) source: &'a Path,
-    pub(crate) destination: &'a Path,
-    pub(crate) source_provenance: &'a str,
-    pub(crate) target_model: &'a str,
-    pub(crate) target_dimension: usize,
-    pub(crate) target_witness: &'a str,
-    pub(crate) epoch_id: &'a str,
-}
-
-impl EpochIdentity {
-    pub(crate) fn new(
-        source_path: PathBuf,
-        source_provenance: String,
-        target_model: String,
-        target_dimension: usize,
-        target_witness: String,
-        destination_path: PathBuf,
-    ) -> Result<Self, MemoryError> {
-        let mut random = [0_u8; 16];
-        getrandom::fill(&mut random)
-            .map_err(|err| capture(format!("cannot mint epoch id: {err}")))?;
-        let epoch_id = random
-            .iter()
-            .fold(String::with_capacity(32), |mut id, byte| {
-                let _ = write!(id, "{byte:02x}");
-                id
-            });
-        Self::validated(
-            source_path,
-            source_provenance,
-            target_model,
-            target_dimension,
-            target_witness,
-            destination_path,
-            epoch_id,
-        )
-    }
-
-    fn validated(
-        source_path: PathBuf,
-        source_provenance: String,
-        target_model: String,
-        target_dimension: usize,
-        target_witness: String,
-        destination_path: PathBuf,
-        epoch_id: String,
-    ) -> Result<Self, MemoryError> {
-        if source_provenance.trim().is_empty() || target_model.trim().is_empty() {
-            return Err(capture(
-                "epoch provenance and target model must not be empty",
-            ));
-        }
-        if target_dimension == 0 || source_path == destination_path {
-            return Err(capture(
-                "epoch paths must differ and target dimension must be positive",
-            ));
-        }
-        validate_witness(&target_witness)?;
-        validate_epoch_id(&epoch_id)?;
-        Ok(Self {
-            source_path,
-            source_provenance,
-            target_model,
-            target_dimension,
-            target_witness,
-            destination_path,
-            epoch_id,
-        })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn for_test(
-        source_path: PathBuf,
-        source_provenance: &str,
-        target_model: &str,
-        target_dimension: usize,
-        target_witness: &str,
-        destination_path: PathBuf,
-        epoch_id: &str,
-    ) -> Self {
-        Self::validated(
-            source_path,
-            source_provenance.to_owned(),
-            target_model.to_owned(),
-            target_dimension,
-            target_witness.to_owned(),
-            destination_path,
-            epoch_id.to_owned(),
-        )
-        .expect("valid test epoch")
-    }
-}
 
 struct JournalInner {
     file: Option<File>,
@@ -193,13 +91,13 @@ impl DirtyJournal {
     ) -> Result<(), MemoryError> {
         let inner = self.inner.lock();
         let identity = &inner.header.identity;
-        if identity.source_path != expected.source
-            || identity.destination_path != expected.destination
-            || identity.source_provenance != expected.source_provenance
-            || identity.target_model != expected.target_model
-            || identity.target_dimension != expected.target_dimension
-            || identity.target_witness != expected.target_witness
-            || identity.epoch_id != expected.epoch_id
+        if identity.source_path() != expected.source
+            || identity.destination_path() != expected.destination
+            || identity.source_provenance() != expected.source_provenance
+            || identity.target_model() != expected.target_model
+            || identity.target_dimension() != expected.target_dimension
+            || identity.target_witness() != expected.target_witness
+            || identity.epoch_id() != expected.epoch_id
         {
             return Err(capture("cutover identity disagrees with journal epoch"));
         }
@@ -327,16 +225,6 @@ impl DirtyJournal {
     fn maybe_fail(&self, _point: FaultPoint) -> Result<(), MemoryError> {
         Ok(())
     }
-}
-
-fn validate_witness(witness: &str) -> Result<(), MemoryError> {
-    let digest = witness
-        .strip_prefix("sha256:")
-        .ok_or_else(|| capture("target witness must use sha256"))?;
-    if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(capture("target witness must contain 64 hexadecimal digits"));
-    }
-    Ok(())
 }
 
 impl MutationObserver for DirtyJournal {
@@ -469,13 +357,6 @@ fn create_journal(workspace: &Path, identity: &EpochIdentity) -> Result<(), Memo
         .map_err(|err| capture(format!("cannot publish journal: {err}")))?;
     durability_barrier(workspace)
         .map_err(|err| capture(format!("cannot sync journal directory: {err}")))
-}
-
-fn validate_epoch_id(epoch_id: &str) -> Result<(), MemoryError> {
-    if epoch_id.len() != 32 || !epoch_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(capture("epoch id must be 32 hexadecimal characters"));
-    }
-    Ok(())
 }
 
 fn validate_workspace(workspace: &Path) -> Result<(), MemoryError> {

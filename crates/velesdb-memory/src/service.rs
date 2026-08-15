@@ -41,6 +41,11 @@ mod fused_recall;
 #[allow(dead_code, unused_imports)] // Wired by the control-surface slice after this internal seam.
 #[path = "online_migration.rs"]
 mod online_migration;
+#[cfg(feature = "persistence")]
+pub(crate) use online_migration::{
+    recover_startup, JobPhase, JobTarget, LiveGenerationSlot, MigrationStartConfig,
+    MigrationStatus, OnlineMigrationManager,
+};
 
 /// [`MemoryService::feedback`] and the recall re-ranking it drives (RL Memory).
 /// A child module of `service`, like [`fused_recall`], so it uses
@@ -214,6 +219,10 @@ impl<E: Embedder> MemoryService<E, NativeStore> {
     ) -> Result<(), MemoryError> {
         let _generation = self.generation_gate.write();
         self.store.set_mutation_observer(observer)
+    }
+
+    pub(crate) fn migration_capture_active(&self) -> bool {
+        self.store.mutation_capture_active()
     }
 }
 

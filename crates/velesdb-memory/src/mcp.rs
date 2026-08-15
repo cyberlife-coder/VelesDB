@@ -11,16 +11,13 @@ use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::{ErrorCode, Implementation, ServerCapabilities, ServerInfo};
 use rmcp::{tool, tool_handler, tool_router, ErrorData, ServerHandler};
 
-use crate::limits::{DEFAULT_WHY_HOPS, MAX_FACT_BYTES, MAX_RECALL_LIMIT, MAX_WHY_HOPS};
-use crate::model::FusionOptions;
-use crate::service::MemoryService;
+use crate::limits::MAX_RECALL_LIMIT;
+use crate::service::{LiveGenerationSlot, MemoryService};
 
 /// Default number of memories returned by `recall`.
 const DEFAULT_RECALL_LIMIT: usize = 10;
 
-/// Default page size of `list_memories` — bigger than recall's because an
-/// audit walks everything anyway and pages are pure I/O, no ranking.
-const DEFAULT_LIST_LIMIT: usize = 50;
+const UNREPORTED_MODEL: &str = "unreported";
 
 // The boxed embedder and the shared, runtime-attached extraction backend the
 // server stores — imported for internal use only. The canonical public paths are
@@ -39,25 +36,24 @@ use crate::extract::DynExtractor;
 #[cfg(feature = "context")]
 mod context_tools;
 
+mod advanced_tools;
 mod dto;
 mod extraction_job_model;
 mod extraction_job_store;
 mod extraction_jobs;
 mod extractor_resolver;
+mod migration_tools;
+mod status;
 mod wire;
 use dto::{
-    EmbedderStatus, EntityParams, EntityProfileDto, ExplanationDto, ExtractionJobStatusParams,
-    ExtractionJobStatusResult, ExtractionStatus, FeedbackParams, FeedbackResult, ForgetParams,
-    ForgetResult, ListMemoriesParams, ListMemoriesResult, ListedMemoryDto, MemoryCounts,
-    MemoryStatusResult, ProvenanceStatus, RecallFusedParams, RecallFusedResult, RecallParams,
-    RecallResult, RecallWhereParams, RelateParams, RelateResult, RememberExtractedParams,
-    RememberExtractedResult, RememberParams, RememberResult, UnrelateParams, UnrelateResult,
-    WhyParams,
+    EntityParams, EntityProfileDto, FeedbackParams, FeedbackResult, ForgetParams, ForgetResult,
+    RecallParams, RecallResult, RecallWhereParams, RelateParams, RelateResult, RememberParams,
+    RememberResult, UnrelateParams, UnrelateResult,
 };
 use extraction_jobs::{ExtractionJobs, JobError};
 use extractor_resolver::ExtractorResolver;
 
-/// Le constructeur de schema d'ENTREE, unique pour les vingt-trois outils :
+/// Le constructeur de schema d'ENTREE, unique pour tous les outils :
 /// [`crate::schema::wire_safe_input_schema`].
 ///
 /// `keys` nomme les proprietes que CET outil accepte en chaine decimale
@@ -77,7 +73,7 @@ use crate::schema::wire_safe_input_schema as id_wire_input_schema;
 /// MCP server wrapping a [`MemoryService`].
 #[derive(Clone)]
 pub struct McpServer {
-    service: Arc<MemoryService<DynEmbedder>>,
+    service: Arc<LiveGenerationSlot<DynEmbedder>>,
     /// Join guard of the background autograph worker (#1846) — present iff
     /// an autograph extractor is configured. Held only for its `Drop`: the
     /// server going down closes the queue and joins the worker — the job in
@@ -89,17 +85,12 @@ pub struct McpServer {
     /// Durable receipt/status state machine for `remember_extracted`.
     /// Configured by the native daemon once its store path is known.
     extraction_jobs: Option<ExtractionJobs>,
+    /// Daemon-owned online embedding migration control plane.
+    online_migration: Option<Arc<crate::service::OnlineMigrationManager<DynEmbedder>>>,
     /// Default time-to-live (seconds) applied to `remember`d facts that don't
     /// specify their own `ttl_seconds`. `None` (the default) stores permanently.
     /// Set from `VELESDB_MEMORY_DEFAULT_TTL` by the binary.
     default_ttl: Option<u64>,
-    /// The embedder identity the host declared (model name + dimension) —
-    /// what `memory_status` reports as the RUNNING embedder. `None` when the
-    /// host embedded this server without declaring one; the status then says
-    /// "unreported" rather than guessing. Set via
-    /// [`Self::with_embedder_identity`] by the binary, which is the one
-    /// place that knows what `VELESDB_MEMORY_EMBEDDER` resolved to.
-    embedder_identity: Option<(String, usize)>,
     /// The store directory, for reading the embedding-provenance record
     /// (#1751) in `memory_status`. `None` disables the provenance block
     /// (reported as unrecorded — a store nobody can locate has no readable
@@ -119,13 +110,14 @@ impl McpServer {
     /// Wrap a memory service as an MCP server.
     #[must_use]
     pub fn new(service: MemoryService<DynEmbedder>) -> Self {
-        let service = Arc::new(service);
+        let service = Arc::new(LiveGenerationSlot::new(service, UNREPORTED_MODEL));
         // Autograph leaves the response path here (#1846): with an extractor
         // configured, ONE background worker consumes a bounded queue and
         // `remember` returns as soon as the fact is stored — measured 46-52 s
         // inline against a 0.12 s embedding. The handle rides the server so
         // shutdown finishes the job in flight and skips the rest, counted.
-        let autograph_worker = if service.has_autograph() {
+        let autograph_worker = if matches!(service.inspect(MemoryService::has_autograph), Ok(true))
+        {
             match service.spawn_autograph_worker(crate::limits::MAX_AUTOGRAPH_QUEUE) {
                 Ok(handle) => Some(Arc::new(handle)),
                 Err(error) => {
@@ -141,8 +133,8 @@ impl McpServer {
             _autograph_worker: autograph_worker,
             extractors: Arc::new(parking_lot::RwLock::new(ExtractorResolver::default())),
             extraction_jobs: None,
+            online_migration: None,
             default_ttl: None,
-            embedder_identity: None,
             store_dir: None,
             #[cfg(all(feature = "context", not(target_arch = "wasm32")))]
             ingest_roots: None,
@@ -155,8 +147,8 @@ impl McpServer {
     /// Undeclared, the status reports the embedder as unreported rather than
     /// guessing from the service, which only ever sees `&[f32]`.
     #[must_use]
-    pub fn with_embedder_identity(mut self, model: impl Into<String>, dimension: usize) -> Self {
-        self.embedder_identity = Some((model.into(), dimension));
+    pub fn with_embedder_identity(self, model: impl Into<String>, _dimension: usize) -> Self {
+        self.service.declare_model(model);
         self
     }
 
@@ -167,6 +159,29 @@ impl McpServer {
     pub fn with_store_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
         self.store_dir = Some(dir.into());
         self
+    }
+
+    /// Attach the daemon-owned online migration control plane.
+    ///
+    /// # Errors
+    /// Returns an error when its durable control directory cannot be created safely.
+    pub fn with_online_migration<F>(
+        mut self,
+        source: impl Into<std::path::PathBuf>,
+        factory: F,
+    ) -> Result<Self, crate::MemoryError>
+    where
+        F: Fn(&str) -> Result<(DynEmbedder, String), crate::MemoryError> + Send + Sync + 'static,
+    {
+        let targets = Arc::new(move |backend: &str| {
+            factory(backend).map(|(embedder, model)| crate::service::JobTarget { embedder, model })
+        });
+        self.online_migration = Some(crate::service::OnlineMigrationManager::new(
+            Arc::clone(&self.service),
+            source,
+            targets,
+        )?);
+        Ok(self)
     }
 
     /// The full tool router: the memory tools, plus the context compiler's
@@ -187,9 +202,16 @@ impl McpServer {
     /// vraiment per-outil : les cles d'id que l'outil accepte en chaine.
     fn combined_router() -> ToolRouter<McpServer> {
         #[cfg(feature = "context")]
-        let mut router = Self::tool_router() + Self::context_tool_router();
+        let mut router = Self::tool_router()
+            + Self::advanced_tool_router()
+            + Self::status_tool_router()
+            + Self::migration_tool_router()
+            + Self::context_tool_router();
         #[cfg(not(feature = "context"))]
-        let mut router = Self::tool_router();
+        let mut router = Self::tool_router()
+            + Self::advanced_tool_router()
+            + Self::status_tool_router()
+            + Self::migration_tool_router();
 
         // `reharden_tool_input` prend l'outil, pas un schema : `Tool` type
         // ses deux schemas identiquement, donc c'est la signature — et non
@@ -293,7 +315,7 @@ impl McpServer {
         } = params;
         let ttl = ttl_seconds.or(self.default_ttl);
         let id = tokio::task::spawn_blocking(move || {
-            service.remember_with_ttl(&fact, &links, metadata.as_ref(), ttl)
+            service.run(|current| current.remember_with_ttl(&fact, &links, metadata.as_ref(), ttl))
         })
         .await
         .map_err(join_error)?
@@ -321,11 +343,12 @@ impl McpServer {
             .min(MAX_RECALL_LIMIT);
         let service = Arc::clone(&self.service);
         let RecallParams { query, filter, .. } = params;
-        let memories =
-            tokio::task::spawn_blocking(move || service.recall(&query, limit, filter.as_ref()))
-                .await
-                .map_err(join_error)?
-                .map_err(to_error)?;
+        let memories = tokio::task::spawn_blocking(move || {
+            service.run(|current| current.recall(&query, limit, filter.as_ref()))
+        })
+        .await
+        .map_err(join_error)?
+        .map_err(to_error)?;
         Ok(Json(RecallResult::new(memories)))
     }
 
@@ -351,58 +374,13 @@ impl McpServer {
             .min(MAX_RECALL_LIMIT);
         let service = Arc::clone(&self.service);
         let RecallWhereParams { query, filters, .. } = params;
-        let memories =
-            tokio::task::spawn_blocking(move || service.recall_where(&query, limit, &filters))
-                .await
-                .map_err(join_error)?
-                .map_err(to_error)?;
+        let memories = tokio::task::spawn_blocking(move || {
+            service.run(|current| current.recall_where(&query, limit, &filters))
+        })
+        .await
+        .map_err(join_error)?
+        .map_err(to_error)?;
         Ok(Json(RecallResult::new(memories)))
-    }
-
-    #[tool(
-        name = "recall_fused",
-        // rmcp derives an output schema when none is given, and that
-        // derived form keeps `$ref`s a `$defs`-blind client cannot resolve.
-        output_schema = crate::schema::wire_safe_output_schema::<RecallFusedResult>(),
-        description = "Fused vector + graph recall: like `recall`, but also walks the graph from the top vector hit and folds any connected fact into the ranking — the tri-engine ranking (vector similarity + ColumnStore filter + graph reach) measured on multi-hop and temporal benchmarks. Reach for this when an answer needs a fact the query doesn't mention directly but a stored `relate`/extracted link connects (multi-hop reasoning, temporal chains). `hops`/`graph_boost` tune the graph reach and `pool` the depth of the vector candidate pool fusion re-ranks; omit them for the proven defaults. Optionally narrow with an exact-match `filter`. Set `date_field` (the metadata key holding a YYYYMMDD date) to also get a `dated_context` timeline and a `now` anchor for temporal questions. Most relevant first."
-    )]
-    async fn recall_fused(
-        &self,
-        Parameters(params): Parameters<RecallFusedParams>,
-    ) -> Result<Json<RecallFusedResult>, ErrorData> {
-        let k = params
-            .limit
-            .unwrap_or(DEFAULT_RECALL_LIMIT)
-            .min(MAX_RECALL_LIMIT);
-        let opts = FusionOptions::from_knobs(params.hops, params.graph_boost, params.pool);
-        let service = Arc::clone(&self.service);
-        let RecallFusedParams {
-            query,
-            filter,
-            date_field,
-            ..
-        } = params;
-        // With a date field, take the shared "recall then format" path so the
-        // dated timeline stays identical to the Node/WASM bindings; without one,
-        // plain fused recall (no timeline).
-        let (memories, dated_context, now) = if let Some(field) = date_field {
-            let (hits, ctx) = tokio::task::spawn_blocking(move || {
-                service.recall_fused_dated(&query, k, filter.as_ref(), opts, &field)
-            })
-            .await
-            .map_err(join_error)?
-            .map_err(to_error)?;
-            (hits, Some(ctx.timeline), ctx.now)
-        } else {
-            let hits = tokio::task::spawn_blocking(move || {
-                service.recall_fused(&query, k, filter.as_ref(), opts)
-            })
-            .await
-            .map_err(join_error)?
-            .map_err(to_error)?;
-            (hits, None, None)
-        };
-        Ok(Json(RecallFusedResult::new(memories, dated_context, now)))
     }
 
     #[tool(
@@ -420,10 +398,12 @@ impl McpServer {
     ) -> Result<Json<FeedbackResult>, ErrorData> {
         let service = Arc::clone(&self.service);
         let FeedbackParams { id, success } = params;
-        let confidence = tokio::task::spawn_blocking(move || service.feedback(id, success))
-            .await
-            .map_err(join_error)?
-            .map_err(to_error)?;
+        let confidence = tokio::task::spawn_blocking(move || {
+            service.run(|current| current.feedback(id, success))
+        })
+        .await
+        .map_err(join_error)?
+        .map_err(to_error)?;
         Ok(Json(FeedbackResult {
             id,
             id_str: id.to_string(),
@@ -446,10 +426,12 @@ impl McpServer {
     ) -> Result<Json<RelateResult>, ErrorData> {
         let service = Arc::clone(&self.service);
         let RelateParams { from, to, relation } = params;
-        let edge_id = tokio::task::spawn_blocking(move || service.relate(from, to, &relation))
-            .await
-            .map_err(join_error)?
-            .map_err(to_error)?;
+        let edge_id = tokio::task::spawn_blocking(move || {
+            service.run(|current| current.relate(from, to, &relation))
+        })
+        .await
+        .map_err(join_error)?
+        .map_err(to_error)?;
         Ok(Json(RelateResult {
             edge_id,
             edge_id_str: edge_id.to_string(),
@@ -471,10 +453,12 @@ impl McpServer {
     ) -> Result<Json<UnrelateResult>, ErrorData> {
         let service = Arc::clone(&self.service);
         let UnrelateParams { from, to, relation } = params;
-        let outcome = tokio::task::spawn_blocking(move || service.unrelate(from, to, &relation))
-            .await
-            .map_err(join_error)?
-            .map_err(to_error)?;
+        let outcome = tokio::task::spawn_blocking(move || {
+            service.run(|current| current.unrelate(from, to, &relation))
+        })
+        .await
+        .map_err(join_error)?
+        .map_err(to_error)?;
         Ok(Json(UnrelateResult {
             found: outcome.found,
             removed: outcome.removed,
@@ -496,7 +480,7 @@ impl McpServer {
     ) -> Result<Json<ForgetResult>, ErrorData> {
         let service = Arc::clone(&self.service);
         let id = params.id;
-        let found = tokio::task::spawn_blocking(move || service.forget(id))
+        let found = tokio::task::spawn_blocking(move || service.run(|current| current.forget(id)))
             .await
             .map_err(join_error)?
             .map_err(to_error)?;
@@ -522,229 +506,13 @@ impl McpServer {
         let service = Arc::clone(&self.service);
         let EntityParams { name } = params;
         let looked_up = name.clone();
-        let profile = tokio::task::spawn_blocking(move || service.entity_profile(&looked_up))
-            .await
-            .map_err(join_error)?
-            .map_err(to_error)?;
-        Ok(Json(EntityProfileDto::from_lookup(&name, profile)))
-    }
-
-    #[tool(
-        name = "why",
-        // rmcp derives an output schema when none is given, and that
-        // derived form keeps `$ref`s a `$defs`-blind client cannot resolve.
-        output_schema = crate::schema::wire_safe_output_schema::<ExplanationDto>(),
-        description = "Explain a decision: find the best-matching memory (optionally scoped by a metadata `filter`, e.g. the current project) and return the connected subgraph of related memories reachable through typed links — fusing vector, ColumnStore, and graph to surface context a plain similarity search misses."
-    )]
-    async fn why(
-        &self,
-        Parameters(params): Parameters<WhyParams>,
-    ) -> Result<Json<ExplanationDto>, ErrorData> {
-        let max_hops = params
-            .max_hops
-            .unwrap_or(DEFAULT_WHY_HOPS)
-            .min(MAX_WHY_HOPS);
-        let service = Arc::clone(&self.service);
-        let WhyParams {
-            decision, filter, ..
-        } = params;
-        let explanation =
-            tokio::task::spawn_blocking(move || service.why(&decision, max_hops, filter.as_ref()))
-                .await
-                .map_err(join_error)?
-                .map_err(to_error)?;
-        Ok(Json(ExplanationDto::from(explanation)))
-    }
-
-    #[tool(
-        name = "remember_extracted",
-        // Sans declaration explicite, rmcp derive un schema de sortie qui
-        // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
-        // or les SDK MCP valident structuredContent contre ce schema.
-        output_schema = crate::schema::wire_safe_output_schema::<RememberExtractedResult>(),
-        description = "Accept a passage for durable background extraction and return before model generation. Set `extractor` per call (`outline`, `ollama`, or `openai`), or omit it to use VELESDB_MEMORY_EXTRACTOR. Supply `idempotency_key` when retrying across a client timeout: the same key and payload reuse one job, while a changed payload is rejected. The receipt returns `request_id`, its initial `state` (`accepted`, or the persisted state of a reused request), and `reused`. Poll `extraction_status(request_id)` until `committed` or `failed`; accepted/running jobs survive process restart."
-    )]
-    async fn remember_extracted(
-        &self,
-        Parameters(params): Parameters<RememberExtractedParams>,
-    ) -> Result<Json<RememberExtractedResult>, ErrorData> {
-        let RememberExtractedParams {
-            text,
-            metadata,
-            extractor,
-            idempotency_key,
-        } = params;
-        if text.len() > MAX_FACT_BYTES {
-            return Err(ErrorData::new(
-                ErrorCode::INVALID_PARAMS,
-                format!("text exceeds maximum size of {MAX_FACT_BYTES} bytes"),
-                None,
-            ));
-        }
-        let jobs = self.extraction_jobs.clone().ok_or_else(|| {
-            ErrorData::new(
-                ErrorCode::INTERNAL_ERROR,
-                "durable extraction jobs are not configured for this server",
-                None,
-            )
-        })?;
-        let receipt = tokio::task::spawn_blocking(move || {
-            jobs.submit(
-                &text,
-                metadata,
-                extractor.as_deref(),
-                idempotency_key.as_deref(),
-            )
-        })
-        .await
-        .map_err(join_error)?
-        .map_err(job_error)?;
-        Ok(Json(RememberExtractedResult {
-            request_id: receipt.request_id,
-            state: receipt.state,
-            reused: receipt.reused,
-        }))
-    }
-
-    #[tool(
-        name = "extraction_status",
-        output_schema = crate::schema::wire_safe_output_schema::<ExtractionJobStatusResult>(),
-        description = "Read one durable extraction job by the `request_id` returned from `remember_extracted`. Returns that `request_id`, its persisted `state` (`accepted`, `running`, `committed`, or `failed`), committed fact `ids` and their u64-safe decimal `ids_str` twins, `skipped_over_cap` after commit, and `error` after failure. While accepted/running, `ids` and `ids_str` are empty and both optional terminal fields are null."
-    )]
-    async fn extraction_status(
-        &self,
-        Parameters(params): Parameters<ExtractionJobStatusParams>,
-    ) -> Result<Json<ExtractionJobStatusResult>, ErrorData> {
-        let jobs = self.extraction_jobs.clone().ok_or_else(|| {
-            ErrorData::new(
-                ErrorCode::INTERNAL_ERROR,
-                "durable extraction jobs are not configured for this server",
-                None,
-            )
-        })?;
-        let view = tokio::task::spawn_blocking(move || jobs.status(&params.request_id))
-            .await
-            .map_err(join_error)?
-            .map_err(job_error)?;
-        let (ids, skipped_over_cap) = view.outcome.map_or_else(
-            || (Vec::new(), None),
-            |outcome| (outcome.ids, Some(outcome.skipped_over_cap)),
-        );
-        let ids_str = ids.iter().map(u64::to_string).collect();
-        Ok(Json(ExtractionJobStatusResult {
-            request_id: view.request_id,
-            state: view.state,
-            ids,
-            ids_str,
-            skipped_over_cap,
-            error: view.error,
-        }))
-    }
-
-    #[tool(
-        name = "memory_status",
-        // Sans declaration explicite, rmcp derive un schema de sortie qui
-        // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
-        // or les SDK MCP valident structuredContent contre ce schema.
-        output_schema = crate::schema::wire_safe_output_schema::<MemoryStatusResult>(),
-        description = "Report this memory server's health and configuration: which embedder is running and whether recall is SEMANTIC (`embedder.semantic: false` means the offline `hash` default — recall matches surface form, not meaning, and configuring a semantic embedder is an env-var switch, no rebuild), what embedder the store was filled by per its on-disk provenance record, whether a default extraction backend is configured (`remember_extracted` may omit `extractor` iff `extraction.configured`; explicit `outline` remains available), whether the background autograph worker is active and how many enrichments a full queue dropped, and the corpus size — `memory.facts` and `memory.edges`. Read `memory.edges` when `why` seems to add nothing over `recall`: `0` means no fact was ever linked (by `relate`, `remember`'s `links`, or extraction), so `why` HAS no graph to walk and degrades to plain search — that is a wiring gap, not a defect. Call this at session start, or whenever recall quality or `why`'s evidence trails surprise you, and tell the user when the server runs degraded. Takes no parameters."
-    )]
-    async fn memory_status(&self) -> Result<Json<MemoryStatusResult>, ErrorData> {
-        let embedder = match &self.embedder_identity {
-            Some((model, dimension)) => EmbedderStatus {
-                model: Some(model.clone()),
-                dimension: Some(*dimension),
-                semantic: Some(model != "hash"),
-            },
-            None => EmbedderStatus {
-                model: None,
-                dimension: None,
-                semantic: None,
-            },
-        };
-        // The provenance record and the counts both touch the filesystem —
-        // off the async workers, like every other tool body.
-        let service = Arc::clone(&self.service);
-        let store_dir = self.store_dir.clone();
-        let (provenance, facts, edges) = tokio::task::spawn_blocking(move || {
-            let recorded = store_dir
-                .as_deref()
-                .and_then(|dir| crate::embedding_provenance::read(dir).ok().flatten());
-            (recorded, service.fact_count(), service.edge_count())
-        })
-        .await
-        .map_err(join_error)?;
-        let provenance = match provenance {
-            Some(record) => ProvenanceStatus {
-                recorded: true,
-                model: Some(record.model),
-                dimension: Some(record.dimension),
-            },
-            None => ProvenanceStatus {
-                recorded: false,
-                model: None,
-                dimension: None,
-            },
-        };
-        Ok(Json(MemoryStatusResult {
-            embedder,
-            provenance,
-            extraction: ExtractionStatus {
-                // Exactly the `remember_extracted` gate — the autograph
-                // extractor is attached separately and reports through the
-                // two autograph fields, so an autograph-only configuration
-                // never claims a tool that would refuse.
-                configured: self.extractors.read().default_is_configured(),
-                autograph_active: self.service.autograph_queue_open(),
-                autograph_dropped: self.service.autograph_dropped(),
-            },
-            memory: MemoryCounts { facts, edges },
-        }))
-    }
-
-    #[tool(
-        name = "list_memories",
-        // Sans declaration explicite, rmcp derive un schema de sortie qui
-        // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
-        // or les SDK MCP valident structuredContent contre ce schema.
-        output_schema = crate::schema::wire_safe_output_schema::<ListMemoriesResult>(),
-        input_schema = id_wire_input_schema::<ListMemoriesParams>(&["cursor"]),
-        description = "AUDIT the store: walk every stored fact, page by page — the question `recall` structurally cannot answer, because recall ranks by resemblance to a query and what resembles nothing you thought to ask stays invisible. Use it when the user asks what the memory contains ('what do you know about me / this project?'), to review or clean up before sharing a store, or to back up its contents. Returns `memories` (ids ascending — two audits of the same store see the same order; each entry carries `id`, `id_str`, `content`, `metadata`) and `next_cursor`: pass it back as `cursor` for the next page, `null` means the walk is complete. `filter` keeps only facts whose metadata equals every given key (e.g. {\"project\": \"acme\"}); a filtered page may come back sparse — KEEP following `next_cursor`, the walk stays exhaustive. Metadata follows recall's visibility rule (business keys plus the auto-stamped `_veles_date`; internal graph scaffolding excluded) unless `include_internal` is set, which lists everything verbatim. Ids exceed 2^53 — always relay them as strings (`id_str`, and `next_cursor` is already a string)."
-    )]
-    async fn list_memories(
-        &self,
-        Parameters(params): Parameters<ListMemoriesParams>,
-    ) -> Result<Json<ListMemoriesResult>, ErrorData> {
-        let service = Arc::clone(&self.service);
-        let ListMemoriesParams {
-            cursor,
-            limit,
-            filter,
-            include_internal,
-        } = params;
-        let (memories, next) = tokio::task::spawn_blocking(move || {
-            service.list(
-                cursor,
-                limit.unwrap_or(DEFAULT_LIST_LIMIT),
-                filter.as_ref(),
-                include_internal,
-            )
+        let profile = tokio::task::spawn_blocking(move || {
+            service.run(|current| current.entity_profile(&looked_up))
         })
         .await
         .map_err(join_error)?
         .map_err(to_error)?;
-        Ok(Json(ListMemoriesResult {
-            memories: memories
-                .into_iter()
-                .map(|memory| ListedMemoryDto {
-                    id: memory.id,
-                    id_str: memory.id.to_string(),
-                    content: memory.content,
-                    metadata: memory.metadata,
-                })
-                .collect(),
-            next_cursor: next.map(|id| id.to_string()),
-        }))
+        Ok(Json(EntityProfileDto::from_lookup(&name, profile)))
     }
 }
 
@@ -758,14 +526,15 @@ impl McpServer {
 /// "context")]` variant since the context-compiler tools only exist in that
 /// build.
 #[cfg(feature = "context")]
-const SERVER_INSTRUCTIONS: &str = "Local-first memory and context engineering for AI agents, three tool families: (1) durable memory — remember, remember_extracted, extraction_status, recall, recall_fused, recall_where, relate, unrelate, forget, feedback, entity, and why — explainable (why returns the evidence trail) and self-improving (feedback re-ranks future recall); remember_extracted durably accepts a passage, then reads the entities, typed edges and attributes it STATES and wires them into the graph in the background: keep its request_id and poll extraction_status until committed or failed, reusing one idempotency_key across transport retries; entity(name) answers a question ABOUT a named thing rather than about the sentences mentioning it; memory_status reports the server's health — which embedder runs and whether recall is semantic, extraction wiring, and graph size; list_memories audits the store page by page — what recall cannot answer, because what resembles no query stays invisible; (2) the deterministic context compiler — compile_context, compile_transcript, explain_compilation, retrieve_context_source, context_savings, and suggest_budget — token-budgets and audits prompt context with no LLM call, ever; (3) cross-session working-context resumption — save_working_context, load_working_context, and list_working_contexts. compile_context/explain_compilation fragments accept a `path` instead of inline `content` to ingest a file by reference — disabled unless the server is started with VELESDB_MEMORY_INGEST_ROOTS set to an allowlist of directories (compile_transcript's own `path` field uses the same allowlist). compile_transcript is a one-call shortcut over compile_context for a raw agent-session transcript: it segments plain or JSONL text into turns before compiling, so an agent no longer needs to segment a transcript by hand. Nothing ever leaves the machine.";
+const SERVER_INSTRUCTIONS: &str = "Local-first memory and context engineering for AI agents, four tool families: (1) durable memory — remember, remember_extracted, extraction_status, recall, recall_fused, recall_where, relate, unrelate, forget, feedback, entity, and why — explainable (why returns the evidence trail) and self-improving (feedback re-ranks future recall); remember_extracted durably accepts a passage, then reads the entities, typed edges and attributes it STATES and wires them into the graph in the background: keep its request_id and poll extraction_status until committed or failed, reusing one idempotency_key across transport retries; entity(name) answers a question ABOUT a named thing rather than about the sentences mentioning it; memory_status reports the server's health — which embedder runs and whether recall is semantic, extraction wiring, and graph size; list_memories audits the store page by page — what recall cannot answer, because what resembles no query stays invisible; (2) online embedding migration — migration_start returns after durable acceptance, migration_status reports progress and recovery, migration_cancel is safe only while the source is authoritative, and migration_recover resumes a stopped pre-cutover job; (3) the deterministic context compiler — compile_context, compile_transcript, explain_compilation, retrieve_context_source, context_savings, and suggest_budget — token-budgets and audits prompt context with no LLM call, ever; (4) cross-session working-context resumption — save_working_context, load_working_context, and list_working_contexts. compile_context/explain_compilation fragments accept a `path` instead of inline `content` to ingest a file by reference — disabled unless the server is started with VELESDB_MEMORY_INGEST_ROOTS set to an allowlist of directories (compile_transcript's own `path` field uses the same allowlist). compile_transcript is a one-call shortcut over compile_context for a raw agent-session transcript: it segments plain or JSONL text into turns before compiling, so an agent no longer needs to segment a transcript by hand. Nothing ever leaves the machine.";
 
 #[cfg(not(feature = "context"))]
 const SERVER_INSTRUCTIONS: &str = "Local-first memory for AI agents: remember facts, recall them \
      semantically, relate them, forget them, ask why a decision was made (connected subgraph), \
      submit durable remember_extracted jobs and poll extraction_status to completion, \
      read memory_status for the server's health — embedder semantics, extraction wiring, \
-     graph size — and audit the store page by page with list_memories.";
+     graph size — audit the store page by page with list_memories, and control daemon-owned \
+     online embedding migration with migration_start/status/cancel/recover.";
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for McpServer {
@@ -779,10 +548,10 @@ impl ServerHandler for McpServer {
         // a degraded server that only warned there was indistinguishable
         // from a healthy one — the audit finding memory_status closes, and
         // this note is its push half (the tool is the pull half).
-        if let Some(("hash", _)) = self
-            .embedder_identity
-            .as_ref()
-            .map(|(model, dim)| (model.as_str(), dim))
+        if self
+            .service
+            .with_generation(|generation| generation.model() == "hash")
+            .unwrap_or(false)
         {
             instructions.push_str(
                 " NOTE: this server is running the offline 'hash' embedder — recall matches \
@@ -949,6 +718,9 @@ fn to_error(err: crate::error::MemoryError) -> ErrorData {
     ErrorData::new(code, err.to_string(), None)
 }
 
+#[cfg(all(test, feature = "persistence"))]
+#[path = "mcp/generation_tests.rs"]
+mod generation_tests;
 #[cfg(test)]
 #[path = "mcp/server_tests.rs"]
 mod tests;

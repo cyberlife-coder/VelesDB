@@ -39,7 +39,7 @@
 //! transport" step (`.github/workflows/ci.yml`) invokes
 //! `cargo test -p velesdb-memory --features http` WITHOUT
 //! `--no-default-features`, so this file compiles and executes there as well.
-//! Verified by running it, not assumed: it passes, because the twenty-three
+//! Verified by running it, not assumed: it passes, because the twenty-seven
 //! tools are registered unconditionally — `remember_extracted` is always
 //! advertised and merely answers "no extractor configured" until one is
 //! attached, so neither role-named HTTP feature adds or removes a tool.

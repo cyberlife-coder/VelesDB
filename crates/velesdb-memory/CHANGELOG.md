@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Daemon-owned online embedding migration (#1796).** Four MCP tools now
+  start, inspect, cancel, and recover a background re-embedding without
+  opening the live source from a second process. A bounded, checksummed dirty
+  journal captures every mutation before it reaches the source; catch-up
+  reports convergence and refuses an unsafe cutover; the exclusive live
+  generation switch enforces the operator's pause budget and recovers across
+  either rename. Durable job state, epoch/model witnesses, verified
+  cancellation cleanup, process-level concurrent-write coverage, and measured
+  no-capture/capture overhead complete the operator contract.
+
 - **Role-named HTTP inference features (#1766).** `embedder-http` enables the
   Ollama and OpenAI-compatible embedding backends; `extractor-http` enables
   their extraction counterparts. The former `ollama` and `extract` features

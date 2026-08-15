@@ -46,6 +46,38 @@ fn to_wire_value<T: serde::Serialize>(
     Ok(value)
 }
 
+fn segment_for_compilation(
+    text: &str,
+    policy: &SegmentationPolicy,
+) -> Result<(Vec<ContextFragment>, SegmentationReport), ErrorData> {
+    let outcome = segment_transcript(text, policy).map_err(to_error)?;
+    let segments = outcome
+        .segments
+        .iter()
+        .enumerate()
+        .map(|(index, segment)| SegmentInfo {
+            index,
+            turn: segment.turn,
+            role: segment.role.clone(),
+            kind: segment.kind,
+            byte_start: segment.byte_start,
+            byte_end: segment.byte_end,
+            fragment_id: fragment_id(&segment.fragment.content),
+        })
+        .collect();
+    let fragments = outcome
+        .segments
+        .into_iter()
+        .map(|segment| segment.fragment)
+        .collect();
+    let report = SegmentationReport {
+        format_detected: outcome.format_detected,
+        segments,
+        merged_segments: outcome.merged_segments,
+    };
+    Ok((fragments, report))
+}
+
 /// The advertised-schema half of the [`CompilePolicy::ids_as_strings`]
 /// contract: the response may carry each [`ID_KEYS`] field as an integer OR
 /// a decimal string, and the official MCP SDKs validate `structuredContent`
@@ -435,7 +467,9 @@ impl McpServer {
         let ids_as_strings = request.policy.as_ref().is_some_and(|p| p.ids_as_strings);
         let service = Arc::clone(&self.service);
         let compiled = tokio::task::spawn_blocking(move || {
-            service.compile_context(&ContextCompiler::new(CompilePolicy::default()), &request)
+            service.run(|current| {
+                current.compile_context(&ContextCompiler::new(CompilePolicy::default()), &request)
+            })
         })
         .await
         .map_err(join_error)?
@@ -479,27 +513,7 @@ impl McpServer {
         } = params;
         let transcript_text = self.resolve_transcript_text(transcript, path)?;
         let segmentation_policy = segmentation.unwrap_or_default();
-        let outcome =
-            segment_transcript(&transcript_text, &segmentation_policy).map_err(to_error)?;
-        let segments_info: Vec<SegmentInfo> = outcome
-            .segments
-            .iter()
-            .enumerate()
-            .map(|(index, segment)| SegmentInfo {
-                index,
-                turn: segment.turn,
-                role: segment.role.clone(),
-                kind: segment.kind,
-                byte_start: segment.byte_start,
-                byte_end: segment.byte_end,
-                fragment_id: fragment_id(&segment.fragment.content),
-            })
-            .collect();
-        let fragments: Vec<ContextFragment> = outcome
-            .segments
-            .into_iter()
-            .map(|segment| segment.fragment)
-            .collect();
+        let (fragments, report) = segment_for_compilation(&transcript_text, &segmentation_policy)?;
         let ids_as_strings = policy.as_ref().is_some_and(|p| p.ids_as_strings);
         let request = CompileRequest {
             query,
@@ -512,18 +526,16 @@ impl McpServer {
         };
         let service = Arc::clone(&self.service);
         let compiled = tokio::task::spawn_blocking(move || {
-            service.compile_context(&ContextCompiler::new(CompilePolicy::default()), &request)
+            service.run(|current| {
+                current.compile_context(&ContextCompiler::new(CompilePolicy::default()), &request)
+            })
         })
         .await
         .map_err(join_error)?
         .map_err(to_error)?;
         let result = CompileTranscriptResult {
             context: compiled,
-            segmentation: SegmentationReport {
-                format_detected: outcome.format_detected,
-                segments: segments_info,
-                merged_segments: outcome.merged_segments,
-            },
+            segmentation: report,
         };
         Ok(Json(to_wire_value(&result, ids_as_strings)?))
     }
@@ -541,11 +553,12 @@ impl McpServer {
         Parameters(params): Parameters<ContextSavingsParams>,
     ) -> Result<Json<ContextSavings>, ErrorData> {
         let service = Arc::clone(&self.service);
-        let savings =
-            tokio::task::spawn_blocking(move || service.context_savings(params.project.as_deref()))
-                .await
-                .map_err(join_error)?
-                .map_err(to_error)?;
+        let savings = tokio::task::spawn_blocking(move || {
+            service.run(|current| current.context_savings(params.project.as_deref()))
+        })
+        .await
+        .map_err(join_error)?
+        .map_err(to_error)?;
         Ok(Json(savings))
     }
 
@@ -572,7 +585,8 @@ impl McpServer {
         // Python bindings — this tool only resolves `path` ingestion (a
         // server-config concern) and maps the result onto the wire.
         let decision = tokio::task::spawn_blocking(move || {
-            service.explain_compilation(&request, fragment_id, fragment_index)
+            service
+                .run(|current| current.explain_compilation(&request, fragment_id, fragment_index))
         })
         .await
         .map_err(join_error)?
@@ -595,10 +609,12 @@ impl McpServer {
         let service = Arc::clone(&self.service);
         let RetrieveContextSourceParams { handle } = params;
         let lookup = handle.clone();
-        let source = tokio::task::spawn_blocking(move || service.retrieve_context_source(&lookup))
-            .await
-            .map_err(join_error)?
-            .map_err(to_error)?;
+        let source = tokio::task::spawn_blocking(move || {
+            service.run(|current| current.retrieve_context_source(&lookup))
+        })
+        .await
+        .map_err(join_error)?
+        .map_err(to_error)?;
         Ok(Json(RetrieveContextSourceResult {
             handle,
             content: source.content,
@@ -626,7 +642,7 @@ impl McpServer {
             working,
         } = params;
         let id = tokio::task::spawn_blocking(move || {
-            service.save_working_context(&project, &session, &working)
+            service.run(|current| current.save_working_context(&project, &session, &working))
         })
         .await
         .map_err(join_error)?
@@ -656,11 +672,12 @@ impl McpServer {
         // ("lister meme sur un hit", "ne jamais reemettre la session
         // demandee") sont les memes pour cet outil et pour les trois
         // bindings, et une regle recopiee par surface diverge en silence.
-        let loaded =
-            tokio::task::spawn_blocking(move || service.resume_working_context(&project, &session))
-                .await
-                .map_err(join_error)?
-                .map_err(to_error)?;
+        let loaded = tokio::task::spawn_blocking(move || {
+            service.run(|current| current.resume_working_context(&project, &session))
+        })
+        .await
+        .map_err(join_error)?
+        .map_err(to_error)?;
         // Les ids sortent en CHAINE decimale, sans option, contrairement au
         // compilateur ou `ids_as_strings` est un choix de l'appelant.
         //
@@ -701,10 +718,12 @@ impl McpServer {
     ) -> Result<Json<ListWorkingContextsResult>, ErrorData> {
         let service = Arc::clone(&self.service);
         let ListWorkingContextsParams { project } = params;
-        let sessions = tokio::task::spawn_blocking(move || service.list_working_contexts(&project))
-            .await
-            .map_err(join_error)?
-            .map_err(to_error)?;
+        let sessions = tokio::task::spawn_blocking(move || {
+            service.run(|current| current.list_working_contexts(&project))
+        })
+        .await
+        .map_err(join_error)?
+        .map_err(to_error)?;
         Ok(Json(ListWorkingContextsResult { sessions }))
     }
 

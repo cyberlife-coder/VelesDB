@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
@@ -91,10 +92,10 @@ fn live_cutover_installs_target_and_persists_the_measured_window() {
                 destination: &rig.destination,
                 target_model: "target-model",
                 started_at: Duration::from_secs(3),
-                completed_at: Duration::from_millis(3_125),
+                now: &successful_completion,
             },
             HashEmbedder::new(3),
-            |_| Ok(()),
+            |_, _| Ok(()),
         )
         .expect("cut over");
 
@@ -126,10 +127,10 @@ fn deadline_expiry_reopens_the_source_without_activation() {
                 destination: &rig.destination,
                 target_model: "target-model",
                 started_at: Duration::from_secs(3),
-                completed_at: Duration::from_millis(3_501),
+                now: &expired_completion,
             },
             HashEmbedder::new(3),
-            |_| Ok(()),
+            |_, _| Ok(()),
         )
         .expect_err("deadline must expire");
 
@@ -147,6 +148,38 @@ fn deadline_expiry_reopens_the_source_without_activation() {
 }
 
 #[test]
+fn completion_clock_is_sampled_after_the_destination_is_sealed() {
+    let rig = CutoverRig::new();
+    let mut controller = rig.quiescing_controller();
+    let sealed = AtomicBool::new(false);
+    let now = || {
+        assert!(
+            sealed.load(Ordering::Acquire),
+            "completion sampled before seal"
+        );
+        Duration::from_millis(3_125)
+    };
+    rig.slot
+        .cut_over(
+            LiveCutover {
+                controller: &mut controller,
+                journal: &rig.journal,
+                source: &rig.source,
+                destination: &rig.destination,
+                target_model: "target-model",
+                started_at: Duration::from_secs(3),
+                now: &now,
+            },
+            HashEmbedder::new(3),
+            |_, _| {
+                sealed.store(true, Ordering::Release);
+                Ok(())
+            },
+        )
+        .expect("cut over after seal");
+}
+
+#[test]
 fn dirty_final_watermark_refuses_before_moving_or_retiring_source() {
     let rig = CutoverRig::new();
     rig.journal
@@ -155,9 +188,11 @@ fn dirty_final_watermark_refuses_before_moving_or_retiring_source() {
     let mut controller = rig.quiescing_controller();
     let error = rig
         .slot
-        .cut_over(rig.cutover(&mut controller), HashEmbedder::new(3), |_| {
-            Ok(())
-        })
+        .cut_over(
+            rig.cutover(&mut controller),
+            HashEmbedder::new(3),
+            |_, _| Ok(()),
+        )
         .expect_err("dirty journal must refuse");
 
     assert!(error.to_string().contains("not drained"), "{error}");
@@ -171,9 +206,11 @@ fn seal_failure_refuses_before_moving_or_retiring_source() {
     let mut controller = rig.quiescing_controller();
     let error = rig
         .slot
-        .cut_over(rig.cutover(&mut controller), HashEmbedder::new(3), |_| {
-            Err(velesdb_core::Error::Query("seal failed".to_owned()).into())
-        })
+        .cut_over(
+            rig.cutover(&mut controller),
+            HashEmbedder::new(3),
+            |_, _| Err(velesdb_core::Error::Query("seal failed".to_owned()).into()),
+        )
         .expect_err("seal must fail");
 
     assert!(error.to_string().contains("seal failed"), "{error}");
@@ -187,9 +224,11 @@ fn source_provenance_mismatch_refuses_before_movement() {
     let mut controller = rig.quiescing_controller();
     let error = rig
         .slot
-        .cut_over(rig.cutover(&mut controller), HashEmbedder::new(3), |_| {
-            Ok(())
-        })
+        .cut_over(
+            rig.cutover(&mut controller),
+            HashEmbedder::new(3),
+            |_, _| Ok(()),
+        )
         .expect_err("source identity must fail");
 
     assert!(error.to_string().contains("identity"), "{error}");
@@ -312,7 +351,7 @@ impl CutoverRig {
             destination: &self.destination,
             target_model: "target-model",
             started_at: Duration::from_secs(3),
-            completed_at: Duration::from_millis(3_125),
+            now: &successful_completion,
         }
     }
 
@@ -360,6 +399,14 @@ impl CutoverRig {
             .expect("quiesce");
         controller
     }
+}
+
+fn successful_completion() -> Duration {
+    Duration::from_millis(3_125)
+}
+
+fn expired_completion() -> Duration {
+    Duration::from_millis(3_501)
 }
 
 struct RecoveryRig {

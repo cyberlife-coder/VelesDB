@@ -130,11 +130,11 @@ fn assert_write_remains_exactly_once(
 fn recovery_commits_persisted_extraction_without_second_generation() {
     let directory = tempfile::tempdir().expect("create durable job store");
     let embedder: DynEmbedder = Box::new(HashEmbedder::new(crate::DEFAULT_DIMENSION));
-    let service = Arc::new(
-        MemoryService::open(directory.path(), embedder).expect("open native memory service"),
-    );
+    let service =
+        MemoryService::open(directory.path(), embedder).expect("open native memory service");
     let (request_id, facts_before_replay, edges_before_replay) =
         persist_interrupted_job(directory.path(), &service);
+    let service = Arc::new(LiveGenerationSlot::new(service, "hash"));
 
     let extractor = Arc::new(GenerationMustNotRun {
         calls: AtomicUsize::new(0),
@@ -147,5 +147,9 @@ fn recovery_commits_persisted_extraction_without_second_generation() {
     assert_eq!(status.state, ExtractionJobState::Committed);
     assert_eq!(status.outcome.expect("committed outcome").ids.len(), 1);
     assert_eq!(extractor.calls.load(Ordering::SeqCst), 0);
-    assert_write_remains_exactly_once(&service, facts_before_replay, edges_before_replay);
+    service
+        .inspect(|current| {
+            assert_write_remains_exactly_once(current, facts_before_replay, edges_before_replay);
+        })
+        .expect("active generation");
 }

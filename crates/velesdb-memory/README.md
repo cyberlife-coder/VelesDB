@@ -258,11 +258,12 @@ end-to-end *extraction* comparison on the real
 
 ## What the server exposes
 
-23 MCP tools in the default build, in three families:
+27 MCP tools in the default build, in four families:
 
 | Family | Tools |
 |---|---|
 | Durable memory | `remember`, `recall`, `recall_where`, `recall_fused`, `relate`, `unrelate`, `forget`, `entity`, `why`, `feedback`, `remember_extracted`, `extraction_status`, `memory_status`, `list_memories` |
+| Online embedding migration | `migration_start`, `migration_status`, `migration_cancel`, `migration_recover` |
 | Context compiler | `compile_context`, `compile_transcript`, `explain_compilation`, `retrieve_context_source`, `context_savings`, `suggest_budget` |
 | Session resumption | `save_working_context`, `load_working_context`, `list_working_contexts` |
 
@@ -280,7 +281,7 @@ capabilities (`query`, `create_collection`, `upsert`, `traverse`).
 | [MCP tool reference](../../docs/reference/MCP_TOOLS.md) | one section per tool: parameters, returns, limits, error model |
 | [Context compiler](../../docs/guides/CONTEXT_COMPILER.md) | budgets, preservation rules, `risk`, retrieval handles, media, `path` ingestion, transcripts, the `compile-stdin` CLI and the `PostToolUse` hook |
 | [Agent Memory SDK](../../docs/guides/AGENT_MEMORY.md) | the *other* path: the embedded, language-native `AgentMemory` API |
-| [Migrating embedding models](../../docs/guides/MIGRATE_EMBEDDINGS.md) | `migrate-embeddings` end to end: regimes, the journal, crash recovery, the switch, and what it costs |
+| [Migrating embedding models](../../docs/guides/MIGRATE_EMBEDDINGS.md) | online daemon migration and offline `migrate-embeddings`: control, recovery, the switch, and measured cost |
 | [`BENCHMARK.md`](BENCHMARK.md) | every published retrieval number, its method, and how to reproduce it |
 | [`POSITIONING.md`](POSITIONING.md) | honest comparison against Mem0 and Zep/Graphiti, and where local-first is a hard requirement |
 | [`CHANGELOG.md`](CHANGELOG.md) | what changed in each release |
@@ -364,4 +365,4 @@ Questions: contact@wiscale.fr.
 
 ---
 
-`velesdb-memory v0.12.0` · Last updated: 2026-08-08 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)
+`velesdb-memory v0.12.0` · Last updated: 2026-08-15 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)

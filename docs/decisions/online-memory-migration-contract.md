@@ -1,12 +1,13 @@
 # Online memory migration is a daemon-owned dirty-state protocol
 
-Status: accepted design; not implemented
+Status: implemented by slices 1–6; release evidence is maintained below
 
 Issue [#1796](https://github.com/cyberlife-coder/VelesDB/issues/1796)
 requires an embedding migration that keeps the daemon available during the
 long rebuild. This document is the global contract that issue requires before
-implementation. It does not make online migration available, and no
-intermediate implementation may claim that it does.
+implementation. Slices 1–5 did not make online migration available; the
+daemon-owned control surface and end-to-end release gates arrive together in
+slice 6.
 
 ## Decision
 
@@ -23,8 +24,7 @@ from the source and makes the destination match it. Replaying the same record
 is therefore safe, and a journal record left by a source operation that later
 failed is only a harmless extra read.
 
-The existing `migrate-embeddings` command remains the offline path until every
-gate in this document is implemented. An external process never opens or
+The existing `migrate-embeddings` command remains the offline alternative. An external process never opens or
 renames the live store: `Database::open` holds an exclusive process lock, and
 the current switch code documents that renaming a directory below a live
 handle can let the daemon write into an archive that is later unlinked.
@@ -204,11 +204,11 @@ to the migration journal. The target model name, dimension and vector witness
 are durable because they are needed to reject a resume across an in-place model
 change.
 
-## Required implementation slices
+## Implemented slices
 
-Implementation is split by invariant. Each slice has its own tests and PR; none
-closes #1796 or advertises online migration until the final end-to-end slice is
-green.
+Implementation is split by invariant. Each earlier slice remained internal;
+the final slice exposes the complete protocol only after its release evidence
+is green.
 
 1. **Coordinator and mutation census**: one service generation gate, one
    exhaustive registry of every primitive mutation, and a guard that fails
@@ -228,9 +228,9 @@ green.
    process-level concurrent-write journeys and performance evidence. This is
    the only slice allowed to close #1796.
 
-## Release gates
+## Release gates and evidence
 
-The feature remains unavailable until all of these are demonstrated:
+The following evidence is blocking for the feature:
 
 - crash injection before and after journal append, sync, source mutation,
   destination apply, watermark acknowledgement and both switch renames;
@@ -249,6 +249,12 @@ The feature remains unavailable until all of these are demonstrated:
   published capture/replay overhead when one is active;
 - the full repository quality, security, duplication and complexity gates.
 
-Until then, the supported operational instruction remains: stop the daemon and
-use the offline migration documented in
-[`MIGRATE_EMBEDDINGS.md`](../guides/MIGRATE_EMBEDDINGS.md).
+The executable evidence lives beside the invariant it proves: journal and
+controller fault matrices under `mutation/*_tests.rs`, exact base/replay
+preservation under `mutation/catchup_tests/`, cutover recovery under
+`online_migration_tests.rs`, durable job/startup recovery under
+`online_migration/*_tests.rs`, and the real-daemon concurrent-write journey in
+`tests/online_migration_process.rs`. The operator procedure, including
+non-convergence, cancellation and restart recovery, is documented in
+[`MIGRATE_EMBEDDINGS.md`](../guides/MIGRATE_EMBEDDINGS.md), together with the
+reproducible release-mode capture/replay and no-capture guard measurements.
