@@ -330,6 +330,30 @@
       "measured_on": "2026-07-26",
       "measured_machine": "platform-independent (committed corpus, deterministic tokenizer)",
       "measured_version": "4.0.0"
+    },
+    {
+      "id": "mcp_same_named_scalar_wire_tolerance",
+      "file": "docs/reference/MCP_TOOLS.md",
+      "must_contain": "**Invariant:** same field name + same advertised scalar type means identical tolerance for the JSON-encoded string form.",
+      "validation_command": "cargo test -p velesdb-memory --test mcp_schema_bdd same_named_scalar_input_slots_share_wire_tolerance -- --exact --test-threads=1",
+      "executable": false,
+      "source": "Issue #1686: the live-schema MCP regression test compares the accepted wire form for every repeated field-name and scalar-type pair.",
+      "last_updated": "2026-08-15",
+      "measured_on": "2026-08-15",
+      "measured_machine": "platform-independent (wire-schema contract)",
+      "measured_version": "5.0.0"
+    },
+    {
+      "id": "mcp_lenient_scalar_rejects_incompatible_forms",
+      "file": "docs/reference/MCP_TOOLS.md",
+      "must_contain": "**Rejection invariant:** leniency never accepts an invalid JSON string or a value of another scalar or container type.",
+      "validation_command": "cargo test -p velesdb-memory --test mcp_schema_bdd every_non_string_scalar_input_rejects_incompatible_forms -- --exact --test-threads=1",
+      "executable": false,
+      "source": "Issue #1686: the live MCP server must reject invalid strings and incompatible scalar or container values at every non-string scalar input slot.",
+      "last_updated": "2026-08-15",
+      "measured_on": "2026-08-15",
+      "measured_machine": "platform-independent (wire-schema contract)",
+      "measured_version": "5.0.0"
     }
   ],
   "claim_families": [

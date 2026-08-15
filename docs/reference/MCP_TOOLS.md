@@ -44,6 +44,27 @@ database capabilities (`query`, `create_collection`, `upsert`, `traverse`) —
 that boundary is what keeps local, embedded use inside the VelesDB Core
 License.
 
+## Scalar inputs on the wire
+
+Every input slot advertises exactly one scalar type. Input unions are not
+published because degraded MCP harnesses flatten them into an untyped `{}`;
+the single advertised type is the form a schema-driven caller should send.
+
+Some harnesses nevertheless JSON-encode a non-string scalar inside a string.
+For a lenient slot, the server accepts that string only when decoding it as
+JSON produces the same advertised scalar value: an integer slot may accept
+both `6` and `"6"`, but still rejects `"abc"`, `"1.5"`, arrays, objects and
+booleans. Leniency is never applied to a genuine string slot, whose content
+must not be reinterpreted as JSON.
+
+**Invariant:** same field name + same advertised scalar type means identical tolerance for the JSON-encoded string form.
+The live MCP schema test `same_named_scalar_input_slots_share_wire_tolerance`
+enforces this rule without maintaining a list of field names.
+
+**Rejection invariant:** leniency never accepts an invalid JSON string or a value of another scalar or container type.
+The live test `every_non_string_scalar_input_rejects_incompatible_forms`
+checks every boolean, integer and number slot, including uniquely named fields.
+
 ## Ids on the wire (read this before relaying any id)
 
 Memory ids and fragment ids are `u64` and routinely exceed 2^53, where a JSON

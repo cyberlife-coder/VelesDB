@@ -143,6 +143,10 @@ pub mod storage;
 /// behind `http` since it exists only to serve that transport.
 #[cfg(feature = "http")]
 pub mod tls;
+/// Shared defensive deserialization for non-string scalar and structured
+/// inputs whose client-side schema can degrade to untyped JSON.
+#[cfg(any(feature = "mcp", feature = "context"))]
+mod wire;
 
 /// Default embedding dimension — the single source of truth, taken from the
 /// SDK's own default so the server, library, and tests never restate the
