@@ -52,6 +52,8 @@ mod edges;
 mod enumeration;
 mod execute;
 mod filesystem;
+#[allow(dead_code)] // Wired by the control-surface slice after this internal seam.
+mod live;
 mod orchestrate;
 mod rebuild;
 mod state;
@@ -74,8 +76,11 @@ pub use enumeration::{
     enumerate_by_cursor, enumerate_collection, enumerate_page, reinsert, reinsert_batch,
     scroll_page, BatchReinsertion, RawFact, Reinsertion, AGENT_COLLECTIONS,
 };
+pub(crate) use execute::target_embedder_witness;
 pub use execute::{execute, ExecuteOutcome};
 pub use filesystem::{bytes_on_disk, fingerprint};
+#[allow(unused_imports)] // Wired by the control-surface slice after this internal seam.
+pub(crate) use live::prepare_live_switch;
 pub use orchestrate::{migrate, MigrateOutcome};
 #[cfg(test)]
 pub(crate) use rebuild::rebuild_with_stop;
@@ -87,6 +92,10 @@ pub use state::{
     PHASES, STATE_FILE, STATE_FORMAT_VERSION, STATE_TEMP_FILE,
 };
 pub use strategy::{assess, resolve, Compatibility, Resolution, Strategy};
+pub(crate) use switchover::{
+    commit_retained_switch, finalize_staged_live_switch, rollback_staged_live_switch,
+    stage_live_switch,
+};
 pub use switchover::{switch_over, SwitchOutcome, ARCHIVE_SUFFIX};
 #[cfg(test)]
 pub(crate) use validate::divergence_explained_by_expiry;

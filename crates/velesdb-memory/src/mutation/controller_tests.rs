@@ -276,6 +276,23 @@ fn make_activated(controller: &mut ConvergenceController) {
         .expect("activate");
 }
 
+#[test]
+fn activation_persists_the_measured_cutover_window() {
+    let root = tempfile::tempdir().expect("root");
+    let mut controller = quiescing_controller(root.path());
+    controller
+        .activate(Duration::from_millis(3_125))
+        .expect("activate");
+    assert_eq!(
+        controller.measured_cutover(),
+        Some(Duration::from_millis(125))
+    );
+    assert_eq!(
+        open_controller(root.path()).measured_cutover(),
+        Some(Duration::from_millis(125))
+    );
+}
+
 fn quiescing_controller(workspace: &std::path::Path) -> ConvergenceController {
     let mut controller = open_controller(workspace);
     make_ready(&mut controller);

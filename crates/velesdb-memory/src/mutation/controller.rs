@@ -177,6 +177,24 @@ impl ConvergenceController {
     }
 
     pub(crate) fn activate(&mut self, now: Duration) -> Result<(), MemoryError> {
+        self.ensure_cutover_start(now)?;
+        let ControllerPhase::Quiescing { deadline } = self.state.phase else {
+            return Err(capture("migration is not quiescing"));
+        };
+        let started = deadline
+            .checked_sub(self.config.pause_budget)
+            .ok_or_else(|| capture("cutover deadline predates its pause budget"))?;
+        let elapsed = now
+            .checked_sub(started)
+            .ok_or_else(|| capture("activation time predates quiescing"))?;
+        let mut next = self.state.clone();
+        next.phase = ControllerPhase::Activated;
+        next.recovery_action = None;
+        next.measured_cutover = Some(elapsed);
+        self.replace_state(next)
+    }
+
+    pub(crate) fn ensure_cutover_start(&mut self, now: Duration) -> Result<(), MemoryError> {
         if self.state.recovery_action.as_deref() == Some(RECOVER_CUTOVER) {
             return Err(capture("cutover recovery is required after restart"));
         }
@@ -191,10 +209,7 @@ impl ConvergenceController {
             self.replace_state(next)?;
             return Err(capture("cutover deadline expired"));
         }
-        let mut next = self.state.clone();
-        next.phase = ControllerPhase::Activated;
-        next.recovery_action = None;
-        self.replace_state(next)
+        Ok(())
     }
 
     pub(crate) fn cancel(
@@ -234,10 +249,50 @@ impl ConvergenceController {
         self.state.recovery_action.as_deref()
     }
 
+    pub(crate) fn complete_source_recovery(&mut self) -> Result<(), MemoryError> {
+        self.require_recovery_phase(false)?;
+        let mut next = self.state.clone();
+        next.phase = ControllerPhase::CatchingUp;
+        next.samples.clear();
+        next.last_observation = None;
+        next.last_verdict = None;
+        next.recovery_action = Some(RESUME_CATCH_UP.to_owned());
+        self.replace_state(next)
+    }
+
+    pub(crate) fn complete_target_recovery(&mut self) -> Result<(), MemoryError> {
+        self.require_recovery_phase(true)?;
+        let mut next = self.state.clone();
+        next.recovery_action = None;
+        self.replace_state(next)
+    }
+
+    pub(crate) fn measured_cutover(&self) -> Option<Duration> {
+        self.state.measured_cutover
+    }
+
+    pub(crate) fn epoch_id(&self) -> &str {
+        &self.state.epoch_id
+    }
+
     fn replace_state(&mut self, next: ControllerState) -> Result<(), MemoryError> {
         self.store.save(&next)?;
         self.state = next;
         Ok(())
+    }
+
+    fn require_recovery_phase(&self, activated: bool) -> Result<(), MemoryError> {
+        let expected = if activated {
+            matches!(self.state.phase, ControllerPhase::Activated)
+        } else {
+            matches!(self.state.phase, ControllerPhase::Quiescing { .. })
+        };
+        if expected && self.state.recovery_action.as_deref() == Some(RECOVER_CUTOVER) {
+            return Ok(());
+        }
+        Err(capture(
+            "controller is not in the requested cutover recovery phase",
+        ))
     }
 
     #[cfg(test)]

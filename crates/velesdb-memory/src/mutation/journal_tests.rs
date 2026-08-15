@@ -17,6 +17,7 @@ fn epoch(root: &Path, id: &str) -> EpochIdentity {
         "sha256:source",
         "target-model",
         384,
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000",
         root.join("destination"),
         id,
     )
@@ -60,6 +61,29 @@ fn identity_mismatch_is_refused() {
     )
     .err()
     .expect("mismatch");
+    assert!(error.to_string().contains("identity mismatch"), "{error}");
+}
+
+#[test]
+fn changed_target_witness_is_refused_under_the_same_model_and_dimension() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let id = "00112233445566778899aabbccddeeff";
+    let original = epoch(dir.path(), id);
+    drop(DirtyJournal::open(dir.path(), &original, CAPACITY).expect("create"));
+    let changed = EpochIdentity::for_test(
+        dir.path().join("source"),
+        "sha256:source",
+        "target-model",
+        384,
+        "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        dir.path().join("destination"),
+        id,
+    );
+
+    let error = DirtyJournal::open(dir.path(), &changed, CAPACITY)
+        .err()
+        .expect("witness mismatch");
+
     assert!(error.to_string().contains("identity mismatch"), "{error}");
 }
 
@@ -295,6 +319,7 @@ fn generated_epoch_ids_are_random_and_well_formed() {
         "sha256:source".to_owned(),
         "target-model".to_owned(),
         384,
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_owned(),
         dir.path().join("destination"),
     )
     .expect("first epoch");
@@ -303,6 +328,7 @@ fn generated_epoch_ids_are_random_and_well_formed() {
         "sha256:source".to_owned(),
         "target-model".to_owned(),
         384,
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_owned(),
         dir.path().join("destination"),
     )
     .expect("second epoch");

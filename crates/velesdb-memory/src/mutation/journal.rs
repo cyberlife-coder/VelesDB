@@ -30,8 +30,19 @@ pub(crate) struct EpochIdentity {
     source_provenance: String,
     target_model: String,
     target_dimension: usize,
+    target_witness: String,
     destination_path: PathBuf,
     epoch_id: String,
+}
+
+pub(crate) struct CutoverIdentity<'a> {
+    pub(crate) source: &'a Path,
+    pub(crate) destination: &'a Path,
+    pub(crate) source_provenance: &'a str,
+    pub(crate) target_model: &'a str,
+    pub(crate) target_dimension: usize,
+    pub(crate) target_witness: &'a str,
+    pub(crate) epoch_id: &'a str,
 }
 
 impl EpochIdentity {
@@ -40,6 +51,7 @@ impl EpochIdentity {
         source_provenance: String,
         target_model: String,
         target_dimension: usize,
+        target_witness: String,
         destination_path: PathBuf,
     ) -> Result<Self, MemoryError> {
         let mut random = [0_u8; 16];
@@ -56,6 +68,7 @@ impl EpochIdentity {
             source_provenance,
             target_model,
             target_dimension,
+            target_witness,
             destination_path,
             epoch_id,
         )
@@ -66,6 +79,7 @@ impl EpochIdentity {
         source_provenance: String,
         target_model: String,
         target_dimension: usize,
+        target_witness: String,
         destination_path: PathBuf,
         epoch_id: String,
     ) -> Result<Self, MemoryError> {
@@ -79,23 +93,26 @@ impl EpochIdentity {
                 "epoch paths must differ and target dimension must be positive",
             ));
         }
+        validate_witness(&target_witness)?;
         validate_epoch_id(&epoch_id)?;
         Ok(Self {
             source_path,
             source_provenance,
             target_model,
             target_dimension,
+            target_witness,
             destination_path,
             epoch_id,
         })
     }
 
     #[cfg(test)]
-    pub(super) fn for_test(
+    pub(crate) fn for_test(
         source_path: PathBuf,
         source_provenance: &str,
         target_model: &str,
         target_dimension: usize,
+        target_witness: &str,
         destination_path: PathBuf,
         epoch_id: &str,
     ) -> Self {
@@ -104,6 +121,7 @@ impl EpochIdentity {
             source_provenance.to_owned(),
             target_model.to_owned(),
             target_dimension,
+            target_witness.to_owned(),
             destination_path,
             epoch_id.to_owned(),
         )
@@ -167,6 +185,29 @@ impl DirtyJournal {
 
     pub(crate) fn compacted_through(&self) -> u64 {
         self.inner.lock().header.compacted_through
+    }
+
+    pub(crate) fn verify_cutover_identity(
+        &self,
+        expected: &CutoverIdentity<'_>,
+    ) -> Result<(), MemoryError> {
+        let inner = self.inner.lock();
+        let identity = &inner.header.identity;
+        if identity.source_path != expected.source
+            || identity.destination_path != expected.destination
+            || identity.source_provenance != expected.source_provenance
+            || identity.target_model != expected.target_model
+            || identity.target_dimension != expected.target_dimension
+            || identity.target_witness != expected.target_witness
+            || identity.epoch_id != expected.epoch_id
+        {
+            return Err(capture("cutover identity disagrees with journal epoch"));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn workspace(&self) -> &Path {
+        &self.workspace
     }
 
     pub(crate) fn records_after(
@@ -286,6 +327,16 @@ impl DirtyJournal {
     fn maybe_fail(&self, _point: FaultPoint) -> Result<(), MemoryError> {
         Ok(())
     }
+}
+
+fn validate_witness(witness: &str) -> Result<(), MemoryError> {
+    let digest = witness
+        .strip_prefix("sha256:")
+        .ok_or_else(|| capture("target witness must use sha256"))?;
+    if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(capture("target witness must contain 64 hexadecimal digits"));
+    }
+    Ok(())
 }
 
 impl MutationObserver for DirtyJournal {
