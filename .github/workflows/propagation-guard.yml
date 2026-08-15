@@ -22,7 +22,9 @@ on:
       - ".github/workflows/propagation-guard.yml"
 
 concurrency:
-  group: propagation-guard-${{ github.ref }}
+  # A called workflow inherits its caller's `github.workflow`, so this keeps
+  # CI's reusable run distinct from this file's standalone push run.
+  group: propagation-guard-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
