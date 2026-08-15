@@ -197,7 +197,9 @@ fn recover_reopens_a_failed_capturing_job_and_commits_it() {
     let manager = OnlineMigrationManager::new(Arc::clone(&slot), source, factory).expect("manager");
     manager.start("recoverable", config()).expect("start");
     wait_for(&manager, |status| {
-        status.record.phase == JobPhase::Capturing && status.record.last_error.is_some()
+        status.record.phase == JobPhase::Capturing
+            && status.record.last_error.is_some()
+            && !status.running
     });
 
     manager.recover().expect("recover");
