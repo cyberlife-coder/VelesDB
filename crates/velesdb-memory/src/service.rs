@@ -38,13 +38,15 @@ use crate::storage::{is_reserved_key, strip_reserved_keys, MemoryStore, AUTO_DAT
 mod fused_recall;
 
 #[cfg(feature = "persistence")]
-#[allow(dead_code, unused_imports)] // Wired by the control-surface slice after this internal seam.
+#[allow(dead_code)]
 #[path = "online_migration.rs"]
 mod online_migration;
 #[cfg(feature = "persistence")]
+pub(crate) use online_migration::recover_startup;
+#[cfg(feature = "mcp")]
 pub(crate) use online_migration::{
-    recover_startup, JobPhase, JobTarget, LiveGenerationSlot, MigrationStartConfig,
-    MigrationStatus, OnlineMigrationManager,
+    JobPhase, JobTarget, LiveGenerationSlot, MigrationStartConfig, MigrationStatus,
+    OnlineMigrationManager,
 };
 
 /// [`MemoryService::feedback`] and the recall re-ranking it drives (RL Memory).

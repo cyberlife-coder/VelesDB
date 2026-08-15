@@ -16,12 +16,17 @@ mod manager;
 #[path = "online_migration/startup.rs"]
 mod startup;
 pub(crate) use cleanup::remove_cancelled_artifacts;
-pub(crate) use job_runner::{run_job, JobRunOutcome, JobTarget};
-pub(crate) use job_state::{JobPhase, JobRecord, JobSpec, JobStore};
+#[cfg(feature = "mcp")]
+pub(crate) use job_runner::JobTarget;
+#[cfg(test)]
+pub(crate) use job_state::JobSpec;
+pub(crate) use job_state::{JobPhase, JobRecord};
+#[cfg(feature = "mcp")]
 pub(crate) use manager::{MigrationStartConfig, MigrationStatus, OnlineMigrationManager};
 pub(crate) use startup::recover_startup;
 #[path = "online_migration/recovery.rs"]
 mod recovery;
+#[cfg(test)]
 pub(crate) use recovery::LiveRecovery;
 
 pub(crate) struct LiveGenerationSlot<E: Embedder> {
