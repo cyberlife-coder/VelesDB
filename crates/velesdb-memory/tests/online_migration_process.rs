@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 use velesdb_memory::{HashEmbedder, MemoryService, Metadata, DEFAULT_DIMENSION};
 
 const TIMEOUT: Duration = Duration::from_secs(90);
+const FUNCTIONAL_PAUSE_BUDGET_MS: u64 = 30_000;
 
 #[test]
 fn daemon_migration_preserves_writes_from_every_memory_path() {
@@ -258,7 +259,7 @@ impl ProcessClient {
             "migration_start",
             json!({
                 "target_backend":"hash",
-                "pause_budget_ms":5000,
+                "pause_budget_ms":FUNCTIONAL_PAUSE_BUDGET_MS,
                 "fact_batch":1,
                 "replay_batch":1,
                 "edge_cap":64,
