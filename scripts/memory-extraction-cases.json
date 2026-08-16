@@ -74,7 +74,7 @@
           ]
         }
       ],
-      "split": "train"
+      "split": "holdout"
     },
     {
       "id": "fr-employment-date",
@@ -856,6 +856,485 @@
         }
       ],
       "split": "train"
+    },
+    {
+      "id": "close-en-role",
+      "family": "close-pair",
+      "lang": "en",
+      "note": "Mirror of close-role. One verb apart; managing and joining are not the same edge.",
+      "passages": [
+        {
+          "text": "Nadia Osei manages Kestrel Foods.",
+          "checks": [
+            {
+              "type": "relation_present",
+              "subject": "nadia osei",
+              "predicate_any": [
+                "manage"
+              ],
+              "object": "kestrel foods",
+              "severity": "major",
+              "label": "management edge missing"
+            },
+            {
+              "type": "predicate_forbids",
+              "substrings": [
+                "travaille",
+                "dirige",
+                "fils de",
+                "soeur de",
+                "possede"
+              ],
+              "severity": "major",
+              "label": "French predicate on an English passage"
+            }
+          ]
+        },
+        {
+          "text": "Nadia Osei joined Kestrel Foods.",
+          "checks": [
+            {
+              "type": "relation_present",
+              "subject": "nadia osei",
+              "predicate_any": [
+                "join",
+                "work"
+              ],
+              "object": "kestrel foods",
+              "severity": "major",
+              "label": "employment edge missing"
+            },
+            {
+              "type": "predicate_forbids",
+              "substrings": [
+                "travaille",
+                "dirige",
+                "fils de",
+                "soeur de",
+                "possede"
+              ],
+              "severity": "major",
+              "label": "French predicate on an English passage"
+            }
+          ]
+        }
+      ],
+      "cross_checks": [
+        {
+          "type": "predicates_differ",
+          "severity": "major",
+          "label": "managing and joining collapsed into one predicate"
+        }
+      ],
+      "split": "train"
+    },
+    {
+      "id": "close-en-kinship",
+      "family": "close-pair",
+      "lang": "en",
+      "note": "Mirror of close-kinship. The possessive names the relative, so the relative carries the edge.",
+      "passages": [
+        {
+          "text": "Priya Raghunathan has a sister, Meena Raghunathan.",
+          "checks": [
+            {
+              "type": "relation_present",
+              "subject": "meena raghunathan",
+              "predicate_any": [
+                "sister"
+              ],
+              "object": "priya raghunathan",
+              "severity": "major",
+              "label": "sibling edge missing or reversed"
+            },
+            {
+              "type": "relation_absent",
+              "subject": "priya raghunathan",
+              "predicate_any": [
+                "sister"
+              ],
+              "severity": "major",
+              "label": "parasitic converse: both directions of one predicate"
+            }
+          ]
+        },
+        {
+          "text": "Priya Raghunathan has a daughter, Meena Raghunathan.",
+          "checks": [
+            {
+              "type": "relation_present",
+              "subject": "meena raghunathan",
+              "predicate_any": [
+                "daughter"
+              ],
+              "object": "priya raghunathan",
+              "severity": "major",
+              "label": "filiation edge missing or reversed"
+            }
+          ]
+        }
+      ],
+      "cross_checks": [
+        {
+          "type": "predicates_differ",
+          "severity": "major",
+          "label": "sister and daughter collapsed into one predicate"
+        }
+      ],
+      "split": "train"
+    },
+    {
+      "id": "close-en-tense",
+      "family": "close-pair",
+      "lang": "en",
+      "note": "A ceased employment must not be stored as a current one; the graph has no tense.",
+      "passages": [
+        {
+          "text": "Tomas Weber works at Halden Rail.",
+          "checks": [
+            {
+              "type": "relation_present",
+              "subject": "tomas weber",
+              "predicate_any": [
+                "work"
+              ],
+              "object": "halden rail",
+              "severity": "major",
+              "label": "employment edge missing"
+            }
+          ]
+        },
+        {
+          "text": "Tomas Weber no longer works at Halden Rail.",
+          "checks": [
+            {
+              "type": "facts_mention",
+              "substrings": [
+                "no longer"
+              ],
+              "severity": "major",
+              "label": "the fact drops the negation, so the graph reads as current employment"
+            }
+          ]
+        }
+      ],
+      "cross_checks": [
+        {
+          "type": "predicates_differ",
+          "severity": "major",
+          "label": "current and ceased employment collapsed into one predicate"
+        }
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "close-en-possession",
+      "family": "close-pair",
+      "lang": "en",
+      "note": "Owning and managing are two stated relations, not one.",
+      "passages": [
+        {
+          "text": "Owen Blake owns Larkspur Studio.",
+          "checks": [
+            {
+              "type": "relation_present",
+              "subject": "owen blake",
+              "predicate_any": [
+                "own"
+              ],
+              "object": "larkspur studio",
+              "severity": "major",
+              "label": "ownership edge missing"
+            }
+          ]
+        },
+        {
+          "text": "Owen Blake manages Larkspur Studio.",
+          "checks": [
+            {
+              "type": "relation_present",
+              "subject": "owen blake",
+              "predicate_any": [
+                "manage"
+              ],
+              "object": "larkspur studio",
+              "severity": "major",
+              "label": "management edge missing"
+            }
+          ]
+        }
+      ],
+      "cross_checks": [
+        {
+          "type": "predicates_differ",
+          "severity": "major",
+          "label": "owning and managing collapsed into one predicate"
+        }
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "edge-en-no-relation",
+      "family": "edge",
+      "lang": "en",
+      "note": "Mirror of edge-no-relation. Nothing relates two named entities; inventing an edge is worse than none.",
+      "passages": [
+        {
+          "text": "The quarterly report was printed on recycled paper and filed the same afternoon.",
+          "checks": [
+            {
+              "type": "relations_empty",
+              "severity": "fatal",
+              "label": "invented an edge from a passage that states none"
+            }
+          ]
+        }
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "edge-en-hostile-format",
+      "family": "edge",
+      "lang": "en",
+      "note": "Mirror of edge-hostile-format. Braces inside the passage must not leak into the envelope.",
+      "passages": [
+        {
+          "text": "Ana Ferreira pasted {\"status\": \"done\"} into the ticket she filed for Vantage Health.",
+          "checks": [
+            {
+              "type": "min_relations",
+              "n": 1,
+              "severity": "major",
+              "label": "no edge extracted from a passage that states one"
+            },
+            {
+              "type": "not_truncated",
+              "severity": "fatal",
+              "label": "reply cut off"
+            }
+          ]
+        }
+      ],
+      "split": "train"
+    },
+    {
+      "id": "fr-multi-entity",
+      "family": "nominal-fr",
+      "lang": "fr",
+      "note": "Two stated edges over a shared organisation. An entity that only receives attributes is a dead end.",
+      "passages": [
+        {
+          "text": "Sofia Marchetti dirige Aurel Textile. Karim Benali travaille chez Aurel Textile depuis 2021.",
+          "checks": [
+            {
+              "type": "min_relations",
+              "n": 2,
+              "severity": "major",
+              "label": "fewer edges than the passage states"
+            },
+            {
+              "type": "relation_present",
+              "subject": "sofia marchetti",
+              "predicate_any": [
+                "dirig"
+              ],
+              "object": "aurel textile",
+              "severity": "major",
+              "label": "direction edge missing"
+            },
+            {
+              "type": "relation_present",
+              "subject": "karim benali",
+              "predicate_any": [
+                "travaill"
+              ],
+              "object": "aurel textile",
+              "severity": "major",
+              "label": "employment edge missing"
+            },
+            {
+              "type": "predicate_forbids",
+              "substrings": [
+                "works",
+                "runs",
+                "manages",
+                "son of",
+                "sister of",
+                "owns"
+              ],
+              "severity": "major",
+              "label": "English predicate on a French passage"
+            }
+          ]
+        }
+      ],
+      "split": "train"
+    },
+    {
+      "id": "en-multi-entity",
+      "family": "nominal-en",
+      "lang": "en",
+      "note": "English mirror of fr-multi-entity.",
+      "passages": [
+        {
+          "text": "Sofia Marchetti runs Aurel Textile. Karim Benali has worked at Aurel Textile since 2021.",
+          "checks": [
+            {
+              "type": "min_relations",
+              "n": 2,
+              "severity": "major",
+              "label": "fewer edges than the passage states"
+            },
+            {
+              "type": "relation_present",
+              "subject": "sofia marchetti",
+              "predicate_any": [
+                "run",
+                "manage"
+              ],
+              "object": "aurel textile",
+              "severity": "major",
+              "label": "direction edge missing"
+            },
+            {
+              "type": "relation_present",
+              "subject": "karim benali",
+              "predicate_any": [
+                "work"
+              ],
+              "object": "aurel textile",
+              "severity": "major",
+              "label": "employment edge missing"
+            },
+            {
+              "type": "predicate_forbids",
+              "substrings": [
+                "travaille",
+                "dirige",
+                "fils de",
+                "soeur de",
+                "possede"
+              ],
+              "severity": "major",
+              "label": "French predicate on an English passage"
+            }
+          ]
+        }
+      ],
+      "split": "train"
+    },
+    {
+      "id": "fr-numeric-pair",
+      "family": "nominal-fr",
+      "lang": "fr",
+      "note": "Two ages, two entities. Misattribution is invisible unless both are checked.",
+      "passages": [
+        {
+          "text": "Lise Aubert a 34 ans. Son fils Theo Aubert a 8 ans.",
+          "checks": [
+            {
+              "type": "attribute_number",
+              "entity": "lise aubert",
+              "key_any": [
+                "age"
+              ],
+              "value": 34,
+              "severity": "major",
+              "label": "age missing, misattributed, or emitted as a string"
+            },
+            {
+              "type": "attribute_number",
+              "entity": "theo aubert",
+              "key_any": [
+                "age"
+              ],
+              "value": 8,
+              "severity": "major",
+              "label": "age missing, misattributed, or emitted as a string"
+            },
+            {
+              "type": "relation_present",
+              "subject": "theo aubert",
+              "predicate_any": [
+                "fils"
+              ],
+              "object": "lise aubert",
+              "severity": "major",
+              "label": "filiation edge missing or reversed"
+            },
+            {
+              "type": "predicate_forbids",
+              "substrings": [
+                "works",
+                "runs",
+                "manages",
+                "son of",
+                "sister of",
+                "owns"
+              ],
+              "severity": "major",
+              "label": "English predicate on a French passage"
+            }
+          ]
+        }
+      ],
+      "split": "train"
+    },
+    {
+      "id": "en-numeric-pair",
+      "family": "nominal-en",
+      "lang": "en",
+      "note": "English mirror of fr-numeric-pair.",
+      "passages": [
+        {
+          "text": "Lise Aubert is 34. Her son Theo Aubert is 8.",
+          "checks": [
+            {
+              "type": "attribute_number",
+              "entity": "lise aubert",
+              "key_any": [
+                "age"
+              ],
+              "value": 34,
+              "severity": "major",
+              "label": "age missing, misattributed, or emitted as a string"
+            },
+            {
+              "type": "attribute_number",
+              "entity": "theo aubert",
+              "key_any": [
+                "age"
+              ],
+              "value": 8,
+              "severity": "major",
+              "label": "age missing, misattributed, or emitted as a string"
+            },
+            {
+              "type": "relation_present",
+              "subject": "theo aubert",
+              "predicate_any": [
+                "son"
+              ],
+              "object": "lise aubert",
+              "severity": "major",
+              "label": "filiation edge missing or reversed"
+            },
+            {
+              "type": "predicate_forbids",
+              "substrings": [
+                "travaille",
+                "dirige",
+                "fils de",
+                "soeur de",
+                "possede"
+              ],
+              "severity": "major",
+              "label": "French predicate on an English passage"
+            }
+          ]
+        }
+      ],
+      "split": "holdout"
     }
   ]
 }
