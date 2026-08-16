@@ -503,15 +503,33 @@ def digest_log(path: Path, since: "str | None" = None) -> dict:
     }
 
 
+def _cell(value: object, width: int = 10) -> str:
+    """Render one statistic, which is absent when the window selected nothing.
+
+    An empty window is a legitimate outcome, not a crash: `--since` is matched
+    as a raw ISO prefix against a log the daemon timestamps in UTC, so a prefix
+    written in local time selects no line at all. Formatting `None` raised a
+    TypeError that read as a broken bench rather than as the empty selection it
+    actually was.
+    """
+    if value is None:
+        return f"{'-':>{width}}"
+    return f"{float(value):>{width}.0f}"
+
+
 def print_digest(digest: dict) -> None:
     rows = sorted(digest["tools"].items(), key=lambda kv: -(kv[1]["p95_ms"] or 0))
     print(f"{'tool':30} {'n':>5} {'p50':>10} {'p95':>10} {'max':>10}   (ms)")
     for name, stats in rows:
-        print(f"{name:30} {stats['n']:>5} {stats['p50_ms']:>10.0f} "
-              f"{stats['p95_ms']:>10.0f} {stats['max_ms']:>10}")
+        print(f"{name:30} {stats['n']:>5} {_cell(stats['p50_ms'])} "
+              f"{_cell(stats['p95_ms'])} {_cell(stats['max_ms'])}")
     http = digest["http_post"]
-    print(f"\n{'MCP HTTP POST':30} {http['n']:>5} {http['p50_ms']:>10.0f} "
-          f"{http['p95_ms']:>10.0f} {http['max_ms']:>10}")
+    print(f"\n{'MCP HTTP POST':30} {http['n']:>5} {_cell(http['p50_ms'])} "
+          f"{_cell(http['p95_ms'])} {_cell(http['max_ms'])}")
+    if not rows and not http["n"]:
+        print(f"\nno tool call in this window — {digest['since']!r} matched nothing. "
+              f"The daemon timestamps its log in UTC and --since compares a raw "
+              f"prefix, so check the timezone before concluding it was idle.")
     bad = {key: n for key, n in digest["verdicts"].items() if not key.endswith(":ok")}
     print(f"\nnon-ok verdicts: {bad or 'none'}")
 
@@ -543,6 +561,18 @@ def http_json(url: str, payload: "dict | None" = None, token: "str | None" = Non
     with urllib.request.urlopen(request, timeout=timeout, context=insecure_context(url)) as response:
         body = response.read().decode("utf-8", errors="replace")
     return json.loads(body) if body.strip() else {}
+
+
+def http_text(url: str, timeout: int = 30) -> str:
+    """One GET whose body is read as text, for endpoints that answer no JSON.
+
+    `/health` answers `OK` as `text/plain`; routing it through `http_json` made
+    a healthy daemon look like a crashed bench.
+    """
+    request = urllib.request.Request(url, method="GET")
+    with urllib.request.urlopen(request, timeout=timeout,
+                                context=insecure_context(url)) as response:
+        return response.read().decode("utf-8", errors="replace")
 
 
 def extractor_token() -> str:
@@ -599,14 +629,32 @@ class OpenAiBackend:
                   payload={}, token=self.token, timeout=900)
 
 
+# Ollama derives its default context from the HOST's VRAM (4k under 24 GiB,
+# 32k from 24 to 48, 256k beyond), and `OllamaExtractor` sends no `num_ctx`.
+# Left implicit, the same model reserves a KV cache of a different size on the
+# bench machine than on a reader's, which breaks BOTH the per-tier weight
+# budget and cross-machine reproducibility. The bench therefore states it:
+# ~700 prompt tokens + 512 of output, rounded up for margin.
+DEFAULT_NUM_CTX = 2048
+
+
 class OllamaBackend:
     """The `ollama` extractor path, body-for-body with `OllamaExtractor`."""
 
-    def __init__(self, base_url: str, model: str, cap: int, keep_alive: object = -1) -> None:
+    def __init__(self, base_url: str, model: str, cap: int, keep_alive: object = -1,
+                 num_ctx: int = DEFAULT_NUM_CTX, schema: "dict | None" = None) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.cap = cap
         self.keep_alive = keep_alive
+        self.num_ctx = num_ctx
+        # Constrained decoding is a DECLARED variant, never the reference: the
+        # product sends no `format` today, and a bench that quietly enabled it
+        # would measure something velesdb-memory does not do.
+        self.schema = schema
+
+    def _options(self) -> dict:
+        return {"temperature": 0, "num_predict": self.cap, "num_ctx": self.num_ctx}
 
     def generate(self, prompt: str) -> dict:
         body = {
@@ -615,8 +663,10 @@ class OllamaBackend:
             "stream": False,
             "think": False,
             "keep_alive": self.keep_alive,
-            "options": {"temperature": 0, "num_predict": self.cap},
+            "options": self._options(),
         }
+        if self.schema is not None:
+            body["format"] = self.schema
         started = time.monotonic()
         response = http_json(f"{self.base_url}/api/generate", body)
         elapsed = time.monotonic() - started
@@ -635,8 +685,12 @@ class OllamaBackend:
     def set_loaded(self, model: str, loaded: bool) -> None:
         http_json(f"{self.base_url}/api/generate", {
             "model": model, "prompt": "ok",
+            # Without this, ollama streams NDJSON and the JSON decoder stops at
+            # the second object ("Extra data"). `generate` always had it; this
+            # call did not, so every residency change crashed the run.
+            "stream": False,
             "keep_alive": -1 if loaded else 0,
-            "options": {"num_predict": 1},
+            "options": {"num_predict": 1, "num_ctx": self.num_ctx},
         }, timeout=900)
 
 
@@ -1079,13 +1133,44 @@ class DisposableDaemon:
     def _await_health(self, timeout_s: float) -> None:
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
+            # A daemon that already exited will never become healthy, and
+            # waiting the full timeout turns a two-second, self-explanatory
+            # refusal into a mute minute. Its own words are the diagnosis.
+            if self.process is not None and self.process.poll() is not None:
+                raise RuntimeError(self._death_report())
             try:
-                http_json(f"{self.url}/health", timeout=5)
+                # `/health` answers `OK` as text/plain, so it must NOT be parsed
+                # as JSON: doing so raised a JSONDecodeError that escaped the
+                # OSError-only retry and read as a bench crash.
+                http_text(f"{self.url}/health", timeout=5)
                 return
             except OSError:
                 time.sleep(0.5)
         self.stop()
-        raise RuntimeError(f"daemon on port {self.port} never became healthy")
+        raise RuntimeError(f"daemon on port {self.port} never became healthy "
+                           f"within {timeout_s:.0f}s (it is still running)")
+
+    def _death_report(self) -> str:
+        """Why the daemon exited, in its own words rather than ours.
+
+        stderr was captured into a pipe that nothing ever read, so the two
+        causes seen in practice — a binary built without `--features http`, and
+        an autograph enabled with no extractor configured — were both reported
+        as a generic timeout.
+        """
+        code = self.process.returncode if self.process else None
+        try:
+            _, err = self.process.communicate(timeout=5)
+        except (subprocess.TimeoutExpired, ValueError, AttributeError):
+            err = b""
+        detail = (err or b"").decode("utf-8", "replace").strip().splitlines()
+        last = detail[-1] if detail else "(no stderr)"
+        hint = ""
+        if "--features http" in last:
+            hint = (" — rebuild it: "
+                    "cargo build --release -p velesdb-memory --features http")
+        return (f"daemon on port {self.port} exited with code {code} before "
+                f"becoming healthy: {last}{hint}")
 
     def stop(self) -> None:
         if self.process and self.process.poll() is None:
@@ -1284,8 +1369,18 @@ def cmd_report(args: argparse.Namespace) -> int:
 
 
 def build_backend(args: argparse.Namespace, cap: int) -> object:
+    if args.backend == "outline":
+        # `outline` is the daemon's own deterministic reader, not an HTTP
+        # service: there is no endpoint to screen against. Sent to the OpenAI
+        # backend it asked omlx to load a model named "outline" and died on a
+        # 404 that blamed the server for the bench's category error.
+        raise SystemExit(
+            "screen cannot run the `outline` extractor: it is in-process in the "
+            "daemon, with no API to call. Measure the no-LLM floor with "
+            "`endtoend --backend outline`, which runs it where it lives.")
     if args.backend == "ollama":
-        return OllamaBackend(args.url or "http://localhost:11434", args.config, cap)
+        return OllamaBackend(args.url or "http://localhost:11434", args.config, cap,
+                             num_ctx=getattr(args, "num_ctx", DEFAULT_NUM_CTX))
     return OpenAiBackend(args.url or "http://127.0.0.1:8019", args.config, extractor_token(), cap)
 
 
@@ -1426,6 +1521,10 @@ def _add_model_arguments(parser: argparse.ArgumentParser, config_required: bool)
     # the same verdict for their own language.
     parser.add_argument("--cases", default=str(CASES_FILE),
                         help="scenario file; replace it to bench another language")
+    parser.add_argument("--num-ctx", type=int, default=DEFAULT_NUM_CTX, dest="num_ctx",
+                        help="ollama context window, stated rather than inherited "
+                             "from the host's VRAM (its default varies 4k/32k/256k "
+                             "by card, which makes runs incomparable across machines)")
 
 
 def build_parser() -> argparse.ArgumentParser:
