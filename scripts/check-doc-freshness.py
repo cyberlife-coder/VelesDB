@@ -89,7 +89,14 @@ VERSION_SCAN_EXCLUDED_NAMES = re.compile(r"^(MIGRATION_v|CHANGELOG)", re.IGNOREC
 # Their entry page must link to them with a freshness caveat; changing the
 # captured versions would falsify the historical result rather than freshen it.
 VERSION_SCAN_EXCLUDED_FILES: "frozenset[str]" = frozenset(
-    {"docs/quickstart/timing-results.md"}
+    {
+        "docs/quickstart/timing-results.md",
+        # A dated benchmark report states the versions its numbers were taken
+        # under. Refreshing those stamps would not update the report, it would
+        # falsify it: the measurement stays attached to the release that
+        # produced it, exactly as for the timing results above.
+        "benchmarks/results/2026-08-16-memory-extraction-report.md",
+    }
 )
 
 # `Last updated: 2026-07-25`, `**Last Updated**: 2026-06-12`,
