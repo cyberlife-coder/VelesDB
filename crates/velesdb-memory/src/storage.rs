@@ -366,7 +366,6 @@ impl NativeStore {
         })
     }
 
-    #[allow(dead_code)] // The journal activation path remains internal until slice 6.
     pub(crate) fn set_mutation_observer(
         &self,
         observer: Option<Arc<dyn MutationObserver>>,

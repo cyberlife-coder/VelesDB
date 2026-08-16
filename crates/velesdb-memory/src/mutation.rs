@@ -6,11 +6,8 @@ use parking_lot::RwLock;
 
 use crate::MemoryError;
 
-#[allow(dead_code)] // Internal until the control-surface slice exposes online migration.
 pub(crate) mod catchup;
-#[allow(dead_code)] // Internal until the control-surface slice exposes online migration.
 pub(crate) mod controller;
-#[allow(dead_code)] // The catch-up slice consumes the journal before the control surface ships.
 pub(crate) mod journal;
 
 #[cfg(test)]
@@ -43,7 +40,6 @@ impl MutationCapture {
         }
     }
 
-    #[allow(dead_code)] // The journal activation path remains internal until slice 6.
     pub(crate) fn replace(
         &self,
         observer: Option<Arc<dyn MutationObserver>>,

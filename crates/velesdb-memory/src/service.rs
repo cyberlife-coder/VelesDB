@@ -214,7 +214,6 @@ impl<E: Embedder> MemoryService<E, NativeStore> {
         })
     }
 
-    #[allow(dead_code)] // The journal activation path remains internal until slice 6.
     pub(crate) fn install_mutation_observer(
         &self,
         observer: Option<Arc<dyn MutationObserver>>,

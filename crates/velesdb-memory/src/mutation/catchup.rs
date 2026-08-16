@@ -191,6 +191,10 @@ impl<'a, E: Embedder> OnlineCatchUp<'a, E> {
         ))
     }
 
+    // Only reached from tests today: production teardown (online_migration's
+    // job_runner and manager) calls `install_mutation_observer(None)`
+    // directly instead of going through this method.
+    #[allow(dead_code)]
     pub(crate) fn finish(self) -> Result<(), MemoryError> {
         self.source.install_mutation_observer(None)
     }
