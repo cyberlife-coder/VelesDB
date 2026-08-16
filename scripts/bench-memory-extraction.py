@@ -712,9 +712,50 @@ EXTRACTION_SCHEMA = {
                 "required": ["entity", "key", "value"],
             },
         },
+        "facts": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "fact": {"type": "string"},
+                    "entities": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["fact", "entities"],
+            },
+        },
     },
-    "required": ["relations", "attributes"],
+    "required": ["relations", "attributes", "facts"],
 }
+
+
+def assert_schema_tracks_the_crate(source: Path = EXTRACT_RS) -> None:
+    """Fail loudly if the crate's `format` schema and this one name different sections.
+
+    Sourced-by-assertion rather than sourced-by-parse: the crate builds its
+    schema from a `json!` macro that references a helper, so a literal parse
+    would be guesswork. The top-level `required` list is the part that decides
+    what survives the grammar, and it is checkable.
+
+    This exists because the first version of this constant declared `relations`
+    and `attributes` only. A property a schema does not declare does not
+    survive llama.cpp's grammar AT ALL — measured, see
+    `scripts/constrained-decoding-probe.py` — so that schema silently produced
+    replies with no `facts` key, and the variant scored a model that had been
+    prevented from answering the question. Nothing in the output said so.
+    """
+    text = source.read_text(encoding="utf-8")
+    start = text.find("fn extraction_schema()")
+    if start < 0:
+        raise RuntimeError(f"extraction_schema not found in {source}")
+    match = re.search(r'"required":\s*\[([^\]]*)\]\s*,\s*\}\)', text[start:], re.DOTALL)
+    if not match:
+        raise RuntimeError(f"no top-level `required` under extraction_schema in {source}")
+    crate_keys = set(re.findall(r'"([^"]+)"', match.group(1)))
+    mine = set(EXTRACTION_SCHEMA["required"])
+    if crate_keys != mine:
+        raise RuntimeError(
+            f"constrained variant would measure a schema the crate does not send: "
+            f"crate requires {sorted(crate_keys)}, this bench requires {sorted(mine)}")
 
 
 class OllamaBackend:
@@ -1566,10 +1607,14 @@ def build_backend(args: argparse.Namespace, cap: int) -> object:
             "daemon, with no API to call. Measure the no-LLM floor with "
             "`endtoend --backend outline`, which runs it where it lives.")
     if args.backend == "ollama":
+        constrained = getattr(args, "constrained", False)
+        if constrained:
+            # Checked HERE rather than at import: an unconstrained run is
+            # unaffected by the crate's schema and must not be blocked by it.
+            assert_schema_tracks_the_crate()
         return OllamaBackend(args.url or "http://localhost:11434", args.config, cap,
                              num_ctx=getattr(args, "num_ctx", DEFAULT_NUM_CTX),
-                             schema=EXTRACTION_SCHEMA
-                             if getattr(args, "constrained", False) else None)
+                             schema=EXTRACTION_SCHEMA if constrained else None)
     return OpenAiBackend(args.url or "http://127.0.0.1:8019", args.config, extractor_token(), cap)
 
 
@@ -1712,10 +1757,10 @@ def _add_model_arguments(parser: argparse.ArgumentParser, config_required: bool)
                         help="scenario file; replace it to bench another language")
     parser.add_argument("--constrained", action="store_true",
                         help="ollama only: constrain decoding to the extraction "
-                             "schema. A DECLARED VARIANT, never the reference — "
-                             "velesdb-memory sends no `format` today, so a run "
-                             "with this flag measures a product that does not "
-                             "exist yet, and its numbers belong in their own column")
+                             "schema, which is what velesdb-memory now sends on "
+                             "every call (#1944). Kept as a separate arm because "
+                             "the published reference column was measured before "
+                             "that shipped: the two are not comparable row by row")
     parser.add_argument("--num-ctx", type=int, default=DEFAULT_NUM_CTX, dest="num_ctx",
                         help="ollama context window, stated rather than inherited "
                              "from the host's VRAM (its default varies 4k/32k/256k "
