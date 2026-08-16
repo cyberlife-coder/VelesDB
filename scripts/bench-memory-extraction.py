@@ -974,8 +974,29 @@ def cold_load(backend: object, model: str, prompt: str, backing: "dict | None" =
 # ------------------------------------------------------ phase A: screening ----
 
 
-def load_cases(path: Path = CASES_FILE) -> "list[dict]":
-    return json.loads(path.read_text(encoding="utf-8"))["cases"]
+def load_cases(path: Path = CASES_FILE, split: "str | None" = None) -> "list[dict]":
+    """The scenarios, optionally restricted to one side of the train/holdout line.
+
+    The split exists for prompt tuning, and only for that. Anything that edits
+    the prompt to raise a score must be tuned on `train` and reported on
+    `holdout`, because a suite of nineteen scenarios is small enough that a loop
+    iterating against it learns the scenarios rather than the task — and a score
+    that improves on the cases it was optimised against is not evidence of
+    anything.
+
+    `None` keeps every case, which is what a campaign measuring MODELS wants:
+    the split is a defence against overfitting a prompt, and withholding cases
+    from a model comparison would only make it less informative.
+    """
+    cases = json.loads(path.read_text(encoding="utf-8"))["cases"]
+    if split is None:
+        return cases
+    chosen = [case for case in cases if case.get("split") == split]
+    if not chosen:
+        raise RuntimeError(
+            f"no case carries split={split!r} in {path}; the suite must declare "
+            f"one per case before a split run means anything")
+    return chosen
 
 
 def parse_payload(content: str) -> "dict | None":
@@ -1750,7 +1771,7 @@ def cmd_screen(args: argparse.Namespace) -> int:
     cap = read_generation_cap()
     template = read_graph_prompt_template()
     backend = build_backend(args, cap)
-    cases = load_cases(Path(args.cases))
+    cases = load_cases(Path(args.cases), getattr(args, "split", None))
     prompt = build_graph_prompt(cases[0]["passages"][0]["text"], template)
     residency = backend.residency()
     checked = preflight(residency, args.config)
@@ -1807,7 +1828,7 @@ def cmd_endtoend(args: argparse.Namespace) -> int:
     daemon = DisposableDaemon(Path(args.binary), args.port, endtoend_env(args))
     daemon.start()
     try:
-        outcome = endtoend(daemon, load_cases(Path(args.cases)))
+        outcome = endtoend(daemon, load_cases(Path(args.cases), getattr(args, "split", None)))
     finally:
         daemon.stop()
     outcome["config"] = args.config
@@ -1859,6 +1880,10 @@ def _add_model_arguments(parser: argparse.ArgumentParser, config_required: bool)
     # the same verdict for their own language.
     parser.add_argument("--cases", default=str(CASES_FILE),
                         help="scenario file; replace it to bench another language")
+    parser.add_argument("--split", choices=["train", "holdout"], default=None,
+                        help="restrict to one side of the train/holdout line. For "
+                             "PROMPT tuning only: tune on train, report on holdout. "
+                             "Omit it to measure models, which wants every case")
     parser.add_argument("--constrained", action="store_true",
                         help="ollama only: constrain decoding to the extraction "
                              "schema, which is what velesdb-memory now sends on "
