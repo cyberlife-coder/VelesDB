@@ -637,6 +637,46 @@ class OpenAiBackend:
 # ~700 prompt tokens + 512 of output, rounded up for margin.
 DEFAULT_NUM_CTX = 2048
 
+# The extraction contract, as the scorer reads it: `relation_triples` needs
+# objects with subject/predicate/object, and `_attributes` needs entity/key/
+# value. Handed to ollama as `format`, it makes the fatal failure this bench
+# exists to catch — relations emitted as arrays, or a reply that is not JSON at
+# all — structurally impossible rather than merely discouraged.
+#
+# `value` stays string-or-number on purpose. Forcing a number would also force
+# the numeric-attribute oracle to pass, so the variant would be scoring its own
+# constraint instead of the model.
+EXTRACTION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "relations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "subject": {"type": "string"},
+                    "predicate": {"type": "string"},
+                    "object": {"type": "string"},
+                },
+                "required": ["subject", "predicate", "object"],
+            },
+        },
+        "attributes": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "entity": {"type": "string"},
+                    "key": {"type": "string"},
+                    "value": {"type": ["string", "number"]},
+                },
+                "required": ["entity", "key", "value"],
+            },
+        },
+    },
+    "required": ["relations", "attributes"],
+}
+
 
 class OllamaBackend:
     """The `ollama` extractor path, body-for-body with `OllamaExtractor`."""
@@ -1380,7 +1420,9 @@ def build_backend(args: argparse.Namespace, cap: int) -> object:
             "`endtoend --backend outline`, which runs it where it lives.")
     if args.backend == "ollama":
         return OllamaBackend(args.url or "http://localhost:11434", args.config, cap,
-                             num_ctx=getattr(args, "num_ctx", DEFAULT_NUM_CTX))
+                             num_ctx=getattr(args, "num_ctx", DEFAULT_NUM_CTX),
+                             schema=EXTRACTION_SCHEMA
+                             if getattr(args, "constrained", False) else None)
     return OpenAiBackend(args.url or "http://127.0.0.1:8019", args.config, extractor_token(), cap)
 
 
@@ -1521,6 +1563,12 @@ def _add_model_arguments(parser: argparse.ArgumentParser, config_required: bool)
     # the same verdict for their own language.
     parser.add_argument("--cases", default=str(CASES_FILE),
                         help="scenario file; replace it to bench another language")
+    parser.add_argument("--constrained", action="store_true",
+                        help="ollama only: constrain decoding to the extraction "
+                             "schema. A DECLARED VARIANT, never the reference — "
+                             "velesdb-memory sends no `format` today, so a run "
+                             "with this flag measures a product that does not "
+                             "exist yet, and its numbers belong in their own column")
     parser.add_argument("--num-ctx", type=int, default=DEFAULT_NUM_CTX, dest="num_ctx",
                         help="ollama context window, stated rather than inherited "
                              "from the host's VRAM (its default varies 4k/32k/256k "
