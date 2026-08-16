@@ -1,0 +1,1438 @@
+{
+  "config": "llama3.1:8b",
+  "generation_cap": 512,
+  "residency_before": {
+    "models": [
+      {
+        "name": "qwen3.5:4b",
+        "model": "qwen3.5:4b",
+        "size": 3075704093,
+        "digest": "2a654d98e6fba55d452b7043684e9b57a947e393bbffa62485a7aac05ee4eefd",
+        "details": {
+          "parent_model": "",
+          "format": "gguf",
+          "family": "qwen35",
+          "families": [
+            "qwen35"
+          ],
+          "parameter_size": "4.7B",
+          "quantization_level": "Q4_K_M"
+        },
+        "expires_at": "2318-11-26T01:32:23.919460807+01:00",
+        "size_vram": 3075704093,
+        "context_length": 2048
+      },
+      {
+        "name": "bge-m3:latest",
+        "model": "bge-m3:latest",
+        "size": 664660868,
+        "digest": "7907646426070047a77226ac3e684fbbe8410524f7b4a74d02837e43f2146bab",
+        "details": {
+          "parent_model": "",
+          "format": "gguf",
+          "family": "bert",
+          "families": [
+            "bert"
+          ],
+          "parameter_size": "566.70M",
+          "quantization_level": "F16"
+        },
+        "expires_at": "2318-11-26T01:26:57.584675807+01:00",
+        "size_vram": 664660868,
+        "context_length": 8192
+      },
+      {
+        "name": "qwen3:14b",
+        "model": "qwen3:14b",
+        "size": 9298226707,
+        "digest": "bdbd181c33f2ed1b31c972991882db3cf4d192569092138a7d29e973cd9debe8",
+        "details": {
+          "parent_model": "",
+          "format": "gguf",
+          "family": "qwen3",
+          "families": [
+            "qwen3"
+          ],
+          "parameter_size": "14.8B",
+          "quantization_level": "Q4_K_M"
+        },
+        "expires_at": "2318-11-26T01:13:51.733089807+01:00",
+        "size_vram": 9298226707,
+        "context_length": 2048
+      }
+    ]
+  },
+  "storage": {
+    "path": null,
+    "reachable": false,
+    "reason": "no path reported"
+  },
+  "estimated_size": null,
+  "cold": {
+    "load_seconds": 1.6240292080037761,
+    "first_answer_seconds": 6.300984832996619,
+    "cold_total_seconds": 7.925014041000395,
+    "storage": {
+      "path": null,
+      "reachable": false,
+      "reason": "no path reported"
+    },
+    "cache_state": "unknown"
+  },
+  "warmup": {
+    "rounds": 3,
+    "latencies": [
+      5.512820542004192,
+      5.413559292006539,
+      5.29121420798765
+    ],
+    "stabilised": true
+  },
+  "phase": "screen",
+  "runs": 2,
+  "cases": [
+    {
+      "id": "fr-possessive",
+      "family": "nominal-fr",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Marie Dupont a une soeur, Camille Dupont. Camille Dupont a 15 ans et travaille chez Wiscale.",
+          "seconds": 5.1628659589914605,
+          "completion_tokens": 215,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\"fact\": \"Camille Dupont a 15 ans\", \"entities\": [\"Camille Dupont\", \"15\"]},\n    {\"fact\": \"Camille Dupont travaille chez Wiscale\", \"entities\": [\"Camille Dupont\", \"Wiscale\"]}\n  ],\n  \"relations\": [\n    {\"subject\": \"Camille Dupont\", \"predicate\": \"soeur de\", \"object\": \"Marie Dupont\"},\n    {\"subject\": \"Camille Dupont\", \"predicate\": \"travaille chez\", \"object\": \"Wiscale\"}\n  ],\n  \"attributes\": [\n    {\"entity\": \"Camille Dupont\", \"key\": \"age\", \"value\": 15}\n  ]\n}\n```\n\nNote that I've kept the \"travaille chez\" relation as is, even though it's a possessive, because the passage states it as a separate fact from the \"soeur de\" relation.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "fr-employment-date",
+      "family": "nominal-fr",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Bruno Durand dirige Wiscale depuis 2019.",
+          "seconds": 4.546974666998722,
+          "completion_tokens": 167,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\n      \"fact\": \"Bruno Durand dirige Wiscale depuis 2019.\",\n      \"entities\": [\"Bruno Durand\", \"Wiscale\"]\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject\": \"Bruno Durand\",\n      \"predicate\": \"dirige\",\n      \"object\": \"Wiscale\"\n    }\n  ],\n  \"attributes\": [\n    {\n      \"entity\": \"Bruno Durand\",\n      \"key\": \"année de début de direction\",\n      \"value\": 2019\n    }\n  ]\n}\n```\n\nNote: I used the passage's language, which appears to be French, to extract the facts, relations, and attributes.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "fr-pronoun",
+      "family": "nominal-fr",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Bruno Durand dirige Wiscale. Il habite a Lyon.",
+          "seconds": 4.47979425000085,
+          "completion_tokens": 165,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\"fact\": \"bruno durand dirige wiscale\", \"entities\": [\"bruno durand\", \"wiscale\"]},\n    {\"fact\": \"bruno durand habite a lyon\", \"entities\": [\"bruno durand\", \"lyon\"]}\n  ],\n  \"relations\": [\n    {\"subject\": \"bruno durand\", \"predicate\": \"dirige\", \"object\": \"wiscale\"},\n    {\"subject\": \"bruno durand\", \"predicate\": \"habite\", \"object\": \"lyon\"}\n  ],\n  \"attributes\": []\n}\n```\n\nNote that there are no attributes to report, as the passage only mentions relationships and facts about the entities.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "fr-converse-stated",
+      "family": "nominal-fr",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Wiscale emploie Alice Martin. Alice Martin travaille pour Wiscale depuis 2019.",
+          "seconds": 6.331382415999542,
+          "completion_tokens": 243,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\n      \"fact\": \"Alice Martin travaille pour Wiscale depuis 2019.\",\n      \"entities\": [\"Alice Martin\", \"Wiscale\"]\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject\": \"Alice Martin\",\n      \"predicate\": \"travaille pour\",\n      \"object\": \"Wiscale\"\n    },\n    {\n      \"subject\": \"Alice Martin\",\n      \"predicate\": \"travaille depuis\",\n      \"object\": \"2019\"\n    }\n  ],\n  \"attributes\": [\n    {\n      \"entity\": \"Alice Martin\",\n      \"key\": \"employeur\",\n      \"value\": \"Wiscale\"\n    },\n    {\n      \"entity\": \"Alice Martin\",\n      \"key\": \"début de carrière\",\n      \"value\": 2019\n    }\n  ]\n}\n```\n\nNote that I've used the passage's language, which is French, to extract the facts, relations, and attributes. I've also followed the instructions to use short lowercase keys for attributes and to omit anything the passage does not state.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "en-possessive",
+      "family": "nominal-en",
+      "lang": "en",
+      "passages": [
+        {
+          "text": "Sarah Miller has a brother, Tom Miller. Tom Miller is 22 and works at Northwind.",
+          "seconds": 6.313169916989864,
+          "completion_tokens": 243,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\"fact\": \"Sarah Miller has a brother.\", \"entities\": [\"Sarah Miller\", \"Tom Miller\"]},\n    {\"fact\": \"Tom Miller is 22.\", \"entities\": [\"Tom Miller\"]},\n    {\"fact\": \"Tom Miller works at Northwind.\", \"entities\": [\"Tom Miller\", \"Northwind\"]}\n  ],\n  \"relations\": [\n    {\"subject\": \"Sarah Miller\", \"predicate\": \"has a brother\", \"object\": \"Tom Miller\"},\n    {\"subject\": \"Tom Miller\", \"predicate\": \"is\", \"object\": \"22\"},\n    {\"subject\": \"Tom Miller\", \"predicate\": \"works at\", \"object\": \"Northwind\"}\n  ],\n  \"attributes\": [\n    {\"entity\": \"Tom Miller\", \"key\": \"age\", \"value\": 22}\n  ]\n}\n```\n\nNote that I've used the passage's language, which appears to be informal English, to write the facts, relations, and attributes. I've also followed the instructions to use short lowercase keys for attributes and to omit anything the passage does not state.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "en-employment-date",
+      "family": "nominal-en",
+      "lang": "en",
+      "passages": [
+        {
+          "text": "David Clarke runs Northwind since 2019.",
+          "seconds": 5.082303749994026,
+          "completion_tokens": 197,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\n      \"fact\": \"David Clarke runs Northwind since 2019.\",\n      \"entities\": [\"David Clarke\", \"Northwind\"]\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject\": \"David Clarke\",\n      \"predicate\": \"runs\",\n      \"object\": \"Northwind\"\n    }\n  ],\n  \"attributes\": [\n    {\n      \"entity\": \"David Clarke\",\n      \"key\": \"since\",\n      \"value\": 2019\n    }\n  ]\n}\n```\n\nI extracted the following facts, relations, and attributes:\n\n**Facts:**\n\n1. David Clarke runs Northwind since 2019.\n\t* Topics: david clarke, northwind, date\n\n**Relations:**\n\n1. David Clarke / runs / Northwind\n\n**Attributes:**\n\n1. David Clarke / since / 2019",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "en-pronoun",
+      "family": "nominal-en",
+      "lang": "en",
+      "passages": [
+        {
+          "text": "David Clarke runs Northwind. He lives in Leeds.",
+          "seconds": 4.165583207999589,
+          "completion_tokens": 156,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\"fact\": \"David Clarke runs Northwind.\", \"entities\": [\"David Clarke\", \"Northwind\"]},\n    {\"fact\": \"David Clarke lives in Leeds.\", \"entities\": [\"David Clarke\", \"Leeds\"]}\n  ],\n  \"relations\": [\n    {\"subject\": \"David Clarke\", \"predicate\": \"runs\", \"object\": \"Northwind\"},\n    {\"subject\": \"David Clarke\", \"predicate\": \"lives in\", \"object\": \"Leeds\"}\n  ],\n  \"attributes\": []\n}\n```\n\nNote that there are no attributes to report, as the passage does not provide any information about properties or characteristics of the entities mentioned.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "en-converse-stated",
+      "family": "nominal-en",
+      "lang": "en",
+      "passages": [
+        {
+          "text": "Northwind employs Emma Stone. Emma Stone works for Northwind since 2019.",
+          "seconds": 6.17135295800108,
+          "completion_tokens": 240,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Based on the passage, I will return the following JSON object:\n\n```\n{\n  \"facts\": [\n    {\n      \"fact\": \"Emma Stone works for Northwind since 2019.\",\n      \"entities\": [\"Emma Stone\", \"Northwind\"]\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject\": \"Emma Stone\",\n      \"predicate\": \"works for\",\n      \"object\": \"Northwind\"\n    }\n  ],\n  \"attributes\": [\n    {\n      \"entity\": \"Emma Stone\",\n      \"key\": \"employeur\",\n      \"value\": \"Northwind\"\n    },\n    {\n      \"entity\": \"Emma Stone\",\n      \"key\": \"date de début\",\n      \"value\": 2019\n    }\n  ]\n}\n```\n\nHere's a breakdown of the three sections:\n\n**Facts**\n\n1. \"Emma Stone works for Northwind since 2019.\"\n\t* Topics: emma stone, northwind, employment, date\n\n**Relations**\n\n1. Emma Stone / works for / Northwind\n\n**Attributes**\n\n1. Emma Stone / employeur / Northwind\n2. Emma Stone / date de début / 2019",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "edge-no-relation",
+      "family": "edge",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Il pleuvait sur la ville hier soir.",
+          "seconds": 5.099061667002388,
+          "completion_tokens": 199,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\n      \"fact\": \"Il pleuvait sur la ville hier soir.\",\n      \"entities\": [\"ville\"]\n    }\n  ],\n  \"relations\": [],\n  \"attributes\": []\n}\n```\n\nExplanation:\n\n1. \"facts\": The passage states a single fact, which is a sentence describing the weather in the city. The entities involved are the city, but it's not a named entity, so I've only listed it as a single entity. The topics concerned are \"ville\" (city) and \"meteo\" (weather).\n2. \"relations\": There are no explicit relationships between two named entities in the passage.\n3. \"attributes\": There are no properties attributed to any named entity in the passage.\n\nNote that the passage is in French, so the language of the output should also be French. I've kept the language consistent throughout the output.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "edge-hostile-format",
+      "family": "edge",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Le projet \"Ardoise {beta}\" est pilote par Nadia Kerouac chez Wiscale.",
+          "seconds": 7.114168333995622,
+          "completion_tokens": 279,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\n      \"fact\": \"Le projet 'Ardoise {beta}' est pilote par Nadia Kerouac chez Wiscale.\",\n      \"entities\": [\"Nadia Kerouac\", \"Wiscale\", \"Ardoise {beta}\"]\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject\": \"Nadia Kerouac\",\n      \"predicate\": \"pilote\",\n      \"object\": \"Ardoise {beta}\"\n    },\n    {\n      \"subject\": \"Nadia Kerouac\",\n      \"predicate\": \"travaille chez\",\n      \"object\": \"Wiscale\"\n    }\n  ],\n  \"attributes\": [\n    {\n      \"entity\": \"Nadia Kerouac\",\n      \"key\": \"employeur\",\n      \"value\": \"Wiscale\"\n    }\n  ]\n}\n```\n\nNote that I've kept the fact as a single sentence, but extracted the entities mentioned in the passage. For the relations, I've used the predicate \"pilote\" and \"travaille chez\" as they are the most concise labels that capture the relationship between the entities. For the attributes, I've used the key \"employeur\" to indicate that Nadia Kerouac works at Wiscale.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "edge-verbose-truncation",
+      "family": "edge",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Nadia Kerouac dirige Wiscale depuis 2018. Wiscale possede le serveur Hydra, qui dispose de 128 Go de RAM. Bruno Durand, 42 ans, est le directeur technique de Wiscale et habite a Lyon. Alice Martin a rejoint l'equipe en janvier 2025 comme ingenieure. Le projet Ardoise, lance en mars 2025, est pilote par Alice Martin. Wiscale emploie 37 personnes et son siege est a Geneve.",
+          "seconds": 12.38040470800479,
+          "completion_tokens": 512,
+          "truncated": true,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\"fact\": \"Nadia Kerouac dirige Wiscale depuis 2018.\", \"entities\": [\"Nadia Kerouac\", \"Wiscale\"]},\n    {\"fact\": \"Wiscale possede le serveur Hydra.\", \"entities\": [\"Wiscale\", \"Hydra\"]},\n    {\"fact\": \"Bruno Durand est le directeur technique de Wiscale.\", \"entities\": [\"Bruno Durand\", \"Wiscale\"]},\n    {\"fact\": \"Alice Martin a rejoint l'equipe en janvier 2025 comme ingenieure.\", \"entities\": [\"Alice Martin\", \"Wiscale\"]},\n    {\"fact\": \"Le projet Ardoise, lance en mars 2025, est pilote par Alice Martin.\", \"entities\": [\"Alice Martin\", \"Le projet Ardoise\"]},\n    {\"fact\": \"Wiscale emploie 37 personnes.\", \"entities\": [\"Wiscale\"]},\n    {\"fact\": \"Le siege de Wiscale est a Geneve.\", \"entities\": [\"Wiscale\", \"Geneve\"]}\n  ],\n  \"relations\": [\n    {\"subject\": \"Nadia Kerouac\", \"predicate\": \"dirige\", \"object\": \"Wiscale\"},\n    {\"subject\": \"Wiscale\", \"predicate\": \"possede\", \"object\": \"Hydra\"},\n    {\"subject\": \"Bruno Durand\", \"predicate\": \"est le directeur technique\", \"object\": \"Wiscale\"},\n    {\"subject\": \"Alice Martin\", \"predicate\": \"a rejoint l'equipe\", \"object\": \"Wiscale\"},\n    {\"subject\": \"Alice Martin\", \"predicate\": \"pilote\", \"object\": \"Le projet Ardoise\"},\n    {\"subject\": \"Wiscale\", \"predicate\": \"emploie\", \"object\": \"37\"}\n  ],\n  \"attributes\": [\n    {\"entity\": \"Nadia Kerouac\", \"key\": \"fonction\", \"value\": \"dirige\"},\n    {\"entity\": \"Wiscale\", \"key\": \"serveur\", \"value\": \"Hydra\"},\n    {\"entity\": \"Bruno Durand\", \"key\": \"age\", \"value\": \"42\"},\n    {\"entity\": \"Alice Martin\", \"key\": \"fonction\", \"value\": \"ingenieure\"},\n    {\"entity\": \"Wiscale\", \"key\": \"siege\", \"value\": \"",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "edge-accents-hyphens",
+      "family": "edge",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Jean-Luc D'Arcy a fonde Eco-Kerite S.a r.l. a Geneve en 2018.",
+          "seconds": 6.288631332994555,
+          "completion_tokens": 241,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\n      \"fact\": \"Jean-Luc D'Arcy a fonde Eco-Kerite S.a r.l. en 2018.\",\n      \"entities\": [\"Jean-Luc D'Arcy\", \"Eco-Kerite S.a r.l.\"]\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject\": \"Jean-Luc D'Arcy\",\n      \"predicate\": \"fonde\",\n      \"object\": \"Eco-Kerite S.a r.l.\"\n    }\n  ],\n  \"attributes\": [\n    {\n      \"entity\": \"Eco-Kerite S.a r.l.\",\n      \"key\": \"fondation\",\n      \"value\": 2018\n    }\n  ]\n}\n```\n\nNote that I've kept the fact as a single sentence, and extracted the entities mentioned in the passage. For the relations, I've followed the instructions to use the entity's full name in lowercase, and to use a short label for the predicate. I've also omitted any attributes that are not explicitly stated in the passage.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "edge-mixed-lang",
+      "family": "edge",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Marie Dupont a rejoint Northwind Data Services en janvier 2025.",
+          "seconds": 6.038468124999781,
+          "completion_tokens": 233,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\n      \"fact\": \"Marie Dupont a rejoint Northwind Data Services en janvier 2025.\",\n      \"entities\": [\"Marie Dupont\", \"Northwind Data Services\"]\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject\": \"Marie Dupont\",\n      \"predicate\": \"a rejoint\",\n      \"object\": \"Northwind Data Services\"\n    }\n  ],\n  \"attributes\": [\n    {\n      \"entity\": \"Marie Dupont\",\n      \"key\": \"employeur\",\n      \"value\": \"Northwind Data Services\"\n    },\n    {\n      \"entity\": \"Marie Dupont\",\n      \"key\": \"date de rejointure\",\n      \"value\": \"janvier 2025\"\n    }\n  ]\n}\n```\n\nNote that I've used the passage's language, which is French, to extract the facts, relations, and attributes. I've also followed the instructions to use short lowercase keys for attributes and to omit anything the passage does not state.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "close-role",
+      "family": "close-pair",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Alice Martin travaille chez Wiscale.",
+          "seconds": 3.7010679170052754,
+          "completion_tokens": 135,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\n      \"fact\": \"Alice Martin travaille chez Wiscale.\",\n      \"entities\": [\"Alice Martin\", \"Wiscale\"]\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject\": \"Alice Martin\",\n      \"predicate\": \"travaille chez\",\n      \"object\": \"Wiscale\"\n    }\n  ],\n  \"attributes\": []\n}\n```\n\nNote that there are no attributes to report, as the passage only mentions a relationship between Alice Martin and Wiscale, without providing any additional information about Alice Martin or Wiscale.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        },
+        {
+          "text": "Alice Martin dirige Wiscale.",
+          "seconds": 3.6275841249880614,
+          "completion_tokens": 132,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\n      \"fact\": \"Alice Martin dirige Wiscale.\",\n      \"entities\": [\"Alice Martin\", \"Wiscale\"]\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject\": \"Alice Martin\",\n      \"predicate\": \"dirige\",\n      \"object\": \"Wiscale\"\n    }\n  ],\n  \"attributes\": []\n}\n```\n\nNote that there are no attributes to report, as the passage only mentions a relationship between Alice Martin and Wiscale, without providing any additional information about Alice Martin or Wiscale.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 2,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "close-negation",
+      "family": "close-pair",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Alice Martin travaille chez Wiscale.",
+          "seconds": 3.2870684590016026,
+          "completion_tokens": 135,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\n      \"fact\": \"Alice Martin travaille chez Wiscale.\",\n      \"entities\": [\"Alice Martin\", \"Wiscale\"]\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject\": \"Alice Martin\",\n      \"predicate\": \"travaille chez\",\n      \"object\": \"Wiscale\"\n    }\n  ],\n  \"attributes\": []\n}\n```\n\nNote that there are no attributes to report, as the passage only mentions a relationship between Alice Martin and Wiscale, without providing any additional information about Alice Martin or Wiscale.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        },
+        {
+          "text": "Alice Martin a quitte Wiscale en 2024.",
+          "seconds": 3.5659650830057217,
+          "completion_tokens": 125,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\n      \"fact\": \"Alice Martin a quitté Wiscale en 2024.\",\n      \"entities\": [\"Alice Martin\", \"Wiscale\"]\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject\": \"Alice Martin\",\n      \"predicate\": \"a quitté\",\n      \"object\": \"Wiscale\"\n    }\n  ],\n  \"attributes\": []\n}\n```\n\nNote that there are no attributes to report, as the passage only mentions a fact and a relation.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 2,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "close-kinship",
+      "family": "close-pair",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Camille Rey est la soeur de Marie Rey.",
+          "seconds": 3.6004775000037625,
+          "completion_tokens": 124,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\"fact\": \"Camille Rey est la soeur de Marie Rey\", \"entities\": [\"Camille Rey\", \"Marie Rey\"]}\n  ],\n  \"relations\": [\n    {\"subject\": \"Camille Rey\", \"predicate\": \"soeur de\", \"object\": \"Marie Rey\"}\n  ],\n  \"attributes\": []\n}\n```\n\nNote that there are no attributes to report, as the passage only mentions a relationship between two entities and does not provide any additional information about them.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        },
+        {
+          "text": "Camille Rey est la belle-soeur de Marie Rey.",
+          "seconds": 3.5962810420023743,
+          "completion_tokens": 126,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\"fact\": \"Camille Rey est la belle-soeur de Marie Rey\", \"entities\": [\"Camille Rey\", \"Marie Rey\"]}\n  ],\n  \"relations\": [\n    {\"subject\": \"Camille Rey\", \"predicate\": \"belle-soeur de\", \"object\": \"Marie Rey\"}\n  ],\n  \"attributes\": []\n}\n```\n\nNote that there are no attributes to report, as the passage only mentions a relationship between two entities, without providing any additional information about them.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 2,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "close-possession",
+      "family": "close-pair",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Wiscale possede le serveur Hydra.",
+          "seconds": 3.680280959000811,
+          "completion_tokens": 125,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\n      \"fact\": \"Wiscale possède le serveur Hydra.\",\n      \"entities\": [\"Wiscale\", \"Hydra\"]\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject\": \"Wiscale\",\n      \"predicate\": \"possède\",\n      \"object\": \"Hydra\"\n    }\n  ],\n  \"attributes\": []\n}\n```\n\nNote that there are no attributes to report, as the passage only mentions a single fact and a relation between two entities.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        },
+        {
+          "text": "Wiscale loue le serveur Hydra.",
+          "seconds": 3.624714083998697,
+          "completion_tokens": 125,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\n      \"fact\": \"Wiscale loue le serveur Hydra.\",\n      \"entities\": [\"Wiscale\", \"Hydra\"]\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject\": \"Wiscale\",\n      \"predicate\": \"loue\",\n      \"object\": \"Hydra\"\n    }\n  ],\n  \"attributes\": []\n}\n```\n\nNote that there are no attributes to report, as the passage does not provide any information about properties or characteristics of the entities mentioned.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 2,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "close-symmetry",
+      "family": "close-pair",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Alice Rey travaille avec Bob Neri.",
+          "seconds": 3.860180000003311,
+          "completion_tokens": 131,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\n      \"fact\": \"Alice Rey travaille avec Bob Neri.\",\n      \"entities\": [\"Alice Rey\", \"Bob Neri\"]\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject\": \"Alice Rey\",\n      \"predicate\": \"travaille avec\",\n      \"object\": \"Bob Neri\"\n    }\n  ],\n  \"attributes\": []\n}\n```\n\nNote that there are no attributes to report, as the passage does not provide any information about Alice Rey or Bob Neri beyond their relationship.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        },
+        {
+          "text": "Alice Rey travaille pour Bob Neri.",
+          "seconds": 3.7888241250038845,
+          "completion_tokens": 131,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\n      \"fact\": \"Alice Rey travaille pour Bob Neri.\",\n      \"entities\": [\"Alice Rey\", \"Bob Neri\"]\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject\": \"Alice Rey\",\n      \"predicate\": \"travaille pour\",\n      \"object\": \"Bob Neri\"\n    }\n  ],\n  \"attributes\": []\n}\n```\n\nNote that there are no attributes to report, as the passage only mentions a relationship between two entities, without providing any additional information about them.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 2,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "close-homonyms",
+      "family": "close-pair",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Marie Dupont habite a Lyon. Marie Dupond habite a Nantes.",
+          "seconds": 5.26710120899952,
+          "completion_tokens": 181,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\"fact\": \"Marie Dupont habite à Lyon.\", \"entities\": [\"Marie Dupont\", \"Lyon\"]},\n    {\"fact\": \"Marie Dupond habite à Nantes.\", \"entities\": [\"Marie Dupond\", \"Nantes\"]}\n  ],\n  \"relations\": [\n    {\"subject\": \"Marie Dupond\", \"predicate\": \"habite à\", \"object\": \"Nantes\"},\n    {\"subject\": \"Marie Dupont\", \"predicate\": \"habite à\", \"object\": \"Lyon\"}\n  ],\n  \"attributes\": []\n}\n```\n\nNote that there are no attributes to report, as the passage only mentions the locations where Marie Dupont and Marie Dupond live, without providing any additional information about them.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "fr-possessive",
+      "family": "nominal-fr",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Marie Dupont a une soeur, Camille Dupont. Camille Dupont a 15 ans et travaille chez Wiscale.",
+          "seconds": 5.454026375009562,
+          "completion_tokens": 215,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\"fact\": \"Camille Dupont a 15 ans\", \"entities\": [\"Camille Dupont\", \"15\"]},\n    {\"fact\": \"Camille Dupont travaille chez Wiscale\", \"entities\": [\"Camille Dupont\", \"Wiscale\"]}\n  ],\n  \"relations\": [\n    {\"subject\": \"Camille Dupont\", \"predicate\": \"soeur de\", \"object\": \"Marie Dupont\"},\n    {\"subject\": \"Camille Dupont\", \"predicate\": \"travaille chez\", \"object\": \"Wiscale\"}\n  ],\n  \"attributes\": [\n    {\"entity\": \"Camille Dupont\", \"key\": \"age\", \"value\": 15}\n  ]\n}\n```\n\nNote that I've kept the \"travaille chez\" relation as is, even though it's a possessive, because the passage states it as a separate fact from the \"soeur de\" relation.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "fr-employment-date",
+      "family": "nominal-fr",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Bruno Durand dirige Wiscale depuis 2019.",
+          "seconds": 4.271119415992871,
+          "completion_tokens": 167,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\n      \"fact\": \"Bruno Durand dirige Wiscale depuis 2019.\",\n      \"entities\": [\"Bruno Durand\", \"Wiscale\"]\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject\": \"Bruno Durand\",\n      \"predicate\": \"dirige\",\n      \"object\": \"Wiscale\"\n    }\n  ],\n  \"attributes\": [\n    {\n      \"entity\": \"Bruno Durand\",\n      \"key\": \"année de début de direction\",\n      \"value\": 2019\n    }\n  ]\n}\n```\n\nNote: I used the passage's language, which appears to be French, to extract the facts, relations, and attributes.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "fr-pronoun",
+      "family": "nominal-fr",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Bruno Durand dirige Wiscale. Il habite a Lyon.",
+          "seconds": 4.20577229099581,
+          "completion_tokens": 165,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\"fact\": \"bruno durand dirige wiscale\", \"entities\": [\"bruno durand\", \"wiscale\"]},\n    {\"fact\": \"bruno durand habite a lyon\", \"entities\": [\"bruno durand\", \"lyon\"]}\n  ],\n  \"relations\": [\n    {\"subject\": \"bruno durand\", \"predicate\": \"dirige\", \"object\": \"wiscale\"},\n    {\"subject\": \"bruno durand\", \"predicate\": \"habite\", \"object\": \"lyon\"}\n  ],\n  \"attributes\": []\n}\n```\n\nNote that there are no attributes to report, as the passage only mentions relationships and facts about the entities.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "fr-converse-stated",
+      "family": "nominal-fr",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Wiscale emploie Alice Martin. Alice Martin travaille pour Wiscale depuis 2019.",
+          "seconds": 6.252511416998459,
+          "completion_tokens": 243,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\n      \"fact\": \"Alice Martin travaille pour Wiscale depuis 2019.\",\n      \"entities\": [\"Alice Martin\", \"Wiscale\"]\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject\": \"Alice Martin\",\n      \"predicate\": \"travaille pour\",\n      \"object\": \"Wiscale\"\n    },\n    {\n      \"subject\": \"Alice Martin\",\n      \"predicate\": \"travaille depuis\",\n      \"object\": \"2019\"\n    }\n  ],\n  \"attributes\": [\n    {\n      \"entity\": \"Alice Martin\",\n      \"key\": \"employeur\",\n      \"value\": \"Wiscale\"\n    },\n    {\n      \"entity\": \"Alice Martin\",\n      \"key\": \"début de carrière\",\n      \"value\": 2019\n    }\n  ]\n}\n```\n\nNote that I've used the passage's language, which is French, to extract the facts, relations, and attributes. I've also followed the instructions to use short lowercase keys for attributes and to omit anything the passage does not state.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "en-possessive",
+      "family": "nominal-en",
+      "lang": "en",
+      "passages": [
+        {
+          "text": "Sarah Miller has a brother, Tom Miller. Tom Miller is 22 and works at Northwind.",
+          "seconds": 6.429521832993487,
+          "completion_tokens": 243,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\"fact\": \"Sarah Miller has a brother.\", \"entities\": [\"Sarah Miller\", \"Tom Miller\"]},\n    {\"fact\": \"Tom Miller is 22.\", \"entities\": [\"Tom Miller\"]},\n    {\"fact\": \"Tom Miller works at Northwind.\", \"entities\": [\"Tom Miller\", \"Northwind\"]}\n  ],\n  \"relations\": [\n    {\"subject\": \"Sarah Miller\", \"predicate\": \"has a brother\", \"object\": \"Tom Miller\"},\n    {\"subject\": \"Tom Miller\", \"predicate\": \"is\", \"object\": \"22\"},\n    {\"subject\": \"Tom Miller\", \"predicate\": \"works at\", \"object\": \"Northwind\"}\n  ],\n  \"attributes\": [\n    {\"entity\": \"Tom Miller\", \"key\": \"age\", \"value\": 22}\n  ]\n}\n```\n\nNote that I've used the passage's language, which appears to be informal English, to write the facts, relations, and attributes. I've also followed the instructions to use short lowercase keys for attributes and to omit anything the passage does not state.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "en-employment-date",
+      "family": "nominal-en",
+      "lang": "en",
+      "passages": [
+        {
+          "text": "David Clarke runs Northwind since 2019.",
+          "seconds": 5.145998624997446,
+          "completion_tokens": 197,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\n      \"fact\": \"David Clarke runs Northwind since 2019.\",\n      \"entities\": [\"David Clarke\", \"Northwind\"]\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject\": \"David Clarke\",\n      \"predicate\": \"runs\",\n      \"object\": \"Northwind\"\n    }\n  ],\n  \"attributes\": [\n    {\n      \"entity\": \"David Clarke\",\n      \"key\": \"since\",\n      \"value\": 2019\n    }\n  ]\n}\n```\n\nI extracted the following facts, relations, and attributes:\n\n**Facts:**\n\n1. David Clarke runs Northwind since 2019.\n\t* Topics: david clarke, northwind, date\n\n**Relations:**\n\n1. David Clarke / runs / Northwind\n\n**Attributes:**\n\n1. David Clarke / since / 2019",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "en-pronoun",
+      "family": "nominal-en",
+      "lang": "en",
+      "passages": [
+        {
+          "text": "David Clarke runs Northwind. He lives in Leeds.",
+          "seconds": 4.115758959000232,
+          "completion_tokens": 156,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\"fact\": \"David Clarke runs Northwind.\", \"entities\": [\"David Clarke\", \"Northwind\"]},\n    {\"fact\": \"David Clarke lives in Leeds.\", \"entities\": [\"David Clarke\", \"Leeds\"]}\n  ],\n  \"relations\": [\n    {\"subject\": \"David Clarke\", \"predicate\": \"runs\", \"object\": \"Northwind\"},\n    {\"subject\": \"David Clarke\", \"predicate\": \"lives in\", \"object\": \"Leeds\"}\n  ],\n  \"attributes\": []\n}\n```\n\nNote that there are no attributes to report, as the passage does not provide any information about properties or characteristics of the entities mentioned.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "en-converse-stated",
+      "family": "nominal-en",
+      "lang": "en",
+      "passages": [
+        {
+          "text": "Northwind employs Emma Stone. Emma Stone works for Northwind since 2019.",
+          "seconds": 6.322732957996777,
+          "completion_tokens": 240,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Based on the passage, I will return the following JSON object:\n\n```\n{\n  \"facts\": [\n    {\n      \"fact\": \"Emma Stone works for Northwind since 2019.\",\n      \"entities\": [\"Emma Stone\", \"Northwind\"]\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject\": \"Emma Stone\",\n      \"predicate\": \"works for\",\n      \"object\": \"Northwind\"\n    }\n  ],\n  \"attributes\": [\n    {\n      \"entity\": \"Emma Stone\",\n      \"key\": \"employeur\",\n      \"value\": \"Northwind\"\n    },\n    {\n      \"entity\": \"Emma Stone\",\n      \"key\": \"date de début\",\n      \"value\": 2019\n    }\n  ]\n}\n```\n\nHere's a breakdown of the three sections:\n\n**Facts**\n\n1. \"Emma Stone works for Northwind since 2019.\"\n\t* Topics: emma stone, northwind, employment, date\n\n**Relations**\n\n1. Emma Stone / works for / Northwind\n\n**Attributes**\n\n1. Emma Stone / employeur / Northwind\n2. Emma Stone / date de début / 2019",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "edge-no-relation",
+      "family": "edge",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Il pleuvait sur la ville hier soir.",
+          "seconds": 5.358987917003105,
+          "completion_tokens": 199,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\n      \"fact\": \"Il pleuvait sur la ville hier soir.\",\n      \"entities\": [\"ville\"]\n    }\n  ],\n  \"relations\": [],\n  \"attributes\": []\n}\n```\n\nExplanation:\n\n1. \"facts\": The passage states a single fact, which is a sentence describing the weather in the city. The entities involved are the city, but it's not a named entity, so I've only listed it as a single entity. The topics concerned are \"ville\" (city) and \"meteo\" (weather).\n2. \"relations\": There are no explicit relationships between two named entities in the passage.\n3. \"attributes\": There are no properties attributed to any named entity in the passage.\n\nNote that the passage is in French, so the language of the output should also be French. I've kept the language consistent throughout the output.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "edge-hostile-format",
+      "family": "edge",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Le projet \"Ardoise {beta}\" est pilote par Nadia Kerouac chez Wiscale.",
+          "seconds": 7.4987684579973575,
+          "completion_tokens": 279,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\n      \"fact\": \"Le projet 'Ardoise {beta}' est pilote par Nadia Kerouac chez Wiscale.\",\n      \"entities\": [\"Nadia Kerouac\", \"Wiscale\", \"Ardoise {beta}\"]\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject\": \"Nadia Kerouac\",\n      \"predicate\": \"pilote\",\n      \"object\": \"Ardoise {beta}\"\n    },\n    {\n      \"subject\": \"Nadia Kerouac\",\n      \"predicate\": \"travaille chez\",\n      \"object\": \"Wiscale\"\n    }\n  ],\n  \"attributes\": [\n    {\n      \"entity\": \"Nadia Kerouac\",\n      \"key\": \"employeur\",\n      \"value\": \"Wiscale\"\n    }\n  ]\n}\n```\n\nNote that I've kept the fact as a single sentence, but extracted the entities mentioned in the passage. For the relations, I've used the predicate \"pilote\" and \"travaille chez\" as they are the most concise labels that capture the relationship between the entities. For the attributes, I've used the key \"employeur\" to indicate that Nadia Kerouac works at Wiscale.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "edge-verbose-truncation",
+      "family": "edge",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Nadia Kerouac dirige Wiscale depuis 2018. Wiscale possede le serveur Hydra, qui dispose de 128 Go de RAM. Bruno Durand, 42 ans, est le directeur technique de Wiscale et habite a Lyon. Alice Martin a rejoint l'equipe en janvier 2025 comme ingenieure. Le projet Ardoise, lance en mars 2025, est pilote par Alice Martin. Wiscale emploie 37 personnes et son siege est a Geneve.",
+          "seconds": 13.995236415998079,
+          "completion_tokens": 512,
+          "truncated": true,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\"fact\": \"Nadia Kerouac dirige Wiscale depuis 2018.\", \"entities\": [\"Nadia Kerouac\", \"Wiscale\"]},\n    {\"fact\": \"Wiscale possede le serveur Hydra.\", \"entities\": [\"Wiscale\", \"Hydra\"]},\n    {\"fact\": \"Bruno Durand est le directeur technique de Wiscale.\", \"entities\": [\"Bruno Durand\", \"Wiscale\"]},\n    {\"fact\": \"Alice Martin a rejoint l'equipe en janvier 2025 comme ingenieure.\", \"entities\": [\"Alice Martin\", \"Wiscale\"]},\n    {\"fact\": \"Le projet Ardoise, lance en mars 2025, est pilote par Alice Martin.\", \"entities\": [\"Alice Martin\", \"Le projet Ardoise\"]},\n    {\"fact\": \"Wiscale emploie 37 personnes.\", \"entities\": [\"Wiscale\"]},\n    {\"fact\": \"Le siege de Wiscale est a Geneve.\", \"entities\": [\"Wiscale\", \"Geneve\"]}\n  ],\n  \"relations\": [\n    {\"subject\": \"Nadia Kerouac\", \"predicate\": \"dirige\", \"object\": \"Wiscale\"},\n    {\"subject\": \"Wiscale\", \"predicate\": \"possede\", \"object\": \"Hydra\"},\n    {\"subject\": \"Bruno Durand\", \"predicate\": \"est le directeur technique\", \"object\": \"Wiscale\"},\n    {\"subject\": \"Alice Martin\", \"predicate\": \"a rejoint l'equipe\", \"object\": \"Wiscale\"},\n    {\"subject\": \"Alice Martin\", \"predicate\": \"pilote\", \"object\": \"Le projet Ardoise\"},\n    {\"subject\": \"Wiscale\", \"predicate\": \"emploie\", \"object\": \"37\"}\n  ],\n  \"attributes\": [\n    {\"entity\": \"Nadia Kerouac\", \"key\": \"fonction\", \"value\": \"dirige\"},\n    {\"entity\": \"Wiscale\", \"key\": \"serveur\", \"value\": \"Hydra\"},\n    {\"entity\": \"Bruno Durand\", \"key\": \"age\", \"value\": \"42\"},\n    {\"entity\": \"Alice Martin\", \"key\": \"fonction\", \"value\": \"ingenieure\"},\n    {\"entity\": \"Wiscale\", \"key\": \"siege\", \"value\": \"",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "edge-accents-hyphens",
+      "family": "edge",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Jean-Luc D'Arcy a fonde Eco-Kerite S.a r.l. a Geneve en 2018.",
+          "seconds": 6.737930125003913,
+          "completion_tokens": 241,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\n      \"fact\": \"Jean-Luc D'Arcy a fonde Eco-Kerite S.a r.l. en 2018.\",\n      \"entities\": [\"Jean-Luc D'Arcy\", \"Eco-Kerite S.a r.l.\"]\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject\": \"Jean-Luc D'Arcy\",\n      \"predicate\": \"fonde\",\n      \"object\": \"Eco-Kerite S.a r.l.\"\n    }\n  ],\n  \"attributes\": [\n    {\n      \"entity\": \"Eco-Kerite S.a r.l.\",\n      \"key\": \"fondation\",\n      \"value\": 2018\n    }\n  ]\n}\n```\n\nNote that I've kept the fact as a single sentence, and extracted the entities mentioned in the passage. For the relations, I've followed the instructions to use the entity's full name in lowercase, and to use a short label for the predicate. I've also omitted any attributes that are not explicitly stated in the passage.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "edge-mixed-lang",
+      "family": "edge",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Marie Dupont a rejoint Northwind Data Services en janvier 2025.",
+          "seconds": 6.429591666004853,
+          "completion_tokens": 233,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\n      \"fact\": \"Marie Dupont a rejoint Northwind Data Services en janvier 2025.\",\n      \"entities\": [\"Marie Dupont\", \"Northwind Data Services\"]\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject\": \"Marie Dupont\",\n      \"predicate\": \"a rejoint\",\n      \"object\": \"Northwind Data Services\"\n    }\n  ],\n  \"attributes\": [\n    {\n      \"entity\": \"Marie Dupont\",\n      \"key\": \"employeur\",\n      \"value\": \"Northwind Data Services\"\n    },\n    {\n      \"entity\": \"Marie Dupont\",\n      \"key\": \"date de rejointure\",\n      \"value\": \"janvier 2025\"\n    }\n  ]\n}\n```\n\nNote that I've used the passage's language, which is French, to extract the facts, relations, and attributes. I've also followed the instructions to use short lowercase keys for attributes and to omit anything the passage does not state.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "close-role",
+      "family": "close-pair",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Alice Martin travaille chez Wiscale.",
+          "seconds": 3.836768042005133,
+          "completion_tokens": 135,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\n      \"fact\": \"Alice Martin travaille chez Wiscale.\",\n      \"entities\": [\"Alice Martin\", \"Wiscale\"]\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject\": \"Alice Martin\",\n      \"predicate\": \"travaille chez\",\n      \"object\": \"Wiscale\"\n    }\n  ],\n  \"attributes\": []\n}\n```\n\nNote that there are no attributes to report, as the passage only mentions a relationship between Alice Martin and Wiscale, without providing any additional information about Alice Martin or Wiscale.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        },
+        {
+          "text": "Alice Martin dirige Wiscale.",
+          "seconds": 3.618707291010651,
+          "completion_tokens": 132,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\n      \"fact\": \"Alice Martin dirige Wiscale.\",\n      \"entities\": [\"Alice Martin\", \"Wiscale\"]\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject\": \"Alice Martin\",\n      \"predicate\": \"dirige\",\n      \"object\": \"Wiscale\"\n    }\n  ],\n  \"attributes\": []\n}\n```\n\nNote that there are no attributes to report, as the passage only mentions a relationship between Alice Martin and Wiscale, without providing any additional information about Alice Martin or Wiscale.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 2,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "close-negation",
+      "family": "close-pair",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Alice Martin travaille chez Wiscale.",
+          "seconds": 3.7778362079989165,
+          "completion_tokens": 135,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\n      \"fact\": \"Alice Martin travaille chez Wiscale.\",\n      \"entities\": [\"Alice Martin\", \"Wiscale\"]\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject\": \"Alice Martin\",\n      \"predicate\": \"travaille chez\",\n      \"object\": \"Wiscale\"\n    }\n  ],\n  \"attributes\": []\n}\n```\n\nNote that there are no attributes to report, as the passage only mentions a relationship between Alice Martin and Wiscale, without providing any additional information about Alice Martin or Wiscale.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        },
+        {
+          "text": "Alice Martin a quitte Wiscale en 2024.",
+          "seconds": 3.541694125000504,
+          "completion_tokens": 125,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\n      \"fact\": \"Alice Martin a quitté Wiscale en 2024.\",\n      \"entities\": [\"Alice Martin\", \"Wiscale\"]\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject\": \"Alice Martin\",\n      \"predicate\": \"a quitté\",\n      \"object\": \"Wiscale\"\n    }\n  ],\n  \"attributes\": []\n}\n```\n\nNote that there are no attributes to report, as the passage only mentions a fact and a relation.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 2,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "close-kinship",
+      "family": "close-pair",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Camille Rey est la soeur de Marie Rey.",
+          "seconds": 3.4122282919997815,
+          "completion_tokens": 124,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\"fact\": \"Camille Rey est la soeur de Marie Rey\", \"entities\": [\"Camille Rey\", \"Marie Rey\"]}\n  ],\n  \"relations\": [\n    {\"subject\": \"Camille Rey\", \"predicate\": \"soeur de\", \"object\": \"Marie Rey\"}\n  ],\n  \"attributes\": []\n}\n```\n\nNote that there are no attributes to report, as the passage only mentions a relationship between two entities and does not provide any additional information about them.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        },
+        {
+          "text": "Camille Rey est la belle-soeur de Marie Rey.",
+          "seconds": 3.616662417000043,
+          "completion_tokens": 129,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\n      \"fact\": \"Camille Rey est la belle-soeur de Marie Rey.\",\n      \"entities\": [\"Camille Rey\", \"Marie Rey\"]\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject\": \"Camille Rey\",\n      \"predicate\": \"belle-soeur de\",\n      \"object\": \"Marie Rey\"\n    }\n  ],\n  \"attributes\": []\n}\n```\n\nNote that there are no attributes to extract, as the passage only mentions a relationship between two entities.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 2,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "close-possession",
+      "family": "close-pair",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Wiscale possede le serveur Hydra.",
+          "seconds": 3.524663000003784,
+          "completion_tokens": 125,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\n      \"fact\": \"Wiscale possède le serveur Hydra.\",\n      \"entities\": [\"Wiscale\", \"Hydra\"]\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject\": \"Wiscale\",\n      \"predicate\": \"possède\",\n      \"object\": \"Hydra\"\n    }\n  ],\n  \"attributes\": []\n}\n```\n\nNote that there are no attributes to report, as the passage only mentions a single fact and a relation between two entities.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        },
+        {
+          "text": "Wiscale loue le serveur Hydra.",
+          "seconds": 3.55391062500712,
+          "completion_tokens": 125,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\n      \"fact\": \"Wiscale loue le serveur Hydra.\",\n      \"entities\": [\"Wiscale\", \"Hydra\"]\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject\": \"Wiscale\",\n      \"predicate\": \"loue\",\n      \"object\": \"Hydra\"\n    }\n  ],\n  \"attributes\": []\n}\n```\n\nNote that there are no attributes to report, as the passage does not provide any information about properties or characteristics of the entities mentioned.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 2,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "close-symmetry",
+      "family": "close-pair",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Alice Rey travaille avec Bob Neri.",
+          "seconds": 3.582508332998259,
+          "completion_tokens": 131,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\n      \"fact\": \"Alice Rey travaille avec Bob Neri.\",\n      \"entities\": [\"Alice Rey\", \"Bob Neri\"]\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject\": \"Alice Rey\",\n      \"predicate\": \"travaille avec\",\n      \"object\": \"Bob Neri\"\n    }\n  ],\n  \"attributes\": []\n}\n```\n\nNote that there are no attributes to report, as the passage does not provide any information about Alice Rey or Bob Neri beyond their relationship.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        },
+        {
+          "text": "Alice Rey travaille pour Bob Neri.",
+          "seconds": 3.7606071250047535,
+          "completion_tokens": 131,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\n      \"fact\": \"Alice Rey travaille pour Bob Neri.\",\n      \"entities\": [\"Alice Rey\", \"Bob Neri\"]\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject\": \"Alice Rey\",\n      \"predicate\": \"travaille pour\",\n      \"object\": \"Bob Neri\"\n    }\n  ],\n  \"attributes\": []\n}\n```\n\nNote that there are no attributes to report, as the passage only mentions a relationship between two entities, without providing any additional information about them.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 2,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "close-homonyms",
+      "family": "close-pair",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Marie Dupont habite a Lyon. Marie Dupond habite a Nantes.",
+          "seconds": 5.023846541007515,
+          "completion_tokens": 181,
+          "truncated": false,
+          "parse_ok": false,
+          "raw": "Here is the JSON object with the extracted facts, relations, and attributes:\n\n```\n{\n  \"facts\": [\n    {\"fact\": \"Marie Dupont habite à Lyon.\", \"entities\": [\"Marie Dupont\", \"Lyon\"]},\n    {\"fact\": \"Marie Dupond habite à Nantes.\", \"entities\": [\"Marie Dupond\", \"Nantes\"]}\n  ],\n  \"relations\": [\n    {\"subject\": \"Marie Dupond\", \"predicate\": \"habite à\", \"object\": \"Nantes\"},\n    {\"subject\": \"Marie Dupont\", \"predicate\": \"habite à\", \"object\": \"Lyon\"}\n  ],\n  \"attributes\": []\n}\n```\n\nNote that there are no attributes to report, as the passage only mentions the locations where Marie Dupont and Marie Dupond live, without providing any additional information about them.",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 2
+    }
+  ],
+  "totals": {
+    "fatal": 48,
+    "major": 0,
+    "minor": 0,
+    "parse_rate": 0.0,
+    "truncated": 2,
+    "p50_seconds": 4.271119415992871,
+    "p95_seconds": 7.4987684579973575
+  },
+  "by_language": {
+    "en": {
+      "fatal": 8,
+      "major": 0,
+      "minor": 0,
+      "parse_rate": 0.0,
+      "truncated": 0,
+      "p50_seconds": 5.145998624997446,
+      "p95_seconds": 6.429521832993487
+    },
+    "fr": {
+      "fatal": 40,
+      "major": 0,
+      "minor": 0,
+      "parse_rate": 0.0,
+      "truncated": 2,
+      "p50_seconds": 3.860180000003311,
+      "p95_seconds": 7.4987684579973575
+    }
+  },
+  "by_family": {
+    "close-pair": {
+      "fatal": 22,
+      "major": 0,
+      "minor": 0,
+      "parse_rate": 0.0,
+      "truncated": 0,
+      "p50_seconds": 3.618707291010651,
+      "p95_seconds": 5.023846541007515
+    },
+    "edge": {
+      "fatal": 10,
+      "major": 0,
+      "minor": 0,
+      "parse_rate": 0.0,
+      "truncated": 2,
+      "p50_seconds": 6.429591666004853,
+      "p95_seconds": 13.995236415998079
+    },
+    "nominal-en": {
+      "fatal": 8,
+      "major": 0,
+      "minor": 0,
+      "parse_rate": 0.0,
+      "truncated": 0,
+      "p50_seconds": 5.145998624997446,
+      "p95_seconds": 6.429521832993487
+    },
+    "nominal-fr": {
+      "fatal": 8,
+      "major": 0,
+      "minor": 0,
+      "parse_rate": 0.0,
+      "truncated": 0,
+      "p50_seconds": 4.546974666998722,
+      "p95_seconds": 6.331382415999542
+    }
+  },
+  "mirror_gap": {
+    "fr": {
+      "fatal": 8,
+      "major": 0,
+      "minor": 0,
+      "parse_rate": 0.0,
+      "truncated": 0,
+      "p50_seconds": 4.546974666998722,
+      "p95_seconds": 6.331382415999542
+    },
+    "en": {
+      "fatal": 8,
+      "major": 0,
+      "minor": 0,
+      "parse_rate": 0.0,
+      "truncated": 0,
+      "p50_seconds": 5.145998624997446,
+      "p95_seconds": 6.429521832993487
+    },
+    "weighted_fr": 80,
+    "weighted_en": 80,
+    "gap": 0,
+    "weaker": null
+  }
+}
