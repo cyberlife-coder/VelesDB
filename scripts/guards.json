@@ -1003,6 +1003,12 @@
       "workflow": ".github/workflows/ci.yml",
       "job": "perf-smoke",
       "reason": "Produces the artefact compare_perf.py then judges (ci.yml:1108, one step before). It has no non-zero exit path at all — measured — so it cannot refuse anything, and declaring it a guard would overstate the registry. The claim is checked: the suite reads its source and fails this entry if a failure path ever appears."
+    },
+    {
+      "script": "scripts/constrained-decoding-probe.py",
+      "workflow": ".github/workflows/constrained-decoding-probe.yml",
+      "job": "verify",
+      "reason": "A measurement, not a gate. It asks a real Ollama whether `format` keeps a section the schema does not declare — the question #1944 could not settle by reading the crate — and PRINTS the verdict either way. Its only non-zero exit is the daemon being unreachable, i.e. the probe failing to run, never the answer being inconvenient; it gates nothing and no PR waits on it. It runs outside `CI Success` on its own branch and on manual dispatch, because it pulls a model."
     }
   ]
 }

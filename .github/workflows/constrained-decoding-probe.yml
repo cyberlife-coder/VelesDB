@@ -1,0 +1,71 @@
+name: Verify Constrained Decoding
+
+# One question, one real model, no GPU: does Ollama's `format` keep a section
+# the schema does not declare? It decides whether the campaign's schema (#1943),
+# which omits `facts`, would have silently emptied every extraction — and so
+# whether the superset the crate now sends (#1944) is prudence or a correction.
+#
+# Deliberately NOT part of `CI Success`: it pulls a model and talks to a local
+# daemon, which is not a gate any PR should wait on. It runs on push to its own
+# branch and on manual dispatch, and it reports rather than blocks.
+
+on:
+  push:
+    branches:
+      - ci/verify-constrained-decoding
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Ollama model id (CPU-sized — this runner has no GPU)"
+        required: false
+        default: "qwen3:0.6b"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Does `format` keep what it does not name?
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          nohup ollama serve > "${RUNNER_TEMP}/ollama.log" 2>&1 &
+          for _ in $(seq 1 60); do
+            if curl -sf http://localhost:11434/ > /dev/null; then
+              echo "ollama up"; exit 0
+            fi
+            sleep 2
+          done
+          echo "ollama never came up"; cat "${RUNNER_TEMP}/ollama.log"; exit 1
+
+      - name: Pull the model
+        env:
+          MODEL: ${{ github.event.inputs.model || 'qwen3:0.6b' }}
+        run: |
+          # A small model is the RIGHT instrument here, not a concession: the
+          # question is a property of the grammar compiler, identical at every
+          # size. A 14B model would answer the same thing and take an hour of
+          # CPU inference to do it.
+          ollama pull "$MODEL"
+          ollama list
+
+      - name: Verify
+        env:
+          MODEL: ${{ github.event.inputs.model || 'qwen3:0.6b' }}
+        run: |
+          python3 scripts/constrained-decoding-probe.py \
+            --model "$MODEL" \
+            --out "${RUNNER_TEMP}/constrained-decoding.json"
+
+      - name: Upload the raw replies
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: constrained-decoding-run
+          path: ${{ runner.temp }}/constrained-decoding.json
+          if-no-files-found: warn
