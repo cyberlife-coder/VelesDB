@@ -564,6 +564,26 @@ def http_json(url: str, payload: "dict | None" = None, token: "str | None" = Non
     return json.loads(body) if body.strip() else {}
 
 
+def generation_timeout(cap: int) -> int:
+    """A client timeout scaled to what the server was ASKED to generate.
+
+    `http_json` defaults to 400 s, which was chosen against a machine that
+    generates quickly. It is not scaled to `num_predict`, and on a slow host it
+    is the cap that decides how long a reply takes: raising the cap to 1024 or
+    4096 raises the time proportionally, and a fixed ceiling turns the larger
+    arms of an experiment into timeouts.
+
+    A timeout is not a bad measurement here — nothing catches it, so it crashes
+    the run and no result file is written, which the caller reports as an
+    inability to measure. But an experiment that cannot complete answers
+    nothing, and that is a poor reason to lose a two-hour run.
+
+    Two seconds per token is far above any real rate; the point is a bound that
+    scales, not a prediction. The job's own timeout stays the real ceiling.
+    """
+    return max(400, cap * 2)
+
+
 def http_text(url: str, timeout: int = 30) -> str:
     """One GET whose body is read as text, for endpoints that answer no JSON.
 
@@ -608,7 +628,8 @@ class OpenAiBackend:
             "max_tokens": self.cap,
         }
         started = time.monotonic()
-        response = http_json(f"{self.base_url}/v1/chat/completions", body, self.token)
+        response = http_json(f"{self.base_url}/v1/chat/completions", body, self.token,
+                             timeout=generation_timeout(self.cap))
         elapsed = time.monotonic() - started
         choice = (response.get("choices") or [{}])[0]
         return {
@@ -818,7 +839,8 @@ class OllamaBackend:
         if self.schema is not None:
             body["format"] = self.schema
         started = time.monotonic()
-        response = http_json(f"{self.base_url}/api/generate", body)
+        response = http_json(f"{self.base_url}/api/generate", body,
+                             timeout=generation_timeout(self.cap))
         elapsed = time.monotonic() - started
         return {
             "seconds": elapsed,
