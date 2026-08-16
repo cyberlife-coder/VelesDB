@@ -342,23 +342,49 @@ jobs:
             --out "${RUNNER_TEMP}/cap-1024.json" || true
           test -f "${RUNNER_TEMP}/cap-1024.json" || { echo "could not measure"; exit 1; }
 
+      - name: Constrained, uncensored
+        run: |
+          # 512 and 1024 can both censor the distribution: a reply that WOULD
+          # have run to 1500 tokens is recorded as exactly the cap. Picking a
+          # value from censored data would just re-derive the cap already in
+          # place. This arm is high enough to observe the real tail, and is a
+          # measurement rather than a proposal — the crate is not going to ship
+          # 4096.
+          python3 scripts/bench-memory-extraction.py screen \
+            --backend ollama --config qwen3:14b --constrained \
+            --url http://localhost:11434 --num-ctx 4096 --generation-cap 4096 \
+            --out "${RUNNER_TEMP}/cap-4096.json" || true
+          test -f "${RUNNER_TEMP}/cap-4096.json" || { echo "could not measure"; exit 1; }
+
       - name: Verdict
         if: always()
         run: |
-          for cap in 512 1024; do
+          for cap in 512 1024 4096; do
             file="${RUNNER_TEMP}/cap-${cap}.json"
             [ -f "$file" ] || { echo "cap ${cap}: not produced"; continue; }
             python3 - "$file" "$cap" <<'PY'
           import json, sys
           run = json.load(open(sys.argv[1]))
           t = run["totals"]
+          # The distribution, not just the verdict: freezing a cap needs the
+          # tail it has to clear, and `max` is only meaningful when it is below
+          # the cap — at the cap it means the reply was cut, not that it ended.
+          lens = sorted(p["completion_tokens"] for c in run.get("cases", [])
+                        for p in c.get("passages", [])
+                        if isinstance(p.get("completion_tokens"), int))
+          cap = int(sys.argv[2])
+          at_cap = sum(1 for n in lens if n >= cap)
           print(f"cap={sys.argv[2]:>5} fatal={t['fatal']} major={t['major']} "
                 f"parse_rate={t['parse_rate']:.4f} truncated={t['truncated']} "
                 f"num_predict={run.get('settings', {}).get('num_predict')}")
+          if lens:
+              print(f"{'':10}tokens n={len(lens)} p50={lens[len(lens)//2]} "
+                    f"p95={lens[int(0.95 * len(lens)) - 1]} max={max(lens)} "
+                    f"at_or_over_cap={at_cap}")
           PY
           done
-          echo "If truncated falls to 0 and fatal follows, the regression is the"
-          echo "cap, not the grammar — and there is no size-dependent rule to encode."
+          echo "Read `max` against its own cap: equal to it means censored, below"
+          echo "it means observed. Only the uncensored arm can say what the tail is."
 
       - name: Upload
         if: always()
@@ -368,4 +394,5 @@ jobs:
           path: |
             ${{ runner.temp }}/cap-512.json
             ${{ runner.temp }}/cap-1024.json
+            ${{ runner.temp }}/cap-4096.json
           if-no-files-found: warn
