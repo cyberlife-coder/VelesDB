@@ -58,6 +58,7 @@ import sys
 import tempfile
 import time
 import unicodedata
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -625,8 +626,35 @@ class OpenAiBackend:
 
     def set_loaded(self, model: str, loaded: bool) -> None:
         action = "load" if loaded else "unload"
-        http_json(f"{self.base_url}/v1/models/{model}/{action}",
-                  payload={}, token=self.token, timeout=900)
+        try:
+            http_json(f"{self.base_url}/v1/models/{model}/{action}",
+                      payload={}, token=self.token, timeout=900)
+        except urllib.error.HTTPError as exc:
+            if exc.code != 404 or not self._is_resident(model):
+                raise
+            # A PROFILE ALIAS (`default:fast`) can be generated against but not
+            # loaded: measured on omlx, `ornith-35b` and `gpt-oss-20b` answer
+            # 200 where `default:fast` answers 404, because the alias is a view
+            # on weights the base model owns. Refusing the whole configuration
+            # over it would drop the profiles this campaign exists to compare —
+            # and residency is already satisfied, which is what the 404 is
+            # checked against rather than assumed.
+
+    def _is_resident(self, model: str) -> bool:
+        """Does the server report this model as loaded right now?
+
+        Consulted only to interpret a 404 from load/unload. Without it a real
+        missing model would be silently treated as a resident alias.
+        """
+        try:
+            status = self.residency()
+        except OSError:
+            return False
+        entries = status.get("models", status) if isinstance(status, dict) else status
+        for entry in entries if isinstance(entries, list) else []:
+            if isinstance(entry, dict) and (entry.get("id") or entry.get("name")) == model:
+                return bool(entry.get("loaded"))
+        return False
 
 
 # Ollama derives its default context from the HOST's VRAM (4k under 24 GiB,
