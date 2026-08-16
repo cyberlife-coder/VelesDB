@@ -52,7 +52,6 @@ mod edges;
 mod enumeration;
 mod execute;
 mod filesystem;
-#[allow(dead_code)] // Wired by the control-surface slice after this internal seam.
 mod live;
 mod orchestrate;
 mod rebuild;
@@ -80,7 +79,6 @@ pub(crate) use execute::journal_workspace;
 pub(crate) use execute::target_embedder_witness;
 pub use execute::{execute, ExecuteOutcome};
 pub use filesystem::{bytes_on_disk, fingerprint};
-#[allow(unused_imports)] // Wired by the control-surface slice after this internal seam.
 pub(crate) use live::prepare_live_switch;
 pub use orchestrate::{migrate, MigrateOutcome};
 #[cfg(test)]

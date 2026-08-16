@@ -36,9 +36,7 @@ use super::execute::journal_workspace;
 use super::state::{MigrationLock, MigrationState, Phase, SwitchState};
 
 #[path = "switchover/live.rs"]
-#[allow(dead_code)] // Wired by the control-surface slice after this internal seam.
 mod live;
-#[allow(unused_imports)] // Wired by the control-surface slice after this internal seam.
 pub(crate) use live::{
     finalize_staged_live_switch, rollback_staged_live_switch, stage_live_switch,
 };
@@ -69,7 +67,6 @@ pub fn switch_over(store: &Path, destination: &Path) -> Result<SwitchOutcome, cr
     run_switch(store, destination, true, false)
 }
 
-#[allow(dead_code)] // Wired by the control-surface slice after this internal seam.
 pub(crate) fn commit_retained_switch(
     store: &Path,
     destination: &Path,
