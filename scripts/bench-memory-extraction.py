@@ -1392,7 +1392,39 @@ def render_report(results: dict) -> str:
     configurations = results.get("configurations", {})
     lines += [_report_row(name, entry) for name, entry in configurations.items()]
     lines += _language_section(configurations)
+    lines += _end_to_end_section(results.get("end_to_end", {}))
     return "\n".join(lines) + "\n"
+
+
+def _end_to_end_section(runs: dict) -> "list[str]":
+    """What phase B actually stored, which screening cannot answer.
+
+    Screening reads the model's reply; this reads the graph the daemon kept
+    afterwards. A drain that never completed is reported as `not drained`
+    rather than as its timeout, because a give-up is not a duration.
+    """
+    if not runs:
+        return []
+    lines = [
+        "",
+        "## End-to-end (what the daemon actually stored)",
+        "",
+        "| configuration | fatal | major | drain | burst p95 | enrichment dropped |",
+        "|---|---|---|---|---|---|",
+    ]
+    for name, entry in runs.items():
+        totals = entry.get("totals", {})
+        burst = entry.get("burst", {})
+        drain = totals.get("max_drain_seconds")
+        drained = any(case.get("entities") and any(case["entities"].values())
+                      for case in entry.get("cases", []))
+        drain_cell = f"{drain:.1f}s" if drained and drain is not None else "not drained"
+        p95 = burst.get("p95_seconds")
+        lines.append(
+            f"| `{name}` | {totals.get('fatal', 0)} | {totals.get('major', 0)} | "
+            f"{drain_cell} | {f'{p95 * 1000:.0f}ms' if p95 is not None else '-'} | "
+            f"{burst.get('autograph_dropped', '-')} |")
+    return lines
 
 
 def _language_section(configurations: dict) -> "list[str]":
@@ -1470,7 +1502,7 @@ def collect_environment(binary: "Path | None" = None) -> dict:
     return environment
 
 
-def merge_configurations(directory: Path) -> dict:
+def merge_configurations(directory: Path, phase: str = "screen") -> dict:
     """Fold every per-configuration result in a tree into one campaign map.
 
     `screen` writes one file per configuration and `report` reads one campaign,
@@ -1482,7 +1514,11 @@ def merge_configurations(directory: Path) -> dict:
     configurations: "dict[str, dict]" = {}
     for path in sorted(directory.rglob("*.json")):
         entry = json.loads(path.read_text(encoding="utf-8"))
-        if "totals" not in entry:
+        # Both phases carry `totals`, with different members: screening has
+        # parse_rate and percentiles, end-to-end has a drain time. Folding them
+        # into one table would print a screening row for a run that never
+        # screened anything, so the phase decides rather than the shape.
+        if entry.get("phase") != phase:
             continue
         name = entry.get("config") or path.stem
         variant = path.parent.name
@@ -1503,7 +1539,8 @@ def cmd_report(args: argparse.Namespace) -> int:
             "campaign": args.campaign or directory.name,
             "environment": collect_environment(
                 Path(args.binary) if getattr(args, "binary", None) else None),
-            "configurations": merge_configurations(directory),
+            "configurations": merge_configurations(directory, "screen"),
+            "end_to_end": merge_configurations(directory, "endtoend"),
         }
         if args.merged_out:
             Path(args.merged_out).write_text(
