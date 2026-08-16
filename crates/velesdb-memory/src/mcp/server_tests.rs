@@ -1090,6 +1090,66 @@ async fn explicit_outline_works_without_a_daemon_default() {
     assert_eq!(stored.ids.len(), 1);
 }
 
+/// A typed edge must reach the graph through the *offline* reader — no model,
+/// no network, no HTTP backend anywhere in the picture (#1945).
+///
+/// The extraction campaign's end-to-end rows read `not drained` with the
+/// outline extractor as well as with a live model, which left two readings
+/// open: an extraction→graph path that links nothing, or a measurement that
+/// stops before the write lands. This closes the first. It asserts the edge is
+/// **readable back** through `entity`, never that the call merely returned —
+/// a green write with an empty graph is exactly the failure being ruled out.
+///
+/// The bounded wait is the instrument, not a workaround: it separates "the
+/// edge never arrives" from "the edge arrives late", and those are different
+/// defects with different owners.
+#[tokio::test]
+async fn outline_extraction_lands_a_typed_edge_in_the_graph() {
+    let (_dir, srv) = server();
+
+    let Json(receipt) = srv
+        .remember_extracted(Parameters(RememberExtractedParams {
+            text: "fact: Alice ships the parser.\nedge: Alice | works_with | Bob".to_owned(),
+            metadata: None,
+            extractor: Some("outline".to_owned()),
+            idempotency_key: None,
+        }))
+        .await
+        .expect("the offline reader must not need a daemon default");
+    let stored = committed_extraction(&srv, receipt).await;
+    assert_eq!(stored.ids.len(), 1, "the `fact:` line is the only fact");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let Json(profile) = srv
+            .entity(Parameters(EntityParams {
+                name: "alice".to_owned(),
+            }))
+            .await
+            .expect("entity lookup");
+        let edge = profile.relations.iter().find(|relation| {
+            relation.predicate == "works_with" && relation.target.to_lowercase().ends_with("bob")
+        });
+        if edge.is_some() {
+            assert!(profile.found, "an entity with an edge is a found entity");
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no `works_with` edge reached the graph from the offline reader; \
+             found={} relations=[{}]",
+            profile.found,
+            profile
+                .relations
+                .iter()
+                .map(|relation| format!("{} -> {}", relation.predicate, relation.target))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        tokio::task::yield_now().await;
+    }
+}
+
 #[tokio::test]
 async fn unknown_per_call_extractor_returns_invalid_params() {
     let (_dir, srv) = server();
