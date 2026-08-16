@@ -70,10 +70,17 @@ jobs:
           # plausibly run. It answers a question the GPU tiers cannot: what a
           # machine with no headroom at all actually gets. A floor is worth
           # publishing precisely because it is unflattering.
+          # `screen` exits 1 when the model produced a FATAL error. On a floor
+          # model that is the measurement, not a broken run — refusing to
+          # continue there would mean this workflow can only report floors that
+          # happen to be good. The honest separator is the artefact: a written
+          # JSON means it measured, a missing one means it could not.
           python3 scripts/bench-memory-extraction.py screen \
             --backend ollama --config "$MODEL" \
             --url http://localhost:11434 --num-ctx 4096 \
-            --out "${RUNNER_TEMP}/floor-reference.json"
+            --out "${RUNNER_TEMP}/floor-reference.json" || true
+          test -f "${RUNNER_TEMP}/floor-reference.json" \
+            || { echo "reference arm produced no result — it could not measure"; exit 1; }
 
       - name: Score the floor — constrained arm
         env:
@@ -85,7 +92,12 @@ jobs:
           python3 scripts/bench-memory-extraction.py screen \
             --backend ollama --config "$MODEL" --constrained \
             --url http://localhost:11434 --num-ctx 4096 \
-            --out "${RUNNER_TEMP}/floor-constrained.json"
+            --out "${RUNNER_TEMP}/floor-constrained.json" || true
+          # A missing file here is NOT just "it could not measure": the
+          # constrained arm also refuses to run when the bench's schema and the
+          # crate's name different sections. Either way there is no result.
+          test -f "${RUNNER_TEMP}/floor-constrained.json" \
+            || { echo "constrained arm produced no result — it could not measure"; exit 1; }
 
       - name: Summarise both arms
         if: always()
