@@ -1103,11 +1103,11 @@ fn extraction_from_reply(reply: &str) -> Result<Extraction, ExtractError> {
 #[cfg(feature = "extractor-http")]
 impl Extractor for OllamaExtractor {
     fn extract(&self, text: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
-        facts_from_reply(&self.generate(&build_prompt(text))?)
+        facts_from_reply(&self.generate(&build_prompt(text), &fact_list_schema())?)
     }
 
     fn extract_graph(&self, text: &str) -> Result<Extraction, ExtractError> {
-        extraction_from_reply(&self.generate(&build_graph_prompt(text))?)
+        extraction_from_reply(&self.generate(&build_graph_prompt(text), &extraction_schema())?)
     }
 }
 
@@ -1198,21 +1198,9 @@ impl OllamaExtractor {
     /// Ollama may have closed, and `ureq` will not replay a POST with a body.
     /// The whole attempt — POST and body read — is inside the closure so a
     /// truncated response is replayed rather than surfacing as a parse error.
-    fn generate(&self, prompt: &str) -> Result<String, ExtractError> {
+    fn generate(&self, prompt: &str, schema: &serde_json::Value) -> Result<String, ExtractError> {
         let url = format!("{}/api/generate", self.base_url);
-        let body = serde_json::json!({
-            "model": self.model,
-            "prompt": prompt,
-            "stream": false,
-            "think": false,
-            // Extraction models are large — the one this crate documents as an
-            // example is 21.9 GB — so an unload between calls is the dominant
-            // cost, not the generation. Shares the embedder's knob so one
-            // setting governs every Ollama call the daemon makes.
-            "keep_alive": crate::embedder::keep_alive(),
-            "options": { "temperature": 0, "num_predict": MAX_GENERATION_TOKENS },
-        })
-        .to_string();
+        let body = generate_body(&self.model, prompt, schema).to_string();
         let attempt = || {
             let response = self
                 .agent
@@ -1233,6 +1221,97 @@ impl OllamaExtractor {
         })?;
         parse_generate_response(&payload)
     }
+}
+
+/// The body of one `/api/generate` call, built where a test can read it.
+///
+/// Split out of [`OllamaExtractor::generate`] so the wire contract can be
+/// asserted without a live model: a `format` that silently stopped being sent
+/// would restore the exact defect this shape exists to close, and no
+/// stub-backed extraction test would notice.
+#[cfg(feature = "extractor-http")]
+fn generate_body(model: &str, prompt: &str, schema: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "model": model,
+        "prompt": prompt,
+        "stream": false,
+        "think": false,
+        // The same contract the prompt states, restated as a grammar the
+        // sampler cannot leave. Structure only: it makes replies parsable, it
+        // does not make them true, and the prompt stays the place that says
+        // what to extract.
+        "format": schema,
+        // Extraction models are large — the one this crate documents as an
+        // example is 21.9 GB — so an unload between calls is the dominant
+        // cost, not the generation. Shares the embedder's knob so one setting
+        // governs every Ollama call the daemon makes.
+        "keep_alive": crate::embedder::keep_alive(),
+        "options": { "temperature": 0, "num_predict": MAX_GENERATION_TOKENS },
+    })
+}
+
+/// One `{"fact": …, "entities": […]}` item, as a JSON Schema.
+///
+/// Kept beside [`RawFact`], which is what parses it back: the two are one
+/// contract stated twice, once for the sampler and once for the reader, and
+/// they must be changed together.
+#[cfg(feature = "extractor-http")]
+fn fact_item_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "fact": { "type": "string" },
+            "entities": { "type": "array", "items": { "type": "string" } },
+        },
+        "required": ["fact", "entities"],
+    })
+}
+
+/// The JSON Schema for [`build_prompt`]'s reply: a bare array of facts.
+#[cfg(feature = "extractor-http")]
+fn fact_list_schema() -> serde_json::Value {
+    serde_json::json!({ "type": "array", "items": fact_item_schema() })
+}
+
+/// The JSON Schema for [`build_graph_prompt`]'s reply, mirroring
+/// [`RawExtraction`].
+///
+/// `value` keeps the `number` arm the prompt insists on ("Emit numbers as JSON
+/// NUMBERS, never strings"): constraining it to `string` would silently undo
+/// what the prompt spends a line asking for.
+#[cfg(feature = "extractor-http")]
+fn extraction_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "facts": { "type": "array", "items": fact_item_schema() },
+            "relations": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "subject": { "type": "string" },
+                        "predicate": { "type": "string" },
+                        "object": { "type": "string" },
+                    },
+                    "required": ["subject", "predicate", "object"],
+                },
+            },
+            "attributes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "entity": { "type": "string" },
+                        "key": { "type": "string" },
+                        "value": { "type": ["string", "number", "boolean"] },
+                    },
+                    "required": ["entity", "key", "value"],
+                },
+            },
+        },
+        "required": ["facts", "relations", "attributes"],
+    })
 }
 
 /// The strict JSON contract the extraction prompt asks the model to honour.
@@ -1568,6 +1647,56 @@ mod selection_tests;
 #[cfg(all(test, feature = "extractor-http"))]
 mod tests {
     use super::*;
+
+    /// The graph call must carry the schema as Ollama's `format` (#1944).
+    ///
+    /// Measured, not assumed: passing the extraction schema moved the 8 GB
+    /// tier from no eligible model to two, and took one model from zero valid
+    /// replies to all of them. Dropping this field would undo that silently —
+    /// every stub-backed test would stay green, because no stub reads it.
+    #[test]
+    fn the_graph_call_constrains_decoding_with_the_extraction_schema() {
+        let body = generate_body("qwen3:14b", "passage", &extraction_schema());
+        assert_eq!(
+            body["format"],
+            extraction_schema(),
+            "the graph call must send the extraction schema verbatim"
+        );
+        assert_eq!(body["options"]["temperature"], 0, "greedy decoding kept");
+    }
+
+    /// The fact-only call carries the array shape its own prompt states — the
+    /// two prompts return different top-level types, so one schema cannot
+    /// serve both.
+    #[test]
+    fn the_fact_only_call_constrains_decoding_with_the_array_schema() {
+        let body = generate_body("qwen3:14b", "passage", &fact_list_schema());
+        assert_eq!(body["format"]["type"], "array");
+        assert_eq!(body["format"]["items"], fact_item_schema());
+    }
+
+    /// The schema and the parser are one contract stated twice. A reply that
+    /// satisfies every `required` key must survive the reader — if the two
+    /// drift, constrained decoding starts guaranteeing a shape nothing reads.
+    #[test]
+    fn every_required_key_of_the_schema_is_a_key_the_parser_reads() {
+        let schema = extraction_schema();
+        let required: Vec<&str> = schema["required"]
+            .as_array()
+            .expect("the extraction schema declares required keys")
+            .iter()
+            .map(|key| key.as_str().expect("required keys are strings"))
+            .collect();
+        assert_eq!(required, ["facts", "relations", "attributes"]);
+
+        let reply = r#"{"facts": [{"fact": "Kaltar is fifteen.", "entities": ["kaltar"]}],
+            "relations": [{"subject": "zephyrin", "predicate": "pere de", "object": "kaltar"}],
+            "attributes": [{"entity": "kaltar", "key": "age", "value": 15}]}"#;
+        let extraction = extraction_from_reply(reply).expect("a schema-shaped reply parses");
+        assert_eq!(extraction.facts.len(), 1, "facts survive the reader");
+        assert_eq!(extraction.relations.len(), 1);
+        assert_eq!(extraction.attributes[0].value, serde_json::json!(15));
+    }
 
     /// Regression: the graph reply is an OBJECT whose first `[` belongs to the
     /// nested `facts` field. Slicing with the array preference grabbed that

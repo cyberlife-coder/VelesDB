@@ -71,9 +71,13 @@ Two things to keep straight before acting on it:
 - **It repairs structure, not comprehension.** A constrained small model returns
   valid JSON that is more often wrong about the passage. It stops losing
   enrichment silently; it does not become accurate.
-- **`velesdb-memory` does not send `format` today.** Those figures describe a
-  product change, not a setting you can switch on. Until it ships, the tiers
-  above are what you get.
+- **`velesdb-memory` now sends `format` on every extraction call.** The figures
+  above were measured as a declared variant *before* that shipped, and the
+  schema the crate sends is a **superset** of the measured one: it also
+  constrains `facts`, which the bench variant left free. So the direction is
+  established and the tier table is not yet re-earned — the 8 GB and 12 GB rows
+  stay as published until a campaign is replayed against the schema the product
+  actually sends. Treat them as a floor, not as the last word.
 
 ## Settings that are yours to state, not to inherit
 

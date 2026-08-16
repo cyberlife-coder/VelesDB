@@ -17,6 +17,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The Ollama extractor constrains decoding with its own schema (#1944).**
+  Every `/api/generate` call now carries the extraction contract as Ollama's
+  `format`, so a schema-broken reply is structurally impossible rather than
+  merely discouraged by the prompt. Measured on the extraction campaign
+  (#1943), constrained decoding moved the 8 GB tier from no eligible model to
+  two, and took one model from zero valid replies to all of them. It repairs
+  **structure, not comprehension**: a constrained small model returns valid
+  JSON that is more often wrong about the passage. The published tier table in
+  [`docs/guides/MEMORY_EXTRACTOR_MODELS.md`](docs/guides/MEMORY_EXTRACTOR_MODELS.md)
+  is deliberately left as measured until a campaign is replayed against the
+  schema the crate now sends.
 - **HTTP inference features are named by role (#1766).** `embedder-http` and
   `extractor-http` are now the canonical build features. The former `ollama`
   and `extract` names remain compatibility aliases, so existing dependency
