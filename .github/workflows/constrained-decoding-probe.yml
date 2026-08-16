@@ -206,8 +206,12 @@ jobs:
         run: |
           # Phase B drives the REAL binary. Built from this branch, so what runs
           # is the extractor this PR changed rather than a released one.
-          cargo build --release -p velesdb-memory \
-            --features persistence,mcp,extractor-http,embedder-http
+          # `http` is the one that matters and it is NOT a default: the bench
+          # launches the daemon with `--http`, and a binary built without it
+          # refuses at startup. The crate's defaults already carry mcp,
+          # persistence, context and both HTTP-client roles, and `--features`
+          # adds to them rather than replacing them.
+          cargo build --release -p velesdb-memory --features http
           ls -la target/release/velesdb-memory
 
       - name: Install Ollama
