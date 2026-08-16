@@ -1,0 +1,117 @@
+{
+  "phase": "endtoend",
+  "write_p50_seconds": 0.10317129199393094,
+  "write_p95_seconds": 0.15979120900738053,
+  "cases": [
+    {
+      "id": "fr-possessive",
+      "failures": [
+        {
+          "severity": "major",
+          "label": "sibling edge missing or reversed",
+          "type": "relation_present"
+        },
+        {
+          "severity": "major",
+          "label": "age missing, misattributed, or emitted as a string",
+          "type": "attribute_number"
+        }
+      ],
+      "counts": {
+        "fatal": 0,
+        "major": 2,
+        "minor": 0
+      },
+      "drain_seconds": 180.7862844170013,
+      "entities": {
+        "camille dupont": {},
+        "marie dupont": {}
+      }
+    },
+    {
+      "id": "en-possessive",
+      "failures": [
+        {
+          "severity": "major",
+          "label": "sibling edge missing or reversed",
+          "type": "relation_present"
+        },
+        {
+          "severity": "major",
+          "label": "age missing, misattributed, or emitted as a string",
+          "type": "attribute_number"
+        }
+      ],
+      "counts": {
+        "fatal": 0,
+        "major": 2,
+        "minor": 0
+      },
+      "drain_seconds": 180.91321299999254,
+      "entities": {
+        "tom miller": {}
+      }
+    },
+    {
+      "id": "close-role",
+      "failures": [
+        {
+          "severity": "major",
+          "label": "works-at edge missing",
+          "type": "relation_present"
+        },
+        {
+          "severity": "major",
+          "label": "leads edge missing",
+          "type": "relation_present"
+        }
+      ],
+      "counts": {
+        "fatal": 0,
+        "major": 2,
+        "minor": 0
+      },
+      "drain_seconds": 180.8295385420206,
+      "entities": {
+        "alice martin": {}
+      }
+    },
+    {
+      "id": "close-homonyms",
+      "failures": [
+        {
+          "severity": "major",
+          "label": "lyon not attached to marie dupont",
+          "type": "attribute_on"
+        },
+        {
+          "severity": "major",
+          "label": "nantes not attached to marie dupond",
+          "type": "attribute_on"
+        }
+      ],
+      "counts": {
+        "fatal": 0,
+        "major": 2,
+        "minor": 0
+      },
+      "drain_seconds": 180.86354950000532,
+      "entities": {
+        "marie dupont": {},
+        "marie dupond": {}
+      }
+    }
+  ],
+  "burst": {
+    "count": 20,
+    "p50_seconds": 0.10205608399701305,
+    "p95_seconds": 0.10480329199344851,
+    "autograph_dropped": 0
+  },
+  "totals": {
+    "fatal": 0,
+    "major": 8,
+    "max_drain_seconds": 180.91321299999254
+  },
+  "config": "qwen3:14b"
+}

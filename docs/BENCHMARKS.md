@@ -451,6 +451,36 @@ Two layers of CI coverage:
 
 ---
 
+## 12. velesdb-memory — graph-extraction models
+
+*Measured 2026-08-16 on an Apple M5 Pro (64 GB unified memory), against
+velesdb-memory 0.12.0 — a different machine from the Test Environment above,
+which describes the Core reference host.*
+
+Eight Ollama models and four MLX configurations were scored on nineteen
+French/English extraction scenarios, with declarative oracles rather than a
+human reading outputs. Three findings, and no latency figures:
+
+- **Schema discipline eliminates candidates; size does not rank them.** With the
+  settings the product sends today, exactly one measured model produced valid
+  JSON on every case without breaking the relation schema. A 35B model came out
+  *behind* a 14B one on error count while weighing over three times as much.
+- **Constrained decoding matters more than the model.** Passing the extraction
+  schema as Ollama's `format` took the 8 GB tier from no eligible model to two,
+  and took one model from zero valid replies to all of them. `velesdb-memory`
+  does not send `format` today, so this measures a product change.
+- **Quality is deterministic here, latency is not.** Two full campaigns half an
+  hour apart reproduced every quality verdict to the digit under greedy
+  decoding, while the order control — first configuration replayed last —
+  disagreed with itself by 26% and then 55% on timing. The timings are
+  therefore not published.
+
+Full tables: [`benchmarks/results/2026-08-16-memory-extraction-report.md`](../benchmarks/results/2026-08-16-memory-extraction-report.md).
+How to choose, including for models we did not test:
+[Extraction models guide](guides/MEMORY_EXTRACTOR_MODELS.md).
+
+---
+
 ## Methodology
 
 - **Hardware**: See Test Environment section above

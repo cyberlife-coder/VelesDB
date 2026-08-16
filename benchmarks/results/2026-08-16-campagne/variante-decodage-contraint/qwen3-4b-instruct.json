@@ -1,0 +1,1282 @@
+{
+  "config": "qwen3:4b-instruct",
+  "generation_cap": 512,
+  "residency_before": {
+    "models": [
+      {
+        "name": "bge-m3:latest",
+        "model": "bge-m3:latest",
+        "size": 664660868,
+        "digest": "7907646426070047a77226ac3e684fbbe8410524f7b4a74d02837e43f2146bab",
+        "details": {
+          "parent_model": "",
+          "format": "gguf",
+          "family": "bert",
+          "families": [
+            "bert"
+          ],
+          "parameter_size": "566.70M",
+          "quantization_level": "F16"
+        },
+        "expires_at": "2318-11-26T02:06:42.963560807+01:00",
+        "size_vram": 664660868,
+        "context_length": 8192
+      },
+      {
+        "name": "qwen3:4b-instruct",
+        "model": "qwen3:4b-instruct",
+        "size": 2865674321,
+        "digest": "0edcdef34593eac1aa2be9c7d06c432dcf81945adca5eca2f27662c18f168ba0",
+        "details": {
+          "parent_model": "",
+          "format": "gguf",
+          "family": "qwen3",
+          "families": [
+            "qwen3"
+          ],
+          "parameter_size": "4.0B",
+          "quantization_level": "Q4_K_M"
+        },
+        "expires_at": "2318-11-26T02:04:05.397060807+01:00",
+        "size_vram": 2865674321,
+        "context_length": 2048
+      },
+      {
+        "name": "gemma3:12b",
+        "model": "gemma3:12b",
+        "size": 8877600930,
+        "digest": "f4031aab637d1ffa37b42570452ae0e4fad0314754d17ded67322e4b95836f8a",
+        "details": {
+          "parent_model": "",
+          "format": "gguf",
+          "family": "gemma3",
+          "families": [
+            "gemma3"
+          ],
+          "parameter_size": "12.2B",
+          "quantization_level": "Q4_K_M"
+        },
+        "expires_at": "2318-11-26T01:55:39.527855807+01:00",
+        "size_vram": 8877600930,
+        "context_length": 2048
+      }
+    ]
+  },
+  "storage": {
+    "path": null,
+    "reachable": false,
+    "reason": "no path reported"
+  },
+  "estimated_size": null,
+  "cold": {
+    "load_seconds": 0.13530316701508127,
+    "first_answer_seconds": 1.0864860000147019,
+    "cold_total_seconds": 1.2217891670297831,
+    "storage": {
+      "path": null,
+      "reachable": false,
+      "reason": "no path reported"
+    },
+    "cache_state": "unknown"
+  },
+  "warmup": {
+    "rounds": 3,
+    "latencies": [
+      1.0339697090093978,
+      1.0361964160110801,
+      1.0378531250171363
+    ],
+    "stabilised": true
+  },
+  "phase": "screen",
+  "runs": 2,
+  "cases": [
+    {
+      "id": "fr-possessive",
+      "family": "nominal-fr",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Marie Dupont a une soeur, Camille Dupont. Camille Dupont a 15 ans et travaille chez Wiscale.",
+          "seconds": 1.057631624978967,
+          "completion_tokens": 81,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"camille dupont\", \"predicate\": \"soeur de\", \"object\": \"marie dupont\"}], \"attributes\": [{\"entity\": \"camille dupont\", \"key\": \"age\", \"value\": 15}, {\"entity\": \"camille dup_ont\", \"key\": \"employeur\", \"value\": \"wiscale\"}]}",
+          "failures": []
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "fr-employment-date",
+      "family": "nominal-fr",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Bruno Durand dirige Wiscale depuis 2019.",
+          "seconds": 0.8388933750102296,
+          "completion_tokens": 60,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"bruno durand\", \"predicate\": \"dirige\", \"object\": \"wiscale\"}], \"attributes\": [{\"entity\": \"bruno durand\", \"key\": \"date de prise de poste\", \"value\": 2019}]}",
+          "failures": [
+            {
+              "severity": "major",
+              "label": "absolute date dropped",
+              "type": "facts_mention"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 1,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "fr-pronoun",
+      "family": "nominal-fr",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Bruno Durand dirige Wiscale. Il habite a Lyon.",
+          "seconds": 0.7715955419989768,
+          "completion_tokens": 54,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"bruno durand\", \"predicate\": \"dirige\", \"object\": \"wiscale\"}], \"attributes\": [{\"entity\": \"bruno durand\", \"key\": \"ville\", \"value\": \"lyon\"}]}",
+          "failures": []
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "fr-converse-stated",
+      "family": "nominal-fr",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Wiscale emploie Alice Martin. Alice Martin travaille pour Wiscale depuis 2019.",
+          "seconds": 0.7252935830038041,
+          "completion_tokens": 53,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"alice martin\", \"predicate\": \"travaille pour\", \"object\": \"wiscale\"}], \"attributes\": [{\"entity\": \"alice martin\", \"key\": \"employeur\", \"value\": \"wiscale\"}]}",
+          "failures": [
+            {
+              "severity": "major",
+              "label": "employs edge missing",
+              "type": "relation_present"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 1,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "en-possessive",
+      "family": "nominal-en",
+      "lang": "en",
+      "passages": [
+        {
+          "text": "Sarah Miller has a brother, Tom Miller. Tom Miller is 22 and works at Northwind.",
+          "seconds": 1.018967333016917,
+          "completion_tokens": 76,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"tom miller\", \"predicate\": \"works at\", \"object\": \"northwind\"}], \"attributes\": [{\"entity\": \"tom miller\", \"key\": \"age\", \"value\": 22}, {\"entity\": \"sarah miller\", \"key\": \"brother\", \"value\": \"tom miller\"}]}",
+          "failures": [
+            {
+              "severity": "major",
+              "label": "sibling edge missing or reversed",
+              "type": "relation_present"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 1,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "en-employment-date",
+      "family": "nominal-en",
+      "lang": "en",
+      "passages": [
+        {
+          "text": "David Clarke runs Northwind since 2019.",
+          "seconds": 0.775118665973423,
+          "completion_tokens": 57,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"david clarke\", \"predicate\": \"runs at\", \"object\": \"northwind\"}], \"attributes\": [{\"entity\": \"david clarke\", \"key\": \"start year\", \"value\": 2019}]}",
+          "failures": [
+            {
+              "severity": "major",
+              "label": "absolute date dropped",
+              "type": "facts_mention"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 1,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "en-pronoun",
+      "family": "nominal-en",
+      "lang": "en",
+      "passages": [
+        {
+          "text": "David Clarke runs Northwind. He lives in Leeds.",
+          "seconds": 0.7207897920161486,
+          "completion_tokens": 53,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"david clarke\", \"predicate\": \"runs\", \"object\": \"northwind\"}], \"attributes\": [{\"entity\": \"david clarke\", \"key\": \"ville\", \"value\": \"leeds\"}]}",
+          "failures": []
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "en-converse-stated",
+      "family": "nominal-en",
+      "lang": "en",
+      "passages": [
+        {
+          "text": "Northwind employs Emma Stone. Emma Stone works for Northwind since 2019.",
+          "seconds": 1.545947749982588,
+          "completion_tokens": 53,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"emma stone\", \"predicate\": \"works at\", \"object\": \"northwind\"}], \"attributes\": [{\"entity\": \"emma stone\", \"key\": \"start date\", \"value\": 2019}]}",
+          "failures": [
+            {
+              "severity": "major",
+              "label": "employs edge missing",
+              "type": "relation_present"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 1,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "edge-no-relation",
+      "family": "edge",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Il pleuvait sur la ville hier soir.",
+          "seconds": 0.9491966660134494,
+          "completion_tokens": 10,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [], \"attributes\": []}",
+          "failures": []
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "edge-hostile-format",
+      "family": "edge",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Le projet \"Ardoise {beta}\" est pilote par Nadia Kerouac chez Wiscale.",
+          "seconds": 1.0639573330117855,
+          "completion_tokens": 59,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"nadia kerouac\", \"predicate\": \"pilote\", \"object\": \"ardoise beta\"}], \"attributes\": [{\"entity\": \"nadia kerouac\", \"key\": \"employeur\", \"value\": \"wiscale\"}]}",
+          "failures": []
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "edge-verbose-truncation",
+      "family": "edge",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Nadia Kerouac dirige Wiscale depuis 2018. Wiscale possede le serveur Hydra, qui dispose de 128 Go de RAM. Bruno Durand, 42 ans, est le directeur technique de Wiscale et habite a Lyon. Alice Martin a rejoint l'equipe en janvier 2025 comme ingenieure. Le projet Ardoise, lance en mars 2025, est pilote par Alice Martin. Wiscale emploie 37 personnes et son siege est a Geneve.",
+          "seconds": 5.2819379169959575,
+          "completion_tokens": 424,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\n  \"relations\": [\n    {\n      \"subject\": \"nadia kerouac\",\n      \"predicate\": \"dirige\",\n      \"object\": \"wiscale\"\n    },\n    {\n      \"subject\": \"bruno durand\",\n      \"predicate\": \"travaille chez\",\n      \"object\": \"wiscale\"\n    },\n    {\n      \"subject\": \"alice martin\",\n      \"predicate\": \"travaille chez\",\n      \"object\": \"wiscale\"\n    },\n    {\n      \"subject\": \"alice martin\",\n      \"predicate\": \"pilote\",\n      \"object\": \"ardoise\"\n    },\n    {\n      \"subject\": \"wiscale\",\n      \"predicate\": \"a un serveur\",\n      \"object\": \"hydra\"\n    }\n  ],\n  \"attributes\": [\n    {\n      \"entity\": \"nadia kerouac\",\n      \"key\": \"annee de prise de pouvoir\",\n      \"value\": 2018\n    },\n    {\n      \"entity\": \"bruno durand\",\n      \"key\": \"age\",\n      \"value\": 42\n    },\n    {\n      \"entity\": \"bruno durand\",\n      \"key\": \"ville\",\n      \"value\": \"lyon\"\n    },\n    {\n      \"entity\": \"alice martin\",\n      \"key\": \"date d'arrivée\",\n      \"value\": \"2025-01-01\"\n    },\n    {\n      \"entity\": \"ardoise\",\n      \"key\": \"date de lancement\",\n      \"value\": \"2025-03-01\"\n    },\n    {\n      \"entity\": \"wiscale\",\n      \"key\": \"effectif\",\n      \"value\": 37\n    },\n    {\n      \"entity\": \"wiscale\",\n      \"key\": \"siege\",\n      \"value\": \"geneve\"\n    },\n    {\n      \"entity\": \"hydra\",\n      \"key\": \"ram\",\n      \"value\": 128\n    }\n  ]\n}",
+          "failures": []
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "edge-accents-hyphens",
+      "family": "edge",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Jean-Luc D'Arcy a fonde Eco-Kerite S.a r.l. a Geneve en 2018.",
+          "seconds": 1.6162737080012448,
+          "completion_tokens": 127,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"jean-luc d'arcy\", \"predicate\": \"fonde\", \"object\": \"eco-kerite s.a.r.l.\"}, {\"subject\": \"eco-kerite s.a.r.l.\", \"predicate\": \"est en\", \"object\": \"geneve\"}], \"attributes\": [{\"entity\": \"jean-luc d'arcy\", \"key\": \"annee_fondation\", \"value\": 2018}, {\"entity\": \"eco-kerite s.a.r.l.\", \"key\": \"lieu\", \"value\": \"geneve\"}]}",
+          "failures": [
+            {
+              "severity": "minor",
+              "label": "absolute date dropped",
+              "type": "facts_mention"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 0,
+        "minor": 1
+      },
+      "run": 1
+    },
+    {
+      "id": "edge-mixed-lang",
+      "family": "edge",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Marie Dupont a rejoint Northwind Data Services en janvier 2025.",
+          "seconds": 0.8583659580035601,
+          "completion_tokens": 64,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"marie dupont\", \"predicate\": \"rejoint\", \"object\": \"northwind data services\"}], \"attributes\": [{\"entity\": \"marie dupont\", \"key\": \"date\", \"value\": \"2025-01-01\"}]}",
+          "failures": []
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "close-role",
+      "family": "close-pair",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Alice Martin travaille chez Wiscale.",
+          "seconds": 0.7294611659890506,
+          "completion_tokens": 53,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"alice martin\", \"predicate\": \"travaille chez\", \"object\": \"wiscale\"}], \"attributes\": [{\"entity\": \"alice martin\", \"key\": \"employeur\", \"value\": \"wiscale\"}]}",
+          "failures": []
+        },
+        {
+          "text": "Alice Martin dirige Wiscale.",
+          "seconds": 0.7004974590090569,
+          "completion_tokens": 51,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"alice martin\", \"predicate\": \"dirige\", \"object\": \"wiscale\"}], \"attributes\": [{\"entity\": \"alice martin\", \"key\": \"employeur\", \"value\": \"wiscale\"}]}",
+          "failures": []
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "close-negation",
+      "family": "close-pair",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Alice Martin travaille chez Wiscale.",
+          "seconds": 0.7208969589846674,
+          "completion_tokens": 53,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"alice martin\", \"predicate\": \"travaille chez\", \"object\": \"wiscale\"}], \"attributes\": [{\"entity\": \"alice martin\", \"key\": \"employeur\", \"value\": \"wiscale\"}]}",
+          "failures": []
+        },
+        {
+          "text": "Alice Martin a quitte Wiscale en 2024.",
+          "seconds": 0.22993512501125224,
+          "completion_tokens": 10,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [], \"attributes\": []}",
+          "failures": [
+            {
+              "severity": "major",
+              "label": "departure edge missing",
+              "type": "relation_present"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 1,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "close-kinship",
+      "family": "close-pair",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Camille Rey est la soeur de Marie Rey.",
+          "seconds": 0.5297844590095337,
+          "completion_tokens": 36,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"camille rey\", \"predicate\": \"soeur de\", \"object\": \"marie rey\"}], \"attributes\": []}",
+          "failures": []
+        },
+        {
+          "text": "Camille Rey est la belle-soeur de Marie Rey.",
+          "seconds": 0.5335901660146192,
+          "completion_tokens": 36,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"camille rey\", \"predicate\": \"sœur de\", \"object\": \"marie rey\"}], \"attributes\": []}",
+          "failures": [
+            {
+              "severity": "major",
+              "label": "kinship by marriage rendered as blood kinship",
+              "type": "relation_present"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [
+        {
+          "severity": "major",
+          "label": "both passages yield the same predicate",
+          "type": "predicates_differ"
+        }
+      ],
+      "counts": {
+        "fatal": 0,
+        "major": 2,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "close-possession",
+      "family": "close-pair",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Wiscale possede le serveur Hydra.",
+          "seconds": 0.7030064160062466,
+          "completion_tokens": 50,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"wiscale\", \"predicate\": \"possede\", \"object\": \"hydra\"}], \"attributes\": [{\"entity\": \"hydra\", \"key\": \"serveur\", \"value\": \"true\"}]}",
+          "failures": []
+        },
+        {
+          "text": "Wiscale loue le serveur Hydra.",
+          "seconds": 0.6832882500020787,
+          "completion_tokens": 49,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"wiscale\", \"predicate\": \"loves\", \"object\": \"hydra\"}], \"attributes\": [{\"entity\": \"wiscale\", \"key\": \"emotion\", \"value\": \"love\"}]}",
+          "failures": [
+            {
+              "severity": "major",
+              "label": "lease edge missing",
+              "type": "relation_present"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 1,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "close-symmetry",
+      "family": "close-pair",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Alice Rey travaille avec Bob Neri.",
+          "seconds": 0.5114151249872521,
+          "completion_tokens": 35,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"alice rey\", \"predicate\": \"travaille avec\", \"object\": \"bob neri\"}], \"attributes\": []}",
+          "failures": []
+        },
+        {
+          "text": "Alice Rey travaille pour Bob Neri.",
+          "seconds": 0.7352004169952124,
+          "completion_tokens": 54,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"alice rey\", \"predicate\": \"works at\", \"object\": \"bob neri\"}], \"attributes\": [{\"entity\": \"alice rey\", \"key\": \"employer\", \"value\": \"bob neri\"}]}",
+          "failures": [
+            {
+              "severity": "major",
+              "label": "subordination edge missing or reversed",
+              "type": "relation_present"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 1,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "close-homonyms",
+      "family": "close-pair",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Marie Dupont habite a Lyon. Marie Dupond habite a Nantes.",
+          "seconds": 1.2702147499949206,
+          "completion_tokens": 101,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"marie dupont\", \"predicate\": \"habite a\", \"object\": \"lyon\"}, {\"subject\": \"marie dupond\", \"predicate\": \"habite a\", \"object\": \"nantes\"}], \"attributes\": [{\"entity\": \"marie dupont\", \"key\": \"ville\", \"value\": \"lyon\"}, {\"entity\": \"marie dupond\", \"key\": \"ville\", \"value\": \"nantes\"}]}",
+          "failures": []
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "fr-possessive",
+      "family": "nominal-fr",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Marie Dupont a une soeur, Camille Dupont. Camille Dupont a 15 ans et travaille chez Wiscale.",
+          "seconds": 1.0404034160019364,
+          "completion_tokens": 81,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"camille dupont\", \"predicate\": \"soeur de\", \"object\": \"marie dupont\"}], \"attributes\": [{\"entity\": \"camille dupont\", \"key\": \"age\", \"value\": 15}, {\"entity\": \"camille dup_ont\", \"key\": \"employeur\", \"value\": \"wiscale\"}]}",
+          "failures": []
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "fr-employment-date",
+      "family": "nominal-fr",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Bruno Durand dirige Wiscale depuis 2019.",
+          "seconds": 0.8079612090077717,
+          "completion_tokens": 60,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"bruno durand\", \"predicate\": \"dirige\", \"object\": \"wiscale\"}], \"attributes\": [{\"entity\": \"bruno durand\", \"key\": \"date de prise de poste\", \"value\": 2019}]}",
+          "failures": [
+            {
+              "severity": "major",
+              "label": "absolute date dropped",
+              "type": "facts_mention"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 1,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "fr-pronoun",
+      "family": "nominal-fr",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Bruno Durand dirige Wiscale. Il habite a Lyon.",
+          "seconds": 0.733867458999157,
+          "completion_tokens": 54,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"bruno durand\", \"predicate\": \"dirige\", \"object\": \"wiscale\"}], \"attributes\": [{\"entity\": \"bruno durand\", \"key\": \"ville\", \"value\": \"lyon\"}]}",
+          "failures": []
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "fr-converse-stated",
+      "family": "nominal-fr",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Wiscale emploie Alice Martin. Alice Martin travaille pour Wiscale depuis 2019.",
+          "seconds": 0.7245896249951329,
+          "completion_tokens": 53,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"alice martin\", \"predicate\": \"travaille pour\", \"object\": \"wiscale\"}], \"attributes\": [{\"entity\": \"alice martin\", \"key\": \"employeur\", \"value\": \"wiscale\"}]}",
+          "failures": [
+            {
+              "severity": "major",
+              "label": "employs edge missing",
+              "type": "relation_present"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 1,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "en-possessive",
+      "family": "nominal-en",
+      "lang": "en",
+      "passages": [
+        {
+          "text": "Sarah Miller has a brother, Tom Miller. Tom Miller is 22 and works at Northwind.",
+          "seconds": 0.9856701660028193,
+          "completion_tokens": 76,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"tom miller\", \"predicate\": \"works at\", \"object\": \"northwind\"}], \"attributes\": [{\"entity\": \"tom miller\", \"key\": \"age\", \"value\": 22}, {\"entity\": \"sarah miller\", \"key\": \"brother\", \"value\": \"tom miller\"}]}",
+          "failures": [
+            {
+              "severity": "major",
+              "label": "sibling edge missing or reversed",
+              "type": "relation_present"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 1,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "en-employment-date",
+      "family": "nominal-en",
+      "lang": "en",
+      "passages": [
+        {
+          "text": "David Clarke runs Northwind since 2019.",
+          "seconds": 0.7622568329970818,
+          "completion_tokens": 57,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"david clarke\", \"predicate\": \"runs at\", \"object\": \"northwind\"}], \"attributes\": [{\"entity\": \"david clarke\", \"key\": \"start year\", \"value\": 2019}]}",
+          "failures": [
+            {
+              "severity": "major",
+              "label": "absolute date dropped",
+              "type": "facts_mention"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 1,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "en-pronoun",
+      "family": "nominal-en",
+      "lang": "en",
+      "passages": [
+        {
+          "text": "David Clarke runs Northwind. He lives in Leeds.",
+          "seconds": 0.7154350420169067,
+          "completion_tokens": 53,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"david clarke\", \"predicate\": \"runs\", \"object\": \"northwind\"}], \"attributes\": [{\"entity\": \"david clarke\", \"key\": \"ville\", \"value\": \"leeds\"}]}",
+          "failures": []
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "en-converse-stated",
+      "family": "nominal-en",
+      "lang": "en",
+      "passages": [
+        {
+          "text": "Northwind employs Emma Stone. Emma Stone works for Northwind since 2019.",
+          "seconds": 0.7260852080071345,
+          "completion_tokens": 53,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"emma stone\", \"predicate\": \"works at\", \"object\": \"northwind\"}], \"attributes\": [{\"entity\": \"emma stone\", \"key\": \"start date\", \"value\": 2019}]}",
+          "failures": [
+            {
+              "severity": "major",
+              "label": "employs edge missing",
+              "type": "relation_present"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 1,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "edge-no-relation",
+      "family": "edge",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Il pleuvait sur la ville hier soir.",
+          "seconds": 0.22880595800234005,
+          "completion_tokens": 10,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [], \"attributes\": []}",
+          "failures": []
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "edge-hostile-format",
+      "family": "edge",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Le projet \"Ardoise {beta}\" est pilote par Nadia Kerouac chez Wiscale.",
+          "seconds": 0.7942667919851374,
+          "completion_tokens": 59,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"nadia kerouac\", \"predicate\": \"pilote\", \"object\": \"ardoise beta\"}], \"attributes\": [{\"entity\": \"nadia kerouac\", \"key\": \"employeur\", \"value\": \"wiscale\"}]}",
+          "failures": []
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "edge-verbose-truncation",
+      "family": "edge",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Nadia Kerouac dirige Wiscale depuis 2018. Wiscale possede le serveur Hydra, qui dispose de 128 Go de RAM. Bruno Durand, 42 ans, est le directeur technique de Wiscale et habite a Lyon. Alice Martin a rejoint l'equipe en janvier 2025 comme ingenieure. Le projet Ardoise, lance en mars 2025, est pilote par Alice Martin. Wiscale emploie 37 personnes et son siege est a Geneve.",
+          "seconds": 5.011131584004033,
+          "completion_tokens": 424,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\n  \"relations\": [\n    {\n      \"subject\": \"nadia kerouac\",\n      \"predicate\": \"dirige\",\n      \"object\": \"wiscale\"\n    },\n    {\n      \"subject\": \"bruno durand\",\n      \"predicate\": \"travaille chez\",\n      \"object\": \"wiscale\"\n    },\n    {\n      \"subject\": \"alice martin\",\n      \"predicate\": \"travaille chez\",\n      \"object\": \"wiscale\"\n    },\n    {\n      \"subject\": \"alice martin\",\n      \"predicate\": \"pilote\",\n      \"object\": \"ardoise\"\n    },\n    {\n      \"subject\": \"wiscale\",\n      \"predicate\": \"a un serveur\",\n      \"object\": \"hydra\"\n    }\n  ],\n  \"attributes\": [\n    {\n      \"entity\": \"nadia kerouac\",\n      \"key\": \"annee de prise de pouvoir\",\n      \"value\": 2018\n    },\n    {\n      \"entity\": \"bruno durand\",\n      \"key\": \"age\",\n      \"value\": 42\n    },\n    {\n      \"entity\": \"bruno durand\",\n      \"key\": \"ville\",\n      \"value\": \"lyon\"\n    },\n    {\n      \"entity\": \"alice martin\",\n      \"key\": \"date d'arrivée\",\n      \"value\": \"2025-01-01\"\n    },\n    {\n      \"entity\": \"ardoise\",\n      \"key\": \"date de lancement\",\n      \"value\": \"2025-03-01\"\n    },\n    {\n      \"entity\": \"wiscale\",\n      \"key\": \"effectif\",\n      \"value\": 37\n    },\n    {\n      \"entity\": \"wiscale\",\n      \"key\": \"siege\",\n      \"value\": \"geneve\"\n    },\n    {\n      \"entity\": \"hydra\",\n      \"key\": \"ram\",\n      \"value\": 128\n    }\n  ]\n}",
+          "failures": []
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "edge-accents-hyphens",
+      "family": "edge",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Jean-Luc D'Arcy a fonde Eco-Kerite S.a r.l. a Geneve en 2018.",
+          "seconds": 1.567873291001888,
+          "completion_tokens": 127,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"jean-luc d'arcy\", \"predicate\": \"fonde\", \"object\": \"eco-kerite s.a.r.l.\"}, {\"subject\": \"eco-kerite s.a.r.l.\", \"predicate\": \"est en\", \"object\": \"geneve\"}], \"attributes\": [{\"entity\": \"jean-luc d'arcy\", \"key\": \"annee_fondation\", \"value\": 2018}, {\"entity\": \"eco-kerite s.a.r.l.\", \"key\": \"lieu\", \"value\": \"geneve\"}]}",
+          "failures": [
+            {
+              "severity": "minor",
+              "label": "absolute date dropped",
+              "type": "facts_mention"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 0,
+        "minor": 1
+      },
+      "run": 2
+    },
+    {
+      "id": "edge-mixed-lang",
+      "family": "edge",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Marie Dupont a rejoint Northwind Data Services en janvier 2025.",
+          "seconds": 0.8305412089976016,
+          "completion_tokens": 64,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"marie dupont\", \"predicate\": \"rejoint\", \"object\": \"northwind data services\"}], \"attributes\": [{\"entity\": \"marie dupont\", \"key\": \"date\", \"value\": \"2025-01-01\"}]}",
+          "failures": []
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "close-role",
+      "family": "close-pair",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Alice Martin travaille chez Wiscale.",
+          "seconds": 0.7056724159920122,
+          "completion_tokens": 53,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"alice martin\", \"predicate\": \"travaille chez\", \"object\": \"wiscale\"}], \"attributes\": [{\"entity\": \"alice martin\", \"key\": \"employeur\", \"value\": \"wiscale\"}]}",
+          "failures": []
+        },
+        {
+          "text": "Alice Martin dirige Wiscale.",
+          "seconds": 0.6908550839871168,
+          "completion_tokens": 51,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"alice martin\", \"predicate\": \"dirige\", \"object\": \"wiscale\"}], \"attributes\": [{\"entity\": \"alice martin\", \"key\": \"employeur\", \"value\": \"wiscale\"}]}",
+          "failures": []
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "close-negation",
+      "family": "close-pair",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Alice Martin travaille chez Wiscale.",
+          "seconds": 0.7338510419940576,
+          "completion_tokens": 53,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"alice martin\", \"predicate\": \"travaille chez\", \"object\": \"wiscale\"}], \"attributes\": [{\"entity\": \"alice martin\", \"key\": \"employeur\", \"value\": \"wiscale\"}]}",
+          "failures": []
+        },
+        {
+          "text": "Alice Martin a quitte Wiscale en 2024.",
+          "seconds": 0.23756133299320936,
+          "completion_tokens": 10,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [], \"attributes\": []}",
+          "failures": [
+            {
+              "severity": "major",
+              "label": "departure edge missing",
+              "type": "relation_present"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 1,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "close-kinship",
+      "family": "close-pair",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Camille Rey est la soeur de Marie Rey.",
+          "seconds": 0.5247524169972166,
+          "completion_tokens": 36,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"camille rey\", \"predicate\": \"soeur de\", \"object\": \"marie rey\"}], \"attributes\": []}",
+          "failures": []
+        },
+        {
+          "text": "Camille Rey est la belle-soeur de Marie Rey.",
+          "seconds": 0.5259327920211945,
+          "completion_tokens": 36,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"camille rey\", \"predicate\": \"sœur de\", \"object\": \"marie rey\"}], \"attributes\": []}",
+          "failures": [
+            {
+              "severity": "major",
+              "label": "kinship by marriage rendered as blood kinship",
+              "type": "relation_present"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [
+        {
+          "severity": "major",
+          "label": "both passages yield the same predicate",
+          "type": "predicates_differ"
+        }
+      ],
+      "counts": {
+        "fatal": 0,
+        "major": 2,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "close-possession",
+      "family": "close-pair",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Wiscale possede le serveur Hydra.",
+          "seconds": 0.6921694170159753,
+          "completion_tokens": 50,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"wiscale\", \"predicate\": \"possede\", \"object\": \"hydra\"}], \"attributes\": [{\"entity\": \"hydra\", \"key\": \"serveur\", \"value\": \"true\"}]}",
+          "failures": []
+        },
+        {
+          "text": "Wiscale loue le serveur Hydra.",
+          "seconds": 0.6719565840030555,
+          "completion_tokens": 49,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"wiscale\", \"predicate\": \"loves\", \"object\": \"hydra\"}], \"attributes\": [{\"entity\": \"wiscale\", \"key\": \"emotion\", \"value\": \"love\"}]}",
+          "failures": [
+            {
+              "severity": "major",
+              "label": "lease edge missing",
+              "type": "relation_present"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 1,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "close-symmetry",
+      "family": "close-pair",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Alice Rey travaille avec Bob Neri.",
+          "seconds": 0.5114983330131508,
+          "completion_tokens": 35,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"alice rey\", \"predicate\": \"travaille avec\", \"object\": \"bob neri\"}], \"attributes\": []}",
+          "failures": []
+        },
+        {
+          "text": "Alice Rey travaille pour Bob Neri.",
+          "seconds": 0.7261107910017017,
+          "completion_tokens": 54,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"alice rey\", \"predicate\": \"works at\", \"object\": \"bob neri\"}], \"attributes\": [{\"entity\": \"alice rey\", \"key\": \"employer\", \"value\": \"bob neri\"}]}",
+          "failures": [
+            {
+              "severity": "major",
+              "label": "subordination edge missing or reversed",
+              "type": "relation_present"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 1,
+        "minor": 0
+      },
+      "run": 2
+    },
+    {
+      "id": "close-homonyms",
+      "family": "close-pair",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Marie Dupont habite a Lyon. Marie Dupond habite a Nantes.",
+          "seconds": 1.2582527920021676,
+          "completion_tokens": 101,
+          "truncated": false,
+          "parse_ok": true,
+          "raw": "{\"relations\": [{\"subject\": \"marie dupont\", \"predicate\": \"habite a\", \"object\": \"lyon\"}, {\"subject\": \"marie dupond\", \"predicate\": \"habite a\", \"object\": \"nantes\"}], \"attributes\": [{\"entity\": \"marie dupont\", \"key\": \"ville\", \"value\": \"lyon\"}, {\"entity\": \"marie dupond\", \"key\": \"ville\", \"value\": \"nantes\"}]}",
+          "failures": []
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 0,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 2
+    }
+  ],
+  "totals": {
+    "fatal": 0,
+    "major": 20,
+    "minor": 2,
+    "parse_rate": 1.0,
+    "truncated": 0,
+    "p50_seconds": 0.7294611659890506,
+    "p95_seconds": 1.6162737080012448
+  },
+  "by_language": {
+    "en": {
+      "fatal": 0,
+      "major": 6,
+      "minor": 0,
+      "parse_rate": 1.0,
+      "truncated": 0,
+      "p50_seconds": 0.7622568329970818,
+      "p95_seconds": 1.545947749982588
+    },
+    "fr": {
+      "fatal": 0,
+      "major": 14,
+      "minor": 2,
+      "parse_rate": 1.0,
+      "truncated": 0,
+      "p50_seconds": 0.7261107910017017,
+      "p95_seconds": 1.6162737080012448
+    }
+  },
+  "by_family": {
+    "close-pair": {
+      "fatal": 0,
+      "major": 10,
+      "minor": 0,
+      "parse_rate": 1.0,
+      "truncated": 0,
+      "p50_seconds": 0.6908550839871168,
+      "p95_seconds": 1.2582527920021676
+    },
+    "edge": {
+      "fatal": 0,
+      "major": 0,
+      "minor": 2,
+      "parse_rate": 1.0,
+      "truncated": 0,
+      "p50_seconds": 0.9491966660134494,
+      "p95_seconds": 5.2819379169959575
+    },
+    "nominal-en": {
+      "fatal": 0,
+      "major": 6,
+      "minor": 0,
+      "parse_rate": 1.0,
+      "truncated": 0,
+      "p50_seconds": 0.7622568329970818,
+      "p95_seconds": 1.545947749982588
+    },
+    "nominal-fr": {
+      "fatal": 0,
+      "major": 4,
+      "minor": 0,
+      "parse_rate": 1.0,
+      "truncated": 0,
+      "p50_seconds": 0.7715955419989768,
+      "p95_seconds": 1.057631624978967
+    }
+  },
+  "mirror_gap": {
+    "fr": {
+      "fatal": 0,
+      "major": 4,
+      "minor": 0,
+      "parse_rate": 1.0,
+      "truncated": 0,
+      "p50_seconds": 0.7715955419989768,
+      "p95_seconds": 1.057631624978967
+    },
+    "en": {
+      "fatal": 0,
+      "major": 6,
+      "minor": 0,
+      "parse_rate": 1.0,
+      "truncated": 0,
+      "p50_seconds": 0.7622568329970818,
+      "p95_seconds": 1.545947749982588
+    },
+    "weighted_fr": 4,
+    "weighted_en": 6,
+    "gap": 2,
+    "weaker": "en"
+  }
+}

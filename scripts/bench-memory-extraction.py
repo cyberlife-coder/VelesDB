@@ -58,6 +58,7 @@ import sys
 import tempfile
 import time
 import unicodedata
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -503,15 +504,33 @@ def digest_log(path: Path, since: "str | None" = None) -> dict:
     }
 
 
+def _cell(value: object, width: int = 10) -> str:
+    """Render one statistic, which is absent when the window selected nothing.
+
+    An empty window is a legitimate outcome, not a crash: `--since` is matched
+    as a raw ISO prefix against a log the daemon timestamps in UTC, so a prefix
+    written in local time selects no line at all. Formatting `None` raised a
+    TypeError that read as a broken bench rather than as the empty selection it
+    actually was.
+    """
+    if value is None:
+        return f"{'-':>{width}}"
+    return f"{float(value):>{width}.0f}"
+
+
 def print_digest(digest: dict) -> None:
     rows = sorted(digest["tools"].items(), key=lambda kv: -(kv[1]["p95_ms"] or 0))
     print(f"{'tool':30} {'n':>5} {'p50':>10} {'p95':>10} {'max':>10}   (ms)")
     for name, stats in rows:
-        print(f"{name:30} {stats['n']:>5} {stats['p50_ms']:>10.0f} "
-              f"{stats['p95_ms']:>10.0f} {stats['max_ms']:>10}")
+        print(f"{name:30} {stats['n']:>5} {_cell(stats['p50_ms'])} "
+              f"{_cell(stats['p95_ms'])} {_cell(stats['max_ms'])}")
     http = digest["http_post"]
-    print(f"\n{'MCP HTTP POST':30} {http['n']:>5} {http['p50_ms']:>10.0f} "
-          f"{http['p95_ms']:>10.0f} {http['max_ms']:>10}")
+    print(f"\n{'MCP HTTP POST':30} {http['n']:>5} {_cell(http['p50_ms'])} "
+          f"{_cell(http['p95_ms'])} {_cell(http['max_ms'])}")
+    if not rows and not http["n"]:
+        print(f"\nno tool call in this window — {digest['since']!r} matched nothing. "
+              f"The daemon timestamps its log in UTC and --since compares a raw "
+              f"prefix, so check the timezone before concluding it was idle.")
     bad = {key: n for key, n in digest["verdicts"].items() if not key.endswith(":ok")}
     print(f"\nnon-ok verdicts: {bad or 'none'}")
 
@@ -543,6 +562,18 @@ def http_json(url: str, payload: "dict | None" = None, token: "str | None" = Non
     with urllib.request.urlopen(request, timeout=timeout, context=insecure_context(url)) as response:
         body = response.read().decode("utf-8", errors="replace")
     return json.loads(body) if body.strip() else {}
+
+
+def http_text(url: str, timeout: int = 30) -> str:
+    """One GET whose body is read as text, for endpoints that answer no JSON.
+
+    `/health` answers `OK` as `text/plain`; routing it through `http_json` made
+    a healthy daemon look like a crashed bench.
+    """
+    request = urllib.request.Request(url, method="GET")
+    with urllib.request.urlopen(request, timeout=timeout,
+                                context=insecure_context(url)) as response:
+        return response.read().decode("utf-8", errors="replace")
 
 
 def extractor_token() -> str:
@@ -594,19 +625,115 @@ class OpenAiBackend:
         return http_json(f"{self.base_url}/v1/models/status", token=self.token, timeout=30)
 
     def set_loaded(self, model: str, loaded: bool) -> None:
+        """Bring the model to the requested residency, which may already hold.
+
+        This is a DECLARATIVE request, and omlx refuses two cases that are not
+        failures at all — both measured on this server:
+
+          - `POST .../default:fast/load` -> 404, because a profile alias is a
+            view on weights the base model owns and has nothing of its own to
+            load, while `ornith-35b` and `gpt-oss-20b` answer 200;
+          - `POST .../<model>/unload` -> 400 `Model not loaded`, for a model
+            already absent.
+
+        Treating either as fatal killed whole configurations: the ornith
+        profiles never ran, and `gemma-4-31b` died before its first case
+        because one of the models the choreography unloads was already gone.
+        The refusal is accepted only when the server itself reports the desired
+        state as already true, so a genuinely missing or stuck model still
+        fails loudly instead of passing as a no-op.
+        """
         action = "load" if loaded else "unload"
-        http_json(f"{self.base_url}/v1/models/{model}/{action}",
-                  payload={}, token=self.token, timeout=900)
+        try:
+            http_json(f"{self.base_url}/v1/models/{model}/{action}",
+                      payload={}, token=self.token, timeout=900)
+        except urllib.error.HTTPError as exc:
+            if exc.code not in (400, 404) or self._is_resident(model) != loaded:
+                raise
+
+    def _is_resident(self, model: str) -> bool:
+        """Does the server report this model as loaded right now?
+
+        Consulted only to interpret a 404 from load/unload. Without it a real
+        missing model would be silently treated as a resident alias.
+        """
+        try:
+            status = self.residency()
+        except OSError:
+            return False
+        entries = status.get("models", status) if isinstance(status, dict) else status
+        for entry in entries if isinstance(entries, list) else []:
+            if isinstance(entry, dict) and (entry.get("id") or entry.get("name")) == model:
+                return bool(entry.get("loaded"))
+        return False
+
+
+# Ollama derives its default context from the HOST's VRAM (4k under 24 GiB,
+# 32k from 24 to 48, 256k beyond), and `OllamaExtractor` sends no `num_ctx`.
+# Left implicit, the same model reserves a KV cache of a different size on the
+# bench machine than on a reader's, which breaks BOTH the per-tier weight
+# budget and cross-machine reproducibility. The bench therefore states it:
+# ~700 prompt tokens + 512 of output, rounded up for margin.
+DEFAULT_NUM_CTX = 2048
+
+# The extraction contract, as the scorer reads it: `relation_triples` needs
+# objects with subject/predicate/object, and `_attributes` needs entity/key/
+# value. Handed to ollama as `format`, it makes the fatal failure this bench
+# exists to catch — relations emitted as arrays, or a reply that is not JSON at
+# all — structurally impossible rather than merely discouraged.
+#
+# `value` stays string-or-number on purpose. Forcing a number would also force
+# the numeric-attribute oracle to pass, so the variant would be scoring its own
+# constraint instead of the model.
+EXTRACTION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "relations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "subject": {"type": "string"},
+                    "predicate": {"type": "string"},
+                    "object": {"type": "string"},
+                },
+                "required": ["subject", "predicate", "object"],
+            },
+        },
+        "attributes": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "entity": {"type": "string"},
+                    "key": {"type": "string"},
+                    "value": {"type": ["string", "number"]},
+                },
+                "required": ["entity", "key", "value"],
+            },
+        },
+    },
+    "required": ["relations", "attributes"],
+}
 
 
 class OllamaBackend:
     """The `ollama` extractor path, body-for-body with `OllamaExtractor`."""
 
-    def __init__(self, base_url: str, model: str, cap: int, keep_alive: object = -1) -> None:
+    def __init__(self, base_url: str, model: str, cap: int, keep_alive: object = -1,
+                 num_ctx: int = DEFAULT_NUM_CTX, schema: "dict | None" = None) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.cap = cap
         self.keep_alive = keep_alive
+        self.num_ctx = num_ctx
+        # Constrained decoding is a DECLARED variant, never the reference: the
+        # product sends no `format` today, and a bench that quietly enabled it
+        # would measure something velesdb-memory does not do.
+        self.schema = schema
+
+    def _options(self) -> dict:
+        return {"temperature": 0, "num_predict": self.cap, "num_ctx": self.num_ctx}
 
     def generate(self, prompt: str) -> dict:
         body = {
@@ -615,8 +742,10 @@ class OllamaBackend:
             "stream": False,
             "think": False,
             "keep_alive": self.keep_alive,
-            "options": {"temperature": 0, "num_predict": self.cap},
+            "options": self._options(),
         }
+        if self.schema is not None:
+            body["format"] = self.schema
         started = time.monotonic()
         response = http_json(f"{self.base_url}/api/generate", body)
         elapsed = time.monotonic() - started
@@ -635,8 +764,12 @@ class OllamaBackend:
     def set_loaded(self, model: str, loaded: bool) -> None:
         http_json(f"{self.base_url}/api/generate", {
             "model": model, "prompt": "ok",
+            # Without this, ollama streams NDJSON and the JSON decoder stops at
+            # the second object ("Extra data"). `generate` always had it; this
+            # call did not, so every residency change crashed the run.
+            "stream": False,
             "keep_alive": -1 if loaded else 0,
-            "options": {"num_predict": 1},
+            "options": {"num_predict": 1, "num_ctx": self.num_ctx},
         }, timeout=900)
 
 
@@ -1079,13 +1212,44 @@ class DisposableDaemon:
     def _await_health(self, timeout_s: float) -> None:
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
+            # A daemon that already exited will never become healthy, and
+            # waiting the full timeout turns a two-second, self-explanatory
+            # refusal into a mute minute. Its own words are the diagnosis.
+            if self.process is not None and self.process.poll() is not None:
+                raise RuntimeError(self._death_report())
             try:
-                http_json(f"{self.url}/health", timeout=5)
+                # `/health` answers `OK` as text/plain, so it must NOT be parsed
+                # as JSON: doing so raised a JSONDecodeError that escaped the
+                # OSError-only retry and read as a bench crash.
+                http_text(f"{self.url}/health", timeout=5)
                 return
             except OSError:
                 time.sleep(0.5)
         self.stop()
-        raise RuntimeError(f"daemon on port {self.port} never became healthy")
+        raise RuntimeError(f"daemon on port {self.port} never became healthy "
+                           f"within {timeout_s:.0f}s (it is still running)")
+
+    def _death_report(self) -> str:
+        """Why the daemon exited, in its own words rather than ours.
+
+        stderr was captured into a pipe that nothing ever read, so the two
+        causes seen in practice — a binary built without `--features http`, and
+        an autograph enabled with no extractor configured — were both reported
+        as a generic timeout.
+        """
+        code = self.process.returncode if self.process else None
+        try:
+            _, err = self.process.communicate(timeout=5)
+        except (subprocess.TimeoutExpired, ValueError, AttributeError):
+            err = b""
+        detail = (err or b"").decode("utf-8", "replace").strip().splitlines()
+        last = detail[-1] if detail else "(no stderr)"
+        hint = ""
+        if "--features http" in last:
+            hint = (" — rebuild it: "
+                    "cargo build --release -p velesdb-memory --features http")
+        return (f"daemon on port {self.port} exited with code {code} before "
+                f"becoming healthy: {last}{hint}")
 
     def stop(self) -> None:
         if self.process and self.process.poll() is None:
@@ -1228,7 +1392,39 @@ def render_report(results: dict) -> str:
     configurations = results.get("configurations", {})
     lines += [_report_row(name, entry) for name, entry in configurations.items()]
     lines += _language_section(configurations)
+    lines += _end_to_end_section(results.get("end_to_end", {}))
     return "\n".join(lines) + "\n"
+
+
+def _end_to_end_section(runs: dict) -> "list[str]":
+    """What phase B actually stored, which screening cannot answer.
+
+    Screening reads the model's reply; this reads the graph the daemon kept
+    afterwards. A drain that never completed is reported as `not drained`
+    rather than as its timeout, because a give-up is not a duration.
+    """
+    if not runs:
+        return []
+    lines = [
+        "",
+        "## End-to-end (what the daemon actually stored)",
+        "",
+        "| configuration | fatal | major | drain | burst p95 | enrichment dropped |",
+        "|---|---|---|---|---|---|",
+    ]
+    for name, entry in runs.items():
+        totals = entry.get("totals", {})
+        burst = entry.get("burst", {})
+        drain = totals.get("max_drain_seconds")
+        drained = any(case.get("entities") and any(case["entities"].values())
+                      for case in entry.get("cases", []))
+        drain_cell = f"{drain:.1f}s" if drained and drain is not None else "not drained"
+        p95 = burst.get("p95_seconds")
+        lines.append(
+            f"| `{name}` | {totals.get('fatal', 0)} | {totals.get('major', 0)} | "
+            f"{drain_cell} | {f'{p95 * 1000:.0f}ms' if p95 is not None else '-'} | "
+            f"{burst.get('autograph_dropped', '-')} |")
+    return lines
 
 
 def _language_section(configurations: dict) -> "list[str]":
@@ -1273,8 +1469,84 @@ def cmd_from_log(args: argparse.Namespace) -> int:
     return 0
 
 
+def _command_output(*argv: str) -> str:
+    """One command's first line, or `unavailable` — never a raised campaign."""
+    try:
+        out = subprocess.run(argv, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return "unavailable"
+    line = (out.stdout or out.stderr or "").strip().splitlines()
+    return line[0] if line else "unavailable"
+
+
+def collect_environment(binary: "Path | None" = None) -> dict:
+    """The measuring conditions, read from the machine rather than typed.
+
+    The daemon binary's mtime is in here because it is what distinguishes the
+    campaign's before from its after: the same source tree served by a stale
+    binary measures the previous release.
+    """
+    environment = {
+        "machine": _command_output("uname", "-m"),
+        "os": _command_output("sw_vers", "-productVersion"),
+        "rustc": _command_output("rustc", "--version"),
+        "ollama": _command_output("ollama", "--version"),
+        "develop_commit": _command_output("git", "rev-parse", "HEAD"),
+        "cases_file": str(CASES_FILE),
+        "num_ctx": DEFAULT_NUM_CTX,
+    }
+    if binary is not None and binary.exists():
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(binary.stat().st_mtime))
+        environment["daemon_binary"] = str(binary)
+        environment["daemon_binary_mtime"] = stamp
+    return environment
+
+
+def merge_configurations(directory: Path, phase: str = "screen") -> dict:
+    """Fold every per-configuration result in a tree into one campaign map.
+
+    `screen` writes one file per configuration and `report` reads one campaign,
+    with nothing in between: the consolidation was being done by hand, which is
+    exactly the step where a published table drifts from its measurement.
+    Sub-directories are kept and prefixed, so a declared variant stays labelled
+    as one instead of overwriting its own reference row.
+    """
+    configurations: "dict[str, dict]" = {}
+    for path in sorted(directory.rglob("*.json")):
+        entry = json.loads(path.read_text(encoding="utf-8"))
+        # Both phases carry `totals`, with different members: screening has
+        # parse_rate and percentiles, end-to-end has a drain time. Folding them
+        # into one table would print a screening row for a run that never
+        # screened anything, so the phase decides rather than the shape.
+        if entry.get("phase") != phase:
+            continue
+        name = entry.get("config") or path.stem
+        variant = path.parent.name
+        if variant != directory.name:
+            name = f"{name} [{variant}]"
+        configurations[name] = entry
+    return configurations
+
+
 def cmd_report(args: argparse.Namespace) -> int:
-    results = json.loads(Path(args.results).read_text(encoding="utf-8"))
+    if not args.from_dir and not args.results:
+        raise SystemExit("report needs a source: --results <campaign.json> for an "
+                         "already consolidated file, or --from-dir <dir> to fold "
+                         "one file per configuration into a campaign.")
+    if args.from_dir:
+        directory = Path(args.from_dir)
+        results = {
+            "campaign": args.campaign or directory.name,
+            "environment": collect_environment(
+                Path(args.binary) if getattr(args, "binary", None) else None),
+            "configurations": merge_configurations(directory, "screen"),
+            "end_to_end": merge_configurations(directory, "endtoend"),
+        }
+        if args.merged_out:
+            Path(args.merged_out).write_text(
+                json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8")
+    else:
+        results = json.loads(Path(args.results).read_text(encoding="utf-8"))
     rendered = render_report(results)
     if args.out:
         Path(args.out).write_text(rendered, encoding="utf-8")
@@ -1284,8 +1556,20 @@ def cmd_report(args: argparse.Namespace) -> int:
 
 
 def build_backend(args: argparse.Namespace, cap: int) -> object:
+    if args.backend == "outline":
+        # `outline` is the daemon's own deterministic reader, not an HTTP
+        # service: there is no endpoint to screen against. Sent to the OpenAI
+        # backend it asked omlx to load a model named "outline" and died on a
+        # 404 that blamed the server for the bench's category error.
+        raise SystemExit(
+            "screen cannot run the `outline` extractor: it is in-process in the "
+            "daemon, with no API to call. Measure the no-LLM floor with "
+            "`endtoend --backend outline`, which runs it where it lives.")
     if args.backend == "ollama":
-        return OllamaBackend(args.url or "http://localhost:11434", args.config, cap)
+        return OllamaBackend(args.url or "http://localhost:11434", args.config, cap,
+                             num_ctx=getattr(args, "num_ctx", DEFAULT_NUM_CTX),
+                             schema=EXTRACTION_SCHEMA
+                             if getattr(args, "constrained", False) else None)
     return OpenAiBackend(args.url or "http://127.0.0.1:8019", args.config, extractor_token(), cap)
 
 
@@ -1426,6 +1710,16 @@ def _add_model_arguments(parser: argparse.ArgumentParser, config_required: bool)
     # the same verdict for their own language.
     parser.add_argument("--cases", default=str(CASES_FILE),
                         help="scenario file; replace it to bench another language")
+    parser.add_argument("--constrained", action="store_true",
+                        help="ollama only: constrain decoding to the extraction "
+                             "schema. A DECLARED VARIANT, never the reference — "
+                             "velesdb-memory sends no `format` today, so a run "
+                             "with this flag measures a product that does not "
+                             "exist yet, and its numbers belong in their own column")
+    parser.add_argument("--num-ctx", type=int, default=DEFAULT_NUM_CTX, dest="num_ctx",
+                        help="ollama context window, stated rather than inherited "
+                             "from the host's VRAM (its default varies 4k/32k/256k "
+                             "by card, which makes runs incomparable across machines)")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1457,7 +1751,14 @@ def build_parser() -> argparse.ArgumentParser:
     probe.set_defaults(func=cmd_probe)
 
     report = subparsers.add_parser("report", help="render the markdown report from a result file")
-    report.add_argument("--results", required=True)
+    report.add_argument("--results", help="one consolidated campaign file")
+    report.add_argument("--from-dir", dest="from_dir",
+                        help="consolidate every per-configuration result under this "
+                             "tree instead; sub-directories label declared variants")
+    report.add_argument("--campaign", help="campaign label; defaults to the directory name")
+    report.add_argument("--binary", help="daemon binary whose mtime dates the measurement")
+    report.add_argument("--merged-out", dest="merged_out",
+                        help="write the consolidated campaign JSON, the report's source")
     report.add_argument("--out")
     report.set_defaults(func=cmd_report)
     return parser

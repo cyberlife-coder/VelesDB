@@ -45,6 +45,7 @@ each guide links back.
 | [Agent Memory](./AGENT_MEMORY.md) | AI agent memory: semantic, episodic, procedural, TTL, snapshots |
 | [MCP server setup](./MCP_SERVER_SETUP.md) | velesdb-memory: install, every client config, the shared HTTPS daemon, embedding/extraction backends |
 | [Context compiler](./CONTEXT_COMPILER.md) | Deterministic prompt compression: budgets, preservation rules, `risk`, transcripts, the `PostToolUse` hook |
+| [Extraction models](./MEMORY_EXTRACTOR_MODELS.md) | Picking the local model that turns remembered facts into graph edges: criteria, VRAM tiers, and why schema discipline outranks size |
 | [Temporal Memory](./TEMPORAL_MEMORY.md) | Dated recall and reasoning about *when* things happened |
 
 ## CLI and REPL

@@ -1,0 +1,957 @@
+{
+  "config": "gpt-oss-20b-MXFP4-Q8",
+  "generation_cap": 512,
+  "residency_before": {
+    "final_ceiling": 55662788608,
+    "current_model_memory": 43194911401,
+    "model_count": 8,
+    "loaded_count": 5,
+    "load_seconds_per_gb_estimate": 0.6326848894614028,
+    "load_time_observations": 2,
+    "models": [
+      {
+        "id": "Kimi-Linear-48B-A3B-Instruct-4bit",
+        "model_path": "/Users/julien/Developer/llm-local-runtime/models/mlx-community/Kimi-Linear-48B-A3B-Instruct-4bit",
+        "loaded": false,
+        "is_loading": false,
+        "loading_started_at": null,
+        "estimated_size": 29023301249,
+        "actual_size": null,
+        "pinned": false,
+        "engine_type": "batched",
+        "model_type": "llm",
+        "config_model_type": "kimi_linear",
+        "model_context_length": null,
+        "is_helper": false,
+        "thinking_default": null,
+        "preserve_thinking_default": null,
+        "source_type": "local",
+        "source_repo_id": null,
+        "last_access": null,
+        "max_context_window": 65536,
+        "max_tokens": 16384
+      },
+      {
+        "id": "Qwen3-30B-A3B-Instruct-2507-4bit",
+        "model_path": "/Users/julien/Developer/llm-local-runtime/models/mlx-community/Qwen3-30B-A3B-Instruct-2507-4bit",
+        "loaded": false,
+        "is_loading": false,
+        "loading_started_at": null,
+        "estimated_size": 18040125593,
+        "actual_size": null,
+        "pinned": false,
+        "engine_type": "batched",
+        "model_type": "llm",
+        "config_model_type": "qwen3_moe",
+        "model_context_length": 262144,
+        "is_helper": false,
+        "thinking_default": null,
+        "preserve_thinking_default": null,
+        "source_type": "local",
+        "source_repo_id": null,
+        "last_access": null,
+        "max_context_window": 262144,
+        "max_tokens": 16384
+      },
+      {
+        "id": "gemma-4-31b-it-4bit",
+        "model_path": "/Users/julien/Developer/llm-local-runtime/models/mlx-community/gemma-4-31b-it-4bit",
+        "loaded": false,
+        "is_loading": false,
+        "loading_started_at": null,
+        "estimated_size": 19332617509,
+        "actual_size": null,
+        "pinned": false,
+        "engine_type": "vlm",
+        "model_type": "vlm",
+        "config_model_type": "gemma4",
+        "model_context_length": 262144,
+        "is_helper": false,
+        "thinking_default": false,
+        "preserve_thinking_default": null,
+        "source_type": "local",
+        "source_repo_id": null,
+        "last_access": null,
+        "max_context_window": 262144,
+        "max_tokens": 16384
+      },
+      {
+        "id": "gpt-oss-20b-MXFP4-Q8",
+        "model_path": "/Users/julien/Developer/llm-local-runtime/models/mlx-community/gpt-oss-20b-MXFP4-Q8",
+        "loaded": true,
+        "is_loading": false,
+        "loading_started_at": null,
+        "estimated_size": 12680017946,
+        "actual_size": 12195635912,
+        "pinned": false,
+        "engine_type": "batched",
+        "model_type": "llm",
+        "config_model_type": "gpt_oss",
+        "model_context_length": 131072,
+        "is_helper": false,
+        "thinking_default": null,
+        "preserve_thinking_default": null,
+        "source_type": "local",
+        "source_repo_id": null,
+        "last_access": 1786843821.865995,
+        "max_context_window": 131072,
+        "max_tokens": 16384
+      },
+      {
+        "id": "ornith-35b",
+        "model_path": "/Users/julien/Developer/llm-local-runtime/models/ornith-35b",
+        "loaded": true,
+        "is_loading": false,
+        "loading_started_at": null,
+        "estimated_size": 30514893455,
+        "actual_size": 29401900584,
+        "pinned": true,
+        "engine_type": "vlm",
+        "model_type": "vlm",
+        "config_model_type": "qwen3_5_moe",
+        "model_context_length": 262144,
+        "is_helper": false,
+        "thinking_default": true,
+        "preserve_thinking_default": null,
+        "source_type": "local",
+        "source_repo_id": null,
+        "last_access": 1786844016.0941281,
+        "max_context_window": 65536,
+        "model_alias": "default",
+        "max_tokens": 16384
+      },
+      {
+        "id": "default:base",
+        "model_path": "/Users/julien/Developer/llm-local-runtime/models/ornith-35b",
+        "loaded": true,
+        "is_loading": false,
+        "loading_started_at": null,
+        "estimated_size": 30514893455,
+        "actual_size": 29401900584,
+        "pinned": true,
+        "engine_type": "vlm",
+        "model_type": "vlm",
+        "config_model_type": "qwen3_5_moe",
+        "model_context_length": 262144,
+        "is_helper": false,
+        "thinking_default": true,
+        "preserve_thinking_default": null,
+        "source_type": "local",
+        "source_repo_id": null,
+        "last_access": 1786844016.0941281,
+        "source_model_id": "ornith-35b",
+        "profile_name": "base",
+        "profile_api_name": "base",
+        "profile_display_name": "Base",
+        "max_context_window": 32768,
+        "max_tokens": 8192
+      },
+      {
+        "id": "default:think",
+        "model_path": "/Users/julien/Developer/llm-local-runtime/models/ornith-35b",
+        "loaded": true,
+        "is_loading": false,
+        "loading_started_at": null,
+        "estimated_size": 30514893455,
+        "actual_size": 29401900584,
+        "pinned": true,
+        "engine_type": "vlm",
+        "model_type": "vlm",
+        "config_model_type": "qwen3_5_moe",
+        "model_context_length": 262144,
+        "is_helper": false,
+        "thinking_default": true,
+        "preserve_thinking_default": null,
+        "source_type": "local",
+        "source_repo_id": null,
+        "last_access": 1786844016.0941281,
+        "source_model_id": "ornith-35b",
+        "profile_name": "think",
+        "profile_api_name": "think",
+        "profile_display_name": "Think",
+        "max_context_window": 65536,
+        "max_tokens": 16384
+      },
+      {
+        "id": "default:fast",
+        "model_path": "/Users/julien/Developer/llm-local-runtime/models/ornith-35b",
+        "loaded": true,
+        "is_loading": false,
+        "loading_started_at": null,
+        "estimated_size": 30514893455,
+        "actual_size": 29401900584,
+        "pinned": true,
+        "engine_type": "vlm",
+        "model_type": "vlm",
+        "config_model_type": "qwen3_5_moe",
+        "model_context_length": 262144,
+        "is_helper": false,
+        "thinking_default": true,
+        "preserve_thinking_default": null,
+        "source_type": "local",
+        "source_repo_id": null,
+        "last_access": 1786844016.0941281,
+        "source_model_id": "ornith-35b",
+        "profile_name": "fast",
+        "profile_api_name": "fast",
+        "profile_display_name": "Fast",
+        "max_context_window": 32768,
+        "max_tokens": 8192
+      }
+    ]
+  },
+  "storage": {
+    "path": "/Users/julien/Developer/llm-local-runtime/models/mlx-community/gpt-oss-20b-MXFP4-Q8",
+    "symlink": false,
+    "resolved": "/Volumes/Samsung_X5/models/mlx-community/gpt-oss-20b-MXFP4-Q8",
+    "reachable": true,
+    "device": "/dev/disk4s1",
+    "mount": "/Volumes/Samsung_X5"
+  },
+  "estimated_size": 12680017946,
+  "cold": {
+    "load_seconds": 0.0015946250059641898,
+    "first_answer_seconds": 7.7199286250106525,
+    "cold_total_seconds": 7.721523250016617,
+    "storage": {
+      "path": "/Users/julien/Developer/llm-local-runtime/models/mlx-community/gpt-oss-20b-MXFP4-Q8",
+      "symlink": false,
+      "resolved": "/Volumes/Samsung_X5/models/mlx-community/gpt-oss-20b-MXFP4-Q8",
+      "reachable": true,
+      "device": "/dev/disk4s1",
+      "mount": "/Volumes/Samsung_X5"
+    },
+    "cache_state": "unknown"
+  },
+  "warmup": {
+    "rounds": 4,
+    "latencies": [
+      9.169988750014454,
+      14.527887125004781,
+      14.020591208973201,
+      13.369143041985808
+    ],
+    "stabilised": true
+  },
+  "phase": "screen",
+  "runs": 1,
+  "cases": [
+    {
+      "id": "fr-possessive",
+      "family": "nominal-fr",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Marie Dupont a une soeur, Camille Dupont. Camille Dupont a 15 ans et travaille chez Wiscale.",
+          "seconds": 12.56766158301616,
+          "completion_tokens": 512,
+          "truncated": true,
+          "parse_ok": false,
+          "raw": "",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "fr-employment-date",
+      "family": "nominal-fr",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Bruno Durand dirige Wiscale depuis 2019.",
+          "seconds": 12.366003958013607,
+          "completion_tokens": 512,
+          "truncated": true,
+          "parse_ok": false,
+          "raw": "",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "fr-pronoun",
+      "family": "nominal-fr",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Bruno Durand dirige Wiscale. Il habite a Lyon.",
+          "seconds": 11.720598790998338,
+          "completion_tokens": 512,
+          "truncated": true,
+          "parse_ok": false,
+          "raw": "{\"facts\":[{\"fact\":\"Bruno Durand dirige Wiscale.\",\"entities\":[\"bruno durand\",\"wiscale\"]},{\"fact\":\"Bruno Durand habite à Lyon.\",\"entities\":[\"bruno durand\",\"lyon\"]}],\"",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "fr-converse-stated",
+      "family": "nominal-fr",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Wiscale emploie Alice Martin. Alice Martin travaille pour Wiscale depuis 2019.",
+          "seconds": 11.021902499982389,
+          "completion_tokens": 512,
+          "truncated": true,
+          "parse_ok": false,
+          "raw": "",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "en-possessive",
+      "family": "nominal-en",
+      "lang": "en",
+      "passages": [
+        {
+          "text": "Sarah Miller has a brother, Tom Miller. Tom Miller is 22 and works at Northwind.",
+          "seconds": 10.423694375000196,
+          "completion_tokens": 512,
+          "truncated": true,
+          "parse_ok": false,
+          "raw": "",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "en-employment-date",
+      "family": "nominal-en",
+      "lang": "en",
+      "passages": [
+        {
+          "text": "David Clarke runs Northwind since 2019.",
+          "seconds": 12.668544415995711,
+          "completion_tokens": 512,
+          "truncated": true,
+          "parse_ok": false,
+          "raw": "",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "en-pronoun",
+      "family": "nominal-en",
+      "lang": "en",
+      "passages": [
+        {
+          "text": "David Clarke runs Northwind. He lives in Leeds.",
+          "seconds": 13.952579625009093,
+          "completion_tokens": 512,
+          "truncated": true,
+          "parse_ok": false,
+          "raw": "",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "en-converse-stated",
+      "family": "nominal-en",
+      "lang": "en",
+      "passages": [
+        {
+          "text": "Northwind employs Emma Stone. Emma Stone works for Northwind since 2019.",
+          "seconds": 10.618571416998748,
+          "completion_tokens": 512,
+          "truncated": true,
+          "parse_ok": false,
+          "raw": "",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "edge-no-relation",
+      "family": "edge",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Il pleuvait sur la ville hier soir.",
+          "seconds": 9.171598665998317,
+          "completion_tokens": 512,
+          "truncated": true,
+          "parse_ok": false,
+          "raw": "",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "edge-hostile-format",
+      "family": "edge",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Le projet \"Ardoise {beta}\" est pilote par Nadia Kerouac chez Wiscale.",
+          "seconds": 8.938378916995134,
+          "completion_tokens": 512,
+          "truncated": true,
+          "parse_ok": false,
+          "raw": "",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "edge-verbose-truncation",
+      "family": "edge",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Nadia Kerouac dirige Wiscale depuis 2018. Wiscale possede le serveur Hydra, qui dispose de 128 Go de RAM. Bruno Durand, 42 ans, est le directeur technique de Wiscale et habite a Lyon. Alice Martin a rejoint l'equipe en janvier 2025 comme ingenieure. Le projet Ardoise, lance en mars 2025, est pilote par Alice Martin. Wiscale emploie 37 personnes et son siege est a Geneve.",
+          "seconds": 9.063709916983498,
+          "completion_tokens": 512,
+          "truncated": true,
+          "parse_ok": false,
+          "raw": "",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "edge-accents-hyphens",
+      "family": "edge",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Jean-Luc D'Arcy a fonde Eco-Kerite S.a r.l. a Geneve en 2018.",
+          "seconds": 8.775851207989035,
+          "completion_tokens": 512,
+          "truncated": true,
+          "parse_ok": false,
+          "raw": "",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "edge-mixed-lang",
+      "family": "edge",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Marie Dupont a rejoint Northwind Data Services en janvier 2025.",
+          "seconds": 8.967993916972773,
+          "completion_tokens": 512,
+          "truncated": true,
+          "parse_ok": false,
+          "raw": "",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "close-role",
+      "family": "close-pair",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Alice Martin travaille chez Wiscale.",
+          "seconds": 8.655919874989195,
+          "completion_tokens": 512,
+          "truncated": true,
+          "parse_ok": false,
+          "raw": "",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        },
+        {
+          "text": "Alice Martin dirige Wiscale.",
+          "seconds": 8.782394499983639,
+          "completion_tokens": 512,
+          "truncated": true,
+          "parse_ok": false,
+          "raw": "",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 2,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "close-negation",
+      "family": "close-pair",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Alice Martin travaille chez Wiscale.",
+          "seconds": 8.314034584007459,
+          "completion_tokens": 512,
+          "truncated": true,
+          "parse_ok": false,
+          "raw": "",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        },
+        {
+          "text": "Alice Martin a quitte Wiscale en 2024.",
+          "seconds": 8.771976749994792,
+          "completion_tokens": 512,
+          "truncated": true,
+          "parse_ok": false,
+          "raw": "",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 2,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "close-kinship",
+      "family": "close-pair",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Camille Rey est la soeur de Marie Rey.",
+          "seconds": 8.728671916003805,
+          "completion_tokens": 512,
+          "truncated": true,
+          "parse_ok": false,
+          "raw": "",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        },
+        {
+          "text": "Camille Rey est la belle-soeur de Marie Rey.",
+          "seconds": 8.80280608299654,
+          "completion_tokens": 512,
+          "truncated": true,
+          "parse_ok": false,
+          "raw": "",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 2,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "close-possession",
+      "family": "close-pair",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Wiscale possede le serveur Hydra.",
+          "seconds": 8.750970916997176,
+          "completion_tokens": 512,
+          "truncated": true,
+          "parse_ok": false,
+          "raw": "",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        },
+        {
+          "text": "Wiscale loue le serveur Hydra.",
+          "seconds": 8.838495832984336,
+          "completion_tokens": 512,
+          "truncated": true,
+          "parse_ok": false,
+          "raw": "",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 2,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "close-symmetry",
+      "family": "close-pair",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Alice Rey travaille avec Bob Neri.",
+          "seconds": 8.807609749987023,
+          "completion_tokens": 512,
+          "truncated": true,
+          "parse_ok": false,
+          "raw": "",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        },
+        {
+          "text": "Alice Rey travaille pour Bob Neri.",
+          "seconds": 8.871194084000308,
+          "completion_tokens": 512,
+          "truncated": true,
+          "parse_ok": false,
+          "raw": "",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 2,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    },
+    {
+      "id": "close-homonyms",
+      "family": "close-pair",
+      "lang": "fr",
+      "passages": [
+        {
+          "text": "Marie Dupont habite a Lyon. Marie Dupond habite a Nantes.",
+          "seconds": 8.859793374984292,
+          "completion_tokens": 512,
+          "truncated": true,
+          "parse_ok": false,
+          "raw": "{\"",
+          "failures": [
+            {
+              "severity": "fatal",
+              "label": "response is not valid JSON",
+              "type": "parse"
+            }
+          ]
+        }
+      ],
+      "cross_failures": [],
+      "counts": {
+        "fatal": 1,
+        "major": 0,
+        "minor": 0
+      },
+      "run": 1
+    }
+  ],
+  "totals": {
+    "fatal": 24,
+    "major": 0,
+    "minor": 0,
+    "parse_rate": 0.0,
+    "truncated": 24,
+    "p50_seconds": 8.871194084000308,
+    "p95_seconds": 12.668544415995711
+  },
+  "by_language": {
+    "en": {
+      "fatal": 4,
+      "major": 0,
+      "minor": 0,
+      "parse_rate": 0.0,
+      "truncated": 4,
+      "p50_seconds": 10.618571416998748,
+      "p95_seconds": 13.952579625009093
+    },
+    "fr": {
+      "fatal": 20,
+      "major": 0,
+      "minor": 0,
+      "parse_rate": 0.0,
+      "truncated": 20,
+      "p50_seconds": 8.838495832984336,
+      "p95_seconds": 12.366003958013607
+    }
+  },
+  "by_family": {
+    "close-pair": {
+      "fatal": 11,
+      "major": 0,
+      "minor": 0,
+      "parse_rate": 0.0,
+      "truncated": 11,
+      "p50_seconds": 8.782394499983639,
+      "p95_seconds": 8.871194084000308
+    },
+    "edge": {
+      "fatal": 5,
+      "major": 0,
+      "minor": 0,
+      "parse_rate": 0.0,
+      "truncated": 5,
+      "p50_seconds": 8.967993916972773,
+      "p95_seconds": 9.171598665998317
+    },
+    "nominal-en": {
+      "fatal": 4,
+      "major": 0,
+      "minor": 0,
+      "parse_rate": 0.0,
+      "truncated": 4,
+      "p50_seconds": 10.618571416998748,
+      "p95_seconds": 13.952579625009093
+    },
+    "nominal-fr": {
+      "fatal": 4,
+      "major": 0,
+      "minor": 0,
+      "parse_rate": 0.0,
+      "truncated": 4,
+      "p50_seconds": 11.720598790998338,
+      "p95_seconds": 12.56766158301616
+    }
+  },
+  "mirror_gap": {
+    "fr": {
+      "fatal": 4,
+      "major": 0,
+      "minor": 0,
+      "parse_rate": 0.0,
+      "truncated": 4,
+      "p50_seconds": 11.720598790998338,
+      "p95_seconds": 12.56766158301616
+    },
+    "en": {
+      "fatal": 4,
+      "major": 0,
+      "minor": 0,
+      "parse_rate": 0.0,
+      "truncated": 4,
+      "p50_seconds": 10.618571416998748,
+      "p95_seconds": 13.952579625009093
+    },
+    "weighted_fr": 40,
+    "weighted_en": 40,
+    "gap": 0,
+    "weaker": null
+  }
+}
