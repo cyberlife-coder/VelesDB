@@ -625,20 +625,31 @@ class OpenAiBackend:
         return http_json(f"{self.base_url}/v1/models/status", token=self.token, timeout=30)
 
     def set_loaded(self, model: str, loaded: bool) -> None:
+        """Bring the model to the requested residency, which may already hold.
+
+        This is a DECLARATIVE request, and omlx refuses two cases that are not
+        failures at all — both measured on this server:
+
+          - `POST .../default:fast/load` -> 404, because a profile alias is a
+            view on weights the base model owns and has nothing of its own to
+            load, while `ornith-35b` and `gpt-oss-20b` answer 200;
+          - `POST .../<model>/unload` -> 400 `Model not loaded`, for a model
+            already absent.
+
+        Treating either as fatal killed whole configurations: the ornith
+        profiles never ran, and `gemma-4-31b` died before its first case
+        because one of the models the choreography unloads was already gone.
+        The refusal is accepted only when the server itself reports the desired
+        state as already true, so a genuinely missing or stuck model still
+        fails loudly instead of passing as a no-op.
+        """
         action = "load" if loaded else "unload"
         try:
             http_json(f"{self.base_url}/v1/models/{model}/{action}",
                       payload={}, token=self.token, timeout=900)
         except urllib.error.HTTPError as exc:
-            if exc.code != 404 or not self._is_resident(model):
+            if exc.code not in (400, 404) or self._is_resident(model) != loaded:
                 raise
-            # A PROFILE ALIAS (`default:fast`) can be generated against but not
-            # loaded: measured on omlx, `ornith-35b` and `gpt-oss-20b` answer
-            # 200 where `default:fast` answers 404, because the alias is a view
-            # on weights the base model owns. Refusing the whole configuration
-            # over it would drop the profiles this campaign exists to compare —
-            # and residency is already satisfied, which is what the 404 is
-            # checked against rather than assumed.
 
     def _is_resident(self, model: str) -> bool:
         """Does the server report this model as loaded right now?
