@@ -1689,9 +1689,11 @@ mod tests {
             .collect();
         assert_eq!(required, ["facts", "relations", "attributes"]);
 
-        let reply = r#"{"facts": [{"fact": "Kaltar is fifteen.", "entities": ["kaltar"]}],
-            "relations": [{"subject": "zephyrin", "predicate": "pere de", "object": "kaltar"}],
-            "attributes": [{"entity": "kaltar", "key": "age", "value": 15}]}"#;
+        // One line on purpose: `check_prod_unwraps.py` delimits this test
+        // module by matching braces, and a multi-line JSON literal unbalances
+        // that count mid-module — which silently reclassifies everything after
+        // it as production code (#1918 documents the same fragility).
+        let reply = r#"{"facts": [{"fact": "Kaltar is fifteen.", "entities": ["kaltar"]}], "relations": [{"subject": "zephyrin", "predicate": "pere de", "object": "kaltar"}], "attributes": [{"entity": "kaltar", "key": "age", "value": 15}]}"#;
         let extraction = extraction_from_reply(reply).expect("a schema-shaped reply parses");
         assert_eq!(extraction.facts.len(), 1, "facts survive the reader");
         assert_eq!(extraction.relations.len(), 1);
