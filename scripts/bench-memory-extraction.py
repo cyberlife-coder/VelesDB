@@ -621,6 +621,19 @@ class OpenAiBackend:
             "truncated": choice.get("finish_reason") == "length",
         }
 
+    def settings(self) -> dict:
+        """Same contract as the ollama backend — see its `settings`."""
+        return {
+            "backend": "openai",
+            # This path sends no schema at all: the crate's OpenAI-compatible
+            # extractor has no `format` equivalent wired (#1944), so a run here
+            # is unconstrained by construction rather than by choice.
+            "constrained": False,
+            "schema_required": None,
+            "temperature": 0,
+            "max_tokens": self.cap,
+        }
+
     def residency(self) -> dict:
         return http_json(f"{self.base_url}/v1/models/status", token=self.token, timeout=30)
 
@@ -775,6 +788,23 @@ class OllamaBackend:
 
     def _options(self) -> dict:
         return {"temperature": 0, "num_predict": self.cap, "num_ctx": self.num_ctx}
+
+    def settings(self) -> dict:
+        """The decode settings this run actually sent, for the record.
+
+        Asked of the backend rather than of the CLI arguments, so a result can
+        never claim a setting the requests did not carry. A published run whose
+        `num_ctx` is not on the record cannot be replayed and cannot be compared
+        to another machine — which is exactly what happened to the first
+        campaign, whose files carry no context window at all.
+        """
+        return {
+            "backend": "ollama",
+            "constrained": self.schema is not None,
+            "schema_required": sorted(self.schema.get("required", [])) if self.schema else None,
+            "keep_alive": self.keep_alive,
+            **self._options(),
+        }
 
     def generate(self, prompt: str) -> dict:
         body = {
@@ -1379,6 +1409,27 @@ def endtoend(daemon: DisposableDaemon, cases: "list[dict]") -> dict:
 # ------------------------------------------------------------------ report ----
 
 
+def _quality_cell(totals: dict, key: str) -> str:
+    """A quality count, or a refusal to state one that cannot mean anything.
+
+    `major` and `minor` are counted on replies that PARSED. A configuration
+    where nothing parsed therefore scores zero of them — and `0` in a quality
+    column reads as "no errors" when it means "nothing to grade". Measured:
+    `llama3.1:8b` published `major=0` beside `parse=0%`, its best-looking cell
+    produced by its worst possible outcome.
+
+    A partial parse rate has a weaker version of the same problem, so the count
+    is qualified with what it was counted over rather than presented bare.
+    """
+    count = totals.get(key, 0)
+    parsed = totals.get("parse_rate")
+    if parsed == 0:
+        return "n/a"
+    if parsed is not None and parsed < 1:
+        return f"{count} (of {parsed * 100:.0f}%)"
+    return str(count)
+
+
 def _report_row(name: str, entry: dict) -> str:
     totals = entry.get("totals", {})
     cold = entry.get("cold", {}).get("cold_total_seconds")
@@ -1386,8 +1437,8 @@ def _report_row(name: str, entry: dict) -> str:
     return " | ".join([
         f"| `{name}`",
         str(totals.get("fatal", 0)),
-        str(totals.get("major", 0)),
-        str(totals.get("minor", 0)),
+        _quality_cell(totals, "major"),
+        _quality_cell(totals, "minor"),
         f"{totals.get('parse_rate', 0) * 100:.0f}%",
         str(totals.get("truncated", 0)),
         f"{totals.get('p50_seconds', float('nan')):.1f}s",
@@ -1655,6 +1706,7 @@ def cmd_screen(args: argparse.Namespace) -> int:
     outcome = {
         "config": args.config,
         "generation_cap": cap,
+        "settings": backend.settings(),
         "residency_before": residency,
         "storage": checked["backing"],
         "estimated_size": checked["estimated_size"],

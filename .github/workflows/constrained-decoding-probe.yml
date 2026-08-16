@@ -147,10 +147,20 @@ jobs:
             [ -f "$file" ] || { echo "${arm}: not produced"; continue; }
             python3 - "$file" "$arm" "${{ matrix.model }}" <<'PY'
           import json, sys
-          totals = json.load(open(sys.argv[1]))["totals"]
-          print(f"{sys.argv[3]:20} {sys.argv[2]:12} fatal={totals['fatal']} "
-                f"major={totals['major']} minor={totals['minor']} "
+          run = json.load(open(sys.argv[1]))
+          totals, model, arm = run["totals"], sys.argv[3], sys.argv[2]
+          # Eligibility is zero fatal AND every reply parsed AND a French/English
+          # gap within tolerance. Printing only the first two invites a verdict
+          # the data does not support, so the per-language split is printed too.
+          langs = run.get("by_language", {})
+          gap = " ".join(
+              f"{lang}:{t.get('fatal')}f/{t.get('major')}m" for lang, t in sorted(langs.items()))
+          quality = "n/a (nothing parsed)" if totals["parse_rate"] == 0 else \
+                    f"major={totals['major']} minor={totals['minor']}"
+          print(f"{model:20} {arm:12} fatal={totals['fatal']} {quality} "
                 f"parse_rate={totals['parse_rate']:.4f} truncated={totals['truncated']}")
+          print(f"{'':20} {'':12} settings={run.get('settings')}")
+          print(f"{'':20} {'':12} by_language={gap or 'absent'}")
           PY
           done
 
