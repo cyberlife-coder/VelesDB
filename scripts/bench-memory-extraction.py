@@ -1426,8 +1426,79 @@ def cmd_from_log(args: argparse.Namespace) -> int:
     return 0
 
 
+def _command_output(*argv: str) -> str:
+    """One command's first line, or `unavailable` — never a raised campaign."""
+    try:
+        out = subprocess.run(argv, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return "unavailable"
+    line = (out.stdout or out.stderr or "").strip().splitlines()
+    return line[0] if line else "unavailable"
+
+
+def collect_environment(binary: "Path | None" = None) -> dict:
+    """The measuring conditions, read from the machine rather than typed.
+
+    The daemon binary's mtime is in here because it is what distinguishes the
+    campaign's before from its after: the same source tree served by a stale
+    binary measures the previous release.
+    """
+    environment = {
+        "machine": _command_output("uname", "-m"),
+        "os": _command_output("sw_vers", "-productVersion"),
+        "rustc": _command_output("rustc", "--version"),
+        "ollama": _command_output("ollama", "--version"),
+        "develop_commit": _command_output("git", "rev-parse", "HEAD"),
+        "cases_file": str(CASES_FILE),
+        "num_ctx": DEFAULT_NUM_CTX,
+    }
+    if binary is not None and binary.exists():
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(binary.stat().st_mtime))
+        environment["daemon_binary"] = str(binary)
+        environment["daemon_binary_mtime"] = stamp
+    return environment
+
+
+def merge_configurations(directory: Path) -> dict:
+    """Fold every per-configuration result in a tree into one campaign map.
+
+    `screen` writes one file per configuration and `report` reads one campaign,
+    with nothing in between: the consolidation was being done by hand, which is
+    exactly the step where a published table drifts from its measurement.
+    Sub-directories are kept and prefixed, so a declared variant stays labelled
+    as one instead of overwriting its own reference row.
+    """
+    configurations: "dict[str, dict]" = {}
+    for path in sorted(directory.rglob("*.json")):
+        entry = json.loads(path.read_text(encoding="utf-8"))
+        if "totals" not in entry:
+            continue
+        name = entry.get("config") or path.stem
+        variant = path.parent.name
+        if variant != directory.name:
+            name = f"{name} [{variant}]"
+        configurations[name] = entry
+    return configurations
+
+
 def cmd_report(args: argparse.Namespace) -> int:
-    results = json.loads(Path(args.results).read_text(encoding="utf-8"))
+    if not args.from_dir and not args.results:
+        raise SystemExit("report needs a source: --results <campaign.json> for an "
+                         "already consolidated file, or --from-dir <dir> to fold "
+                         "one file per configuration into a campaign.")
+    if args.from_dir:
+        directory = Path(args.from_dir)
+        results = {
+            "campaign": args.campaign or directory.name,
+            "environment": collect_environment(
+                Path(args.binary) if getattr(args, "binary", None) else None),
+            "configurations": merge_configurations(directory),
+        }
+        if args.merged_out:
+            Path(args.merged_out).write_text(
+                json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8")
+    else:
+        results = json.loads(Path(args.results).read_text(encoding="utf-8"))
     rendered = render_report(results)
     if args.out:
         Path(args.out).write_text(rendered, encoding="utf-8")
@@ -1632,7 +1703,14 @@ def build_parser() -> argparse.ArgumentParser:
     probe.set_defaults(func=cmd_probe)
 
     report = subparsers.add_parser("report", help="render the markdown report from a result file")
-    report.add_argument("--results", required=True)
+    report.add_argument("--results", help="one consolidated campaign file")
+    report.add_argument("--from-dir", dest="from_dir",
+                        help="consolidate every per-configuration result under this "
+                             "tree instead; sub-directories label declared variants")
+    report.add_argument("--campaign", help="campaign label; defaults to the directory name")
+    report.add_argument("--binary", help="daemon binary whose mtime dates the measurement")
+    report.add_argument("--merged-out", dest="merged_out",
+                        help="write the consolidated campaign JSON, the report's source")
     report.add_argument("--out")
     report.set_defaults(func=cmd_report)
     return parser
