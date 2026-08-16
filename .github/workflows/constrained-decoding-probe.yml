@@ -342,16 +342,25 @@ jobs:
             --out "${RUNNER_TEMP}/cap-1024.json" || true
           test -f "${RUNNER_TEMP}/cap-1024.json" || { echo "could not measure"; exit 1; }
 
-      - name: Constrained, uncensored
+      - name: Pull the uncensored subject
+        run: ollama pull qwen3:4b-instruct
+
+      - name: Constrained, uncensored — on a 4B, deliberately
         run: |
-          # 512 and 1024 can both censor the distribution: a reply that WOULD
-          # have run to 1500 tokens is recorded as exactly the cap. Picking a
-          # value from censored data would just re-derive the cap already in
-          # place. This arm is high enough to observe the real tail, and is a
-          # measurement rather than a proposal — the crate is not going to ship
-          # 4096.
+          # NOT on the 14B, and the reason is the runner. Four vCPU with no GPU
+          # generate a 14B at a few tokens a second: the 512 arm above needs ~19
+          # minutes because replies stop around 100-250 tokens, and an arm that
+          # lets each reply run eight times further would spend half an hour on
+          # a single runaway. That is the most expensive possible way to ask a
+          # question a small model answers in minutes.
+          #
+          # The tail being measured is driven mostly by the SCHEMA — the grammar
+          # requires all three sections — so the subject should be a model that
+          # demonstrably hits the cap rather than the largest one. In the
+          # published campaign qwen3:4b-instruct is one of the six that
+          # truncated at 512; qwen3:14b is not among them.
           python3 scripts/bench-memory-extraction.py screen \
-            --backend ollama --config qwen3:14b --constrained \
+            --backend ollama --config qwen3:4b-instruct --constrained \
             --url http://localhost:11434 --num-ctx 4096 --generation-cap 4096 \
             --out "${RUNNER_TEMP}/cap-4096.json" || true
           test -f "${RUNNER_TEMP}/cap-4096.json" || { echo "could not measure"; exit 1; }
@@ -383,8 +392,9 @@ jobs:
                     f"at_or_over_cap={at_cap}")
           PY
           done
-          echo "Read `max` against its own cap: equal to it means censored, below"
-          echo "it means observed. Only the uncensored arm can say what the tail is."
+          echo "Read max against its own cap: equal to it means censored, below it"
+          echo "means observed. The 4096 arm is a DIFFERENT model (qwen3:4b-instruct)"
+          echo "and answers what the tail looks like, not how the 14B ranks."
 
       - name: Upload
         if: always()
