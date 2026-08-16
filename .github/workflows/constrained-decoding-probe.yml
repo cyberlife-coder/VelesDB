@@ -62,65 +62,105 @@ jobs:
             --model "$MODEL" \
             --out "${RUNNER_TEMP}/constrained-decoding.json"
 
-      - name: Score the floor — reference arm
-        env:
-          MODEL: ${{ github.event.inputs.model || 'qwen3:0.6b' }}
-        run: |
-          # The campaign's own phase A, on the smallest model anyone could
-          # plausibly run. It answers a question the GPU tiers cannot: what a
-          # machine with no headroom at all actually gets. A floor is worth
-          # publishing precisely because it is unflattering.
-          # `screen` exits 1 when the model produced a FATAL error. On a floor
-          # model that is the measurement, not a broken run — refusing to
-          # continue there would mean this workflow can only report floors that
-          # happen to be good. The honest separator is the artefact: a written
-          # JSON means it measured, a missing one means it could not.
-          python3 scripts/bench-memory-extraction.py screen \
-            --backend ollama --config "$MODEL" \
-            --url http://localhost:11434 --num-ctx 4096 \
-            --out "${RUNNER_TEMP}/floor-reference.json" || true
-          test -f "${RUNNER_TEMP}/floor-reference.json" \
-            || { echo "reference arm produced no result — it could not measure"; exit 1; }
-
-      - name: Score the floor — constrained arm
-        env:
-          MODEL: ${{ github.event.inputs.model || 'qwen3:0.6b' }}
-        run: |
-          # Same model, same cases, with the schema the crate now sends. The
-          # bench refuses to run this arm if its schema and the crate's name
-          # different sections.
-          python3 scripts/bench-memory-extraction.py screen \
-            --backend ollama --config "$MODEL" --constrained \
-            --url http://localhost:11434 --num-ctx 4096 \
-            --out "${RUNNER_TEMP}/floor-constrained.json" || true
-          # A missing file here is NOT just "it could not measure": the
-          # constrained arm also refuses to run when the bench's schema and the
-          # crate's name different sections. Either way there is no result.
-          test -f "${RUNNER_TEMP}/floor-constrained.json" \
-            || { echo "constrained arm produced no result — it could not measure"; exit 1; }
-
-      - name: Summarise both arms
-        if: always()
-        run: |
-          for arm in reference constrained; do
-            file="${RUNNER_TEMP}/floor-${arm}.json"
-            [ -f "$file" ] || { echo "${arm}: not produced"; continue; }
-            python3 - "$file" "$arm" <<'PY'
-          import json, sys
-          totals = json.load(open(sys.argv[1]))["totals"]
-          print(f"{sys.argv[2]:12} fatal={totals['fatal']} major={totals['major']} "
-                f"minor={totals['minor']} parse_rate={totals['parse_rate']} "
-                f"truncated={totals['truncated']}")
-          PY
-          done
-
       - name: Upload the raw replies
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: constrained-decoding-run
+          path: ${{ runner.temp }}/constrained-decoding.json
+          if-no-files-found: warn
+
+  campaign:
+    name: ${{ matrix.model }}
+    runs-on: ubuntu-latest
+    # A 14B model generates at a few tokens a second on four cores. The cap is
+    # the GitHub job ceiling minus a margin, not an estimate of the work.
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every entry is a model the published campaign ALREADY measured
+        # unconstrained, so each result lands beside a reference row instead of
+        # in a vacuum. `qwen3:14b` is here despite already scoring zero fatal
+        # errors: the open question there is not whether constrained decoding
+        # helps but whether it HURTS a model that had nothing left to fix.
+        model:
+          - qwen3:4b-instruct
+          - qwen3.5:4b
+          - llama3.1:8b
+          - qwen3:8b
+          - qwen3:14b
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reclaim disk for the larger weights
+        run: |
+          # A 14B pull is ~9 GB against ~14 GB free. Removing toolchains this
+          # job never uses buys ~20 GB and costs seconds.
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost \
+                      "${AGENT_TOOLSDIRECTORY}" /usr/local/lib/android || true
+          df -h / | tail -1
+
+      - name: Install Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          nohup ollama serve > "${RUNNER_TEMP}/ollama.log" 2>&1 &
+          for _ in $(seq 1 60); do
+            if curl -sf http://localhost:11434/ > /dev/null; then
+              echo "ollama up"; exit 0
+            fi
+            sleep 2
+          done
+          echo "ollama never came up"; cat "${RUNNER_TEMP}/ollama.log"; exit 1
+
+      - name: Pull ${{ matrix.model }}
+        run: |
+          ollama pull "${{ matrix.model }}"
+          ollama list
+
+      - name: Reference arm
+        run: |
+          # `screen` exits 1 on a FATAL error, which on these models is a
+          # result rather than a broken run. The artefact is the separator: a
+          # written JSON means it measured, a missing one means it could not.
+          python3 scripts/bench-memory-extraction.py screen \
+            --backend ollama --config "${{ matrix.model }}" \
+            --url http://localhost:11434 --num-ctx 4096 \
+            --out "${RUNNER_TEMP}/reference.json" || true
+          test -f "${RUNNER_TEMP}/reference.json" \
+            || { echo "reference arm produced no result — it could not measure"; exit 1; }
+
+      - name: Constrained arm
+        run: |
+          python3 scripts/bench-memory-extraction.py screen \
+            --backend ollama --config "${{ matrix.model }}" --constrained \
+            --url http://localhost:11434 --num-ctx 4096 \
+            --out "${RUNNER_TEMP}/constrained.json" || true
+          test -f "${RUNNER_TEMP}/constrained.json" \
+            || { echo "constrained arm produced no result — it could not measure"; exit 1; }
+
+      - name: Summarise
+        if: always()
+        run: |
+          for arm in reference constrained; do
+            file="${RUNNER_TEMP}/${arm}.json"
+            [ -f "$file" ] || { echo "${arm}: not produced"; continue; }
+            python3 - "$file" "$arm" "${{ matrix.model }}" <<'PY'
+          import json, sys
+          totals = json.load(open(sys.argv[1]))["totals"]
+          print(f"{sys.argv[3]:20} {sys.argv[2]:12} fatal={totals['fatal']} "
+                f"major={totals['major']} minor={totals['minor']} "
+                f"parse_rate={totals['parse_rate']:.4f} truncated={totals['truncated']}")
+          PY
+          done
+
+      - name: Upload both arms
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          # Slashes and colons are not allowed in artifact names.
+          name: campaign-${{ strategy.job-index }}
           path: |
-            ${{ runner.temp }}/constrained-decoding.json
-            ${{ runner.temp }}/floor-reference.json
-            ${{ runner.temp }}/floor-constrained.json
+            ${{ runner.temp }}/reference.json
+            ${{ runner.temp }}/constrained.json
           if-no-files-found: warn
