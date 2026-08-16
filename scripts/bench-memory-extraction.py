@@ -1768,7 +1768,7 @@ def preflight(residency: dict, model: str) -> dict:
 
 
 def cmd_screen(args: argparse.Namespace) -> int:
-    cap = read_generation_cap()
+    cap = getattr(args, "generation_cap", None) or read_generation_cap()
     template = read_graph_prompt_template()
     backend = build_backend(args, cap)
     cases = load_cases(Path(args.cases), getattr(args, "split", None))
@@ -1880,6 +1880,12 @@ def _add_model_arguments(parser: argparse.ArgumentParser, config_required: bool)
     # the same verdict for their own language.
     parser.add_argument("--cases", default=str(CASES_FILE),
                         help="scenario file; replace it to bench another language")
+    parser.add_argument("--generation-cap", type=int, default=None, dest="generation_cap",
+                        help="override `MAX_GENERATION_TOKENS`. A DECLARED VARIANT, "
+                             "never the reference: the crate caps at its own value and "
+                             "a run with this flag measures a product that does not "
+                             "exist. Exists to test whether a truncation is the cap's "
+                             "fault or the model's")
     parser.add_argument("--split", choices=["train", "holdout"], default=None,
                         help="restrict to one side of the train/holdout line. For "
                              "PROMPT tuning only: tune on train, report on holdout. "

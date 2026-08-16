@@ -295,3 +295,77 @@ jobs:
           name: endtoend-${{ strategy.job-index }}
           path: ${{ runner.temp }}/endtoend.json
           if-no-files-found: warn
+
+  truncation:
+    name: is the 14B regression the cap's fault?
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reclaim disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost \
+                      "${AGENT_TOOLSDIRECTORY}" /usr/local/lib/android || true
+          df -h / | tail -1
+
+      - name: Install Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          nohup ollama serve > "${RUNNER_TEMP}/ollama.log" 2>&1 &
+          for _ in $(seq 1 60); do
+            curl -sf http://localhost:11434/ > /dev/null && { echo up; exit 0; }
+            sleep 2
+          done
+          echo "ollama never came up"; cat "${RUNNER_TEMP}/ollama.log"; exit 1
+
+      - name: Pull qwen3:14b
+        run: ollama pull qwen3:14b
+
+      - name: Constrained at the shipped cap
+        run: |
+          # Both caps in ONE job, on one machine, on one day. The reference
+          # column of the published campaign does not reproduce across machines
+          # (#1949), so a comparison that spans two runs would prove nothing —
+          # this pair differs only in `num_predict`.
+          python3 scripts/bench-memory-extraction.py screen \
+            --backend ollama --config qwen3:14b --constrained \
+            --url http://localhost:11434 --num-ctx 4096 \
+            --out "${RUNNER_TEMP}/cap-512.json" || true
+          test -f "${RUNNER_TEMP}/cap-512.json" || { echo "could not measure"; exit 1; }
+
+      - name: Constrained at a raised cap
+        run: |
+          python3 scripts/bench-memory-extraction.py screen \
+            --backend ollama --config qwen3:14b --constrained \
+            --url http://localhost:11434 --num-ctx 4096 --generation-cap 1024 \
+            --out "${RUNNER_TEMP}/cap-1024.json" || true
+          test -f "${RUNNER_TEMP}/cap-1024.json" || { echo "could not measure"; exit 1; }
+
+      - name: Verdict
+        if: always()
+        run: |
+          for cap in 512 1024; do
+            file="${RUNNER_TEMP}/cap-${cap}.json"
+            [ -f "$file" ] || { echo "cap ${cap}: not produced"; continue; }
+            python3 - "$file" "$cap" <<'PY'
+          import json, sys
+          run = json.load(open(sys.argv[1]))
+          t = run["totals"]
+          print(f"cap={sys.argv[2]:>5} fatal={t['fatal']} major={t['major']} "
+                f"parse_rate={t['parse_rate']:.4f} truncated={t['truncated']} "
+                f"num_predict={run.get('settings', {}).get('num_predict')}")
+          PY
+          done
+          echo "If truncated falls to 0 and fatal follows, the regression is the"
+          echo "cap, not the grammar — and there is no size-dependent rule to encode."
+
+      - name: Upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: truncation-probe
+          path: |
+            ${{ runner.temp }}/cap-512.json
+            ${{ runner.temp }}/cap-1024.json
+          if-no-files-found: warn
