@@ -174,3 +174,124 @@ jobs:
             ${{ runner.temp }}/reference.json
             ${{ runner.temp }}/constrained.json
           if-no-files-found: warn
+
+  endtoend:
+    name: e2e ${{ matrix.model }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        # Two models, not five. Phase B runs the real daemon and waits for each
+        # durable commit, so it costs far more per passage than screening — and
+        # the question it answers is not "which model ranks where" but "does the
+        # graph the daemon KEEPS match what the model said". One small model to
+        # make that cheap to observe, one that the screening phase showed
+        # reaching zero fatal errors under constraint.
+        model:
+          - qwen3:0.6b
+          - qwen3:8b
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reclaim disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost \
+                      "${AGENT_TOOLSDIRECTORY}" /usr/local/lib/android || true
+          df -h / | tail -1
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build the daemon
+        run: |
+          # Phase B drives the REAL binary. Built from this branch, so what runs
+          # is the extractor this PR changed rather than a released one.
+          cargo build --release -p velesdb-memory \
+            --features persistence,mcp,extractor-http,embedder-http
+          ls -la target/release/velesdb-memory
+
+      - name: Install Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          nohup ollama serve > "${RUNNER_TEMP}/ollama.log" 2>&1 &
+          for _ in $(seq 1 60); do
+            if curl -sf http://localhost:11434/ > /dev/null; then echo up; exit 0; fi
+            sleep 2
+          done
+          echo "ollama never came up"; cat "${RUNNER_TEMP}/ollama.log"; exit 1
+
+      - name: Pull the extractor and the embedder
+        run: |
+          # Phase B needs BOTH: the daemon embeds every stored fact as well as
+          # extracting it, and an absent embedder fails as a storage error that
+          # would read as a model result.
+          ollama pull "${{ matrix.model }}"
+          ollama pull bge-m3
+          ollama list
+
+      - name: Handshake
+        env:
+          VELESDB_MEMORY_EMBEDDER: ollama
+          VELESDB_MEMORY_OLLAMA_MODEL: bge-m3
+          VELESDB_MEMORY_EXTRACTOR: ollama
+          VELESDB_MEMORY_EXTRACTOR_MODEL: ${{ matrix.model }}
+          VELESDB_MEMORY_EXTRACTOR_URL: http://localhost:11434
+        run: |
+          # Proves the client and the tool surface agree BEFORE spending an hour
+          # on generation: a daemon missing `remember_extracted` would otherwise
+          # report "tool not found" once per passage as if it were a result.
+          #
+          # Launched exactly as `DisposableDaemon.start` launches it — same
+          # flags, same env — so a handshake that passes says something about
+          # the run that follows.
+          export VELESDB_MEMORY_PATH="${RUNNER_TEMP}/handshake-store"
+          mkdir -p "$VELESDB_MEMORY_PATH"
+          printf '[graph]\nautograph = true\n' > "$VELESDB_MEMORY_PATH/velesdb-memory.toml"
+          nohup ./target/release/velesdb-memory --http --http-port 18098 \
+            > "${RUNNER_TEMP}/daemon.log" 2>&1 &
+          for _ in $(seq 1 60); do
+            curl -skf https://127.0.0.1:18098/health > /dev/null && break
+            sleep 2
+          done
+          python3 scripts/bench-memory-extraction.py probe --url https://127.0.0.1:18098 \
+            || { echo "--- daemon log ---"; cat "${RUNNER_TEMP}/daemon.log"; exit 1; }
+          pkill -f "velesdb-memory --http" || true
+
+      - name: End-to-end
+        run: |
+          python3 scripts/bench-memory-extraction.py endtoend \
+            --binary ./target/release/velesdb-memory \
+            --backend ollama --config "${{ matrix.model }}" \
+            --embedder bge-m3 --url http://localhost:11434 \
+            --out "${RUNNER_TEMP}/endtoend.json" || true
+          test -f "${RUNNER_TEMP}/endtoend.json" \
+            || { echo "no result — it could not measure"; exit 1; }
+
+      - name: Summarise
+        if: always()
+        run: |
+          file="${RUNNER_TEMP}/endtoend.json"
+          [ -f "$file" ] || { echo "not produced"; exit 0; }
+          python3 - "$file" "${{ matrix.model }}" <<'PY'
+          import json, sys
+          run = json.load(open(sys.argv[1]))
+          totals = run["totals"]
+          # The measurement this whole job exists for: an edge that reached the
+          # graph, or the absence of one. Reported as a count, never as a bare
+          # duration, because a drain that never completed has no duration.
+          drained = sum(
+              1 for case in run.get("cases", [])
+              if any(p.get("relations") or p.get("attributes")
+                     for p in (case.get("entities") or {}).values()))
+          print(f"{sys.argv[2]}: fatal={totals['fatal']} major={totals['major']} "
+                f"cases_with_edges={drained}/{len(run.get('cases', []))} "
+                f"max_drain={totals.get('max_drain_seconds')}")
+          PY
+
+      - name: Upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: endtoend-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/endtoend.json
+          if-no-files-found: warn

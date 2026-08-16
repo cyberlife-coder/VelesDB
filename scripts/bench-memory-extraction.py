@@ -1335,11 +1335,62 @@ class DisposableDaemon:
         shutil.rmtree(self.store, ignore_errors=True)
 
 
-def remember_passage(client: McpClient, text: str) -> dict:
-    """Store one passage and report what the caller waited for."""
+def write_fact(client: McpClient, text: str) -> dict:
+    """Store one fact verbatim through `remember`, without waiting for anything.
+
+    Deliberately NOT the extraction path. This is what `burst` needs: `remember`
+    accepts immediately and hands enrichment to the bounded autograph queue, and
+    that queue's drop behaviour under a fast writer is the whole subject. Routing
+    it through `remember_extracted` and awaiting each commit would serialise the
+    burst and measure the opposite of what it exists to measure.
+    """
     result = client.call("remember", {"fact": text})
     payload = tool_payload(result)
     return {"seconds": result["seconds"], "stored": payload is not None, "payload": payload}
+
+
+def remember_passage(client: McpClient, text: str, timeout_s: float = 600.0) -> dict:
+    """Store one passage THROUGH THE EXTRACTOR, and wait for the durable commit.
+
+    This used to call `remember`, which stores a fact verbatim and never invokes
+    an extractor at all (#1945). Phase B therefore measured a path the backend
+    under test was not on: the graph it then polled for typed entity edges only
+    ever receives the bipartite fact-topic scaffolding from that tool, so
+    `await_edges` could not do anything but run out its timeout — identically
+    for every model, and identically for the no-LLM reader.
+
+    `remember_extracted` is asynchronous by design: it returns a receipt and a
+    background worker generates and commits. Waiting for the terminal state is
+    what makes this a measurement of the daemon rather than of its acceptance
+    queue.
+    """
+    started = time.monotonic()
+    receipt = tool_payload(client.call("remember_extracted", {"text": text})) or {}
+    request_id = receipt.get("request_id")
+    if not request_id:
+        return {"seconds": time.monotonic() - started, "stored": False,
+                "state": "no-receipt", "payload": receipt}
+
+    state, status = receipt.get("state"), {}
+    while state not in ("committed", "failed"):
+        if time.monotonic() - started > timeout_s:
+            return {"seconds": time.monotonic() - started, "stored": False,
+                    "state": "timeout", "request_id": request_id, "payload": status}
+        time.sleep(1.0)
+        status = tool_payload(client.call("extraction_status",
+                                          {"request_id": request_id})) or {}
+        state = status.get("state")
+
+    return {
+        "seconds": time.monotonic() - started,
+        # Committed with zero ids is not a store: the extractor answered with
+        # nothing usable, which is a model result and must not read as success.
+        "stored": state == "committed" and bool(status.get("ids")),
+        "state": state,
+        "request_id": request_id,
+        "error": status.get("error"),
+        "payload": status,
+    }
 
 
 def score_stored_case(client: McpClient, case: dict) -> dict:
@@ -1372,7 +1423,7 @@ def burst(client: McpClient, texts: "list[str]") -> dict:
     than the model generates loses enrichment. Counted and visible by design —
     this measures how close a given model puts a user to that edge.
     """
-    latencies = [remember_passage(client, text)["seconds"] for text in texts]
+    latencies = [write_fact(client, text)["seconds"] for text in texts]
     status = tool_payload(client.call("memory_status", {})) or {}
     return {
         "count": len(texts),
@@ -1775,7 +1826,8 @@ def cmd_endtoend(args: argparse.Namespace) -> int:
 # daemon installed on this machine on 2026-08-15 exposes 20 tools and NOT
 # `memory_status`, because its binary predates that tool. Phase B run against
 # it would have reported "tool not found" as a measurement.
-PHASE_B_TOOLS = ("remember", "entity", "recall", "memory_status")
+PHASE_B_TOOLS = ("remember", "remember_extracted", "extraction_status",
+                 "entity", "recall", "memory_status")
 
 
 def cmd_probe(args: argparse.Namespace) -> int:
