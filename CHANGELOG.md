@@ -24,10 +24,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (#1943), constrained decoding moved the 8 GB tier from no eligible model to
   two, and took one model from zero valid replies to all of them. It repairs
   **structure, not comprehension**: a constrained small model returns valid
-  JSON that is more often wrong about the passage. The published tier table in
+  JSON that is more often wrong about the passage.
+
+  The schema the crate sends declares `facts`, which the measured variant did
+  not — and that turns out to be required, not merely prudent. Run against a
+  real Ollama (`scripts/constrained-decoding-probe.py`), the variant's schema
+  **drops the `facts` key entirely**: a property it does not declare does not
+  survive the grammar. The campaign's own published replies show the same, so
+  its constrained figures describe replies that would have stored no facts at
+  all. The published tier table in
   [`docs/guides/MEMORY_EXTRACTOR_MODELS.md`](docs/guides/MEMORY_EXTRACTOR_MODELS.md)
-  is deliberately left as measured until a campaign is replayed against the
-  schema the crate now sends.
+  is therefore left as measured until a campaign is replayed against the schema
+  the crate now sends.
 - **HTTP inference features are named by role (#1766).** `embedder-http` and
   `extractor-http` are now the canonical build features. The former `ollama`
   and `extract` names remain compatibility aliases, so existing dependency

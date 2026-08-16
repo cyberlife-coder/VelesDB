@@ -71,13 +71,21 @@ Two things to keep straight before acting on it:
 - **It repairs structure, not comprehension.** A constrained small model returns
   valid JSON that is more often wrong about the passage. It stops losing
   enrichment silently; it does not become accurate.
-- **`velesdb-memory` now sends `format` on every extraction call.** The figures
-  above were measured as a declared variant *before* that shipped, and the
-  schema the crate sends is a **superset** of the measured one: it also
-  constrains `facts`, which the bench variant left free. So the direction is
-  established and the tier table is not yet re-earned — the 8 GB and 12 GB rows
-  stay as published until a campaign is replayed against the schema the product
-  actually sends. Treat them as a floor, not as the last word.
+- **`velesdb-memory` now sends `format` on every extraction call**, with a
+  schema that also constrains `facts` — which the measured variant did not.
+  That difference is not cosmetic, and it is measured rather than assumed:
+  `scripts/constrained-decoding-probe.py`, run against a real Ollama, shows the
+  variant's schema **drops the `facts` key entirely**. A property the schema
+  does not declare does not survive the grammar.
+
+  The campaign's own published replies confirm it: every raw reply under
+  `benchmarks/results/2026-08-16-campagne/variante-decodage-contraint/` carries
+  `relations` and `attributes` and no `facts` at all. So the figures above were
+  obtained from replies that would have stored **no facts** — the primary
+  output of extraction, not enrichment. The direction of the finding stands;
+  the numbers attached to it do not transfer to what the crate now sends, and
+  the 8 GB and 12 GB rows stay as published until a campaign is replayed. Treat
+  them as a floor, not as the last word.
 
 ## Settings that are yours to state, not to inherit
 
