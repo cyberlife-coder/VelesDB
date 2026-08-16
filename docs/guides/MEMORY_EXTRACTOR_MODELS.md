@@ -46,6 +46,7 @@ errors, every reply parsed, and a French/English gap within tolerance.
 
 | Tier | Usable | Weight budget | Runtime | What we found |
 |---|---|---|---|---|
+| CPU only, no GPU | — | ~0.5 GB | Ollama | **Not eligible, and worth knowing by how much.** `qwen3:0.6b` on 4 vCPU: 5 fatal errors and one reply in six unparseable. With the schema the crate now sends, that becomes **1 fatal and every reply parsed**. Measured, not extrapolated — see *The floor, measured* below. |
 | 8 GB | 8 GB | ≤ ~6.5 GB | Ollama | **No eligible model with default settings.** Every candidate produced at least one unparseable or schema-broken reply. Constrained decoding changes this completely — see below. |
 | 12 GB | 12 GB | ≤ ~10 GB | Ollama | **No eligible model.** The failures are rarer than at 8 GB but not absent. |
 | 16 GB | 16 GB | ≤ ~14 GB | Ollama | `qwen3:14b` — the only model eligible with the settings the product sends today: every reply parsed, no schema break, no language asymmetry. |
@@ -86,6 +87,32 @@ Two things to keep straight before acting on it:
   the numbers attached to it do not transfer to what the crate now sends, and
   the 8 GB and 12 GB rows stay as published until a campaign is replayed. Treat
   them as a floor, not as the last word.
+
+## The floor, measured
+
+The tiers above all assume a GPU. This one does not: `qwen3:0.6b` — 522 MB — on
+four CPU cores with no accelerator, scored on the same nineteen scenarios by the
+same oracles. It is what a machine with no headroom at all gets.
+
+| Arm | fatal | major | parse rate |
+|---|---|---|---|
+| Reference (no `format`) | 5 | 16 | 0.83 |
+| Constrained, the schema the crate sends | **1** | **14** | **1.00** |
+
+Read it for the shape, not for a recommendation. **Constrained decoding does
+most of its work at the bottom**: every reply becomes parsable, and four of the
+five fatal errors disappear — those were structural, and structure is what a
+grammar can fix. The `major` count barely moves, 16 to 14, because those are
+comprehension failures and no grammar repairs those. A 0.6B model that now
+always returns valid JSON is a 0.6B model that is still often wrong about the
+passage.
+
+So this row is not an invitation to run a 0.6B extractor. It is the honest lower
+bound the GPU tiers cannot show, and the clearest available evidence for the
+claim made just above: `format` repairs structure, not comprehension.
+
+Reproduce it with `.github/workflows/constrained-decoding-probe.yml`, which runs
+on any CPU runner in about eight minutes and needs no GPU.
 
 ## Settings that are yours to state, not to inherit
 
