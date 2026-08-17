@@ -359,7 +359,9 @@ fn cmd_graph_store_payload(db: &Database, parts: &[&str]) -> CommandResult {
     if let Err(e) = col.upsert_node_payload(node_id, &payload) {
         return CommandResult::Error(format!("{e}"));
     }
-    let _ = col.flush();
+    if let Err(e) = col.flush() {
+        return CommandResult::Error(format!("Payload stored but flush failed: {e}"));
+    }
 
     println!(
         "{} Payload stored on node {}",
