@@ -131,4 +131,4 @@ shapes), see [CONTEXT_COMPILER.md](CONTEXT_COMPILER.md).
 
 ---
 
-Last updated: 2026-07-25 · Applies to: velesdb-core 5.0.0
+Last updated: 2026-07-25 · Applies to: velesdb-core 5.1.0

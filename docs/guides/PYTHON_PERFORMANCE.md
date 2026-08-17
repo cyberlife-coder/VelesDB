@@ -457,4 +457,4 @@ See also: [TUNING_GUIDE.md](TUNING_GUIDE.md) for HNSW parameter tuning and
 
 ---
 
-Last updated: 2026-08-08 · Applies to: velesdb-core 5.0.0
+Last updated: 2026-08-08 · Applies to: velesdb-core 5.1.0

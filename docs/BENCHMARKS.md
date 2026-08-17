@@ -1,6 +1,6 @@
 # VelesDB Performance Benchmarks
 
-*Last updated: 2026-08-08 · Applies to: velesdb-core 5.0.0. Figures are re-validated at each release only when re-measured — each section carries its own measurement date and machine; this stamp tracks the document revision, not a fresh measurement.*
+*Last updated: 2026-08-08 · Applies to: velesdb-core 5.1.0. Figures are re-validated at each release only when re-measured — each section carries its own measurement date and machine; this stamp tracks the document revision, not a fresh measurement.*
 
 ---
 
@@ -454,7 +454,7 @@ Two layers of CI coverage:
 ## 12. velesdb-memory — graph-extraction models
 
 *Measured 2026-08-16 on an Apple M5 Pro (64 GB unified memory), against
-velesdb-memory 0.12.0 — a different machine from the Test Environment above,
+velesdb-memory 0.12.0 as shipped on that date — a different machine from the Test Environment above,
 which describes the Core reference host.*
 
 Eight Ollama models and four MLX configurations were scored on nineteen

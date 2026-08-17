@@ -381,4 +381,4 @@ that runs VelesQL (`executeQuery`). See
 
 ---
 
-Last updated: 2026-08-13 · Applies to: velesdb-core 5.0.0
+Last updated: 2026-08-13 · Applies to: velesdb-core 5.1.0

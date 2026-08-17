@@ -4,7 +4,7 @@ This roadmap commits to **what we are building**, **why**, and **when**. It is u
 
 It is intentionally narrow. Items not on this roadmap are tracked as `roadmap` issues but **not committed** until they reach a milestone here.
 
-> **Last updated:** 2026-08-08 — covers v5.0.0 (current) — the workspace manifest version; the latest published 4.x packages are 4.2.0, `velesdb-memory` 0.12.0. The v1.x-era horizon framing is retired: everything those horizons shipped is compressed into the Delivered table, and the next commitments are derived from the repo's own registers ([`CHANGELOG.md`](CHANGELOG.md) [Unreleased], [`docs/CORE_WIRING_DEBT.md`](docs/CORE_WIRING_DEBT.md), [`docs/reference/KNOWN_LIMITATIONS.md`](docs/reference/KNOWN_LIMITATIONS.md)).
+> **Last updated:** 2026-08-17 — covers v5.1.0 (current) — the workspace manifest version; the latest published packages are 5.0.0, `velesdb-memory` 0.12.0. The v1.x-era horizon framing is retired: everything those horizons shipped is compressed into the Delivered table, and the next commitments are derived from the repo's own registers ([`CHANGELOG.md`](CHANGELOG.md) [Unreleased], [`docs/CORE_WIRING_DEBT.md`](docs/CORE_WIRING_DEBT.md), [`docs/reference/KNOWN_LIMITATIONS.md`](docs/reference/KNOWN_LIMITATIONS.md)).
 
 ---
 
@@ -41,22 +41,13 @@ One line per item; the [`CHANGELOG.md`](CHANGELOG.md) is the per-release record.
 | Head-to-head benchmark vs Qdrant + Chroma + pgvector | ⚠️ only the pgvector leg is reproducible (`benchmarks/` Docker Compose); the Qdrant + Chroma legs never landed — back to `roadmap`-issue status, not committed | [`benchmarks/`](benchmarks/) |
 | External `unsafe` audit (SIMD module) | ❌ never funded (~5-15 k€) — remains a `roadmap` issue, not committed | — |
 | `velesdb-migrate` rework decision | ❌ decision never made → **Later below** | [`ARCHITECTURE.md`](ARCHITECTURE.md) crate table |
+| Ship the pending major correctly (P1) | v5.0.0 tagged 2026-08-10 carrying the `load_working_context` envelope break; `@wiscale/velesdb-wasm` floor raised to `^5.0.0` in the TS SDK and the `velesdb` floor to `>=5.0.0` in `langgraph-velesdb` — the runtime skew guards are nets again, no longer the fence | [`CHANGELOG.md`](CHANGELOG.md) `[5.0.0]` |
 
 ---
 
 ## Next (committed)
 
-Three items, in priority order. Each has a register in the repository as its source of truth; done means that register says so.
-
-### P1 — Ship the pending major correctly (5.0.0)
-
-The `velesdb-memory` 0.12.0 result-envelope break (`load_working_context` now returns `{found, working, other_sessions}`) reaches three **published 4.x packages** that relay the value: `velesdb` (PyPI), `@wiscale/velesdb-sdk`, `@wiscale/velesdb-wasm`. Source: the "Read this before cutting the next workspace release" warning in [`CHANGELOG.md`](CHANGELOG.md) `[Unreleased]` — `check-version-sync.py` compares version strings and cannot catch a breaking change.
-
-| Step | Success criterion |
-|---|---|
-| Tag the next workspace release **5.0.0**, not a minor | the break never ships inside a `>=4.2,<5` pin |
-| Raise the `@wiscale/velesdb-wasm` floor in `sdks/typescript/package.json` (today `^4.1.0`) to that release | the SDK's runtime skew guard is a net, no longer the fence |
-| Raise the `velesdb` floor in `integrations/langgraph/pyproject.toml` (today `>=3.12.0`) to the same release | the toolkit stops reporting drift at call time |
+Two items, in priority order. Each has a register in the repository as its source of truth; done means that register says so. (P1 — ship the pending major correctly — was delivered as v5.0.0; see the Delivered table.)
 
 ### P2 — Pay down the core wiring debt
 
@@ -88,7 +79,7 @@ No dates. These graduate to **Next** only through a milestone.
 
 ## velesdb-memory line (independent 0.x cadence)
 
-`velesdb-memory` (0.12.0) versions and releases on its own 0.x cadence, decoupled from the workspace majors.
+`velesdb-memory` (0.13.0) versions and releases on its own 0.x cadence, decoupled from the workspace majors.
 
 - **LoCoMo temporal-decomposition follow-up** — [`docs/planning/LOCOMO_TEMPORAL_DECOMP_RESEARCH.md`](docs/planning/LOCOMO_TEMPORAL_DECOMP_RESEARCH.md) concluded: dated recall's +33.6pp temporal lift is real and ironclad; the scaffold's marginal gain is unproven at n=321 and its feared single-hop cost is not real. The honest follow-up it scopes is a *cost*-framed routing chapter (skip the scaffold's CoT tokens where they don't move accuracy) — and it needs its own justification before it runs.
 - **Context-compiler evolution** — the deterministic compiler (`compile_context` and friends) evolves per `crates/velesdb-memory/CHANGELOG.md`.
