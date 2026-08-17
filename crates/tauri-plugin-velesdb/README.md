@@ -255,4 +255,4 @@ VelesDB engine and is governed by the Core License.
 
 ---
 
-`tauri-plugin-velesdb v5.0.0` · Last updated: 2026-08-10 · Applies to: velesdb-core 5.0.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)
+`tauri-plugin-velesdb v5.1.0` · Last updated: 2026-08-10 · Applies to: velesdb-core 5.1.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)
