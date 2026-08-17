@@ -426,44 +426,13 @@ fn parse_embedding_response(body: &str) -> Result<Vec<f32>, EmbedError> {
 #[cfg(feature = "embedder-http")]
 const EMBED_TIMEOUT_SECS: u64 = 60;
 
-/// Ceiling on establishing the TCP connection.
-///
-/// The one setting here that genuinely changes behavior. `ureq` already applies
-/// a connect timeout, but its default is 30 s (`agent.rs`) — a sane figure for
-/// the open internet and an absurd one for a daemon on `localhost`, which either
-/// accepts immediately or is not running. Since retries multiply this wait, 30 s
-/// would turn a dead Ollama into a 90 s stall.
-#[cfg(feature = "embedder-http")]
-const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
-
-/// Ceiling on writing the request. Applied to the socket at connect time, so —
-/// unlike the read timeout below — it is in force independently of the global
-/// deadline.
-#[cfg(feature = "embedder-http")]
-const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-
-/// Agent used for every embeddings request, with [`EMBED_TIMEOUT_SECS`]
-/// applied. Same pattern as [`crate::extract::OllamaExtractor`], which has
-/// bounded its own Ollama calls since it was written.
-///
-/// # Precedence, stated plainly
-///
-/// `ureq` documents that `.timeout()` "takes precedence over `.timeout_read()`
-/// and `.timeout_write()`, but not `.timeout_connect()`", and its
-/// `DeadlineStream` rewrites the socket read deadline to the remaining global
-/// budget before every read. So `.timeout_read()` below is **subordinate**: it
-/// is declared for the day the global bound is lifted, and must not be read as
-/// a per-read ceiling today. `.timeout_connect()` and `.timeout_write()` are the
-/// two that bite. Saying otherwise in a doc — or writing a test that claimed to
-/// prove a per-read bound — would be a reassurance with nothing behind it.
+/// Agent for every embeddings request: the shared local-daemon transport
+/// budget with [`EMBED_TIMEOUT_SECS`] as the whole-request deadline. The
+/// timeout-precedence contract lives on
+/// [`crate::http_client::bounded_agent`], its single authoritative copy.
 #[cfg(feature = "embedder-http")]
 fn embed_agent(timeout: std::time::Duration) -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .timeout_connect(CONNECT_TIMEOUT)
-        .timeout_write(WRITE_TIMEOUT)
-        .timeout_read(timeout)
-        .timeout(timeout)
-        .build()
+    crate::http_client::bounded_agent(crate::http_client::AgentBudget::local_daemon(timeout))
 }
 
 /// How one embeddings attempt failed, kept apart just long enough to classify
