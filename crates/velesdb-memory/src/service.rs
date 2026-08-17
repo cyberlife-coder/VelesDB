@@ -1,4 +1,22 @@
 //! The memory service: five operations over the in-core Agent Memory SDK.
+//!
+//! # Role: the crate's assembler — declared, with a budget
+//!
+//! This module is the ONE place allowed to know every seam at once — store,
+//! embedder, extractor, fusion, autograph, online migration, the working
+//! context bridge — and wire them into the operations the adapters call.
+//! That role is why it is the crate's largest module (measured ~1 076 NLOC on
+//! 2026-08-17, against the ~500-NLOC file budget the child-module splits aim
+//! at), and why its size is a *declared* cost rather than an accident: an
+//! assembler that was split by size alone would scatter the wiring it exists
+//! to make readable.
+//!
+//! The budget still binds. Growth goes into child modules that keep private
+//! access (`fused_recall.rs` and `online_migration.rs` are the pattern —
+//! `#[path]` children of `service`, not siblings), never into this file; the
+//! next named cut is the working-context bridge (#1967, decided together with
+//! the store facetting of #1959). A change that adds an operation body here
+//! instead of a child module needs to say why in review.
 
 use std::collections::{HashMap, HashSet};
 #[cfg(feature = "persistence")]

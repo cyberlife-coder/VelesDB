@@ -24,6 +24,29 @@
 //! `traverse(graph)`). Exposing the raw engine would constitute a "Substantial
 //! Set" of the Software's features and breach the `VelesDB` Core License 1.0
 //! (§1, No Hosted or Managed Service). See `VISION.md` §5 and `PLAN.md` Phase 4A.
+//!
+//! ## Generics at the core, `dyn` at the edges (doctrine)
+//!
+//! Two dispatch styles coexist in this crate, and the split is a rule, not an
+//! accident of history:
+//!
+//! - **Compile-time seams are generic parameters.**
+//!   [`service::MemoryService`]`<E: Embedder, S: MemoryStore>` is monomorphized
+//!   over its embedder and its storage backend: each consumer (native daemon,
+//!   WASM binding) compiles exactly the backend it uses, recall paths carry
+//!   no vtable, and a backend that cannot support an operation fails at
+//!   compile time instead of at a customer.
+//! - **Runtime choices are type-erased once, at the edge.** A backend picked
+//!   by configuration — `VELESDB_MEMORY_EMBEDDER`, an `extractor` argument, a
+//!   bring-your-own reranker — crosses into the crate as [`DynEmbedder`],
+//!   [`DynExtractor`] or [`DynReranker`], built once at startup. The erasure
+//!   happens at construction, never inside an operation.
+//!
+//! A new abstraction follows the same test: chosen at compile time → generic
+//! parameter; chosen by configuration → a `Dyn*` alias resolved at startup.
+//! And an adapter over one of these traits forwards the **whole** trait —
+//! partial forwarding is how a binding silently loses a capability the server
+//! already publishes (the #1690–#1692 gap family), and is rejected in review.
 
 /// Wall-clock "today" as a `YYYYMMDD` integer, read only by `remember`'s
 /// auto-date stamping (see [`storage::AUTO_DATE_FIELD`]) — never by the

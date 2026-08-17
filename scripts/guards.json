@@ -1003,6 +1003,12 @@
       "workflow": ".github/workflows/ci.yml",
       "job": "perf-smoke",
       "reason": "Produces the artefact compare_perf.py then judges (ci.yml:1108, one step before). It has no non-zero exit path at all — measured — so it cannot refuse anything, and declaring it a guard would overstate the registry. The claim is checked: the suite reads its source and fails this entry if a failure path ever appears."
+    },
+    {
+      "script": "scripts/bench-memory-extraction.py",
+      "workflow": ".github/workflows/github-models-probe.yml",
+      "job": "probe",
+      "reason": "A measurement harness, not a gate: manual-dispatch probe for #1944 whose exit 1 means 'a case scored fatal' - a result to record, which is why the workflow runs it with `|| true` and fails only on a missing result file. It refuses nothing on any merge path and sits outside CI Success by design."
     }
   ]
 }
