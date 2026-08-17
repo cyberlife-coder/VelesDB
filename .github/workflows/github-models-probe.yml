@@ -1,0 +1,96 @@
+name: GitHub Models Probe
+
+# The #1944 probe: does OpenAI-protocol `response_format` lift extraction the
+# way Ollama's `format` did (measured, model-dependent, #1948), or does it
+# regress it? Manual-dispatch only, and deliberately OUTSIDE `CI Success`: it
+# spends a shared free-tier quota and answers a design question, it does not
+# gate a merge.
+#
+# Zero configured secrets by construction: the ambient GITHUB_TOKEN carries
+# `models: read` (owner decision of 2026-08-17 — GitHub Models over paid
+# providers for probes). Quality counts only, per the CPU-runner discipline:
+# latencies from a shared, queued endpoint are context, never results.
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "GitHub Models model id (catalog spelling, e.g. openai/gpt-4o-mini)"
+        default: "openai/gpt-4o-mini"
+      response_format:
+        description: "Probe arm for #1944"
+        type: choice
+        options: [off_arm, json_object, json_schema]
+        default: json_schema
+      baseline_too:
+        description: "Also run the unconstrained arm for a paired comparison"
+        type: boolean
+        default: true
+      split:
+        description: "Case split (train keeps quota; empty = every case)"
+        type: choice
+        options: [train, holdout, all]
+        default: train
+      request_delay:
+        description: "Seconds slept before each request (free-tier pacing)"
+        default: "4"
+
+permissions:
+  contents: read
+  models: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # `off_arm` in the dispatch menu is `off` to the bench: GitHub's YAML
+      # parser reads a literal `off` option as a boolean before the workflow
+      # ever sees it.
+      - name: Resolve arm names
+        id: arms
+        run: |
+          arm="${{ inputs.response_format }}"
+          [ "$arm" = "off_arm" ] && arm="off"
+          echo "arm=$arm" >> "$GITHUB_OUTPUT"
+          split="${{ inputs.split }}"
+          if [ "$split" = "all" ]; then echo "split_flag=" >> "$GITHUB_OUTPUT";
+          else echo "split_flag=--split $split" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Screen (selected arm)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # `screen` exits 1 when a case is fatal — that is a MEASUREMENT this
+        # probe exists to record, not a workflow failure. A missing result
+        # file is the failure.
+        run: |
+          python3 scripts/bench-memory-extraction.py screen \
+            --backend github-models \
+            --config "${{ inputs.model }}" \
+            --response-format "${{ steps.arms.outputs.arm }}" \
+            --request-delay "${{ inputs.request_delay }}" \
+            ${{ steps.arms.outputs.split_flag }} \
+            --out "probe-${{ steps.arms.outputs.arm }}.json" || true
+          test -s "probe-${{ steps.arms.outputs.arm }}.json"
+
+      - name: Screen (unconstrained baseline)
+        if: ${{ inputs.baseline_too && steps.arms.outputs.arm != 'off' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/bench-memory-extraction.py screen \
+            --backend github-models \
+            --config "${{ inputs.model }}" \
+            --response-format off \
+            --request-delay "${{ inputs.request_delay }}" \
+            ${{ steps.arms.outputs.split_flag }} \
+            --out "probe-off.json" || true
+          test -s "probe-off.json"
+
+      - name: Upload results
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: github-models-probe-${{ github.run_id }}
+          path: probe-*.json
+          if-no-files-found: error
