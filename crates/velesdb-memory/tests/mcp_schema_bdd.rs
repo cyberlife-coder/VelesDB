@@ -25,9 +25,9 @@
 
 #![cfg(all(feature = "mcp", feature = "context", feature = "persistence"))]
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use rmcp::model::CallToolRequestParams;
+use rmcp::model::{CallToolRequestParams, Tool};
 use rmcp::service::RunningService;
 use rmcp::{RoleClient, ServiceExt};
 use serde_json::{json, Map, Value};
@@ -840,7 +840,7 @@ const PROBE_MAP_KEY: &str = "probe";
 /// unconfigured extractor) is a legitimate answer to a well-formed call.
 const ARGUMENT_TYPE_REFUSAL: &str = "failed to deserialize parameters:";
 
-/// Every slot the schema announces as a single scalar `integer` or `string`,
+/// Every slot the schema announces as a single scalar,
 /// with the path needed to reach it.
 ///
 /// `properties`, `items` and `additionalProperties` are followed: the three
@@ -885,10 +885,8 @@ fn walk_probes(node: &Value, path: &mut Vec<Step>, found: &mut Vec<(Vec<Step>, S
     }
 }
 
-/// `"integer"` or `"string"`, and only those: the probe sends the two forms
-/// an id can take on the wire, so it is meaningless on a boolean or an
-/// object. An enumerated slot is skipped too — its value set is closed, and
-/// neither `1` nor `"1"` belongs to it.
+/// An enumerated slot is skipped: its value set is closed, so an arbitrary
+/// scalar probe would test the enum rather than the wire type.
 fn probed_scalar(slot: &Value) -> Option<String> {
     let Value::Object(map) = slot else {
         return None;
@@ -897,9 +895,38 @@ fn probed_scalar(slot: &Value) -> Option<String> {
         return None;
     }
     match map.get("type") {
-        Some(Value::String(kind)) if kind == "integer" || kind == "string" => Some(kind.clone()),
+        Some(Value::String(kind))
+            if matches!(kind.as_str(), "boolean" | "integer" | "number" | "string") =>
+        {
+            Some(kind.clone())
+        }
         _ => None,
     }
+}
+
+fn announced_scalar(kind: &str) -> Value {
+    match kind {
+        "boolean" => json!(true),
+        "number" => json!(0.5),
+        "string" => json!("1"),
+        _ => json!(1),
+    }
+}
+
+fn stringified_scalar(kind: &str) -> Option<Value> {
+    match kind {
+        "boolean" => Some(json!("true")),
+        "integer" => Some(json!("6")),
+        "number" => Some(json!("0.5")),
+        _ => None,
+    }
+}
+
+fn leaf_property(path: &[Step]) -> Option<&str> {
+    path.iter().rev().find_map(|step| match step {
+        Step::Property(name) => Some(name.as_str()),
+        Step::Items | Step::MapValue => None,
+    })
 }
 
 /// The minimal call that carries `value` at `path`: every required sibling
@@ -989,10 +1016,7 @@ async fn every_scalar_input_slot_accepts_the_form_it_announces() {
         let schema = Value::Object((*tool.input_schema).clone());
         for (path, kind) in probed_slots(&schema) {
             probed += 1;
-            let announced = match kind.as_str() {
-                "string" => json!("1"),
-                _ => json!(1),
-            };
+            let announced = announced_scalar(&kind);
             let arguments = call_carrying(&schema, &path, &announced);
             let complaint = complaint_about(&client, &tool.name, arguments.clone()).await;
             if complaint.contains(ARGUMENT_TYPE_REFUSAL) {
@@ -1019,11 +1043,145 @@ async fn every_scalar_input_slot_accepts_the_form_it_announces() {
     client.cancel().await.expect("close the MCP session");
 }
 
+struct ScalarToleranceProbe {
+    tool: String,
+    schema: Value,
+    path: Vec<Step>,
+}
+
+fn scalar_tolerance_groups(
+    tools: &[Tool],
+) -> BTreeMap<(String, String), Vec<ScalarToleranceProbe>> {
+    let mut groups = BTreeMap::new();
+    for tool in tools {
+        let schema = Value::Object((*tool.input_schema).clone());
+        for (path, kind) in probed_slots(&schema) {
+            let Some(name) = leaf_property(&path) else {
+                continue;
+            };
+            if stringified_scalar(&kind).is_none() {
+                continue;
+            }
+            groups
+                .entry((name.to_owned(), kind))
+                .or_insert_with(Vec::new)
+                .push(ScalarToleranceProbe {
+                    tool: tool.name.to_string(),
+                    schema: schema.clone(),
+                    path,
+                });
+        }
+    }
+    groups
+}
+
+/// A field name and its announced scalar type define one wire contract.
+/// Every occurrence must therefore make the same decision about the
+/// JSON-encoded string form that degraded MCP harnesses can send.
+#[tokio::test]
+async fn same_named_scalar_input_slots_share_wire_tolerance() {
+    let (_store, client) = connected().await;
+    let tools = client.list_all_tools().await.expect("list tools");
+    let groups = scalar_tolerance_groups(&tools);
+    let mut compared = 0usize;
+    let mut asymmetric = Vec::new();
+    for ((name, kind), probes) in groups.into_iter().filter(|(_, probes)| probes.len() > 1) {
+        compared += 1;
+        let encoded = stringified_scalar(&kind).expect("grouped kinds have a string probe");
+        let mut accepted = Vec::new();
+        let mut refused = Vec::new();
+        for probe in probes {
+            let arguments = call_carrying(&probe.schema, &probe.path, &encoded);
+            let complaint = complaint_about(&client, &probe.tool, arguments).await;
+            let location = format!("{} {}", probe.tool, render_path(&probe.path));
+            if complaint.contains(ARGUMENT_TYPE_REFUSAL) {
+                refused.push(location);
+            } else {
+                accepted.push(location);
+            }
+        }
+        if !accepted.is_empty() && !refused.is_empty() {
+            asymmetric.push(format!(
+                "`{name}` ({kind}) accepts {encoded} at {accepted:?}, but refuses it at {refused:?}"
+            ));
+        }
+    }
+
+    assert!(compared > 0, "no repeated scalar contract was found");
+    assert!(
+        asymmetric.is_empty(),
+        "same field name + same announced scalar type must have one wire tolerance:\n{}",
+        asymmetric.join("\n")
+    );
+    client.cancel().await.expect("close the MCP session");
+}
+
+fn incompatible_scalar_values(kind: &str) -> Option<Vec<Value>> {
+    match kind {
+        "boolean" => Some(vec![json!("1"), json!(1), json!([]), json!({})]),
+        "integer" => Some(vec![
+            json!("abc"),
+            json!("1.5"),
+            json!(true),
+            json!(0.5),
+            json!([]),
+            json!({}),
+        ]),
+        "number" => Some(vec![
+            json!("abc"),
+            json!("true"),
+            json!(true),
+            json!([]),
+            json!({}),
+        ]),
+        _ => None,
+    }
+}
+
+/// Leniency is one narrow exception for a JSON-encoded value of the same
+/// advertised type. It must not become a general scalar or container
+/// coercion, including on a field that has no same-named peer to compare.
+#[tokio::test]
+async fn every_non_string_scalar_input_rejects_incompatible_forms() {
+    let (_store, client) = connected().await;
+    let tools = client.list_all_tools().await.expect("list tools");
+    let mut probed = 0usize;
+    let mut accepted = Vec::new();
+    for tool in &tools {
+        let schema = Value::Object((*tool.input_schema).clone());
+        for (path, kind) in probed_slots(&schema) {
+            let Some(values) = incompatible_scalar_values(&kind) else {
+                continue;
+            };
+            for value in values {
+                probed += 1;
+                let arguments = call_carrying(&schema, &path, &value);
+                let complaint = complaint_about(&client, &tool.name, arguments).await;
+                if !complaint.contains(ARGUMENT_TYPE_REFUSAL) {
+                    accepted.push(format!(
+                        "{} {} announces `{kind}` but accepted {value}",
+                        tool.name,
+                        render_path(&path)
+                    ));
+                }
+            }
+        }
+    }
+
+    assert!(probed > 0, "no non-string scalar slot was probed");
+    assert!(
+        accepted.is_empty(),
+        "incompatible scalar forms reached tool execution:\n{}",
+        accepted.join("\n")
+    );
+    client.cancel().await.expect("close the MCP session");
+}
+
 /// A decimal string that only the ID CONTRACT accepts.
 ///
 /// The complement below cannot simply be "a slot announced `integer` refuses
 /// a string": measured on 2026-07-29, ten integer slots accept `"6"` —
-/// `recall.limit`, `why.max_hops`, `compile_transcript.token_budget`… — and
+/// `recall.k`, `why.max_hops`, `compile_transcript.token_budget`… — and
 /// that is not drift. It is `mcp::wire::lenient`, a deliberate, documented
 /// server-side fallback for the harness that stringifies an argument BECAUSE
 /// its view of the schema degraded. Removing it would break exactly the

@@ -91,7 +91,7 @@ VectorStore.import_from_bytes(new Uint8Array([1, 2, 3, 4, 5]));
 // Error: Invalid data: wrong magic number
 ```
 
-Verified round-trip against `@wiscale/velesdb-wasm@4.0.0`: a 3-dimension store
+Historical reference verified against `@wiscale/velesdb-wasm@4.0.0`: a 3-dimension store
 holding one vector exports to 87 bytes, magic `VELS`, version byte `2`, and
 re-imports with `len === 1`.
 
@@ -162,4 +162,4 @@ different shape from the table above; expect different absolute numbers.
 
 ---
 
-Last updated: 2026-07-25 · Applies to: velesdb-core 5.0.0
+Last updated: 2026-08-13 · Applies to: velesdb-core 5.1.0

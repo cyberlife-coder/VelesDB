@@ -7,6 +7,7 @@ use tracing::{debug, info, warn};
 
 use super::common::{
     build_numeric_offset_batch, check_response, create_http_client, extract_id_from_value,
+    normalise_metric,
 };
 use super::{ExtractedBatch, ExtractedPoint, FieldInfo, SourceConnector, SourceSchema};
 use crate::config::MilvusConfig;
@@ -312,12 +313,7 @@ impl MilvusConnector {
     /// `TANIMOTO` are lowercased and returned verbatim so mismatch
     /// errors remain actionable instead of being silently dropped.
     fn normalise_milvus_metric(raw: &str) -> String {
-        let lower = raw.to_ascii_lowercase();
-        match lower.as_str() {
-            "l2" => "euclidean".to_string(),
-            "ip" => "dot".to_string(),
-            _ => lower,
-        }
+        normalise_metric(raw, &[("l2", "euclidean"), ("ip", "dot")])
     }
 
     /// Extract the distance metric for the given vector field from

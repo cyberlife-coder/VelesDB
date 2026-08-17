@@ -1,0 +1,1340 @@
+{
+  "version": 1,
+  "about": [
+    "Scenarios for scripts/bench-memory-extraction.py: what a graph-extraction",
+    "model must get right before velesdb-memory's autograph can be trusted with",
+    "it. Every check is declarative, so the cases stay data and the scorer stays",
+    "testable without a model.",
+    "",
+    "Severities. `fatal` means the stored graph is WRONG, or the enrichment is",
+    "lost without a trace: a broken schema, an invented relation, an attribute",
+    "landing on the wrong entity. `major` means the graph is poorer or split:",
+    "a reversed edge, a predicate in the wrong language (`works at` and",
+    "`travaille chez` fragment one relation into two graph predicates), a number",
+    "stored as a string. `minor` is cosmetic.",
+    "",
+    "Matching is case- and accent-folded, and the folding maps the oe/ae",
+    "ligatures explicitly: NFKD does NOT decompose U+0153, so a naive fold turns",
+    "`soeur` into `sur` and every kinship check silently stops matching.",
+    "",
+    "Paired cases carry two passages one word apart. They are the point of the",
+    "suite: a model that answers both the same way has collapsed a distinction",
+    "the passage makes, and the graph inherits the collapse."
+  ],
+  "cases": [
+    {
+      "id": "fr-possessive",
+      "family": "nominal-fr",
+      "lang": "fr",
+      "note": "Issue #1754. The possessive names the sibling, so the sibling carries the edge.",
+      "passages": [
+        {
+          "text": "Marie Dupont a une soeur, Camille Dupont. Camille Dupont a 15 ans et travaille chez Wiscale.",
+          "checks": [
+            {
+              "type": "relation_present",
+              "subject": "camille dupont",
+              "predicate_any": [
+                "soeur"
+              ],
+              "object": "marie dupont",
+              "severity": "major",
+              "label": "sibling edge missing or reversed"
+            },
+            {
+              "type": "relation_absent",
+              "subject": "marie dupont",
+              "predicate_any": [
+                "soeur"
+              ],
+              "severity": "major",
+              "label": "parasitic converse: both directions of one predicate"
+            },
+            {
+              "type": "predicate_forbids",
+              "substrings": [
+                "works",
+                "sister",
+                "brother",
+                "father of"
+              ],
+              "severity": "major",
+              "label": "English predicate on a French passage"
+            },
+            {
+              "type": "attribute_number",
+              "entity": "camille dupont",
+              "key_any": [
+                "age"
+              ],
+              "value": 15,
+              "severity": "major",
+              "label": "age missing, misattributed, or emitted as a string"
+            }
+          ]
+        }
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "fr-employment-date",
+      "family": "nominal-fr",
+      "lang": "fr",
+      "note": "An absolute date must survive into the fact; the predicate stays a label.",
+      "passages": [
+        {
+          "text": "Bruno Durand dirige Wiscale depuis 2019.",
+          "checks": [
+            {
+              "type": "relation_present",
+              "subject": "bruno durand",
+              "predicate_any": [
+                "dirige",
+                "directeur",
+                "pdg",
+                "a la tete"
+              ],
+              "object": "wiscale",
+              "severity": "major",
+              "label": "leadership edge missing"
+            },
+            {
+              "type": "facts_mention",
+              "substrings": [
+                "2019"
+              ],
+              "severity": "major",
+              "label": "absolute date dropped"
+            },
+            {
+              "type": "predicate_max_words",
+              "n": 3,
+              "severity": "minor",
+              "label": "predicate longer than 3 words"
+            }
+          ]
+        }
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "fr-pronoun",
+      "family": "nominal-fr",
+      "lang": "fr",
+      "note": "`Il` must resolve to Bruno Durand, and Lyon must not land on Wiscale.",
+      "passages": [
+        {
+          "text": "Bruno Durand dirige Wiscale. Il habite a Lyon.",
+          "checks": [
+            {
+              "type": "attribute_on",
+              "entity": "bruno durand",
+              "value": "lyon",
+              "severity": "major",
+              "label": "city not attached to bruno durand"
+            },
+            {
+              "type": "attribute_not_on",
+              "entity": "wiscale",
+              "value": "lyon",
+              "severity": "fatal",
+              "label": "city attached to the wrong entity"
+            },
+            {
+              "type": "facts_forbid",
+              "substrings": [
+                " il habite",
+                " il dirige"
+              ],
+              "severity": "major",
+              "label": "pronoun left unresolved in a fact meant to stand alone"
+            }
+          ]
+        }
+      ],
+      "split": "train"
+    },
+    {
+      "id": "fr-converse-stated",
+      "family": "nominal-fr",
+      "lang": "fr",
+      "note": "Two DIFFERENT predicates the passage states separately: both are kept. The counter-case to the parasitic converse above.",
+      "passages": [
+        {
+          "text": "Wiscale emploie Alice Martin. Alice Martin travaille pour Wiscale depuis 2019.",
+          "checks": [
+            {
+              "type": "relation_present",
+              "subject": "wiscale",
+              "predicate_any": [
+                "emploie",
+                "employeur"
+              ],
+              "object": "alice martin",
+              "severity": "major",
+              "label": "employs edge missing"
+            },
+            {
+              "type": "relation_present",
+              "subject": "alice martin",
+              "predicate_any": [
+                "travaille"
+              ],
+              "object": "wiscale",
+              "severity": "major",
+              "label": "works-for edge missing"
+            }
+          ]
+        }
+      ],
+      "split": "train"
+    },
+    {
+      "id": "en-possessive",
+      "family": "nominal-en",
+      "lang": "en",
+      "note": "Exact mirror of fr-possessive. Passing one language and failing the other is what this pair exists to catch.",
+      "passages": [
+        {
+          "text": "Sarah Miller has a brother, Tom Miller. Tom Miller is 22 and works at Northwind.",
+          "checks": [
+            {
+              "type": "relation_present",
+              "subject": "tom miller",
+              "predicate_any": [
+                "brother"
+              ],
+              "object": "sarah miller",
+              "severity": "major",
+              "label": "sibling edge missing or reversed"
+            },
+            {
+              "type": "single_edge_between",
+              "entities": [
+                "tom miller",
+                "sarah miller"
+              ],
+              "severity": "major",
+              "label": "both directions over the same pair"
+            },
+            {
+              "type": "predicate_forbids",
+              "substrings": [
+                "frere",
+                "soeur",
+                "travaille",
+                "dirige",
+                "pere de"
+              ],
+              "severity": "major",
+              "label": "French predicate on an English passage"
+            },
+            {
+              "type": "attribute_number",
+              "entity": "tom miller",
+              "key_any": [
+                "age"
+              ],
+              "value": 22,
+              "severity": "major",
+              "label": "age missing, misattributed, or emitted as a string"
+            }
+          ]
+        }
+      ],
+      "split": "train"
+    },
+    {
+      "id": "en-employment-date",
+      "family": "nominal-en",
+      "lang": "en",
+      "note": "Mirror of fr-employment-date.",
+      "passages": [
+        {
+          "text": "David Clarke runs Northwind since 2019.",
+          "checks": [
+            {
+              "type": "relation_present",
+              "subject": "david clarke",
+              "predicate_any": [
+                "runs",
+                "leads",
+                "heads",
+                "manages",
+                "ceo",
+                "director"
+              ],
+              "object": "northwind",
+              "severity": "major",
+              "label": "leadership edge missing"
+            },
+            {
+              "type": "facts_mention",
+              "substrings": [
+                "2019"
+              ],
+              "severity": "major",
+              "label": "absolute date dropped"
+            },
+            {
+              "type": "predicate_max_words",
+              "n": 3,
+              "severity": "minor",
+              "label": "predicate longer than 3 words"
+            }
+          ]
+        }
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "en-pronoun",
+      "family": "nominal-en",
+      "lang": "en",
+      "note": "Mirror of fr-pronoun.",
+      "passages": [
+        {
+          "text": "David Clarke runs Northwind. He lives in Leeds.",
+          "checks": [
+            {
+              "type": "attribute_on",
+              "entity": "david clarke",
+              "value": "leeds",
+              "severity": "major",
+              "label": "city not attached to david clarke"
+            },
+            {
+              "type": "attribute_not_on",
+              "entity": "northwind",
+              "value": "leeds",
+              "severity": "fatal",
+              "label": "city attached to the wrong entity"
+            },
+            {
+              "type": "facts_forbid",
+              "substrings": [
+                " he lives",
+                " he runs"
+              ],
+              "severity": "major",
+              "label": "pronoun left unresolved in a fact meant to stand alone"
+            }
+          ]
+        }
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "en-converse-stated",
+      "family": "nominal-en",
+      "lang": "en",
+      "note": "Mirror of fr-converse-stated.",
+      "passages": [
+        {
+          "text": "Northwind employs Emma Stone. Emma Stone works for Northwind since 2019.",
+          "checks": [
+            {
+              "type": "relation_present",
+              "subject": "northwind",
+              "predicate_any": [
+                "employs",
+                "employer"
+              ],
+              "object": "emma stone",
+              "severity": "major",
+              "label": "employs edge missing"
+            },
+            {
+              "type": "relation_present",
+              "subject": "emma stone",
+              "predicate_any": [
+                "works for",
+                "works at",
+                "employee"
+              ],
+              "object": "northwind",
+              "severity": "major",
+              "label": "works-for edge missing"
+            }
+          ]
+        }
+      ],
+      "split": "train"
+    },
+    {
+      "id": "edge-no-relation",
+      "family": "edge",
+      "lang": "fr",
+      "note": "Hallucination control. No named entity, no relation to find; inventing one poisons the graph with a fact nobody wrote.",
+      "passages": [
+        {
+          "text": "Il pleuvait sur la ville hier soir.",
+          "checks": [
+            {
+              "type": "relations_empty",
+              "severity": "fatal",
+              "label": "relation invented on a passage that states none"
+            }
+          ]
+        }
+      ],
+      "split": "train"
+    },
+    {
+      "id": "edge-hostile-format",
+      "family": "edge",
+      "lang": "fr",
+      "note": "Quotes and braces inside the passage must not break the JSON contract.",
+      "passages": [
+        {
+          "text": "Le projet \"Ardoise {beta}\" est pilote par Nadia Kerouac chez Wiscale.",
+          "checks": [
+            {
+              "type": "min_relations",
+              "n": 1,
+              "severity": "major",
+              "label": "no edge extracted from a passage that states one"
+            },
+            {
+              "type": "relation_present",
+              "subject": "nadia kerouac",
+              "predicate_any": [
+                "pilote",
+                "dirige",
+                "responsable",
+                "travaille"
+              ],
+              "severity": "major",
+              "label": "nadia kerouac absent from every edge"
+            }
+          ]
+        }
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "edge-verbose-truncation",
+      "family": "edge",
+      "lang": "fr",
+      "note": "Six dense sentences. Production caps generation at MAX_GENERATION_TOKENS = 512 (extract.rs) and a cut answer is invalid JSON: the failure mode no pre-cap bench ever exercised.",
+      "passages": [
+        {
+          "text": "Nadia Kerouac dirige Wiscale depuis 2018. Wiscale possede le serveur Hydra, qui dispose de 128 Go de RAM. Bruno Durand, 42 ans, est le directeur technique de Wiscale et habite a Lyon. Alice Martin a rejoint l'equipe en janvier 2025 comme ingenieure. Le projet Ardoise, lance en mars 2025, est pilote par Alice Martin. Wiscale emploie 37 personnes et son siege est a Geneve.",
+          "checks": [
+            {
+              "type": "not_truncated",
+              "severity": "fatal",
+              "label": "answer cut off by the generation cap"
+            },
+            {
+              "type": "min_relations",
+              "n": 3,
+              "severity": "major",
+              "label": "dense passage reduced to fewer than 3 edges"
+            }
+          ]
+        }
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "edge-accents-hyphens",
+      "family": "edge",
+      "lang": "fr",
+      "note": "Apostrophe, hyphen, accents and a company suffix inside one entity name.",
+      "passages": [
+        {
+          "text": "Jean-Luc D'Arcy a fonde Eco-Kerite S.a r.l. a Geneve en 2018.",
+          "checks": [
+            {
+              "type": "relation_present",
+              "subject": "jean-luc d'arcy",
+              "predicate_any": [
+                "fonde",
+                "fondateur",
+                "cree"
+              ],
+              "object_contains": "kerite",
+              "severity": "major",
+              "label": "founding edge missing, or entity name mangled"
+            },
+            {
+              "type": "facts_mention",
+              "substrings": [
+                "2018"
+              ],
+              "severity": "minor",
+              "label": "absolute date dropped"
+            }
+          ]
+        }
+      ],
+      "split": "train"
+    },
+    {
+      "id": "edge-mixed-lang",
+      "family": "edge",
+      "lang": "fr",
+      "note": "A French passage naming an English organisation. The predicate follows the PASSAGE, not the entity.",
+      "passages": [
+        {
+          "text": "Marie Dupont a rejoint Northwind Data Services en janvier 2025.",
+          "checks": [
+            {
+              "type": "relation_present",
+              "subject": "marie dupont",
+              "predicate_any": [
+                "rejoint",
+                "travaille",
+                "membre"
+              ],
+              "object_contains": "northwind",
+              "severity": "major",
+              "label": "membership edge missing"
+            },
+            {
+              "type": "predicate_forbids",
+              "substrings": [
+                "joined",
+                "works at",
+                "member of",
+                "employee of"
+              ],
+              "severity": "major",
+              "label": "predicate follows the entity's language instead of the passage's"
+            }
+          ]
+        }
+      ],
+      "split": "train"
+    },
+    {
+      "id": "close-role",
+      "family": "close-pair",
+      "lang": "fr",
+      "note": "Working somewhere and running it are not the same edge. Emitting `travaille chez` for B is the collapse this pair looks for.",
+      "cross_checks": [
+        {
+          "type": "predicates_differ",
+          "severity": "major",
+          "label": "both passages yield the same predicate"
+        }
+      ],
+      "passages": [
+        {
+          "text": "Alice Martin travaille chez Wiscale.",
+          "checks": [
+            {
+              "type": "relation_present",
+              "subject": "alice martin",
+              "predicate_any": [
+                "travaille"
+              ],
+              "object": "wiscale",
+              "severity": "major",
+              "label": "works-at edge missing"
+            },
+            {
+              "type": "relation_absent",
+              "predicate_any": [
+                "dirige",
+                "directeur",
+                "pdg"
+              ],
+              "severity": "major",
+              "label": "leadership role invented"
+            }
+          ]
+        },
+        {
+          "text": "Alice Martin dirige Wiscale.",
+          "checks": [
+            {
+              "type": "relation_present",
+              "subject": "alice martin",
+              "predicate_any": [
+                "dirige",
+                "directrice",
+                "a la tete"
+              ],
+              "object": "wiscale",
+              "severity": "major",
+              "label": "leads edge missing"
+            },
+            {
+              "type": "relation_absent",
+              "predicate_any": [
+                "travaille"
+              ],
+              "severity": "major",
+              "label": "leadership flattened into plain employment"
+            }
+          ]
+        }
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "close-negation",
+      "family": "close-pair",
+      "lang": "fr",
+      "note": "A departure is not an employment. Storing `travaille chez` for B records the opposite of what the passage says.",
+      "cross_checks": [
+        {
+          "type": "predicates_differ",
+          "severity": "major",
+          "label": "both passages yield the same predicate"
+        }
+      ],
+      "passages": [
+        {
+          "text": "Alice Martin travaille chez Wiscale.",
+          "checks": [
+            {
+              "type": "relation_present",
+              "subject": "alice martin",
+              "predicate_any": [
+                "travaille"
+              ],
+              "object": "wiscale",
+              "severity": "major",
+              "label": "works-at edge missing"
+            }
+          ]
+        },
+        {
+          "text": "Alice Martin a quitte Wiscale en 2024.",
+          "checks": [
+            {
+              "type": "relation_absent",
+              "predicate_any": [
+                "travaille chez",
+                "travaille pour",
+                "employee de"
+              ],
+              "severity": "fatal",
+              "label": "departure stored as a current employment"
+            },
+            {
+              "type": "relation_present",
+              "subject": "alice martin",
+              "predicate_any": [
+                "quitte",
+                "ancienne",
+                "depart"
+              ],
+              "object": "wiscale",
+              "severity": "major",
+              "label": "departure edge missing"
+            }
+          ]
+        }
+      ],
+      "split": "train"
+    },
+    {
+      "id": "close-kinship",
+      "family": "close-pair",
+      "lang": "fr",
+      "note": "In-law kinship. `belle-soeur` folds to `belle-soeur` only if the fold maps the oe ligature; NFKD alone turns it into `belle-sur`.",
+      "cross_checks": [
+        {
+          "type": "predicates_differ",
+          "severity": "major",
+          "label": "both passages yield the same predicate"
+        }
+      ],
+      "passages": [
+        {
+          "text": "Camille Rey est la soeur de Marie Rey.",
+          "checks": [
+            {
+              "type": "relation_present",
+              "subject": "camille rey",
+              "predicate_any": [
+                "soeur"
+              ],
+              "object": "marie rey",
+              "severity": "major",
+              "label": "sibling edge missing"
+            },
+            {
+              "type": "predicate_forbids",
+              "substrings": [
+                "belle"
+              ],
+              "severity": "major",
+              "label": "blood kinship rendered as kinship by marriage"
+            }
+          ]
+        },
+        {
+          "text": "Camille Rey est la belle-soeur de Marie Rey.",
+          "checks": [
+            {
+              "type": "relation_present",
+              "subject": "camille rey",
+              "predicate_any": [
+                "belle-soeur",
+                "belle soeur"
+              ],
+              "object": "marie rey",
+              "severity": "major",
+              "label": "kinship by marriage rendered as blood kinship"
+            }
+          ]
+        }
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "close-possession",
+      "family": "close-pair",
+      "lang": "fr",
+      "note": "Owning and renting differ in who bears the asset. Both collapse to `a` in a careless extraction.",
+      "cross_checks": [
+        {
+          "type": "predicates_differ",
+          "severity": "major",
+          "label": "both passages yield the same predicate"
+        }
+      ],
+      "passages": [
+        {
+          "text": "Wiscale possede le serveur Hydra.",
+          "checks": [
+            {
+              "type": "relation_present",
+              "subject": "wiscale",
+              "predicate_any": [
+                "possede",
+                "proprietaire"
+              ],
+              "object_contains": "hydra",
+              "severity": "major",
+              "label": "ownership edge missing"
+            },
+            {
+              "type": "relation_absent",
+              "predicate_any": [
+                "loue",
+                "location"
+              ],
+              "severity": "major",
+              "label": "ownership rendered as a lease"
+            }
+          ]
+        },
+        {
+          "text": "Wiscale loue le serveur Hydra.",
+          "checks": [
+            {
+              "type": "relation_present",
+              "subject": "wiscale",
+              "predicate_any": [
+                "loue",
+                "location"
+              ],
+              "object_contains": "hydra",
+              "severity": "major",
+              "label": "lease edge missing"
+            },
+            {
+              "type": "relation_absent",
+              "predicate_any": [
+                "possede",
+                "proprietaire",
+                "appartient"
+              ],
+              "severity": "fatal",
+              "label": "lease stored as ownership"
+            }
+          ]
+        }
+      ],
+      "split": "train"
+    },
+    {
+      "id": "close-symmetry",
+      "family": "close-pair",
+      "lang": "fr",
+      "note": "`avec` is symmetric and takes ONE edge; `pour` is oriented and its direction carries the hierarchy.",
+      "cross_checks": [
+        {
+          "type": "predicates_differ",
+          "severity": "major",
+          "label": "both passages yield the same predicate"
+        }
+      ],
+      "passages": [
+        {
+          "text": "Alice Rey travaille avec Bob Neri.",
+          "checks": [
+            {
+              "type": "single_edge_between",
+              "entities": [
+                "alice rey",
+                "bob neri"
+              ],
+              "severity": "major",
+              "label": "symmetric relation duplicated in both directions"
+            },
+            {
+              "type": "min_relations",
+              "n": 1,
+              "severity": "major",
+              "label": "collaboration not extracted"
+            }
+          ]
+        },
+        {
+          "text": "Alice Rey travaille pour Bob Neri.",
+          "checks": [
+            {
+              "type": "relation_present",
+              "subject": "alice rey",
+              "predicate_any": [
+                "travaille"
+              ],
+              "object": "bob neri",
+              "severity": "major",
+              "label": "subordination edge missing or reversed"
+            },
+            {
+              "type": "relation_absent",
+              "subject": "bob neri",
+              "predicate_any": [
+                "travaille pour",
+                "travaille avec"
+              ],
+              "severity": "major",
+              "label": "hierarchy inverted"
+            }
+          ]
+        }
+      ],
+      "split": "train"
+    },
+    {
+      "id": "close-homonyms",
+      "family": "close-pair",
+      "lang": "fr",
+      "note": "Two names one letter apart. Merging them, or crossing their cities, makes the graph assert something no passage says.",
+      "passages": [
+        {
+          "text": "Marie Dupont habite a Lyon. Marie Dupond habite a Nantes.",
+          "checks": [
+            {
+              "type": "attribute_on",
+              "entity": "marie dupont",
+              "value": "lyon",
+              "severity": "major",
+              "label": "lyon not attached to marie dupont"
+            },
+            {
+              "type": "attribute_on",
+              "entity": "marie dupond",
+              "value": "nantes",
+              "severity": "major",
+              "label": "nantes not attached to marie dupond"
+            },
+            {
+              "type": "attribute_not_on",
+              "entity": "marie dupont",
+              "value": "nantes",
+              "severity": "fatal",
+              "label": "cross-contamination: nantes on marie dupont"
+            },
+            {
+              "type": "attribute_not_on",
+              "entity": "marie dupond",
+              "value": "lyon",
+              "severity": "fatal",
+              "label": "cross-contamination: lyon on marie dupond"
+            }
+          ]
+        }
+      ],
+      "split": "train"
+    },
+    {
+      "id": "close-en-role",
+      "family": "close-pair",
+      "lang": "en",
+      "note": "Mirror of close-role. One verb apart; managing and joining are not the same edge.",
+      "passages": [
+        {
+          "text": "Nadia Osei manages Kestrel Foods.",
+          "checks": [
+            {
+              "type": "relation_present",
+              "subject": "nadia osei",
+              "predicate_any": [
+                "manage"
+              ],
+              "object": "kestrel foods",
+              "severity": "major",
+              "label": "management edge missing"
+            },
+            {
+              "type": "predicate_forbids",
+              "substrings": [
+                "travaille",
+                "dirige",
+                "fils de",
+                "soeur de",
+                "possede"
+              ],
+              "severity": "major",
+              "label": "French predicate on an English passage"
+            }
+          ]
+        },
+        {
+          "text": "Nadia Osei joined Kestrel Foods.",
+          "checks": [
+            {
+              "type": "relation_present",
+              "subject": "nadia osei",
+              "predicate_any": [
+                "join",
+                "work"
+              ],
+              "object": "kestrel foods",
+              "severity": "major",
+              "label": "employment edge missing"
+            },
+            {
+              "type": "predicate_forbids",
+              "substrings": [
+                "travaille",
+                "dirige",
+                "fils de",
+                "soeur de",
+                "possede"
+              ],
+              "severity": "major",
+              "label": "French predicate on an English passage"
+            }
+          ]
+        }
+      ],
+      "cross_checks": [
+        {
+          "type": "predicates_differ",
+          "severity": "major",
+          "label": "managing and joining collapsed into one predicate"
+        }
+      ],
+      "split": "train"
+    },
+    {
+      "id": "close-en-kinship",
+      "family": "close-pair",
+      "lang": "en",
+      "note": "Mirror of close-kinship. The possessive names the relative, so the relative carries the edge.",
+      "passages": [
+        {
+          "text": "Priya Raghunathan has a sister, Meena Raghunathan.",
+          "checks": [
+            {
+              "type": "relation_present",
+              "subject": "meena raghunathan",
+              "predicate_any": [
+                "sister"
+              ],
+              "object": "priya raghunathan",
+              "severity": "major",
+              "label": "sibling edge missing or reversed"
+            },
+            {
+              "type": "relation_absent",
+              "subject": "priya raghunathan",
+              "predicate_any": [
+                "sister"
+              ],
+              "severity": "major",
+              "label": "parasitic converse: both directions of one predicate"
+            }
+          ]
+        },
+        {
+          "text": "Priya Raghunathan has a daughter, Meena Raghunathan.",
+          "checks": [
+            {
+              "type": "relation_present",
+              "subject": "meena raghunathan",
+              "predicate_any": [
+                "daughter"
+              ],
+              "object": "priya raghunathan",
+              "severity": "major",
+              "label": "filiation edge missing or reversed"
+            }
+          ]
+        }
+      ],
+      "cross_checks": [
+        {
+          "type": "predicates_differ",
+          "severity": "major",
+          "label": "sister and daughter collapsed into one predicate"
+        }
+      ],
+      "split": "train"
+    },
+    {
+      "id": "close-en-tense",
+      "family": "close-pair",
+      "lang": "en",
+      "note": "A ceased employment must not be stored as a current one; the graph has no tense.",
+      "passages": [
+        {
+          "text": "Tomas Weber works at Halden Rail.",
+          "checks": [
+            {
+              "type": "relation_present",
+              "subject": "tomas weber",
+              "predicate_any": [
+                "work"
+              ],
+              "object": "halden rail",
+              "severity": "major",
+              "label": "employment edge missing"
+            }
+          ]
+        },
+        {
+          "text": "Tomas Weber no longer works at Halden Rail.",
+          "checks": [
+            {
+              "type": "facts_mention",
+              "substrings": [
+                "no longer"
+              ],
+              "severity": "major",
+              "label": "the fact drops the negation, so the graph reads as current employment"
+            }
+          ]
+        }
+      ],
+      "cross_checks": [
+        {
+          "type": "predicates_differ",
+          "severity": "major",
+          "label": "current and ceased employment collapsed into one predicate"
+        }
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "close-en-possession",
+      "family": "close-pair",
+      "lang": "en",
+      "note": "Owning and managing are two stated relations, not one.",
+      "passages": [
+        {
+          "text": "Owen Blake owns Larkspur Studio.",
+          "checks": [
+            {
+              "type": "relation_present",
+              "subject": "owen blake",
+              "predicate_any": [
+                "own"
+              ],
+              "object": "larkspur studio",
+              "severity": "major",
+              "label": "ownership edge missing"
+            }
+          ]
+        },
+        {
+          "text": "Owen Blake manages Larkspur Studio.",
+          "checks": [
+            {
+              "type": "relation_present",
+              "subject": "owen blake",
+              "predicate_any": [
+                "manage"
+              ],
+              "object": "larkspur studio",
+              "severity": "major",
+              "label": "management edge missing"
+            }
+          ]
+        }
+      ],
+      "cross_checks": [
+        {
+          "type": "predicates_differ",
+          "severity": "major",
+          "label": "owning and managing collapsed into one predicate"
+        }
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "edge-en-no-relation",
+      "family": "edge",
+      "lang": "en",
+      "note": "Mirror of edge-no-relation. Nothing relates two named entities; inventing an edge is worse than none.",
+      "passages": [
+        {
+          "text": "The quarterly report was printed on recycled paper and filed the same afternoon.",
+          "checks": [
+            {
+              "type": "relations_empty",
+              "severity": "fatal",
+              "label": "invented an edge from a passage that states none"
+            }
+          ]
+        }
+      ],
+      "split": "holdout"
+    },
+    {
+      "id": "edge-en-hostile-format",
+      "family": "edge",
+      "lang": "en",
+      "note": "Mirror of edge-hostile-format. Braces inside the passage must not leak into the envelope.",
+      "passages": [
+        {
+          "text": "Ana Ferreira pasted {\"status\": \"done\"} into the ticket she filed for Vantage Health.",
+          "checks": [
+            {
+              "type": "min_relations",
+              "n": 1,
+              "severity": "major",
+              "label": "no edge extracted from a passage that states one"
+            },
+            {
+              "type": "not_truncated",
+              "severity": "fatal",
+              "label": "reply cut off"
+            }
+          ]
+        }
+      ],
+      "split": "train"
+    },
+    {
+      "id": "fr-multi-entity",
+      "family": "nominal-fr",
+      "lang": "fr",
+      "note": "Two stated edges over a shared organisation. An entity that only receives attributes is a dead end.",
+      "passages": [
+        {
+          "text": "Sofia Marchetti dirige Aurel Textile. Karim Benali travaille chez Aurel Textile depuis 2021.",
+          "checks": [
+            {
+              "type": "min_relations",
+              "n": 2,
+              "severity": "major",
+              "label": "fewer edges than the passage states"
+            },
+            {
+              "type": "relation_present",
+              "subject": "sofia marchetti",
+              "predicate_any": [
+                "dirig"
+              ],
+              "object": "aurel textile",
+              "severity": "major",
+              "label": "direction edge missing"
+            },
+            {
+              "type": "relation_present",
+              "subject": "karim benali",
+              "predicate_any": [
+                "travaill"
+              ],
+              "object": "aurel textile",
+              "severity": "major",
+              "label": "employment edge missing"
+            },
+            {
+              "type": "predicate_forbids",
+              "substrings": [
+                "works",
+                "runs",
+                "manages",
+                "son of",
+                "sister of",
+                "owns"
+              ],
+              "severity": "major",
+              "label": "English predicate on a French passage"
+            }
+          ]
+        }
+      ],
+      "split": "train"
+    },
+    {
+      "id": "en-multi-entity",
+      "family": "nominal-en",
+      "lang": "en",
+      "note": "English mirror of fr-multi-entity.",
+      "passages": [
+        {
+          "text": "Sofia Marchetti runs Aurel Textile. Karim Benali has worked at Aurel Textile since 2021.",
+          "checks": [
+            {
+              "type": "min_relations",
+              "n": 2,
+              "severity": "major",
+              "label": "fewer edges than the passage states"
+            },
+            {
+              "type": "relation_present",
+              "subject": "sofia marchetti",
+              "predicate_any": [
+                "run",
+                "manage"
+              ],
+              "object": "aurel textile",
+              "severity": "major",
+              "label": "direction edge missing"
+            },
+            {
+              "type": "relation_present",
+              "subject": "karim benali",
+              "predicate_any": [
+                "work"
+              ],
+              "object": "aurel textile",
+              "severity": "major",
+              "label": "employment edge missing"
+            },
+            {
+              "type": "predicate_forbids",
+              "substrings": [
+                "travaille",
+                "dirige",
+                "fils de",
+                "soeur de",
+                "possede"
+              ],
+              "severity": "major",
+              "label": "French predicate on an English passage"
+            }
+          ]
+        }
+      ],
+      "split": "train"
+    },
+    {
+      "id": "fr-numeric-pair",
+      "family": "nominal-fr",
+      "lang": "fr",
+      "note": "Two ages, two entities. Misattribution is invisible unless both are checked.",
+      "passages": [
+        {
+          "text": "Lise Aubert a 34 ans. Son fils Theo Aubert a 8 ans.",
+          "checks": [
+            {
+              "type": "attribute_number",
+              "entity": "lise aubert",
+              "key_any": [
+                "age"
+              ],
+              "value": 34,
+              "severity": "major",
+              "label": "age missing, misattributed, or emitted as a string"
+            },
+            {
+              "type": "attribute_number",
+              "entity": "theo aubert",
+              "key_any": [
+                "age"
+              ],
+              "value": 8,
+              "severity": "major",
+              "label": "age missing, misattributed, or emitted as a string"
+            },
+            {
+              "type": "relation_present",
+              "subject": "theo aubert",
+              "predicate_any": [
+                "fils"
+              ],
+              "object": "lise aubert",
+              "severity": "major",
+              "label": "filiation edge missing or reversed"
+            },
+            {
+              "type": "predicate_forbids",
+              "substrings": [
+                "works",
+                "runs",
+                "manages",
+                "son of",
+                "sister of",
+                "owns"
+              ],
+              "severity": "major",
+              "label": "English predicate on a French passage"
+            }
+          ]
+        }
+      ],
+      "split": "train"
+    },
+    {
+      "id": "en-numeric-pair",
+      "family": "nominal-en",
+      "lang": "en",
+      "note": "English mirror of fr-numeric-pair.",
+      "passages": [
+        {
+          "text": "Lise Aubert is 34. Her son Theo Aubert is 8.",
+          "checks": [
+            {
+              "type": "attribute_number",
+              "entity": "lise aubert",
+              "key_any": [
+                "age"
+              ],
+              "value": 34,
+              "severity": "major",
+              "label": "age missing, misattributed, or emitted as a string"
+            },
+            {
+              "type": "attribute_number",
+              "entity": "theo aubert",
+              "key_any": [
+                "age"
+              ],
+              "value": 8,
+              "severity": "major",
+              "label": "age missing, misattributed, or emitted as a string"
+            },
+            {
+              "type": "relation_present",
+              "subject": "theo aubert",
+              "predicate_any": [
+                "son"
+              ],
+              "object": "lise aubert",
+              "severity": "major",
+              "label": "filiation edge missing or reversed"
+            },
+            {
+              "type": "predicate_forbids",
+              "substrings": [
+                "travaille",
+                "dirige",
+                "fils de",
+                "soeur de",
+                "possede"
+              ],
+              "severity": "major",
+              "label": "French predicate on an English passage"
+            }
+          ]
+        }
+      ],
+      "split": "holdout"
+    }
+  ]
+}

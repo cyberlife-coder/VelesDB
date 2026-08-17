@@ -107,6 +107,19 @@ pub const MAX_WHY_EDGES: usize = MAX_WHY_NODES * 4;
 /// is rebuilt by re-remembering.
 pub const MAX_AUTOGRAPH_QUEUE: usize = 64;
 
+/// Maximum extraction jobs that may be accepted but not yet terminal.
+///
+/// Unlike autograph enrichments, these jobs are durable and therefore never
+/// dropped when the worker falls behind. Admission stops at the same bounded
+/// depth instead: the accepted receipt remains an honest promise that the job
+/// will either commit or expose a persisted failure.
+pub const MAX_EXTRACTION_JOBS: usize = 64;
+
+/// Maximum caller-supplied idempotency-key size for `remember_extracted`.
+/// Keys are hashed before they reach a filename, but bounding the input still
+/// prevents an otherwise tiny receipt call from carrying an arbitrary payload.
+pub const MAX_IDEMPOTENCY_KEY_BYTES: usize = 256;
+
 /// Maximum typed edges an `entity` profile resolves and returns PER
 /// DIRECTION (`relations` and `relations_in` each) — the same width grammar
 /// as [`MAX_WHY_NODE_DEGREE`], on the surface #1743 never covered: resolving

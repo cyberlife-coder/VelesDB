@@ -28,6 +28,8 @@ curl -O https://raw.githubusercontent.com/cyberlife-coder/VelesDB/main/examples/
 python hello_velesdb.py
 ```
 
+To search your own text instead of hand-written vectors, install the opt-in local adapter (`pip install "velesdb[embed-sentence-transformers]"`) and run [`hello_velesdb_text.py`](examples/python/hello_velesdb_text.py); its first run downloads `all-MiniLM-L6-v2`.
+
 Expected output, byte-for-byte ([read the script](examples/python/hello_velesdb.py) — no server, no embedding model):
 
 ```
@@ -42,6 +44,8 @@ Query: "tech + music"
   score=0.707  Miles Davis discography
 ```
 
+An embedding model determines the vector dimension, while your similarity semantics determine the metric. Both are fixed when a collection is created; to change either, create a new collection and re-index your documents.
+
 **Give your agent a persistent memory — three more commands:**
 
 ```bash
@@ -50,7 +54,7 @@ claude mcp add velesdb-memory -- ~/.cargo/bin/velesdb-memory    # any MCP client
 curl -L https://github.com/cyberlife-coder/VelesDB/releases/latest/download/velesdb-skills.tar.gz | tar -xz -C ~/.claude/skills/
 ```
 
-No Rust toolchain? `npm i @wiscale/velesdb-memory-node`, or grab a prebuilt `.mcpb` bundle from the [latest release](https://github.com/cyberlife-coder/VelesDB/releases/latest).
+No Rust toolchain? `npm i @wiscale/velesdb-memory-node`, or grab a prebuilt `.mcpb` bundle from the [official MCP Registry](https://registry.modelcontextprotocol.io/?q=velesdb-memory) (`io.github.cyberlife-coder/velesdb-memory`).
 
 <details>
 <summary><strong>Other paths — always-on hooks, shared daemon, Rust, Docker, WASM, REST</strong></summary>
@@ -137,6 +141,11 @@ mem.remember("Booked the aisle seat on Robert's flight", links=[(reason, "becaus
 mem.why("why the aisle seat on Robert's flight?")   # walks booking → reason — recall() can't
 ```
 
+> `MemoryService` defaults to the offline `hash` embedder: deterministic, but
+> **lexical rather than semantic**, so unrelated wording can score `0.000`.
+> Opening it now says so once on stderr. For meaning-based recall, pass
+> `embedder="ollama"`; follow [Real semantic recall in 5 minutes](crates/velesdb-memory/README.md#real-semantic-recall-in-5-minutes).
+
 ![recall() finds the booking but misses the reason; why() reaches it through typed links, across a session restart](examples/agent_memory/why_across_sessions.gif)
 
 Memories are permanent by default; `forget(id)` deletes one, `ttl_seconds` gives a fact a durable expiry. Every `remember` auto-stamps its storage day, so recency-weighted recall works with zero setup. Same wedge in **Python**, **Node**, the [**MCP server**](crates/velesdb-memory), and in-memory in the [**TypeScript SDK**](sdks/typescript).
@@ -210,7 +219,7 @@ No figure here is an estimate from a slide; each links to the log or script in t
 |---|---|---|
 | Try it in one file | [`velesdb`](https://pypi.org/project/velesdb/) (Python 3.9+) | Fastest onboarding path |
 | Embed the engine | [`velesdb-core`](https://crates.io/crates/velesdb-core) (Rust) | The engine itself |
-| Give my agent memory | [`velesdb-memory`](crates/velesdb-memory) | MCP server + context compiler, any MCP client; `.mcpb` bundles on the [MCP registry](https://registry.modelcontextprotocol.io) |
+| Give my agent memory | [`velesdb-memory`](crates/velesdb-memory) | MCP server + context compiler, any MCP client; `.mcpb` bundles on the [MCP Registry](https://registry.modelcontextprotocol.io/?q=velesdb-memory) |
 | Call it from Node | [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) | Memory wedge ([full engine via server + TS SDK](crates/velesdb-node/README.md#need-the-full-engine)) |
 | Run it in a browser | [`@wiscale/velesdb-sdk`](https://www.npmjs.com/package/@wiscale/velesdb-sdk) | WASM, ~674 KB gzipped, fully client-side |
 | Serve it over HTTP | [`velesdb-server`](https://crates.io/crates/velesdb-server) | 54 REST endpoints — [API reference](docs/reference/api-reference.md) · [OpenAPI](docs/openapi.yaml) · [server security](docs/guides/SERVER_SECURITY.md) |
@@ -243,6 +252,7 @@ Tool parity per surface is published honestly — including where a surface is s
 | **Metadata filtering** | Typed ColumnStore + secondary indexes | JSON scan | JSON payload | SQL |
 | **Graph support** | Native (`MATCH` clause) | No | No | No |
 | **Query language** | VelesQL (SQL + NEAR + MATCH) | Python API | JSON API / gRPC | SQL + operators |
+| **Embeddings from text** | Opt-in [local / OpenAI adapters](crates/velesdb-python/python/velesdb/embed.py); no bundled model | [Embedding functions](https://docs.trychroma.com/docs/embeddings/embedding-functions), with a default local model in Python/TypeScript | Opt-in client-side [FastEmbed](https://qdrant.tech/documentation/fastembed/fastembed-semantic-search/) | None; bring vectors from an external model |
 | **Deployment** | Embedded / Server / WASM / Mobile | Server (Python) | Server (Rust) | Requires PostgreSQL |
 | **Binary size** | ~10 MB | ~500 MB (with deps) | ~50 MB | N/A (PG extension) |
 | **Browser / Mobile** | Yes / Yes | No | No | No |

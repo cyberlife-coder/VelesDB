@@ -325,6 +325,25 @@ pub fn format_count(count: Option<u64>) -> String {
     count.map_or_else(|| "unknown".to_string(), |c| c.to_string())
 }
 
+/// Lowercases `raw` and rewrites it to a canonical distance-metric name
+/// using `aliases`, falling back to the lowercased value verbatim.
+///
+/// Every source connector exposes its own vendor-specific metric labels
+/// (Milvus's `L2`/`IP`, Qdrant's `Euclid`, pgvector's `vector_l2_ops`, ...)
+/// and normalises them to the VelesDB core vocabulary (`cosine`, `dot`,
+/// `euclidean`, `hamming`, `jaccard`) so `Pipeline::check_metric_fidelity`
+/// can compare a source metric against a destination collection's metric.
+/// `aliases` lists `(vendor_label, canonical_name)` pairs matched against
+/// the lowercased input; unknown labels are lowercased and returned
+/// verbatim so mismatch errors stay actionable rather than being masked.
+pub fn normalise_metric(raw: &str, aliases: &[(&str, &str)]) -> String {
+    let lower = raw.to_ascii_lowercase();
+    aliases
+        .iter()
+        .find(|(alias, _)| *alias == lower)
+        .map_or(lower, |(_, canonical)| (*canonical).to_string())
+}
+
 /// Detects payload fields from a sample JSON document, excluding specified fields.
 ///
 /// Each non-excluded key produces a `FieldInfo` with type inferred via [`json_type_name`].
@@ -650,5 +669,30 @@ mod tests {
     #[test]
     fn test_format_count_none() {
         assert_eq!(format_count(None), "unknown");
+    }
+
+    #[test]
+    fn test_normalise_metric_maps_known_alias() {
+        assert_eq!(normalise_metric("L2", &[("l2", "euclidean")]), "euclidean");
+    }
+
+    #[test]
+    fn test_normalise_metric_matches_case_insensitively() {
+        assert_eq!(normalise_metric("Ip", &[("ip", "dot")]), "dot");
+    }
+
+    #[test]
+    fn test_normalise_metric_preserves_unknown_value() {
+        assert_eq!(
+            normalise_metric("manhattan", &[("l2", "euclidean")]),
+            "manhattan"
+        );
+    }
+
+    #[test]
+    fn test_normalise_metric_supports_multiple_aliases_to_same_canonical() {
+        let aliases = [("l2", "euclidean"), ("vector_l2_ops", "euclidean")];
+        assert_eq!(normalise_metric("vector_l2_ops", &aliases), "euclidean");
+        assert_eq!(normalise_metric("l2", &aliases), "euclidean");
     }
 }

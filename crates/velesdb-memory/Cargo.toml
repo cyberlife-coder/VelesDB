@@ -2,7 +2,7 @@
 name = "velesdb-memory"
 # Independent of the workspace version: velesdb-memory is a young MCP wrapper
 # with its own release cadence, decoupled from the core engine's 3.x line.
-version = "0.12.0"
+version = "0.13.0"
 edition.workspace = true
 rust-version.workspace = true
 license-file = "../../LICENSE"
@@ -35,7 +35,12 @@ serde = { workspace = true }
 toml = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { version = "0.11", optional = true }
+getrandom = { version = "0.4", optional = true }
 fs2 = { version = "0.4", optional = true }
+# Secure sibling temporary files for durable extraction-job snapshots. The
+# dependency follows `persistence`, so wasm/no-default consumers do not carry
+# filesystem code.
+tempfile = { version = "3", optional = true }
 # Pinned to rmcp's schemars (1.2.x) so domain types and MCP DTOs share one
 # JsonSchema derive — no duplicate wire/domain structs.
 schemars = "1"
@@ -124,7 +129,7 @@ optional = true
 # pick only what they need. The cost of the two extra defaults is one small
 # HTTP client (`ureq`, no TLS); the least technical install paths were the
 # ones locked out of the product's own pitch without them (#1846 aftermath).
-default = ["mcp", "persistence", "context", "ollama", "extract"]
+default = ["mcp", "persistence", "context", "embedder-http", "extractor-http"]
 mcp = ["dep:rmcp", "dep:tokio", "dep:tracing", "dep:tracing-subscriber", "persistence"]
 # Streamable-HTTP transport (multi-client daemon mode, see the README's "HTTP
 # transport" section): lets several MCP clients share ONE `velesdb-memory`
@@ -161,27 +166,35 @@ context = []
 persistence = [
     "velesdb-core/persistence",
     "dep:sha2",
+    "dep:getrandom",
     "dep:fs2",
+    "dep:tempfile",
     "dep:atomicwrites",
 ]
 # Real on-device semantic recall via a local Ollama or OpenAI-compatible
-# embeddings endpoint (the name predates the protocol split: this is the HTTP
-# dependency for the embedding ROLE, not a vendor). On by default — see the
-# `default` comment; nothing is contacted unless `VELESDB_MEMORY_EMBEDDER`
-# opts in at runtime.
-ollama = ["dep:ureq"]
+# embeddings endpoint. On by default — see the `default` comment; nothing is
+# contacted unless `VELESDB_MEMORY_EMBEDDER` opts in at runtime.
+embedder-http = ["dep:ureq"]
 # Batteries-included text → facts+entities extraction (Ollama or
 # OpenAI-compatible backends) so the fact↔entity graph self-builds. On by
 # default — same reasoning and same runtime opt-in (`VELESDB_MEMORY_EXTRACTOR`)
-# as `ollama`; the Extractor trait itself is always available feature-free for
-# bring-your-own-LLM.
-extract = ["dep:ureq"]
+# as `embedder-http`; the Extractor trait itself is always available
+# feature-free for bring-your-own-LLM.
+extractor-http = ["dep:ureq"]
+# Compatibility aliases retained for existing library consumers. New code
+# should use the role-named features above; both aliases enable exactly the
+# same implementation gates and dependencies.
+ollama = ["embedder-http"]
+extract = ["extractor-http"]
 
 [dev-dependencies]
-tempfile = "3"
 serde_json = { workspace = true }
 tokio = { workspace = true }
 criterion = { workspace = true }
+# Integration tests use scratch stores even when `persistence` is not one of
+# the features under test. Keep the production dependency optional while
+# making the test harness feature-independent.
+tempfile = { workspace = true }
 # tests/daemon_logging.rs (#1780) installs a capturing global subscriber to
 # assert the per-request events exist, carry the promised fields, and never
 # leak a payload. Dev-only copies of the optional prod deps above, so the
@@ -226,6 +239,20 @@ name = "fused_recall_benchmark"
 harness = false
 required-features = ["persistence"]
 
+# Latency and allocations of remember's autograph write path as one shared
+# entity hub accumulates facts (issue #1790).
+[[bench]]
+name = "autograph_write_benchmark"
+harness = false
+required-features = ["persistence"]
+
+# Comparative steady-state cost of the service-generation read guard with
+# mutation capture disabled (issue #1925).
+[[bench]]
+name = "generation_gate_benchmark"
+harness = false
+required-features = ["persistence"]
+
 # Reproducible before/after benchmark of the deterministic context compiler.
 # Offline and dependency-free — needs only the `context` feature.
 [[example]]
@@ -234,12 +261,12 @@ path = "examples/context_savings/main.rs"
 required-features = ["context"]
 
 # Real-data LoCoMo benchmark. Needs a local Ollama (all-minilm + a generative
-# model), so it only builds with the `ollama` feature.
+# model), so it only builds with the `embedder-http` feature.
 [[example]]
 name = "locomo"
 path = "examples/locomo/main.rs"
 # `persistence` too: these examples open the file-backed store (#1765).
-required-features = ["ollama", "persistence"]
+required-features = ["embedder-http", "persistence"]
 
 [lib]
 name = "velesdb_memory"
@@ -323,22 +350,22 @@ required-features = ["persistence"]
 name = "multihop"
 path = "examples/multihop/main.rs"
 # `persistence` too: these examples open the file-backed store (#1765).
-required-features = ["ollama", "persistence"]
+required-features = ["embedder-http", "persistence"]
 
 [[example]]
 name = "colfilter"
 path = "examples/colfilter/main.rs"
 # `persistence` too: these examples open the file-backed store (#1765).
-required-features = ["ollama", "persistence"]
+required-features = ["embedder-http", "persistence"]
 
 [[example]]
 name = "timeqa"
 path = "examples/timeqa/main.rs"
 # `persistence` too: these examples open the file-backed store (#1765).
-required-features = ["ollama", "persistence"]
+required-features = ["embedder-http", "persistence"]
 
 [[example]]
 name = "triengine"
 path = "examples/triengine/main.rs"
 # `persistence` too: these examples open the file-backed store (#1765).
-required-features = ["ollama", "persistence"]
+required-features = ["embedder-http", "persistence"]

@@ -1,0 +1,44 @@
+{
+  "phase": "endtoend",
+  "write_p50_seconds": 1.0831819589948282,
+  "write_p95_seconds": 1.0831819589948282,
+  "cases": [
+    {
+      "id": "fr-possessive",
+      "failures": [
+        {
+          "severity": "major",
+          "label": "sibling edge missing or reversed",
+          "type": "relation_present"
+        },
+        {
+          "severity": "major",
+          "label": "age missing, misattributed, or emitted as a string",
+          "type": "attribute_number"
+        }
+      ],
+      "counts": {
+        "fatal": 0,
+        "major": 2,
+        "minor": 0
+      },
+      "drain_seconds": 180.91291033300513,
+      "entities": {
+        "camille dupont": {},
+        "marie dupont": {}
+      }
+    }
+  ],
+  "burst": {
+    "count": 20,
+    "p50_seconds": 0.09399204098735936,
+    "p95_seconds": 0.09912512499431614,
+    "autograph_dropped": 0
+  },
+  "totals": {
+    "fatal": 0,
+    "major": 2,
+    "max_drain_seconds": 180.91291033300513
+  },
+  "config": "outline"
+}

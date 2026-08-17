@@ -249,8 +249,8 @@ any URL that is not `https://`, even for `127.0.0.1`, so plain HTTP is no
 longer viable as the default.
 
 ```bash
-cargo install velesdb-memory --features http,ollama
-# → opt into `ollama` at BUILD time only if you want that embedder available;
+cargo install velesdb-memory --features http,embedder-http
+# → opt into HTTP embedders at BUILD time only if you want them available;
 #   VELESDB_MEMORY_EMBEDDER stays a runtime choice regardless.
 velesdb-memory --http
 # [velesdb-memory] HTTPS server listening on https://127.0.0.1:18090/mcp
@@ -613,8 +613,9 @@ places:
 
 ## Installing the daemon without a Rust toolchain
 
-Both installers default to `cargo install --features ollama,http`, which needs
-a Rust toolchain on the machine. Pass `--from-release[=TAG]` (`.sh`) or
+Both installers default to
+`cargo install --features embedder-http,extractor-http,http`, which needs a
+Rust toolchain on the machine. Pass `--from-release[=TAG]` (`.sh`) or
 `-FromRelease` / `-FromReleaseTag <TAG>` (`.ps1`, which has no PowerShell
 equivalent of the shell flag's optional inline value) to instead download a
 prebuilt `velesdb-memory-daemon-<target>.{tar.gz,zip}` archive from a
@@ -748,6 +749,17 @@ a requested remote backend must match the one configured at startup so it can
 reuse that backend's URL, model, and credential safely. This lets one daemon
 handle structured directives and free prose without a restart.
 
+The MCP call is a durable asynchronous contract. It returns
+`{request_id, state, reused}` after the request is persisted, before the model
+runs. Give each logical client operation an `idempotency_key`, then poll
+`extraction_status({request_id})` until `committed` or `failed`. Retrying the
+same key and payload never launches a second extraction; changing the payload
+under that key is rejected. Accepted/running jobs resume after a daemon
+restart, and model output is persisted before graph writes so an interrupted
+commit replays the same extraction. The job snapshots live under
+`<VELESDB_MEMORY_PATH>/extraction-jobs/`; terminal snapshots drop the passage
+and retain only its digest and result.
+
 `openai` is the same OpenAI-compatible protocol described under
 [Embedding backend](#embedding-backend), reached over
 `/v1/chat/completions`:
@@ -792,4 +804,4 @@ trait and pass it to `MemoryService::remember_extracted` from Rust.
 
 ---
 
-Last updated: 2026-07-25 · Applies to: velesdb-memory 0.12.0
+Last updated: 2026-07-25 · Applies to: velesdb-memory 0.13.0

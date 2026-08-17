@@ -79,7 +79,7 @@ docs.upsert([
     {"id": 3, "vector": [0.6, 0.0, 0.8, 0.0], "payload": {"title": "AI-generated jazz"}},
 ])
 
-results = docs.search_request(velesdb.SearchOptions(vector=[1.0, 0.0, 0.0, 0.0], top_k=2))
+results = docs.search_request(velesdb.SearchOptions(vector=[1.0, 0.0, 0.0, 0.0], k=2))
 for r in results:
     print(f"score={r['score']:.3f}  {r['payload']['title']}")
 ```
@@ -217,4 +217,4 @@ so `except velesdb.VelesDBError` is a safe catch-all.
 
 ---
 
-`velesdb-python v5.0.0` · Last updated: 2026-08-10 · Applies to: velesdb-core 5.0.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)
+`velesdb-python v5.1.0` · Last updated: 2026-08-10 · Applies to: velesdb-core 5.1.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)

@@ -6,10 +6,8 @@ use crate::collection::graph::property_index::{
 use crate::collection::graph::{ConcurrentEdgeStore, LabelIndex, PropertyIndex, RangeIndex};
 use crate::collection::types::{Collection, CollectionConfig};
 use crate::error::Result;
-use crate::guardrails::GuardRails;
 use crate::index::sparse::SparseInvertedIndex;
 use crate::index::{Bm25Index, HnswIndex};
-use crate::sparse_index::DEFAULT_SPARSE_INDEX_NAME;
 use crate::storage::{LogPayloadStorage, MmapStorage, PayloadStorage};
 use crate::velesql::{QueryCache, QueryPlanner};
 
@@ -71,7 +69,8 @@ impl Collection {
     /// Assembles a `Collection` from pre-built components and default caches.
     ///
     /// This is the single point of truth for the `Self { .. }` struct literal,
-    /// eliminating duplication across the five public constructors.
+    /// eliminating duplication across the five public constructors. Focused
+    /// builders keep this orchestration within the function-size budget.
     pub(super) fn assemble(parts: CollectionParts) -> Self {
         #[cfg(feature = "persistence")]
         let deferred_indexer = Self::build_deferred_indexer(&parts.config);
@@ -79,34 +78,20 @@ impl Collection {
         let async_index_builder = Self::build_async_index_builder(&parts.config);
 
         Self {
-            storage: crate::collection::types::StorageState {
-                path: parts.path,
-                config: Arc::new(RwLock::new(parts.config)),
-                vector_storage: parts.vector_storage,
-                payload_storage: parts.payload_storage,
-                index: parts.index,
-                text_index: parts.text_index,
-                sq8_cache: Arc::new(RwLock::new(HashMap::new())),
-                binary_cache: Arc::new(RwLock::new(HashMap::new())),
-                pq_cache: Arc::new(RwLock::new(HashMap::new())),
-                pq_quantizer: Arc::new(RwLock::new(None)),
-                pq_training_buffer: Arc::new(RwLock::new(VecDeque::new())),
-                payload_mirror: Arc::new(
-                    crate::collection::payload_mirror::PayloadMirror::default(),
-                ),
-            },
-            graph: Arc::new(crate::collection::types::GraphStore {
-                property_index: Arc::new(RwLock::new(parts.property_index)),
-                label_index: Arc::new(RwLock::new(parts.label_index)),
-                range_index: Arc::new(RwLock::new(parts.range_index)),
-                graph_range_indexes: Arc::new(RwLock::new(HashMap::new())),
-                edge_range_indexes: Arc::new(RwLock::new(HashMap::new())),
-                composite_index_manager: Arc::new(RwLock::new(CompositeIndexManager::new())),
-                query_pattern_tracker: Arc::new(RwLock::new(QueryPatternTracker::new())),
-                index_advisor: Arc::new(RwLock::new(IndexAdvisor::new())),
-                edge_store: Arc::new(parts.edge_store),
-                edge_wal_lock: Arc::new(Mutex::new(())),
-            }),
+            storage: Self::build_storage_state(
+                parts.path,
+                parts.config,
+                parts.vector_storage,
+                parts.payload_storage,
+                parts.index,
+                parts.text_index,
+            ),
+            graph: Self::build_graph_store(
+                parts.property_index,
+                parts.label_index,
+                parts.range_index,
+                parts.edge_store,
+            ),
             query: crate::collection::types::QueryState {
                 sparse_indexes: Arc::new(RwLock::new(parts.sparse_indexes)),
                 secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
@@ -133,13 +118,56 @@ impl Collection {
                 async_index_builder,
                 auto_reindex: Arc::new(RwLock::new(None)),
             },
-            runtime: crate::collection::types::RuntimeGuards {
-                guard_rails: Arc::new(GuardRails::default()),
-                runtime_limits: Arc::new(RwLock::new(
-                    crate::collection::types::RuntimeLimits::default(),
-                )),
-            },
+            runtime: crate::collection::types::RuntimeGuards::default(),
         }
+    }
+
+    /// Builds the storage/cache half of a `Collection` from its persisted
+    /// components; caches always start empty.
+    fn build_storage_state(
+        path: PathBuf,
+        config: CollectionConfig,
+        vector_storage: Arc<RwLock<MmapStorage>>,
+        payload_storage: Arc<RwLock<LogPayloadStorage>>,
+        index: Arc<HnswIndex>,
+        text_index: Arc<Bm25Index>,
+    ) -> crate::collection::types::StorageState {
+        crate::collection::types::StorageState {
+            path,
+            config: Arc::new(RwLock::new(config)),
+            vector_storage,
+            payload_storage,
+            index,
+            text_index,
+            sq8_cache: Arc::new(RwLock::new(HashMap::new())),
+            binary_cache: Arc::new(RwLock::new(HashMap::new())),
+            pq_cache: Arc::new(RwLock::new(HashMap::new())),
+            pq_quantizer: Arc::new(RwLock::new(None)),
+            pq_training_buffer: Arc::new(RwLock::new(VecDeque::new())),
+            payload_mirror: Arc::new(crate::collection::payload_mirror::PayloadMirror::default()),
+        }
+    }
+
+    /// Builds the graph half of a `Collection` from its persisted indexes;
+    /// derived/query-tracking indexes always start empty.
+    fn build_graph_store(
+        property_index: PropertyIndex,
+        label_index: LabelIndex,
+        range_index: RangeIndex,
+        edge_store: ConcurrentEdgeStore,
+    ) -> Arc<crate::collection::types::GraphStore> {
+        Arc::new(crate::collection::types::GraphStore {
+            property_index: Arc::new(RwLock::new(property_index)),
+            label_index: Arc::new(RwLock::new(label_index)),
+            range_index: Arc::new(RwLock::new(range_index)),
+            graph_range_indexes: Arc::new(RwLock::new(HashMap::new())),
+            edge_range_indexes: Arc::new(RwLock::new(HashMap::new())),
+            composite_index_manager: Arc::new(RwLock::new(CompositeIndexManager::new())),
+            query_pattern_tracker: Arc::new(RwLock::new(QueryPatternTracker::new())),
+            index_advisor: Arc::new(RwLock::new(IndexAdvisor::new())),
+            edge_store: Arc::new(edge_store),
+            edge_wal_lock: Arc::new(Mutex::new(())),
+        })
     }
 
     /// Builds the optional `DeferredIndexer` from config.
@@ -538,81 +566,11 @@ impl Collection {
         Some(idx)
     }
 
-    /// Loads all named sparse indexes from disk.
-    ///
-    /// Scans for `sparse.meta` (default name `""`) and `sparse-{name}.meta` files.
-    /// Returns a `BTreeMap` keyed by sparse vector name.
-    ///
-    /// # Concurrency safety of `read_dir`
-    ///
-    /// The `read_dir` scan below is safe from race conditions for two reasons:
-    ///
-    /// 1. **Single-threaded open**: `Collection::open` (and therefore this
-    ///    function) is always called from `Database::open`, which runs
-    ///    single-threaded during startup. No concurrent writers exist at this
-    ///    point.
-    ///
-    /// 2. **Atomic rename in compaction**: `compact_with_prefix` writes new
-    ///    data to `{prefix}.*.tmp` staging files and only promotes them to
-    ///    their final names via an atomic `rename(2)`. A `read_dir` scan
-    ///    therefore never observes a partially-written `sparse-*.meta` file;
-    ///    it either sees the complete previous version or the complete new
-    ///    version — never a torn write.
+    /// Loads default, legacy named, and manifested named sparse indexes.
     fn load_named_sparse_indexes(
         path: &std::path::Path,
     ) -> BTreeMap<String, crate::index::sparse::SparseInvertedIndex> {
-        let mut indexes = BTreeMap::new();
-
-        // Load default (unprefixed) sparse index: sparse.meta / sparse.wal
-        match crate::index::sparse::persistence::load_from_disk(path) {
-            Ok(Some(idx)) => {
-                indexes.insert(DEFAULT_SPARSE_INDEX_NAME.to_string(), idx);
-            }
-            Ok(None) => {}
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to load default sparse index from {:?}: {}. Skipping.",
-                    path,
-                    e
-                );
-            }
-        }
-
-        // Scan for named sparse indexes: sparse-{name}.meta files.
-        // The `.meta` suffix is the sentinel for a fully compacted (committed)
-        // index file; stale `.tmp` artefacts from interrupted compactions are
-        // ignored because they do not match the `strip_suffix(".meta")` filter.
-        if let Ok(entries) = std::fs::read_dir(path) {
-            for entry in entries.flatten() {
-                let file_name = entry.file_name();
-                let name_str = file_name.to_string_lossy();
-                if let Some(sparse_name) = name_str
-                    .strip_prefix("sparse-")
-                    .and_then(|s| s.strip_suffix(".meta"))
-                {
-                    let sparse_name = sparse_name.to_string();
-                    match crate::index::sparse::persistence::load_named_from_disk(
-                        path,
-                        &sparse_name,
-                    ) {
-                        Ok(Some(idx)) => {
-                            indexes.insert(sparse_name, idx);
-                        }
-                        Ok(None) => {}
-                        Err(e) => {
-                            tracing::warn!(
-                                "Failed to load sparse index '{}' from {:?}: {}. Skipping.",
-                                sparse_name,
-                                path,
-                                e
-                            );
-                        }
-                    }
-                }
-            }
-        }
-
-        indexes
+        super::sparse_lifecycle::load_named_sparse_indexes(path)
     }
 
     /// Loads a persisted index from disk, falling back to a default on missing

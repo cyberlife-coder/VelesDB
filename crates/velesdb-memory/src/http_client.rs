@@ -29,6 +29,7 @@ use crate::http_retry;
 /// server wants nothing at all, and a future provider will want something
 /// else again. Widening an `Option<String>` later would break every caller;
 /// adding a variant here does not.
+#[non_exhaustive] // authentication schemes grow; matching externally requires a wildcard arm
 pub enum Auth {
     /// Send no credential header at all.
     ///
@@ -186,6 +187,80 @@ fn call_is_retryable(err: &Call) -> bool {
         Call::Transport(inner) => http_retry::is_retryable(inner),
         Call::Body(inner) => http_retry::io_is_retryable(inner),
     }
+}
+
+/// The three timeout ceilings a remote-inference agent is built from.
+///
+/// A budget, not an agent: the *values* are role knowledge (an embedding that
+/// has not answered in a minute is not going to; a generation legitimately
+/// takes hundreds of seconds), so they stay declared next to the role. What
+/// lives here is the *shape* — which knobs exist and what they actually do —
+/// because it was declared four times over three files, each copy one edit
+/// away from drifting from the others.
+#[derive(Debug, Clone, Copy)]
+pub struct AgentBudget {
+    /// Ceiling on establishing the TCP connection. The one knob that
+    /// genuinely changes behavior over `ureq`'s defaults: its own connect
+    /// default is 30 s (`agent.rs`) — sane for the open internet, absurd for
+    /// a daemon on `localhost`, which either accepts immediately or is not
+    /// running. With replays, that idle wait would be paid three times over.
+    pub connect: std::time::Duration,
+    /// Ceiling on writing the request. Applied to the socket at connect time,
+    /// so — unlike the read deadline — it is in force independently of the
+    /// overall budget.
+    pub write: std::time::Duration,
+    /// Whole-request deadline, connect included.
+    pub overall: std::time::Duration,
+}
+
+impl AgentBudget {
+    /// Budget for a model daemon expected on `localhost`: 2 s to connect,
+    /// 10 s to write, `overall` to answer. The connect and write figures are
+    /// shared by the embedding and extraction roles on purpose — they bound
+    /// the *transport* to a local daemon, which is the same transport for
+    /// both; only `overall` is role knowledge.
+    #[must_use]
+    pub const fn local_daemon(overall: std::time::Duration) -> Self {
+        Self {
+            connect: std::time::Duration::from_secs(2),
+            write: std::time::Duration::from_secs(10),
+            overall,
+        }
+    }
+
+    /// One figure for every ceiling — for probes whose caller states a single
+    /// whole budget and means it.
+    #[must_use]
+    pub const fn uniform(budget: std::time::Duration) -> Self {
+        Self {
+            connect: budget,
+            write: budget,
+            overall: budget,
+        }
+    }
+}
+
+/// Build the agent a budget describes.
+///
+/// # Precedence, stated plainly (the authoritative copy)
+///
+/// `ureq` documents that `.timeout()` "takes precedence over `.timeout_read()`
+/// and `.timeout_write()`, but not `.timeout_connect()`", and its
+/// `DeadlineStream` rewrites the socket read deadline to the remaining global
+/// budget before every read. So the `.timeout_read()` set here is
+/// **subordinate**: declared for the day the global bound is lifted, and not
+/// to be read as a per-read ceiling today. `.timeout_connect()` and
+/// `.timeout_write()` are the two that bite alongside the global deadline.
+/// Saying otherwise in a doc — or writing a test that claimed to prove a
+/// per-read bound — would be a reassurance with nothing behind it.
+#[must_use]
+pub fn bounded_agent(budget: AgentBudget) -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout_connect(budget.connect)
+        .timeout_write(budget.write)
+        .timeout_read(budget.overall)
+        .timeout(budget.overall)
+        .build()
 }
 
 #[cfg(test)]

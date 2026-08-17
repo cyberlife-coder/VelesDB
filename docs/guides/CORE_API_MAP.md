@@ -125,4 +125,4 @@ use velesdb_core::{recall_at_k, precision_at_k, mrr, ndcg_at_k};
 
 ---
 
-Last updated: 2026-07-25 · Applies to: velesdb-core 5.0.0
+Last updated: 2026-07-25 · Applies to: velesdb-core 5.1.0

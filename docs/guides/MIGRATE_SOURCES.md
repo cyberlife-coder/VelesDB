@@ -400,4 +400,4 @@ Common embedding dimensions:
 
 ---
 
-`velesdb-migrate v4.3.0` · Last updated: 2026-08-08 · Applies to: velesdb-core 5.0.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)
+`velesdb-migrate v5.1.0` · Last updated: 2026-08-13 · Applies to: velesdb-core 5.1.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)

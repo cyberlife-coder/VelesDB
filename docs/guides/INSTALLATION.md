@@ -60,10 +60,10 @@ entry.
 
 ```bash
 # Download
-wget https://github.com/cyberlife-coder/VelesDB/releases/download/v5.0.0/velesdb-5.0.0-amd64.deb
+wget https://github.com/cyberlife-coder/VelesDB/releases/download/v5.1.0/velesdb-5.1.0-amd64.deb
 
 # Install
-sudo dpkg -i velesdb-5.0.0-amd64.deb
+sudo dpkg -i velesdb-5.1.0-amd64.deb
 
 # Verify
 velesdb --version
@@ -124,7 +124,7 @@ collection.upsert([
 ])
 
 # Search
-results = collection.search_request(velesdb.SearchOptions(vector=query_vector, top_k=10))
+results = collection.search_request(velesdb.SearchOptions(vector=query_vector, k=10))
 ```
 
 ---
@@ -136,7 +136,7 @@ results = collection.search_request(velesdb.SearchOptions(vector=query_vector, t
 ```toml
 # Cargo.toml
 [dependencies]
-velesdb-core = "5.0.0"
+velesdb-core = "5.1.0"
 ```
 
 ### As CLI Tools
@@ -160,13 +160,13 @@ GitHub Container Registry, so you don't need to build locally:
 
 ```bash
 # Pull a specific release (recommended for reproducibility)
-docker pull ghcr.io/cyberlife-coder/velesdb:5.0.0
+docker pull ghcr.io/cyberlife-coder/velesdb:5.1.0
 
 # ...or the latest stable release
 docker pull ghcr.io/cyberlife-coder/velesdb:latest
 
 docker run -d --name velesdb -p 8080:8080 -v velesdb_data:/data \
-  ghcr.io/cyberlife-coder/velesdb:5.0.0
+  ghcr.io/cyberlife-coder/velesdb:5.1.0
 ```
 
 ### Build locally

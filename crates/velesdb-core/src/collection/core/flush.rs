@@ -310,7 +310,9 @@ impl Collection {
 
     /// Compacts all named sparse indexes to disk (EPIC-062 / SPARSE-04).
     fn flush_sparse_indexes(&self) -> Result<()> {
-        let indexes = self.query.sparse_indexes.read();
+        // Exclusive across snapshot publication and WAL reset. Mutation paths
+        // hold the same guard from WAL append through in-memory application.
+        let indexes = self.query.sparse_indexes.write();
         for (name, idx) in indexes.iter() {
             crate::index::sparse::persistence::compact_named(&self.storage.path, name, idx)?;
         }

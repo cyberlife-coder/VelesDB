@@ -47,7 +47,7 @@ echo "daemon: ${before:-unreachable} → building ${target} from ${REPO}"
 # does less.
 cargo install --path "$REPO/crates/velesdb-memory" \
   --bin velesdb-memory \
-  --features http,ollama,extract \
+  --features http,embedder-http,extractor-http \
   --force
 
 if command -v launchctl >/dev/null 2>&1; then

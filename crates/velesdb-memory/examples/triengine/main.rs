@@ -15,7 +15,7 @@
 //! compound.
 //!
 //! ```text
-//! cargo run --release -p velesdb-memory --features ollama --example triengine -- --k 5
+//! cargo run --release -p velesdb-memory --features embedder-http --example triengine -- --k 5
 //! ```
 
 use std::collections::{HashMap, HashSet};

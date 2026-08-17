@@ -24,7 +24,12 @@ use velesdb_core::{Database, SearchResult};
 
 use crate::error::MemoryError;
 use crate::model::{BoundedMemoryEdges, ColumnFilter, MemoryEdge, Recollection};
+#[cfg(feature = "persistence")]
+use crate::mutation::{DirtyKey, MutationCapture, MutationObserver};
 use crate::service::Metadata;
+
+#[cfg(feature = "persistence")]
+mod migration;
 
 /// The storage primitives [`crate::service::MemoryService`] needs: write,
 /// vector search, graph edges, and by-id lookup. A backend that implements
@@ -238,6 +243,19 @@ pub trait MemoryStore {
     /// Returns [`MemoryError`] if storage access fails.
     fn unrelate(&self, edge_id: u64) -> Result<bool, MemoryError>;
 
+    /// Remove an edge while preserving its known source for mutation capture.
+    ///
+    /// The default keeps third-party backends source-compatible. Native
+    /// online migration overrides it so `OutgoingEdges(from)` is recorded
+    /// before the edge is removed.
+    ///
+    /// # Errors
+    /// Returns [`MemoryError`] if storage access fails.
+    fn unrelate_from(&self, from: u64, edge_id: u64) -> Result<bool, MemoryError> {
+        let _ = from;
+        self.unrelate(edge_id)
+    }
+
     /// The total number of live (non-expired) tracked facts, including
     /// internal entity hubs — used as a corpus-size proxy for idf weighting.
     fn count(&self) -> usize;
@@ -329,6 +347,7 @@ pub struct NativeStore {
     /// that speak to the engine directly — [`MemoryStore::list`] walks the
     /// collection cursor, which `AgentMemory` does not re-expose.
     db: Arc<Database>,
+    capture: MutationCapture,
 }
 
 #[cfg(feature = "persistence")]
@@ -340,13 +359,36 @@ impl NativeStore {
     pub fn open<P: AsRef<Path>>(path: P, dimension: usize) -> Result<Self, MemoryError> {
         let db = Arc::new(Database::open(path)?);
         let memory = AgentMemory::with_dimension(Arc::clone(&db), dimension)?;
-        Ok(Self { memory, db })
+        Ok(Self {
+            memory,
+            db,
+            capture: MutationCapture::default(),
+        })
+    }
+
+    pub(crate) fn set_mutation_observer(
+        &self,
+        observer: Option<Arc<dyn MutationObserver>>,
+    ) -> Result<(), MemoryError> {
+        self.capture.replace(observer)
+    }
+
+    pub(crate) fn mutation_capture_active(&self) -> bool {
+        self.capture.is_active()
+    }
+
+    fn unrelate_unobserved(&self, edge_id: u64) -> Result<bool, MemoryError> {
+        self.memory
+            .semantic()
+            .unrelate(edge_id)
+            .map_err(MemoryError::from)
     }
 }
 
 #[cfg(feature = "persistence")]
 impl MemoryStore for NativeStore {
     fn store(&self, id: u64, content: &str, embedding: &[f32]) -> Result<(), MemoryError> {
+        self.capture.observe(DirtyKey::Fact(id))?;
         self.memory
             .semantic()
             .store(id, content, embedding)
@@ -360,6 +402,7 @@ impl MemoryStore for NativeStore {
         embedding: &[f32],
         metadata: &Metadata,
     ) -> Result<(), MemoryError> {
+        self.capture.observe(DirtyKey::Fact(id))?;
         self.memory
             .semantic()
             .store_with_metadata(id, content, embedding, metadata)
@@ -373,6 +416,7 @@ impl MemoryStore for NativeStore {
         embedding: &[f32],
         ttl_seconds: u64,
     ) -> Result<(), MemoryError> {
+        self.capture.observe(DirtyKey::Fact(id))?;
         self.memory
             .semantic()
             .store_with_ttl(id, content, embedding, ttl_seconds)
@@ -380,6 +424,7 @@ impl MemoryStore for NativeStore {
     }
 
     fn update_metadata(&self, id: u64, metadata: &Metadata) -> Result<(), MemoryError> {
+        self.capture.observe(DirtyKey::Fact(id))?;
         self.memory
             .semantic()
             .update_metadata(id, metadata)
@@ -394,6 +439,7 @@ impl MemoryStore for NativeStore {
         metadata: &Metadata,
         ttl_seconds: u64,
     ) -> Result<(), MemoryError> {
+        self.capture.observe(DirtyKey::Fact(id))?;
         // Ordre delibere : le fait est ecrit avec sa metadata et SANS
         // expiration, donc il ne peut pas expirer entre les deux appels.
         // L'expiration est posee ensuite. C'est l'inverse de la sequence
@@ -428,6 +474,7 @@ impl MemoryStore for NativeStore {
     }
 
     fn delete(&self, id: u64) -> Result<(), MemoryError> {
+        self.capture.observe(DirtyKey::Fact(id))?;
         self.memory.semantic().delete(id).map_err(MemoryError::from)
     }
 
@@ -484,6 +531,7 @@ impl MemoryStore for NativeStore {
     }
 
     fn relate(&self, from: u64, to: u64, relation: &str) -> Result<u64, MemoryError> {
+        self.capture.observe(DirtyKey::OutgoingEdges(from))?;
         self.memory
             .semantic()
             .relate(from, to, relation, None)
@@ -521,10 +569,17 @@ impl MemoryStore for NativeStore {
     }
 
     fn unrelate(&self, edge_id: u64) -> Result<bool, MemoryError> {
-        self.memory
-            .semantic()
-            .unrelate(edge_id)
-            .map_err(MemoryError::from)
+        if self.capture.is_active() {
+            return Err(MemoryError::MigrationCapture(format!(
+                "cannot remove edge {edge_id} without its source id"
+            )));
+        }
+        self.unrelate_unobserved(edge_id)
+    }
+
+    fn unrelate_from(&self, from: u64, edge_id: u64) -> Result<bool, MemoryError> {
+        self.capture.observe(DirtyKey::OutgoingEdges(from))?;
+        self.unrelate_unobserved(edge_id)
     }
 
     fn count(&self) -> usize {

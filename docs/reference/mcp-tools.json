@@ -1972,6 +1972,79 @@
       }
     },
     {
+      "description": "Read one durable extraction job by the `request_id` returned from `remember_extracted`. Returns that `request_id`, its persisted `state` (`accepted`, `running`, `committed`, or `failed`), committed fact `ids` and their u64-safe decimal `ids_str` twins, `skipped_over_cap` after commit, and `error` after failure. While accepted/running, `ids` and `ids_str` are empty and both optional terminal fields are null.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "request_id": {
+            "description": "The `request_id` returned by `remember_extracted`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id"
+        ],
+        "type": "object"
+      },
+      "name": "extraction_status",
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "error": {
+            "description": "Terminal failure detail, present only in the `failed` state.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ids": {
+            "description": "Stored fact ids after commit; empty while pending or failed.",
+            "items": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "ids_str": {
+            "description": "Decimal-string twins of `ids` for float-lossy JSON clients.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "request_id": {
+            "description": "Stable job identifier.",
+            "type": "string"
+          },
+          "skipped_over_cap": {
+            "description": "Extracted facts dropped for exceeding the embeddable cap, present only\nafter commit.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "One of `accepted`, `running`, `committed`, or `failed`.",
+            "enum": [
+              "accepted",
+              "running",
+              "committed",
+              "failed"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "state",
+          "ids",
+          "ids_str"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "description": "Reinforce a recalled memory with an outcome: `success=true` if the fact was useful, `false` if it was noise. This durably updates the fact's learned confidence, which `recall` uses to re-rank future results — over repeated feedback, useful facts drift up and noise drifts down, so the memory improves with use without retraining the model. Returns the fact's new confidence in [0,1].",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2619,6 +2692,607 @@
       }
     },
     {
+      "description": "Durably request cancellation while the source remains authoritative. A running worker observes the request at its next bounded batch; a paused job is cancelled immediately. From quiescing onward cancellation refuses and reports the required recovery action instead of guessing a rollback.",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "migration_cancel",
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "configured": {
+            "type": "boolean"
+          },
+          "job": {
+            "anyOf": [
+              {
+                "properties": {
+                  "cancellation_requested": {
+                    "type": "boolean"
+                  },
+                  "destination": {
+                    "type": "string"
+                  },
+                  "epoch_id": {
+                    "type": "string"
+                  },
+                  "last_error": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "phase": {
+                    "type": "string"
+                  },
+                  "progress": {
+                    "properties": {
+                      "base_batches": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "base_edge_sets": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "base_facts": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "distinct_dirty_facts": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "distinct_edge_sources": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "estimated_pause_ms": {
+                        "minimum": 0,
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      },
+                      "input_watermark": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "measured_cutover_ms": {
+                        "minimum": 0,
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      },
+                      "output_watermark": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "pending_journal_bytes": {
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "base_facts",
+                      "base_edge_sets",
+                      "base_batches",
+                      "input_watermark",
+                      "output_watermark",
+                      "distinct_dirty_facts",
+                      "distinct_edge_sources",
+                      "pending_journal_bytes"
+                    ],
+                    "type": "object"
+                  },
+                  "recovery_action": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "running": {
+                    "type": "boolean"
+                  },
+                  "target_backend": {
+                    "type": "string"
+                  },
+                  "target_dimension": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "target_model": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "epoch_id",
+                  "phase",
+                  "running",
+                  "target_backend",
+                  "target_model",
+                  "target_dimension",
+                  "destination",
+                  "cancellation_requested",
+                  "progress"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "configured"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "Resume a durable prepared, capturing, base-copied, catching-up, non-converging or cutover-ready job after verifying the environment-backed target model, dimension and vector witness. Quiescing or activated jobs refuse here until crash-safe cutover recovery has restored a single authoritative generation.",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "migration_recover",
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "configured": {
+            "type": "boolean"
+          },
+          "job": {
+            "anyOf": [
+              {
+                "properties": {
+                  "cancellation_requested": {
+                    "type": "boolean"
+                  },
+                  "destination": {
+                    "type": "string"
+                  },
+                  "epoch_id": {
+                    "type": "string"
+                  },
+                  "last_error": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "phase": {
+                    "type": "string"
+                  },
+                  "progress": {
+                    "properties": {
+                      "base_batches": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "base_edge_sets": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "base_facts": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "distinct_dirty_facts": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "distinct_edge_sources": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "estimated_pause_ms": {
+                        "minimum": 0,
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      },
+                      "input_watermark": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "measured_cutover_ms": {
+                        "minimum": 0,
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      },
+                      "output_watermark": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "pending_journal_bytes": {
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "base_facts",
+                      "base_edge_sets",
+                      "base_batches",
+                      "input_watermark",
+                      "output_watermark",
+                      "distinct_dirty_facts",
+                      "distinct_edge_sources",
+                      "pending_journal_bytes"
+                    ],
+                    "type": "object"
+                  },
+                  "recovery_action": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "running": {
+                    "type": "boolean"
+                  },
+                  "target_backend": {
+                    "type": "string"
+                  },
+                  "target_dimension": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "target_model": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "epoch_id",
+                  "phase",
+                  "running",
+                  "target_backend",
+                  "target_model",
+                  "target_dimension",
+                  "destination",
+                  "cancellation_requested",
+                  "progress"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "configured"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "Start one daemon-owned online embedding migration in the background. The existing MCP transport remains the only control boundary; no listener or credential is persisted. `target_backend` selects a backend configured in this daemon's environment. `pause_budget_ms` is the maximum measured request pause. Returns immediately with durable job status; poll migration_status. Refuses a pre-existing destination or another non-terminal epoch.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "edge_cap": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "fact_batch": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "journal_max_bytes": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "observation_window": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pause_budget_ms": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "replay_batch": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "target_backend": {
+            "type": "string"
+          },
+          "verification_reserve_ms": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "target_backend",
+          "pause_budget_ms"
+        ],
+        "type": "object"
+      },
+      "name": "migration_start",
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "configured": {
+            "type": "boolean"
+          },
+          "job": {
+            "anyOf": [
+              {
+                "properties": {
+                  "cancellation_requested": {
+                    "type": "boolean"
+                  },
+                  "destination": {
+                    "type": "string"
+                  },
+                  "epoch_id": {
+                    "type": "string"
+                  },
+                  "last_error": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "phase": {
+                    "type": "string"
+                  },
+                  "progress": {
+                    "properties": {
+                      "base_batches": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "base_edge_sets": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "base_facts": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "distinct_dirty_facts": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "distinct_edge_sources": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "estimated_pause_ms": {
+                        "minimum": 0,
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      },
+                      "input_watermark": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "measured_cutover_ms": {
+                        "minimum": 0,
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      },
+                      "output_watermark": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "pending_journal_bytes": {
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "base_facts",
+                      "base_edge_sets",
+                      "base_batches",
+                      "input_watermark",
+                      "output_watermark",
+                      "distinct_dirty_facts",
+                      "distinct_edge_sources",
+                      "pending_journal_bytes"
+                    ],
+                    "type": "object"
+                  },
+                  "recovery_action": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "running": {
+                    "type": "boolean"
+                  },
+                  "target_backend": {
+                    "type": "string"
+                  },
+                  "target_dimension": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "target_model": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "epoch_id",
+                  "phase",
+                  "running",
+                  "target_backend",
+                  "target_model",
+                  "target_dimension",
+                  "destination",
+                  "cancellation_requested",
+                  "progress"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "configured"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "Read the durable online embedding migration phase, progress watermarks, convergence estimate, measured cutover, cancellation flag, last error and required recovery action. Returns immediately and performs no migration work.",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "migration_status",
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "configured": {
+            "type": "boolean"
+          },
+          "job": {
+            "anyOf": [
+              {
+                "properties": {
+                  "cancellation_requested": {
+                    "type": "boolean"
+                  },
+                  "destination": {
+                    "type": "string"
+                  },
+                  "epoch_id": {
+                    "type": "string"
+                  },
+                  "last_error": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "phase": {
+                    "type": "string"
+                  },
+                  "progress": {
+                    "properties": {
+                      "base_batches": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "base_edge_sets": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "base_facts": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "distinct_dirty_facts": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "distinct_edge_sources": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "estimated_pause_ms": {
+                        "minimum": 0,
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      },
+                      "input_watermark": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "measured_cutover_ms": {
+                        "minimum": 0,
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      },
+                      "output_watermark": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "pending_journal_bytes": {
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "base_facts",
+                      "base_edge_sets",
+                      "base_batches",
+                      "input_watermark",
+                      "output_watermark",
+                      "distinct_dirty_facts",
+                      "distinct_edge_sources",
+                      "pending_journal_bytes"
+                    ],
+                    "type": "object"
+                  },
+                  "recovery_action": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "running": {
+                    "type": "boolean"
+                  },
+                  "target_backend": {
+                    "type": "string"
+                  },
+                  "target_dimension": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "target_model": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "epoch_id",
+                  "phase",
+                  "running",
+                  "target_backend",
+                  "target_model",
+                  "target_dimension",
+                  "destination",
+                  "cancellation_requested",
+                  "progress"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "configured"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "description": "Recall memories semantically similar to a query (vector). Ranking blends similarity with each fact's learned confidence (see `feedback`), so the order is not pure similarity — the returned `score` is always the raw similarity, never the blended value. Optionally narrow to exact-match metadata via `filter` (ColumnStore), e.g. {\"project\":\"veles\",\"status\":\"resolved\"}. Ids exceed 2^53 — always relay them as strings (`id_str`); passing a JSON-number id read from a previous response will fail on float-lossy clients.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2628,8 +3302,8 @@
             "description": "Optional exact-match metadata filter (e.g.\n`{\"project\": \"veles\", \"status\": \"resolved\"}`).",
             "type": "object"
           },
-          "limit": {
-            "description": "Maximum number of memories to return (default 10).",
+          "k": {
+            "description": "Maximum number of memories to return (default 10). `k` is canonical;\nthe deprecated `limit` spelling remains a wire alias for one version.",
             "minimum": 0,
             "type": "integer"
           },
@@ -2720,13 +3394,13 @@
             "minimum": 0,
             "type": "integer"
           },
-          "limit": {
-            "description": "Maximum number of memories to return (default 10). Multi-hop reasoning\nbenefits from a larger budget (~32-64); simple and temporal recall\nsaturate early, where a larger budget only adds tokens.",
+          "k": {
+            "description": "Maximum number of memories to return (default 10). `k` is canonical;\nthe deprecated `limit` spelling remains a wire alias for one version.\nMulti-hop reasoning benefits from a larger budget (~32-64); simple and\ntemporal recall saturate early, where a larger budget only adds tokens.",
             "minimum": 0,
             "type": "integer"
           },
           "pool": {
-            "description": "Depth of the oversampled vector candidate pool fusion re-ranks before\nthe `limit` cutoff (default: `limit` scaled up, floored at 64). That\ndefault is already deep enough for a graph-reached fact to surface;\nwiden it to give a reranker more to work with, narrow it to confine\nfusion to the strongest vector hits. Capped at 1000, the same ceiling\n`limit` carries — NOT the one `hops` carries, which is 10.",
+            "description": "Depth of the oversampled vector candidate pool fusion re-ranks before\nthe `k` cutoff (default: `k` scaled up, floored at 64). That\ndefault is already deep enough for a graph-reached fact to surface;\nwiden it to give a reranker more to work with, narrow it to confine\nfusion to the strongest vector hits. Capped at 1000, the same ceiling\n`k` carries — NOT the one `hops` carries, which is 10.",
             "minimum": 0,
             "type": "integer"
           },
@@ -2851,8 +3525,8 @@
             },
             "type": "array"
           },
-          "limit": {
-            "description": "Maximum number of memories to return (default 10).",
+          "k": {
+            "description": "Maximum number of memories to return (default 10). `k` is canonical;\nthe deprecated `limit` spelling remains a wire alias for one version.",
             "minimum": 0,
             "type": "integer"
           },
@@ -3034,12 +3708,16 @@
       }
     },
     {
-      "description": "Store a passage of raw text by extracting its atomic facts and auto-building the fact↔topic graph, so `why` can later connect them with no manual links. Set `extractor` per call (`outline`, `ollama`, or `openai`), or omit it to use the daemon default from VELESDB_MEMORY_EXTRACTOR. `outline` is always available; a remote backend must be the one configured when the daemon started. Returns `ids` — the stored facts' ids, in extraction order — plus `ids_str`, their decimal-string twins: ids exceed 2^53, so always relay those on clients without u64-safe JSON number parsing. It also returns `skipped_over_cap`, and you should read it: that is how many facts the extractor DID produce out of your text and this tool did NOT store, because each was longer than the per-fact text limit. A non-zero `skipped_over_cap` means part of what you sent was extracted and then dropped — without that number, a short `ids` list is indistinguishable from a passage that simply held fewer facts.",
+      "description": "Accept a passage for durable background extraction and return before model generation. Set `extractor` per call (`outline`, `ollama`, or `openai`), or omit it to use VELESDB_MEMORY_EXTRACTOR. Supply `idempotency_key` when retrying across a client timeout: the same key and payload reuse one job, while a changed payload is rejected. The receipt returns `request_id`, its initial `state` (`accepted`, or the persisted state of a reused request), and `reused`. Poll `extraction_status(request_id)` until `committed` or `failed`; accepted/running jobs survive process restart.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
           "extractor": {
             "description": "Per-call backend (`outline`, `ollama`, or `openai`). Omit it to use the\nbackend configured when the daemon started.",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "description": "Optional retry key. Reusing it with the same payload returns the same\ndurable job; reusing it with a different payload is rejected.",
             "type": "string"
           },
           "metadata": {
@@ -3061,31 +3739,29 @@
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
-          "ids": {
-            "description": "Stable ids of the stored facts, in extraction order.",
-            "items": {
-              "minimum": 0,
-              "type": "integer"
-            },
-            "type": "array"
+          "request_id": {
+            "description": "Stable 64-hex identifier used to query the durable job.",
+            "type": "string"
           },
-          "ids_str": {
-            "description": "Decimal-string twins of `ids`, same order (issue #1468) — see\n[`RememberResult::id_str`].",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
+          "reused": {
+            "description": "Whether an identical prior request was reused instead of enqueued.",
+            "type": "boolean"
           },
-          "skipped_over_cap": {
-            "description": "Extracted facts DROPPED for exceeding the embeddable text cap\n(2048 bytes). Additive and always present: a skip the caller cannot\nsee is indistinguishable from the model extracting fewer facts, and\nthis tool exists precisely so the caller does not have to verify what\nit stored.",
-            "minimum": 0,
-            "type": "integer"
+          "state": {
+            "description": "State observed when the receipt was produced.",
+            "enum": [
+              "accepted",
+              "running",
+              "committed",
+              "failed"
+            ],
+            "type": "string"
           }
         },
         "required": [
-          "ids",
-          "ids_str",
-          "skipped_over_cap"
+          "request_id",
+          "state",
+          "reused"
         ],
         "type": "object"
       }

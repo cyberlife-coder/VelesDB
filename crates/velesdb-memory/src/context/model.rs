@@ -167,18 +167,30 @@ pub struct MemoryScope {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
     /// How many memories to consider (adapter-clamped).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::wire::lenient"
+    )]
     pub k: Option<usize>,
     /// Graph-walk depth of the fused recall (default 2). Deeper hops reach
     /// longer cause/fix chains from the vector seed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::wire::lenient"
+    )]
     pub hops: Option<usize>,
     /// Fusion weight added to graph-reached memories (default 0.15). Raise
     /// it (e.g. `0.5`–`0.8`) when pulling from curated fact chains built
     /// with `relate`: evidence that shares **no vocabulary** with the query
     /// can then out-rank lexically-noisy near-misses — the tri-engine's
     /// answer to the purely lexical relevance of caller fragments.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::wire::lenient"
+    )]
     pub graph_boost: Option<f64>,
 }
 
@@ -384,6 +396,7 @@ pub struct CompileRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_model: Option<String>,
     /// Hard token ceiling for the assembled content.
+    #[serde(deserialize_with = "crate::wire::lenient")]
     pub token_budget: u64,
     /// Which memories may be pulled in (US-002; ignored by the memoryless core).
     #[serde(default, skip_serializing_if = "Option::is_none")]

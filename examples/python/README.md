@@ -13,6 +13,15 @@ python hello_velesdb.py
 
 A self-contained ~25-line script: open a database, store five tiny documents, run two searches, print results. No NumPy import needed, no server, no embedding model. If this works, your VelesDB install is healthy.
 
+## Next step — `hello_velesdb_text.py`
+
+```bash
+pip install "velesdb[embed-sentence-transformers]"
+python hello_velesdb_text.py
+```
+
+This sibling example replaces hand-written vectors with ordinary sentences and the opt-in local `SentenceTransformerEmbedder`. Its first run downloads `all-MiniLM-L6-v2`; VelesDB does not bundle the model, and no API key or server is required.
+
 ## Prerequisites (other examples)
 
 - Python 3.9+
@@ -41,13 +50,14 @@ pip install -r requirements.txt
 
 ## Examples
 
-All examples use synthetic data (random vectors via NumPy) and create temporary
-directories that are cleaned up automatically. No external embedding models or
-API keys are needed (except for the GraphRAG examples).
+Most examples use synthetic data (random vectors via NumPy) and create temporary
+directories that are cleaned up automatically. `hello_velesdb_text.py` uses an
+opt-in local embedding model; only the GraphRAG examples require an API key.
 
 | File | Description |
 |---|---|
 | `hello_velesdb.py` | **Start here.** 25-line first-search example, no NumPy required. |
+| `hello_velesdb_text.py` | **Then use real text.** Local SentenceTransformers embeddings; no API key or server. |
 | `fusion_strategies.py` | Multi-query search with RRF, Average, Maximum, Weighted, and Relative Score fusion strategies |
 | `graph_traversal.py` | Persistent GraphCollection: edges, BFS/DFS traversal, node payloads, degree analysis |
 | `hybrid_queries.py` | Dense vector search, VelesQL queries, batch search, EXPLAIN plans, CRUD operations |
@@ -58,6 +68,9 @@ API keys are needed (except for the GraphRAG examples).
 ## Running
 
 ```bash
+# Local text embeddings (first run downloads all-MiniLM-L6-v2)
+python hello_velesdb_text.py
+
 # Self-contained examples (no external dependencies beyond velesdb + numpy)
 python fusion_strategies.py
 python graph_traversal.py

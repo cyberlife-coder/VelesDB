@@ -206,7 +206,10 @@ pub(crate) fn actionable_ollama_failure(
 ///
 /// `hint` is the caller's escape hatch (e.g. the fully-offline embedder), or
 /// `None` when it has none to offer.
-#[cfg_attr(not(any(feature = "ollama", feature = "extract")), allow(dead_code))]
+#[cfg_attr(
+    not(any(feature = "embedder-http", feature = "extractor-http")),
+    allow(dead_code)
+)]
 pub(crate) fn actionable_openai_failure(
     endpoint: &str,
     url: &str,

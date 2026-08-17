@@ -43,13 +43,13 @@ if ctx is None: start_fresh()           if not out["found"]:
 The TypeScript SDK and the LangGraph toolkit detect a version skew at call
 time and reject with an actionable error rather than handing back an object
 whose `found` is `undefined` — but that guard is a net. Upgrade the
-packages together. The LangGraph floor enforces it now
-(`velesdb>=5.0.0`); the SDK's `@wiscale/velesdb-wasm` floor moves to
-`^5.0.0` in the first SDK release AFTER npm carries the 5.0.0 wasm bundle —
-a floor CI must be able to resolve cannot name a version that does not
-exist yet, which is the same constraint the changelog recorded when it
-deferred the raise to this train. Until then the runtime guard is the
-enforcement.
+packages together. Both floors now enforce it: the LangGraph toolkit
+requires `velesdb>=5.0.0`, and the SDK requires
+`@wiscale/velesdb-wasm@^5.0.0` (raised once npm carried the 5.0.0 wasm
+bundle — a floor CI must be able to resolve cannot name a version that
+does not exist yet, which is why the raise trailed the publish by one
+step). A fresh `npm install` can no longer pair the SDK with a 4.x wasm;
+the runtime guard remains as defense in depth for already-installed trees.
 
 ---
 
@@ -67,7 +67,8 @@ intact behind the visibility change.
 ## 3. Behavior notes that are NOT breaks
 
 - **`velesdb-memory`'s default build now carries both semantic backends**
-  (`ollama` + `extract` features). Nothing changes at runtime until
+  (`embedder-http` + `extractor-http` features; `ollama` + `extract` remain
+  compatibility aliases). Nothing changes at runtime until
   `VELESDB_MEMORY_EMBEDDER` / `VELESDB_MEMORY_EXTRACTOR` opt in — the
   default embedder is still the offline `hash`. A packager who wants the
   previous minimal binary builds with

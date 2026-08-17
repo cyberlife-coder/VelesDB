@@ -1,13 +1,13 @@
 //! Tests for [`super::select_extractor`] — the seam that resolves an extraction
 //! backend name to what the caller must do about it.
 //!
-//! Deliberately NOT gated on `feature = "extract"`, and that absence is the
-//! point: `outline` and `none` must resolve in every build, including the
-//! published one that has no HTTP backend compiled in. #1734 is exactly what
+//! Deliberately NOT gated on `feature = "extractor-http"`, and that absence is
+//! the point: `outline` and `none` must resolve in every build, including a
+//! feature-free one that has no HTTP backend compiled in. #1734 is exactly what
 //! happens when the only code that can *choose* a dependency-free backend sits
 //! behind an unrelated HTTP feature — two published tools went dead by default.
-//! A test living inside `extract.rs`'s own `cfg(feature = "extract")` module
-//! would have been compiled away alongside the defect.
+//! A test living inside `extract.rs`'s own `cfg(feature = "extractor-http")`
+//! module would have been compiled away alongside the defect.
 //!
 //! Its counterpart is `embedder_selection_tests.rs`; the two roles are kept
 //! deliberately symmetric, down to the shape of the refusals.

@@ -3,7 +3,7 @@ name: velesdb-memory
 description: >
   Use durable, explainable, self-improving memory across a coding session via the
   velesdb-memory MCP server. Trigger whenever the velesdb-memory MCP tools
-  (remember/recall/recall_fused/relate/why/feedback/forget/remember_extracted/entity/memory_status)
+  (remember/recall/recall_fused/relate/why/feedback/forget/remember_extracted/extraction_status/entity/memory_status)
   are available and the
   work would benefit from remembering decisions, recalling prior context, or
   answering "why did we do X". Use it at the START of a task (recall what's known),
@@ -45,13 +45,30 @@ Server setup: [velesdb-memory README](https://github.com/cyberlife-coder/VelesDB
 
 ## The loop (run it every task)
 
+Keep the MCP root envelopes distinct — nested item fields are not substitutes
+for these roots.
+
+`recall` returns `{memories}`.
+
+`remember` returns `{id, id_str}`.
+
+`why` returns `{nodes, edges, truncated}`.
+
+`entity` returns `{found, id, id_str, name, attributes, relations,
+relations_in, relations_truncated, relations_in_truncated}`.
+
+The asynchronous read side is equally explicit: `extraction_status` returns
+`{request_id, state, ids, ids_str, skipped_over_cap, error}`. Pending states
+leave the terminal fields empty; only `committed` carries final ids.
+
 0. **Know what you are running on — once per session.** Call `memory_status`
    at the start of the first task. Read three things: `embedder.semantic`
    (`false` = the offline `hash` default — recall matches surface form, and
    the USER should be told if recall quality matters, since fixing it is one
    env var); `memory.edges` (`0` = the graph is flat, so `why` degrades to
    plain search until something wires links); `extraction.configured`
-   (whether `remember_extracted` will work at all). Do not re-poll it every
+   (whether `remember_extracted` may omit its backend; explicit `outline`
+   still works when false). Do not re-poll it every
    turn — it answers configuration questions, not content ones.
 
 1. **Recall before you act.** At the start of a task, retrieve what's already
@@ -220,9 +237,11 @@ tool for a *decision* graph, where you choose the edges deliberately. It is the
 wrong tool for facts about **people, places, organisations and things**, where
 the edges are simply what the sentence already says.
 
-`remember_extracted(text)` reads a passage and stores three things at once: the
-atomic facts, the typed edges **between named entities**, and the **attributes**
-those entities carry. Say it in plain language and the graph assembles itself:
+`remember_extracted(text)` durably accepts a passage for background work and
+returns `{request_id, state, reused}` before model generation. The job stores
+three things: atomic facts, typed edges **between named entities**, and the
+**attributes** those entities carry. Say it in plain language and the graph
+assembles itself:
 
 > "Bruno Durand est le père d'Theo Durand. Theo Durand a 15 ans.
 >  Theo Durand a une sœur, Camille Durand."
@@ -276,6 +295,16 @@ are **not** interchangeable:
 Pick `"outline"` when you control the input format, or to get a graph at all
 without running a model. Pick `"ollama"` when the input is prose nobody is
 going to reformat.
+
+**Always close the asynchronous loop.** Give one logical write a stable
+`idempotency_key`; if the client times out, retry that same key and unchanged
+payload rather than guessing whether the write happened. Keep the returned
+`request_id` and poll `extraction_status(request_id)` until `committed` or
+`failed`. Only a committed status carries final `ids` / u64-safe `ids_str` and
+`skipped_over_cap`; read the latter because non-zero means the passage was only
+partly stored. `accepted` and `running` survive daemon restarts. A `failed`
+status is terminal: surface its `error`, correct the cause, then submit a new
+logical operation with a new key.
 
 ## Concrete scenarios
 

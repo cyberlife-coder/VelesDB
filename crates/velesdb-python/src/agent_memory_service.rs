@@ -23,7 +23,7 @@ use velesdb_memory::{
     DatedContext, DynEmbedder, EmbedderSelection, EntityProfile, EntityRelation, ErrorCategory,
     Explanation, FusionOptions, Link, MemoryEdge, MemoryError, MemoryNode, MemoryService, Metadata,
     OllamaEmbedder, OllamaExtractor, OpenAiEmbedder, OutlineExtractor, Recollection,
-    RememberedExtraction, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL,
+    RememberedExtraction, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL, HASH_EMBEDDER_NOTICE,
 };
 
 use crate::collection::query::convert_params;
@@ -61,11 +61,27 @@ macro_rules! python_to_serde {
 /// memory id → `KeyError`, the rest → `RuntimeError`.
 fn to_py_err(e: MemoryError) -> PyErr {
     let msg = e.to_string();
-    match e.category() {
+    known_category_err(e.category(), msg.clone()).unwrap_or_else(|| PyRuntimeError::new_err(msg))
+}
+
+/// The explicit half of the mapping, split from the runtime fallback
+/// (`RuntimeError`, the coarsest bucket) so the two are distinguishable.
+///
+/// `ErrorCategory` is `non_exhaustive`, so a new category no longer fails this
+/// match at compile time. Unlike the Node and wasm adapters, no local test
+/// walks [`ErrorCategory::ALL`] here: this crate's Rust tests never run (PyO3
+/// linkage keeps it out of `cargo test --workspace`, see `AGENTS.md`). The
+/// guard is transitive instead — a new category turns the Node and wasm
+/// coverage tests red in the same workspace CI that gates this wheel, and
+/// whoever fixes those two must find this third mapping by the cross-reference
+/// they carry. Keep the three in sync.
+fn known_category_err(category: ErrorCategory, msg: String) -> Option<PyErr> {
+    Some(match category {
         ErrorCategory::InvalidInput => PyValueError::new_err(msg),
         ErrorCategory::NotFound => PyKeyError::new_err(msg),
         ErrorCategory::Internal => PyRuntimeError::new_err(msg),
-    }
+        _ => return None,
+    })
 }
 
 /// Parse a column-filter operator token (`eq`/`ne`/`lt`/`le`/`gt`/`ge`).
@@ -103,8 +119,8 @@ fn to_column_filters(
         .collect()
 }
 
-/// Resolve and build the requested embedder, returning it alongside the
-/// model name `memory_status` reports.
+/// Resolve and build the requested embedder, returning it alongside the model
+/// name and semantic flag `memory_status` reports.
 ///
 /// `kind` is the constructor's explicit `embedder` argument; when `None`,
 /// `VELESDB_MEMORY_EMBEDDER` takes over — the explicit argument always wins,
@@ -118,14 +134,18 @@ fn build_embedder(
     kind: Option<&str>,
     url: Option<String>,
     model: Option<String>,
-) -> PyResult<(DynEmbedder, String)> {
+) -> PyResult<(DynEmbedder, String, bool)> {
     let backend_env = std::env::var("VELESDB_MEMORY_EMBEDDER").ok();
     let selection =
         select_embedder(kind.or(backend_env.as_deref())).map_err(PyValueError::new_err)?;
     match selection {
-        EmbedderSelection::Ready(name, embedder) => Ok((embedder, name.to_owned())),
-        EmbedderSelection::NeedsRemoteConfig("ollama") => build_ollama_embedder(url, model),
-        EmbedderSelection::NeedsRemoteConfig("openai") => build_openai_embedder(),
+        EmbedderSelection::Ready(name, embedder) => Ok((embedder, name.to_owned(), name != "hash")),
+        EmbedderSelection::NeedsRemoteConfig("ollama") => {
+            build_ollama_embedder(url, model).map(|(embedder, model)| (embedder, model, true))
+        }
+        EmbedderSelection::NeedsRemoteConfig("openai") => {
+            build_openai_embedder().map(|(embedder, model)| (embedder, model, true))
+        }
         EmbedderSelection::NeedsRemoteConfig(other) => Err(PyRuntimeError::new_err(format!(
             "the embedding backend '{other}' is accepted by velesdb-memory's selector but \
              this binding has no builder for it — this is a bug in velesdb-memory, not a \
@@ -165,6 +185,18 @@ fn build_openai_embedder() -> PyResult<(DynEmbedder, String)> {
     let embedder = OpenAiEmbedder::new(url, model.clone(), auth)
         .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
     Ok((Box::new(embedder), model))
+}
+
+/// Surface the lexical fallback once per successfully opened Python instance.
+fn warn_hash_embedder_not_semantic(semantic: bool) {
+    if semantic || std::env::var_os("VELESDB_MEMORY_QUIET").is_some() {
+        return;
+    }
+    eprintln!(
+        "[velesdb] {HASH_EMBEDDER_NOTICE} For real semantic recall reopen with \
+         MemoryService(path, embedder=\"ollama\") or configure \
+         VELESDB_MEMORY_EMBEDDER=ollama. Set VELESDB_MEMORY_QUIET=1 to silence this notice."
+    );
 }
 
 /// Build the requested extractor and run it, releasing the GIL for the call.
@@ -411,6 +443,7 @@ pub struct PyMemoryService {
     /// sees `&[f32]`, so the constructor is the one place that knows.
     embedder_model: String,
     embedder_dimension: usize,
+    embedder_semantic: bool,
     /// Where the store lives, for the provenance block of `memory_status`
     /// (#1751's on-disk record).
     store_dir: std::path::PathBuf,
@@ -429,6 +462,8 @@ impl PyMemoryService {
     ///         explicit value wins over `VELESDB_MEMORY_EMBEDDER_URL`/`_MODEL`.
     ///         embedder="openai" reads its URL, model and credential from the
     ///         environment exclusively — see `crates/velesdb-memory/README.md`.
+    ///     Opening with `hash` emits one degraded-recall notice on stderr;
+    ///         `VELESDB_MEMORY_QUIET=1` suppresses it for deliberate offline use.
     #[new]
     #[pyo3(signature = (path, embedder = None, ollama_url = None, ollama_model = None))]
     fn new(
@@ -437,13 +472,16 @@ impl PyMemoryService {
         ollama_url: Option<String>,
         ollama_model: Option<String>,
     ) -> PyResult<Self> {
-        let (emb, embedder_model) = build_embedder(embedder, ollama_url, ollama_model)?;
+        let (emb, embedder_model, embedder_semantic) =
+            build_embedder(embedder, ollama_url, ollama_model)?;
         let embedder_dimension = emb.dimension();
         let svc = MemoryService::open(&path, emb).map_err(to_py_err)?;
+        warn_hash_embedder_not_semantic(embedder_semantic);
         Ok(Self {
             svc,
             embedder_model,
             embedder_dimension,
+            embedder_semantic,
             store_dir: std::path::PathBuf::from(path),
         })
     }
@@ -509,7 +547,8 @@ impl PyMemoryService {
     /// Fused vector + `ColumnStore` recall: like [`recall`](Self::recall) but the
     /// `filters` support ranges/comparisons, so numeric/temporal facets become
     /// queryable. `filters` is a list of `(field, op, value)` tuples where `op`
-    /// is one of `eq`/`ne`/`lt`/`le`/`gt`/`ge`. Returns `{id, score, content, metadata}`
+    /// is one of `eq`/`ne`/`lt`/`le`/`gt`/`ge`. Returns a list of
+    /// `{id, score, content, metadata}` items
     /// (`metadata` is the fact's stored dict, or `None` if it carried none).
     ///
     /// Returns your own stored facts ONLY: entity hubs and the context compiler's
@@ -692,7 +731,7 @@ impl PyMemoryService {
     }
 
     /// Extract atomic facts from raw `text` and store them, auto-building the
-    /// entity graph they state.
+    /// entity graph the passage describes.
     ///
     /// Args:
     ///     text: the passage to extract from.
@@ -743,7 +782,7 @@ impl PyMemoryService {
     /// JSON shape as the MCP tool's input (`{query, fragments, token_budget,
     /// project?, target_model?, memory_scope?, policy?}`); the result is the
     /// same shape as its output (`{content, sections, decisions, sources,
-    /// retrieval_handles, insights, risk}`). One documented difference from
+    /// retrieval_handles, insights, risk, warnings}`). One documented difference from
     /// the Node binding: every u64 id (`fragment_id`, `content_hash`,
     /// `memory_id`, entries of `fragment_ids`) crosses as a **native Python
     /// int** (unlimited precision), not a decimal string — both are faithful
@@ -833,7 +872,7 @@ impl PyMemoryService {
     /// carried one (US-009, PR2) — behind a `ctx://source/<hash>` handle
     /// from a [`compile_context`](Self::compile_context) result: what was
     /// externalized or partially packed is recoverable, not lost. Returns a
-    /// dict shaped `{content, media?}`, `media` present only for a source
+    /// dict shaped `{handle, content, media?}`, `media` present only for a source
     /// whose fragment carried one.
     fn retrieve_context_source(&self, py: Python<'_>, handle: &str) -> PyResult<Py<PyAny>> {
         let source: ContextSource =
@@ -965,7 +1004,7 @@ impl PyMemoryService {
             "embedder": {
                 "model": self.embedder_model,
                 "dimension": self.embedder_dimension,
-                "semantic": self.embedder_model != "hash",
+                "semantic": self.embedder_semantic,
             },
             "provenance": provenance,
             "extraction": {

@@ -28,7 +28,7 @@ Set BorderRadius 10
 # Hidden setup: build once with the real-embedder feature, point it at the local
 # model, clear the screen. The commands below are then instant and clean.
 Hide
-Type "cargo build -q --features ollama -p velesdb-memory --example wow_offline 2>/dev/null"
+Type "cargo build -q --features embedder-http -p velesdb-memory --example wow_offline 2>/dev/null"
 Enter
 Sleep 4s
 Type "export VELESDB_MEMORY_EMBEDDER=ollama"

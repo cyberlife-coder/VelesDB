@@ -20,12 +20,24 @@ pub const CODE_INTERNAL: &str = "INTERNAL";
 /// server's and the `PyO3` binding's.
 pub fn to_napi_err(e: MemoryError) -> Error {
     let msg = e.to_string();
-    let (status, code) = match e.category() {
+    let (status, code) =
+        known_category_mapping(e.category()).unwrap_or((Status::GenericFailure, CODE_INTERNAL));
+    Error::new(status, format!("[{code}] {msg}"))
+}
+
+/// The explicit half of the mapping, split from the fallback so
+/// `every_category_is_mapped_explicitly` can tell them apart: `ErrorCategory`
+/// is `non_exhaustive`, so the compiler no longer forces this match to cover a
+/// new category — the test walking [`ErrorCategory::ALL`] does instead. The
+/// runtime fallback (`INTERNAL`, the coarsest 5xx-style bucket) only ever
+/// serves a binding built against a newer `velesdb-memory` than this file.
+fn known_category_mapping(category: ErrorCategory) -> Option<(Status, &'static str)> {
+    Some(match category {
         ErrorCategory::InvalidInput => (Status::InvalidArg, CODE_INVALID_INPUT),
         ErrorCategory::NotFound => (Status::InvalidArg, CODE_NOT_FOUND),
         ErrorCategory::Internal => (Status::GenericFailure, CODE_INTERNAL),
-    };
-    Error::new(status, format!("[{code}] {msg}"))
+        _ => return None,
+    })
 }
 
 /// Build an `INVALID_INPUT` napi error for adapter-side validation failures
@@ -36,3 +48,7 @@ pub fn invalid_input(msg: impl AsRef<str>) -> Error {
         format!("[{CODE_INVALID_INPUT}] {}", msg.as_ref()),
     )
 }
+
+#[cfg(test)]
+#[path = "error_tests.rs"]
+mod error_tests;

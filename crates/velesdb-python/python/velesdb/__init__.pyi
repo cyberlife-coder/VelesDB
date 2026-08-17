@@ -170,18 +170,19 @@ class SearchOptions:
 
         opts = SearchOptions(
             vector=my_embedding,
-            top_k=20,
+            k=20,
             filter={"condition": {"type": "eq", "field": "lang", "value": "en"}},
         )
 
     Fluent builder style (each ``with_*`` method returns ``self``)::
 
-        opts = SearchOptions().with_vector(my_embedding).with_top_k(20)
+        opts = SearchOptions().with_vector(my_embedding).with_k(20)
 
     Attributes:
         vector: Dense query vector (list or numpy array).
         sparse_vector: Sparse query as dict[int, float] or scipy sparse.
-        top_k: Max results to return (default: 10).
+        k: Max results to return (default: 10).
+        top_k: Deprecated alias for ``k``.
         filter: Metadata pre-filter dict. Shape: ``{"condition": <cond>}`` where
             ``<cond>`` is ``{"type": <op>, "field": ..., ...}``. Operators:
             ``eq``/``neq``/``gt``/``gte``/``lt``/``lte`` (``field``+``value``),
@@ -200,12 +201,13 @@ class SearchOptions:
 
     Example:
         >>> cond = {"type": "eq", "field": "lang", "value": "en"}
-        >>> opts = SearchOptions(vector=my_embedding, top_k=20, filter={"condition": cond})
+        >>> opts = SearchOptions(vector=my_embedding, k=20, filter={"condition": cond})
         >>> results = collection.search_request(opts)
     """
 
     vector: Optional[Union[List[float], "np.ndarray"]]
     sparse_vector: Optional[Dict[int, float]]
+    k: int
     top_k: int
     filter: Optional[Dict[str, Any]]
     sparse_index_name: Optional[str]
@@ -219,7 +221,8 @@ class SearchOptions:
         vector: Optional[Union[List[float], "np.ndarray"]] = None,
         *,
         sparse_vector: Optional[Dict[int, float]] = None,
-        top_k: int = 10,
+        k: Optional[int] = None,
+        top_k: Optional[int] = None,
         filter: Optional[Dict[str, Any]] = None,
         sparse_index_name: Optional[str] = None,
         include_vectors: bool = False,
@@ -233,6 +236,7 @@ class SearchOptions:
     def with_sparse_vector(
         self, sparse_vector: Optional[Dict[int, float]]
     ) -> "SearchOptions": ...
+    def with_k(self, k: int) -> "SearchOptions": ...
     def with_top_k(self, top_k: int) -> "SearchOptions": ...
     def with_filter(self, filter: Optional[Dict[str, Any]]) -> "SearchOptions": ...
     def with_sparse_index_name(self, name: Optional[str]) -> "SearchOptions": ...
@@ -509,7 +513,7 @@ class Collection:
             List of dicts with ``id``, ``score``, and ``payload`` keys.
 
         Example:
-            >>> opts = SearchOptions(vector=my_embedding, top_k=20)
+            >>> opts = SearchOptions(vector=my_embedding, k=20)
             >>> results = collection.search_request(opts)
         """
         ...
@@ -2305,6 +2309,9 @@ class MemoryService:
             ollama_url: Ollama server URL (used when ``embedder="ollama"``).
             ollama_model: Ollama model name (used when ``embedder="ollama"``).
 
+        Opening with ``"hash"`` emits one degraded-recall notice on stderr.
+        Set ``VELESDB_MEMORY_QUIET=1`` to suppress it for deliberate offline use.
+
         Raises:
             ValueError: If ``embedder`` is not ``"hash"`` or ``"ollama"``.
             RuntimeError: If the store cannot be opened or the Ollama embedder
@@ -2655,7 +2662,8 @@ class MemoryService:
         Returns:
             Same shape as the MCP tool's output: ``{"content": str,
             "sections": [...], "decisions": [...], "sources": [...],
-            "retrieval_handles": [...], "insights": dict, "risk": str}``.
+            "retrieval_handles": [...], "insights": dict, "risk": str,
+            "warnings": [...]}``.
             Every u64 id (``fragment_id``, ``content_hash``, ``memory_id``,
             entries of ``fragment_ids``) is a native Python int (unlimited
             precision) — unlike the Node binding, which crosses ids as
@@ -2744,7 +2752,7 @@ class MemoryService:
             handle: A ``ctx://source/<hash>`` handle from a compiled context.
 
         Returns:
-            A dict shaped ``{"content": str, "media"?: ...}``, byte-for-byte
+            A dict shaped ``{"handle": str, "content": str, "media"?: ...}``, byte-for-byte
             the original fragment; ``media`` is present only when the
             fragment carried one.
 

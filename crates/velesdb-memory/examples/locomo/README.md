@@ -20,12 +20,12 @@ ollama pull all-minilm          # embeddings (384-dim)
 ollama pull qwen3.6:35b-mlx     # extraction + answer + judge (any local chat model works)
 
 # 2. smoke on one conversation, then the full run
-cargo run --release -p velesdb-memory --features ollama --example locomo -- --conversations 1
-cargo run --release -p velesdb-memory --features ollama --example locomo
+cargo run --release -p velesdb-memory --features embedder-http --example locomo -- --conversations 1
+cargo run --release -p velesdb-memory --features embedder-http --example locomo
 
 # explanation benchmark (LLM-free, fast): does the graph connect scattered
 # evidence that pure vector recall misses?
-cargo run --release -p velesdb-memory --features ollama --example locomo -- --explanation
+cargo run --release -p velesdb-memory --features embedder-http --example locomo -- --explanation
 ```
 
 Flags: `--conversations N`, `--max-qa N` (cap per conversation), `--k` (fact

@@ -150,9 +150,10 @@ for (const hit of await store.recall(question, 2)) {
 }
 
 console.log('why  — vector seed + graph of typed links:')
-const { nodes, edges } = await store.why(question)
+const { nodes, edges, truncated } = await store.why(question)
 for (const node of nodes) console.log(`  hop ${node.hop}  ${node.content}`)
 console.log(`  ${edges.length} typed edge(s) walked`)
+if (truncated) console.log('  explanation truncated')
 ```
 
 Expected output, exactly:
@@ -324,4 +325,4 @@ Questions: contact@wiscale.fr.
 
 ---
 
-`velesdb-node v0.12.0` (npm `@wiscale/velesdb-memory-node@0.12.0`) · Last updated: 2026-07-30 · Applies to: velesdb-core 5.0.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)
+`velesdb-node v0.13.0` (npm `@wiscale/velesdb-memory-node@0.13.0`) · Last updated: 2026-07-30 · Applies to: velesdb-core 5.1.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)

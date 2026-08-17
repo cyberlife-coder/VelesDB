@@ -35,6 +35,12 @@ use std::path::{Path, PathBuf};
 use super::execute::journal_workspace;
 use super::state::{MigrationLock, MigrationState, Phase, SwitchState};
 
+#[path = "switchover/live.rs"]
+mod live;
+pub(crate) use live::{
+    finalize_staged_live_switch, rollback_staged_live_switch, stage_live_switch,
+};
+
 /// The archive slot: a sibling of the source, named after it.
 pub const ARCHIVE_SUFFIX: &str = ".archive";
 
@@ -58,9 +64,32 @@ pub struct SwitchOutcome {
 /// validation, the archive slot is occupied, the disk is in a shape no step of
 /// this migration produces, or a rename, deletion, or journal write fails.
 pub fn switch_over(store: &Path, destination: &Path) -> Result<SwitchOutcome, crate::MemoryError> {
+    run_switch(store, destination, true, false)
+}
+
+pub(crate) fn commit_retained_switch(
+    store: &Path,
+    destination: &Path,
+) -> Result<SwitchOutcome, crate::MemoryError> {
+    run_switch(store, destination, false, true)
+}
+
+fn run_switch(
+    store: &Path,
+    destination: &Path,
+    verify_open: bool,
+    allow_completed: bool,
+) -> Result<SwitchOutcome, crate::MemoryError> {
     let workspace = journal_workspace(destination)?;
     let lock = MigrationLock::acquire(&workspace, "migrate-switch").map_err(query_error)?;
-    let result = switch_locked(store, destination, &workspace, &lock);
+    let result = switch_locked(
+        store,
+        destination,
+        &workspace,
+        &lock,
+        verify_open,
+        allow_completed,
+    );
     super::execute::reconcile(result, lock.release())
 }
 
@@ -69,8 +98,10 @@ fn switch_locked(
     destination: &Path,
     workspace: &Path,
     lock: &MigrationLock,
+    verify_open: bool,
+    allow_completed: bool,
 ) -> Result<SwitchOutcome, crate::MemoryError> {
-    let mut state = entry_state(workspace)?;
+    let mut state = entry_state(workspace, allow_completed)?;
     let slots = Slots::resolve(store, &state, destination)?;
     loop {
         match state.phase {
@@ -83,14 +114,20 @@ fn switch_locked(
             }
             Phase::DestinationValidated => step_archive(&slots, &mut state, workspace, lock)?,
             Phase::SourceArchived => step_activate(&slots, &mut state, workspace, lock)?,
-            Phase::DestinationActivated => step_commit(&slots, &mut state, workspace, lock)?,
+            Phase::DestinationActivated => {
+                step_commit(&slots, &mut state, workspace, lock, verify_open)?;
+            }
             Phase::Committed => {
-                return Ok(SwitchOutcome {
-                    activated: slots.source.clone(),
-                    archive: slots.archive.clone(),
-                });
+                return Ok(outcome(&slots));
             }
         }
+    }
+}
+
+fn outcome(slots: &Slots) -> SwitchOutcome {
+    SwitchOutcome {
+        activated: slots.source.clone(),
+        archive: slots.archive.clone(),
     }
 }
 
@@ -100,7 +137,10 @@ fn switch_locked(
 /// `Committed` reports its outcome, while a fresh invocation on a committed
 /// journal has nothing left to do — the recovery table has said since C1 that
 /// replaying a step would act on a store that is already the new one.
-fn entry_state(workspace: &Path) -> Result<MigrationState, crate::MemoryError> {
+fn entry_state(
+    workspace: &Path,
+    allow_completed: bool,
+) -> Result<MigrationState, crate::MemoryError> {
     let state = MigrationState::read(workspace)
         .map_err(query_error)?
         .ok_or_else(|| {
@@ -109,7 +149,7 @@ fn entry_state(workspace: &Path) -> Result<MigrationState, crate::MemoryError> {
                 workspace.display()
             ))
         })?;
-    if state.phase == Phase::Committed {
+    if state.phase == Phase::Committed && !allow_completed {
         return Err(query_error(
             "this migration is complete; there is nothing left to switch, and \
              replaying a step would act on a store that is already the new one",
@@ -174,6 +214,11 @@ fn step_archive(
     workspace: &Path,
     lock: &MigrationLock,
 ) -> Result<(), crate::MemoryError> {
+    archive_source(slots, state)?;
+    advance(state, Phase::SourceArchived, workspace, lock)
+}
+
+fn archive_source(slots: &Slots, state: &MigrationState) -> Result<(), crate::MemoryError> {
     match slots.on_disk() {
         // The step is pending: the slot must be free, or renaming would eat
         // whatever sits there — and the source must still BE the store the
@@ -213,7 +258,7 @@ fn step_archive(
         }
         other => return Err(unrecognised_disk(other, Phase::DestinationValidated)),
     }
-    advance(state, Phase::SourceArchived, workspace, lock)
+    Ok(())
 }
 
 /// Second rename: the destination takes the source's name.
@@ -223,6 +268,11 @@ fn step_activate(
     workspace: &Path,
     lock: &MigrationLock,
 ) -> Result<(), crate::MemoryError> {
+    activate_destination(slots, state)?;
+    advance(state, Phase::DestinationActivated, workspace, lock)
+}
+
+fn activate_destination(slots: &Slots, state: &MigrationState) -> Result<(), crate::MemoryError> {
     match slots.on_disk() {
         SwitchState {
             source: false,
@@ -257,7 +307,7 @@ fn step_activate(
         } => redo_after_manual_restore(slots, state)?,
         other => return Err(unrecognised_disk(other, Phase::SourceArchived)),
     }
-    advance(state, Phase::DestinationActivated, workspace, lock)
+    Ok(())
 }
 
 /// The second rename already happened and only the journal is behind. Two
@@ -287,9 +337,10 @@ fn step_commit(
     state: &mut MigrationState,
     workspace: &Path,
     lock: &MigrationLock,
+    verify_open: bool,
 ) -> Result<(), crate::MemoryError> {
     require_target_stamp(slots, state)?;
-    {
+    if verify_open {
         let _opens = velesdb_core::Database::open(&slots.source)?;
     }
     if slots.archive.exists() {

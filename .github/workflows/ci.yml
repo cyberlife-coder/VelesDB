@@ -98,7 +98,7 @@ jobs:
           packages: libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
           version: 1.0
 
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: "velesdb-ci"
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
@@ -139,35 +139,34 @@ jobs:
 
       # The workspace check above unifies features across crates, so a feature
       # that only compiles because a SIBLING feature happens to be on still
-      # passes it. `--features extract` alone did not compile: it pulls
-      # `dep:ureq` but not `ollama`, while extract.rs calls a helper gated on
-      # `ollama`. Each optional feature of velesdb-memory is therefore checked
-      # in isolation.
+      # passes it. Each optional feature of velesdb-memory is therefore checked
+      # in isolation. The role-named HTTP features are canonical; `ollama` and
+      # `extract` remain compatibility aliases and must keep compiling too.
       #
       # `--all-targets` is part of the contract, not an embellishment: without
       # it this step never compiles the test and example targets, and sixteen
-      # BDD suites plus six examples sat broken under `context`/`ollama`/
-      # `extract` alone with this step green (#1765) — a target that cannot
-      # fail the build is not guarded by it.
+      # BDD suites plus six examples sat broken under isolated features with
+      # this step green (#1765) — a target that cannot fail the build is not
+      # guarded by it.
       - name: Check each velesdb-memory feature in isolation
         run: |
           set -eu
-          for feat in mcp http context persistence ollama extract; do
+          for feat in mcp http context persistence embedder-http extractor-http ollama extract; do
             echo "::group::--features $feat"
             cargo check -p velesdb-memory --no-default-features --features "$feat" --all-targets
             echo "::endgroup::"
           done
 
-      # `extract` was CHECKED above but never TESTED: no `cargo test` in this
-      # workflow passes the feature, so its nineteen unit tests — the graph
-      # prompt contract and the reply parser among them — have never run on
-      # CI. A test that cannot fail the build is documentation, not a gate.
-      #
-      # Paired with `ollama` because `extract` alone does not compile (see the
-      # comment above). The tests reached this way are pure parsing and
-      # prompt-building: none opens a socket, so no service is needed.
-      - name: Test the velesdb-memory extract feature
-        run: cargo test -p velesdb-memory --features extract,ollama,persistence
+      # The extraction backend's unit tests are pure parsing and prompt
+      # building: none opens a socket. Run them under the canonical role name
+      # and its compatibility alias so neither path can silently stop enabling
+      # the implementation it promises.
+      - name: Test the velesdb-memory extraction features
+        run: |
+          cargo test -p velesdb-memory --lib --no-default-features --features extractor-http,persistence
+          cargo test -p velesdb-memory --lib --no-default-features --features extract,persistence
+          cargo test -p velesdb-memory --test default_build_carries_semantic_backends \
+            --no-default-features --features ollama,extract
 
       # Same hole as the step above, left open for the whole HTTP transport:
       # six `[[test]]` targets declare `required-features = ["http"]` and no
@@ -404,7 +403,7 @@ jobs:
           packages: libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
           version: 1.0
 
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: "velesdb-ci"
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
@@ -505,12 +504,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
       - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
         with:
           toolchain: ${{ env.RUST_VERSION }}
           targets: wasm32-unknown-unknown
 
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: "velesdb-ci-wasm"
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
@@ -538,12 +541,12 @@ jobs:
       # to empty binaries under the native test job and are invisible to the
       # cargo check above — without this step they never run in CI at all.
       - name: Install wasm-pack
-        uses: taiki-e/install-action@6a1bd70eaac3c8bdf093356838d7ee09fda951cf # v2.85.5
+        uses: taiki-e/install-action@82cd3e7658a6f96c86c0234aeeda1748937cb0a1 # v2.85.13
         with:
           tool: wasm-pack
 
       - name: Run wasm-bindgen tests (Node)
-        run: wasm-pack test --node crates/velesdb-wasm
+        run: python3 scripts/run-wasm-bindgen-tests.py --root .
 
   # ===========================================================================
   # OpenAPI Drift Check
@@ -561,7 +564,7 @@ jobs:
         with:
           toolchain: ${{ env.RUST_VERSION }}
 
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: "velesdb-ci-openapi"
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
@@ -697,7 +700,7 @@ jobs:
           packages: libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
           version: 1.0
 
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: "velesdb-ci"
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
@@ -846,6 +849,10 @@ jobs:
         with:
           node-version: '20'
 
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
       - name: Install stable Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -877,11 +884,7 @@ jobs:
       # including new ones like skills-sync.spec.mjs — is picked up automatically;
       # see package.json's "test" script for the single source of truth on the glob.
       - name: Build napi addon + run Node tests
-        working-directory: crates/velesdb-node
-        run: |
-          npm install --no-audit --no-fund
-          npx napi build --platform
-          npm test
+        run: python3 scripts/run-node-binding-tests.py --root .
 
       # Mirror the release assembly before any tag exists: test the root
       # tarball plus its native package from a clean npm install, never the
@@ -995,13 +998,18 @@ jobs:
         with:
           node-version: '20'
 
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: needs.node-windows-changed.outputs.relevant == 'true'
+        with:
+          python-version: '3.12'
+
       - name: Install stable Rust toolchain
         if: needs.node-windows-changed.outputs.relevant == 'true'
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ env.RUST_VERSION }}
 
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: needs.node-windows-changed.outputs.relevant == 'true'
         with:
           shared-key: "velesdb-ci-node-windows"
@@ -1011,12 +1019,7 @@ jobs:
       # file (not `npm test`) — see the job-level comment for why (#1509).
       - name: Build napi addon + run Node tests (Windows)
         if: needs.node-windows-changed.outputs.relevant == 'true'
-        working-directory: crates/velesdb-node
-        shell: bash
-        run: |
-          npm install --no-audit --no-fund
-          npx napi build --platform
-          node --test __test__/index.spec.mjs
+        run: python scripts/run-node-binding-tests-windows.py --root .
 
       - name: Skipped — crates/velesdb-node/** unchanged
         if: needs.node-windows-changed.outputs.relevant != 'true'
@@ -1049,7 +1052,7 @@ jobs:
           packages: libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
           version: 1.0
 
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: "velesdb-ci"
 
@@ -1057,7 +1060,7 @@ jobs:
       # `cargo install` from source — faster and avoids the compile/network
       # flakes that lost the runner mid-job on earlier release runs.
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@6a1bd70eaac3c8bdf093356838d7ee09fda951cf # v2.85.5
+        uses: taiki-e/install-action@82cd3e7658a6f96c86c0234aeeda1748937cb0a1 # v2.85.13
         with:
           tool: cargo-llvm-cov
 
@@ -1119,7 +1122,7 @@ jobs:
           cache: 'npm'
           cache-dependency-path: sdks/typescript/package-lock.json
 
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: "velesdb-ci"
 
@@ -1171,7 +1174,7 @@ jobs:
           packages: libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
           version: 1.0
 
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: "velesdb-ci"
 
@@ -1217,7 +1220,7 @@ jobs:
           packages: libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
           version: 1.0
 
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: "velesdb-ci"
 
@@ -1366,7 +1369,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: needs.perf-path-changed.outputs.relevant == 'true'
-      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # stable
         if: needs.perf-path-changed.outputs.relevant == 'true'
         with:
           toolchain: "1.90"
@@ -1374,7 +1377,7 @@ jobs:
         if: needs.perf-path-changed.outputs.relevant == 'true'
         with:
           python-version: "3.11"
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: needs.perf-path-changed.outputs.relevant == 'true'
         with:
           shared-key: "velesdb-perf-gate"

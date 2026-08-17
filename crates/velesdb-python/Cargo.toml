@@ -24,11 +24,11 @@ crate-type = ["cdylib", "rlib"]
 velesdb-core = { workspace = true }
 # The high-level memory wedge (MemoryService: remember/recall/relate/forget/why
 # + remember_extracted). `default-features = false` drops the MCP server stack
-# (rmcp/tokio-server); `ollama`+`extract` enable real embeddings and extraction;
-# `context` enables the deterministic context compiler (EPIC-P-071/US-001) —
-# zero new dependencies (`context = []` in velesdb-memory), same feature set
-# velesdb-node already builds with.
-velesdb-memory = { path = "../velesdb-memory", default-features = false, features = ["persistence", "ollama", "extract", "context"] }
+# (rmcp/tokio-server); `embedder-http`+`extractor-http` enable real embeddings
+# and extraction; `context` enables the deterministic context compiler
+# (EPIC-P-071/US-001) — zero new dependencies (`context = []` in
+# velesdb-memory), same feature set velesdb-node already builds with.
+velesdb-memory = { path = "../velesdb-memory", default-features = false, features = ["persistence", "embedder-http", "extractor-http", "context"] }
 # `extension-module` is deliberately NOT hard-coded here: it tells PyO3 to leave
 # libpython unresolved, which is right for the wheel but makes any test binary
 # unlinkable. It moves to the `extension-module` feature below, which `default`

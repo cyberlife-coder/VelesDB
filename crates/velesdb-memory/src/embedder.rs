@@ -6,12 +6,13 @@
 //! [`Embedder`] trait with a default on-device model and a deterministic,
 //! network-free fallback for tests and air-gapped reproducibility.
 
-#[cfg(feature = "ollama")]
+#[cfg(feature = "embedder-http")]
 use serde::Deserialize;
 
 /// Failure produced by an [`Embedder`] backend (e.g. a network-backed embedder
 /// that cannot reach its model). The in-memory [`HashEmbedder`] never fails.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive] // error enum, grows by nature; matching externally requires a wildcard arm
 pub enum EmbedError {
     /// The embedding backend (network, subprocess, …) returned an error.
     #[error("embedding backend error: {0}")]
@@ -32,6 +33,12 @@ pub trait Embedder {
     /// Returns [`EmbedError`] if the backend cannot produce an embedding.
     fn embed(&self, text: &str) -> Result<Vec<f32>, EmbedError>;
 }
+
+/// Transport-neutral part of the startup notice adapters emit for `hash`.
+/// The library itself never writes to stderr; each owning binary or language
+/// binding adds the configuration syntax its caller can actually use.
+pub const HASH_EMBEDDER_NOTICE: &str = "Using the offline 'hash' embedder: deterministic and \
+    fully offline, but NOT semantic — recall matches surface form, not meaning.";
 
 /// Deterministic, network-free embedder (token-hashing into L2-normalized
 /// buckets). Not semantically strong — its purpose is reproducible tests and
@@ -97,6 +104,11 @@ impl<T: Embedder + ?Sized> Embedder for Box<T> {
 /// `Disabled`. "No extraction" is a real choice — the graph simply does not
 /// build — while a memory store cannot exist without an embedder. Every
 /// accepted name therefore resolves to something usable.
+/// **Deliberately exhaustive** (no `non_exhaustive`): every variant demands
+/// caller wiring — construct a backend, ask for configuration, run nothing —
+/// and a wildcard arm would silently ignore a new capability instead of
+/// failing to compile where it must be handled. Adding a variant is therefore
+/// a breaking change, made on purpose, in a minor bump while the crate is 0.x.
 pub enum EmbedderSelection {
     /// Ready to use as-is: needs no configuration, no network, and no optional
     /// dependency.
@@ -177,22 +189,22 @@ pub fn select_embedder(backend: Option<&str>) -> Result<EmbedderSelection, Strin
 
 // --- Optional real-recall backend: a local Ollama embeddings endpoint --------
 //
-// Enabled with `--features ollama`. The default build omits this backend (and
-// its HTTP dependency) so the shipped binary stays tiny, zero-dependency, and
-// fully offline. This backend keeps the binary small too: it calls a model the
-// user already runs locally, so the memory still never leaves the machine.
+// Enabled with `--features embedder-http`. A minimal `--no-default-features`
+// build omits this backend and its HTTP dependency. This backend keeps the
+// binary small: it calls a model the user already runs locally, so the memory
+// still never leaves the machine.
 
 /// Default Ollama base URL.
-#[cfg(feature = "ollama")]
+#[cfg(feature = "embedder-http")]
 pub const DEFAULT_OLLAMA_URL: &str = "http://localhost:11434";
 
 /// Default Ollama embedding model (384-dim; `ollama pull all-minilm`).
-#[cfg(feature = "ollama")]
+#[cfg(feature = "embedder-http")]
 pub const DEFAULT_OLLAMA_MODEL: &str = "all-minilm";
 
 /// Embeds text through a local Ollama `/api/embeddings` endpoint — real
 /// semantic recall while the model stays on the user's own machine.
-#[cfg(feature = "ollama")]
+#[cfg(feature = "embedder-http")]
 #[derive(Debug, Clone)]
 pub struct OllamaEmbedder {
     base_url: String,
@@ -201,7 +213,7 @@ pub struct OllamaEmbedder {
     agent: ureq::Agent,
 }
 
-#[cfg(feature = "ollama")]
+#[cfg(feature = "embedder-http")]
 impl OllamaEmbedder {
     /// Connect to Ollama at `base_url` using `model`, probing the embedding
     /// dimension once so it adapts to whatever model is configured.
@@ -226,7 +238,7 @@ impl OllamaEmbedder {
     }
 }
 
-#[cfg(feature = "ollama")]
+#[cfg(feature = "embedder-http")]
 impl Embedder for OllamaEmbedder {
     fn dimension(&self) -> usize {
         self.dimension
@@ -244,10 +256,9 @@ impl Embedder for OllamaEmbedder {
 /// its own protocol, both over the same transport. Reaching a new server is a
 /// different base URL, never a new backend name.
 ///
-/// Gated on `feature = "ollama"` because that feature carries this crate's
-/// HTTP dependency for the embedding role. The name predates the protocol
-/// split and now under-describes what it enables.
-#[cfg(feature = "ollama")]
+/// Gated on `feature = "embedder-http"`, which carries this crate's HTTP
+/// dependency for the embedding role.
+#[cfg(feature = "embedder-http")]
 #[derive(Debug)]
 pub struct OpenAiEmbedder {
     client: crate::http_client::HttpJsonClient,
@@ -255,7 +266,7 @@ pub struct OpenAiEmbedder {
     dimension: usize,
 }
 
-#[cfg(feature = "ollama")]
+#[cfg(feature = "embedder-http")]
 impl OpenAiEmbedder {
     /// Connect to the server at `base_url` using `model`, probing the
     /// embedding dimension once so it adapts to whatever model is configured.
@@ -317,7 +328,7 @@ impl OpenAiEmbedder {
     }
 }
 
-#[cfg(feature = "ollama")]
+#[cfg(feature = "embedder-http")]
 impl Embedder for OpenAiEmbedder {
     fn dimension(&self) -> usize {
         self.dimension
@@ -341,7 +352,7 @@ impl Embedder for OpenAiEmbedder {
 /// Override with `VELESDB_MEMORY_OLLAMA_KEEP_ALIVE` (any value Ollama accepts,
 /// e.g. `30m`, or `0` to unload immediately) when pinning the weights costs
 /// more RAM than the latency is worth.
-#[cfg(any(feature = "ollama", feature = "extract"))]
+#[cfg(any(feature = "embedder-http", feature = "extractor-http"))]
 pub(crate) const DEFAULT_KEEP_ALIVE: i64 = -1;
 
 /// The configured keep-alive as Ollama expects it on the wire.
@@ -355,9 +366,9 @@ pub(crate) const DEFAULT_KEEP_ALIVE: i64 = -1;
 ///
 /// So: parse as a number when it is one, pass through as a string otherwise.
 // Also reachable from `extract.rs`, whose Ollama client sends the same
-// field. Gating this on `ollama` alone broke `--features extract` on its
-// own: `extract` pulls `dep:ureq`, not `ollama`.
-#[cfg(any(feature = "ollama", feature = "extract"))]
+// field. Gating this on the embedding role alone broke the extraction role in
+// isolation; both role features pull `dep:ureq`.
+#[cfg(any(feature = "embedder-http", feature = "extractor-http"))]
 pub(crate) fn keep_alive() -> serde_json::Value {
     let raw = std::env::var("VELESDB_MEMORY_OLLAMA_KEEP_ALIVE")
         .ok()
@@ -372,7 +383,7 @@ pub(crate) fn keep_alive() -> serde_json::Value {
     }
 }
 
-#[cfg(feature = "ollama")]
+#[cfg(feature = "embedder-http")]
 fn build_request_body(model: &str, text: &str) -> String {
     serde_json::json!({
         "model": model,
@@ -383,14 +394,14 @@ fn build_request_body(model: &str, text: &str) -> String {
 }
 
 /// Ollama `/api/embeddings` response shape.
-#[cfg(feature = "ollama")]
+#[cfg(feature = "embedder-http")]
 #[derive(Deserialize)]
 struct EmbeddingResponse {
     embedding: Vec<f32>,
 }
 
 /// Parse an embeddings response body into a vector.
-#[cfg(feature = "ollama")]
+#[cfg(feature = "embedder-http")]
 fn parse_embedding_response(body: &str) -> Result<Vec<f32>, EmbedError> {
     let parsed: EmbeddingResponse = serde_json::from_str(body)
         .map_err(|err| EmbedError::Backend(format!("invalid embeddings response: {err}")))?;
@@ -412,53 +423,22 @@ fn parse_embedding_response(body: &str) -> Result<Vec<f32>, EmbedError> {
 /// Deliberately far below `extract.rs`'s 300 s: that ceiling covers text
 /// GENERATION, while an embedding that has not returned in a minute is not
 /// going to.
-#[cfg(feature = "ollama")]
+#[cfg(feature = "embedder-http")]
 const EMBED_TIMEOUT_SECS: u64 = 60;
 
-/// Ceiling on establishing the TCP connection.
-///
-/// The one setting here that genuinely changes behavior. `ureq` already applies
-/// a connect timeout, but its default is 30 s (`agent.rs`) — a sane figure for
-/// the open internet and an absurd one for a daemon on `localhost`, which either
-/// accepts immediately or is not running. Since retries multiply this wait, 30 s
-/// would turn a dead Ollama into a 90 s stall.
-#[cfg(feature = "ollama")]
-const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
-
-/// Ceiling on writing the request. Applied to the socket at connect time, so —
-/// unlike the read timeout below — it is in force independently of the global
-/// deadline.
-#[cfg(feature = "ollama")]
-const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-
-/// Agent used for every embeddings request, with [`EMBED_TIMEOUT_SECS`]
-/// applied. Same pattern as [`crate::extract::OllamaExtractor`], which has
-/// bounded its own Ollama calls since it was written.
-///
-/// # Precedence, stated plainly
-///
-/// `ureq` documents that `.timeout()` "takes precedence over `.timeout_read()`
-/// and `.timeout_write()`, but not `.timeout_connect()`", and its
-/// `DeadlineStream` rewrites the socket read deadline to the remaining global
-/// budget before every read. So `.timeout_read()` below is **subordinate**: it
-/// is declared for the day the global bound is lifted, and must not be read as
-/// a per-read ceiling today. `.timeout_connect()` and `.timeout_write()` are the
-/// two that bite. Saying otherwise in a doc — or writing a test that claimed to
-/// prove a per-read bound — would be a reassurance with nothing behind it.
-#[cfg(feature = "ollama")]
+/// Agent for every embeddings request: the shared local-daemon transport
+/// budget with [`EMBED_TIMEOUT_SECS`] as the whole-request deadline. The
+/// timeout-precedence contract lives on
+/// [`crate::http_client::bounded_agent`], its single authoritative copy.
+#[cfg(feature = "embedder-http")]
 fn embed_agent(timeout: std::time::Duration) -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .timeout_connect(CONNECT_TIMEOUT)
-        .timeout_write(WRITE_TIMEOUT)
-        .timeout_read(timeout)
-        .timeout(timeout)
-        .build()
+    crate::http_client::bounded_agent(crate::http_client::AgentBudget::local_daemon(timeout))
 }
 
 /// How one embeddings attempt failed, kept apart just long enough to classify
 /// it: transport and body failures may be replayed, a payload the server
 /// answered in full is the server's final word.
-#[cfg(feature = "ollama")]
+#[cfg(feature = "embedder-http")]
 enum OllamaCall {
     /// The request never completed (reset, refusal, timeout, HTTP error status).
     /// Boxed: `ureq::Error::Status` carries a whole `Response`.
@@ -470,7 +450,7 @@ enum OllamaCall {
 }
 
 /// Replay policy for one embeddings attempt.
-#[cfg(feature = "ollama")]
+#[cfg(feature = "embedder-http")]
 fn call_is_retryable(err: &OllamaCall) -> bool {
     match err {
         OllamaCall::Transport(inner) => crate::http_retry::is_retryable(inner),
@@ -480,7 +460,7 @@ fn call_is_retryable(err: &OllamaCall) -> bool {
 }
 
 /// The knobs that actually configure this backend, named in its failures.
-#[cfg(feature = "ollama")]
+#[cfg(feature = "embedder-http")]
 const EMBED_LEVERS: crate::http_retry::FailureLevers<'static> = crate::http_retry::FailureLevers {
     url_var: "VELESDB_MEMORY_OLLAMA_URL",
     model_var: "VELESDB_MEMORY_OLLAMA_MODEL",
@@ -501,7 +481,7 @@ const EMBED_LEVERS: crate::http_retry::FailureLevers<'static> = crate::http_retr
 /// The whole attempt — POST *and* body read — sits inside the closure, so a
 /// truncated response is classified and replayed like any other transport
 /// failure instead of surfacing later as an unexplained parse error.
-#[cfg(feature = "ollama")]
+#[cfg(feature = "embedder-http")]
 fn request_embedding(
     agent: &ureq::Agent,
     base_url: &str,
@@ -550,7 +530,7 @@ fn request_embedding(
     }
 }
 
-#[cfg(all(test, feature = "ollama"))]
+#[cfg(all(test, feature = "embedder-http"))]
 #[path = "embedder_tests.rs"]
 mod ollama_tests;
 

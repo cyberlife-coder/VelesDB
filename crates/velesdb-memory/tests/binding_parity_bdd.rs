@@ -93,17 +93,19 @@
 //! binding and read the real result. What this file adds is the thing none
 //! of those can do: notice that the SERVER grew a field nobody relayed.
 //!
-//! ### `SHAPE_DIVERGENCES` holds two different things, on purpose
+//! ### `SHAPE_DIVERGENCES` holds explicit differences, on purpose
 //!
 //! Most entries are deliberate unwraps (`recall` → a bare array, `forget` →
-//! a bare bool, an id twin collapsing to one form). A few carried
+//! a bare bool, an id twin collapsing to one form). #1839 adds a deliberate
+//! transport split: MCP extraction is a durable background receipt, while the
+//! in-process bindings keep the synchronous domain call. A few entries carried
 //! [`KNOWN_GAP`]: fields a binding really does lose. Writing a real gap down
 //! is not blessing it — it is the only way the guard can be green on the 19
 //! other tools while the gap stays visible in one place instead of being
 //! rediscovered by a user. An entry is deleted by the fix, never renewed.
 //!
-//! As of issues #1690/#1691/#1692 the second kind is EMPTY: every entry left
-//! is a deliberate unwrap. That is the state this list is meant to reach, so
+//! As of issues #1690/#1691/#1692 the known-gap kind is EMPTY: every entry left
+//! is a deliberate unwrap or contract split. That is the state this list is meant to reach, so
 //! [`KNOWN_GAP`] now sits unused on purpose — see its own doc comment. Note
 //! what it does NOT mean: nothing here caps how many gaps may be declared,
 //! and adding a seventh would have been exactly as green as fixing six. The
@@ -162,7 +164,89 @@ struct Exemption {
     reason: &'static str,
 }
 
+const DAEMON_MIGRATION_ONLY: &str = "online migration owns the native daemon's live generation, process lock, durable control directory and environment-backed target factory; an in-process language binding owns none of that control plane, so exposing this MCP operation there would create a second unsafe migration authority";
+
 const EXEMPTIONS: &[Exemption] = &[
+    Exemption {
+        binding: "velesdb-node",
+        tool: "migration_start",
+        reason: DAEMON_MIGRATION_ONLY,
+    },
+    Exemption {
+        binding: "velesdb-node",
+        tool: "migration_status",
+        reason: DAEMON_MIGRATION_ONLY,
+    },
+    Exemption {
+        binding: "velesdb-node",
+        tool: "migration_cancel",
+        reason: DAEMON_MIGRATION_ONLY,
+    },
+    Exemption {
+        binding: "velesdb-node",
+        tool: "migration_recover",
+        reason: DAEMON_MIGRATION_ONLY,
+    },
+    Exemption {
+        binding: "velesdb-python",
+        tool: "migration_start",
+        reason: DAEMON_MIGRATION_ONLY,
+    },
+    Exemption {
+        binding: "velesdb-python",
+        tool: "migration_status",
+        reason: DAEMON_MIGRATION_ONLY,
+    },
+    Exemption {
+        binding: "velesdb-python",
+        tool: "migration_cancel",
+        reason: DAEMON_MIGRATION_ONLY,
+    },
+    Exemption {
+        binding: "velesdb-python",
+        tool: "migration_recover",
+        reason: DAEMON_MIGRATION_ONLY,
+    },
+    Exemption {
+        binding: "velesdb-wasm",
+        tool: "migration_start",
+        reason: DAEMON_MIGRATION_ONLY,
+    },
+    Exemption {
+        binding: "velesdb-wasm",
+        tool: "migration_status",
+        reason: DAEMON_MIGRATION_ONLY,
+    },
+    Exemption {
+        binding: "velesdb-wasm",
+        tool: "migration_cancel",
+        reason: DAEMON_MIGRATION_ONLY,
+    },
+    Exemption {
+        binding: "velesdb-wasm",
+        tool: "migration_recover",
+        reason: DAEMON_MIGRATION_ONLY,
+    },
+    Exemption {
+        binding: "velesdb-node",
+        tool: "extraction_status",
+        reason: "this status surface exists for the MCP transport's durable background receipt; \
+                 the Node binding keeps MemoryService::remember_extracted synchronous and returns \
+                 its final ids directly, so it has no background request_id to query",
+    },
+    Exemption {
+        binding: "velesdb-python",
+        tool: "extraction_status",
+        reason: "this status surface exists for the MCP transport's durable background receipt; \
+                 the Python binding keeps MemoryService::remember_extracted synchronous and \
+                 returns its final ids directly, so it has no background request_id to query",
+    },
+    Exemption {
+        binding: "velesdb-wasm",
+        tool: "extraction_status",
+        reason: "WASM rememberExtracted is synchronous and in-memory, while durable extraction \
+                 receipts require the native persistence directory that wasm32 deliberately omits",
+    },
     Exemption {
         binding: "velesdb-wasm",
         tool: "feedback",
@@ -223,6 +307,14 @@ const DATED_SPLIT: &str = "deliberate split, not a drop: the dated half of fused
      SECOND binding method (`recallFusedDated`), which returns the timeline and the clock. \
      This method is the undated one, and returns the bare memories array";
 
+/// MCP accepts a durable background job; in-process bindings finish inline.
+const MCP_ASYNC_SPLIT: &str = "deliberate transport split, not an omitted implementation: the \
+     MCP tool returns a durable background receipt because a model call can outlive its client \
+     transport, while this in-process binding calls the transport-neutral MemoryService \
+     synchronously and returns the committed ids plus skipped count directly. It therefore has \
+     no MCP request_id/state/reused receipt; extraction_status is separately exempted for the \
+     same reason (#1839)";
+
 /// A field the server publishes and this binding really does lose. NOT a
 /// deliberate unwrap — an entry here is an admission, kept honest by
 /// [`no_shape_divergence_is_stale`], and it must be deleted by the fix, not
@@ -231,7 +323,7 @@ const DATED_SPLIT: &str = "deliberate split, not a drop: the dated half of fused
 /// **Currently unused, and that is the point.** The six entries that carried
 /// it were deleted by their fixes (issues #1690, #1691, #1692): every field
 /// the server publishes now reaches every binding, or is a declared,
-/// motivated unwrap. The constant stays so the next honest admission has this
+/// motivated unwrap/contract split. The constant stays so the next honest admission has this
 /// exact wording to reach for — deleting it would leave the next author to
 /// invent a looser reason of their own, which is how a gap stops being
 /// visible.
@@ -308,8 +400,20 @@ const SHAPE_DIVERGENCES: &[ShapeDivergence] = &[
     ShapeDivergence {
         binding: "velesdb-node",
         tool: "remember_extracted",
-        field: "ids_str",
-        reason: ID_TWIN,
+        field: "request_id",
+        reason: MCP_ASYNC_SPLIT,
+    },
+    ShapeDivergence {
+        binding: "velesdb-node",
+        tool: "remember_extracted",
+        field: "state",
+        reason: MCP_ASYNC_SPLIT,
+    },
+    ShapeDivergence {
+        binding: "velesdb-node",
+        tool: "remember_extracted",
+        field: "reused",
+        reason: MCP_ASYNC_SPLIT,
     },
     ShapeDivergence {
         binding: "velesdb-node",
@@ -368,8 +472,20 @@ const SHAPE_DIVERGENCES: &[ShapeDivergence] = &[
     ShapeDivergence {
         binding: "velesdb-python",
         tool: "remember_extracted",
-        field: "ids_str",
-        reason: ID_TWIN,
+        field: "request_id",
+        reason: MCP_ASYNC_SPLIT,
+    },
+    ShapeDivergence {
+        binding: "velesdb-python",
+        tool: "remember_extracted",
+        field: "state",
+        reason: MCP_ASYNC_SPLIT,
+    },
+    ShapeDivergence {
+        binding: "velesdb-python",
+        tool: "remember_extracted",
+        field: "reused",
+        reason: MCP_ASYNC_SPLIT,
     },
     ShapeDivergence {
         binding: "velesdb-python",
@@ -386,8 +502,20 @@ const SHAPE_DIVERGENCES: &[ShapeDivergence] = &[
     ShapeDivergence {
         binding: "velesdb-wasm",
         tool: "remember_extracted",
-        field: "ids_str",
-        reason: ID_TWIN,
+        field: "request_id",
+        reason: MCP_ASYNC_SPLIT,
+    },
+    ShapeDivergence {
+        binding: "velesdb-wasm",
+        tool: "remember_extracted",
+        field: "state",
+        reason: MCP_ASYNC_SPLIT,
+    },
+    ShapeDivergence {
+        binding: "velesdb-wasm",
+        tool: "remember_extracted",
+        field: "reused",
+        reason: MCP_ASYNC_SPLIT,
     },
     ShapeDivergence {
         binding: "velesdb-wasm",
@@ -458,8 +586,20 @@ const SHAPE_DIVERGENCES: &[ShapeDivergence] = &[
     ShapeDivergence {
         binding: TYPESCRIPT_SDK,
         tool: "remember_extracted",
-        field: "ids_str",
-        reason: ID_TWIN,
+        field: "request_id",
+        reason: MCP_ASYNC_SPLIT,
+    },
+    ShapeDivergence {
+        binding: TYPESCRIPT_SDK,
+        tool: "remember_extracted",
+        field: "state",
+        reason: MCP_ASYNC_SPLIT,
+    },
+    ShapeDivergence {
+        binding: TYPESCRIPT_SDK,
+        tool: "remember_extracted",
+        field: "reused",
+        reason: MCP_ASYNC_SPLIT,
     },
 ];
 
@@ -1068,10 +1208,73 @@ fn output_root_fields(tool: &rmcp::model::Tool) -> BTreeSet<String> {
         .unwrap_or_default()
 }
 
+/// Root input property names from the live MCP schema.
+fn input_root_fields(tool: &rmcp::model::Tool) -> BTreeSet<String> {
+    tool.input_schema
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+        .map(|props| props.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// The parameter list of `method`'s Rust declaration inside its source region.
+fn input_window(region: &str, method: &str) -> String {
+    let Some(header) = region
+        .lines()
+        .position(|line| method_name(line.trim()).as_deref() == Some(method))
+    else {
+        return String::new();
+    };
+    let declaration = region.lines().skip(header).collect::<Vec<_>>().join("\n");
+    let Some(open) = declaration.find('(') else {
+        return String::new();
+    };
+    let Some(close) = matching_paren(&declaration[open..]).map(|offset| open + offset) else {
+        return String::new();
+    };
+    declaration[open + 1..close].to_owned()
+}
+
+#[tokio::test]
+async fn recall_count_input_is_k_on_the_server_and_every_binding() {
+    let (_store, client) = connected().await;
+    let tools = client.list_all_tools().await.expect("list tools");
+    let recall_tools = ["recall", "recall_where", "recall_fused"];
+    let mut gaps = Vec::new();
+    for name in recall_tools {
+        let tool = tools
+            .iter()
+            .find(|tool| tool.name.as_ref() == name)
+            .unwrap_or_else(|| panic!("live server no longer advertises `{name}`"));
+        let fields = input_root_fields(tool);
+        if !fields.contains("k") || fields.contains("limit") {
+            gaps.push(format!(
+                "  {name} advertises {fields:?}, expected canonical `k`"
+            ));
+        }
+        for binding in BINDINGS {
+            let regions = method_regions(binding);
+            let params = regions
+                .get(name)
+                .map_or_else(String::new, |region| input_window(region, name));
+            if !names_identifier(&params, "k") {
+                gaps.push(format!("  {}.{name} does not accept `k`", binding.name));
+            }
+        }
+    }
+    assert!(
+        gaps.is_empty(),
+        "shared recall count input drifted across surfaces:\n{}",
+        gaps.join("\n")
+    );
+    client.cancel().await.expect("close the MCP session");
+}
+
 /// The server source files declaring the tools, scanned for the Rust type
 /// each tool's `output_schema` is derived from.
 const SERVER_TOOL_SOURCES: &[&str] = &[
     "crates/velesdb-memory/src/mcp.rs",
+    "crates/velesdb-memory/src/mcp/advanced_tools.rs",
     "crates/velesdb-memory/src/mcp/context_tools.rs",
 ];
 
@@ -1095,7 +1298,7 @@ fn server_output_types() -> BTreeMap<String, String> {
     assert!(
         types.len() >= 20,
         "only {} tool output type(s) parsed out of the server source — the scan is broken, \
-         not the server (it publishes 22 tools)",
+         not the server (it publishes 27 tools)",
         types.len(),
     );
     types

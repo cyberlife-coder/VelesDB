@@ -467,7 +467,7 @@ avoid implying a guarantee that does not exist. Community-scope.
 
 ---
 
-*Last updated: 2026-08-09 · Applies to: velesdb-core 5.0.0 (this stamp tracks
+*Last updated: 2026-08-09 · Applies to: velesdb-core 5.1.0 (this stamp tracks
 the document revision; this revision adds entry 7, lock-order enforcement debt.
 The rest of the inventory was last re-verified against the code on 2026-06-14,
 as stated at the top of this page)*

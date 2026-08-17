@@ -5,7 +5,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use tracing::{debug, info};
 
-use super::common::{check_response, create_http_client};
+use super::common::{check_response, create_http_client, normalise_metric};
 use super::{ExtractedBatch, ExtractedPoint, SourceConnector, SourceSchema};
 use crate::config::PineconeConfig;
 use crate::error::{Error, Result};
@@ -43,11 +43,7 @@ impl PineconeConnector {
     /// `check_metric_fidelity` can surface them verbatim in the
     /// mismatch error instead of swallowing them.
     fn normalise_pinecone_metric(raw: &str) -> String {
-        let lower = raw.to_ascii_lowercase();
-        match lower.as_str() {
-            "dotproduct" => "dot".to_string(),
-            _ => lower,
-        }
+        normalise_metric(raw, &[("dotproduct", "dot")])
     }
 
     fn api_request(&self, method: reqwest::Method, url: &str) -> reqwest::RequestBuilder {

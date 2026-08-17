@@ -9,13 +9,71 @@ recall silently return nonsense, which is why the daemon refuses to start on a
 model mismatch and points you at this command.
 
 Everything below is journalled, resumable, and refuses loudly rather than
-guessing. The one command is:
+guessing. For a stopped daemon, the command is:
 
 ```bash
 velesdb-memory migrate-embeddings --store <dir> --destination <dir> [--strategy auto|reuse|reembed]
 ```
 
-## Before you start
+## Choose online or offline
+
+Use the daemon-owned online path when the daemon must keep serving. Use the
+offline command when an outage is acceptable or when you want to stage an
+explicit destination yourself. Never run the offline command against a store
+the daemon has open; its process lock refuses that unsafe combination.
+
+## Online migration through MCP
+
+The online control plane uses the daemon's existing MCP transport and its
+existing authorization boundary. It adds no listener. The target backend is
+resolved from the daemon environment; credentials and endpoint secrets are
+never copied into durable job state.
+
+1. Submit this `migration_start` request with the backend and the maximum
+   request pause you accept:
+
+   ```json
+   {
+     "target_backend": "ollama",
+     "pause_budget_ms": 500,
+     "journal_max_bytes": 67108864,
+     "fact_batch": 256,
+     "replay_batch": 256,
+     "edge_cap": 4096,
+     "observation_window": 3,
+     "verification_reserve_ms": 100
+   }
+   ```
+
+   `migration_start` returns `{ configured, job }` immediately after the job
+   is durable. The work continues in the background.
+
+2. Poll `migration_status`. Progress reports base-copy counts, input/output
+   watermarks, dirty fact and edge-source counts, pending journal bytes, the
+   estimated pause, the measured cutover, the last error, and any mandatory
+   recovery action.
+3. A `non_converging` job has stopped rather than looped forever. Reduce the
+   write rate or increase replay capacity, then call `migration_recover`; the
+   daemon revalidates the target model, dimension and vector witness before it
+   resumes.
+4. `migration_cancel` is accepted only before quiescing while the source is
+   authoritative. It verifies the epoch journal and target provenance before
+   removing the generated destination and journal. From `quiescing` onward it
+   refuses and reports the recovery action instead of guessing a rollback.
+5. After a daemon crash, restart it with the same store and target-backend
+   configuration. Startup repairs an interrupted cutover before opening the
+   store: pre-activation state rolls back to the source; post-activation state
+   completes forward to the target. For an earlier stopped phase, call
+   `migration_recover` after restart.
+
+The destination is `<store>.online-migration-target`, the bounded dirty-state
+journal is `<store>.online-migration-target.migration-journal`, and durable job
+status is under `<store>.online-migration-control`. Pre-existing paths,
+symlinks, corrupt/future state, identity mismatches and an in-place target-model
+change are refusals. The journal byte cap is a safety boundary: when full, a
+source write is refused before it could become untracked.
+
+## Before an offline run
 
 - **Stop the daemon.** The store is single-writer; a live daemon holds its
   `flock` and the migration refuses to open the source. Do not race it: a
@@ -126,6 +184,46 @@ to the store's name: re-running the switch recognises the restored source
 
 No duration is promised, because none transfers between machines. What has
 been measured (each figure on one machine, quoted with what it is):
+
+### Online-path evidence
+
+Measured 2026-08-15 on arm64 macOS 26.5.2, optimized build, offline hash
+embedder at 384 dimensions, 64 seeded facts and 16 measured writes per arm:
+
+```text
+baseline_us_per_write=10231.3
+capture_us_per_write=19214.4
+capture_ratio=1.88
+replayed_records=8
+migration_ms=2141
+```
+
+This is a reproducible diagnostic, not an SLA. Run it on the deployment host:
+
+```bash
+cargo test -p velesdb-memory --release --test online_migration_process \
+  reports_steady_state_capture_and_replay_overhead -- \
+  --ignored --test-threads=1 --nocapture
+```
+
+The no-capture generation guard was also isolated with Criterion on the same
+machine: direct `NativeStore::count` measured 5.45 ns and guarded
+`MemoryService::fact_count` 6.18 ns, an absolute 0.73 ns increment. The 13%
+relative number is intentionally the worst-looking view of a sub-10 ns
+synthetic operation; against the measured 10.2 ms end-to-end write it is below
+the resolution of the request-scale measurement. Re-run with:
+
+```bash
+cargo bench -p velesdb-memory --bench generation_gate_benchmark -- --noplot
+```
+
+Capture itself is deliberately not free: every acknowledged mutation first
+appends and durability-syncs its dirty key. On this run write latency was
+1.88× baseline. Size the pause and journal from measurements on the actual
+filesystem and embedder, and treat `non_converging` as a capacity signal rather than
+repeatedly forcing recovery.
+
+### Offline-path evidence
 
 - **Re-insertion** — the whole cost under `reuse` — measured at ~16 µs/fact
   (dimension 4, `--release`, batch 1024) after the batched-fsync fix (#1797);

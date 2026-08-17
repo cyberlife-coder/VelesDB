@@ -3,6 +3,11 @@
 
 use super::*;
 use crate::embedder::HashEmbedder;
+use crate::limits::MAX_FACT_BYTES;
+use crate::mcp::dto::{
+    ExtractionJobStatusParams, ExtractionJobStatusResult, ListMemoriesParams, RecallFusedParams,
+    RememberExtractedParams, RememberExtractedResult, WhyParams,
+};
 use crate::model::{ColumnFilter, ColumnOp, Link};
 use crate::service::Metadata;
 use tempfile::TempDir;
@@ -13,7 +18,36 @@ fn server() -> (TempDir, McpServer) {
     let dir = TempDir::new().expect("create tempdir");
     let embedder: DynEmbedder = Box::new(HashEmbedder::new(crate::DEFAULT_DIMENSION));
     let service = MemoryService::open(dir.path(), embedder).expect("open memory store");
-    (dir, McpServer::new(service))
+    let server = McpServer::new(service)
+        .with_extraction_jobs(dir.path())
+        .expect("start durable extraction jobs");
+    (dir, server)
+}
+
+async fn committed_extraction(
+    server: &McpServer,
+    receipt: RememberExtractedResult,
+) -> ExtractionJobStatusResult {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let Json(status) = server
+                .extraction_status(Parameters(ExtractionJobStatusParams {
+                    request_id: receipt.request_id.clone(),
+                }))
+                .await
+                .expect("query extraction status");
+            match status.state {
+                extraction_jobs::ExtractionJobState::Committed => return status,
+                extraction_jobs::ExtractionJobState::Failed => {
+                    panic!("extraction failed: {:?}", status.error)
+                }
+                extraction_jobs::ExtractionJobState::Accepted
+                | extraction_jobs::ExtractionJobState::Running => tokio::task::yield_now().await,
+            }
+        }
+    })
+    .await
+    .expect("extraction job reaches a terminal state")
 }
 
 /// Run a one-hop `why(DECISION)` through the server, returning the seed
@@ -748,6 +782,31 @@ impl Extractor for GenerativeStub {
     }
 }
 
+struct CountingExtractionStub {
+    calls: AtomicUsize,
+}
+
+struct FailingExtractionStub {
+    calls: AtomicUsize,
+}
+
+impl Extractor for FailingExtractionStub {
+    fn extract(&self, _text: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Err(ExtractError::Backend("model unavailable".to_owned()))
+    }
+}
+
+impl Extractor for CountingExtractionStub {
+    fn extract(&self, _text: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(vec![ExtractedFact {
+            text: "One idempotent extraction result.".to_owned(),
+            entities: Vec::new(),
+        }])
+    }
+}
+
 #[tokio::test]
 async fn remember_extracted_builds_a_graph_through_the_server() {
     let (_dir, srv) = server();
@@ -755,14 +814,16 @@ async fn remember_extracted_builds_a_graph_through_the_server() {
         .with_named_extractor("ollama", Arc::new(GraphStub) as DynExtractor)
         .expect("ollama is a supported extractor name");
 
-    let Json(res) = srv
+    let Json(receipt) = srv
         .remember_extracted(Parameters(RememberExtractedParams {
             text: "Alice and Bob work in Rust.".to_owned(),
             metadata: None,
             extractor: None,
+            idempotency_key: None,
         }))
         .await
         .expect("remember_extracted");
+    let res = committed_extraction(&srv, receipt).await;
     assert_eq!(res.ids.len(), 2, "both facts stored");
 
     // why reaches the sibling fact via the shared topic, seed is a real fact.
@@ -789,22 +850,26 @@ async fn two_successive_calls_can_select_different_extractors() {
         .expect("ollama is a supported extractor name");
     let source = "fact: Deterministic directive | outline";
 
-    let Json(outlined) = srv
+    let Json(outlined_receipt) = srv
         .remember_extracted(Parameters(RememberExtractedParams {
             text: source.to_owned(),
             metadata: None,
             extractor: Some("outline".to_owned()),
+            idempotency_key: None,
         }))
         .await
         .expect("the per-call outline backend must work");
-    let Json(generative) = srv
+    let Json(generative_receipt) = srv
         .remember_extracted(Parameters(RememberExtractedParams {
             text: source.to_owned(),
             metadata: None,
             extractor: Some("ollama".to_owned()),
+            idempotency_key: None,
         }))
         .await
         .expect("the configured remote backend must remain selectable");
+    let outlined = committed_extraction(&srv, outlined_receipt).await;
+    let generative = committed_extraction(&srv, generative_receipt).await;
 
     assert_ne!(outlined.ids, generative.ids, "the extractions must differ");
     let Json(listed) = srv
@@ -823,6 +888,92 @@ async fn two_successive_calls_can_select_different_extractors() {
         .collect();
     assert!(contents.contains(&"Deterministic directive"));
     assert!(contents.contains(&"Generative interpretation"));
+}
+
+#[tokio::test]
+async fn retry_key_runs_one_extraction_and_rejects_a_changed_payload() {
+    let (_dir, srv) = server();
+    let extractor = Arc::new(CountingExtractionStub {
+        calls: AtomicUsize::new(0),
+    });
+    let srv = srv.with_extractor(extractor.clone());
+    let submit = |text: &str| RememberExtractedParams {
+        text: text.to_owned(),
+        metadata: None,
+        extractor: None,
+        idempotency_key: Some("client-operation-42".to_owned()),
+    };
+
+    let Json(first) = srv
+        .remember_extracted(Parameters(submit("same passage")))
+        .await
+        .expect("first durable receipt");
+    let Json(retry) = srv
+        .remember_extracted(Parameters(submit("same passage")))
+        .await
+        .expect("retry must reuse the receipt");
+    assert_eq!(retry.request_id, first.request_id);
+    assert!(retry.reused);
+    let result = committed_extraction(&srv, first).await;
+    assert_eq!(result.ids.len(), 1);
+    assert_eq!(extractor.calls.load(Ordering::SeqCst), 1);
+
+    let error = srv
+        .remember_extracted(Parameters(submit("changed passage")))
+        .await
+        .map(|_| ())
+        .expect_err("one retry key cannot alias a changed payload");
+    assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+}
+
+#[tokio::test]
+async fn failed_extraction_is_terminal_queryable_and_not_retried() {
+    let (_dir, srv) = server();
+    let extractor = Arc::new(FailingExtractionStub {
+        calls: AtomicUsize::new(0),
+    });
+    let srv = srv.with_extractor(extractor.clone());
+    let params = || RememberExtractedParams {
+        text: "passage whose model call fails".to_owned(),
+        metadata: None,
+        extractor: None,
+        idempotency_key: Some("terminal-failure-proof".to_owned()),
+    };
+    let Json(receipt) = srv
+        .remember_extracted(Parameters(params()))
+        .await
+        .expect("the durable request is accepted before generation fails");
+    let status = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let Json(status) = srv
+                .extraction_status(Parameters(ExtractionJobStatusParams {
+                    request_id: receipt.request_id.clone(),
+                }))
+                .await
+                .expect("query failed extraction");
+            if status.state.is_terminal() {
+                return status;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("failed extraction reaches its terminal record");
+    assert_eq!(status.state, extraction_jobs::ExtractionJobState::Failed);
+    assert!(status.ids.is_empty());
+    assert!(status.skipped_over_cap.is_none());
+    assert!(status
+        .error
+        .as_deref()
+        .is_some_and(|error| error.contains("model unavailable")));
+
+    let Json(retry) = srv
+        .remember_extracted(Parameters(params()))
+        .await
+        .expect("same key and payload reuses terminal failure");
+    assert!(retry.reused);
+    assert_eq!(retry.state, extraction_jobs::ExtractionJobState::Failed);
+    assert_eq!(extractor.calls.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
@@ -915,6 +1066,7 @@ async fn remember_extracted_without_backend_returns_internal_error() {
             text: "anything".to_owned(),
             metadata: None,
             extractor: None,
+            idempotency_key: None,
         }))
         .await
         .map(|_| ())
@@ -925,15 +1077,77 @@ async fn remember_extracted_without_backend_returns_internal_error() {
 #[tokio::test]
 async fn explicit_outline_works_without_a_daemon_default() {
     let (_dir, srv) = server();
-    let Json(stored) = srv
+    let Json(receipt) = srv
         .remember_extracted(Parameters(RememberExtractedParams {
             text: "fact: A deterministic fact | outline".to_owned(),
             metadata: None,
             extractor: Some("outline".to_owned()),
+            idempotency_key: None,
         }))
         .await
         .expect("explicit outline must not need a daemon default");
+    let stored = committed_extraction(&srv, receipt).await;
     assert_eq!(stored.ids.len(), 1);
+}
+
+/// A typed edge must reach the graph through the *offline* reader — no model,
+/// no network, no HTTP backend anywhere in the picture (#1945).
+///
+/// The extraction campaign's end-to-end rows read `not drained` with the
+/// outline extractor as well as with a live model, which left two readings
+/// open: an extraction→graph path that links nothing, or a measurement that
+/// stops before the write lands. This closes the first. It asserts the edge is
+/// **readable back** through `entity`, never that the call merely returned —
+/// a green write with an empty graph is exactly the failure being ruled out.
+///
+/// The bounded wait is the instrument, not a workaround: it separates "the
+/// edge never arrives" from "the edge arrives late", and those are different
+/// defects with different owners.
+#[tokio::test]
+async fn outline_extraction_lands_a_typed_edge_in_the_graph() {
+    let (_dir, srv) = server();
+
+    let Json(receipt) = srv
+        .remember_extracted(Parameters(RememberExtractedParams {
+            text: "fact: Alice ships the parser.\nedge: Alice | works_with | Bob".to_owned(),
+            metadata: None,
+            extractor: Some("outline".to_owned()),
+            idempotency_key: None,
+        }))
+        .await
+        .expect("the offline reader must not need a daemon default");
+    let stored = committed_extraction(&srv, receipt).await;
+    assert_eq!(stored.ids.len(), 1, "the `fact:` line is the only fact");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let Json(profile) = srv
+            .entity(Parameters(EntityParams {
+                name: "alice".to_owned(),
+            }))
+            .await
+            .expect("entity lookup");
+        let edge = profile.relations.iter().find(|relation| {
+            relation.predicate == "works_with" && relation.target.to_lowercase().ends_with("bob")
+        });
+        if edge.is_some() {
+            assert!(profile.found, "an entity with an edge is a found entity");
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no `works_with` edge reached the graph from the offline reader; \
+             found={} relations=[{}]",
+            profile.found,
+            profile
+                .relations
+                .iter()
+                .map(|relation| format!("{} -> {}", relation.predicate, relation.target))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        tokio::task::yield_now().await;
+    }
 }
 
 #[tokio::test]
@@ -944,6 +1158,7 @@ async fn unknown_per_call_extractor_returns_invalid_params() {
             text: "anything".to_owned(),
             metadata: None,
             extractor: Some("lmstudio".to_owned()),
+            idempotency_key: None,
         }))
         .await
         .map(|_| ())
@@ -1121,14 +1336,16 @@ async fn remember_extracted_response_echoes_ids_str() {
     }
     let (_dir, srv) = server();
     let srv = srv.with_extractor(Arc::new(Stub) as DynExtractor);
-    let Json(res) = srv
+    let Json(receipt) = srv
         .remember_extracted(Parameters(RememberExtractedParams {
             text: "Alice works in Rust.".to_owned(),
             metadata: None,
             extractor: None,
+            idempotency_key: None,
         }))
         .await
         .expect("remember_extracted");
+    let res = committed_extraction(&srv, receipt).await;
     assert_eq!(res.ids_str.len(), res.ids.len());
     for (id, id_str) in res.ids.iter().zip(res.ids_str.iter()) {
         assert_eq!(*id_str, id.to_string());
@@ -1249,7 +1466,7 @@ fn test_recall_where_description_documents_type_strict_comparisons() {
 /// Whether `haystack` names `field` as a WORD, not as an accidental substring.
 ///
 /// A plain `contains` is not enough, and the measurement says so: across the
-/// twenty published tools it lets `feedback`'s `id` pass on the strength of
+/// the published tools it lets `feedback`'s `id` pass on the strength of
 /// "con-f-**id**-ence", and `entity`'s `relations` on "relation-ships". A
 /// guard weaker than its own statement is worse than none, because it reads
 /// as coverage.
@@ -1268,25 +1485,21 @@ fn description_names_field(haystack: &str, field: &str) -> bool {
     })
 }
 
-/// #1747. `remember_extracted`'s published `outputSchema` carries three root
-/// fields, and one of them — `skipped_over_cap` — exists PRECISELY to make a
-/// silent loss visible: facts the extractor produced and this tool dropped for
-/// exceeding the per-fact text cap. Its own doc-comment argues the point: "a
-/// skip the caller cannot see is indistinguishable from the model extracting
-/// fewer facts".
+/// #1747/#1839. `remember_extracted`'s published `outputSchema` carries the
+/// durable receipt fields (`request_id`, `state`, `reused`). Each changes what
+/// a caller must do next: save the id, poll the state, and distinguish an
+/// accepted operation from an idempotent retry.
 ///
-/// The description used to say only "Returns the stored facts' ids". So the
-/// one surface a model reads BEFORE deciding to call never mentioned the field
-/// whose whole purpose is to be read — the omission defeated the reason the
-/// field was added (#1692).
+/// The older synchronous contract once omitted its loss counter from the
+/// description, proving that a field present only in a schema is not enough:
+/// the model reads the description before deciding how to close the loop.
 ///
 /// The field names are DERIVED from the published schema rather than kept as a
 /// second hard-coded list here: a root field added tomorrow is caught without
 /// anyone remembering this test exists.
 ///
-/// Scope, stated so it is not overclaimed: this pins ONE tool. Fourteen of the
-/// twenty published tools would fail the same check today, and closing that
-/// class is its own piece of work (#1695).
+/// Scope, stated so it is not overclaimed: this pins ONE tool. Closing the
+/// same class across the complete published surface is tracked by #1695.
 #[test]
 fn test_remember_extracted_description_names_every_published_output_field() {
     let tool = McpServer::remember_extracted_tool_attr();
@@ -1329,7 +1542,7 @@ fn test_remember_extracted_description_names_every_published_output_field() {
 /// degrade a parameter whose advertised schema carries no DIRECT `type`
 /// keyword — `anyOf`-wrapped optionals and `$ref`-only structs both come out
 /// untyped on the client side, and the harness then serializes the argument
-/// as a JSON-encoded STRING (`limit: "6"`, `filter: "{\"project\":...}"`),
+/// as a JSON-encoded STRING (`k: "6"`, `filter: "{\"project\":...}"`),
 /// which the server rejects. Same wire-contract class as issue #1468
 /// (u64 ids vs float-lossy clients): the schema must be harness-proof, not
 /// merely spec-correct.
@@ -1354,6 +1567,31 @@ fn test_recall_fused_input_schema_types_every_parameter_directly() {
     }
 }
 
+#[test]
+fn recall_family_advertises_k_as_the_canonical_count_parameter() {
+    let tools = [
+        McpServer::recall_tool_attr(),
+        McpServer::recall_where_tool_attr(),
+        McpServer::recall_fused_tool_attr(),
+    ];
+    for tool in tools {
+        let schema = serde_json::to_value(&tool.input_schema).expect("schema serializes");
+        let properties = schema["properties"]
+            .as_object()
+            .expect("recall input schema must have properties");
+        assert!(
+            properties.contains_key("k"),
+            "{} must advertise `k`",
+            tool.name
+        );
+        assert!(
+            !properties.contains_key("limit"),
+            "{} must keep `limit` as a wire alias, not the canonical schema field",
+            tool.name
+        );
+    }
+}
+
 /// Server-side tolerance half of the harness-proof contract: a client that
 /// DID stringify a scalar or object argument (today's Claude Code harness
 /// does exactly that for schema-degraded parameters) must still be served.
@@ -1362,7 +1600,7 @@ fn test_recall_fused_input_schema_types_every_parameter_directly() {
 fn test_recall_fused_params_accept_stringified_scalars_and_objects() {
     let params: RecallFusedParams = serde_json::from_value(serde_json::json!({
         "query": "q",
-        "limit": "6",
+        "k": "6",
         "hops": "2",
         "graph_boost": "0.15",
         "pool": "128",
@@ -1378,6 +1616,49 @@ fn test_recall_fused_params_accept_stringified_scalars_and_objects() {
         filter.get("project").and_then(|v| v.as_str()),
         Some("velesdb")
     );
+}
+
+#[test]
+fn recall_fused_accepts_k_and_the_deprecated_limit_alias() {
+    for (input, value) in [
+        (serde_json::json!({"query": "q", "k": 7}), 7),
+        (serde_json::json!({"query": "q", "limit": 8}), 8),
+    ] {
+        let params: RecallFusedParams = serde_json::from_value(input)
+            .expect("canonical and deprecated spellings must deserialize");
+        assert_eq!(params.limit, Some(value));
+    }
+}
+
+#[test]
+fn recall_and_recall_where_accept_the_deprecated_limit_alias() {
+    let recall: RecallParams = serde_json::from_value(serde_json::json!({
+        "query": "q",
+        "limit": 7
+    }))
+    .expect("recall must accept deprecated `limit`");
+    assert_eq!(recall.limit, Some(7));
+
+    let recall_where: RecallWhereParams = serde_json::from_value(serde_json::json!({
+        "query": "q",
+        "limit": 8,
+        "filters": []
+    }))
+    .expect("recall_where must accept deprecated `limit`");
+    assert_eq!(recall_where.limit, Some(8));
+}
+
+#[test]
+fn recall_fused_rejects_k_and_limit_together() {
+    let result = serde_json::from_value::<RecallFusedParams>(serde_json::json!({
+        "query": "q",
+        "k": 7,
+        "limit": 8
+    }));
+    let Err(error) = result else {
+        panic!("two spellings for one parameter must be ambiguous");
+    };
+    assert!(error.to_string().contains("duplicate field"), "{error}");
 }
 
 // ---------------------------------------------------------------------------
@@ -1483,7 +1764,7 @@ fn unrelate_params_accept_string_or_number_ids_on_the_wire() {
 /// The defect was never in the library: `OutlineExtractor` always worked, and
 /// `McpServer::with_extractor` always accepted it. What was broken is that the
 /// only code able to CHOOSE `outline` sat inside the daemon's
-/// `#[cfg(feature = "extract")]` block, so on a default build two of the twenty
+/// `#[cfg(feature = "extractor-http")]` block, so on a default build two of the twenty
 /// published tools were dead — `remember_extracted` refused outright, and
 /// `entity` answered `found: false` for every name, entity hubs being born only
 /// of extraction.
@@ -1507,11 +1788,14 @@ async fn an_outline_configured_server_builds_a_hub_that_entity_finds() {
     else {
         panic!("`outline` must be usable as-is, with no remote configuration");
     };
-    let srv = McpServer::new(service).with_extractor(extractor);
+    let srv = McpServer::new(service)
+        .with_extractor(extractor)
+        .with_extraction_jobs(dir.path())
+        .expect("start durable extraction jobs");
 
     // Tool 1 of the two that were dead: it used to answer "extraction backend
     // not configured" no matter what the operator set.
-    let Json(stored) = srv
+    let Json(receipt) = srv
         .remember_extracted(Parameters(RememberExtractedParams {
             text: "fact: Theo has a sister called Camille | Theo, Camille\n\
                    edge: Camille | soeur de | Theo\n\
@@ -1519,9 +1803,11 @@ async fn an_outline_configured_server_builds_a_hub_that_entity_finds() {
                 .to_owned(),
             metadata: None,
             extractor: None,
+            idempotency_key: None,
         }))
         .await
         .expect("remember_extracted must work on an outline-configured server");
+    let stored = committed_extraction(&srv, receipt).await;
     assert_eq!(
         stored.ids.len(),
         1,
@@ -1659,6 +1945,48 @@ fn gated_server() -> (
     (dir, McpServer::new(service), extractor, release)
 }
 
+#[tokio::test]
+async fn remember_extracted_receipt_does_not_wait_for_generation() {
+    let (_dir, srv) = server();
+    let (extractor, release) = GatedServerExtractor::new();
+    let srv = srv.with_extractor(extractor.clone());
+
+    let Json(receipt) = srv
+        .remember_extracted(Parameters(RememberExtractedParams {
+            text: "Alice works at Wiscale.".to_owned(),
+            metadata: None,
+            extractor: None,
+            idempotency_key: Some("immediate-receipt-proof".to_owned()),
+        }))
+        .await
+        .expect("durable acceptance must not wait for the extractor");
+    assert_eq!(receipt.state, extraction_jobs::ExtractionJobState::Accepted);
+    assert_eq!(
+        extractor.completed.load(Ordering::SeqCst),
+        0,
+        "the receipt must arrive while generation is still blocked"
+    );
+    assert!(
+        wait_for(Duration::from_secs(5), || extractor
+            .entered
+            .load(Ordering::SeqCst)
+            == 1),
+        "the background worker must start the accepted job"
+    );
+    let Json(running) = srv
+        .extraction_status(Parameters(ExtractionJobStatusParams {
+            request_id: receipt.request_id.clone(),
+        }))
+        .await
+        .expect("read the in-flight job");
+    assert_eq!(running.state, extraction_jobs::ExtractionJobState::Running);
+
+    release.send(()).expect("release extraction");
+    let status = committed_extraction(&srv, receipt).await;
+    assert_eq!(status.state, extraction_jobs::ExtractionJobState::Committed);
+    assert_eq!(extractor.completed.load(Ordering::SeqCst), 1);
+}
+
 /// Poll until `probe` answers true — the event, not the clock (#1793).
 fn wait_for(deadline: Duration, mut probe: impl FnMut() -> bool) -> bool {
     let end = Instant::now() + deadline;
@@ -1691,7 +2019,9 @@ async fn remember_tool_answers_while_the_autograph_gate_is_still_shut() {
          what makes the server's drop bound shutdown"
     );
     assert!(
-        srv.service.autograph_queue_open(),
+        srv.service
+            .inspect(MemoryService::autograph_queue_open)
+            .expect("active generation"),
         "the spawned worker's queue must be open, so remember enqueues \
          instead of running the enrichment on the response path"
     );
@@ -1769,7 +2099,11 @@ async fn dropping_the_server_bounds_shutdown_and_skips_queued_jobs() {
     let started = Instant::now();
     let joiner = std::thread::spawn(move || drop(srv));
     assert!(
-        wait_for(Duration::from_secs(5), || !service.autograph_queue_open()),
+        wait_for(Duration::from_secs(5), || {
+            service
+                .inspect(MemoryService::autograph_queue_open)
+                .is_ok_and(|open| !open)
+        }),
         "dropping the server must close the autograph queue via the stored \
          worker handle"
     );
@@ -1786,7 +2120,9 @@ async fn dropping_the_server_bounds_shutdown_and_skips_queued_jobs() {
         "only the in-flight job is wired on shutdown"
     );
     assert_eq!(
-        service.autograph_dropped(),
+        service
+            .inspect(MemoryService::autograph_dropped)
+            .expect("active generation"),
         2,
         "the two still-queued jobs are SKIPPED and counted, not waited out"
     );

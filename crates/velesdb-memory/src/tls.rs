@@ -91,6 +91,7 @@ const NOT_BEFORE_SLACK_HOURS: i64 = 1;
 /// distinct from [`crate::error::MemoryError`] — these are infra/filesystem
 /// concerns, not store/domain ones.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive] // error enum, grows by nature; matching externally requires a wildcard arm
 pub enum TlsError {
     #[error("failed to create TLS material directory {path}: {source}")]
     CreateDir { path: PathBuf, source: io::Error },

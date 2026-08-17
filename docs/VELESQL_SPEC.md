@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector + graph + column-store search in VelesDB.
 
-**Version**: 3.10.0 | Last updated: 2026-08-08 · Applies to: velesdb-core 5.0.0
+**Version**: 3.10.0 | Last updated: 2026-08-13 · Applies to: velesdb-core 5.1.0
 
 ---
 
@@ -72,8 +72,8 @@ equivalent. Identifiers (collection names, column names) are case-sensitive.
 | GROUP BY MAX(score) / AVG(score) | Stable | 3.7 |
 | FIRST(column) projection | Stable | 3.7 |
 | CONTAINS_TEXT strict text filter | Stable | 3.8 |
-| Window functions (`ROW_NUMBER`, `RANK`, `DENSE_RANK`) with `OVER`, `PARTITION BY`, `ORDER BY` | Stable | 3.9 (VelesDB v1.13.0) |
-| CBO feedback calibration in `EXPLAIN ANALYZE` | Stable | 3.10 (VelesDB v1.15.0) |
+| Window functions (`ROW_NUMBER`, `RANK`, `DENSE_RANK`) with `OVER`, `PARTITION BY`, `ORDER BY` | Stable | 3.9 (introduced in VelesDB v1.13.0) |
+| CBO feedback calibration in `EXPLAIN ANALYZE` | Stable | 3.10 (introduced in VelesDB v1.15.0) |
 | FUSE BY fusion clause | Planned | -- |
 
 ### REST Contract Notes

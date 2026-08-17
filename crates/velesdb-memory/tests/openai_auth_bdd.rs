@@ -15,7 +15,7 @@
 //!
 //! Categories: Nominal (≥60%), Edge (~20%), Negative (≥20%).
 
-#![cfg(all(feature = "ollama", feature = "extract"))]
+#![cfg(all(feature = "embedder-http", feature = "extractor-http"))]
 
 use std::io::{Read as _, Write as _};
 use std::net::{SocketAddr, TcpListener};

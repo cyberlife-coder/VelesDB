@@ -41,6 +41,7 @@ declaring what it refuses are one act, in one file, confronted by
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -71,6 +72,63 @@ def materialise(tree: "dict[str, str]", root: Path) -> None:
         path.write_text(content, encoding="utf-8")
 
 
+def copy_repository_snapshot(root: Path) -> None:
+    """Copy the current contents of every tracked path, excluding ``.git``.
+
+    A shipped-registry vector needs all currently pinned surfaces as its
+    accepted control. Encoding thousands of lines into guards.json would
+    duplicate the repository and go stale whenever a new surface is pinned.
+    The tracked snapshot is the scalable fixture; a vector then declares only
+    its deliberate overlay mutation.
+    """
+    listed = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "ls-files", "-z"],
+        capture_output=True,
+        check=True,
+    ).stdout
+    for encoded in listed.split(b"\0"):
+        if not encoded:
+            continue
+        relative = encoded.decode("utf-8", errors="surrogateescape")
+        source = REPO_ROOT / relative
+        destination = root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if source.is_symlink():
+            destination.symlink_to(os.readlink(source))
+        else:
+            shutil.copy2(source, destination)
+
+
+def apply_replacements(replacements: "list[dict[str, str]]", root: Path) -> None:
+    """Apply exact, anti-vacuous text replacements to a fixture tree."""
+    for replacement in replacements:
+        path = root / replacement["path"]
+        text = path.read_text(encoding="utf-8")
+        old = replacement["old"]
+        occurrences = text.count(old)
+        if occurrences != 1:
+            raise ValueError(
+                f"{replacement['path']}: replacement source must occur exactly once "
+                f"(found {occurrences})"
+            )
+        path.write_text(text.replace(old, replacement["new"], 1), encoding="utf-8")
+
+
+def mark_executable(paths: "list[str]", root: Path) -> None:
+    """Give declared fixture tools executable bits on every Unix platform."""
+    for relative in paths:
+        path = root / relative
+        if not path.is_file():
+            raise ValueError(f"executable fixture path does not exist: {relative}")
+        path.chmod(path.stat().st_mode | 0o111)
+
+
+def argv_for_state(vector: dict, key: str) -> "list[str]":
+    """Return common argv, or the argv specific to one vector state."""
+    argv = vector["argv"]
+    return argv[key] if isinstance(argv, dict) else argv
+
+
 #: Identity and message a `repo` vector gets unless it names its own. Local to
 #: the tree, so the harness never depends on the machine's git configuration.
 DEFAULT_IDENTITY = "refusal-vector-harness <harness@velesdb.invalid>"
@@ -88,6 +146,7 @@ def make_repository(
     tracked: "list[str]",
     identity: str = DEFAULT_IDENTITY,
     message: str = DEFAULT_MESSAGE,
+    relation: "str | None" = None,
 ) -> None:
     """Turn the materialised tree into a git work tree, tracking `tracked`.
 
@@ -116,6 +175,24 @@ def make_repository(
         run("add", "--", relative)
     run("commit", "-q", "-m", message)
 
+    if relation is None:
+        return
+    if relation not in {"ancestor", "diverged"}:
+        raise ValueError(f"unknown repository relation: {relation}")
+
+    head_branch = run("symbolic-ref", "--short", "HEAD").stdout.strip()
+    run("branch", "vector-base", "HEAD")
+    if relation == "ancestor":
+        run("commit", "-q", "--allow-empty", "-m", "vector head")
+        return
+
+    # The base and HEAD each advance from the fixture commit, making them
+    # siblings. `vector-base` therefore is not an ancestor of HEAD.
+    run("checkout", "-q", "vector-base")
+    run("commit", "-q", "--allow-empty", "-m", "vector base")
+    run("checkout", "-q", head_branch)
+    run("commit", "-q", "--allow-empty", "-m", "vector head")
+
 
 def run_guard(script: str, argv: "list[str]", root: Path) -> "subprocess.CompletedProcess[str]":
     """Invoke ``script`` on the materialised tree.
@@ -140,7 +217,11 @@ class RefusalVectorTests(unittest.TestCase):
     def _run_tree(self, entry: dict, vector: dict, key: str) -> "subprocess.CompletedProcess[str]":
         tmp = Path(tempfile.mkdtemp(prefix="guard-vector-"))
         self.addCleanup(shutil.rmtree, tmp, True)
+        if vector.get("base") == "repository":
+            copy_repository_snapshot(tmp)
         materialise(vector[key], tmp)
+        apply_replacements((vector.get("replace") or {}).get(key, []), tmp)
+        mark_executable((vector.get("executable") or {}).get(key, []), tmp)
         # `repo` names the paths git must TRACK; everything else stays
         # untracked, which is the whole point for a guard that asks git.
         repo = vector.get("repo")
@@ -150,8 +231,9 @@ class RefusalVectorTests(unittest.TestCase):
                 repo.get(key, []),
                 repo.get("author", {}).get(key, DEFAULT_IDENTITY),
                 repo.get("message", {}).get(key, DEFAULT_MESSAGE),
+                repo.get("relation", {}).get(key),
             )
-        return run_guard(entry["script"], vector["argv"], tmp)
+        return run_guard(entry["script"], argv_for_state(vector, key), tmp)
 
     def test_every_declared_vector_is_refused(self) -> None:
         for entry in guards_with_vectors():
@@ -217,12 +299,22 @@ class RefusalVectorTests(unittest.TestCase):
                         sorted(repo.get("files", [])),
                         author.get("files"),
                         message.get("files"),
+                        (repo.get("relation") or {}).get("files"),
+                        vector.get("base"),
+                        (vector.get("replace") or {}).get("files", []),
+                        sorted((vector.get("executable") or {}).get("files", [])),
+                        argv_for_state(vector, "files"),
                     )
                     accepted = (
                         vector["accepts"],
                         sorted(repo.get("accepts", [])),
                         author.get("accepts"),
                         message.get("accepts"),
+                        (repo.get("relation") or {}).get("accepts"),
+                        vector.get("base"),
+                        (vector.get("replace") or {}).get("accepts", []),
+                        sorted((vector.get("executable") or {}).get("accepts", [])),
+                        argv_for_state(vector, "accepts"),
                     )
                     self.assertNotEqual(
                         refused,
@@ -241,8 +333,29 @@ class VectorShapeTests(unittest.TestCase):
                 with self.subTest(script=entry["script"]):
                     for field in ("vector", "files", "argv", "accepts"):
                         self.assertIn(field, vector, f"missing `{field}`")
-                    self.assertTrue(vector["files"], "an empty tree exercises nothing")
-                    self.assertTrue(vector["accepts"], "an empty control proves nothing")
+                    self.assertIn(vector.get("base"), (None, "repository"))
+                    if vector.get("base") != "repository":
+                        self.assertTrue(vector["files"], "an empty tree exercises nothing")
+                        self.assertTrue(vector["accepts"], "an empty control proves nothing")
+                    argv = vector["argv"]
+                    if isinstance(argv, dict):
+                        self.assertEqual(set(argv), {"files", "accepts"})
+                        self.assertTrue(all(isinstance(value, list) for value in argv.values()))
+                    else:
+                        self.assertIsInstance(argv, list)
+                    for state in ("files", "accepts"):
+                        replacements = (vector.get("replace") or {}).get(state, [])
+                        for replacement in replacements:
+                            self.assertEqual(
+                                set(replacement),
+                                {"path", "old", "new"},
+                                "a replacement declares path, old and new exactly",
+                            )
+                            self.assertNotEqual(replacement["old"], replacement["new"])
+                    relation = (vector.get("repo") or {}).get("relation", {})
+                    self.assertTrue(
+                        all(value in {"ancestor", "diverged"} for value in relation.values())
+                    )
                     self.assertTrue(
                         (vector["vector"] or "").strip(),
                         "a vector must say in words what it materialises",
@@ -256,6 +369,61 @@ class VectorShapeTests(unittest.TestCase):
             guards_with_vectors(),
             "no guard declares a refusal vector: this suite proves nothing",
         )
+
+
+class HarnessExtensionTests(unittest.TestCase):
+    """The scalable fixture features #1715 needs are contracts themselves."""
+
+    def test_argv_can_differ_between_the_refused_and_accepted_state(self) -> None:
+        vector = {
+            "argv": {
+                "files": ["--source-ref", "archive/old"],
+                "accepts": ["--source-ref", "feat/current"],
+            }
+        }
+        self.assertEqual(argv_for_state(vector, "files"), ["--source-ref", "archive/old"])
+        self.assertEqual(
+            argv_for_state(vector, "accepts"), ["--source-ref", "feat/current"]
+        )
+
+    def test_a_repository_overlay_replacement_must_match_exactly_once(self) -> None:
+        root = Path(tempfile.mkdtemp(prefix="guard-replacement-test-"))
+        self.addCleanup(shutil.rmtree, root, True)
+        (root / "surface.md").write_text("Returns {good}.\n", encoding="utf-8")
+
+        apply_replacements(
+            [{"path": "surface.md", "old": "{good}", "new": "{drift}"}], root
+        )
+        self.assertEqual(
+            (root / "surface.md").read_text(encoding="utf-8"),
+            "Returns {drift}.\n",
+        )
+        with self.assertRaisesRegex(ValueError, "exactly once"):
+            apply_replacements(
+                [{"path": "surface.md", "old": "{missing}", "new": "{drift}"}],
+                root,
+            )
+
+    def test_repository_relation_can_model_a_stale_and_fresh_branch(self) -> None:
+        for relation, expected in (("diverged", 1), ("ancestor", 0)):
+            with self.subTest(relation=relation):
+                root = Path(tempfile.mkdtemp(prefix="guard-history-test-"))
+                self.addCleanup(shutil.rmtree, root, True)
+                (root / "tracked.txt").write_text("fixture\n", encoding="utf-8")
+                make_repository(root, ["tracked.txt"], relation=relation)
+                result = subprocess.run(
+                    [
+                        "git",
+                        "-C",
+                        str(root),
+                        "merge-base",
+                        "--is-ancestor",
+                        "refs/heads/vector-base",
+                        "HEAD",
+                    ],
+                    check=False,
+                )
+                self.assertEqual(result.returncode, expected)
 
 
 if __name__ == "__main__":

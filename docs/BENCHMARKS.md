@@ -1,6 +1,6 @@
 # VelesDB Performance Benchmarks
 
-*Last updated: 2026-08-08 · Applies to: velesdb-core 5.0.0. Figures are re-validated at each release only when re-measured — each section carries its own measurement date and machine; this stamp tracks the document revision, not a fresh measurement.*
+*Last updated: 2026-08-08 · Applies to: velesdb-core 5.1.0. Figures are re-validated at each release only when re-measured — each section carries its own measurement date and machine; this stamp tracks the document revision, not a fresh measurement.*
 
 ---
 
@@ -448,6 +448,36 @@ Two layers of CI coverage:
 - First run downloads from `http://corpus-texmex.irisa.fr/sift.tar.gz`. The primary INRIA HTTP mirror has returned 404 since mid-2025; the loader automatically falls back to the Hugging Face mirror (`huggingface.co/datasets/qbo-odp/sift1m`), downloading the three files individually. Manual pre-population via `VELESDB_SIFT1M_DIR` remains supported — the bench detects the cache and skips the download.
 - **SHA-256 fingerprints are currently placeholders** (`TODO(US-S4-BENCH-SIFT1M)`). On first run (or any run while the placeholders are in place), `verify_fingerprint` prints the observed SHA-256 to stderr with a `[WARN]` prefix and the exact pinning instructions. Paste those values into the `SHA256_BASE` / `SHA256_QUERY` / `SHA256_GT` constants in `crates/velesdb-core/benches/datasets/sift1m.rs` (around line 96) after verifying against the INRIA distribution. **Until pinned, bit-level corruption inside a valid-shape file is NOT detected** — only row count and dimension are validated by `check_shape`. Pinning closes that gap.
 - No competitor comparison in this section — Section 9 owns that. Re-running Section 9 requires a separate Docker Compose harness (tracked as a follow-up PR).
+
+---
+
+## 12. velesdb-memory — graph-extraction models
+
+*Measured 2026-08-16 on an Apple M5 Pro (64 GB unified memory), against
+velesdb-memory 0.12.0 as shipped on that date — a different machine from the Test Environment above,
+which describes the Core reference host.*
+
+Eight Ollama models and four MLX configurations were scored on nineteen
+French/English extraction scenarios, with declarative oracles rather than a
+human reading outputs. Three findings, and no latency figures:
+
+- **Schema discipline eliminates candidates; size does not rank them.** With the
+  settings the product sends today, exactly one measured model produced valid
+  JSON on every case without breaking the relation schema. A 35B model came out
+  *behind* a 14B one on error count while weighing over three times as much.
+- **Constrained decoding matters more than the model.** Passing the extraction
+  schema as Ollama's `format` took the 8 GB tier from no eligible model to two,
+  and took one model from zero valid replies to all of them. `velesdb-memory`
+  does not send `format` today, so this measures a product change.
+- **Quality is deterministic here, latency is not.** Two full campaigns half an
+  hour apart reproduced every quality verdict to the digit under greedy
+  decoding, while the order control — first configuration replayed last —
+  disagreed with itself by 26% and then 55% on timing. The timings are
+  therefore not published.
+
+Full tables: [`benchmarks/results/2026-08-16-memory-extraction-report.md`](../benchmarks/results/2026-08-16-memory-extraction-report.md).
+How to choose, including for models we did not test:
+[Extraction models guide](guides/MEMORY_EXTRACTOR_MODELS.md).
 
 ---
 

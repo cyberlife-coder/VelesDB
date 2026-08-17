@@ -5,7 +5,22 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [5.1.0] — 2026-08-17
+
+### Added
+
+- **`velesdb-memory` can re-embed its live store online (#1796).** The daemon
+  now owns snapshot copy, bounded durable mutation capture, measured catch-up,
+  budgeted cutover, crash recovery, and safe cancellation through four MCP
+  tools. The offline `migrate-embeddings` command remains available when an
+  outage is acceptable.
+
+### Changed
+
+- **HTTP inference features are named by role (#1766).** `embedder-http` and
+  `extractor-http` are now the canonical build features. The former `ollama`
+  and `extract` names remain compatibility aliases, so existing dependency
+  declarations continue to compile unchanged.
 
 ### Fixed
 
@@ -25,6 +40,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the literal `"hash"` to `None`; passing `embedder="hash"` explicitly is
   unaffected, and `None`/omitted now falls back to `VELESDB_MEMORY_EMBEDDER`
   before defaulting to `hash`.
+
+- **CLI: a failed flush after a REPL `upsert` or payload-store write is now
+  reported instead of swallowed (#1950).** The two fixed call sites were the
+  only remaining swallowed flushes in the CLI. Community contribution.
+
+### Changed (velesdb-memory 0.13.0, released alongside)
+
+- The memory crate ships its 17/08 review wave in this release: the error
+  surface frozen for semver (`#[non_exhaustive]` + per-adapter category
+  guards on the Node, Python and WASM bindings, #1960), all HTTP clients on
+  one bounded `ureq` agent (#1961), a structured `WorkingContextCodec` error
+  (#1963), and the daemon binary split from a 1708-line `main.rs` into four
+  modules (#1964). Details in `crates/velesdb-memory/CHANGELOG.md`.
 
 ## [5.0.0] — 2026-08-10
 

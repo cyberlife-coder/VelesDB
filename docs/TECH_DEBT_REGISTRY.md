@@ -184,4 +184,4 @@ across all three kinds. The distinct public surfaces (`VectorCollection` /
 shared backing store is a deliberate, honest design choice, not residual debt.
 
 ---
-Last updated: 2026-07-25 · Applies to: velesdb-core 5.0.0
+Last updated: 2026-07-25 · Applies to: velesdb-core 5.1.0

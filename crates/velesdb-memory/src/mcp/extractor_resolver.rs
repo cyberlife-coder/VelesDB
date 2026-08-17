@@ -16,6 +16,12 @@ struct NamedExtractor {
     extractor: DynExtractor,
 }
 
+/// One resolved backend plus the stable name persisted with a durable job.
+pub(super) struct ResolvedExtractor {
+    pub(super) backend: Option<String>,
+    pub(super) extractor: DynExtractor,
+}
+
 /// The daemon-level default plus the rules for a per-call override.
 #[derive(Clone, Default)]
 pub(super) struct ExtractorResolver {
@@ -48,17 +54,21 @@ impl ExtractorResolver {
         }
     }
 
-    /// Resolve an optional per-call name, falling back to the daemon default.
-    pub(super) fn resolve(
+    /// Resolve a backend while retaining the canonical choice needed to
+    /// recover a durable extraction job after process restart.
+    pub(super) fn resolve_for_job(
         &self,
         requested: Option<&str>,
-    ) -> Result<DynExtractor, ExtractorResolveError> {
+    ) -> Result<ResolvedExtractor, ExtractorResolveError> {
         match requested {
             Some(backend) => self.resolve_requested(backend),
             None => self
                 .default
                 .as_ref()
-                .map(|configured| configured.extractor.clone())
+                .map(|configured| ResolvedExtractor {
+                    backend: configured.backend.clone(),
+                    extractor: configured.extractor.clone(),
+                })
                 .ok_or(ExtractorResolveError::DefaultNotConfigured),
         }
     }
@@ -68,9 +78,12 @@ impl ExtractorResolver {
         self.default.is_some()
     }
 
-    fn resolve_requested(&self, backend: &str) -> Result<DynExtractor, ExtractorResolveError> {
+    fn resolve_requested(&self, backend: &str) -> Result<ResolvedExtractor, ExtractorResolveError> {
         match select_extractor(backend).map_err(ExtractorResolveError::InvalidRequest)? {
-            ExtractorSelection::Ready(extractor) => Ok(extractor),
+            ExtractorSelection::Ready(extractor) => Ok(ResolvedExtractor {
+                backend: Some(backend.to_owned()),
+                extractor,
+            }),
             ExtractorSelection::NeedsRemoteConfig(name) => self.resolve_remote(name),
             ExtractorSelection::Disabled => Err(ExtractorResolveError::InvalidRequest(
                 "extractor 'none' cannot extract a passage; omit the field to use the daemon default"
@@ -79,7 +92,7 @@ impl ExtractorResolver {
         }
     }
 
-    fn resolve_remote(&self, backend: &str) -> Result<DynExtractor, ExtractorResolveError> {
+    fn resolve_remote(&self, backend: &str) -> Result<ResolvedExtractor, ExtractorResolveError> {
         let Some(configured) = &self.default else {
             return Err(ExtractorResolveError::InvalidRequest(format!(
                 "extractor '{backend}' is not configured for this server; start it with \
@@ -87,7 +100,10 @@ impl ExtractorResolver {
             )));
         };
         if configured.backend.as_deref() == Some(backend) {
-            return Ok(configured.extractor.clone());
+            return Ok(ResolvedExtractor {
+                backend: Some(backend.to_owned()),
+                extractor: configured.extractor.clone(),
+            });
         }
         let current = configured
             .backend

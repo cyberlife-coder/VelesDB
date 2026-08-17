@@ -35,7 +35,7 @@ collection.upsert([
 
 # 4. Search with a natural language query
 query_vector = model.encode("How does vector search work?").tolist()
-results = collection.search_request(velesdb.SearchOptions(vector=query_vector, top_k=2))
+results = collection.search_request(velesdb.SearchOptions(vector=query_vector, k=2))
 
 for r in results:
     print(f"Score: {r['score']:.4f} | {r['payload']['text']}")
@@ -69,7 +69,7 @@ collection.upsert([{"id": i, "vector": v, "payload": {"text": t}}
                    for i, (v, t) in enumerate(zip(vectors, texts))])
 
 results = collection.search_request(
-    velesdb.SearchOptions(vector=embedder.embed(["fast search"])[0], top_k=2)
+    velesdb.SearchOptions(vector=embedder.embed(["fast search"])[0], k=2)
 )
 ```
 
@@ -91,4 +91,4 @@ so you can drop in your own implementation. `dimension` is inferred after the fi
 
 ---
 
-Last updated: 2026-07-25 · Applies to: velesdb-core 5.0.0
+Last updated: 2026-07-25 · Applies to: velesdb-core 5.1.0

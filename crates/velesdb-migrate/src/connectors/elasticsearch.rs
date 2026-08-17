@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use crate::connectors::common::{
     check_response, create_http_client, detect_fields_from_sample, extract_payload_from_object,
-    parse_vector_from_json,
+    normalise_metric, parse_vector_from_json,
 };
 use crate::connectors::{ExtractedBatch, ExtractedPoint, SourceConnector, SourceSchema};
 use crate::error::{Error, Result};
@@ -169,12 +169,7 @@ impl ElasticsearchConnector {
     /// Unknown labels are lowercased and returned verbatim so
     /// mismatch errors stay actionable rather than masked.
     fn normalise_elasticsearch_metric(raw: &str) -> String {
-        let lower = raw.to_ascii_lowercase();
-        match lower.as_str() {
-            "dot_product" => "dot".to_string(),
-            "l2_norm" => "euclidean".to_string(),
-            _ => lower,
-        }
+        normalise_metric(raw, &[("dot_product", "dot"), ("l2_norm", "euclidean")])
     }
 
     /// Best-effort retrieval of the distance metric from the

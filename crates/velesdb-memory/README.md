@@ -142,7 +142,7 @@ remember { "fact": "we chose parking_lot to avoid lock poisoning",
            "metadata": { "project": "checkout" } }
 → { "id": 9876543210, "id_str": "9876543210" }
 
-recall { "query": "locking strategy", "limit": 5 }
+recall { "query": "locking strategy", "k": 5 }
 → { "memories": [ { "id": 9876543210, "id_str": "9876543210",
                     "score": 0.59,
                     "content": "we chose parking_lot to avoid lock poisoning",
@@ -245,9 +245,9 @@ only a third of the answers; the graph recovers all of them, **+67 pp** with a
 real model. Run that arm yourself:
 
 ```bash
-cargo build --release -p velesdb-memory --features ollama && ollama pull all-minilm
+cargo build --release -p velesdb-memory --features embedder-http && ollama pull all-minilm
 VELESDB_MEMORY_EMBEDDER=ollama \
-  cargo run --release -p velesdb-memory --features ollama --example bench_multihop
+  cargo run --release -p velesdb-memory --features embedder-http --example bench_multihop
 ```
 
 `bench_multihop` measures the *engine's* contribution on controlled data with
@@ -258,11 +258,12 @@ end-to-end *extraction* comparison on the real
 
 ## What the server exposes
 
-22 MCP tools in the default build, in three families:
+27 MCP tools in the default build, in four families:
 
 | Family | Tools |
 |---|---|
-| Durable memory | `remember`, `recall`, `recall_where`, `recall_fused`, `relate`, `unrelate`, `forget`, `entity`, `why`, `feedback`, `remember_extracted`, `memory_status`, `list_memories` |
+| Durable memory | `remember`, `recall`, `recall_where`, `recall_fused`, `relate`, `unrelate`, `forget`, `entity`, `why`, `feedback`, `remember_extracted`, `extraction_status`, `memory_status`, `list_memories` |
+| Online embedding migration | `migration_start`, `migration_status`, `migration_cancel`, `migration_recover` |
 | Context compiler | `compile_context`, `compile_transcript`, `explain_compilation`, `retrieve_context_source`, `context_savings`, `suggest_budget` |
 | Session resumption | `save_working_context`, `load_working_context`, `list_working_contexts` |
 
@@ -280,7 +281,7 @@ capabilities (`query`, `create_collection`, `upsert`, `traverse`).
 | [MCP tool reference](../../docs/reference/MCP_TOOLS.md) | one section per tool: parameters, returns, limits, error model |
 | [Context compiler](../../docs/guides/CONTEXT_COMPILER.md) | budgets, preservation rules, `risk`, retrieval handles, media, `path` ingestion, transcripts, the `compile-stdin` CLI and the `PostToolUse` hook |
 | [Agent Memory SDK](../../docs/guides/AGENT_MEMORY.md) | the *other* path: the embedded, language-native `AgentMemory` API |
-| [Migrating embedding models](../../docs/guides/MIGRATE_EMBEDDINGS.md) | `migrate-embeddings` end to end: regimes, the journal, crash recovery, the switch, and what it costs |
+| [Migrating embedding models](../../docs/guides/MIGRATE_EMBEDDINGS.md) | online daemon migration and offline `migrate-embeddings`: control, recovery, the switch, and measured cost |
 | [`BENCHMARK.md`](BENCHMARK.md) | every published retrieval number, its method, and how to reproduce it |
 | [`POSITIONING.md`](POSITIONING.md) | honest comparison against Mem0 and Zep/Graphiti, and where local-first is a hard requirement |
 | [`CHANGELOG.md`](CHANGELOG.md) | what changed in each release |
@@ -316,7 +317,8 @@ Other verified clients: Cursor, Cline, Zed, opencode, Devin CLI.
 - **A store is fixed to one embedder.** The embedding dimension is probed from
   the model, so do not switch embedders on an existing store.
 - **Bring-your-own-links by default.** The graph is built by `relate` and
-  `links`; automatic extraction needs `--features extract` plus a local model.
+  `links`; automatic extraction needs `--features extractor-http` plus a local
+  model. The former `extract` feature remains a compatibility alias.
 - **`path` ingestion is off unless allowlisted** via
   `VELESDB_MEMORY_INGEST_ROOTS`.
 - **Binding parity is incomplete.** `compile_transcript` is MCP-only; the Node
@@ -333,6 +335,7 @@ Other verified clients: Cursor, Cline, Zed, opencode, Devin CLI.
 | `Storage(DatabaseLocked)` | Two processes opened the same store — usually a second client, or a stray stdio process next to the daemon. | Run one `--http` daemon and point every client at it, or give the second client its own `VELESDB_MEMORY_PATH`. |
 | The server never starts from a JSON/TOML config | `~` is not expanded: those configs spawn the binary without a shell. | Use an absolute path, e.g. `/home/you/.cargo/bin/velesdb-memory`. |
 | `extraction backend not configured` from `remember_extracted` | The call omitted `extractor` and `VELESDB_MEMORY_EXTRACTOR` is unset. | Pass `extractor: "outline"`, or configure the daemon default; see [auto-extraction](../../docs/guides/MCP_SERVER_SETUP.md#auto-extraction-backend-opt-in). |
+| A `remember_extracted` client timed out | The durable job may still be running or committed; a transport timeout is not an outcome. | Retry with the same `idempotency_key`, then poll `extraction_status` using the returned `request_id`. |
 | `IngestDisabled` on a `path` fragment | `VELESDB_MEMORY_INGEST_ROOTS` is unset or empty — path ingestion is off by default. | Start the server with an allowlist of absolute directories. |
 | `relate` / `forget` reports a missing id from a JS client | Ids exceed 2^53 and lose precision as JSON numbers. | Relay the `id_str` field, or set `"policy": {"ids_as_strings": true}` on compiler calls. |
 
@@ -362,4 +365,4 @@ Questions: contact@wiscale.fr.
 
 ---
 
-`velesdb-memory v0.12.0` · Last updated: 2026-08-08 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)
+`velesdb-memory v0.13.0` · Last updated: 2026-08-15 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)

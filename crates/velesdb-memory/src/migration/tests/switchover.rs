@@ -83,6 +83,91 @@ fn a_full_switch_activates_the_destination_and_frees_the_archive() {
 }
 
 #[test]
+fn a_live_switch_retains_the_archive_until_the_new_generation_is_installed() {
+    let root = root_with_source();
+    let executed = validated(root.path());
+    let store = root.path().join("store");
+    let archive = root.path().join("store.archive");
+
+    super::super::stage_live_switch(&store, &executed.destination).expect("stage");
+    super::super::finalize_staged_live_switch(&store, &executed.destination).expect("finalize");
+    assert!(
+        archive.exists(),
+        "the old generation still has a recovery copy"
+    );
+    assert_eq!(
+        journal(&executed.workspace).phase,
+        Phase::DestinationActivated
+    );
+
+    super::super::commit_retained_switch(&store, &executed.destination)
+        .expect("commit after installing the new generation");
+    assert!(!archive.exists(), "commit may now release the archive");
+    assert_eq!(journal(&executed.workspace).phase, Phase::Committed);
+}
+
+#[test]
+fn a_staged_live_switch_can_roll_back_before_activation() {
+    let root = root_with_source();
+    let executed = validated(root.path());
+    let store = root.path().join("store");
+    let archive = root.path().join("store.archive");
+
+    super::super::stage_live_switch(&store, &executed.destination).expect("stage");
+    assert!(store.exists() && archive.exists());
+    assert!(!executed.destination.exists());
+    assert_eq!(
+        journal(&executed.workspace).phase,
+        Phase::DestinationValidated,
+        "physical staging must remain pre-activation in durable state"
+    );
+
+    super::super::rollback_staged_live_switch(&store, &executed.destination).expect("rollback");
+    assert!(store.exists());
+    assert!(!archive.exists());
+    assert!(executed.destination.exists());
+    assert_eq!(
+        journal(&executed.workspace).phase,
+        Phase::DestinationValidated
+    );
+}
+
+#[test]
+fn a_live_crash_after_the_first_rename_rolls_back_to_source_authority() {
+    let root = root_with_source();
+    let executed = validated(root.path());
+    let store = root.path().join("store");
+    let archive = root.path().join("store.archive");
+    std::fs::rename(&store, &archive).expect("first rename");
+
+    super::super::rollback_staged_live_switch(&store, &executed.destination)
+        .expect("rollback first rename");
+
+    assert!(store.exists());
+    assert!(executed.destination.exists());
+    assert!(!archive.exists());
+    assert_eq!(
+        journal(&executed.workspace).phase,
+        Phase::DestinationValidated
+    );
+}
+
+#[test]
+fn a_staged_live_switch_is_journalled_only_after_activation() {
+    let root = root_with_source();
+    let executed = validated(root.path());
+    let store = root.path().join("store");
+
+    super::super::stage_live_switch(&store, &executed.destination).expect("stage");
+    super::super::finalize_staged_live_switch(&store, &executed.destination).expect("finalize");
+    assert_eq!(
+        journal(&executed.workspace).phase,
+        Phase::DestinationActivated
+    );
+    assert!(root.path().join("store.archive").exists());
+}
+
+#[test]
 fn a_switch_before_validation_is_refused() {
     let root = root_with_source();
     let executed = run(root.path()).expect("execute");

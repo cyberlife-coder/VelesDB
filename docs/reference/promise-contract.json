@@ -330,6 +330,153 @@
       "measured_on": "2026-07-26",
       "measured_machine": "platform-independent (committed corpus, deterministic tokenizer)",
       "measured_version": "4.0.0"
+    },
+    {
+      "id": "mcp_same_named_scalar_wire_tolerance",
+      "file": "docs/reference/MCP_TOOLS.md",
+      "must_contain": "**Invariant:** same field name + same advertised scalar type means identical tolerance for the JSON-encoded string form.",
+      "validation_command": "cargo test -p velesdb-memory --test mcp_schema_bdd same_named_scalar_input_slots_share_wire_tolerance -- --exact --test-threads=1",
+      "executable": false,
+      "source": "Issue #1686: the live-schema MCP regression test compares the accepted wire form for every repeated field-name and scalar-type pair.",
+      "last_updated": "2026-08-15",
+      "measured_on": "2026-08-17",
+      "measured_machine": "platform-independent (wire-schema contract)",
+      "measured_version": "5.1.0"
+    },
+    {
+      "id": "mcp_lenient_scalar_rejects_incompatible_forms",
+      "file": "docs/reference/MCP_TOOLS.md",
+      "must_contain": "**Rejection invariant:** leniency never accepts an invalid JSON string or a value of another scalar or container type.",
+      "validation_command": "cargo test -p velesdb-memory --test mcp_schema_bdd every_non_string_scalar_input_rejects_incompatible_forms -- --exact --test-threads=1",
+      "executable": false,
+      "source": "Issue #1686: the live MCP server must reject invalid strings and incompatible scalar or container values at every non-string scalar input slot.",
+      "last_updated": "2026-08-15",
+      "measured_on": "2026-08-17",
+      "measured_machine": "platform-independent (wire-schema contract)",
+      "measured_version": "5.1.0"
+    }
+  ],
+  "claim_families": [
+    {
+      "id": "binary_size",
+      "canonical_claim_id": "readme_binary_size_9mb",
+      "canonical_value": "~10 MB",
+      "members": [
+        {
+          "file": "README.md",
+          "value": "~10 MB",
+          "must_contain": "One ~10 MB binary"
+        },
+        {
+          "file": "README.md",
+          "value": "~10 MB",
+          "must_contain": "| **Binary size** | ~10 MB |"
+        },
+        {
+          "file": "docs/README.md",
+          "value": "~10 MB",
+          "must_contain": "One ~10 MB binary"
+        },
+        {
+          "file": "docs/WHY_VELESDB.md",
+          "value": "~10 MB",
+          "must_contain": "single embeddable ~10 MB binary"
+        },
+        {
+          "file": "ARCHITECTURE.md",
+          "value": "~10 MB",
+          "must_contain": "single ~10 MB binary"
+        },
+        {
+          "file": "docs/BUSINESS_MODEL.md",
+          "value": "~10 MB",
+          "must_contain": "single binary (~10 MB)"
+        },
+        {
+          "file": "docs/guides/BUSINESS_SCENARIOS.md",
+          "value": "~10 MB",
+          "must_contain": "**~10 MB binary**"
+        },
+        {
+          "file": "AGENTS.md",
+          "value": "~10 MB",
+          "must_contain": "single ~10 MB binary"
+        },
+        {
+          "file": "CLAUDE.md",
+          "value": "~10 MB",
+          "must_contain": "single ~10 MB binary"
+        }
+      ]
+    },
+    {
+      "id": "wasm_bundle_size",
+      "canonical_claim_id": "readme_wasm_bundle_gzipped",
+      "canonical_value": "~674 KB",
+      "members": [
+        {
+          "file": "README.md",
+          "value": "~674 KB",
+          "must_contain": "WASM build is ~674 KB gzipped"
+        },
+        {
+          "file": "README.md",
+          "value": "~674 KB",
+          "must_contain": "WASM, ~674 KB gzipped"
+        },
+        {
+          "file": "docs/wasm/bundle-optimization.md",
+          "value": "~674 KB",
+          "must_contain": "| Release (gzipped) | < 200 KB | ~674 KB |"
+        },
+        {
+          "file": "docs/wasm/bundle-optimization.md",
+          "value": "~674 KB",
+          "must_contain": "measured figure (~674 KB gzipped,"
+        },
+        {
+          "file": "docs/wasm/bundle-optimization.md",
+          "value": "~674 KB",
+          "must_contain": "artifact (~674 KB gzipped, ~2.0 MB raw)"
+        }
+      ]
+    },
+    {
+      "id": "rest_endpoint_count",
+      "canonical_claim_id": "readme_rest_endpoint_count",
+      "canonical_value": "54 REST endpoints",
+      "members": [
+        {
+          "file": "README.md",
+          "value": "54 REST endpoints",
+          "must_contain": "benchmark figures, \"54 REST endpoints\""
+        },
+        {
+          "file": "README.md",
+          "value": "54 REST endpoints",
+          "must_contain": "**REST:** 54 REST endpoints"
+        },
+        {
+          "file": "README.md",
+          "value": "54 REST endpoints",
+          "must_contain": "| 54 REST endpoints —"
+        },
+        {
+          "file": "README.md",
+          "value": "54 REST endpoints",
+          "must_contain": "Serving it over HTTP — the 54 REST endpoints"
+        },
+        {
+          "file": "docs/reference/ARCHITECTURE.md",
+          "value": "54 REST endpoints",
+          "must_contain": "- 54 REST endpoints (61 method+path operations)"
+        },
+        {
+          "file": "docs/NEW_USER_TROUBLESHOOTING.md",
+          "value": "54 REST endpoints",
+          "must_contain": "All 54 REST endpoints with request/response examples"
+        }
+      ]
     }
   ]
 }

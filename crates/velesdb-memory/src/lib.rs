@@ -74,7 +74,7 @@ pub mod http;
 /// Synchronous retry + actionable failure reporting shared by the two blocking
 /// Ollama call sites ([`embedder`] and [`extract`]). Internal: it exists to make
 /// those two backends resilient, not to be a general-purpose retry API.
-#[cfg(any(feature = "ollama", feature = "extract"))]
+#[cfg(any(feature = "embedder-http", feature = "extractor-http"))]
 mod http_retry;
 /// Content-addressed memory ids — internal; ids surface through the service API.
 pub(crate) mod id;
@@ -100,15 +100,17 @@ pub mod migration;
 /// (`Link`, `Recollection`, `ColumnFilter`, `Explanation`, …), separate from the
 /// service that computes them.
 pub mod model;
+#[cfg(feature = "persistence")]
+mod mutation;
 
 /// Authenticated JSON over HTTP: the transport under every remote inference
 /// backend, with no knowledge of role or vendor.
-#[cfg(any(feature = "ollama", feature = "extract"))]
+#[cfg(any(feature = "embedder-http", feature = "extractor-http"))]
 pub mod http_client;
 
 /// The OpenAI-compatible protocol — paths, bodies, responses — over
 /// [`http_client`].
-#[cfg(any(feature = "ollama", feature = "extract"))]
+#[cfg(any(feature = "embedder-http", feature = "extractor-http"))]
 mod openai;
 /// Is a configured remote inference backend actually reachable? (#1751 D2)
 ///
@@ -117,12 +119,12 @@ mod openai;
 /// remote backend to be unreachable, and no transport to ask with. Declaring
 /// it unconditionally compiled here and nowhere else — the default build has
 /// neither dependency.
-#[cfg(any(feature = "ollama", feature = "extract"))]
+#[cfg(any(feature = "embedder-http", feature = "extractor-http"))]
 pub mod reachability;
 /// Where a remote embedding/extraction backend's URL, model and credential
 /// come from, resolved from the environment once so the daemon and the
 /// language bindings read the same variables the same way (#1886).
-#[cfg(any(feature = "ollama", feature = "extract"))]
+#[cfg(any(feature = "embedder-http", feature = "extractor-http"))]
 pub mod remote_endpoint;
 /// Optional second-stage re-scoring of a fused recall pool (bring your own
 /// cross-encoder/LLM). Never wired in by default — see [`rerank::Reranker`].
@@ -141,6 +143,10 @@ pub mod storage;
 /// behind `http` since it exists only to serve that transport.
 #[cfg(feature = "http")]
 pub mod tls;
+/// Shared defensive deserialization for non-string scalar and structured
+/// inputs whose client-side schema can degrade to untyped JSON.
+#[cfg(any(feature = "mcp", feature = "context"))]
+mod wire;
 
 /// Default embedding dimension — the single source of truth, taken from the
 /// SDK's own default so the server, library, and tests never restate the
@@ -170,17 +176,18 @@ pub use context::ContextCompiler;
 pub use dated_context::{format_dated_context, DatedContext};
 pub use embedder::{
     select_embedder, DynEmbedder, EmbedError, Embedder, EmbedderSelection, HashEmbedder,
+    HASH_EMBEDDER_NOTICE,
 };
-#[cfg(feature = "ollama")]
+#[cfg(feature = "embedder-http")]
 pub use embedder::{OllamaEmbedder, OpenAiEmbedder, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL};
 pub use error::{ErrorCategory, MemoryError};
 pub use extract::{
     select_extractor, DynExtractor, ExtractError, ExtractedAttribute, ExtractedFact,
     ExtractedRelation, Extraction, Extractor, ExtractorSelection, OutlineExtractor,
 };
-#[cfg(feature = "extract")]
+#[cfg(feature = "extractor-http")]
 pub use extract::{OllamaExtractor, OpenAiExtractor};
-#[cfg(any(feature = "ollama", feature = "extract"))]
+#[cfg(any(feature = "embedder-http", feature = "extractor-http"))]
 pub use http_client::{Auth, HttpJsonClient};
 #[cfg(feature = "mcp")]
 pub use mcp::McpServer;
@@ -189,9 +196,9 @@ pub use model::{
     EntityRelation, Explanation, FusionOptions, Link, MemoryEdge, MemoryNode, Recollection,
     RememberedExtraction, UnrelateOutcome,
 };
-#[cfg(feature = "ollama")]
+#[cfg(feature = "embedder-http")]
 pub use remote_endpoint::embedder_env_endpoint;
-#[cfg(any(feature = "ollama", feature = "extract"))]
+#[cfg(any(feature = "embedder-http", feature = "extractor-http"))]
 pub use remote_endpoint::{role_auth, RemoteEndpoint};
 pub use rerank::{DynReranker, RerankError, Reranker};
 pub use service::{AutographWorkerHandle, MemoryService, Metadata};

@@ -11,7 +11,7 @@
 //! it was until #1886, simply never reading) the resolution the daemon
 //! already had.
 
-#[cfg(feature = "ollama")]
+#[cfg(feature = "embedder-http")]
 use crate::config::{alias_conflict_notice, resolve_alias};
 use crate::http_client::Auth;
 
@@ -96,7 +96,7 @@ pub fn role_auth(name: &str) -> Result<Auth, String> {
 ///
 /// # Errors
 /// An `_API_TOKEN` that is set but empty.
-#[cfg(feature = "ollama")]
+#[cfg(feature = "embedder-http")]
 pub fn embedder_env_endpoint() -> Result<(RemoteEndpoint, Option<String>), String> {
     let url = resolve_alias(
         env_opt("VELESDB_MEMORY_EMBEDDER_URL").as_deref(),
@@ -124,6 +124,6 @@ pub fn embedder_env_endpoint() -> Result<(RemoteEndpoint, Option<String>), Strin
     Ok((endpoint, alias_conflict_notice(&conflicts)))
 }
 
-#[cfg(all(test, feature = "ollama"))]
+#[cfg(all(test, feature = "embedder-http"))]
 #[path = "remote_endpoint_tests.rs"]
 mod tests;

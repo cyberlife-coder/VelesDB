@@ -1,6 +1,6 @@
 # 🎯 Search Modes - Recall Configuration Guide
 
-*Version 5.0.0 -- Last updated: 2026-08-08*
+*Version 5.1.0 -- Last updated: 2026-08-08*
 
 Complete guide to the **recall vs latency** trade-off in VelesDB: what the search modes mean and when to pick which. Covers dense search (HNSW), sparse search (SPLADE/BM42), and hybrid search (dense+sparse with fusion). Includes a comparison with Milvus, OpenSearch, and Qdrant practices.
 
@@ -309,7 +309,7 @@ coll = db.get_collection("docs")
 
 results = coll.search_request(velesdb.SearchOptions(
     sparse_vector={42: 0.8, 156: 0.3, 891: 0.5},
-    top_k=10
+    k=10
 ))
 ```
 
@@ -367,7 +367,7 @@ When both the `vector` and `sparse_vector` fields are provided, VelesDB automati
 results = coll.search_request(velesdb.SearchOptions(
     vector=[0.1, 0.2, 0.3, ...],
     sparse_vector={42: 0.8, 156: 0.3},
-    top_k=10
+    k=10
 ))
 ```
 
@@ -779,4 +779,4 @@ println!("Recall@10: {:.1}%", recall * 100.0);
 
 ---
 
-*VelesDB Documentation -- Last updated: 2026-08-08 · Applies to: velesdb-core 5.0.0*
+*VelesDB Documentation -- Last updated: 2026-08-08 · Applies to: velesdb-core 5.1.0*

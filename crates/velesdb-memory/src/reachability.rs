@@ -44,6 +44,7 @@ use std::time::Duration;
 
 /// What a probe found. Every variant is one distinct next action.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // diagnosis outcomes grow as failure modes are learned; matching externally requires a wildcard arm
 pub enum Reachability {
     /// The server answered and lists the configured model.
     Reachable,
@@ -87,11 +88,13 @@ pub fn probe_openai(
     timeout: Duration,
 ) -> Reachability {
     let url = format!("{}{MODELS_PATH}", crate::openai::base_url(base_url));
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(timeout)
-        .timeout_read(timeout)
-        .timeout_write(timeout)
-        .build();
+    // `uniform` also sets the OVERALL deadline, which this construction never
+    // did: the doc above has always promised "the whole budget", but without
+    // `.timeout()` the worst case was one budget each for connect, write and
+    // read — three times the promise. Aligning the code with its own contract
+    // is the one behavioral change of the agent consolidation.
+    let agent =
+        crate::http_client::bounded_agent(crate::http_client::AgentBudget::uniform(timeout));
     let mut request = agent.get(&url);
     if let Some(secret) = token {
         request = request.set("Authorization", &format!("Bearer {secret}"));

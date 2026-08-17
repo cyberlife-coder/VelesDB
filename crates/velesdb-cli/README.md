@@ -109,7 +109,7 @@ velesdb repl ./data
 ```
 
 ```
-VelesDB v4.3.0 - VelesQL REPL
+VelesDB v5.1.0 - VelesQL REPL
 Database: ./data
 Type .help for commands, .quit to exit
 
@@ -199,7 +199,7 @@ a prebuilt binary in each GitHub release; any other target can be built with
 | Windows x86_64 (`x86_64-pc-windows-msvc`) | Prebuilt | ZIP archive; WiX (MSI) sources in `wix/` |
 | Linux aarch64 | Build from source | No prebuilt CLI binary — use `cargo install velesdb-cli` |
 | Rust toolchain | 1.90+ | Workspace `rust-version` |
-| VelesDB database format | velesdb-core 4.3.0 | Same-version core is assumed; migration guides are listed in the [guides index](../../docs/guides/README.md) |
+| VelesDB database format | velesdb-core 5.1.0 | Same-version core is assumed; migration guides are listed in the [guides index](../../docs/guides/README.md) |
 
 ## Troubleshooting
 
@@ -218,4 +218,4 @@ Licensed under the [VelesDB Core License 1.0](./LICENSE) (source-available).
 
 ---
 
-`velesdb-cli v5.0.0` · Last updated: 2026-08-10 · Applies to: velesdb-core 5.0.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)
+`velesdb-cli v5.1.0` · Last updated: 2026-08-13 · Applies to: velesdb-core 5.1.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)

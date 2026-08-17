@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{debug, info, warn};
 
-use super::common::{check_response, create_http_client};
+use super::common::{check_response, create_http_client, normalise_metric};
 use super::{ExtractedBatch, ExtractedPoint, SourceConnector, SourceSchema};
 use crate::config::QdrantConfig;
 use crate::error::Result;
@@ -37,11 +37,7 @@ impl QdrantConnector {
     /// verbatim so mismatch errors stay actionable instead of being
     /// silently dropped.
     fn normalise_qdrant_metric(raw: &str) -> String {
-        let lower = raw.to_ascii_lowercase();
-        match lower.as_str() {
-            "euclid" => "euclidean".to_string(),
-            _ => lower,
-        }
+        normalise_metric(raw, &[("euclid", "euclidean")])
     }
 
     /// Pick the "primary" named vector from a multi-vector Qdrant

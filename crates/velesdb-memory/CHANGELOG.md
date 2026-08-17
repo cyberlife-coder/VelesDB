@@ -7,9 +7,24 @@ released on its own `velesdb-memory-vX.Y.Z` tag.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.13.0] - 2026-08-17
 
 ### Added
+
+- **Daemon-owned online embedding migration (#1796).** Four MCP tools now
+  start, inspect, cancel, and recover a background re-embedding without
+  opening the live source from a second process. A bounded, checksummed dirty
+  journal captures every mutation before it reaches the source; catch-up
+  reports convergence and refuses an unsafe cutover; the exclusive live
+  generation switch enforces the operator's pause budget and recovers across
+  either rename. Durable job state, epoch/model witnesses, verified
+  cancellation cleanup, process-level concurrent-write coverage, and measured
+  no-capture/capture overhead complete the operator contract.
+
+- **Role-named HTTP inference features (#1766).** `embedder-http` enables the
+  Ollama and OpenAI-compatible embedding backends; `extractor-http` enables
+  their extraction counterparts. The former `ollama` and `extract` features
+  remain aliases for compatibility with existing consumers.
 
 - **`openai`: an OpenAI-compatible backend for BOTH roles (#1751).** Set
   `VELESDB_MEMORY_EMBEDDER=openai` or `VELESDB_MEMORY_EXTRACTOR=openai` to
@@ -155,6 +170,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (MCP) — `remember_extracted` is now a durable asynchronous job
+  (#1839).** It returns `{request_id, state, reused}` immediately after an
+  `accepted` record is synced, rather than holding the transport open across
+  model generation and graph writes. Callers should supply one
+  `idempotency_key` per logical operation and poll the new
+  `extraction_status` tool for `{state, ids, ids_str, skipped_over_cap,
+  error}`. Identical retries reuse the persisted receipt; a changed payload
+  under the same key is rejected. Accepted/running jobs recover after restart,
+  and the generated extraction is persisted before writes so an interrupted
+  commit replays stable output. The Rust `MemoryService` and language-binding
+  methods remain synchronous and keep their existing return envelopes.
+
 - **BREAKING — `remember_extracted` returns an envelope**, `{ids,
   skipped_over_cap}` (`{ids, skippedOverCap}` on the JS surfaces), where Node
   returned `Array<string>` and Python `List[int]`. **Migration**: read
@@ -186,6 +213,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   itself is kept, unused, so the next honest admission has wording to reach
   for. Worth stating plainly: nothing caps how many gaps may be declared, and
   adding a seventh would have been exactly as green as fixing six.
+
+- **The error surface is frozen for semver, enum by enum (#1960).**
+  `MemoryError` and `ErrorCategory` are `#[non_exhaustive]` (adding a variant
+  is no longer a breaking change), while the selection enums stay deliberately
+  exhaustive — a wildcard arm there would silently ignore a new capability.
+  `ErrorCategory::ALL` restores enumerability at test time, and each binding
+  adapter (Node, Python, WASM) now splits its category mapping into an
+  explicit half and a fallback, with a test over `ALL` that fails the moment a
+  category is left to the fallback.
+
+- **All HTTP clients are built by one bounded constructor (#1961).**
+  `http_client::bounded_agent(AgentBudget)` replaces five hand-rolled `ureq`
+  agents; every client now carries explicit connect/write/overall timeouts,
+  with the timeout-precedence rules documented in one place.
+
+- **`WorkingContextCodec` carries a structured error (#1963).** A corrupt
+  working-context index reports what was in flight and which slot, with the
+  underlying serde error attached as a boxed `#[source]`; the degraded-index
+  fallback now matches on the variant rather than on message text. The other
+  error variants keep prose payloads by recorded decision: a variant earns
+  structure only when structure is being lost.
+
+- **The binary's 1708-line `main.rs` is split along its four seams (#1964)**
+  — transport/lifecycle, startup assembly, backend builders, and early
+  commands — leaving a 92-line entry point. `config.rs` now documents where
+  the library is allowed to read the environment; a new `env::var` anywhere
+  else is a defect by that doctrine.
+
+- **The two over-threshold functions are under the CCN gate (#1962)**, and
+  the graph-extraction model guidance is picked on measurement rather than
+  parameter count (#1943).
 
 ## [0.12.0] - 2026-07-30
 

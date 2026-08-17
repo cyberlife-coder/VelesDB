@@ -242,26 +242,30 @@ fn embedder_witness(
 ) -> Result<Option<String>, crate::MemoryError> {
     match resolution {
         Resolution::Reuse => Ok(None),
-        Resolution::Reembed { .. } => {
-            use sha2::Digest;
-            let vector = embedder.embed(WITNESS_SENTENCE).map_err(|err| {
-                query_error(format!(
-                    "the target embedder cannot embed the witness: {err}"
-                ))
-            })?;
-            let mut hash = sha2::Sha256::new();
-            for value in &vector {
-                hash.update(value.to_le_bytes());
-            }
-            Ok(Some(format!(
-                "sha256:{}",
-                super::filesystem::encode_hex(&hash.finalize())
-            )))
-        }
+        Resolution::Reembed { .. } => target_embedder_witness(embedder).map(Some),
         Resolution::Refuse { .. } => {
             unreachable!("execute gated Refuse before the witness was computed")
         }
     }
+}
+
+pub(crate) fn target_embedder_witness(
+    embedder: &dyn Embedder,
+) -> Result<String, crate::MemoryError> {
+    use sha2::Digest;
+    let vector = embedder.embed(WITNESS_SENTENCE).map_err(|err| {
+        query_error(format!(
+            "the target embedder cannot embed the witness: {err}"
+        ))
+    })?;
+    let mut hash = sha2::Sha256::new();
+    for value in &vector {
+        hash.update(value.to_le_bytes());
+    }
+    Ok(format!(
+        "sha256:{}",
+        super::filesystem::encode_hex(&hash.finalize())
+    ))
 }
 
 /// Read-and-verify the existing journal, or write the first entry.
@@ -353,7 +357,7 @@ fn regime_word(strategy: super::strategy::Strategy) -> &'static str {
 }
 
 /// The journal's home: a sibling of the destination, named after it.
-pub(super) fn journal_workspace(destination: &Path) -> Result<PathBuf, crate::MemoryError> {
+pub(crate) fn journal_workspace(destination: &Path) -> Result<PathBuf, crate::MemoryError> {
     let name = destination
         .file_name()
         .and_then(|name| name.to_str())

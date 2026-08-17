@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Verify release binary sizes stay within the advertised ceilings.
 
-The README advertises a "~9 MB binary" (`velesdb-server`, stripped release).
+The README advertises a "~10 MB binary" (`velesdb-server`, stripped release).
 Until this gate existed, that figure was prose only — nothing measured it, so a
 heavy dependency could have silently inflated the binary while the claim went
 stale. This script measures each release binary and fails if it exceeds its
@@ -27,7 +27,7 @@ import sys
 MIB = 1024 * 1024
 
 # (binary file name, ceiling in bytes). `velesdb` is the CLI; `velesdb-server`
-# is the "~9 MB binary" the README headline refers to.
+# is the "~10 MB binary" the README headline refers to.
 BINARIES = [
     ("velesdb-server", 12 * MIB),
     ("velesdb", 10 * MIB),
