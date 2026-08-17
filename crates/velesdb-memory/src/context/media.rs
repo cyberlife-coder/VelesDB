@@ -108,16 +108,11 @@ fn decode_quad(quad: &[u8], out: &mut Vec<u8>) -> Result<usize, DecodeError> {
         | (u32::from(sextets[1]) << 12)
         | (u32::from(sextets[2]) << 6)
         | u32::from(sextets[3]);
-    #[allow(clippy::cast_possible_truncation)]
-    out.push((word >> 16) as u8);
-    if pad < 2 {
-        #[allow(clippy::cast_possible_truncation)]
-        out.push((word >> 8) as u8);
-    }
-    if pad < 1 {
-        #[allow(clippy::cast_possible_truncation)]
-        out.push(word as u8);
-    }
+    // The 24 decoded bits sit in the low three bytes of the big-endian word;
+    // padding shortens the tail. Slicing `to_be_bytes` says exactly that, and
+    // says it without the three truncating casts (each carrying its own
+    // clippy allow) that the shift-and-push spelling needed.
+    out.extend_from_slice(&word.to_be_bytes()[1..4 - pad]);
     Ok(pad)
 }
 
