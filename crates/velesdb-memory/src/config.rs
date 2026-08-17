@@ -20,6 +20,21 @@
 //! single run with `VELESDB_MEMORY_OLLAMA_MODEL=… velesdb-memory`, which is
 //! the behaviour anyone who has used a dotfile-driven tool expects.
 //!
+//! # Where the library is allowed to read the environment
+//!
+//! Audited 2026-08-17: every `std::env::var` in this library sits in a module
+//! whose *purpose* is resolving daemon configuration — this one,
+//! [`crate::logging`], [`crate::http`], [`crate::tls`], and
+//! [`crate::remote_endpoint`] (the single door for role endpoints and
+//! credentials). Those reads are the doors, named by their variable, and the
+//! export-into-env rule above is what lets one file feed them all. The single
+//! exception is [`crate::embedder`]'s keep-alive knob, read **per call** on
+//! purpose: it is shared by both Ollama roles and documented as a live
+//! setting, and hoisting it to construction time would silently change when
+//! it takes effect. Role modules otherwise receive values from their callers;
+//! a new `env::var` anywhere else in the library should be treated as a
+//! defect against this paragraph.
+//!
 //! The file is entirely optional: no file, or a file with only some keys, is
 //! not an error. A file that exists but cannot be parsed **is** an error —
 //! silently ignoring a malformed config is how a daemon ends up quietly
