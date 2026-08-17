@@ -416,8 +416,6 @@ fn open_store_with_actionable_lock_error(
     store_path: &str,
     configured: ConfiguredEmbedder,
 ) -> Result<MemoryService<DynEmbedder>, Box<dyn std::error::Error>> {
-    use velesdb_memory::MemoryError;
-
     let ConfiguredEmbedder { embedder, model } = configured;
     let dimension = embedder.dimension();
     // Read BEFORE the store is opened, so a mismatch is refused instead of
@@ -429,33 +427,50 @@ fn open_store_with_actionable_lock_error(
     velesdb_memory::embedding_provenance::check(recorded.as_ref(), &model, dimension)?;
     let unrecorded = recorded.is_none();
 
+    match open_through_lock_retries(store_path, dimension) {
+        Ok(store) => {
+            if unrecorded {
+                record_embedding_model(store_dir, &store, &model, dimension);
+            }
+            Ok(MemoryService::with_store(store, embedder))
+        }
+        // A dimension mismatch surfaces here, from the core. When the store
+        // carries no model record, that dimension was the ONLY thing that
+        // could be compared, and saying so is what stops a caller reading
+        // the core's message as a full compatibility verdict.
+        Err(other) if unrecorded => Err(format!(
+            "{other}\n{}",
+            velesdb_memory::embedding_provenance::unrecorded_model_note(&model)
+        )
+        .into()),
+        Err(other) => Err(other.into()),
+    }
+}
+
+/// The lock-retry loop alone: open the store, sitting out up to
+/// [`LOCK_RETRY_ATTEMPTS`] × [`LOCK_RETRY_DELAY`] of `DatabaseLocked`.
+///
+/// A lock that outlives every retry prints the actionable message and exits
+/// the process rather than returning — that message, not a generic `Result`
+/// bubble-up, is the point: a bare `Storage(DatabaseLocked(..))` debug dump
+/// gives a user nothing to act on (#1448). Every other error returns to the
+/// caller, which owns the provenance context this loop knows nothing about.
+fn open_through_lock_retries(
+    store_path: &str,
+    dimension: usize,
+) -> Result<NativeStore, velesdb_memory::MemoryError> {
+    use velesdb_memory::MemoryError;
+
     let mut last_locked_path: Option<String> = None;
     for attempt in 0..LOCK_RETRY_ATTEMPTS {
         match NativeStore::open(store_path, dimension) {
-            Ok(store) => {
-                if unrecorded {
-                    record_embedding_model(store_dir, &store, &model, dimension);
-                }
-                return Ok(MemoryService::with_store(store, embedder));
-            }
             Err(MemoryError::Storage(velesdb_core::Error::DatabaseLocked(locked_path))) => {
                 last_locked_path = Some(locked_path);
                 if attempt + 1 < LOCK_RETRY_ATTEMPTS {
                     std::thread::sleep(LOCK_RETRY_DELAY);
                 }
             }
-            // A dimension mismatch surfaces here, from the core. When the store
-            // carries no model record, that dimension was the ONLY thing that
-            // could be compared, and saying so is what stops a caller reading
-            // the core's message as a full compatibility verdict.
-            Err(other) if unrecorded => {
-                return Err(format!(
-                    "{other}\n{}",
-                    velesdb_memory::embedding_provenance::unrecorded_model_note(&model)
-                )
-                .into())
-            }
-            Err(other) => return Err(other.into()),
+            outcome => return outcome,
         }
     }
 
