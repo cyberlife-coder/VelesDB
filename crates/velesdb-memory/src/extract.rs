@@ -960,17 +960,6 @@ pub const DEFAULT_OLLAMA_URL: &str = "http://localhost:11434";
 #[cfg(feature = "extractor-http")]
 const REQUEST_TIMEOUT_SECS: u64 = 300;
 
-/// Ceiling on establishing the TCP connection to Ollama. Short on purpose: a
-/// local daemon accepts at once or is not running, and `ureq`'s 30 s default
-/// would be paid once per replay.
-#[cfg(feature = "extractor-http")]
-const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
-
-/// Ceiling on writing the request (prompt upload). Unlike the read bound, this
-/// one is applied to the socket at connect time and is genuinely in force.
-#[cfg(feature = "extractor-http")]
-const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-
 /// Ceiling on how many tokens one extraction call may generate.
 ///
 /// Unbounded, the real graph-extraction prompt measured 3 933 completion
@@ -1065,13 +1054,10 @@ impl OllamaExtractor {
     /// with replays, that idle wait would be paid three times over.
     #[must_use]
     pub fn new(base_url: impl Into<String>, model: impl Into<String>) -> Self {
-        let timeout = std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS);
-        let agent = ureq::AgentBuilder::new()
-            .timeout_connect(CONNECT_TIMEOUT)
-            .timeout_write(WRITE_TIMEOUT)
-            .timeout_read(timeout)
-            .timeout(timeout)
-            .build();
+        let agent =
+            crate::http_client::bounded_agent(crate::http_client::AgentBudget::local_daemon(
+                std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS),
+            ));
         Self {
             base_url: base_url.into(),
             model: model.into(),
@@ -1137,13 +1123,10 @@ impl OpenAiExtractor {
         model: impl Into<String>,
         auth: crate::http_client::Auth,
     ) -> Self {
-        let timeout = std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS);
-        let agent = ureq::AgentBuilder::new()
-            .timeout_connect(CONNECT_TIMEOUT)
-            .timeout_write(WRITE_TIMEOUT)
-            .timeout_read(timeout)
-            .timeout(timeout)
-            .build();
+        let agent =
+            crate::http_client::bounded_agent(crate::http_client::AgentBudget::local_daemon(
+                std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS),
+            ));
         Self {
             client: crate::http_client::HttpJsonClient::new(
                 crate::openai::base_url(&base_url.into()),
