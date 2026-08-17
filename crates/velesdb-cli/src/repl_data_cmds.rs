@@ -223,7 +223,11 @@ pub(crate) fn cmd_upsert(db: &Database, parts: &[&str]) -> CommandResult {
             let point = velesdb_core::Point::new(id, vector, payload);
             match col.upsert(vec![point]) {
                 Ok(()) => {
-                    let _ = col.flush();
+                    if let Err(e) = col.flush() {
+                        return CommandResult::Error(format!(
+                            "Upsert succeeded but flush failed: {e}"
+                        ));
+                    }
                     println!(
                         "{} Upserted point {} into '{}'\n",
                         "\u{2713}".green(),
