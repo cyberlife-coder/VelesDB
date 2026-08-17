@@ -564,6 +564,26 @@ def http_json(url: str, payload: "dict | None" = None, token: "str | None" = Non
     return json.loads(body) if body.strip() else {}
 
 
+def generation_timeout(cap: int) -> int:
+    """A client timeout scaled to what the server was ASKED to generate.
+
+    `http_json` defaults to 400 s, which was chosen against a machine that
+    generates quickly. It is not scaled to `num_predict`, and on a slow host it
+    is the cap that decides how long a reply takes: raising the cap to 1024 or
+    4096 raises the time proportionally, and a fixed ceiling turns the larger
+    arms of an experiment into timeouts.
+
+    A timeout is not a bad measurement here — nothing catches it, so it crashes
+    the run and no result file is written, which the caller reports as an
+    inability to measure. But an experiment that cannot complete answers
+    nothing, and that is a poor reason to lose a two-hour run.
+
+    Two seconds per token is far above any real rate; the point is a bound that
+    scales, not a prediction. The job's own timeout stays the real ceiling.
+    """
+    return max(400, cap * 2)
+
+
 def http_text(url: str, timeout: int = 30) -> str:
     """One GET whose body is read as text, for endpoints that answer no JSON.
 
@@ -608,7 +628,8 @@ class OpenAiBackend:
             "max_tokens": self.cap,
         }
         started = time.monotonic()
-        response = http_json(f"{self.base_url}/v1/chat/completions", body, self.token)
+        response = http_json(f"{self.base_url}/v1/chat/completions", body, self.token,
+                             timeout=generation_timeout(self.cap))
         elapsed = time.monotonic() - started
         choice = (response.get("choices") or [{}])[0]
         return {
@@ -619,6 +640,19 @@ class OpenAiBackend:
             # this bench exists to catch, reported by the server rather than
             # inferred from a JSON parse error.
             "truncated": choice.get("finish_reason") == "length",
+        }
+
+    def settings(self) -> dict:
+        """Same contract as the ollama backend — see its `settings`."""
+        return {
+            "backend": "openai",
+            # This path sends no schema at all: the crate's OpenAI-compatible
+            # extractor has no `format` equivalent wired (#1944), so a run here
+            # is unconstrained by construction rather than by choice.
+            "constrained": False,
+            "schema_required": None,
+            "temperature": 0,
+            "max_tokens": self.cap,
         }
 
     def residency(self) -> dict:
@@ -735,6 +769,23 @@ class OllamaBackend:
     def _options(self) -> dict:
         return {"temperature": 0, "num_predict": self.cap, "num_ctx": self.num_ctx}
 
+    def settings(self) -> dict:
+        """The decode settings this run actually sent, for the record.
+
+        Asked of the backend rather than of the CLI arguments, so a result can
+        never claim a setting the requests did not carry. A published run whose
+        `num_ctx` is not on the record cannot be replayed and cannot be compared
+        to another machine — which is exactly what happened to the first
+        campaign, whose files carry no context window at all.
+        """
+        return {
+            "backend": "ollama",
+            "constrained": self.schema is not None,
+            "schema_required": sorted(self.schema.get("required", [])) if self.schema else None,
+            "keep_alive": self.keep_alive,
+            **self._options(),
+        }
+
     def generate(self, prompt: str) -> dict:
         body = {
             "model": self.model,
@@ -747,7 +798,8 @@ class OllamaBackend:
         if self.schema is not None:
             body["format"] = self.schema
         started = time.monotonic()
-        response = http_json(f"{self.base_url}/api/generate", body)
+        response = http_json(f"{self.base_url}/api/generate", body,
+                             timeout=generation_timeout(self.cap))
         elapsed = time.monotonic() - started
         return {
             "seconds": elapsed,
@@ -903,8 +955,29 @@ def cold_load(backend: object, model: str, prompt: str, backing: "dict | None" =
 # ------------------------------------------------------ phase A: screening ----
 
 
-def load_cases(path: Path = CASES_FILE) -> "list[dict]":
-    return json.loads(path.read_text(encoding="utf-8"))["cases"]
+def load_cases(path: Path = CASES_FILE, split: "str | None" = None) -> "list[dict]":
+    """The scenarios, optionally restricted to one side of the train/holdout line.
+
+    The split exists for prompt tuning, and only for that. Anything that edits
+    the prompt to raise a score must be tuned on `train` and reported on
+    `holdout`, because a suite of nineteen scenarios is small enough that a loop
+    iterating against it learns the scenarios rather than the task — and a score
+    that improves on the cases it was optimised against is not evidence of
+    anything.
+
+    `None` keeps every case, which is what a campaign measuring MODELS wants:
+    the split is a defence against overfitting a prompt, and withholding cases
+    from a model comparison would only make it less informative.
+    """
+    cases = json.loads(path.read_text(encoding="utf-8"))["cases"]
+    if split is None:
+        return cases
+    chosen = [case for case in cases if case.get("split") == split]
+    if not chosen:
+        raise RuntimeError(
+            f"no case carries split={split!r} in {path}; the suite must declare "
+            f"one per case before a split run means anything")
+    return chosen
 
 
 def parse_payload(content: str) -> "dict | None":
@@ -1264,11 +1337,62 @@ class DisposableDaemon:
         shutil.rmtree(self.store, ignore_errors=True)
 
 
-def remember_passage(client: McpClient, text: str) -> dict:
-    """Store one passage and report what the caller waited for."""
+def write_fact(client: McpClient, text: str) -> dict:
+    """Store one fact verbatim through `remember`, without waiting for anything.
+
+    Deliberately NOT the extraction path. This is what `burst` needs: `remember`
+    accepts immediately and hands enrichment to the bounded autograph queue, and
+    that queue's drop behaviour under a fast writer is the whole subject. Routing
+    it through `remember_extracted` and awaiting each commit would serialise the
+    burst and measure the opposite of what it exists to measure.
+    """
     result = client.call("remember", {"fact": text})
     payload = tool_payload(result)
     return {"seconds": result["seconds"], "stored": payload is not None, "payload": payload}
+
+
+def remember_passage(client: McpClient, text: str, timeout_s: float = 600.0) -> dict:
+    """Store one passage THROUGH THE EXTRACTOR, and wait for the durable commit.
+
+    This used to call `remember`, which stores a fact verbatim and never invokes
+    an extractor at all (#1945). Phase B therefore measured a path the backend
+    under test was not on: the graph it then polled for typed entity edges only
+    ever receives the bipartite fact-topic scaffolding from that tool, so
+    `await_edges` could not do anything but run out its timeout — identically
+    for every model, and identically for the no-LLM reader.
+
+    `remember_extracted` is asynchronous by design: it returns a receipt and a
+    background worker generates and commits. Waiting for the terminal state is
+    what makes this a measurement of the daemon rather than of its acceptance
+    queue.
+    """
+    started = time.monotonic()
+    receipt = tool_payload(client.call("remember_extracted", {"text": text})) or {}
+    request_id = receipt.get("request_id")
+    if not request_id:
+        return {"seconds": time.monotonic() - started, "stored": False,
+                "state": "no-receipt", "payload": receipt}
+
+    state, status = receipt.get("state"), {}
+    while state not in ("committed", "failed"):
+        if time.monotonic() - started > timeout_s:
+            return {"seconds": time.monotonic() - started, "stored": False,
+                    "state": "timeout", "request_id": request_id, "payload": status}
+        time.sleep(1.0)
+        status = tool_payload(client.call("extraction_status",
+                                          {"request_id": request_id})) or {}
+        state = status.get("state")
+
+    return {
+        "seconds": time.monotonic() - started,
+        # Committed with zero ids is not a store: the extractor answered with
+        # nothing usable, which is a model result and must not read as success.
+        "stored": state == "committed" and bool(status.get("ids")),
+        "state": state,
+        "request_id": request_id,
+        "error": status.get("error"),
+        "payload": status,
+    }
 
 
 def score_stored_case(client: McpClient, case: dict) -> dict:
@@ -1301,7 +1425,7 @@ def burst(client: McpClient, texts: "list[str]") -> dict:
     than the model generates loses enrichment. Counted and visible by design —
     this measures how close a given model puts a user to that edge.
     """
-    latencies = [remember_passage(client, text)["seconds"] for text in texts]
+    latencies = [write_fact(client, text)["seconds"] for text in texts]
     status = tool_payload(client.call("memory_status", {})) or {}
     return {
         "count": len(texts),
@@ -1338,6 +1462,27 @@ def endtoend(daemon: DisposableDaemon, cases: "list[dict]") -> dict:
 # ------------------------------------------------------------------ report ----
 
 
+def _quality_cell(totals: dict, key: str) -> str:
+    """A quality count, or a refusal to state one that cannot mean anything.
+
+    `major` and `minor` are counted on replies that PARSED. A configuration
+    where nothing parsed therefore scores zero of them — and `0` in a quality
+    column reads as "no errors" when it means "nothing to grade". Measured:
+    `llama3.1:8b` published `major=0` beside `parse=0%`, its best-looking cell
+    produced by its worst possible outcome.
+
+    A partial parse rate has a weaker version of the same problem, so the count
+    is qualified with what it was counted over rather than presented bare.
+    """
+    count = totals.get(key, 0)
+    parsed = totals.get("parse_rate")
+    if parsed == 0:
+        return "n/a"
+    if parsed is not None and parsed < 1:
+        return f"{count} (of {parsed * 100:.0f}%)"
+    return str(count)
+
+
 def _report_row(name: str, entry: dict) -> str:
     totals = entry.get("totals", {})
     cold = entry.get("cold", {}).get("cold_total_seconds")
@@ -1345,8 +1490,8 @@ def _report_row(name: str, entry: dict) -> str:
     return " | ".join([
         f"| `{name}`",
         str(totals.get("fatal", 0)),
-        str(totals.get("major", 0)),
-        str(totals.get("minor", 0)),
+        _quality_cell(totals, "major"),
+        _quality_cell(totals, "minor"),
         f"{totals.get('parse_rate', 0) * 100:.0f}%",
         str(totals.get("truncated", 0)),
         f"{totals.get('p50_seconds', float('nan')):.1f}s",
@@ -1600,16 +1745,17 @@ def preflight(residency: dict, model: str) -> dict:
 
 
 def cmd_screen(args: argparse.Namespace) -> int:
-    cap = read_generation_cap()
+    cap = getattr(args, "generation_cap", None) or read_generation_cap()
     template = read_graph_prompt_template()
     backend = build_backend(args, cap)
-    cases = load_cases(Path(args.cases))
+    cases = load_cases(Path(args.cases), getattr(args, "split", None))
     prompt = build_graph_prompt(cases[0]["passages"][0]["text"], template)
     residency = backend.residency()
     checked = preflight(residency, args.config)
     outcome = {
         "config": args.config,
         "generation_cap": cap,
+        "settings": backend.settings(),
         "residency_before": residency,
         "storage": checked["backing"],
         "estimated_size": checked["estimated_size"],
@@ -1659,7 +1805,7 @@ def cmd_endtoend(args: argparse.Namespace) -> int:
     daemon = DisposableDaemon(Path(args.binary), args.port, endtoend_env(args))
     daemon.start()
     try:
-        outcome = endtoend(daemon, load_cases(Path(args.cases)))
+        outcome = endtoend(daemon, load_cases(Path(args.cases), getattr(args, "split", None)))
     finally:
         daemon.stop()
     outcome["config"] = args.config
@@ -1678,7 +1824,8 @@ def cmd_endtoend(args: argparse.Namespace) -> int:
 # daemon installed on this machine on 2026-08-15 exposes 20 tools and NOT
 # `memory_status`, because its binary predates that tool. Phase B run against
 # it would have reported "tool not found" as a measurement.
-PHASE_B_TOOLS = ("remember", "entity", "recall", "memory_status")
+PHASE_B_TOOLS = ("remember", "remember_extracted", "extraction_status",
+                 "entity", "recall", "memory_status")
 
 
 def cmd_probe(args: argparse.Namespace) -> int:
@@ -1710,6 +1857,16 @@ def _add_model_arguments(parser: argparse.ArgumentParser, config_required: bool)
     # the same verdict for their own language.
     parser.add_argument("--cases", default=str(CASES_FILE),
                         help="scenario file; replace it to bench another language")
+    parser.add_argument("--generation-cap", type=int, default=None, dest="generation_cap",
+                        help="override `MAX_GENERATION_TOKENS`. A DECLARED VARIANT, "
+                             "never the reference: the crate caps at its own value and "
+                             "a run with this flag measures a product that does not "
+                             "exist. Exists to test whether a truncation is the cap's "
+                             "fault or the model's")
+    parser.add_argument("--split", choices=["train", "holdout"], default=None,
+                        help="restrict to one side of the train/holdout line. For "
+                             "PROMPT tuning only: tune on train, report on holdout. "
+                             "Omit it to measure models, which wants every case")
     parser.add_argument("--constrained", action="store_true",
                         help="ollama only: constrain decoding to the extraction "
                              "schema. A DECLARED VARIANT, never the reference — "
