@@ -84,6 +84,50 @@
       ]
     },
     {
+      "script": "scripts/check-inline-tests.py",
+      "purpose": "Freeze the inline-test-module debt: no new inline #[cfg(test)] mod {...} block, and no growth of an existing one, against a frozen baseline.",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "lint",
+      "required": true,
+      "mode": "strict",
+      "self_test": "scripts.tests.test_check_inline_tests",
+      "self_test_required": true,
+      "blind_spot": {
+        "issue": null,
+        "summary": "Line-based brace/bracket counting inherits check_prod_unwraps.py's known caveat: a multi-line string literal containing an unmatched brace or bracket can unbalance the count. Likewise line-based: a #[cfg(...)] attribute wrapped across several lines is not recognized as a gate (none exist in the tree today; rustfmt keeps cfg attributes on one line at current lengths)."
+      },
+      "must_refuse": [
+        {
+          "vector": "a new inline test module in a file the frozen baseline has never seen",
+          "files": {
+            "crates/velesdb-core/src/lib.rs": "pub fn a() {}\n\n#[cfg(test)]\nmod tests {\n    fn t() {}\n}\n"
+          },
+          "accepts": {
+            "crates/velesdb-core/src/lib.rs": "pub fn a() {}\n\n#[cfg(test)]\n#[path = \"lib_tests.rs\"]\nmod lib_tests;\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        },
+        {
+          "vector": "a baselined inline test module that grew past its frozen line count",
+          "files": {
+            "scripts/inline-tests-baseline.txt": "crates/velesdb-core/src/lib.rs\t4\n",
+            "crates/velesdb-core/src/lib.rs": "#[cfg(test)]\nmod tests {\n    fn a() {}\n    fn b() {}\n}\n"
+          },
+          "accepts": {
+            "scripts/inline-tests-baseline.txt": "crates/velesdb-core/src/lib.rs\t4\n",
+            "crates/velesdb-core/src/lib.rs": "#[cfg(test)]\nmod tests {\n    fn t() {}\n}\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        }
+      ]
+    },
+    {
       "script": "scripts/verify_unsafe_safety_template.py",
       "purpose": "Every unsafe block carries a // SAFETY: comment (Gate 4).",
       "workflow": ".github/workflows/ci.yml",

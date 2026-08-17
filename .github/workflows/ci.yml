@@ -323,6 +323,13 @@ jobs:
           fi
           python3 scripts/check-todo-annotations.py --files "${CORE_RS_FILES[@]}"
 
+      # Freezes the inline-test-module debt: a file may keep an inline
+      # #[cfg(test)] mod {...} it already has, but neither a new file nor a
+      # bigger block is allowed in. Whole-tree, not diff-scoped, since the
+      # baseline itself is the frozen state to compare against.
+      - name: Check inline test-module debt against the frozen baseline
+        run: python3 scripts/check-inline-tests.py
+
       - name: Check for .unwrap() in production code
         run: python3 scripts/check_prod_unwraps.py
 
@@ -338,6 +345,9 @@ jobs:
 
       - name: Test prod-unwraps audit script
         run: python3 -m unittest scripts.tests.test_check_prod_unwraps
+
+      - name: Test inline-tests audit script
+        run: python3 -m unittest scripts.tests.test_check_inline_tests
 
       - name: Audit feature claims vs exports
         run: python3 scripts/check-feature-claims.py
