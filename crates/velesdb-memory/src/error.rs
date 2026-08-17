@@ -11,7 +11,14 @@ use crate::rerank::RerankError;
 /// The transport-neutral class of a [`MemoryError`] — the single source of
 /// truth every adapter maps onto its own error channel (JSON-RPC code, napi
 /// status, `PyO3` exception type), so the taxonomy can never drift between them.
+/// `non_exhaustive` so a future category is a wildcard arm downstream instead
+/// of a breaking release. That trades away the compile-time exhaustiveness the
+/// in-repo adapters relied on, so [`ErrorCategory::ALL`] restores it as a
+/// test-time guard: each adapter iterates `ALL` and asserts its mapping is
+/// total, which turns "someone added a category" from a silent fallback into
+/// a red test naming the unmapped variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ErrorCategory {
     /// The caller supplied bad input (empty fact, reserved key, malformed
     /// filter) — a 4xx-style fault.
@@ -22,8 +29,24 @@ pub enum ErrorCategory {
     Internal,
 }
 
+impl ErrorCategory {
+    /// Every category, for adapter coverage tests — see the type-level doc.
+    ///
+    /// Lives here because only the defining crate can enumerate a
+    /// `non_exhaustive` enum; an adapter hand-listing the variants would just
+    /// re-create the drift this exists to catch. Adding a variant without
+    /// extending this slice fails `all_lists_every_category` below.
+    pub const ALL: &'static [Self] = &[Self::InvalidInput, Self::NotFound, Self::Internal];
+}
+
 /// Errors returned by [`crate::service::MemoryService`].
+///
+/// `non_exhaustive`: adapters classify through [`MemoryError::category`], never
+/// by variant, so new variants must be a non-event downstream — which is also
+/// what lets the stringly-typed variants gain structured payloads one minor
+/// release at a time instead of in one breaking batch.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum MemoryError {
     /// Failure in the underlying `VelesDB` storage engine.
     #[error("storage error: {0}")]
@@ -314,3 +337,7 @@ impl MemoryError {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "error_tests.rs"]
+mod error_tests;

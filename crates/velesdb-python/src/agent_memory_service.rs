@@ -61,11 +61,27 @@ macro_rules! python_to_serde {
 /// memory id → `KeyError`, the rest → `RuntimeError`.
 fn to_py_err(e: MemoryError) -> PyErr {
     let msg = e.to_string();
-    match e.category() {
+    known_category_err(e.category(), msg.clone()).unwrap_or_else(|| PyRuntimeError::new_err(msg))
+}
+
+/// The explicit half of the mapping, split from the runtime fallback
+/// (`RuntimeError`, the coarsest bucket) so the two are distinguishable.
+///
+/// `ErrorCategory` is `non_exhaustive`, so a new category no longer fails this
+/// match at compile time. Unlike the Node and wasm adapters, no local test
+/// walks [`ErrorCategory::ALL`] here: this crate's Rust tests never run (PyO3
+/// linkage keeps it out of `cargo test --workspace`, see `AGENTS.md`). The
+/// guard is transitive instead — a new category turns the Node and wasm
+/// coverage tests red in the same workspace CI that gates this wheel, and
+/// whoever fixes those two must find this third mapping by the cross-reference
+/// they carry. Keep the three in sync.
+fn known_category_err(category: ErrorCategory, msg: String) -> Option<PyErr> {
+    Some(match category {
         ErrorCategory::InvalidInput => PyValueError::new_err(msg),
         ErrorCategory::NotFound => PyKeyError::new_err(msg),
         ErrorCategory::Internal => PyRuntimeError::new_err(msg),
-    }
+        _ => return None,
+    })
 }
 
 /// Parse a column-filter operator token (`eq`/`ne`/`lt`/`le`/`gt`/`ge`).

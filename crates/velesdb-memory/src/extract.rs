@@ -665,6 +665,7 @@ pub(crate) fn orient_kinship(passage: &str, relations: &mut [ExtractedRelation])
 /// Failure produced by an [`Extractor`] backend (e.g. a network-backed model
 /// that cannot be reached, or output that cannot be parsed into facts).
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive] // error enum, grows by nature; matching externally requires a wildcard arm
 pub enum ExtractError {
     /// The extraction backend (network, subprocess, …) returned an error.
     #[error("extraction backend error: {0}")]
@@ -875,6 +876,11 @@ impl Extractor for OutlineExtractor {
 /// lets the dependency-free backends be selected in **any** build: only the
 /// [`Self::NeedsRemoteConfig`] arm requires an optional dependency and the URL
 /// and model that go with it, and only that arm's construction is feature-gated.
+/// **Deliberately exhaustive** (no `non_exhaustive`): every variant demands
+/// caller wiring — construct a backend, ask for configuration, run nothing —
+/// and a wildcard arm would silently ignore a new capability instead of
+/// failing to compile where it must be handled. Adding a variant is therefore
+/// a breaking change, made on purpose, in a minor bump while the crate is 0.x.
 pub enum ExtractorSelection {
     /// No extraction. Tools that need an extractor answer "not configured".
     Disabled,

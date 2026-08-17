@@ -12,6 +12,7 @@ use serde::Deserialize;
 /// Failure produced by an [`Embedder`] backend (e.g. a network-backed embedder
 /// that cannot reach its model). The in-memory [`HashEmbedder`] never fails.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive] // error enum, grows by nature; matching externally requires a wildcard arm
 pub enum EmbedError {
     /// The embedding backend (network, subprocess, …) returned an error.
     #[error("embedding backend error: {0}")]
@@ -103,6 +104,11 @@ impl<T: Embedder + ?Sized> Embedder for Box<T> {
 /// `Disabled`. "No extraction" is a real choice — the graph simply does not
 /// build — while a memory store cannot exist without an embedder. Every
 /// accepted name therefore resolves to something usable.
+/// **Deliberately exhaustive** (no `non_exhaustive`): every variant demands
+/// caller wiring — construct a backend, ask for configuration, run nothing —
+/// and a wildcard arm would silently ignore a new capability instead of
+/// failing to compile where it must be handled. Adding a variant is therefore
+/// a breaking change, made on purpose, in a minor bump while the crate is 0.x.
 pub enum EmbedderSelection {
     /// Ready to use as-is: needs no configuration, no network, and no optional
     /// dependency.

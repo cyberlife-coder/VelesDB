@@ -118,6 +118,7 @@ pub struct Recollection {
 /// [`MemoryService::recall_where`](crate::service::MemoryService::recall_where).
 #[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive] // mirrors VelesQL operators, which grow; adapters only construct it; matching externally requires a wildcard arm
 pub enum ColumnOp {
     /// `=`
     Eq,

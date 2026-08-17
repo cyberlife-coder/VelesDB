@@ -19,6 +19,7 @@ use crate::model::Recollection;
 /// that cannot be reached, or output that cannot be mapped back to
 /// candidates).
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive] // error enum, grows by nature; matching externally requires a wildcard arm
 pub enum RerankError {
     /// The reranking backend (network, subprocess, …) returned an error.
     #[error("rerank backend error: {0}")]

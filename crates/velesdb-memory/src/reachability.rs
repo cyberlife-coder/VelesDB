@@ -44,6 +44,7 @@ use std::time::Duration;
 
 /// What a probe found. Every variant is one distinct next action.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // diagnosis outcomes grow as failure modes are learned; matching externally requires a wildcard arm
 pub enum Reachability {
     /// The server answered and lists the configured model.
     Reachable,

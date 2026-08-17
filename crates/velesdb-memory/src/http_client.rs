@@ -29,6 +29,7 @@ use crate::http_retry;
 /// server wants nothing at all, and a future provider will want something
 /// else again. Widening an `Option<String>` later would break every caller;
 /// adding a variant here does not.
+#[non_exhaustive] // authentication schemes grow; matching externally requires a wildcard arm
 pub enum Auth {
     /// Send no credential header at all.
     ///
