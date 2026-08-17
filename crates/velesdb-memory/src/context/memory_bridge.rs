@@ -796,8 +796,11 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         if working.is_empty() {
             return Err(MemoryError::EmptyWorkingContext);
         }
-        let content = serde_json::to_string(working)
-            .map_err(|err| MemoryError::WorkingContextCodec(err.to_string()))?;
+        let content =
+            serde_json::to_string(working).map_err(|err| MemoryError::WorkingContextCodec {
+                detail: "encoding the working context for storage".to_owned(),
+                source: Some(Box::new(err)),
+            })?;
         if content.len() > crate::limits::MAX_FACT_BYTES {
             return Err(MemoryError::ContextOverLimit(format!(
                 "working context of {} bytes exceeds the cap of {} bytes",
@@ -871,14 +874,23 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             return Ok(None);
         }
         let Some((content, _)) = self.store.get(slot)? else {
-            return Err(MemoryError::WorkingContextCodec(format!(
-                "working context for project '{project}', session '{session}' is corrupt: \
-                 the reserved marker is present but the stored body is gone"
-            )));
+            return Err(MemoryError::WorkingContextCodec {
+                detail: format!(
+                    "working context for project '{project}', session '{session}' is corrupt: \
+                     the reserved marker is present but the stored body is gone"
+                ),
+                source: None,
+            });
         };
         serde_json::from_str(&content)
             .map(Some)
-            .map_err(|err| MemoryError::WorkingContextCodec(err.to_string()))
+            .map_err(|err| MemoryError::WorkingContextCodec {
+                detail: format!(
+                    "decoding the stored working context for project '{project}', \
+                     session '{session}'"
+                ),
+                source: Some(Box::new(err)),
+            })
     }
 
     /// The full resumption envelope for `project` + `session`: what
@@ -991,11 +1003,14 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             // The trait promises one result per id. A backend that breaks
             // that promise must not be silently read as "these sessions are
             // dead" — that would delete real entries on the write path.
-            return Err(MemoryError::WorkingContextCodec(format!(
-                "storage returned {} metadata rows for {} working-context ids",
-                payloads.len(),
-                ids.len()
-            )));
+            return Err(MemoryError::WorkingContextCodec {
+                detail: format!(
+                    "storage returned {} metadata rows for {} working-context ids",
+                    payloads.len(),
+                    ids.len()
+                ),
+                source: None,
+            });
         }
         Ok(sessions
             .into_iter()
@@ -1070,13 +1085,19 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             return Ok(None);
         }
         match self.store.get(slot)? {
-            Some((content, _)) => serde_json::from_str(&content)
-                .map(Some)
-                .map_err(|err| MemoryError::WorkingContextCodec(err.to_string())),
-            None => Err(MemoryError::WorkingContextCodec(format!(
-                "working-context index for project '{project}' is corrupt: the index \
-                 marker is present but the stored body is gone"
-            ))),
+            Some((content, _)) => serde_json::from_str(&content).map(Some).map_err(|err| {
+                MemoryError::WorkingContextCodec {
+                    detail: format!("decoding the working-context index for project '{project}'"),
+                    source: Some(Box::new(err)),
+                }
+            }),
+            None => Err(MemoryError::WorkingContextCodec {
+                detail: format!(
+                    "working-context index for project '{project}' is corrupt: the index \
+                     marker is present but the stored body is gone"
+                ),
+                source: None,
+            }),
         }
     }
 
@@ -1112,7 +1133,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         // only writer of the index is this function. Rebuild instead.
         let mut index = match self.working_index(project) {
             Ok(index) => index.unwrap_or_default(),
-            Err(MemoryError::WorkingContextCodec(_)) => WorkingContextIndex::default(),
+            Err(MemoryError::WorkingContextCodec { .. }) => WorkingContextIndex::default(),
             Err(err) => return Err(err),
         };
         let now = now_unix_secs();
@@ -1128,8 +1149,11 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         // stored moments ago, before this call); this only sheds the ones a
         // `forget` orphaned.
         index.sessions = self.live_sessions(project, index.sessions)?;
-        let content = serde_json::to_string(&index)
-            .map_err(|err| MemoryError::WorkingContextCodec(err.to_string()))?;
+        let content =
+            serde_json::to_string(&index).map_err(|err| MemoryError::WorkingContextCodec {
+                detail: format!("encoding the working-context index for project '{project}'"),
+                source: Some(Box::new(err)),
+            })?;
         self.write_working_index(project, &content, &embedding)
     }
 

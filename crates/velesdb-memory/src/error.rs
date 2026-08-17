@@ -43,8 +43,22 @@ impl ErrorCategory {
 ///
 /// `non_exhaustive`: adapters classify through [`MemoryError::category`], never
 /// by variant, so new variants must be a non-event downstream — which is also
-/// what lets the stringly-typed variants gain structured payloads one minor
-/// release at a time instead of in one breaking batch.
+/// what lets a variant's payload gain structure one minor release at a time
+/// instead of in one breaking batch.
+///
+/// # `String` payloads are a decision here, not a debt
+///
+/// Every adapter consumes this type through [`MemoryError::category`] plus
+/// `Display`; no payload is read programmatically outside this crate. So a
+/// variant earns a structured payload only when structure is being **lost** —
+/// a source error flattened out of the `source()` chain, or an in-crate
+/// consumer parsing prose — and [`Self::WorkingContextCodec`] is the one that
+/// qualified (it had both). The others carry prose on purpose: their messages
+/// are heterogeneous narratives written for the person reading them
+/// ([`Self::IngestPath`] additionally cites the *requested* path and never the
+/// canonical one, a security decision its module documents), and forcing one
+/// struct template over them would flatten exactly the nuance they exist to
+/// deliver. Re-litigating this per variant is what this paragraph is for.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum MemoryError {
@@ -231,9 +245,24 @@ pub enum MemoryError {
 
     /// A persisted working context could not be (de)serialized — the stored
     /// payload predates or postdates this crate's schema.
+    ///
+    /// The one String-payload variant that gained structure, because it is
+    /// the one that had lost some: half its construction sites flattened a
+    /// `serde_json::Error` into prose, destroying the `source()` chain
+    /// `thiserror` exists to preserve — and it is also the only variant
+    /// matched programmatically (the index reader falls back to an empty
+    /// index on it rather than failing a load). `source` is `None` where the
+    /// corruption is structural (a marker with no body) rather than a codec
+    /// refusal.
     #[cfg(feature = "context")]
-    #[error("working context codec error: {0}")]
-    WorkingContextCodec(String),
+    #[error("working context codec error: {detail}")]
+    WorkingContextCodec {
+        /// What was being encoded or decoded, and for which slot.
+        detail: String,
+        /// The codec's own refusal, when there is one to preserve.
+        #[source]
+        source: Option<Box<serde_json::Error>>,
+    },
 
     /// A context fragment carried a `path` (V2b-1 path ingestion) but no
     /// filesystem root is configured (`VELESDB_MEMORY_INGEST_ROOTS` unset or
@@ -324,7 +353,7 @@ impl MemoryError {
             #[cfg(feature = "context")]
             Self::UnknownHandle(_) => ErrorCategory::NotFound,
             #[cfg(feature = "context")]
-            Self::WorkingContextCodec(_) => ErrorCategory::Internal,
+            Self::WorkingContextCodec { .. } => ErrorCategory::Internal,
             Self::UnknownMemory(_) => ErrorCategory::NotFound,
             #[cfg(feature = "persistence")]
             Self::Memory(_) | Self::MigrationCapture(_) => ErrorCategory::Internal,
