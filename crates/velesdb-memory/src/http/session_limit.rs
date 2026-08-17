@@ -92,6 +92,7 @@ impl<SM> BoundedSessionManager<SM> {
 /// Error type for [`BoundedSessionManager`]: either its own bound was hit,
 /// or the wrapped `SessionManager` failed on its own terms.
 #[derive(Debug, Error)]
+#[non_exhaustive] // error enum, grows by nature; matching externally requires a wildcard arm
 pub enum BoundedSessionManagerError<E> {
     /// `max_sessions` concurrent MCP sessions are already live.
     #[error("too many concurrent MCP sessions (max {0}); close an existing one and retry")]

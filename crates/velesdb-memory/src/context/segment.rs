@@ -84,6 +84,7 @@ const MIN_LOG_RUN_LINES: usize = 8;
 /// Which transcript format to assume, or detect automatically.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive] // formats grow; matching externally requires a wildcard arm
 pub enum SegmentFormat {
     /// Detect `jsonl` vs `plain` from the transcript itself (the default).
     Auto,
@@ -100,6 +101,7 @@ pub enum SegmentFormat {
 /// left for [`super::classify`]'s rule table to judge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive] // kinds grow; matching externally requires a wildcard arm
 pub enum SegmentKind {
     /// Ordinary text — [`ContextFragment::kind`] stays `None`, so the
     /// existing classification rules (code fence, URL, negative constraint,

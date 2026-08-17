@@ -38,6 +38,7 @@ pub const CONFIG_FILE_NAME: &str = "velesdb-memory.toml";
 
 /// Why a config file could not be used.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive] // error enum, grows by nature; matching externally requires a wildcard arm
 pub enum ConfigError {
     /// The file could not be read.
     #[error("config file {path} could not be read: {source}")]

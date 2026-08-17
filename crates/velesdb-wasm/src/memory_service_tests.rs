@@ -729,3 +729,20 @@ fn test_unrelate_serializes_to_the_documented_wire_shape() {
     .expect("UnrelateOut is serializable");
     assert_eq!(wire, serde_json::json!({ "found": true, "removed": 2 }));
 }
+
+/// `ErrorCategory` is `non_exhaustive`, so a category added upstream no longer
+/// fails this adapter's mapping at compile time — this test does, by walking
+/// the authoritative list only the defining crate can produce. A category
+/// served by the runtime fallback is a taxonomy hole, not a mapping.
+#[test]
+fn every_error_category_is_mapped_explicitly() {
+    for category in velesdb_memory::ErrorCategory::ALL {
+        assert!(
+            super::known_category_code(*category).is_some(),
+            "category {category:?} would fall through to the INTERNAL fallback; \
+             map it explicitly in known_category_code; \
+             the PyO3 adapter (velesdb-python agent_memory_service.rs) has the \
+             same mapping and no test of its own — update it in the same change"
+        );
+    }
+}
