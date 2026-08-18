@@ -244,4 +244,4 @@ Developed by Julien Lange, WiScale France.
 
 ---
 
-`velesdb-migrate v5.0.0` · Last updated: 2026-08-10 · Applies to: velesdb-core 5.0.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)
+`velesdb-migrate v5.1.0` · Last updated: 2026-08-10 · Applies to: velesdb-core 5.1.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)

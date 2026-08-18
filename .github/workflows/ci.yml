@@ -323,6 +323,20 @@ jobs:
           fi
           python3 scripts/check-todo-annotations.py --files "${CORE_RS_FILES[@]}"
 
+      # Freezes the inline-test-module debt: a file may keep an inline
+      # #[cfg(test)] mod {...} it already has, but neither a new file nor a
+      # bigger block is allowed in. Whole-tree, not diff-scoped, since the
+      # baseline itself is the frozen state to compare against.
+      - name: Check inline test-module debt against the frozen baseline
+        run: python3 scripts/check-inline-tests.py
+
+      # Same freeze, other axis: no production file newly crosses the
+      # 1000-line budget, and no over-budget file grows. The split guidance
+      # lives in the failure message; test volume is #1918's program and is
+      # excluded here.
+      - name: Check production file budgets against the frozen baseline
+        run: python3 scripts/check-file-budgets.py
+
       - name: Check for .unwrap() in production code
         run: python3 scripts/check_prod_unwraps.py
 
@@ -338,6 +352,12 @@ jobs:
 
       - name: Test prod-unwraps audit script
         run: python3 -m unittest scripts.tests.test_check_prod_unwraps
+
+      - name: Test inline-tests audit script
+        run: python3 -m unittest scripts.tests.test_check_inline_tests
+
+      - name: Test file-budgets audit script
+        run: python3 -m unittest scripts.tests.test_check_file_budgets
 
       - name: Audit feature claims vs exports
         run: python3 scripts/check-feature-claims.py
@@ -541,7 +561,7 @@ jobs:
       # to empty binaries under the native test job and are invisible to the
       # cargo check above — without this step they never run in CI at all.
       - name: Install wasm-pack
-        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
+        uses: taiki-e/install-action@82cd3e7658a6f96c86c0234aeeda1748937cb0a1 # v2.85.13
         with:
           tool: wasm-pack
 
@@ -1060,7 +1080,7 @@ jobs:
       # `cargo install` from source — faster and avoids the compile/network
       # flakes that lost the runner mid-job on earlier release runs.
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
+        uses: taiki-e/install-action@82cd3e7658a6f96c86c0234aeeda1748937cb0a1 # v2.85.13
         with:
           tool: cargo-llvm-cov
 

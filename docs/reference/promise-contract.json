@@ -339,9 +339,9 @@
       "executable": false,
       "source": "Issue #1686: the live-schema MCP regression test compares the accepted wire form for every repeated field-name and scalar-type pair.",
       "last_updated": "2026-08-15",
-      "measured_on": "2026-08-15",
+      "measured_on": "2026-08-17",
       "measured_machine": "platform-independent (wire-schema contract)",
-      "measured_version": "5.0.0"
+      "measured_version": "5.1.0"
     },
     {
       "id": "mcp_lenient_scalar_rejects_incompatible_forms",
@@ -351,9 +351,9 @@
       "executable": false,
       "source": "Issue #1686: the live MCP server must reject invalid strings and incompatible scalar or container values at every non-string scalar input slot.",
       "last_updated": "2026-08-15",
-      "measured_on": "2026-08-15",
+      "measured_on": "2026-08-17",
       "measured_machine": "platform-independent (wire-schema contract)",
-      "measured_version": "5.0.0"
+      "measured_version": "5.1.0"
     }
   ],
   "claim_families": [

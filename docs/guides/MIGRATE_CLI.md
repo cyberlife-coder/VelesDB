@@ -46,7 +46,7 @@ Global options:
 | `--dry-run` | Extract and transform, never write to the destination |
 | `-v, --verbose` | Raise the log level from `INFO` to `DEBUG` |
 | `--batch-size <N>` | Override `options.batch_size` from the config |
-| `-h, --help` / `-V, --version` | Help / version (`velesdb-migrate 5.0.0`) |
+| `-h, --help` / `-V, --version` | Help / version (`velesdb-migrate 5.1.0`) |
 
 Signatures are generated on
 [docs.rs/velesdb-migrate](https://docs.rs/velesdb-migrate); this page documents
@@ -275,4 +275,4 @@ elsewhere) before re-running.
 
 ---
 
-`velesdb-migrate v5.0.0` · Last updated: 2026-08-13 · Applies to: velesdb-core 5.0.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)
+`velesdb-migrate v5.1.0` · Last updated: 2026-08-13 · Applies to: velesdb-core 5.1.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)

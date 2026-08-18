@@ -665,6 +665,7 @@ pub(crate) fn orient_kinship(passage: &str, relations: &mut [ExtractedRelation])
 /// Failure produced by an [`Extractor`] backend (e.g. a network-backed model
 /// that cannot be reached, or output that cannot be parsed into facts).
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive] // error enum, grows by nature; matching externally requires a wildcard arm
 pub enum ExtractError {
     /// The extraction backend (network, subprocess, …) returned an error.
     #[error("extraction backend error: {0}")]
@@ -875,6 +876,11 @@ impl Extractor for OutlineExtractor {
 /// lets the dependency-free backends be selected in **any** build: only the
 /// [`Self::NeedsRemoteConfig`] arm requires an optional dependency and the URL
 /// and model that go with it, and only that arm's construction is feature-gated.
+/// **Deliberately exhaustive** (no `non_exhaustive`): every variant demands
+/// caller wiring — construct a backend, ask for configuration, run nothing —
+/// and a wildcard arm would silently ignore a new capability instead of
+/// failing to compile where it must be handled. Adding a variant is therefore
+/// a breaking change, made on purpose, in a minor bump while the crate is 0.x.
 pub enum ExtractorSelection {
     /// No extraction. Tools that need an extractor answer "not configured".
     Disabled,
@@ -959,17 +965,6 @@ pub const DEFAULT_OLLAMA_URL: &str = "http://localhost:11434";
 /// embedding call, so a wedged model fails the call instead of hanging forever.
 #[cfg(feature = "extractor-http")]
 const REQUEST_TIMEOUT_SECS: u64 = 300;
-
-/// Ceiling on establishing the TCP connection to Ollama. Short on purpose: a
-/// local daemon accepts at once or is not running, and `ureq`'s 30 s default
-/// would be paid once per replay.
-#[cfg(feature = "extractor-http")]
-const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
-
-/// Ceiling on writing the request (prompt upload). Unlike the read bound, this
-/// one is applied to the socket at connect time and is genuinely in force.
-#[cfg(feature = "extractor-http")]
-const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Ceiling on how many tokens one extraction call may generate.
 ///
@@ -1065,13 +1060,10 @@ impl OllamaExtractor {
     /// with replays, that idle wait would be paid three times over.
     #[must_use]
     pub fn new(base_url: impl Into<String>, model: impl Into<String>) -> Self {
-        let timeout = std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS);
-        let agent = ureq::AgentBuilder::new()
-            .timeout_connect(CONNECT_TIMEOUT)
-            .timeout_write(WRITE_TIMEOUT)
-            .timeout_read(timeout)
-            .timeout(timeout)
-            .build();
+        let agent =
+            crate::http_client::bounded_agent(crate::http_client::AgentBudget::local_daemon(
+                std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS),
+            ));
         Self {
             base_url: base_url.into(),
             model: model.into(),
@@ -1137,13 +1129,10 @@ impl OpenAiExtractor {
         model: impl Into<String>,
         auth: crate::http_client::Auth,
     ) -> Self {
-        let timeout = std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS);
-        let agent = ureq::AgentBuilder::new()
-            .timeout_connect(CONNECT_TIMEOUT)
-            .timeout_write(WRITE_TIMEOUT)
-            .timeout_read(timeout)
-            .timeout(timeout)
-            .build();
+        let agent =
+            crate::http_client::bounded_agent(crate::http_client::AgentBudget::local_daemon(
+                std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS),
+            ));
         Self {
             client: crate::http_client::HttpJsonClient::new(
                 crate::openai::base_url(&base_url.into()),

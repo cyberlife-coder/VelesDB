@@ -320,4 +320,4 @@ silently reduced instead.
 
 ---
 
-Last updated: 2026-08-09 · Applies to: velesdb-core 5.0.0
+Last updated: 2026-08-09 · Applies to: velesdb-core 5.1.0

@@ -1,6 +1,6 @@
 # Tauri plugin — recipes
 
-*Last updated: 2026-07-25 · Applies to: velesdb-core 5.0.0*
+*Last updated: 2026-07-25 · Applies to: velesdb-core 5.1.0*
 
 Copy-pasteable snippets for [`tauri-plugin-velesdb`](../../crates/tauri-plugin-velesdb/README.md),
 beyond the 60-second first success in the crate README. Command names, payload

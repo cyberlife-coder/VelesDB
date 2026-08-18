@@ -175,4 +175,4 @@ Expected on a host with default features: `123 passed` (lib target), `8 passed`
 
 ---
 
-Last updated: 2026-08-08 · Applies to: velesdb-core 5.0.0
+Last updated: 2026-08-08 · Applies to: velesdb-core 5.1.0

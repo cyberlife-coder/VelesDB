@@ -72,12 +72,23 @@ const CODE_INTERNAL: &str = "INTERNAL";
 use crate::wasm_error::structured_js_error;
 
 fn category_code(e: &MemoryError) -> &'static str {
+    known_category_code(e.category()).unwrap_or(CODE_INTERNAL)
+}
+
+/// The explicit half of the mapping, split from the fallback so the coverage
+/// test over [`velesdb_memory::ErrorCategory::ALL`] can tell them apart:
+/// `ErrorCategory` is `non_exhaustive`, so a new category no longer fails this
+/// match at compile time — the test does instead. The runtime fallback
+/// (`INTERNAL`, the coarsest bucket) only ever serves a binding built against
+/// a newer `velesdb-memory` than this file.
+fn known_category_code(category: velesdb_memory::ErrorCategory) -> Option<&'static str> {
     use velesdb_memory::ErrorCategory;
-    match e.category() {
+    Some(match category {
         ErrorCategory::InvalidInput => CODE_INVALID_INPUT,
         ErrorCategory::NotFound => CODE_NOT_FOUND,
         ErrorCategory::Internal => CODE_INTERNAL,
-    }
+        _ => return None,
+    })
 }
 
 fn to_js_err(e: MemoryError) -> JsValue {

@@ -702,6 +702,152 @@ class OpenAiBackend:
         return False
 
 
+GITHUB_MODELS_URL = "https://models.github.ai/inference"
+
+
+def github_models_token() -> str:
+    """The GitHub Models credential: the workflow's own `GITHUB_TOKEN`.
+
+    Environment-only, mirroring the crate's token rule — and on Actions it is
+    the ambient token with `models: read`, so the probe needs zero configured
+    secrets (the reason this hosted backend was chosen over alternatives).
+    """
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if not token:
+        raise SystemExit(
+            "github-models needs GITHUB_TOKEN (or GH_TOKEN) in the environment: "
+            "on Actions grant `permissions: models: read`; locally export a PAT.")
+    return token
+
+
+def strict_object_schema(schema: dict) -> dict:
+    """The strict-mode spelling of the same contract.
+
+    OpenAI-protocol `json_schema` with `strict: true` requires every object
+    level to declare `additionalProperties: false`; the crate's schema states
+    the contract without it (Ollama's grammar needs no such clause). Same
+    keys, same requireds — one mechanical clause added per object, so the
+    probe constrains exactly what the crate would.
+    """
+    import copy
+
+    def close(node: object) -> None:
+        if isinstance(node, dict):
+            if node.get("type") == "object":
+                node["additionalProperties"] = False
+            for value in node.values():
+                close(value)
+
+    closed = copy.deepcopy(schema)
+    close(closed)
+    return closed
+
+
+class GitHubModelsBackend:
+    """The OpenAI protocol as GitHub Models serves it, plus `response_format`.
+
+    Two deliberate differences from `OpenAiBackend`, both properties of the
+    hosted service rather than choices of this bench:
+
+      - the chat path is unversioned (`/inference/chat/completions`, no `/v1`
+        segment — which is also why `endtoend` refuses this backend: the
+        daemon's `openai` module speaks the `/v1`-suffixed spelling);
+      - there is no residency to manage — `residency`/`set_loaded` are no-ops
+        so the screen choreography runs unchanged, and `cold`/`warm-up`
+        figures measure network + queueing, never weights loading. On shared
+        CI they are context, not results (#1949 discipline: quality counts
+        only).
+
+    The `response_format` arm is the probe #1944 exists for: `off` sends the
+    body `openai::chat_body` builds today; `json_object` asks for
+    syntactically valid JSON; `json_schema` sends the crate's schema in
+    strict mode. 429s are retried with the server's own `Retry-After` and
+    counted on the record, because a free-tier probe that silently waited
+    would publish latencies it never measured.
+    """
+
+    hosted = True
+
+    def __init__(self, model: str, token: str, cap: int, response_format: str = "off",
+                 request_delay: float = 0.0, base_url: str = GITHUB_MODELS_URL) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.token = token
+        self.cap = cap
+        self.response_format = response_format
+        self.request_delay = request_delay
+        self.rate_limit_hits = 0
+
+    def _response_format(self) -> "dict | None":
+        if self.response_format == "json_object":
+            return {"type": "json_object"}
+        if self.response_format == "json_schema":
+            return {"type": "json_schema",
+                    "json_schema": {"name": "extraction", "strict": True,
+                                    "schema": strict_object_schema(EXTRACTION_SCHEMA)}}
+        return None
+
+    def generate(self, prompt: str) -> dict:
+        body = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0,
+            "max_tokens": self.cap,
+        }
+        response_format = self._response_format()
+        if response_format is not None:
+            body["response_format"] = response_format
+        if self.request_delay:
+            time.sleep(self.request_delay)
+        started = time.monotonic()
+        response = self._post_with_backoff(body)
+        elapsed = time.monotonic() - started
+        choice = (response.get("choices") or [{}])[0]
+        return {
+            "seconds": elapsed,
+            "content": (choice.get("message") or {}).get("content", ""),
+            "completion_tokens": (response.get("usage") or {}).get("completion_tokens"),
+            "truncated": choice.get("finish_reason") == "length",
+        }
+
+    def _post_with_backoff(self, body: dict) -> dict:
+        for attempt in range(4):
+            try:
+                return http_json(f"{self.base_url}/chat/completions", body, self.token,
+                                 timeout=generation_timeout(self.cap))
+            except urllib.error.HTTPError as exc:
+                if exc.code != 429 or attempt == 3:
+                    raise
+                self.rate_limit_hits += 1
+                retry_after = exc.headers.get("Retry-After") if exc.headers else None
+                try:
+                    pause = min(float(retry_after), 120.0) if retry_after else 15.0
+                except ValueError:
+                    pause = 15.0
+                time.sleep(pause)
+        raise AssertionError("unreachable: the loop returns or raises")
+
+    def settings(self) -> dict:
+        """Same contract as the other backends — see `OllamaBackend.settings`."""
+        return {
+            "backend": "github-models",
+            "constrained": self.response_format != "off",
+            "response_format": self.response_format,
+            "schema_required": (EXTRACTION_SCHEMA["required"]
+                                if self.response_format == "json_schema" else None),
+            "temperature": 0,
+            "max_tokens": self.cap,
+            "request_delay": self.request_delay,
+            "rate_limit_hits": self.rate_limit_hits,
+        }
+
+    def residency(self) -> dict:
+        return {"hosted": "github-models", "models": []}
+
+    def set_loaded(self, model: str, loaded: bool) -> None:
+        """Hosted service: residency is the provider's problem, not the probe's."""
+
+
 # Ollama derives its default context from the HOST's VRAM (4k under 24 GiB,
 # 32k from 24 to 48, 256k beyond), and `OllamaExtractor` sends no `num_ctx`.
 # Left implicit, the same model reserves a KV cache of a different size on the
@@ -1759,7 +1905,13 @@ def build_backend(args: argparse.Namespace, cap: int) -> object:
             assert_schema_tracks_the_crate()
         return OllamaBackend(args.url or "http://localhost:11434", args.config, cap,
                              num_ctx=getattr(args, "num_ctx", DEFAULT_NUM_CTX),
-                             schema=EXTRACTION_SCHEMA if constrained else None)
+                             schema=EXTRACTION_SCHEMA
+                             if getattr(args, "constrained", False) else None)
+    if args.backend == "github-models":
+        return GitHubModelsBackend(args.config, github_models_token(), cap,
+                                   response_format=getattr(args, "response_format", "off"),
+                                   request_delay=getattr(args, "request_delay", 0.0),
+                                   base_url=args.url or GITHUB_MODELS_URL)
     return OpenAiBackend(args.url or "http://127.0.0.1:8019", args.config, extractor_token(), cap)
 
 
@@ -1838,6 +1990,16 @@ def endtoend_env(args: argparse.Namespace) -> "dict[str, str]":
         "VELESDB_MEMORY_EXTRACTOR": args.backend,
         "VELESDB_MEMORY_EXTRACTOR_MODEL": args.config or "",
     }
+    if args.backend == "github-models":
+        # The daemon's `openai` module speaks the `/v1`-suffixed spelling of
+        # the protocol; GitHub Models serves an unversioned path, so pointing
+        # the daemon at it would request `/inference/v1/...` and 404. Phase B
+        # against GitHub Models needs #1944's wiring first — refusing here is
+        # itself a finding for that issue, not a harness gap to paper over.
+        raise SystemExit(
+            "endtoend cannot run against github-models: the daemon's OpenAI "
+            "path appends /v1, which this host does not serve. Screen (phase "
+            "A) is the supported probe; see #1944.")
     if args.backend == "openai":
         env["VELESDB_MEMORY_EXTRACTOR_URL"] = args.url or "http://127.0.0.1:8019"
         env["VELESDB_MEMORY_EXTRACTOR_API_TOKEN"] = extractor_token()
@@ -1892,7 +2054,8 @@ def cmd_probe(args: argparse.Namespace) -> int:
 
 def _add_model_arguments(parser: argparse.ArgumentParser, config_required: bool) -> None:
     parser.add_argument("--config", required=config_required, help="model id")
-    parser.add_argument("--backend", choices=["openai", "ollama", "outline"], default="openai")
+    parser.add_argument("--backend", choices=["openai", "ollama", "outline", "github-models"],
+                        default="openai")
     parser.add_argument("--url")
     parser.add_argument("--out")
     # velesdb-memory is used in whatever language its user writes in, and the
@@ -1922,6 +2085,17 @@ def _add_model_arguments(parser: argparse.ArgumentParser, config_required: bool)
                         help="ollama context window, stated rather than inherited "
                              "from the host's VRAM (its default varies 4k/32k/256k "
                              "by card, which makes runs incomparable across machines)")
+    parser.add_argument("--response-format", choices=["off", "json_object", "json_schema"],
+                        default="off", dest="response_format",
+                        help="github-models only: the #1944 probe arm. `off` sends the "
+                             "body `openai::chat_body` builds today; the other two are "
+                             "DECLARED VARIANTS measuring a wiring the crate does not "
+                             "have yet, and their numbers belong in their own column")
+    parser.add_argument("--request-delay", type=float, default=0.0, dest="request_delay",
+                        help="github-models only: seconds slept before each request, so "
+                             "a free-tier per-minute quota shapes pacing instead of "
+                             "killing the run; 429s are additionally retried with the "
+                             "server's Retry-After and counted on the record")
 
 
 def build_parser() -> argparse.ArgumentParser:
