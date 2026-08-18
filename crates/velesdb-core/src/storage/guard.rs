@@ -8,8 +8,13 @@
 //! gracefully.
 //!
 //! The `Deref` and `AsRef<[f32]>` implementations exist for ergonomics in
-//! contexts where panicking on epoch mismatch is acceptable (e.g., short-lived
-//! guards within a single function scope where remap cannot happen).
+//! short-lived, single-scope contexts where a remap cannot happen. On an epoch
+//! mismatch they return `&[]` and log (they do **not** panic — a panicking
+//! `Deref` is an anti-pattern). In production that branch is unreachable: the
+//! guard holds the mmap read lock for its whole lifetime, and the epoch is only
+//! bumped under the mmap *write* lock, so the epoch cannot change while a guard
+//! is alive. The `&[]` fallback is defense in depth, exercised directly by the
+//! guard tests (which force a mismatch via the shared epoch counter).
 
 use memmap2::MmapMut;
 use parking_lot::RwLockReadGuard;
@@ -55,7 +60,11 @@ use std::sync::atomic::AtomicU64;
 /// # Epoch Validation
 ///
 /// The guard captures the epoch at creation and validates it on each access.
-/// If the mmap was remapped (epoch changed), access panics to prevent UB.
+/// If the mmap was remapped (epoch changed), the fallible accessors
+/// ([`as_slice`](Self::as_slice) / [`try_deref`](Self::try_deref)) return
+/// `Error::EpochMismatch`, and the infallible `Deref`/`AsRef` return `&[]` with
+/// a logged error (they do not panic). The read lock the guard holds makes an
+/// in-flight remap impossible, so that mismatch is unreachable in practice.
 ///
 /// The epoch uses wrapping `u64` arithmetic. Overflow is theoretically possible
 /// after 2^64 remaps (~584 years at 1B/sec) but practically irrelevant.

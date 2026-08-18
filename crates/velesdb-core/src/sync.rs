@@ -14,9 +14,22 @@
 //!
 //! # Testing with Loom
 //!
+//! The loom tests are gated on `cfg(loom)`. The crate's `build.rs` bridges the
+//! `loom` Cargo feature to that cfg, so the feature flag alone is enough — no
+//! `RUSTFLAGS` needed. Both the integration models and the storage models
+//! additionally require the `persistence` feature:
+//!
 //! ```bash
-//! cargo +nightly test --features loom --test loom_tests
+//! # Integration models (tests/loom_tests.rs):
+//! cargo test -p velesdb-core --features loom,persistence --test loom_tests
+//! # Storage models (src/storage/loom_tests.rs, a unit-test target):
+//! cargo test -p velesdb-core --features loom,persistence --lib storage::loom
 //! ```
+//!
+//! CI runs the same models on a schedule with `RUSTFLAGS="--cfg loom"` set
+//! explicitly (`quality-deep.yml`); the build.rs makes local runs work without
+//! it. Note: these validate hand-written loom *models* of the lock ordering,
+//! not the production `parking_lot`/`dashmap` types directly.
 //!
 //! # EPIC-023: Loom Concurrency Testing
 

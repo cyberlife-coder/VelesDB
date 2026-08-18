@@ -907,12 +907,24 @@ design is the baseline for correctness validation.
 
 ### Running Loom Tests
 
+These validate **hand-written loom models** of the lock ordering
+(`tests/loom_tests.rs`, `src/storage/loom_tests.rs`), not the production
+`parking_lot`/`dashmap` types directly. The tests gate on `cfg(loom)`; the
+crate's `build.rs` bridges the `loom` Cargo feature to that cfg, so the feature
+flag alone activates them — `RUSTFLAGS="--cfg loom"` is **not** required locally
+(CI still sets it explicitly, which is harmless — the cfg is idempotent). A bare
+`cargo test --features loom` (without the bridge) would compile loom but run
+zero tests, which is the trap the build.rs removes.
+
 ```bash
-# Run all loom tests
-cargo +nightly test --features loom,persistence --test loom_tests
+# Integration models (tests/loom_tests.rs)
+cargo test -p velesdb-core --features loom,persistence --test loom_tests
+
+# Storage models (src/storage/loom_tests.rs, a unit-test target)
+cargo test -p velesdb-core --features loom,persistence --lib storage::loom
 
 # With limited preemptions (faster)
-LOOM_MAX_PREEMPTIONS=2 cargo +nightly test --features loom,persistence --test loom_tests
+LOOM_MAX_PREEMPTIONS=2 cargo test -p velesdb-core --features loom,persistence --test loom_tests
 ```
 
 ### Stress Testing

@@ -50,9 +50,16 @@ def test_enable_streaming_then_stream_insert_lands_points(temp_db):
     )
     assert count == 2
 
-    # The drain task flushes asynchronously; wait until the points land.
-    assert _wait_until(lambda: not collection.is_empty()), "streamed points never drained"
-    results = collection.search_request(SearchOptions(vector=[1.0, 0.0, 0.0, 0.0], k=1))
+    # The drain task flushes asynchronously. Poll the actual observable we
+    # assert on — that a search returns the point — instead of `is_empty()`:
+    # a point can land in storage (making the collection non-empty) a beat
+    # before the HNSW index is queryable, which raced `results[0]` to an
+    # IndexError.
+    query = SearchOptions(vector=[1.0, 0.0, 0.0, 0.0], k=1)
+    assert _wait_until(
+        lambda: len(collection.search_request(query)) > 0
+    ), "streamed points never became searchable"
+    results = collection.search_request(query)
     assert results[0]["id"] == 1
 
 
