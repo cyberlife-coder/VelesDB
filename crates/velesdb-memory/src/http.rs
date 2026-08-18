@@ -400,66 +400,9 @@ fn spawn_tls_connection(
 }
 
 #[cfg(test)]
-mod body_cap_tests {
-    use super::DEFAULT_HTTP_MAX_BODY_BYTES;
-    use crate::limits::{MAX_TOTAL_MEDIA_BYTES, MAX_TRANSCRIPT_BYTES};
-
-    /// The daemon's default transport cap must carry every request the core
-    /// itself accepts: the full published media budget plus the largest
-    /// single text field, with framing on top (#1746). Asserted as a
-    /// RELATION between the constants, not as a number — the next adjustment
-    /// to either side must re-face this invariant instead of a stale figure.
-    #[test]
-    fn the_default_body_cap_carries_the_full_media_budget() {
-        assert!(
-            DEFAULT_HTTP_MAX_BODY_BYTES >= MAX_TOTAL_MEDIA_BYTES + MAX_TRANSCRIPT_BYTES,
-            "a request the core accepts (up to {MAX_TOTAL_MEDIA_BYTES} bytes of media \
-             plus up to {MAX_TRANSCRIPT_BYTES} bytes of text) must not be refused by \
-             the transport alone — stdio has no such cap, so a tighter HTTP default \
-             makes the SAME call succeed or fail depending on how the client connected \
-             (got {DEFAULT_HTTP_MAX_BODY_BYTES})"
-        );
-    }
-}
+#[path = "body_cap_tests.rs"]
+mod body_cap_tests;
 
 #[cfg(test)]
-mod keep_alive_tests {
-    use super::{keep_alive_from_raw, DEFAULT_HTTP_KEEP_ALIVE};
-    use std::time::Duration;
-
-    #[test]
-    fn unset_falls_back_to_the_sixty_minute_default() {
-        assert_eq!(keep_alive_from_raw(None), DEFAULT_HTTP_KEEP_ALIVE);
-        assert_eq!(
-            DEFAULT_HTTP_KEEP_ALIVE,
-            Duration::from_secs(3600),
-            "the default must stay well beyond an agent's normal silences — a CI \
-             wait alone already approaches 30 minutes"
-        );
-    }
-
-    #[test]
-    fn a_valid_value_is_honoured() {
-        assert_eq!(
-            keep_alive_from_raw(Some("900")),
-            Duration::from_secs(900),
-            "the timeout must be configurable, not hard-coded"
-        );
-        assert_eq!(
-            keep_alive_from_raw(Some("  120  ")),
-            Duration::from_secs(120)
-        );
-    }
-
-    #[test]
-    fn unparseable_or_zero_falls_back_instead_of_bricking_the_daemon() {
-        // Zero would retire every session the instant it was created, so the
-        // daemon would answer 404 to every second request. Falling back is the
-        // only safe reading of a nonsense value.
-        assert_eq!(keep_alive_from_raw(Some("0")), DEFAULT_HTTP_KEEP_ALIVE);
-        assert_eq!(keep_alive_from_raw(Some("")), DEFAULT_HTTP_KEEP_ALIVE);
-        assert_eq!(keep_alive_from_raw(Some("soon")), DEFAULT_HTTP_KEEP_ALIVE);
-        assert_eq!(keep_alive_from_raw(Some("-30")), DEFAULT_HTTP_KEEP_ALIVE);
-        assert_eq!(keep_alive_from_raw(Some("1.5")), DEFAULT_HTTP_KEEP_ALIVE);
-    }
-}
+#[path = "keep_alive_tests.rs"]
+mod keep_alive_tests;
