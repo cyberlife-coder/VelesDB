@@ -36,6 +36,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   clean error (matching the v2 path). The capacity hints in `reserve()` and the
   `with_capacity` constructor also use `saturating_mul` so a 32-bit wasm build
   cannot silently under-reserve.
+- **`rabitq` storage mode crashed on the first search**: `ScratchBuffer::new`
+  allocated its dequantization buffer only for `SQ8`/`Binary`/`ProductQuantization`,
+  but `RaBitQ` is a full SQ8 alias in the browser engine (it encodes via
+  `encode_sq8` and decodes via `decode_sq8`). A store created with
+  `new_with_mode(.., "rabitq")` therefore indexed into an empty buffer on the
+  first `search()`/`query()`/`hybrid_search()`, an out-of-bounds panic that
+  `panic = "abort"` turns into a module abort. `RaBitQ` now allocates the
+  scratch buffer like `SQ8`.
+- **Composite metadata filters failed open on a malformed shape**: the
+  `and`/`or`/`not` arms of the filter evaluator used `is_none_or`, so a
+  condition whose `conditions` key was absent or not an array (e.g. an object
+  from a JS typo), or a `not` with no inner `condition`, matched *every* point
+  instead of none — the same unfiltered-leak class the unknown-`type` arm was
+  hardened against in the previous release. They now fail closed via
+  `is_some_and`; a *present* empty array keeps its vacuous result (`and` -> all
+  -> true, `or` -> any -> false).
 - **JOIN `ON` condition side order (#1555)**: `ON joined.col = base.col`
   silently matched nothing (every row came back with NULL joined columns)
   because the join key resolution read the two sides of the condition
