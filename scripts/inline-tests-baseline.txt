@@ -97,16 +97,6 @@ crates/velesdb-migrate/src/source_config_builder.rs	291
 crates/velesdb-migrate/src/templates.rs	332
 crates/velesdb-migrate/src/transform.rs	99
 crates/velesdb-migrate/src/wizard/mod.rs	420
-crates/velesdb-python/src/collection/search.rs	169
-crates/velesdb-python/src/collection_helpers.rs	40
-crates/velesdb-python/src/exceptions.rs	453
-crates/velesdb-python/src/graph.rs	81
-crates/velesdb-python/src/graph_collection.rs	33
-crates/velesdb-python/src/graph_store.rs	12
-crates/velesdb-python/src/options.rs	194
-crates/velesdb-python/src/streaming_config.rs	22
-crates/velesdb-python/src/utils.rs	222
-crates/velesdb-python/src/velesql.rs	147
 crates/velesdb-server/src/auth.rs	115
 crates/velesdb-server/src/config.rs	559
 crates/velesdb-server/src/handlers/admin.rs	88
