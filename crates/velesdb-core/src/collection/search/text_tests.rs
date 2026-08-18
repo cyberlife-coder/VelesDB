@@ -192,3 +192,43 @@ fn test_hybrid_search_dimension_mismatch_error() {
     let result = col.hybrid_search(&bad_vec, "rust", 5, None, None);
     assert!(result.is_err(), "wrong dimension should error");
 }
+
+#[test]
+fn test_top_k_from_scores_huge_k_does_not_over_reserve() {
+    // Regression: `top_k_from_scores` reserved `with_capacity(k + 1)` from the
+    // caller-supplied `k`, which is unclamped on the hybrid/fused path. A huge
+    // `k` (reachable from a `POST /search/hybrid` body) requested a terabyte-
+    // scale heap; the allocation failure aborts the whole process. The
+    // reservation is now bounded by the candidate count.
+    //
+    // `1 << 60` is chosen so the *old* code's `(k + 1) * size_of` exceeds
+    // `isize::MAX` — a deterministic `capacity overflow` panic (caught here as a
+    // failure) in both debug and release, rather than a process abort. With the
+    // fix, capacity is `min(k, 3) + 1`, so this simply returns the 3 candidates.
+    let mut fused: rustc_hash::FxHashMap<u64, f32> = rustc_hash::FxHashMap::default();
+    fused.insert(1, 0.9);
+    fused.insert(2, 0.5);
+    fused.insert(3, 0.1);
+
+    let out = Collection::top_k_from_scores(fused, 1usize << 60);
+
+    assert_eq!(out.len(), 3, "cannot return more than the candidate count");
+    // Sorted by descending score.
+    assert_eq!(out[0].0, 1);
+    assert_eq!(out[2].0, 3);
+}
+
+#[test]
+fn test_top_k_from_scores_respects_small_k() {
+    let mut fused: rustc_hash::FxHashMap<u64, f32> = rustc_hash::FxHashMap::default();
+    for id in 0..10u64 {
+        fused.insert(id, id as f32);
+    }
+    let out = Collection::top_k_from_scores(fused, 3);
+    assert_eq!(out.len(), 3, "must trim to k");
+    // Top 3 by score are ids 9, 8, 7.
+    assert_eq!(
+        out.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+        vec![9, 8, 7]
+    );
+}

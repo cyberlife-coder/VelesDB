@@ -284,14 +284,23 @@ impl Collection {
     }
 
     /// Extracts top-k IDs from fused scores using a streaming min-heap.
-    fn top_k_from_scores(
+    pub(super) fn top_k_from_scores(
         fused_scores: rustc_hash::FxHashMap<u64, f32>,
         k: usize,
     ) -> Vec<(u64, f32)> {
         use std::cmp::Reverse;
         use std::collections::BinaryHeap;
 
-        let mut heap: BinaryHeap<Reverse<(OrderedFloat, u64)>> = BinaryHeap::with_capacity(k + 1);
+        // Bound the eager reservation by the candidate count, not by the raw
+        // `k`. The heap holds at most `k + 1` entries transiently, and there are
+        // only `fused_scores.len()` candidates, so `min(k, len) + 1` is an exact
+        // upper bound on what the heap ever needs. A caller-supplied `top_k` is
+        // otherwise unclamped on this (hybrid/fused) path — a huge value made
+        // `with_capacity(k + 1)` request terabytes, and the resulting
+        // allocation failure aborts the whole process rather than the request.
+        // This changes no result: the `heap.len() > k` trim below is untouched.
+        let cap = k.min(fused_scores.len()).saturating_add(1);
+        let mut heap: BinaryHeap<Reverse<(OrderedFloat, u64)>> = BinaryHeap::with_capacity(cap);
         for (id, score) in fused_scores {
             heap.push(Reverse((OrderedFloat(score), id)));
             if heap.len() > k {
