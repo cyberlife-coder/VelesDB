@@ -1078,8 +1078,17 @@
    "must_refuse": [
     {
      "vector": "a new production file that File::create's with no sync_all and no baseline entry",
+     "argv": [
+      "{root}",
+      "{root}/scripts/durability-barrier-baseline.txt"
+     ],
      "files": {
-      "crates/velesdb-core/src/new_writer.rs": "pub fn w(p: &std::path::Path) { let _ = std::fs::File::create(p); }\n"
+      "crates/velesdb-core/src/new_writer.rs": "pub fn w(p: &std::path::Path) { let _ = std::fs::File::create(p); }\n",
+      "scripts/durability-barrier-baseline.txt": "# empty baseline for the refusal-vector harness\n"
+     },
+     "accepts": {
+      "crates/velesdb-core/src/new_writer.rs": "pub fn w(p: &std::path::Path) -> std::io::Result<()> {\n    let f = std::fs::File::create(p)?;\n    f.sync_all()\n}\n",
+      "scripts/durability-barrier-baseline.txt": "# empty baseline for the refusal-vector harness\n"
      }
     }
    ]
