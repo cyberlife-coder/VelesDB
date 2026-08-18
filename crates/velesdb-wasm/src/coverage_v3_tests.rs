@@ -276,3 +276,26 @@ fn test_enrich_row_skips_when_referenced_payload_not_object() {
     // A non-object referenced payload merges nothing.
     assert!(data["b"].as_object().expect("test: b is object").len() <= 3);
 }
+
+#[test]
+fn v1_layout_rejects_size_overflow() {
+    // Regression: `import_v1` computed `count * dimension` and
+    // `count * vector_size` unchecked. On wasm32 (32-bit usize) a hostile blob
+    // could wrap those, spoof the length guard, and read out of bounds; the
+    // checked `v1_layout` now returns an error instead. Native usize is 64-bit,
+    // so this uses u64-overflowing values to exercise the same checked path.
+    use crate::serialization::v1_layout;
+
+    let err =
+        v1_layout(2_000_000_000, u32::MAX as usize).expect_err("count * vector_size must overflow");
+    assert!(err.contains("overflow"), "unexpected error: {err}");
+
+    // A sane layout is accepted and its sizes are exact.
+    let ok = v1_layout(2, 4).expect("sane layout");
+    assert_eq!(ok.total_floats, 8);
+    assert_eq!(ok.data_bytes_len, 16);
+    assert_eq!(
+        ok.expected_size,
+        crate::serialization::HEADER_SIZE + 2 * (8 + 16)
+    );
+}
