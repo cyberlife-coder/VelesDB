@@ -40,7 +40,6 @@ napi = { version = "3", default-features = false, features = [
     "serde-json",
 ] }
 napi-derive = "3"
-serde = { workspace = true }
 serde_json = { workspace = true }
 
 [build-dependencies]

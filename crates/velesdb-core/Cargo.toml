@@ -41,9 +41,6 @@ version = "0.12"
 [dependencies.arc-swap]
 version = "1.9"
 
-[dependencies.bytes]
-version = "1.11"
-
 [dependencies.rustc-hash]
 version = "2.1"
 
