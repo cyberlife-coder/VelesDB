@@ -1,8 +1,8 @@
 crates/velesdb-core/src/collection/core/graph_api.rs	1021
 crates/velesdb-core/src/simd_native/x86_avx512.rs	1469
-crates/velesdb-memory/src/context.rs	1200
+crates/velesdb-memory/src/context.rs	1097
 crates/velesdb-memory/src/context/memory_bridge.rs	1530
-crates/velesdb-memory/src/extract.rs	1738
+crates/velesdb-memory/src/extract.rs	1559
 crates/velesdb-memory/src/schema.rs	1119
 crates/velesdb-memory/src/service.rs	1969
 crates/velesdb-python/src/agent_memory_service.rs	1097
