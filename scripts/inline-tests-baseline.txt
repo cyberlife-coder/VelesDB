@@ -147,7 +147,6 @@ crates/velesdb-server/src/lib.rs	461
 crates/velesdb-server/src/rate_limit.rs	48
 crates/velesdb-server/src/tls.rs	40
 crates/velesdb-wasm/src/agent.rs	58
-crates/velesdb-wasm/src/filter.rs	104
 crates/velesdb-wasm/src/fusion.rs	338
 crates/velesdb-wasm/src/graph_persistence.rs	5
 crates/velesdb-wasm/src/graph_store.rs	141
