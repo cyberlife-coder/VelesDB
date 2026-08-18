@@ -11,8 +11,8 @@ The `simd_native` module provides hand-tuned SIMD implementations using `core::a
 │              simd_native::cosine_similarity_native()             │
 │                                                                  │
 │  Runtime: feature detection → tiered dispatch → native SIMD     │
-│  - AVX-512: 4/2/1 accumulators based on size                    │
-│  - AVX2: 4-acc (>1024), 2-acc (64-1023), 1-acc (<64)            │
+│  - AVX-512: 8/4-acc + masked single-acc based on size           │
+│  - AVX2: 4-acc (>=256), plain (>=64), 1-acc (>=8)               │
 │  - ARM NEON: 128-bit SIMD                                       │
 │  - Scalar: fallback for small vectors                           │
 └─────────────────────────────────────────────────────────────────┘
@@ -29,8 +29,8 @@ The `simd_native` module provides hand-tuned SIMD implementations using `core::a
 
 | Platform | Implementation | Instructions | Performance (768D) |
 |----------|----------------|-------------|-------------------|
-| **x86_64 AVX-512** | simd_native | 512-bit 2/4-acc | ~38-42ns |
-| **x86_64 AVX2** | simd_native | 256-bit 2/4-acc | ~40-82ns |
+| **x86_64 AVX-512** | simd_native | 512-bit 8/4-acc | ~38-42ns |
+| **x86_64 AVX2+FMA** | simd_native | 256-bit 4/1-acc | ~40-82ns |
 | **aarch64** | simd_native | NEON 128-bit | ~60-100ns |
 | **WASM** | scalar fallback (SIMD128 planned) | Native Rust | see Fallback |
 | **Fallback** | Scalar | Native Rust | ~150-200ns |
@@ -41,32 +41,125 @@ Implementations adapt based on vector size and ISA to minimize register pressure
 
 **AVX-512 (cosine):**
 
-| Size Range | Accumulators | Stride | Use Case |
-|------------|--------------|--------|----------|
-| >= 512 elements | 4-acc (12 zmm regs) | 64 | Large vectors (ada-002, text-embedding-3-large) |
-| 16-511 elements | 2-acc (6 zmm regs) | 32 | Medium vectors (BERT, MiniLM) |
-| < 16 elements | Scalar | 1 | Tiny vectors |
+| Size Range | Accumulators | Use Case |
+|------------|--------------|----------|
+| >= 1024 elements | 8-acc | Very large vectors (text-embedding-3-large) |
+| 512-1023 elements | 4-acc | Large vectors (ada-002) |
+| 16-511 elements | single fused kernel | Medium vectors (BERT, MiniLM) |
+| < 16 elements | Scalar | Tiny vectors |
+
+**AVX-512 (dot product, squared L2):**
+
+| Size Range | Accumulators | Use Case |
+|------------|--------------|----------|
+| >= 1024 elements | 8-acc | Very large vectors |
+| 512-1023 elements | 4-acc | Large vectors |
+| < 512 elements | masked single-acc kernel (no minimum) | All other sizes |
 
 **AVX2 (cosine):**
 
-| Size Range | Accumulators | Stride | Use Case |
-|------------|--------------|--------|----------|
-| >= 512 elements | 4-acc (12 ymm regs) | 32 | Large vectors |
-| 8-511 elements | 2-acc (6 ymm regs) | 16 | Medium/small vectors |
-| < 8 elements | Scalar | 1 | Tiny vectors |
+| Size Range | Accumulators | Use Case |
+|------------|--------------|----------|
+| >= 512 elements | 4-acc (12 ymm regs) | Large vectors |
+| 8-511 elements | 2-acc (6 ymm regs) | Medium/small vectors |
+| < 8 elements | Scalar | Tiny vectors |
 
 **AVX2 (dot product, squared L2):**
 
-| Size Range | Accumulators | Stride | Use Case |
-|------------|--------------|--------|----------|
-| >= 256 elements | 4-acc | 32 | Large vectors |
-| 64-255 elements | 2-acc | 16 | Medium vectors |
-| 8-63 elements | 1-acc | 8 | Small vectors |
-| < 8 elements | Scalar | 1 | Tiny vectors |
+| Size Range | Accumulators | Use Case |
+|------------|--------------|----------|
+| >= 256 elements | 4-acc | Large vectors |
+| 64-255 elements | plain 8-wide kernel | Medium vectors |
+| 8-63 elements | 1-acc | Small vectors |
+| < 8 elements | Scalar | Tiny vectors |
 
 All AVX2 cosine kernels use vectorized 8-wide remainder handling, reducing the
 scalar tail from up to 31 elements to at most 7. AVX-512 kernels use masked
 loads for zero-cost remainder.
+
+## Dispatch Registry
+
+What actually serves each operation on each target, from an audit of
+`crates/velesdb-core/src/simd_native/` (2026-08-18). This section is the
+completion of the two tables above: those answer "which accumulator count at
+which dimension" for the three hot op families; this one answers "which kernel
+class serves op X on target Y" for everything.
+
+### Runtime detection
+
+- `SimdLevel` (`simd_native/dispatch/mod.rs`) has four variants — `Avx512`,
+  `Avx2`, `Neon`, `Scalar` — detected **once** and cached in a `OnceLock`.
+- **x86_64**: `avx512f` → `Avx512`; else `avx2` **and** `fma` (both required)
+  → `Avx2`; else `Scalar`. An AVX2-without-FMA machine runs scalar.
+- **aarch64**: always `Neon` (architecturally guaranteed, no probe).
+- **wasm32 and everything else**: `Scalar`.
+- Sub-feature probes (`avx512vl`, `avx512bw`, `avx512vnni`,
+  `avx512vpopcntdq`) are separate, per-call checks. Only `vpopcntdq` is
+  consumed by a kernel (binary Hamming). **VNNI is detected but no kernel
+  uses it yet.**
+- Two dispatch styles coexist: the `*_native` free functions re-match the
+  level on every call, and `DistanceEngine` resolves five fn pointers once at
+  construction — the HNSW hot loop uses the latter.
+- The trigram index carries its **own independent detector**
+  (`index/trigram/simd.rs`), uncached and with different gates (AVX-512 needs
+  `avx512f+avx512bw`; AVX2 does not require FMA).
+
+### Operation × target matrix
+
+| Operation | AVX-512F | AVX2+FMA | NEON | Scalar |
+|---|---|---|---|---|
+| dot product | 8/4-acc + masked (any dim) | 4/1-acc, >= 8 | 4-acc, >= 4 | yes |
+| squared L2 / euclidean | same ladder (`sqrt` on top) | same | >= 4 | yes |
+| cosine (fused) | 8/4-acc/plain, >= 16 | 4/2-acc, >= 8 | >= 4 | yes |
+| cosine (normalized) | = dot product (alias) | = dot | = dot | yes |
+| Hamming (f32) | 4-acc >= 512, plain >= 16 — **no 8-acc tier** | >= 8 | >= 4 | yes |
+| Jaccard | 8/4-acc/plain, >= 16 | >= 8 | >= 4 | yes |
+| binary Hamming (packed u64) | `vpopcntdq` kernel when detected, else AVX-512F, >= 8 | >= 4 | `vcnt`, >= 2 | yes |
+| ADC (PQ table scan) | shares the AVX2 gather kernel | 8-subspace `i32gather`, >= threshold | 4-wide (scalar gathers + vector add) | yes |
+| scale / normalize in place | none (deliberate — AVX-512 warmup cost) | >= 8 | **none — falls to scalar** | yes |
+| batch variants (all ops) | prefetch loop over the single-pair kernel — no batch-specific SIMD kernels exist | same | same | same |
+| prefetch (f32/u16/u64, multi-line) | `_mm_prefetch` T0/T1/T2 | same | inline-asm / `prefetch_read_l1` | no-op |
+| trigram extract / match count | **nominal only** — scalar loops behind `#[target_feature]` shells | nominal only | cache-warmup load, then scalar | yes |
+| SQ8 quantized dot/L2/cosine | — | — | — | **unrolled scalar everywhere** (no VNNI, no `sdot`/`udot`) |
+| f16 / bf16 | — | — | — | scalar convert to f32, then the f32 kernels above (no F16C, no FP16 arithmetic) |
+
+RaBitQ is the exception on the quantized side: its Hamming step routes through
+`hamming_binary_native`, so it gets the full binary-Hamming ladder including
+`vpopcntdq`.
+
+### GPU (feature `gpu`, wgpu)
+
+Wired at runtime, each behind a size threshold so small workloads never pay
+dispatch cost:
+
+| Path | Threshold |
+|---|---|
+| PQ k-means assignment (training) | `n * k * subspace_dim > 10M` |
+| HNSW layer-0 traversal | `> 500K vectors` and `vectors * dim <= u32::MAX` |
+| HNSW rerank | `rerank_k * dim > 262144` |
+| Brute-force batch distances | whenever a device is available |
+
+Cosine / Euclidean / Dot only — **Hamming, Jaccard, RaBitQ traversal, and the
+ADC scan always stay CPU**. Upper-layer HNSW descent is CPU even on the GPU
+path. Feature passthrough: `velesdb-python`, `velesdb-server`, `velesdb-cli`,
+`velesdb-mobile`, `tauri-plugin-velesdb` expose `gpu`; `velesdb-node` cannot
+(license boundary — it has no `velesdb-core` dependency), `velesdb-wasm` and
+`velesdb-memory` deliberately do not (browser target; daemon bottleneck is
+inference).
+
+### Known gaps (each needs a before/after measurement to close — #1965)
+
+- `scale_inplace` has no NEON kernel: aarch64 normalization is scalar.
+- f32 Hamming lacks the AVX-512 8-acc tier its Jaccard sibling has.
+- AVX-512 VNNI detected but unused; int8/SQ8 paths are scalar on every ISA.
+- Trigram "SIMD" is nominal — the loops are scalar behind feature shells.
+- wasm is pure scalar (`simd128` not used); all wasm distance math delegates
+  to core's `DistanceMetric::calculate`, so a core `simd128` path would light
+  the browser up without touching `velesdb-wasm`.
+- `simd_neon.rs` is a legacy, unused duplicate of the live NEON kernels in
+  `simd_native/neon.rs` (removal candidate).
+- `velesdb simd info` prints a static summary rather than the detected
+  runtime level.
 
 ## Performance Benchmarks (March 27, 2026)
 
@@ -123,11 +216,11 @@ for i in 0..simd_len {
 For cosine similarity with pre-normalized vectors:
 
 ```rust
-// Standard cosine: 3 passes (dot, norm_a, norm_b)
-pub fn cosine_similarity_fast(a: &[f32], b: &[f32]) -> f32;
+// Standard cosine: fused single pass over dot and both norms
+pub fn cosine_similarity_native(a: &[f32], b: &[f32]) -> f32;
 
 // Normalized: 1 pass (dot only) - 40% faster!
-pub fn cosine_similarity_normalized(a: &[f32], b: &[f32]) -> f32;
+pub fn cosine_normalized_native(a: &[f32], b: &[f32]) -> f32;
 ```
 
 **Use when:**
@@ -184,17 +277,14 @@ On Intel Skylake-X and later CPUs, AVX-512 instructions incur a significant **wa
 
 ### VelesDB Mitigation
 
-The adaptive dispatch system handles this automatically:
-
-```rust
-// 500 iterations per benchmark captures warmup cost
-const BENCHMARK_ITERATIONS: usize = 500;
-
-// Eager initialization at Database::open() avoids first-call latency
-let info = simd_ops::init_dispatch();
-```
-
-**Result**: The dispatch table reflects real-world performance *after* warmup, ensuring AVX-512 is only selected when it provides a genuine advantage over AVX2.
+Dispatch is **static and tiered**, not benchmark-adaptive: the ISA level is
+detected once (`OnceLock`), and the per-dimension tiers in the tables above
+were fixed from offline measurements, so no runtime benchmarking happens on
+the query path. Feature detection itself is lazy — the first distance call
+pays it, every later call reads the cached level. One deliberate consequence
+recorded in the dispatcher: in-place scaling has **no** AVX-512 kernel,
+because a short normalize burst is exactly the shape the transition cost
+punishes.
 
 ### Recommendations
 
@@ -202,12 +292,11 @@ let info = simd_ops::init_dispatch();
 |----------|----------------|
 | **Sustained vector ops** (batch search) | AVX-512 beneficial |
 | **Sporadic single queries** | AVX2 may be faster |
-| **Mixed workloads** | Let adaptive dispatch decide |
+| **Mixed workloads** | The static tiers already encode this trade-off |
 
-To check which backend was selected:
-```bash
-velesdb simd info
-```
+`velesdb simd info` prints a static summary of the dispatch design; it does
+not currently report the level detected on the running machine (see the
+Dispatch Registry's known gaps).
 
 ## Best Practices
 
@@ -219,14 +308,14 @@ let norm = vector.iter().map(|x| x * x).sum::<f32>().sqrt();
 let normalized: Vec<f32> = vector.iter().map(|x| x / norm).collect();
 
 // Fast cosine at search time
-let similarity = cosine_similarity_normalized(&stored, &query);
+let similarity = cosine_normalized_native(&stored, &query);
 ```
 
 ### 2. Batch Operations
 
 ```rust
-// Single query, multiple candidates
-let results = batch_cosine_normalized(&candidates, &query);
+// Single query, multiple candidates (prefetching loop over the pair kernel)
+let results = batch_cosine_native(&candidates, &query);
 ```
 
 ### 3. Use Appropriate Metric
@@ -266,25 +355,29 @@ simd_native::normalize_inplace_native(&mut v);
 
 // Batch operations with prefetching
 let results = simd_native::batch_dot_product_native(&candidates, &query);
-
-// Fast approximate (Newton-Raphson rsqrt)
-let fast_sim = simd_native::cosine_similarity_fast(&a, &b);
 ```
 
 ### Module Structure
 
 | Module | Purpose | Use When |
 |--------|---------|----------|
-| `simd_native` | Hand-tuned intrinsics (AVX2/AVX-512/NEON) | Maximum performance, native CPU |
-| `wide_simd` | Portable SIMD (f32x8) | WASM, cross-platform |
-| `simd` | Auto-vectorized fallback | Generic builds |
+| `simd_native` | Hand-tuned intrinsics (AVX2/AVX-512/NEON) + tiered dispatch | The engine's own path — everything routes here |
+| `simd_dispatch` | Thin public facade re-exporting `simd_native` entry points | External callers wanting a stable surface |
 
 ## Future Optimizations
 
 1. **ARM SVE** - Scalable vectors for ARM servers
 2. **WASM SIMD relaxed** - Additional browser performance
-3. **GPU offload** - Optional CUDA/Metal for batch operations
+3. **Native f16/bf16 arithmetic** (F16C / AVX-512 FP16 / NEON FP16) - today mixed precision converts to f32 in scalar
+4. **int8 VNNI / `sdot`** - dedicated int8 distance instructions (VNNI is already detected, unused)
+
+GPU offload shipped behind the `gpu` feature — see the Dispatch Registry
+above for what is wired and its thresholds.
 
 ## License
 
 VelesDB Core is licensed under VelesDB Core License 1.0.
+
+---
+
+Last updated: 2026-08-18 · Applies to: velesdb-core 5.1.0

@@ -222,6 +222,41 @@ fn import_v2(bytes: &[u8]) -> Result<VectorStore, JsValue> {
 }
 
 /// Reads the legacy v1 format (id + f32 vectors only; Full mode, no payloads).
+/// Checked byte/element sizes for a v1 blob body.
+#[derive(Debug)]
+pub(crate) struct V1Layout {
+    /// Total expected blob length (header + all `count` vector records).
+    pub expected_size: usize,
+    /// Bytes of vector data per record (`dimension * 4`).
+    pub data_bytes_len: usize,
+    /// Total `f32` elements across all vectors (`count * dimension`).
+    pub total_floats: usize,
+}
+
+/// Computes the [`V1Layout`] for `count` vectors of `dimension` floats, or an
+/// error string on any size-arithmetic overflow.
+///
+/// Every product is `checked_*`. On `wasm32` `usize` is 32-bit and
+/// `overflow-checks` is off in release, so an unchecked `count * dimension`
+/// (or `count * vector_size`) could wrap, spoof `import_v1`'s length guard, and
+/// admit an out-of-bounds read on a hostile or corrupt blob. Returns `String`
+/// (not `JsValue`) so it is unit-testable off `wasm32`.
+pub(crate) fn v1_layout(count: usize, dimension: usize) -> Result<V1Layout, String> {
+    const OVERFLOW: &str = "Invalid data: vector size arithmetic overflow";
+    let data_bytes_len = dimension.checked_mul(4).ok_or(OVERFLOW)?;
+    let vector_size = data_bytes_len.checked_add(8).ok_or(OVERFLOW)?;
+    let expected_size = count
+        .checked_mul(vector_size)
+        .and_then(|body| body.checked_add(HEADER_SIZE))
+        .ok_or(OVERFLOW)?;
+    let total_floats = count.checked_mul(dimension).ok_or(OVERFLOW)?;
+    Ok(V1Layout {
+        expected_size,
+        data_bytes_len,
+        total_floats,
+    })
+}
+
 fn import_v1(bytes: &[u8]) -> Result<VectorStore, JsValue> {
     if bytes.len() < HEADER_SIZE {
         return Err(JsValue::from_str("Invalid data: too short"));
@@ -239,21 +274,24 @@ fn import_v1(bytes: &[u8]) -> Result<VectorStore, JsValue> {
         bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15], bytes[16], bytes[17],
     ]) as usize;
 
-    // Validate data size
-    let vector_size = 8 + dimension * 4;
-    let expected_size = HEADER_SIZE + count * vector_size;
-    if bytes.len() < expected_size {
+    // Validate data size with checked arithmetic (see `v1_layout`): on wasm32
+    // `usize` is 32-bit and `overflow-checks` is off in release, so an unchecked
+    // `count * dimension` could wrap, spoof the length guard, and admit an
+    // out-of-bounds read on a hostile/corrupt blob.
+    let layout = v1_layout(count, dimension).map_err(|e| JsValue::from_str(&e))?;
+    if bytes.len() < layout.expected_size {
         return Err(JsValue::from_str(&format!(
-            "Invalid data: expected {expected_size} bytes, got {}",
+            "Invalid data: expected {} bytes, got {}",
+            layout.expected_size,
             bytes.len()
         )));
     }
 
     // Perf: Pre-allocate contiguous buffers
     let mut ids = Vec::with_capacity(count);
-    let total_floats = count * dimension;
+    let total_floats = layout.total_floats;
     let mut data = vec![0.0_f32; total_floats];
-    let data_bytes_len = dimension * 4;
+    let data_bytes_len = layout.data_bytes_len;
 
     // Read all IDs first (cache-friendly sequential access)
     let mut offset = HEADER_SIZE;

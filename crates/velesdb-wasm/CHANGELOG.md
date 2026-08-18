@@ -27,6 +27,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   single-sourcing; output is unchanged. (Issue #1545.)
 
 ### Fixed
+- **`import_from_bytes` (v1) rejects a size-overflowing blob instead of
+  aborting.** `import_v1` computed `count * dimension` and `count * vector_size`
+  unchecked. On `wasm32` (32-bit `usize`, `overflow-checks` off in release) a
+  hostile or corrupt blob could wrap those products, spoof the length guard, and
+  read out of bounds — a panic that `panic = "abort"` turns into a module abort.
+  The size arithmetic moved into a checked `v1_layout` helper that returns a
+  clean error (matching the v2 path). The capacity hints in `reserve()` and the
+  `with_capacity` constructor also use `saturating_mul` so a 32-bit wasm build
+  cannot silently under-reserve.
 - **`rabitq` storage mode crashed on the first search**: `ScratchBuffer::new`
   allocated its dequantization buffer only for `SQ8`/`Binary`/`ProductQuantization`,
   but `RaBitQ` is a full SQ8 alias in the browser engine (it encodes via

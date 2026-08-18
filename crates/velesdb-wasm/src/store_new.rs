@@ -37,20 +37,26 @@ pub fn create_with_capacity(
 ) -> VectorStore {
     let mut store = create_store(dimension, metric, storage_mode);
     store.ids.reserve(capacity);
+    // These are capacity hints; `saturating_mul` keeps a 32-bit-usize wasm32
+    // build from silently under-reserving on a huge `capacity` (a wrapping `*`
+    // would). A genuinely oversized request still aborts on allocation.
+    let elems = capacity.saturating_mul(dimension);
     match storage_mode {
-        StorageMode::Full => store.data.reserve(capacity * dimension),
+        StorageMode::Full => store.data.reserve(elems),
         StorageMode::SQ8 => {
-            store.data_sq8.reserve(capacity * dimension);
+            store.data_sq8.reserve(elems);
             store.sq8_mins.reserve(capacity);
             store.sq8_scales.reserve(capacity);
         }
         StorageMode::Binary => {
             let bytes_per = dimension.div_ceil(8);
-            store.data_binary.reserve(capacity * bytes_per);
+            store
+                .data_binary
+                .reserve(capacity.saturating_mul(bytes_per));
         }
         // ProductQuantization/RaBitQ fall back to SQ8 in WASM context
         StorageMode::ProductQuantization | StorageMode::RaBitQ => {
-            store.data_sq8.reserve(capacity * dimension);
+            store.data_sq8.reserve(elems);
             store.sq8_mins.reserve(capacity);
             store.sq8_scales.reserve(capacity);
         }

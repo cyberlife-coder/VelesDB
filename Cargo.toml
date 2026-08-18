@@ -26,7 +26,13 @@ license-file = "LICENSE"
 repository = "https://github.com/cyberlife-coder/velesdb"
 homepage = "https://velesdb.com"
 documentation = "https://deepwiki.com/cyberlife-coder/VelesDB"
-keywords = ["vector-database", "embeddings", "rag", "local-first", "semantic-search"]
+keywords = [
+    "vector-database",
+    "embeddings",
+    "rag",
+    "local-first",
+    "semantic-search",
+]
 categories = ["database", "data-structures", "algorithms", "science"]
 description = "VelesDB: The Local Vector Database for Rust & AI. Microsecond semantic search, zero network latency, runs anywhere."
 authors = ["Julien Lange <contact@wiscale.fr>"]
@@ -186,4 +192,3 @@ non_send_fields_in_send_ty = "warn"
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
-

@@ -20,6 +20,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so a panicking background job aborted the Node process even under the
   `release-node` unwind profile. It now rejects the Promise with an
   `[INTERNAL]` error carrying the panic message.
+- **Server: an unbounded `top_k` on hybrid search no longer aborts the
+  process.** The hybrid/fused search path reserved `BinaryHeap::with_capacity(k
+  + 1)` from the caller-supplied `top_k`, which is unclamped there (unlike the
+  dense path). A large value in a `POST /collections/{c}/search/hybrid` body
+  requested a terabyte-scale allocation; the allocation failure calls
+  `handle_alloc_error`, which aborts the whole server rather than failing the
+  request. The reservation is now bounded by the candidate count
+  (`min(k, candidates) + 1`), which changes no result — the heap still trims to
+  `top_k`.
+- **Server: HTTPS + rate limiting now work together.** The manual TLS accept
+  path built its hyper service without injecting `ConnectInfo<SocketAddr>`, so
+  the rate limiter's `SmartIpKeyExtractor` could not extract a key and returned
+  `500` for every HTTPS request that carried no
+  `X-Forwarded-For`/`X-Real-Ip`/`Forwarded` header — i.e. every normal REST
+  client. Since TLS is the recommended production step and rate limiting is on
+  by default, the two were unusable together. The TLS path now inserts
+  `ConnectInfo` per request, exactly as the plaintext path's
+  `into_make_service_with_connect_info` does.
 - **Collection config write now fsyncs the parent directory (power-loss
   durability).** `save_config` fsynced the temp file and renamed it atomically,
   but never fsynced the directory, so the rename of `config.json` — which is

@@ -1,0 +1,9 @@
+# taplo (TOML formatter) configuration — matches the repository's existing
+# manifest style rather than taplo's defaults: 4-space indentation, keys left
+# where the author put them (no reordering).
+include = ["Cargo.toml", "crates/**/Cargo.toml"]
+
+[formatting]
+indent_string = "    "
+reorder_keys = false
+reorder_arrays = false
