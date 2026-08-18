@@ -74,19 +74,5 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_error_display() {
-        let err = Error::Config("missing API key".to_string());
-        assert_eq!(err.to_string(), "Configuration error: missing API key");
-    }
-
-    #[test]
-    fn test_error_from_io() {
-        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
-        let err: Error = io_err.into();
-        assert!(matches!(err, Error::Io(_)));
-    }
-}
+#[path = "error_tests.rs"]
+mod tests;
