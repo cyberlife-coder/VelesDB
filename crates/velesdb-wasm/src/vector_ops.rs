@@ -108,9 +108,20 @@ impl ScratchBuffer {
     /// Creates a scratch buffer sized for the given dimension and storage mode.
     #[must_use]
     fn new(dimension: usize, mode: StorageMode) -> Self {
+        // Every mode whose `dequantize` writes into `self.buf` must allocate
+        // it. `RaBitQ` is a full SQ8 alias in the browser engine — it both
+        // encodes via `encode_sq8` and decodes via `decode_sq8` (see
+        // `store_insert::encode_vector` and `dequantize` below) — so it needs
+        // the scratch buffer exactly like `SQ8`. Omitting it here left
+        // `decode_sq8` writing into an empty `Vec` on the first `search()` of
+        // any `rabitq` store, an out-of-bounds panic that `panic = "abort"`
+        // turns into a module abort.
         let needs_buf = matches!(
             mode,
-            StorageMode::SQ8 | StorageMode::Binary | StorageMode::ProductQuantization
+            StorageMode::SQ8
+                | StorageMode::Binary
+                | StorageMode::ProductQuantization
+                | StorageMode::RaBitQ
         );
         Self {
             buf: if needs_buf {

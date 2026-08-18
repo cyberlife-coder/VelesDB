@@ -72,17 +72,23 @@ pub fn evaluate_condition(payload: &Value, condition: &Value) -> bool {
         "gte" => compare_numeric(payload, condition, |pv, v| pv >= v),
         "lt" => compare_numeric(payload, condition, |pv, v| pv < v),
         "lte" => compare_numeric(payload, condition, |pv, v| pv <= v),
+        // Composites fail closed on a malformed shape, for the same reason the
+        // unknown-`type` arm below does: a missing or non-array `conditions`
+        // (an object, number, string) — or a `not` with no `condition` — is a
+        // filter typo, and must not match every point. `is_some_and` yields
+        // `false` for that shape; a *present* empty array keeps its vacuous
+        // result (`all` -> true, `any` -> false), which is correct.
         "and" => condition
             .get("conditions")
             .and_then(|c| c.as_array())
-            .is_none_or(|conds| conds.iter().all(|c| evaluate_condition(payload, c))),
+            .is_some_and(|conds| conds.iter().all(|c| evaluate_condition(payload, c))),
         "or" => condition
             .get("conditions")
             .and_then(|c| c.as_array())
-            .is_none_or(|conds| conds.iter().any(|c| evaluate_condition(payload, c))),
+            .is_some_and(|conds| conds.iter().any(|c| evaluate_condition(payload, c))),
         "not" => condition
             .get("condition")
-            .is_none_or(|c| !evaluate_condition(payload, c)),
+            .is_some_and(|c| !evaluate_condition(payload, c)),
         // Fail closed: an unrecognized/misspelled "type" must not silently
         // match everything, or a filter typo would leak unfiltered results.
         _ => false,

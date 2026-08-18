@@ -140,3 +140,53 @@ fn test_non_string_condition_type_fails_closed() {
     });
     assert!(!matches_filter(&payload, &filter));
 }
+
+#[test]
+fn test_or_with_non_array_conditions_fails_closed() {
+    // A malformed `or` — `conditions` is an object, not an array — must not
+    // pass every point. This is the same leak class the unknown-`type` arm
+    // closes, reachable from a JS typo (object instead of list).
+    let payload = json!({"category": "tech"});
+    let filter = json!({
+        "condition": { "type": "or", "conditions": { "field": "category" } }
+    });
+    assert!(!matches_filter(&payload, &filter));
+}
+
+#[test]
+fn test_and_with_missing_conditions_fails_closed() {
+    let payload = json!({"category": "tech"});
+    let filter = json!({
+        "condition": { "type": "and" }
+    });
+    assert!(!matches_filter(&payload, &filter));
+}
+
+#[test]
+fn test_not_with_missing_inner_condition_fails_closed() {
+    let payload = json!({"category": "tech"});
+    let filter = json!({
+        "condition": { "type": "not" }
+    });
+    assert!(!matches_filter(&payload, &filter));
+}
+
+#[test]
+fn test_empty_and_is_vacuously_true() {
+    // A *present* empty array keeps its vacuous meaning: `all` of nothing is
+    // true. Only the malformed (absent / non-array) shape fails closed.
+    let payload = json!({"category": "tech"});
+    let filter = json!({
+        "condition": { "type": "and", "conditions": [] }
+    });
+    assert!(matches_filter(&payload, &filter));
+}
+
+#[test]
+fn test_empty_or_is_false() {
+    let payload = json!({"category": "tech"});
+    let filter = json!({
+        "condition": { "type": "or", "conditions": [] }
+    });
+    assert!(!matches_filter(&payload, &filter));
+}
