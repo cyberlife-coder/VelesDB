@@ -89,6 +89,19 @@ flaky/random tests.
 - `cargo audit` and `cargo deny check` must pass.
 - No `unsafe` without a documented `// SAFETY:` comment.
 - Validate all user input; no secrets in code.
+- **Fail closed on untrusted shapes.** Any matcher, guard, or evaluator that
+  interprets untrusted input — filter conditions, operator dispatch, mode/type
+  parsing, wire-format tags — must treat an *unknown, absent, or malformed*
+  shape as no-match / error, never as match-all. This is enforced by mechanism,
+  not just convention:
+  - **In-crate enums** (`#[non_exhaustive]` defined in this workspace): match
+    exhaustively with **no permissive wildcard**, so a new variant breaks the
+    build until it is handled. Exemplar:
+    `collection::search::query::match_exec::where_eval::eval_match_condition`.
+  - **Cross-crate enums** (the compiler forces a wildcard): the wildcard must be
+    `_ => false` / `_ => Err(..)`, **never** `_ => true` / `_ => Ok(true)`, and
+    must carry a regression test. Exemplar: `velesdb-wasm`'s `filter::evaluate_condition`
+    with `filter_tests.rs`'s fail-closed cases.
 
 ---
 

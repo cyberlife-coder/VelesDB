@@ -548,20 +548,15 @@ impl NativeHnswInner {
 // Send + Sync for thread safety
 // ============================================================================
 
-// SAFETY: `NativeHnswInner` is `Send` because ownership transfer preserves invariants.
-// - Condition 1: Internal mutability is synchronized via `parking_lot::RwLock`/atomics.
-// - Condition 2: No thread-affine resources are stored in the wrapper.
-// SAFETY: Moving the index wrapper between threads is sound.
-unsafe impl Send for NativeHnswInner {}
-// SAFETY: `NativeHnswInner` is `Sync` because shared references are concurrency-safe.
-// - Condition 1: Concurrent access to mutable graph state is lock/atomic protected.
-// - Condition 2: Exposed APIs do not bypass synchronization primitives.
-// SAFETY: `&NativeHnswInner` can be shared safely across threads.
-unsafe impl Sync for NativeHnswInner {}
-
-// Compile-time assertion: NativeHnswInner must satisfy Send + Sync.
-// If the struct gains a non-Send/Sync field, this causes a build error
-// rather than a subtle runtime data race.
+// `NativeHnswInner` is auto-`Send + Sync`: every field is either lock/atomic
+// protected or itself `Send + Sync`. Its only raw pointer lives in
+// `ContiguousVectors` (`perf_optimizations.rs`), which carries its own audited
+// `unsafe impl Send`/`Sync` — so that `NonNull` is already "whitewashed" one
+// level down, and `NativeHnswInner` needs no `unsafe impl` of its own. An
+// unconditional `unsafe impl` here would be worse than nothing: it would
+// silently mask a future non-`Send` field. The compile-time assertion below is
+// the real guard — with no `unsafe impl` shadowing it, adding a `!Send`/`!Sync`
+// field breaks the build here instead of introducing a subtle data race.
 const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<NativeHnswInner>();
