@@ -36,7 +36,7 @@ Bias toward caution over speed. For trivial tasks, use judgment.
 - **Git Flow:** branch off and target `develop`, never `main`. Release/hotfix branches target `main`.
 - **Crate quirks that `ls` won't tell you:** `velesdb-python` is excluded from the strict clippy
   line above (N-API/PyO3 link); `velesdb-node` builds with the `release-node` profile
-  (`panic = "unwind"`); `velesdb-wasm` has no `persistence` feature.
+  and mobile device builds with `release-mobile` (both `panic = "unwind"`); `velesdb-wasm` has no `persistence` feature.
 - **Node binding surface is contract-tested:** any method added to `MemoryService` requires updating the allowlist in `crates/velesdb-node/__test__/index.spec.mjs` plus a behavior test, or CI fails.
 - **No std clock in wasm-reachable code:** `SystemTime::now()`/`Instant` abort on `wasm32-unknown-unknown`; cfg-gate them (pattern: `now_nanos()` in `velesdb-memory/src/context/memory_bridge.rs`).
 

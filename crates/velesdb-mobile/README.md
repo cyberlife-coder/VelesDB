@@ -70,8 +70,14 @@ bindings from source:
 ```bash
 git clone https://github.com/cyberlife-coder/velesdb.git
 cd velesdb
-cargo build --release -p velesdb-mobile
+cargo build --profile release-mobile -p velesdb-mobile
 ```
+
+The `release-mobile` profile is not optional for device builds: the default
+release profile sets `panic = "abort"`, which disables the `catch_unwind` net
+inside UniFFI's trampolines — a throwing Swift/Kotlin callback would abort the
+whole app instead of raising a catchable exception. `release-mobile` restores
+`panic = "unwind"` and inherits everything else from `release`.
 
 A Rust application (including a Tauri or desktop host) can depend on the crate
 directly instead:

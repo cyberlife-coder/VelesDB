@@ -3,10 +3,6 @@ crates/tauri-plugin-velesdb/src/error.rs	128
 crates/tauri-plugin-velesdb/src/events.rs	37
 crates/tauri-plugin-velesdb/src/helpers.rs	200
 crates/tauri-plugin-velesdb/src/lib.rs	36
-crates/velesdb-cli/src/helpers.rs	175
-crates/velesdb-cli/src/repl.rs	344
-crates/velesdb-cli/src/repl_query_cmds.rs	42
-crates/velesdb-cli/src/session.rs	136
 crates/velesdb-core/src/agent/memory_helpers.rs	160
 crates/velesdb-core/src/api_types/requests.rs	65
 crates/velesdb-core/src/collection/collection_config.rs	104

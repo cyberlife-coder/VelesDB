@@ -56,10 +56,28 @@ impl<O: Send + 'static + ToNapiValue + TypeName> Task for Job<O> {
             .work
             .take()
             .ok_or_else(|| Error::from_reason("[INTERNAL] task computed twice"))?;
-        work()
+        // napi's async trampoline calls `compute` from a plain `extern "C"`
+        // function with no catch_unwind of its own, so a panic here would
+        // abort the Node process even under the `release-node` unwind
+        // profile. AssertUnwindSafe is sound: on panic the closure and
+        // everything it captured are discarded and only an error escapes.
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).unwrap_or_else(|payload| {
+            let msg = payload
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_owned())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "non-string panic payload".to_owned());
+            Err(Error::from_reason(format!(
+                "[INTERNAL] background task panicked: {msg}"
+            )))
+        })
     }
 
     fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
         Ok(output)
     }
 }
+
+#[cfg(test)]
+#[path = "tasks_tests.rs"]
+mod tasks_tests;
