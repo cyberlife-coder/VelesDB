@@ -20,6 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so a panicking background job aborted the Node process even under the
   `release-node` unwind profile. It now rejects the Promise with an
   `[INTERNAL]` error carrying the panic message.
+- **Collection config write now fsyncs the parent directory (power-loss
+  durability).** `save_config` fsynced the temp file and renamed it atomically,
+  but never fsynced the directory, so the rename of `config.json` — which is
+  authoritative and non-reconstructible (HNSW params, storage mode, advanced
+  config) — was not guaranteed durable. A power loss right after creating or
+  reconfiguring a collection could leave a data directory whose collection has
+  no loadable config. The write now applies the same `sync_parent_directory`
+  barrier `storage::atomic_write` uses everywhere else. Off the hot path.
+
 - **Sparse-index WAL now fsyncs the acknowledged write (power-loss
   durability).** `wal_append_upsert` / `wal_append_delete` flushed the buffer
   but never `sync_all`ed, so an upsert carrying `sparse_vectors` could be

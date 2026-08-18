@@ -115,6 +115,62 @@ goes red, the cause is not in what you just ran — go read that job.
 
 ---
 
+## Hardened execution methods
+
+Rules distilled from real incidents in this repository (each one is a mistake
+that was actually made once, with its cost). They extend the Working principles
+above; where they overlap, these are the operational form.
+
+**7. Adversarial review before acting on findings.** A review finding — human,
+tool, or agent — is a *claim*, not a fact. Before implementing a fix, attack
+the claim: read the call chain for the guard that makes it unreachable, and
+attack the *remedy* for perf cost and over-engineering. Measured on one
+architecture pass: of 12 confirmed-sounding claims, 2 were factually wrong
+(the barrier was already present), 3 were exaggerated (derived artifacts,
+no data loss), and 1 proposed remedy (a `Drop`-that-fsyncs type) was itself
+an anti-pattern. Implement only what survives.
+
+**8. Root cause, never symptom.** No re-running a flaky job (fix why it
+flakes — e.g. poll the observable the test asserts on, not a proxy like
+`is_empty()`), no `#[allow]` to silence a lint on new code, no skipping a
+test to get green, no baselining away a defect the code should fix.
+
+**9. Baseline before gating.** Before adding any new CI gate, run the tool on
+the whole tree and audit the results first. A raw `typos` gate would have
+arrived 2 070 findings red — all false positives (French prose, deliberate
+typo fixtures, identifier tokenization). Configure the tool to the repo's
+reality (audited allowlist, the repo's own format style), pin its version so
+a dictionary update cannot flip the verdict, and only then wire the gate.
+
+**10. Local checks mirror CI flags exactly.** `cargo clippy --all-targets
+--all-features` (a `--lib`-only run missed `-D pedantic` on test targets and
+shipped two red pipelines), `cargo fmt --check`, the guard scripts, and
+`git branch --show-current` before trusting any validation run. For a new
+dependency advisory, bump the lockfile surgically (edit version+checksum,
+verify with `cargo metadata --locked`) — a full `cargo update -p` re-resolves
+unrelated edges under a local toolchain that differs from CI's.
+
+**11. Never let a pipe swallow a verdict.** `… | tail -n` on a test run once
+reduced `FAILED (errors=1)` to an invisible line and the push went red in CI.
+Capture full output to a file, read the summary line (`Ran N tests` + `OK`),
+and remember the guard suite prints "FAILED" on stdout *while passing* (a
+refusal-path test) — never grep for FAILED alone.
+
+**12. A new guard implements the whole registry contract.** `scripts/guards.json`
+entry with declared blind spots, a `must_refuse` vector carrying **all four**
+fields (`vector`, `files`, `argv` with `{root}`, `accepts` — the harness
+executes both states and a missing positive control errors three meta-tests),
+a self-test module, and wiring into a workflow job that `CI Success` needs.
+Run the vector by hand exactly as the harness does before pushing.
+
+**13. Sequence merges against the freshness gate.** `pr-governance` requires a
+PR to not be behind `develop` *at CI time*. Merging PR A to develop invalidates
+PR B's freshness mid-run — so order the queue: land the independent PRs first,
+refresh the dependent one **once, last** (union-merge CHANGELOG conflicts),
+and never chase develop with repeated refresh pushes.
+
+---
+
 ## Architecture (3 layers)
 
 Full picture: [ARCHITECTURE.md](docs/reference/ARCHITECTURE.md), [STORAGE_FORMAT.md](docs/STORAGE_FORMAT.md). In short:

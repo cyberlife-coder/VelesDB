@@ -6885,7 +6885,6 @@ dependencies = [
  "arc-swap",
  "atomicwrites",
  "bytemuck",
- "bytes",
  "clap",
  "criterion",
  "dashmap",
@@ -7005,7 +7004,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
- "tracing",
  "uniffi",
  "velesdb-core",
 ]
@@ -7017,7 +7015,6 @@ dependencies = [
  "napi",
  "napi-build",
  "napi-derive",
- "serde",
  "serde_json",
  "velesdb-memory",
 ]
