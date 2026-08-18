@@ -330,6 +330,13 @@ jobs:
       - name: Check inline test-module debt against the frozen baseline
         run: python3 scripts/check-inline-tests.py
 
+      # Same freeze, other axis: no production file newly crosses the
+      # 1000-line budget, and no over-budget file grows. The split guidance
+      # lives in the failure message; test volume is #1918's program and is
+      # excluded here.
+      - name: Check production file budgets against the frozen baseline
+        run: python3 scripts/check-file-budgets.py
+
       - name: Check for .unwrap() in production code
         run: python3 scripts/check_prod_unwraps.py
 
@@ -348,6 +355,9 @@ jobs:
 
       - name: Test inline-tests audit script
         run: python3 -m unittest scripts.tests.test_check_inline_tests
+
+      - name: Test file-budgets audit script
+        run: python3 -m unittest scripts.tests.test_check_file_budgets
 
       - name: Audit feature claims vs exports
         run: python3 scripts/check-feature-claims.py
