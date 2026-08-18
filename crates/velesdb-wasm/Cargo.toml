@@ -28,7 +28,9 @@ velesdb-core = { workspace = true, default-features = false }
 # backend (memory_store.rs). default-features=false drops the default `mcp`
 # feature (rmcp/tokio), leaving the offline, zero-dep HashEmbedder; `context`
 # adds the deterministic compiler (zero new dependencies, persistence-free).
-velesdb-memory = { path = "../velesdb-memory", default-features = false, features = ["context"] }
+velesdb-memory = { path = "../velesdb-memory", default-features = false, features = [
+    "context",
+] }
 
 # getrandom must use the JS backend on wasm32-unknown-unknown.
 # `rand 0.10` depends directly on `getrandom 0.4`; other workspace
@@ -90,11 +92,15 @@ workspace = true
 # Required features for Rust-generated WASM:
 # - bulk-memory: memory.copy/fill operations
 # - nontrapping-float-to-int: i32.trunc_sat_f32_u etc.
-wasm-opt = ["-Os", "--enable-simd", "--enable-bulk-memory", "--enable-nontrapping-float-to-int"]
+wasm-opt = [
+    "-Os",
+    "--enable-simd",
+    "--enable-bulk-memory",
+    "--enable-nontrapping-float-to-int",
+]
 
 [package.metadata.wasm-pack.profile.profiling]
 wasm-opt = false
 
 [package.metadata.wasm-pack.profile.dev]
 wasm-opt = false
-
