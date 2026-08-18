@@ -113,10 +113,6 @@ crates/velesdb-migrate/src/source_config_builder.rs	291
 crates/velesdb-migrate/src/templates.rs	332
 crates/velesdb-migrate/src/transform.rs	99
 crates/velesdb-migrate/src/wizard/mod.rs	420
-crates/velesdb-mobile/src/agent.rs	101
-crates/velesdb-mobile/src/graph.rs	272
-crates/velesdb-mobile/src/query.rs	109
-crates/velesdb-mobile/src/types.rs	42
 crates/velesdb-python/src/collection/search.rs	169
 crates/velesdb-python/src/collection_helpers.rs	40
 crates/velesdb-python/src/exceptions.rs	453
