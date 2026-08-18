@@ -6,5 +6,5 @@ crates/velesdb-memory/src/extract.rs	1738
 crates/velesdb-memory/src/schema.rs	1119
 crates/velesdb-memory/src/service.rs	1969
 crates/velesdb-python/src/agent_memory_service.rs	1097
-crates/velesdb-python/src/options.rs	1314
+crates/velesdb-python/src/options.rs	1123
 crates/velesdb-wasm/src/memory_service.rs	1080
