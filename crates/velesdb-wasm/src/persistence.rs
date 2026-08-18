@@ -60,6 +60,5 @@ pub async fn delete_database(db_name: &str) -> Result<(), JsValue> {
 }
 
 #[cfg(test)]
-mod tests {
-    // Tests require wasm-bindgen-test and must be run with wasm-pack test
-}
+#[path = "persistence_tests.rs"]
+mod tests;
