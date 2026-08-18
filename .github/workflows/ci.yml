@@ -337,6 +337,13 @@ jobs:
       - name: Check production file budgets against the frozen baseline
         run: python3 scripts/check-file-budgets.py
 
+      # Durability-barrier class-closer (#1981 item 2): a production file
+      # that File::create's must carry a sync_all barrier, or an audited
+      # exemption in the shrink-only baseline. The helper to use lives in
+      # the failure message (storage::atomic_write / wal_framing::flush_wal).
+      - name: Check durability barriers on file-creating write paths
+        run: python3 scripts/check-durability-barrier.py
+
       - name: Check for .unwrap() in production code
         run: python3 scripts/check_prod_unwraps.py
 
