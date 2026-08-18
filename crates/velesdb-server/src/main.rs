@@ -1,7 +1,7 @@
 #![allow(clippy::doc_markdown)]
 //! `VelesDB` Server - REST API for the `VelesDB` vector database.
 
-use axum::{http::HeaderValue, middleware::Next, Router};
+use axum::{extract::ConnectInfo, http::HeaderValue, middleware::Next, Router};
 use clap::Parser;
 use std::future::IntoFuture;
 use std::net::SocketAddr;
@@ -300,8 +300,8 @@ async fn tls_accept_loop(
         tokio::select! {
             result = listener.accept() => {
                 match result {
-                    Ok((stream, _peer_addr)) => {
-                        spawn_tls_connection(stream, tls_acceptor.clone(), app.clone(), active_conns.clone());
+                    Ok((stream, peer_addr)) => {
+                        spawn_tls_connection(stream, peer_addr, tls_acceptor.clone(), app.clone(), active_conns.clone());
                     }
                     Err(e) => {
                         tracing::warn!("Failed to accept TCP connection: {e}");
@@ -322,6 +322,7 @@ async fn tls_accept_loop(
 
 fn spawn_tls_connection(
     stream: tokio::net::TcpStream,
+    peer_addr: SocketAddr,
     acceptor: TlsAcceptor,
     app: Router,
     conns: Arc<std::sync::atomic::AtomicUsize>,
@@ -335,8 +336,18 @@ fn spawn_tls_connection(
         };
 
         let io = hyper_util::rt::TokioIo::new(tls_stream);
-        let hyper_service = hyper::service::service_fn(move |request| {
+        let hyper_service = hyper::service::service_fn(move |mut request| {
             let clone = app.clone();
+            // The rate limiter's `SmartIpKeyExtractor` reads `ConnectInfo<SocketAddr>`
+            // from request extensions. The plaintext path supplies it via
+            // `into_make_service_with_connect_info`, but this manual hyper TLS
+            // path builds the service by hand, so it must insert `ConnectInfo`
+            // itself. Without it every HTTPS request that carries no
+            // `X-Forwarded-For`/`X-Real-Ip`/`Forwarded` header (i.e. every
+            // normal REST client) failed key extraction and got a blanket 500,
+            // making TLS + rate limiting — both on by default in production —
+            // unusable together.
+            request.extensions_mut().insert(ConnectInfo(peer_addr));
             async move { clone.oneshot(request).await }
         });
 
