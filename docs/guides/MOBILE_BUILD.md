@@ -82,21 +82,30 @@ sources are identical across targets; only the linked binary differs.
 
 ## 3. iOS: static libraries and XCFramework
 
+Device builds use the `release-mobile` profile, **not** `--release`. The default
+release profile sets `panic = "abort"`, which turns the `catch_unwind` safety net
+inside UniFFI's FFI trampolines into a no-op: any Rust panic — including the one
+UniFFI raises when a Swift/Kotlin observer callback throws unexpectedly — aborts
+the whole app instead of surfacing as a catchable exception. The
+`release-mobile` profile (workspace `Cargo.toml`) inherits everything else from
+`release` and restores `panic = "unwind"`; the cost is unwind tables in the
+binary.
+
 ```bash
-cargo build --release --target aarch64-apple-ios -p velesdb-mobile
-cargo build --release --target aarch64-apple-ios-sim -p velesdb-mobile
-cargo build --release --target x86_64-apple-ios -p velesdb-mobile
+cargo build --profile release-mobile --target aarch64-apple-ios -p velesdb-mobile
+cargo build --profile release-mobile --target aarch64-apple-ios-sim -p velesdb-mobile
+cargo build --profile release-mobile --target x86_64-apple-ios -p velesdb-mobile
 
 # One fat simulator slice (a single XCFramework slice cannot hold two archs
 # for the same platform variant otherwise).
 mkdir -p target/universal-sim
 lipo -create \
-    target/aarch64-apple-ios-sim/release/libvelesdb_mobile.a \
-    target/x86_64-apple-ios/release/libvelesdb_mobile.a \
+    target/aarch64-apple-ios-sim/release-mobile/libvelesdb_mobile.a \
+    target/x86_64-apple-ios/release-mobile/libvelesdb_mobile.a \
     -output target/universal-sim/libvelesdb_mobile.a
 
 xcodebuild -create-xcframework \
-    -library target/aarch64-apple-ios/release/libvelesdb_mobile.a \
+    -library target/aarch64-apple-ios/release-mobile/libvelesdb_mobile.a \
     -headers bindings/swift \
     -library target/universal-sim/libvelesdb_mobile.a \
     -headers bindings/swift \
@@ -117,17 +126,20 @@ before assuming the layout above is complete.
 
 ## 4. Android: shared libraries, jniLibs, JNA
 
+Same profile requirement as iOS — `--profile release-mobile`, not `--release`
+(see §3 for why):
+
 ```bash
 cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 \
-    build --release -p velesdb-mobile
+    build --profile release-mobile -p velesdb-mobile
 ```
 
 Artifacts land in the usual per-target directories:
 
 ```text
-target/aarch64-linux-android/release/libvelesdb_mobile.so
-target/armv7-linux-androideabi/release/libvelesdb_mobile.so
-target/x86_64-linux-android/release/libvelesdb_mobile.so
+target/aarch64-linux-android/release-mobile/libvelesdb_mobile.so
+target/armv7-linux-androideabi/release-mobile/libvelesdb_mobile.so
+target/x86_64-linux-android/release-mobile/libvelesdb_mobile.so
 ```
 
 Package them under the ABI names the Android runtime expects:
@@ -140,7 +152,7 @@ app/src/main/jniLibs/x86_64/libvelesdb_mobile.so
 
 `cargo-ndk`'s `-o <dir>` flag writes that layout directly (unverified on current
 toolchain — confirm with your `cargo-ndk` version: `cargo ndk -o app/src/main/jniLibs
--t arm64-v8a build --release -p velesdb-mobile`).
+-t arm64-v8a build --profile release-mobile -p velesdb-mobile`).
 
 Two Gradle-side requirements come from the generated Kotlin itself:
 
