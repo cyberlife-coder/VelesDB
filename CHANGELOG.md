@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A panic in a binding no longer aborts the host process (mobile + Node,
+  #1980).** Mobile release builds now use the new `release-mobile` workspace
+  profile (`panic = "unwind"`, mirroring `release-node`), so UniFFI's
+  `catch_unwind` trampolines can convert a Rust panic — including the one
+  UniFFI raises when a Swift/Kotlin callback throws unexpectedly — into a
+  catchable foreign exception instead of a SIGABRT of the whole app. On the
+  Node side, the async task path (`Job::compute`) now catches panics itself:
+  napi's async trampoline is a plain `extern "C"` call with no net of its own,
+  so a panicking background job aborted the Node process even under the
+  `release-node` unwind profile. It now rejects the Promise with an
+  `[INTERNAL]` error carrying the panic message.
 - **Sparse-index WAL now fsyncs the acknowledged write (power-loss
   durability).** `wal_append_upsert` / `wal_append_delete` flushed the buffer
   but never `sync_all`ed, so an upsert carrying `sparse_vectors` could be

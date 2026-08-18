@@ -97,6 +97,15 @@ strip = true
 inherits = "release"
 panic = "unwind"
 
+# UniFFI's FFI trampolines rely on catch_unwind to turn a Rust panic — including
+# the panic it raises itself when a Kotlin/Swift callback throws unexpectedly —
+# into a foreign exception. Under `panic = "abort"` that safety net is a no-op
+# and the whole app SIGABRTs instead. Mobile release builds use this profile
+# (`cargo build --profile release-mobile`, see docs/guides/MOBILE_BUILD.md).
+[profile.release-mobile]
+inherits = "release"
+panic = "unwind"
+
 [profile.bench]
 lto = true
 codegen-units = 1

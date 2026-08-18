@@ -56,10 +56,65 @@ impl<O: Send + 'static + ToNapiValue + TypeName> Task for Job<O> {
             .work
             .take()
             .ok_or_else(|| Error::from_reason("[INTERNAL] task computed twice"))?;
-        work()
+        // napi's async trampoline calls `compute` from a plain `extern "C"`
+        // function with no catch_unwind of its own, so a panic here would
+        // abort the Node process even under the `release-node` unwind
+        // profile. AssertUnwindSafe is sound: on panic the closure and
+        // everything it captured are discarded and only an error escapes.
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).unwrap_or_else(|payload| {
+            let msg = payload
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_owned())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "non-string panic payload".to_owned());
+            Err(Error::from_reason(format!(
+                "[INTERNAL] background task panicked: {msg}"
+            )))
+        })
     }
 
     fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
         Ok(output)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compute_returns_closure_result() {
+        let mut job: Job<u32> = Job::new(|| Ok(7));
+        assert_eq!(job.compute().expect("closure result"), 7);
+    }
+
+    #[test]
+    fn compute_twice_is_an_error_not_a_panic() {
+        let mut job: Job<u32> = Job::new(|| Ok(7));
+        let _ = job.compute();
+        let err = job.compute().expect_err("second compute must fail");
+        assert!(err.reason.contains("[INTERNAL]"), "got: {}", err.reason);
+    }
+
+    #[test]
+    fn compute_converts_panic_into_error() {
+        let mut job: Job<u32> = Job::new(|| panic!("boom in background job"));
+        let err = job.compute().expect_err("panic must become an error");
+        assert!(
+            err.reason.contains("boom in background job"),
+            "panic message must be preserved, got: {}",
+            err.reason
+        );
+    }
+
+    #[test]
+    fn compute_handles_non_string_panic_payload() {
+        let mut job: Job<u32> = Job::new(|| std::panic::panic_any(42_i32));
+        let err = job.compute().expect_err("panic must become an error");
+        assert!(
+            err.reason.contains("non-string panic payload"),
+            "got: {}",
+            err.reason
+        );
     }
 }
