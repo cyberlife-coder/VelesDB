@@ -195,16 +195,16 @@ impl std::fmt::Debug for DistanceEngine {
     }
 }
 
-// SAFETY: `DistanceEngine` stores only plain function pointers and a `usize`.
-// - Condition 1: All fields are `fn(...)` pointers and `usize`, both inherently `Send`.
-// - Condition 2: No interior mutability or non-`Send` types like `Rc`, raw pointers, or thread-local refs.
-// SAFETY: Function pointers are safe to transfer across threads.
-unsafe impl Send for DistanceEngine {}
-// SAFETY: Function pointers are immutable references to static code.
-// - Condition 1: All fields are `fn(...)` pointers and `usize`, both inherently `Sync`.
-// - Condition 2: No mutable shared state; the struct is read-only after construction.
-// SAFETY: Multiple threads can safely share a `&DistanceEngine` for distance computation.
-unsafe impl Sync for DistanceEngine {}
+// `DistanceEngine` holds only `fn(...)` pointers and a `usize`, all of which are
+// `Send + Sync` by construction, so the auto-derived impls are correct — an
+// explicit `unsafe impl` would only be noise (and, being unconditional, would
+// silently mask a future non-`Send` field). This compile-time assertion is the
+// real guard: adding a `!Send`/`!Sync` field breaks the build here rather than
+// permitting a data race.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<DistanceEngine>();
+};
 
 impl DistanceEngine {
     /// Creates a distance engine and resolves SIMD kernels once for `dimension`.
