@@ -86,7 +86,6 @@ crates/velesdb-core/src/wire/vrb1.rs	119
 crates/velesdb-memory/src/context.rs	109
 crates/velesdb-memory/src/daemon_commands.rs	133
 crates/velesdb-memory/src/daemon_serve.rs	19
-crates/velesdb-memory/src/extract.rs	182
 crates/velesdb-memory/src/http.rs	63
 crates/velesdb-memory/src/http/session_limit.rs	307
 crates/velesdb-memory/src/http_retry.rs	160
