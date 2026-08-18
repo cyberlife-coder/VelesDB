@@ -5,6 +5,19 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **WASM: a metadata filter with an unrecognized or missing condition `type`
+  now matches nothing instead of everything (#1975).** `search_with_filter`'s
+  evaluator returned `true` for any `"type"` it did not recognize, so a typo'd
+  operator (`"eqals"`) — or a condition object with no `"type"` at all —
+  silently returned unfiltered results. Both now fail closed. An absent
+  `filter`, or a filter without a `condition` key, still matches everything:
+  "no filter" and "a filter the evaluator cannot interpret" are different
+  claims, and only the second one is an error.
+
 ## [5.1.0] — 2026-08-17
 
 ### Added

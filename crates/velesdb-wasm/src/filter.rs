@@ -38,7 +38,14 @@ pub fn matches_filter(payload: &Value, filter: &Value) -> bool {
 }
 
 /// Evaluates a single condition against a payload.
+///
+/// Fails closed on any condition it cannot interpret: an unrecognized
+/// `"type"`, a missing `"type"`, or a non-string one all match nothing.
+/// The permissive case is reserved for [`matches_filter`]'s *absent*
+/// `condition` key — "no filter" and "a filter this evaluator cannot
+/// interpret" are different claims, and only the second is an error.
 pub fn evaluate_condition(payload: &Value, condition: &Value) -> bool {
+    // A missing or non-string "type" funnels into the fail-closed arm below.
     let cond_type = condition.get("type").and_then(|t| t.as_str()).unwrap_or("");
 
     match cond_type {

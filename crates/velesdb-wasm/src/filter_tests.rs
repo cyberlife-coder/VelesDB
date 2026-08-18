@@ -112,3 +112,31 @@ fn test_unknown_condition_type_fails_closed() {
     });
     assert!(!matches_filter(&payload, &filter));
 }
+
+#[test]
+fn test_missing_condition_type_fails_closed() {
+    // A condition OBJECT with no "type" is an uninterpretable filter, not an
+    // absent one — it funnels into the same fail-closed arm as a typo'd type.
+    // (An absent `condition` key stays permissive: test_no_filter_matches_all.)
+    let payload = json!({"category": "tech"});
+    let filter = json!({
+        "condition": {
+            "field": "category",
+            "value": "tech"
+        }
+    });
+    assert!(!matches_filter(&payload, &filter));
+}
+
+#[test]
+fn test_non_string_condition_type_fails_closed() {
+    let payload = json!({"category": "tech"});
+    let filter = json!({
+        "condition": {
+            "type": 7,
+            "field": "category",
+            "value": "tech"
+        }
+    });
+    assert!(!matches_filter(&payload, &filter));
+}
