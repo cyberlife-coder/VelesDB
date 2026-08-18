@@ -142,3 +142,34 @@ fn stale_wal_generation_is_not_replayed_over_new_snapshot() {
     std::fs::write(dir.path().join("sparse.wal"), stale_wal).expect("test: restore stale WAL");
     assert_complete_recovery(&dir);
 }
+
+#[test]
+fn wal_append_fsyncs_the_acked_write() {
+    // The sparse WAL append path used to `flush()` only, so an acknowledged
+    // upsert could sit in the page cache and be lost on power loss — and sparse
+    // vectors live nowhere else to rebuild from. It now shares the BM25/edge
+    // durability discipline (one `flush` + `sync_all` per acked append), which
+    // `count_wal_io` observes as a durability barrier (`syncs`).
+    use crate::index::wal_framing::io_counters::count_wal_io;
+
+    let dir = TempDir::new().expect("test: temp dir");
+    let wal_path = dir.path().join("sparse.wal");
+    let v = vector(7, 1.0);
+
+    let (_, counts) = count_wal_io(&wal_path, || {
+        wal_append_upsert(&wal_path, 7, &v).expect("test: append");
+    });
+    assert_eq!(
+        counts.syncs, 1,
+        "an acked upsert must be fsynced exactly once"
+    );
+
+    let (_, del_counts) = count_wal_io(&wal_path, || {
+        crate::index::sparse::persistence::wal_append_delete(&wal_path, 7)
+            .expect("test: delete append");
+    });
+    assert_eq!(
+        del_counts.syncs, 1,
+        "an acked delete must be fsynced exactly once"
+    );
+}

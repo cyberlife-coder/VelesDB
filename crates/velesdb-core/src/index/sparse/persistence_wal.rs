@@ -65,7 +65,7 @@ pub fn wal_append_upsert(wal_path: &Path, point_id: u64, vector: &SparseVector) 
     let mut w = open_wal_writer(wal_path)?;
     write_upsert_header(&mut w, total_len, point_id, nnz)?;
     write_term_value_pairs(&mut w, &vector.indices, &vector.values)?;
-    flush_wal(&mut w)
+    flush_wal(&mut w, wal_path)
 }
 
 /// Writes the upsert WAL entry header (length prefix, opcode, point ID, nnz).
@@ -94,10 +94,18 @@ fn write_term_value_pairs(
     Ok(())
 }
 
-/// Flushes the WAL writer, mapping I/O errors to `SparseIndexError`.
-fn flush_wal(w: &mut BufWriter<std::fs::File>) -> Result<()> {
-    w.flush()
-        .map_err(|e| Error::SparseIndexError(format!("WAL flush failed: {e}")))
+/// Flushes AND fsyncs the WAL writer, mapping I/O errors to `SparseIndexError`.
+///
+/// A sparse upsert/delete is acknowledged only after this returns `Ok`, and the
+/// sparse vectors live nowhere else — a lost WAL entry is not rebuilt from any
+/// snapshot or payload. So the acked append path must be durable against power
+/// loss, exactly like the BM25 and edge WALs: this delegates to the shared
+/// `wal_framing::flush_wal` (a single `flush` + `sync_all`) rather than a
+/// buffer-only `flush`, which left acknowledged writes in the page cache. The
+/// framing helper's `Error::Index` is remapped to this module's error contract.
+fn flush_wal(w: &mut BufWriter<std::fs::File>, wal_path: &Path) -> Result<()> {
+    crate::index::wal_framing::flush_wal(w, wal_path, "sparse WAL")
+        .map_err(|e| Error::SparseIndexError(format!("WAL flush/fsync failed: {e}")))
 }
 
 /// Computes the total byte length of an upsert WAL entry using checked arithmetic.
@@ -171,7 +179,7 @@ pub fn wal_append_delete(wal_path: &Path, point_id: u64) -> Result<()> {
     wal_write(&mut w, &total_len.to_le_bytes())?;
     wal_write(&mut w, &[WAL_OP_DELETE])?;
     wal_write(&mut w, &point_id.to_le_bytes())?;
-    flush_wal(&mut w)
+    flush_wal(&mut w, wal_path)
 }
 
 // ---------------------------------------------------------------------------

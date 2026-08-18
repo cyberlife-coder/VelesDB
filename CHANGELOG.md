@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Sparse-index WAL now fsyncs the acknowledged write (power-loss
+  durability).** `wal_append_upsert` / `wal_append_delete` flushed the buffer
+  but never `sync_all`ed, so an upsert carrying `sparse_vectors` could be
+  acknowledged while its bytes sat only in the OS page cache — and sparse
+  vectors are stored nowhere else, so a power loss before the next compaction
+  lost them silently. The append path now shares the BM25 and edge WALs'
+  durability discipline (a single `flush` + `sync_all` per acked append). A
+  process crash was already safe; this closes the power-loss / kernel-panic
+  window.
 - **WASM: a metadata filter with an unrecognized or missing condition `type`
   now matches nothing instead of everything (#1975).** `search_with_filter`'s
   evaluator returned `true` for any `"type"` it did not recognize, so a typo'd
