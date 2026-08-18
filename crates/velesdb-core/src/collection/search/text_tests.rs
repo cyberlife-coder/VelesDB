@@ -221,8 +221,11 @@ fn test_top_k_from_scores_huge_k_does_not_over_reserve() {
 #[test]
 fn test_top_k_from_scores_respects_small_k() {
     let mut fused: rustc_hash::FxHashMap<u64, f32> = rustc_hash::FxHashMap::default();
+    // Ascending, distinct scores without a lossy u64->f32 cast (clippy pedantic).
+    let mut score = 0.0f32;
     for id in 0..10u64 {
-        fused.insert(id, id as f32);
+        fused.insert(id, score);
+        score += 1.0;
     }
     let out = Collection::top_k_from_scores(fused, 3);
     assert_eq!(out.len(), 3, "must trim to k");
