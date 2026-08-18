@@ -31,7 +31,12 @@ tempfile = "3.14"
 toml = "1.1"
 # Used by tests/nonblocking_state.rs to build a single-worker async runtime
 # and prove blocking core operations never starve runtime workers.
-tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "time", "sync"] }
+tokio = { version = "1.52", features = [
+    "rt-multi-thread",
+    "macros",
+    "time",
+    "sync",
+] }
 # `test` feature unlocks `tauri::test::{mock_builder, mock_context, noop_assets}`
 # and `MockRuntime`, used by command integration tests to build an
 # `App<MockRuntime>` and exercise the `#[command]` handlers directly.

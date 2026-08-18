@@ -29,8 +29,16 @@ crate-type = ["cdylib"]
 # `embedder-http`+`extractor-http` compile the real embedder + auto-extraction
 # into the default prebuild (full PyO3 parity). We MUST NOT depend on
 # velesdb-core directly.
-velesdb-memory = { path = "../velesdb-memory", default-features = false, features = ["persistence", "embedder-http", "extractor-http", "context"] }
-napi = { version = "3", default-features = false, features = ["napi9", "serde-json"] }
+velesdb-memory = { path = "../velesdb-memory", default-features = false, features = [
+    "persistence",
+    "embedder-http",
+    "extractor-http",
+    "context",
+] }
+napi = { version = "3", default-features = false, features = [
+    "napi9",
+    "serde-json",
+] }
 napi-derive = "3"
 serde_json = { workspace = true }
 
