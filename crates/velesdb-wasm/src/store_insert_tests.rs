@@ -307,3 +307,38 @@ fn test_insert_batch_raw_overflow_errors() {
     assert!(err.contains("overflow"), "unexpected error: {err}");
     assert!(store.ids.is_empty());
 }
+
+// -------------------------------------------------------------------------
+// RaBitQ mode: the scratch buffer must be allocated for dequantization.
+// -------------------------------------------------------------------------
+
+#[test]
+fn test_rabitq_search_does_not_panic_on_empty_scratch() {
+    // Regression: `ScratchBuffer::new` used to allocate `buf` only for
+    // SQ8/Binary/PQ, so a `rabitq` store — which decodes via `decode_sq8` —
+    // indexed into an empty `Vec` on the first score computation, an
+    // out-of-bounds panic (a module abort under `panic = "abort"`). A
+    // `rabitq` store is reachable from JS via `new_with_mode(.., "rabitq")`.
+    let mut store = create_store(4, DistanceMetric::Euclidean, StorageMode::RaBitQ);
+    insert_vector(&mut store, 1, &[1.0, 2.0, 3.0, 4.0]);
+    insert_vector(&mut store, 2, &[5.0, 6.0, 7.0, 8.0]);
+
+    // This is the exact call `store_search::search` makes; before the fix it
+    // panicked here rather than returning scores.
+    let scores = crate::vector_ops::compute_scores(
+        &[1.0, 2.0, 3.0, 4.0],
+        &store.ids,
+        &store.data,
+        &store.data_sq8,
+        &store.data_binary,
+        &store.sq8_mins,
+        &store.sq8_scales,
+        4,
+        DistanceMetric::Euclidean,
+        StorageMode::RaBitQ,
+    );
+
+    assert_eq!(scores.len(), 2, "every stored id must be scored");
+    assert_eq!(scores[0].0, 1);
+    assert_eq!(scores[1].0, 2);
+}
