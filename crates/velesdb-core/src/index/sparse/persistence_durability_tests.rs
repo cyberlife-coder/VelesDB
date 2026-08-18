@@ -156,7 +156,7 @@ fn wal_append_fsyncs_the_acked_write() {
     let wal_path = dir.path().join("sparse.wal");
     let v = vector(7, 1.0);
 
-    let (_, counts) = count_wal_io(&wal_path, || {
+    let ((), counts) = count_wal_io(&wal_path, || {
         wal_append_upsert(&wal_path, 7, &v).expect("test: append");
     });
     assert_eq!(
@@ -164,7 +164,7 @@ fn wal_append_fsyncs_the_acked_write() {
         "an acked upsert must be fsynced exactly once"
     );
 
-    let (_, del_counts) = count_wal_io(&wal_path, || {
+    let ((), del_counts) = count_wal_io(&wal_path, || {
         crate::index::sparse::persistence::wal_append_delete(&wal_path, 7)
             .expect("test: delete append");
     });
