@@ -361,6 +361,13 @@ impl Collection {
         writer.flush()?;
         writer.get_ref().sync_all()?;
         std::fs::rename(&tmp_path, &config_path)?;
+        // The file contents are fsynced above, but the *rename* is only durable
+        // once the directory entry is fsynced. `config.json` is authoritative
+        // and not reconstructible (HNSW params, storage mode, advanced config),
+        // so a power loss right after a create/reconfigure could otherwise leave
+        // a data directory whose collection has no loadable config. This mirrors
+        // the barrier `storage::atomic_write` applies everywhere else.
+        crate::storage::atomic_write::sync_parent_directory(&config_path)?;
         Ok(())
     }
 

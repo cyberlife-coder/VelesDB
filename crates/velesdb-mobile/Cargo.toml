@@ -30,7 +30,6 @@ parking_lot = "0.12"
 thiserror = "2.0"
 serde = { workspace = true }
 serde_json = "1.0"
-tracing = "0.1"
 
 # iOS targets (add via: rustup target add <target>)
 # - aarch64-apple-ios (device)
@@ -52,9 +51,6 @@ loom = ["velesdb-core/loom"]
 [dev-dependencies]
 tempfile = "3.14"
 
-# tokio is required as async runtime by uniffi's "tokio" feature — not directly imported
-[package.metadata.cargo-machete]
-ignored = ["tokio"]
 
 [lints]
 workspace = true
