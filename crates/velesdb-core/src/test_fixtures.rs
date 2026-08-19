@@ -16,5 +16,5 @@
 //! ```
 
 #[cfg(test)]
-#[path = "fixtures.rs"]
+#[path = "fixtures_tests.rs"]
 pub(crate) mod fixtures;
