@@ -405,8 +405,8 @@ impl GraphStore for WasmStore {
 }
 
 impl WasmStore {
-    /// Shared vector-search core for [`MemoryStore::query_filtered`],
-    /// [`MemoryStore::query_excluding`], and [`MemoryStore::query_columnar`]:
+    /// Shared vector-search core for [`RecallStore::query_filtered`],
+    /// [`RecallStore::query_excluding`], and [`ColumnStore::query_columnar`]:
     /// score every non-expired fact whose payload passes `predicate` against
     /// `embedding`, rank, take `k` after `offset`, and build each returned
     /// row with `row`.
@@ -473,7 +473,7 @@ impl WasmStore {
     }
 
     /// [`Self::query_ranked`] specialised to the `(id, score, content)`
-    /// triple [`MemoryStore::query_filtered`]/[`MemoryStore::query_excluding`]
+    /// triple [`RecallStore::query_filtered`]/[`RecallStore::query_excluding`]
     /// return.
     fn query_scored(
         &self,
