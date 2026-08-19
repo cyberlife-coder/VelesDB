@@ -14,6 +14,8 @@ pub const CODE_INVALID_INPUT: &str = "INVALID_INPUT";
 pub const CODE_NOT_FOUND: &str = "NOT_FOUND";
 /// An internal/storage/embedding/extraction failure.
 pub const CODE_INTERNAL: &str = "INTERNAL";
+/// Stable code for a capability the storage backend does not provide.
+pub const CODE_UNSUPPORTED: &str = "UNSUPPORTED";
 
 /// Map a [`MemoryError`] to a `napi::Error` carrying a stable code, driven by
 /// its [`ErrorCategory`] so the JS-facing taxonomy stays identical to the MCP
@@ -36,6 +38,7 @@ fn known_category_mapping(category: ErrorCategory) -> Option<(Status, &'static s
         ErrorCategory::InvalidInput => (Status::InvalidArg, CODE_INVALID_INPUT),
         ErrorCategory::NotFound => (Status::InvalidArg, CODE_NOT_FOUND),
         ErrorCategory::Internal => (Status::GenericFailure, CODE_INTERNAL),
+        ErrorCategory::Unsupported => (Status::GenericFailure, CODE_UNSUPPORTED),
         _ => return None,
     })
 }

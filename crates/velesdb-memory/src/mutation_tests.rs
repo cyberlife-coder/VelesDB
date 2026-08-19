@@ -66,14 +66,24 @@ const READ_ONLY: &[&str] = &[
 #[test]
 fn memory_store_registry_classifies_every_primitive() {
     let source = include_str!("storage.rs");
-    let body = source
-        .split_once("pub trait MemoryStore")
-        .expect("MemoryStore trait")
-        .1
-        .split_once("\n}\n")
-        .expect("MemoryStore trait body")
-        .0;
-    let actual: BTreeSet<&str> = body.lines().filter_map(method_name).collect();
+    // The storage surface is four facet traits since #1959; the registry
+    // must classify every primitive across all of them, so parse each body.
+    let mut actual: BTreeSet<&str> = BTreeSet::new();
+    for facet in [
+        "pub trait FactStore",
+        "pub trait RecallStore",
+        "pub trait GraphStore",
+        "pub trait ColumnStore",
+    ] {
+        let body = source
+            .split_once(facet)
+            .expect("facet trait")
+            .1
+            .split_once("\n}\n")
+            .expect("facet trait body")
+            .0;
+        actual.extend(body.lines().filter_map(method_name));
+    }
     let classified: BTreeSet<&str> = MUTATING.iter().chain(READ_ONLY).copied().collect();
 
     assert_eq!(actual, classified);

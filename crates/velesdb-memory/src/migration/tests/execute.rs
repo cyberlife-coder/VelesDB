@@ -11,7 +11,7 @@
 use super::*;
 use crate::embedder::HashEmbedder;
 use crate::storage::NativeStore;
-use crate::MemoryStore;
+use crate::{FactStore, GraphStore};
 use std::collections::BTreeMap;
 
 pub(super) const NEW_DIM: usize = 8;

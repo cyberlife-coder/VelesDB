@@ -18,7 +18,7 @@ use velesdb_core::agent::{FixedRate, ReinforcementContext, ReinforcementStrategy
 use super::{MemoryService, Metadata};
 use crate::embedder::Embedder;
 use crate::error::MemoryError;
-use crate::storage::MemoryStore;
+use crate::storage::FactStore;
 
 /// Reserved payload key holding a fact's learned confidence in `[0.0, 1.0]`.
 /// Absent means the fact has never received feedback.
@@ -47,7 +47,7 @@ type RankedHit = (Hit, Option<Metadata>, f32);
 /// Reordered hits and their raw payloads, returned by [`MemoryService::rl_rerank`].
 type RerankedHits = (Vec<Hit>, Vec<Option<Metadata>>);
 
-impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
+impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     /// Record an outcome for a recalled fact and return its new confidence.
     ///
     /// `success = true` reinforces the fact (it was useful), `false` weakens it

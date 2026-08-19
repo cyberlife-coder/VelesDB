@@ -25,8 +25,8 @@ use std::fmt::Write as _;
 use tempfile::TempDir;
 use velesdb_memory::limits::MAX_ENTITY_RELATIONS;
 use velesdb_memory::{
-    BoundedMemoryEdges, ColumnFilter, HashEmbedder, MemoryEdge, MemoryError, MemoryService,
-    MemoryStore, Metadata, OutlineExtractor, Recollection, DEFAULT_DIMENSION,
+    BoundedMemoryEdges, FactStore, GraphStore, HashEmbedder, MemoryEdge, MemoryError,
+    MemoryService, Metadata, OutlineExtractor, DEFAULT_DIMENSION,
 };
 
 /// A fresh service over a temp store. The [`TempDir`] must outlive the service.
@@ -39,7 +39,7 @@ fn service() -> (TempDir, MemoryService<HashEmbedder>) {
 
 /// The profile of `name`, which must exist — the lookup boilerplate every
 /// case shares, whatever store the service runs on.
-fn profile_of<S: MemoryStore>(
+fn profile_of<S: FactStore + GraphStore>(
     svc: &MemoryService<HashEmbedder, S>,
     name: &str,
 ) -> velesdb_memory::EntityProfile {
@@ -116,7 +116,7 @@ struct ScanCutStore {
     inner: velesdb_memory::NativeStore,
 }
 
-impl MemoryStore for ScanCutStore {
+impl FactStore for ScanCutStore {
     fn store(&self, id: u64, content: &str, embedding: &[f32]) -> Result<(), MemoryError> {
         self.inner.store(id, content, embedding)
     }
@@ -163,34 +163,16 @@ impl MemoryStore for ScanCutStore {
         self.inner.delete(id)
     }
 
-    fn query_filtered(
-        &self,
-        embedding: &[f32],
-        k: usize,
-        filter: &Metadata,
-        offset: usize,
-    ) -> Result<Vec<(u64, f32, String)>, MemoryError> {
-        self.inner.query_filtered(embedding, k, filter, offset)
+    fn count(&self) -> usize {
+        self.inner.count()
     }
+}
 
-    fn query_excluding(
-        &self,
-        embedding: &[f32],
-        k: usize,
-        exclude: &Metadata,
-    ) -> Result<Vec<(u64, f32, String)>, MemoryError> {
-        self.inner.query_excluding(embedding, k, exclude)
-    }
-
-    fn query_columnar(
-        &self,
-        embedding: &[f32],
-        k: usize,
-        filters: &[ColumnFilter],
-    ) -> Result<Vec<Recollection>, MemoryError> {
-        self.inner.query_columnar(embedding, k, filters)
-    }
-
+/// The graph facet, inner-delegated except the bounded outgoing scan under
+/// test. The recall and columnar facets are deliberately NOT implemented:
+/// this scenario never searches, and a drift into those paths is now a
+/// compile error instead of a silent delegation.
+impl GraphStore for ScanCutStore {
     fn relate(&self, from: u64, to: u64, relation: &str) -> Result<u64, MemoryError> {
         self.inner.relate(from, to, relation)
     }
@@ -219,10 +201,6 @@ impl MemoryStore for ScanCutStore {
 
     fn unrelate(&self, edge_id: u64) -> Result<bool, MemoryError> {
         self.inner.unrelate(edge_id)
-    }
-
-    fn count(&self) -> usize {
-        self.inner.count()
     }
 }
 

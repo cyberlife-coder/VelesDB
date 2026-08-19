@@ -27,6 +27,11 @@ pub enum ErrorCategory {
     NotFound,
     /// An internal storage / embedding / extraction failure — a 5xx-style fault.
     Internal,
+    /// The operation is not supported by the storage backend in use — a
+    /// capability gap, not a caller mistake and not a fault. Introduced with
+    /// the facet split (#1959) so a backend's honest refusal stops being
+    /// billed to the client as invalid input.
+    Unsupported,
 }
 
 impl ErrorCategory {
@@ -36,7 +41,12 @@ impl ErrorCategory {
     /// `non_exhaustive` enum; an adapter hand-listing the variants would just
     /// re-create the drift this exists to catch. Adding a variant without
     /// extending this slice fails `all_lists_every_category` below.
-    pub const ALL: &'static [Self] = &[Self::InvalidInput, Self::NotFound, Self::Internal];
+    pub const ALL: &'static [Self] = &[
+        Self::InvalidInput,
+        Self::NotFound,
+        Self::Internal,
+        Self::Unsupported,
+    ];
 }
 
 /// Errors returned by [`crate::service::MemoryService`].
@@ -158,6 +168,12 @@ pub enum MemoryError {
     #[cfg(feature = "persistence")]
     #[error("migration capture error: {0}")]
     MigrationCapture(String),
+
+    /// The storage backend in use does not support the requested operation.
+    /// A static description, not prose: the set of refusable operations is
+    /// closed and known at compile time, and adapters display it verbatim.
+    #[error("unsupported by this storage backend: {0}")]
+    Unsupported(&'static str),
 
     /// A fused-recall filter referenced a field name that is not a plain
     /// identifier, named a reserved key, or carried a non-scalar value.
@@ -336,6 +352,7 @@ impl MemoryError {
             | Self::ZeroTtl
             | Self::SelfRelation(_)
             | Self::MetadataTooLarge { .. } => ErrorCategory::InvalidInput,
+            Self::Unsupported(_) => ErrorCategory::Unsupported,
             #[cfg(feature = "context")]
             Self::EmptyWorkingContext => ErrorCategory::InvalidInput,
             #[cfg(feature = "context")]

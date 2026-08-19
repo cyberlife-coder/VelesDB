@@ -19,7 +19,7 @@ use super::*;
 use crate::context::model::CompilePolicy;
 use crate::context::{fragment_id, ContextAction};
 use crate::embedder::HashEmbedder;
-use crate::model::{BoundedMemoryEdges, MemoryEdge};
+
 use crate::storage::NativeStore;
 
 const DIM: usize = 384;
@@ -702,73 +702,13 @@ macro_rules! delegate_untouched_store_methods {
             self.inner.delete(id)
         }
 
-        fn query_filtered(
-            &self,
-            embedding: &[f32],
-            k: usize,
-            filter: &Metadata,
-            offset: usize,
-        ) -> Result<Vec<(u64, f32, String)>, MemoryError> {
-            self.inner.query_filtered(embedding, k, filter, offset)
-        }
-
-        fn query_excluding(
-            &self,
-            embedding: &[f32],
-            k: usize,
-            exclude: &Metadata,
-        ) -> Result<Vec<(u64, f32, String)>, MemoryError> {
-            self.inner.query_excluding(embedding, k, exclude)
-        }
-
-        fn query_columnar(
-            &self,
-            embedding: &[f32],
-            k: usize,
-            filters: &[crate::model::ColumnFilter],
-        ) -> Result<Vec<crate::model::Recollection>, MemoryError> {
-            self.inner.query_columnar(embedding, k, filters)
-        }
-
-        fn relate(&self, from: u64, to: u64, relation: &str) -> Result<u64, MemoryError> {
-            self.inner.relate(from, to, relation)
-        }
-
-        fn relations(&self, id: u64) -> Result<Vec<MemoryEdge>, MemoryError> {
-            self.inner.relations(id)
-        }
-
-        fn incoming_relations(&self, id: u64) -> Result<Vec<MemoryEdge>, MemoryError> {
-            self.inner.incoming_relations(id)
-        }
-
-        fn relations_bounded(
-            &self,
-            id: u64,
-            cap: usize,
-        ) -> Result<BoundedMemoryEdges, MemoryError> {
-            self.inner.relations_bounded(id, cap)
-        }
-
-        fn incoming_relations_bounded(
-            &self,
-            id: u64,
-            cap: usize,
-        ) -> Result<BoundedMemoryEdges, MemoryError> {
-            self.inner.incoming_relations_bounded(id, cap)
-        }
-
-        fn unrelate(&self, edge_id: u64) -> Result<bool, MemoryError> {
-            self.inner.unrelate(edge_id)
-        }
-
         fn count(&self) -> usize {
             self.inner.count()
         }
     };
 }
 
-impl MemoryStore for IndexRaceStore {
+impl FactStore for IndexRaceStore {
     delegate_untouched_store_methods!();
 
     fn get(&self, id: u64) -> Result<Option<(String, Vec<f32>)>, MemoryError> {
@@ -851,7 +791,7 @@ struct TornBodyStore {
     torn: u64,
 }
 
-impl MemoryStore for TornBodyStore {
+impl FactStore for TornBodyStore {
     delegate_untouched_store_methods!();
 
     fn get(&self, id: u64) -> Result<Option<(String, Vec<f32>)>, MemoryError> {

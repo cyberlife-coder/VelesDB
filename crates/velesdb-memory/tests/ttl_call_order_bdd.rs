@@ -20,8 +20,8 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 use velesdb_memory::{
-    BoundedMemoryEdges, ColumnFilter, HashEmbedder, MemoryEdge, MemoryError, MemoryService,
-    MemoryStore, Metadata, Recollection, AUTO_DATE_FIELD, DEFAULT_DIMENSION,
+    BoundedMemoryEdges, FactStore, GraphStore, HashEmbedder, MemoryEdge, MemoryError,
+    MemoryService, Metadata, AUTO_DATE_FIELD, DEFAULT_DIMENSION,
 };
 
 /// One store call the service made, with exactly the detail the order
@@ -59,7 +59,7 @@ impl RecordingStore {
     }
 }
 
-impl MemoryStore for RecordingStore {
+impl FactStore for RecordingStore {
     fn store(&self, _id: u64, _content: &str, _embedding: &[f32]) -> Result<(), MemoryError> {
         self.record(StoreCall::Store);
         Ok(())
@@ -126,34 +126,17 @@ impl MemoryStore for RecordingStore {
         Ok(())
     }
 
-    fn query_filtered(
-        &self,
-        _embedding: &[f32],
-        _k: usize,
-        _filter: &Metadata,
-        _offset: usize,
-    ) -> Result<Vec<(u64, f32, String)>, MemoryError> {
-        Ok(Vec::new())
+    fn count(&self) -> usize {
+        0
     }
+}
 
-    fn query_excluding(
-        &self,
-        _embedding: &[f32],
-        _k: usize,
-        _exclude: &Metadata,
-    ) -> Result<Vec<(u64, f32, String)>, MemoryError> {
-        Ok(Vec::new())
-    }
-
-    fn query_columnar(
-        &self,
-        _embedding: &[f32],
-        _k: usize,
-        _filters: &[ColumnFilter],
-    ) -> Result<Vec<Recollection>, MemoryError> {
-        Ok(Vec::new())
-    }
-
+/// The graph facet `remember` transitively requires (entity wiring). Neutral
+/// empty-graph answers, same values the monolithic double returned — this
+/// test asserts call ORDER on the fact facet, not graph behavior. The recall
+/// and columnar facets are deliberately NOT implemented: a test that drifted
+/// into them now fails to compile instead of getting a plausible empty answer.
+impl GraphStore for RecordingStore {
     fn relate(&self, _from: u64, _to: u64, _relation: &str) -> Result<u64, MemoryError> {
         Ok(1)
     }
@@ -186,10 +169,6 @@ impl MemoryStore for RecordingStore {
 
     fn unrelate(&self, _edge_id: u64) -> Result<bool, MemoryError> {
         Ok(false)
-    }
-
-    fn count(&self) -> usize {
-        0
     }
 }
 

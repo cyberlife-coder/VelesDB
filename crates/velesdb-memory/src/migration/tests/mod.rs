@@ -22,7 +22,7 @@
 
 use super::*;
 use crate::storage::NativeStore;
-use crate::{MemoryStore, Metadata};
+use crate::{FactStore, Metadata};
 use serde_json::Value;
 use std::collections::BTreeSet;
 

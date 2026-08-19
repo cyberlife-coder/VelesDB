@@ -4,7 +4,8 @@ use serde_json::json;
 use velesdb_core::GraphEdge;
 
 use super::TestRig;
-use crate::storage::MemoryStore;
+
+use crate::FactStore;
 use crate::Metadata;
 
 #[test]
