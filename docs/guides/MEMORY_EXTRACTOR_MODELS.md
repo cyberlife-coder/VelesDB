@@ -1,6 +1,6 @@
 # Choosing a graph-extraction model for velesdb-memory
 
-Last updated: 2026-08-16 · Applies to: velesdb-memory 0.13.0
+Last updated: 2026-08-16 · Applies to: velesdb-memory 0.14.0
 
 `velesdb-memory` turns a remembered fact into graph edges by asking a local
 model for JSON. Which model you point it at — `VELESDB_MEMORY_EXTRACTOR_MODEL`

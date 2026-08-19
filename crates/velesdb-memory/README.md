@@ -327,6 +327,17 @@ Other verified clients: Cursor, Cline, Zed, opencode, Devin CLI.
   [surface matrix](../../docs/guides/CONTEXT_COMPILER.md#where-the-compiler-is-available).
 - **No selective source purge.** Compiled sources are kept permanently by
   default; you can set a TTL going forward, or delete the whole store.
+- **The daemon never uses the GPU — by design, not omission.** This crate
+  pins `velesdb-core` with `default-features = false` plus `persistence`
+  only: an agent-memory store is thousands of facts, far below the scale
+  where core's GPU paths (PQ k-means, HNSW traversal) pay for their
+  transfer overhead, and a daemon that quietly initialized a GPU context
+  would be a strange neighbor on a developer machine. The same applies to
+  the Node binding (`@wiscale/velesdb-memory-node`), which wraps this crate
+  and is forbidden a direct `velesdb-core` dependency by its license
+  boundary. If a measured memory workload ever demands it, the path is a
+  `gpu` passthrough feature here first — reopen the discussion with that
+  measurement in hand (#1965).
 
 ## Troubleshooting
 
@@ -365,4 +376,4 @@ Questions: contact@wiscale.fr.
 
 ---
 
-`velesdb-memory v0.13.0` · Last updated: 2026-08-15 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)
+`velesdb-memory v0.14.0` · Last updated: 2026-08-19 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)

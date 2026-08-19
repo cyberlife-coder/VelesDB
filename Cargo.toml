@@ -26,7 +26,13 @@ license-file = "LICENSE"
 repository = "https://github.com/cyberlife-coder/velesdb"
 homepage = "https://velesdb.com"
 documentation = "https://deepwiki.com/cyberlife-coder/VelesDB"
-keywords = ["vector-database", "embeddings", "rag", "local-first", "semantic-search"]
+keywords = [
+    "vector-database",
+    "embeddings",
+    "rag",
+    "local-first",
+    "semantic-search",
+]
 categories = ["database", "data-structures", "algorithms", "science"]
 description = "VelesDB: The Local Vector Database for Rust & AI. Microsecond semantic search, zero network latency, runs anywhere."
 authors = ["Julien Lange <contact@wiscale.fr>"]
@@ -94,6 +100,15 @@ strip = true
 # profile (`napi build --profile release-node`) so panics unwind into JS errors.
 # `panic` cannot be overridden in a per-package profile, hence a whole profile.
 [profile.release-node]
+inherits = "release"
+panic = "unwind"
+
+# UniFFI's FFI trampolines rely on catch_unwind to turn a Rust panic — including
+# the panic it raises itself when a Kotlin/Swift callback throws unexpectedly —
+# into a foreign exception. Under `panic = "abort"` that safety net is a no-op
+# and the whole app SIGABRTs instead. Mobile release builds use this profile
+# (`cargo build --profile release-mobile`, see docs/guides/MOBILE_BUILD.md).
+[profile.release-mobile]
 inherits = "release"
 panic = "unwind"
 
@@ -177,4 +192,3 @@ non_send_fields_in_send_ty = "warn"
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
-

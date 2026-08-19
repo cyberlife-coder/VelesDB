@@ -108,9 +108,20 @@ impl ScratchBuffer {
     /// Creates a scratch buffer sized for the given dimension and storage mode.
     #[must_use]
     fn new(dimension: usize, mode: StorageMode) -> Self {
+        // Every mode whose `dequantize` writes into `self.buf` must allocate
+        // it. `RaBitQ` is a full SQ8 alias in the browser engine — it both
+        // encodes via `encode_sq8` and decodes via `decode_sq8` (see
+        // `store_insert::encode_vector` and `dequantize` below) — so it needs
+        // the scratch buffer exactly like `SQ8`. Omitting it here left
+        // `decode_sq8` writing into an empty `Vec` on the first `search()` of
+        // any `rabitq` store, an out-of-bounds panic that `panic = "abort"`
+        // turns into a module abort.
         let needs_buf = matches!(
             mode,
-            StorageMode::SQ8 | StorageMode::Binary | StorageMode::ProductQuantization
+            StorageMode::SQ8
+                | StorageMode::Binary
+                | StorageMode::ProductQuantization
+                | StorageMode::RaBitQ
         );
         Self {
             buf: if needs_buf {
@@ -213,45 +224,5 @@ impl ScratchBuffer {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_compute_scores_full() {
-        let query = [1.0, 0.0, 0.0, 0.0];
-        let ids = vec![1, 2];
-        let data = vec![1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0];
-        let metric = DistanceMetric::Cosine;
-
-        let scores = compute_scores(
-            &query,
-            &ids,
-            &data,
-            &[],
-            &[],
-            &[],
-            &[],
-            4,
-            metric,
-            StorageMode::Full,
-        );
-
-        assert_eq!(scores.len(), 2);
-        assert_eq!(scores[0].0, 1);
-        assert!((scores[0].1 - 1.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_sort_results_higher() {
-        let mut results = vec![(1, 0.5), (2, 0.9), (3, 0.3)];
-        sort_results(&mut results, true);
-        assert_eq!(results[0].0, 2);
-    }
-
-    #[test]
-    fn test_sort_results_lower() {
-        let mut results = vec![(1, 0.5), (2, 0.9), (3, 0.3)];
-        sort_results(&mut results, false);
-        assert_eq!(results[0].0, 3);
-    }
-}
+#[path = "vector_ops_tests.rs"]
+mod tests;

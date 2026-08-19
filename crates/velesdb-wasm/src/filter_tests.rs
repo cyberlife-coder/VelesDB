@@ -1,0 +1,192 @@
+use super::*;
+use serde_json::json;
+
+#[test]
+fn test_filter_eq() {
+    let payload = json!({"category": "tech"});
+    let filter = json!({
+        "condition": {
+            "type": "eq",
+            "field": "category",
+            "value": "tech"
+        }
+    });
+    assert!(matches_filter(&payload, &filter));
+}
+
+#[test]
+fn test_filter_neq() {
+    let payload = json!({"category": "tech"});
+    let filter = json!({
+        "condition": {
+            "type": "neq",
+            "field": "category",
+            "value": "sports"
+        }
+    });
+    assert!(matches_filter(&payload, &filter));
+}
+
+#[test]
+fn test_filter_gt() {
+    let payload = json!({"score": 85.0});
+    let filter = json!({
+        "condition": {
+            "type": "gt",
+            "field": "score",
+            "value": 80.0
+        }
+    });
+    assert!(matches_filter(&payload, &filter));
+}
+
+#[test]
+fn test_filter_and() {
+    let payload = json!({"category": "tech", "score": 90.0});
+    let filter = json!({
+        "condition": {
+            "type": "and",
+            "conditions": [
+                {"type": "eq", "field": "category", "value": "tech"},
+                {"type": "gt", "field": "score", "value": 80.0}
+            ]
+        }
+    });
+    assert!(matches_filter(&payload, &filter));
+}
+
+#[test]
+fn test_filter_or() {
+    let payload = json!({"category": "sports"});
+    let filter = json!({
+        "condition": {
+            "type": "or",
+            "conditions": [
+                {"type": "eq", "field": "category", "value": "tech"},
+                {"type": "eq", "field": "category", "value": "sports"}
+            ]
+        }
+    });
+    assert!(matches_filter(&payload, &filter));
+}
+
+#[test]
+fn test_filter_not() {
+    let payload = json!({"category": "tech"});
+    let filter = json!({
+        "condition": {
+            "type": "not",
+            "condition": {
+                "type": "eq",
+                "field": "category",
+                "value": "sports"
+            }
+        }
+    });
+    assert!(matches_filter(&payload, &filter));
+}
+
+#[test]
+fn test_nested_field() {
+    let payload = json!({"user": {"profile": {"name": "John"}}});
+    let value = get_nested_field(&payload, "user.profile.name");
+    assert_eq!(value, Some(&json!("John")));
+}
+
+#[test]
+fn test_no_filter_matches_all() {
+    let payload = json!({"anything": "value"});
+    let filter = json!({});
+    assert!(matches_filter(&payload, &filter));
+}
+
+#[test]
+fn test_unknown_condition_type_fails_closed() {
+    let payload = json!({"category": "tech"});
+    let filter = json!({
+        "condition": {
+            "type": "eqals",
+            "field": "category",
+            "value": "tech"
+        }
+    });
+    assert!(!matches_filter(&payload, &filter));
+}
+
+#[test]
+fn test_missing_condition_type_fails_closed() {
+    // A condition OBJECT with no "type" is an uninterpretable filter, not an
+    // absent one — it funnels into the same fail-closed arm as a typo'd type.
+    // (An absent `condition` key stays permissive: test_no_filter_matches_all.)
+    let payload = json!({"category": "tech"});
+    let filter = json!({
+        "condition": {
+            "field": "category",
+            "value": "tech"
+        }
+    });
+    assert!(!matches_filter(&payload, &filter));
+}
+
+#[test]
+fn test_non_string_condition_type_fails_closed() {
+    let payload = json!({"category": "tech"});
+    let filter = json!({
+        "condition": {
+            "type": 7,
+            "field": "category",
+            "value": "tech"
+        }
+    });
+    assert!(!matches_filter(&payload, &filter));
+}
+
+#[test]
+fn test_or_with_non_array_conditions_fails_closed() {
+    // A malformed `or` — `conditions` is an object, not an array — must not
+    // pass every point. This is the same leak class the unknown-`type` arm
+    // closes, reachable from a JS typo (object instead of list).
+    let payload = json!({"category": "tech"});
+    let filter = json!({
+        "condition": { "type": "or", "conditions": { "field": "category" } }
+    });
+    assert!(!matches_filter(&payload, &filter));
+}
+
+#[test]
+fn test_and_with_missing_conditions_fails_closed() {
+    let payload = json!({"category": "tech"});
+    let filter = json!({
+        "condition": { "type": "and" }
+    });
+    assert!(!matches_filter(&payload, &filter));
+}
+
+#[test]
+fn test_not_with_missing_inner_condition_fails_closed() {
+    let payload = json!({"category": "tech"});
+    let filter = json!({
+        "condition": { "type": "not" }
+    });
+    assert!(!matches_filter(&payload, &filter));
+}
+
+#[test]
+fn test_empty_and_is_vacuously_true() {
+    // A *present* empty array keeps its vacuous meaning: `all` of nothing is
+    // true. Only the malformed (absent / non-array) shape fails closed.
+    let payload = json!({"category": "tech"});
+    let filter = json!({
+        "condition": { "type": "and", "conditions": [] }
+    });
+    assert!(matches_filter(&payload, &filter));
+}
+
+#[test]
+fn test_empty_or_is_false() {
+    let payload = json!({"category": "tech"});
+    let filter = json!({
+        "condition": { "type": "or", "conditions": [] }
+    });
+    assert!(!matches_filter(&payload, &filter));
+}

@@ -580,7 +580,11 @@ impl VectorStore {
     #[wasm_bindgen]
     pub fn reserve(&mut self, additional: usize) {
         self.ids.reserve(additional);
-        self.data.reserve(additional * self.dimension);
+        // `reserve` is a capacity hint, so a `saturating_mul` (rather than a
+        // wrapping `*`) keeps a 32-bit-usize wasm32 build from silently
+        // under-reserving on a huge `additional`; a genuinely oversized request
+        // still aborts on allocation, which is the caller's explicit ask.
+        self.data.reserve(additional.saturating_mul(self.dimension));
     }
 
     /// Batch insert. Input: `[[id, Float32Array], ...]`.
@@ -598,7 +602,8 @@ impl VectorStore {
             }
         }
         self.ids.reserve(batch.len());
-        self.data.reserve(batch.len() * self.dimension);
+        self.data
+            .reserve(batch.len().saturating_mul(self.dimension));
         for (id, vector) in batch {
             if let Some(idx) = self.ids.iter().position(|&x| x == id) {
                 self.remove_at_index(idx);

@@ -17,7 +17,7 @@ use velesdb_memory::column_filter_conformance::{
     cases, cases_failed_under, fixture, NeSemantics, SCAFFOLDING,
 };
 use velesdb_memory::storage::NativeStore;
-use velesdb_memory::MemoryStore;
+use velesdb_memory::{ColumnStore, FactStore};
 
 const EMBEDDING: [f32; 4] = [1.0, 0.0, 0.0, 0.0];
 

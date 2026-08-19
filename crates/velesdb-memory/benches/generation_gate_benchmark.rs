@@ -1,7 +1,7 @@
 //! Steady-state cost of the no-capture service-generation guard.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use velesdb_memory::{HashEmbedder, MemoryService, MemoryStore, NativeStore};
+use velesdb_memory::{FactStore, HashEmbedder, MemoryService, NativeStore};
 
 const DIMENSION: usize = 4;
 

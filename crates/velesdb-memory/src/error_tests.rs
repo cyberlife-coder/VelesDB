@@ -12,7 +12,10 @@ fn all_lists_every_category() {
         // Exhaustive on purpose; a new variant must be added to `ALL` and to
         // this match in the same change.
         match category {
-            ErrorCategory::InvalidInput | ErrorCategory::NotFound | ErrorCategory::Internal => {
+            ErrorCategory::InvalidInput
+            | ErrorCategory::NotFound
+            | ErrorCategory::Internal
+            | ErrorCategory::Unsupported => {
                 seen += 1;
             }
         }

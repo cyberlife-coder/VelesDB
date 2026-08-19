@@ -17,9 +17,9 @@ use crate::error::MemoryError;
 use crate::fusion::{self, Candidate};
 use crate::model::{FusionOptions, MemoryEdge, MemoryNode, Recollection};
 use crate::rerank::Reranker;
-use crate::storage::MemoryStore;
+use crate::storage::{FactStore, GraphStore, RecallStore};
 
-impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
+impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     /// Fused recall: like [`Self::recall`], but also walks the graph from the
     /// query's top vector hit and folds any fact it reaches (hop ≥ 1) into the
     /// ranking, scored by `opts.graph_boost · graph_weight` on top of its
@@ -45,7 +45,10 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         k: usize,
         filter: Option<&Metadata>,
         opts: FusionOptions,
-    ) -> Result<Vec<Recollection>, MemoryError> {
+    ) -> Result<Vec<Recollection>, MemoryError>
+    where
+        S: GraphStore + RecallStore,
+    {
         let _generation = self.enter_generation();
         self.recall_fused_inner(query, k, filter, opts)
     }
@@ -56,7 +59,10 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         k: usize,
         filter: Option<&Metadata>,
         opts: FusionOptions,
-    ) -> Result<Vec<Recollection>, MemoryError> {
+    ) -> Result<Vec<Recollection>, MemoryError>
+    where
+        S: GraphStore + RecallStore,
+    {
         let query = query.trim();
         if query.is_empty() || k == 0 {
             return Ok(Vec::new());
@@ -86,7 +92,10 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         k: usize,
         filter: Option<&Metadata>,
         opts: FusionOptions,
-    ) -> Result<Vec<fusion::ScoredCandidate>, MemoryError> {
+    ) -> Result<Vec<fusion::ScoredCandidate>, MemoryError>
+    where
+        S: GraphStore + RecallStore,
+    {
         let query = query.trim();
         if query.is_empty() || k == 0 {
             return Ok(Vec::new());
@@ -122,7 +131,10 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         filter: Option<&Metadata>,
         opts: FusionOptions,
         date_field: &str,
-    ) -> Result<(Vec<Recollection>, crate::DatedContext), MemoryError> {
+    ) -> Result<(Vec<Recollection>, crate::DatedContext), MemoryError>
+    where
+        S: GraphStore + RecallStore,
+    {
         let _generation = self.enter_generation();
         let hits = self.recall_fused_inner(query, k, filter, opts)?;
         let ctx = crate::format_dated_context(&hits, date_field);
@@ -151,7 +163,10 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         filter: Option<&Metadata>,
         opts: FusionOptions,
         reranker: &R,
-    ) -> Result<Vec<Recollection>, MemoryError> {
+    ) -> Result<Vec<Recollection>, MemoryError>
+    where
+        S: GraphStore + RecallStore,
+    {
         let _generation = self.enter_generation();
         self.recall_fused_reranked_inner(query, k, filter, opts, reranker)
     }
@@ -163,7 +178,10 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         filter: Option<&Metadata>,
         opts: FusionOptions,
         reranker: &R,
-    ) -> Result<Vec<Recollection>, MemoryError> {
+    ) -> Result<Vec<Recollection>, MemoryError>
+    where
+        S: GraphStore + RecallStore,
+    {
         let query = query.trim();
         if query.is_empty() || k == 0 {
             return Ok(Vec::new());
@@ -187,7 +205,10 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         embedding: &[f32],
         depth: usize,
         filter: Option<&Metadata>,
-    ) -> Result<Vec<Candidate>, MemoryError> {
+    ) -> Result<Vec<Candidate>, MemoryError>
+    where
+        S: RecallStore,
+    {
         let hits = self.search(embedding, depth, filter)?;
         let ids: Vec<u64> = hits.iter().map(|(id, _, _)| *id).collect();
         let metadata = self.recall_metadata_batch(&ids)?;
@@ -240,7 +261,10 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         embedding: &[f32],
         filter: Option<&Metadata>,
         hops: usize,
-    ) -> Result<Vec<Candidate>, MemoryError> {
+    ) -> Result<Vec<Candidate>, MemoryError>
+    where
+        S: GraphStore + RecallStore,
+    {
         let seeds = self.search(embedding, 1, filter)?;
         let Some((seed_id, _score, seed_content)) = seeds.into_iter().next() else {
             return Ok(Vec::new());
@@ -282,7 +306,10 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         mentions_by_target: &HashMap<u64, Vec<u64>>,
         filter: Option<&Metadata>,
         idf_cache: &mut HashMap<u64, f64>,
-    ) -> Result<Option<Candidate>, MemoryError> {
+    ) -> Result<Option<Candidate>, MemoryError>
+    where
+        S: GraphStore,
+    {
         if raw
             .as_ref()
             .is_some_and(|meta| meta.get(HUB_FIELD) == Some(&Value::Bool(true)))
@@ -316,7 +343,10 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         fact_id: u64,
         mentions_by_target: &HashMap<u64, Vec<u64>>,
         idf_cache: &mut HashMap<u64, f64>,
-    ) -> Result<f64, MemoryError> {
+    ) -> Result<f64, MemoryError>
+    where
+        S: GraphStore,
+    {
         let Some(hub_ids) = mentions_by_target.get(&fact_id) else {
             return Ok(1.0);
         };
@@ -336,7 +366,10 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         &self,
         hub_id: u64,
         cache: &mut HashMap<u64, f64>,
-    ) -> Result<f64, MemoryError> {
+    ) -> Result<f64, MemoryError>
+    where
+        S: GraphStore,
+    {
         if let Some(&idf) = cache.get(&hub_id) {
             return Ok(idf);
         }
@@ -351,7 +384,10 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// answer signal). Mirrors the `LoCoMo` harness formula
     /// (`examples/locomo/ingest.rs`), using the store's total memory count
     /// (facts + hubs) as a corpus-size proxy.
-    fn entity_idf(&self, hub_id: u64) -> Result<f64, MemoryError> {
+    fn entity_idf(&self, hub_id: u64) -> Result<f64, MemoryError>
+    where
+        S: GraphStore,
+    {
         let degree = self.store.relations(hub_id)?.len();
         let n = self.store.count();
         if degree == 0 || n <= 1 {

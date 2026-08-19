@@ -15,7 +15,7 @@
 use super::*;
 use crate::embedder::HashEmbedder;
 use crate::storage::NativeStore;
-use crate::MemoryStore;
+use crate::{FactStore, GraphStore};
 use std::collections::BTreeMap;
 use velesdb_core::agent::AgentMemory;
 

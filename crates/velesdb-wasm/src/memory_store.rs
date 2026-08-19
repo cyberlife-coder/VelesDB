@@ -17,8 +17,8 @@ use std::collections::HashMap;
 
 use serde_json::{Map, Value};
 use velesdb_memory::{
-    column_value_matches, BoundedMemoryEdges, ColumnFilter, MemoryEdge, MemoryError, MemoryStore,
-    Metadata, Recollection,
+    column_value_matches, BoundedMemoryEdges, ColumnFilter, ColumnStore, FactStore, GraphStore,
+    MemoryEdge, MemoryError, Metadata, RecallStore, Recollection,
 };
 
 use crate::graph_store::WasmGraphStore;
@@ -162,7 +162,7 @@ impl WasmStore {
     }
 }
 
-impl MemoryStore for WasmStore {
+impl FactStore for WasmStore {
     fn store(&self, id: u64, content: &str, embedding: &[f32]) -> Result<(), MemoryError> {
         self.put(id, embedding, build_payload(content, None, None));
         Ok(())
@@ -237,6 +237,17 @@ impl MemoryStore for WasmStore {
         Ok(())
     }
 
+    fn count(&self) -> usize {
+        let inner = self.inner.borrow();
+        inner
+            .order
+            .iter()
+            .filter(|&&id| inner.live_fact(id).is_some())
+            .count()
+    }
+}
+
+impl RecallStore for WasmStore {
     fn query_filtered(
         &self,
         embedding: &[f32],
@@ -257,7 +268,9 @@ impl MemoryStore for WasmStore {
             exclude.is_empty() || !matches_all(payload, exclude)
         })
     }
+}
 
+impl ColumnStore for WasmStore {
     fn query_columnar(
         &self,
         embedding: &[f32],
@@ -292,7 +305,9 @@ impl MemoryStore for WasmStore {
             },
         )
     }
+}
 
+impl GraphStore for WasmStore {
     fn relate(&self, from: u64, to: u64, relation: &str) -> Result<u64, MemoryError> {
         let mut inner = self.inner.borrow_mut();
         // The trait contract (and the native backend) reject an edge to a
@@ -387,20 +402,11 @@ impl MemoryStore for WasmStore {
     fn unrelate(&self, edge_id: u64) -> Result<bool, MemoryError> {
         Ok(self.inner.borrow_mut().graph.delete_edge_by_id(edge_id))
     }
-
-    fn count(&self) -> usize {
-        let inner = self.inner.borrow();
-        inner
-            .order
-            .iter()
-            .filter(|&&id| inner.live_fact(id).is_some())
-            .count()
-    }
 }
 
 impl WasmStore {
-    /// Shared vector-search core for [`MemoryStore::query_filtered`],
-    /// [`MemoryStore::query_excluding`], and [`MemoryStore::query_columnar`]:
+    /// Shared vector-search core for [`RecallStore::query_filtered`],
+    /// [`RecallStore::query_excluding`], and [`ColumnStore::query_columnar`]:
     /// score every non-expired fact whose payload passes `predicate` against
     /// `embedding`, rank, take `k` after `offset`, and build each returned
     /// row with `row`.
@@ -467,7 +473,7 @@ impl WasmStore {
     }
 
     /// [`Self::query_ranked`] specialised to the `(id, score, content)`
-    /// triple [`MemoryStore::query_filtered`]/[`MemoryStore::query_excluding`]
+    /// triple [`RecallStore::query_filtered`]/[`RecallStore::query_excluding`]
     /// return.
     fn query_scored(
         &self,

@@ -7,7 +7,7 @@
 //! wraps the exact same hardened Rust used by the MCP server — no logic is
 //! reimplemented here.
 
-use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyKeyError, PyNotImplementedError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyString};
 use std::collections::HashMap;
@@ -17,13 +17,13 @@ use velesdb_memory::context::{
     CompiledContext, ContextCompiler, ContextDecision, ContextSavings, ContextSource,
     LoadedWorkingContext, TranscriptCompileInput, WorkingContext, WorkingContextSession,
 };
-use velesdb_memory::service::canonical_entity_name;
 use velesdb_memory::{
-    embedder_env_endpoint, format_dated_context, limits, select_embedder, ColumnFilter, ColumnOp,
-    DatedContext, DynEmbedder, EmbedderSelection, EntityProfile, EntityRelation, ErrorCategory,
-    Explanation, FusionOptions, Link, MemoryEdge, MemoryError, MemoryNode, MemoryService, Metadata,
-    OllamaEmbedder, OllamaExtractor, OpenAiEmbedder, OutlineExtractor, Recollection,
-    RememberedExtraction, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL, HASH_EMBEDDER_NOTICE,
+    embedder_env_endpoint, format_dated_context, limits, select_embedder,
+    service::canonical_entity_name, ColumnFilter, ColumnOp, DatedContext, DynEmbedder,
+    EmbedderSelection, EntityProfile, EntityRelation, ErrorCategory, Explanation, FusionOptions,
+    Link, MemoryEdge, MemoryError, MemoryNode, MemoryService, Metadata, OllamaEmbedder,
+    OllamaExtractor, OpenAiEmbedder, OutlineExtractor, Recollection, RememberedExtraction,
+    DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL, HASH_EMBEDDER_NOTICE,
 };
 
 use crate::collection::query::convert_params;
@@ -73,13 +73,13 @@ fn to_py_err(e: MemoryError) -> PyErr {
 /// linkage keeps it out of `cargo test --workspace`, see `AGENTS.md`). The
 /// guard is transitive instead — a new category turns the Node and wasm
 /// coverage tests red in the same workspace CI that gates this wheel, and
-/// whoever fixes those two must find this third mapping by the cross-reference
-/// they carry. Keep the three in sync.
+/// their cross-reference leads whoever fixes them here. Keep the three in sync.
 fn known_category_err(category: ErrorCategory, msg: String) -> Option<PyErr> {
     Some(match category {
         ErrorCategory::InvalidInput => PyValueError::new_err(msg),
         ErrorCategory::NotFound => PyKeyError::new_err(msg),
         ErrorCategory::Internal => PyRuntimeError::new_err(msg),
+        ErrorCategory::Unsupported => PyNotImplementedError::new_err(msg),
         _ => return None,
     })
 }

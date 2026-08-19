@@ -38,7 +38,14 @@ pub fn matches_filter(payload: &Value, filter: &Value) -> bool {
 }
 
 /// Evaluates a single condition against a payload.
+///
+/// Fails closed on any condition it cannot interpret: an unrecognized
+/// `"type"`, a missing `"type"`, or a non-string one all match nothing.
+/// The permissive case is reserved for [`matches_filter`]'s *absent*
+/// `condition` key — "no filter" and "a filter this evaluator cannot
+/// interpret" are different claims, and only the second is an error.
 pub fn evaluate_condition(payload: &Value, condition: &Value) -> bool {
+    // A missing or non-string "type" funnels into the fail-closed arm below.
     let cond_type = condition.get("type").and_then(|t| t.as_str()).unwrap_or("");
 
     match cond_type {
@@ -65,18 +72,26 @@ pub fn evaluate_condition(payload: &Value, condition: &Value) -> bool {
         "gte" => compare_numeric(payload, condition, |pv, v| pv >= v),
         "lt" => compare_numeric(payload, condition, |pv, v| pv < v),
         "lte" => compare_numeric(payload, condition, |pv, v| pv <= v),
+        // Composites fail closed on a malformed shape, for the same reason the
+        // unknown-`type` arm below does: a missing or non-array `conditions`
+        // (an object, number, string) — or a `not` with no `condition` — is a
+        // filter typo, and must not match every point. `is_some_and` yields
+        // `false` for that shape; a *present* empty array keeps its vacuous
+        // result (`all` -> true, `any` -> false), which is correct.
         "and" => condition
             .get("conditions")
             .and_then(|c| c.as_array())
-            .is_none_or(|conds| conds.iter().all(|c| evaluate_condition(payload, c))),
+            .is_some_and(|conds| conds.iter().all(|c| evaluate_condition(payload, c))),
         "or" => condition
             .get("conditions")
             .and_then(|c| c.as_array())
-            .is_none_or(|conds| conds.iter().any(|c| evaluate_condition(payload, c))),
+            .is_some_and(|conds| conds.iter().any(|c| evaluate_condition(payload, c))),
         "not" => condition
             .get("condition")
-            .is_none_or(|c| !evaluate_condition(payload, c)),
-        _ => true,
+            .is_some_and(|c| !evaluate_condition(payload, c)),
+        // Fail closed: an unrecognized/misspelled "type" must not silently
+        // match everything, or a filter typo would leak unfiltered results.
+        _ => false,
     }
 }
 
@@ -126,106 +141,5 @@ pub fn get_nested_field<'a>(payload: &'a Value, field: &str) -> Option<&'a Value
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn test_filter_eq() {
-        let payload = json!({"category": "tech"});
-        let filter = json!({
-            "condition": {
-                "type": "eq",
-                "field": "category",
-                "value": "tech"
-            }
-        });
-        assert!(matches_filter(&payload, &filter));
-    }
-
-    #[test]
-    fn test_filter_neq() {
-        let payload = json!({"category": "tech"});
-        let filter = json!({
-            "condition": {
-                "type": "neq",
-                "field": "category",
-                "value": "sports"
-            }
-        });
-        assert!(matches_filter(&payload, &filter));
-    }
-
-    #[test]
-    fn test_filter_gt() {
-        let payload = json!({"score": 85.0});
-        let filter = json!({
-            "condition": {
-                "type": "gt",
-                "field": "score",
-                "value": 80.0
-            }
-        });
-        assert!(matches_filter(&payload, &filter));
-    }
-
-    #[test]
-    fn test_filter_and() {
-        let payload = json!({"category": "tech", "score": 90.0});
-        let filter = json!({
-            "condition": {
-                "type": "and",
-                "conditions": [
-                    {"type": "eq", "field": "category", "value": "tech"},
-                    {"type": "gt", "field": "score", "value": 80.0}
-                ]
-            }
-        });
-        assert!(matches_filter(&payload, &filter));
-    }
-
-    #[test]
-    fn test_filter_or() {
-        let payload = json!({"category": "sports"});
-        let filter = json!({
-            "condition": {
-                "type": "or",
-                "conditions": [
-                    {"type": "eq", "field": "category", "value": "tech"},
-                    {"type": "eq", "field": "category", "value": "sports"}
-                ]
-            }
-        });
-        assert!(matches_filter(&payload, &filter));
-    }
-
-    #[test]
-    fn test_filter_not() {
-        let payload = json!({"category": "tech"});
-        let filter = json!({
-            "condition": {
-                "type": "not",
-                "condition": {
-                    "type": "eq",
-                    "field": "category",
-                    "value": "sports"
-                }
-            }
-        });
-        assert!(matches_filter(&payload, &filter));
-    }
-
-    #[test]
-    fn test_nested_field() {
-        let payload = json!({"user": {"profile": {"name": "John"}}});
-        let value = get_nested_field(&payload, "user.profile.name");
-        assert_eq!(value, Some(&json!("John")));
-    }
-
-    #[test]
-    fn test_no_filter_matches_all() {
-        let payload = json!({"anything": "value"});
-        let filter = json!({});
-        assert!(matches_filter(&payload, &filter));
-    }
-}
+#[path = "filter_tests.rs"]
+mod tests;

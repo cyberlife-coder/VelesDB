@@ -155,7 +155,7 @@ pub(crate) fn record_embedding_model(
     dimension: usize,
 ) {
     use velesdb_memory::embedding_provenance::{write, EmbeddingProvenance};
-    use velesdb_memory::MemoryStore as _;
+    use velesdb_memory::FactStore as _;
 
     if store.count() != 0 {
         return;

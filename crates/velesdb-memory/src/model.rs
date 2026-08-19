@@ -352,7 +352,7 @@ pub struct MemoryNode {
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub struct MemoryEdge {
     /// Stable id of the edge itself — what
-    /// [`MemoryStore::unrelate`](crate::storage::MemoryStore::unrelate)
+    /// [`GraphStore::unrelate`](crate::storage::GraphStore::unrelate)
     /// removes by.
     pub id: u64,
     /// Source memory id.

@@ -1,0 +1,110 @@
+# typos (https://github.com/crate-ci/typos) configuration.
+#
+# The repo carries French prose in comments, docs and BDD test fixtures, plus
+# deliberate typo fixtures (e.g. `wieght`, `mdoel` in error-path tests) and
+# identifier fragments the tokenizer splits out (`dist_ba` -> `ba`,
+# `np.arange` -> `arange`, `ANDed` -> `Ded`). Every entry below self-maps a
+# word to itself, i.e. "accept as spelled" — audited one by one on
+# 2026-08-18: the baseline contained zero genuine English typos. New words
+# NOT in this list still fail the gate, which is the point: the gate exists
+# to catch future real typos, not to relitigate the existing vocabulary.
+#
+# To accept a new legitimate word, add `word = "word"` under
+# [default.extend-words] (keys are matched case-insensitively).
+
+[files]
+extend-exclude = [
+    "*.lock",
+    "target/",
+    "*.svg",
+]
+
+[default.extend-words]
+abd = "abd"
+abord = "abord"
+accepte = "accepte"
+adresse = "adresse"
+alignement = "alignement"
+annonce = "annonce"
+annoncer = "annoncer"
+annonces = "annonces"
+arange = "arange"
+attribut = "attribut"
+authentification = "authentification"
+ba = "ba"
+branche = "branche"
+caf = "caf"
+candidats = "candidats"
+celle = "celle"
+certificat = "certificat"
+colinear = "colinear"
+collapsable = "collapsable"
+commiter = "commiter"
+comparaison = "comparaison"
+complet = "complet"
+composant = "composant"
+compteurs = "compteurs"
+conjonction = "conjonction"
+contraint = "contraint"
+contraintes = "contraintes"
+contributeurs = "contributeurs"
+controle = "controle"
+copie = "copie"
+ded = "ded"
+defaut = "defaut"
+devine = "devine"
+employeur = "employeur"
+enveloppe = "enveloppe"
+exemple = "exemple"
+exemples = "exemples"
+explicite = "explicite"
+fille = "fille"
+fils = "fils"
+fixe = "fixe"
+flate = "flate"
+fonction = "fonction"
+fonctions = "fonctions"
+formes = "formes"
+fpr = "fpr"
+gamme = "gamme"
+garantie = "garantie"
+hel = "hel"
+inser = "inser"
+invalide = "invalide"
+listes = "listes"
+lits = "lits"
+mdoel = "mdoel"
+mesure = "mesure"
+mis = "mis"
+moteur = "moteur"
+nd = "nd"
+ned = "ned"
+objet = "objet"
+origines = "origines"
+parametre = "parametre"
+parametres = "parametres"
+pn = "pn"
+pont = "pont"
+portait = "portait"
+pris = "pris"
+probleme = "probleme"
+projet = "projet"
+regenere = "regenere"
+registres = "registres"
+repare = "repare"
+reponse = "reponse"
+reponses = "reponses"
+requireds = "requireds"
+responsable = "responsable"
+ressemble = "ressemble"
+reste = "reste"
+seconde = "seconde"
+seeked = "seeked"
+sesion = "sesion"
+strat = "strat"
+sur = "sur"
+truncat = "truncat"
+unparseable = "unparseable"
+valide = "valide"
+verifie = "verifie"
+wieght = "wieght"

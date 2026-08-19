@@ -1,0 +1,8 @@
+# Audited exemptions for check-durability-barrier.py — files that call
+# File::create in production with NO sync_all, where that is correct by
+# design. Format: <repo-relative path><TAB><reason>. This baseline only
+# shrinks: when a file gains a barrier or stops creating files, the guard
+# fails until its line here is deleted.
+crates/velesdb-core/src/index/hnsw/native/graph_io.rs	derived artifact: the HNSW graph/vectors dump is reconciled by the generation scheme (#617) and rebuilt from the fsynced MmapStorage on load; fsyncing it would spend two fsyncs per periodic save on replayable data (adversarial durability review, #1981)
+crates/velesdb-core/src/database/mod.rs	velesdb.lock advisory lock file: exists only while the process holds it, carries no data and no durability semantics
+crates/velesdb-memory/src/daemon_commands.rs	user-requested JSONL export to a caller-chosen output path (equivalent to shell redirection): a one-shot stream the caller owns, not acknowledged database state; flush-to-OS is the contract

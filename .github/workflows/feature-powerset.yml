@@ -1,0 +1,53 @@
+name: Feature Powerset
+
+# Every feature-gated `cfg` boundary in velesdb-memory is a compilation
+# surface CI never sees: the workspace gate builds the default set and
+# `--all-features`, so a `use` that only breaks when `context` is on WITHOUT
+# `persistence` (a real consumer shape — the wasm binding's) merges green and
+# fails the first library consumer who picks features à la carte.
+#
+# `cargo hack --feature-powerset --depth 2` checks every single feature and
+# every PAIR — the depth where gating bugs actually live (a triple that
+# breaks while all its pairs build requires three interacting gates, which
+# this crate's feature graph does not express). The two compatibility
+# aliases are grouped with their targets: `ollama = [embedder-http]` and
+# `extract = [extractor-http]` add combinations without adding surface.
+#
+# Deliberately OUTSIDE `CI Success` for now (weekly + manual), promotion to
+# a required gate being its own decision once the runtime is known: the
+# powerset re-checks the crate ~30 times and does not belong in every PR's
+# critical path on day one. velesdb-core comes after velesdb-memory proves
+# the harness — its 20+ features need `--depth 2` discipline even more.
+on:
+  workflow_dispatch:
+  schedule:
+    # Mondays 04:12 UTC — off the busy on-the-hour spike.
+    - cron: '12 4 * * 1'
+  pull_request:
+    paths:
+      - '.github/workflows/feature-powerset.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  memory-powerset:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: feature-powerset
+      - name: Install cargo-hack
+        uses: taiki-e/install-action@82cd3e7658a6f96c86c0234aeeda1748937cb0a1 # v2.85.13
+        with:
+          tool: cargo-hack
+      - name: Check velesdb-memory feature powerset (depth 2)
+        run: |
+          cargo hack check -p velesdb-memory \
+            --feature-powerset --depth 2 \
+            --group-features ollama,embedder-http \
+            --group-features extract,extractor-http \
+            --no-dev-deps
