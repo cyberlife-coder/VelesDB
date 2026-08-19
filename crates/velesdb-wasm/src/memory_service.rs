@@ -56,20 +56,20 @@ use velesdb_memory::context::{
 };
 use velesdb_memory::service::canonical_entity_name;
 use velesdb_memory::{
-    ColumnFilter, ColumnOp, EntityProfile, EntityRelation, Explanation, FusionOptions,
-    HashEmbedder, MemoryEdge, MemoryError, MemoryNode, MemoryService, Metadata, OutlineExtractor,
-    Recollection,
+    ColumnFilter, ColumnOp, EntityProfile, EntityRelation, ErrorCategory, Explanation,
+    FusionOptions, HashEmbedder, MemoryEdge, MemoryError, MemoryNode, MemoryService, Metadata,
+    OutlineExtractor, Recollection,
 };
 
 use crate::memory_store::WasmStore;
+use crate::wasm_error::structured_js_error;
 
 const CODE_INVALID_INPUT: &str = "INVALID_INPUT";
 const CODE_NOT_FOUND: &str = "NOT_FOUND";
 const CODE_INTERNAL: &str = "INTERNAL";
+const CODE_UNSUPPORTED: &str = "UNSUPPORTED";
 
 // --- Errors ------------------------------------------------------------
-
-use crate::wasm_error::structured_js_error;
 
 fn category_code(e: &MemoryError) -> &'static str {
     known_category_code(e.category()).unwrap_or(CODE_INTERNAL)
@@ -81,12 +81,12 @@ fn category_code(e: &MemoryError) -> &'static str {
 /// match at compile time — the test does instead. The runtime fallback
 /// (`INTERNAL`, the coarsest bucket) only ever serves a binding built against
 /// a newer `velesdb-memory` than this file.
-fn known_category_code(category: velesdb_memory::ErrorCategory) -> Option<&'static str> {
-    use velesdb_memory::ErrorCategory;
+fn known_category_code(category: ErrorCategory) -> Option<&'static str> {
     Some(match category {
         ErrorCategory::InvalidInput => CODE_INVALID_INPUT,
         ErrorCategory::NotFound => CODE_NOT_FOUND,
         ErrorCategory::Internal => CODE_INTERNAL,
+        ErrorCategory::Unsupported => CODE_UNSUPPORTED,
         _ => return None,
     })
 }

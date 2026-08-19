@@ -713,7 +713,11 @@ fn to_error(err: crate::error::MemoryError) -> ErrorData {
     use crate::error::ErrorCategory;
     let code = match err.category() {
         ErrorCategory::InvalidInput | ErrorCategory::NotFound => ErrorCode::INVALID_PARAMS,
-        ErrorCategory::Internal => ErrorCode::INTERNAL_ERROR,
+        // A capability gap is the server's to own, not the caller's: the
+        // request was well-formed, this backend just cannot serve it.
+        // JSON-RPC has no "unsupported" code, so it rides internal_error
+        // with the message naming the missing capability.
+        ErrorCategory::Internal | ErrorCategory::Unsupported => ErrorCode::INTERNAL_ERROR,
     };
     ErrorData::new(code, err.to_string(), None)
 }

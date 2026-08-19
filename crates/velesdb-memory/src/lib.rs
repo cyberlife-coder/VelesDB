@@ -31,11 +31,15 @@
 //! accident of history:
 //!
 //! - **Compile-time seams are generic parameters.**
-//!   [`service::MemoryService`]`<E: Embedder, S: MemoryStore>` is monomorphized
+//!   [`service::MemoryService`]`<E: Embedder, S: FactStore>` is monomorphized
 //!   over its embedder and its storage backend: each consumer (native daemon,
 //!   WASM binding) compiles exactly the backend it uses, recall paths carry
 //!   no vtable, and a backend that cannot support an operation fails at
-//!   compile time instead of at a customer.
+//!   compile time instead of at a customer. Since #1959 the storage surface
+//!   is four facets ([`FactStore`], [`RecallStore`], [`GraphStore`],
+//!   [`ColumnStore`]; [`MemoryStore`] is their sum, kept as an alias), and
+//!   each service method carries the bound of the facet it consumes — so
+//!   "cannot support" is now judged per capability, not per backend.
 //! - **Runtime choices are type-erased once, at the edge.** A backend picked
 //!   by configuration — `VELESDB_MEMORY_EMBEDDER`, an `extractor` argument, a
 //!   bring-your-own reranker — crosses into the crate as [`DynEmbedder`],
@@ -47,6 +51,8 @@
 //! And an adapter over one of these traits forwards the **whole** trait —
 //! partial forwarding is how a binding silently loses a capability the server
 //! already publishes (the #1690–#1692 gap family), and is rejected in review.
+//! The storage facets refine the unit that rule applies to: an adapter picks
+//! which *facets* it serves, but each facet it implements is forwarded whole.
 
 /// Wall-clock "today" as a `YYYYMMDD` integer, read only by `remember`'s
 /// auto-date stamping (see [`storage::AUTO_DATE_FIELD`]) — never by the
@@ -227,4 +233,4 @@ pub use rerank::{DynReranker, RerankError, Reranker};
 pub use service::{AutographWorkerHandle, MemoryService, Metadata};
 #[cfg(feature = "persistence")]
 pub use storage::NativeStore;
-pub use storage::{MemoryStore, AUTO_DATE_FIELD};
+pub use storage::{ColumnStore, FactStore, GraphStore, MemoryStore, RecallStore, AUTO_DATE_FIELD};

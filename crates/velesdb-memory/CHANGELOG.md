@@ -7,6 +7,36 @@ released on its own `velesdb-memory-vX.Y.Z` tag.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] - 2026-08-19
+
+### Changed
+
+- **BREAKING for trait implementors — `MemoryStore` is now four facets
+  (#1959).** The 22-method monolith is split into `FactStore` (write,
+  by-id lookup, deletion, `count`, `list`), `RecallStore: FactStore`
+  (`query_filtered`, `query_excluding`), `GraphStore` (edges, bounded
+  scans, `edge_count`) and `ColumnStore` (`query_columnar`).
+  `MemoryStore` remains as their sum with a blanket impl, so **callers
+  change nothing**: every `S: MemoryStore` bound, including
+  `MemoryService`'s default, compiles as before. An out-of-tree backend
+  migrates by replacing `impl MemoryStore` with the four facet impls —
+  the methods did not change, they moved. `MemoryService`'s struct bound
+  relaxed to `S: FactStore`; each method now carries the bound of the
+  facet it actually consumes, so a partial backend (or a test double)
+  implements only what it serves and calls to the rest are refused at
+  compile time.
+
+### Added
+
+- **`MemoryError::Unsupported` and `ErrorCategory::Unsupported`.** A
+  backend's honest capability gap is no longer billed to the caller as
+  invalid input: the default `list()` refusal moved from
+  `InvalidFilter` (category `InvalidInput`) to `Unsupported`. Adapters
+  map the new category explicitly — napi `GenericFailure` with a stable
+  `UNSUPPORTED` code, Python `NotImplementedError`, WASM/MCP an
+  `UNSUPPORTED`-coded internal error — under the existing
+  `ErrorCategory::ALL` coverage guards.
+
 ## [0.13.0] - 2026-08-17
 
 ### Added

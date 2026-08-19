@@ -19,6 +19,7 @@
 //! carrying edges into facts the fact export refused, silently.
 
 use super::*;
+use crate::GraphStore;
 use velesdb_core::agent::AgentMemory;
 use velesdb_core::collection::graph::GraphEdge;
 

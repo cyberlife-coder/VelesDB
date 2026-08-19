@@ -31,12 +31,12 @@ use crate::service::Metadata;
 #[cfg(feature = "persistence")]
 mod migration;
 
-/// The storage primitives [`crate::service::MemoryService`] needs: write,
-/// vector search, graph edges, and by-id lookup. A backend that implements
-/// this trait can run the full wedge (`remember`/`recall`/`recall_fused`/
-/// `relate`/`forget`/`why`/`remember_extracted`) with no orchestration code
-/// duplicated.
-pub trait MemoryStore {
+/// Fact storage: write, by-id lookup, deletion, corpus size — the core
+/// facet every backend must provide. The other facets ([`RecallStore`],
+/// [`GraphStore`], [`ColumnStore`]) build on stored facts; a partial
+/// backend, or a test double, implements only the facets it serves and
+/// the compiler refuses calls to the rest (#1959).
+pub trait FactStore {
     /// Store a fact with no metadata or expiry.
     ///
     /// # Errors
@@ -128,6 +128,45 @@ pub trait MemoryStore {
     /// Returns [`MemoryError`] if deletion fails.
     fn delete(&self, id: u64) -> Result<(), MemoryError>;
 
+    /// The total number of live (non-expired) tracked facts, including
+    /// internal entity hubs — used as a corpus-size proxy for idf weighting.
+    fn count(&self) -> usize;
+
+    /// One cursor page of the store's live facts, ids ascending: up to
+    /// `limit` entries strictly after `cursor` (`None` starts the walk),
+    /// plus the cursor for the next page (`None` ends it). Payloads come
+    /// back RAW — reserved keys and scaffolding markers included — because
+    /// the policy of what a caller may see (hub filtering, key stripping)
+    /// belongs to the service layer, in one place, for every backend.
+    ///
+    /// TTL-expired facts are skipped, not listed: an audit must show what
+    /// the store will still serve, and a fact past its expiry is not it.
+    ///
+    /// Defaulted to a refusal rather than required, same reasoning as
+    /// [`GraphStore::edge_count`]: an out-of-crate backend keeps compiling,
+    /// and its `list_memories` answers with this error instead of a wrong
+    /// walk.
+    ///
+    /// # Errors
+    /// Returns [`MemoryError::Unsupported`] if the backend cannot enumerate
+    /// at all, or [`MemoryError`] if the walk fails.
+    fn list(
+        &self,
+        cursor: Option<u64>,
+        limit: usize,
+    ) -> Result<(Vec<RawListedFact>, Option<u64>), MemoryError> {
+        let _ = (cursor, limit);
+        Err(MemoryError::Unsupported(
+            "this storage backend does not support listing",
+        ))
+    }
+}
+
+/// Vector recall over stored facts — the surface every
+/// [`crate::service::MemoryService::recall`]/`search` call goes through.
+/// [`FactStore`] is a supertrait because these queries return the content
+/// of the facts they rank; a backend cannot rank what it cannot store.
+pub trait RecallStore: FactStore {
     /// Vector search for up to `k` ids, narrowed to facts whose metadata
     /// exactly matches every key in `filter`.
     ///
@@ -152,8 +191,13 @@ pub trait MemoryStore {
         k: usize,
         exclude: &Metadata,
     ) -> Result<Vec<(u64, f32, String)>, MemoryError>;
+}
 
-    /// Vector search fused with structured `ColumnStore` predicates (ranges
+/// Structured columnar predicates fused with vector recall — one method
+/// today, but the facet where field enumeration and richer predicates will
+/// land ([`ColumnFilter`]'s op set is already `non_exhaustive`).
+pub trait ColumnStore {
+    /// Vector search fused with structured columnar predicates (ranges
     /// and comparisons, not just equality) — the engine behind
     /// [`crate::service::MemoryService::recall_where`].
     ///
@@ -190,7 +234,13 @@ pub trait MemoryStore {
         k: usize,
         filters: &[ColumnFilter],
     ) -> Result<Vec<Recollection>, MemoryError>;
+}
 
+/// Typed graph edges between facts — the facet behind `relate`/`why` and
+/// the hub walks. A backend without a graph simply does not implement it,
+/// and the service methods that need it stop existing for that backend at
+/// compile time.
+pub trait GraphStore {
     /// Create a typed edge `from -> to`. Returns the edge id.
     ///
     /// # Errors
@@ -256,10 +306,6 @@ pub trait MemoryStore {
         self.unrelate(edge_id)
     }
 
-    /// The total number of live (non-expired) tracked facts, including
-    /// internal entity hubs — used as a corpus-size proxy for idf weighting.
-    fn count(&self) -> usize;
-
     /// The total number of graph edges, when the backend can answer without
     /// materializing them — the observable difference between a store whose
     /// `why()` can walk somewhere and one where it degrades to plain
@@ -273,37 +319,22 @@ pub trait MemoryStore {
     fn edge_count(&self) -> Option<usize> {
         None
     }
-
-    /// One cursor page of the store's live facts, ids ascending: up to
-    /// `limit` entries strictly after `cursor` (`None` starts the walk),
-    /// plus the cursor for the next page (`None` ends it). Payloads come
-    /// back RAW — reserved keys and scaffolding markers included — because
-    /// the policy of what a caller may see (hub filtering, key stripping)
-    /// belongs to the service layer, in one place, for every backend.
-    ///
-    /// TTL-expired facts are skipped, not listed: an audit must show what
-    /// the store will still serve, and a fact past its expiry is not it.
-    ///
-    /// Defaulted to a refusal rather than required, same reasoning as
-    /// [`Self::edge_count`]: an out-of-crate backend keeps compiling, and
-    /// its `list_memories` answers with this error instead of a wrong walk.
-    ///
-    /// # Errors
-    /// Returns [`MemoryError`] if the backend cannot enumerate at all, or if
-    /// the walk fails.
-    fn list(
-        &self,
-        cursor: Option<u64>,
-        limit: usize,
-    ) -> Result<(Vec<RawListedFact>, Option<u64>), MemoryError> {
-        let _ = (cursor, limit);
-        Err(MemoryError::InvalidFilter(
-            "this storage backend does not support listing".to_owned(),
-        ))
-    }
 }
 
-/// One fact as [`MemoryStore::list`] hands it to the service layer: content
+/// The full storage surface [`crate::service::MemoryService`] historically
+/// required: every facet at once. Kept as a supertrait alias so existing
+/// callers and bounds (`S: MemoryStore`) compile unchanged; the blanket
+/// impl makes it automatic for any backend that implements the facets, so
+/// there is nothing extra to implement and nothing to forget.
+///
+/// Implementors migrating from the pre-facet monolith (≤ 0.13): the
+/// methods did not change — they moved. `impl MemoryStore` becomes
+/// `impl FactStore + RecallStore + GraphStore + ColumnStore` (#1959).
+pub trait MemoryStore: RecallStore + GraphStore + ColumnStore {}
+
+impl<T: RecallStore + GraphStore + ColumnStore> MemoryStore for T {}
+
+/// One fact as [`FactStore::list`] hands it to the service layer: content
 /// split out, everything else — reserved keys and scaffolding markers
 /// included — still in `payload` so the service can apply its visibility
 /// policy exactly once for every backend.
@@ -386,7 +417,7 @@ impl NativeStore {
 }
 
 #[cfg(feature = "persistence")]
-impl MemoryStore for NativeStore {
+impl FactStore for NativeStore {
     fn store(&self, id: u64, content: &str, embedding: &[f32]) -> Result<(), MemoryError> {
         self.capture.observe(DirtyKey::Fact(id))?;
         self.memory
@@ -478,6 +509,32 @@ impl MemoryStore for NativeStore {
         self.memory.semantic().delete(id).map_err(MemoryError::from)
     }
 
+    fn count(&self) -> usize {
+        self.memory.semantic().count()
+    }
+
+    fn list(
+        &self,
+        cursor: Option<u64>,
+        limit: usize,
+    ) -> Result<(Vec<RawListedFact>, Option<u64>), MemoryError> {
+        // The migration module's cursor walk, reused verbatim: id-keyed,
+        // ascending, exclusive, and it skips TTL-expired points — exactly
+        // the audit contract (#1762 built it to enumerate a store with full
+        // fidelity, which is what an audit is).
+        let (facts, next) = crate::migration::scroll_page(
+            &self.db,
+            self.memory.semantic().collection_name(),
+            cursor,
+            limit,
+        )?;
+        let listed = facts.iter().map(RawListedFact::from_raw).collect();
+        Ok((listed, next))
+    }
+}
+
+#[cfg(feature = "persistence")]
+impl RecallStore for NativeStore {
     fn query_filtered(
         &self,
         embedding: &[f32],
@@ -502,7 +559,10 @@ impl MemoryStore for NativeStore {
             .query_excluding(embedding, k, exclude)
             .map_err(MemoryError::from)
     }
+}
 
+#[cfg(feature = "persistence")]
+impl ColumnStore for NativeStore {
     fn query_columnar(
         &self,
         embedding: &[f32],
@@ -529,7 +589,10 @@ impl MemoryStore for NativeStore {
             .map_err(MemoryError::from)?;
         Ok(results.iter().map(to_recollection).collect())
     }
+}
 
+#[cfg(feature = "persistence")]
+impl GraphStore for NativeStore {
     fn relate(&self, from: u64, to: u64, relation: &str) -> Result<u64, MemoryError> {
         self.capture.observe(DirtyKey::OutgoingEdges(from))?;
         self.memory
@@ -582,34 +645,11 @@ impl MemoryStore for NativeStore {
         self.unrelate_unobserved(edge_id)
     }
 
-    fn count(&self) -> usize {
-        self.memory.semantic().count()
-    }
-
     fn edge_count(&self) -> Option<usize> {
         // A collection-access failure here means the store is unusable for
         // every other call too; for a status readout "cannot say" is the
         // honest degradation, not an error path of its own.
         self.memory.semantic().edge_count().ok()
-    }
-
-    fn list(
-        &self,
-        cursor: Option<u64>,
-        limit: usize,
-    ) -> Result<(Vec<RawListedFact>, Option<u64>), MemoryError> {
-        // The migration module's cursor walk, reused verbatim: id-keyed,
-        // ascending, exclusive, and it skips TTL-expired points — exactly
-        // the audit contract (#1762 built it to enumerate a store with full
-        // fidelity, which is what an audit is).
-        let (facts, next) = crate::migration::scroll_page(
-            &self.db,
-            self.memory.semantic().collection_name(),
-            cursor,
-            limit,
-        )?;
-        let listed = facts.iter().map(RawListedFact::from_raw).collect();
-        Ok((listed, next))
     }
 }
 
