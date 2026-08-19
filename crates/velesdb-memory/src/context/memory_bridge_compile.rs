@@ -6,7 +6,17 @@
 //! half is the one whose methods carry `RecallStore`/`GraphStore` bounds
 //! (#1959), so the budget seam and the facet seam coincide.
 
-use super::*;
+use super::{
+    aggregate_events, annotate_memory_provenance, event_meta, importance_active,
+    index_fragments_by_handle_hash, now_nanos, now_unix_secs, payload_confidence, positive_ttl,
+    provenance, recency_norms, scope_and_k, scope_filter, source_id, source_media, stable_id,
+    system_meta, BTreeMap, CompilePolicy, CompileRequest, CompiledContext, ContextCompiler,
+    ContextDecision, ContextFragment, ContextSavings, ContextSource, Embedder, FactStore,
+    FusionOptions, GraphStore, ImportanceWeights, Map, MemoryCandidate, MemoryError, MemoryService,
+    Metadata, Ordering, PulledMemory, RecallStore, Value, CTX_EVENT_FIELD, CTX_PROJECT_FIELD,
+    CTX_SOURCE_FIELD, CTX_SOURCE_MEDIA_FIELD, EVENT_ANCHOR, EVENT_ID_SALT, EVENT_SEQ,
+    EXPIRES_AT_FIELD, NEUTRAL_CONFIDENCE,
+};
 use crate::service::embeddable_prefix;
 
 impl<E: Embedder, S: FactStore> MemoryService<E, S> {

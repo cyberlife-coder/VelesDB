@@ -5,7 +5,11 @@
 //! to `MemoryService`'s private fields and methods. Every method here needs
 //! at least `S: GraphStore` (#1959) — that is the seam this file cuts along.
 
-use super::*;
+use super::{
+    reject_reserved_keys, validate_relation, Embedder, Explanation, FactStore, GraphStore, HashSet,
+    MemoryError, MemoryNode, MemoryService, Metadata, RecallStore, UnrelateOutcome, HUB_FIELD,
+    MENTIONS_RELATION,
+};
 
 impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     /// Create a typed edge `from -> to`. Returns the edge id.
@@ -294,9 +298,7 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
                 // check alone would let the expansion that crosses the line
                 // finish its node — up to MAX_WHY_NODE_DEGREE nodes past the
                 // "ceiling", which a review measured at 522 of a promised 500.
-                if explanation.nodes.len() >= crate::limits::MAX_WHY_NODES
-                    || explanation.edges.len() >= crate::limits::MAX_WHY_EDGES
-                {
+                if why_budget_spent(&explanation) {
                     // Unexpanded frontier work remained — the response is a
                     // partial view and must SAY so (#1820); whether the rest
                     // held anything unseen is exactly what the budget forbids
@@ -349,29 +351,53 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
             // this node's expansion stops MID-NODE rather than finishing. The
             // caller's check between nodes cannot provide that — an expansion
             // that crosses the line would otherwise add its whole degree.
-            if explanation.nodes.len() >= crate::limits::MAX_WHY_NODES
-                || explanation.edges.len() >= crate::limits::MAX_WHY_EDGES
-            {
+            if why_budget_spent(explanation) {
                 // An edge was in hand and not followed — an exact cut, not
                 // a conservative one.
                 explanation.truncated = true;
                 break;
             }
-            let target = edge.to;
-            if !visited.contains(&target) {
-                let Some((content, _embedding)) = self.store.get(target)? else {
-                    continue; // target no longer exists → drop the dangling edge too
-                };
-                visited.insert(target);
-                explanation.nodes.push(MemoryNode {
-                    id: target,
-                    content,
-                    hop,
-                });
-                next.push(target);
+            if self.resolve_target(edge.to, hop, explanation, visited, next)? {
+                explanation.edges.push(edge);
             }
-            explanation.edges.push(edge);
         }
         Ok(())
     }
+
+    /// Resolve one edge target: record it as a node and enqueue it if unseen.
+    /// Returns whether the edge may be recorded — `false` means the target no
+    /// longer exists, and the dangling edge must be dropped with it so the
+    /// subgraph never contains an edge pointing at a node absent from `nodes`.
+    fn resolve_target(
+        &self,
+        target: u64,
+        hop: usize,
+        explanation: &mut Explanation,
+        visited: &mut HashSet<u64>,
+        next: &mut Vec<u64>,
+    ) -> Result<bool, MemoryError> {
+        if visited.contains(&target) {
+            return Ok(true);
+        }
+        let Some((content, _embedding)) = self.store.get(target)? else {
+            return Ok(false); // target no longer exists → drop the dangling edge too
+        };
+        visited.insert(target);
+        explanation.nodes.push(MemoryNode {
+            id: target,
+            content,
+            hop,
+        });
+        next.push(target);
+        Ok(true)
+    }
+}
+
+/// Whether either width budget of a why-subgraph is spent. Both ceilings are
+/// checked at both call sites — between nodes AND per edge inside a node's
+/// expansion — because either alone lets work cross the line (see the call
+/// sites for what each miss costs).
+fn why_budget_spent(explanation: &Explanation) -> bool {
+    explanation.nodes.len() >= crate::limits::MAX_WHY_NODES
+        || explanation.edges.len() >= crate::limits::MAX_WHY_EDGES
 }
