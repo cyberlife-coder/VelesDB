@@ -1,8 +1,3 @@
-crates/tauri-plugin-velesdb/src/commands_graph.rs	23
-crates/tauri-plugin-velesdb/src/error.rs	128
-crates/tauri-plugin-velesdb/src/events.rs	37
-crates/tauri-plugin-velesdb/src/helpers.rs	200
-crates/tauri-plugin-velesdb/src/lib.rs	36
 crates/velesdb-core/src/agent/memory_helpers.rs	160
 crates/velesdb-core/src/config.rs	103
 crates/velesdb-core/src/distance.rs	35
