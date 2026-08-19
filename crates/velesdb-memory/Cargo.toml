@@ -2,7 +2,7 @@
 name = "velesdb-memory"
 # Independent of the workspace version: velesdb-memory is a young MCP wrapper
 # with its own release cadence, decoupled from the core engine's 3.x line.
-version = "0.14.0"
+version = "0.14.1"
 edition.workspace = true
 rust-version.workspace = true
 license-file = "../../LICENSE"
@@ -64,7 +64,12 @@ tracing = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, optional = true }
 # Optional real-recall backend (off by default). HTTP-only to a local Ollama;
 # `default-features = false` drops TLS to keep the binary small.
-ureq = { version = "2", optional = true, default-features = false }
+# `tls` (rustls) so the SAME env vars reach a local server over http:// or a
+# cloud endpoint over https:// — the user pastes a URL, nothing to rebuild or
+# discover. Local stays the default posture; TLS is capability, not policy.
+ureq = { version = "2", optional = true, default-features = false, features = [
+    "tls",
+] }
 # HTTP transport (multi-client daemon), behind the `http` feature only — the
 # default binary stays offline/stdio-only. `axum`/`tower` are already
 # workspace dependencies (velesdb-server); `tokio-util` provides the
@@ -140,8 +145,9 @@ optional = true
 # rebuild. The runtime default stays `hash`: fully offline, no model
 # contacted unless the user opts in. Library consumers disable defaults to
 # pick only what they need. The cost of the two extra defaults is one small
-# HTTP client (`ureq`, no TLS); the least technical install paths were the
-# ones locked out of the product's own pitch without them (#1846 aftermath).
+# HTTP client (`ureq` + rustls, so https:// endpoints work out of the box —
+# #2025); the least technical install paths were the ones locked out of the
+# product's own pitch without them (#1846 aftermath).
 default = ["mcp", "persistence", "context", "embedder-http", "extractor-http"]
 mcp = [
     "dep:rmcp",
