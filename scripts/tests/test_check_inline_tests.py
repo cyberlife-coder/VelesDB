@@ -345,10 +345,16 @@ class TestRealBaseline(unittest.TestCase):
         self.assertEqual(cit.main(["--root", str(REPO_ROOT)]), 0)
 
     def test_the_baseline_file_is_well_formed(self) -> None:
+        # An empty baseline is the terminal success state, not a broken file:
+        # #1918 moved every inline test module to a sibling, so there is no
+        # debt left to freeze. Emptiness also makes the guard as strict as it
+        # can be — with nothing exempted, any new inline test module is new
+        # debt — so there is nothing here to protect against by demanding
+        # entries. What still has to hold is the shape of whatever entries
+        # remain.
         baseline = cit.load_baseline(
             REPO_ROOT / "scripts" / "inline-tests-baseline.txt"
         )
-        self.assertTrue(baseline, "the checked-in baseline must not be empty")
         for rel, count in baseline.items():
             with self.subTest(path=rel):
                 self.assertGreater(count, 0)
