@@ -838,4 +838,4 @@ trait and pass it to `MemoryService::remember_extracted` from Rust.
 
 ---
 
-Last updated: 2026-07-25 · Applies to: velesdb-memory 0.14.0
+Last updated: 2026-07-25 · Applies to: velesdb-memory 0.14.1
