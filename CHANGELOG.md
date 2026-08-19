@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`GEO_DISTANCE(...) = threshold` / `<>` now tolerates realistic
+  floating-point noise instead of demanding near bit-exact equality.** The
+  distance is computed via several `sin`/`cos`/`sqrt`/`atan2` calls
+  (`haversine_distance_m`), so `f64::EPSILON` — the ULP at magnitude 1.0 — was
+  far tighter than the actual precision at real-world distances (meters),
+  making `Eq`/`NotEq` on `GEO_DISTANCE` spuriously fail for values that were,
+  for all practical purposes, equal. The comparator now scales the epsilon by
+  the compared magnitudes, matching the relative-epsilon fix already applied
+  to the `HAVING` threshold comparator (`aggregation/having.rs`).
+- **A failed PQ (Product Quantization) training pass or codebook save is now
+  logged instead of silently discarded.** `cache_pq_vector` trains the
+  quantizer once its buffer reaches `PQ_TRAINING_SAMPLES`, then drains that
+  buffer unconditionally; a training failure (e.g. degenerate input) left the
+  quantizer permanently unset and threw the accumulated samples away with no
+  operator-visible signal — the collection silently ran without PQ
+  quantization from then on. `save_codebook`'s failure was swallowed the same
+  way, silently leaving the quantizer working in memory but unpersisted
+  across restarts. Both now emit a `tracing::warn!` with the underlying error.
 - **A panic in a binding no longer aborts the host process (mobile + Node,
   #1980).** Mobile release builds now use the new `release-mobile` workspace
   profile (`panic = "unwind"`, mirroring `release-node`), so UniFFI's

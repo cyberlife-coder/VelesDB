@@ -110,15 +110,26 @@ impl Collection {
                 let training: Vec<Vec<f32>> =
                     buffer.iter().map(|(_, vector)| vector.clone()).collect();
                 let num_centroids = 256usize.min(training.len().max(2));
-                let trained = ProductQuantizer::train(
+                let trained = match ProductQuantizer::train(
                     &training,
                     auto_num_subspaces(point.vector.len()),
                     num_centroids,
-                )
-                .ok();
+                ) {
+                    Ok(pq) => Some(pq),
+                    Err(error) => {
+                        // The training buffer is drained below regardless of
+                        // outcome, so a failure here silently disables PQ for
+                        // this batch (and every point already buffered) with
+                        // no other signal — log it so it is observable.
+                        tracing::warn!(%error, "PQ training failed; buffer discarded, quantizer stays unset");
+                        None
+                    }
+                };
                 #[cfg(feature = "persistence")]
                 if let Some(ref pq) = trained {
-                    let _ = pq.save_codebook(&self.storage.path);
+                    if let Err(error) = pq.save_codebook(&self.storage.path) {
+                        tracing::warn!(%error, "PQ codebook save failed; quantizer stays in-memory only");
+                    }
                 }
                 *quantizer_guard = trained;
                 backfill_samples = buffer.drain(..).collect();
