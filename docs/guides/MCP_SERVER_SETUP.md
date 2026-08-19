@@ -708,6 +708,40 @@ same endpoint. Server consoles advertise the version-prefixed form
 (`http://127.0.0.1:8019/v1`) next to a copy button, so pasting it must work
 rather than silently produce `/v1/v1/embeddings` and a `404`.
 
+### Local or cloud: the same three variables
+
+The URL's scheme is the whole switch. `http://` reaches a server on your
+machine; `https://` reaches a hosted provider (supported since
+velesdb-memory 0.14.1) — same variables, nothing to rebuild, nothing else to
+learn:
+
+```bash
+# Local (LM Studio, llama.cpp server, vLLM, oMLX…) — memory never leaves
+# the machine:
+VELESDB_MEMORY_EMBEDDER=openai \
+VELESDB_MEMORY_EMBEDDER_URL=http://127.0.0.1:8019 \
+VELESDB_MEMORY_EMBEDDER_MODEL=bge-m3 \
+  /path/to/velesdb-memory
+
+# Cloud (any OpenAI-compatible embeddings provider):
+VELESDB_MEMORY_EMBEDDER=openai \
+VELESDB_MEMORY_EMBEDDER_URL=https://api.openai.com \
+VELESDB_MEMORY_EMBEDDER_MODEL=text-embedding-3-small \
+VELESDB_MEMORY_EMBEDDER_API_TOKEN=sk-... \
+  /path/to/velesdb-memory
+```
+
+The extractor mirrors this exactly with its own `VELESDB_MEMORY_EXTRACTOR*`
+variables — including providers that only serve chat completions: OpenRouter,
+for instance, speaks `/v1/chat/completions` but not `/v1/embeddings`, so it
+can back the **extractor** while the **embedder** stays local or on an
+embeddings-serving provider.
+
+**Choosing a cloud URL is choosing to send that text off the machine.** The
+default posture does not change: `hash` needs no network at all, local
+servers keep everything on your hardware, and nothing contacts a remote host
+unless you set an `https://` URL yourself.
+
 **API tokens are read from the environment only.** There is deliberately no
 `api_token` field in `velesdb-memory.toml`, and putting one there is refused at
 startup: a credential at rest in a versionable file is one `git add .` away
