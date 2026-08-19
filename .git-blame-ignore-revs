@@ -1,0 +1,17 @@
+# Bulk mechanical moves whose churn should not surface in git blame.
+# Configure locally with:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# Campaign #1918 - inline test modules moved to sibling files (12 squash merges)
+10128bccd62ccbd94bca7e8b151f4d215261fff0
+586caebe9bde5e1d6a14e09856d14285e9a01c84
+28a6d3ea128e5e56ae62a0318fadf26cc2dc101f
+9e9999beab6d780a2d9d33a9258559fa666ccb8d
+bbf8b519d903d3616ee5491f46aac1ecfb1ed3b4
+f99df50df3ac0a05bee5827ceb628dbff66b48a4
+40083f9e77856e323ae76232ab972bd601e07706
+53691612fb683872d0e735a8cb76ec6e060262da
+f7b5c16f4198dde77aeb772ab2c3cb44be8cdb66
+26630b892e489ccaef4de81f086dfe7bf2ebacc1
+f5c52526e98a7a01117d366f1a514c82a529569a
+3b885fee830e573e9694dddd454a7309d90ec99c
