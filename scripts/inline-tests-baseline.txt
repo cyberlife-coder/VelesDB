@@ -4,12 +4,9 @@ crates/tauri-plugin-velesdb/src/events.rs	37
 crates/tauri-plugin-velesdb/src/helpers.rs	200
 crates/tauri-plugin-velesdb/src/lib.rs	36
 crates/velesdb-core/src/agent/memory_helpers.rs	160
-crates/velesdb-core/src/api_types/requests.rs	65
 crates/velesdb-core/src/config.rs	103
 crates/velesdb-core/src/distance.rs	35
 crates/velesdb-core/src/fault_injection.rs	48
-crates/velesdb-core/src/filter/matching.rs	292
-crates/velesdb-core/src/filter/mod.rs	119
 crates/velesdb-core/src/gpu/gpu_csr.rs	141
 crates/velesdb-core/src/gpu/gpu_traversal.rs	229
 crates/velesdb-core/src/gpu/pq_gpu.rs	119
@@ -31,11 +28,3 @@ crates/velesdb-core/src/update_check/check.rs	26
 crates/velesdb-core/src/update_check/config.rs	132
 crates/velesdb-core/src/update_check/instance_id.rs	46
 crates/velesdb-core/src/validation.rs	101
-crates/velesdb-core/src/velesql/ast/mod.rs	116
-crates/velesdb-core/src/velesql/cache.rs	241
-crates/velesdb-core/src/velesql/cost_estimator/plan_cost.rs	298
-crates/velesdb-core/src/velesql/cost_estimator/selectivity_method.rs	295
-crates/velesdb-core/src/velesql/error.rs	67
-crates/velesdb-core/src/velesql/parser/helpers.rs	144
-crates/velesdb-core/src/velesql/parser/hints.rs	49
-crates/velesdb-core/src/wire/vrb1.rs	119
