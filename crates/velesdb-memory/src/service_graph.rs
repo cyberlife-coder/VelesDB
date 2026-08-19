@@ -1,9 +1,14 @@
-//! The graph facet of [`MemoryService`]: `relate`/`unrelate`/`forget`, the
-//! entity-hub lifecycle, and the `why`/`traverse`/`expand` walks — split out
-//! to keep `service.rs` inside the crate's file budget, same pattern as
-//! `fused_recall.rs`. A child module of `service`, so it shares full access
-//! to `MemoryService`'s private fields and methods. Every method here needs
-//! at least `S: GraphStore` (#1959) — that is the seam this file cuts along.
+//! Part of the graph facet of [`MemoryService`]: `relate`/`unrelate`/
+//! `forget`, the *destruction* half of the entity-hub lifecycle, and the
+//! `why`/`traverse`/`expand` walks — split out to keep `service.rs` inside
+//! the crate's file budget, same pattern as `fused_recall.rs`. A child
+//! module of `service`, so it shares full access to `MemoryService`'s
+//! private fields and methods. Every method here needs at least
+//! `S: GraphStore` (#1959) — but the converse does not hold yet: the
+//! *wiring* half of the graph surface (`wire_entities`, `entity_profile`,
+//! `add_edge`, the `remember*`/`autograph*` family) still lives in
+//! `service.rs` with the same bound. Finishing that cut is the natural next
+//! slice when `service.rs` needs to shrink again.
 
 use super::{
     reject_reserved_keys, validate_relation, Embedder, Explanation, FactStore, GraphStore, HashSet,
@@ -239,7 +244,9 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
 
     /// Explain a `decision`: find the best-matching memory (optionally scoped to
     /// a metadata `filter`, e.g. the current project), then walk its typed links
-    /// up to `max_hops` away — fusing the vector, `ColumnStore`, and graph facets.
+    /// up to `max_hops` away — fusing the [`RecallStore`] and [`GraphStore`]
+    /// facets (the `filter` goes through `query_filtered`, not the columnar
+    /// path).
     ///
     /// Returns an empty [`Explanation`] when nothing matches the decision.
     ///

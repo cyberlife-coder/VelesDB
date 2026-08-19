@@ -26,16 +26,29 @@
 //! Harness notes: MCP-over-stdio plumbing follows
 //! `online_migration_process.rs`'s `ProcessClient`; the contender-fails-fast
 //! half mirrors `http_lock_contention.rs` (same store lock, stdio variant).
+//! Every wait in here is bounded — including the request/response round
+//! trips: the failure mode this test guards against is a daemon that stops
+//! answering, which a bare `read_line` would turn into a suite hang instead
+//! of a red test.
+
+#![cfg(all(feature = "mcp", feature = "persistence"))]
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
 /// Bound on the contender's fail-fast exit: generously above
-/// `daemon_startup`'s bounded lock retry (3 × 500 ms), far below a hang.
+/// `daemon_startup`'s bounded lock retry (three attempts separated by two
+/// 500 ms pauses), far below a hang.
 const CONTENDER_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Bound on any single request/response round trip (and on shutdown). These
+/// are local-process saves against a hash embedder — sub-second in practice,
+/// so ten seconds separates "slow" from "hung" unambiguously.
+const STEP: Duration = Duration::from_secs(10);
 
 /// The project every session is saved under — contention on the index is
 /// per project, so one shared project is the interesting case.
@@ -50,8 +63,21 @@ const SESSIONS_AFTER: [&str; 3] = ["a4", "a5", "a6"];
 struct StdioDaemon {
     child: Child,
     stdin: Option<ChildStdin>,
-    stdout: BufReader<ChildStdout>,
+    /// Response lines, fed by a dedicated reader thread — so every receive
+    /// can carry a deadline. The thread ends on the daemon's stdout EOF,
+    /// which drops the sender and turns further receives into clean errors.
+    lines: mpsc::Receiver<String>,
     next_id: u64,
+}
+
+/// A panic anywhere mid-test (a failed assert) must not leave a live daemon
+/// behind: it would outlive the `TempDir` it is writing into. Redundant
+/// after a clean [`StdioDaemon::shutdown`] (both calls then fail, ignored).
+impl Drop for StdioDaemon {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
 }
 
 impl StdioDaemon {
@@ -68,10 +94,19 @@ impl StdioDaemon {
             .expect("spawn velesdb-memory daemon");
         let stdin = child.stdin.take().expect("stdin");
         let stdout = BufReader::new(child.stdout.take().expect("stdout"));
+        let (line_tx, lines) = mpsc::channel();
+        std::thread::spawn(move || {
+            for line in stdout.lines() {
+                let Ok(line) = line else { break };
+                if line_tx.send(line).is_err() {
+                    break;
+                }
+            }
+        });
         let mut daemon = Self {
             child,
             stdin: Some(stdin),
-            stdout,
+            lines,
             next_id: 1,
         };
         daemon.initialize();
@@ -132,8 +167,9 @@ impl StdioDaemon {
         let mut frame = json!({"jsonrpc":"2.0","id":id,"method":method});
         frame["params"] = params;
         self.send(&frame);
-        let mut line = String::new();
-        self.stdout.read_line(&mut line).expect("read response");
+        let line = self.lines.recv_timeout(STEP).unwrap_or_else(|_| {
+            panic!("no response to {method} within {STEP:?} — the daemon is hung or dead")
+        });
         let response: Value = serde_json::from_str(&line).expect("JSON response");
         assert_eq!(response["id"], id, "unexpected response: {response}");
         assert!(
@@ -151,10 +187,12 @@ impl StdioDaemon {
     }
 
     /// EOF on stdin, then a clean exit — the lock-releasing shutdown
-    /// `mcp_lifecycle.rs` proves.
+    /// `mcp_lifecycle.rs` proves. Bounded: a daemon that ignores EOF is a
+    /// red test, not a hung suite.
     fn shutdown(mut self) {
         drop(self.stdin.take());
-        let status = self.child.wait().expect("daemon exit");
+        let status = wait_for_exit(&mut self.child, STEP)
+            .unwrap_or_else(|| panic!("daemon did not exit within {STEP:?} of stdin EOF"));
         assert!(status.success(), "daemon status: {status}");
     }
 }
@@ -164,8 +202,12 @@ impl StdioDaemon {
 fn wait_for_exit(child: &mut Child, timeout: Duration) -> Option<std::process::ExitStatus> {
     let deadline = Instant::now() + timeout;
     loop {
-        if let Ok(Some(status)) = child.try_wait() {
-            return Some(status);
+        match child.try_wait() {
+            Ok(Some(status)) => return Some(status),
+            Ok(None) => {}
+            // Surface the real cause instead of letting the caller blame a
+            // timeout that never happened.
+            Err(err) => panic!("try_wait failed: {err}"),
         }
         if Instant::now() >= deadline {
             return None;
