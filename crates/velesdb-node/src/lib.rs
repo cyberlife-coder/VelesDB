@@ -12,9 +12,14 @@
 //! since JS has no exception classes.
 //!
 //! ## License boundary
-//! Depends on `velesdb-memory` (memory semantics only), never `velesdb-core`. The
-//! addon is an in-process library, not a network service, so it stays inside the
-//! `VelesDB` Core License 1.0 "no hosted/managed service" restriction.
+//! Consumes `velesdb-memory`'s API surface only: no `velesdb-core` symbol is
+//! named anywhere in this crate, and CI pins the direct-dependency edge
+//! (`cargo tree --depth 1`). Core is still in the dependency tree —
+//! transitively, underneath `velesdb-memory`'s `persistence` feature — so the
+//! licensing argument rests on the consumed API surface, not on core's
+//! absence from the tree. The addon is an in-process library, not a network
+//! service, so it stays inside the `VelesDB` Core License 1.0 "no
+//! hosted/managed service" restriction.
 
 #![deny(unsafe_code)]
 // napi's panic→JS-error conversion relies on `panic = "unwind"` (the
