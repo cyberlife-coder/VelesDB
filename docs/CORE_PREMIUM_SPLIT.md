@@ -8,6 +8,12 @@
 > - Open core: `velesdb` — VelesDB Core License 1.0
 > - Premium: `velesdb-private` — Commercial
 >
+> **Naming, once and for all:** `velesdb-private` is the *repository*; the
+> crate inside it is `crates/velesdb-premium`. Prose that says "lives in
+> `velesdb-private`" (AGENTS.md, CLAUDE.md, the boundary ADR) names the repo;
+> rustdoc that says `velesdb-premium` names the crate. Same codebase, two
+> levels of the same address.
+>
 > Grounded in the actual code as of the audit below, **not** in the specs alone
 > (Truth 2 records how the once-unlanded seam was verified landed).
 
@@ -22,7 +28,9 @@ Premium does **not** fork core. `crates/velesdb-premium/src/observer.rs` impleme
 `velesdb_core::DatabaseObserver`, consumes `Database::open_with_observer`, and
 re-exports core's engine instead of copying it (`velesdb-premium/src/lib.rs`:
 *"P0: use Core's implementation, don't duplicate"* for HNSW / quantization / SIMD /
-distance). `velesdb-node` depends only on `velesdb-memory`, not on core directly.
+distance). `velesdb-node`'s only *direct* dependency is `velesdb-memory` — core remains a
+transitive dependency underneath it, and the license argument rests on the
+consumed API surface, not on core's absence from the tree.
 The "fork or extend?" question is settled: **extension by trait.**
 
 **Truth 2 — The core seam is LANDED (resolved 2026-07).**

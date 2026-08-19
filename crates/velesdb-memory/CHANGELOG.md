@@ -37,6 +37,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `UNSUPPORTED`-coded internal error — under the existing
   `ErrorCategory::ALL` coverage guards.
 
+### Fixed
+
+- **The working-context index lock's documented limitation was false, and
+  is now corrected and proven (#1958, #2011).** Its doc-comment claimed
+  "two processes opening the same store still race" past the intra-process
+  mutex. They cannot: the store takes an exclusive `flock` at open and
+  holds it for the process's lifetime, so a second process fails with
+  `DatabaseLocked` before reaching any read-modify-write. A two-daemon
+  process test (`tests/working_index_two_daemons_process.rs`) enacts the
+  contention scenario end to end — zero index entries lost — and pins the
+  invariant the corrected doc-comment now states.
+
 ## [0.13.0] - 2026-08-17
 
 ### Added
@@ -139,6 +151,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   guard's perimeter for the first time.
 
 ### Fixed
+
+- **The lexical-embedder fallback is surfaced instead of silent (#1911).**
+  When the configured embedder cannot serve and recall degrades to the
+  lexical path, the degradation is now visible to the caller rather than
+  discovered through "recall is bad".
+
+- **The scalar wire tolerance is aligned with the documented schema claim
+  (#1938),** so the wire-schema promise and the code compare scalars the
+  same way.
 
 - **`why`/`recall_fused`'s graph walk had no width budget: a hub could dump its
   entire neighborhood, full fact content included, into one response (#1743).**

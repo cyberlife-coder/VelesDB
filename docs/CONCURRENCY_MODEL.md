@@ -17,6 +17,39 @@ VelesDB utilise un modèle de concurrence basé sur:
 - **ArcSwap**: Lock-free CSR snapshot reads for graph traversal (zero contention on reads)
 - **Lock ordering**: Ordre déterministe pour prévenir les deadlocks
 
+## Inter-Process Exclusion (the outermost boundary)
+
+Everything below this section describes concurrency *inside one process* —
+because one process is all there can be. `Database::open_impl`
+(`crates/velesdb-core/src/database/mod.rs`) takes an **exclusive `flock` on
+`<data_dir>/velesdb.lock` at open** and holds it for the `Database`'s entire
+lifetime (the RAII `_lock_file` field releases it on drop, including on
+crash, via the OS). A second process — another daemon, an embedded binding,
+a CLI pointed at the same directory — fails at `open` with
+`Error::DatabaseLocked` **before it can reach any read, write, or
+read-modify-write**. The daemon surfaces this as actionable stderr guidance
+after a bounded retry (`velesdb-memory`'s `daemon_startup.rs`).
+
+This is the invariant the rest of the model leans on. Notably, the
+working-context index in `velesdb-memory` needs no cross-process
+compare-and-swap precisely because no second process can hold the store
+(#1958 was closed on that proof). Two real-process tests pin it:
+
+- `crates/velesdb-memory/tests/http_lock_contention.rs` — a second HTTP
+  daemon on a held store exits non-zero with the lock guidance;
+- `crates/velesdb-memory/tests/working_index_two_daemons_process.rs` — a
+  contender fails fast mid-save-loop, and no index entry is lost across
+  contention or the process handoff.
+
+If single-writer-at-open is ever relaxed, those tests fail first, and every
+"intra-process is all there is" claim in this document must be re-derived.
+
+**Known limits**: `flock` is advisory (a process bypassing `Database::open`
+is not stopped by it), and its semantics on network filesystems (NFS, some
+FUSE mounts) are weaker than on local disks — the same caveat any
+flock-based scheme carries. Deleting `velesdb.lock` while a holder is live
+breaks the exclusion for *future* openers; nothing in-tree does this.
+
 ## Architecture
 
 ### Sharding Strategy

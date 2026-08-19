@@ -39,6 +39,7 @@ Bias toward caution over speed. For trivial tasks, use judgment.
   and mobile device builds with `release-mobile` (both `panic = "unwind"`); `velesdb-wasm` has no `persistence` feature.
 - **Node binding surface is contract-tested:** any method added to `MemoryService` requires updating the allowlist in `crates/velesdb-node/__test__/index.spec.mjs` plus a behavior test, or CI fails.
 - **No std clock in wasm-reachable code:** `SystemTime::now()`/`Instant` abort on `wasm32-unknown-unknown`; cfg-gate them (pattern: `now_nanos()` in `velesdb-memory/src/context/memory_bridge.rs`).
+- **Versioning the independent 0.x crates (`velesdb-memory`, `velesdb-node`):** Cargo's 0.x rule applies — the MINOR is the breaking component. Bump minor for any change that breaks an *implementor or caller* out of tree (a trait method added without a default, a signature change, a renamed export); bump patch for everything else. A caller-compatible change that breaks only trait *implementors* (e.g. the 0.14.0 facet split) is still a minor, and its crate CHANGELOG entry leads with **BREAKING** plus the migration path. Workspace crates share `[workspace.package].version` and follow plain SemVer. `scripts/check-version-sync.py` must stay green either way.
 
 ---
 
@@ -181,7 +182,7 @@ Full picture: [ARCHITECTURE.md](docs/reference/ARCHITECTURE.md), [STORAGE_FORMAT
 
 Tests live beside their module as `*_tests.rs`; integration/BDD suites in `crates/velesdb-core/tests/`. The control-plane seam is `core/src/observer/`.
 
-**Control-plane boundary:** `observer/` exposes a policy-free port (`DatabaseObserver`, `on_query_request` → `AccessDecision`, `open_with_observer`). Core ships only the default allow-all/no-op behavior; the enforcing policy (RBAC, tenancy, audit) lives in `velesdb-private` as an observer impl. **Core must never reference any premium crate, type, or symbol.**
+**Control-plane boundary:** `observer/` exposes a policy-free port (`DatabaseObserver`, `on_query_request` → `AccessDecision`, `open_with_observer`). Core ships only the default allow-all/no-op behavior; the enforcing policy (RBAC, tenancy, audit) lives in `velesdb-private` (the private repo; its crate is `velesdb-premium`) as an observer impl. **Core must never reference any premium crate, type, or symbol.**
 
 ---
 
