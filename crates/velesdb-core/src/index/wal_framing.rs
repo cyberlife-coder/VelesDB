@@ -133,5 +133,5 @@ pub(crate) fn read_entry_header(data: &[u8], pos: usize, context: &str) -> Optio
 ///   payload path, which walks its points sequentially, and a future
 ///   parallelisation would make the assertion fail loudly rather than silently.
 #[cfg(test)]
-#[path = "io_counters.rs"]
+#[path = "io_counters_tests.rs"]
 pub(crate) mod io_counters;
