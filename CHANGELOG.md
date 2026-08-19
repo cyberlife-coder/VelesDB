@@ -65,7 +65,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "no filter" and "a filter the evaluator cannot interpret" are different
   claims, and only the second one is an error.
 
-## [5.1.0] — 2026-08-17
+## [5.1.0] — 2026-08-19
+
+### Security
+
+- **`h2` 0.4.14 → 0.4.16 (RUSTSEC-2026-0258, #1976).** The HTTP/2
+  dependency carried a published advisory; `cargo deny check advisories`
+  is clean again on this release.
 
 ### Added
 
@@ -81,6 +87,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `extractor-http` are now the canonical build features. The former `ollama`
   and `extract` names remain compatibility aliases, so existing dependency
   declarations continue to compile unchanged.
+
+- **Python SDK: the result-count option is `k` everywhere (#1921).**
+  `SearchOptions(top_k=…)` and `.with_top_k(…)` are now `SearchOptions(k=…)`
+  and `.with_k(…)`, aligning the Python surface with the `k` every other
+  binding and the MCP tools already use. *Migration*: replace `top_k=` with
+  `k=` and `with_top_k(` with `with_k(` — the semantics are unchanged.
+
+- **Every inline test module moved beside its file (#1918).** 173 files —
+  22,805 lines of `#[cfg(test)] mod` blocks across all ten crates — now live
+  in sibling `*_tests.rs` files (twelve PRs, #1994–#2005), with shrink-only
+  baselines freezing both the inline-test debt (#1971) and production file
+  budgets (#1974), a durability-barrier guard on file-creating write paths
+  (#1990), and a hygiene gate (typos, taplo, cargo-machete) wired into
+  `CI Success` (#1989). Production code and test behavior are unchanged; a
+  `.git-blame-ignore-revs` keeps `git blame` readable across the campaign.
+
+- **Superfluous `unsafe Send/Sync` impls removed from core (#1982),** with
+  the remaining ones re-documented against their actual guards and a
+  fail-closed doctrine written where reviewers look for it.
 
 ### Fixed
 
@@ -105,14 +130,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reported instead of swallowed (#1950).** The two fixed call sites were the
   only remaining swallowed flushes in the CLI. Community contribution.
 
-### Changed (velesdb-memory 0.13.0, released alongside)
+- **Snapshot publication is power-loss durable (#1900, closes #1897).**
+  `atomic_write` fsyncs the directory entry after the rename — success now
+  means the *replacement* is durable, not just the file contents — and
+  sparse compaction promotes its `idx`/`terms`/`meta` generation through one
+  durable commit point, keeping the WAL recoverable until that point is on
+  disk. A restart observes either the previous complete generation plus its
+  WAL or the new complete generation, never a mixture.
 
-- The memory crate ships its 17/08 review wave in this release: the error
-  surface frozen for semver (`#[non_exhaustive]` + per-adapter category
-  guards on the Node, Python and WASM bindings, #1960), all HTTP clients on
-  one bounded `ureq` agent (#1961), a structured `WorkingContextCodec` error
-  (#1963), and the daemon binary split from a 1708-line `main.rs` into four
-  modules (#1964). Details in `crates/velesdb-memory/CHANGELOG.md`.
+- **Concurrent HNSW inserts can no longer orphan a stored fact (#1907,
+  #1908).** When two single-point inserts reserved mapping indices in one
+  order and the graph assigned node IDs in another, reconciliation removed
+  a reverse mapping by index alone — deleting another insert's valid
+  mapping and leaving a successfully stored fact unreachable from vector
+  search (one write in ten under the concurrent regression test). Removal
+  is now conditional on the slot still belonging to the insertion being
+  corrected.
+
+- **Two API-reachable crash/DoS vectors closed in the server (#1979).** An
+  unbounded `top_k` could abort the process on allocation, and enabling TLS
+  together with rate limiting turned every HTTPS request into a 500.
+
+- **A panic inside a binding no longer aborts the host process (#1992).**
+  Node and mobile hosts see a structured error instead of a hard abort.
+
+- **WASM: three reachable-from-JS defects closed.** A RaBitQ configuration
+  crash and a metadata filter that silently matched everything on an
+  unrecognized condition — now fail-closed (#1977, #1975) — and a
+  size-overflowing v1 import is rejected instead of truncating, with
+  saturating capacity hints (#1986).
+
+- **Durability barriers on two write paths (#1978, #1985).** The
+  sparse-index WAL is fsynced on the acknowledged append, and the parent
+  directory is fsynced after `config.json`'s rename — an acknowledged write
+  now survives power loss on both paths.
+
+- **Lexical-embedder fallback is surfaced instead of silent
+  (velesdb-memory #1911),** and the scalar wire tolerance is aligned with
+  the documented schema claim (velesdb-memory #1938).
+
+### Changed (velesdb-memory 0.14.0, released alongside)
+
+- The memory crate ships its 17/08 review wave: the error surface frozen
+  for semver (`#[non_exhaustive]` + per-adapter category guards on the
+  Node, Python and WASM bindings, #1960), all HTTP clients on one bounded
+  `ureq` agent (#1961), a structured `WorkingContextCodec` error (#1963),
+  and the daemon binary split from a 1708-line `main.rs` into four modules
+  (#1964).
+
+- On top of that wave, 0.14.0 splits the 22-method `MemoryStore` trait
+  into four facets — `FactStore`, `RecallStore`, `GraphStore`,
+  `ColumnStore` (#1959, breaking for out-of-tree *implementors* only;
+  callers compile unchanged via the `MemoryStore` supertrait alias) — adds
+  an honest `MemoryError::Unsupported`/`ErrorCategory::Unsupported` for
+  backend capability gaps, and corrects the working-context index lock's
+  false cross-process claim: a second process fails at open with
+  `DatabaseLocked` before any read-modify-write, now proven by a
+  two-daemon process test (#1958, #2011). Details and the implementor
+  migration in `crates/velesdb-memory/CHANGELOG.md`.
 
 ## [5.0.0] — 2026-08-10
 
