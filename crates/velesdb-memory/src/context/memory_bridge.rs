@@ -146,12 +146,23 @@ static EVENT_SEQ: AtomicU64 = AtomicU64::new(0);
 /// therefore `load_working_context`'s `other_sessions` recovery hint) no
 /// longer knows it exists, and nothing anywhere returns an error.
 ///
-/// **Scope, honestly: this is an INTRA-PROCESS lock only.** Two processes
-/// opening the same store still race, because nothing below this layer offers
-/// a compare-and-swap. The durable fix is a CAS or a transaction on the
-/// [`MemoryStore`] trait itself; until then, the single-process case (the MCP
-/// server, whose `spawn_blocking` handlers are exactly what made this
-/// reachable) is covered and the multi-process case is not.
+/// **Scope: intra-process — which is the WHOLE problem (#1958).** An earlier
+/// version of this comment claimed two processes opening the same store
+/// still race past this lock. They cannot: `velesdb-core`'s
+/// `Database::open_impl` takes an exclusive `flock` on `velesdb.lock` at
+/// open and holds it for the `Database`'s entire lifetime — not per write —
+/// so a second process fails at `open` with `DatabaseLocked` before it can
+/// reach any read-modify-write, of this index or of anything else. Proven
+/// with real processes by `tests/http_lock_contention.rs` and
+/// `tests/working_index_two_daemons_process.rs` (the latter is #1958's
+/// success criterion verbatim: sessions saved under contention and across a
+/// process handoff, zero index entries lost). A trait-level compare-and-swap
+/// was considered there and declined: flock is the only cross-process
+/// primitive available here, and the store boundary already holds it — a
+/// second one around the index would guard against a concurrency the first
+/// makes unreachable. This mutex therefore covers the only concurrency that
+/// exists: threads of the one process allowed to hold the store (the MCP
+/// server's `spawn_blocking` handlers are exactly what made it reachable).
 ///
 /// One global lock rather than one per project: index writes are rare (one
 /// per `save_working_context`), so the contention is negligible, whereas a
