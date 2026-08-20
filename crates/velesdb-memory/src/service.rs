@@ -135,14 +135,19 @@ const ABOUT_RELATION: &str = "about";
 /// Two definitions, `persistence`-gated: the default type parameter itself
 /// references [`NativeStore`], which doesn't exist as a type at all without
 /// the feature, so a `persistence`-free build (e.g. `velesdb-wasm`) drops the
-/// default and every caller names its own storage backend explicitly.
+/// default and every caller names its own storage backend explicitly. The
+/// duplication stops at the type-parameter list: the field lists are
+/// identical by contract — what varies per feature is the *type* of
+/// [`GenerationGate`], never the shape of the service — and
+/// `tests/service_field_drift.rs` fails the build of any change that lets
+/// them diverge again (#2017).
 #[cfg(feature = "persistence")]
 pub struct MemoryService<E: Embedder, S: FactStore = NativeStore> {
     store: S,
     embedder: E,
     autograph: Option<crate::extract::DynExtractor>,
     autograph_queue: AutographQueue,
-    generation_gate: parking_lot::RwLock<()>,
+    generation_gate: GenerationGate,
 }
 #[cfg(not(feature = "persistence"))]
 pub struct MemoryService<E: Embedder, S: FactStore> {
@@ -150,14 +155,12 @@ pub struct MemoryService<E: Embedder, S: FactStore> {
     embedder: E,
     autograph: Option<crate::extract::DynExtractor>,
     autograph_queue: AutographQueue,
+    generation_gate: GenerationGate,
 }
 
-struct GenerationGuard<'a> {
-    #[cfg(feature = "persistence")]
-    _guard: parking_lot::RwLockReadGuard<'a, ()>,
-    #[cfg(not(feature = "persistence"))]
-    _lifetime: std::marker::PhantomData<&'a ()>,
-}
+#[path = "service_generation.rs"]
+mod service_generation;
+use service_generation::{GenerationGate, GenerationGuard};
 
 /// One deferred autograph: the stored fact a background worker will read for
 /// entities, edges and attributes (#1846).
@@ -239,7 +242,7 @@ impl<E: Embedder> MemoryService<E, NativeStore> {
             embedder,
             autograph: None,
             autograph_queue: AutographQueue::default(),
-            generation_gate: parking_lot::RwLock::new(()),
+            generation_gate: GenerationGate::new(),
         })
     }
 
@@ -266,23 +269,13 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
             embedder,
             autograph: None,
             autograph_queue: AutographQueue::default(),
-            #[cfg(feature = "persistence")]
-            generation_gate: parking_lot::RwLock::new(()),
+            generation_gate: GenerationGate::new(),
         }
     }
 
-    #[cfg(feature = "persistence")]
     fn enter_generation(&self) -> GenerationGuard<'_> {
         GenerationGuard {
             _guard: self.generation_gate.read(),
-        }
-    }
-
-    #[cfg(not(feature = "persistence"))]
-    fn enter_generation(&self) -> GenerationGuard<'_> {
-        let _ = self;
-        GenerationGuard {
-            _lifetime: std::marker::PhantomData,
         }
     }
 
