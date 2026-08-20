@@ -1,15 +1,32 @@
-//! Compiled lock-rank invariant for the global lock-acquisition order.
+//! The ordinal registry for the global lock-acquisition order — and the
+//! declared premium extension point for lock ranks.
 //!
-//! Lock ordering was historically documented as convention in
-//! [`docs/CONCURRENCY_MODEL.md`]. This module promotes that convention to a
-//! typed [`LockRank`] newtype so the global acquisition order is expressed in
-//! code, with a debug-only [`assert_lock_order`] check that compiles to
-//! nothing in release builds (zero release overhead).
+//! Two things live here, and naming them precisely is the point (#2013):
 //!
-//! Locks MUST be acquired in strictly ascending rank. Core ranks occupy the
-//! low ordinals (`gpu < vectors < columnar < layers < neighbors`); the
-//! inclusive range `[40, 59]` is reserved for premium-owned lock classes so
-//! premium can order its locks relative to core without collision.
+//! 1. **The authoritative ordinal table.** Core's enforced ordering
+//!    mechanism is the *private* `HnswLockRank` enum in
+//!    `index/hnsw/native/graph/locking.rs` (a debug-only, warn-only tracker
+//!    on the HNSW hot path; see `CONCURRENCY_MODEL.md` for exactly what it
+//!    does and does not check). That enum's discriminants are defined FROM
+//!    the constants below, so the two tables cannot diverge without a
+//!    compile error — this module owns the numbers, the private enum owns
+//!    the mechanism.
+//! 2. **The premium ordinal reservation.** The inclusive range `[40, 59]`
+//!    and the [`LockRank::premium`] constructor exist for out-of-tree
+//!    premium lock classes to order themselves relative to core without
+//!    collision. Alongside the observer port (`core/src/observer/`), this
+//!    is one of the two declared premium extension points in core — which
+//!    is why the type is public despite having no in-tree production
+//!    caller: its consumer is `velesdb-private`. Zero in-tree usage is the
+//!    expected state of a reservation, not dead code.
+//!
+//! [`assert_lock_order`] is offered to implementations that adopt this
+//! registry (it is what premium builds its checks on); core's own hot path
+//! deliberately keeps its private tracker instead of taking a dependency on
+//! a public type it would then freeze.
+//!
+//! Locks MUST be acquired in strictly ascending rank:
+//! `gpu < vectors < columnar < layers < neighbors`, then premium `[40, 59]`.
 
 #[cfg(test)]
 #[path = "lock_rank_tests.rs"]
