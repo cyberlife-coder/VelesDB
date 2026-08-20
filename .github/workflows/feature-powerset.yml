@@ -13,11 +13,14 @@ name: Feature Powerset
 # aliases are grouped with their targets: `ollama = [embedder-http]` and
 # `extract = [extractor-http]` add combinations without adding surface.
 #
-# Deliberately OUTSIDE `CI Success` for now (weekly + manual), promotion to
-# a required gate being its own decision once the runtime is known: the
-# powerset re-checks the crate ~30 times and does not belong in every PR's
-# critical path on day one. velesdb-core comes after velesdb-memory proves
-# the harness — its 20+ features need `--depth 2` discipline even more.
+# Deliberately OUTSIDE `CI Success` (weekly + manual): the powerset re-checks
+# the crate ~30 times and does not belong in every PR's critical path. The
+# four combinations real consumers actually build with (velesdb-wasm,
+# velesdb-node/velesdb-python, the stdio MCP daemon) are promoted to a
+# blocking job instead — `memory-feature-matrix` in ci.yml, see #2019. This
+# workflow stays the exhaustive weekly filet for every other combination.
+# velesdb-core comes after velesdb-memory proves the harness — its 20+
+# features need `--depth 2` discipline even more.
 on:
   workflow_dispatch:
   schedule:

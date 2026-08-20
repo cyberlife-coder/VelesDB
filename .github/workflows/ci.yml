@@ -608,6 +608,46 @@ jobs:
         run: python3 scripts/run-wasm-bindgen-tests.py --root .
 
   # ===========================================================================
+  # velesdb-memory Feature Matrix
+  # feature-powerset.yml's full `cargo hack --feature-powerset --depth 2` stays
+  # weekly/manual — it re-checks the crate ~30 times, too slow for every PR.
+  # These four combinations are the shapes real consumers actually build with
+  # (velesdb-wasm, velesdb-node/velesdb-python, and the stdio MCP daemon
+  # before `context` is layered on) — see #2019. A regression in any of them
+  # breaks a real downstream target the same day, not the following Monday.
+  # ===========================================================================
+  memory-feature-matrix:
+    name: velesdb-memory Feature Matrix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: "velesdb-ci-memory-feature-matrix"
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
+
+      # The floor every downstream Cargo.toml starts from.
+      - name: Check with no default features
+        run: cargo check -p velesdb-memory --no-default-features
+
+      # velesdb-wasm's shape: context alone, persistence-free.
+      - name: Check context alone (wasm shape)
+        run: cargo check -p velesdb-memory --no-default-features --features context
+
+      # velesdb-node/velesdb-python's shape minus the HTTP embedder/extractor clients.
+      - name: Check persistence+context (native-binding shape)
+        run: cargo check -p velesdb-memory --no-default-features --features persistence,context
+
+      # The stdio MCP daemon without the context compiler layered on top.
+      - name: Check mcp+persistence (daemon shape)
+        run: cargo check -p velesdb-memory --no-default-features --features mcp,persistence
+
+  # ===========================================================================
   # OpenAPI Drift Check
   # Regenerates the committed docs/openapi.{json,yaml} snapshots from the
   # utoipa-derived schema and fails if they differ from what is checked in,
@@ -1556,7 +1596,7 @@ jobs:
   ci-success:
     name: CI Success
     runs-on: ubuntu-latest
-    needs: [lint, test, security, hygiene, wasm-check, openapi-drift, mcp-doc-contract, velesql-conformance, perf-smoke, bench-sift1m-compile, perf-gate-e2e, python-sdk-tests, python-integrations, node-binding-tests, node-binding-tests-windows, gate-contracts, doc-contract, promise-contract, production-gates, propagation-guard, binary-size, pr-governance, sonarcloud]
+    needs: [lint, test, security, hygiene, wasm-check, memory-feature-matrix, openapi-drift, mcp-doc-contract, velesql-conformance, perf-smoke, bench-sift1m-compile, perf-gate-e2e, python-sdk-tests, python-integrations, node-binding-tests, node-binding-tests-windows, gate-contracts, doc-contract, promise-contract, production-gates, propagation-guard, binary-size, pr-governance, sonarcloud]
     if: always()
     steps:
       # sonarcloud is intentionally absent from the gate below: it is an
@@ -1567,6 +1607,7 @@ jobs:
           [[ "${{ needs.lint.result }}" == "success" ]] && \
           [[ "${{ needs.test.result }}" == "success" ]] && \
           [[ "${{ needs.wasm-check.result }}" == "success" ]] && \
+          [[ "${{ needs.memory-feature-matrix.result }}" == "success" ]] && \
           [[ "${{ needs.openapi-drift.result }}" == "success" ]] && \
           [[ "${{ needs.mcp-doc-contract.result }}" == "success" ]] && \
           [[ "${{ needs.velesql-conformance.result }}" == "success" ]] && \

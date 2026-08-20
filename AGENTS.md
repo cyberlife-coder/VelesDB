@@ -64,6 +64,11 @@ cargo test --doc --package velesdb-server
 # Feature-gate sanity:
 cargo check --no-default-features
 cargo check -p velesdb-wasm --no-default-features --target wasm32-unknown-unknown
+# velesdb-memory feature matrix (the shapes real consumers build with — #2019):
+cargo check -p velesdb-memory --no-default-features
+cargo check -p velesdb-memory --no-default-features --features context
+cargo check -p velesdb-memory --no-default-features --features persistence,context
+cargo check -p velesdb-memory --no-default-features --features mcp,persistence
 # Functional wasm gate — catches std APIs that abort on wasm32 (e.g. SystemTime::now):
 wasm-pack test --node crates/velesdb-wasm
 # Guards and contracts. Every one of these blocks a PR through `CI Success`, and
