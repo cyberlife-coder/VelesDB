@@ -323,9 +323,8 @@ curl -X POST http://localhost:8080/query \
 
 ## Getting Help
 
-- [**Discord**](https://discord.gg/velesdb): Join our community for real-time support
 - [**GitHub Issues**](https://github.com/cyberlife-coder/VelesDB/issues): Report bugs or request features
 - [**GitHub Discussions**](https://github.com/cyberlife-coder/VelesDB/discussions): Ask questions and share ideas
 
 ---
-Last updated: 2026-08-13 · Applies to: velesdb-core 5.1.0
+Last updated: 2026-08-20 · Applies to: velesdb-core 5.1.0
