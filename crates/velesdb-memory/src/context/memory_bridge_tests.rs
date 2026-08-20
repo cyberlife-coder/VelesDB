@@ -15,6 +15,7 @@
 //! is `stable_id(fact)`, not caller-chosen, so colliding it with a specific
 //! `source_id` is an infeasible preimage search, not a realistic fixture).
 
+use super::compile::source_id;
 use super::*;
 use crate::context::model::CompilePolicy;
 use crate::context::{fragment_id, ContextAction};
