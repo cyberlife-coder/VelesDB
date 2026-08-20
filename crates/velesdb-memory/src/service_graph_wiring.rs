@@ -12,10 +12,15 @@ use crate::id;
 
 use super::{
     canonical_entity_name, reject_self_links, strip_reserved_keys, validate_relation, AutographJob,
-    AutographWorkerHandle, Embedder, EntityProfile, EntityRelation, ExtractedRelation, Extractor,
-    FactStore, GraphStore, HashMap, HashSet, Link, MemoryError, MemoryService, Metadata,
-    RememberedExtraction, ABOUT_RELATION, HUB_ID_SALT, MENTIONS_RELATION,
+    Embedder, EntityProfile, EntityRelation, ExtractedRelation, Extractor, FactStore, GraphStore,
+    HashMap, HashSet, Link, MemoryError, MemoryService, Metadata, RememberedExtraction,
+    ABOUT_RELATION, HUB_ID_SALT, MENTIONS_RELATION,
 };
+
+// Only the spawned-worker pair at the bottom touches this; that whole impl
+// block is compiled out on wasm32, so the import is gated with it.
+#[cfg(not(target_arch = "wasm32"))]
+use super::AutographWorkerHandle;
 
 impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     /// Remember a `fact`, optionally tagging it with structured `metadata`
