@@ -72,6 +72,10 @@ wasm-pack test --node crates/velesdb-wasm
 # path, so read `Ran N tests` + `OK`, never grep for FAILED.
 python3 -m unittest discover -s scripts/tests -p "test_*.py" -t .
 python3 scripts/check-version-sync.py
+# ^ checks stamps against each other, not against crates.io/npm. Manifest↔registry
+#   coherence is proved at release time (release-memory.yml `verify-registries`)
+#   and daily by registry-drift.yml — never at PR time, where "manifest > registry"
+#   is the normal transient state of every release-prep PR (#2030).
 python3 scripts/check-feature-claims.py
 python3 scripts/check-perf-claims.py --no-criterion
 python3 scripts/check-promise-contract.py
