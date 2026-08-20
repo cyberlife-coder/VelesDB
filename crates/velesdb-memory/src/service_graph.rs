@@ -4,11 +4,11 @@
 //! the crate's file budget, same pattern as `fused_recall.rs`. A child
 //! module of `service`, so it shares full access to `MemoryService`'s
 //! private fields and methods. Every method here needs at least
-//! `S: GraphStore` (#1959) — but the converse does not hold yet: the
-//! *wiring* half of the graph surface (`wire_entities`, `entity_profile`,
-//! `add_edge`, the `remember*`/`autograph*` family) still lives in
-//! `service.rs` with the same bound. Finishing that cut is the natural next
-//! slice when `service.rs` needs to shrink again.
+//! `S: GraphStore` (#1959), and since #2021 the converse holds too: every
+//! `GraphStore`-bounded method lives in one of the two `service_graph*`
+//! modules — walks and destruction here, the *construction* half
+//! (`remember*`/`autograph*`, `wire_*`) in `service_graph_wiring.rs`,
+//! because either half alone would blow the file budget the split serves.
 
 use super::{
     reject_reserved_keys, validate_relation, Embedder, Explanation, FactStore, GraphStore, HashSet,
