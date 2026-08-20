@@ -93,7 +93,7 @@ fn get_fallback_id() -> String {
         |h| h.to_string_lossy().to_string(),
     );
 
-    let username = whoami::username();
+    let username = whoami::username().unwrap_or_else(|_| "unknown".to_string());
 
     format!("fallback:{hostname}:{username}")
 }
