@@ -7,6 +7,19 @@ released on its own `velesdb-memory-vX.Y.Z` tag.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Deprecated
+
+- **The `MemoryStore` supertrait alias (#2018).** Since the 0.14 facet split
+  no bound in the workspace names it — facet bounds (`S: GraphStore`-style)
+  everywhere — so it exists only as a compat shim for pre-facet out-of-tree
+  implementors. It now carries `#[deprecated]` pointing at the facet traits,
+  and will be removed in 0.15. Unrelated homonym cleaned up on the other
+  side of the binding seam: `velesdb-node`'s napi class (JS-visible as
+  `MemoryService` via `js_name`) no longer uses the Rust identifier
+  `MemoryStore`; being name-mapped, the rename is invisible to JS consumers.
+
 ## [0.14.1] - 2026-08-19
 
 ### Added
