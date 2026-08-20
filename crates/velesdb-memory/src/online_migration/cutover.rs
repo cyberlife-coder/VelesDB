@@ -250,7 +250,7 @@ fn assemble<E: Embedder>(
             embedder,
             autograph: runtime.autograph,
             autograph_queue: runtime.autograph_queue,
-            generation_gate: parking_lot::RwLock::new(()),
+            generation_gate: crate::service::GenerationGate::new(),
         },
         model,
     }
