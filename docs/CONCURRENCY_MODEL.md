@@ -177,8 +177,14 @@ Enforcement in practice, by build and by tier:
   tests, not on any runtime mechanism.
 
 The ordinal table below is the human-readable record of the intended order; it
-is not enforced by a compiled assertion at acquisition time. The code constants
-and this table are still kept in lock-step and MUST NOT diverge.
+is not enforced by a compiled assertion at acquisition time. Two `LockRank`
+types carry it in code, with distinct roles (#2013): the **public registry**
+(`crate::lock_rank::LockRank`) owns the numbers and the premium reservation,
+and the **private mechanism** (`HnswLockRank`,
+`index/hnsw/native/graph/locking.rs`) is what the debug tracker actually
+records. Their lock-step is not a promise: the private enum's discriminants
+are defined *from* the registry's constants, so any divergence is a compile
+error.
 
 For HNSW index operations that touch the GPU snapshot cache, vector storage,
 the PDX columnar layout, graph layers, and neighbor lists, the global lock
@@ -189,7 +195,7 @@ gpu_vectors_snapshot (rank 5) → vectors (rank 10) → columnar (rank 15)
     → layers (rank 20) → neighbors (rank 30)
 ```
 
-| Lock | Rank | `LockRank` constant | Component | Notes |
+| Lock | Rank | Registry constant (= `HnswLockRank` discriminant) | Component | Notes |
 |------|------|---------------------|-----------|-------|
 | `gpu_vectors_snapshot` | 5 | `LockRank::GPU_VECTORS_SNAPSHOT` | GPU flat-vector snapshot cache (`Mutex`) | Acquired before `vectors` in the GPU path (`gpu` feature); writers release `vectors` before reacquiring it to invalidate |
 | `vectors` | 10 | `LockRank::VECTORS` | `ContiguousVectors` (single vector store since PERF1) | Acquired first among the core HNSW locks in upsert and search paths |

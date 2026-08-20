@@ -61,6 +61,12 @@ use super::safety_counters::HNSW_COUNTERS;
 /// `gpu_vectors_snapshot → vectors → columnar → layers → neighbors`.
 /// Any code path that acquires multiple locks must acquire them
 /// in strictly increasing rank order.
+/// Discriminants are defined FROM the public ordinal registry
+/// (`crate::lock_rank::LockRank`), not repeated: the two tables cannot
+/// diverge without a compile error, so "kept in lock-step" is enforced by
+/// the compiler rather than promised by prose (#2013). The registry is the
+/// authority on the numbers; this enum stays the private mechanism wired
+/// into the debug tracker below.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
 pub(crate) enum LockRank {
@@ -72,17 +78,17 @@ pub(crate) enum LockRank {
     // Only exercised when the `gpu` feature is active; stays in the enum so
     // lock-ordering logic is the same across feature configurations.
     #[cfg_attr(not(feature = "gpu"), allow(dead_code))]
-    GpuVectorsSnapshot = 5,
+    GpuVectorsSnapshot = crate::lock_rank::LockRank::GPU_VECTORS_SNAPSHOT.ordinal(),
     /// `vectors` RwLock — rank 10 (acquired first among the core HNSW locks)
-    Vectors = 10,
+    Vectors = crate::lock_rank::LockRank::VECTORS.ordinal(),
     /// `columnar` RwLock — rank 15 (PDX block-columnar layout)
     #[allow(dead_code)] // Reason: PDX columnar lock rank — used when PDX search is wired
-    Columnar = 15,
+    Columnar = crate::lock_rank::LockRank::COLUMNAR.ordinal(),
     /// `layers` RwLock — rank 20 (acquired after vectors/columnar)
-    Layers = 20,
+    Layers = crate::lock_rank::LockRank::LAYERS.ordinal(),
     /// Per-node neighbor lists — rank 30 (acquired last)
     #[allow(dead_code)] // Reason: Neighbor-level lock rank — reserved for fine-grained locking
-    Neighbors = 30,
+    Neighbors = crate::lock_rank::LockRank::NEIGHBORS.ordinal(),
 }
 
 // F-25: Thread-local stack only in debug builds to avoid ~10-20ns overhead
