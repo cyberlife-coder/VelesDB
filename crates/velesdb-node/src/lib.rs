@@ -154,9 +154,13 @@ fn warn_hash_embedder_not_semantic(semantic: bool) {
 ///
 /// Exposed to JS as `MemoryService` (matching the `PyO3` binding and the core
 /// type); the Rust struct keeps a distinct name only to avoid colliding with the
-/// imported [`velesdb_memory::MemoryService`] it wraps.
+/// imported [`velesdb_memory::MemoryService`] it wraps. `NodeMemoryService`
+/// rather than the old `MemoryStore`: that name collided with
+/// `velesdb_memory`'s storage-trait alias on the other side of the binding
+/// seam, exactly where ambiguity costs the most (#2018) — and being
+/// `js_name`-mapped, the Rust identifier is invisible to JS consumers.
 #[napi(js_name = "MemoryService")]
-pub struct MemoryStore {
+pub struct NodeMemoryService {
     inner: Arc<MemoryService<DynEmbedder>>,
     /// The embedder identity resolved at [`Self::open`] — what
     /// [`Self::memory_status`] reports as RUNNING. The service itself only
@@ -170,7 +174,7 @@ pub struct MemoryStore {
 }
 
 #[napi]
-impl MemoryStore {
+impl NodeMemoryService {
     /// Open (or create) a memory store at `path`.
     ///
     /// `embedder` is `"hash"` (default, offline), `"ollama"` or `"openai"`

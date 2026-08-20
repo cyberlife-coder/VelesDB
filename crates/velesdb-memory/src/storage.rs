@@ -330,8 +330,27 @@ pub trait GraphStore {
 /// Implementors migrating from the pre-facet monolith (≤ 0.13): the
 /// methods did not change — they moved. `impl MemoryStore` becomes
 /// `impl FactStore + RecallStore + GraphStore + ColumnStore` (#1959).
+///
+/// Not to be confused with `velesdb-node`'s napi **class** `MemoryStore`,
+/// which is unrelated: that is the JS-facing service object (a
+/// `MemoryService` wrapper), not this storage trait. Same name, opposite
+/// sides of the binding seam (#2018).
+///
+/// Since the facet split shipped, no bound in this workspace names the
+/// alias (`S: GraphStore`-style facet bounds everywhere) — it exists only
+/// so pre-facet out-of-tree code keeps compiling, and it goes away in the
+/// next breaking cycle.
+#[deprecated(
+    since = "0.14.2",
+    note = "bound on the facet traits you use (FactStore / RecallStore / \
+            GraphStore / ColumnStore); MemoryStore is a compat alias since \
+            the 0.14 facet split and will be removed in 0.15"
+)]
 pub trait MemoryStore: RecallStore + GraphStore + ColumnStore {}
 
+// The blanket impl IS the compat shim the deprecation announces — it must
+// keep compiling until the alias is removed with it in 0.15.
+#[allow(deprecated)]
 impl<T: RecallStore + GraphStore + ColumnStore> MemoryStore for T {}
 
 /// One fact as [`FactStore::list`] hands it to the service layer: content

@@ -138,7 +138,10 @@ const BINDINGS: &[Binding] = &[
     Binding {
         name: "velesdb-node",
         path: "crates/velesdb-node/src/lib.rs",
-        surface_impl: "impl MemoryStore {",
+        // The Rust-side name, not the JS one: the napi class is js_name-mapped
+        // to "MemoryService", and the struct was renamed away from the
+        // trait-colliding `MemoryStore` (#2018).
+        surface_impl: "impl NodeMemoryService {",
     },
     Binding {
         name: "velesdb-python",
