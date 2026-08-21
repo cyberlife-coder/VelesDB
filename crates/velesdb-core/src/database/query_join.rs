@@ -289,7 +289,7 @@ impl Database {
 
         // Phase 3: emit — one merged row per (left row, match), budget-bounded.
         let mut output = Vec::new();
-        'rows: for (left, key) in results.into_iter().zip(keys) {
+        for (left, key) in results.into_iter().zip(keys) {
             if output.len() >= row_budget {
                 break;
             }
@@ -303,36 +303,47 @@ impl Database {
                 }
                 continue;
             };
-            let rights: Vec<&crate::Point> = match_ids
-                .iter()
-                .filter_map(|id| point_map.get(id))
-                .collect();
-            let Some((last_right, head_rights)) = rights.split_last() else {
-                // Matches existed but none hydrated — the row vanishes,
-                // exactly as the per-row `get` loop emitted nothing here.
-                continue;
-            };
-            let score = left.score;
-            for right_point in head_rights {
-                if output.len() >= row_budget {
-                    continue 'rows;
-                }
-                output.push(SearchResult::new(
-                    Self::merge_payloads(&left.point, right_point),
-                    score,
-                ));
-            }
+            Self::emit_indexed_rows(left, match_ids, &point_map, row_budget, &mut output);
+        }
+        output
+    }
+
+    /// Emits the merged rows of one left row's match list, budget-bounded.
+    ///
+    /// The final row of a key takes the left point by move — the 1:1 common
+    /// case therefore never clones the vector. A match list whose ids all
+    /// failed to hydrate emits nothing, exactly as the per-row `get` loop
+    /// behaved.
+    fn emit_indexed_rows(
+        left: SearchResult,
+        match_ids: &[u64],
+        point_map: &std::collections::HashMap<u64, crate::Point>,
+        row_budget: usize,
+        output: &mut Vec<SearchResult>,
+    ) {
+        let rights: Vec<&crate::Point> = match_ids
+            .iter()
+            .filter_map(|id| point_map.get(id))
+            .collect();
+        let Some((last_right, head_rights)) = rights.split_last() else {
+            return;
+        };
+        let score = left.score;
+        for right_point in head_rights {
             if output.len() >= row_budget {
-                continue;
+                return;
             }
-            // The final row of a key takes the left point by move — the
-            // 1:1 common case therefore never clones the vector.
+            output.push(SearchResult::new(
+                Self::merge_payloads(&left.point, right_point),
+                score,
+            ));
+        }
+        if output.len() < row_budget {
             output.push(SearchResult::new(
                 Self::merge_payloads_owned(left.point, last_right),
                 score,
             ));
         }
-        output
     }
 
     /// Returns the JOIN-side `ColumnStore` for `collection`, rebuilding only
