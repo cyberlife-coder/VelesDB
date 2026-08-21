@@ -83,7 +83,22 @@ impl VelesConfig {
         self.validate_limits()?;
         self.validate_server()?;
         self.validate_storage()?;
-        self.validate_logging()
+        self.validate_logging()?;
+        self.warn_inert_wal_batch();
+        Ok(())
+    }
+
+    /// `[wal_batch]` is parsed but not wired (issue #2078): warn — rather
+    /// than reject — when a config enables it, so existing files keep
+    /// loading while no deployment silently believes it has group commit.
+    fn warn_inert_wal_batch(&self) {
+        if self.wal_batch.enabled {
+            tracing::warn!(
+                "[wal_batch] enabled = true is parsed but not yet wired: no group \
+                 commit occurs and every write keeps its own durability barrier \
+                 (see issue #2078)"
+            );
+        }
     }
 
     fn validate_search(&self) -> Result<(), ConfigError> {
