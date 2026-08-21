@@ -119,6 +119,52 @@ def check_safety_template(lines: List[str]) -> Tuple[bool, List[str]]:
     return len(missing) == 0, missing
 
 
+def find_adjacent_safety_duplicates(content: str) -> List[Tuple[int, str, List[str]]]:
+    """
+    Flags a ``// SAFETY:`` header that immediately restates another one.
+
+    The canonical template deliberately uses TWO ``// SAFETY:`` lines — a
+    header, condition bullets, then a second SAFETY line acting as the
+    Reason (see check_safety_template). That form is NOT flagged here: the
+    bullets between the two headers identify it.
+
+    What IS flagged is two SAFETY headers within 3 lines of each other with
+    only plain comment lines between them and no condition bullet or Reason
+    line separating them — that shape is always a copy-paste restatement
+    (or a stray SAFETY comment on a safe call) and never the template.
+    Intervening code lines mean two distinct unsafe sites, which is fine.
+    """
+    lines = content.split('\n')
+    header_indices = [
+        i for i, line in enumerate(lines) if SAFETY_HEADER_PATTERN.search(line)
+    ]
+    violations = []
+    for a, b in zip(header_indices, header_indices[1:]):
+        if b - a > 3:
+            continue
+        between = lines[a + 1:b]
+        only_comments = all(line.strip().startswith('//') for line in between)
+        # Separator detection is deliberately broader than
+        # CONDITION_BULLET_PATTERN: a bullet whose first token is a code span
+        # (`` // - `ptr` is valid `` ) still separates two SAFETY headers into
+        # the canonical header/bullets/reason shape and must not be flagged.
+        dash_bullet = re.compile(r'\s*//\s*[-*]\s')
+        has_separator = any(
+            CONDITION_BULLET_PATTERN.search(line)
+            or REASON_PATTERN.search(line)
+            or dash_bullet.match(line)
+            for line in between
+        )
+        if only_comments and not has_separator:
+            violations.append((
+                b + 1,
+                lines[b].strip(),
+                ["duplicate SAFETY header — merge it into the SAFETY block above "
+                 "(or drop the SAFETY prefix if the call below is safe)"],
+            ))
+    return violations
+
+
 def verify_file(filepath: Path, strict: bool = False) -> List[Tuple[int, str, List[str]]]:
     """
     Verify a single Rust file for SAFETY template completeness.
@@ -142,6 +188,8 @@ def verify_file(filepath: Path, strict: bool = False) -> List[Tuple[int, str, Li
         
         if not is_valid:
             violations.append((line_num, line_content, missing))
+    
+    violations.extend(find_adjacent_safety_duplicates(content))
     
     return violations
 
