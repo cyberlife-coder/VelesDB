@@ -23,7 +23,7 @@ use crate::collection::types::Collection;
 use crate::distance::DistanceMetric;
 use crate::error::{Error, Result};
 use crate::guardrails::QueryContext;
-use crate::storage::{LogPayloadStorage, MmapStorage};
+use crate::storage::{LogPayloadStorage, MmapStorage, PayloadStorage as _};
 use crate::velesql::{GraphPattern, MatchClause};
 use std::collections::{HashMap, HashSet};
 
@@ -51,6 +51,58 @@ pub(in crate::collection::search::query) struct MatchStorageGuards<'a> {
     pub(in crate::collection::search::query) vector_guard: &'a MmapStorage,
     /// `payload_storage` read guard (rank 3).
     pub(in crate::collection::search::query) payload_guard: &'a LogPayloadStorage,
+    /// Query-lifetime payload memo over `payload_guard` (see [`PayloadMemo`]).
+    pub(in crate::collection::search::query) payload_memo: PayloadMemo<'a>,
+}
+
+/// Query-lifetime memo of payload reads during MATCH traversal.
+///
+/// A k-hop pattern re-reads the same node payload once per hop candidacy
+/// check, once per WHERE leaf, and once per RETURN item — each a positional
+/// disk read plus a full JSON deserialize. Bindings repeat across those
+/// stages, so one memoized `Arc` per node id turns the repeats into pointer
+/// clones.
+///
+/// Deliberately NOT used by the start-node full scan: that pass touches every
+/// candidate id exactly once, so caching it would grow the memo to the
+/// collection size for zero reuse. The memo fills from the ids traversal
+/// actually binds, which bounds it by the visited-binding set.
+///
+/// `RefCell` is sound here: MATCH traversal is single-threaded per query (the
+/// guards bundle is `!Sync` by construction and never crosses threads).
+pub(in crate::collection::search::query) struct PayloadMemo<'a> {
+    storage: &'a LogPayloadStorage,
+    cache:
+        std::cell::RefCell<rustc_hash::FxHashMap<u64, Option<std::sync::Arc<serde_json::Value>>>>,
+}
+
+impl<'a> PayloadMemo<'a> {
+    pub(in crate::collection::search::query) fn new(storage: &'a LogPayloadStorage) -> Self {
+        Self {
+            storage,
+            cache: std::cell::RefCell::new(rustc_hash::FxHashMap::default()),
+        }
+    }
+
+    /// Returns the payload for `id`, reading and deserializing at most once
+    /// per query. `None` (absent payload) is memoized too — repeat probes of
+    /// payload-less nodes are as common as hits during traversal.
+    pub(in crate::collection::search::query) fn get(
+        &self,
+        id: u64,
+    ) -> Option<std::sync::Arc<serde_json::Value>> {
+        if let Some(hit) = self.cache.borrow().get(&id) {
+            return hit.clone();
+        }
+        let loaded = self
+            .storage
+            .retrieve(id)
+            .ok()
+            .flatten()
+            .map(std::sync::Arc::new);
+        self.cache.borrow_mut().insert(id, loaded.clone());
+        loaded
+    }
 }
 
 /// Result of a MATCH query traversal.
@@ -294,6 +346,7 @@ impl Collection {
             metric,
             vector_guard: &vector_guard,
             payload_guard: &payload_guard,
+            payload_memo: PayloadMemo::new(&payload_guard),
         };
         self.execute_match_with_guards(match_clause, params, ctx, &guards)
     }
@@ -459,7 +512,7 @@ impl Collection {
                 &HashMap::new(),
                 &HashMap::new(),
                 &ctx.match_clause.return_clause,
-                ctx.guards.payload_guard,
+                &ctx.guards.payload_memo,
             );
             ctx.all_results.push(result);
         }

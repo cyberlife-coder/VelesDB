@@ -9,7 +9,7 @@ use crate::collection::graph::GraphEdge;
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::filter;
-use crate::storage::{PayloadStorage, VectorStorage};
+use crate::storage::VectorStorage;
 use std::collections::HashMap;
 
 /// Applies an ordering comparison operator to an `Ord` pair.
@@ -289,8 +289,7 @@ impl Collection {
 
         let target_id = resolve_target_id(&cmp.column, ctx.bindings, ctx.node_id);
 
-        let Some(target_payload) = ctx.guards.payload_guard.retrieve(target_id).ok().flatten()
-        else {
+        let Some(target_payload) = ctx.guards.payload_memo.get(target_id) else {
             return Ok(false);
         };
 
@@ -353,7 +352,7 @@ impl Collection {
             resolve_target_id(col, ctx.bindings, ctx.node_id)
         });
 
-        let Some(payload) = ctx.guards.payload_guard.retrieve(target_id).ok().flatten() else {
+        let Some(payload) = ctx.guards.payload_memo.get(target_id) else {
             return Ok(false);
         };
 

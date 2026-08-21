@@ -95,6 +95,7 @@ impl Collection {
             metric,
             vector_guard: &vector_guard,
             payload_guard: &payload_guard,
+            payload_memo: super::PayloadMemo::new(&payload_guard),
         };
         let mut results = Vec::new();
         let mut examined = 0u64;
@@ -163,7 +164,7 @@ impl Collection {
             &mr.edge_paths,
             &match_clause.return_clause,
             Some(candidate.score),
-            guards.payload_guard,
+            &guards.payload_memo,
         );
         Ok(Some(mr))
     }
