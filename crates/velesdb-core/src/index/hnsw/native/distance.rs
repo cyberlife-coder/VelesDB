@@ -157,7 +157,11 @@ impl DistanceEngine for CachedSimdDistance {
         crate::index::hnsw::eval_count::record_eval();
         match self.metric {
             DistanceMetric::Cosine if self.pre_normalized => {
-                1.0 - self.engine.cosine_similarity(a, b).clamp(-1.0, 1.0)
+                // Both sides are unit-norm (enforced at insert and load), so
+                // cosine reduces to a single dot-product chain: no norm
+                // accumulators, no sqrt, no divide. The clamp absorbs FP
+                // drift so the distance stays in [0, 2] like the exact arm.
+                1.0 - self.engine.dot_product(a, b).clamp(-1.0, 1.0)
             }
             DistanceMetric::Cosine => 1.0 - self.engine.cosine_similarity(a, b),
             // Reason: Returns squared L2 (no sqrt) because HNSW traversal only

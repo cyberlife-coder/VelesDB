@@ -91,7 +91,7 @@ impl NativeHnswInner {
         alpha: f32,
     ) -> crate::error::Result<Self> {
         let backend = if matches!(storage_mode, crate::StorageMode::RaBitQ) {
-            let distance = CachedSimdDistance::new(metric, dimension);
+            let distance = CachedSimdDistance::new_prenormalized(metric, dimension);
             let rabitq = RaBitQPrecisionHnsw::new_with_alpha(
                 distance,
                 dimension,
@@ -102,7 +102,7 @@ impl NativeHnswInner {
             )?;
             HnswBackend::RaBitQ(Box::new(rabitq))
         } else {
-            let distance = CachedSimdDistance::new(metric, dimension);
+            let distance = CachedSimdDistance::new_prenormalized(metric, dimension);
             let inner = if dimension > 0 {
                 NativeHnsw::new_with_dimension_and_alpha(
                     distance,
@@ -188,7 +188,7 @@ impl NativeHnswInner {
     pub fn promote_to_rabitq(self, dimension: usize) -> Self {
         match self.backend {
             HnswBackend::Standard(inner) => {
-                let distance = CachedSimdDistance::new(self.metric, dimension);
+                let distance = CachedSimdDistance::new_prenormalized(self.metric, dimension);
                 Self {
                     backend: HnswBackend::RaBitQ(Box::new(RaBitQPrecisionHnsw::from_inner(
                         inner, distance, dimension,
@@ -420,13 +420,13 @@ impl NativeHnswInner {
         dimension: usize,
         storage_mode: crate::StorageMode,
     ) -> std::io::Result<Self> {
-        let distance = CachedSimdDistance::new(metric, dimension);
+        let distance = CachedSimdDistance::new_prenormalized(metric, dimension);
         let inner = NativeHnsw::file_load(path, basename, distance)?;
 
         let backend = if matches!(storage_mode, crate::StorageMode::RaBitQ) {
             // Wrap loaded graph in RaBitQ backend.
             // The quantizer is NOT trained yet — it trains lazily from new inserts.
-            let distance = CachedSimdDistance::new(metric, dimension);
+            let distance = CachedSimdDistance::new_prenormalized(metric, dimension);
             let rabitq = RaBitQPrecisionHnsw::from_inner(inner, distance, dimension);
             HnswBackend::RaBitQ(Box::new(rabitq))
         } else {
