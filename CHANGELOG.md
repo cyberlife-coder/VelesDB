@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The executed-strategy channel is now a typed cell.** The
+  `Arc<AtomicU8>` probe introduced with `executed_filter_strategy` spread
+  its raw `u8` encoding across three modules; it is now
+  `guardrails::ExecutedStrategyCell`, whose encoding is a private detail —
+  callers only `record` a `FilterStrategy` and `get` an `Option` back. The
+  counted (EXPLAIN ANALYZE) executions also return a named
+  `CountedExecution` struct instead of a 4-tuple, and the Database-level
+  counted path shares its pre-flight (`execute_query_gated`: subquery
+  resolution, validation, read gate, timed execution) with the plain path
+  instead of replaying a copy — the two can no longer drift. The executor's
+  dispatch match is spelled out with no wildcard arm: a future
+  `FilterStrategy` variant fails compilation at every site that must choose,
+  instead of silently falling into a default. No behavior change.
+
 ### Added
 
 - **EXPLAIN ANALYZE now reports the filter strategy the executor actually

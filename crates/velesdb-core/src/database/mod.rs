@@ -19,10 +19,9 @@ use crate::observer::DatabaseObserver;
 use crate::simd_dispatch;
 use crate::{ColumnStore, Error, Result};
 
-/// Shared out-slot for the executed filter strategy, threaded from the
+/// Shared out-cell for the executed filter strategy, threaded from the
 /// EXPLAIN ANALYZE counted path down to the base collection's query pipeline.
-/// Encoding is `guardrails`' (0 = unset).
-pub(crate) type StrategyProbeSlot = std::sync::Arc<std::sync::atomic::AtomicU8>;
+pub(crate) type StrategyProbeSlot = std::sync::Arc<crate::guardrails::ExecutedStrategyCell>;
 
 mod admin_executor;
 mod collection_ops;

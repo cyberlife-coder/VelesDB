@@ -352,14 +352,6 @@ impl Database {
         query: &crate::velesql::Query,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
-        // Resolve scalar subqueries (EPIC-039) into literals *before* validation
-        // so the validator and every downstream path see a subquery-free AST.
-        if let Some(rewritten) = self.resolve_subqueries(query, params)? {
-            return self.execute_query(&rewritten, params);
-        }
-
-        crate::velesql::QueryValidator::validate(query).map_err(|e| Error::Query(e.to_string()))?;
-
         // Requirement 1: read-path control-plane gate. Fires exactly once here
         // at the `Database` facade for read paths (SELECT + MATCH). Compound /
         // JOIN sub-executions re-enter `execute_single_select`, not
@@ -372,8 +364,26 @@ impl Database {
         // after the data-plane op completes. Resolving the `Cow` to a `&Query`
         // (via deref coercion on `&gated`) keeps the timing in one place rather
         // than duplicated across the borrowed / owned arms.
+        self.execute_query_gated(query, params, None)
+    }
+
+    /// Shared pre-flight + execution used by both the plain path and the
+    /// EXPLAIN ANALYZE counted path, so the two can never drift: scalar
+    /// subquery resolution, validation, the read-path gate, then the timed
+    /// execution — with an optional executed-strategy probe threaded to the
+    /// base-collection call.
+    fn execute_query_gated(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        probe: Option<&crate::database::StrategyProbeSlot>,
+    ) -> Result<Vec<SearchResult>> {
+        if let Some(rewritten) = self.resolve_subqueries(query, params)? {
+            return self.execute_query_gated(&rewritten, params, probe);
+        }
+        crate::velesql::QueryValidator::validate(query).map_err(|e| Error::Query(e.to_string()))?;
         let gated = self.read_gate(query)?;
-        self.execute_query_timed(&gated, params, None)
+        self.execute_query_timed(&gated, params, probe)
     }
 
     /// Executes the resolved (post-gate) query and fires the `on_query`
@@ -620,8 +630,12 @@ impl Database {
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<(Vec<SearchResult>, u64, u64)> {
         let coll = self.resolve_match_collection(query, params)?;
-        let (mut results, nodes_visited, edges_traversed, _strategy) =
-            coll.execute_query_counted(query, params)?;
+        let counted = coll.execute_query_counted(query, params)?;
+        let (mut results, nodes_visited, edges_traversed) = (
+            counted.results,
+            counted.nodes_visited,
+            counted.edges_traversed,
+        );
         // Cross-collection enrichment: if any node pattern has a @collection
         // annotation, look up payloads from those collections and merge them
         // into the projected fields.
@@ -654,21 +668,13 @@ impl Database {
             let (results, nodes, edges) = self.execute_match_routed(&gated, params)?;
             return Ok((results, nodes, edges, None));
         }
-        // Same pre-steps as execute_query (subquery resolution, validation,
-        // read gate, telemetry) with a probe threaded to the base-collection
-        // call so EXPLAIN ANALYZE reports the strategy the executor ran.
-        if let Some(rewritten) = self.resolve_subqueries(query, params)? {
-            return self.execute_query_counted(&rewritten, params);
-        }
-        crate::velesql::QueryValidator::validate(query).map_err(|e| Error::Query(e.to_string()))?;
-        let gated = self.read_gate(query)?;
+        // The exact pre-steps of execute_query (shared execute_query_gated
+        // inner — the two paths cannot drift), with a probe threaded to the
+        // base-collection call so EXPLAIN ANALYZE reports the ran strategy.
         let slot: crate::database::StrategyProbeSlot =
-            std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0));
-        let results = self.execute_query_timed(&gated, params, Some(&slot))?;
-        let strategy = crate::guardrails::decode_filter_strategy(
-            slot.load(std::sync::atomic::Ordering::Relaxed),
-        );
-        Ok((results, 0, 0, strategy))
+            std::sync::Arc::new(crate::guardrails::ExecutedStrategyCell::default());
+        let results = self.execute_query_gated(query, params, Some(&slot))?;
+        Ok((results, 0, 0, slot.get()))
     }
 
     /// Executes the SELECT portion of a query, resolving JOINs if present.
