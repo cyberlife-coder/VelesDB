@@ -361,7 +361,7 @@ impl<'a> CostEstimator<'a> {
             Condition::Match(_) | Condition::Contains(_) | Condition::GeoDistance(_) => 0.1,
             Condition::ContainsText(_) => 0.05,
             Condition::GeoBbox(_) => 0.2,
-            Condition::GraphMatch(_) => 0.5,
+            Condition::GraphMatch(gm) => self.estimate_graph_match_selectivity(gm),
             Condition::And(left, right) => {
                 self.estimate_condition_selectivity(left)
                     * self.estimate_condition_selectivity(right)
@@ -378,6 +378,46 @@ impl<'a> CostEstimator<'a> {
             | Condition::SparseVectorSearch(_)
             | Condition::Similarity(_) => 1.0,
         }
+    }
+
+    /// Estimates the anchor fraction of a graph pattern from the `ANALYZE`
+    /// graph view; the historical `0.5` constant when no graph statistics
+    /// exist (never-analyzed collection, stats persisted before 5.2.0).
+    ///
+    /// Per hop: a typed hop keeps roughly `avg_degree × label_selectivity`
+    /// of the nodes (expected count of matching out-edges, capped at 1); an
+    /// untyped hop only requires *some* edge, ≈ `min(1, avg_degree)`. A
+    /// variable-length hop `*lo..hi` contributes `lo` mandatory hops — and
+    /// none when `lo == 0`, since the pattern then matches without any edge.
+    /// Hops multiply (independence approximation), clamped to
+    /// `[FLOOR, 0.5]`: the estimate only ever *tightens* the historical
+    /// constant, never loosens it, so an optimistic graph view cannot make
+    /// a graph predicate look cheaper to post-filter than before.
+    fn estimate_graph_match_selectivity(
+        &self,
+        gm: &crate::velesql::ast::GraphMatchPredicate,
+    ) -> f64 {
+        const GRAPH_MATCH_DEFAULT: f64 = 0.5;
+        let Some(graph) = self.stats.graph_stats.as_ref() else {
+            return GRAPH_MATCH_DEFAULT;
+        };
+        if graph.total_nodes == 0 {
+            return GRAPH_MATCH_DEFAULT;
+        }
+        let mut selectivity = 1.0_f64;
+        for rel in &gm.pattern.relationships {
+            let per_hop = if rel.types.is_empty() {
+                graph.avg_degree.min(1.0)
+            } else {
+                (graph.avg_degree * graph.label_selectivity).min(1.0)
+            };
+            let mandatory_hops = rel.range.map_or(1, |(lo, _)| lo);
+            selectivity *= per_hop.powi(i32::try_from(mandatory_hops).unwrap_or(i32::MAX));
+        }
+        selectivity.clamp(
+            crate::collection::stats::selectivity_defaults::FLOOR,
+            GRAPH_MATCH_DEFAULT,
+        )
     }
 
     /// Estimates selectivity for a `Comparison` condition using histogram data.
