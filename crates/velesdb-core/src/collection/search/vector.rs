@@ -533,7 +533,10 @@ impl Collection {
         let metric = self.validate_query_and_read_metric(query)?;
         let higher_is_better = metric.higher_is_better();
 
-        let candidates_k = super::vector_filter::compute_oversampled_k(k, filter);
+        // Raw search path: no stats handle threaded here, and get_stats() may
+        // trigger a full analyze() on a cold cache — keep the structure-only
+        // estimate so this path's cost profile is unchanged.
+        let candidates_k = super::vector_filter::compute_oversampled_k(k, filter, None);
 
         // Attempt bitmap pre-filter from secondary indexes.
         let index_results =
