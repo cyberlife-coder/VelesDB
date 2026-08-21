@@ -298,6 +298,7 @@ impl Database {
         self.graph_colls.write().remove(name);
         self.metadata_colls.write().remove(name);
         self.collection_stats.write().remove(name);
+        self.join_store_cache.write().remove(name);
     }
 
     /// Creates a new collection with a specific type (Vector, Graph, or `MetadataOnly`).

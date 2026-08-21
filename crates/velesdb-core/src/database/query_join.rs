@@ -4,6 +4,17 @@ use crate::{Result, SearchResult};
 
 use super::Database;
 
+/// One cached JOIN-side `ColumnStore` with the counters it was built under.
+///
+/// See `Database::join_store_cache` (CACHE-03) for the validity contract.
+pub(super) struct JoinStoreEntry {
+    /// `(schema_version, write_generation)` read *before* the store was built,
+    /// so a mutation racing the build can only make the entry look stale.
+    stamp: (u64, u64),
+    /// The shared store, cloned out cheaply per query.
+    store: std::sync::Arc<crate::column_store::ColumnStore>,
+}
+
 impl Database {
     /// Returns `true` if the join condition references the primary key (`id`) on both sides.
     ///
@@ -129,9 +140,12 @@ impl Database {
         }
 
         let column_store = if pushed.is_empty() {
-            Self::build_join_column_store(&join_collection)?
+            self.cached_join_column_store(&join.table, &join_collection)?
         } else {
-            Self::build_filtered_join_column_store(&join_collection, pushed)?
+            std::sync::Arc::new(Self::build_filtered_join_column_store(
+                &join_collection,
+                pushed,
+            )?)
         };
 
         let joined = crate::collection::search::query::join::execute_join(
@@ -141,5 +155,55 @@ impl Database {
             row_budget,
         )?;
         Ok(crate::collection::search::query::join::joined_to_search_results(joined))
+    }
+
+    /// Returns the JOIN-side `ColumnStore` for `collection`, rebuilding only
+    /// when the collection changed since the cached copy was built.
+    ///
+    /// The `(schema_version, write_generation)` stamp is read *before* the
+    /// build: a mutation racing the build can only make the cached entry look
+    /// older than it is, forcing a rebuild on the next query — never a stale
+    /// hit. Collections carrying TTL points are never cached, because expiry
+    /// is evaluated lazily at read time and does not bump `write_generation`.
+    pub(super) fn cached_join_column_store(
+        &self,
+        name: &str,
+        collection: &crate::collection::Collection,
+    ) -> Result<std::sync::Arc<crate::column_store::ColumnStore>> {
+        let stamp = (
+            self.schema_version
+                .load(std::sync::atomic::Ordering::Acquire),
+            collection.write_generation(),
+        );
+        if let Some(entry) = self.join_store_cache.read().get(name) {
+            if entry.stamp == stamp {
+                return Ok(std::sync::Arc::clone(&entry.store));
+            }
+        }
+
+        let points = Self::fetch_join_points(collection);
+        let carries_ttl = Self::points_carry_ttl(&points);
+        let refs: Vec<&crate::Point> = points.iter().collect();
+        let store = std::sync::Arc::new(Self::build_column_store_from_points(&refs)?);
+        if !carries_ttl {
+            self.join_store_cache.write().insert(
+                name.to_string(),
+                JoinStoreEntry {
+                    stamp,
+                    store: std::sync::Arc::clone(&store),
+                },
+            );
+        }
+        Ok(store)
+    }
+
+    /// Returns `true` if any point carries the reserved durable-TTL payload key.
+    fn points_carry_ttl(points: &[crate::Point]) -> bool {
+        points.iter().any(|p| {
+            p.payload
+                .as_ref()
+                .and_then(serde_json::Value::as_object)
+                .is_some_and(|map| map.contains_key(crate::collection::expiry::EXPIRES_AT_KEY))
+        })
     }
 }

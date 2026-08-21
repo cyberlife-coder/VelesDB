@@ -274,7 +274,7 @@ impl Database {
     }
 
     /// Builds a `ColumnStore` from a slice of point references.
-    fn build_column_store_from_points(points: &[&crate::Point]) -> Result<ColumnStore> {
+    pub(super) fn build_column_store_from_points(points: &[&crate::Point]) -> Result<ColumnStore> {
         let owned: Vec<crate::Point> = points.iter().copied().cloned().collect();
         let schema = Self::infer_column_schema(&owned);
         let schema_refs: Vec<(&str, crate::column_store::ColumnType)> = schema
@@ -295,23 +295,20 @@ impl Database {
     pub(super) fn build_join_column_store(
         collection: &crate::collection::Collection,
     ) -> Result<ColumnStore> {
+        let points = Self::fetch_join_points(collection);
+        let refs: Vec<&crate::Point> = points.iter().collect();
+        Self::build_column_store_from_points(&refs)
+    }
+
+    /// Fetches every live point of `collection` for JOIN-side materialization.
+    ///
+    /// Goes through `Collection::get`, so lazily-expired TTL points are
+    /// already excluded from the result.
+    pub(super) fn fetch_join_points(
+        collection: &crate::collection::Collection,
+    ) -> Vec<crate::Point> {
         let ids = collection.all_ids();
-        let points: Vec<_> = collection.get(&ids).into_iter().flatten().collect();
-
-        let schema = Self::infer_column_schema(&points);
-        let schema_refs: Vec<(&str, crate::column_store::ColumnType)> = schema
-            .iter()
-            .map(|(name, ty)| (name.as_str(), ty.clone()))
-            .collect();
-
-        let mut store = ColumnStore::with_primary_key(&schema_refs, "id")
-            .map_err(|e| Error::ColumnStoreError(e.to_string()))?;
-
-        for point in &points {
-            Self::insert_point_row(point, &schema_refs, &mut store)?;
-        }
-
-        Ok(store)
+        collection.get(&ids).into_iter().flatten().collect()
     }
 
     /// Infers a consistent column schema from point payloads.
