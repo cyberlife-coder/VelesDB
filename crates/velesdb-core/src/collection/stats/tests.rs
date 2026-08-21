@@ -754,3 +754,44 @@ fn test_zero_width_merge_trailing_does_not_double_count_distinct() {
         "trailing zero-width merge should use max for distinct_count"
     );
 }
+
+// =========================================================================
+// graph_stats — serde compatibility of the optional graph-shape view
+// =========================================================================
+
+/// Stats persisted before 5.2.0 carry no `graph_stats` key; they must load
+/// with the field defaulting to `None` (`#[serde(default)]`).
+#[test]
+fn stats_json_without_graph_stats_deserializes_to_none() {
+    let legacy = r#"{
+        "total_points": 3,
+        "payload_size_bytes": 0,
+        "field_stats": {},
+        "row_count": 3,
+        "deleted_count": 0,
+        "avg_row_size_bytes": 0,
+        "total_size_bytes": 0,
+        "column_stats": {},
+        "index_stats": {},
+        "last_analyzed_epoch_ms": null
+    }"#;
+    let stats: CollectionStats = serde_json::from_str(legacy).unwrap();
+    assert!(stats.graph_stats.is_none());
+}
+
+/// A populated `graph_stats` view must survive a serde round-trip unchanged.
+#[test]
+fn graph_stats_roundtrips_through_serde() {
+    let mut stats = CollectionStats::new();
+    stats.graph_stats = Some(crate::velesql::match_planner::MatchGraphStats {
+        total_nodes: 10,
+        total_edges: 25,
+        avg_degree: 2.5,
+        label_count: 5,
+        label_selectivity: 0.2,
+    });
+
+    let json = serde_json::to_string(&stats).unwrap();
+    let back: CollectionStats = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.graph_stats, stats.graph_stats);
+}

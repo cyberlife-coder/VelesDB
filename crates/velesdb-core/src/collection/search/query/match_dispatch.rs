@@ -28,7 +28,7 @@ impl Collection {
     #[allow(clippy::cast_precision_loss)]
     pub(crate) fn compute_match_collection_stats(
         &self,
-    ) -> crate::velesql::match_planner::CollectionStats {
+    ) -> crate::velesql::match_planner::MatchGraphStats {
         let total_nodes = self.len();
         let total_edges = self.graph.edge_store.len();
         let avg_degree = if total_nodes > 0 {
@@ -42,7 +42,7 @@ impl Collection {
         } else {
             1.0
         };
-        crate::velesql::match_planner::CollectionStats {
+        crate::velesql::match_planner::MatchGraphStats {
             total_nodes,
             total_edges,
             avg_degree,

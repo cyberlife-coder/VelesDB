@@ -15,7 +15,7 @@ use super::types::{
 };
 use crate::collection::stats::CollectionStats as CoreCollectionStats;
 use crate::velesql::ast::{Condition, LetBinding, SelectStatement, DEFAULT_SELECT_LIMIT};
-use crate::velesql::match_planner::{CollectionStats, MatchExecutionStrategy, MatchQueryPlanner};
+use crate::velesql::match_planner::{MatchExecutionStrategy, MatchGraphStats, MatchQueryPlanner};
 use crate::velesql::MatchClause;
 
 impl QueryPlan {
@@ -112,7 +112,7 @@ impl QueryPlan {
 
     /// Creates a full query plan from a `Query`, threading both calibrated
     /// `CoreCollectionStats` (SELECT cost estimation) and graph
-    /// `CollectionStats` (MATCH traversal-strategy selection).
+    /// `MatchGraphStats` (MATCH traversal-strategy selection).
     ///
     /// MATCH queries route through [`Self::from_match`] so the EXPLAIN/exec
     /// path emits a `MatchTraversal` node with a real strategy instead of a
@@ -124,10 +124,10 @@ impl QueryPlan {
         query: &crate::velesql::ast::Query,
         indexed_fields: &HashSet<String>,
         stats: Option<&CoreCollectionStats>,
-        match_stats: Option<&CollectionStats>,
+        match_stats: Option<&MatchGraphStats>,
     ) -> Self {
         let mut plan = if let Some(ref match_clause) = query.match_clause {
-            let default_stats = CollectionStats::default();
+            let default_stats = MatchGraphStats::default();
             Self::from_match(match_clause, match_stats.unwrap_or(&default_stats))
         } else {
             // Compound queries have no implicit default LIMIT either.
@@ -140,7 +140,7 @@ impl QueryPlan {
 
     /// Creates a new query plan from a MATCH clause (EPIC-046 US-004).
     #[must_use]
-    pub fn from_match(match_clause: &MatchClause, stats: &CollectionStats) -> Self {
+    pub fn from_match(match_clause: &MatchClause, stats: &MatchGraphStats) -> Self {
         let strategy = MatchQueryPlanner::plan(match_clause, stats);
         let strategy_explanation = MatchQueryPlanner::explain(&strategy);
 

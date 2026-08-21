@@ -208,7 +208,7 @@ impl Database {
     pub(crate) fn match_stats_for(
         &self,
         name: &str,
-    ) -> Option<crate::velesql::match_planner::CollectionStats> {
+    ) -> Option<crate::velesql::match_planner::MatchGraphStats> {
         if let Some(vc) = self.vector_colls.read().get(name) {
             return Some(vc.inner.compute_match_collection_stats());
         }
