@@ -252,29 +252,24 @@ impl Collection {
         } else {
             match &agg.argument {
                 AggregateArg::Wildcard => "count".to_string(),
-                AggregateArg::Score => {
-                    let prefix = match agg.function_type {
-                        AggregateType::Count => "count",
-                        AggregateType::Sum => "sum",
-                        AggregateType::Avg => "avg",
-                        AggregateType::Min => "min",
-                        AggregateType::Max => "max",
-                        AggregateType::First => "first",
-                    };
-                    format!("{prefix}_score")
-                }
+                AggregateArg::Score => format!("{}_score", Self::aggregate_type_prefix(agg)),
                 AggregateArg::Column(col) => {
-                    let prefix = match agg.function_type {
-                        AggregateType::Count => "count",
-                        AggregateType::Sum => "sum",
-                        AggregateType::Avg => "avg",
-                        AggregateType::Min => "min",
-                        AggregateType::Max => "max",
-                        AggregateType::First => "first",
-                    };
-                    format!("{prefix}_{col}")
+                    format!("{}_{col}", Self::aggregate_type_prefix(agg))
                 }
             }
+        }
+    }
+
+    /// The result-key prefix for an aggregation function's type, e.g.
+    /// `AggregateType::Sum` -> `"sum"`.
+    fn aggregate_type_prefix(agg: &AggregateFunction) -> &'static str {
+        match agg.function_type {
+            AggregateType::Count => "count",
+            AggregateType::Sum => "sum",
+            AggregateType::Avg => "avg",
+            AggregateType::Min => "min",
+            AggregateType::Max => "max",
+            AggregateType::First => "first",
         }
     }
 
