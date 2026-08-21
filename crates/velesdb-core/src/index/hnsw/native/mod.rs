@@ -51,6 +51,7 @@ mod search;
 pub use backend_adapter::{NativeHnswBackend, NativeNeighbour};
 pub use distance::{CachedSimdDistance, CpuDistance, DistanceEngine};
 pub use dual_precision::{DualPrecisionConfig, DualPrecisionHnsw};
+pub(crate) use graph::ResumableSearch;
 pub use graph::{NativeHnsw, DEFAULT_ALPHA, NO_ENTRY_POINT};
 // Re-exported so sibling modules (notably `crate::gpu::gpu_csr` and its
 // tests) can document and assert the caller contract of rebuilders that

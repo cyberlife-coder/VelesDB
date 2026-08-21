@@ -132,6 +132,8 @@ jobs:
         run: |
           cargo test -p velesdb-core --features persistence,internal-bench \
             --test cost_crossover -- --test-threads=1 --nocapture
+          cargo test -p velesdb-core --features persistence,internal-bench \
+            --test adaptive_resume_evals -- --test-threads=1 --nocapture
 
   # ===========================================================================
   # Loom Concurrency Tests - Détecte deadlocks et data races
