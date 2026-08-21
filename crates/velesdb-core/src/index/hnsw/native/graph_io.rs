@@ -210,6 +210,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
 
     /// Serializes all layers' neighbor lists to the writer.
     fn write_layer_data(writer: &mut BufWriter<File>, layers: &[Layer]) -> std::io::Result<()> {
+        let mut scratch: Vec<u8> = Vec::new();
         for layer in layers {
             let num_nodes = layer.neighbors.len() as u64;
             writer.write_all(&num_nodes.to_le_bytes())?;
@@ -219,13 +220,17 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
                 // Reason: num_neighbors <= max_connections < 1024
                 #[allow(clippy::cast_possible_truncation)]
                 let num_neighbors = neighbors.len() as u32;
-                writer.write_all(&num_neighbors.to_le_bytes())?;
+                // One buffered write per node instead of one 4-byte
+                // write_all per neighbor (each a BufWriter fn call).
+                scratch.clear();
+                scratch.extend_from_slice(&num_neighbors.to_le_bytes());
                 for &neighbor in neighbors.iter() {
                     // Reason: NodeId stored as u32 in file format v1
                     #[allow(clippy::cast_possible_truncation)]
                     let neighbor_u32 = neighbor as u32;
-                    writer.write_all(&neighbor_u32.to_le_bytes())?;
+                    scratch.extend_from_slice(&neighbor_u32.to_le_bytes());
                 }
+                writer.write_all(&scratch)?;
             }
         }
         Ok(())
