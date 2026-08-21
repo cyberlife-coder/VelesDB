@@ -1,0 +1,1 @@
+LET $v = [0.1, 0.2]; SELECT * FROM docs WHERE vector NEAR $v LIMIT 5

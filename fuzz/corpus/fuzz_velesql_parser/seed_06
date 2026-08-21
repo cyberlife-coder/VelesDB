@@ -1,0 +1,1 @@
+SELECT * FROM products JOIN inventory ON inventory.sku = products.sku WHERE inventory.stock > 0 LIMIT 10

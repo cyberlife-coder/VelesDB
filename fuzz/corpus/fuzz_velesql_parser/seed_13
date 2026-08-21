@@ -1,0 +1,1 @@
+EXPLAIN ANALYZE SELECT * FROM docs WHERE tag IN ('a','b') OR NOT (price < 5) LIMIT 1
