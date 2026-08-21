@@ -92,6 +92,15 @@ jobs:
         env:
           MIRIFLAGS: "-Zmiri-disable-isolation -Zmiri-symbolic-alignment-check"
 
+      # ContiguousVectors / AllocGuard - manual allocation, raw pointers, resize
+      - name: Miri - contiguous vectors & alloc guard
+        run: |
+          cargo miri test --no-default-features \
+            -p velesdb-core --lib -- \
+            perf_optimizations alloc_guard contiguous_resize --test-threads=1
+        env:
+          MIRIFLAGS: "-Zmiri-disable-isolation -Zmiri-symbolic-alignment-check"
+
   # ===========================================================================
   # Loom Concurrency Tests - Détecte deadlocks et data races
   # ===========================================================================
