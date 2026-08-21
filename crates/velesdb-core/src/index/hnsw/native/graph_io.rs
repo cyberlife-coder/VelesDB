@@ -244,7 +244,34 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     /// Returns `io::Error` if file operations fail or data is corrupted.
     pub fn file_load(path: &Path, basename: &str, distance: D) -> std::io::Result<Self> {
         let vectors_path = path.join(format!("{basename}.vectors"));
-        let (vectors, count) = Self::load_vectors_file(&vectors_path)?;
+        let (mut vectors, count) = Self::load_vectors_file(&vectors_path)?;
+
+        // Indexes written before the pre-normalized cosine engine store raw
+        // vectors. Cosine is scale-invariant, so normalizing here never
+        // changes any result, and it (re-)establishes the unit-norm invariant
+        // the fast dot-product arm relies on.
+        //
+        // The epsilon gate keeps save/load roundtrips bit-identical: a file
+        // written by the pre-normalized engine holds vectors whose norm is 1
+        // within f32 renormalization noise (~sqrt(dim) * 2^-24), and blindly
+        // re-normalizing those would drift the stored bytes by 1 ulp per
+        // cycle. Legacy raw vectors sit far outside the gate and get their
+        // one-time normalization; a legacy vector the user already stored
+        // unit-norm within 1e-5 is left as-is, bounding its dot-vs-cosine
+        // error at the same 1e-5 — below f32 ranking noise.
+        if distance.is_pre_normalized() && distance.metric() == crate::DistanceMetric::Cosine {
+            const UNIT_NORM_EPS: f32 = 1e-5;
+            if let Some(storage) = vectors.as_mut() {
+                for i in 0..storage.len() {
+                    if let Some(v) = storage.get_mut(i) {
+                        let n = crate::simd_native::norm_native(v);
+                        if n > 0.0 && (n - 1.0).abs() > UNIT_NORM_EPS {
+                            crate::simd_native::normalize_inplace_native(v);
+                        }
+                    }
+                }
+            }
+        }
 
         let graph_path = path.join(format!("{basename}.graph"));
         let graph = Self::load_graph_file(&graph_path, count)?;
