@@ -164,7 +164,6 @@ pub(crate) mod selectivity_defaults {
     pub(crate) const NEGATION: f64 = 0.9;
     /// Floor applied under conjunction/negation so an over-confident
     /// estimate never predicts zero rows.
-    #[cfg(feature = "persistence")]
     pub(crate) const FLOOR: f64 = 0.01;
 }
 
