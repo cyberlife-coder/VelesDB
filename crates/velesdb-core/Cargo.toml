@@ -430,6 +430,10 @@ harness = false
 name = "pq_recall_multidist"
 harness = false
 
+[[test]]
+name = "adaptive_resume_evals"
+required-features = ["internal-bench"]
+
 [[bench]]
 name = "scalability_quick"
 harness = false

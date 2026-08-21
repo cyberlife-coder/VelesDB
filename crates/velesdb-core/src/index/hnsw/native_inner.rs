@@ -10,9 +10,18 @@
 #![allow(clippy::cast_precision_loss)]
 
 use super::native::rabitq_precision::RaBitQPrecisionHnsw;
-use super::native::{CachedSimdDistance, NativeHnsw, NativeNeighbour, DEFAULT_ALPHA};
+use super::native::{
+    CachedSimdDistance, NativeHnsw, NativeNeighbour, ResumableSearch, DEFAULT_ALPHA,
+};
 use crate::distance::DistanceMetric;
 use std::path::Path;
+
+/// Opaque resume handle for an escalatable CPU search on the Standard backend.
+///
+/// Wraps the graph-level [`ResumableSearch`] so callers above the backend
+/// dispatch hold it without seeing graph internals. Dropping it releases the
+/// pooled traversal structures.
+pub struct SearchResume(ResumableSearch);
 
 /// Backend selector for the native HNSW index.
 ///
@@ -257,21 +266,90 @@ impl NativeHnswInner {
     /// is not yet implemented).
     #[must_use]
     pub fn search_auto(&self, query: &[f32], k: usize, ef_search: usize) -> Vec<(usize, f32)> {
+        if let Some(results) = self.try_gpu_route(query, k, ef_search) {
+            return results;
+        }
+        self.search(query, k, ef_search)
+    }
+
+    /// GPU routing policy shared by [`Self::search_auto`] and
+    /// [`Self::search_resumable`]: attempts device layer-0 traversal when the
+    /// Standard backend crosses the GPU threshold. `None` means "take the CPU
+    /// path" — either the feature is off, the backend/scale does not qualify,
+    /// or the GPU attempt failed and search falls through.
+    ///
+    /// `query.len()` is authoritative for the index dimension: a query of
+    /// wrong length would fail distance evaluation anyway.
+    #[allow(unused_variables)] // Reason: parameters unused when `gpu` is off
+    fn try_gpu_route(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef_search: usize,
+    ) -> Option<Vec<(usize, f32)>> {
         #[cfg(feature = "gpu")]
-        {
-            if let HnswBackend::Standard(hnsw) = &self.backend {
-                // `query.len()` is authoritative for the index dimension: a query
-                // of wrong length would fail distance evaluation anyway.
-                if crate::gpu::should_traverse_gpu(hnsw.len(), query.len()) {
-                    if let Some(results) = self.search_gpu(query, k, ef_search) {
-                        return results;
-                    }
-                    // GPU failed — fall through to CPU
+        if let HnswBackend::Standard(hnsw) = &self.backend {
+            if crate::gpu::should_traverse_gpu(hnsw.len(), query.len()) {
+                if let Some(results) = self.search_gpu(query, k, ef_search) {
+                    return Some(results);
                 }
+                // GPU failed — fall through to CPU
             }
         }
+        None
+    }
 
-        self.search(query, k, ef_search)
+    /// Phase-1 search that keeps its traversal state for a possible escalation.
+    ///
+    /// Same GPU/backend dispatch as [`Self::search_auto`], with one addition:
+    /// on the Standard-backend CPU path the graph traversal state is returned
+    /// as a [`SearchResume`] handle, so an escalating caller can widen the
+    /// `ef` budget via [`Self::resume_search`] instead of restarting.
+    ///
+    /// Paths with no CPU-side state to resume return `None` and keep their
+    /// pre-change escalation behavior (restart):
+    /// - GPU layer-0 traversal (state lives on the device);
+    /// - the `RaBitQ` backend (its binary-quantized search loop owns no
+    ///   [`ResumableSearch`]).
+    #[must_use]
+    pub fn search_resumable(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef_search: usize,
+    ) -> (Vec<(usize, f32)>, Option<SearchResume>) {
+        if let Some(results) = self.try_gpu_route(query, k, ef_search) {
+            // GPU traversal keeps no CPU-side state to resume.
+            return (results, None);
+        }
+
+        match &self.backend {
+            HnswBackend::Standard(hnsw) => {
+                let (results, resume) = hnsw.search_resumable(query, k, ef_search);
+                (results, resume.map(SearchResume))
+            }
+            HnswBackend::RaBitQ(rabitq) => (rabitq.search(query, k, ef_search), None),
+        }
+    }
+
+    /// Continues a [`Self::search_resumable`] traversal under a widened `ef`.
+    ///
+    /// `query` must be the same vector passed to `search_resumable`.
+    #[must_use]
+    pub fn resume_search(
+        &self,
+        resume: SearchResume,
+        query: &[f32],
+        k: usize,
+        ef_search: usize,
+    ) -> Vec<(usize, f32)> {
+        match &self.backend {
+            HnswBackend::Standard(hnsw) => hnsw.resume_search(resume.0, query, k, ef_search),
+            // Unreachable in practice: `SearchResume` is only handed out for
+            // the Standard backend. Kept total so a future backend cannot
+            // silently drop the escalation.
+            HnswBackend::RaBitQ(rabitq) => rabitq.search(query, k, ef_search),
+        }
     }
 
     /// Attempts GPU-accelerated search on the Standard backend.

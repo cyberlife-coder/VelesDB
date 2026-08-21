@@ -87,8 +87,9 @@ auto_quantization = true
 auto_quantization_threshold = 10000
 
 [wal_batch]
-# Group commit. Off by default: it trades durability latency for throughput,
-# which rarely pays on a device that can be killed by the OS at any moment.
+# RESERVED — parsed but not yet wired (issue #2078): enabling it changes
+# nothing today, and the engine logs a warning if you do. Batch writes
+# already pay one durability barrier per call.
 enabled = false
 commit_delay_us = 100
 max_batch_size = 128
