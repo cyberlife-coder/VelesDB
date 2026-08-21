@@ -30,7 +30,9 @@ use crate::distance::DistanceMetric;
 use parking_lot::{Mutex, RwLock};
 use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -68,6 +70,11 @@ pub struct DeferredIndexerConfig {
 
     /// Maximum age (milliseconds) of the oldest buffered vector before a
     /// time-based merge is triggered.
+    ///
+    /// The age is checked at write time (`push`/`extend`) and by
+    /// [`DeferredIndexer::should_merge`] — there is no background timer, so
+    /// an expired buffer merges on the next write or explicit check, not
+    /// spontaneously. `0` makes every write signal a merge.
     #[serde(default = "default_max_buffer_age_ms")]
     pub max_buffer_age_ms: u64,
 }
@@ -108,7 +115,18 @@ pub struct DeferredIndexer {
 
     /// Configuration (immutable after construction).
     config: DeferredIndexerConfig,
+
+    /// Millisecond timestamp (relative to `epoch`) of the first push since
+    /// the last drain; [`AGE_EMPTY`] when the buffer holds no epoch-tracked
+    /// entries. Lock-free: the common push path is one relaxed load.
+    first_push_millis: AtomicU64,
+
+    /// Time origin for `first_push_millis`.
+    epoch: Instant,
 }
+
+/// Sentinel for `first_push_millis`: no first-push timestamp recorded.
+const AGE_EMPTY: u64 = u64::MAX;
 
 impl DeferredIndexer {
     /// Creates a new `DeferredIndexer` with the given configuration.
@@ -122,7 +140,43 @@ impl DeferredIndexer {
             swap_lock: Mutex::new(()),
             deleted_ids: RwLock::new(FxHashSet::default()),
             config,
+            first_push_millis: AtomicU64::new(AGE_EMPTY),
+            epoch: Instant::now(),
         }
+    }
+
+    /// Records the first-push timestamp if none is recorded yet.
+    ///
+    /// One relaxed load in the steady state (timestamp already set); the CAS
+    /// runs only on the first push after a drain. Losing the race to another
+    /// first pusher is fine — either timestamp is a valid buffer birth time.
+    #[inline]
+    fn note_push_time(&self) {
+        if self.first_push_millis.load(Ordering::Relaxed) == AGE_EMPTY {
+            #[allow(clippy::cast_possible_truncation)]
+            // Reason: millis since indexer creation; u64 covers 584M years.
+            let now = self.epoch.elapsed().as_millis() as u64;
+            let _ = self.first_push_millis.compare_exchange(
+                AGE_EMPTY,
+                now,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            );
+        }
+    }
+
+    /// Returns `true` if the oldest buffered entry has exceeded
+    /// `max_buffer_age_ms`. `false` when the buffer is age-empty.
+    #[inline]
+    fn buffer_expired(&self) -> bool {
+        let first = self.first_push_millis.load(Ordering::Relaxed);
+        if first == AGE_EMPTY {
+            return false;
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        // Reason: same clock domain as note_push_time.
+        let now = self.epoch.elapsed().as_millis() as u64;
+        now.saturating_sub(first) >= self.config.max_buffer_age_ms
     }
 
     /// Whether deferred indexing is enabled.
@@ -157,7 +211,8 @@ impl DeferredIndexer {
         }
         self.ensure_buffer_active();
         self.buffer.push(id, vector);
-        self.buffer.len() >= self.config.merge_threshold
+        self.note_push_time();
+        self.buffer.len() >= self.config.merge_threshold || self.buffer_expired()
     }
 
     /// Batch-pushes vectors into the write buffer.
@@ -170,7 +225,8 @@ impl DeferredIndexer {
         }
         self.ensure_buffer_active();
         self.buffer.extend(entries);
-        self.buffer.len() >= self.config.merge_threshold
+        self.note_push_time();
+        self.buffer.len() >= self.config.merge_threshold || self.buffer_expired()
     }
 
     /// Marks `id` as deleted, removing it from the buffer.
@@ -255,6 +311,7 @@ impl DeferredIndexer {
     pub fn swap_and_drain(&self) -> Vec<(u64, Vec<f32>)> {
         let _guard = self.swap_lock.lock();
         let drained = self.buffer.deactivate_and_drain();
+        self.first_push_millis.store(AGE_EMPTY, Ordering::Relaxed);
         self.deleted_ids.write().clear();
         // Re-activate the buffer so pushes between drain and next merge
         // are not silently dropped (fixes TOCTOU race with concurrent push).
@@ -271,7 +328,7 @@ impl DeferredIndexer {
     /// Returns `true` if the buffer has reached `merge_threshold`.
     #[must_use]
     pub fn should_merge(&self) -> bool {
-        self.buffer.len() >= self.config.merge_threshold
+        self.buffer.len() >= self.config.merge_threshold || self.buffer_expired()
     }
 
     /// Returns `true` if deferred indexing is enabled and the buffer has
@@ -288,6 +345,7 @@ impl DeferredIndexer {
     pub fn drain_all(&self) -> Vec<(u64, Vec<f32>)> {
         let _guard = self.swap_lock.lock();
         let all = self.buffer.deactivate_and_drain();
+        self.first_push_millis.store(AGE_EMPTY, Ordering::Relaxed);
         self.deleted_ids.write().clear();
         all
     }
@@ -343,6 +401,36 @@ mod tests {
         idx.push(1, vec![1.0, 0.0, 0.0]);
         idx.push(2, vec![0.0, 1.0, 0.0]);
         assert_eq!(idx.pending_count(), 2);
+    }
+
+    #[test]
+    fn age_zero_makes_every_write_signal_a_merge() {
+        let indexer = DeferredIndexer::new(DeferredIndexerConfig {
+            enabled: true,
+            merge_threshold: 1_000,
+            max_buffer_age_ms: 0,
+        });
+        // Far below the count threshold: only the age trigger can fire.
+        assert!(indexer.push(1, vec![0.0; 4]));
+        assert!(indexer.should_merge());
+        // Draining clears the age stamp; an empty buffer never reports
+        // expiry on its own.
+        let drained = indexer.swap_and_drain();
+        assert_eq!(drained.len(), 1);
+        assert!(!indexer.should_merge());
+    }
+
+    #[test]
+    fn unexpired_buffer_below_threshold_does_not_merge() {
+        let indexer = DeferredIndexer::new(DeferredIndexerConfig {
+            enabled: true,
+            merge_threshold: 1_000,
+            // One hour: cannot expire within the test.
+            max_buffer_age_ms: 3_600_000,
+        });
+        assert!(!indexer.push(1, vec![0.0; 4]));
+        assert!(!indexer.extend(vec![(2, vec![0.0; 4])]));
+        assert!(!indexer.should_merge());
     }
 
     #[test]

@@ -27,7 +27,11 @@ pub struct AsyncIndexBuilderConfig {
     #[serde(default = "default_merge_threshold")]
     pub merge_threshold: usize,
 
-    /// Number of segments for parallel construction (default: `num_cpus`).
+    /// Reserved — parsed but not yet wired. Flushes currently go through
+    /// `HnswIndex::insert_batch_parallel`, which parallelizes on the global
+    /// rayon pool with no segment notion; this knob changes nothing today.
+    /// Wiring it belongs to the pipeline integration tracked under
+    /// issue #488 Task 4 (the same one gating this whole builder).
     #[serde(default)]
     pub segment_count: Option<usize>,
 }
