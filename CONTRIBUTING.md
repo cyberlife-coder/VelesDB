@@ -194,6 +194,11 @@ cd VelesDB
 # Build the project
 cargo build --workspace
 
+# No GTK/WebKit on the machine? The two Tauri crates are the only ones that
+# need them (CI installs libgtk-3-dev/libwebkit2gtk-4.1-dev); everything else
+# builds without system packages:
+cargo check --workspace --exclude tauri-plugin-velesdb --exclude tauri-rag-app
+
 # Run tests (single-threaded — required for file system isolation)
 cargo test --workspace --features persistence,gpu,update-check \
   --exclude velesdb-python -- --test-threads=1
