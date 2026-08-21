@@ -138,6 +138,13 @@ impl Database {
         if Self::is_lookup_join_eligible(join) && pushed.is_empty() {
             return Ok(Self::execute_lookup_join(results, join, &join_collection));
         }
+        if pushed.is_empty() {
+            if let Some(output) =
+                Self::try_indexed_join(results, join, &join_collection, row_budget)
+            {
+                return Ok(output);
+            }
+        }
 
         let column_store = if pushed.is_empty() {
             self.cached_join_column_store(&join.table, &join_collection)?
@@ -155,6 +162,93 @@ impl Database {
             row_budget,
         )?;
         Ok(crate::collection::search::query::join::joined_to_search_results(joined))
+    }
+
+    /// Answers an Inner/Left JOIN from a secondary index on the join-side
+    /// column, avoiding the per-query `ColumnStore` materialization.
+    ///
+    /// Returns `None` when the shape is not eligible, falling through to the
+    /// ColumnStore path: Right/Full joins need the unmatched join-side rows
+    /// that only a full enumeration can produce, `id` is already served by
+    /// the lookup fast path, and a column that is neither `id` nor indexed
+    /// reaches that path's actionable error. Unlike the PK paths a non-PK
+    /// key may match several join-side points; one merged row is emitted per
+    /// (left row, match) pair, bounded by `row_budget`.
+    fn try_indexed_join(
+        results: &[SearchResult],
+        join: &crate::velesql::JoinClause,
+        collection: &crate::collection::Collection,
+        row_budget: usize,
+    ) -> Option<Vec<SearchResult>> {
+        use crate::velesql::JoinType;
+        if !matches!(join.join_type, JoinType::Inner | JoinType::Left) {
+            return None;
+        }
+        let condition = crate::collection::search::query::join::resolve_join_condition(join)?;
+        let index_column = condition.left.column.clone();
+        if index_column == "id" || !collection.indexed_field_names().contains(&index_column) {
+            return None;
+        }
+
+        let mut output = Vec::new();
+        for left in results {
+            if output.len() >= row_budget {
+                break;
+            }
+            Self::append_indexed_matches(
+                collection,
+                left,
+                &index_column,
+                &condition.right.column,
+                join.join_type,
+                row_budget,
+                &mut output,
+            );
+        }
+        Some(output)
+    }
+
+    /// Appends the join output rows for one left-side result: every indexed
+    /// match merged left-over-right, or the bare left row for an unmatched
+    /// LEFT JOIN. The source key uses the same payload→key conversion as
+    /// index maintenance (`JsonValue::from_json`), with the `id` fallback the
+    /// PK key extractor also honours.
+    fn append_indexed_matches(
+        collection: &crate::collection::Collection,
+        left: &SearchResult,
+        index_column: &str,
+        source_column: &str,
+        join_type: crate::velesql::JoinType,
+        row_budget: usize,
+        output: &mut Vec<SearchResult>,
+    ) {
+        let source_value = left
+            .point
+            .payload
+            .as_ref()
+            .and_then(|p| p.get(source_column).cloned())
+            .or_else(|| (source_column == "id").then(|| serde_json::json!(left.point.id)));
+        let matches = source_value
+            .as_ref()
+            .and_then(crate::index::JsonValue::from_json)
+            .and_then(|key| collection.secondary_index_lookup(index_column, &key))
+            .unwrap_or_default();
+
+        if matches.is_empty() {
+            if matches!(join_type, crate::velesql::JoinType::Left) {
+                output.push(left.clone());
+            }
+            return;
+        }
+        for right_point in collection.get(&matches).into_iter().flatten() {
+            if output.len() >= row_budget {
+                return;
+            }
+            output.push(SearchResult::new(
+                Self::merge_payloads(&left.point, &right_point),
+                left.score,
+            ));
+        }
     }
 
     /// Returns the JOIN-side `ColumnStore` for `collection`, rebuilding only
