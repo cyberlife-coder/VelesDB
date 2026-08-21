@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The pre/post-filter decision now has a single brain:
+  `velesql::decide_filter_strategy`.** The executor's bitmap dispatch
+  (`collection/search/vector_filter.rs`) and EXPLAIN's plan-time strategy
+  (`velesql/explain/filter_strategy.rs`) each owned their own thresholds; the
+  executor's `0.01` / `0.8` cutoffs now live next to the plan-time recall
+  guard and both consumers call the same pure function —
+  `FilterDecisionMode::Exact` for the measured bitmap ratio,
+  `FilterDecisionMode::Estimated` for the cost-model comparison. A new
+  `FilterStrategy::PreFilterExact` variant names the executor's brute-force
+  branch (exact scan of the bitmap survivors), which the estimated mode never
+  promises. Zero behavior change: every dispatch boundary and every EXPLAIN
+  output is bit-for-bit what it was.
 - **`velesql::match_planner::CollectionStats` is renamed `MatchGraphStats`**;
   the old name remains as a deprecated type alias, so callers compile
   unchanged. The old name collided with the tabular

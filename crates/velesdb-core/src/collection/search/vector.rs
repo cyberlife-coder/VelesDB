@@ -12,10 +12,6 @@ use crate::quantization::{
 use crate::scored_result::ScoredResult;
 use crate::validation::validate_dimension_match;
 
-// Re-export constants moved to vector_filter.rs for test compatibility.
-#[cfg(test)]
-pub(crate) use super::vector_filter::SELECTIVITY_THRESHOLD;
-
 /// Estimates the real selectivity from a pre-filter bitmap.
 ///
 /// Returns the ratio `bitmap.len() / collection_len` as an `f64` in

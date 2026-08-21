@@ -22,8 +22,9 @@ mod types;
 #[cfg(feature = "persistence")]
 pub(crate) use filter_strategy::strip_vector_predicates;
 pub use filter_strategy::{
-    fallback_selectivity_threshold, set_fallback_selectivity_threshold,
-    DEFAULT_FALLBACK_SELECTIVITY_THRESHOLD,
+    decide_filter_strategy, fallback_selectivity_threshold, set_fallback_selectivity_threshold,
+    FilterDecisionMode, DEFAULT_FALLBACK_SELECTIVITY_THRESHOLD, EXACT_FULL_SCAN_MAX_SELECTIVITY,
+    EXACT_POST_FILTER_MIN_SELECTIVITY,
 };
 pub use node_stats::build_leaf_node_stats;
 pub use types::*;

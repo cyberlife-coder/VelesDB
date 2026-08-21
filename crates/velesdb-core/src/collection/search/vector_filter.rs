@@ -17,11 +17,7 @@ use crate::point::SearchResult;
 use crate::scored_result::ScoredResult;
 use crate::storage::{PayloadStorage, VectorStorage};
 use crate::validation::validate_dimension_match;
-
-/// Selectivity threshold below which full-scan brute-force is used.
-pub(crate) const SELECTIVITY_THRESHOLD: f64 = 0.01;
-/// Selectivity threshold above which bitmap is skipped in favor of post-filter.
-const SELECTIVITY_HIGH_THRESHOLD: f64 = 0.8;
+use crate::velesql::{decide_filter_strategy, FilterDecisionMode, FilterStrategy};
 
 impl Collection {
     /// Searches with metadata filtering AND quality options from a WITH clause.
@@ -81,23 +77,28 @@ impl Collection {
         let selectivity =
             super::vector::estimate_real_selectivity(bitmap, self.storage.index.len());
 
-        if selectivity > SELECTIVITY_HIGH_THRESHOLD {
-            return self.search_post_filter(query, k, filter, quality, metric);
+        match decide_filter_strategy(selectivity, FilterDecisionMode::Exact, None) {
+            FilterStrategy::PostFilter => {
+                self.search_post_filter(query, k, filter, quality, metric)
+            }
+            FilterStrategy::PreFilterExact => {
+                let results = self.storage.index.full_scan_with_bitmap(query, k, bitmap)?;
+                Ok(self.merge_delta(results, query, k, metric))
+            }
+            // `PreFilter` — and, defensively, any future variant the
+            // non-exhaustive enum grows that Exact mode does not emit —
+            // runs HNSW constrained by the bitmap with an oversampled k.
+            _ => {
+                let candidates_k = compute_oversampled_k(k, filter, Some(&self.get_stats()));
+                let results = self.storage.index.search_with_quality_and_bitmap(
+                    query,
+                    candidates_k,
+                    quality,
+                    bitmap,
+                )?;
+                Ok(self.merge_delta(results, query, candidates_k, metric))
+            }
         }
-
-        if selectivity <= SELECTIVITY_THRESHOLD {
-            let results = self.storage.index.full_scan_with_bitmap(query, k, bitmap)?;
-            return Ok(self.merge_delta(results, query, k, metric));
-        }
-
-        let candidates_k = compute_oversampled_k(k, filter, Some(&self.get_stats()));
-        let results = self.storage.index.search_with_quality_and_bitmap(
-            query,
-            candidates_k,
-            quality,
-            bitmap,
-        )?;
-        Ok(self.merge_delta(results, query, candidates_k, metric))
     }
 
     /// Searches without bitmap pre-filter, using quality-aware HNSW + post-filter.
