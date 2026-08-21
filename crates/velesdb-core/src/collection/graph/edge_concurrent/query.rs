@@ -135,9 +135,15 @@ impl ConcurrentEdgeStore {
     /// Gets incoming edges filtered by label (thread-safe).
     #[must_use]
     pub fn get_incoming_by_label(&self, node_id: u64, label: &str) -> Vec<GraphEdge> {
-        self.get_incoming(node_id)
+        // Composite (target, label) index — the pre-fix shape cloned every
+        // incoming edge of the node and filtered afterwards, O(in-degree)
+        // with a String + properties clone per edge on super-nodes.
+        let shard = &self.shards[self.shard_index(node_id)];
+        let guard = shard.read();
+        guard
+            .get_incoming_by_label(node_id, label)
             .into_iter()
-            .filter(|e| e.label() == label)
+            .cloned()
             .collect()
     }
 
