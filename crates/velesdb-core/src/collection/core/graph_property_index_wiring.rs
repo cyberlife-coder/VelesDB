@@ -77,12 +77,18 @@ impl Collection {
         // Populate composite indexes
         {
             let mut composite_mgr = self.graph.composite_index_manager.write();
-            for label in &labels {
+            // Composite indexes are DDL-created and usually absent; the owned
+            // props map (String key + Value clone per property) is only worth
+            // building when at least one index exists — and once, not once
+            // per label.
+            if !composite_mgr.is_empty() {
                 let props_map: HashMap<String, Value> = properties
                     .iter()
                     .map(|&(k, v)| (k.to_string(), v.clone()))
                     .collect();
-                composite_mgr.on_add_node(label, node_id, &props_map);
+                for label in &labels {
+                    composite_mgr.on_add_node(label, node_id, &props_map);
+                }
             }
         }
     }
@@ -110,12 +116,15 @@ impl Collection {
 
         {
             let mut composite_mgr = self.graph.composite_index_manager.write();
-            for label in &labels {
+            // Same guard as the add path: no composite index, no owned map.
+            if !composite_mgr.is_empty() {
                 let props_map: HashMap<String, Value> = properties
                     .iter()
                     .map(|&(k, v)| (k.to_string(), v.clone()))
                     .collect();
-                composite_mgr.on_remove_node(label, node_id, &props_map);
+                for label in &labels {
+                    composite_mgr.on_remove_node(label, node_id, &props_map);
+                }
             }
         }
     }
