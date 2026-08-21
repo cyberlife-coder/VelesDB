@@ -53,6 +53,48 @@ pub(in crate::collection::search::query) struct MatchStorageGuards<'a> {
     pub(in crate::collection::search::query) payload_guard: &'a LogPayloadStorage,
     /// Query-lifetime payload memo over `payload_guard` (see [`PayloadMemo`]).
     pub(in crate::collection::search::query) payload_memo: PayloadMemo<'a>,
+    /// Query-lifetime compiled-filter memo for MATCH WHERE metadata leaves
+    /// (see [`WhereFilterMemo`]).
+    pub(in crate::collection::search::query) where_filters: WhereFilterMemo,
+}
+
+/// Query-lifetime memo of compiled filter conditions for MATCH WHERE
+/// metadata leaves (IN / BETWEEN / LIKE / IS NULL / MATCH).
+///
+/// The row loop cloned the leaf's whole velesql AST, re-ran the alias
+/// rewrite, re-resolved `$param` placeholders, and re-converted to a
+/// `filter::Condition` for EVERY candidate node (and, on the edge path, for
+/// every edge of every candidate). All of that is invariant per leaf up to
+/// one bit: whether the leaf's column had its alias prefix stripped — which
+/// depends only on the alias being bound, not on which node it is bound to.
+/// The key is therefore `(leaf pointer, variant tag)`, mirroring the
+/// pointer-keyed scheme of the SELECT-side `GraphMatchEvalCache` (#904).
+///
+/// Single-threaded per query like [`PayloadMemo`] — the `RefCell` makes the
+/// guards bundle `!Sync`, so the compiler enforces that claim.
+#[derive(Default)]
+pub(in crate::collection::search::query) struct WhereFilterMemo {
+    cache: std::cell::RefCell<Vec<((usize, u8), crate::filter::Condition)>>,
+}
+
+impl WhereFilterMemo {
+    /// Evaluates the (possibly cached) compiled filter for `key` against
+    /// `payload`, building it with `build` exactly once per key.
+    pub(in crate::collection::search::query) fn matches_with(
+        &self,
+        key: (usize, u8),
+        payload: &serde_json::Value,
+        build: impl FnOnce() -> crate::error::Result<crate::filter::Condition>,
+    ) -> crate::error::Result<bool> {
+        let mut cache = self.cache.borrow_mut();
+        if let Some((_, cond)) = cache.iter().find(|(k, _)| *k == key) {
+            return Ok(cond.matches(payload));
+        }
+        let cond = build()?;
+        let result = cond.matches(payload);
+        cache.push((key, cond));
+        Ok(result)
+    }
 }
 
 /// Query-lifetime memo of payload reads during MATCH traversal.
@@ -347,6 +389,7 @@ impl Collection {
             vector_guard: &vector_guard,
             payload_guard: &payload_guard,
             payload_memo: PayloadMemo::new(&payload_guard),
+            where_filters: WhereFilterMemo::default(),
         };
         self.execute_match_with_guards(match_clause, params, ctx, &guards)
     }

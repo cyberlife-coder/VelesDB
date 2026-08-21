@@ -8,7 +8,6 @@ use super::MatchStorageGuards;
 use crate::collection::graph::GraphEdge;
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
-use crate::filter;
 use crate::storage::VectorStorage;
 use std::collections::HashMap;
 
@@ -356,12 +355,21 @@ impl Collection {
             return Ok(false);
         };
 
-        let rewritten = rewrite_condition_aliases(condition.clone(), &alias_in(ctx.bindings));
-        // Resolve parameter placeholders (e.g. `IN ($a, $b)`) before the
-        // filter conversion, which would otherwise turn them into NULL.
-        let resolved = Self::resolve_condition_params(&rewritten, ctx.params)?;
-        let filter_cond: filter::Condition = resolved.into();
-        Ok(filter_cond.matches(&payload))
+        // Compile-once per (leaf, strip-decision): the rewrite depends only
+        // on whether the leaf column's alias prefix is bound — a bit, not a
+        // binding value — so rows and depths sharing that bit share the
+        // compiled filter (see `WhereFilterMemo`).
+        let stripped = column
+            .and_then(column_alias)
+            .is_some_and(|a| alias_in(ctx.bindings)(a));
+        let key = (std::ptr::from_ref(condition) as usize, u8::from(stripped));
+        ctx.guards.where_filters.matches_with(key, &payload, || {
+            let rewritten = rewrite_condition_aliases(condition.clone(), &alias_in(ctx.bindings));
+            // Resolve parameter placeholders (e.g. `IN ($a, $b)`) before the
+            // filter conversion, which would otherwise turn them into NULL.
+            let resolved = Self::resolve_condition_params(&rewritten, ctx.params)?;
+            Ok(resolved.into())
+        })
     }
 
     /// ANY-element fold over a resolved edge-id list: true when at least one
@@ -397,18 +405,32 @@ impl Collection {
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
         );
-        // Strip the alias against the FULL edge-alias namespace (scalar AND
-        // variable-length). Using only the scalar map here left var-length
-        // columns like `r.w` unstripped, so the filter engine resolved them
-        // as nested paths and every IN/BETWEEN/LIKE/IS NULL on a var-length
-        // alias silently matched nothing (review 2026-06-11 finding 1).
-        let rewritten =
-            rewrite_condition_aliases(condition.clone(), &|alias| ctx.is_edge_alias(alias));
-        // Resolve parameter placeholders before the filter conversion, which
-        // would otherwise turn them into NULL (same hardening as the node path).
-        let resolved = Self::resolve_condition_params(&rewritten, ctx.params)?;
-        let filter_cond: filter::Condition = resolved.into();
-        Ok(filter_cond.matches(&payload))
+        // Compile-once per (leaf, strip-decision) — tag bit 1 separates the
+        // edge-namespace rewrite from the node one. This also amortizes the
+        // build across the ANY-element fold, which recompiled per edge id.
+        let column = crate::velesql::match_planner::column_of_metadata_condition(condition);
+        let stripped = column
+            .and_then(column_alias)
+            .is_some_and(|a| ctx.is_edge_alias(a));
+        let key = (
+            std::ptr::from_ref(condition) as usize,
+            2 | u8::from(stripped),
+        );
+        ctx.guards.where_filters.matches_with(key, &payload, || {
+            // Strip the alias against the FULL edge-alias namespace (scalar
+            // AND variable-length). Using only the scalar map here left
+            // var-length columns like `r.w` unstripped, so the filter engine
+            // resolved them as nested paths and every IN/BETWEEN/LIKE/IS
+            // NULL on a var-length alias silently matched nothing (review
+            // 2026-06-11 finding 1).
+            let rewritten =
+                rewrite_condition_aliases(condition.clone(), &|alias| ctx.is_edge_alias(alias));
+            // Resolve parameter placeholders before the filter conversion,
+            // which would otherwise turn them into NULL (same hardening as
+            // the node path).
+            let resolved = Self::resolve_condition_params(&rewritten, ctx.params)?;
+            Ok(resolved.into())
+        })
     }
 
     /// Evaluates a similarity condition against a node's vector (EPIC-052 US-007).
@@ -565,6 +587,11 @@ fn resolve_target_id(
 }
 
 /// Builds an alias-membership predicate over an optional node-bindings map.
+/// The alias prefix of a dotted column (`a.name` -> `a`), if any.
+fn column_alias(column: &str) -> Option<&str> {
+    column.split_once('.').map(|(alias, _)| alias)
+}
+
 fn alias_in(bindings: Option<&HashMap<String, u64>>) -> impl Fn(&str) -> bool + '_ {
     move |alias| bindings.is_some_and(|b| b.contains_key(alias))
 }
