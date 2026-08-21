@@ -114,8 +114,8 @@ impl CollectionStats {
                 return 1.0 / col_stats.distinct_count as f64;
             }
         }
-        // Default: assume 10% selectivity if unknown
-        0.1
+        // Default: shared structural fallback for an unknown column.
+        selectivity_defaults::EQ
     }
 
     /// Returns the histogram for a column, checking both `column_stats` and `field_stats`.
@@ -138,6 +138,139 @@ impl CollectionStats {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_millis() as u64),
         );
+    }
+}
+
+/// Shared structural fallback selectivities.
+///
+/// Single source for the constants used when no histogram or cardinality
+/// data can answer — consumed by both the plan-time AST estimator
+/// (`velesql::cost_estimator`) and the runtime filter estimator below, so
+/// the two paths cannot drift apart silently.
+pub(crate) mod selectivity_defaults {
+    /// Equality / IS NULL with no statistics.
+    pub(crate) const EQ: f64 = 0.1;
+    /// Range, pattern and containment predicates with no statistics.
+    #[cfg(feature = "persistence")]
+    pub(crate) const RANGE: f64 = 0.3;
+    /// Per-value contribution of an IN list.
+    #[cfg(feature = "persistence")]
+    pub(crate) const IN_PER_VALUE: f64 = 0.05;
+    /// Cap on an IN list's total selectivity.
+    #[cfg(feature = "persistence")]
+    pub(crate) const IN_CAP: f64 = 0.8;
+    /// Negative predicates (`!=`, IS NOT NULL).
+    #[cfg(feature = "persistence")]
+    pub(crate) const NEGATION: f64 = 0.9;
+    /// Floor applied under conjunction/negation so an over-confident
+    /// estimate never predicts zero rows.
+    #[cfg(feature = "persistence")]
+    pub(crate) const FLOOR: f64 = 0.01;
+}
+
+#[cfg(feature = "persistence")]
+impl CollectionStats {
+    /// Estimates the fraction of rows matching a runtime metadata filter.
+    ///
+    /// Histogram-backed where `ANALYZE` has produced one for the field,
+    /// cardinality-backed otherwise, and falling back to the same
+    /// structural constants as the plan-time estimator. Runtime mirror of
+    /// `CostEstimator::estimate_condition_selectivity`, which speaks the
+    /// AST `Condition` — this one speaks `crate::filter::Condition`.
+    #[must_use]
+    pub(crate) fn estimate_runtime_filter_selectivity(&self, filter: &crate::Filter) -> f64 {
+        self.estimate_runtime_condition_selectivity(&filter.condition)
+    }
+
+    pub(crate) fn estimate_runtime_condition_selectivity(
+        &self,
+        cond: &crate::filter::Condition,
+    ) -> f64 {
+        use crate::filter::Condition as C;
+        use selectivity_defaults as d;
+        match cond {
+            C::Eq { field, value } => self.runtime_eq_selectivity(field, value),
+            C::Neq { field, value } => {
+                (1.0 - self.runtime_eq_selectivity(field, value)).clamp(d::FLOOR, 1.0)
+            }
+            C::Gt { field, value } => self.runtime_lt_complement(field, value, true),
+            C::Gte { field, value } => self.runtime_lt_complement(field, value, false),
+            C::Lt { field, value } => self.runtime_lt_selectivity(field, value, false),
+            C::Lte { field, value } => self.runtime_lt_selectivity(field, value, true),
+            C::In { field, values } => {
+                let sum: f64 = values
+                    .iter()
+                    .map(|v| self.runtime_eq_selectivity(field, v))
+                    .sum();
+                sum.min(d::IN_CAP)
+            }
+            C::IsNull { field } => self.runtime_null_ratio(field),
+            C::IsNotNull { field } => (1.0 - self.runtime_null_ratio(field)).clamp(d::FLOOR, 1.0),
+            C::And { conditions } => conditions
+                .iter()
+                .map(|c| self.estimate_runtime_condition_selectivity(c))
+                .product::<f64>()
+                .max(d::FLOOR),
+            C::Or { conditions } => conditions
+                .iter()
+                .map(|c| self.estimate_runtime_condition_selectivity(c))
+                .sum::<f64>()
+                .min(1.0),
+            C::Not { condition } => {
+                (1.0 - self.estimate_runtime_condition_selectivity(condition)).max(d::FLOOR)
+            }
+            C::Contains { .. }
+            | C::Like { .. }
+            | C::ILike { .. }
+            | C::ArrayContains { .. }
+            | C::ArrayContainsAny { .. }
+            | C::ArrayContainsAll { .. }
+            | C::GeoDistance { .. }
+            | C::GeoBbox { .. } => d::RANGE,
+        }
+    }
+
+    /// Histogram equality estimate, then cardinality, then the shared default.
+    fn runtime_eq_selectivity(&self, field: &str, value: &serde_json::Value) -> f64 {
+        if let (Some(hist), Some(v)) = (self.get_column_histogram(field), value.as_f64()) {
+            return hist.estimate_eq_selectivity(v).clamp(0.0, 1.0);
+        }
+        self.estimate_selectivity(field)
+    }
+
+    /// Histogram `<` / `<=` estimate; `RANGE` fallback without one.
+    fn runtime_lt_selectivity(
+        &self,
+        field: &str,
+        value: &serde_json::Value,
+        inclusive: bool,
+    ) -> f64 {
+        if let (Some(hist), Some(v)) = (self.get_column_histogram(field), value.as_f64()) {
+            let bound = if inclusive { next_after(v) } else { v };
+            return hist.estimate_lt_selectivity(bound).clamp(0.0, 1.0);
+        }
+        selectivity_defaults::RANGE
+    }
+
+    /// Histogram `>` / `>=` as the complement of `<=` / `<`.
+    fn runtime_lt_complement(&self, field: &str, value: &serde_json::Value, strict: bool) -> f64 {
+        if let (Some(hist), Some(v)) = (self.get_column_histogram(field), value.as_f64()) {
+            let bound = if strict { next_after(v) } else { v };
+            return (1.0 - hist.estimate_lt_selectivity(bound)).clamp(0.0, 1.0);
+        }
+        selectivity_defaults::RANGE
+    }
+
+    /// Observed null ratio for a field; `EQ` default when never analyzed.
+    fn runtime_null_ratio(&self, field: &str) -> f64 {
+        self.field_stats
+            .get(field)
+            .or_else(|| self.column_stats.get(field))
+            .map_or(selectivity_defaults::EQ, |s| {
+                #[allow(clippy::cast_precision_loss)]
+                let ratio = s.null_count as f64 / self.total_points.max(1) as f64;
+                ratio.clamp(0.0, 1.0)
+            })
     }
 }
 

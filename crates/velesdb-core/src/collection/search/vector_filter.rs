@@ -90,7 +90,7 @@ impl Collection {
             return Ok(self.merge_delta(results, query, k, metric));
         }
 
-        let candidates_k = compute_oversampled_k(k, filter);
+        let candidates_k = compute_oversampled_k(k, filter, Some(&self.get_stats()));
         let results = self.storage.index.search_with_quality_and_bitmap(
             query,
             candidates_k,
@@ -109,7 +109,7 @@ impl Collection {
         quality: crate::SearchQuality,
         metric: crate::DistanceMetric,
     ) -> Result<Vec<ScoredResult>> {
-        let candidates_k = compute_oversampled_k(k, filter);
+        let candidates_k = compute_oversampled_k(k, filter, Some(&self.get_stats()));
         let index_results = self
             .storage
             .index
@@ -194,12 +194,21 @@ const OVERSAMPLE_CAP: f64 = 10_000.0;
 /// huge `k` (e.g. LIMIT close to `MAX_LIMIT`) get at most 10_000 candidates
 /// instead of panicking — `f64::clamp` asserts `min <= max`, and an
 /// unbounded lower bound of `k + 10` used to violate that for large `k`.
-pub(super) fn compute_oversampled_k(k: usize, filter: &crate::filter::Filter) -> usize {
+pub(super) fn compute_oversampled_k(
+    k: usize,
+    filter: &crate::filter::Filter,
+    stats: Option<&crate::collection::stats::CollectionStats>,
+) -> usize {
     // Clamp to a tiny positive value so that a zero-selectivity filter (e.g. empty
     // IN clause) never produces NaN (0.0/0.0 when k=0) or Inf (k>0/0.0). Both would
     // be handled by the clamp below, but NaN→usize is implementation-defined (LLVM
     // saturates to 0, giving zero candidates instead of the minimum sensible count).
-    let selectivity = estimate_filter_selectivity(filter).max(1e-9);
+    let selectivity = stats
+        .map_or_else(
+            || estimate_filter_selectivity(filter),
+            |s| s.estimate_runtime_filter_selectivity(filter),
+        )
+        .max(1e-9);
     #[allow(clippy::cast_precision_loss)]
     let k_f64 = k as f64;
     #[allow(clippy::cast_precision_loss)]
@@ -214,10 +223,15 @@ fn estimate_filter_selectivity(filter: &crate::filter::Filter) -> f64 {
     estimate_condition_selectivity(&filter.condition)
 }
 
+/// Structure-only fallback used when no [`CollectionStats`] is available
+/// (raw search paths). Constants come from the shared
+/// [`selectivity_defaults`](crate::collection::stats::selectivity_defaults)
+/// table so this path cannot drift from the stats-backed one.
 fn estimate_condition_selectivity(cond: &crate::filter::Condition) -> f64 {
+    use crate::collection::stats::selectivity_defaults as d;
     use crate::filter::Condition;
     match cond {
-        Condition::Eq { .. } | Condition::IsNull { .. } => 0.1,
+        Condition::Eq { .. } | Condition::IsNull { .. } => d::EQ,
         Condition::Gt { .. }
         | Condition::Gte { .. }
         | Condition::Lt { .. }
@@ -229,23 +243,25 @@ fn estimate_condition_selectivity(cond: &crate::filter::Condition) -> f64 {
         | Condition::ArrayContainsAny { .. }
         | Condition::ArrayContainsAll { .. }
         | Condition::GeoDistance { .. }
-        | Condition::GeoBbox { .. } => 0.3,
+        | Condition::GeoBbox { .. } => d::RANGE,
         Condition::In { values, .. } => {
             #[allow(clippy::cast_precision_loss)]
-            let sel = values.len() as f64 * 0.05;
-            sel.min(0.8)
+            let sel = values.len() as f64 * d::IN_PER_VALUE;
+            sel.min(d::IN_CAP)
         }
-        Condition::Neq { .. } | Condition::IsNotNull { .. } => 0.9,
+        Condition::Neq { .. } | Condition::IsNotNull { .. } => d::NEGATION,
         Condition::And { conditions } => conditions
             .iter()
             .map(estimate_condition_selectivity)
             .product::<f64>()
-            .max(0.01),
+            .max(d::FLOOR),
         Condition::Or { conditions } => conditions
             .iter()
             .map(estimate_condition_selectivity)
             .sum::<f64>()
             .min(1.0),
-        Condition::Not { condition } => (1.0 - estimate_condition_selectivity(condition)).max(0.01),
+        Condition::Not { condition } => {
+            (1.0 - estimate_condition_selectivity(condition)).max(d::FLOOR)
+        }
     }
 }
