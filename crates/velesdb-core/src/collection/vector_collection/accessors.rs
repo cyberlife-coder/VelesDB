@@ -154,7 +154,9 @@ impl VectorCollection {
     /// Returns CBO statistics.
     #[must_use]
     pub fn get_stats(&self) -> crate::collection::stats::CollectionStats {
-        self.inner.get_stats()
+        // Public API stays by-value; the one deep clone lives at this cold
+        // boundary instead of on every internal planner read.
+        (*self.inner.get_stats()).clone()
     }
 
     /// Returns `true` if the collection is a metadata-only collection.
