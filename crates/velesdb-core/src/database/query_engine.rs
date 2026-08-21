@@ -821,7 +821,7 @@ impl Database {
             None => base_collection.execute_query(&single_query, params)?,
         };
         for join in &query.select.joins {
-            results = self.execute_single_join(&results, join, &pushed, row_budget)?;
+            results = self.execute_single_join(results, join, &pushed, row_budget)?;
         }
 
         // Apply post-join filters: cross-source predicates that reference
