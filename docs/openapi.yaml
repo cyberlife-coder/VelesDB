@@ -2259,6 +2259,15 @@ components:
             Approximate number of edges traversed during MATCH graph traversal.
             See `traversal_counters_approximate`; 0 for non-graph queries.
           minimum: 0
+        executed_filter_strategy:
+          type:
+          - string
+          - 'null'
+          description: |-
+            Filter strategy the executor actually ran, recorded at the dispatch
+            site (see `FilterStrategy::as_str`). Present for single SELECTs that
+            went through the filtered vector-search dispatch; absent for MATCH,
+            compound queries, and arms where pre/post-filter does not apply.
         loops:
           type: integer
           format: int64
