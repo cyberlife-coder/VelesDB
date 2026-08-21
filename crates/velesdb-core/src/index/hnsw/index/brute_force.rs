@@ -48,8 +48,7 @@ impl HnswIndex {
             // RoaringBitmap — consistent with HNSW+bitmap path (search.rs).
             self.score_overflow_ids(query, vectors, &mut scored);
 
-            self.metric.sort_scored_results(&mut scored);
-            scored.truncate(k);
+            self.metric.top_k_scored_results(&mut scored, k);
             scored
         });
 

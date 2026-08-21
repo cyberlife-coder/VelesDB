@@ -210,8 +210,7 @@ impl HnswIndex {
             }
         }
 
-        self.metric.sort_scored_results(&mut results);
-        results.truncate(k);
+        self.metric.top_k_scored_results(&mut results, k);
         Ok(results)
     }
 

@@ -125,6 +125,34 @@ impl Collection {
         let similarity_scores_map = self.precompute_similarity_scores(results, order_by, params)?;
         let higher_is_better = self.storage.config.read().metric.higher_is_better();
 
+        // Decorate-then-sort for plain payload fields: resolve each row's
+        // key ONCE instead of re-walking the (BTreeMap-backed) payload JSON
+        // inside the comparator — O(n) resolutions where the comparator paid
+        // O(n log n) x2. LET-bound and builtin-score fields keep the
+        // per-comparison path: they read per-row f32 contexts, not payload
+        // JSON, so there is nothing to decorate.
+        let field_keys: Vec<Option<Vec<Option<&serde_json::Value>>>> = order_by
+            .iter()
+            .map(|ob| match &ob.expr {
+                crate::velesql::OrderByExpr::Field(field_name)
+                    if per_result_let.is_empty() && !is_builtin_score_variable(field_name) =>
+                {
+                    Some(
+                        results
+                            .iter()
+                            .map(|r| {
+                                r.point
+                                    .payload
+                                    .as_ref()
+                                    .and_then(|p| get_nested_payload(p, field_name))
+                            })
+                            .collect(),
+                    )
+                }
+                _ => None,
+            })
+            .collect();
+
         let mut indices: Vec<usize> = (0..results.len()).collect();
         indices.sort_unstable_by(|&i, &j| {
             Self::compare_by_order_columns(
@@ -135,6 +163,7 @@ impl Collection {
                 &similarity_scores_map,
                 higher_is_better,
                 per_result_let,
+                &field_keys,
             )
             // Deterministic tie-break: rows whose ORDER BY keys are all equal are
             // ordered by ascending point id, regardless of ASC/DESC on the keys.
@@ -233,6 +262,7 @@ impl Collection {
 
     /// Compares two result indices across all ORDER BY columns.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)] // Reason: internal comparator; the decorated keys ride alongside the raw inputs
     fn compare_by_order_columns(
         i: usize,
         j: usize,
@@ -241,6 +271,7 @@ impl Collection {
         similarity_scores: &std::collections::HashMap<usize, Vec<f32>>,
         higher_is_better: bool,
         per_result_let: &[Vec<(String, f32)>],
+        field_keys: &[Option<Vec<Option<&serde_json::Value>>>],
     ) -> Ordering {
         use crate::velesql::OrderByExpr;
         for (idx, ob) in order_by.iter().enumerate() {
@@ -249,7 +280,10 @@ impl Collection {
                     .get(&idx)
                     .map_or(Ordering::Equal, |scores| scores[i].total_cmp(&scores[j])),
                 OrderByExpr::Field(field_name) => {
-                    Self::compare_field_expr(field_name, i, j, results, per_result_let)
+                    match field_keys.get(idx).and_then(Option::as_ref) {
+                        Some(keys) => compare_json_values(keys[i], keys[j]),
+                        None => Self::compare_field_expr(field_name, i, j, results, per_result_let),
+                    }
                 }
                 OrderByExpr::Aggregate(_) => Ordering::Equal,
                 // Design: Arithmetic ORDER BY uses direct numeric ordering without
