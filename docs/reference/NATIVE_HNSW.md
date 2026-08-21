@@ -313,82 +313,28 @@ rabitq_hnsw.force_train_quantizer()?;
 | Query preparation | 0 | ~60 us (768D) | One-time per query |
 | Minimum index size | N/A | 5000 vectors | Below threshold: f32 fallback |
 
-## PDX Block-Columnar Layout
+## Cosine: Pre-Normalized Dot-Product Kernel
 
-VelesDB includes a **PDX block-columnar vector layout** that transposes row-major vectors into 64-vector blocks for SIMD-parallel distance computation.
+For the cosine metric, production engines are constructed pre-normalized
+(`CachedSimdDistance::new_prenormalized`): vectors are normalized in place at
+insert (under the vectors write lock) and at legacy-file load, and queries are
+normalized once per search in `prepare_query`. Every distance in the hot loop
+is then a single dot-product chain (`1 - dot`) instead of the full cosine
+formula's three accumulator chains plus a sqrt and a divide.
 
-### Memory Layout
+Two contracts follow from the unit-norm invariant:
 
-Standard Array-of-Structures (AoS) stores vectors contiguously:
+- **Recovery pass 3** normalizes the WAL storage copy with the same SIMD
+  kernel before its byte comparison, so surviving vectors still compare
+  bit-identical.
+- **`file_load`** re-establishes the invariant for pre-invariant files behind
+  an epsilon gate that leaves already-normalized files bitwise untouched, so
+  save/load roundtrips stay bit-identical.
 
-```
-[v0_d0, v0_d1, ..., v0_dD, v1_d0, v1_d1, ..., v1_dD, ...]
-```
-
-PDX block-columnar layout groups 64 vectors into blocks, with dimensions interleaved within each block:
-
-```
-Block k: [v_{kB}_d0,   ..., v_{kB+63}_d0,    // dim 0
-          v_{kB}_d1,   ..., v_{kB+63}_d1,    // dim 1
-          ...
-          v_{kB}_dD-1, ..., v_{kB+63}_dD-1]  // dim D-1
-```
-
-This enables broadcasting `query[d]` once per dimension and computing the d-th contribution for all 64 vectors simultaneously, achieving 64x better register reuse vs AoS.
-
-### `ColumnarVectors`
-
-The `ColumnarVectors` struct transposes `ContiguousVectors` (AoS) into PDX layout:
-
-```rust
-// Auto-built after BFS reordering — not created manually
-let pdx = ColumnarVectors::from_contiguous(&contiguous_vectors);
-
-// Access a block of 64 vectors
-let block_data: &[f32] = pdx.block_ptr(block_idx);
-let valid_count: usize = pdx.block_size(block_idx);
-```
-
-The last block is zero-padded if the vector count is not a multiple of 64. Zero-padding is safe: squared-L2 and dot-product contributions from padded slots are zeroed out by the block distance kernels.
-
-### Auto-Build After BFS Reordering
-
-PDX layout is built automatically after `reorder_for_locality()` completes BFS graph reordering:
-
-```rust
-// After bulk insert, reorder for cache locality
-hnsw.reorder_for_locality()?;
-// PDX columnar layout is now available in hnsw.columnar
-```
-
-The columnar data is stored in `NativeHnsw::columnar: RwLock<Option<ColumnarVectors>>` with **lock rank 15** (between vectors=10 and layers=20), ensuring deadlock-free acquisition:
-
-```
-vectors (rank 10) -> columnar (rank 15) -> layers (rank 20) -> neighbors (rank 30)
-```
-
-### Block Distance Kernels
-
-Three kernels compute distances from a query to all 64 vectors in a block simultaneously:
-
-| Kernel | Metric | Returns |
-|--------|--------|---------|
-| `block_squared_l2(query, block, dim, block_size)` | Euclidean | Squared L2 distances |
-| `block_dot_product(query, block, dim, block_size)` | DotProduct | Negative dot products |
-| `block_cosine_distance(query, block, dim, block_size)` | Cosine | Cosine distances |
-
-Each kernel returns `[f32; 64]` — only indices `0..block_size` contain valid results.
-
-LLVM auto-vectorizes the inner loop over 64 elements into:
-- **4 iterations** with AVX-512 (16 f32 lanes)
-- **8 iterations** with AVX2 (8 f32 lanes)
-- **16 iterations** with NEON (4 f32 lanes)
-
-No manual SIMD intrinsics are needed.
-
-### Reference
-
-Pirk, H. et al. "Efficient Cross-Columnar Sorting" (PDX layout).
+(An experimental PDX block-columnar layout used to be documented here; it was
+never wired into any search path and doubled vector memory when the optimize
+endpoint ran, so it was removed in the Tier-S perf wave — see git history if
+the design is revisited.)
 
 ## Software Pipelining
 
