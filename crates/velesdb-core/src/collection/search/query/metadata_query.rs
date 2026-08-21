@@ -81,16 +81,26 @@ impl Collection {
         filter: &crate::filter::Filter,
         execution_limit: usize,
     ) -> Vec<SearchResult> {
+        /// Hydration chunk: large enough to amortize the storage guards,
+        /// small enough that an early exit at the limit leaves most of a
+        /// broad candidate list (bitmap prefilters routinely hand over
+        /// thousands of ids) un-hydrated.
+        const SCAN_CHUNK: usize = 256;
+
         let mut results = Vec::new();
-        for point in self.get(ids).into_iter().flatten() {
-            // `matches` only borrows the payload; pass a reference instead of
-            // deep-cloning the JSON per candidate. A missing payload is treated
-            // as `Null` (unchanged semantics). The borrow ends before `point`
-            // is moved into the result below.
-            if filter.matches(point.payload.as_ref().unwrap_or(&serde_json::Value::Null)) {
-                results.push(SearchResult::new(point, 1.0));
-                if results.len() >= execution_limit {
-                    break;
+        // Hydrate lazily, chunk by chunk: `self.get(ids)` up front paid
+        // N preads + N JSON parses + N vector copies before the first
+        // filter check, so the early exit below only ever saved filter
+        // work, never the dominant hydration cost.
+        'chunks: for chunk in ids.chunks(SCAN_CHUNK) {
+            for point in self.get(chunk).into_iter().flatten() {
+                // `matches` only borrows the payload; a missing payload is
+                // treated as `Null` (unchanged semantics).
+                if filter.matches(point.payload.as_ref().unwrap_or(&serde_json::Value::Null)) {
+                    results.push(SearchResult::new(point, 1.0));
+                    if results.len() >= execution_limit {
+                        break 'chunks;
+                    }
                 }
             }
         }
