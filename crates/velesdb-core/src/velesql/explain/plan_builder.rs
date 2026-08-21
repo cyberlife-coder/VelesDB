@@ -5,7 +5,7 @@
 
 use std::collections::HashSet;
 
-use super::filter_strategy::{estimate_filter_stats, resolve_filter_strategy};
+use super::filter_strategy::{decide_filter_strategy, estimate_filter_stats, FilterDecisionMode};
 use super::formatter;
 use super::node_stats;
 use super::types::{
@@ -347,11 +347,13 @@ impl QueryPlan {
             let candidates =
                 u32::try_from(stmt.limit.unwrap_or(DEFAULT_SELECT_LIMIT)).unwrap_or(u32::MAX);
 
-            filter_strategy = resolve_filter_strategy(
+            filter_strategy = decide_filter_strategy(
                 selectivity,
-                has_vector_search,
-                ef_search,
-                candidates,
+                FilterDecisionMode::Estimated {
+                    has_vector_search,
+                    ef_search,
+                    candidates,
+                },
                 stats,
             );
 

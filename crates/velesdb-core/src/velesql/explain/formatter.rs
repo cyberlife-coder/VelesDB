@@ -268,6 +268,7 @@ impl FilterStrategy {
         match self {
             Self::None => "none",
             Self::PreFilter => "pre-filtering (high selectivity)",
+            Self::PreFilterExact => "pre-filtering (exact, brute-force scan)",
             Self::PostFilter => "post-filtering (low selectivity)",
         }
     }

@@ -417,6 +417,14 @@ pub enum FilterStrategy {
     None,
     /// Pre-filtering: filter before vector search (high selectivity).
     PreFilter,
+    /// Exact pre-filtering: the filter is so selective that the executor
+    /// brute-forces the surviving candidates instead of running HNSW.
+    ///
+    /// Only produced by the exact (executor-side) decision mode of
+    /// [`decide_filter_strategy`](crate::velesql::decide_filter_strategy),
+    /// where the true selectivity is measured from a materialized pre-filter
+    /// bitmap. The plan-time estimated mode never emits it.
+    PreFilterExact,
     /// Post-filtering: filter after vector search (low selectivity).
     PostFilter,
 }
