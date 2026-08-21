@@ -60,6 +60,11 @@ pub struct CollectionStats {
     /// Persisted in `collection.stats.json` to survive restarts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calibrated_cost_factors: Option<OperationCostFactors>,
+    /// Graph-shape view of the collection (nodes, edges, labels), filled by
+    /// `ANALYZE` so the MATCH planner and the cost estimator read the same
+    /// source. `None` on stats persisted before 5.2.0 or never analyzed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph_stats: Option<crate::velesql::match_planner::MatchGraphStats>,
 }
 
 impl CollectionStats {

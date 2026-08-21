@@ -57,9 +57,14 @@ impl Default for MatchExecutionStrategy {
     }
 }
 
-/// Statistics about a collection for cost estimation.
-#[derive(Debug, Clone, Default)]
-pub struct CollectionStats {
+/// Graph-shape statistics used to choose a MATCH execution strategy.
+///
+/// Renamed from `CollectionStats` (5.2.0): the old name collided with the
+/// tabular [`crate::collection::stats::CollectionStats`] while sharing no
+/// field with it — this type describes only the graph (nodes, edges,
+/// labels). Persisted inside the tabular stats as an optional view.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct MatchGraphStats {
     /// Total number of nodes/points.
     pub total_nodes: usize,
     /// Total number of edges.
@@ -71,6 +76,13 @@ pub struct CollectionStats {
     /// Estimated selectivity per label (0.0-1.0).
     pub label_selectivity: f64,
 }
+
+/// Former name of [`MatchGraphStats`].
+#[deprecated(
+    since = "5.2.0",
+    note = "renamed to MatchGraphStats — same fields, graph-only scope"
+)]
+pub type CollectionStats = MatchGraphStats;
 
 /// Query planner for MATCH queries.
 #[derive(Debug, Default)]
@@ -88,7 +100,7 @@ impl MatchQueryPlanner {
     ///
     /// The optimal execution strategy.
     #[must_use]
-    pub fn plan(match_clause: &MatchClause, stats: &CollectionStats) -> MatchExecutionStrategy {
+    pub fn plan(match_clause: &MatchClause, stats: &MatchGraphStats) -> MatchExecutionStrategy {
         let has_similarity = Self::has_similarity_condition(match_clause.where_clause.as_ref());
         let start_labels = Self::extract_start_labels(match_clause);
         let max_depth = Self::count_hops(match_clause);
@@ -203,7 +215,7 @@ impl MatchQueryPlanner {
     /// Plans a vector-first strategy.
     fn plan_vector_first(
         match_clause: &MatchClause,
-        stats: &CollectionStats,
+        stats: &MatchGraphStats,
         similarity_info: Option<(String, f32, String)>,
     ) -> MatchExecutionStrategy {
         let (alias, threshold, _) = similarity_info.unwrap_or_default();
@@ -217,7 +229,7 @@ impl MatchQueryPlanner {
     /// Plans a parallel (graph + vector) strategy.
     fn plan_parallel(
         match_clause: &MatchClause,
-        stats: &CollectionStats,
+        stats: &MatchGraphStats,
         similarity_info: Option<(String, f32, String)>,
         start_labels: Vec<String>,
         max_depth: u32,
@@ -300,7 +312,7 @@ impl MatchQueryPlanner {
     /// Estimate top-k based on limit and selectivity.
     fn estimate_top_k(
         match_clause: &MatchClause,
-        stats: &CollectionStats,
+        stats: &MatchGraphStats,
         threshold: f32,
     ) -> usize {
         let limit = match_clause
@@ -332,7 +344,7 @@ impl MatchQueryPlanner {
 
     /// Decide if parallel execution is beneficial.
     fn should_use_parallel(
-        stats: &CollectionStats,
+        stats: &MatchGraphStats,
         similarity_info: Option<&(String, f32, String)>,
     ) -> bool {
         // Use parallel when:

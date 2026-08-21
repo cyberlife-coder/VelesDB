@@ -34,7 +34,7 @@ use std::collections::HashMap;
 
 use serde_json::json;
 use velesdb_core::velesql::match_planner::{
-    CollectionStats, MatchExecutionStrategy, MatchQueryPlanner,
+    MatchExecutionStrategy, MatchGraphStats, MatchQueryPlanner,
 };
 use velesdb_core::{Database, GraphEdge, Point};
 
@@ -175,8 +175,8 @@ fn collection_param(collection: &str) -> HashMap<String, serde_json::Value> {
 }
 
 /// Stats representative of the seeded collection: 5 nodes, 1 edge, 2 labels.
-fn seeded_stats() -> CollectionStats {
-    CollectionStats {
+fn seeded_stats() -> MatchGraphStats {
+    MatchGraphStats {
         total_nodes: 5,
         total_edges: 1,
         avg_degree: 0.2,

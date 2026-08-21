@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`velesql::match_planner::CollectionStats` is renamed `MatchGraphStats`**;
+  the old name remains as a deprecated type alias, so callers compile
+  unchanged. The old name collided with the tabular
+  `collection::stats::CollectionStats` while sharing no field with it. The
+  graph-shape view is now also filled by `ANALYZE` into
+  `CollectionStats::graph_stats` (optional, serde-defaulted — stats files
+  persisted by older versions load unchanged), giving the MATCH planner and
+  the cost estimator one shared source for graph statistics.
+
 ### Fixed
 
 - **`GEO_DISTANCE(...) = threshold` / `<>` now tolerates realistic

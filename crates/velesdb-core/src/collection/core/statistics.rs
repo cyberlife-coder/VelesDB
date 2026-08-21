@@ -94,6 +94,9 @@ impl Collection {
         let calibrated = calibrate_cost_factors(&stats, &OperationCostFactors::default());
         stats.calibrated_cost_factors = Some(calibrated);
 
+        // Graph-shape view: single source shared with the MATCH planner.
+        stats.graph_stats = Some(self.compute_match_collection_stats());
+
         Ok(stats)
     }
 
