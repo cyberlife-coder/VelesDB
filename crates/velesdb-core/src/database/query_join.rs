@@ -168,7 +168,7 @@ impl Database {
     /// column, avoiding the per-query `ColumnStore` materialization.
     ///
     /// Returns `None` when the shape is not eligible, falling through to the
-    /// ColumnStore path: Right/Full joins need the unmatched join-side rows
+    /// `ColumnStore` path: Right/Full joins need the unmatched join-side rows
     /// that only a full enumeration can produce, `id` is already served by
     /// the lookup fast path, and a column that is neither `id` nor indexed
     /// reaches that path's actionable error. Unlike the PK paths a non-PK

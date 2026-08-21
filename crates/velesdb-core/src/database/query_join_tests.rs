@@ -125,8 +125,8 @@ fn run_sql(db: &Database, sql: &str) -> crate::Result<Vec<crate::SearchResult>> 
     db.execute_query(&query, &std::collections::HashMap::new())
 }
 
-/// products(id, sku) JOIN inventory ON inventory.sku = products.sku, with a
-/// secondary index on inventory.sku. One product sku matches TWO inventory
+/// `products(id, sku) JOIN inventory ON inventory.sku = products.sku`, with
+/// a secondary index on `inventory.sku`. One product sku matches TWO inventory
 /// rows — a shape the PK-only path cannot express.
 fn seed_indexed_join_fixtures(db: &Database) {
     db.create_collection("products", 4, DistanceMetric::Cosine)
