@@ -232,6 +232,15 @@ impl CompositeIndexManager {
             .collect()
     }
 
+    /// Returns `true` when no composite index exists.
+    ///
+    /// The per-node maintenance wiring uses this to skip building its
+    /// owned property map when there is nothing to maintain.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.indexes.is_empty()
+    }
+
     /// Lists all index names.
     #[must_use]
     #[allow(dead_code)] // Reason: Public API — used by tests and future DDL SHOW INDEXES handler

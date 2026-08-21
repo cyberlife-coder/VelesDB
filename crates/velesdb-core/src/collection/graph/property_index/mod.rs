@@ -96,6 +96,14 @@ impl PropertyIndex {
     /// Uses `RoaringBitmap` internally which only supports u32 IDs.
     /// Returns `false` if `node_id > u32::MAX` to prevent data corruption.
     pub fn insert(&mut self, label: &str, property: &str, value: &Value, node_id: u64) -> bool {
+        // Resolve the index BEFORE the id-range check: an unindexed property
+        // is a silent no-op (the maintenance hooks call this for every
+        // property), and the u32 warning should only fire when an existing
+        // index actually failed to take the node.
+        let key = make_label_prop_key(label, property);
+        let Some(value_map) = self.indexes.get_mut(&key) else {
+            return false;
+        };
         let Some(safe_id) = safe_bitmap_id(node_id) else {
             tracing::warn!(
                 node_id = node_id,
@@ -108,14 +116,9 @@ impl PropertyIndex {
             return false;
         };
 
-        let key = make_label_prop_key(label, property);
-        if let Some(value_map) = self.indexes.get_mut(&key) {
-            let value_key = value.to_string();
-            value_map.entry(value_key).or_default().insert(safe_id);
-            true
-        } else {
-            false
-        }
+        let value_key = value.to_string();
+        value_map.entry(value_key).or_default().insert(safe_id);
+        true
     }
 
     /// Remove a node from the index.
@@ -147,6 +150,9 @@ impl PropertyIndex {
     /// Returns `Some(&RoaringBitmap)` with matching node IDs (empty if no matches).
     #[must_use]
     pub fn lookup(&self, label: &str, property: &str, value: &Value) -> Option<&RoaringBitmap> {
+        if self.indexes.is_empty() {
+            return None;
+        }
         let key = make_label_prop_key(label, property);
         self.indexes
             .get(&key)
@@ -200,10 +206,14 @@ impl PropertyIndex {
     ///
     /// Indexes all properties that have an active index.
     pub fn on_add_node(&mut self, label: &str, node_id: u64, properties: &HashMap<String, Value>) {
+        if self.indexes.is_empty() {
+            return;
+        }
         for (prop_name, value) in properties {
-            if self.has_index(label, prop_name) {
-                self.insert(label, prop_name, value, node_id);
-            }
+            // No `has_index` pre-check: `insert` already no-ops on an
+            // unindexed property, and the pre-check doubled the key
+            // allocations for every property of every node.
+            self.insert(label, prop_name, value, node_id);
         }
     }
 
@@ -216,10 +226,13 @@ impl PropertyIndex {
         node_id: u64,
         properties: &HashMap<String, Value>,
     ) {
+        if self.indexes.is_empty() {
+            return;
+        }
         for (prop_name, value) in properties {
-            if self.has_index(label, prop_name) {
-                self.remove(label, prop_name, value, node_id);
-            }
+            // Same rationale as `on_add_node`: `remove` no-ops when the
+            // index is absent.
+            self.remove(label, prop_name, value, node_id);
         }
     }
 
@@ -234,6 +247,9 @@ impl PropertyIndex {
         old_value: &Value,
         new_value: &Value,
     ) {
+        if self.indexes.is_empty() {
+            return;
+        }
         if self.has_index(label, property) {
             self.remove(label, property, old_value, node_id);
             self.insert(label, property, new_value, node_id);
