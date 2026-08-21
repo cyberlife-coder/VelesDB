@@ -52,6 +52,56 @@ pub(super) fn read_le_f32(data: &[u8], pos: usize, context: &str) -> Result<f32>
 // WAL write operations
 // ---------------------------------------------------------------------------
 
+/// Appends a batch of upsert entries under ONE open + ONE durability barrier.
+///
+/// The batched counterpart of [`wal_append_upsert`]: calling that in a loop
+/// costs one `open` and one fsync PER ENTRY; here every frame is buffered
+/// through a single writer and `flush_wal` runs once at the end. Frame
+/// encoding is byte-identical to the single-entry path, so replay cannot
+/// tell them apart. An empty batch writes nothing and never opens the file.
+///
+/// # Errors
+///
+/// Returns an error if the WAL file cannot be opened or written. Entries
+/// buffered before the error are only durable up to the last completed
+/// `flush_wal`, exactly like a crash between single-entry appends.
+pub fn wal_append_upsert_batch(wal_path: &Path, entries: &[(u64, &SparseVector)]) -> Result<()> {
+    if entries.is_empty() {
+        return Ok(());
+    }
+    let mut w = open_wal_writer(wal_path)?;
+    for (point_id, vector) in entries {
+        #[allow(clippy::cast_possible_truncation)] // nnz bounded by sparse vector dimension count
+        let nnz = vector.nnz() as u32;
+        let total_len = compute_upsert_entry_len(nnz)?;
+        write_upsert_header(&mut w, total_len, *point_id, nnz)?;
+        write_term_value_pairs(&mut w, &vector.indices, &vector.values)?;
+    }
+    flush_wal(&mut w, wal_path)
+}
+
+/// Appends a batch of delete entries under ONE open + ONE durability barrier.
+///
+/// The batched counterpart of [`wal_append_delete`], with the same frame
+/// encoding; see [`wal_append_upsert_batch`] for the batching contract.
+///
+/// # Errors
+///
+/// Returns an error if the WAL file cannot be opened or written.
+pub fn wal_append_delete_batch(wal_path: &Path, ids: &[u64]) -> Result<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let total_len: u32 = 1 + 8;
+    let mut w = open_wal_writer(wal_path)?;
+    for &point_id in ids {
+        wal_write(&mut w, &total_len.to_le_bytes())?;
+        wal_write(&mut w, &[WAL_OP_DELETE])?;
+        wal_write(&mut w, &point_id.to_le_bytes())?;
+    }
+    flush_wal(&mut w, wal_path)
+}
+
 /// Appends an upsert entry to the sparse WAL.
 ///
 /// # Errors

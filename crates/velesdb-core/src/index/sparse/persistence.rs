@@ -36,7 +36,10 @@ use crate::error::{Error, Result};
 use crate::storage::atomic_write::{atomic_write, atomic_write_with};
 
 // Re-export WAL operations for backward compatibility.
-pub use super::persistence_wal::{wal_append_delete, wal_append_upsert, wal_replay};
+pub use super::persistence_wal::{
+    wal_append_delete, wal_append_delete_batch, wal_append_upsert, wal_append_upsert_batch,
+    wal_replay,
+};
 
 // WAL constants are in persistence_wal.rs
 

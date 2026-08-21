@@ -137,32 +137,12 @@ impl Collection {
 
     /// Updates the BM25 text index for a single point (WAL-then-apply).
     ///
-    /// Issue #389: appends the mutation to `bm25.wal` BEFORE calling
-    /// `add_document` / `remove_document` on the in-memory index so
-    /// that a crash between the two replays the mutation on next
-    /// open. WAL append errors propagate; the in-memory mutation is
-    /// skipped so in-memory and WAL state never diverge.
-    pub(super) fn update_text_index(&self, point: &Point) -> Result<()> {
-        if let Some(payload) = &point.payload {
-            let text = Self::extract_text_from_payload(payload);
-            if !text.is_empty() {
-                #[cfg(feature = "persistence")]
-                self.append_bm25_wal_add(point.id, &text)?;
-                self.storage.text_index.add_document(point.id, &text);
-            }
-        } else {
-            #[cfg(feature = "persistence")]
-            self.append_bm25_wal_remove(point.id)?;
-            self.storage.text_index.remove_document(point.id);
-        }
-        Ok(())
-    }
-
     /// Applies the BM25 side of a whole batch under ONE durability barrier.
     ///
-    /// The batched counterpart of [`Self::update_text_index`]. Calling that per
-    /// point is what cost one `open` and one `fsync` PER DOCUMENT (#1797); here
-    /// every frame goes into a single `wal_append_batch` call.
+    /// The single upsert, metadata upsert, and bulk-import paths all route
+    /// here: a per-point WAL append cost one `open` and one `fsync` PER
+    /// DOCUMENT (#1797); every frame goes into a single `wal_append_batch`
+    /// call instead.
     ///
     /// # The three cases a mixed batch contains
     ///
@@ -171,7 +151,7 @@ impl Collection {
     ///
     /// * payload carrying text → an `Add` frame;
     /// * payload with NO text  → nothing at all, no WAL entry (empty text is
-    ///   not indexed, matching [`Self::update_text_index`]);
+    ///   not indexed — an empty extraction never was);
     /// * no payload at all     → a `Remove` frame, preserving delete semantics.
     ///
     /// # Ordering
@@ -228,7 +208,11 @@ impl Collection {
     /// Non-persistence builds have no on-disk WAL, so this is a no-op there and
     /// the caller proceeds straight to the in-memory update.
     #[allow(clippy::unused_self)] // Reason: needs `self.storage.path` under `persistence`.
-    fn append_text_batch_to_wal(&self, adds: &[(u64, String)], removes: &[u64]) -> Result<()> {
+    pub(super) fn append_text_batch_to_wal(
+        &self,
+        adds: &[(u64, String)],
+        removes: &[u64],
+    ) -> Result<()> {
         #[cfg(feature = "persistence")]
         {
             use crate::index::bm25_persistence_wal::{wal_append_batch, wal_path_for_bm25, WalOp};
@@ -249,32 +233,12 @@ impl Collection {
         Ok(())
     }
 
-    /// Appends an `add_document` mutation to the BM25 WAL.
-    ///
-    /// Feature-gated — non-persistence builds have no on-disk WAL.
-    /// Callers already gate on `feature = "persistence"` when they
-    /// need crash-safety ordering.
-    #[cfg(feature = "persistence")]
-    #[inline]
-    pub(super) fn append_bm25_wal_add(&self, id: u64, text: &str) -> Result<()> {
-        let wal_path = crate::index::bm25_persistence_wal::wal_path_for_bm25(&self.storage.path);
-        crate::index::bm25_persistence_wal::wal_append_add_document(&wal_path, id, text)
-    }
-
-    /// Appends a `remove_document` mutation to the BM25 WAL.
-    #[cfg(feature = "persistence")]
-    #[inline]
-    pub(super) fn append_bm25_wal_remove(&self, id: u64) -> Result<()> {
-        let wal_path = crate::index::bm25_persistence_wal::wal_path_for_bm25(&self.storage.path);
-        crate::index::bm25_persistence_wal::wal_append_remove_document(&wal_path, id)
-    }
-
     /// Appends `remove_document` mutations for a whole batch to the BM25 WAL
     /// under ONE durability barrier.
     ///
-    /// Batched counterpart of [`Self::append_bm25_wal_remove`]: calling that
-    /// in a loop pays one `open` + one fsync PER ID (the #1797 failure mode,
-    /// resurfacing on the delete path — finding C3). The frames are identical
+    /// Calling a single-frame append in a loop pays one `open` + one fsync
+    /// PER ID (the #1797 failure mode, resurfacing on the delete path —
+    /// finding C3). The frames are identical
     /// to N sequential appends; only the syscall count differs. Callers keep
     /// WAL-before-apply at batch granularity: let this return `Ok` first,
     /// then remove the documents from the in-memory index.
@@ -309,23 +273,40 @@ impl Collection {
     where
         I: IntoIterator<Item = (&'a str, u64, &'a crate::index::sparse::SparseVector)>,
     {
-        // Cache wal_path across consecutive entries sharing the same index name
-        // so callers that yield entries grouped by name (e.g. apply_sparse_batch_bulk)
-        // retain the O(N_NAMES) path-resolution cost of the pre-refactor code
-        // rather than paying O(N_ENTRIES). Mixed-name callers degrade gracefully
-        // to one resolution per entry, matching the original per-triple cost.
-        let mut cached: Option<(&'a str, std::path::PathBuf)> = None;
+        // Group consecutive entries sharing the same index name into one
+        // `wal_append_upsert_batch` call: one `open` and one fsync per run
+        // instead of per entry (#1797 shape). Callers yield entries grouped
+        // by name (e.g. `apply_sparse_batch_bulk`), so a batch touching K
+        // index names pays exactly K barriers. Mixed-name callers degrade
+        // gracefully to one barrier per run boundary.
+        let mut run_name: Option<&'a str> = None;
+        let mut run: Vec<(u64, &'a crate::index::sparse::SparseVector)> = Vec::new();
         for (name, point_id, sv) in entries {
-            if cached.as_ref().map(|(cached_name, _)| *cached_name) != Some(name) {
-                let wal_path =
-                    crate::index::sparse::persistence::wal_path_for_name(&self.storage.path, name);
-                cached = Some((name, wal_path));
+            if run_name != Some(name) {
+                if let Some(prev) = run_name.take() {
+                    self.flush_sparse_wal_run(prev, &run)?;
+                    run.clear();
+                }
+                run_name = Some(name);
             }
-            let Some((_, wal_path)) = cached.as_ref() else {
-                continue;
-            };
-            crate::index::sparse::persistence::wal_append_upsert(wal_path, point_id, sv)?;
+            run.push((point_id, sv));
         }
+        if let Some(prev) = run_name {
+            self.flush_sparse_wal_run(prev, &run)?;
+        }
+        Ok(())
+    }
+
+    /// Writes one same-name run of sparse upserts under a single WAL barrier.
+    #[cfg(feature = "persistence")]
+    fn flush_sparse_wal_run(
+        &self,
+        name: &str,
+        run: &[(u64, &crate::index::sparse::SparseVector)],
+    ) -> Result<()> {
+        let wal_path =
+            crate::index::sparse::persistence::wal_path_for_name(&self.storage.path, name);
+        crate::index::sparse::persistence::wal_append_upsert_batch(&wal_path, run)?;
         Ok(())
     }
 
