@@ -293,7 +293,7 @@ mod property_tests {
             }
 
             // offsets[M] == N (last offset == total edges)
-            prop_assert_eq!(*offsets.last().unwrap(), total_edges);
+            prop_assert_eq!(*offsets.last().unwrap() as usize, total_edges);
 
             // Per-node degree matches EdgeStore
             for &nid in &source_nodes {

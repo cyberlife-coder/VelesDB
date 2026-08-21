@@ -9,6 +9,7 @@
 use super::edge::EdgeStore;
 use super::label_table::{LabelId, LabelTable};
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // EdgePredicate trait and filters (Task 7: predicate pushdown)
@@ -115,7 +116,12 @@ impl AdjacencySource for EdgeStore {
 pub struct CsrSnapshot {
     /// Offset array: `offsets[i]..offsets[i+1]` = neighbor range for node at index `i`.
     /// Length = `node_count + 1`. `offsets[node_count] == targets.len()`.
-    offsets: Vec<usize>,
+    ///
+    /// `u32` because every value is bounded by `targets.len()`: a snapshot
+    /// approaching `u32::MAX` edges would already hold >100 GB of parallel
+    /// `u64` arrays. Halving this array doubles the node ranges that fit in
+    /// a cache line on the BFS hot path.
+    offsets: Vec<u32>,
     /// Contiguous storage of target node IDs for all outgoing edges.
     targets: Vec<u64>,
     /// Contiguous storage of edge IDs, parallel to `targets`.
@@ -123,13 +129,16 @@ pub struct CsrSnapshot {
     /// Contiguous storage of interned label IDs, parallel to `targets`.
     label_ids: Vec<LabelId>,
     /// Mapping `node_id → index` in the offsets array for O(1) lookup.
-    node_to_index: FxHashMap<u64, usize>,
+    /// Values are bounded by `node_count` (same `u32` argument as `offsets`).
+    node_to_index: FxHashMap<u64, u32>,
     /// Mapping `index → node_id` (inverse of `node_to_index`).
     index_to_node: Vec<u64>,
-    /// Interned label strings for label-based filtering.
-    label_table: Vec<String>,
+    /// Interned label strings for label-based filtering. Each entry shares
+    /// its allocation with the `label_to_idx` key — the snapshot owns one
+    /// `Arc<str>` per distinct label, not two `String`s.
+    label_table: Vec<Arc<str>>,
     /// Reverse map: label string → label index for O(1) lookup.
-    label_to_idx: FxHashMap<String, u32>,
+    label_to_idx: FxHashMap<Arc<str>, u32>,
 }
 
 impl CsrSnapshot {
@@ -137,8 +146,9 @@ impl CsrSnapshot {
     #[inline]
     fn range_of(&self, node_id: u64) -> Option<(usize, usize)> {
         let &idx = self.node_to_index.get(&node_id)?;
-        let start = self.offsets[idx];
-        let end = self.offsets[idx + 1];
+        let idx = idx as usize;
+        let start = self.offsets[idx] as usize;
+        let end = self.offsets[idx + 1] as usize;
         Some((start, end))
     }
 
@@ -195,7 +205,7 @@ impl CsrSnapshot {
         let label_id = self.label_ids[start + neighbor_idx];
         self.label_table
             .get(label_id.as_u32() as usize)
-            .map(String::as_str)
+            .map(AsRef::as_ref)
     }
 
     /// Returns the outgoing degree of a node.
@@ -274,7 +284,7 @@ impl CsrSnapshot {
 
     /// Returns a reference to the internal offsets array (for testing/validation).
     #[cfg(test)]
-    pub(crate) fn offsets(&self) -> &[usize] {
+    pub(crate) fn offsets(&self) -> &[u32] {
         &self.offsets
     }
 }
@@ -314,43 +324,62 @@ impl SnapshotBuilder {
         let mut node_to_index =
             FxHashMap::with_capacity_and_hasher(node_count, rustc_hash::FxBuildHasher);
         for (idx, &nid) in node_ids.iter().enumerate() {
-            node_to_index.insert(nid, idx);
+            #[allow(clippy::cast_possible_truncation)]
+            // Reason: node_count is bounded by the edge count; a u32-overflowing
+            // snapshot would already hold >100 GB of parallel u64 arrays.
+            node_to_index.insert(nid, idx as u32);
         }
 
         // 4 & 5. Fill arrays
-        let mut offsets = Vec::with_capacity(node_count + 1);
+        let mut offsets: Vec<u32> = Vec::with_capacity(node_count + 1);
         let mut targets = Vec::with_capacity(total_edges);
         let mut edge_ids_buf = Vec::with_capacity(total_edges);
         let mut label_ids_buf: Vec<LabelId> = Vec::with_capacity(total_edges);
-        let mut label_table_vec: Vec<String> = Vec::new();
-        let mut label_to_idx: FxHashMap<String, u32> =
+        let mut label_table_vec: Vec<Arc<str>> = Vec::new();
+        let mut label_to_idx: FxHashMap<Arc<str>, u32> =
             FxHashMap::with_capacity_and_hasher(16, rustc_hash::FxBuildHasher);
+        debug_assert!(
+            u32::try_from(total_edges).is_ok(),
+            "CSR snapshot edge count {total_edges} exceeds the u32 offset domain"
+        );
 
         for &nid in &node_ids {
-            offsets.push(targets.len());
+            #[allow(clippy::cast_possible_truncation)]
+            // Reason: bounded by total_edges, debug-asserted above.
+            offsets.push(targets.len() as u32);
             edge_store.for_each_outgoing_edge(nid, |edge| {
                 targets.push(edge.target());
                 edge_ids_buf.push(edge.id());
 
                 // Always use local interning for label_ids stored in CSR.
                 // label_at() resolves against the local label_table vec.
+                //
+                // Look up by &str BEFORE inserting: `entry()` demands an owned
+                // key, which would allocate one String per EDGE just to probe
+                // a map whose distinct-key count is the label vocabulary
+                // (typically tens). The owned Arc<str> is built only on the
+                // first sighting of a label, and that one allocation is shared
+                // between the vec entry and the map key.
                 let label_str = edge.label();
-                let local_idx = *label_to_idx
-                    .entry(label_str.to_string())
-                    .or_insert_with(|| {
-                        let idx = label_table_vec.len();
-                        label_table_vec.push(label_str.to_string());
-                        #[allow(clippy::cast_possible_truncation)]
-                        // Reason: label count bounded by schema size
-                        {
-                            idx as u32
-                        }
-                    });
+                let local_idx = if let Some(&idx) = label_to_idx.get(label_str) {
+                    idx
+                } else {
+                    let idx = label_table_vec.len();
+                    #[allow(clippy::cast_possible_truncation)]
+                    // Reason: label count bounded by schema size
+                    let idx = idx as u32;
+                    let shared: Arc<str> = Arc::from(label_str);
+                    label_table_vec.push(Arc::clone(&shared));
+                    label_to_idx.insert(shared, idx);
+                    idx
+                };
                 label_ids_buf.push(LabelId::from_u32(local_idx));
             });
         }
         // Final offset sentinel
-        offsets.push(targets.len());
+        #[allow(clippy::cast_possible_truncation)]
+        // Reason: bounded by total_edges, debug-asserted above.
+        offsets.push(targets.len() as u32);
 
         CsrSnapshot {
             offsets,
