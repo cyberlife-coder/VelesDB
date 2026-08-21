@@ -4,7 +4,7 @@
 //! checking to prevent deadlocks. The rank system encodes the rule:
 //!
 //! ```text
-//! gpu_vectors_snapshot (rank 5) → vectors (rank 10) → columnar (rank 15)
+//! gpu_vectors_snapshot (rank 5) → vectors (rank 10)
 //!     → layers (rank 20) → neighbors (rank 30)
 //! ```
 //!
@@ -27,7 +27,7 @@
 //! builds, full stack-based tracking is enabled, but it only *warns* via
 //! `tracing::warn!` — it never panics — and only for the ranks that actually
 //! have a `record_lock_acquire` call site (`GpuVectorsSnapshot`, `Vectors`,
-//! `Layers`; `Columnar` and `Neighbors` are `#[allow(dead_code)]` and never
+//! `Layers`; `Neighbors` is `#[allow(dead_code)]` and never
 //! recorded).
 //!
 //! # Higher-level synchronization layered on top of these ranks
@@ -58,7 +58,7 @@ use super::safety_counters::HNSW_COUNTERS;
 /// Lock rank values — monotonically increasing acquisition order.
 ///
 /// The global lock order is:
-/// `gpu_vectors_snapshot → vectors → columnar → layers → neighbors`.
+/// `gpu_vectors_snapshot → vectors → layers → neighbors`.
 /// Any code path that acquires multiple locks must acquire them
 /// in strictly increasing rank order.
 /// Discriminants are defined FROM the public ordinal registry
@@ -81,13 +81,7 @@ pub(crate) enum LockRank {
     GpuVectorsSnapshot = crate::lock_rank::LockRank::GPU_VECTORS_SNAPSHOT.ordinal(),
     /// `vectors` RwLock — rank 10 (acquired first among the core HNSW locks)
     Vectors = crate::lock_rank::LockRank::VECTORS.ordinal(),
-    /// `columnar` RwLock — rank 15 (PDX block-columnar layout).
-    ///
-    /// Tracked at its single acquisition site, the PDX layout rebuild in
-    /// `reorder.rs` (vectors → columnar); PDX search readers, when wired,
-    /// inherit the tracked order.
-    Columnar = crate::lock_rank::LockRank::COLUMNAR.ordinal(),
-    /// `layers` RwLock — rank 20 (acquired after vectors/columnar)
+    /// `layers` RwLock — rank 20 (acquired after vectors)
     Layers = crate::lock_rank::LockRank::LAYERS.ordinal(),
     /// Per-node neighbor lists — rank 30 (acquired last).
     // Reason: pure reservation — no per-node neighbor lock exists yet, so

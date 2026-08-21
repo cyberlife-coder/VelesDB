@@ -56,9 +56,10 @@ pub(crate) fn simd_distance_for_metric(metric: DistanceMetric, a: &[f32], b: &[f
 
 /// Batch distance with CPU prefetch hints to hide memory latency.
 ///
-/// Returns `SmallVec<[f32; 32]>` to avoid heap allocation for typical
-/// batch sizes (M=16..32 neighbors). For batches up to 32 elements
-/// (~128 bytes), the result lives entirely on the stack.
+/// Returns `SmallVec<[f32; 64]>` to avoid heap allocation for real batch
+/// sizes: layer 0 runs at `M0 = max_connections * 2` (48 or 64 with the
+/// default params), so a 32-slot inline buffer spilled to the heap on
+/// every dense candidate expansion. 64 slots (256 bytes) stay on the stack.
 ///
 /// Used by `CachedSimdDistance` and called directly from the HNSW search
 /// hot loop to bypass the
@@ -68,7 +69,7 @@ pub(crate) fn batch_distance_with_prefetch(
     engine: &impl DistanceEngine,
     query: &[f32],
     candidates: &[&[f32]],
-) -> SmallVec<[f32; 32]> {
+) -> SmallVec<[f32; 64]> {
     let prefetch_distance = crate::simd_native::calculate_prefetch_distance(query.len());
     let mut results = SmallVec::with_capacity(candidates.len());
 

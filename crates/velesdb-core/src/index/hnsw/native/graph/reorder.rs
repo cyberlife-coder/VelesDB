@@ -125,9 +125,6 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     }
 
     /// Applies a permutation to vectors, neighbor lists, and the entry point.
-    ///
-    /// After reordering, builds a PDX columnar layout from the reordered
-    /// vectors for SIMD-parallel distance computation.
     fn apply_permutation(&self, new_order: &[NodeId]) -> crate::error::Result<()> {
         let count = new_order.len();
 
@@ -136,30 +133,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         self.reorder_vectors(new_order)?;
         self.remap_neighbor_ids(&old_to_new);
         self.update_entry_point(&old_to_new, count);
-        self.build_columnar_layout();
 
         Ok(())
-    }
-
-    /// Builds a PDX block-columnar layout from the current vector storage.
-    ///
-    /// This transposes row-major vectors into 64-vector blocks where each
-    /// dimension is contiguous, enabling SIMD-parallel distance computation.
-    fn build_columnar_layout(&self) {
-        use super::locking::{record_lock_acquire, record_lock_release, LockRank};
-        // The only current two-lock site touching `columnar`: vectors (10)
-        // then columnar (15), tracked so a future PDX reader taking the
-        // locks the other way round trips the debug tracker immediately.
-        record_lock_acquire(LockRank::Vectors);
-        let vectors_guard = self.vectors.read();
-        if let Some(vectors) = vectors_guard.as_ref() {
-            let pdx = super::super::columnar_vectors::ColumnarVectors::from_contiguous(vectors);
-            record_lock_acquire(LockRank::Columnar);
-            *self.columnar.write() = Some(pdx);
-            record_lock_release(LockRank::Columnar);
-        }
-        drop(vectors_guard);
-        record_lock_release(LockRank::Vectors);
     }
 
     /// Builds a reverse mapping: `result[old_id] = new_id`.

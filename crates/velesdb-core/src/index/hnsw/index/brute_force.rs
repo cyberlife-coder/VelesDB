@@ -85,8 +85,11 @@ impl HnswIndex {
         vectors: &crate::perf_optimizations::ContiguousVectors,
         scored: &mut Vec<ScoredResult>,
     ) {
-        // Fast path: if no vectors are stored, nothing to scan.
-        if vectors.is_empty() {
+        // Fast path: no overflow id was ever registered (virtually every
+        // deployment), so the O(N) full-mapping sweep below has nothing to
+        // find — skip it entirely instead of paying one DashMap lookup per
+        // stored vector on every filtered query.
+        if vectors.is_empty() || !self.mappings.has_overflow_ids() {
             return;
         }
         for idx in 0..vectors.len() {
