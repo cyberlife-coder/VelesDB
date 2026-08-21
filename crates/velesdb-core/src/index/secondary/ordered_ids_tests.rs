@@ -1,20 +1,29 @@
 //! Unit tests for [`SecondaryIndex::ordered_ids`] — the ordered-iteration
 //! primitive for index-backed `ORDER BY <field> LIMIT k` top-k (B001 follow-up).
 
-use super::{F64Key, JsonValue, SecondaryIndex};
+use super::{F64Key, IdSet, JsonValue, SecondaryIndex};
 use parking_lot::RwLock;
 use std::collections::BTreeMap;
+
+/// Builds an `IdSet` bucket from ids given in any order.
+fn set(ids: &[u64]) -> IdSet {
+    let mut out = IdSet::default();
+    for &id in ids {
+        out.insert(id);
+    }
+    out
+}
 
 /// Mixed-type fixture. Key order is Bool < Number < String (the `JsonValue`
 /// `Ord`), and the `Number(1.0)` bucket holds IDs out of order on purpose so
 /// the within-bucket ascending-ID sort is exercised.
 fn fixture() -> SecondaryIndex {
-    let mut map: BTreeMap<JsonValue, Vec<u64>> = BTreeMap::new();
-    map.insert(JsonValue::Bool(false), vec![5]);
-    map.insert(JsonValue::Bool(true), vec![3]);
-    map.insert(JsonValue::Number(F64Key::from(1.0)), vec![10, 2]);
-    map.insert(JsonValue::Number(F64Key::from(2.0)), vec![7]);
-    map.insert(JsonValue::String("a".to_string()), vec![8]);
+    let mut map: BTreeMap<JsonValue, IdSet> = BTreeMap::new();
+    map.insert(JsonValue::Bool(false), set(&[5]));
+    map.insert(JsonValue::Bool(true), set(&[3]));
+    map.insert(JsonValue::Number(F64Key::from(1.0)), set(&[10, 2]));
+    map.insert(JsonValue::Number(F64Key::from(2.0)), set(&[7]));
+    map.insert(JsonValue::String("a".to_string()), set(&[8]));
     SecondaryIndex::BTree(RwLock::new(map))
 }
 
@@ -52,10 +61,10 @@ fn empty_index_returns_empty() {
 
 #[test]
 fn single_key_many_ids_emits_all_sorted() {
-    let mut map: BTreeMap<JsonValue, Vec<u64>> = BTreeMap::new();
+    let mut map: BTreeMap<JsonValue, IdSet> = BTreeMap::new();
     map.insert(
         JsonValue::Number(F64Key::from(42.0)),
-        vec![9, 1, 4, 1_000_000_000_000],
+        set(&[9, 1, 4, 1_000_000_000_000]),
     );
     let idx = SecondaryIndex::BTree(RwLock::new(map));
     assert_eq!(
