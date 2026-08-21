@@ -85,7 +85,53 @@ impl VelesConfig {
         self.validate_storage()?;
         self.validate_logging()?;
         self.warn_inert_wal_batch();
+        self.warn_inert_engine_sections();
         Ok(())
+    }
+
+    /// The `[search]`, `[hnsw]`, `[storage]` and `[quantization]` sections
+    /// are parsed and validated but not yet applied — only `[limits]`
+    /// reaches the engine (issue #2087). Warn — rather than reject — when a
+    /// config sets any of them away from its defaults, so existing files
+    /// keep loading while no deployment silently believes those knobs work.
+    ///
+    /// Serde-value comparison instead of `PartialEq` derives: the sections
+    /// carry enums and nested types, and this runs once per config load.
+    fn warn_inert_engine_sections(&self) {
+        fn deviates<T: serde::Serialize>(actual: &T, default: &T) -> bool {
+            match (serde_json::to_value(actual), serde_json::to_value(default)) {
+                (Ok(a), Ok(d)) => a != d,
+                _ => false,
+            }
+        }
+
+        let mut inert: Vec<&str> = Vec::new();
+        if deviates(&self.search, &crate::config::SearchConfig::default()) {
+            inert.push("[search]");
+        }
+        if deviates(&self.hnsw, &crate::config::HnswConfig::default()) {
+            inert.push("[hnsw]");
+        }
+        if deviates(
+            &self.storage,
+            &crate::config::server::StorageConfig::default(),
+        ) {
+            inert.push("[storage]");
+        }
+        if deviates(
+            &self.quantization,
+            &crate::config_quantization::QuantizationConfig::default(),
+        ) {
+            inert.push("[quantization]");
+        }
+        if !inert.is_empty() {
+            tracing::warn!(
+                sections = inert.join(", "),
+                "these config sections are parsed and validated but not yet \
+                 applied by the engine — only [limits] is; see issue #2087. \
+                 Query-time WITH (...) overrides are unaffected."
+            );
+        }
     }
 
     /// `[wal_batch]` is parsed but not wired (issue #2078): warn — rather

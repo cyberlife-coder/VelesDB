@@ -87,6 +87,13 @@ impl SearchMode {
 }
 
 /// Search configuration section.
+///
+/// **Reserved — parsed and validated, not yet applied.** Only `[limits]`
+/// reaches the engine today; [`VelesConfig::validate`] warns when this
+/// section deviates from its defaults so a config cannot silently promise
+/// behavior the engine does not deliver. Wiring these values as engine
+/// defaults is tracked in issue #2087. Per-query runtime overrides
+/// (`WITH (ef_search = N)`) are a separate, working mechanism.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SearchConfig {
@@ -112,6 +119,13 @@ impl Default for SearchConfig {
 }
 
 /// HNSW index configuration section.
+///
+/// **Reserved — parsed and validated, not yet applied.** Only `[limits]`
+/// reaches the engine today; [`VelesConfig::validate`] warns when this
+/// section deviates from its defaults so a config cannot silently promise
+/// behavior the engine does not deliver. Wiring these values as engine
+/// defaults is tracked in issue #2087. Per-query runtime overrides
+/// (`WITH (ef_search = N)`) are a separate, working mechanism.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HnswConfig {
@@ -134,6 +148,12 @@ pub mod server {
     use serde::{Deserialize, Serialize};
 
     /// Storage configuration section.
+    ///
+    /// **Reserved — parsed and validated, not yet applied.** Only
+    /// `[limits]` reaches the engine today; `VelesConfig::validate` warns
+    /// when this section deviates from its defaults. Wiring is tracked in
+    /// issue #2087 (`data_dir` in particular conflicts with the path passed
+    /// to `Database::open` and may go through deprecation instead).
     #[derive(Debug, Clone, Serialize, Deserialize)]
     #[serde(default)]
     pub struct StorageConfig {
@@ -473,6 +493,11 @@ impl VelesConfig {
     // Validation is in config_validation.rs
 
     /// Returns the effective `ef_search` value.
+    #[deprecated(
+        since = "5.2.0",
+        note = "never read by the engine — [search] is not applied (issue #2087); \
+                query-time WITH (ef_search = N) is the working override"
+    )]
     #[must_use]
     pub fn effective_ef_search(&self) -> usize {
         self.search
