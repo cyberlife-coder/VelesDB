@@ -798,8 +798,11 @@ fn graph_stats_roundtrips_through_serde() {
 
 // =========================================================================
 // Runtime filter selectivity — the stats-backed mirror of the AST estimator
+// (persistence-gated like the methods under test: `cargo miri test
+// --no-default-features` compiles this file too, and must keep compiling)
 // =========================================================================
 
+#[cfg(feature = "persistence")]
 fn stats_with_price_histogram() -> CollectionStats {
     let mut stats = CollectionStats::new();
     stats.total_points = 100;
@@ -812,6 +815,7 @@ fn stats_with_price_histogram() -> CollectionStats {
     stats
 }
 
+#[cfg(feature = "persistence")]
 #[test]
 fn runtime_eq_uses_the_histogram_when_present() {
     let stats = stats_with_price_histogram();
@@ -825,6 +829,7 @@ fn runtime_eq_uses_the_histogram_when_present() {
     assert!(sel < 0.05, "expected histogram-backed estimate, got {sel}");
 }
 
+#[cfg(feature = "persistence")]
 #[test]
 fn runtime_range_uses_the_histogram_when_present() {
     let stats = stats_with_price_histogram();
@@ -839,6 +844,7 @@ fn runtime_range_uses_the_histogram_when_present() {
     );
 }
 
+#[cfg(feature = "persistence")]
 #[test]
 fn runtime_unknown_column_falls_back_to_shared_defaults() {
     let stats = CollectionStats::new();
@@ -863,6 +869,7 @@ fn runtime_unknown_column_falls_back_to_shared_defaults() {
 /// Drift test (single-source constants): without histograms, the runtime
 /// estimator's equality answer must equal the AST estimator's fallback for
 /// the same column — both resolve through `CollectionStats::estimate_selectivity`.
+#[cfg(feature = "persistence")]
 #[test]
 fn runtime_and_ast_estimators_agree_without_histograms() {
     let mut stats = CollectionStats::new();
@@ -886,6 +893,7 @@ fn runtime_and_ast_estimators_agree_without_histograms() {
     );
 }
 
+#[cfg(feature = "persistence")]
 #[test]
 fn runtime_boolean_combinators_recurse() {
     let stats = CollectionStats::new();
