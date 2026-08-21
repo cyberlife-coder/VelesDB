@@ -233,6 +233,7 @@ impl Collection {
             payload_memo: crate::collection::search::query::match_exec::PayloadMemo::new(
                 &payload_storage,
             ),
+            where_filters: crate::collection::search::query::match_exec::WhereFilterMemo::default(),
         };
         let ids: Vec<u64> = vector_storage.ids();
 

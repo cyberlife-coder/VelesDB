@@ -98,11 +98,86 @@ impl JsonValue {
     }
 }
 
+/// One equal-key bucket of a secondary index.
+///
+/// The common case lives in a prebuilt [`roaring::RoaringBitmap`], so
+/// pre-filter reads are bitmap clones and unions instead of one roaring
+/// insert per id per query (the pre-fix shape rebuilt a 500k-row range
+/// bitmap on every execution). Ids above `u32::MAX` — unrepresentable in
+/// roaring — live in the sorted `overflow` side list; its non-emptiness is
+/// exactly the "incomplete bitmap" condition that [`SecondaryIndex::to_bitmap`]
+/// reports as `None`. Insert/remove are set operations, so buckets need no
+/// dedup or sort passes and iteration is ascending by construction
+/// (every overflow id exceeds every bitmap id).
+#[derive(Debug, Default, Clone)]
+pub(crate) struct IdSet {
+    bitmap: roaring::RoaringBitmap,
+    overflow: Vec<u64>,
+}
+
+impl IdSet {
+    pub(crate) fn insert(&mut self, id: u64) {
+        match u32::try_from(id) {
+            Ok(id32) => {
+                self.bitmap.insert(id32);
+            }
+            Err(_) => {
+                if let Err(pos) = self.overflow.binary_search(&id) {
+                    self.overflow.insert(pos, id);
+                }
+            }
+        }
+    }
+
+    pub(crate) fn remove(&mut self, id: u64) {
+        match u32::try_from(id) {
+            Ok(id32) => {
+                self.bitmap.remove(id32);
+            }
+            Err(_) => {
+                if let Ok(pos) = self.overflow.binary_search(&id) {
+                    self.overflow.remove(pos);
+                }
+            }
+        }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.bitmap.is_empty() && self.overflow.is_empty()
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        usize::try_from(self.bitmap.len()).unwrap_or(usize::MAX) + self.overflow.len()
+    }
+
+    /// Ascending-id iteration: every overflow id exceeds every bitmap id.
+    fn iter_ascending(&self) -> impl Iterator<Item = u64> + '_ {
+        self.bitmap
+            .iter()
+            .map(u64::from)
+            .chain(self.overflow.iter().copied())
+    }
+
+    pub(crate) fn to_vec(&self) -> Vec<u64> {
+        self.iter_ascending().collect()
+    }
+}
+
+impl From<Vec<u64>> for IdSet {
+    fn from(ids: Vec<u64>) -> Self {
+        let mut set = Self::default();
+        for id in ids {
+            set.insert(id);
+        }
+        set
+    }
+}
+
 /// Secondary index implementation.
 #[derive(Debug)]
 pub(crate) enum SecondaryIndex {
-    /// B-tree index mapping JSON primitive values to point IDs.
-    BTree(RwLock<BTreeMap<JsonValue, Vec<u64>>>),
+    /// B-tree index mapping JSON primitive values to id sets.
+    BTree(RwLock<BTreeMap<JsonValue, IdSet>>),
 }
 
 impl SecondaryIndex {
@@ -120,7 +195,8 @@ impl SecondaryIndex {
             Self::BTree(tree) => {
                 let guard = tree.read();
                 match guard.get(value) {
-                    Some(ids) => ids_to_bitmap(ids),
+                    Some(ids) if ids.overflow.is_empty() => Some(ids.bitmap.clone()),
+                    Some(_) => None,
                     None => Some(roaring::RoaringBitmap::new()),
                 }
             }
@@ -145,9 +221,10 @@ impl SecondaryIndex {
                 let guard = tree.read();
                 let mut bm = roaring::RoaringBitmap::new();
                 for ids in guard.range((from, to)).map(|(_, v)| v) {
-                    for &id in ids {
-                        bm.insert(u32::try_from(id).ok()?);
+                    if !ids.overflow.is_empty() {
+                        return None;
                     }
+                    bm |= &ids.bitmap;
                 }
                 Some(bm)
             }
@@ -194,7 +271,7 @@ impl SecondaryIndex {
     ) -> Option<Vec<u64>> {
         let Self::BTree(tree) = self;
         let guard = tree.read();
-        let covered: usize = guard.values().map(Vec::len).sum();
+        let covered: usize = guard.values().map(IdSet::len).sum();
         if covered != point_count {
             return None;
         }
@@ -222,7 +299,7 @@ impl SecondaryIndex {
     ) -> Option<Vec<u64>> {
         let Self::BTree(tree) = self;
         let guard = tree.read();
-        let covered: usize = guard.values().map(Vec::len).sum();
+        let covered: usize = guard.values().map(IdSet::len).sum();
         if covered != point_count {
             return None;
         }
@@ -234,9 +311,9 @@ impl SecondaryIndex {
 /// collecting up to `limit` point IDs, ascending by ID within each equal-key
 /// bucket. The caller holds the read guard so the coverage check and the walk
 /// stay atomic.
-fn walk_ordered(tree: &BTreeMap<JsonValue, Vec<u64>>, descending: bool, limit: usize) -> Vec<u64> {
+fn walk_ordered(tree: &BTreeMap<JsonValue, IdSet>, descending: bool, limit: usize) -> Vec<u64> {
     let mut out: Vec<u64> = Vec::new();
-    let mut collect = |buckets: &mut dyn Iterator<Item = &Vec<u64>>| {
+    let mut collect = |buckets: &mut dyn Iterator<Item = &IdSet>| {
         for ids in buckets {
             if out.len() >= limit {
                 break;
@@ -258,19 +335,17 @@ fn walk_ordered(tree: &BTreeMap<JsonValue, Vec<u64>>, descending: bool, limit: u
 /// bucket and the result holds complete leading buckets — never a partial one,
 /// which a multi-key secondary sort requires.
 fn walk_whole_buckets(
-    tree: &BTreeMap<JsonValue, Vec<u64>>,
+    tree: &BTreeMap<JsonValue, IdSet>,
     descending: bool,
     min_rows: usize,
 ) -> Vec<u64> {
     let mut out: Vec<u64> = Vec::new();
-    let mut absorb = |buckets: &mut dyn Iterator<Item = &Vec<u64>>| {
+    let mut absorb = |buckets: &mut dyn Iterator<Item = &IdSet>| {
         for ids in buckets {
             if out.len() >= min_rows {
                 break;
             }
-            let mut bucket = ids.clone();
-            bucket.sort_unstable();
-            out.extend(bucket);
+            out.extend(ids.iter_ascending());
         }
     };
     if descending {
@@ -281,29 +356,13 @@ fn walk_whole_buckets(
     out
 }
 
-/// Appends `ids` (sorted ascending for determinism) to `out`, stopping once
-/// `out` reaches `limit`.
-fn push_bucket_capped(ids: &[u64], limit: usize, out: &mut Vec<u64>) {
-    let mut bucket = ids.to_vec();
-    bucket.sort_unstable();
-    for id in bucket {
+/// Appends `ids` (ascending by construction) to `out`, stopping once `out`
+/// reaches `limit`.
+fn push_bucket_capped(ids: &IdSet, limit: usize, out: &mut Vec<u64>) {
+    for id in ids.iter_ascending() {
         if out.len() >= limit {
             return;
         }
         out.push(id);
     }
-}
-
-/// Converts a slice of `u64` point IDs into a [`RoaringBitmap`].
-///
-/// `RoaringBitmap` stores `u32` values. Returns `None` if any ID exceeds
-/// [`u32::MAX`]: the bitmap would silently omit that ID, so callers that fetch
-/// only the bitmap's IDs (e.g. the JOIN pre-filter) would drop a real match.
-/// Signalling `None` forces those callers to fall back to a full scan.
-fn ids_to_bitmap(ids: &[u64]) -> Option<roaring::RoaringBitmap> {
-    let mut bm = roaring::RoaringBitmap::new();
-    for &id in ids {
-        bm.insert(u32::try_from(id).ok()?);
-    }
-    Some(bm)
 }
