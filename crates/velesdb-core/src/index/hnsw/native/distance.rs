@@ -97,6 +97,8 @@ impl CpuDistance {
 
 impl DistanceEngine for CpuDistance {
     fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
+        #[cfg(feature = "internal-bench")]
+        crate::index::hnsw::eval_count::record_eval();
         match self.metric {
             DistanceMetric::Cosine => cosine_distance_scalar(a, b),
             DistanceMetric::Euclidean => euclidean_distance_scalar(a, b),
@@ -151,6 +153,8 @@ impl DistanceEngine for CachedSimdDistance {
     #[allow(clippy::inline_always)] // Reason: HNSW hot loop --- single branch + fn pointer call
     #[inline(always)]
     fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
+        #[cfg(feature = "internal-bench")]
+        crate::index::hnsw::eval_count::record_eval();
         match self.metric {
             DistanceMetric::Cosine if self.pre_normalized => {
                 1.0 - self.engine.cosine_similarity(a, b).clamp(-1.0, 1.0)

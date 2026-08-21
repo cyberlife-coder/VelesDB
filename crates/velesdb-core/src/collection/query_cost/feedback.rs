@@ -17,7 +17,11 @@
 //! (cold cache, GC pause, OS jitter) and is discarded.
 //!
 //! Adjustment activates only after [`MIN_SAMPLES`] observations, giving the
-//! EMA time to warm up before influencing planner decisions.
+//! EMA time to warm up before being reported. Today the warmed value is
+//! surfaced in EXPLAIN ANALYZE output (`feedback_calibration`) as a
+//! deployment-specific calibration readout; no planner decision consumes it
+//! yet — a global ms-per-unit scale cancels out of any cost *comparison*,
+//! so consuming it only becomes meaningful against absolute budgets.
 //!
 //! # Thread safety
 //!
@@ -27,7 +31,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Minimum observations before the EMA value influences the planner.
+/// Minimum observations before the EMA value is reported (EXPLAIN ANALYZE).
 const MIN_SAMPLES: u64 = 10;
 
 /// EMA learning rate α (5 %).  Conservative to avoid over-fitting.

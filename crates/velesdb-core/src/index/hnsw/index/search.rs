@@ -57,6 +57,8 @@ impl HnswIndex {
     /// HNSW results.
     #[inline]
     pub(crate) fn compute_distance(&self, query: &[f32], vector: &[f32]) -> f32 {
+        #[cfg(feature = "internal-bench")]
+        crate::index::hnsw::eval_count::record_eval();
         match self.metric {
             DistanceMetric::Cosine => crate::simd_native::cosine_similarity_native(query, vector),
             DistanceMetric::Euclidean => crate::simd_native::euclidean_native(query, vector),
