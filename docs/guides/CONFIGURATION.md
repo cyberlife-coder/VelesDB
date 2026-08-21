@@ -45,6 +45,13 @@ To point at a file anywhere else, pass it explicitly:
 | `velesdb-server` | `--config <path>` | `VELESDB_CONFIG` |
 | `velesdb` (CLI) | `--config <path>` (global — REPL and every one-shot command) | `VELESDB_CONFIG` |
 
+> **Reserved sections (issue #2087).** Of the engine sections below, only
+> `[limits]` is applied by the engine today. `[search]`, `[hnsw]`,
+> `[storage]` and `[quantization]` are parsed and validated but not yet
+> wired — setting them away from their defaults logs a warning at load.
+> Query-time overrides (`WITH (ef_search = N)`) are a separate, working
+> mechanism, as are per-collection creation options.
+
 Both binaries can load the **same** file, but only the *engine* sections —
 `[search]`, `[hnsw]`, `[storage]`, `[limits]`, `[quantization]`,
 `[wal_batch]` — reach `VelesConfig` and, via
