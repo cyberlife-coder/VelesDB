@@ -245,7 +245,12 @@
       "last_updated": "2026-06-12",
       "measured_on": "2026-07-25",
       "measured_machine": "aarch64-apple-darwin (size varies by target)",
-      "measured_version": "4.0.0"
+      "measured_version": "4.0.0",
+      "stale_accepted": {
+        "reason": "binary size can only be re-measured on a release build of the reference toolchain; scheduled for the next release cut, figure verified against Binary Size Gate ceilings meanwhile",
+        "granted": "2026-08-21",
+        "for_workspace_major": 5
+      }
     },
     {
       "id": "readme_wasm_bundle_gzipped",
@@ -257,7 +262,12 @@
       "last_updated": "2026-06-12",
       "measured_on": "2026-07-25",
       "measured_machine": "platform-independent (published artifact)",
-      "measured_version": "4.0.0"
+      "measured_version": "4.0.0",
+      "stale_accepted": {
+        "reason": "bundle size requires the published npm artifact of the next release; the WASM Build Check job bounds regressions meanwhile",
+        "granted": "2026-08-21",
+        "for_workspace_major": 5
+      }
     },
     {
       "id": "readme_rest_endpoint_count",
