@@ -214,7 +214,7 @@ mod tests {
                 let mut t = tree.write();
                 t.insert(
                     crate::index::JsonValue::String("tech".to_string()),
-                    vec![1, 5, 10],
+                    vec![1, 5, 10].into(),
                 );
             }
         }
@@ -250,14 +250,14 @@ mod tests {
                 let mut t = tree.write();
                 t.insert(
                     crate::index::JsonValue::String("tech".to_string()),
-                    vec![1, 5, 10, 20],
+                    vec![1, 5, 10, 20].into(),
                 );
             }
             if let Some(crate::index::SecondaryIndex::BTree(tree)) = indexes.get("status") {
                 let mut t = tree.write();
                 t.insert(
                     crate::index::JsonValue::String("active".to_string()),
-                    vec![5, 10, 30],
+                    vec![5, 10, 30].into(),
                 );
             }
         }
@@ -302,7 +302,7 @@ mod tests {
             for (price, id) in [(10, 1u64), (20, 2), (30, 3), (40, 4), (50, 5)] {
                 t.insert(
                     crate::index::JsonValue::Number(F64Key::from(f64::from(price))),
-                    vec![id],
+                    vec![id].into(),
                 );
             }
         }
@@ -496,11 +496,11 @@ mod tests {
                 let mut t = tree.write();
                 t.insert(
                     crate::index::JsonValue::String("tech".to_string()),
-                    vec![1, 5],
+                    vec![1, 5].into(),
                 );
                 t.insert(
                     crate::index::JsonValue::String("science".to_string()),
-                    vec![3, 7],
+                    vec![3, 7].into(),
                 );
             }
         }
@@ -546,7 +546,7 @@ mod tests {
                 let mut t = tree.write();
                 t.insert(
                     crate::index::JsonValue::String("tech".to_string()),
-                    vec![1, 5],
+                    vec![1, 5].into(),
                 );
             }
         }
@@ -606,11 +606,11 @@ mod tests {
                 let mut t = tree.write();
                 t.insert(
                     crate::index::JsonValue::String("tech".to_string()),
-                    vec![1, 5, 10],
+                    vec![1, 5, 10].into(),
                 );
                 t.insert(
                     crate::index::JsonValue::String("science".to_string()),
-                    vec![2, 7],
+                    vec![2, 7].into(),
                 );
             }
         }
@@ -649,7 +649,7 @@ mod tests {
                 let mut t = tree.write();
                 t.insert(
                     crate::index::JsonValue::String("tech".to_string()),
-                    vec![1, 2, 3, 4, 5],
+                    vec![1, 2, 3, 4, 5].into(),
                 );
             }
         }
@@ -711,13 +711,16 @@ mod tests {
             let mut t = tree.write();
             t.insert(
                 crate::index::JsonValue::String("tech".to_string()),
-                vec![1, 5, 10],
+                vec![1, 5, 10].into(),
             );
             t.insert(
                 crate::index::JsonValue::String("science".to_string()),
-                vec![2, 7],
+                vec![2, 7].into(),
             );
-            t.insert(crate::index::JsonValue::String("art".to_string()), vec![3]);
+            t.insert(
+                crate::index::JsonValue::String("art".to_string()),
+                vec![3].into(),
+            );
         }
     }
 
@@ -871,7 +874,7 @@ mod tests {
                 let mut t = tree.write();
                 t.insert(
                     crate::index::JsonValue::String("tech".to_string()),
-                    vec![1, large_id, 5],
+                    vec![1, large_id, 5].into(),
                 );
             }
         }
