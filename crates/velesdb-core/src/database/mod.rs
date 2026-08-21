@@ -55,6 +55,8 @@ mod graph_ops_tests;
 #[cfg(all(test, feature = "persistence"))]
 mod query_engine_tests;
 #[cfg(all(test, feature = "persistence"))]
+mod query_join_tests;
+#[cfg(all(test, feature = "persistence"))]
 mod stats_tests;
 
 pub use gated_search::GatedRead;
@@ -111,6 +113,15 @@ pub struct Database {
     /// Stores recently compiled `QueryPlan` instances keyed by `PlanKey`.
     /// Default sizing: L1 = 1K hot entries, L2 = 10K LRU entries.
     compiled_plan_cache: crate::cache::CompiledPlanCache,
+    /// JOIN-side `ColumnStore` cache keyed by collection name (CACHE-03).
+    ///
+    /// An entry is valid only while its `(schema_version, write_generation)`
+    /// stamp matches the live counters, so any mutation — or a drop/recreate
+    /// under the same name — forces a rebuild. Entries are also purged
+    /// eagerly on `delete_collection`. Collections carrying TTL points are
+    /// never cached (expiry does not bump `write_generation`).
+    join_store_cache:
+        parking_lot::RwLock<std::collections::HashMap<String, query_join::JoinStoreEntry>>,
 }
 
 #[cfg(feature = "persistence")]
@@ -231,6 +242,7 @@ impl Database {
             observer,
             schema_version: std::sync::atomic::AtomicU64::new(0),
             compiled_plan_cache: crate::cache::CompiledPlanCache::new(1_000, 10_000),
+            join_store_cache: parking_lot::RwLock::new(std::collections::HashMap::new()),
         };
 
         // Auto-load all existing collections from disk (replaces manual load_collections()).
