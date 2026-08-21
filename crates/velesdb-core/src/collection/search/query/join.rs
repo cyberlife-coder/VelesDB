@@ -322,7 +322,7 @@ fn append_unmatched_left_rows(
 ///
 /// `USING` with multiple columns is currently not supported because execution
 /// path relies on a single primary key lookup.
-fn resolve_join_condition(join: &JoinClause) -> Option<JoinCondition> {
+pub(crate) fn resolve_join_condition(join: &JoinClause) -> Option<JoinCondition> {
     if let Some(condition) = &join.condition {
         return Some(normalize_join_condition(condition, join));
     }
