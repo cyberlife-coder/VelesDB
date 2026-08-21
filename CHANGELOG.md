@@ -9,6 +9,132 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The cosine hot path runs on the pre-normalized kernel.** Vectors are
+  unit-norm at insert (and normalized on legacy load behind an epsilon gate
+  that keeps already-unit vectors bitwise intact), so production HNSW now
+  scores cosine as `1 - dot` — one FMA chain instead of three plus a
+  sqrt/div — at every traversal, rerank, and recovery comparison site.
+  Recovery pass 3 compares bytes on the normalized form, preserving its
+  exactness contract. (#2058)
+
+- **Every WAL write path pays one durability barrier per batch, not one per
+  point.** BM25, sparse and payload batch APIs append their whole batch and
+  sync once; frame encodings are byte-identical to N single appends, so
+  existing logs replay unchanged. (#2059)
+
+- **The query row loops stopped re-deriving per-query invariants.** MATCH
+  payload reads are memoized per query behind the storage guards; WHERE
+  metadata leaves compile once per query instead of once per row; the WHERE
+  similarity loop hoists its vector/metric snapshot; and the payload log no
+  longer issues an `fstat` per read. (#2060, #2066, #2068)
+
+- **MATCH planning reads O(1) statistics.** Edge and label counts come from
+  maintained counters instead of full scans, and the planner honors the CSR
+  rebuild debounce instead of forcing rebuilds on read. GraphMatch
+  selectivity is costed from the ANALYZE graph view instead of a 0.5
+  constant. (#2061, #2048)
+
+- **Filtered search allocates and hydrates less.** Secondary-index lookups
+  serve prebuilt roaring buckets folded smallest-first; vector hydration is
+  deferred to the k survivors of the score sort; candidate scans stream in
+  bounded chunks; cache hits on `CollectionStats` share an `Arc` instead of
+  deep-cloning the stats tree. (#2063, #2064, #2065)
+
+- **JOIN stopped deep-cloning its left rows.** The PK ColumnStore join is
+  1:1 by construction, so joined rows now *move* their left `SearchResult`
+  (vector included) instead of copying it; the indexed non-PK join builds a
+  real grouped hash-join side — one index lookup per distinct key, one
+  batched hydration — instead of one lookup per row; and the JOIN-side
+  ColumnStore is cached keyed by collection generation. (#2042, #2067)
+
+- **`flush()` rewrites only what changed.** Property and range index files
+  key off dirty flags, the edge-store snapshot keys off WAL emptiness
+  (an empty WAL proves store == snapshot), and clean sparse indexes skip
+  compaction — O(batch) per flush instead of O(total edges + postings).
+  Crash ordering (snapshot before WAL truncate) is unchanged and pinned by
+  the recovery suites. (#2072)
+
+- **Reverse graph traversals resolve through a composite index.**
+  `incoming_by_label` mirrors the outgoing index, so `<-[:TYPE]-` patterns
+  and `Direction::Both` expansions are O(matching edges) instead of
+  cloning the whole in-neighborhood; the field is rebuilt at load
+  (`serde(skip)`), leaving `edge_store.bin` byte-compatible. (#2071)
+
+- **The vector mmap advises `MADV_RANDOM`** at map and at every
+  capacity-growth remap, so HNSW's random access pattern stops paying
+  kernel readahead for pages search never touches. (#2070)
+
+- **Brute-force scans partial-sort to top-k** (`select_nth_unstable` +
+  sort of the k survivors) instead of fully sorting candidate sets, and
+  `ORDER BY` on plain payload fields decorates each row once instead of
+  re-walking payload JSON inside the comparator. (#2069)
+
+- **Three small hot-path allocation fixes**: the delta-buffer merge uses
+  `FxHashSet`, `ShardedIndex::len()` reads a maintained atomic counter
+  instead of walking 16 shard locks, and the HNSW graph writer serializes
+  neighbors through a reused scratch buffer — byte-identical output.
+  (#2073)
+
+- **The adaptive escalation resumes instead of restarting.** When the
+  spread heuristic escalates a hard query, phase 2 re-enters the phase-1
+  traversal (visited set and frontier carried over) under the widened ef
+  instead of re-running from scratch — measured 27% fewer distance
+  evaluations at exact recall parity on the deterministic harness, which
+  now runs in CI next to the cost-crossover suite. GPU and RaBitQ paths
+  keep their restart semantics. (#2080)
+
+- **The ColumnStore string dictionary interns each string once** — both
+  interning maps share a single `Arc<str>` allocation per entry instead of
+  storing every string twice. (#2081)
+
+### Added
+
+- **Inner/Left JOINs on a non-primary join column are served from a
+  secondary index** when one exists on the right collection, instead of
+  falling back to a full scan. (#2049)
+
+- **The runtime filter-selectivity estimate is backed by ANALYZE
+  statistics** instead of static heuristics, feeding the pre/post-filter
+  decision brain. (#2046)
+
+- **CI: the fuzz seed corpus is committed and replayed on every PR**, and a
+  crash found by the nightly job now fails it; nightly Miri extends to the
+  manual-allocation core. Four consumer feature combinations gate every PR,
+  and manifests are checked against the public registries daily. (#2027,
+  #2032, #2033, #2051, #2052)
+
+### Deprecated
+
+- **The `MemoryStore` alias** (velesdb-memory) is deprecated; its napi
+  homonym is renamed. (#2035)
+
+### Removed
+
+- **The PDX block-columnar machinery.** It was maintained on every insert,
+  rebuilt on optimize (2x vector RAM), and read by nothing; the search loop
+  it fed was reclaimed, and `NATIVE_HNSW.md` now documents the
+  pre-normalized kernel that production actually runs. Recoverable from git
+  history if the design returns. (#2062, #2074)
+
+### Fixed
+
+- **The bitmap under-fill retry explored nothing.** It doubled
+  `candidates_k` at the same `ef`, but the graph's result heap is bounded
+  by `ef`, so the retry re-ran the identical traversal and returned the
+  identical set — pure cost. The retry now widens `ef` as well, and a
+  regression test pins both the old no-op mechanism and the new deeper
+  exploration. (#2080)
+
+- **`[wal_batch]` no longer promises group commit it does not deliver.**
+  The section is parsed but unwired; enabling it now logs a warning, the
+  rustdoc marks it reserved, and both example TOMLs stop describing it as
+  functional. Wiring or removal is tracked in #2078. (#2082)
+
+- **Package descriptions claim sub-millisecond, not microsecond**, and the
+  benchmarks licence notice is corrected. (#2041)
+
+### Changed
+
 - **The executed-strategy channel is now a typed cell.** The
   `Arc<AtomicU8>` probe introduced with `executed_filter_strategy` spread
   its raw `u8` encoding across three modules; it is now
