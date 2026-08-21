@@ -230,6 +230,9 @@ impl Collection {
             metric,
             vector_guard: &vector_storage,
             payload_guard: &payload_storage,
+            payload_memo: crate::collection::search::query::match_exec::PayloadMemo::new(
+                &payload_storage,
+            ),
         };
         let ids: Vec<u64> = vector_storage.ids();
 

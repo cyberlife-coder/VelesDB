@@ -199,7 +199,7 @@ impl Collection {
         let Some(node) = walk.pattern.nodes.get(rel_idx + 1) else {
             return Ok(());
         };
-        if !Self::node_matches_bound_pattern(node_id, node, walk.ctx.guards.payload_guard) {
+        if !Self::node_matches_bound_pattern(node_id, node, &walk.ctx.guards.payload_memo) {
             return Ok(());
         }
         let inserted = Self::bind_node_alias(walk.bindings, node, node_id);
@@ -244,7 +244,7 @@ impl Collection {
             walk.edge_bindings,
             walk.edge_paths,
             &walk.ctx.match_clause.return_clause,
-            walk.ctx.guards.payload_guard,
+            &walk.ctx.guards.payload_memo,
         );
         walk.ctx.all_results.push(result);
         Ok(())
