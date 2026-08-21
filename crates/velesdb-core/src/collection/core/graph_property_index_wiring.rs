@@ -175,6 +175,20 @@ impl Collection {
         self.graph.index_advisor.read().suggest(&tracker)
     }
 
+    /// Looks up the range index for `label.property` and, if present, runs
+    /// `f` against it. Shared by the `graph_range_lookup_*` variants below,
+    /// which differ only in which `CompositeRangeIndex` method `f` calls.
+    fn with_range_index<T>(
+        &self,
+        label: &str,
+        property: &str,
+        f: impl FnOnce(&CompositeRangeIndex) -> T,
+    ) -> Option<T> {
+        let key = range_index_key(label, property);
+        let indexes = self.graph.graph_range_indexes.read();
+        indexes.get(&key).map(f)
+    }
+
     /// Looks up node IDs matching a greater-than predicate.
     #[must_use]
     pub(crate) fn graph_range_lookup_gt(
@@ -183,11 +197,7 @@ impl Collection {
         property: &str,
         value: &Value,
     ) -> Option<Vec<u64>> {
-        let key = range_index_key(label, property);
-        let indexes = self.graph.graph_range_indexes.read();
-        indexes
-            .get(&key)
-            .map(|idx: &CompositeRangeIndex| idx.lookup_gt(value))
+        self.with_range_index(label, property, |idx| idx.lookup_gt(value))
     }
 
     /// Looks up node IDs matching a less-than predicate.
@@ -198,11 +208,7 @@ impl Collection {
         property: &str,
         value: &Value,
     ) -> Option<Vec<u64>> {
-        let key = range_index_key(label, property);
-        let indexes = self.graph.graph_range_indexes.read();
-        indexes
-            .get(&key)
-            .map(|idx: &CompositeRangeIndex| idx.lookup_lt(value))
+        self.with_range_index(label, property, |idx| idx.lookup_lt(value))
     }
 
     /// Looks up node IDs matching a range predicate.
@@ -214,11 +220,7 @@ impl Collection {
         lower: Option<&Value>,
         upper: Option<&Value>,
     ) -> Option<Vec<u64>> {
-        let key = range_index_key(label, property);
-        let indexes = self.graph.graph_range_indexes.read();
-        indexes
-            .get(&key)
-            .map(|idx: &CompositeRangeIndex| idx.lookup_range(lower, upper))
+        self.with_range_index(label, property, |idx| idx.lookup_range(lower, upper))
     }
 
     /// Looks up node IDs matching an exact value.
@@ -229,11 +231,7 @@ impl Collection {
         property: &str,
         value: &Value,
     ) -> Option<Vec<u64>> {
-        let key = range_index_key(label, property);
-        let indexes = self.graph.graph_range_indexes.read();
-        indexes
-            .get(&key)
-            .map(|idx: &CompositeRangeIndex| idx.lookup_exact(value).to_vec())
+        self.with_range_index(label, property, |idx| idx.lookup_exact(value).to_vec())
     }
 
     /// Looks up node IDs via composite index for multi-property equality.
