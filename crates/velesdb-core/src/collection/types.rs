@@ -301,6 +301,14 @@ pub(crate) struct GraphStore {
     /// Lock order position: **7**.
     pub(super) property_index: Arc<RwLock<PropertyIndex>>,
 
+    /// Set by every `property_index` mutation (all DDL: create/drop), cleared
+    /// by the flush that persisted it — `flush()` was rewriting
+    /// `property_index.bin` on every call, changed or not.
+    pub(super) property_index_dirty: std::sync::atomic::AtomicBool,
+
+    /// `range_index`'s twin of `property_index_dirty`.
+    pub(super) range_index_dirty: std::sync::atomic::AtomicBool,
+
     /// Label index for O(1) label-based node lookups (Issue #486).
     ///
     /// Maps label names to `RoaringBitmap` of node IDs, enabling

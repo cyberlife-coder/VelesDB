@@ -529,6 +529,9 @@ impl Collection {
     pub fn create_property_index(&self, label: &str, property: &str) -> Result<()> {
         let mut index = self.graph.property_index.write();
         index.create_index(label, property);
+        self.graph
+            .property_index_dirty
+            .store(true, std::sync::atomic::Ordering::Release);
         Ok(())
     }
 
@@ -546,6 +549,9 @@ impl Collection {
     pub fn create_range_index(&self, label: &str, property: &str) -> Result<()> {
         let mut index = self.graph.range_index.write();
         index.create_index(label, property);
+        self.graph
+            .range_index_dirty
+            .store(true, std::sync::atomic::Ordering::Release);
         Ok(())
     }
 
@@ -634,11 +640,19 @@ impl Collection {
             .write()
             .drop_index(label, property);
         if dropped_prop {
+            self.graph
+                .property_index_dirty
+                .store(true, std::sync::atomic::Ordering::Release);
             return Ok(true);
         }
 
         // Try range index
         let dropped_range = self.graph.range_index.write().drop_index(label, property);
+        if dropped_range {
+            self.graph
+                .range_index_dirty
+                .store(true, std::sync::atomic::Ordering::Release);
+        }
         Ok(dropped_range)
     }
 
