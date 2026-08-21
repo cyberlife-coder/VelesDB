@@ -22,6 +22,15 @@ pub(crate) struct GraphMatchEvalCache {
     /// every row of a single evaluation, so pointer identity is a stable key
     /// and lets us build each leaf `Filter` exactly once instead of per row.
     filters: Vec<(usize, crate::filter::Filter)>,
+    /// Resolved query vectors for `similarity()` leaves, keyed the same way
+    /// (leaf pointer): `resolve_vector` cloned the literal (or re-parsed the
+    /// `$param` JSON) for EVERY candidate row — a 3 KB alloc+copy per row at
+    /// 768 dims. The vector is invariant across the evaluation.
+    similarity_vectors: Vec<(usize, Vec<f32>)>,
+    /// Metric snapshot for similarity comparisons: `evaluate_similarity` took
+    /// the `config` read lock TWICE per row (once inside
+    /// `compute_metric_score`, once for the threshold direction).
+    metric: Option<crate::distance::DistanceMetric>,
 }
 
 impl GraphMatchEvalCache {
@@ -59,6 +68,35 @@ impl GraphMatchEvalCache {
         self.filters.push((key, filter));
         let idx = self.filters.len() - 1;
         &self.filters[idx].1
+    }
+
+    /// Returns the resolved query vector for a `similarity()` leaf, resolving
+    /// it exactly once per evaluation (same pointer-keyed scheme as
+    /// [`Self::metadata_filter`]).
+    fn similarity_query_vector(
+        &mut self,
+        sim: &crate::velesql::SimilarityCondition,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<&[f32]> {
+        let key = std::ptr::from_ref(sim) as usize;
+        if let Some(idx) = self.similarity_vectors.iter().position(|(k, _)| *k == key) {
+            return Ok(&self.similarity_vectors[idx].1);
+        }
+        let resolved = Collection::resolve_vector(&sim.vector, params)?;
+        self.similarity_vectors.push((key, resolved));
+        let idx = self.similarity_vectors.len() - 1;
+        Ok(&self.similarity_vectors[idx].1)
+    }
+
+    /// Returns the collection's metric, reading the `config` lock at most
+    /// once per evaluation (the per-row path read it twice per candidate).
+    fn metric_snapshot(&mut self, collection: &Collection) -> crate::distance::DistanceMetric {
+        if let Some(metric) = self.metric {
+            return metric;
+        }
+        let metric = collection.storage.config.read().metric;
+        self.metric = Some(metric);
+        metric
     }
 
     /// Test seam (#904): number of distinct metadata-leaf `Filter`s built.
@@ -233,7 +271,9 @@ impl Collection {
             Condition::Or(left, right) => self.eval_short_circuit_or(left, right, ctx, graph_cache),
             Condition::Not(inner) => self.eval_condition(inner, ctx, graph_cache).map(|v| !v),
             Condition::Group(inner) => self.eval_condition(inner, ctx, graph_cache),
-            Condition::Similarity(sim) => self.evaluate_similarity(sim, ctx.vector, ctx.params),
+            Condition::Similarity(sim) => {
+                self.evaluate_similarity(sim, ctx.vector, ctx.params, graph_cache)
+            }
             Condition::VectorSearch(_) | Condition::VectorFusedSearch(_) => Ok(true),
             // #904: reuse the per-query cached `Filter` for this metadata leaf
             // instead of rebuilding it (and cloning the AST) on every row.
@@ -278,13 +318,22 @@ impl Collection {
         sim: &crate::velesql::SimilarityCondition,
         vector: Option<&[f32]>,
         params: &std::collections::HashMap<String, serde_json::Value>,
+        graph_cache: &mut GraphMatchEvalCache,
     ) -> Result<bool> {
         let Some(record_vector) = vector else {
             return Ok(false);
         };
-        let query_vec = Self::resolve_vector(&sim.vector, params)?;
-        let score = self.compute_metric_score(record_vector, &query_vec);
-        let metric = self.storage.config.read().metric;
+        // Per-query invariants come from the eval cache: the resolved query
+        // vector (was one alloc+copy or `$param` re-parse per row) and the
+        // metric snapshot (was TWO `config` read-lock acquisitions per row —
+        // one inside `compute_metric_score`, one for the direction).
+        let metric = graph_cache.metric_snapshot(self);
+        let query_vec = graph_cache.similarity_query_vector(sim, params)?;
+        let score = if record_vector.len() == query_vec.len() && !record_vector.is_empty() {
+            metric.calculate(record_vector, query_vec)
+        } else {
+            0.0
+        };
         #[allow(clippy::cast_possible_truncation)]
         // Reason: similarity thresholds are approximate floating bounds.
         let threshold = sim.threshold as f32;
