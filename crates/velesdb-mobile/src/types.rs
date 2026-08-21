@@ -472,7 +472,9 @@ pub struct MobileDeferredIndexerConfig {
     pub enabled: bool,
     /// Number of buffered points before a merge is triggered.
     pub merge_threshold: u64,
-    /// Maximum buffer age in milliseconds before a forced merge.
+    /// Maximum buffer age in milliseconds before a forced merge. Checked
+    /// at write time (no background timer): an expired buffer merges on
+    /// the next write. `0` makes every write trigger a merge.
     pub max_buffer_age_ms: u64,
 }
 
@@ -494,7 +496,9 @@ impl From<MobileDeferredIndexerConfig>
 pub struct MobileAsyncIndexBuilderConfig {
     /// Number of buffered points before a segment merge is triggered.
     pub merge_threshold: u64,
-    /// Number of parallel segments; `None` falls back to the CPU count.
+    /// Reserved — parsed but not yet wired (core issue #488 Task 4):
+    /// flushes parallelize on the global thread pool and this knob
+    /// changes nothing today.
     pub segment_count: Option<u32>,
 }
 
