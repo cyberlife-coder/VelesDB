@@ -98,11 +98,45 @@ const BANDS: &[Band] = &[
     }, // 95% → post-filter
 ];
 
-/// Deterministic, normalized vector for a point id (closed form, no RNG).
-fn vector_for(id: u64) -> Vec<f32> {
-    let mut v: Vec<f32> = (0..DIM)
-        .map(|d| ((id as f32) * 0.13 + (d as f32) * 0.07).cos())
-        .collect();
+/// Corpus geometry. The closed-form trigonometric corpus lies on a smooth
+/// 1-D curve — a degenerate distribution an HNSW graph finds unusually easy,
+/// so its numbers alone could flatter the index. The seeded corpus draws
+/// isotropic-ish vectors from an inline xorshift64* stream (no external RNG
+/// crate, so the sequence can never change under a dependency bump): every
+/// law must hold on BOTH geometries for the table to be trusted.
+#[derive(Clone, Copy, Debug)]
+enum Geometry {
+    ClosedForm,
+    Seeded,
+}
+
+const GEOMETRIES: &[Geometry] = &[Geometry::ClosedForm, Geometry::Seeded];
+
+impl Geometry {
+    fn name(self) -> &'static str {
+        match self {
+            Self::ClosedForm => "closed_form",
+            Self::Seeded => "seeded_xorshift",
+        }
+    }
+}
+
+/// Inline xorshift64* step — deterministic forever, dependency-free.
+fn xorshift64star(state: &mut u64) -> u64 {
+    let mut x = *state;
+    x ^= x >> 12;
+    x ^= x << 25;
+    x ^= x >> 27;
+    *state = x;
+    x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+}
+
+/// Uniform-ish f32 in [-1, 1) from the stream.
+fn unit_f32(state: &mut u64) -> f32 {
+    ((xorshift64star(state) >> 40) as f32 / (1u64 << 24) as f32) * 2.0 - 1.0
+}
+
+fn normalize(mut v: Vec<f32>) -> Vec<f32> {
     let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm > 0.0 {
         for x in &mut v {
@@ -112,23 +146,37 @@ fn vector_for(id: u64) -> Vec<f32> {
     v
 }
 
-/// Deterministic, normalized query vector for a query index.
-fn query_for(q: usize) -> Vec<f32> {
-    let mut v: Vec<f32> = (0..DIM)
-        .map(|d| ((q as f32) * 0.31 + (d as f32) * 0.11).sin())
-        .collect();
-    let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm > 0.0 {
-        for x in &mut v {
-            *x /= norm;
+/// Deterministic, normalized vector for a point id under a geometry.
+fn vector_for(geometry: Geometry, id: u64) -> Vec<f32> {
+    let v: Vec<f32> = match geometry {
+        Geometry::ClosedForm => (0..DIM)
+            .map(|d| ((id as f32) * 0.13 + (d as f32) * 0.07).cos())
+            .collect(),
+        Geometry::Seeded => {
+            let mut state = id ^ 0x9E37_79B9_7F4A_7C15 | 1;
+            (0..DIM).map(|_| unit_f32(&mut state)).collect()
         }
-    }
-    v
+    };
+    normalize(v)
+}
+
+/// Deterministic, normalized query vector for a query index under a geometry.
+fn query_for(geometry: Geometry, q: usize) -> Vec<f32> {
+    let v: Vec<f32> = match geometry {
+        Geometry::ClosedForm => (0..DIM)
+            .map(|d| ((q as f32) * 0.31 + (d as f32) * 0.11).sin())
+            .collect(),
+        Geometry::Seeded => {
+            let mut state = (q as u64) ^ 0xD1B5_4A32_D192_ED03 | 1;
+            (0..DIM).map(|_| unit_f32(&mut state)).collect()
+        }
+    };
+    normalize(v)
 }
 
 /// Builds the corpus: every band field is an indexed boolean-like tag whose
 /// `"y"` population is the id prefix `0..count`.
-fn setup() -> (VectorCollection, TempDir) {
+fn setup(geometry: Geometry) -> (VectorCollection, TempDir) {
     let dir = TempDir::new().expect("temp dir");
     let collection = VectorCollection::create(
         dir.path().join("crossover"),
@@ -151,7 +199,11 @@ fn setup() -> (VectorCollection, TempDir) {
                 payload.insert(band.field.to_string(), json!(value));
             }
             payload.insert("seq".to_string(), json!(id));
-            Point::new(id, vector_for(id), Some(serde_json::Value::Object(payload)))
+            Point::new(
+                id,
+                vector_for(geometry, id),
+                Some(serde_json::Value::Object(payload)),
+            )
         })
         .collect();
 
@@ -165,9 +217,9 @@ fn cosine(a: &[f32], b: &[f32]) -> f32 {
 }
 
 /// Exact top-k ids among the band's population for one query (ground truth).
-fn ground_truth(band: &Band, query: &[f32]) -> Vec<u64> {
+fn ground_truth(geometry: Geometry, band: &Band, query: &[f32]) -> Vec<u64> {
     let mut scored: Vec<(u64, f32)> = (0..band.count)
-        .map(|id| (id, cosine(query, &vector_for(id))))
+        .map(|id| (id, cosine(query, &vector_for(geometry, id))))
         .collect();
     scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     scored.truncate(K);
@@ -176,7 +228,7 @@ fn ground_truth(band: &Band, query: &[f32]) -> Vec<u64> {
 
 /// Runs one batch of the band's filtered query through the quality-aware
 /// dispatch; returns (distance evals for the batch, mean recall@K).
-fn run_batch(collection: &VectorCollection, band: &Band) -> (u64, f64) {
+fn run_batch(geometry: Geometry, collection: &VectorCollection, band: &Band) -> (u64, f64) {
     let sql = format!(
         "SELECT * FROM crossover WHERE vector NEAR $v AND {} = '{}' LIMIT {K} WITH (mode='balanced')",
         band.field, band.value
@@ -184,13 +236,13 @@ fn run_batch(collection: &VectorCollection, band: &Band) -> (u64, f64) {
     let mut recall_sum = 0.0_f64;
     reset_hnsw_distance_evals();
     for q in 0..QUERIES {
-        let query = query_for(q);
+        let query = query_for(geometry, q);
         let mut params = HashMap::new();
         params.insert("v".to_string(), json!(query));
         let results = collection
             .execute_query_str(&sql, &params)
             .expect("filtered query");
-        let truth = ground_truth(band, &query);
+        let truth = ground_truth(geometry, band, &query);
         let got: std::collections::HashSet<u64> = results.iter().map(|r| r.point.id).collect();
         let hit = truth.iter().filter(|id| got.contains(id)).count();
         recall_sum += hit as f64 / truth.len().max(1) as f64;
@@ -200,12 +252,20 @@ fn run_batch(collection: &VectorCollection, band: &Band) -> (u64, f64) {
 
 #[test]
 fn cost_crossover_work_table_is_deterministic_and_lawful() {
-    let (collection, _dir) = setup();
+    for &geometry in GEOMETRIES {
+        crossover_table_for(geometry);
+    }
+}
+
+/// Runs the full band table under one corpus geometry and asserts the exact
+/// laws; the laws are geometry-independent, the numbers are not.
+fn crossover_table_for(geometry: Geometry) {
+    let (collection, _dir) = setup(geometry);
 
     let mut rows = Vec::new();
     for band in BANDS {
-        let (evals_a, recall_a) = run_batch(&collection, band);
-        let (evals_b, recall_b) = run_batch(&collection, band);
+        let (evals_a, recall_a) = run_batch(geometry, &collection, band);
+        let (evals_b, recall_b) = run_batch(geometry, &collection, band);
 
         // Determinism: two identical batches over an immutable collection
         // must do bit-for-bit identical work and return identical recall.
@@ -230,6 +290,7 @@ fn cost_crossover_work_table_is_deterministic_and_lawful() {
         println!(
             "{}",
             json!({
+                "geometry": geometry.name(),
                 "band": band.field,
                 "selectivity": selectivity,
                 "matching": band.count,

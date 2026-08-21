@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The cost-crossover harness measures two corpus geometries.** The original
+  closed-form trigonometric corpus lies on a smooth 1-D curve — a degenerate
+  distribution an HNSW graph finds unusually easy, so its numbers alone could
+  flatter the index. A seeded isotropic corpus (inline xorshift64*, no RNG
+  dependency, so the sequence can never change under a dependency bump) now
+  runs the same band table; every exact law must hold on both. First
+  measured correction: on the isotropic corpus the bitmap path's work
+  advantage over post-filter at 50–80 % selectivity collapses (≈4 % instead
+  of ≈36 %), and at 5 % selectivity bitmap-HNSW costs nearly 2× the
+  post-filter — the oversampling budget `k/selectivity` dominates. The
+  threshold-convergence work must weigh both geometries.
+
 - **EXPLAIN ANALYZE now reports the filter strategy the executor actually
   ran** (`actual_stats.executed_filter_strategy`), recorded at the dispatch
   site itself — not re-derived — through a probe shared between the query
