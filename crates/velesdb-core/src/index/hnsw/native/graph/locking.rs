@@ -81,13 +81,18 @@ pub(crate) enum LockRank {
     GpuVectorsSnapshot = crate::lock_rank::LockRank::GPU_VECTORS_SNAPSHOT.ordinal(),
     /// `vectors` RwLock — rank 10 (acquired first among the core HNSW locks)
     Vectors = crate::lock_rank::LockRank::VECTORS.ordinal(),
-    /// `columnar` RwLock — rank 15 (PDX block-columnar layout)
-    #[allow(dead_code)] // Reason: PDX columnar lock rank — used when PDX search is wired
+    /// `columnar` RwLock — rank 15 (PDX block-columnar layout).
+    ///
+    /// Tracked at its single acquisition site, the PDX layout rebuild in
+    /// `reorder.rs` (vectors → columnar); PDX search readers, when wired,
+    /// inherit the tracked order.
     Columnar = crate::lock_rank::LockRank::COLUMNAR.ordinal(),
     /// `layers` RwLock — rank 20 (acquired after vectors/columnar)
     Layers = crate::lock_rank::LockRank::LAYERS.ordinal(),
-    /// Per-node neighbor lists — rank 30 (acquired last)
-    #[allow(dead_code)] // Reason: Neighbor-level lock rank — reserved for fine-grained locking
+    /// Per-node neighbor lists — rank 30 (acquired last).
+    // Reason: pure reservation — no per-node neighbor lock exists yet, so
+    // there is nothing to track; the rank pins the slot in the global order.
+    #[allow(dead_code)]
     Neighbors = crate::lock_rank::LockRank::NEIGHBORS.ordinal(),
 }
 

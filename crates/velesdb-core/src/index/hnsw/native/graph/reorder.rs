@@ -146,11 +146,20 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// This transposes row-major vectors into 64-vector blocks where each
     /// dimension is contiguous, enabling SIMD-parallel distance computation.
     fn build_columnar_layout(&self) {
+        use super::locking::{record_lock_acquire, record_lock_release, LockRank};
+        // The only current two-lock site touching `columnar`: vectors (10)
+        // then columnar (15), tracked so a future PDX reader taking the
+        // locks the other way round trips the debug tracker immediately.
+        record_lock_acquire(LockRank::Vectors);
         let vectors_guard = self.vectors.read();
         if let Some(vectors) = vectors_guard.as_ref() {
             let pdx = super::super::columnar_vectors::ColumnarVectors::from_contiguous(vectors);
+            record_lock_acquire(LockRank::Columnar);
             *self.columnar.write() = Some(pdx);
+            record_lock_release(LockRank::Columnar);
         }
+        drop(vectors_guard);
+        record_lock_release(LockRank::Vectors);
     }
 
     /// Builds a reverse mapping: `result[old_id] = new_id`.
