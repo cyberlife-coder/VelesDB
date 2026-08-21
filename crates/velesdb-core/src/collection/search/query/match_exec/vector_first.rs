@@ -96,6 +96,7 @@ impl Collection {
             vector_guard: &vector_guard,
             payload_guard: &payload_guard,
             payload_memo: super::PayloadMemo::new(&payload_guard),
+            where_filters: super::WhereFilterMemo::default(),
         };
         let mut results = Vec::new();
         let mut examined = 0u64;
