@@ -488,6 +488,13 @@ fn test_concurrent_insert_search_correctness() {
     use std::sync::Arc;
     use std::thread;
 
+    // The safety counters are process-global: snapshot before, compare after,
+    // so tests that legitimately exercise the violation detector (e.g. the
+    // locking tests) cannot fail this one through the shared counter.
+    let violations_before = super::graph::safety_counters::HNSW_COUNTERS
+        .snapshot()
+        .invariant_violation_total;
+
     let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = Arc::new(NativeHnsw::new(engine, 16, 100, 1000));
 
@@ -557,10 +564,10 @@ fn test_concurrent_insert_search_correctness() {
         "Should have at least 100 initial + 200 inserted, got {final_count}"
     );
 
-    // Safety counters: no invariant violations
+    // Safety counters: this test must not have added invariant violations
     let snapshot = super::graph::safety_counters::HNSW_COUNTERS.snapshot();
     assert_eq!(
-        snapshot.invariant_violation_total, 0,
+        snapshot.invariant_violation_total, violations_before,
         "Concurrent insert+search must not trigger lock-order violations"
     );
 }
@@ -634,6 +641,11 @@ fn test_hnsw_no_deadlock_during_parallel_insert_search() {
     use std::sync::Arc;
     use std::thread;
 
+    // Global-counter delta (see test_concurrent_insert_search_correctness).
+    let violations_before = super::graph::safety_counters::HNSW_COUNTERS
+        .snapshot()
+        .invariant_violation_total;
+
     let engine = CachedSimdDistance::new(DistanceMetric::Cosine, 64);
     let hnsw = Arc::new(NativeHnsw::new(engine, 16, 100, 500));
 
@@ -689,10 +701,10 @@ fn test_hnsw_no_deadlock_during_parallel_insert_search() {
         "Should have at least initial 100 vectors, got {final_count}"
     );
 
-    // Verify safety counters are accessible and no invariant violations
+    // Verify safety counters are accessible and this test added no violations
     let snapshot = super::graph::safety_counters::HNSW_COUNTERS.snapshot();
     assert_eq!(
-        snapshot.invariant_violation_total, 0,
+        snapshot.invariant_violation_total, violations_before,
         "No lock-order violations should occur with correct lock ordering"
     );
 }
@@ -982,6 +994,9 @@ fn test_prenormalized_search_distances_are_consistent() {
 
 #[test]
 fn test_safety_counters_accessible_after_operations() {
+    // Global-counter deltas (see test_concurrent_insert_search_correctness).
+    let before = super::graph::safety_counters::HNSW_COUNTERS.snapshot();
+
     let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
@@ -998,12 +1013,12 @@ fn test_safety_counters_accessible_after_operations() {
 
     // No invariant violations expected with correct lock ordering
     assert_eq!(
-        snapshot.invariant_violation_total, 0,
+        snapshot.invariant_violation_total, before.invariant_violation_total,
         "Correct lock ordering should produce zero violations"
     );
-    // Corruption counter should be zero for normal operations
+    // Corruption counter should not move for normal operations
     assert_eq!(
-        snapshot.corruption_detected_total, 0,
+        snapshot.corruption_detected_total, before.corruption_detected_total,
         "Normal operations should not trigger corruption signals"
     );
 }
