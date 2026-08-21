@@ -18,8 +18,6 @@ fn holds_lock_reports_currently_held_rank() {
 fn gpu_vectors_snapshot_rank_sorts_before_vectors() {
     // Monotone rank check — the core invariant of the enum.
     assert!(LockRank::GpuVectorsSnapshot < LockRank::Vectors);
-    assert!(LockRank::Vectors < LockRank::Columnar);
-    assert!(LockRank::Columnar < LockRank::Layers);
     assert!(LockRank::Layers < LockRank::Neighbors);
 }
 
@@ -41,29 +39,11 @@ fn nested_acquire_in_declared_order_reports_both_held() {
 }
 
 #[test]
-fn columnar_after_vectors_is_the_tracked_pdx_rebuild_order() {
-    // Mirrors reorder::build_columnar_layout: vectors (10) then columnar (15).
-    record_lock_acquire(LockRank::Vectors);
-    record_lock_acquire(LockRank::Columnar);
-
-    assert!(holds_lock(LockRank::Vectors));
-    assert!(holds_lock(LockRank::Columnar));
-
-    record_lock_release(LockRank::Columnar);
-    record_lock_release(LockRank::Vectors);
-    assert!(!holds_lock(LockRank::Columnar));
-    assert!(!holds_lock(LockRank::Vectors));
-}
-
-#[test]
-fn vectors_after_columnar_counts_a_violation() {
+fn vectors_after_layers_counts_a_violation() {
     let before = HNSW_COUNTERS.snapshot().invariant_violation_total;
-    record_lock_acquire(LockRank::Columnar);
-    record_lock_acquire(LockRank::Vectors); // wrong order: 10 while holding 15
+    record_lock_acquire(LockRank::Layers);
+    record_lock_acquire(LockRank::Vectors); // wrong order: 10 while holding 20
     record_lock_release(LockRank::Vectors);
-    record_lock_release(LockRank::Columnar);
-    assert!(
-        HNSW_COUNTERS.snapshot().invariant_violation_total > before,
-        "acquiring Vectors while holding Columnar must be flagged"
-    );
+    record_lock_release(LockRank::Layers);
+    assert!(HNSW_COUNTERS.snapshot().invariant_violation_total > before,);
 }

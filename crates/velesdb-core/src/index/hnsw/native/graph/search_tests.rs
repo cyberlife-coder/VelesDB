@@ -202,7 +202,7 @@ fn test_gather_unvisited_neighbors_filters_visited() {
     visited.insert(1);
     visited.insert(3);
 
-    let unvisited: SmallVec<[(NodeId, &[f32]); 32]> =
+    let unvisited: SmallVec<[(NodeId, &[f32]); 64]> =
         gather_unvisited_neighbors(&neighbors, &mut visited, &vectors, false);
 
     let ids: Vec<NodeId> = unvisited.iter().map(|(id, _)| *id).collect();

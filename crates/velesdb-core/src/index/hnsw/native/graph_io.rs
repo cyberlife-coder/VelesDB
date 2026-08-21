@@ -273,7 +273,6 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             alpha: graph.alpha,
             stagnation_limit: graph.ef_construction / 2,
             pre_allocated_capacity: std::sync::atomic::AtomicUsize::new(0),
-            columnar: parking_lot::RwLock::new(None),
             #[cfg(feature = "gpu")]
             gpu_csr_cache: crate::gpu::gpu_csr::CsrCache::new(),
             #[cfg(feature = "gpu")]

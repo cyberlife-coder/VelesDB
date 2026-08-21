@@ -24,7 +24,6 @@ mod search_tests;
 #[cfg(feature = "gpu")]
 mod gpu_search;
 
-use super::columnar_vectors::ColumnarVectors;
 use super::distance::DistanceEngine;
 use super::layer::Layer;
 use crate::perf_optimizations::ContiguousVectors;
@@ -105,11 +104,6 @@ pub struct NativeHnsw<D: DistanceEngine> {
     /// to skip the write lock when the insert falls within the pre-allocated range.
     /// Transient: not serialized to disk.
     pub(in crate::index::hnsw::native) pre_allocated_capacity: AtomicUsize,
-    /// PDX block-columnar layout for SIMD-parallel distance computation.
-    ///
-    /// Built automatically after BFS reordering (`reorder_for_locality()`).
-    /// Lock rank 15 (between vectors=10 and layers=20).
-    pub(in crate::index::hnsw::native) columnar: RwLock<Option<ColumnarVectors>>,
     /// Per-instance CSR cache for GPU traversal.
     ///
     /// Each `NativeHnsw` instance owns its own cache, preventing cross-collection
@@ -268,7 +262,6 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             // contributing to recall degradation (97% at 10K → 64% at 100K).
             stagnation_limit: ef_construction / 2,
             pre_allocated_capacity: AtomicUsize::new(0),
-            columnar: RwLock::new(None),
             #[cfg(feature = "gpu")]
             gpu_csr_cache: crate::gpu::gpu_csr::CsrCache::new(),
             #[cfg(feature = "gpu")]

@@ -14,9 +14,7 @@
 //! The count is a *work measure*, not a timer: it is bit-for-bit reproducible
 //! across runs and machines for a deterministic corpus (the HNSW level PRNG
 //! is fixed-seed), which makes it usable on shared CI runners where
-//! wall-clock benchmarks are noise. Block-columnar (PDX) kernels compute
-//! distances in blocks without passing through these entry points, so for
-//! paths that engage them the counter is a lower bound.
+//! wall-clock benchmarks are noise.
 //!
 //! Corollary: with `internal-bench` enabled, the relaxed atomic increment
 //! sits inside the distance hot loop — wall-clock measured under this

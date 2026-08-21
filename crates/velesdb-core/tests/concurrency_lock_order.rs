@@ -3,7 +3,7 @@
 //! This suite is designed to run under `ThreadSanitizer` on a nightly toolchain
 //! (see `.github/workflows/tsan-concurrency.yml`). It exercises acquisition
 //! across the core lock classes in strictly ascending rank order
-//! (`gpu → vectors → columnar → layers → neighbors`) from many threads at
+//! (`gpu → vectors → layers → neighbors`) from many threads at
 //! once, using [`assert_lock_order`] to encode the global order and
 //! `parking_lot` locks to create real cross-thread contention.
 //!
@@ -34,7 +34,6 @@ const ITERATIONS: usize = 500;
 struct CoreLocks {
     gpu: Mutex<u64>,
     vectors: Mutex<u64>,
-    columnar: Mutex<u64>,
     layers: Mutex<u64>,
     neighbors: Mutex<u64>,
 }
@@ -44,7 +43,6 @@ impl CoreLocks {
         Self {
             gpu: Mutex::new(0),
             vectors: Mutex::new(0),
-            columnar: Mutex::new(0),
             layers: Mutex::new(0),
             neighbors: Mutex::new(0),
         }
@@ -68,11 +66,6 @@ impl CoreLocks {
         let mut vectors = self.vectors.lock();
         *vectors += 1;
 
-        assert_lock_order(prev, LockRank::COLUMNAR);
-        prev = LockRank::COLUMNAR;
-        let mut columnar = self.columnar.lock();
-        *columnar += 1;
-
         assert_lock_order(prev, LockRank::LAYERS);
         prev = LockRank::LAYERS;
         let mut layers = self.layers.lock();
@@ -86,17 +79,15 @@ impl CoreLocks {
         // the correct release order for ascending acquisition.
         drop(neighbors);
         drop(layers);
-        drop(columnar);
         drop(vectors);
         drop(gpu);
     }
 
     /// Returns the per-class counters once all workers have joined.
-    fn totals(&self) -> [u64; 5] {
+    fn totals(&self) -> [u64; 4] {
         [
             *self.gpu.lock(),
             *self.vectors.lock(),
-            *self.columnar.lock(),
             *self.layers.lock(),
             *self.neighbors.lock(),
         ]
@@ -130,7 +121,7 @@ fn test_concurrent_ascending_lock_order_holds() {
     let expected = (NUM_THREADS * ITERATIONS) as u64;
     assert_eq!(
         locks.totals(),
-        [expected; 5],
+        [expected; 4],
         "every ordered lock class must have been acquired exactly once per iteration per thread"
     );
 }
@@ -143,7 +134,6 @@ fn test_core_acquisition_path_is_strictly_ascending() {
     let path = [
         LockRank::GPU_VECTORS_SNAPSHOT,
         LockRank::VECTORS,
-        LockRank::COLUMNAR,
         LockRank::LAYERS,
         LockRank::NEIGHBORS,
     ];
