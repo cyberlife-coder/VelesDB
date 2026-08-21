@@ -9,6 +9,7 @@
 //! - **Circuit Breaker**: Auto-disable on repeated failures (US-006)
 
 mod context;
+pub(crate) use context::{decode_filter_strategy, encode_filter_strategy};
 mod limits;
 mod resilience;
 #[cfg(test)]

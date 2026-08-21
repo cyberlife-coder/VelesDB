@@ -530,6 +530,7 @@ fn test_search_with_filter_and_opts_applies_quality() {
         ef_search: None,
         force_rerank: None,
         fusion_clause: None,
+        executed_strategy_probe: None,
     };
     // This method must exist and apply quality-aware search + filter.
     let results = col

@@ -50,7 +50,12 @@ impl Collection {
         &self,
         query: &crate::velesql::Query,
         params: &std::collections::HashMap<String, serde_json::Value>,
-    ) -> Result<(Vec<SearchResult>, u64, u64)> {
+    ) -> Result<(
+        Vec<SearchResult>,
+        u64,
+        u64,
+        Option<crate::velesql::FilterStrategy>,
+    )> {
         // Only a standalone MATCH query carries traversal counters. Run it
         // through the same context + dispatch as execute_query, then read the
         // counters the executor recorded into the query context. is_match_query
@@ -64,9 +69,17 @@ impl Collection {
                 results,
                 ctx.traversal_nodes_visited(),
                 ctx.traversal_edges_traversed(),
+                None,
             ));
         }
-        Ok((self.execute_query(query, params)?, 0, 0))
+        // Single SELECT: the traced core also reports which filter strategy
+        // the executor ran. Compound queries execute several selects — a
+        // single reported strategy would be ambiguous, so they report none.
+        if query.compound.is_none() {
+            let (results, strategy) = self.execute_query_traced(query, params, "default")?;
+            return Ok((results, 0, 0, strategy));
+        }
+        Ok((self.execute_query(query, params)?, 0, 0, None))
     }
 
     /// Computes the effective `(limit, fetch_limit)` from a SELECT statement.
@@ -389,8 +402,10 @@ impl Collection {
         let plan = QueryPlan::from_query_with_all_stats(query, &indexed, None, Some(&match_stats));
 
         let start = std::time::Instant::now();
-        let (results, nodes, edges) = self.execute_query_counted(query, params)?;
-        let stats = ActualStats::from_counted(results.len() as u64, start.elapsed(), nodes, edges);
+        let (results, nodes, edges, executed_strategy) =
+            self.execute_query_counted(query, params)?;
+        let stats = ActualStats::from_counted(results.len() as u64, start.elapsed(), nodes, edges)
+            .with_executed_filter_strategy(executed_strategy);
         let node_stats = build_leaf_node_stats(&plan.root, stats.actual_rows, stats.actual_time_ms);
         let mut output = ExplainOutput::with_stats(plan, stats, node_stats);
 

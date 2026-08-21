@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **EXPLAIN ANALYZE now reports the filter strategy the executor actually
+  ran** (`actual_stats.executed_filter_strategy`), recorded at the dispatch
+  site itself — not re-derived — through a probe shared between the query
+  context and the search options (an atomic slot, so the vector leg of the
+  CBO `Parallel` strategy, which runs on a rayon worker, records correctly).
+  Present for single SELECTs that went through the filtered vector-search
+  dispatch (including the new `PreFilterExact` brute-force branch); omitted
+  for MATCH, compound queries, and arms where pre/post-filter does not
+  apply. Unlike the plan's `filter_strategy` (an estimate), this is ground
+  truth: comparing the two surfaces plan/execution divergence — e.g. the
+  no-override path runs the bitmap even at 90 % selectivity where the
+  override path post-filters. Serde-defaulted: stats persisted by older
+  versions load unchanged.
+
 - **Deterministic cost-crossover harness** (`tests/cost_crossover.rs`, nightly
   `cost-crossover` CI job): measures the *work* (single-pair distance
   evaluations, via a new `internal-bench`-gated counter) and the exact recall
