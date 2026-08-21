@@ -355,11 +355,7 @@ impl VelesConfig {
             .merge(Toml::file(path.as_ref()))
             .merge(Env::prefixed("VELESDB_").split("_").lowercase(false));
 
-        let config: Self = figment
-            .extract()
-            .map_err(|e| ConfigError::ParseError(e.to_string()))?;
-        config.validate()?;
-        Ok(config)
+        Self::finish(&figment)
     }
 
     /// Creates a configuration from a TOML string.
@@ -376,11 +372,7 @@ impl VelesConfig {
             .merge(Serialized::defaults(Self::default()))
             .merge(Toml::string(toml_str));
 
-        let config: Self = figment
-            .extract()
-            .map_err(|e| ConfigError::ParseError(e.to_string()))?;
-        config.validate()?;
-        Ok(config)
+        Self::finish(&figment)
     }
 
     /// The top-level TOML tables that belong to the *engine* — as opposed
@@ -450,6 +442,14 @@ impl VelesConfig {
             .merge(Toml::string(&filtered))
             .merge(Env::prefixed("VELESDB_").split("_").lowercase(false));
 
+        Self::finish(&figment)
+    }
+
+    /// Extracts a [`Self`] from an assembled [`Figment`] and validates it.
+    /// Shared tail of `load_from_path`, `from_toml`, and
+    /// `load_from_path_engine_only`, which differ only in how `figment` is
+    /// assembled.
+    fn finish(figment: &Figment) -> Result<Self, ConfigError> {
         let config: Self = figment
             .extract()
             .map_err(|e| ConfigError::ParseError(e.to_string()))?;
