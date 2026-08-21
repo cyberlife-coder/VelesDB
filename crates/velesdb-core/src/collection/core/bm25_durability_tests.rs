@@ -365,12 +365,15 @@ fn empty_batch_does_not_touch_the_wal() {
     assert!(!wal_path(&dir).exists(), "no WAL file for an empty batch");
 }
 
-/// The single-document path keeps its per-call durability contract.
+/// `upsert` keeps its per-call durability contract at ONE barrier per call.
 ///
-/// The fix batches the BULK path; it must not silently weaken `upsert`, whose
-/// callers get one durability barrier per call.
+/// The contract callers rely on is "everything this call acknowledged is
+/// durable when it returns" — nothing is acknowledged between the points of
+/// one call, so per-document barriers bought no guarantee, only N-1 extra
+/// fsyncs (#1797). The whole batch now rides a single `wal_append_batch`
+/// barrier, same as `upsert_bulk`.
 #[test]
-fn single_document_path_keeps_its_contract() {
+fn upsert_call_gets_one_durability_barrier() {
     let dir = tempfile::tempdir().expect("temp dir");
     let col = Collection::create(PathBuf::from(dir.path()), DIM, DistanceMetric::Cosine)
         .expect("created");
@@ -379,9 +382,8 @@ fn single_document_path_keeps_its_contract() {
     res.expect("upsert");
 
     assert_eq!(
-        counts.syncs, 3,
-        "the single-document path still fsyncs per document; batching the bulk \
-         path must not have changed it"
+        counts.syncs, 1,
+        "one durability barrier covers the whole upsert call's BM25 batch"
     );
 }
 

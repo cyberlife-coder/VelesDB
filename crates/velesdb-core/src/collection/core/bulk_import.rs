@@ -295,7 +295,7 @@ impl Collection {
     ///
     /// Points with `Some(payload)` get their text indexed; points with
     /// `None` payload get their stale BM25 entry removed. Mirrors the
-    /// contract of `update_text_index` in `crud.rs`.
+    /// contract of `bulk_update_text_index` in `crud_indexing.rs`.
     ///
     /// Issue #389: each mutation is appended to the BM25 WAL BEFORE it
     /// is applied in-memory so that a crash between the two replays
@@ -308,19 +308,29 @@ impl Collection {
         payloads: Option<&[Option<serde_json::Value>]>,
     ) -> Result<()> {
         let Some(ps) = payloads else { return Ok(()) };
+        let mut adds: Vec<(u64, String)> = Vec::new();
+        let mut removes: Vec<u64> = Vec::new();
         for (i, opt) in ps.iter().enumerate() {
             if let Some(payload) = opt {
                 let text = Self::extract_text_from_payload(payload);
                 if !text.is_empty() {
-                    #[cfg(feature = "persistence")]
-                    self.append_bm25_wal_add(ids[i], &text)?;
-                    self.storage.text_index.add_document(ids[i], &text);
+                    adds.push((ids[i], text));
                 }
             } else {
-                #[cfg(feature = "persistence")]
-                self.append_bm25_wal_remove(ids[i])?;
-                self.storage.text_index.remove_document(ids[i]);
+                removes.push(ids[i]);
             }
+        }
+        if adds.is_empty() && removes.is_empty() {
+            return Ok(());
+        }
+        // One WAL barrier for the whole batch (WAL-before-apply preserved:
+        // the in-memory index is only touched after the batch is durable).
+        self.append_text_batch_to_wal(&adds, &removes)?;
+        for (id, text) in &adds {
+            self.storage.text_index.add_document(*id, text);
+        }
+        for id in &removes {
+            self.storage.text_index.remove_document(*id);
         }
         Ok(())
     }

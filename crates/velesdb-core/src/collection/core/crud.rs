@@ -267,14 +267,21 @@ impl Collection {
             .filter(|&(i, p)| dedup_map.get(&p.id) == Some(&i) && p.payload.is_some())
             .filter_map(|(_, p)| p.payload.as_ref().map(|pl| (p.id, pl)))
             .collect();
-        storage.store_batch(&deduped)?;
+        // Deferred: the caller (`write_and_flush_payloads`) ends with
+        // `flush()`, which applies the configured durability barrier once for
+        // stores and tombstones together — `store_batch` + per-id `delete`
+        // here would fsync 1 + N_DELETED times for the same guarantee.
+        storage.store_batch_deferred(&deduped)?;
 
-        // Delete IDs whose final occurrence has payload=None
-        for (i, p) in points.iter().enumerate() {
-            if dedup_map.get(&p.id) == Some(&i) && p.payload.is_none() {
-                storage.delete(p.id)?;
-            }
-        }
+        // Delete IDs whose final occurrence has payload=None — one batched
+        // tombstone append instead of one barrier per id.
+        let final_deletes: Vec<u64> = points
+            .iter()
+            .enumerate()
+            .filter(|&(i, p)| dedup_map.get(&p.id) == Some(&i) && p.payload.is_none())
+            .map(|(_, p)| p.id)
+            .collect();
+        storage.delete_batch(&final_deletes)?;
         Ok(())
     }
 
@@ -401,6 +408,14 @@ impl Collection {
             HashMap::with_capacity(points.len());
         let skip_bm25 =
             self.storage.text_index.is_empty() && !points.iter().any(|p| p.payload.is_some());
+        // Issue #389 + #1797: WAL-before-apply at BATCH granularity — one
+        // durability barrier for the whole batch's BM25 mutations instead of
+        // one open + fsync per point. Payloads were already stored and
+        // flushed by `batch_store_all`, so the BM25 WAL never leads payload
+        // durability. A failure propagates with the in-memory index untouched.
+        if !skip_bm25 {
+            self.bulk_update_text_index(points)?;
+        }
         let needs_label_updates = Self::needs_label_updates(points, old_payloads);
         let mut label_updates = Self::alloc_label_buffer(needs_label_updates, points.len());
 
@@ -413,11 +428,6 @@ impl Collection {
                 effective_old,
                 point.payload.as_ref(),
             );
-            if !skip_bm25 {
-                // Issue #389: WAL-before-apply — failure propagates so
-                // in-memory BM25 and on-disk WAL never diverge.
-                self.update_text_index(point)?;
-            }
             Self::collect_sparse_vectors(point, &mut sparse_batch);
             if needs_label_updates {
                 label_updates.push((point.id, effective_old.cloned(), point.payload.clone()));
@@ -465,6 +475,11 @@ impl Collection {
         payload_storage.flush()?;
         drop(payload_storage);
 
+        // Issue #389 + #1797: one BM25 WAL barrier for the whole batch,
+        // sequenced after the payload flush so the BM25 WAL never leads
+        // payload durability — the same envelope as the vector upsert path.
+        self.bulk_update_text_index(&points)?;
+
         // config(1) only — payload_storage(3) and label_index(7) both released above.
         self.storage.config.write().point_count = point_count;
 
@@ -489,14 +504,32 @@ impl Collection {
         payload_storage: &mut LogPayloadStorage,
         label_idx: &mut crate::collection::graph::LabelIndex,
     ) -> Result<()> {
+        // Pass 1: resolve the old payload each occurrence would have seen in
+        // the sequential loop. Intra-batch duplicates observe the previous
+        // occurrence's payload (via `seen`), not the pre-batch value, exactly
+        // as the per-point store-then-retrieve interleaving behaved.
+        let mut seen: HashMap<u64, Option<serde_json::Value>> =
+            HashMap::with_capacity(points.len());
+        let mut effective_olds: Vec<Option<serde_json::Value>> = Vec::with_capacity(points.len());
         for point in points {
-            let old_payload = payload_storage.retrieve(point.id).ok().flatten();
-            if let Some(payload) = &point.payload {
-                payload_storage.store(point.id, payload)?;
-            } else {
-                payload_storage.delete(point.id)?;
-            }
-            self.update_text_index(point)?;
+            let old_payload = match seen.get(&point.id) {
+                Some(prev) => prev.clone(),
+                None => payload_storage.retrieve(point.id).ok().flatten(),
+            };
+            effective_olds.push(old_payload);
+            seen.insert(point.id, point.payload.clone());
+        }
+
+        // Pass 2: payload writes, last-writer-wins deduped, buffered under
+        // the caller's single `flush()` barrier — the per-point `store` +
+        // `delete` calls each carried their own fsync (#1797 shape) for the
+        // same end state and the same durability point (return of
+        // `upsert_metadata`).
+        let dedup_map = Self::build_dedup_map(points);
+        Self::write_deduped_payloads(points, payload_storage, &dedup_map)?;
+
+        // Pass 3: in-memory index maintenance, per occurrence, in order.
+        for (point, old_payload) in points.iter().zip(&effective_olds) {
             self.update_secondary_indexes_on_upsert(
                 point.id,
                 old_payload.as_ref(),
