@@ -99,6 +99,24 @@ impl SearchState {
         }
     }
 
+    /// Non-destructive sorted snapshot of the current result set.
+    ///
+    /// Used by the resumable-search path to publish phase-1 results while
+    /// the heaps and visited set stay alive for a possible escalation.
+    /// Copies at most `ef` entries and applies the same partial sort as
+    /// [`Self::into_sorted_results`].
+    pub(super) fn peek_sorted_results(&self, limit: Option<usize>) -> Vec<(NodeId, f32)> {
+        let mut result_vec: Vec<(NodeId, f32)> =
+            self.results.iter().map(|&(d, n)| (n, d.0)).collect();
+        let cmp = |a: &(NodeId, f32), b: &(NodeId, f32)| a.1.total_cmp(&b.1);
+        if let Some(k) = limit {
+            crate::index::top_k_partial_sort(&mut result_vec, k, cmp);
+        } else {
+            result_vec.sort_by(cmp);
+        }
+        result_vec
+    }
+
     /// Consumes the state and returns results sorted by distance ascending.
     ///
     /// When `limit` is `Some(k)`, uses partial sort (`select_nth_unstable_by`)
