@@ -1,0 +1,2 @@
+-- comment
+SELECT * FROM docs LIMIT 1;

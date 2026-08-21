@@ -87,7 +87,10 @@ migration-*.yaml
 
 # Fuzzing artifacts (cargo-fuzz)
 /fuzz/target/
-/fuzz/corpus/
+# The curated fuzz seed corpus IS committed: it feeds the nightly fuzzers
+# (cargo-fuzz's default corpus dir) and the PR-time no-panic regression test
+# (crates/velesdb-core/tests/fuzz_corpus_smoke.rs). libFuzzer's local
+# working artifacts stay out via /fuzz/artifacts/ below.
 /fuzz/artifacts/
 
 # Benchmark output files

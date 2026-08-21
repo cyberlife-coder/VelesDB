@@ -168,7 +168,8 @@ jobs:
           cd fuzz
           cargo +nightly fuzz run fuzz_velesql_parser \
             -- -max_total_time=${{ inputs.fuzz_duration || 300 }}
-        continue-on-error: true  # Fuzz may timeout without finding bugs; not a failure
+        # No continue-on-error: reaching max_total_time without a crash exits 0,
+        # so a non-zero exit here IS a found crash and must fail the job.
 
       # Distance metrics - données vectorielles
       - name: Fuzz distance metrics
@@ -176,7 +177,8 @@ jobs:
           cd fuzz
           cargo +nightly fuzz run fuzz_distance_metrics \
             -- -max_total_time=${{ inputs.fuzz_duration || 300 }}
-        continue-on-error: true  # Fuzz may timeout without finding bugs; not a failure
+        # No continue-on-error: reaching max_total_time without a crash exits 0,
+        # so a non-zero exit here IS a found crash and must fail the job.
 
       # Snapshot parser - fichiers de persistance
       - name: Fuzz snapshot parser
@@ -184,7 +186,8 @@ jobs:
           cd fuzz
           cargo +nightly fuzz run fuzz_snapshot_parser \
             -- -max_total_time=${{ inputs.fuzz_duration || 300 }}
-        continue-on-error: true  # Fuzz may timeout without finding bugs; not a failure
+        # No continue-on-error: reaching max_total_time without a crash exits 0,
+        # so a non-zero exit here IS a found crash and must fail the job.
 
       # Upload crash artifacts si trouvés
       - name: Upload crash artifacts

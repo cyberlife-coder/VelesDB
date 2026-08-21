@@ -1,0 +1,1 @@
+SELECT EDGES FROM docs WHERE label = 'REL' LIMIT 10
