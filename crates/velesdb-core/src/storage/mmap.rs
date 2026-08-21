@@ -319,7 +319,22 @@ impl MmapStorage {
         // - Condition 2: set_len() was called to ensure the file has INITIAL_SIZE bytes.
         // - Condition 3: MmapMut requires readable and writable file, guaranteed by OpenOptions.
         // SAFETY: Memory mapping requires unsafe due to potential for undefined behavior if file is truncated externally.
-        unsafe { MmapMut::map_mut(data_file) }
+        let mmap = unsafe { MmapMut::map_mut(data_file) }?;
+        Self::advise_random(&mmap);
+        Ok(mmap)
+    }
+
+    /// Tells the kernel this mapping is accessed randomly (per-offset vector
+    /// reads), so readahead does not evict hot pages fetching neighbors we
+    /// never touch. Best-effort: an unsupported platform just keeps the
+    /// default readahead behavior.
+    fn advise_random(mmap: &MmapMut) {
+        #[cfg(unix)]
+        if let Err(e) = mmap.advise(memmap2::Advice::Random) {
+            tracing::debug!("madvise(MADV_RANDOM) failed: {e}");
+        }
+        #[cfg(not(unix))]
+        let _ = mmap;
     }
 
     /// Opens or creates the WAL file wrapped in a buffered writer.
