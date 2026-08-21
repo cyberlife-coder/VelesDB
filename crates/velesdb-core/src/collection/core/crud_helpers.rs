@@ -202,10 +202,8 @@ impl Collection {
         match index {
             SecondaryIndex::BTree(tree) => {
                 let mut tree = tree.write();
-                let ids = tree.entry(key).or_default();
-                if !ids.contains(&id) {
-                    ids.push(id);
-                }
+                // Set semantics: no O(k) contains() scan per insert.
+                tree.entry(key).or_default().insert(id);
             }
         }
     }
@@ -216,7 +214,7 @@ impl Collection {
             SecondaryIndex::BTree(tree) => {
                 let mut tree = tree.write();
                 if let Some(ids) = tree.get_mut(key) {
-                    ids.retain(|existing| *existing != id);
+                    ids.remove(id);
                     if ids.is_empty() {
                         tree.remove(key);
                     }
