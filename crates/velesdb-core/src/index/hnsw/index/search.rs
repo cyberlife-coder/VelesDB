@@ -86,9 +86,19 @@ impl HnswIndex {
     ) -> Vec<ScoredResult> {
         let inner = self.inner.read();
         let neighbours = inner.search_auto(query, k, ef_search);
+        self.map_graph_results(&inner, &neighbours)
+    }
 
+    /// Maps raw graph results `(node_id, raw_dist)` to user-facing
+    /// [`ScoredResult`]s: internal index -> external ID via the mappings,
+    /// raw distance -> metric score via `transform_score`.
+    fn map_graph_results(
+        &self,
+        inner: &crate::index::hnsw::native_inner::NativeHnswInner,
+        neighbours: &[(usize, f32)],
+    ) -> Vec<ScoredResult> {
         let mut results: Vec<ScoredResult> = Vec::with_capacity(neighbours.len());
-        for &(node_id, raw_dist) in &neighbours {
+        for &(node_id, raw_dist) in neighbours {
             if let Some(id) = self.mappings.get_id(node_id) {
                 let score = inner.transform_score(raw_dist);
                 results.push(ScoredResult::new(id, score));
@@ -196,11 +206,18 @@ impl HnswIndex {
             self.search_hnsw_only_filtered(query, candidates_k, ef_search, allowed_ids);
 
         // Adaptive retry: if too few results survived the bitmap filter,
-        // double the candidate pool and retry once to find more matches.
+        // double the candidate pool AND the ef budget, then retry once.
+        // `ef_search` bounds the graph's result heap, so it is the knob that
+        // actually deepens exploration: `candidates_k` beyond `ef` only
+        // raises a truncation limit the heap never reaches. (A retry at the
+        // same ef re-runs the identical traversal and returns the same
+        // candidate set — the pre-fix behavior, which made this retry pure
+        // cost.)
         if results.len() < k && candidates_k < 10_000 {
             let retry_k = (candidates_k.saturating_mul(2)).min(10_000);
+            let retry_ef = (ef_search.saturating_mul(2)).min(10_000);
             let retry_results =
-                self.search_hnsw_only_filtered(query, retry_k, ef_search, allowed_ids);
+                self.search_hnsw_only_filtered(query, retry_k, retry_ef, allowed_ids);
             // Merge retry results, deduplicating by ID
             let existing_ids: rustc_hash::FxHashSet<u64> = results.iter().map(|r| r.id).collect();
             for r in retry_results {
@@ -385,8 +402,12 @@ impl HnswIndex {
     /// Two-phase adaptive search that starts with a low ef and escalates if needed.
     ///
     /// Phase 1: search with `min_ef`. If the result spread (max_dist / min_dist)
-    /// indicates a hard query (scattered results), re-search with doubled ef.
-    /// This saves 2-4x latency on easy queries while maintaining recall on hard ones.
+    /// indicates a hard query (scattered results), widen ef to `2 * min_ef` and
+    /// **resume** the phase-1 traversal (visited set and frontier carried over)
+    /// rather than re-searching from scratch — restart remains only for the
+    /// GPU/RaBitQ paths, which keep no CPU-side state. This saves 2-4x latency
+    /// on easy queries and roughly a third of the distance evaluations on
+    /// escalated ones.
     fn search_adaptive(
         &self,
         query: &[f32],
@@ -394,8 +415,14 @@ impl HnswIndex {
         min_ef: usize,
         max_ef: usize,
     ) -> Vec<ScoredResult> {
-        // Phase 1: fast search with min_ef
-        let results = self.search_hnsw_only(query, k, min_ef);
+        // Phase 1: fast search with min_ef, keeping the traversal state so an
+        // escalation resumes the search instead of restarting it (#2077).
+        // One read guard spans both phases: re-locking through
+        // `search_hnsw_only` would be a recursive `read()` on a parking_lot
+        // `RwLock`, which can deadlock behind a queued writer.
+        let inner = self.inner.read();
+        let (neighbours, resume) = inner.search_resumable(query, k, min_ef);
+        let results = self.map_graph_results(&inner, &neighbours);
         if results.len() < 2 {
             return results;
         }
@@ -422,13 +449,24 @@ impl HnswIndex {
             return results;
         }
 
-        // Phase 2: re-search with doubled ef (capped at max_ef)
+        // Phase 2: widen ef (capped at max_ef)
         let escalated_ef = (min_ef * 2).min(max_ef);
         if escalated_ef <= min_ef {
             return results;
         }
 
-        self.search_hnsw_only(query, k, escalated_ef)
+        // Resume the phase-1 traversal when it kept state (Standard backend,
+        // CPU path): the visited set and frontier carry over, so the widened
+        // pass pays only the marginal exploration instead of ef1 + ef2 from
+        // scratch. GPU and RaBitQ phase-1 searches return no state and
+        // restart, exactly as before. See `ResumableSearch` for what a
+        // resumed pass does not reconsider (recall sits between single-pass
+        // ef1 and ef2; the `adaptive_resume_evals` harness pins the trade).
+        let escalated = match resume {
+            Some(r) => inner.resume_search(r, query, k, escalated_ef),
+            None => inner.search_auto(query, k, escalated_ef),
+        };
+        self.map_graph_results(&inner, &escalated)
     }
 
     /// Sets the index to searching mode after bulk insertions.

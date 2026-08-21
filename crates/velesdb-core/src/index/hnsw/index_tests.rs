@@ -3390,3 +3390,145 @@ fn test_with_params_propagates_alpha_to_native_graph() {
         "alpha 1.5 must propagate to native graph, got {actual}"
     );
 }
+
+// =========================================================================
+// Resumable adaptive escalation + bitmap under-fill retry (#2077)
+// =========================================================================
+
+/// Deterministic pseudo-random unit vector for the resume/retry tests.
+fn resume_test_vector(dim: usize, seed: u64) -> Vec<f32> {
+    let mut state = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+    let mut v: Vec<f32> = (0..dim)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state as f64 / u64::MAX as f64) as f32 - 0.5
+        })
+        .collect();
+    let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    for x in &mut v {
+        *x /= norm;
+    }
+    v
+}
+
+/// The bitmap under-fill retry must widen `ef`, not just `candidates_k`:
+/// the graph's result heap is bounded by `ef`, so a same-ef retry re-runs
+/// the identical traversal and returns the identical candidate set. This
+/// test pins both halves of that statement.
+#[test]
+fn bitmap_underfill_retry_widens_ef_and_finds_more_matches() {
+    const DIM: usize = 64;
+    const N: u64 = 1_500;
+    const K: usize = 20;
+
+    let index = HnswIndex::new(DIM, DistanceMetric::Cosine).unwrap();
+    for id in 0..N {
+        index.insert(id, &resume_test_vector(DIM, id + 1));
+    }
+    let query = resume_test_vector(DIM, 987_654_321);
+
+    // Exact cosine ranking of all ids against the query.
+    let mut ranked: Vec<(u64, f32)> = (0..N)
+        .map(|id| {
+            let v = resume_test_vector(DIM, id + 1);
+            let dot: f32 = query.iter().zip(&v).map(|(a, b)| a * b).sum();
+            (id, dot)
+        })
+        .collect();
+    ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
+
+    // Allow only a mid-far band: mostly outside the base-ef candidate set,
+    // reachable when the traversal digs deeper.
+    let allowed: Vec<u64> = ranked[300..380].iter().map(|&(id, _)| id).collect();
+    let mut bitmap = roaring::RoaringBitmap::new();
+    for &id in &allowed {
+        bitmap.insert(u32::try_from(id).unwrap());
+    }
+
+    let quality = SearchQuality::Balanced;
+    let ef = quality.ef_search_for_scale(K, index.len());
+    let candidates_k = K.saturating_mul(4).max(ef);
+
+    // Mechanism pin: doubling candidates_k at the SAME ef returns the exact
+    // same survivor set — candidates_k beyond ef only raises a truncation
+    // limit the ef-bounded heap never reaches.
+    let base = index.search_hnsw_only_filtered(&query, candidates_k, ef, &bitmap);
+    let same_ef_double_k = index.search_hnsw_only_filtered(&query, candidates_k * 2, ef, &bitmap);
+    let base_ids: Vec<u64> = base.iter().map(|r| r.id).collect();
+    let double_k_ids: Vec<u64> = same_ef_double_k.iter().map(|r| r.id).collect();
+    assert_eq!(
+        base_ids, double_k_ids,
+        "same-ef retry must be a no-op: candidates_k is not the exploration knob"
+    );
+
+    // The band is chosen so the base pass under-fills — otherwise the retry
+    // (the code under test) never runs.
+    assert!(
+        base.len() < K,
+        "test setup: base pass must under-fill (got {} >= K={K})",
+        base.len()
+    );
+
+    // Fix pin: the full path (base + widened-ef retry) surfaces strictly
+    // more allowed matches than the base pass alone.
+    let full = index
+        .search_with_quality_and_bitmap(&query, K, quality, &bitmap)
+        .unwrap();
+    assert!(
+        full.len() > base.len(),
+        "widened-ef retry must find more allowed matches (base {}, full {})",
+        base.len(),
+        full.len()
+    );
+}
+
+/// Repeated adaptive searches must be bit-identical: the resumed traversal
+/// hands its pooled heaps and visited set back on drop, so any pool
+/// pollution (a visited set returned uncleared, a heap kept warm with stale
+/// entries) would show up as run-to-run drift here.
+#[test]
+fn adaptive_resume_is_deterministic_across_pool_reuse() {
+    const DIM: usize = 128;
+    const N: u64 = 1_200;
+    const K: usize = 10;
+
+    let index = HnswIndex::new(DIM, DistanceMetric::Cosine).unwrap();
+    // A tight 4-vector pocket around a distinct direction plus random
+    // background: the pocket dominates the top of the result list while the
+    // background trails far behind, which drives the spread heuristic over
+    // its escalation threshold.
+    let pocket_dir = resume_test_vector(DIM, 42);
+    for id in 0..4u64 {
+        let mut v = pocket_dir.clone();
+        let noise = resume_test_vector(DIM, 1_000 + id);
+        for (x, n) in v.iter_mut().zip(&noise) {
+            *x += 0.05 * n;
+        }
+        let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+        for x in &mut v {
+            *x /= norm;
+        }
+        index.insert(id, &v);
+    }
+    for id in 4..N {
+        index.insert(id, &resume_test_vector(DIM, id + 1));
+    }
+
+    let quality = SearchQuality::Adaptive {
+        min_ef: 32,
+        max_ef: 64,
+    };
+    let first = index.search_with_quality(&pocket_dir, K, quality).unwrap();
+    assert!(!first.is_empty());
+    for _ in 0..50 {
+        let run = index.search_with_quality(&pocket_dir, K, quality).unwrap();
+        let first_ids: Vec<u64> = first.iter().map(|r| r.id).collect();
+        let run_ids: Vec<u64> = run.iter().map(|r| r.id).collect();
+        assert_eq!(
+            first_ids, run_ids,
+            "adaptive resume drifted across pooled reuse"
+        );
+    }
+}

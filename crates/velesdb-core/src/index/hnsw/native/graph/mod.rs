@@ -15,6 +15,7 @@ mod neighbors;
 mod reorder;
 pub(crate) mod safety_counters;
 mod search;
+pub(crate) use search::ResumableSearch;
 mod search_pipeline;
 mod search_pools;
 mod search_state;

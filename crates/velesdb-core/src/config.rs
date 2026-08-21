@@ -263,8 +263,16 @@ const fn default_max_batch_size() -> usize {
 
 /// Configuration for WAL group commit batching.
 ///
-/// When enabled, multiple concurrent writes are batched into a single
-/// `sync_all()` call, amortizing the fsync cost across the batch.
+/// **Reserved — parsed but not yet wired.** Setting `enabled = true` changes
+/// nothing today: no group commit occurs, and every write keeps its own
+/// durability barrier (batch APIs already amortize to one barrier per call).
+/// [`VelesConfig::validate`] logs a warning when the flag is set so a config
+/// cannot promise behavior the engine does not deliver. Wiring the
+/// `WalBatcher` (or removing this section) is tracked in issue #2078 — the
+/// decision needs a multi-writer measurement, not a default.
+///
+/// When wired, group commit would batch multiple concurrent writes into a
+/// single `sync_all()` call, amortizing the fsync cost across the batch.
 ///
 /// # Example (TOML)
 ///
