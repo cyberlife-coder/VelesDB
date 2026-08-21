@@ -154,7 +154,7 @@ fn compute_and_process<D: DistanceEngine>(
     ef: usize,
     state: &mut SearchState,
 ) -> bool {
-    let vecs: SmallVec<[&[f32]; 32]> = batch.iter().map(|(_, v)| *v).collect();
+    let vecs: SmallVec<[&[f32]; 64]> = batch.iter().map(|(_, v)| *v).collect();
     let distances = batch_distance_with_prefetch(distance, query, &vecs);
     process_batch_results(batch, &distances, ef, state)
 }

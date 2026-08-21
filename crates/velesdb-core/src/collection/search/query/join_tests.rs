@@ -134,7 +134,7 @@ fn test_execute_join_basic() {
     let column_store = make_column_store();
     let join = make_join_clause();
 
-    let joined = execute_join(&results, &join, &column_store, NO_LIMIT).unwrap();
+    let joined = execute_join(results.clone(), &join, &column_store, NO_LIMIT).unwrap();
 
     assert_eq!(joined.len(), 3);
     assert!(joined[0].column_data.contains_key("price"));
@@ -157,7 +157,7 @@ fn test_execute_join_inner_skips_missing() {
     let column_store = make_column_store();
     let join = make_join_clause();
 
-    let joined = execute_join(&results, &join, &column_store, NO_LIMIT).unwrap();
+    let joined = execute_join(results.clone(), &join, &column_store, NO_LIMIT).unwrap();
     assert_eq!(joined.len(), 2);
 }
 
@@ -167,7 +167,7 @@ fn test_joined_to_search_results() {
     let column_store = make_column_store();
     let join = make_join_clause();
 
-    let joined = execute_join(&results, &join, &column_store, NO_LIMIT).unwrap();
+    let joined = execute_join(results.clone(), &join, &column_store, NO_LIMIT).unwrap();
     let search_results = joined_to_search_results(joined);
 
     assert_eq!(search_results.len(), 1);
@@ -303,7 +303,7 @@ fn test_execute_join_validates_pk_column() {
         using_columns: None,
     };
 
-    let joined = execute_join(&results, &wrong_join, &column_store, NO_LIMIT);
+    let joined = execute_join(results.clone(), &wrong_join, &column_store, NO_LIMIT);
     assert!(
         joined.is_err(),
         "JOIN on non-PK column must return an error"
@@ -332,7 +332,7 @@ fn test_execute_join_correct_pk_column_works() {
         using_columns: None,
     };
 
-    let joined = execute_join(&results, &correct_join, &column_store, NO_LIMIT).unwrap();
+    let joined = execute_join(results.clone(), &correct_join, &column_store, NO_LIMIT).unwrap();
     assert_eq!(joined.len(), 1);
 }
 
@@ -353,7 +353,7 @@ fn test_execute_join_using_single_column_supported() {
         using_columns: Some(vec!["product_id".to_string()]),
     };
 
-    let joined = execute_join(&results, &using_join, &column_store, NO_LIMIT).unwrap();
+    let joined = execute_join(results.clone(), &using_join, &column_store, NO_LIMIT).unwrap();
     assert_eq!(joined.len(), 2);
     assert!(joined[0].column_data.contains_key("price"));
 }
@@ -374,7 +374,7 @@ fn test_execute_join_using_rejects_multi_column() {
         using_columns: Some(vec!["product_id".to_string(), "region_id".to_string()]),
     };
 
-    let joined = execute_join(&results, &using_join, &column_store, NO_LIMIT);
+    let joined = execute_join(results.clone(), &using_join, &column_store, NO_LIMIT);
     assert!(
         joined.is_err(),
         "USING with multiple columns must return an error"
@@ -402,7 +402,7 @@ fn test_execute_left_join_keeps_unmatched_left_rows() {
         using_columns: None,
     };
 
-    let joined = execute_join(&results, &join, &column_store, NO_LIMIT).unwrap();
+    let joined = execute_join(results.clone(), &join, &column_store, NO_LIMIT).unwrap();
     assert_eq!(joined.len(), 2);
     assert!(joined[0].column_data.contains_key("price"));
     assert_eq!(
@@ -432,7 +432,7 @@ fn test_execute_right_join_includes_unmatched_right_rows() {
         using_columns: None,
     };
 
-    let joined = execute_join(&results, &join, &column_store, NO_LIMIT).unwrap();
+    let joined = execute_join(results.clone(), &join, &column_store, NO_LIMIT).unwrap();
     assert_eq!(joined.len(), 3);
 }
 
@@ -457,7 +457,7 @@ fn test_execute_full_join_combines_left_and_right_unmatched() {
         using_columns: None,
     };
 
-    let joined = execute_join(&results, &join, &column_store, NO_LIMIT).unwrap();
+    let joined = execute_join(results.clone(), &join, &column_store, NO_LIMIT).unwrap();
     assert_eq!(joined.len(), 4);
     let null_join_count = joined
         .iter()
@@ -512,7 +512,7 @@ fn test_execute_right_join_respects_row_budget() {
     };
 
     // Budget 5: 1 matched row + 4 unmatched-right rows, NOT all 10_000.
-    let joined = execute_join(&results, &join, &column_store, 5).unwrap();
+    let joined = execute_join(results.clone(), &join, &column_store, 5).unwrap();
     assert_eq!(joined.len(), 5, "RIGHT join must stop at the row budget");
 
     // The matched row (pk=1) is emitted first.
@@ -520,7 +520,7 @@ fn test_execute_right_join_respects_row_budget() {
     assert!(joined[0].column_data.contains_key("price"));
 
     // Unbounded run returns every right row (regression guard on correctness).
-    let full = execute_join(&results, &join, &column_store, NO_LIMIT).unwrap();
+    let full = execute_join(results.clone(), &join, &column_store, NO_LIMIT).unwrap();
     assert_eq!(full.len(), 10_000);
 }
 
@@ -550,9 +550,9 @@ fn test_execute_left_join_respects_row_budget() {
         using_columns: None,
     };
 
-    let joined = execute_join(&results, &join, &column_store, 7).unwrap();
+    let joined = execute_join(results.clone(), &join, &column_store, 7).unwrap();
     assert_eq!(joined.len(), 7, "LEFT join must stop at the row budget");
 
-    let full = execute_join(&results, &join, &column_store, NO_LIMIT).unwrap();
+    let full = execute_join(results.clone(), &join, &column_store, NO_LIMIT).unwrap();
     assert_eq!(full.len(), 50);
 }

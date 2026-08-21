@@ -28,6 +28,14 @@ pub(crate) struct TrackedScan {
 }
 
 /// Inverted-similarity threshold bundle for the NOT-similarity scan.
+/// Per-scan invariants for the NOT-similarity loop, hoisted once.
+struct NotSimilarityScanCtx<'a> {
+    vector_storage: &'a crate::storage::MmapStorage,
+    payload_storage: &'a crate::storage::LogPayloadStorage,
+    metric: crate::distance::DistanceMetric,
+    now_secs: u64,
+}
+
 struct NotSimilarityThreshold {
     op: crate::velesql::CompareOp,
     value: f32,
@@ -151,13 +159,28 @@ impl Collection {
             value: threshold_f32,
             higher_is_better,
         };
+        // Hoist the per-row invariants: the metric snapshot, the expiry
+        // clock, and both storage guards (vector rank 2 before payload rank
+        // 3, decree order). The per-candidate helper previously acquired
+        // three locks and called SystemTime::now() for every scanned row.
+        let metric = self.storage.config.read().metric;
+        let now_secs = now_unix_secs();
+        let vector_storage = self.storage.vector_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
+        let scan = NotSimilarityScanCtx {
+            vector_storage: &vector_storage,
+            payload_storage: &payload_storage,
+            metric,
+            now_secs,
+        };
         for id in all_ids {
-            if let Some(result) = self.eval_not_similarity_candidate(
+            if let Some(result) = Self::eval_not_similarity_candidate(
                 id,
                 &sim_field,
                 &sim_vec,
                 &threshold,
                 filter.as_ref(),
+                &scan,
             ) {
                 results.push(result);
                 if results.len() >= limit {
@@ -173,15 +196,24 @@ impl Collection {
     /// hydrated result when it passes both the inverted similarity threshold
     /// and the metadata filter.
     fn eval_not_similarity_candidate(
-        &self,
         id: u64,
         sim_field: &str,
         sim_vec: &[f32],
         threshold: &NotSimilarityThreshold,
         filter: Option<&crate::filter::Filter>,
+        scan: &NotSimilarityScanCtx<'_>,
     ) -> Option<SearchResult> {
-        let vector = self.retrieve_vector_for_scan(id, sim_field)?;
-        let score = self.compute_metric_score(&vector, sim_vec);
+        let vector = Self::retrieve_vector_for_scan_in(
+            scan.vector_storage,
+            scan.payload_storage,
+            id,
+            sim_field,
+        )?;
+        let score = if vector.len() == sim_vec.len() && !vector.is_empty() {
+            scan.metric.calculate(&vector, sim_vec)
+        } else {
+            0.0
+        };
         if Self::compare_similarity(
             score,
             threshold.value,
@@ -190,14 +222,8 @@ impl Collection {
         ) {
             return None; // excluded by the NOT-similarity threshold
         }
-        let payload = self
-            .storage
-            .payload_storage
-            .read()
-            .retrieve(id)
-            .ok()
-            .flatten();
-        if is_payload_expired(payload.as_ref(), now_unix_secs()) {
+        let payload = scan.payload_storage.retrieve(id).ok().flatten();
+        if is_payload_expired(payload.as_ref(), scan.now_secs) {
             return None;
         }
         if !Self::passes_metadata_filter(filter, payload.as_ref()) {
@@ -228,8 +254,13 @@ impl Collection {
     }
 
     /// Retrieves a vector for a given field, logging warnings on failure.
-    fn retrieve_vector_for_scan(&self, id: u64, field: &str) -> Option<Vec<f32>> {
-        match self.get_vector_for_field(id, field) {
+    fn retrieve_vector_for_scan_in(
+        vector_storage: &crate::storage::MmapStorage,
+        payload_storage: &crate::storage::LogPayloadStorage,
+        id: u64,
+        field: &str,
+    ) -> Option<Vec<f32>> {
+        match Self::get_vector_for_field_in(vector_storage, payload_storage, id, field) {
             Ok(Some(v)) => Some(v),
             Ok(None) => None,
             Err(e) => {

@@ -21,6 +21,8 @@
 // ============================================================================
 pub(crate) mod auto_ef;
 pub(crate) mod direct_writer;
+#[cfg(feature = "internal-bench")]
+pub(crate) mod eval_count;
 mod index;
 pub mod native;
 pub mod native_index;

@@ -35,6 +35,12 @@ struct IndexShard {
 pub struct ShardedIndex {
     /// 16 independent shards, each with its own lock.
     shards: [RwLock<IndexShard>; NUM_SHARDS],
+    /// Cached total entry count: `len()` walked all 16 shard locks and is
+    /// called on every upsert batch. Maintained by every mutation while its
+    /// shard write lock is held, so the counter can lag a concurrent
+    /// mutation by at most that mutation's own in-flight delta — the same
+    /// staleness the 16-lock walk had.
+    entry_count: std::sync::atomic::AtomicUsize,
 }
 
 impl Default for ShardedIndex {
@@ -49,6 +55,7 @@ impl ShardedIndex {
     pub fn new() -> Self {
         Self {
             shards: std::array::from_fn(|_| RwLock::new(IndexShard::default())),
+            entry_count: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -76,7 +83,10 @@ impl ShardedIndex {
     pub fn insert(&self, id: u64, offset: usize) {
         let shard_idx = Self::shard_index(id);
         let mut shard = self.shards[shard_idx].write();
-        shard.entries.insert(id, offset);
+        if shard.entries.insert(id, offset).is_none() {
+            self.entry_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     /// Gets an offset by ID.
@@ -103,13 +113,18 @@ impl ShardedIndex {
     pub fn remove(&self, id: u64) -> Option<usize> {
         let shard_idx = Self::shard_index(id);
         let mut shard = self.shards[shard_idx].write();
-        shard.entries.remove(&id)
+        let removed = shard.entries.remove(&id);
+        if removed.is_some() {
+            self.entry_count
+                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        removed
     }
 
     /// Returns the total number of entries across all shards.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.shards.iter().map(|s| s.read().entries.len()).sum()
+        self.entry_count.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Returns true if the index is empty.
@@ -125,6 +140,8 @@ impl ShardedIndex {
         for shard in &self.shards {
             shard.write().entries.clear();
         }
+        self.entry_count
+            .store(0, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Atomically replaces all entries in the index.
@@ -148,10 +165,14 @@ impl ShardedIndex {
         }
 
         // Repopulate from new entries
+        let mut count = 0usize;
         for (id, offset) in new_entries {
             let shard_idx = Self::shard_index(id);
             guards[shard_idx].entries.insert(id, offset);
+            count += 1;
         }
+        self.entry_count
+            .store(count, std::sync::atomic::Ordering::Release);
         // All guards dropped here, releasing locks simultaneously
     }
 

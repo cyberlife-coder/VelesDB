@@ -79,6 +79,13 @@ pub struct ActualStatsResponse {
     /// approximations (a lower bound), not exact measured counts. Always `false`
     /// for non-graph queries, where both counters are 0.
     pub traversal_counters_approximate: bool,
+    /// Filter strategy the executor actually ran, recorded at the dispatch
+    /// site (see `FilterStrategy::as_str`). Present for single SELECTs that
+    /// went through the filtered vector-search dispatch; absent for MATCH,
+    /// compound queries, and arms where pre/post-filter does not apply.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable))]
+    pub executed_filter_strategy: Option<String>,
 }
 
 #[cfg(feature = "persistence")]
@@ -93,6 +100,7 @@ impl From<&crate::velesql::ActualStats> for ActualStatsResponse {
             // Graph traversal counters are only present (and only approximate)
             // when a MATCH query actually walked the graph (backlog #26).
             traversal_counters_approximate: s.nodes_visited > 0 || s.edges_traversed > 0,
+            executed_filter_strategy: s.executed_filter_strategy.map(|f| f.as_str().to_string()),
         }
     }
 }

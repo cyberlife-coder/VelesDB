@@ -137,6 +137,15 @@ pub struct EdgeStore {
     pub(super) by_label: HashMap<String, Vec<u64>>,
     /// Composite index: (source_id, label) -> Vec<edge_id> for fast filtered traversal
     pub(super) outgoing_by_label: HashMap<(u64, String), Vec<u64>>,
+    /// Composite index: (target_id, label) -> Vec<edge_id> — the incoming
+    /// mirror of `outgoing_by_label`, so `<-[:TYPE]-` patterns stop paying
+    /// O(in-degree) full-edge clones on super-nodes.
+    ///
+    /// `serde(skip)`: the snapshot format is postcard (not self-describing),
+    /// so a new serialized field would break every existing edge_store.bin.
+    /// The index is fully derivable and rebuilt in `load_from_file`.
+    #[serde(skip)]
+    pub(super) incoming_by_label: HashMap<(u64, String), Vec<u64>>,
     /// Zero-copy CSR snapshot for BFS traversal (G1).
     /// Built on-demand via `build_read_snapshot()`, invalidated by writes.
     #[serde(skip)]
@@ -185,6 +194,7 @@ impl EdgeStore {
             incoming: HashMap::with_capacity(expected_nodes),
             by_label: HashMap::with_capacity(expected_labels),
             outgoing_by_label: HashMap::with_capacity(outgoing_by_label_cap),
+            incoming_by_label: HashMap::with_capacity(outgoing_by_label_cap),
             csr_snapshot: None,
         }
     }
@@ -256,7 +266,12 @@ impl EdgeStore {
         }
 
         if index_incoming {
-            self.incoming.entry(edge.target()).or_default().push(id);
+            let target = edge.target();
+            self.incoming.entry(target).or_default().push(id);
+            self.incoming_by_label
+                .entry((target, edge.label().to_string()))
+                .or_default()
+                .push(id);
         }
 
         self.edges.insert(id, edge);
@@ -389,10 +404,23 @@ impl EdgeStore {
     /// Gets incoming edges filtered by label.
     #[must_use]
     pub fn get_incoming_by_label(&self, node_id: u64, label: &str) -> Vec<&GraphEdge> {
-        self.get_incoming(node_id)
-            .into_iter()
-            .filter(|e| e.label() == label)
-            .collect()
+        self.resolve_edge_ids(self.incoming_by_label.get(&(node_id, label.to_string())))
+    }
+
+    /// Rebuilds the (unserialized) `incoming_by_label` index from the live
+    /// edges — called after loading a postcard snapshot.
+    pub(super) fn rebuild_incoming_label_index(&mut self) {
+        self.incoming_by_label.clear();
+        for ids in self.incoming.values() {
+            for &id in ids {
+                if let Some(edge) = self.edges.get(&id) {
+                    self.incoming_by_label
+                        .entry((edge.target(), edge.label().to_string()))
+                        .or_default()
+                        .push(id);
+                }
+            }
+        }
     }
 
     /// Checks if an edge with the given ID exists.

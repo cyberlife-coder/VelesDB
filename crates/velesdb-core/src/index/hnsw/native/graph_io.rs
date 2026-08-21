@@ -210,6 +210,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
 
     /// Serializes all layers' neighbor lists to the writer.
     fn write_layer_data(writer: &mut BufWriter<File>, layers: &[Layer]) -> std::io::Result<()> {
+        let mut scratch: Vec<u8> = Vec::new();
         for layer in layers {
             let num_nodes = layer.neighbors.len() as u64;
             writer.write_all(&num_nodes.to_le_bytes())?;
@@ -219,13 +220,17 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
                 // Reason: num_neighbors <= max_connections < 1024
                 #[allow(clippy::cast_possible_truncation)]
                 let num_neighbors = neighbors.len() as u32;
-                writer.write_all(&num_neighbors.to_le_bytes())?;
+                // One buffered write per node instead of one 4-byte
+                // write_all per neighbor (each a BufWriter fn call).
+                scratch.clear();
+                scratch.extend_from_slice(&num_neighbors.to_le_bytes());
                 for &neighbor in neighbors.iter() {
                     // Reason: NodeId stored as u32 in file format v1
                     #[allow(clippy::cast_possible_truncation)]
                     let neighbor_u32 = neighbor as u32;
-                    writer.write_all(&neighbor_u32.to_le_bytes())?;
+                    scratch.extend_from_slice(&neighbor_u32.to_le_bytes());
                 }
+                writer.write_all(&scratch)?;
             }
         }
         Ok(())
@@ -244,7 +249,34 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     /// Returns `io::Error` if file operations fail or data is corrupted.
     pub fn file_load(path: &Path, basename: &str, distance: D) -> std::io::Result<Self> {
         let vectors_path = path.join(format!("{basename}.vectors"));
-        let (vectors, count) = Self::load_vectors_file(&vectors_path)?;
+        let (mut vectors, count) = Self::load_vectors_file(&vectors_path)?;
+
+        // Indexes written before the pre-normalized cosine engine store raw
+        // vectors. Cosine is scale-invariant, so normalizing here never
+        // changes any result, and it (re-)establishes the unit-norm invariant
+        // the fast dot-product arm relies on.
+        //
+        // The epsilon gate keeps save/load roundtrips bit-identical: a file
+        // written by the pre-normalized engine holds vectors whose norm is 1
+        // within f32 renormalization noise (~sqrt(dim) * 2^-24), and blindly
+        // re-normalizing those would drift the stored bytes by 1 ulp per
+        // cycle. Legacy raw vectors sit far outside the gate and get their
+        // one-time normalization; a legacy vector the user already stored
+        // unit-norm within 1e-5 is left as-is, bounding its dot-vs-cosine
+        // error at the same 1e-5 — below f32 ranking noise.
+        if distance.is_pre_normalized() && distance.metric() == crate::DistanceMetric::Cosine {
+            const UNIT_NORM_EPS: f32 = 1e-5;
+            if let Some(storage) = vectors.as_mut() {
+                for i in 0..storage.len() {
+                    if let Some(v) = storage.get_mut(i) {
+                        let n = crate::simd_native::norm_native(v);
+                        if n > 0.0 && (n - 1.0).abs() > UNIT_NORM_EPS {
+                            crate::simd_native::normalize_inplace_native(v);
+                        }
+                    }
+                }
+            }
+        }
 
         let graph_path = path.join(format!("{basename}.graph"));
         let graph = Self::load_graph_file(&graph_path, count)?;
@@ -273,7 +305,6 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             alpha: graph.alpha,
             stagnation_limit: graph.ef_construction / 2,
             pre_allocated_capacity: std::sync::atomic::AtomicUsize::new(0),
-            columnar: parking_lot::RwLock::new(None),
             #[cfg(feature = "gpu")]
             gpu_csr_cache: crate::gpu::gpu_csr::CsrCache::new(),
             #[cfg(feature = "gpu")]

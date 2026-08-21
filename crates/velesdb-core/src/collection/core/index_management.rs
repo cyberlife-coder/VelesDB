@@ -105,13 +105,6 @@ impl Collection {
         for id in ids {
             Self::backfill_single_payload(&*payload_storage, id, field_name, &mut tree_guard);
         }
-        // Deduplicate each bucket in one O(k log k) pass rather than checking
-        // contains() per-insertion (was O(k) per insert → O(k²) total for a
-        // bucket of k IDs, e.g. low-cardinality fields like status/category).
-        for ids_vec in tree_guard.values_mut() {
-            ids_vec.sort_unstable();
-            ids_vec.dedup();
-        }
         if !is_new {
             tracing::debug!(
                 field = field_name,
@@ -127,12 +120,12 @@ impl Collection {
         payload_storage: &dyn crate::storage::PayloadStorage,
         id: u64,
         field_name: &str,
-        tree_guard: &mut std::collections::BTreeMap<JsonValue, Vec<u64>>,
+        tree_guard: &mut std::collections::BTreeMap<JsonValue, crate::index::secondary::IdSet>,
     ) {
         if let Ok(Some(payload)) = payload_storage.retrieve(id) {
             if let Some(val) = payload.get(field_name) {
                 if let Some(key) = JsonValue::from_json(val) {
-                    tree_guard.entry(key).or_default().push(id);
+                    tree_guard.entry(key).or_default().insert(id);
                 }
             }
         }
@@ -323,7 +316,10 @@ impl Collection {
         let indexes = self.query.secondary_indexes.read();
         let index = indexes.get(field_name)?;
         match index {
-            SecondaryIndex::BTree(tree) => tree.read().get(value).cloned(),
+            SecondaryIndex::BTree(tree) => tree
+                .read()
+                .get(value)
+                .map(crate::index::secondary::IdSet::to_vec),
         }
     }
 
@@ -481,16 +477,25 @@ impl Collection {
         indexes: &SecondaryIndexMap,
         conditions: &[crate::filter::Condition],
     ) -> Option<roaring::RoaringBitmap> {
-        let mut result: Option<roaring::RoaringBitmap> = None;
-        for cond in conditions {
-            if let Some(bm) = Self::bitmap_from_condition(indexes, cond) {
-                result = Some(match result {
-                    Some(existing) => existing & &bm,
-                    None => bm,
-                });
+        // Children that cannot be pre-filtered are skipped: for AND that
+        // yields a superset bitmap, which the post-filter narrows — same
+        // contract as before. Intersect smallest-first and in place: the
+        // AST-order fold allocated a fresh bitmap per child and could grind
+        // a 10-row Eq child against a million-row range child first.
+        let mut bitmaps: Vec<roaring::RoaringBitmap> = conditions
+            .iter()
+            .filter_map(|cond| Self::bitmap_from_condition(indexes, cond))
+            .collect();
+        bitmaps.sort_unstable_by_key(roaring::RoaringBitmap::len);
+        let mut iter = bitmaps.into_iter();
+        let mut result = iter.next()?;
+        for bm in iter {
+            result &= &bm;
+            if result.is_empty() {
+                break;
             }
         }
-        result
+        Some(result)
     }
 
     /// Unions bitmaps from OR-ed conditions.
@@ -524,6 +529,9 @@ impl Collection {
     pub fn create_property_index(&self, label: &str, property: &str) -> Result<()> {
         let mut index = self.graph.property_index.write();
         index.create_index(label, property);
+        self.graph
+            .property_index_dirty
+            .store(true, std::sync::atomic::Ordering::Release);
         Ok(())
     }
 
@@ -541,6 +549,9 @@ impl Collection {
     pub fn create_range_index(&self, label: &str, property: &str) -> Result<()> {
         let mut index = self.graph.range_index.write();
         index.create_index(label, property);
+        self.graph
+            .range_index_dirty
+            .store(true, std::sync::atomic::Ordering::Release);
         Ok(())
     }
 
@@ -629,11 +640,19 @@ impl Collection {
             .write()
             .drop_index(label, property);
         if dropped_prop {
+            self.graph
+                .property_index_dirty
+                .store(true, std::sync::atomic::Ordering::Release);
             return Ok(true);
         }
 
         // Try range index
         let dropped_range = self.graph.range_index.write().drop_index(label, property);
+        if dropped_range {
+            self.graph
+                .range_index_dirty
+                .store(true, std::sync::atomic::Ordering::Release);
+        }
         Ok(dropped_range)
     }
 

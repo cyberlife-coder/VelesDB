@@ -290,3 +290,91 @@ fn backward_compat_selectivity_value_unchanged() {
         "method-aware and legacy paths must agree: new={sel_new} old={sel_old}"
     );
 }
+
+// =========================================================================
+// GraphMatch selectivity — ANALYZE graph view instead of the 0.5 constant
+// =========================================================================
+
+fn graph_match(types: Vec<&str>, range: Option<(u32, u32)>) -> Condition {
+    use crate::velesql::graph_pattern::{
+        Direction, GraphPattern, NodePattern, RelationshipPattern,
+    };
+    let mut rel = RelationshipPattern::new(Direction::Outgoing);
+    rel.types = types.into_iter().map(String::from).collect();
+    rel.range = range;
+    Condition::GraphMatch(crate::velesql::ast::GraphMatchPredicate {
+        pattern: GraphPattern {
+            name: None,
+            nodes: vec![NodePattern::new(), NodePattern::new()],
+            relationships: vec![rel],
+        },
+    })
+}
+
+fn stats_with_graph(avg_degree: f64, label_count: usize) -> CollectionStats {
+    let mut s = CollectionStats::new();
+    s.total_points = 1_000;
+    s.row_count = 1_000;
+    s.graph_stats = Some(crate::velesql::match_planner::MatchGraphStats {
+        total_nodes: 1_000,
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        // Reason: test fixture; degree is a small positive constant.
+        total_edges: (avg_degree * 1_000.0) as usize,
+        avg_degree,
+        label_count,
+        label_selectivity: if label_count > 0 {
+            1.0 / label_count as f64
+        } else {
+            1.0
+        },
+    });
+    s
+}
+
+#[test]
+fn graph_match_without_graph_stats_keeps_the_historical_constant() {
+    let stats = CollectionStats::new();
+    let est = CostEstimator::new(&stats);
+    let sel = est.estimate_condition_selectivity(&graph_match(vec!["WROTE"], None));
+    assert!((sel - 0.5).abs() < f64::EPSILON);
+}
+
+#[test]
+fn typed_hop_on_a_sparse_labeled_graph_tightens_the_estimate() {
+    // avg_degree 2, 50 edge labels: one typed hop keeps ~2/50 = 0.04.
+    let stats = stats_with_graph(2.0, 50);
+    let est = CostEstimator::new(&stats);
+    let sel = est.estimate_condition_selectivity(&graph_match(vec!["WROTE"], None));
+    assert!(sel < 0.05, "expected a tight estimate, got {sel}");
+    assert!(sel >= 0.01, "estimate must respect the floor, got {sel}");
+}
+
+#[test]
+fn graph_estimate_never_exceeds_the_historical_constant() {
+    // Dense graph, single label: raw estimate would be ~min(1, 8*1) = 1.0.
+    let stats = stats_with_graph(8.0, 1);
+    let est = CostEstimator::new(&stats);
+    let sel = est.estimate_condition_selectivity(&graph_match(vec!["LINK"], None));
+    assert!(
+        (sel - 0.5).abs() < f64::EPSILON,
+        "cap at the historical 0.5, got {sel}"
+    );
+}
+
+#[test]
+fn optional_variable_length_hop_contributes_nothing() {
+    // `*0..3`: zero mandatory hops — the pattern matches without any edge.
+    let stats = stats_with_graph(2.0, 50);
+    let est = CostEstimator::new(&stats);
+    let sel = est.estimate_condition_selectivity(&graph_match(vec!["WROTE"], Some((0, 3))));
+    assert!((sel - 0.5).abs() < f64::EPSILON, "got {sel}");
+}
+
+#[test]
+fn mandatory_variable_length_hops_multiply() {
+    // `*2..3` on a 0.04-per-hop graph: 0.04^2 = 0.0016 -> floored at 0.01.
+    let stats = stats_with_graph(2.0, 50);
+    let est = CostEstimator::new(&stats);
+    let sel = est.estimate_condition_selectivity(&graph_match(vec!["WROTE"], Some((2, 3))));
+    assert!((sel - 0.01).abs() < f64::EPSILON, "got {sel}");
+}

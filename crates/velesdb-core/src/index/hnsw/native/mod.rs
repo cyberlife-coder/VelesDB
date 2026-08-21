@@ -36,8 +36,6 @@
 
 mod backend_adapter;
 mod batch_schedule;
-pub(crate) mod columnar_distance;
-pub(crate) mod columnar_vectors;
 mod distance;
 mod dual_precision;
 mod graph;
@@ -75,8 +73,6 @@ pub use search::SearchResult;
 
 #[cfg(test)]
 mod backend_adapter_tests;
-#[cfg(test)]
-mod columnar_vectors_tests;
 #[cfg(test)]
 mod distance_tests;
 #[cfg(test)]

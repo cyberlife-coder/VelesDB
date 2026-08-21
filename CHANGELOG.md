@@ -9,6 +9,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The executed-strategy channel is now a typed cell.** The
+  `Arc<AtomicU8>` probe introduced with `executed_filter_strategy` spread
+  its raw `u8` encoding across three modules; it is now
+  `guardrails::ExecutedStrategyCell`, whose encoding is a private detail —
+  callers only `record` a `FilterStrategy` and `get` an `Option` back. The
+  counted (EXPLAIN ANALYZE) executions also return a named
+  `CountedExecution` struct instead of a 4-tuple, and the Database-level
+  counted path shares its pre-flight (`execute_query_gated`: subquery
+  resolution, validation, read gate, timed execution) with the plain path
+  instead of replaying a copy — the two can no longer drift. The executor's
+  dispatch match is spelled out with no wildcard arm: a future
+  `FilterStrategy` variant fails compilation at every site that must choose,
+  instead of silently falling into a default. No behavior change.
+
+### Added
+
+- **The cost-crossover harness measures two corpus geometries.** The original
+  closed-form trigonometric corpus lies on a smooth 1-D curve — a degenerate
+  distribution an HNSW graph finds unusually easy, so its numbers alone could
+  flatter the index. A seeded isotropic corpus (inline xorshift64*, no RNG
+  dependency, so the sequence can never change under a dependency bump) now
+  runs the same band table; every exact law must hold on both. First
+  measured correction: on the isotropic corpus the bitmap path's work
+  advantage over post-filter at 50–80 % selectivity collapses (≈4 % instead
+  of ≈36 %), and at 5 % selectivity bitmap-HNSW costs nearly 2× the
+  post-filter — the oversampling budget `k/selectivity` dominates. The
+  threshold-convergence work must weigh both geometries.
+
+- **EXPLAIN ANALYZE now reports the filter strategy the executor actually
+  ran** (`actual_stats.executed_filter_strategy`), recorded at the dispatch
+  site itself — not re-derived — through a probe shared between the query
+  context and the search options (an atomic slot, so the vector leg of the
+  CBO `Parallel` strategy, which runs on a rayon worker, records correctly).
+  Present for single SELECTs that went through the filtered vector-search
+  dispatch (including the new `PreFilterExact` brute-force branch); omitted
+  for MATCH, compound queries, and arms where pre/post-filter does not
+  apply. Unlike the plan's `filter_strategy` (an estimate), this is ground
+  truth: comparing the two surfaces plan/execution divergence — e.g. the
+  no-override path runs the bitmap even at 90 % selectivity where the
+  override path post-filters. Serde-defaulted: stats persisted by older
+  versions load unchanged.
+
+- **Deterministic cost-crossover harness** (`tests/cost_crossover.rs`, nightly
+  `cost-crossover` CI job): measures the *work* (single-pair distance
+  evaluations, via a new `internal-bench`-gated counter) and the exact recall
+  of each filtered-search execution shape on a fully deterministic corpus —
+  closed-form vectors, fixed-seed HNSW level PRNG, selectivities exact by
+  construction straddling the `0.01`/`0.8` dispatch thresholds. Counts are
+  bit-for-bit reproducible across runs and machines, so the numbers are
+  comparable between commits even on shared CI runners where wall-clock
+  benchmarks are noise. The printed JSON table is the measurement feed for
+  the planner-threshold convergence work; the harness asserts only exact
+  laws (determinism, scan work = bitmap cardinality, post-filter work
+  independent of selectivity, strict `0.8` boundary). Release builds carry
+  zero instrumentation.
+
+### Changed
+
+- **The pre/post-filter decision now has a single brain:
+  `velesql::decide_filter_strategy`.** The executor's bitmap dispatch
+  (`collection/search/vector_filter.rs`) and EXPLAIN's plan-time strategy
+  (`velesql/explain/filter_strategy.rs`) each owned their own thresholds; the
+  executor's `0.01` / `0.8` cutoffs now live next to the plan-time recall
+  guard and both consumers call the same pure function —
+  `FilterDecisionMode::Exact` for the measured bitmap ratio,
+  `FilterDecisionMode::Estimated` for the cost-model comparison. A new
+  `FilterStrategy::PreFilterExact` variant names the executor's brute-force
+  branch (exact scan of the bitmap survivors), which the estimated mode never
+  promises. Zero behavior change: every dispatch boundary and every EXPLAIN
+  output is bit-for-bit what it was.
 - **`velesql::match_planner::CollectionStats` is renamed `MatchGraphStats`**;
   the old name remains as a deprecated type alias, so callers compile
   unchanged. The old name collided with the tabular
@@ -17,6 +87,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CollectionStats::graph_stats` (optional, serde-defaulted — stats files
   persisted by older versions load unchanged), giving the MATCH planner and
   the cost estimator one shared source for graph statistics.
+- **The promise contract now fails the build when a documentary claim was
+  measured a full major behind the shipping workspace.** Minor drift stays
+  advisory (unchanged), but a figure taken on a previous major describes a
+  product that no longer ships — both real drifts this guard exists for
+  crossed exactly that line. A claim may carry an explicit, dated
+  `stale_accepted` waiver scoped to the current workspace major
+  (self-expiring at the next major bump); the two 4.0.0-era size claims
+  carry one until the next release build re-measures them.
 
 ### Fixed
 

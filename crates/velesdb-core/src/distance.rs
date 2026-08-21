@@ -195,6 +195,26 @@ impl DistanceMetric {
             results.sort_unstable_by(|a, b| a.score.total_cmp(&b.score));
         }
     }
+
+    /// Top-k twin of [`Self::sort_scored_results`]: O(n + k log k) partial
+    /// select + sort instead of a full O(n log n) sort, for callers that
+    /// truncate to `k` anyway — the bitmap brute-force scan hands this the
+    /// whole allowed set, which can be a large fraction of the collection.
+    ///
+    /// Gated with the `index` module its helper lives in (its callers are
+    /// the persistence-gated HNSW paths).
+    #[cfg(feature = "persistence")]
+    pub(crate) fn top_k_scored_results(
+        self,
+        results: &mut Vec<crate::scored_result::ScoredResult>,
+        k: usize,
+    ) {
+        if self.higher_is_better() {
+            crate::index::top_k_partial_sort(results, k, |a, b| b.score.total_cmp(&a.score));
+        } else {
+            crate::index::top_k_partial_sort(results, k, |a, b| a.score.total_cmp(&b.score));
+        }
+    }
 }
 
 impl FromStr for DistanceMetric {

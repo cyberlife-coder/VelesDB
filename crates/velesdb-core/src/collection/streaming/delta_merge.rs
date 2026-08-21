@@ -3,7 +3,7 @@
 //! Extracted from `delta.rs` to keep that module focused on the `DeltaBuffer`
 //! state machine and its core operations.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 use crate::distance::DistanceMetric;
 
@@ -33,7 +33,9 @@ pub fn merge_with_delta(
     }
 
     // Delta IDs win on duplicates (more recent data).
-    let delta_ids: HashSet<u64> = delta_results.iter().map(|(id, _)| *id).collect();
+    // FxHashSet: this merge sits on the unconditional search path and the
+    // std SipHash set cost showed in the audit; ids are already random-ish.
+    let delta_ids: FxHashSet<u64> = delta_results.iter().map(|(id, _)| *id).collect();
     let mut merged: Vec<(u64, f32)> = hnsw_results
         .into_iter()
         .filter(|(id, _)| !delta_ids.contains(id))
@@ -67,7 +69,9 @@ pub fn merge_with_delta_scored(
         return hnsw_results;
     }
 
-    let delta_ids: HashSet<u64> = delta_results.iter().map(|(id, _)| *id).collect();
+    // FxHashSet: this merge sits on the unconditional search path and the
+    // std SipHash set cost showed in the audit; ids are already random-ish.
+    let delta_ids: FxHashSet<u64> = delta_results.iter().map(|(id, _)| *id).collect();
     let mut merged: Vec<(u64, f32)> = hnsw_results
         .into_iter()
         .filter(|sr| !delta_ids.contains(&sr.id))

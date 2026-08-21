@@ -1,0 +1,1 @@
+SELECT count(*), category FROM docs GROUP BY category HAVING count(*) > 2

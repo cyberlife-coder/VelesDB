@@ -45,8 +45,6 @@ impl LockRank {
     pub const GPU_VECTORS_SNAPSHOT: LockRank = LockRank(5);
     /// Dense-vector storage lock.
     pub const VECTORS: LockRank = LockRank(10);
-    /// Columnar (`ColumnStore`) lock.
-    pub const COLUMNAR: LockRank = LockRank(15);
     /// HNSW layer-structure lock.
     pub const LAYERS: LockRank = LockRank(20);
     /// HNSW neighbor-list lock — highest core rank.

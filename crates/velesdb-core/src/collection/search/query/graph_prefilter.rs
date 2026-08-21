@@ -154,7 +154,11 @@ impl Collection {
         let candidates_k = metadata_filter
             .as_ref()
             .map_or(limit, |f| {
-                super::super::vector_filter::compute_oversampled_k(limit, f)
+                super::super::vector_filter::compute_oversampled_k(
+                    limit,
+                    f,
+                    Some(&self.get_stats()),
+                )
             })
             .min(super::MAX_LIMIT);
         let index_results = self.storage.index.search_with_quality_and_bitmap(

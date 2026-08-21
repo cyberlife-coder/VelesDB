@@ -112,6 +112,23 @@ pub fn set_fallback_selectivity_threshold(value: f64) -> Result<f64> {
 /// candidates survive). Forces PostFilter in that case.
 pub(super) const PREFILTER_RECALL_GUARD: f64 = 0.5;
 
+/// Exact-mode threshold: at or below this measured selectivity, the executor
+/// abandons HNSW and brute-forces the bitmap survivors — the candidate set is
+/// so small that exact distance computation beats graph traversal.
+///
+/// Historically `SELECTIVITY_THRESHOLD` in `collection/search/vector_filter.rs`;
+/// moved here so every filter-strategy threshold lives in one module.
+pub const EXACT_FULL_SCAN_MAX_SELECTIVITY: f64 = 0.01;
+
+/// Exact-mode threshold: above this measured selectivity, the bitmap prunes
+/// so little that the executor skips it entirely and post-filters a full
+/// HNSW pass.
+///
+/// Historically `SELECTIVITY_HIGH_THRESHOLD` in
+/// `collection/search/vector_filter.rs`; moved here so every filter-strategy
+/// threshold lives in one module.
+pub const EXACT_POST_FILTER_MIN_SELECTIVITY: f64 = 0.8;
+
 // POSTFILTER_TOPK_COST_FRACTION was removed in favour of
 // `CostEstimator::estimate_post_filter_topk_cost(k, ef_search)` (issue #609).
 // The previous `filter_scan_cost × 0.01` approximation was off by up to 5× for
@@ -230,7 +247,10 @@ fn threshold_strategy(selectivity: f64) -> FilterStrategy {
     }
 }
 
-pub(super) fn resolve_filter_strategy(
+/// Plan-time (estimated) arm of [`decide_filter_strategy`]: cost comparison
+/// with a recall guardrail when calibrated stats are available, the
+/// historical fallback threshold otherwise.
+fn estimated_strategy(
     selectivity: f64,
     has_vector_search: bool,
     ef_search: u32,
@@ -305,5 +325,70 @@ pub(super) fn resolve_filter_strategy(
         FilterStrategy::PreFilter
     } else {
         FilterStrategy::PostFilter
+    }
+}
+
+/// How the selectivity fed to [`decide_filter_strategy`] was obtained.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FilterDecisionMode {
+    /// Plan-time estimate (EXPLAIN / planner): the selectivity comes from
+    /// histograms or structural heuristics, and the decision weighs the
+    /// calibrated pre- vs post-filter cost models when stats are available.
+    Estimated {
+        /// Whether the plan contains an HNSW stage; without one the
+        /// pre/post-filter label is informational only.
+        has_vector_search: bool,
+        /// The query's effective `ef_search` (WITH clause or default).
+        ef_search: u32,
+        /// The query's effective candidate count (`LIMIT` or default).
+        candidates: u32,
+    },
+    /// Executor-side: the selectivity is the exact ratio measured from a
+    /// materialized pre-filter bitmap (`bitmap.len() / collection.len()`),
+    /// so the decision uses the executor's hard thresholds instead of a
+    /// cost model.
+    Exact,
+}
+
+/// The single decision point for pre- vs post-filtering — the executor and
+/// EXPLAIN both consume this function, so the plan output cannot drift from
+/// what actually runs.
+///
+/// - [`FilterDecisionMode::Exact`] reproduces the executor's dispatch in
+///   `collection/search/vector_filter.rs` bit-for-bit: selectivity above
+///   [`EXACT_POST_FILTER_MIN_SELECTIVITY`] post-filters a full HNSW pass, at
+///   or below [`EXACT_FULL_SCAN_MAX_SELECTIVITY`] the bitmap survivors are
+///   brute-forced exactly ([`FilterStrategy::PreFilterExact`]), and the band
+///   in between runs HNSW constrained by the bitmap
+///   ([`FilterStrategy::PreFilter`]). `stats` is not consulted: the
+///   selectivity is already exact.
+/// - [`FilterDecisionMode::Estimated`] is the plan-time brain: a calibrated
+///   cost comparison guarded by [`PREFILTER_RECALL_GUARD`] when `stats` is
+///   available, the historical fallback threshold
+///   ([`fallback_selectivity_threshold`]) otherwise. It never returns
+///   [`FilterStrategy::PreFilterExact`] — without the bitmap the executor's
+///   exact branch cannot be promised.
+#[must_use]
+pub fn decide_filter_strategy(
+    selectivity: f64,
+    mode: FilterDecisionMode,
+    stats: Option<&CoreCollectionStats>,
+) -> FilterStrategy {
+    match mode {
+        FilterDecisionMode::Exact => {
+            if selectivity > EXACT_POST_FILTER_MIN_SELECTIVITY {
+                FilterStrategy::PostFilter
+            } else if selectivity <= EXACT_FULL_SCAN_MAX_SELECTIVITY {
+                FilterStrategy::PreFilterExact
+            } else {
+                FilterStrategy::PreFilter
+            }
+        }
+        FilterDecisionMode::Estimated {
+            has_vector_search,
+            ef_search,
+            candidates,
+        } => estimated_strategy(selectivity, has_vector_search, ef_search, candidates, stats),
     }
 }

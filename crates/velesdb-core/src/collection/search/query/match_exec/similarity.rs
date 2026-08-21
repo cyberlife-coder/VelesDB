@@ -14,7 +14,7 @@ use crate::collection::expiry::{is_payload_expired, now_unix_secs};
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::point::SearchResult;
-use crate::storage::{LogPayloadStorage, PayloadStorage, VectorStorage};
+use crate::storage::{PayloadStorage, VectorStorage};
 use crate::validation::validate_dimension_match;
 use std::collections::HashMap;
 
@@ -24,7 +24,7 @@ struct ProjectionCtx<'a> {
     edge_bindings: &'a HashMap<String, u64>,
     edge_paths: &'a HashMap<String, Vec<u64>>,
     score: Option<f32>,
-    payload_guard: &'a LogPayloadStorage,
+    memo: &'a super::PayloadMemo<'a>,
 }
 
 /// Output key of a RETURN item: its `AS` alias, or the raw expression.
@@ -47,13 +47,13 @@ impl Collection {
     /// per-node lock acquisitions during traversal. `edge_bindings` maps
     /// relationship aliases to traversed edge ids so `RETURN r.prop`
     /// projects the EDGE's property (audit 2026-06 F).
-    pub(crate) fn project_properties(
+    pub(in crate::collection::search::query) fn project_properties(
         &self,
         bindings: &HashMap<String, u64>,
         edge_bindings: &HashMap<String, u64>,
         edge_paths: &HashMap<String, Vec<u64>>,
         return_clause: &crate::velesql::ReturnClause,
-        payload_guard: &LogPayloadStorage,
+        memo: &super::PayloadMemo<'_>,
     ) -> HashMap<String, serde_json::Value> {
         self.project_properties_with_score(
             bindings,
@@ -61,7 +61,7 @@ impl Collection {
             edge_paths,
             return_clause,
             None,
-            payload_guard,
+            memo,
         )
     }
 
@@ -71,21 +71,21 @@ impl Collection {
     /// When `score` is `Some`, `RETURN similarity()` injects it into the
     /// projected map. All other variants work identically to
     /// [`project_properties`].
-    pub(crate) fn project_properties_with_score(
+    pub(in crate::collection::search::query) fn project_properties_with_score(
         &self,
         bindings: &HashMap<String, u64>,
         edge_bindings: &HashMap<String, u64>,
         edge_paths: &HashMap<String, Vec<u64>>,
         return_clause: &crate::velesql::ReturnClause,
         score: Option<f32>,
-        payload_guard: &LogPayloadStorage,
+        memo: &super::PayloadMemo<'_>,
     ) -> HashMap<String, serde_json::Value> {
         let ctx = ProjectionCtx {
             bindings,
             edge_bindings,
             edge_paths,
             score,
-            payload_guard,
+            memo,
         };
         let mut projected = HashMap::new();
         for item in &return_clause.items {
@@ -103,7 +103,7 @@ impl Collection {
     ) {
         match parse_projection_item(&item.expression) {
             ProjectionItem::Wildcard => {
-                Self::project_wildcard(ctx.bindings, ctx.payload_guard, projected);
+                Self::project_wildcard(ctx.bindings, ctx.memo, projected);
             }
             ProjectionItem::FunctionCall(name) => {
                 if let ("similarity", Some(s)) = (name, ctx.score) {
@@ -122,7 +122,7 @@ impl Collection {
                 if let Some(edge_ids) = ctx.edge_paths.get(alias) {
                     projected.insert(projection_key(item), serde_json::json!(edge_ids));
                 } else {
-                    Self::project_bare_alias(alias, ctx.bindings, ctx.payload_guard, projected);
+                    Self::project_bare_alias(alias, ctx.bindings, ctx.memo, projected);
                 }
             }
         }
@@ -145,14 +145,7 @@ impl Collection {
         } else if let Some(edge_ids) = ctx.edge_paths.get(alias) {
             self.project_edge_path_property(edge_ids, property, item, projected);
         } else {
-            Self::project_property_path(
-                alias,
-                property,
-                item,
-                ctx.bindings,
-                ctx.payload_guard,
-                projected,
-            );
+            Self::project_property_path(alias, property, item, ctx.bindings, ctx.memo, projected);
         }
     }
 
@@ -201,11 +194,11 @@ impl Collection {
     /// Projects ALL properties from ALL bound nodes into the result (RETURN *).
     fn project_wildcard(
         bindings: &HashMap<String, u64>,
-        payload_storage: &crate::storage::LogPayloadStorage,
+        memo: &super::PayloadMemo<'_>,
         projected: &mut HashMap<String, serde_json::Value>,
     ) {
         for (alias, &node_id) in bindings {
-            Self::project_all_node_properties(alias, node_id, payload_storage, projected);
+            Self::project_all_node_properties(alias, node_id, memo, projected);
         }
     }
 
@@ -214,10 +207,10 @@ impl Collection {
     fn project_all_node_properties(
         alias: &str,
         node_id: u64,
-        payload_storage: &crate::storage::LogPayloadStorage,
+        memo: &super::PayloadMemo<'_>,
         projected: &mut HashMap<String, serde_json::Value>,
     ) {
-        let Ok(Some(payload)) = payload_storage.retrieve(node_id) else {
+        let Some(payload) = memo.get(node_id) else {
             return;
         };
         if let Some(map) = payload.as_object() {
@@ -233,13 +226,13 @@ impl Collection {
         property: &str,
         item: &crate::velesql::ReturnItem,
         bindings: &HashMap<String, u64>,
-        payload_storage: &crate::storage::LogPayloadStorage,
+        memo: &super::PayloadMemo<'_>,
         projected: &mut HashMap<String, serde_json::Value>,
     ) {
         let Some(&node_id) = bindings.get(alias) else {
             return;
         };
-        let Ok(Some(payload)) = payload_storage.retrieve(node_id) else {
+        let Some(payload) = memo.get(node_id) else {
             return;
         };
         let Some(payload_map) = payload.as_object() else {
@@ -254,13 +247,13 @@ impl Collection {
     fn project_bare_alias(
         alias: &str,
         bindings: &HashMap<String, u64>,
-        payload_storage: &crate::storage::LogPayloadStorage,
+        memo: &super::PayloadMemo<'_>,
         projected: &mut HashMap<String, serde_json::Value>,
     ) {
         let Some(&node_id) = bindings.get(alias) else {
             return;
         };
-        Self::project_all_node_properties(alias, node_id, payload_storage, projected);
+        Self::project_all_node_properties(alias, node_id, memo, projected);
     }
 
     /// Gets a nested property from a JSON object (EPIC-058 US-007).
@@ -335,12 +328,13 @@ impl Collection {
         // reversed here. See .investigation/http-deadlock-2026-07-22/.
         let vector_storage = self.storage.vector_storage.read();
         let payload_guard = self.storage.payload_storage.read();
+        let memo = super::PayloadMemo::new(&payload_guard);
         let higher_is_better = metric.higher_is_better();
 
         let mut scored_results = self.score_match_results(
             results,
             &vector_storage,
-            &payload_guard,
+            &memo,
             match_clause,
             query_vector,
             expected_dimension,
@@ -379,7 +373,7 @@ impl Collection {
         &self,
         results: Vec<MatchResult>,
         vector_storage: &crate::storage::MmapStorage,
-        payload_guard: &LogPayloadStorage,
+        memo: &super::PayloadMemo<'_>,
         match_clause: &crate::velesql::MatchClause,
         query_vector: &[f32],
         expected_dimension: usize,
@@ -409,7 +403,7 @@ impl Collection {
                         &result.edge_paths,
                         &match_clause.return_clause,
                         Some(score),
-                        payload_guard,
+                        memo,
                     );
                     scored_results.push(result);
                 }

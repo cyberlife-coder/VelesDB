@@ -1,0 +1,1 @@
+UPDATE docs SET title = 'x' WHERE id = 1

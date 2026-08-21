@@ -19,6 +19,8 @@
 //! edge buffer (`degree × size_of::<GraphEdge>()`). A meter that failed to
 //! see that much would fail the control rather than green-light the claim.
 
+#![cfg(feature = "persistence")]
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 

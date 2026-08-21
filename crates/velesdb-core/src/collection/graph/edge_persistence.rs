@@ -115,6 +115,7 @@ impl EdgeStore {
     /// Returns an error if file I/O or deserialization fails.
     pub fn load_from_file(path: &std::path::Path) -> std::io::Result<Self> {
         let mut store = <Self as PostcardPersistence>::load_from_file(path)?;
+        store.rebuild_incoming_label_index();
         store.build_read_snapshot();
         Ok(store)
     }

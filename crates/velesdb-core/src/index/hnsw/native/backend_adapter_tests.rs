@@ -1224,9 +1224,11 @@ fn test_unit_vs_batch_parity_cosine_production_engine() {
     let n = 300;
     let vectors = parity_vectors(n, dim);
 
-    // Production configuration: CachedSimdDistance::new — NOT pre-normalized.
+    // Production configuration: CachedSimdDistance::new_prenormalized —
+    // cosine vectors are unit-norm in graph storage (recovery pass 3
+    // normalizes the storage copy before its byte comparison to match).
     let unit = NativeHnsw::new(
-        CachedSimdDistance::new(DistanceMetric::Cosine, dim),
+        CachedSimdDistance::new_prenormalized(DistanceMetric::Cosine, dim),
         16,
         100,
         n,
@@ -1236,7 +1238,7 @@ fn test_unit_vs_batch_parity_cosine_production_engine() {
     }
 
     let batch = NativeHnsw::new(
-        CachedSimdDistance::new(DistanceMetric::Cosine, dim),
+        CachedSimdDistance::new_prenormalized(DistanceMetric::Cosine, dim),
         16,
         100,
         n,
@@ -1249,13 +1251,16 @@ fn test_unit_vs_batch_parity_cosine_production_engine() {
     batch.parallel_insert(&data).expect("batch insert");
     assert_eq!(batch.len(), n);
 
-    // Production cosine stores vectors VERBATIM (recovery pass 3 relies on
-    // byte-exact equality between graph storage and vector storage).
+    // Production cosine stores vectors UNIT-NORM: batch and unit insert paths
+    // must produce byte-identical normalized storage (recovery pass 3
+    // normalizes the WAL storage copy with the same kernel before comparing).
     for id in [0, n / 2, n - 1] {
+        let mut expected = vectors[id].clone();
+        crate::simd_native::normalize_inplace_native(&mut expected);
         assert_eq!(
             stored_vector(&batch, id),
-            vectors[id],
-            "production cosine batch path must store vectors verbatim (id={id})"
+            expected,
+            "production cosine batch path must store unit-norm vectors (id={id})"
         );
     }
 

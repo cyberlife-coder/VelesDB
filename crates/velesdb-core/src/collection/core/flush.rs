@@ -270,18 +270,49 @@ impl Collection {
     }
 
     /// Persists property index, range index, and edge store (EPIC-009 US-005).
+    ///
+    /// Each artifact rewrites only when something changed since the last
+    /// flush: the pre-fix shape rewrote all three files on EVERY `flush()`
+    /// call — O(total edges + total postings) per batch, not O(batch).
+    /// Property/range use dirty flags set at their mutation (DDL) sites; the
+    /// edge snapshot keys off the edge WAL, which every mutation appends to
+    /// before applying and which the snapshot itself truncates — an empty
+    /// WAL therefore proves the store equals the last snapshot.
     fn flush_secondary_indexes(&self) -> Result<()> {
-        let property_index_path = self.storage.path.join("property_index.bin");
-        self.graph
-            .property_index
-            .read()
-            .save_to_file(&property_index_path)?;
+        use std::sync::atomic::Ordering;
 
-        let range_index_path = self.storage.path.join("range_index.bin");
-        self.graph
-            .range_index
-            .read()
-            .save_to_file(&range_index_path)?;
+        if self
+            .graph
+            .property_index_dirty
+            .swap(false, Ordering::AcqRel)
+        {
+            let property_index_path = self.storage.path.join("property_index.bin");
+            if let Err(e) = self
+                .graph
+                .property_index
+                .read()
+                .save_to_file(&property_index_path)
+            {
+                // Re-mark so the next flush retries the write.
+                self.graph
+                    .property_index_dirty
+                    .store(true, Ordering::Release);
+                return Err(e.into());
+            }
+        }
+
+        if self.graph.range_index_dirty.swap(false, Ordering::AcqRel) {
+            let range_index_path = self.storage.path.join("range_index.bin");
+            if let Err(e) = self
+                .graph
+                .range_index
+                .read()
+                .save_to_file(&range_index_path)
+            {
+                self.graph.range_index_dirty.store(true, Ordering::Release);
+                return Err(e.into());
+            }
+        }
 
         // Save the EdgeStore snapshot for ANY collection that uses the graph
         // dimension (edges now WAL-persist on every collection type, so the
@@ -291,18 +322,35 @@ impl Collection {
         // empty store.
         let edge_store_path = self.storage.path.join("edge_store.bin");
         if !self.graph.edge_store.is_empty() || edge_store_path.exists() {
-            self.graph.edge_store.save_to_file(&edge_store_path)?;
-            // The snapshot now contains every edge, so the edge WAL delta is
-            // redundant — truncate it AFTER the snapshot is durably written so
-            // a crash between the two still replays the edges (never loses
-            // them). Mirrors the BM25 snapshot → wal_truncate contract.
+            // Skip the full-store clone + serialize when nothing changed:
+            // every edge mutation WAL-appends before applying and the WAL is
+            // truncated only after a durable snapshot, so a zero-length WAL
+            // proves store == snapshot. (Without `persistence` there is no
+            // WAL to consult — keep the unconditional save.)
             #[cfg(feature = "persistence")]
-            crate::collection::graph::edge_wal::wal_truncate(
-                &crate::collection::graph::edge_wal::wal_path_for_edges(&self.storage.path),
-            )?;
-            // Rebuild CSR read snapshot after flush so that subsequent reads
-            // benefit from zero-copy neighbor lookups (EPIC-020 US-004).
-            self.graph.edge_store.build_read_snapshot();
+            let edges_dirty = !edge_store_path.exists()
+                || std::fs::metadata(crate::collection::graph::edge_wal::wal_path_for_edges(
+                    &self.storage.path,
+                ))
+                .map(|m| m.len() > 0)
+                .unwrap_or(false);
+            #[cfg(not(feature = "persistence"))]
+            let edges_dirty = true;
+
+            if edges_dirty {
+                self.graph.edge_store.save_to_file(&edge_store_path)?;
+                // The snapshot now contains every edge, so the edge WAL delta is
+                // redundant — truncate it AFTER the snapshot is durably written so
+                // a crash between the two still replays the edges (never loses
+                // them). Mirrors the BM25 snapshot → wal_truncate contract.
+                #[cfg(feature = "persistence")]
+                crate::collection::graph::edge_wal::wal_truncate(
+                    &crate::collection::graph::edge_wal::wal_path_for_edges(&self.storage.path),
+                )?;
+                // Rebuild CSR read snapshot after flush so that subsequent reads
+                // benefit from zero-copy neighbor lookups (EPIC-020 US-004).
+                self.graph.edge_store.build_read_snapshot();
+            }
         }
 
         Ok(())
@@ -314,7 +362,12 @@ impl Collection {
         // hold the same guard from WAL append through in-memory application.
         let indexes = self.query.sparse_indexes.write();
         for (name, idx) in indexes.iter() {
-            crate::index::sparse::persistence::compact_named(&self.storage.path, name, idx)?;
+            // WAL-before-apply means a clean index (empty WAL + published
+            // snapshot) is byte-equal to its snapshot: skip the full
+            // postings rewrite the unconditional compaction paid per flush.
+            if crate::index::sparse::persistence::needs_compaction(&self.storage.path, name) {
+                crate::index::sparse::persistence::compact_named(&self.storage.path, name, idx)?;
+            }
         }
         Ok(())
     }

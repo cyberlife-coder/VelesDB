@@ -301,6 +301,14 @@ pub(crate) struct GraphStore {
     /// Lock order position: **7**.
     pub(super) property_index: Arc<RwLock<PropertyIndex>>,
 
+    /// Set by every `property_index` mutation (all DDL: create/drop), cleared
+    /// by the flush that persisted it — `flush()` was rewriting
+    /// `property_index.bin` on every call, changed or not.
+    pub(super) property_index_dirty: std::sync::atomic::AtomicBool,
+
+    /// `range_index`'s twin of `property_index_dirty`.
+    pub(super) range_index_dirty: std::sync::atomic::AtomicBool,
+
     /// Label index for O(1) label-based node lookups (Issue #486).
     ///
     /// Maps label names to `RoaringBitmap` of node IDs, enabling
@@ -364,6 +372,12 @@ pub(crate) struct GraphStore {
     pub(super) edge_wal_lock: Arc<Mutex<()>>,
 }
 
+/// One TTL-stamped, `Arc`-shared snapshot of the collection's CBO
+/// statistics (see `get_stats`): the `Arc` makes cache hits pointer clones
+/// instead of deep histogram copies.
+pub(crate) type SharedStatsCache =
+    Arc<Mutex<Option<(std::sync::Arc<CollectionStats>, std::time::Instant)>>>;
+
 /// Secondary/sparse payload indexes and the query-execution engine state.
 ///
 /// Concern cluster **query** of `Collection` (R1.1, EPIC #1384). See
@@ -402,7 +416,7 @@ pub(crate) struct QueryState {
     pub(crate) query_cache: Arc<QueryCache>,
 
     /// Cached CBO statistics with TTL (avoids O(n) scan per query).
-    pub(crate) cached_stats: Arc<Mutex<Option<(CollectionStats, std::time::Instant)>>>,
+    pub(crate) cached_stats: SharedStatsCache,
 
     /// Guards read → modify → write cycles on `collection.stats.json`.
     ///

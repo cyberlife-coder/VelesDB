@@ -23,6 +23,8 @@
 //! installed once — sequential phases inside one test keep every count
 //! attributable.
 
+#![cfg(feature = "persistence")]
+
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 

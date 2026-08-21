@@ -1,0 +1,1 @@
+SELECT * FROM products LEFT JOIN inventory USING(id) LIMIT 10

@@ -518,7 +518,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                     if batch.is_empty() {
                         return false;
                     }
-                    let vecs: SmallVec<[&[f32]; 32]> = batch.iter().map(|(_, v)| *v).collect();
+                    let vecs: SmallVec<[&[f32]; 64]> = batch.iter().map(|(_, v)| *v).collect();
                     let distances = batch_distance_with_prefetch(distance, query, &vecs);
                     process_batch_results(&batch, &distances, ef, state)
                 })

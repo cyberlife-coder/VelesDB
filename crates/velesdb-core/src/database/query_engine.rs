@@ -326,8 +326,10 @@ impl Database {
 
         let plan = self.explain_query(query)?;
         let start = std::time::Instant::now();
-        let (results, nodes, edges) = self.execute_query_counted(query, params)?;
-        let stats = ActualStats::from_counted(results.len() as u64, start.elapsed(), nodes, edges);
+        let (results, nodes, edges, executed_strategy) =
+            self.execute_query_counted(query, params)?;
+        let stats = ActualStats::from_counted(results.len() as u64, start.elapsed(), nodes, edges)
+            .with_executed_filter_strategy(executed_strategy);
         let node_stats = crate::velesql::build_leaf_node_stats(
             &plan.root,
             stats.actual_rows,
@@ -350,14 +352,6 @@ impl Database {
         query: &crate::velesql::Query,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
-        // Resolve scalar subqueries (EPIC-039) into literals *before* validation
-        // so the validator and every downstream path see a subquery-free AST.
-        if let Some(rewritten) = self.resolve_subqueries(query, params)? {
-            return self.execute_query(&rewritten, params);
-        }
-
-        crate::velesql::QueryValidator::validate(query).map_err(|e| Error::Query(e.to_string()))?;
-
         // Requirement 1: read-path control-plane gate. Fires exactly once here
         // at the `Database` facade for read paths (SELECT + MATCH). Compound /
         // JOIN sub-executions re-enter `execute_single_select`, not
@@ -370,8 +364,26 @@ impl Database {
         // after the data-plane op completes. Resolving the `Cow` to a `&Query`
         // (via deref coercion on `&gated`) keeps the timing in one place rather
         // than duplicated across the borrowed / owned arms.
+        self.execute_query_gated(query, params, None)
+    }
+
+    /// Shared pre-flight + execution used by both the plain path and the
+    /// EXPLAIN ANALYZE counted path, so the two can never drift: scalar
+    /// subquery resolution, validation, the read-path gate, then the timed
+    /// execution — with an optional executed-strategy probe threaded to the
+    /// base-collection call.
+    fn execute_query_gated(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        probe: Option<&crate::database::StrategyProbeSlot>,
+    ) -> Result<Vec<SearchResult>> {
+        if let Some(rewritten) = self.resolve_subqueries(query, params)? {
+            return self.execute_query_gated(&rewritten, params, probe);
+        }
+        crate::velesql::QueryValidator::validate(query).map_err(|e| Error::Query(e.to_string()))?;
         let gated = self.read_gate(query)?;
-        self.execute_query_timed(&gated, params)
+        self.execute_query_timed(&gated, params, probe)
     }
 
     /// Executes the resolved (post-gate) query and fires the `on_query`
@@ -392,12 +404,13 @@ impl Database {
         &self,
         query: &crate::velesql::Query,
         params: &std::collections::HashMap<String, serde_json::Value>,
+        probe: Option<&crate::database::StrategyProbeSlot>,
     ) -> Result<Vec<SearchResult>> {
         let Some(observer) = self.observer.as_ref() else {
-            return self.execute_query_inner(query, params); // zero-overhead fast path
+            return self.execute_query_inner(query, params, probe); // zero-overhead fast path
         };
         let started = std::time::Instant::now();
-        let results = self.execute_query_inner(query, params)?;
+        let results = self.execute_query_inner(query, params, probe)?;
         let duration_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
         observer.on_query(query.select.from.as_str(), duration_us);
         Ok(results)
@@ -529,6 +542,7 @@ impl Database {
         &self,
         query: &crate::velesql::Query,
         params: &std::collections::HashMap<String, serde_json::Value>,
+        probe: Option<&crate::database::StrategyProbeSlot>,
     ) -> Result<Vec<SearchResult>> {
         if let Some(results) = self.dispatch_non_select(query, params)? {
             return Ok(results);
@@ -543,7 +557,7 @@ impl Database {
         let pre_exec_key = self.build_plan_key(query);
         let is_cached = self.compiled_plan_cache.contains(&pre_exec_key);
 
-        let results = self.execute_select_query(query, params)?;
+        let results = self.execute_select_query(query, params, probe)?;
 
         // Populate cache on miss (CACHE-02).
         //
@@ -616,8 +630,12 @@ impl Database {
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<(Vec<SearchResult>, u64, u64)> {
         let coll = self.resolve_match_collection(query, params)?;
-        let (mut results, nodes_visited, edges_traversed) =
-            coll.execute_query_counted(query, params)?;
+        let counted = coll.execute_query_counted(query, params)?;
+        let (mut results, nodes_visited, edges_traversed) = (
+            counted.results,
+            counted.nodes_visited,
+            counted.edges_traversed,
+        );
         // Cross-collection enrichment: if any node pattern has a @collection
         // annotation, look up payloads from those collections and merge them
         // into the projected fields.
@@ -635,16 +653,28 @@ impl Database {
         &self,
         query: &Query,
         params: &std::collections::HashMap<String, serde_json::Value>,
-    ) -> Result<(Vec<SearchResult>, u64, u64)> {
+    ) -> Result<(
+        Vec<SearchResult>,
+        u64,
+        u64,
+        Option<crate::velesql::FilterStrategy>,
+    )> {
         if query.is_match_query() {
             // Apply the read-path gate before the MATCH executor. The non-EXPLAIN
             // MATCH path is gated inside `execute_query`; this counted path (used
             // by EXPLAIN ANALYZE) routes straight to `execute_match_routed`, so
             // without this it would let EXPLAIN ANALYZE MATCH bypass governance.
             let gated = self.read_gate(query)?;
-            return self.execute_match_routed(&gated, params);
+            let (results, nodes, edges) = self.execute_match_routed(&gated, params)?;
+            return Ok((results, nodes, edges, None));
         }
-        Ok((self.execute_query(query, params)?, 0, 0))
+        // The exact pre-steps of execute_query (shared execute_query_gated
+        // inner — the two paths cannot drift), with a probe threaded to the
+        // base-collection call so EXPLAIN ANALYZE reports the ran strategy.
+        let slot: crate::database::StrategyProbeSlot =
+            std::sync::Arc::new(crate::guardrails::ExecutedStrategyCell::default());
+        let results = self.execute_query_gated(query, params, Some(&slot))?;
+        Ok((results, 0, 0, slot.get()))
     }
 
     /// Executes the SELECT portion of a query, resolving JOINs if present.
@@ -652,6 +682,7 @@ impl Database {
         &self,
         query: &crate::velesql::Query,
         params: &std::collections::HashMap<String, serde_json::Value>,
+        probe: Option<&crate::database::StrategyProbeSlot>,
     ) -> Result<Vec<SearchResult>> {
         // EPIC-040 US-006: For compound queries, strip LIMIT from each operand so
         // the set operation sees the full result sets.  The final LIMIT is applied
@@ -660,11 +691,13 @@ impl Database {
         const COMPOUND_LIMIT: usize = 100_000;
         let compound_limit = Some(COMPOUND_LIMIT as u64); // 100_000 fits u64 exactly.
         let left_results = if query.compound.is_some() {
+            // Compound queries execute several selects; a single reported
+            // strategy would be ambiguous, so the probe stays untouched.
             let mut left_query = query.clone();
             left_query.select.limit = compound_limit;
-            self.execute_single_select(&left_query, params)?
+            self.execute_single_select(&left_query, params, None)?
         } else {
-            return self.execute_single_select(query, params);
+            return self.execute_single_select(query, params, probe);
         };
 
         // compound is guaranteed Some here (non-compound returns above).
@@ -673,7 +706,7 @@ impl Database {
             for (operator, right_select) in &compound.operations {
                 let mut right_query = crate::velesql::Query::new_select(right_select.clone());
                 right_query.select.limit = compound_limit;
-                let right_results = self.execute_single_select(&right_query, params)?;
+                let right_results = self.execute_single_select(&right_query, params, None)?;
                 accumulated = crate::collection::search::query::set_operations::apply_set_operation(
                     accumulated,
                     right_results,
@@ -764,6 +797,7 @@ impl Database {
         &self,
         query: &crate::velesql::Query,
         params: &std::collections::HashMap<String, serde_json::Value>,
+        probe: Option<&crate::database::StrategyProbeSlot>,
     ) -> Result<Vec<SearchResult>> {
         let base_collection = self.resolve_collection(&query.select.from)?;
 
@@ -771,7 +805,10 @@ impl Database {
         single_query.compound = None;
 
         if single_query.select.joins.is_empty() {
-            return base_collection.execute_query(&single_query, params);
+            return match probe {
+                Some(slot) => base_collection.execute_query_probed(&single_query, params, slot),
+                None => base_collection.execute_query(&single_query, params),
+            };
         }
 
         let analysis = Self::prepare_join_pushdown(&mut single_query, params)?;
@@ -779,9 +816,12 @@ impl Database {
 
         let row_budget = Self::join_row_budget(&query.select, &analysis);
 
-        let mut results = base_collection.execute_query(&single_query, params)?;
+        let mut results = match probe {
+            Some(slot) => base_collection.execute_query_probed(&single_query, params, slot)?,
+            None => base_collection.execute_query(&single_query, params)?,
+        };
         for join in &query.select.joins {
-            results = self.execute_single_join(&results, join, &pushed, row_budget)?;
+            results = self.execute_single_join(results, join, &pushed, row_budget)?;
         }
 
         // Apply post-join filters: cross-source predicates that reference

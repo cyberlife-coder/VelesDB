@@ -36,7 +36,10 @@ use crate::error::{Error, Result};
 use crate::storage::atomic_write::{atomic_write, atomic_write_with};
 
 // Re-export WAL operations for backward compatibility.
-pub use super::persistence_wal::{wal_append_delete, wal_append_upsert, wal_replay};
+pub use super::persistence_wal::{
+    wal_append_delete, wal_append_delete_batch, wal_append_upsert, wal_append_upsert_batch,
+    wal_replay,
+};
 
 // WAL constants are in persistence_wal.rs
 
@@ -92,6 +95,21 @@ fn sparse_file_prefix(name: &str) -> String {
     } else {
         format!("sparse-{name}")
     }
+}
+
+/// Returns `true` when `name`'s index has changes its snapshot lacks.
+///
+/// Every mutation WAL-appends before applying and compaction truncates the
+/// WAL only after publishing a snapshot, so an EMPTY WAL alongside a
+/// published snapshot manifest proves index == snapshot. A missing manifest
+/// (never compacted) always compacts.
+#[must_use]
+pub fn needs_compaction(dir: &Path, name: &str) -> bool {
+    let prefix = sparse_file_prefix(name);
+    let wal_dirty = std::fs::metadata(dir.join(format!("{prefix}.wal")))
+        .map(|m| m.len() > 0)
+        .unwrap_or(false);
+    wal_dirty || !dir.join(format!("{prefix}.snapshot")).exists()
 }
 
 /// Compacts a named sparse index to disk using name-prefixed files.

@@ -9,6 +9,7 @@
 //! - **Circuit Breaker**: Auto-disable on repeated failures (US-006)
 
 mod context;
+pub(crate) use context::ExecutedStrategyCell;
 mod limits;
 mod resilience;
 #[cfg(test)]

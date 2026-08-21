@@ -6,6 +6,7 @@
 
 use super::options::{ExtractedComponents, QueryFinalizationContext, MAX_LIMIT};
 use super::vector_group_by;
+use super::CountedExecution;
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::point::SearchResult;
@@ -50,7 +51,7 @@ impl Collection {
         &self,
         query: &crate::velesql::Query,
         params: &std::collections::HashMap<String, serde_json::Value>,
-    ) -> Result<(Vec<SearchResult>, u64, u64)> {
+    ) -> Result<CountedExecution> {
         // Only a standalone MATCH query carries traversal counters. Run it
         // through the same context + dispatch as execute_query, then read the
         // counters the executor recorded into the query context. is_match_query
@@ -60,13 +61,31 @@ impl Collection {
             let results = self
                 .try_dispatch_match(query, params, &ctx)?
                 .unwrap_or_default();
-            return Ok((
+            return Ok(CountedExecution {
+                nodes_visited: ctx.traversal_nodes_visited(),
+                edges_traversed: ctx.traversal_edges_traversed(),
+                executed_filter_strategy: None,
                 results,
-                ctx.traversal_nodes_visited(),
-                ctx.traversal_edges_traversed(),
-            ));
+            });
         }
-        Ok((self.execute_query(query, params)?, 0, 0))
+        // Single SELECT: the traced core also reports which filter strategy
+        // the executor ran. Compound queries execute several selects — a
+        // single reported strategy would be ambiguous, so they report none.
+        if query.compound.is_none() {
+            let (results, strategy) = self.execute_query_traced(query, params, "default")?;
+            return Ok(CountedExecution {
+                results,
+                nodes_visited: 0,
+                edges_traversed: 0,
+                executed_filter_strategy: strategy,
+            });
+        }
+        Ok(CountedExecution {
+            results: self.execute_query(query, params)?,
+            nodes_visited: 0,
+            edges_traversed: 0,
+            executed_filter_strategy: None,
+        })
     }
 
     /// Computes the effective `(limit, fetch_limit)` from a SELECT statement.
@@ -389,8 +408,14 @@ impl Collection {
         let plan = QueryPlan::from_query_with_all_stats(query, &indexed, None, Some(&match_stats));
 
         let start = std::time::Instant::now();
-        let (results, nodes, edges) = self.execute_query_counted(query, params)?;
-        let stats = ActualStats::from_counted(results.len() as u64, start.elapsed(), nodes, edges);
+        let counted = self.execute_query_counted(query, params)?;
+        let stats = ActualStats::from_counted(
+            counted.results.len() as u64,
+            start.elapsed(),
+            counted.nodes_visited,
+            counted.edges_traversed,
+        )
+        .with_executed_filter_strategy(counted.executed_filter_strategy);
         let node_stats = build_leaf_node_stats(&plan.root, stats.actual_rows, stats.actual_time_ms);
         let mut output = ExplainOutput::with_stats(plan, stats, node_stats);
 

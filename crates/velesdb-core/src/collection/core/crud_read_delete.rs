@@ -339,12 +339,13 @@ impl Collection {
         let indexes = self.query.sparse_indexes.write();
         #[cfg(feature = "persistence")]
         {
+            // One barrier per index name instead of one per (name, id): the
+            // nested single-append loop cost N_NAMES x N_IDS fsyncs, all held
+            // under the exclusive `sparse_indexes` guard above.
             for name in indexes.keys() {
                 let wal_path =
                     crate::index::sparse::persistence::wal_path_for_name(&self.storage.path, name);
-                for &id in ids {
-                    crate::index::sparse::persistence::wal_append_delete(&wal_path, id)?;
-                }
+                crate::index::sparse::persistence::wal_append_delete_batch(&wal_path, ids)?;
             }
         }
         for idx in indexes.values() {

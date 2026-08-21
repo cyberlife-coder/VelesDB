@@ -158,8 +158,12 @@ impl Collection {
     ) -> Arc<crate::collection::types::GraphStore> {
         Arc::new(crate::collection::types::GraphStore {
             property_index: Arc::new(RwLock::new(property_index)),
+            // Dirty at open: the first flush persists the baseline once,
+            // then flushes skip the files until a mutation re-marks them.
+            property_index_dirty: std::sync::atomic::AtomicBool::new(true),
             label_index: Arc::new(RwLock::new(label_index)),
             range_index: Arc::new(RwLock::new(range_index)),
+            range_index_dirty: std::sync::atomic::AtomicBool::new(true),
             graph_range_indexes: Arc::new(RwLock::new(HashMap::new())),
             edge_range_indexes: Arc::new(RwLock::new(HashMap::new())),
             composite_index_manager: Arc::new(RwLock::new(CompositeIndexManager::new())),

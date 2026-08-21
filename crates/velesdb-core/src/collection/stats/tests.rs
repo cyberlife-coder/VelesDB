@@ -795,3 +795,119 @@ fn graph_stats_roundtrips_through_serde() {
     let back: CollectionStats = serde_json::from_str(&json).unwrap();
     assert_eq!(back.graph_stats, stats.graph_stats);
 }
+
+// =========================================================================
+// Runtime filter selectivity — the stats-backed mirror of the AST estimator
+// (persistence-gated like the methods under test: `cargo miri test
+// --no-default-features` compiles this file too, and must keep compiling)
+// =========================================================================
+
+#[cfg(feature = "persistence")]
+fn stats_with_price_histogram() -> CollectionStats {
+    let mut stats = CollectionStats::new();
+    stats.total_points = 100;
+    let builder = HistogramBuilder::new(4);
+    let mut values: Vec<f64> = (0..100).map(f64::from).collect();
+    let hist = builder.build(&mut values);
+    let mut col = ColumnStats::new("price").with_distinct_count(100);
+    col.histogram = Some(hist);
+    stats.column_stats.insert("price".to_string(), col);
+    stats
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn runtime_eq_uses_the_histogram_when_present() {
+    let stats = stats_with_price_histogram();
+    let cond = crate::filter::Condition::Eq {
+        field: "price".to_string(),
+        value: serde_json::json!(50),
+    };
+    let sel = stats.estimate_runtime_condition_selectivity(&cond);
+    // 100 distinct uniform values: histogram equality is ~1/100, far from
+    // the 0.1 structural default.
+    assert!(sel < 0.05, "expected histogram-backed estimate, got {sel}");
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn runtime_range_uses_the_histogram_when_present() {
+    let stats = stats_with_price_histogram();
+    let cond = crate::filter::Condition::Lt {
+        field: "price".to_string(),
+        value: serde_json::json!(25),
+    };
+    let sel = stats.estimate_runtime_condition_selectivity(&cond);
+    assert!(
+        (sel - 0.25).abs() < 0.1,
+        "uniform 0..100: P(x < 25) should be near 0.25, got {sel}"
+    );
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn runtime_unknown_column_falls_back_to_shared_defaults() {
+    let stats = CollectionStats::new();
+    let eq = crate::filter::Condition::Eq {
+        field: "missing".to_string(),
+        value: serde_json::json!("x"),
+    };
+    let range = crate::filter::Condition::Gt {
+        field: "missing".to_string(),
+        value: serde_json::json!(1),
+    };
+    assert!(
+        (stats.estimate_runtime_condition_selectivity(&eq) - selectivity_defaults::EQ).abs()
+            < f64::EPSILON
+    );
+    assert!(
+        (stats.estimate_runtime_condition_selectivity(&range) - selectivity_defaults::RANGE).abs()
+            < f64::EPSILON
+    );
+}
+
+/// Drift test (single-source constants): without histograms, the runtime
+/// estimator's equality answer must equal the AST estimator's fallback for
+/// the same column — both resolve through `CollectionStats::estimate_selectivity`.
+#[cfg(feature = "persistence")]
+#[test]
+fn runtime_and_ast_estimators_agree_without_histograms() {
+    let mut stats = CollectionStats::new();
+    stats.total_points = 100;
+    stats.column_stats.insert(
+        "cat".to_string(),
+        ColumnStats::new("cat").with_distinct_count(4),
+    );
+    stats.row_count = 100;
+
+    let runtime = stats.estimate_runtime_condition_selectivity(&crate::filter::Condition::Eq {
+        field: "cat".to_string(),
+        value: serde_json::json!("a"),
+    });
+    // AST path: Comparison Eq falls back to estimate_selectivity("cat") when
+    // no histogram exists (cost_estimator delegates to the same method).
+    let ast_fallback = stats.estimate_selectivity("cat");
+    assert!(
+        (runtime - ast_fallback).abs() < f64::EPSILON,
+        "runtime {runtime} vs ast fallback {ast_fallback}"
+    );
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn runtime_boolean_combinators_recurse() {
+    let stats = CollectionStats::new();
+    let eq = crate::filter::Condition::Eq {
+        field: "a".to_string(),
+        value: serde_json::json!(1),
+    };
+    let and = crate::filter::Condition::And {
+        conditions: vec![eq.clone(), eq.clone()],
+    };
+    let not = crate::filter::Condition::Not {
+        condition: Box::new(eq.clone()),
+    };
+    let base = stats.estimate_runtime_condition_selectivity(&eq);
+    assert!((stats.estimate_runtime_condition_selectivity(&and) - base * base).abs() < 1e-9);
+    assert!((stats.estimate_runtime_condition_selectivity(&not) - (1.0 - base)).abs() < 1e-9);
+}

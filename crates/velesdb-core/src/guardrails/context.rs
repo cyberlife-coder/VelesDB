@@ -8,7 +8,8 @@
 // - Used for timeout checking and logging, not precise calculations
 #![allow(clippy::cast_possible_truncation)]
 
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::limits::{GuardRailViolation, QueryLimits};
@@ -30,6 +31,52 @@ pub struct QueryContext {
     traversal_nodes_visited: AtomicU64,
     /// Graph edges traversed during MATCH traversal (for EXPLAIN ANALYZE).
     traversal_edges_traversed: AtomicU64,
+    /// Filter strategy the executor actually ran (for EXPLAIN ANALYZE).
+    ///
+    /// `Arc` so the query pipeline can hand the cell to the search options,
+    /// which flow through every dispatch path — including the vector leg of
+    /// the CBO `Parallel` strategy, which runs on a rayon worker thread
+    /// (a thread-local channel would silently lose that leg's record).
+    executed_filter_strategy: Arc<ExecutedStrategyCell>,
+}
+
+/// Shared cell the executor records the ran filter strategy into.
+///
+/// The atomic encoding (0 = unset) is a private detail of this type: callers
+/// only ever [`record`](Self::record) a [`FilterStrategy`] and
+/// [`get`](Self::get) an `Option` back. Relaxed ordering is sufficient — the
+/// only cross-thread hand-off (a rayon `join` leg recording before the join
+/// point returns) is ordered by the join itself.
+#[derive(Debug, Default)]
+pub(crate) struct ExecutedStrategyCell(AtomicU8);
+
+impl ExecutedStrategyCell {
+    /// Records the strategy the executor is about to run.
+    pub(crate) fn record(&self, strategy: crate::velesql::FilterStrategy) {
+        use crate::velesql::FilterStrategy as F;
+        let raw = match strategy {
+            // `None` maps to the "unset" encoding: recording it is a no-op
+            // read back as absent. A future variant added to the
+            // (non-exhaustive) enum fails compilation here, forcing an
+            // explicit encoding choice.
+            F::None => 0,
+            F::PreFilter => 1,
+            F::PreFilterExact => 2,
+            F::PostFilter => 3,
+        };
+        self.0.store(raw, Ordering::Relaxed);
+    }
+
+    /// Returns the recorded strategy, if any query dispatch recorded one.
+    pub(crate) fn get(&self) -> Option<crate::velesql::FilterStrategy> {
+        use crate::velesql::FilterStrategy as F;
+        match self.0.load(Ordering::Relaxed) {
+            1 => Some(F::PreFilter),
+            2 => Some(F::PreFilterExact),
+            3 => Some(F::PostFilter),
+            _ => None,
+        }
+    }
 }
 
 impl QueryContext {
@@ -44,7 +91,23 @@ impl QueryContext {
             memory_used: AtomicUsize::new(0),
             traversal_nodes_visited: AtomicU64::new(0),
             traversal_edges_traversed: AtomicU64::new(0),
+            executed_filter_strategy: Arc::new(ExecutedStrategyCell::default()),
         }
+    }
+
+    /// Returns the shared cell the executor records the ran filter strategy
+    /// into. Handed to the search options at pipeline entry; read back by
+    /// EXPLAIN ANALYZE via [`executed_filter_strategy`](Self::executed_filter_strategy).
+    #[must_use]
+    pub(crate) fn executed_strategy_slot(&self) -> Arc<ExecutedStrategyCell> {
+        Arc::clone(&self.executed_filter_strategy)
+    }
+
+    /// Returns the filter strategy the executor recorded for this query, if
+    /// the query went through the filtered vector-search dispatch.
+    #[must_use]
+    pub(crate) fn executed_filter_strategy(&self) -> Option<crate::velesql::FilterStrategy> {
+        self.executed_filter_strategy.get()
     }
 
     /// Checks if the query has timed out (US-001).

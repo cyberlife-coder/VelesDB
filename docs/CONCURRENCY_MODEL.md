@@ -165,9 +165,9 @@ Enforcement in practice, by build and by tier:
   `#[cfg(debug_assertions)]`; on an out-of-order acquisition it increments an
   atomic violation counter and emits a `tracing::warn!` — it **never panics**.
   It is also partial: only the `GpuVectorsSnapshot`, `Vectors`, and `Layers`
-  ranks are ever recorded. `Columnar` and `Neighbors` are `#[allow(dead_code)]`
-  with no `record_lock_acquire` call site, so 2 of the 5 core ranks are
-  untracked even in debug.
+  ranks are ever recorded. `Neighbors` is `#[allow(dead_code)]` with no
+  `record_lock_acquire` call site, so 1 of the 4 core ranks is untracked even
+  in debug.
 - **The collection tier** — `Collection`'s own field order (`config`,
   `vector_storage`, `payload_storage`, ...; the `=== LOCK ORDERING ===` block
   in `crates/velesdb-core/src/collection/types.rs`, and the "Collection-level
@@ -187,19 +187,20 @@ are defined *from* the registry's constants, so any divergence is a compile
 error.
 
 For HNSW index operations that touch the GPU snapshot cache, vector storage,
-the PDX columnar layout, graph layers, and neighbor lists, the global lock
-acquisition order is:
+graph layers, and neighbor lists, the global lock acquisition order is:
 
 ```
-gpu_vectors_snapshot (rank 5) → vectors (rank 10) → columnar (rank 15)
+gpu_vectors_snapshot (rank 5) → vectors (rank 10)
     → layers (rank 20) → neighbors (rank 30)
 ```
+
+(Rank 15 was the PDX block-columnar layout, removed with the unwired PDX
+machinery — the ordinal is retired, not reassigned.)
 
 | Lock | Rank | Registry constant (= `HnswLockRank` discriminant) | Component | Notes |
 |------|------|---------------------|-----------|-------|
 | `gpu_vectors_snapshot` | 5 | `LockRank::GPU_VECTORS_SNAPSHOT` | GPU flat-vector snapshot cache (`Mutex`) | Acquired before `vectors` in the GPU path (`gpu` feature); writers release `vectors` before reacquiring it to invalidate |
 | `vectors` | 10 | `LockRank::VECTORS` | `ContiguousVectors` (single vector store since PERF1) | Acquired first among the core HNSW locks in upsert and search paths |
-| `columnar` | 15 | `LockRank::COLUMNAR` | `ColumnarVectors` (PDX block-columnar layout of the HNSW vectors) | SIMD-parallel distance layout, acquired after vectors |
 | `layers` | 20 | `LockRank::LAYERS` | HNSW layer structure (`RwLock`) | Global graph topology |
 | `neighbors` | 30 | `LockRank::NEIGHBORS` | Per-node neighbor lists (`RwLock`) | Fine-grained, acquired last |
 

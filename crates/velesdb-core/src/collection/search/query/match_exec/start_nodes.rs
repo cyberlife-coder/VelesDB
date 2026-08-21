@@ -164,12 +164,7 @@ impl Collection {
             return true;
         }
         let payload_opt = payload_storage.retrieve(id).ok().flatten();
-        if !node.labels.is_empty() && !Self::node_matches_labels(payload_opt.as_ref(), &node.labels)
-        {
-            return false;
-        }
-        node.properties.is_empty()
-            || Self::node_matches_properties(payload_opt.as_ref(), &node.properties)
+        Self::payload_matches_pattern(payload_opt.as_ref(), node)
     }
 
     /// Returns true if a bound node satisfies its pattern.
@@ -179,13 +174,29 @@ impl Collection {
     pub(super) fn node_matches_bound_pattern(
         id: u64,
         node: &NodePattern,
-        payload_storage: &crate::storage::LogPayloadStorage,
+        memo: &super::PayloadMemo<'_>,
     ) -> bool {
         if node.collection.is_some() {
             return true;
         }
         let needs_payload = !node.properties.is_empty() || !node.labels.is_empty();
-        Self::node_matches_pattern(id, node, needs_payload, payload_storage)
+        if !needs_payload {
+            return true;
+        }
+        // Bound-node checks repeat per hop candidacy: read through the memo.
+        let payload_opt = memo.get(id);
+        Self::payload_matches_pattern(payload_opt.as_deref(), node)
+    }
+
+    /// Label + property check against an already-loaded payload.
+    fn payload_matches_pattern(
+        payload_opt: Option<&serde_json::Value>,
+        node: &NodePattern,
+    ) -> bool {
+        if !node.labels.is_empty() && !Self::node_matches_labels(payload_opt, &node.labels) {
+            return false;
+        }
+        node.properties.is_empty() || Self::node_matches_properties(payload_opt, &node.properties)
     }
 
     /// Builds a `(node_id, bindings)` pair for a start node.
