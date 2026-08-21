@@ -102,6 +102,20 @@ pub use join::{execute_join, JoinedResult, JOIN_ROW_CEILING};
 
 // Re-export types from options.rs so sibling submodules can use `super::*`.
 pub(crate) use options::QuerySearchOptions;
+
+/// Outcome of a counted (EXPLAIN ANALYZE) execution: the results plus the
+/// execution facts the plain path discards — graph-traversal counters and
+/// the filter strategy the executor actually ran.
+pub(crate) struct CountedExecution {
+    /// Query results, as `execute_query` would return them.
+    pub(crate) results: Vec<crate::point::SearchResult>,
+    /// Approximate MATCH traversal node count (0 for non-MATCH).
+    pub(crate) nodes_visited: u64,
+    /// Approximate MATCH traversal edge count (0 for non-MATCH).
+    pub(crate) edges_traversed: u64,
+    /// Strategy the filtered vector-search dispatch recorded, if any.
+    pub(crate) executed_filter_strategy: Option<crate::velesql::FilterStrategy>,
+}
 pub(in crate::collection::search::query) use options::{
     ExtractedComponents, QueryFinalizationContext, MAX_LIMIT,
 };
@@ -209,14 +223,11 @@ impl Collection {
         &self,
         query: &crate::velesql::Query,
         params: &std::collections::HashMap<String, serde_json::Value>,
-        slot: &std::sync::Arc<std::sync::atomic::AtomicU8>,
+        slot: &crate::guardrails::ExecutedStrategyCell,
     ) -> Result<Vec<SearchResult>> {
         let (results, strategy) = self.execute_query_traced(query, params, "default")?;
         if let Some(strategy) = strategy {
-            slot.store(
-                crate::guardrails::encode_filter_strategy(strategy),
-                std::sync::atomic::Ordering::Relaxed,
-            );
+            slot.record(strategy);
         }
         Ok(results)
     }

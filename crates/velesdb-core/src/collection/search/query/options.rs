@@ -21,12 +21,12 @@ pub(crate) struct QuerySearchOptions {
     /// Fusion clause from `USING FUSION (...)`.
     pub fusion_clause: Option<crate::velesql::FusionClause>,
     /// EXPLAIN ANALYZE out-channel: the executor records which filter
-    /// strategy it actually ran into this slot (shared with the query's
+    /// strategy it actually ran into this cell (shared with the query's
     /// [`QueryContext`](crate::guardrails::QueryContext)). `None` outside
     /// the pipeline (raw search entry points) — recording is then a no-op.
-    /// An `Arc` atomic, not a thread-local: the vector leg of the CBO
+    /// A shared atomic cell, not a thread-local: the vector leg of the CBO
     /// `Parallel` strategy runs on a rayon worker thread.
-    pub executed_strategy_probe: Option<std::sync::Arc<std::sync::atomic::AtomicU8>>,
+    pub executed_strategy_probe: Option<std::sync::Arc<crate::guardrails::ExecutedStrategyCell>>,
 }
 
 impl QuerySearchOptions {
@@ -71,10 +71,7 @@ impl QuerySearchOptions {
     /// no probe is attached (raw search entry points).
     pub(crate) fn record_executed_strategy(&self, strategy: crate::velesql::FilterStrategy) {
         if let Some(probe) = &self.executed_strategy_probe {
-            probe.store(
-                crate::guardrails::encode_filter_strategy(strategy),
-                std::sync::atomic::Ordering::Relaxed,
-            );
+            probe.record(strategy);
         }
     }
 

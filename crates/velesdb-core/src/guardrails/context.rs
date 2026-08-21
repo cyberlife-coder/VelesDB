@@ -33,38 +33,49 @@ pub struct QueryContext {
     traversal_edges_traversed: AtomicU64,
     /// Filter strategy the executor actually ran (for EXPLAIN ANALYZE).
     ///
-    /// `Arc` so the query pipeline can hand the slot to the search options,
+    /// `Arc` so the query pipeline can hand the cell to the search options,
     /// which flow through every dispatch path — including the vector leg of
     /// the CBO `Parallel` strategy, which runs on a rayon worker thread
     /// (a thread-local channel would silently lose that leg's record).
-    /// Encoding: 0 = unset, then `FilterStrategy` per
-    /// [`encode_filter_strategy`].
-    executed_filter_strategy: Arc<AtomicU8>,
+    executed_filter_strategy: Arc<ExecutedStrategyCell>,
 }
 
-/// Encodes a [`FilterStrategy`](crate::velesql::FilterStrategy) into the
-/// atomic slot representation (0 is reserved for "unset").
-pub(crate) fn encode_filter_strategy(strategy: crate::velesql::FilterStrategy) -> u8 {
-    use crate::velesql::FilterStrategy as F;
-    match strategy {
-        // `None` maps to the "unset" encoding: recording it is a no-op read
-        // back as absent. A future variant added to the (non-exhaustive)
-        // enum fails compilation here, forcing an explicit encoding choice.
-        F::None => 0,
-        F::PreFilter => 1,
-        F::PreFilterExact => 2,
-        F::PostFilter => 3,
+/// Shared cell the executor records the ran filter strategy into.
+///
+/// The atomic encoding (0 = unset) is a private detail of this type: callers
+/// only ever [`record`](Self::record) a [`FilterStrategy`] and
+/// [`get`](Self::get) an `Option` back. Relaxed ordering is sufficient — the
+/// only cross-thread hand-off (a rayon `join` leg recording before the join
+/// point returns) is ordered by the join itself.
+#[derive(Debug, Default)]
+pub(crate) struct ExecutedStrategyCell(AtomicU8);
+
+impl ExecutedStrategyCell {
+    /// Records the strategy the executor is about to run.
+    pub(crate) fn record(&self, strategy: crate::velesql::FilterStrategy) {
+        use crate::velesql::FilterStrategy as F;
+        let raw = match strategy {
+            // `None` maps to the "unset" encoding: recording it is a no-op
+            // read back as absent. A future variant added to the
+            // (non-exhaustive) enum fails compilation here, forcing an
+            // explicit encoding choice.
+            F::None => 0,
+            F::PreFilter => 1,
+            F::PreFilterExact => 2,
+            F::PostFilter => 3,
+        };
+        self.0.store(raw, Ordering::Relaxed);
     }
-}
 
-/// Decodes the atomic slot representation back into a strategy.
-pub(crate) fn decode_filter_strategy(raw: u8) -> Option<crate::velesql::FilterStrategy> {
-    use crate::velesql::FilterStrategy as F;
-    match raw {
-        1 => Some(F::PreFilter),
-        2 => Some(F::PreFilterExact),
-        3 => Some(F::PostFilter),
-        _ => None,
+    /// Returns the recorded strategy, if any query dispatch recorded one.
+    pub(crate) fn get(&self) -> Option<crate::velesql::FilterStrategy> {
+        use crate::velesql::FilterStrategy as F;
+        match self.0.load(Ordering::Relaxed) {
+            1 => Some(F::PreFilter),
+            2 => Some(F::PreFilterExact),
+            3 => Some(F::PostFilter),
+            _ => None,
+        }
     }
 }
 
@@ -80,15 +91,15 @@ impl QueryContext {
             memory_used: AtomicUsize::new(0),
             traversal_nodes_visited: AtomicU64::new(0),
             traversal_edges_traversed: AtomicU64::new(0),
-            executed_filter_strategy: Arc::new(AtomicU8::new(0)),
+            executed_filter_strategy: Arc::new(ExecutedStrategyCell::default()),
         }
     }
 
-    /// Returns the shared slot the executor records the ran filter strategy
+    /// Returns the shared cell the executor records the ran filter strategy
     /// into. Handed to the search options at pipeline entry; read back by
     /// EXPLAIN ANALYZE via [`executed_filter_strategy`](Self::executed_filter_strategy).
     #[must_use]
-    pub(crate) fn executed_strategy_slot(&self) -> Arc<AtomicU8> {
+    pub(crate) fn executed_strategy_slot(&self) -> Arc<ExecutedStrategyCell> {
         Arc::clone(&self.executed_filter_strategy)
     }
 
@@ -96,7 +107,7 @@ impl QueryContext {
     /// the query went through the filtered vector-search dispatch.
     #[must_use]
     pub(crate) fn executed_filter_strategy(&self) -> Option<crate::velesql::FilterStrategy> {
-        decode_filter_strategy(self.executed_filter_strategy.load(Ordering::Relaxed))
+        self.executed_filter_strategy.get()
     }
 
     /// Checks if the query has timed out (US-001).

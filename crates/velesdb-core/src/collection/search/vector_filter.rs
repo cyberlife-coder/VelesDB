@@ -96,10 +96,11 @@ impl Collection {
                 let results = self.storage.index.full_scan_with_bitmap(query, k, bitmap)?;
                 Ok(self.merge_delta(results, query, k, metric))
             }
-            // `PreFilter` — and, defensively, any future variant the
-            // non-exhaustive enum grows that Exact mode does not emit —
-            // runs HNSW constrained by the bitmap with an oversampled k.
-            _ => {
+            // Exact mode never emits `None`; if it ever did, the bitmap
+            // path below is the shape that ran. Spelled out (no wildcard)
+            // so a future `FilterStrategy` variant fails compilation here
+            // and forces an explicit dispatch choice.
+            FilterStrategy::PreFilter | FilterStrategy::None => {
                 let candidates_k = compute_oversampled_k(k, filter, Some(&self.get_stats()));
                 let results = self.storage.index.search_with_quality_and_bitmap(
                     query,
