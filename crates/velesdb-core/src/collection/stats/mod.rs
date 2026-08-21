@@ -151,18 +151,24 @@ pub(crate) mod selectivity_defaults {
     /// Equality / IS NULL with no statistics.
     pub(crate) const EQ: f64 = 0.1;
     /// Range, pattern and containment predicates with no statistics.
+    #[cfg(feature = "persistence")]
     pub(crate) const RANGE: f64 = 0.3;
     /// Per-value contribution of an IN list.
+    #[cfg(feature = "persistence")]
     pub(crate) const IN_PER_VALUE: f64 = 0.05;
     /// Cap on an IN list's total selectivity.
+    #[cfg(feature = "persistence")]
     pub(crate) const IN_CAP: f64 = 0.8;
     /// Negative predicates (`!=`, IS NOT NULL).
+    #[cfg(feature = "persistence")]
     pub(crate) const NEGATION: f64 = 0.9;
     /// Floor applied under conjunction/negation so an over-confident
     /// estimate never predicts zero rows.
+    #[cfg(feature = "persistence")]
     pub(crate) const FLOOR: f64 = 0.01;
 }
 
+#[cfg(feature = "persistence")]
 impl CollectionStats {
     /// Estimates the fraction of rows matching a runtime metadata filter.
     ///

@@ -794,6 +794,9 @@ fn graph_stats_roundtrips_through_serde() {
     let json = serde_json::to_string(&stats).unwrap();
     let back: CollectionStats = serde_json::from_str(&json).unwrap();
     assert_eq!(back.graph_stats, stats.graph_stats);
+}
+
+// =========================================================================
 // Runtime filter selectivity — the stats-backed mirror of the AST estimator
 // =========================================================================
 
