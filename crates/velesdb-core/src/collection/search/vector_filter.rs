@@ -142,7 +142,11 @@ impl Collection {
         let payload_storage = self.storage.payload_storage.read();
         let now_secs = now_unix_secs();
 
-        let mut results: Vec<SearchResult> = index_results
+        // Phase 1 — filter on payloads only. The pre-fix shape hydrated the
+        // vector of EVERY candidate that passed the filter (the oversampled
+        // budget reaches 10 000), then threw all but k away: up to ~60 MB of
+        // vector copies per 1536-dim query to keep 10.
+        let mut passing: Vec<(u64, f32, Option<serde_json::Value>)> = index_results
             .into_iter()
             .filter_map(|sr| {
                 let payload = payload_storage.retrieve(sr.id).ok().flatten();
@@ -155,24 +159,33 @@ impl Collection {
                     Some(p) => filter.matches(p),
                     None => filter.matches(&serde_json::Value::Null),
                 };
-                if !matches {
-                    return None;
-                }
-                let vector = vector_storage.retrieve(sr.id).ok().flatten()?;
-                Some(SearchResult::new(
-                    crate::point::Point {
-                        id: sr.id,
-                        vector,
-                        payload,
-                        sparse_vectors: None,
-                    },
-                    sr.score,
-                ))
+                matches.then_some((sr.id, sr.score, payload))
             })
             .collect();
 
-        resolve::sort_results_by_metric(&mut results, higher_is_better);
-        results.truncate(k);
+        resolve::sort_scored_ids_by_metric(&mut passing, higher_is_better);
+
+        // Phase 2 — hydrate vectors in sorted order until k results stand. A
+        // candidate whose vector is missing is skipped and the next one takes
+        // its place, exactly as the eager filter_map dropped it pre-truncate.
+        let mut results: Vec<SearchResult> = Vec::with_capacity(k.min(passing.len()));
+        for (id, score, payload) in passing {
+            if results.len() >= k {
+                break;
+            }
+            let Some(vector) = vector_storage.retrieve(id).ok().flatten() else {
+                continue;
+            };
+            results.push(SearchResult::new(
+                crate::point::Point {
+                    id,
+                    vector,
+                    payload,
+                    sparse_vectors: None,
+                },
+                score,
+            ));
+        }
         super::vector::tag_vector_component_scores(&mut results);
         results
     }
