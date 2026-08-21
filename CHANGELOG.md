@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Deterministic cost-crossover harness** (`tests/cost_crossover.rs`, nightly
+  `cost-crossover` CI job): measures the *work* (single-pair distance
+  evaluations, via a new `internal-bench`-gated counter) and the exact recall
+  of each filtered-search execution shape on a fully deterministic corpus —
+  closed-form vectors, fixed-seed HNSW level PRNG, selectivities exact by
+  construction straddling the `0.01`/`0.8` dispatch thresholds. Counts are
+  bit-for-bit reproducible across runs and machines, so the numbers are
+  comparable between commits even on shared CI runners where wall-clock
+  benchmarks are noise. The printed JSON table is the measurement feed for
+  the planner-threshold convergence work; the harness asserts only exact
+  laws (determinism, scan work = bitmap cardinality, post-filter work
+  independent of selectivity, strict `0.8` boundary). Release builds carry
+  zero instrumentation.
+
 ### Changed
 
 - **The pre/post-filter decision now has a single brain:
