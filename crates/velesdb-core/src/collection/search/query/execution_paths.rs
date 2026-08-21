@@ -452,8 +452,11 @@ impl Collection {
         if bitmap.is_empty() {
             return Some(Vec::new());
         }
-        let candidate_ids: Vec<u64> = bitmap.iter().map(u64::from).collect();
-        if self.prefer_candidate_scan(candidate_ids.len(), execution_limit, Some(cond)) {
+        // Route on bitmap.len() (O(1)) — the id vector is only materialized
+        // once the candidate scan is actually chosen.
+        let candidate_count = usize::try_from(bitmap.len()).unwrap_or(usize::MAX);
+        if self.prefer_candidate_scan(candidate_count, execution_limit, Some(cond)) {
+            let candidate_ids: Vec<u64> = bitmap.iter().map(u64::from).collect();
             return Some(self.scan_ids_with_filter(&candidate_ids, filter, execution_limit));
         }
         // Too many bitmap hits — fall through to scan with early exit
@@ -552,24 +555,16 @@ impl Collection {
         Some(text_results.iter().map(|(id, _)| *id).collect())
     }
 
-    /// Scans a candidate ID list, returning up to `limit` points that match the filter.
+    /// Scans a candidate ID list, returning up to `limit` points that match
+    /// the filter. Delegates to `scan_ids_with_filter` — this body was a
+    /// duplicate that had also kept a per-candidate payload deep clone.
     fn collect_matching_points(
         &self,
         candidate_ids: &[u64],
         filter: &crate::filter::Filter,
         limit: usize,
     ) -> Vec<SearchResult> {
-        let mut results = Vec::new();
-        for point in self.get(candidate_ids).into_iter().flatten() {
-            let payload = point.payload.clone().unwrap_or(serde_json::Value::Null);
-            if filter.matches(&payload) {
-                results.push(SearchResult::new(point, 1.0));
-                if results.len() >= limit {
-                    break;
-                }
-            }
-        }
-        results
+        self.scan_ids_with_filter(candidate_ids, filter, limit)
     }
 
     /// Recursively extracts the first LIKE pattern from a condition tree.

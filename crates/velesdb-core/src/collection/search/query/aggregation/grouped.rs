@@ -80,6 +80,7 @@ impl Collection {
             payload_memo: crate::collection::search::query::match_exec::PayloadMemo::new(
                 &payload_storage,
             ),
+            where_filters: crate::collection::search::query::match_exec::WhereFilterMemo::default(),
         };
         let ids = vector_storage.ids();
         let mut graph_cache = GraphMatchEvalCache::default();
