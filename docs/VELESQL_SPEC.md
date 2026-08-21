@@ -2077,6 +2077,7 @@ The result includes the estimated plan (identical to `EXPLAIN`) plus:
 | `nodes_visited` | u64 | For MATCH queries, an approximate (best-effort, lower-bound) graph-traversal node count (start nodes examined + nodes reached by following edges); 0 for non-MATCH queries |
 | `edges_traversed` | u64 | For MATCH queries, an approximate (best-effort, lower-bound) count of edges followed during traversal; 0 for non-MATCH queries |
 | `traversal_counters_approximate` | bool | `true` when `nodes_visited` / `edges_traversed` are strategy-dependent approximations (a lower bound), not exact measured counts; `false` for non-graph queries where both counters are 0. |
+| `executed_filter_strategy` | string \| absent | The filter strategy the executor **actually ran**, recorded at the dispatch site itself (`"pre-filtering (high selectivity)"`, `"pre-filtering (exact, brute-force scan)"`, or `"post-filtering (low selectivity)"`). Present for single SELECTs that went through the filtered vector-search dispatch — under the CBO `Parallel` strategy it describes the vector leg. **Omitted** for MATCH, compound queries, and arms where the pre/post-filter notion does not apply. Unlike the plan's `filter_strategy` (an estimate), this is ground truth: comparing the two surfaces plan/execution divergence. |
 
 > **Note:** `nodes_visited` / `edges_traversed` are an **approximate, best-effort
 > lower bound** on the graph traversal across all MATCH strategies — not exact

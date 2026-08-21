@@ -33,7 +33,7 @@ impl Collection {
         opts: &crate::collection::search::query::QuerySearchOptions,
     ) -> Result<Vec<SearchResult>> {
         if !opts.has_quality_overrides() {
-            return self.search_with_filter(query, k, filter);
+            return self.search_with_filter_recorded(query, k, filter, opts);
         }
 
         let config = self.storage.config.read();
@@ -50,11 +50,18 @@ impl Collection {
         self.enforce_perfect_mode_limit(quality)?;
 
         let index_results = match self.build_prefilter_bitmap(filter) {
-            Some(bitmap) if bitmap.is_empty() => return Ok(Vec::new()),
-            Some(bitmap) => {
-                self.search_with_bitmap_strategy(query, k, filter, quality, metric, &bitmap)?
+            Some(bitmap) if bitmap.is_empty() => {
+                // The bitmap answers the query exactly: nothing matches.
+                opts.record_executed_strategy(FilterStrategy::PreFilterExact);
+                return Ok(Vec::new());
             }
-            None => self.search_post_filter(query, k, filter, quality, metric)?,
+            Some(bitmap) => {
+                self.search_with_bitmap_strategy(query, k, filter, quality, metric, &bitmap, opts)?
+            }
+            None => {
+                opts.record_executed_strategy(FilterStrategy::PostFilter);
+                self.search_post_filter(query, k, filter, quality, metric)?
+            }
         };
 
         // The full re-match inside `filter_and_hydrate` is deliberate even on
@@ -65,6 +72,7 @@ impl Collection {
     }
 
     /// Dispatches to full-scan, HNSW+bitmap, or post-filter based on selectivity.
+    #[allow(clippy::too_many_arguments)] // Reason: dispatch bundle mirrors the query's full shape.
     fn search_with_bitmap_strategy(
         &self,
         query: &[f32],
@@ -73,11 +81,14 @@ impl Collection {
         quality: crate::SearchQuality,
         metric: crate::DistanceMetric,
         bitmap: &roaring::RoaringBitmap,
+        opts: &crate::collection::search::query::QuerySearchOptions,
     ) -> Result<Vec<ScoredResult>> {
         let selectivity =
             super::vector::estimate_real_selectivity(bitmap, self.storage.index.len());
 
-        match decide_filter_strategy(selectivity, FilterDecisionMode::Exact, None) {
+        let strategy = decide_filter_strategy(selectivity, FilterDecisionMode::Exact, None);
+        opts.record_executed_strategy(strategy);
+        match strategy {
             FilterStrategy::PostFilter => {
                 self.search_post_filter(query, k, filter, quality, metric)
             }

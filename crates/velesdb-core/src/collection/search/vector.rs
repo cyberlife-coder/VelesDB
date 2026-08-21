@@ -526,6 +526,29 @@ impl Collection {
         k: usize,
         filter: &crate::filter::Filter,
     ) -> Result<Vec<SearchResult>> {
+        self.search_with_filter_impl(query, k, filter, None)
+    }
+
+    /// Like [`search_with_filter`](Self::search_with_filter), recording the
+    /// executed filter strategy into the options' EXPLAIN ANALYZE probe.
+    /// Taken by the quality-aware dispatch when no quality override applies.
+    pub(crate) fn search_with_filter_recorded(
+        &self,
+        query: &[f32],
+        k: usize,
+        filter: &crate::filter::Filter,
+        opts: &crate::collection::search::query::QuerySearchOptions,
+    ) -> Result<Vec<SearchResult>> {
+        self.search_with_filter_impl(query, k, filter, Some(opts))
+    }
+
+    fn search_with_filter_impl(
+        &self,
+        query: &[f32],
+        k: usize,
+        filter: &crate::filter::Filter,
+        opts: Option<&crate::collection::search::query::QuerySearchOptions>,
+    ) -> Result<Vec<SearchResult>> {
         let metric = self.validate_query_and_read_metric(query)?;
         let higher_is_better = metric.higher_is_better();
 
@@ -536,7 +559,7 @@ impl Collection {
 
         // Attempt bitmap pre-filter from secondary indexes.
         let index_results =
-            self.search_with_optional_bitmap(query, k, candidates_k, filter, metric);
+            self.search_with_optional_bitmap(query, k, candidates_k, filter, metric, opts);
 
         Ok(self.filter_and_hydrate(index_results, filter, k, higher_is_better))
     }
@@ -549,8 +572,12 @@ impl Collection {
         candidates_k: usize,
         filter: &crate::filter::Filter,
         metric: DistanceMetric,
+        opts: Option<&crate::collection::search::query::QuerySearchOptions>,
     ) -> Vec<ScoredResult> {
         if let Some(bitmap) = self.build_prefilter_bitmap(filter) {
+            if let Some(opts) = opts {
+                opts.record_executed_strategy(crate::velesql::FilterStrategy::PreFilter);
+            }
             let ef_search = candidates_k.max(k * 10);
             let results = self.storage.index.search_hnsw_only_filtered(
                 query,
@@ -559,6 +586,9 @@ impl Collection {
                 &bitmap,
             );
             return self.merge_delta(results, query, candidates_k, metric);
+        }
+        if let Some(opts) = opts {
+            opts.record_executed_strategy(crate::velesql::FilterStrategy::PostFilter);
         }
         self.search_ids_with_adc_if_pq(query, candidates_k)
     }

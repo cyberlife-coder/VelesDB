@@ -318,6 +318,7 @@ fn test_search_with_filter_and_opts_bitmap_empty_returns_empty() {
         ef_search: None,
         force_rerank: None,
         fusion_clause: None,
+        executed_strategy_probe: None,
     };
     let results = col
         .search_with_filter_and_opts(&[0.5, 0.5, 0.5, 0.5], 10, &filter, &opts)
@@ -344,6 +345,7 @@ fn test_search_with_filter_and_opts_no_bitmap_falls_back_to_post_filter() {
         ef_search: None,
         force_rerank: None,
         fusion_clause: None,
+        executed_strategy_probe: None,
     };
     let results = col
         .search_with_filter_and_opts(&[0.5, 0.5, 0.5, 0.5], 5, &filter, &opts)
@@ -393,6 +395,7 @@ fn test_filtered_perfect_search_over_cap_is_rejected() {
         ef_search: None,
         force_rerank: None,
         fusion_clause: None,
+        executed_strategy_probe: None,
     };
 
     let err = col

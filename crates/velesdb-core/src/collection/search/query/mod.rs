@@ -197,12 +197,47 @@ impl Collection {
         params: &std::collections::HashMap<String, serde_json::Value>,
         client_id: &str,
     ) -> Result<Vec<SearchResult>> {
+        self.execute_query_traced(query, params, client_id)
+            .map(|(results, _)| results)
+    }
+
+    /// Executes a single (non-compound) query, storing the executor's ran
+    /// filter strategy into the caller's slot. Used by the Database-level
+    /// EXPLAIN ANALYZE counted path, whose probe travels through the JOIN
+    /// resolution machinery down to this base-collection call.
+    pub(crate) fn execute_query_probed(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        slot: &std::sync::Arc<std::sync::atomic::AtomicU8>,
+    ) -> Result<Vec<SearchResult>> {
+        let (results, strategy) = self.execute_query_traced(query, params, "default")?;
+        if let Some(strategy) = strategy {
+            slot.store(
+                crate::guardrails::encode_filter_strategy(strategy),
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
+        Ok(results)
+    }
+
+    /// Like [`execute_query_with_client`](Self::execute_query_with_client),
+    /// additionally returning the filter strategy the executor actually ran
+    /// (recorded through the query context's probe — `None` when the query
+    /// did not go through the filtered vector-search dispatch, e.g. MATCH).
+    /// Consumed by EXPLAIN ANALYZE at both the Collection and Database level.
+    pub(crate) fn execute_query_traced(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        client_id: &str,
+    ) -> Result<(Vec<SearchResult>, Option<crate::velesql::FilterStrategy>)> {
         // Phase 1: Pre-checks and context setup.
         let ctx = self.prepare_query_context(query, client_id)?;
 
         // MATCH queries take a completely separate path (no extraction needed).
         if let Some(results) = self.try_dispatch_match(query, params, &ctx)? {
-            return Ok(results);
+            return Ok((results, None));
         }
 
         // Resolve scalar WHERE parameters once so every downstream conversion
@@ -212,7 +247,8 @@ impl Collection {
         let query = resolved_query.as_ref().unwrap_or(query);
 
         // Phase 2-3: SELECT extraction, early-return, dispatch, and finalization.
-        self.execute_select_pipeline(query, params, &ctx)
+        let results = self.execute_select_pipeline(query, params, &ctx)?;
+        Ok((results, ctx.executed_filter_strategy()))
     }
 
     /// Runs the full SELECT pipeline: extraction, early-return check, dispatch,

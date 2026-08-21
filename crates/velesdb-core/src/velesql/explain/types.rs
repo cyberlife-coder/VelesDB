@@ -337,6 +337,14 @@ pub struct ActualStats {
     /// VectorFirst per-candidate BFS edges, undercounted by the `limit(1)`
     /// frontier; Parallel sums both legs). 0 for non-graph queries.
     pub edges_traversed: u64,
+    /// Filter strategy the executor actually ran, recorded at the dispatch
+    /// site itself — so this cannot drift from execution the way a re-derived
+    /// estimate could. Present for single SELECTs that went through the
+    /// filtered vector-search dispatch (under the CBO `Parallel` strategy it
+    /// describes the vector leg); `None` for MATCH, compound queries, and
+    /// arms where the pre/post-filter notion does not apply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executed_filter_strategy: Option<FilterStrategy>,
 }
 
 impl ActualStats {
@@ -356,7 +364,15 @@ impl ActualStats {
             loops: 1,
             nodes_visited,
             edges_traversed,
+            executed_filter_strategy: None,
         }
+    }
+
+    /// Attaches the filter strategy the executor recorded for this query.
+    #[must_use]
+    pub fn with_executed_filter_strategy(mut self, strategy: Option<FilterStrategy>) -> Self {
+        self.executed_filter_strategy = strategy;
+        self
     }
 }
 

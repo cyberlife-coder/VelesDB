@@ -8,7 +8,8 @@
 // - Used for timeout checking and logging, not precise calculations
 #![allow(clippy::cast_possible_truncation)]
 
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::limits::{GuardRailViolation, QueryLimits};
@@ -30,6 +31,41 @@ pub struct QueryContext {
     traversal_nodes_visited: AtomicU64,
     /// Graph edges traversed during MATCH traversal (for EXPLAIN ANALYZE).
     traversal_edges_traversed: AtomicU64,
+    /// Filter strategy the executor actually ran (for EXPLAIN ANALYZE).
+    ///
+    /// `Arc` so the query pipeline can hand the slot to the search options,
+    /// which flow through every dispatch path — including the vector leg of
+    /// the CBO `Parallel` strategy, which runs on a rayon worker thread
+    /// (a thread-local channel would silently lose that leg's record).
+    /// Encoding: 0 = unset, then `FilterStrategy` per
+    /// [`encode_filter_strategy`].
+    executed_filter_strategy: Arc<AtomicU8>,
+}
+
+/// Encodes a [`FilterStrategy`](crate::velesql::FilterStrategy) into the
+/// atomic slot representation (0 is reserved for "unset").
+pub(crate) fn encode_filter_strategy(strategy: crate::velesql::FilterStrategy) -> u8 {
+    use crate::velesql::FilterStrategy as F;
+    match strategy {
+        // `None` maps to the "unset" encoding: recording it is a no-op read
+        // back as absent. A future variant added to the (non-exhaustive)
+        // enum fails compilation here, forcing an explicit encoding choice.
+        F::None => 0,
+        F::PreFilter => 1,
+        F::PreFilterExact => 2,
+        F::PostFilter => 3,
+    }
+}
+
+/// Decodes the atomic slot representation back into a strategy.
+pub(crate) fn decode_filter_strategy(raw: u8) -> Option<crate::velesql::FilterStrategy> {
+    use crate::velesql::FilterStrategy as F;
+    match raw {
+        1 => Some(F::PreFilter),
+        2 => Some(F::PreFilterExact),
+        3 => Some(F::PostFilter),
+        _ => None,
+    }
 }
 
 impl QueryContext {
@@ -44,7 +80,23 @@ impl QueryContext {
             memory_used: AtomicUsize::new(0),
             traversal_nodes_visited: AtomicU64::new(0),
             traversal_edges_traversed: AtomicU64::new(0),
+            executed_filter_strategy: Arc::new(AtomicU8::new(0)),
         }
+    }
+
+    /// Returns the shared slot the executor records the ran filter strategy
+    /// into. Handed to the search options at pipeline entry; read back by
+    /// EXPLAIN ANALYZE via [`executed_filter_strategy`](Self::executed_filter_strategy).
+    #[must_use]
+    pub(crate) fn executed_strategy_slot(&self) -> Arc<AtomicU8> {
+        Arc::clone(&self.executed_filter_strategy)
+    }
+
+    /// Returns the filter strategy the executor recorded for this query, if
+    /// the query went through the filtered vector-search dispatch.
+    #[must_use]
+    pub(crate) fn executed_filter_strategy(&self) -> Option<crate::velesql::FilterStrategy> {
+        decode_filter_strategy(self.executed_filter_strategy.load(Ordering::Relaxed))
     }
 
     /// Checks if the query has timed out (US-001).
