@@ -17,6 +17,11 @@
 //! wall-clock benchmarks are noise. Block-columnar (PDX) kernels compute
 //! distances in blocks without passing through these entry points, so for
 //! paths that engage them the counter is a lower bound.
+//!
+//! Corollary: with `internal-bench` enabled, the relaxed atomic increment
+//! sits inside the distance hot loop — wall-clock measured under this
+//! feature is NOT a benchmark of the real engine. Count with this feature;
+//! time without it.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
