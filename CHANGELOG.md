@@ -17,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CollectionStats::graph_stats` (optional, serde-defaulted — stats files
   persisted by older versions load unchanged), giving the MATCH planner and
   the cost estimator one shared source for graph statistics.
+- **The promise contract now fails the build when a documentary claim was
+  measured a full major behind the shipping workspace.** Minor drift stays
+  advisory (unchanged), but a figure taken on a previous major describes a
+  product that no longer ships — both real drifts this guard exists for
+  crossed exactly that line. A claim may carry an explicit, dated
+  `stale_accepted` waiver scoped to the current workspace major
+  (self-expiring at the next major bump); the two 4.0.0-era size claims
+  carry one until the next release build re-measures them.
 
 ### Fixed
 
