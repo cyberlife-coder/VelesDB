@@ -34,7 +34,7 @@ impl Database {
     ///
     /// This avoids building a full `ColumnStore` when the join key is the primary key.
     pub(super) fn execute_lookup_join(
-        results: &[SearchResult],
+        results: Vec<SearchResult>,
         join: &crate::velesql::JoinClause,
         collection: &crate::collection::Collection,
     ) -> Vec<SearchResult> {
@@ -51,30 +51,46 @@ impl Database {
         let mut output = Vec::with_capacity(results.len());
         for left in results {
             if let Some(right_point) = point_map.get(&left.point.id) {
-                let merged = Self::merge_payloads(&left.point, right_point);
-                output.push(SearchResult::new(merged, left.score));
+                let score = left.score;
+                let merged = Self::merge_payloads_owned(left.point, right_point);
+                output.push(SearchResult::new(merged, score));
             } else if matches!(join.join_type, crate::velesql::JoinType::Left) {
-                output.push(left.clone());
+                output.push(left);
             }
         }
         output
     }
 
     /// Merges payloads from left and right points into a single point.
+    ///
+    /// Borrowing variant for callers that emit several rows from one left
+    /// point (the indexed 1:N path); the by-value twin below moves the left
+    /// point — vector included — instead of cloning it.
     pub(super) fn merge_payloads(left: &crate::Point, right: &crate::Point) -> crate::Point {
+        Self::merge_payloads_owned(left.clone(), right)
+    }
+
+    /// By-value twin of [`Self::merge_payloads`]: consumes the left point so
+    /// its vector is moved, not copied.
+    pub(super) fn merge_payloads_owned(
+        mut left: crate::Point,
+        right: &crate::Point,
+    ) -> crate::Point {
         let mut payload = left
             .payload
-            .as_ref()
-            .and_then(|p| p.as_object().cloned())
+            .take()
+            .and_then(|p| match p {
+                serde_json::Value::Object(map) => Some(map),
+                _ => None,
+            })
             .unwrap_or_default();
         if let Some(right_obj) = right.payload.as_ref().and_then(|p| p.as_object()) {
             for (k, v) in right_obj {
                 payload.insert(k.clone(), v.clone());
             }
         }
-        let mut merged = left.clone();
-        merged.payload = Some(serde_json::Value::Object(payload));
-        merged
+        left.payload = Some(serde_json::Value::Object(payload));
+        left
     }
 
     /// Rebuilds a WHERE clause excluding conditions that were pushed down.
@@ -128,7 +144,7 @@ impl Database {
     /// stores. It never drops rows within the requested window.
     pub(super) fn execute_single_join(
         &self,
-        results: &[SearchResult],
+        results: Vec<SearchResult>,
         join: &crate::velesql::JoinClause,
         pushed: &[crate::velesql::Condition],
         row_budget: usize,
@@ -138,12 +154,13 @@ impl Database {
         if Self::is_lookup_join_eligible(join) && pushed.is_empty() {
             return Ok(Self::execute_lookup_join(results, join, &join_collection));
         }
-        if pushed.is_empty() {
-            if let Some(output) =
-                Self::try_indexed_join(results, join, &join_collection, row_budget)
-            {
-                return Ok(output);
-            }
+        if pushed.is_empty() && Self::indexed_join_eligible(join, &join_collection) {
+            return Ok(Self::execute_indexed_join(
+                results,
+                join,
+                &join_collection,
+                row_budget,
+            ));
         }
 
         let column_store = if pushed.is_empty() {
@@ -167,86 +184,164 @@ impl Database {
     /// Answers an Inner/Left JOIN from a secondary index on the join-side
     /// column, avoiding the per-query `ColumnStore` materialization.
     ///
-    /// Returns `None` when the shape is not eligible, falling through to the
-    /// `ColumnStore` path: Right/Full joins need the unmatched join-side rows
-    /// that only a full enumeration can produce, `id` is already served by
-    /// the lookup fast path, and a column that is neither `id` nor indexed
-    /// reaches that path's actionable error. Unlike the PK paths a non-PK
-    /// key may match several join-side points; one merged row is emitted per
-    /// (left row, match) pair, bounded by `row_budget`.
-    fn try_indexed_join(
-        results: &[SearchResult],
+    /// Eligibility mirrors the pre-grouped shape: Right/Full joins need the
+    /// unmatched join-side rows only a full enumeration can produce, `id` is
+    /// already served by the lookup fast path, and a column that is neither
+    /// `id` nor indexed falls through to the `ColumnStore` path.
+    fn indexed_join_eligible(
+        join: &crate::velesql::JoinClause,
+        collection: &crate::collection::Collection,
+    ) -> bool {
+        use crate::velesql::JoinType;
+        if !matches!(join.join_type, JoinType::Inner | JoinType::Left) {
+            return false;
+        }
+        let Some(condition) = crate::collection::search::query::join::resolve_join_condition(join)
+        else {
+            return false;
+        };
+        let index_column = &condition.left.column;
+        index_column != "id" && collection.indexed_field_names().contains(index_column)
+    }
+
+    /// Build side of the indexed join: one `secondary_index_lookup` per
+    /// DISTINCT key, then one batched hydration over the deduplicated match
+    /// ids — the hash-join build the per-left-row shape never had.
+    #[allow(clippy::type_complexity)] // Reason: internal pair of build-side maps, named at the single call site
+    fn indexed_join_build_side(
+        collection: &crate::collection::Collection,
+        keys: &[Option<crate::index::JsonValue>],
+        index_column: &str,
+    ) -> (
+        std::collections::BTreeMap<crate::index::JsonValue, Vec<u64>>,
+        std::collections::HashMap<u64, crate::Point>,
+    ) {
+        let mut key_matches: std::collections::BTreeMap<crate::index::JsonValue, Vec<u64>> =
+            std::collections::BTreeMap::new();
+        for key in keys.iter().flatten() {
+            if !key_matches.contains_key(key) {
+                let ids = collection
+                    .secondary_index_lookup(index_column, key)
+                    .unwrap_or_default();
+                key_matches.insert(key.clone(), ids);
+            }
+        }
+        let all_ids: Vec<u64> = {
+            let mut seen = std::collections::HashSet::new();
+            key_matches
+                .values()
+                .flatten()
+                .copied()
+                .filter(|id| seen.insert(*id))
+                .collect()
+        };
+        let point_map: std::collections::HashMap<u64, crate::Point> = collection
+            .get(&all_ids)
+            .into_iter()
+            .flatten()
+            .map(|p| (p.id, p))
+            .collect();
+        (key_matches, point_map)
+    }
+
+    /// Executes the indexed non-PK join in three grouped phases.
+    ///
+    /// The per-left-row shape issued one `secondary_index_lookup` and one
+    /// storage `get` PER LEFT ROW, re-hydrating the same join-side points
+    /// once per left row sharing a key (10k left rows on one hot key = 10k
+    /// identical fetches). Phases: (1) resolve each left row's join key
+    /// once; (2) one index lookup per DISTINCT key and one batched
+    /// hydration over the deduplicated match ids — a proper hash-join build
+    /// side; (3) emit, moving each left row into its final match and
+    /// cloning only for the extra rows of a 1:N key.
+    fn execute_indexed_join(
+        results: Vec<SearchResult>,
         join: &crate::velesql::JoinClause,
         collection: &crate::collection::Collection,
         row_budget: usize,
-    ) -> Option<Vec<SearchResult>> {
-        use crate::velesql::JoinType;
-        if !matches!(join.join_type, JoinType::Inner | JoinType::Left) {
-            return None;
-        }
-        let condition = crate::collection::search::query::join::resolve_join_condition(join)?;
-        let index_column = condition.left.column.clone();
-        if index_column == "id" || !collection.indexed_field_names().contains(&index_column) {
-            return None;
-        }
+    ) -> Vec<SearchResult> {
+        // Eligibility was checked by `indexed_join_eligible`.
+        let Some(condition) = crate::collection::search::query::join::resolve_join_condition(join)
+        else {
+            return Vec::new();
+        };
+        let index_column = &condition.left.column;
+        let source_column = &condition.right.column;
 
+        // Phase 1: one key per left row (same payload->key conversion as
+        // index maintenance, with the `id` fallback the PK extractor honours).
+        let keys: Vec<Option<crate::index::JsonValue>> = results
+            .iter()
+            .map(|left| {
+                left.point
+                    .payload
+                    .as_ref()
+                    .and_then(|p| p.get(source_column).cloned())
+                    .or_else(|| (source_column == "id").then(|| serde_json::json!(left.point.id)))
+                    .as_ref()
+                    .and_then(crate::index::JsonValue::from_json)
+            })
+            .collect();
+
+        // Phase 2: build side — one lookup per distinct key, one batched get.
+        let (key_matches, point_map) =
+            Self::indexed_join_build_side(collection, &keys, index_column);
+
+        // Phase 3: emit — one merged row per (left row, match), budget-bounded.
         let mut output = Vec::new();
-        for left in results {
+        for (left, key) in results.into_iter().zip(keys) {
             if output.len() >= row_budget {
                 break;
             }
-            Self::append_indexed_matches(
-                collection,
-                left,
-                &index_column,
-                &condition.right.column,
-                join.join_type,
-                row_budget,
-                &mut output,
-            );
+            let matches = key
+                .as_ref()
+                .and_then(|k| key_matches.get(k))
+                .filter(|ids| !ids.is_empty());
+            let Some(match_ids) = matches else {
+                if matches!(join.join_type, crate::velesql::JoinType::Left) {
+                    output.push(left);
+                }
+                continue;
+            };
+            Self::emit_indexed_rows(left, match_ids, &point_map, row_budget, &mut output);
         }
-        Some(output)
+        output
     }
 
-    /// Appends the join output rows for one left-side result: every indexed
-    /// match merged left-over-right, or the bare left row for an unmatched
-    /// LEFT JOIN. The source key uses the same payload→key conversion as
-    /// index maintenance (`JsonValue::from_json`), with the `id` fallback the
-    /// PK key extractor also honours.
-    fn append_indexed_matches(
-        collection: &crate::collection::Collection,
-        left: &SearchResult,
-        index_column: &str,
-        source_column: &str,
-        join_type: crate::velesql::JoinType,
+    /// Emits the merged rows of one left row's match list, budget-bounded.
+    ///
+    /// The final row of a key takes the left point by move — the 1:1 common
+    /// case therefore never clones the vector. A match list whose ids all
+    /// failed to hydrate emits nothing, exactly as the per-row `get` loop
+    /// behaved.
+    fn emit_indexed_rows(
+        left: SearchResult,
+        match_ids: &[u64],
+        point_map: &std::collections::HashMap<u64, crate::Point>,
         row_budget: usize,
         output: &mut Vec<SearchResult>,
     ) {
-        let source_value = left
-            .point
-            .payload
-            .as_ref()
-            .and_then(|p| p.get(source_column).cloned())
-            .or_else(|| (source_column == "id").then(|| serde_json::json!(left.point.id)));
-        let matches = source_value
-            .as_ref()
-            .and_then(crate::index::JsonValue::from_json)
-            .and_then(|key| collection.secondary_index_lookup(index_column, &key))
-            .unwrap_or_default();
-
-        if matches.is_empty() {
-            if matches!(join_type, crate::velesql::JoinType::Left) {
-                output.push(left.clone());
-            }
+        let rights: Vec<&crate::Point> = match_ids
+            .iter()
+            .filter_map(|id| point_map.get(id))
+            .collect();
+        let Some((last_right, head_rights)) = rights.split_last() else {
             return;
-        }
-        for right_point in collection.get(&matches).into_iter().flatten() {
+        };
+        let score = left.score;
+        for right_point in head_rights {
             if output.len() >= row_budget {
                 return;
             }
             output.push(SearchResult::new(
-                Self::merge_payloads(&left.point, &right_point),
-                left.score,
+                Self::merge_payloads(&left.point, right_point),
+                score,
+            ));
+        }
+        if output.len() < row_budget {
+            output.push(SearchResult::new(
+                Self::merge_payloads_owned(left.point, last_right),
+                score,
             ));
         }
     }
