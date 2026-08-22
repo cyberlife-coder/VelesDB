@@ -740,7 +740,9 @@ fn rabitq_load_rejects_rotation_length_mismatch() {
 fn unit_orthogonal_to(q: &[f32], seed: u64) -> Vec<f32> {
     use rand::{RngExt, SeedableRng};
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-    let mut u: Vec<f32> = (0..q.len()).map(|_| rng.random::<f32>() * 2.0 - 1.0).collect();
+    let mut u: Vec<f32> = (0..q.len())
+        .map(|_| rng.random::<f32>() * 2.0 - 1.0)
+        .collect();
     let dot: f32 = u.iter().zip(q.iter()).map(|(a, b)| a * b).sum();
     for (ui, qi) in u.iter_mut().zip(q.iter()) {
         *ui -= dot * qi;

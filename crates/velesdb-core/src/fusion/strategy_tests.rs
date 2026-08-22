@@ -14,10 +14,7 @@ use super::strategy::{
 /// Two Euclidean-distance branches (best-first ascending). doc1 is the near
 /// document in both; doc2 is far in both.
 fn distance_branches() -> Vec<Vec<(u64, f32)>> {
-    vec![
-        vec![(1, 0.1), (2, 3.0)],
-        vec![(1, 0.2), (2, 2.9)],
-    ]
+    vec![vec![(1, 0.1), (2, 3.0)], vec![(1, 0.2), (2, 2.9)]]
 }
 
 fn all_lower(n: usize) -> Vec<ScoreDirection> {
@@ -74,7 +71,10 @@ fn test_directed_relative_score_inverts_distance_branch() {
     let fused = strategy
         .fuse_with_directions(
             vec![dense, sparse],
-            &[ScoreDirection::LowerIsBetter, ScoreDirection::HigherIsBetter],
+            &[
+                ScoreDirection::LowerIsBetter,
+                ScoreDirection::HigherIsBetter,
+            ],
         )
         .expect("fuse");
 

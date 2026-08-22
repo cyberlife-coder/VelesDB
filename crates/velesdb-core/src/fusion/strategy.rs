@@ -296,7 +296,9 @@ impl FusionStrategy {
         let mut fused = self.fuse(results)?;
 
         let all_lower = !directions.is_empty()
-            && directions.iter().all(|d| *d == ScoreDirection::LowerIsBetter);
+            && directions
+                .iter()
+                .all(|d| *d == ScoreDirection::LowerIsBetter);
         if all_lower && self.preserves_score_space() {
             // Restore metric units; descending negated order is ascending
             // distance, so the list stays best-first.
@@ -314,10 +316,7 @@ impl FusionStrategy {
 
     /// True for strategies whose output stays in the input score space.
     fn preserves_score_space(&self) -> bool {
-        matches!(
-            self,
-            Self::Average | Self::Maximum | Self::Weighted { .. }
-        )
+        matches!(self, Self::Average | Self::Maximum | Self::Weighted { .. })
     }
 
     /// Fuses results from multiple queries into a single ranked list.
