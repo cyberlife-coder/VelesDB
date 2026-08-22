@@ -138,8 +138,8 @@ pub enum StorageMode {
     #[default]
     Full,
     /// Accepted and persisted, but currently behaves exactly like [`Full`]:
-    /// vectors are stored and searched full-precision f32, with no memory or
-    /// throughput gain. The SQ8 codec ([`QuantizedVector`]) and an int8
+    /// vectors are stored and searched full-precision f32 — no memory gain,
+    /// no throughput gain. The SQ8 codec ([`QuantizedVector`]) and an int8
     /// traversal engine exist in-tree; wiring them into an HNSW backend (the
     /// `RaBitQ` pattern) is tracked in issue #2112. Selecting this mode today
     /// reserves the intent without changing behavior.
