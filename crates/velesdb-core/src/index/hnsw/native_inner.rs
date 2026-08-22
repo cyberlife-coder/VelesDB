@@ -127,30 +127,55 @@ impl NativeHnswInner {
                     alpha,
                 )?))
             }
-            _ => {
-                let inner = if dimension > 0 {
-                    NativeHnsw::new_with_dimension_and_alpha(
-                        distance,
-                        max_connections,
-                        ef_construction,
-                        max_elements,
-                        dimension,
-                        alpha,
-                    )?
-                } else {
-                    NativeHnsw::with_alpha(
-                        distance,
-                        max_connections,
-                        ef_construction,
-                        max_elements,
-                        alpha,
-                    )
-                };
-                HnswBackend::Standard(inner)
-            }
+            _ => Self::new_standard_backend(
+                distance,
+                max_connections,
+                ef_construction,
+                max_elements,
+                dimension,
+                alpha,
+            )?,
         };
 
         Ok(Self { backend, metric })
+    }
+
+    /// Builds the Standard (full-f32) backend.
+    ///
+    /// A zero `dimension` means the caller does not know it yet, so the
+    /// graph allocates its vector storage lazily on first insert instead of
+    /// pre-sizing it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if vector storage pre-allocation fails.
+    fn new_standard_backend(
+        distance: CachedSimdDistance,
+        max_connections: usize,
+        ef_construction: usize,
+        max_elements: usize,
+        dimension: usize,
+        alpha: f32,
+    ) -> crate::error::Result<HnswBackend> {
+        let inner = if dimension > 0 {
+            NativeHnsw::new_with_dimension_and_alpha(
+                distance,
+                max_connections,
+                ef_construction,
+                max_elements,
+                dimension,
+                alpha,
+            )?
+        } else {
+            NativeHnsw::with_alpha(
+                distance,
+                max_connections,
+                ef_construction,
+                max_elements,
+                alpha,
+            )
+        };
+        Ok(HnswBackend::Standard(inner))
     }
 
     /// Returns the storage mode for this backend.
