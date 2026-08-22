@@ -18,7 +18,7 @@ velesdb repl ./my_db    # explicit path
 ```
 
 ```
-VelesDB v5.1.0 - VelesQL REPL
+VelesDB v5.2.0 - VelesQL REPL
 Database: ./data
 Type .help for commands, .quit to exit
 

@@ -162,4 +162,4 @@ A completed migration deletes its own checkpoint.
 
 ---
 
-`velesdb-migrate v5.1.0` · Last updated: 2026-08-13 · Applies to: velesdb-core 5.2.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)
+`velesdb-migrate v5.2.0` · Last updated: 2026-08-22 · Applies to: velesdb-core 5.2.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)
