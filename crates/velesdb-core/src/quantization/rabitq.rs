@@ -18,13 +18,18 @@ use serde::{Deserialize, Serialize};
 
 /// Scalar correction factors for a `RaBitQ`-encoded vector.
 ///
-/// These values are needed to apply the affine correction during distance estimation.
+/// `vector_norm` restores the metric scale during distance estimation.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct RaBitQCorrection {
     /// L2 norm of the centered vector before binarization.
     pub vector_norm: f32,
     /// Inner product between the binary reconstruction (`±1/√D` scaled) and the
-    /// rotated normalized vector. Measures quantization quality; closer to 1.0 is better.
+    /// rotated normalized vector. Measures quantization quality; closer to 1.0
+    /// is better. NOT consumed by the current symmetric (query-binarized)
+    /// estimator, whose de-bias is the arcsine-law transform in
+    /// [`RaBitQIndex::distance_from_prepared_slice`]; it is the per-vector
+    /// rescale the paper's asymmetric estimator (real-valued query) divides
+    /// by, kept in the persisted format for that upgrade path (#2104).
     pub quantization_ip: f32,
 }
 
@@ -213,8 +218,19 @@ impl RaBitQIndex {
     ) -> f32 {
         let ip_binary = xor_popcount_ip(&pq.bits, bits, pq.num_words, self.dimension);
 
+        // De-bias the symmetric binary inner product (#2104). Both sides are
+        // binarized here, so per coordinate of a random rotation the sign
+        // agreement probability is 1 - θ/π, giving E[ip_binary] = 1 - 2θ/π —
+        // NOT cos θ. Using ip_binary directly overestimates every non-zero
+        // angle's distance by a norm-dependent amount, distorting candidate
+        // ranking (e.g. θ = 60°: ip_binary ≈ 1/3 where cos θ = 0.5). Invert
+        // the map: cos θ = cos(π/2 · (1 - ip_binary)) = sin(π/2 · ip_binary).
+        // The transform is monotone on [-1, 1], so same-norm ordering is
+        // preserved while cross-norm comparisons become unbiased.
+        let cos_est = (std::f32::consts::FRAC_PI_2 * ip_binary).sin();
+
         let v_norm = correction.vector_norm;
-        let estimated_ip = pq.norm * v_norm * ip_binary;
+        let estimated_ip = pq.norm * v_norm * cos_est;
         let l2_sq = v_norm.mul_add(v_norm, pq.norm_sq) - 2.0 * estimated_ip;
         l2_sq.max(0.0).sqrt()
     }

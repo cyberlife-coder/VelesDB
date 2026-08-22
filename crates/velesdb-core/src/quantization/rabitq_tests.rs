@@ -726,3 +726,81 @@ fn rabitq_load_rejects_rotation_length_mismatch() {
     let err = RaBitQIndex::load(dir.path()).expect_err("corrupt rotation length must fail to load");
     assert!(matches!(err, Error::IndexCorrupted(_)), "got {err:?}");
 }
+
+// =============================================================================
+// Regression (#2104): the symmetric (query-binarized) estimator must de-bias
+// the binary inner product. For a random rotation, per-coordinate sign
+// agreement follows the arcsine law (E[agreement] = 1/2 + arcsin(cosθ)/π),
+// so E[ip_binary] = 1 - 2θ/π — not cosθ. Using ip_binary as cosθ
+// overestimated every non-zero angle's distance by a norm-dependent amount.
+// =============================================================================
+
+/// Deterministic unit vector orthogonalized against `q` (Gram-Schmidt).
+#[cfg(feature = "persistence")]
+fn unit_orthogonal_to(q: &[f32], seed: u64) -> Vec<f32> {
+    use rand::{RngExt, SeedableRng};
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+    let mut u: Vec<f32> = (0..q.len()).map(|_| rng.random::<f32>() * 2.0 - 1.0).collect();
+    let dot: f32 = u.iter().zip(q.iter()).map(|(a, b)| a * b).sum();
+    for (ui, qi) in u.iter_mut().zip(q.iter()) {
+        *ui -= dot * qi;
+    }
+    let norm: f32 = u.iter().map(|x| x * x).sum::<f32>().sqrt();
+    for x in &mut u {
+        *x /= norm;
+    }
+    u
+}
+
+/// At θ = 60° between unit vectors the true L2 distance is exactly 1.0.
+/// The pre-fix estimator used ip_binary ≈ 1/3 as cosθ, reporting
+/// sqrt(2 - 2/3) ≈ 1.155 — a systematic +15% bias no averaging removes.
+/// The arcsine-law transform recovers cosθ = sin(π/2 · 1/3) ≈ 0.5.
+#[cfg(feature = "persistence")]
+#[test]
+fn rabitq_estimator_unbiased_at_sixty_degrees() {
+    let dim = 256;
+    // A trained rotation over throwaway vectors provides the random
+    // orthogonal rotation the arcsine law assumes; force a zero centroid so
+    // vector geometry (angles/norms) is exactly as constructed.
+    let filler: Vec<Vec<f32>> = (0..8)
+        .map(|s| unit_orthogonal_to(&vec![1.0; dim], 900 + s))
+        .collect();
+    let mut index = RaBitQIndex::train(&filler, 7).unwrap();
+    index.centroid = vec![0.0; dim];
+
+    // Query: deterministic unit vector.
+    let mut q = vec![0.0f32; dim];
+    for (i, x) in q.iter_mut().enumerate() {
+        #[allow(clippy::cast_precision_loss)]
+        let v = (i as f32 * 0.7).sin() + 0.1;
+        *x = v;
+    }
+    let qn: f32 = q.iter().map(|x| x * x).sum::<f32>().sqrt();
+    for x in &mut q {
+        *x /= qn;
+    }
+
+    // Candidates at exactly 60°: v = 0.5 q + (√3/2) u with u ⊥ q, ‖v‖ = 1.
+    let n_candidates: u64 = 32;
+    let mut total = 0.0f64;
+    for s in 0..n_candidates {
+        let u = unit_orthogonal_to(&q, 1_000 + s);
+        let v: Vec<f32> = q
+            .iter()
+            .zip(u.iter())
+            .map(|(&qi, &ui)| 3.0f32.sqrt().mul_add(ui / 2.0, 0.5 * qi))
+            .collect();
+        let encoded = index.encode(&v).unwrap();
+        total += f64::from(index.distance(&q, &encoded));
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let mean_estimate = total / n_candidates as f64;
+
+    // True distance is 1.0; binary-estimator noise at dim 256 averages out
+    // over 32 candidates, but the pre-fix +15% bias would not.
+    assert!(
+        (mean_estimate - 1.0).abs() < 0.05,
+        "mean estimated distance at 60° must be ~1.0 (unbiased), got {mean_estimate:.4}"
+    );
+}
