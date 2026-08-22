@@ -3,13 +3,15 @@
 //! This module provides `NativeHnswInner`, a drop-in replacement for `HnswInner`
 //! that uses our native HNSW implementation instead of the `hnsw_rs` crate.
 //!
-//! Supports two backends via [`HnswBackend`]:
+//! Supports three backends via [`HnswBackend`]:
 //! - **Standard**: Full f32 distances (`NativeHnsw`)
 //! - **`RaBitQ`**: Binary traversal + f32 re-ranking (`RaBitQPrecisionHnsw`)
+//! - **SQ8**: Int8 traversal + f32 re-ranking (`Sq8PrecisionHnsw`)
 
 #![allow(clippy::cast_precision_loss)]
 
 use super::native::rabitq_precision::RaBitQPrecisionHnsw;
+use super::native::sq8_precision::Sq8PrecisionHnsw;
 use super::native::{
     CachedSimdDistance, NativeHnsw, NativeNeighbour, ResumableSearch, DEFAULT_ALPHA,
 };
@@ -26,10 +28,11 @@ pub struct SearchResume(ResumableSearch);
 /// Backend selector for the native HNSW index.
 ///
 /// `Standard` uses full f32 distances. `RaBitQ` uses binary graph traversal
-/// (32x compression) with f32 re-ranking for final results.
+/// (32x compression) with f32 re-ranking; `Sq8` uses int8 traversal (4x
+/// bandwidth reduction) with f32 re-ranking.
 // SAFETY: `Standard` (272 B) is the hot path — boxing it would add pointer
-// indirection on every search call. `RaBitQ` is boxed intentionally to avoid
-// inflating `Standard`-mode layout across cache lines.
+// indirection on every search call. The quantized backends are boxed
+// intentionally to avoid inflating `Standard`-mode layout across cache lines.
 #[allow(clippy::large_enum_variant)]
 enum HnswBackend {
     /// Standard f32 distance backend.
@@ -40,6 +43,8 @@ enum HnswBackend {
     /// `RaBitQPrecisionHnsw` is ~250 bytes (3 locks + buffers); storing it
     /// inline would push `Standard`-mode hot fields across cache lines.
     RaBitQ(Box<RaBitQPrecisionHnsw<CachedSimdDistance>>),
+    /// SQ8 int8 traversal + f32 re-ranking backend (boxed, same rationale).
+    Sq8(Box<Sq8PrecisionHnsw<CachedSimdDistance>>),
 }
 
 /// Native HNSW index wrapper to handle different distance metrics and backends.
@@ -110,6 +115,17 @@ impl NativeHnswInner {
                 alpha,
             )?;
             HnswBackend::RaBitQ(Box::new(rabitq))
+        } else if matches!(storage_mode, crate::StorageMode::SQ8) {
+            let distance = CachedSimdDistance::new_prenormalized(metric, dimension);
+            let sq8 = Sq8PrecisionHnsw::new_with_alpha(
+                distance,
+                dimension,
+                max_connections,
+                ef_construction,
+                max_elements,
+                alpha,
+            )?;
+            HnswBackend::Sq8(Box::new(sq8))
         } else {
             let distance = CachedSimdDistance::new_prenormalized(metric, dimension);
             let inner = if dimension > 0 {
@@ -142,6 +158,7 @@ impl NativeHnswInner {
         match &self.backend {
             HnswBackend::Standard(_) => crate::StorageMode::Full,
             HnswBackend::RaBitQ(_) => crate::StorageMode::RaBitQ,
+            HnswBackend::Sq8(_) => crate::StorageMode::SQ8,
         }
     }
 
@@ -152,6 +169,7 @@ impl NativeHnswInner {
         match &self.backend {
             HnswBackend::Standard(g) => g.get_alpha(),
             HnswBackend::RaBitQ(p) => p.inner.get_alpha(),
+            HnswBackend::Sq8(p) => p.inner.get_alpha(),
         }
     }
 
@@ -171,20 +189,42 @@ impl NativeHnswInner {
         rabitq: std::sync::Arc<crate::quantization::RaBitQIndex>,
     ) -> crate::error::Result<bool> {
         match &self.backend {
-            HnswBackend::Standard(_) => Ok(false),
             HnswBackend::RaBitQ(precision) => {
                 precision.install_trained_rabitq(rabitq)?;
                 Ok(true)
             }
+            _ => Ok(false),
         }
     }
 
-    /// Returns true when the backend is `RaBitQ` with a trained quantizer.
+    /// Installs a pre-trained SQ8 quantizer into the SQ8 backend,
+    /// re-encoding every stored vector in `NodeId` order.
+    ///
+    /// Returns `Ok(true)` when installed, `Ok(false)` when the backend is
+    /// not SQ8 (no-op — the wiring takes effect at the next open, once the
+    /// backend is rebuilt from the collection storage mode) or the codec
+    /// does not support the metric (search stays exact f32).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if re-encoding a stored vector fails.
     #[cfg(feature = "persistence")]
+    pub fn install_trained_sq8(
+        &self,
+        quantizer: std::sync::Arc<crate::index::hnsw::native::ScalarQuantizer>,
+    ) -> crate::error::Result<bool> {
+        match &self.backend {
+            HnswBackend::Sq8(precision) => precision.install_trained_sq8(quantizer),
+            _ => Ok(false),
+        }
+    }
+
+    /// Returns `true` when this index runs a quantized backend (`RaBitQ` or
+    /// SQ8) whose positional code store requires inserts to flow through the
+    /// backend itself (no direct-writer / async-builder bypass).
     #[must_use]
-    /// Returns `true` when this index runs the `RaBitQ` backend.
-    pub fn is_rabitq_backend(&self) -> bool {
-        matches!(self.backend, HnswBackend::RaBitQ(_))
+    pub fn is_quantized_backend(&self) -> bool {
+        matches!(self.backend, HnswBackend::RaBitQ(_) | HnswBackend::Sq8(_))
     }
 
     /// Converts a Standard backend into an (untrained) `RaBitQ` backend.
@@ -196,16 +236,28 @@ impl NativeHnswInner {
     /// already `RaBitQ` is returned unchanged.
     pub fn promote_to_rabitq(self, dimension: usize) -> Self {
         match self.backend {
-            HnswBackend::Standard(inner) => {
-                let distance = CachedSimdDistance::new_prenormalized(self.metric, dimension);
-                Self {
-                    backend: HnswBackend::RaBitQ(Box::new(RaBitQPrecisionHnsw::from_inner(
-                        inner, distance, dimension,
-                    ))),
-                    metric: self.metric,
-                }
-            }
-            backend @ HnswBackend::RaBitQ(_) => Self {
+            HnswBackend::Standard(inner) => Self {
+                backend: HnswBackend::RaBitQ(Box::new(RaBitQPrecisionHnsw::from_inner(
+                    inner, dimension,
+                ))),
+                metric: self.metric,
+            },
+            backend => Self {
+                backend,
+                metric: self.metric,
+            },
+        }
+    }
+
+    /// Converts a Standard backend into an (untrained) SQ8 backend — the
+    /// vacuum promotion mirror of [`Self::promote_to_rabitq`].
+    pub fn promote_to_sq8(self, dimension: usize) -> Self {
+        match self.backend {
+            HnswBackend::Standard(inner) => Self {
+                backend: HnswBackend::Sq8(Box::new(Sq8PrecisionHnsw::from_inner(inner, dimension))),
+                metric: self.metric,
+            },
+            backend => Self {
                 backend,
                 metric: self.metric,
             },
@@ -216,6 +268,11 @@ impl NativeHnswInner {
         matches!(&self.backend, HnswBackend::RaBitQ(precision) if precision.is_quantizer_trained())
     }
 
+    /// Returns true when the backend is SQ8 with a trained quantizer.
+    pub fn is_sq8_quantizer_trained(&self) -> bool {
+        matches!(&self.backend, HnswBackend::Sq8(precision) if precision.is_quantizer_trained())
+    }
+
     /// Returns the trained `RaBitQ` quantizer, if any.
     ///
     /// Used by vacuum to carry the trained rotation over to the rebuilt
@@ -224,8 +281,23 @@ impl NativeHnswInner {
     #[must_use]
     pub fn rabitq_quantizer(&self) -> Option<std::sync::Arc<crate::quantization::RaBitQIndex>> {
         match &self.backend {
-            HnswBackend::Standard(_) => None,
             HnswBackend::RaBitQ(precision) => precision.trained_quantizer(),
+            _ => None,
+        }
+    }
+
+    /// Returns the trained SQ8 quantizer, if any.
+    ///
+    /// Used by vacuum and the collection flush path (persisting `sq8.idx`)
+    /// to carry a trained quantizer over via [`Self::install_trained_sq8`].
+    #[cfg(feature = "persistence")]
+    #[must_use]
+    pub fn sq8_quantizer(
+        &self,
+    ) -> Option<std::sync::Arc<crate::index::hnsw::native::ScalarQuantizer>> {
+        match &self.backend {
+            HnswBackend::Sq8(precision) => precision.trained_quantizer(),
+            _ => None,
         }
     }
 }
@@ -248,6 +320,7 @@ impl NativeHnswInner {
         match &self.backend {
             HnswBackend::Standard(hnsw) => hnsw.search(query, k, ef_search),
             HnswBackend::RaBitQ(rabitq) => rabitq.search(query, k, ef_search),
+            HnswBackend::Sq8(sq8) => sq8.search(query, k, ef_search),
         }
     }
 
@@ -329,6 +402,7 @@ impl NativeHnswInner {
                 (results, resume.map(SearchResume))
             }
             HnswBackend::RaBitQ(rabitq) => (rabitq.search(query, k, ef_search), None),
+            HnswBackend::Sq8(sq8) => (sq8.search(query, k, ef_search), None),
         }
     }
 
@@ -349,6 +423,7 @@ impl NativeHnswInner {
             // the Standard backend. Kept total so a future backend cannot
             // silently drop the escalation.
             HnswBackend::RaBitQ(rabitq) => rabitq.search(query, k, ef_search),
+            HnswBackend::Sq8(sq8) => sq8.search(query, k, ef_search),
         }
     }
 
@@ -360,7 +435,7 @@ impl NativeHnswInner {
     fn search_gpu(&self, query: &[f32], k: usize, ef_search: usize) -> Option<Vec<(usize, f32)>> {
         let hnsw = match &self.backend {
             HnswBackend::Standard(hnsw) => hnsw,
-            HnswBackend::RaBitQ(_) => return None,
+            HnswBackend::RaBitQ(_) | HnswBackend::Sq8(_) => return None,
         };
 
         hnsw.search_gpu(query, k, ef_search, self.metric)
@@ -378,7 +453,7 @@ impl NativeHnswInner {
     ) -> Vec<NativeNeighbour> {
         match &self.backend {
             HnswBackend::Standard(hnsw) => hnsw.search_neighbours(query, k, ef_search),
-            HnswBackend::RaBitQ(rabitq) => rabitq
+            HnswBackend::RaBitQ(_) | HnswBackend::Sq8(_) => self
                 .search(query, k, ef_search)
                 .into_iter()
                 .map(|(id, dist)| NativeNeighbour {
@@ -408,6 +483,7 @@ impl NativeHnswInner {
         let assigned_id = match &self.backend {
             HnswBackend::Standard(hnsw) => hnsw.insert(vector)?,
             HnswBackend::RaBitQ(rabitq) => rabitq.insert(vector)?,
+            HnswBackend::Sq8(sq8) => sq8.insert(vector)?,
         };
         if assigned_id != expected_idx {
             tracing::warn!(
@@ -426,8 +502,9 @@ impl NativeHnswInner {
     pub fn parallel_insert(&self, data: &[(&[f32], usize)]) -> crate::error::Result<Vec<usize>> {
         match &self.backend {
             HnswBackend::Standard(hnsw) => hnsw.parallel_insert(data),
-            // RaBitQ: insert sequentially to maintain RaBitQ store consistency
-            HnswBackend::RaBitQ(_) => {
+            // Quantized backends: insert sequentially so the positional code
+            // store stays consistent with NodeId assignment order.
+            HnswBackend::RaBitQ(_) | HnswBackend::Sq8(_) => {
                 let mut ids = Vec::with_capacity(data.len());
                 for &(vector, expected_idx) in data {
                     ids.push(self.insert((vector, expected_idx))?);
@@ -442,6 +519,7 @@ impl NativeHnswInner {
         match &mut self.backend {
             HnswBackend::Standard(hnsw) => hnsw.set_searching_mode(mode),
             HnswBackend::RaBitQ(rabitq) => rabitq.inner.set_searching_mode(mode),
+            HnswBackend::Sq8(sq8) => sq8.inner.set_searching_mode(mode),
         }
     }
 
@@ -460,6 +538,7 @@ impl NativeHnswInner {
         match &self.backend {
             HnswBackend::Standard(hnsw) => hnsw.reorder_for_locality(),
             HnswBackend::RaBitQ(rabitq) => rabitq.inner.reorder_for_locality(),
+            HnswBackend::Sq8(sq8) => sq8.inner.reorder_for_locality(),
         }
     }
 }
@@ -478,6 +557,7 @@ impl NativeHnswInner {
         match &self.backend {
             HnswBackend::Standard(hnsw) => hnsw.file_dump(path, basename),
             HnswBackend::RaBitQ(rabitq) => rabitq.inner.file_dump(path, basename),
+            HnswBackend::Sq8(sq8) => sq8.inner.file_dump(path, basename),
         }
     }
 
@@ -501,14 +581,17 @@ impl NativeHnswInner {
         let distance = CachedSimdDistance::new_prenormalized(metric, dimension);
         let inner = NativeHnsw::file_load(path, basename, distance)?;
 
-        let backend = if matches!(storage_mode, crate::StorageMode::RaBitQ) {
-            // Wrap loaded graph in RaBitQ backend.
-            // The quantizer is NOT trained yet — it trains lazily from new inserts.
-            let distance = CachedSimdDistance::new_prenormalized(metric, dimension);
-            let rabitq = RaBitQPrecisionHnsw::from_inner(inner, distance, dimension);
-            HnswBackend::RaBitQ(Box::new(rabitq))
-        } else {
-            HnswBackend::Standard(inner)
+        let backend = match storage_mode {
+            // Wrap the loaded graph in the matching quantized backend. The
+            // quantizer is NOT trained yet — callers install a persisted
+            // artifact or let it train lazily from inserts.
+            crate::StorageMode::RaBitQ => {
+                HnswBackend::RaBitQ(Box::new(RaBitQPrecisionHnsw::from_inner(inner, dimension)))
+            }
+            crate::StorageMode::SQ8 => {
+                HnswBackend::Sq8(Box::new(Sq8PrecisionHnsw::from_inner(inner, dimension)))
+            }
+            _ => HnswBackend::Standard(inner),
         };
 
         Ok(Self { backend, metric })
@@ -529,7 +612,7 @@ impl NativeHnswInner {
     pub fn transform_score(&self, raw_distance: f32) -> f32 {
         match &self.backend {
             HnswBackend::Standard(hnsw) => hnsw.transform_score(raw_distance),
-            HnswBackend::RaBitQ(_) => raw_distance,
+            HnswBackend::RaBitQ(_) | HnswBackend::Sq8(_) => raw_distance,
         }
     }
 
@@ -541,6 +624,7 @@ impl NativeHnswInner {
         match &self.backend {
             HnswBackend::Standard(hnsw) => hnsw.len(),
             HnswBackend::RaBitQ(rabitq) => rabitq.len(),
+            HnswBackend::Sq8(sq8) => sq8.len(),
         }
     }
 
@@ -552,6 +636,7 @@ impl NativeHnswInner {
         match &self.backend {
             HnswBackend::Standard(hnsw) => hnsw.is_empty(),
             HnswBackend::RaBitQ(rabitq) => rabitq.is_empty(),
+            HnswBackend::Sq8(sq8) => sq8.is_empty(),
         }
     }
 
@@ -570,6 +655,7 @@ impl NativeHnswInner {
         match &self.backend {
             HnswBackend::Standard(hnsw) => hnsw.compute_distance(a, b),
             HnswBackend::RaBitQ(rabitq) => rabitq.inner.compute_distance(a, b),
+            HnswBackend::Sq8(sq8) => sq8.inner.compute_distance(a, b),
         }
     }
 
@@ -584,6 +670,7 @@ impl NativeHnswInner {
         match &self.backend {
             HnswBackend::Standard(hnsw) => hnsw.with_vectors_read(f),
             HnswBackend::RaBitQ(rabitq) => rabitq.inner.with_vectors_read(f),
+            HnswBackend::Sq8(sq8) => sq8.inner.with_vectors_read(f),
         }
     }
 
@@ -618,6 +705,7 @@ impl NativeHnswInner {
         match &self.backend {
             HnswBackend::Standard(hnsw) => hnsw.with_vectors_write(f),
             HnswBackend::RaBitQ(rabitq) => rabitq.inner.with_vectors_write(f),
+            HnswBackend::Sq8(sq8) => sq8.inner.with_vectors_write(f),
         }
     }
 }

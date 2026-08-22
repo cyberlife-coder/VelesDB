@@ -381,7 +381,7 @@ fn test_rabitq_precision_recall_above_threshold() {
 /// Uses 64 dims (vs 32 for SQ8 tests): `RaBitQ` allocates 1 bit per dim,
 /// and 32-bit codes are too coarse to rank near-orthogonal random vectors.
 fn run_rabitq_self_query(metric: DistanceMetric) {
-    use super::dual_precision_tests::{assert_top1_and_recall, planted_unit_vectors};
+    use super::precision_test_support::{assert_top1_and_recall, planted_unit_vectors};
 
     let (dim, n, k) = (64, 100, 10);
     let query_id = 42_usize;

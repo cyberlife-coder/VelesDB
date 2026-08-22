@@ -37,20 +37,19 @@
 mod backend_adapter;
 mod batch_schedule;
 mod distance;
-mod dual_precision;
 mod graph;
 mod graph_io;
-mod int8_traversal;
 pub(crate) mod layer;
 mod ordered_float;
 mod quantization;
+mod quantized_precision;
+mod quantized_traversal;
 pub(crate) mod rabitq_precision;
-mod rabitq_traversal;
 mod search;
+pub(crate) mod sq8_precision;
 
 pub use backend_adapter::{NativeHnswBackend, NativeNeighbour};
 pub use distance::{CachedSimdDistance, CpuDistance, DistanceEngine};
-pub use dual_precision::{DualPrecisionConfig, DualPrecisionHnsw};
 pub(crate) use graph::ResumableSearch;
 pub use graph::{NativeHnsw, DEFAULT_ALPHA, NO_ENTRY_POINT};
 // Re-exported so sibling modules (notably `crate::gpu::gpu_csr` and its
@@ -68,16 +67,17 @@ pub(crate) use graph::locking::{
     record_lock_release as hnsw_record_lock_release,
 };
 pub use layer::{Layer, NodeId};
+pub use ordered_float::OrderedFloat;
 pub use quantization::{QuantizedVector, QuantizedVectorStore, ScalarQuantizer};
-pub use rabitq_precision::{RaBitQPrecisionConfig, RaBitQPrecisionHnsw};
+pub use quantized_precision::{QuantizedPrecisionHnsw, TraversalCodec};
+pub use rabitq_precision::{RaBitQCodec, RaBitQPrecisionConfig, RaBitQPrecisionHnsw};
 pub use search::SearchResult;
+pub use sq8_precision::{Sq8Codec, Sq8PrecisionConfig, Sq8PrecisionHnsw};
 
 #[cfg(test)]
 mod backend_adapter_tests;
 #[cfg(test)]
 mod distance_tests;
-#[cfg(test)]
-mod dual_precision_tests;
 #[cfg(test)]
 mod graph_tests;
 #[cfg(test)]
@@ -85,10 +85,14 @@ mod layer_tests;
 #[cfg(test)]
 mod ordered_float_tests;
 #[cfg(test)]
+mod precision_test_support;
+#[cfg(test)]
 mod quantization_tests;
 #[cfg(test)]
 mod rabitq_precision_tests;
 #[cfg(test)]
 mod search_pipeline_tests;
+#[cfg(test)]
+mod sq8_precision_tests;
 #[cfg(test)]
 mod tests;
