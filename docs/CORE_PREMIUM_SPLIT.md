@@ -160,4 +160,4 @@ provenance** — not re-architect.
 
 ---
 
-*Last updated: 2026-08-08 · Applies to: velesdb-core 5.1.0 (this stamp tracks the document revision, not a re-verification of the split).*
+*Last updated: 2026-08-08 · Applies to: velesdb-core 5.2.0 (this stamp tracks the document revision, not a re-verification of the split).*

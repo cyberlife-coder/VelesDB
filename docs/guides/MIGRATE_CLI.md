@@ -275,4 +275,4 @@ elsewhere) before re-running.
 
 ---
 
-`velesdb-migrate v5.1.0` · Last updated: 2026-08-13 · Applies to: velesdb-core 5.1.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)
+`velesdb-migrate v5.1.0` · Last updated: 2026-08-13 · Applies to: velesdb-core 5.2.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)

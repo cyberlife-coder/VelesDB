@@ -180,4 +180,4 @@ the remaining debt is. Read these when you need the *why* behind a behaviour.
 *VelesDB — the explainable, local-first memory engine for AI agents. (Microsecond vector search is the proof, not the pitch.)*
 
 ---
-Last updated: 2026-08-20 · Applies to: velesdb-core 5.1.0
+Last updated: 2026-08-20 · Applies to: velesdb-core 5.2.0
