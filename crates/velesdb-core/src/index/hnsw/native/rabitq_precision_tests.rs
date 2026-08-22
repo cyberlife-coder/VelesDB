@@ -140,3 +140,14 @@ fn test_rabitq_cosine_rerank_keeps_best_candidates() {
 fn test_rabitq_dot_product_rerank_keeps_best_candidates() {
     run_rabitq_self_query(DistanceMetric::DotProduct);
 }
+
+/// Cosine binary traversal must survive an unnormalized query — codes and
+/// prepared query live in the same (stored, unit-norm) space. Before the
+/// codec unification, live inserts encoded the RAW vector while the
+/// restore path re-encoded the normalized stored form; the centroid
+/// subtraction in the encoding is not scale-invariant, so the two
+/// diverged on cosine collections. This pins the aligned behavior.
+#[test]
+fn test_rabitq_cosine_unnormalized_query_matches_normalized() {
+    suite::check_cosine_scale_invariance::<RaBitQCodec>(64);
+}

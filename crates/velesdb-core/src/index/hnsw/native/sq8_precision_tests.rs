@@ -112,7 +112,7 @@ fn test_sq8_precision_config_defaults() {
     assert_eq!(config.oversampling_ratio, 4);
     assert_eq!(config.min_index_size, 10_000);
 
-    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
+    let engine = CachedSimdDistance::new_prenormalized(DistanceMetric::Euclidean, 32);
     let hnsw = Sq8PrecisionHnsw::new(engine, 32, 16, 100, 1000).expect("test");
     for i in 0..50 {
         let v: Vec<f32> = (0..32).map(|j| (i * 32 + j) as f32).collect();
@@ -137,7 +137,7 @@ fn test_sq8_precision_config_defaults() {
 /// pass-through: no training, and search identical to the exact path.
 #[test]
 fn test_sq8_unsupported_metric_stays_exact_f32() {
-    let engine = CachedSimdDistance::new(DistanceMetric::DotProduct, 32);
+    let engine = CachedSimdDistance::new_prenormalized(DistanceMetric::DotProduct, 32);
     let hnsw = Sq8PrecisionHnsw::new(engine, 32, 16, 100, 100).expect("test");
 
     // Past the lazy-train threshold — a supported metric would have trained.
@@ -170,7 +170,7 @@ fn test_sq8_unsupported_metric_stays_exact_f32() {
 /// metric instead of installing a store the traversal would misuse.
 #[test]
 fn test_sq8_install_refused_on_unsupported_metric() {
-    let engine = CachedSimdDistance::new(DistanceMetric::Hamming, 8);
+    let engine = CachedSimdDistance::new_prenormalized(DistanceMetric::Hamming, 8);
     let hnsw = Sq8PrecisionHnsw::new(engine, 8, 16, 100, 1000).expect("test");
     for i in 0..10 {
         let v: Vec<f32> = (0..8).map(|j| ((i + j) % 2) as f32).collect();
@@ -215,25 +215,10 @@ fn test_int8_cosine_rerank_keeps_best_candidates() {
     }
 }
 
-/// Cosine int8 traversal must survive an UNNORMALIZED query: the backend
-/// normalizes before quantizing (codes are built from stored unit-norm
-/// vectors), so scaling the query must not change the result set.
+/// Cosine int8 traversal must survive an unnormalized query.
 #[test]
 fn test_int8_cosine_unnormalized_query_matches_normalized() {
-    let (dim, k) = (32, 10);
-    let (hnsw, vectors) = suite::trained_planted_backend::<Sq8Codec>(DistanceMetric::Cosine, dim);
-    let query = &vectors[suite::PLANTED_QUERY_ID];
-
-    let scaled: Vec<f32> = query.iter().map(|x| x * 37.5).collect();
-    let from_unit = hnsw.search_with_config(query, k, 100, &int8_path_config());
-    let from_scaled = hnsw.search_with_config(&scaled, k, 100, &int8_path_config());
-
-    let unit_ids: Vec<usize> = from_unit.iter().map(|&(id, _)| id).collect();
-    let scaled_ids: Vec<usize> = from_scaled.iter().map(|&(id, _)| id).collect();
-    assert_eq!(
-        unit_ids, scaled_ids,
-        "cosine is scale-invariant: int8 traversal must not depend on query norm"
-    );
+    suite::check_cosine_scale_invariance::<Sq8Codec>(32);
 }
 
 // =========================================================================
@@ -246,7 +231,7 @@ fn test_int8_cosine_unnormalized_query_matches_normalized() {
 #[test]
 fn test_concurrent_inserts_and_search_keep_store_aligned() {
     let (dim, per_thread, threads) = (16, 60, 4);
-    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, dim);
+    let engine = CachedSimdDistance::new_prenormalized(DistanceMetric::Euclidean, dim);
     // training_sample_size = min(1000, 100) = 100 < total inserts (240),
     // so training fires mid-flight under contention.
     let hnsw = Arc::new(Sq8PrecisionHnsw::new(engine, dim, 16, 100, 100).expect("test"));

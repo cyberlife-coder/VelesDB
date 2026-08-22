@@ -22,7 +22,7 @@ fn euclidean_backend<C: TraversalCodec>(
     ef_construction: usize,
     max_elements: usize,
 ) -> Backend<C> {
-    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, dim);
+    let engine = CachedSimdDistance::new_prenormalized(DistanceMetric::Euclidean, dim);
     Backend::<C>::new(engine, dim, max_connections, ef_construction, max_elements).expect("test")
 }
 
@@ -41,7 +41,7 @@ pub(super) fn trained_planted_backend<C: TraversalCodec>(
     metric: DistanceMetric,
     dim: usize,
 ) -> (Backend<C>, Vec<Vec<f32>>) {
-    let engine = CachedSimdDistance::new(metric, dim);
+    let engine = CachedSimdDistance::new_prenormalized(metric, dim);
     let hnsw = Backend::<C>::new(engine, dim, 16, 200, 1000).expect("test");
     let vectors = planted_unit_vectors(100, dim, PLANTED_QUERY_ID);
     for v in &vectors {
@@ -379,12 +379,35 @@ pub(super) fn check_below_min_index_fallback<C: TraversalCodec>(dim: usize) {
     );
 }
 
+/// Cosine traversal must survive an UNNORMALIZED query: codes are built
+/// from the prepared (unit-norm) stored form and the query is prepared the
+/// same way before any codec sees it, so scaling the query must not change
+/// the result set. Pins the encode/prepare-space alignment for every codec
+/// (`RaBitQ`'s centroid subtraction is not scale-invariant, so encoding raw
+/// inputs would break exactly this property).
+pub(super) fn check_cosine_scale_invariance<C: TraversalCodec>(dim: usize) {
+    let k = 10;
+    let (hnsw, vectors) = trained_planted_backend::<C>(DistanceMetric::Cosine, dim);
+    let query = &vectors[PLANTED_QUERY_ID];
+
+    let scaled: Vec<f32> = query.iter().map(|x| x * 37.5).collect();
+    let from_unit = hnsw.search_bounded(query, k, 100, C::DEFAULT_OVERSAMPLING, 0);
+    let from_scaled = hnsw.search_bounded(&scaled, k, 100, C::DEFAULT_OVERSAMPLING, 0);
+
+    let unit_ids: Vec<usize> = from_unit.iter().map(|&(id, _)| id).collect();
+    let scaled_ids: Vec<usize> = from_scaled.iter().map(|&(id, _)| id).collect();
+    assert_eq!(
+        unit_ids, scaled_ids,
+        "cosine is scale-invariant: quantized traversal must not depend on query norm"
+    );
+}
+
 /// Recall contract on the wired default path: recall@10 >= 0.95 on 10K
 /// vectors through `search()` (quantizer auto-trained at 1000 inserts,
 /// quantized traversal active at the codec's default activation size).
 pub(super) fn check_recall_10k<C: TraversalCodec>() {
     let (dim, n, k, ef_search) = (128, 10_000, 10, 200);
-    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, dim);
+    let engine = CachedSimdDistance::new_prenormalized(DistanceMetric::Euclidean, dim);
     let hnsw = Backend::<C>::new(engine, dim, 32, 200, n).expect("test");
 
     let vectors: Vec<Vec<f32>> = (0..n)

@@ -52,7 +52,7 @@ enum HnswBackend {
 /// This is the native equivalent of `HnswInner`, using our own HNSW implementation
 /// instead of `hnsw_rs`. It provides the same API for seamless integration.
 pub struct NativeHnswInner {
-    /// The underlying HNSW backend (standard or `RaBitQ`).
+    /// The underlying HNSW backend (Standard, `RaBitQ`, or SQ8).
     backend: HnswBackend,
     /// The distance metric used.
     #[allow(dead_code)] // Reason: Exposed via `metric()` accessor — API surface for callers
@@ -62,8 +62,9 @@ pub struct NativeHnswInner {
 impl NativeHnswInner {
     /// Creates a new `NativeHnswInner` with a specific storage mode.
     ///
-    /// When `storage_mode` is [`StorageMode::RaBitQ`], the backend uses binary
-    /// graph traversal for 32x bandwidth reduction during search.
+    /// [`StorageMode::RaBitQ`] selects the binary-traversal backend and
+    /// [`StorageMode::SQ8`] the int8-traversal backend; every other mode
+    /// runs the Standard f32 backend.
     ///
     /// # Errors
     ///
@@ -563,10 +564,11 @@ impl NativeHnswInner {
 
     /// Loads the HNSW graph with a specific storage mode.
     ///
-    /// When `storage_mode` is [`crate::StorageMode::RaBitQ`], wraps the
-    /// loaded graph in a `RaBitQPrecisionHnsw`. The quantizer is NOT trained
-    /// here — callers restore a persisted quantizer via
-    /// [`Self::install_trained_rabitq`] or let it train lazily from inserts.
+    /// A quantized `storage_mode` ([`crate::StorageMode::RaBitQ`] or
+    /// [`crate::StorageMode::SQ8`]) wraps the loaded graph in the matching
+    /// backend. The quantizer is NOT trained here — callers restore a
+    /// persisted artifact via [`Self::install_trained_rabitq`] /
+    /// [`Self::install_trained_sq8`] or let it train lazily from inserts.
     ///
     /// # Errors
     ///

@@ -57,11 +57,15 @@ impl TraversalCodec for RaBitQCodec {
     const MAX_DIST: OrderedFloat = OrderedFloat(f32::MAX);
     const DEFAULT_OVERSAMPLING: usize = 6;
     const DEFAULT_MIN_INDEX_SIZE: usize = 5000;
-    /// `RaBitQ` encodes the raw caller slice: its estimator is evaluated
-    /// against a rotation of the raw query, so codes and query stay in the
-    /// same (raw) space. This also keeps the on-disk `rabitq.idx` encoding
-    /// bit-compatible with every index written before this refactor.
-    const ENCODES_PREPARED: bool = false;
+    /// `RaBitQ` encodes the prepared (stored) vector form. The encoding
+    /// subtracts a centroid before rotating, so it is NOT scale-invariant —
+    /// and the restore/install path re-encodes from the graph's stored
+    /// vectors, which ARE the prepared form (unit-norm for cosine engines).
+    /// Encoding the raw slice on live inserts (the pre-codec behavior) made
+    /// live-built codes diverge from reopen-built codes on cosine
+    /// collections. Codes are never persisted (only the quantizer is, in
+    /// `rabitq.idx`), so this alignment has no on-disk compatibility cost.
+    const ENCODES_PREPARED: bool = true;
 
     fn supports_metric(_metric: crate::DistanceMetric) -> bool {
         // The estimator approximates the engine's own distance via the
@@ -111,10 +115,12 @@ impl TraversalCodec for RaBitQCodec {
 
     fn prepare(
         quantizer: &Self::Quantizer,
-        raw: &[f32],
-        _prepared: &[f32],
+        _raw: &[f32],
+        prepared: &[f32],
     ) -> Option<Self::Prepared> {
-        quantizer.prepare_query(raw)
+        // Same space as the codes (see ENCODES_PREPARED): the query is
+        // rotated in the prepared form the stored vectors live in.
+        quantizer.prepare_query(prepared)
     }
 
     fn distance(

@@ -180,6 +180,11 @@ fn asymmetric_remainder_sum(
 }
 
 /// Quantization parameters learned from training data.
+///
+/// This is the TRAINED per-dimension quantizer the SQ8 HNSW backend runs
+/// on — not to be confused with [`crate::quantization::QuantizedVector`],
+/// the standalone per-vector min/max codec (each vector carries its own
+/// range, no training, no shared parameters).
 #[derive(Debug, Clone)]
 pub struct ScalarQuantizer {
     /// Minimum value per dimension
@@ -193,6 +198,11 @@ pub struct ScalarQuantizer {
 }
 
 /// Quantized vector storage (int8 per dimension).
+///
+/// Codes only — the shared per-dimension parameters live in the
+/// [`ScalarQuantizer`] that produced them. Distinct from the
+/// self-describing [`crate::quantization::QuantizedVector`] primitive,
+/// which embeds a per-vector min/max instead.
 #[derive(Debug, Clone)]
 pub struct QuantizedVector {
     /// Quantized values [0, 255]
@@ -427,7 +437,6 @@ impl ScalarQuantizer {
     }
 
     /// Validates a decoded artifact and rebuilds the derived `inv_scales`.
-    #[allow(clippy::needless_pass_by_value)] // Reason: consumes the decoded artifact
     fn from_persisted(persisted: PersistedScalarQuantizer) -> Result<Self, crate::error::Error> {
         let PersistedScalarQuantizer {
             dimension,

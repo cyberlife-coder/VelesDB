@@ -56,6 +56,13 @@ impl Default for Sq8PrecisionConfig {
 
 /// SQ8 traversal codec: one u8 per dimension against a trained
 /// per-dimension min/scale, compared with integer squared L2.
+///
+/// The traversal distance is the SYMMETRIC kernel (query quantized once,
+/// then pure u8/u32 integer arithmetic per candidate) rather than the
+/// asymmetric f32-query variant: the integer kernel reads no per-dimension
+/// f32 parameters in the hot loop, and the coarse-rank error it introduces
+/// is absorbed by oversampling + exact f32 re-ranking (the recall@10 >=
+/// 0.95 contract is pinned on the default configuration).
 pub struct Sq8Codec;
 
 impl TraversalCodec for Sq8Codec {

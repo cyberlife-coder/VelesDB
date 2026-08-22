@@ -891,7 +891,7 @@ fn test_execute_train_sq8_installs_into_live_backend() {
         "300 inserts stay below the lazy-train threshold"
     );
 
-    let query = Parser::parse("TRAIN QUANTIZER ON sq8_live WITH (m=4, type=sq8)").unwrap();
+    let query = Parser::parse("TRAIN QUANTIZER ON sq8_live WITH (type=sq8)").unwrap();
     db.execute_query(&query, &std::collections::HashMap::new())
         .unwrap();
 
@@ -921,7 +921,7 @@ fn test_train_sq8_wiring_survives_reopen() {
         db.create_collection("sq8_reopen", 64, DistanceMetric::Euclidean)
             .unwrap();
         seed_sin_vectors(&db, "sq8_reopen", 64, 300);
-        let query = Parser::parse("TRAIN QUANTIZER ON sq8_reopen WITH (m=4, type=sq8)").unwrap();
+        let query = Parser::parse("TRAIN QUANTIZER ON sq8_reopen WITH (type=sq8)").unwrap();
         db.execute_query(&query, &std::collections::HashMap::new())
             .unwrap();
         assert_eq!(db.flush_all(), 0, "flush before reopen must succeed");
@@ -1007,7 +1007,7 @@ fn test_train_sq8_rejected_on_unsupported_metric() {
         .unwrap();
     seed_sin_vectors(&db, "sq8_dot", 16, 50);
 
-    let query = Parser::parse("TRAIN QUANTIZER ON sq8_dot WITH (m=4, type=sq8)").unwrap();
+    let query = Parser::parse("TRAIN QUANTIZER ON sq8_dot WITH (type=sq8)").unwrap();
     let err = db
         .execute_query(&query, &std::collections::HashMap::new())
         .expect_err("sq8 training on DotProduct must be rejected");

@@ -2657,9 +2657,9 @@ TRAIN QUANTIZER ON <collection> WITH (<parameters>)
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `m` | integer | 8 | Number of subspaces |
-| `k` | integer | 256 | Codebook size per subspace |
-| `type` | string | -- | Quantizer type: `pq`, `opq`, `rabitq`, `sq8` |
+| `m` | integer | -- (required for `pq`/`opq`) | Number of subspaces (ignored by `rabitq`/`sq8`) |
+| `k` | integer | 256 | Codebook size per subspace (`pq`/`opq` only) |
+| `type` | string | `pq` | Quantizer type: `pq`, `opq`, `rabitq`, `sq8` |
 | `oversampling` | integer | -- | Training oversampling ratio |
 | `sample` | integer | -- | Number of vectors to sample |
 | `force` | boolean | false | Force retrain if exists |

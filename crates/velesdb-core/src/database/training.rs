@@ -42,11 +42,28 @@ impl Database {
         match train_params.train_type.as_str() {
             "pq" => Self::train_pq(&collection, &vectors, &train_params),
             "opq" => Self::train_opq(&collection, &vectors, &train_params),
-            "rabitq" => Self::train_rabitq(&collection, &vectors, dim),
+            "rabitq" => Self::train_rabitq(&collection, vectors, dim),
             "sq8" => Self::train_sq8(&collection, vectors, dim),
             other => Err(Error::InvalidQuantizerConfig(format!(
                 "unknown quantizer type: '{other}'. Supported: pq, opq, rabitq, sq8"
             ))),
+        }
+    }
+
+    /// Normalizes training vectors in place for cosine collections.
+    ///
+    /// The traversal backends encode the prepared (stored) vector form,
+    /// which for cosine engines is unit-normalized — so the quantizer must
+    /// be trained on the same form, or its centroid/ranges would describe a
+    /// space no stored code lives in. A no-op for every other metric.
+    fn normalize_training_for_cosine(
+        collection: &crate::collection::Collection,
+        vectors: &mut [Vec<f32>],
+    ) {
+        if collection.config().metric == crate::DistanceMetric::Cosine {
+            for vector in vectors.iter_mut() {
+                crate::simd_native::normalize_inplace_native(vector);
+            }
         }
     }
 
@@ -181,10 +198,11 @@ impl Database {
     /// rebuilds the backend from the storage mode and reloads `rabitq.idx`).
     fn train_rabitq(
         collection: &crate::collection::Collection,
-        vectors: &[Vec<f32>],
+        mut vectors: Vec<Vec<f32>>,
         dim: usize,
     ) -> Result<Vec<SearchResult>> {
-        let rbq = crate::quantization::RaBitQIndex::train(vectors, 42)
+        Self::normalize_training_for_cosine(collection, &mut vectors);
+        let rbq = crate::quantization::RaBitQIndex::train(&vectors, 42)
             .map_err(|e| Error::TrainingFailed(e.to_string()))?;
 
         rbq.save(collection.data_path())
@@ -232,11 +250,7 @@ impl Database {
                 "SQ8 traversal supports euclidean and cosine metrics, not {metric:?}"
             )));
         }
-        if metric == crate::DistanceMetric::Cosine {
-            for vector in &mut vectors {
-                crate::simd_native::normalize_inplace_native(vector);
-            }
-        }
+        Self::normalize_training_for_cosine(collection, &mut vectors);
 
         let refs: Vec<&[f32]> = vectors.iter().map(Vec::as_slice).collect();
         let quantizer = crate::index::hnsw::native::ScalarQuantizer::train(&refs)
@@ -349,7 +363,15 @@ impl TrainParams {
     }
 
     /// Validates basic constraints (m > 0, k > 0).
+    ///
+    /// Only PQ/OPQ consume `m` and `k`; `rabitq` and `sq8` derive everything
+    /// from the vectors themselves, so demanding a dummy `m` for them was an
+    /// incoherence, not a safeguard. Unknown types fall through — the
+    /// dispatch rejects them with the full supported list.
     fn validate_basic(&self) -> Result<()> {
+        if !matches!(self.train_type.as_str(), "pq" | "opq") {
+            return Ok(());
+        }
         if self.m == 0 {
             return Err(Error::InvalidQuantizerConfig(
                 "m (num_subspaces) must be > 0".into(),

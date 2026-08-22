@@ -13,6 +13,11 @@ use super::QuantizationCodec;
 ///
 /// Each f32 value is mapped to a u8 (0-255) using min/max scaling.
 /// The original value can be reconstructed as: `value = (data[i] / 255.0) * (max - min) + min`
+///
+/// Self-describing per-vector codec (each vector carries its own min/max,
+/// no training) — distinct from the trained per-dimension
+/// `ScalarQuantizer` in `index::hnsw::native` that the SQ8 HNSW backend
+/// traverses on.
 #[derive(Debug, Clone)]
 pub struct QuantizedVector {
     /// Quantized data (1 byte per dimension instead of 4).
