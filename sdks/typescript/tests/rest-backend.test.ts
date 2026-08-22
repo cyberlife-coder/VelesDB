@@ -270,6 +270,63 @@ describe('RestBackend', () => {
       );
     });
 
+    it('forwards sparseVector as sparse_vector on upsert', async () => {
+      // Pinned defect: the REST upsert silently dropped sparseVector while
+      // the server accepts it and the streaming backend forwarded it —
+      // producing an empty sparse index and degraded hybrid search.
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({}),
+      });
+
+      await backend.upsert('test', {
+        id: 1,
+        vector: [1.0, 0.0],
+        payload: { title: 'Test' },
+        sparseVector: { 10: 0.5, 42: 1.25 },
+      });
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://localhost:8080/collections/test/points',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            points: [{
+              id: 1,
+              vector: [1.0, 0.0],
+              payload: { title: 'Test' },
+              sparse_vector: { '10': 0.5, '42': 1.25 },
+            }],
+          }),
+        })
+      );
+    });
+
+    it('forwards sparseVector per point on upsertBatch', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({}),
+      });
+
+      await backend.upsertBatch('test', [
+        { id: 1, vector: [1.0, 0.0], sparseVector: { 7: 2.0 } },
+        { id: 2, vector: [0.0, 1.0] },
+      ]);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://localhost:8080/collections/test/points',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            points: [
+              { id: 1, vector: [1.0, 0.0], sparse_vector: { '7': 2.0 } },
+              { id: 2, vector: [0.0, 1.0] },
+            ],
+          }),
+        })
+      );
+    });
+
     it('should search vectors', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
