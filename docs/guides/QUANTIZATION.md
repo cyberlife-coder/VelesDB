@@ -221,6 +221,14 @@ OPQ applies an orthogonal rotation to the vectors before PQ quantization. This r
 > 1000-insertion threshold) is also persisted to `rabitq.idx` on a full
 > flush, at parity with the PQ codebook.
 
+> **Resident-memory caveat:** the RaBitQ backend keeps the full-precision
+> f32 vectors in the index for exact re-ranking, with the 1-bit codes held
+> *alongside* them. The 32x figure is the size of the codes, not of the
+> resident set — today the mode buys traversal speed (32x memory-bandwidth
+> reduction in the hot loop), not a smaller RAM floor. A codes-resident
+> variant for small-RAM devices is part of
+> [#2112](https://github.com/cyberlife-coder/VelesDB/issues/2112).
+
 ### How does it work?
 
 RaBitQ combines binary compression (1 bit per dimension) with a **random orthogonal rotation** that preserves distances. Unlike naive binary quantization, the orthogonal rotation spreads the information more uniformly across all bits.
@@ -265,7 +273,7 @@ status callouts above) — the SQ8/Binary collection modes behave as `full`.
 |----------|----------------|
 | **General production** | f32 (default) — SQ8 adds nothing until [#2112](https://github.com/cyberlife-coder/VelesDB/issues/2112) lands |
 | **Large dataset (100K+)** | PQ m=8 + rescore |
-| **Very limited RAM** | RaBitQ |
+| **Very limited RAM** | f32 with modest HNSW `M` — no current mode shrinks the resident set (see [#2112](https://github.com/cyberlife-coder/VelesDB/issues/2112)) |
 | **Maximum precision** | f32 (no quantization) |
 | **High compression + good recall** | RaBitQ |
 | **Fingerprints/hashes** | `BinaryQuantizedVector` primitives (direct use) |
