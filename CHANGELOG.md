@@ -7,7 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`StorageMode::SQ8` is a real search-path mode on Euclidean and Cosine.**
+  Collections created with `storage='sq8'` now run the VSAG-style
+  dual-precision HNSW backend: graph traversal compares int8 codes (1
+  byte/dimension read instead of 4) and the final top-k is re-ranked with
+  exact f32 distances (recall@10 >= 0.95 pinned on 10K vectors through the
+  default configuration). The quantizer trains lazily after 1000 inserts or
+  via the new `TRAIN QUANTIZER ... WITH (type=sq8)`, persists to `sq8.idx`
+  (lazy training persists on each full flush, parity with RaBitQ), and is
+  re-installed on reopen before gap recovery. On metrics whose ordering
+  int8 L2 cannot preserve (DotProduct/Hamming/Jaccard) the mode stays exact
+  f32, and `TRAIN QUANTIZER type=sq8` is rejected up front. Resident memory
+  is unchanged: the f32 vectors stay resident for re-ranking and the codes
+  are additive — the codes-resident variant remains #2112 Phase B. (#2112)
+
 ### Changed
+
+- **The `RaBitQ` traversal backend became a codec: one quantized-precision
+  state machine, two codecs.** `RaBitQPrecisionHnsw`'s concurrent
+  insert/train/install machinery and its graph traversal are now the
+  codec-generic `QuantizedPrecisionHnsw<D, C>`/`TraversalCodec` pair, with
+  RaBitQ a behavior-preserving alias over it (same defaults, same lock
+  order, on-disk format unchanged) and SQ8 the second codec. The unwired
+  `DualPrecisionHnsw` prototype and its duplicated traversal loop are
+  deleted; its tests are ported onto the wired backend. (#2112)
 
 - **`StorageMode::SQ8`/`Binary` stopped paying for quantization nobody
   reads.** Every upsert into these modes ran a parallel quantization pass

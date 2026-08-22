@@ -2278,19 +2278,20 @@ CREATE METADATA COLLECTION tags
 | `m` | integer | 16 | HNSW M parameter (max links per node) |
 | `ef_construction` | integer | 200 | HNSW build-time expansion factor |
 
-**Capacity mode vs search-path mode.** The `storage` mode determines whether
-quantization affects only memory or also the search path:
+**What each `storage` mode does to the search path:**
 
 | `storage` | Kind | Collection search path |
 |-----------|------|------------------------|
 | `full` | full-precision | f32 (baseline) |
-| `sq8` | **Capacity Mode** | full-precision f32 — memory only, no throughput gain |
-| `binary` | **Capacity Mode** | full-precision f32 — memory only, no throughput gain |
+| `sq8` | search-path mode | int8 traversal + exact f32 re-rank (Euclidean/Cosine; other metrics stay f32) |
+| `binary` | full-precision | f32 — behaves as `full` today, no search-path change |
 | `pq` | search-path mode | ADC-rescored (wired) |
 | `rabitq` | search-path mode | quantized traversal (wired end-to-end) |
 
-Choose `sq8`/`binary` for memory savings only; choose `rabitq` (or `pq`, via
-`TRAIN QUANTIZER`) for a quantized search path.
+Choose `rabitq`, `sq8` (Euclidean/Cosine) or `pq` (via `TRAIN QUANTIZER`)
+for a quantized search path. All quantized paths keep the f32 vectors
+resident for exact re-ranking, so none of them shrinks the resident-memory
+floor.
 
 #### Schema Type Names
 
@@ -2658,7 +2659,7 @@ TRAIN QUANTIZER ON <collection> WITH (<parameters>)
 |-----------|------|---------|-------------|
 | `m` | integer | 8 | Number of subspaces |
 | `k` | integer | 256 | Codebook size per subspace |
-| `type` | string | -- | Quantizer type: `pq`, `opq`, `rabitq` |
+| `type` | string | -- | Quantizer type: `pq`, `opq`, `rabitq`, `sq8` |
 | `oversampling` | integer | -- | Training oversampling ratio |
 | `sample` | integer | -- | Number of vectors to sample |
 | `force` | boolean | false | Force retrain if exists |
@@ -2692,14 +2693,18 @@ TRAIN QUANTIZER ON my_collection WITH (m = 8, k = 256);
 - Re-training overwrites the existing quantizer.
 - OPQ can be enabled via the `type` parameter.
 - Trained quantizers are persisted in the collection directory
-  (`codebook.pq` / `rotation.opq` for PQ/OPQ, `rabitq.idx` for RaBitQ) and
-  restored on database open: the PQ cache and RaBitQ encodings are rebuilt
-  by re-encoding the stored vectors (O(n) at open).
-- `type = rabitq` also installs the trained quantizer into the live index
-  when the collection was created with `storage = 'rabitq'`. For
-  collections created with another storage mode, training persists the
-  index and flips the collection's storage mode; the RaBitQ backend takes
-  effect at the next open.
+  (`codebook.pq` / `rotation.opq` for PQ/OPQ, `rabitq.idx` for RaBitQ,
+  `sq8.idx` for SQ8) and restored on database open: the PQ cache and the
+  RaBitQ/SQ8 encodings are rebuilt by re-encoding the stored vectors (O(n)
+  at open).
+- `type = rabitq` and `type = sq8` also install the trained quantizer into
+  the live index when the collection was created with the matching storage
+  mode. For collections created with another storage mode, training
+  persists the artifact and flips the collection's storage mode; the
+  quantized backend takes effect at the next open.
+- `type = sq8` is accepted only on Euclidean and Cosine collections — the
+  int8 traversal distance cannot preserve the ordering of the other
+  metrics, and training on them is rejected.
 
 ---
 

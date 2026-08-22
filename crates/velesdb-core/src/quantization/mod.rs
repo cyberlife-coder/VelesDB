@@ -13,13 +13,14 @@
 //! ## Engine integration status
 //!
 //! The figures above describe the quantization primitives themselves. In the
-//! collection query path: `RaBitQ` (binary traversal backend) and PQ (ADC
-//! rescoring) are wired end-to-end. Persistence across reopens covers
-//! TRAIN-QUANTIZER-produced artifacts (`rabitq.idx`, `codebook.pq`); a PQ
-//! quantizer trained lazily from inserts (no TRAIN statement) is in-memory
-//! only and retrains after a restart. SQ8/Binary collection modes currently
-//! maintain caches that no search path consumes — collection search stays
-//! full-precision f32 for those modes. See `docs/guides/QUANTIZATION.md`.
+//! collection query path: `RaBitQ` (binary traversal backend), SQ8 (int8
+//! traversal backend, Euclidean/Cosine) and PQ (ADC rescoring) are wired
+//! end-to-end. Persistence across reopens covers TRAIN-QUANTIZER-produced
+//! artifacts (`rabitq.idx`, `sq8.idx`, `codebook.pq`) plus lazily-trained
+//! `RaBitQ`/SQ8 quantizers (persisted by the full flush); a PQ quantizer
+//! trained lazily from inserts (no TRAIN statement) is in-memory only and
+//! retrains after a restart. The Binary collection mode stays full-precision
+//! f32 in the search path. See `docs/guides/QUANTIZATION.md`.
 
 use std::io;
 
@@ -119,17 +120,18 @@ pub const STORAGE_MODE_NAMES: &[&str] = &["full", "sq8", "binary", "pq", "rabitq
 /// | Mode | Collection storage + search path |
 /// |------|----------------------------------|
 /// | `Full` | f32 (baseline) |
-/// | `SQ8` | f32 — behaves as `Full` today; int8 traversal tracked in #2112 |
+/// | `SQ8` | int8 graph traversal + exact f32 re-ranking (Euclidean/Cosine; other metrics stay f32) |
 /// | `Binary` | f32 — behaves as `Full` today (use `RaBitQ` for compressed search) |
 /// | `ProductQuantization` | f32 storage + ADC-rescored search (wired) |
 /// | `RaBitQ` | quantized traversal, wired end-to-end |
 ///
-/// **Search-path modes (`RaBitQ`, `ProductQuantization`)** are the quantized
-/// paths wired into the query hot path. `SQ8` and `Binary` are accepted and
-/// persisted so the intent survives a reopen, but they change neither memory
-/// use nor throughput yet — the earlier "Capacity Mode" framing overstated
-/// them (they filled quantized side-caches that no search path ever read).
-/// See `docs/guides/QUANTIZATION.md`.
+/// **Search-path modes (`RaBitQ`, `SQ8`, `ProductQuantization`)** are the
+/// quantized paths wired into the query hot path. All of them keep the f32
+/// vectors resident for exact re-ranking, so none of them shrinks the
+/// resident-memory floor — the codes are additive (see the resident-memory
+/// note in `docs/guides/QUANTIZATION.md`). `Binary` is accepted and
+/// persisted so the intent survives a reopen, but changes neither memory
+/// use nor the search path today.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
@@ -137,12 +139,15 @@ pub enum StorageMode {
     /// Full precision f32 storage (default).
     #[default]
     Full,
-    /// Accepted and persisted, but currently behaves exactly like [`Full`]:
-    /// vectors are stored and searched full-precision f32 — no memory gain,
-    /// no throughput gain. The SQ8 codec ([`QuantizedVector`]) and an int8
-    /// traversal engine exist in-tree; wiring them into an HNSW backend (the
-    /// `RaBitQ` pattern) is tracked in issue #2112. Selecting this mode today
-    /// reserves the intent without changing behavior.
+    /// 8-bit scalar quantization. Search-path mode for Euclidean and Cosine:
+    /// graph traversal compares int8 codes (1 byte/dimension read instead of
+    /// 4) and the final top-k is re-ranked with exact f32 distances. The
+    /// quantizer trains lazily after 1000 inserts (or via `TRAIN QUANTIZER
+    /// type=sq8`) and persists to `sq8.idx`; traversal engages at 10 000+
+    /// vectors, below which search stays exact f32. On other metrics (int8
+    /// L2 cannot preserve their ordering) the collection behaves as
+    /// [`Full`]. Resident memory is NOT reduced: f32 vectors stay resident
+    /// for re-ranking and the codes are additive.
     ///
     /// [`Full`]: StorageMode::Full
     SQ8,

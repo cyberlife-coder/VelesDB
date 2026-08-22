@@ -26,28 +26,38 @@ The compression figures above describe the quantization **primitives**. In the
 | Storage mode | Collection storage + search path |
 |--------------|----------------------------------|
 | `full` | f32 (baseline) |
-| `sq8` | f32 — behaves as `full` today; int8 traversal tracked in [#2112](https://github.com/cyberlife-coder/VelesDB/issues/2112) |
+| `sq8` | int8 graph traversal + exact f32 re-ranking (Euclidean/Cosine; other metrics stay f32) |
 | `binary` | f32 — behaves as `full` today |
 | `pq` | f32 storage + ADC-rescored search (wired) |
 | `rabitq` | quantized traversal (wired end-to-end) |
 
-Pick `rabitq` (or `pq`) when you want a quantized query hot path. `sq8` and
-`binary` are accepted and persisted so the intent survives a reopen, but they
-currently change neither memory use nor throughput.
+Pick `rabitq`, `sq8` (Euclidean/Cosine) or `pq` when you want a quantized
+query hot path. `binary` is accepted and persisted so the intent survives a
+reopen, but currently changes neither memory use nor the search path — use
+`rabitq` for a real 1-bit query path.
 
 ---
 
 ## 🚀 SQ8: 4x Compression
 
-> **Status: collection mode behaves as `full`.**
-> A collection in `storage='sq8'` mode stores and searches full-precision
-> f32 vectors. (Earlier releases also filled an SQ8 side-cache at insertion
-> time that no search path ever read — pure CPU + unbounded RAM cost — so
-> that cache was removed.) Wiring the in-tree int8 traversal engine into an
-> HNSW backend is tracked in
-> [#2112](https://github.com/cyberlife-coder/VelesDB/issues/2112). The SQ8
-> primitives below (`QuantizedVector`, SIMD distances) are fully functional
-> for direct programmatic use.
+> **Status: wired into the collection query path for Euclidean and Cosine,
+> including across restarts.**
+> A collection created with `storage='sq8'` uses the int8-traversal HNSW
+> backend (`Sq8PrecisionHnsw`): graph traversal reads 1 byte per dimension
+> instead of 4 (4x memory-bandwidth reduction in the hot loop) and the
+> final top-k is re-ranked with exact f32 distances. The quantizer trains
+> lazily after 1000 inserts or explicitly via `TRAIN QUANTIZER` with
+> `type=sq8`; both persist to `sq8.idx` (the lazy one on each full flush)
+> and are re-installed on reopen with an O(n·d) re-encode, mirroring
+> RaBitQ. Int8 traversal engages at 10 000+ vectors; below that, and on
+> metrics whose ordering int8 L2 cannot preserve (DotProduct, Hamming,
+> Jaccard), search stays exact f32.
+
+> **Resident-memory caveat:** same as RaBitQ below — the f32 vectors stay
+> resident for exact re-ranking and the 1-byte codes are held *alongside*
+> them. The 4x figure is the size of the codes, not of the resident set. A
+> codes-resident variant for small-RAM devices is part of
+> [#2112](https://github.com/cyberlife-coder/VelesDB/issues/2112).
 
 Each `f32` value (4 bytes) is converted to a `u8` (1 byte):
 
@@ -262,8 +272,9 @@ The cross-method comparison table (compression, Recall@10, training cost per
 method) moved to the
 [Tuning Guide — When to Use Each Mode](TUNING_GUIDE.md#when-to-use-each-mode),
 the single home for those numbers. Keep in mind the wiring caveat: in the
-collection query path only **RaBitQ** and **PQ** are wired up today (see the
-status callouts above) — the SQ8/Binary collection modes behave as `full`.
+collection query path **RaBitQ**, **SQ8** (Euclidean/Cosine) and **PQ** are
+wired up today (see the status callouts above) — the Binary collection mode
+behaves as `full`.
 
 ---
 
@@ -271,7 +282,7 @@ status callouts above) — the SQ8/Binary collection modes behave as `full`.
 
 | Scenario | Recommendation |
 |----------|----------------|
-| **General production** | f32 (default) — SQ8 adds nothing until [#2112](https://github.com/cyberlife-coder/VelesDB/issues/2112) lands |
+| **General production** | f32 (default); `sq8` on Euclidean/Cosine at 10K+ vectors for a lighter traversal hot loop |
 | **Large dataset (100K+)** | PQ m=8 + rescore |
 | **Very limited RAM** | f32 with modest HNSW `M` — no current mode shrinks the resident set (see [#2112](https://github.com/cyberlife-coder/VelesDB/issues/2112)) |
 | **Maximum precision** | f32 (no quantization) |
@@ -280,9 +291,8 @@ status callouts above) — the SQ8/Binary collection modes behave as `full`.
 | **Correlated data** | PQ + OPQ |
 
 > Note: these recommendations compare the methods as such. In the collection
-> query path, only **RaBitQ** and **PQ** are wired up today (see the status
-> callouts above) — the SQ8/Binary modes maintain caches there that search
-> does not consume yet.
+> query path, **RaBitQ**, **SQ8** (Euclidean/Cosine) and **PQ** are wired up
+> today (see the status callouts above); the Binary mode is not.
 
 ---
 

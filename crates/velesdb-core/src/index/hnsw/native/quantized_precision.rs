@@ -459,7 +459,8 @@ impl<D: DistanceEngine, C: TraversalCodec> QuantizedPrecisionHnsw<D, C> {
     /// vectors snapshot is read and RELEASED before `store.write()`
     /// is taken, preserving the documented order
     /// `quantizer → store → training_buffer`
-    /// (see `docs/CONCURRENCY_MODEL.md` §RaBitQ) and never holding
+    /// (see `docs/CONCURRENCY_MODEL.md` §Quantized-Precision Backend) and
+    /// never holding
     /// `inner.vectors` while waiting on the store lock (a search thread
     /// holds `store.read()` while acquiring `inner.vectors.read()`).
     ///
