@@ -23,6 +23,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is unchanged: the f32 vectors stay resident for re-ranking and the codes
   are additive — the codes-resident variant remains #2112 Phase B. (#2112)
 
+### Removed
+
+- **`DualPrecisionHnsw` and `DualPrecisionConfig`** (public in
+  `index::hnsw::native`). The prototype was wired into no collection path,
+  carried a latent cosine bug (raw query against normalized stored vectors
+  in its rerank), and duplicated the `RaBitQ` traversal loop; its behavior
+  pins moved onto the wired `Sq8PrecisionHnsw`. Also breaking for direct
+  API users: `RaBitQPrecisionHnsw` is now a type alias over the generic
+  backend and its `from_inner` dropped the unused distance-engine
+  parameter.
+
 ### Changed
 
 - **The `RaBitQ` traversal backend became a codec: one quantized-precision

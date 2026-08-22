@@ -104,49 +104,49 @@ impl NativeHnswInner {
         storage_mode: crate::StorageMode,
         alpha: f32,
     ) -> crate::error::Result<Self> {
-        let backend = if matches!(storage_mode, crate::StorageMode::RaBitQ) {
-            let distance = CachedSimdDistance::new_prenormalized(metric, dimension);
-            let rabitq = RaBitQPrecisionHnsw::new_with_alpha(
-                distance,
-                dimension,
-                max_connections,
-                ef_construction,
-                max_elements,
-                alpha,
-            )?;
-            HnswBackend::RaBitQ(Box::new(rabitq))
-        } else if matches!(storage_mode, crate::StorageMode::SQ8) {
-            let distance = CachedSimdDistance::new_prenormalized(metric, dimension);
-            let sq8 = Sq8PrecisionHnsw::new_with_alpha(
-                distance,
-                dimension,
-                max_connections,
-                ef_construction,
-                max_elements,
-                alpha,
-            )?;
-            HnswBackend::Sq8(Box::new(sq8))
-        } else {
-            let distance = CachedSimdDistance::new_prenormalized(metric, dimension);
-            let inner = if dimension > 0 {
-                NativeHnsw::new_with_dimension_and_alpha(
+        let distance = CachedSimdDistance::new_prenormalized(metric, dimension);
+        let backend = match storage_mode {
+            crate::StorageMode::RaBitQ => {
+                HnswBackend::RaBitQ(Box::new(RaBitQPrecisionHnsw::new_with_alpha(
                     distance,
-                    max_connections,
-                    ef_construction,
-                    max_elements,
                     dimension,
-                    alpha,
-                )?
-            } else {
-                NativeHnsw::with_alpha(
-                    distance,
                     max_connections,
                     ef_construction,
                     max_elements,
                     alpha,
-                )
-            };
-            HnswBackend::Standard(inner)
+                )?))
+            }
+            crate::StorageMode::SQ8 => {
+                HnswBackend::Sq8(Box::new(Sq8PrecisionHnsw::new_with_alpha(
+                    distance,
+                    dimension,
+                    max_connections,
+                    ef_construction,
+                    max_elements,
+                    alpha,
+                )?))
+            }
+            _ => {
+                let inner = if dimension > 0 {
+                    NativeHnsw::new_with_dimension_and_alpha(
+                        distance,
+                        max_connections,
+                        ef_construction,
+                        max_elements,
+                        dimension,
+                        alpha,
+                    )?
+                } else {
+                    NativeHnsw::with_alpha(
+                        distance,
+                        max_connections,
+                        ef_construction,
+                        max_elements,
+                        alpha,
+                    )
+                };
+                HnswBackend::Standard(inner)
+            }
         };
 
         Ok(Self { backend, metric })
