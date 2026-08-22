@@ -9,15 +9,13 @@
 //!
 //! # Architecture
 //!
-//! ```text
-//! ┌─────────────────────────────────────────────────────────────┐
-//! │            QuantizedPrecisionHnsw<D, C>                      │
-//! ├─────────────────────────────────────────────────────────────┤
-//! │  inner: NativeHnsw<D>       (graph structure + float32)      │
-//! │  quantizer: C::Quantizer    (trained lazily or installed)    │
-//! │  store: C::Store            (positional codes, entry N = node N) │
-//! └─────────────────────────────────────────────────────────────┘
-//! ```
+//! `QuantizedPrecisionHnsw<D, C>` owns three pieces:
+//!
+//! - `inner: NativeHnsw<D>` — graph structure plus the float32 vectors
+//!   the re-rank reads;
+//! - `quantizer: C::Quantizer` — trained lazily or installed from a
+//!   persisted artifact;
+//! - `store: C::Store` — positional codes, entry N holding node N's code.
 //!
 //! Concrete backends are type aliases over this struct:
 //! [`RaBitQPrecisionHnsw`](super::rabitq_precision::RaBitQPrecisionHnsw)
