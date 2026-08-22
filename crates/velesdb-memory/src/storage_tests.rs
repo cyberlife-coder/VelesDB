@@ -16,7 +16,8 @@ struct RecordingObserver {
 
 impl MutationObserver for RecordingObserver {
     fn before_mutation(&self, key: DirtyKey) -> Result<(), MemoryError> {
-        if let Some(message) = self.failure.lock().clone() {
+        let failure = self.failure.lock().clone();
+        if let Some(message) = failure {
             return Err(MemoryError::MigrationCapture(message));
         }
         self.keys.lock().push(key);
