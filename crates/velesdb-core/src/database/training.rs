@@ -1,5 +1,6 @@
-//! `TRAIN QUANTIZER` statement execution (PQ, OPQ, `RaBitQ`).
+//! `TRAIN QUANTIZER` statement execution (PQ, OPQ, `RaBitQ`, SQ8).
 
+use crate::index::hnsw::native::TraversalCodec;
 use crate::{Error, Result, SearchResult, StorageMode};
 
 use super::Database;
@@ -42,8 +43,9 @@ impl Database {
             "pq" => Self::train_pq(&collection, &vectors, &train_params),
             "opq" => Self::train_opq(&collection, &vectors, &train_params),
             "rabitq" => Self::train_rabitq(&collection, &vectors, dim),
+            "sq8" => Self::train_sq8(&collection, vectors, dim),
             other => Err(Error::InvalidQuantizerConfig(format!(
-                "unknown quantizer type: '{other}'. Supported: pq, opq, rabitq"
+                "unknown quantizer type: '{other}'. Supported: pq, opq, rabitq, sq8"
             ))),
         }
     }
@@ -210,6 +212,61 @@ impl Database {
         })))
     }
 
+    /// Trains an SQ8 scalar quantizer, persists it to `sq8.idx`, and installs
+    /// it into the live index when the collection's HNSW backend is SQ8 —
+    /// mirror of [`Self::train_rabitq`].
+    ///
+    /// The int8 traversal distance is L2 over codes, so training is rejected
+    /// on metrics whose ordering it cannot preserve (everything except
+    /// Euclidean and Cosine — see `Sq8Codec::supports_metric`). For cosine
+    /// collections the index stores unit-normalized vectors, so the quantizer
+    /// trains on the same normalized form.
+    fn train_sq8(
+        collection: &crate::collection::Collection,
+        mut vectors: Vec<Vec<f32>>,
+        dim: usize,
+    ) -> Result<Vec<SearchResult>> {
+        let metric = collection.config().metric;
+        if !crate::index::hnsw::native::Sq8Codec::supports_metric(metric) {
+            return Err(Error::InvalidQuantizerConfig(format!(
+                "SQ8 traversal supports euclidean and cosine metrics, not {metric:?}"
+            )));
+        }
+        if metric == crate::DistanceMetric::Cosine {
+            for vector in &mut vectors {
+                crate::simd_native::normalize_inplace_native(vector);
+            }
+        }
+
+        let refs: Vec<&[f32]> = vectors.iter().map(Vec::as_slice).collect();
+        let quantizer = crate::index::hnsw::native::ScalarQuantizer::train(&refs)
+            .map_err(|e| Error::TrainingFailed(e.to_string()))?;
+
+        quantizer
+            .save(collection.data_path())
+            .map_err(|e| Error::TrainingFailed(e.to_string()))?;
+
+        // Live install: re-encodes the collection's vectors (O(n·d)) so SQ8
+        // traversal activates without a restart.
+        let installed = collection
+            .install_sq8_quantizer(std::sync::Arc::new(quantizer))
+            .map_err(|e| Error::TrainingFailed(e.to_string()))?;
+        if !installed {
+            tracing::debug!(
+                "SQ8 trained on a non-SQ8-backend collection; takes effect at next open"
+            );
+        }
+
+        Self::finalize_pq_config(collection, StorageMode::SQ8, 4)?;
+
+        Ok(train_result_response(serde_json::json!({
+            "status": "trained",
+            "type": "sq8",
+            "dimension": dim,
+            "training_vectors": vectors.len()
+        })))
+    }
+
     /// Updates storage mode and oversampling in config, then persists it.
     fn finalize_pq_config(
         collection: &crate::collection::Collection,
@@ -308,7 +365,7 @@ impl TrainParams {
 
     /// Validates dimension compatibility (dim % m == 0 for PQ/OPQ).
     fn validate_dimension(&self, dim: usize) -> Result<()> {
-        if self.train_type != "rabitq" && !dim.is_multiple_of(self.m) {
+        if !matches!(self.train_type.as_str(), "rabitq" | "sq8") && !dim.is_multiple_of(self.m) {
             return Err(Error::InvalidQuantizerConfig(format!(
                 "dimension {dim} is not divisible by m={}",
                 self.m
