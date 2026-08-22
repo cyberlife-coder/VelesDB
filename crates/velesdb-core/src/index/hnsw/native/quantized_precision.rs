@@ -10,13 +10,13 @@
 //! # Architecture
 //!
 //! ```text
-//! ┌──────────────────────────────────────────────────────────────┐
+//! ┌─────────────────────────────────────────────────────────────┐
 //! │            QuantizedPrecisionHnsw<D, C>                      │
-//! ├──────────────────────────────────────────────────────────────┤
+//! ├─────────────────────────────────────────────────────────────┤
 //! │  inner: NativeHnsw<D>       (graph structure + float32)      │
 //! │  quantizer: C::Quantizer    (trained lazily or installed)    │
 //! │  store: C::Store            (positional codes, entry N = node N) │
-//! └──────────────────────────────────────────────────────────────┘
+//! └─────────────────────────────────────────────────────────────┘
 //! ```
 //!
 //! Concrete backends are type aliases over this struct:
@@ -278,30 +278,7 @@ impl<D: DistanceEngine, C: TraversalCodec> QuantizedPrecisionHnsw<D, C> {
             return self.inner.insert(vector);
         }
 
-        // The prepared form is what the inner graph stores (cosine engines
-        // pre-normalize); codecs whose traversal compares stored codes
-        // symmetrically must encode the same form.
-        let encode_src: std::borrow::Cow<'_, [f32]> = if C::ENCODES_PREPARED {
-            self.inner.prepare_query(vector)
-        } else {
-            std::borrow::Cow::Borrowed(vector)
-        };
-
-        let (node_id, train_due) = {
-            // Hold the install gate (read) for the whole insert so a
-            // concurrent quantizer install/training cannot snapshot the
-            // graph between our trained-check and our graph insert.
-            let _gate = self.install_gate.read();
-            let quantizer_guard = self.quantizer.read();
-            if let Some(quantizer) = quantizer_guard.as_ref().map(Arc::clone) {
-                // Drop read lock BEFORE encoding — holding it blocks training.
-                drop(quantizer_guard);
-                (self.insert_encoded(&quantizer, vector, &encode_src)?, false)
-            } else {
-                drop(quantizer_guard);
-                self.insert_training_phase(vector, &encode_src)?
-            }
-        };
+        let (node_id, train_due) = self.insert_under_install_gate(vector)?;
         // Train OUTSIDE the read gate: train_codec takes the gate for
         // write, which must wait for every in-flight insert (including this
         // one) to finish.
@@ -309,6 +286,41 @@ impl<D: DistanceEngine, C: TraversalCodec> QuantizedPrecisionHnsw<D, C> {
             self.train_codec()?;
         }
         Ok(node_id)
+    }
+
+    /// Runs the graph insert with the install gate held for READ, so a
+    /// concurrent quantizer install/training cannot snapshot the graph
+    /// between our trained-check and our graph insert.
+    ///
+    /// The gate is released when this returns; the caller trains after that.
+    /// Returns the assigned node and whether the training threshold was hit.
+    fn insert_under_install_gate(&self, vector: &[f32]) -> crate::error::Result<(NodeId, bool)> {
+        let encode_src = self.encode_source(vector);
+        let _gate = self.install_gate.read();
+        let quantizer_guard = self.quantizer.read();
+        // Clone the Arc and release the read lock BEFORE encoding — holding
+        // it would block training.
+        let quantizer = quantizer_guard.as_ref().map(Arc::clone);
+        drop(quantizer_guard);
+        match quantizer {
+            Some(quantizer) => Ok((self.insert_encoded(&quantizer, vector, &encode_src)?, false)),
+            None => self.insert_training_phase(vector, &encode_src),
+        }
+    }
+
+    /// The vector form this codec encodes: the prepared (stored) one when
+    /// [`TraversalCodec::ENCODES_PREPARED`], else the raw caller slice.
+    ///
+    /// Cosine engines pre-normalize on insert, so a codec whose traversal
+    /// compares codes symmetrically must encode the stored form or its
+    /// live-built codes would describe a different space than the ones the
+    /// restore path rebuilds from storage.
+    fn encode_source<'a>(&self, vector: &'a [f32]) -> std::borrow::Cow<'a, [f32]> {
+        if C::ENCODES_PREPARED {
+            self.inner.prepare_query(vector)
+        } else {
+            std::borrow::Cow::Borrowed(vector)
+        }
     }
 
     /// Trained-path insert: encodes the vector and pushes the encoding while
