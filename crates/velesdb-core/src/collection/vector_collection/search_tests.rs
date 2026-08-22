@@ -463,3 +463,95 @@ fn test_stream_insert_without_enable_returns_not_configured() {
         "expected NotConfigured, got: {err}"
     );
 }
+
+// ─── hybrid_sparse_search_filtered() ─────────────────────────────────────────
+
+/// Seeds points that carry BOTH a dense vector and a default-index sparse
+/// vector, split across two `cat` values, so the filtered hybrid path has
+/// something to exclude on each branch.
+fn seed_sparse_points(coll: &VectorCollection) {
+    use std::collections::BTreeMap;
+    let mut points = Vec::new();
+    for i in 0u64..8 {
+        #[allow(clippy::cast_precision_loss)]
+        let fi = i as f32;
+        let mut sparse = BTreeMap::new();
+        sparse.insert(
+            String::new(), // default sparse index
+            crate::index::sparse::SparseVector::new(vec![(10, 1.0 + fi), (20, 0.5)]),
+        );
+        points.push(Point {
+            id: i,
+            vector: vec![fi / 8.0, 0.5, 0.3, 0.1],
+            payload: Some(json!({"cat": if i % 2 == 0 { "a" } else { "b" }})),
+            sparse_vectors: Some(sparse),
+        });
+    }
+    coll.upsert(points).unwrap();
+}
+
+/// The metadata filter must bound BOTH branches: no fused result may carry a
+/// point the filter excludes. This pins the defect where the server's hybrid
+/// dense+sparse path never read the request filter.
+#[test]
+fn hybrid_sparse_search_filtered_excludes_filtered_points() {
+    let (coll, _dir) = create_test_vc();
+    seed_sparse_points(&coll);
+
+    let filter = Filter::new(Condition::eq("cat", "a"));
+    let sparse_q = crate::index::sparse::SparseVector::new(vec![(10, 1.0)]);
+    let strategy = crate::fusion::FusionStrategy::rrf_default();
+
+    let filtered = coll
+        .hybrid_sparse_search_filtered(
+            &[0.5, 0.5, 0.3, 0.1],
+            &sparse_q,
+            8,
+            "",
+            &strategy,
+            Some(&filter),
+        )
+        .unwrap();
+    assert!(!filtered.is_empty(), "filtered hybrid search found nothing");
+    for r in &filtered {
+        assert_eq!(
+            r.point.payload.as_ref().unwrap()["cat"],
+            "a",
+            "point {} leaked through the hybrid filter",
+            r.point.id
+        );
+    }
+
+    // Without a filter the excluded category is reachable — proving the
+    // assertion above tested the filter, not the corpus.
+    let unfiltered = coll
+        .hybrid_sparse_search_filtered(&[0.5, 0.5, 0.3, 0.1], &sparse_q, 8, "", &strategy, None)
+        .unwrap();
+    assert!(
+        unfiltered
+            .iter()
+            .any(|r| r.point.payload.as_ref().unwrap()["cat"] == "b"),
+        "corpus setup broken: cat=b never surfaces even unfiltered"
+    );
+}
+
+/// The unfiltered method must stay exactly the filtered method with `None` —
+/// pins the delegation so the two paths cannot drift.
+#[test]
+fn hybrid_sparse_search_is_filtered_with_none() {
+    let (coll, _dir) = create_test_vc();
+    seed_sparse_points(&coll);
+
+    let sparse_q = crate::index::sparse::SparseVector::new(vec![(10, 1.0)]);
+    let strategy = crate::fusion::FusionStrategy::rrf_default();
+
+    let plain = coll
+        .hybrid_sparse_search(&[0.5, 0.5, 0.3, 0.1], &sparse_q, 5, "", &strategy)
+        .unwrap();
+    let none = coll
+        .hybrid_sparse_search_filtered(&[0.5, 0.5, 0.3, 0.1], &sparse_q, 5, "", &strategy, None)
+        .unwrap();
+    let a: Vec<u64> = plain.iter().map(|r| r.point.id).collect();
+    let b: Vec<u64> = none.iter().map(|r| r.point.id).collect();
+    assert_eq!(a, b);
+}

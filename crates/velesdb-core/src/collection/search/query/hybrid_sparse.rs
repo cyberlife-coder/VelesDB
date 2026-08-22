@@ -371,11 +371,23 @@ impl Collection {
             // sparse_indexes(9) when filtering is needed.
             let (dense, sparse) = rayon::join(
                 || {
-                    self.search_ids(dense_vector, candidate_k)
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(Into::into)
-                        .collect()
+                    // The metadata filter bounds BOTH branches. The dense
+                    // branch previously ignored it entirely (only sparse
+                    // filtered), so dense-only candidates the filter
+                    // excludes leaked into fusion.
+                    if let Some(filter) = metadata_filter {
+                        self.search_with_filter(dense_vector, candidate_k, filter)
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|r| (r.point.id, r.score))
+                            .collect()
+                    } else {
+                        self.search_ids(dense_vector, candidate_k)
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(Into::into)
+                            .collect()
+                    }
                 },
                 || {
                     if let Some(filter) = metadata_filter {
@@ -406,12 +418,20 @@ impl Collection {
         #[cfg(not(feature = "persistence"))]
         {
             // Sequential fallback (no rayon).
-            let dense: Vec<(u64, f32)> = self
-                .search_ids(dense_vector, candidate_k)
-                .unwrap_or_default()
-                .into_iter()
-                .map(Into::into)
-                .collect();
+            // Same both-branches contract as the rayon variant above.
+            let dense: Vec<(u64, f32)> = if let Some(filter) = metadata_filter {
+                self.search_with_filter(dense_vector, candidate_k, filter)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|r| (r.point.id, r.score))
+                    .collect()
+            } else {
+                self.search_ids(dense_vector, candidate_k)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(Into::into)
+                    .collect()
+            };
             let sparse = if let Some(filter) = metadata_filter {
                 // LOCK ORDER: payload_storage(3) before sparse_indexes(9).
                 let payload_storage = self.storage.payload_storage.read();
