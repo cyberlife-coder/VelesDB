@@ -25,6 +25,13 @@ pub enum FusionError {
         /// Number of branches passed to fuse.
         branches: usize,
     },
+    /// Direction slice length does not match the number of result branches.
+    DirectionCountMismatch {
+        /// Number of directions provided.
+        directions: usize,
+        /// Number of branches passed to fuse.
+        branches: usize,
+    },
 }
 
 impl std::fmt::Display for FusionError {
@@ -40,11 +47,34 @@ impl std::fmt::Display for FusionError {
                 f,
                 "WeightedRRF requires one weight per branch: {weights} weights for {branches} branches",
             ),
+            Self::DirectionCountMismatch {
+                directions,
+                branches,
+            } => write!(
+                f,
+                "fuse_with_directions requires one direction per branch: {directions} directions for {branches} branches",
+            ),
         }
     }
 }
 
 impl std::error::Error for FusionError {}
+
+/// Polarity of a branch's raw scores.
+///
+/// Score-level fusion (average, maximum, weighted, relative-score) is only
+/// meaningful when every branch agrees on which end of the scale is "better".
+/// Distance metrics (Euclidean, Hamming) produce lower-is-better streams, so
+/// they must be declared as such — fusing them as if higher were better
+/// silently inverts the ranking (#2102).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScoreDirection {
+    /// Similarity-like scores: higher is better (`Cosine`, `DotProduct`,
+    /// `Jaccard`, BM25/text relevance).
+    HigherIsBetter,
+    /// Distance-like scores: lower is better (`Euclidean`, `Hamming`).
+    LowerIsBetter,
+}
 
 /// Canonical default weight for the average-score component of
 /// [`FusionStrategy::Weighted`] when a caller does not supply explicit
@@ -213,12 +243,91 @@ impl FusionStrategy {
         }
     }
 
+    /// Fuses branches whose raw scores may not all be higher-is-better.
+    ///
+    /// `directions[i]` declares the polarity of `results[i]`. Lower-is-better
+    /// branches are negated on the way in — an order-preserving map into
+    /// higher-is-better space — so every strategy combines and ranks them
+    /// correctly. When **all** branches are lower-is-better and the strategy
+    /// preserves the input score space (`Average`, `Maximum`, `Weighted`),
+    /// the fused scores are negated back so the output stays in the metric's
+    /// own units (best first, ascending). Rank-based strategies (`RRF`,
+    /// `WeightedRRF`) only consume the best-first order, and `RelativeScore`
+    /// outputs normalized `[0, 1]` similarities; neither is negated back.
+    ///
+    /// # Arguments
+    ///
+    /// * `results` - One branch per entry, each `(document_id, raw_score)`
+    ///   sorted best-first.
+    /// * `directions` - The polarity of each branch, same length as `results`.
+    ///
+    /// # Returns
+    ///
+    /// A single best-first `(document_id, fused_score)` list.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FusionError::DirectionCountMismatch`] if `directions.len()`
+    /// differs from `results.len()`, plus any error [`Self::fuse`] returns.
+    pub fn fuse_with_directions(
+        &self,
+        mut results: Vec<Vec<(u64, f32)>>,
+        directions: &[ScoreDirection],
+    ) -> Result<Vec<(u64, f32)>, FusionError> {
+        if directions.len() != results.len() {
+            return Err(FusionError::DirectionCountMismatch {
+                directions: directions.len(),
+                branches: results.len(),
+            });
+        }
+        if self.is_rank_based() {
+            // Rank-based strategies consume the best-first order only; the
+            // raw score values (and thus their polarity) never enter the math.
+            return self.fuse(results);
+        }
+
+        for (branch, direction) in results.iter_mut().zip(directions) {
+            if *direction == ScoreDirection::LowerIsBetter {
+                for entry in branch.iter_mut() {
+                    entry.1 = -entry.1;
+                }
+            }
+        }
+        let mut fused = self.fuse(results)?;
+
+        let all_lower = !directions.is_empty()
+            && directions.iter().all(|d| *d == ScoreDirection::LowerIsBetter);
+        if all_lower && self.preserves_score_space() {
+            // Restore metric units; descending negated order is ascending
+            // distance, so the list stays best-first.
+            for entry in &mut fused {
+                entry.1 = -entry.1;
+            }
+        }
+        Ok(fused)
+    }
+
+    /// True for strategies that rank purely by input order, ignoring raw scores.
+    fn is_rank_based(&self) -> bool {
+        matches!(self, Self::RRF { .. } | Self::WeightedRRF { .. })
+    }
+
+    /// True for strategies whose output stays in the input score space.
+    fn preserves_score_space(&self) -> bool {
+        matches!(
+            self,
+            Self::Average | Self::Maximum | Self::Weighted { .. }
+        )
+    }
+
     /// Fuses results from multiple queries into a single ranked list.
     ///
     /// # Arguments
     ///
     /// * `results` - Vec of search results, one per query. Each inner Vec
     ///   contains `(document_id, score)` tuples, assumed sorted by score descending.
+    ///   Raw scores are combined as **higher-is-better**; for distance-metric
+    ///   branches use [`Self::fuse_with_directions`] instead.
     ///
     /// # Returns
     ///

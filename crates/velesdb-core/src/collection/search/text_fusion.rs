@@ -115,7 +115,8 @@ impl Collection {
         let (vector_scored, text_stream) =
             self.anchored_hybrid_streams(vector_query, text_query, anchor_ids, overfetch_k)?;
         let vector_stream: ScoreStream = vector_scored.iter().map(|sr| (sr.id, sr.score)).collect();
-        let fused = fuse_streams(strategy, vector_stream, text_stream)?;
+        let direction = self.storage.config.read().metric.score_direction();
+        let fused = fuse_streams(strategy, vector_stream, direction, text_stream)?;
         Ok(self.resolve_fused_results(&fused, k))
     }
 
@@ -149,7 +150,8 @@ impl Collection {
         let candidate_k = k.saturating_mul(2).max(k + 10);
         let (vector_stream, text_stream) =
             self.hybrid_score_streams(vector_query, text_query, candidate_k)?;
-        let fused = fuse_streams(strategy, vector_stream, text_stream)?;
+        let direction = self.storage.config.read().metric.score_direction();
+        let fused = fuse_streams(strategy, vector_stream, direction, text_stream)?;
         let resolved = self.resolve_fused_results(&fused, fused.len());
         Ok(apply_post_filter(resolved, filter, k))
     }
@@ -184,16 +186,26 @@ fn cast_weight(w: f64) -> f32 {
 
 /// Fuses two `(id, score)` streams via `strategy`, returning an empty list when
 /// both inputs are empty (so callers resolve a uniform result set).
+///
+/// `vector_direction` is the collection metric's polarity: Euclidean/Hamming
+/// vector scores are distances and must be declared lower-is-better so
+/// score-level strategies do not invert them against the always
+/// higher-is-better BM25 stream (#2102).
 fn fuse_streams(
     strategy: &FusionStrategy,
     vector_stream: ScoreStream,
+    vector_direction: crate::fusion::ScoreDirection,
     text_stream: ScoreStream,
 ) -> Result<ScoreStream> {
     if vector_stream.is_empty() && text_stream.is_empty() {
         return Ok(Vec::new());
     }
+    let directions = [
+        vector_direction,
+        crate::fusion::ScoreDirection::HigherIsBetter,
+    ];
     strategy
-        .fuse(vec![vector_stream, text_stream])
+        .fuse_with_directions(vec![vector_stream, text_stream], &directions)
         .map_err(|e| Error::Config(format!("Fusion error: {e}")))
 }
 

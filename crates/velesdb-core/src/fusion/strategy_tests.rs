@@ -1,9 +1,132 @@
 //! Tests for `FusionStrategy` implementations.
 
 use super::strategy::{
-    min_max_normalize, FusionError, FusionStrategy, DEFAULT_WEIGHTED_AVG_WEIGHT,
+    min_max_normalize, FusionError, FusionStrategy, ScoreDirection, DEFAULT_WEIGHTED_AVG_WEIGHT,
     DEFAULT_WEIGHTED_HIT_WEIGHT, DEFAULT_WEIGHTED_MAX_WEIGHT,
 };
+
+// =============================================================================
+// Regression (#2102): score-level strategies must honor branch polarity.
+// Pre-fix every strategy assumed higher-is-better, so Euclidean/Hamming
+// distance branches were fused and sorted inverted (farthest first).
+// =============================================================================
+
+/// Two Euclidean-distance branches (best-first ascending). doc1 is the near
+/// document in both; doc2 is far in both.
+fn distance_branches() -> Vec<Vec<(u64, f32)>> {
+    vec![
+        vec![(1, 0.1), (2, 3.0)],
+        vec![(1, 0.2), (2, 2.9)],
+    ]
+}
+
+fn all_lower(n: usize) -> Vec<ScoreDirection> {
+    vec![ScoreDirection::LowerIsBetter; n]
+}
+
+#[test]
+fn test_directed_maximum_lower_is_better_keeps_nearest_first() {
+    let fused = FusionStrategy::Maximum
+        .fuse_with_directions(distance_branches(), &all_lower(2))
+        .expect("fuse");
+
+    // "Maximum" = best score per doc = the SMALLEST distance; nearest first.
+    assert_eq!(fused[0].0, 1, "nearest doc must rank first, got {fused:?}");
+    assert!(
+        (fused[0].1 - 0.1).abs() < 1e-6,
+        "doc1 keeps its best (smallest) distance, got {}",
+        fused[0].1
+    );
+    assert!(
+        (fused[1].1 - 2.9).abs() < 1e-6,
+        "doc2 keeps its best (smallest) distance, got {}",
+        fused[1].1
+    );
+}
+
+#[test]
+fn test_directed_average_lower_is_better_ascending_metric_units() {
+    let fused = FusionStrategy::Average
+        .fuse_with_directions(distance_branches(), &all_lower(2))
+        .expect("fuse");
+
+    assert_eq!(fused[0].0, 1, "smallest average distance first");
+    assert!(
+        (fused[0].1 - 0.15).abs() < 1e-6,
+        "average stays in metric units (0.15), got {}",
+        fused[0].1
+    );
+    assert!((fused[1].1 - 2.95).abs() < 1e-6);
+}
+
+#[test]
+fn test_directed_relative_score_inverts_distance_branch() {
+    // Dense = Euclidean distances (lower better), sparse = BM25 (higher
+    // better). doc1 wins both branches outright; pre-fix min-max gave the
+    // NEAREST dense doc the WORST normalized score and doc1/doc2 tied.
+    let dense = vec![(1, 0.1), (2, 5.0)];
+    let sparse = vec![(1, 9.0), (2, 1.0)];
+    let strategy = FusionStrategy::RelativeScore {
+        dense_weight: 0.5,
+        sparse_weight: 0.5,
+    };
+
+    let fused = strategy
+        .fuse_with_directions(
+            vec![dense, sparse],
+            &[ScoreDirection::LowerIsBetter, ScoreDirection::HigherIsBetter],
+        )
+        .expect("fuse");
+
+    assert_eq!(fused[0].0, 1, "doc winning both branches must rank first");
+    assert!(
+        (fused[0].1 - 1.0).abs() < 1e-6,
+        "doc1 normalizes to 1.0 in both branches, got {}",
+        fused[0].1
+    );
+    assert!(
+        fused[1].1.abs() < 1e-6,
+        "doc2 normalizes to 0.0 in both branches, got {}",
+        fused[1].1
+    );
+}
+
+#[test]
+fn test_directed_rank_based_ignores_polarity() {
+    // RRF consumes best-first order only: identical output either way.
+    let with_dirs = FusionStrategy::rrf_default()
+        .fuse_with_directions(distance_branches(), &all_lower(2))
+        .expect("fuse");
+    let plain = FusionStrategy::rrf_default()
+        .fuse(distance_branches())
+        .expect("fuse");
+    assert_eq!(with_dirs, plain);
+    assert_eq!(with_dirs[0].0, 1, "best-ranked doc first");
+}
+
+#[test]
+fn test_directed_higher_is_better_matches_plain_fuse() {
+    let branches = vec![vec![(1, 0.9), (2, 0.4)], vec![(1, 0.8), (2, 0.5)]];
+    let with_dirs = FusionStrategy::Average
+        .fuse_with_directions(branches.clone(), &[ScoreDirection::HigherIsBetter; 2])
+        .expect("fuse");
+    let plain = FusionStrategy::Average.fuse(branches).expect("fuse");
+    assert_eq!(with_dirs, plain);
+}
+
+#[test]
+fn test_directed_direction_count_mismatch_rejected() {
+    let err = FusionStrategy::Average
+        .fuse_with_directions(distance_branches(), &all_lower(1))
+        .expect_err("mismatched direction count must be rejected");
+    assert!(matches!(
+        err,
+        FusionError::DirectionCountMismatch {
+            directions: 1,
+            branches: 2
+        }
+    ));
+}
 
 // =============================================================================
 // Canonical `Weighted` default constants (issue #1545: single-source the
