@@ -874,6 +874,156 @@ fn test_lazy_trained_rabitq_survives_reopen_via_flush() {
     );
 }
 
+/// `TRAIN QUANTIZER 'sq8'` on a collection created with `storage='sq8'`
+/// must install the quantizer into the live backend (no restart needed) —
+/// mirror of the `rabitq` live-install test.
+#[test]
+fn test_execute_train_sq8_installs_into_live_backend() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    db.create_collection_with_options("sq8_live", 64, DistanceMetric::Euclidean, StorageMode::SQ8)
+        .unwrap();
+    seed_sin_vectors(&db, "sq8_live", 64, 300);
+
+    let coll = db.resolve_writable_collection("sq8_live").unwrap();
+    assert!(
+        !coll.is_sq8_quantizer_trained(),
+        "300 inserts stay below the lazy-train threshold"
+    );
+
+    let query = Parser::parse("TRAIN QUANTIZER ON sq8_live WITH (m=4, type=sq8)").unwrap();
+    db.execute_query(&query, &std::collections::HashMap::new())
+        .unwrap();
+
+    assert!(
+        coll.is_sq8_quantizer_trained(),
+        "TRAIN must install the quantizer into the live SQ8 backend"
+    );
+
+    let results = coll.search(&sin_vector(64, 42), 5).unwrap();
+    assert_eq!(
+        results.first().map(|r| r.point.id),
+        Some(42),
+        "self-query must return itself as top-1 through the SQ8 path"
+    );
+}
+
+/// End-to-end restart wiring for SQ8: create (Full) → insert → TRAIN 'sq8'
+/// → reopen → the trained quantizer must be restored from `sq8.idx` and
+/// search must keep recall parity with brute force.
+#[test]
+fn test_train_sq8_wiring_survives_reopen() {
+    let dir = tempdir().unwrap();
+    {
+        let db = Database::open(dir.path()).unwrap();
+        // Created with the default Full mode: TRAIN flips the config to SQ8
+        // and the backend takes effect at the reopen below.
+        db.create_collection("sq8_reopen", 64, DistanceMetric::Euclidean)
+            .unwrap();
+        seed_sin_vectors(&db, "sq8_reopen", 64, 300);
+        let query = Parser::parse("TRAIN QUANTIZER ON sq8_reopen WITH (m=4, type=sq8)").unwrap();
+        db.execute_query(&query, &std::collections::HashMap::new())
+            .unwrap();
+        assert_eq!(db.flush_all(), 0, "flush before reopen must succeed");
+    }
+
+    let db = Database::open(dir.path()).unwrap();
+    let coll = db.resolve_writable_collection("sq8_reopen").unwrap();
+    assert_eq!(coll.config().storage_mode, StorageMode::SQ8);
+    assert!(
+        coll.is_sq8_quantizer_trained(),
+        "sq8.idx must be reloaded and installed on open"
+    );
+
+    // Recall parity with brute force (set overlap, not exact scores).
+    let query_vec = sin_vector(64, 42);
+    let results = coll.search(&query_vec, 10).unwrap();
+    assert_eq!(results.len(), 10);
+    let result_ids: std::collections::HashSet<u64> = results.iter().map(|r| r.point.id).collect();
+    let brute_ids = sin_brute_force_top_k(&query_vec, 64, 300, 10);
+    let overlap = brute_ids.intersection(&result_ids).count();
+    assert!(
+        overlap >= 9,
+        "recall@10 vs brute force should be >= 0.9 after reopen, got {overlap}/10"
+    );
+}
+
+/// A lazily-trained SQ8 quantizer (1000-insert threshold, no explicit
+/// `TRAIN QUANTIZER`) must be persisted to `sq8.idx` by the full flush and
+/// reinstalled on reopen BEFORE gap recovery, instead of silently degrading
+/// to f32 search — parity with the `RaBitQ` lazy flush.
+#[test]
+fn test_lazy_trained_sq8_survives_reopen_via_flush() {
+    let dir = tempdir().unwrap();
+    {
+        let db = Database::open(dir.path()).unwrap();
+        db.create_collection_with_options(
+            "sq8_lazy",
+            32,
+            DistanceMetric::Euclidean,
+            StorageMode::SQ8,
+        )
+        .unwrap();
+        seed_sin_vectors(&db, "sq8_lazy", 32, 1200);
+        let coll = db.resolve_writable_collection("sq8_lazy").unwrap();
+        assert!(
+            coll.is_sq8_quantizer_trained(),
+            "1200 inserts must cross the lazy-train threshold"
+        );
+        assert_eq!(db.flush_all(), 0, "flush before reopen must succeed");
+        assert!(
+            coll.data_path().join("sq8.idx").exists(),
+            "full flush must persist the lazily-trained quantizer"
+        );
+    }
+
+    let db = Database::open(dir.path()).unwrap();
+    let coll = db.resolve_writable_collection("sq8_lazy").unwrap();
+    assert!(
+        coll.is_sq8_quantizer_trained(),
+        "lazily-trained quantizer must be reinstalled from sq8.idx on open"
+    );
+
+    let query_vec = sin_vector(32, 7);
+    let results = coll.search(&query_vec, 10).unwrap();
+    assert_eq!(results.len(), 10);
+    let result_ids: std::collections::HashSet<u64> = results.iter().map(|r| r.point.id).collect();
+    let brute_ids = sin_brute_force_top_k(&query_vec, 32, 1200, 10);
+    let overlap = brute_ids.intersection(&result_ids).count();
+    assert!(
+        overlap >= 9,
+        "recall@10 vs brute force should be >= 0.9 after lazy SQ8 reopen, got {overlap}/10"
+    );
+}
+
+/// `TRAIN QUANTIZER 'sq8'` must be rejected on a metric whose ordering the
+/// int8 L2 traversal cannot preserve, instead of flipping the storage mode
+/// to a backend that would never engage.
+#[test]
+fn test_train_sq8_rejected_on_unsupported_metric() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    db.create_collection("sq8_dot", 16, DistanceMetric::DotProduct)
+        .unwrap();
+    seed_sin_vectors(&db, "sq8_dot", 16, 50);
+
+    let query = Parser::parse("TRAIN QUANTIZER ON sq8_dot WITH (m=4, type=sq8)").unwrap();
+    let err = db
+        .execute_query(&query, &std::collections::HashMap::new())
+        .expect_err("sq8 training on DotProduct must be rejected");
+    assert!(
+        err.to_string().contains("euclidean and cosine"),
+        "error must name the supported metrics, got: {err}"
+    );
+
+    let coll = db.resolve_writable_collection("sq8_dot").unwrap();
+    assert_eq!(
+        coll.config().storage_mode,
+        StorageMode::Full,
+        "a rejected TRAIN must not flip the storage mode"
+    );
+}
+
 /// PQ persistence round-trip: the codebook saved by `TRAIN QUANTIZER` must be
 /// reloaded on open and the PQ cache rebuilt, so the ADC rescore path stays
 /// live after a restart.
