@@ -2,13 +2,13 @@
 //!
 //! The state-machine contracts shared with every quantized-precision codec
 //! are pinned through the generic suites in
-//! [`precision_test_support`](super::precision_test_support); this module
+//! [`precision_contract_tests`](super::precision_contract_tests); this module
 //! instantiates them for the SQ8 codec and adds the SQ8-specific pins:
 //! metric gating, cosine query normalization, and store alignment under
 //! concurrent inserts.
 
 use super::distance::CachedSimdDistance;
-use super::precision_test_support as suite;
+use super::precision_contract_tests as suite;
 use super::quantization::ScalarQuantizer;
 use super::sq8_precision::{Sq8Codec, Sq8PrecisionConfig, Sq8PrecisionHnsw};
 use crate::distance::DistanceMetric;
