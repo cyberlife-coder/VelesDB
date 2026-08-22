@@ -118,6 +118,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **HNSW `Jaccard` search scores no longer invert the metric.**
+  `DistanceMetric::higher_is_better()` and `DistanceMetric::calculate()` both
+  treat Jaccard as a similarity (like Cosine), but `transform_score` passed
+  the internal `1.0 - similarity` graph-traversal distance straight through
+  instead of inverting it back — the HNSW-only search path reported the
+  complement of what the brute-force/rerank path reported for the same
+  query. Jaccard now shares Cosine's `(1.0 - raw).clamp(0.0, 1.0)` transform;
+  a regression test pins both paths agreeing on score for the same vectors.
+  (parity audit #2095)
+
 - **TS SDK: REST `upsert`/`upsertBatch` no longer drop `sparseVector`.**
   The REST backend sent only `{id, vector, payload}` while the server
   accepts `sparse_vector` and the streaming backend always forwarded it —
