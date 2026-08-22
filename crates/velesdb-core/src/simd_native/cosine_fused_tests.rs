@@ -98,6 +98,36 @@ fn test_fused_cosine_zero_vectors() {
 }
 
 #[test]
+fn test_fused_cosine_small_magnitude_vectors() {
+    // Regression (#2103): the SIMD finish step guarded on the *product* of
+    // squared norms (< EPSILON²), zeroing out legitimate vectors with norms
+    // around 3.4e-4 while the scalar fallback returned the true cosine. The
+    // result then flipped between 1.0 and 0.0 with dimension and CPU features.
+    for magnitude in [1e-3f32, 1e-4, 1e-5] {
+        // Cover the scalar fallback (dim < 4/8) and every SIMD kernel width,
+        // including tail-exercising odd dims.
+        for size in [3usize, 4, 7, 8, 15, 16, 17, 64, 100, 768] {
+            let a: Vec<f32> = vec![magnitude; size];
+            let result = cosine_similarity_native(&a, &a);
+            assert!(
+                (result - 1.0).abs() < 1e-3,
+                "identical vectors of magnitude {magnitude} at dim {size} \
+                 must have cosine ~1.0, got {result}"
+            );
+        }
+    }
+
+    // Anti-parallel small vectors must stay -1.0, not collapse to 0.0.
+    let a = vec![1e-4f32; 16];
+    let b: Vec<f32> = a.iter().map(|x| -x).collect();
+    let result = cosine_similarity_native(&a, &b);
+    assert!(
+        (result + 1.0).abs() < 1e-3,
+        "opposite small-magnitude vectors must have cosine ~-1.0, got {result}"
+    );
+}
+
+#[test]
 fn test_fused_cosine_opposite_vectors() {
     // Opposite vectors should have cosine = -1.0
     let a: Vec<f32> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
