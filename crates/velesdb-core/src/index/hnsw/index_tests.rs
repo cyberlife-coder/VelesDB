@@ -1579,6 +1579,37 @@ fn test_concurrent_search_stress() {
     }
 }
 
+/// Regression: `Jaccard` is a similarity metric
+/// (`DistanceMetric::higher_is_better() == true`, same as Cosine), but
+/// `transform_score` used to pass the internal `1.0 - similarity` graph
+/// distance straight through instead of inverting it back. That made the
+/// HNSW-only path (`search`, via `transform_score`) report the complement
+/// of what the rerank path (`compute_distance`, via
+/// `jaccard_similarity_native` directly) reports for the exact same query —
+/// caught by the 2026-08-21 parity audit. Both paths must now agree.
+#[test]
+fn test_jaccard_hnsw_and_rerank_paths_agree_on_score() {
+    let index = HnswIndex::new(8, DistanceMetric::Jaccard).unwrap();
+    let target = [1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    index.insert(1, &target);
+    index.insert(2, &[0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0]);
+
+    let hnsw_only = index.search(&target, 1);
+    let hnsw_score = hnsw_only[0].score;
+    let rerank_score = index.compute_distance(&target, &target);
+
+    assert!(
+        hnsw_score > 0.9,
+        "Jaccard is a similarity metric: the exact self-match must score \
+         near 1.0 via the HNSW-only path, got {hnsw_score}"
+    );
+    assert!(
+        (hnsw_score - rerank_score).abs() < 1e-5,
+        "HNSW-only score ({hnsw_score}) and rerank-path score \
+         ({rerank_score}) must agree for the same query/vector pair"
+    );
+}
+
 #[test]
 fn test_all_distance_metrics_search_with_rerank() {
     for metric in [

@@ -140,6 +140,23 @@ fn test_transform_score_dot_product() {
     assert!((hnsw.transform_score(0.5) - (-0.5)).abs() < f32::EPSILON);
 }
 
+#[test]
+fn test_transform_score_jaccard() {
+    let engine = CachedSimdDistance::new(DistanceMetric::Jaccard, 32);
+    let hnsw = NativeHnsw::new(engine, 16, 100, 100);
+
+    // Jaccard is a similarity metric (DistanceMetric::higher_is_better() ==
+    // true), same as Cosine. `CachedSimdDistance` stores `1.0 - similarity`
+    // as the graph-traversal distance, so transform_score must invert it
+    // back to similarity — not pass it through as a raw distance (which
+    // would return the complement and disagree with the rerank path's
+    // `jaccard_similarity_native`, a regression caught by the 2026-08-21
+    // parity audit).
+    assert!((hnsw.transform_score(0.3) - 0.7).abs() < f32::EPSILON);
+    assert!((hnsw.transform_score(1.5) - 0.0).abs() < f32::EPSILON); // clamped
+    assert!((hnsw.transform_score(0.0) - 1.0).abs() < f32::EPSILON); // exact match
+}
+
 // =========================================================================
 // TDD Tests: file_dump and file_load
 // =========================================================================
