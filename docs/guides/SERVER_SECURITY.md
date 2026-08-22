@@ -319,7 +319,7 @@ curl http://localhost:8080/health
 ```json
 {
   "status": "ok",
-  "version": "5.1.0"
+  "version": "5.2.0"
 }
 ```
 
@@ -338,7 +338,7 @@ curl http://localhost:8080/ready
 ```json
 {
   "status": "ready",
-  "version": "5.1.0"
+  "version": "5.2.0"
 }
 ```
 
@@ -347,7 +347,7 @@ curl http://localhost:8080/ready
 ```json
 {
   "status": "not_ready",
-  "version": "5.1.0"
+  "version": "5.2.0"
 }
 ```
 
@@ -382,4 +382,4 @@ echo "VelesDB is ready!"
 
 ---
 
-Last updated: 2026-08-08 · Applies to: velesdb-core 5.1.0
+Last updated: 2026-08-08 · Applies to: velesdb-core 5.2.0

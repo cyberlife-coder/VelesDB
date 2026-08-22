@@ -217,4 +217,4 @@ so `except velesdb.VelesDBError` is a safe catch-all.
 
 ---
 
-`velesdb-python v5.1.0` · Last updated: 2026-08-10 · Applies to: velesdb-core 5.1.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)
+`velesdb-python v5.2.0` · Last updated: 2026-08-22 · Applies to: velesdb-core 5.2.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)

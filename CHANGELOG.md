@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.2.0] - 2026-08-22
+
 ### Changed
 
 - **The cosine hot path runs on the pre-normalized kernel.** Vectors are
@@ -7617,7 +7619,9 @@ still genuinely pending is:
 > product), not part of the open-source Community roadmap — see the
 > "Scope & boundaries" section of the README.
 
-[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v5.0.0...HEAD
+[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v5.2.0...HEAD
+[5.2.0]: https://github.com/cyberlife-coder/VelesDB/compare/v5.1.0...v5.2.0
+[5.1.0]: https://github.com/cyberlife-coder/VelesDB/compare/v5.0.0...v5.1.0
 [5.0.0]: https://github.com/cyberlife-coder/VelesDB/compare/v4.2.0...v5.0.0
 [4.0.0]: https://github.com/cyberlife-coder/VelesDB/compare/v3.12.0...v4.0.0
 [1.16.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.16.0
