@@ -3,12 +3,12 @@
 //! The state-machine contracts shared with every quantized-precision codec
 //! (lazy training, install alignment, rerank semantics, fallback guards,
 //! recall) are pinned through the generic suites in
-//! [`precision_test_support`](super::precision_test_support); this module
+//! [`precision_contract_tests`](super::precision_contract_tests); this module
 //! instantiates them for the `RaBitQ` codec and adds the `RaBitQ`-specific
 //! pins (binary-path config contract, metric-ordered rerank on unit
 //! vectors).
 
-use super::precision_test_support as suite;
+use super::precision_contract_tests as suite;
 use super::rabitq_precision::{RaBitQCodec, RaBitQPrecisionConfig};
 use crate::distance::DistanceMetric;
 
