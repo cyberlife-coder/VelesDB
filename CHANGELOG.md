@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`StorageMode::SQ8`/`Binary` stopped paying for quantization nobody
+  reads.** Every upsert into these modes ran a parallel quantization pass
+  and filled unbounded in-memory side-caches (one entry per vector) that no
+  search path ever consumed — pure CPU plus unbounded RAM (~1 byte/dim/vector
+  for SQ8) with zero effect on results, since the on-disk store and the HNSW
+  index are full-precision f32 in these modes regardless. The dead caches
+  and their fill/delete plumbing are removed; both modes are still accepted
+  and persisted, and now honestly documented as behaving like `Full`
+  (rustdoc + `docs/guides/QUANTIZATION.md`, whose "General production: SQ8"
+  recommendation is corrected). Search results are byte-identical. Wiring
+  the in-tree int8 dual-precision traversal engine into a real SQ8 backend
+  is tracked in #2112. (#2112)
+
 ## [5.2.0] - 2026-08-22
 
 ### Changed
