@@ -85,7 +85,7 @@ mod layer_tests;
 #[cfg(test)]
 mod ordered_float_tests;
 #[cfg(test)]
-mod precision_test_support;
+mod precision_contract_tests;
 #[cfg(test)]
 mod quantization_tests;
 #[cfg(test)]
