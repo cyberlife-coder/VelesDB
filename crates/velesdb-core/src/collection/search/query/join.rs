@@ -132,13 +132,13 @@ pub fn extract_join_keys(results: &[SearchResult], condition: &JoinCondition) ->
 /// - the target `ColumnStore` has no primary key,
 /// - the JOIN column does not match the target primary key.
 pub fn execute_join(
-    results: &[SearchResult],
+    results: Vec<SearchResult>,
     join: &JoinClause,
     column_store: &ColumnStore,
     row_budget: usize,
 ) -> Result<Vec<JoinedResult>> {
     let condition = validate_join_condition(join, column_store)?;
-    let join_keys = extract_join_keys(results, &condition);
+    let join_keys = extract_join_keys(&results, &condition);
 
     if join_keys.is_empty() {
         return Ok(Vec::new());
@@ -147,17 +147,22 @@ pub fn execute_join(
     let batch_size = adaptive_batch_size(join_keys.len());
     let null_row_data = build_null_row_data(column_store);
 
-    let mut matched_left_indices = vec![false; results.len()];
+    // Move-out slots: this is a primary-key join, so `join_keys` carries at
+    // most one entry per left row and every match consumes its slot with
+    // `take()` — the pre-fix shape deep-cloned the whole SearchResult
+    // (vector included: ~3 KB per row at 768 dims) for every joined row.
+    // Whatever remains `Some` afterwards is exactly the unmatched-left set,
+    // which retires the separate `matched_left_indices` bookkeeping.
+    let mut slots: Vec<Option<SearchResult>> = results.into_iter().map(Some).collect();
     let mut matched_right_pks: HashSet<i64> = HashSet::with_capacity(join_keys.len());
 
     let mut joined_results = process_join_batches(
-        results,
+        &mut slots,
         &join_keys,
         batch_size,
         join.join_type,
         column_store,
         &null_row_data,
-        &mut matched_left_indices,
         &mut matched_right_pks,
         row_budget,
     );
@@ -177,13 +182,7 @@ pub fn execute_join(
     if joined_results.len() < row_budget
         && matches!(join.join_type, JoinType::Left | JoinType::Full)
     {
-        append_unmatched_left_rows(
-            results,
-            &matched_left_indices,
-            &null_row_data,
-            &mut joined_results,
-            row_budget,
-        );
+        append_unmatched_left_rows(&mut slots, &null_row_data, &mut joined_results, row_budget);
     }
 
     Ok(joined_results)
@@ -219,13 +218,12 @@ fn validate_join_condition(join: &JoinClause, column_store: &ColumnStore) -> Res
 /// Processes join key batches, merging matching rows with search results.
 #[allow(clippy::too_many_arguments)]
 fn process_join_batches(
-    results: &[SearchResult],
+    slots: &mut [Option<SearchResult>],
     join_keys: &[(usize, i64)],
     batch_size: usize,
     join_type: JoinType,
     column_store: &ColumnStore,
     null_row_data: &HashMap<String, serde_json::Value>,
-    matched_left_indices: &mut [bool],
     matched_right_pks: &mut HashSet<i64>,
     row_budget: usize,
 ) -> Vec<JoinedResult> {
@@ -243,18 +241,14 @@ fn process_join_batches(
                 break;
             }
             if let Some(column_data) = row_map.get(pk) {
-                joined_results.push(JoinedResult::new(
-                    results[*result_idx].clone(),
-                    column_data.clone(),
-                ));
-                matched_left_indices[*result_idx] = true;
-                matched_right_pks.insert(*pk);
+                if let Some(left) = slots[*result_idx].take() {
+                    joined_results.push(JoinedResult::new(left, column_data.clone()));
+                    matched_right_pks.insert(*pk);
+                }
             } else if matches!(join_type, JoinType::Left | JoinType::Full) {
-                joined_results.push(JoinedResult::new(
-                    results[*result_idx].clone(),
-                    null_row_data.clone(),
-                ));
-                matched_left_indices[*result_idx] = true;
+                if let Some(left) = slots[*result_idx].take() {
+                    joined_results.push(JoinedResult::new(left, null_row_data.clone()));
+                }
             }
         }
     }
@@ -295,21 +289,17 @@ fn append_unmatched_right_rows(
 
 /// Appends unmatched left-side rows for LEFT/FULL JOINs.
 fn append_unmatched_left_rows(
-    results: &[SearchResult],
-    matched_left_indices: &[bool],
+    slots: &mut [Option<SearchResult>],
     null_row_data: &HashMap<String, serde_json::Value>,
     joined_results: &mut Vec<JoinedResult>,
     row_budget: usize,
 ) {
-    for (idx, left_result) in results.iter().enumerate() {
+    for slot in slots.iter_mut() {
         if joined_results.len() >= row_budget {
             break;
         }
-        if !matched_left_indices[idx] {
-            joined_results.push(JoinedResult::new(
-                left_result.clone(),
-                null_row_data.clone(),
-            ));
+        if let Some(left) = slot.take() {
+            joined_results.push(JoinedResult::new(left, null_row_data.clone()));
         }
     }
 }
@@ -322,7 +312,7 @@ fn append_unmatched_left_rows(
 ///
 /// `USING` with multiple columns is currently not supported because execution
 /// path relies on a single primary key lookup.
-fn resolve_join_condition(join: &JoinClause) -> Option<JoinCondition> {
+pub(crate) fn resolve_join_condition(join: &JoinClause) -> Option<JoinCondition> {
     if let Some(condition) = &join.condition {
         return Some(normalize_join_condition(condition, join));
     }

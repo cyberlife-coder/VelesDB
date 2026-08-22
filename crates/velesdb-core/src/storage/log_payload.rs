@@ -497,7 +497,12 @@ impl PayloadStorage for LogPayloadStorage {
         // runs fully outside the lock.
         let payload_bytes = {
             let reader = self.reader.read();
-            let file_len = reader.metadata()?.len();
+            // `write_offset` is the tracked WAL length: every append advances
+            // it under the write path's lock and every entry lives strictly
+            // below it, so it is a valid out-of-bounds guard for positional
+            // reads — without paying a `metadata()` (fstat) syscall on every
+            // single payload hydration.
+            let file_len = *self.write_offset.read();
             read_length_prefixed_payload(&reader, offset, file_len)?
         };
 

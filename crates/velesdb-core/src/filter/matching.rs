@@ -459,9 +459,16 @@ fn haversine_distance_m(lat1: f64, lng1: f64, lat2: f64, lng2: f64) -> f64 {
 /// Applies a comparison operator to a geo-distance value and threshold.
 fn compare_geo_distance(dist: f64, threshold: f64, op: crate::velesql::CompareOp) -> bool {
     use crate::velesql::CompareOp;
+    // `dist` is computed via several sin/cos/sqrt/atan2 calls (see
+    // `haversine_distance_m`), so plain `f64::EPSILON` — the ULP at magnitude
+    // 1.0 — is tighter than the actual floating-point precision at real-world
+    // distances (meters), making `Eq`/`NotEq` spuriously fail. Scale by
+    // magnitude, floored at 1.0, matching the HAVING threshold comparator
+    // (`aggregation/having.rs::compare_values`).
+    let relative_epsilon = f64::EPSILON * dist.abs().max(threshold.abs()).max(1.0);
     match op {
-        CompareOp::Eq => (dist - threshold).abs() < f64::EPSILON,
-        CompareOp::NotEq => (dist - threshold).abs() >= f64::EPSILON,
+        CompareOp::Eq => (dist - threshold).abs() < relative_epsilon,
+        CompareOp::NotEq => (dist - threshold).abs() >= relative_epsilon,
         CompareOp::Gt => dist > threshold,
         CompareOp::Gte => dist >= threshold,
         CompareOp::Lt => dist < threshold,

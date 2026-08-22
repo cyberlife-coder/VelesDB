@@ -114,4 +114,5 @@ let params = HnswParams::million_scale(768);
 
 ## License
 
-MIT License
+This benchmark suite is part of the VelesDB repository and is covered by the
+[VelesDB Core License 1.0](../LICENSE), like the rest of the tree.

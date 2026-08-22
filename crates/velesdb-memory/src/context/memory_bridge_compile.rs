@@ -7,15 +7,15 @@
 //! (#1959), so the budget seam and the facet seam coincide.
 
 use super::{
-    aggregate_events, annotate_memory_provenance, event_meta, importance_active,
-    index_fragments_by_handle_hash, now_nanos, now_unix_secs, payload_confidence, positive_ttl,
-    provenance, recency_norms, scope_and_k, scope_filter, source_id, source_media, stable_id,
-    system_meta, BTreeMap, CompilePolicy, CompileRequest, CompiledContext, ContextCompiler,
-    ContextDecision, ContextFragment, ContextSavings, ContextSource, Embedder, FactStore,
-    FusionOptions, GraphStore, ImportanceWeights, Map, MemoryCandidate, MemoryError, MemoryService,
-    Metadata, Ordering, PulledMemory, RecallStore, Value, CTX_EVENT_FIELD, CTX_PROJECT_FIELD,
-    CTX_SOURCE_FIELD, CTX_SOURCE_MEDIA_FIELD, EVENT_ANCHOR, EVENT_ID_SALT, EVENT_SEQ,
-    EXPIRES_AT_FIELD, NEUTRAL_CONFIDENCE,
+    fragment_handle_hash, meta_u64, now_nanos, now_unix_secs, payload_confidence, positive_ttl,
+    provenance, stable_id, system_meta, BTreeMap, CompilePolicy, CompileRequest, CompiledContext,
+    ContextCompiler, ContextDecision, ContextFragment, ContextSavings, ContextSource, Embedder,
+    FactStore, FusionOptions, GraphStore, ImportanceWeights, Map, MediaRef, MemoryCandidate,
+    MemoryError, MemoryScope, MemoryService, Metadata, Number, Ordering, PulledMemory, RecallStore,
+    Value, CTX_AT_FIELD, CTX_COST_FIELD, CTX_CURRENCY_FIELD, CTX_EVENT_FIELD, CTX_MODEL_FIELD,
+    CTX_PROJECT_FIELD, CTX_SOURCE_FIELD, CTX_SOURCE_MEDIA_FIELD, CTX_TOKENS_IN_FIELD,
+    CTX_TOKENS_OUT_FIELD, CTX_TOKENS_SAVED_FIELD, DEFAULT_MEMORY_K, EVENT_ANCHOR, EVENT_ID_SALT,
+    EVENT_SEQ, EXPIRES_AT_FIELD, NEUTRAL_CONFIDENCE, SOURCE_ID_SALT,
 };
 use crate::service::embeddable_prefix;
 
@@ -649,4 +649,212 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
         let payloads = self.store.get_metadata_batch(&ids)?;
         Ok(aggregate_events(&payloads))
     }
+}
+
+// The pure helpers of the compile fold, moved next to their only consumer
+// (#2021): every function below is called from this module alone, and their
+// former home in `memory_bridge.rs` forced its 35-name `use super` seam.
+
+/// The request's memory scope plus the clamped pull count — `None` when
+/// there is no scope or no room: pulled memories must never push the
+/// request over the fragment cap (the cap is validated after augmentation,
+/// and a rejection there would blame the caller for fragments the bridge
+/// itself added).
+fn scope_and_k(request: &CompileRequest) -> Option<(&MemoryScope, usize)> {
+    let scope = request.memory_scope.as_ref()?;
+    let room = crate::limits::MAX_FRAGMENTS.saturating_sub(request.fragments.len());
+    let k = crate::limits::clamp_recall_limit(scope.k.unwrap_or(DEFAULT_MEMORY_K)).min(room);
+    (k > 0).then_some((scope, k))
+}
+
+/// The recall filter a scope narrows to (its project facet), if any.
+fn scope_filter(scope: &MemoryScope) -> Option<Metadata> {
+    scope.project.as_ref().map(|project| {
+        let mut meta = Map::new();
+        meta.insert("project".to_owned(), Value::String(project.clone()));
+        meta
+    })
+}
+
+fn importance_active(weights: &ImportanceWeights) -> bool {
+    weights.confidence != 0.0 || (weights.recency != 0.0 && weights.recency_field.is_some())
+}
+
+fn recency_norms(candidates: &[MemoryCandidate], weights: &ImportanceWeights) -> Vec<f64> {
+    let field = weights
+        .recency_field
+        .as_ref()
+        .filter(|_| weights.recency != 0.0);
+    let Some(field) = field else {
+        return vec![0.0; candidates.len()];
+    };
+    let values: Vec<Option<f64>> = candidates
+        .iter()
+        .map(|candidate| {
+            candidate
+                .metadata
+                .as_ref()
+                .and_then(|meta| meta.get(field.as_str()))
+                .and_then(Value::as_f64)
+                .filter(|value| value.is_finite())
+        })
+        .collect();
+    let (min, max) = values
+        .iter()
+        .flatten()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &v| {
+            (lo.min(v), hi.max(v))
+        });
+    if max <= min {
+        return vec![0.0; candidates.len()];
+    }
+    values
+        .into_iter()
+        .map(|value| value.map_or(0.0, |v| ((v - min) / (max - min)).clamp(0.0, 1.0)))
+        .collect()
+}
+
+/// Stamp pulled memories into the compiled provenance: their decisions and
+/// sources gain the backing `memory_id`, the decision's relevance becomes
+/// the normalised (importance-blended, when active) ranking score, and the
+/// reason spells out the full score ventilation — vector and graph always,
+/// plus confidence and recency when the blend ran — so `why this memory` is
+/// answerable from the decision alone.
+fn annotate_memory_provenance(out: &mut CompiledContext, pulled: &BTreeMap<u64, PulledMemory>) {
+    for decision in &mut out.decisions {
+        if let Some(memory) = pulled.get(&decision.content_hash) {
+            decision.memory_id = Some(memory.memory_id);
+            decision.relevance = memory.relevance;
+            decision.reason = if memory.ventilated {
+                format!(
+                    "{} — pulled from memory {} (vector {:.2}, graph {:.2}, confidence {:.2}, recency {:.2})",
+                    decision.reason,
+                    memory.memory_id,
+                    memory.vector_norm,
+                    memory.graph_weight,
+                    memory.confidence,
+                    memory.recency
+                )
+            } else {
+                format!(
+                    "{} — pulled from memory {} (vector {:.2}, graph {:.2})",
+                    decision.reason, memory.memory_id, memory.vector_norm, memory.graph_weight
+                )
+            };
+        }
+    }
+    for source in &mut out.sources {
+        if let Some(hash) = provenance::parse_handle(&source.handle) {
+            if let Some(memory) = pulled.get(&hash) {
+                source.memory_id = Some(memory.memory_id);
+            }
+        }
+    }
+}
+
+/// The metadata of one compilation event — counts and identifiers only,
+/// every key reserved.
+fn event_meta(request: &CompileRequest, out: &CompiledContext, nanos: u128) -> Metadata {
+    let mut extra: Vec<(&str, Value)> = vec![
+        (CTX_EVENT_FIELD, Value::Bool(true)),
+        (
+            CTX_TOKENS_IN_FIELD,
+            Value::Number(out.insights.tokens_in.into()),
+        ),
+        (
+            CTX_TOKENS_OUT_FIELD,
+            Value::Number(out.insights.tokens_out.into()),
+        ),
+        (
+            CTX_TOKENS_SAVED_FIELD,
+            Value::Number(out.insights.tokens_saved.into()),
+        ),
+        (
+            CTX_AT_FIELD,
+            Value::Number(Number::from(
+                u64::try_from(nanos / 1_000_000_000).unwrap_or(u64::MAX),
+            )),
+        ),
+    ];
+    if let Some(project) = &request.project {
+        extra.push((CTX_PROJECT_FIELD, Value::String(project.clone())));
+    }
+    if let Some(model) = &request.target_model {
+        extra.push((CTX_MODEL_FIELD, Value::String(model.clone())));
+    }
+    if let (Some(micros), Some(currency)) = (
+        out.insights.estimated_cost_saved_micros,
+        out.insights.currency.as_ref(),
+    ) {
+        extra.push((CTX_COST_FIELD, Value::Number(micros.into())));
+        extra.push((CTX_CURRENCY_FIELD, Value::String(currency.clone())));
+    }
+    system_meta(&extra)
+}
+
+/// Fold raw event payloads (reserved keys included) into one
+/// [`ContextSavings`]. Every accumulation saturates — an aggregate must
+/// never panic, whatever the stored numbers.
+fn aggregate_events(payloads: &[Option<Metadata>]) -> ContextSavings {
+    let mut savings = ContextSavings {
+        events: payloads.len() as u64,
+        truncated: payloads.len() >= crate::limits::MAX_RECALL_LIMIT,
+        ..ContextSavings::default()
+    };
+    for payload in payloads {
+        let Some(meta) = payload else { continue };
+        savings.tokens_in = savings
+            .tokens_in
+            .saturating_add(meta_u64(meta, CTX_TOKENS_IN_FIELD));
+        savings.tokens_out = savings
+            .tokens_out
+            .saturating_add(meta_u64(meta, CTX_TOKENS_OUT_FIELD));
+        savings.tokens_saved = savings
+            .tokens_saved
+            .saturating_add(meta_u64(meta, CTX_TOKENS_SAVED_FIELD));
+        if let (Some(Value::String(currency)), micros) =
+            (meta.get(CTX_CURRENCY_FIELD), meta_u64(meta, CTX_COST_FIELD))
+        {
+            if micros > 0 {
+                let entry = savings
+                    .cost_saved_micros_by_currency
+                    .entry(currency.clone())
+                    .or_insert(0);
+                *entry = entry.saturating_add(micros);
+            }
+        }
+    }
+    savings
+}
+
+/// The salted system-fact id of a stored source.
+pub(super) fn source_id(content_hash: u64) -> u64 {
+    stable_id(&format!("{SOURCE_ID_SALT}{content_hash}"))
+}
+
+/// Index a request's fragments by the hash their `ctx://source/` handle is
+/// built from, so a handle can be resolved back to the fragment that produced
+/// it. First occurrence wins (see the identity note on
+/// `store_context_sources`): `entry` + `or_insert`, never a blind overwrite.
+fn index_fragments_by_handle_hash(
+    fragments: &[ContextFragment],
+) -> BTreeMap<u64, &ContextFragment> {
+    let mut by_hash: BTreeMap<u64, &ContextFragment> = BTreeMap::new();
+    for fragment in fragments {
+        by_hash
+            .entry(fragment_handle_hash(fragment))
+            .or_insert(fragment);
+    }
+    by_hash
+}
+
+/// A stored source's media payload (US-009, PR2), when its metadata carries
+/// one — absent (or malformed, which should never happen for a payload this
+/// bridge wrote itself) round-trips as `None` rather than an error, so a
+/// media decode hiccup degrades to "text-only", never breaks the whole
+/// retrieval.
+fn source_media(meta: &Metadata) -> Option<MediaRef> {
+    meta.get(CTX_SOURCE_MEDIA_FIELD)
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
 }

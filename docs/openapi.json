@@ -11,7 +11,7 @@
       "name": "VelesDB Core License 1.0",
       "url": "https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE"
     },
-    "version": "5.1.0"
+    "version": "5.2.0"
   },
   "servers": [
     {
@@ -3407,6 +3407,13 @@
             "format": "int64",
             "description": "Approximate number of edges traversed during MATCH graph traversal.\nSee `traversal_counters_approximate`; 0 for non-graph queries.",
             "minimum": 0
+          },
+          "executed_filter_strategy": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Filter strategy the executor actually ran, recorded at the dispatch\nsite (see `FilterStrategy::as_str`). Present for single SELECTs that\nwent through the filtered vector-search dispatch; absent for MATCH,\ncompound queries, and arms where pre/post-filter does not apply."
           },
           "loops": {
             "type": "integer",

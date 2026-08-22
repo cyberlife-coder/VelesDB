@@ -193,6 +193,19 @@
       "--files",
       "{root}/src/lib.rs"
      ]
+    },
+    {
+     "vector": "a second SAFETY header restating the one above it, with no condition bullet between them",
+     "files": {
+      "src/lib.rs": "pub fn write(target: *mut u8) {\n    // SAFETY: the caller upholds the invariants below.\n    // SAFETY: writing through the caller's pointer is sound.\n    // - target is non-null, aligned and valid for one byte of writes\n    // - no other reference aliases target for the duration of this call\n    // Reason: the caller owns the allocation and cannot express that in the type.\n    unsafe {\n        *target = 1;\n    }\n}\n"
+     },
+     "accepts": {
+      "src/lib.rs": "pub fn write(target: *mut u8) {\n    // SAFETY: the caller upholds the invariants below.\n    // - target is non-null, aligned and valid for one byte of writes\n    // - no other reference aliases target for the duration of this call\n    // SAFETY: writing through the caller's pointer is sound.\n    unsafe {\n        *target = 1;\n    }\n}\n"
+     },
+     "argv": [
+      "--files",
+      "{root}/src/lib.rs"
+     ]
     }
    ],
    "blind_spot": {

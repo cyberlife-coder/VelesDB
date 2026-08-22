@@ -7,6 +7,36 @@ released on its own `velesdb-memory-vX.Y.Z` tag.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Deprecated
+
+- **The `MemoryStore` supertrait alias (#2018).** Since the 0.14 facet split
+  no bound in the workspace names it — facet bounds (`S: GraphStore`-style)
+  everywhere — so it exists only as a compat shim for pre-facet out-of-tree
+  implementors. It now carries `#[deprecated]` pointing at the facet traits,
+  and will be removed in 0.15. Unrelated homonym cleaned up on the other
+  side of the binding seam: `velesdb-node`'s napi class (JS-visible as
+  `MemoryService` via `js_name`) no longer uses the Rust identifier
+  `MemoryStore`; being name-mapped, the rename is invisible to JS consumers.
+
+## [0.14.1] - 2026-08-19
+
+### Added
+
+- **`https://` endpoints work for both HTTP roles (#2025).** The outbound
+  client was built without TLS, so the `openai` backend — documented as
+  reaching "hosted providers" — could in fact only reach `http://` servers.
+  rustls now ships inside the existing `embedder-http`/`extractor-http`
+  features: the URL's scheme is the whole local-or-cloud switch, with the
+  same three variables per role and nothing to rebuild or discover. The
+  default posture is unchanged — `hash` stays offline, and no remote host is
+  contacted unless the user sets an `https://` URL themselves. A provider
+  that serves only chat completions (OpenRouter) can back the extractor
+  while the embedder stays local; the roles are independent on purpose.
+  Pinned by a transport-level test: an `https://` URL must fail at the
+  network, never on a client built without TLS.
+
 ## [0.14.0] - 2026-08-19
 
 ### Changed

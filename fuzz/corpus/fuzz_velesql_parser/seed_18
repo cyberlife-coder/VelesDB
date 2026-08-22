@@ -1,0 +1,1 @@
+INSERT EDGE (1)-[:REL]->(2) INTO docs

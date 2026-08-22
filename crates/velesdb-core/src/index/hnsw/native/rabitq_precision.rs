@@ -491,13 +491,17 @@ impl<D: DistanceEngine> RaBitQPrecisionHnsw<D> {
         candidate_ids: &[NodeId],
         k: usize,
     ) -> Vec<(NodeId, f32)> {
+        // Stored cosine vectors are unit-norm (pre-normalized engine), so the
+        // query must be normalized the same way before exact re-ranking —
+        // `prepare_query` is a zero-cost pass-through for every other metric.
+        let prepared = self.inner.prepare_query(query);
         let vectors_guard = self.inner.vectors.read();
         let mut reranked: Vec<(NodeId, f32)> = if let Some(vectors) = vectors_guard.as_ref() {
             candidate_ids
                 .iter()
                 .filter_map(|&node_id| {
                     let vec = vectors.get(node_id)?;
-                    let raw_dist = self.inner.compute_distance(query, vec);
+                    let raw_dist = self.inner.compute_distance(&prepared, vec);
                     let final_dist = self.inner.transform_score(raw_dist);
                     Some((node_id, final_dist))
                 })

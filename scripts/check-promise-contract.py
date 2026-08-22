@@ -242,6 +242,70 @@ def stale_claims(claims: list[dict], workspace_version: str) -> list[str]:
     return stale
 
 
+def _major(version: str) -> "int | None":
+    """The numeric major of a semver-ish string, or None when unparsable."""
+    head = version.split(".", 1)[0].strip()
+    return int(head) if head.isdigit() else None
+
+
+def stale_major_failures(
+    claims: "list[dict]", workspace_version: str
+) -> "tuple[list[str], list[str]]":
+    """Splits major-stale claims into (fatal, accepted-with-waiver).
+
+    ``stale_claims`` above stays advisory for minor drift — re-measuring every
+    figure at every patch release would only teach people to copy the version
+    string. A figure measured on a previous MAJOR is different in kind: it
+    describes a product that no longer ships, and both real drifts this guard
+    exists for (WASM +25-28%, binary size) crossed exactly that line. Those
+    claims fail the build unless the registry carries an explicit, dated
+    ``stale_accepted`` waiver scoped to the current workspace major:
+
+        "stale_accepted": {
+            "reason": "...why re-measuring must wait...",
+            "granted": "YYYY-MM-DD",
+            "for_workspace_major": 5
+        }
+
+    Scoping the waiver to a major makes it self-expiring: at the next major
+    bump the claim fails again and the waiver must be consciously renewed.
+    """
+    ws_major = _major(workspace_version)
+    if ws_major is None:
+        return [], []
+    fatal: "list[str]" = []
+    accepted: "list[str]" = []
+    for claim in claims:
+        if claim.get("executable", False):
+            continue
+        measured = str(claim.get("measured_version", "")).strip()
+        if not measured or measured.lower() in {"unknown", "n/a"}:
+            continue
+        measured_major = _major(measured)
+        if measured_major is None or measured_major >= ws_major:
+            continue
+        claim_id = claim.get("id", "<unknown>")
+        waiver = claim.get("stale_accepted")
+        if (
+            isinstance(waiver, dict)
+            and str(waiver.get("reason", "")).strip()
+            and waiver.get("for_workspace_major") == ws_major
+        ):
+            accepted.append(
+                f"[{claim_id}] measured on {measured} — waived for {ws_major}.x "
+                f"(granted {waiver.get('granted', 'undated')}): {waiver['reason']}"
+            )
+            continue
+        fatal.append(
+            f"[{claim_id}] measured on {measured}, workspace ships "
+            f"{workspace_version} — a full major behind. Re-run "
+            f"{claim.get('validation_command')!r} and update measured_version, "
+            f"or record a dated 'stale_accepted' waiver scoped to "
+            f"for_workspace_major {ws_major}"
+        )
+    return fatal, accepted
+
+
 def workspace_version(root: pathlib.Path) -> str:
     """The `[workspace.package]` version, the single source of truth."""
     manifest = (root / "Cargo.toml").read_text(encoding="utf-8")
@@ -455,6 +519,14 @@ def run(root: pathlib.Path) -> int:
     stale = stale_claims(claims, version)
     _report(f"Claims measured on an older release than {version} (re-measure):", stale)
 
+    stale_fatal, stale_waived = stale_major_failures(claims, version)
+    _report("Claims a full major behind (accepted by a dated waiver):", stale_waived)
+    _report(
+        "Claims a full major behind the shipping workspace (FATAL — "
+        "re-measure or waive explicitly):",
+        stale_fatal,
+    )
+
     failure_groups = (
         registry_failures,
         family_failures,
@@ -463,6 +535,7 @@ def run(root: pathlib.Path) -> int:
         mcpb_link_failures,
         execution_failures,
         provenance_failures,
+        stale_fatal,
     )
     if any(failure_groups):
         return 1

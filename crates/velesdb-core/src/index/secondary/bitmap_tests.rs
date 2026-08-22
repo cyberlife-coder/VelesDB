@@ -1,8 +1,8 @@
-//! Tests for `SecondaryIndex::to_bitmap` and `ids_to_bitmap`.
+//! Tests for `SecondaryIndex::to_bitmap` over `IdSet` buckets.
 
 #[cfg(test)]
 mod tests {
-    use crate::index::secondary::{JsonValue, SecondaryIndex};
+    use crate::index::secondary::{IdSet, JsonValue, SecondaryIndex};
     use parking_lot::RwLock;
     use std::collections::BTreeMap;
 
@@ -10,7 +10,11 @@ mod tests {
     fn make_btree_index(entries: Vec<(JsonValue, Vec<u64>)>) -> SecondaryIndex {
         let mut tree = BTreeMap::new();
         for (key, ids) in entries {
-            tree.insert(key, ids);
+            let mut set = IdSet::default();
+            for id in ids {
+                set.insert(id);
+            }
+            tree.insert(key, set);
         }
         SecondaryIndex::BTree(RwLock::new(tree))
     }

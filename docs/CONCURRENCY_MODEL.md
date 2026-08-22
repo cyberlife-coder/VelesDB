@@ -17,6 +17,39 @@ VelesDB utilise un modèle de concurrence basé sur:
 - **ArcSwap**: Lock-free CSR snapshot reads for graph traversal (zero contention on reads)
 - **Lock ordering**: Ordre déterministe pour prévenir les deadlocks
 
+## Inter-Process Exclusion (the outermost boundary)
+
+Everything below this section describes concurrency *inside one process* —
+because one process is all there can be. `Database::open_impl`
+(`crates/velesdb-core/src/database/mod.rs`) takes an **exclusive `flock` on
+`<data_dir>/velesdb.lock` at open** and holds it for the `Database`'s entire
+lifetime (the RAII `_lock_file` field releases it on drop, including on
+crash, via the OS). A second process — another daemon, an embedded binding,
+a CLI pointed at the same directory — fails at `open` with
+`Error::DatabaseLocked` **before it can reach any read, write, or
+read-modify-write**. The daemon surfaces this as actionable stderr guidance
+after a bounded retry (`velesdb-memory`'s `daemon_startup.rs`).
+
+This is the invariant the rest of the model leans on. Notably, the
+working-context index in `velesdb-memory` needs no cross-process
+compare-and-swap precisely because no second process can hold the store
+(#1958 was closed on that proof). Two real-process tests pin it:
+
+- `crates/velesdb-memory/tests/http_lock_contention.rs` — a second HTTP
+  daemon on a held store exits non-zero with the lock guidance;
+- `crates/velesdb-memory/tests/working_index_two_daemons_process.rs` — a
+  contender fails fast mid-save-loop, and no index entry is lost across
+  contention or the process handoff.
+
+If single-writer-at-open is ever relaxed, those tests fail first, and every
+"intra-process is all there is" claim in this document must be re-derived.
+
+**Known limits**: `flock` is advisory (a process bypassing `Database::open`
+is not stopped by it), and its semantics on network filesystems (NFS, some
+FUSE mounts) are weaker than on local disks — the same caveat any
+flock-based scheme carries. Deleting `velesdb.lock` while a holder is live
+breaks the exclusion for *future* openers; nothing in-tree does this.
+
 ## Architecture
 
 ### Sharding Strategy
@@ -132,9 +165,9 @@ Enforcement in practice, by build and by tier:
   `#[cfg(debug_assertions)]`; on an out-of-order acquisition it increments an
   atomic violation counter and emits a `tracing::warn!` — it **never panics**.
   It is also partial: only the `GpuVectorsSnapshot`, `Vectors`, and `Layers`
-  ranks are ever recorded. `Columnar` and `Neighbors` are `#[allow(dead_code)]`
-  with no `record_lock_acquire` call site, so 2 of the 5 core ranks are
-  untracked even in debug.
+  ranks are ever recorded. `Neighbors` is `#[allow(dead_code)]` with no
+  `record_lock_acquire` call site, so 1 of the 4 core ranks is untracked even
+  in debug.
 - **The collection tier** — `Collection`'s own field order (`config`,
   `vector_storage`, `payload_storage`, ...; the `=== LOCK ORDERING ===` block
   in `crates/velesdb-core/src/collection/types.rs`, and the "Collection-level
@@ -144,23 +177,30 @@ Enforcement in practice, by build and by tier:
   tests, not on any runtime mechanism.
 
 The ordinal table below is the human-readable record of the intended order; it
-is not enforced by a compiled assertion at acquisition time. The code constants
-and this table are still kept in lock-step and MUST NOT diverge.
+is not enforced by a compiled assertion at acquisition time. Two `LockRank`
+types carry it in code, with distinct roles (#2013): the **public registry**
+(`crate::lock_rank::LockRank`) owns the numbers and the premium reservation,
+and the **private mechanism** (`HnswLockRank`,
+`index/hnsw/native/graph/locking.rs`) is what the debug tracker actually
+records. Their lock-step is not a promise: the private enum's discriminants
+are defined *from* the registry's constants, so any divergence is a compile
+error.
 
 For HNSW index operations that touch the GPU snapshot cache, vector storage,
-the PDX columnar layout, graph layers, and neighbor lists, the global lock
-acquisition order is:
+graph layers, and neighbor lists, the global lock acquisition order is:
 
 ```
-gpu_vectors_snapshot (rank 5) → vectors (rank 10) → columnar (rank 15)
+gpu_vectors_snapshot (rank 5) → vectors (rank 10)
     → layers (rank 20) → neighbors (rank 30)
 ```
 
-| Lock | Rank | `LockRank` constant | Component | Notes |
+(Rank 15 was the PDX block-columnar layout, removed with the unwired PDX
+machinery — the ordinal is retired, not reassigned.)
+
+| Lock | Rank | Registry constant (= `HnswLockRank` discriminant) | Component | Notes |
 |------|------|---------------------|-----------|-------|
 | `gpu_vectors_snapshot` | 5 | `LockRank::GPU_VECTORS_SNAPSHOT` | GPU flat-vector snapshot cache (`Mutex`) | Acquired before `vectors` in the GPU path (`gpu` feature); writers release `vectors` before reacquiring it to invalidate |
 | `vectors` | 10 | `LockRank::VECTORS` | `ContiguousVectors` (single vector store since PERF1) | Acquired first among the core HNSW locks in upsert and search paths |
-| `columnar` | 15 | `LockRank::COLUMNAR` | `ColumnarVectors` (PDX block-columnar layout of the HNSW vectors) | SIMD-parallel distance layout, acquired after vectors |
 | `layers` | 20 | `LockRank::LAYERS` | HNSW layer structure (`RwLock`) | Global graph topology |
 | `neighbors` | 30 | `LockRank::NEIGHBORS` | Per-node neighbor lists (`RwLock`) | Fine-grained, acquired last |
 
@@ -948,4 +988,4 @@ invariants, see [SOUNDNESS.md: HNSW Batch Insertion Ordering](SOUNDNESS.md#hnsw-
 
 ---
 
-*Last updated: 2026-08-09 · Applies to: velesdb-core 5.1.0 (this revision: corrected the lock-order enforcement section — `assert_lock_order` is unwired in production, the HNSW tracker is debug-only, warn-only and partial, the collection tier is convention-only — and the CSR snapshot thread-safety section to describe the lock-free `ArcSwap` + dirty-flag protocol; previous revision noted: HNSW persisted-graph reload at open; storage compaction concurrency)*
+*Last updated: 2026-08-09 · Applies to: velesdb-core 5.2.0 (this revision: corrected the lock-order enforcement section — `assert_lock_order` is unwired in production, the HNSW tracker is debug-only, warn-only and partial, the collection tier is convention-only — and the CSR snapshot thread-safety section to describe the lock-free `ArcSwap` + dirty-flag protocol; previous revision noted: HNSW persisted-graph reload at open; storage compaction concurrency)*

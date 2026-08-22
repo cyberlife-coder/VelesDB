@@ -56,7 +56,6 @@ fn test_core_ranks_are_strictly_ascending() {
     let order = [
         LockRank::GPU_VECTORS_SNAPSHOT,
         LockRank::VECTORS,
-        LockRank::COLUMNAR,
         LockRank::LAYERS,
         LockRank::NEIGHBORS,
     ];

@@ -1,6 +1,6 @@
 # ⚙️ VelesDB Configuration
 
-*Version 5.1.0 — Last updated: 2026-08-08*
+*Version 5.2.0 — Last updated: 2026-08-08*
 
 Complete guide for configuring VelesDB via configuration file, environment variables, and runtime parameters.
 
@@ -44,6 +44,13 @@ To point at a file anywhere else, pass it explicitly:
 |--------|------|---------|
 | `velesdb-server` | `--config <path>` | `VELESDB_CONFIG` |
 | `velesdb` (CLI) | `--config <path>` (global — REPL and every one-shot command) | `VELESDB_CONFIG` |
+
+> **Reserved sections (issue #2087).** Of the engine sections below, only
+> `[limits]` is applied by the engine today. `[search]`, `[hnsw]`,
+> `[storage]` and `[quantization]` are parsed and validated but not yet
+> wired — setting them away from their defaults logs a warning at load.
+> Query-time overrides (`WITH (ef_search = N)`) are a separate, working
+> mechanism, as are per-collection creation options.
 
 Both binaries can load the **same** file, but only the *engine* sections —
 `[search]`, `[hnsw]`, `[storage]`, `[limits]`, `[quantization]`,
@@ -112,7 +119,7 @@ data_dir = "./data"
 ```toml
 # =============================================================================
 # VelesDB Configuration File
-# Version: 5.1.0
+# Version: 5.2.0
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -864,4 +871,4 @@ impl VelesConfig {
 
 ---
 
-*VelesDB Documentation — Last updated: 2026-08-08 · Applies to: velesdb-core 5.1.0*
+*VelesDB Documentation — Last updated: 2026-08-08 · Applies to: velesdb-core 5.2.0*

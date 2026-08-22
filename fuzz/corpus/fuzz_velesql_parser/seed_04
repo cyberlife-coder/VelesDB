@@ -1,0 +1,1 @@
+MATCH (doc:Document)-[:AUTHORED_BY]->(author:Person) WHERE author.dept = 'eng' RETURN author.name LIMIT 5

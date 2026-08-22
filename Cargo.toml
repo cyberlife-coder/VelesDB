@@ -19,7 +19,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "5.1.0"
+version = "5.2.0"
 edition = "2021"
 rust-version = "1.90"
 license-file = "LICENSE"
@@ -34,7 +34,7 @@ keywords = [
     "semantic-search",
 ]
 categories = ["database", "data-structures", "algorithms", "science"]
-description = "VelesDB: The Local Vector Database for Rust & AI. Microsecond semantic search, zero network latency, runs anywhere."
+description = "VelesDB: The Local Vector Database for Rust & AI. Sub-millisecond semantic search, zero network latency, runs anywhere."
 authors = ["Julien Lange <contact@wiscale.fr>"]
 
 [workspace.dependencies]
@@ -86,7 +86,7 @@ base64 = "0.23"
 smallvec = { version = "1", features = ["serde"] }
 
 # Internal workspace crates
-velesdb-core = { path = "crates/velesdb-core", version = "5.1.0", default-features = false }
+velesdb-core = { path = "crates/velesdb-core", version = "5.2.0", default-features = false }
 
 [profile.release]
 lto = true

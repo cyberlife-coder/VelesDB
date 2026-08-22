@@ -6,8 +6,8 @@ use crate::velesql::{
     ReturnClause, SimilarityCondition, VectorExpr,
 };
 
-fn default_stats() -> CollectionStats {
-    CollectionStats {
+fn default_stats() -> MatchGraphStats {
+    MatchGraphStats {
         total_nodes: 1000,
         total_edges: 5000,
         avg_degree: 5.0,
@@ -135,7 +135,7 @@ fn test_count_hops() {
 #[test]
 fn test_planner_with_empty_collection_stats_defaults_to_graph_first() {
     let match_clause = make_match_clause(false, Some(10));
-    let stats = CollectionStats::default();
+    let stats = MatchGraphStats::default();
     let strategy = MatchQueryPlanner::plan(&match_clause, &stats);
     assert!(
         matches!(strategy, MatchExecutionStrategy::GraphFirst { .. }),
@@ -145,7 +145,7 @@ fn test_planner_with_empty_collection_stats_defaults_to_graph_first() {
 
 #[test]
 fn test_planner_with_zero_labels_sets_full_selectivity() {
-    let stats = CollectionStats {
+    let stats = MatchGraphStats {
         total_nodes: 100,
         total_edges: 50,
         avg_degree: 0.5,
@@ -248,7 +248,7 @@ fn test_planner_forces_graph_first_over_parallel_when_edge_alias_referenced() {
         expression: "r.since".to_string(),
         alias: None,
     }];
-    let stats = CollectionStats {
+    let stats = MatchGraphStats {
         total_nodes: 50_000,
         total_edges: 500_000,
         avg_degree: 10.0,

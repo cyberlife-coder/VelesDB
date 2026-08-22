@@ -87,6 +87,13 @@ impl SearchMode {
 }
 
 /// Search configuration section.
+///
+/// **Reserved — parsed and validated, not yet applied.** Only `[limits]`
+/// reaches the engine today; [`VelesConfig::validate`] warns when this
+/// section deviates from its defaults so a config cannot silently promise
+/// behavior the engine does not deliver. Wiring these values as engine
+/// defaults is tracked in issue #2087. Per-query runtime overrides
+/// (`WITH (ef_search = N)`) are a separate, working mechanism.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SearchConfig {
@@ -112,6 +119,13 @@ impl Default for SearchConfig {
 }
 
 /// HNSW index configuration section.
+///
+/// **Reserved — parsed and validated, not yet applied.** Only `[limits]`
+/// reaches the engine today; [`VelesConfig::validate`] warns when this
+/// section deviates from its defaults so a config cannot silently promise
+/// behavior the engine does not deliver. Wiring these values as engine
+/// defaults is tracked in issue #2087. Per-query runtime overrides
+/// (`WITH (ef_search = N)`) are a separate, working mechanism.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HnswConfig {
@@ -134,6 +148,12 @@ pub mod server {
     use serde::{Deserialize, Serialize};
 
     /// Storage configuration section.
+    ///
+    /// **Reserved — parsed and validated, not yet applied.** Only
+    /// `[limits]` reaches the engine today; `VelesConfig::validate` warns
+    /// when this section deviates from its defaults. Wiring is tracked in
+    /// issue #2087 (`data_dir` in particular conflicts with the path passed
+    /// to `Database::open` and may go through deprecation instead).
     #[derive(Debug, Clone, Serialize, Deserialize)]
     #[serde(default)]
     pub struct StorageConfig {
@@ -263,8 +283,16 @@ const fn default_max_batch_size() -> usize {
 
 /// Configuration for WAL group commit batching.
 ///
-/// When enabled, multiple concurrent writes are batched into a single
-/// `sync_all()` call, amortizing the fsync cost across the batch.
+/// **Reserved — parsed but not yet wired.** Setting `enabled = true` changes
+/// nothing today: no group commit occurs, and every write keeps its own
+/// durability barrier (batch APIs already amortize to one barrier per call).
+/// [`VelesConfig::validate`] logs a warning when the flag is set so a config
+/// cannot promise behavior the engine does not deliver. Wiring the
+/// `WalBatcher` (or removing this section) is tracked in issue #2078 — the
+/// decision needs a multi-writer measurement, not a default.
+///
+/// When wired, group commit would batch multiple concurrent writes into a
+/// single `sync_all()` call, amortizing the fsync cost across the batch.
 ///
 /// # Example (TOML)
 ///
@@ -347,11 +375,7 @@ impl VelesConfig {
             .merge(Toml::file(path.as_ref()))
             .merge(Env::prefixed("VELESDB_").split("_").lowercase(false));
 
-        let config: Self = figment
-            .extract()
-            .map_err(|e| ConfigError::ParseError(e.to_string()))?;
-        config.validate()?;
-        Ok(config)
+        Self::finish(&figment)
     }
 
     /// Creates a configuration from a TOML string.
@@ -368,11 +392,7 @@ impl VelesConfig {
             .merge(Serialized::defaults(Self::default()))
             .merge(Toml::string(toml_str));
 
-        let config: Self = figment
-            .extract()
-            .map_err(|e| ConfigError::ParseError(e.to_string()))?;
-        config.validate()?;
-        Ok(config)
+        Self::finish(&figment)
     }
 
     /// The top-level TOML tables that belong to the *engine* — as opposed
@@ -442,6 +462,14 @@ impl VelesConfig {
             .merge(Toml::string(&filtered))
             .merge(Env::prefixed("VELESDB_").split("_").lowercase(false));
 
+        Self::finish(&figment)
+    }
+
+    /// Extracts a [`Self`] from an assembled [`Figment`] and validates it.
+    /// Shared tail of `load_from_path`, `from_toml`, and
+    /// `load_from_path_engine_only`, which differ only in how `figment` is
+    /// assembled.
+    fn finish(figment: &Figment) -> Result<Self, ConfigError> {
         let config: Self = figment
             .extract()
             .map_err(|e| ConfigError::ParseError(e.to_string()))?;
@@ -465,6 +493,11 @@ impl VelesConfig {
     // Validation is in config_validation.rs
 
     /// Returns the effective `ef_search` value.
+    #[deprecated(
+        since = "5.2.0",
+        note = "never read by the engine — [search] is not applied (issue #2087); \
+                query-time WITH (ef_search = N) is the working override"
+    )]
     #[must_use]
     pub fn effective_ef_search(&self) -> usize {
         self.search

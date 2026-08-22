@@ -54,7 +54,13 @@ impl MmapStorage {
             // - Condition 2: Old mmap is dropped when we assign the new one.
             // - Condition 3: File remains open with read+write permissions.
             // SAFETY: Memory mapping requires unsafe; resizing ensures mapping doesn't exceed file bounds.
-            *mmap = unsafe { MmapMut::map_mut(&self.data_file)? };
+            let new_mmap = unsafe { MmapMut::map_mut(&self.data_file)? };
+            // Re-apply the random-access advice — it does not survive remap.
+            #[cfg(unix)]
+            if let Err(e) = new_mmap.advise(memmap2::Advice::Random) {
+                tracing::debug!("madvise(MADV_RANDOM) failed after remap: {e}");
+            }
+            *mmap = new_mmap;
             self.remap_epoch()
                 .fetch_add(1, std::sync::atomic::Ordering::Release);
 

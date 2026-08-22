@@ -206,9 +206,12 @@ pub(crate) fn parse_fusion_strategy(
         "average" | "avg" => Ok(velesdb_core::FusionStrategy::Average),
         "maximum" | "max" => Ok(velesdb_core::FusionStrategy::Maximum),
         "weighted" => Ok(velesdb_core::FusionStrategy::Weighted {
-            avg_weight: f.avg_w.unwrap_or(0.5),
-            max_weight: f.max_w.unwrap_or(0.3),
-            hit_weight: f.hit_w.unwrap_or(0.2),
+            // Canonical defaults from core's fusion module (#1545) — this
+            // arm previously froze the pre-#1545 literals 0.5/0.3/0.2,
+            // forking the REST default from every other surface.
+            avg_weight: f.avg_w.unwrap_or(velesdb_core::DEFAULT_WEIGHTED_AVG_WEIGHT),
+            max_weight: f.max_w.unwrap_or(velesdb_core::DEFAULT_WEIGHTED_MAX_WEIGHT),
+            hit_weight: f.hit_w.unwrap_or(velesdb_core::DEFAULT_WEIGHTED_HIT_WEIGHT),
         }),
         other => Err((
             StatusCode::BAD_REQUEST,
@@ -464,20 +467,28 @@ fn execute_hybrid_sparse(
         return Err((StatusCode::BAD_REQUEST, Json(error)).into_response());
     }
     let strategy = parse_fusion_strategy(req.fusion.as_ref())?;
-    // Gate the read (CORE-2): hybrid dense+sparse has no metadata-filter leaf,
-    // so a scope decision fails closed rather than running unfiltered.
+    // The request's metadata filter applies to BOTH branches (dense pre-filter
+    // + sparse post-filter) inside core; it was previously never read on this
+    // path, silently returning unfiltered hybrid results.
+    let filter = match req.filter {
+        Some(ref filter_json) => Some(parse_filter_or_400(filter_json, &state.onboarding_metrics)?),
+        None => None,
+    };
+    // Gate the read (CORE-2): the gate is consulted without a filter leaf, so
+    // a scope decision still fails closed rather than running under-scoped.
     match state.db.authorize_read(
         name,
         velesdb_core::observer::QueryOperationKind::HybridSearch,
         None,
         None,
     ) {
-        Ok(None) => Ok(collection.hybrid_sparse_search(
+        Ok(None) => Ok(collection.hybrid_sparse_search_filtered(
             &req.vector,
             sparse_query,
             req.top_k,
             index_name,
             &strategy,
+            filter.as_ref(),
         )),
         Ok(Some(_)) => Ok(Err(velesdb_core::Error::Config(
             "scope narrowing is not supported for hybrid dense+sparse search".to_string(),

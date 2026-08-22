@@ -266,11 +266,25 @@ jobs:
       - name: Install build deps (@napi-rs/cli)
         run: npm install
 
+      # Same recipe as the daemon-archive job below: apt's cross gcc. The
+      # napi-rs bundled cross toolchain's gcc is too old for ring's ARM
+      # assembly (`#error "ARM assembler must define __ARM_ARCH"`), which the
+      # crate pulls in since TLS ships in the default HTTP features (0.14.1) —
+      # while the daemon job has been building the same crate for the same
+      # target with the apt toolchain all along. cc-rs finds
+      # aarch64-linux-gnu-gcc by target convention once no TARGET_CC overrides
+      # it, so dropping --use-napi-cross is the whole switch.
+      - name: Install aarch64 linux cross linker
+        if: matrix.cross
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+
       - name: Build addon
         # napi reads the profile from package.json's build script; pass the
-        # target explicitly for cross/host builds. --use-napi-cross supplies the
-        # zig-based sysroot for the one cross target (no Docker needed).
-        run: npx napi build --platform --profile release-node --target ${{ matrix.target }} ${{ matrix.cross && '--use-napi-cross' || '' }}
+        # target explicitly for cross/host builds.
+        run: npx napi build --platform --profile release-node --target ${{ matrix.target }}
 
       - name: Smoke-test the addon (native targets only)
         # HARDENING (tracked): this skips x86_64-apple-darwin (Rosetta on the arm

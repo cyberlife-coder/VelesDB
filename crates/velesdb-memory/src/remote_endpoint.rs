@@ -36,6 +36,13 @@ impl RemoteEndpoint {
     /// list is obliged to know. Ollama keeps its defaults because it genuinely
     /// has one canonical local address.
     ///
+    /// The URL's scheme is the local-or-cloud switch, and nothing else is:
+    /// `http://` reaches a server on this machine, `https://` a hosted
+    /// provider (TLS in the client since 0.14.1, #2025) — same variables
+    /// either way. A provider that serves only chat completions (`OpenRouter`)
+    /// can back the *extractor* role while the embedder stays local: the
+    /// roles are configured independently on purpose.
+    ///
     /// # Errors
     /// A message naming the exact variable that is missing, per role.
     pub fn require(self, prefix: &str) -> Result<(String, String, Auth), String> {

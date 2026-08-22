@@ -489,8 +489,72 @@ fn test_filter_strategy_as_str() {
         "pre-filtering (high selectivity)"
     );
     assert_eq!(
+        FilterStrategy::PreFilterExact.as_str(),
+        "pre-filtering (exact, brute-force scan)"
+    );
+    assert_eq!(
         FilterStrategy::PostFilter.as_str(),
         "post-filtering (low selectivity)"
+    );
+}
+
+// =============================================================================
+// decide_filter_strategy — the single executor/EXPLAIN decision point (lot 3.1)
+// =============================================================================
+
+/// Exact mode must reproduce the executor's historical dispatch bit-for-bit:
+/// `> 0.8` post-filters, `<= 0.01` brute-forces the bitmap survivors, and the
+/// band in between runs bitmap-constrained HNSW.
+#[test]
+fn test_decide_exact_mode_matches_executor_dispatch() {
+    let decide = |sel: f64| decide_filter_strategy(sel, FilterDecisionMode::Exact, None);
+
+    assert_eq!(decide(0.0), FilterStrategy::PreFilterExact);
+    assert_eq!(
+        decide(EXACT_FULL_SCAN_MAX_SELECTIVITY),
+        FilterStrategy::PreFilterExact
+    );
+    assert_eq!(
+        decide(EXACT_FULL_SCAN_MAX_SELECTIVITY + 1e-9),
+        FilterStrategy::PreFilter
+    );
+    assert_eq!(decide(0.5), FilterStrategy::PreFilter);
+    // The boundary itself is NOT post-filter: the executor used a strict `>`.
+    assert_eq!(
+        decide(EXACT_POST_FILTER_MIN_SELECTIVITY),
+        FilterStrategy::PreFilter
+    );
+    assert_eq!(
+        decide(EXACT_POST_FILTER_MIN_SELECTIVITY + 1e-9),
+        FilterStrategy::PostFilter
+    );
+    assert_eq!(decide(1.0), FilterStrategy::PostFilter);
+}
+
+/// Estimated mode without stats must preserve the historical 0.1 fallback
+/// threshold — and must never promise the exact brute-force branch, which
+/// only exists once a bitmap has been materialized.
+#[test]
+fn test_decide_estimated_mode_fallback_threshold_parity() {
+    let mode = FilterDecisionMode::Estimated {
+        has_vector_search: true,
+        ef_search: 100,
+        candidates: 10,
+    };
+
+    assert_eq!(
+        decide_filter_strategy(0.05, mode, None),
+        FilterStrategy::PreFilter
+    );
+    assert_eq!(
+        decide_filter_strategy(0.2, mode, None),
+        FilterStrategy::PostFilter
+    );
+    // Even a selectivity deep inside the executor's brute-force band stays
+    // a plain PreFilter at plan time.
+    assert_eq!(
+        decide_filter_strategy(0.001, mode, None),
+        FilterStrategy::PreFilter
     );
 }
 

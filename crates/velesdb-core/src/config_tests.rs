@@ -60,6 +60,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // Reason: pins the deprecated helper until its removal (issue #2087)
     fn test_config_effective_ef_search_from_mode() {
         // Arrange
         let config = VelesConfig::default();
@@ -72,6 +73,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // Reason: pins the deprecated helper until its removal (issue #2087)
     fn test_config_effective_ef_search_override() {
         // Arrange
         let mut config = VelesConfig::default();

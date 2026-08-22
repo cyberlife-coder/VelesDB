@@ -38,6 +38,34 @@ thread_local! {
     static PROBE_RNG: Cell<u64> = const { Cell::new(0) };
 }
 
+/// Resumable handle over a completed layer-0 traversal.
+///
+/// Produced by [`NativeHnsw::search_resumable`] and consumed by
+/// [`NativeHnsw::resume_search`]. Dropping it without resuming returns the
+/// pooled heaps and visited set through [`SearchState`]'s `Drop`.
+///
+/// # What a resumed traversal does not reconsider
+///
+/// Resuming continues best-first expansion from the phase-1 frontier
+/// (`candidates`) under a widened `ef`. Two classes of phase-1 nodes are
+/// permanently out of reach:
+///
+/// - neighbors gathered during phase 1 whose distance failed the phase-1
+///   admission test — the visited mark happens at gather time (exactly as
+///   in hnswlib), so they can never be re-gathered, and no heap entry was
+///   created for them;
+/// - the single candidate popped by the terminating iteration of phase 1.
+///
+/// A resumed search therefore explores a subset of what a from-scratch
+/// search at the widened `ef` would explore: its recall sits between
+/// single-pass `ef1` and single-pass `ef2`. The `adaptive_resume_evals`
+/// harness pins both sides of that trade — distance evaluations saved and
+/// recall parity against the from-scratch escalation — on a deterministic
+/// corpus.
+pub struct ResumableSearch {
+    state: SearchState,
+}
+
 impl<D: DistanceEngine> NativeHnsw<D> {
     /// Searches for k nearest neighbors.
     ///
@@ -239,6 +267,108 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     // Layer-level search helpers
     // =========================================================================
 
+    /// Phase-1 search that keeps its traversal state for a possible escalation.
+    ///
+    /// Runs the same descent and layer-0 traversal as [`Self::search`], but
+    /// returns the sorted top-k **and** a live [`ResumableSearch`] handle
+    /// instead of consuming the state. Pass the handle to
+    /// [`Self::resume_search`] to widen the `ef` budget without restarting
+    /// the traversal; drop it to release the pooled structures unchanged.
+    #[must_use]
+    pub(in crate::index::hnsw) fn search_resumable(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef_search: usize,
+    ) -> (Vec<(NodeId, f32)>, Option<ResumableSearch>) {
+        let prepared_query = self.prepare_query(query);
+        let outcome = self.search_resumable_prepared(&prepared_query, k, ef_search);
+        Self::recycle_cow(prepared_query);
+        outcome
+    }
+
+    /// [`Self::search_resumable`] on an already-prepared query vector.
+    ///
+    /// Mirrors [`Self::search_prepared`] / [`Self::search_multi_entry_prepared`]
+    /// (greedy upper-layer descent, adaptive probe count, layer-0 traversal)
+    /// but keeps the [`SearchState`] alive inside the returned handle.
+    fn search_resumable_prepared(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef_search: usize,
+    ) -> (Vec<(NodeId, f32)>, Option<ResumableSearch>) {
+        let ep = self.entry_point.load(Ordering::Acquire);
+        if ep == NO_ENTRY_POINT {
+            return (Vec::new(), None);
+        }
+
+        let max_layer = self.max_layer.load(Ordering::Relaxed);
+        let mut current_ep = ep;
+        for layer_idx in (1..=max_layer).rev() {
+            current_ep = self.search_layer_single(query, current_ep, layer_idx);
+        }
+
+        let count = self.count.load(Ordering::Relaxed);
+        let probes = self.adaptive_num_probes(count, ef_search, k);
+
+        let mut state = SearchState::new(count);
+        if probes > 1 {
+            let entry_points = Self::gather_multi_entry_points(current_ep, count, probes);
+            self.run_layer_search(
+                query,
+                &entry_points,
+                ef_search,
+                0,
+                self.stagnation_limit,
+                &mut state,
+            );
+        } else {
+            self.run_layer_search(
+                query,
+                &[current_ep],
+                ef_search,
+                0,
+                self.stagnation_limit,
+                &mut state,
+            );
+        }
+
+        let results = state.peek_sorted_results(Some(k));
+        (results, Some(ResumableSearch { state }))
+    }
+
+    /// Continues a phase-1 traversal under a widened `ef` budget.
+    ///
+    /// `query` must be the same vector passed to [`Self::search_resumable`];
+    /// it is re-prepared here (one normalization pass for cosine) so the
+    /// handle neither borrows nor owns the phase-1 buffer. See
+    /// [`ResumableSearch`] for what a resumed traversal does and does not
+    /// reconsider.
+    #[must_use]
+    pub(in crate::index::hnsw) fn resume_search(
+        &self,
+        resume: ResumableSearch,
+        query: &[f32],
+        k: usize,
+        ef_search: usize,
+    ) -> Vec<(NodeId, f32)> {
+        let ResumableSearch { mut state } = resume;
+        // The widened budget deserves fresh stagnation chances: phase 1 may
+        // have stopped on the stagnation limit rather than the distance bound.
+        state.stagnation_count = 0;
+        let prepared_query = self.prepare_query(query);
+        self.continue_layer_search(
+            &prepared_query,
+            &mut state,
+            ef_search,
+            0,
+            self.stagnation_limit,
+        );
+        Self::recycle_cow(prepared_query);
+        state.into_sorted_results(Some(k))
+    }
+
     /// F-04 optimization: acquires both vectors and layers read locks once
     /// before the greedy descent loop, avoiding repeated lock cycles per hop.
     ///
@@ -389,7 +519,23 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     ) -> Vec<(NodeId, f32)> {
         let capacity_hint = self.count.load(Ordering::Relaxed);
         let mut state = SearchState::new(capacity_hint);
+        self.run_layer_search(query, entry_points, ef, layer, stagnation_limit, &mut state);
+        state.into_sorted_results(result_limit)
+    }
 
+    /// Seeds `state` with `entry_points` and runs the layer traversal loop.
+    ///
+    /// Factored out of [`Self::search_layer`] so the resumable-search path
+    /// can run the identical traversal while retaining the state.
+    fn run_layer_search(
+        &self,
+        query: &[f32],
+        entry_points: &[NodeId],
+        ef: usize,
+        layer: usize,
+        stagnation_limit: usize,
+        state: &mut SearchState,
+    ) {
         self.with_vectors_and_layers_read(|vectors, layers| {
             let use_prefetch = should_prefetch(vectors.dimension());
 
@@ -415,15 +561,44 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                 query,
                 vectors,
                 layers,
-                &mut state,
+                state,
                 ef,
                 layer,
                 stagnation_limit,
                 use_prefetch,
             );
         });
+    }
 
-        state.into_sorted_results(result_limit)
+    /// Re-enters the layer traversal loop with an existing state.
+    ///
+    /// No entry-point seeding: `state.candidates` already holds the frontier
+    /// left by the previous pass, and `state.results` its admitted set. With
+    /// a widened `ef`, [`SearchState::should_terminate`] does not fire until
+    /// the result set grows past the new budget, so the loop continues the
+    /// best-first expansion exactly where the previous pass stopped.
+    fn continue_layer_search(
+        &self,
+        query: &[f32],
+        state: &mut SearchState,
+        ef: usize,
+        layer: usize,
+        stagnation_limit: usize,
+    ) {
+        self.with_vectors_and_layers_read(|vectors, layers| {
+            let use_prefetch = should_prefetch(vectors.dimension());
+            Self::dispatch_layer_search(
+                &self.distance,
+                query,
+                vectors,
+                layers,
+                state,
+                ef,
+                layer,
+                stagnation_limit,
+                use_prefetch,
+            );
+        });
     }
 
     /// Dispatches layer search to the pipelined or sequential path.
@@ -518,7 +693,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
                     if batch.is_empty() {
                         return false;
                     }
-                    let vecs: SmallVec<[&[f32]; 32]> = batch.iter().map(|(_, v)| *v).collect();
+                    let vecs: SmallVec<[&[f32]; 64]> = batch.iter().map(|(_, v)| *v).collect();
                     let distances = batch_distance_with_prefetch(distance, query, &vecs);
                     process_batch_results(&batch, &distances, ef, state)
                 })

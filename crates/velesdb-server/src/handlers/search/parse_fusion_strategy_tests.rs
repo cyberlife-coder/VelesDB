@@ -63,9 +63,11 @@ fn test_weighted_with_defaults() {
             max_weight,
             hit_weight,
         } => {
-            assert!((avg_weight - 0.5).abs() < f32::EPSILON);
-            assert!((max_weight - 0.3).abs() < f32::EPSILON);
-            assert!((hit_weight - 0.2).abs() < f32::EPSILON);
+            // Canonical #1545 defaults, sourced from core's fusion consts —
+            // this arm shipped the pre-#1545 fork (0.5/0.3/0.2) until then.
+            assert!((avg_weight - velesdb_core::DEFAULT_WEIGHTED_AVG_WEIGHT).abs() < f32::EPSILON);
+            assert!((max_weight - velesdb_core::DEFAULT_WEIGHTED_MAX_WEIGHT).abs() < f32::EPSILON);
+            assert!((hit_weight - velesdb_core::DEFAULT_WEIGHTED_HIT_WEIGHT).abs() < f32::EPSILON);
         }
         other => panic!("expected Weighted, got {other:?}"),
     }

@@ -95,3 +95,24 @@ pub fn velesql_canonical_hash(query: &str) -> u64 {
     hasher.write(canonical.as_bytes());
     hasher.finish()
 }
+
+// =============================================================================
+// Deterministic distance-evaluation counter (cost-crossover harness)
+// =============================================================================
+
+/// Returns the process-global count of single-pair distance evaluations.
+///
+/// See `index::hnsw::eval_count` for what is (and is not) counted. The count
+/// is a deterministic work measure for seeded corpora — usable on shared CI
+/// runners where wall-clock is noise.
+#[cfg(feature = "persistence")]
+#[must_use]
+pub fn hnsw_distance_evals() -> u64 {
+    crate::index::hnsw::eval_count::distance_evals()
+}
+
+/// Resets the distance-evaluation counter to zero.
+#[cfg(feature = "persistence")]
+pub fn reset_hnsw_distance_evals() {
+    crate::index::hnsw::eval_count::reset_distance_evals();
+}

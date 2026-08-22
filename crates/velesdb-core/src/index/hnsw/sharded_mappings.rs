@@ -46,6 +46,14 @@ pub struct ShardedMappings {
     /// Number of orphaned index slots created by race conditions in
     /// `batch_insert_fast_path`. Monotonically increasing.
     tombstone_slots: AtomicUsize,
+    /// Whether any external id above `u32::MAX` was ever registered.
+    ///
+    /// Gates the O(N) overflow-id sweep in the bitmap brute-force path: with
+    /// no overflow ids (virtually every deployment) that sweep is a pure
+    /// full-DashMap scan per filtered query. Sticky by design — removing the
+    /// last overflow id keeps the flag set until the index is reloaded, which
+    /// costs the sweep again but never correctness.
+    has_overflow_ids: std::sync::atomic::AtomicBool,
 }
 
 impl Default for ShardedMappings {
@@ -63,6 +71,7 @@ impl ShardedMappings {
             idx_to_id: DashMap::new(),
             next_idx: AtomicUsize::new(0),
             tombstone_slots: AtomicUsize::new(0),
+            has_overflow_ids: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -76,6 +85,7 @@ impl ShardedMappings {
             idx_to_id: DashMap::with_capacity(capacity),
             next_idx: AtomicUsize::new(0),
             tombstone_slots: AtomicUsize::new(0),
+            has_overflow_ids: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -123,6 +133,23 @@ impl ShardedMappings {
 
     /// Allocates a new internal index and inserts bidirectional mappings.
     ///
+    /// Records `id` into the overflow flag (see `has_overflow_ids`).
+    #[inline]
+    fn note_id(&self, id: u64) {
+        if u32::try_from(id).is_err() {
+            self.has_overflow_ids
+                .store(true, std::sync::atomic::Ordering::Release);
+        }
+    }
+
+    /// Returns `true` if any id above `u32::MAX` was ever registered.
+    #[inline]
+    #[must_use]
+    pub fn has_overflow_ids(&self) -> bool {
+        self.has_overflow_ids
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
     /// Shared by `register` and `register_or_replace` for the new-ID path.
     fn allocate_and_map(
         &self,
@@ -130,6 +157,7 @@ impl ShardedMappings {
         id: u64,
     ) -> usize {
         let idx = self.next_idx.fetch_add(1, Ordering::Relaxed);
+        self.note_id(id);
         entry.insert(idx);
         self.idx_to_id.insert(idx, id);
         idx
@@ -198,6 +226,7 @@ impl ShardedMappings {
             let result = match self.id_to_idx.entry(id) {
                 Entry::Vacant(entry) => {
                     let slot_idx = start + i;
+                    self.note_id(id);
                     entry.insert(slot_idx);
                     self.idx_to_id.insert(slot_idx, id);
                     (slot_idx, None)
@@ -265,6 +294,7 @@ impl ShardedMappings {
     /// `register_or_replace` for this `id`. Passing an arbitrary `idx` will
     /// corrupt the bidirectional mapping.
     pub fn restore(&self, id: u64, idx: usize) {
+        self.note_id(id);
         self.id_to_idx.insert(id, idx);
         self.idx_to_id.insert(idx, id);
     }
@@ -379,7 +409,9 @@ impl ShardedMappings {
         let sharded_id_to_idx = DashMap::with_capacity(id_to_idx.len());
         let sharded_idx_to_id = DashMap::with_capacity(idx_to_id.len());
 
+        let mut has_overflow = false;
         for (id, idx) in id_to_idx {
+            has_overflow |= u32::try_from(id).is_err();
             sharded_id_to_idx.insert(id, idx);
         }
         for (idx, id) in idx_to_id {
@@ -391,6 +423,7 @@ impl ShardedMappings {
             idx_to_id: sharded_idx_to_id,
             next_idx: AtomicUsize::new(next_idx),
             tombstone_slots: AtomicUsize::new(0),
+            has_overflow_ids: std::sync::atomic::AtomicBool::new(has_overflow),
         }
     }
 

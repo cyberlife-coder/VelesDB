@@ -7,8 +7,271 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.2.0] - 2026-08-22
+
+### Changed
+
+- **The cosine hot path runs on the pre-normalized kernel.** Vectors are
+  unit-norm at insert (and normalized on legacy load behind an epsilon gate
+  that keeps already-unit vectors bitwise intact), so production HNSW now
+  scores cosine as `1 - dot` — one FMA chain instead of three plus a
+  sqrt/div — at every traversal, rerank, and recovery comparison site.
+  Recovery pass 3 compares bytes on the normalized form, preserving its
+  exactness contract. (#2058)
+
+- **Every WAL write path pays one durability barrier per batch, not one per
+  point.** BM25, sparse and payload batch APIs append their whole batch and
+  sync once; frame encodings are byte-identical to N single appends, so
+  existing logs replay unchanged. (#2059)
+
+- **The query row loops stopped re-deriving per-query invariants.** MATCH
+  payload reads are memoized per query behind the storage guards; WHERE
+  metadata leaves compile once per query instead of once per row; the WHERE
+  similarity loop hoists its vector/metric snapshot; and the payload log no
+  longer issues an `fstat` per read. (#2060, #2066, #2068)
+
+- **MATCH planning reads O(1) statistics.** Edge and label counts come from
+  maintained counters instead of full scans, and the planner honors the CSR
+  rebuild debounce instead of forcing rebuilds on read. GraphMatch
+  selectivity is costed from the ANALYZE graph view instead of a 0.5
+  constant. (#2061, #2048)
+
+- **Filtered search allocates and hydrates less.** Secondary-index lookups
+  serve prebuilt roaring buckets folded smallest-first; vector hydration is
+  deferred to the k survivors of the score sort; candidate scans stream in
+  bounded chunks; cache hits on `CollectionStats` share an `Arc` instead of
+  deep-cloning the stats tree. (#2063, #2064, #2065)
+
+- **JOIN stopped deep-cloning its left rows.** The PK ColumnStore join is
+  1:1 by construction, so joined rows now *move* their left `SearchResult`
+  (vector included) instead of copying it; the indexed non-PK join builds a
+  real grouped hash-join side — one index lookup per distinct key, one
+  batched hydration — instead of one lookup per row; and the JOIN-side
+  ColumnStore is cached keyed by collection generation. (#2042, #2067)
+
+- **`flush()` rewrites only what changed.** Property and range index files
+  key off dirty flags, the edge-store snapshot keys off WAL emptiness
+  (an empty WAL proves store == snapshot), and clean sparse indexes skip
+  compaction — O(batch) per flush instead of O(total edges + postings).
+  Crash ordering (snapshot before WAL truncate) is unchanged and pinned by
+  the recovery suites. (#2072)
+
+- **Reverse graph traversals resolve through a composite index.**
+  `incoming_by_label` mirrors the outgoing index, so `<-[:TYPE]-` patterns
+  and `Direction::Both` expansions are O(matching edges) instead of
+  cloning the whole in-neighborhood; the field is rebuilt at load
+  (`serde(skip)`), leaving `edge_store.bin` byte-compatible. (#2071)
+
+- **The vector mmap advises `MADV_RANDOM`** at map and at every
+  capacity-growth remap, so HNSW's random access pattern stops paying
+  kernel readahead for pages search never touches. (#2070)
+
+- **Brute-force scans partial-sort to top-k** (`select_nth_unstable` +
+  sort of the k survivors) instead of fully sorting candidate sets, and
+  `ORDER BY` on plain payload fields decorates each row once instead of
+  re-walking payload JSON inside the comparator. (#2069)
+
+- **Three small hot-path allocation fixes**: the delta-buffer merge uses
+  `FxHashSet`, `ShardedIndex::len()` reads a maintained atomic counter
+  instead of walking 16 shard locks, and the HNSW graph writer serializes
+  neighbors through a reused scratch buffer — byte-identical output.
+  (#2073)
+
+- **The adaptive escalation resumes instead of restarting.** When the
+  spread heuristic escalates a hard query, phase 2 re-enters the phase-1
+  traversal (visited set and frontier carried over) under the widened ef
+  instead of re-running from scratch — measured 27% fewer distance
+  evaluations at exact recall parity on the deterministic harness, which
+  now runs in CI next to the cost-crossover suite. GPU and RaBitQ paths
+  keep their restart semantics. (#2080)
+
+- **The ColumnStore string dictionary interns each string once** — both
+  interning maps share a single `Arc<str>` allocation per entry instead of
+  storing every string twice. (#2081)
+
+### Added
+
+- **Inner/Left JOINs on a non-primary join column are served from a
+  secondary index** when one exists on the right collection, instead of
+  falling back to a full scan. (#2049)
+
+- **The runtime filter-selectivity estimate is backed by ANALYZE
+  statistics** instead of static heuristics, feeding the pre/post-filter
+  decision brain. (#2046)
+
+- **CI: the fuzz seed corpus is committed and replayed on every PR**, and a
+  crash found by the nightly job now fails it; nightly Miri extends to the
+  manual-allocation core. Four consumer feature combinations gate every PR,
+  and manifests are checked against the public registries daily. (#2027,
+  #2032, #2033, #2051, #2052)
+
+### Deprecated
+
+- **The `MemoryStore` alias** (velesdb-memory) is deprecated; its napi
+  homonym is renamed. (#2035)
+
+### Removed
+
+- **The PDX block-columnar machinery.** It was maintained on every insert,
+  rebuilt on optimize (2x vector RAM), and read by nothing; the search loop
+  it fed was reclaimed, and `NATIVE_HNSW.md` now documents the
+  pre-normalized kernel that production actually runs. Recoverable from git
+  history if the design returns. (#2062, #2074)
+
 ### Fixed
 
+- **The hybrid dense+sparse metadata filter now binds BOTH branches — and
+  the REST endpoint finally reads it at all.** Two layered defects: the
+  server's `/search` hybrid dense+sparse path never read the request's
+  `filter` (silently returning unfiltered fused results), and even when a
+  filter reached core's `execute_both_branches` (the VelesQL hybrid path),
+  only the sparse branch applied it — dense-only candidates the filter
+  excludes leaked into fusion. The dense branch now routes through the
+  filtered dense search (bitmap pre-filter + oversampling), the facade
+  gains `hybrid_sparse_search_filtered`, and the server wires the request
+  filter through it. A facade test pins that no fused result can carry an
+  excluded point.
+
+- **The REST weighted-fusion defaults rejoin the #1545 canon.** The REST
+  surface froze the pre-#1545 weights (0.5/0.3/0.2) in two places — the
+  `api_types` serde defaults and the server's strategy parser — while
+  every other surface used the canonical 0.6/0.3/0.1 from core's fusion
+  module. Both now derive from the canonical constants; a weightless
+  `strategy: "weighted"` REST request behaves like the same request on
+  every other surface. Behavioral change for REST clients that relied on
+  the forked defaults: pass explicit weights to keep the old blend.
+
+- **TS SDK: REST `upsert`/`upsertBatch` no longer drop `sparseVector`.**
+  The REST backend sent only `{id, vector, payload}` while the server
+  accepts `sparse_vector` and the streaming backend always forwarded it —
+  a sparse-carrying upsert silently produced an empty sparse index and
+  degraded hybrid search. Both paths now forward it; wire-body tests pin
+  the contract.
+
+- **The bitmap under-fill retry explored nothing.** It doubled
+  `candidates_k` at the same `ef`, but the graph's result heap is bounded
+  by `ef`, so the retry re-ran the identical traversal and returned the
+  identical set — pure cost. The retry now widens `ef` as well, and a
+  regression test pins both the old no-op mechanism and the new deeper
+  exploration. (#2080)
+
+- **`[wal_batch]` no longer promises group commit it does not deliver.**
+  The section is parsed but unwired; enabling it now logs a warning, the
+  rustdoc marks it reserved, and both example TOMLs stop describing it as
+  functional. Wiring or removal is tracked in #2078. (#2082)
+
+- **Package descriptions claim sub-millisecond, not microsecond**, and the
+  benchmarks licence notice is corrected. (#2041)
+
+### Changed
+
+- **The executed-strategy channel is now a typed cell.** The
+  `Arc<AtomicU8>` probe introduced with `executed_filter_strategy` spread
+  its raw `u8` encoding across three modules; it is now
+  `guardrails::ExecutedStrategyCell`, whose encoding is a private detail —
+  callers only `record` a `FilterStrategy` and `get` an `Option` back. The
+  counted (EXPLAIN ANALYZE) executions also return a named
+  `CountedExecution` struct instead of a 4-tuple, and the Database-level
+  counted path shares its pre-flight (`execute_query_gated`: subquery
+  resolution, validation, read gate, timed execution) with the plain path
+  instead of replaying a copy — the two can no longer drift. The executor's
+  dispatch match is spelled out with no wildcard arm: a future
+  `FilterStrategy` variant fails compilation at every site that must choose,
+  instead of silently falling into a default. No behavior change.
+
+### Added
+
+- **The cost-crossover harness measures two corpus geometries.** The original
+  closed-form trigonometric corpus lies on a smooth 1-D curve — a degenerate
+  distribution an HNSW graph finds unusually easy, so its numbers alone could
+  flatter the index. A seeded isotropic corpus (inline xorshift64*, no RNG
+  dependency, so the sequence can never change under a dependency bump) now
+  runs the same band table; every exact law must hold on both. First
+  measured correction: on the isotropic corpus the bitmap path's work
+  advantage over post-filter at 50–80 % selectivity collapses (≈4 % instead
+  of ≈36 %), and at 5 % selectivity bitmap-HNSW costs nearly 2× the
+  post-filter — the oversampling budget `k/selectivity` dominates. The
+  threshold-convergence work must weigh both geometries.
+
+- **EXPLAIN ANALYZE now reports the filter strategy the executor actually
+  ran** (`actual_stats.executed_filter_strategy`), recorded at the dispatch
+  site itself — not re-derived — through a probe shared between the query
+  context and the search options (an atomic slot, so the vector leg of the
+  CBO `Parallel` strategy, which runs on a rayon worker, records correctly).
+  Present for single SELECTs that went through the filtered vector-search
+  dispatch (including the new `PreFilterExact` brute-force branch); omitted
+  for MATCH, compound queries, and arms where pre/post-filter does not
+  apply. Unlike the plan's `filter_strategy` (an estimate), this is ground
+  truth: comparing the two surfaces plan/execution divergence — e.g. the
+  no-override path runs the bitmap even at 90 % selectivity where the
+  override path post-filters. Serde-defaulted: stats persisted by older
+  versions load unchanged.
+
+- **Deterministic cost-crossover harness** (`tests/cost_crossover.rs`, nightly
+  `cost-crossover` CI job): measures the *work* (single-pair distance
+  evaluations, via a new `internal-bench`-gated counter) and the exact recall
+  of each filtered-search execution shape on a fully deterministic corpus —
+  closed-form vectors, fixed-seed HNSW level PRNG, selectivities exact by
+  construction straddling the `0.01`/`0.8` dispatch thresholds. Counts are
+  bit-for-bit reproducible across runs and machines, so the numbers are
+  comparable between commits even on shared CI runners where wall-clock
+  benchmarks are noise. The printed JSON table is the measurement feed for
+  the planner-threshold convergence work; the harness asserts only exact
+  laws (determinism, scan work = bitmap cardinality, post-filter work
+  independent of selectivity, strict `0.8` boundary). Release builds carry
+  zero instrumentation.
+
+### Changed
+
+- **The pre/post-filter decision now has a single brain:
+  `velesql::decide_filter_strategy`.** The executor's bitmap dispatch
+  (`collection/search/vector_filter.rs`) and EXPLAIN's plan-time strategy
+  (`velesql/explain/filter_strategy.rs`) each owned their own thresholds; the
+  executor's `0.01` / `0.8` cutoffs now live next to the plan-time recall
+  guard and both consumers call the same pure function —
+  `FilterDecisionMode::Exact` for the measured bitmap ratio,
+  `FilterDecisionMode::Estimated` for the cost-model comparison. A new
+  `FilterStrategy::PreFilterExact` variant names the executor's brute-force
+  branch (exact scan of the bitmap survivors), which the estimated mode never
+  promises. Zero behavior change: every dispatch boundary and every EXPLAIN
+  output is bit-for-bit what it was.
+- **`velesql::match_planner::CollectionStats` is renamed `MatchGraphStats`**;
+  the old name remains as a deprecated type alias, so callers compile
+  unchanged. The old name collided with the tabular
+  `collection::stats::CollectionStats` while sharing no field with it. The
+  graph-shape view is now also filled by `ANALYZE` into
+  `CollectionStats::graph_stats` (optional, serde-defaulted — stats files
+  persisted by older versions load unchanged), giving the MATCH planner and
+  the cost estimator one shared source for graph statistics.
+- **The promise contract now fails the build when a documentary claim was
+  measured a full major behind the shipping workspace.** Minor drift stays
+  advisory (unchanged), but a figure taken on a previous major describes a
+  product that no longer ships — both real drifts this guard exists for
+  crossed exactly that line. A claim may carry an explicit, dated
+  `stale_accepted` waiver scoped to the current workspace major
+  (self-expiring at the next major bump); the two 4.0.0-era size claims
+  carry one until the next release build re-measures them.
+
+### Fixed
+
+- **`GEO_DISTANCE(...) = threshold` / `<>` now tolerates realistic
+  floating-point noise instead of demanding near bit-exact equality.** The
+  distance is computed via several `sin`/`cos`/`sqrt`/`atan2` calls
+  (`haversine_distance_m`), so `f64::EPSILON` — the ULP at magnitude 1.0 — was
+  far tighter than the actual precision at real-world distances (meters),
+  making `Eq`/`NotEq` on `GEO_DISTANCE` spuriously fail for values that were,
+  for all practical purposes, equal. The comparator now scales the epsilon by
+  the compared magnitudes, matching the relative-epsilon fix already applied
+  to the `HAVING` threshold comparator (`aggregation/having.rs`).
+- **A failed PQ (Product Quantization) training pass or codebook save is now
+  logged instead of silently discarded.** `cache_pq_vector` trains the
+  quantizer once its buffer reaches `PQ_TRAINING_SAMPLES`, then drains that
+  buffer unconditionally; a training failure (e.g. degenerate input) left the
+  quantizer permanently unset and threw the accumulated samples away with no
+  operator-visible signal — the collection silently ran without PQ
+  quantization from then on. `save_codebook`'s failure was swallowed the same
+  way, silently leaving the quantizer working in memory but unpersisted
+  across restarts. Both now emit a `tracing::warn!` with the underlying error.
 - **A panic in a binding no longer aborts the host process (mobile + Node,
   #1980).** Mobile release builds now use the new `release-mobile` workspace
   profile (`panic = "unwind"`, mirroring `release-node`), so UniFFI's
@@ -7356,7 +7619,9 @@ still genuinely pending is:
 > product), not part of the open-source Community roadmap — see the
 > "Scope & boundaries" section of the README.
 
-[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v5.0.0...HEAD
+[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v5.2.0...HEAD
+[5.2.0]: https://github.com/cyberlife-coder/VelesDB/compare/v5.1.0...v5.2.0
+[5.1.0]: https://github.com/cyberlife-coder/VelesDB/compare/v5.0.0...v5.1.0
 [5.0.0]: https://github.com/cyberlife-coder/VelesDB/compare/v4.2.0...v5.0.0
 [4.0.0]: https://github.com/cyberlife-coder/VelesDB/compare/v3.12.0...v4.0.0
 [1.16.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.16.0

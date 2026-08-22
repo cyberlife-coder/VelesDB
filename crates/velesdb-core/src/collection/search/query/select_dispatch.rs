@@ -198,7 +198,7 @@ impl Collection {
         params: &std::collections::HashMap<String, serde_json::Value>,
         extracted: &ExtractedComponents,
         limit: usize,
-        _ctx: &crate::guardrails::QueryContext,
+        ctx: &crate::guardrails::QueryContext,
     ) -> Result<Vec<SearchResult>> {
         let has_graph_predicates = !extracted.graph_match_predicates.is_empty();
         let skip_metadata_prefilter_for_graph_or = has_graph_predicates
@@ -208,7 +208,8 @@ impl Collection {
                 .is_some_and(Self::condition_contains_or);
         let execution_limit = main_select_execution_limit(stmt, extracted, limit);
         let search_opts = super::QuerySearchOptions::from_with_clause(stmt.with_clause.as_ref())
-            .with_fusion(stmt.fusion_clause.clone());
+            .with_fusion(stmt.fusion_clause.clone())
+            .with_executed_strategy_probe(ctx);
         let (cbo_strategy, cbo_over_fetch) =
             self.compute_cbo_strategy(stmt, extracted.filter_condition.as_ref(), limit);
 

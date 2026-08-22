@@ -233,4 +233,8 @@ pub use rerank::{DynReranker, RerankError, Reranker};
 pub use service::{AutographWorkerHandle, MemoryService, Metadata};
 #[cfg(feature = "persistence")]
 pub use storage::NativeStore;
-pub use storage::{ColumnStore, FactStore, GraphStore, MemoryStore, RecallStore, AUTO_DATE_FIELD};
+pub use storage::{ColumnStore, FactStore, GraphStore, RecallStore, AUTO_DATE_FIELD};
+// Re-exported separately so the deprecation shim's allowance covers only the
+// alias, never the facet traits above.
+#[allow(deprecated)]
+pub use storage::MemoryStore;

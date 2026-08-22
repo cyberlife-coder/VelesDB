@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector + graph + column-store search in VelesDB.
 
-**Version**: 3.10.0 | Last updated: 2026-08-13 · Applies to: velesdb-core 5.1.0
+**Version**: 3.10.0 | Last updated: 2026-08-13 · Applies to: velesdb-core 5.2.0
 
 ---
 
@@ -276,11 +276,16 @@ FROM <table1> [[AS] <alias1>]
 | Right | `RIGHT JOIN` or `RIGHT OUTER JOIN` | All right rows; unmatched left side gets `NULL`s | Fully executed (`join.rs:155-162`) |
 | Full | `FULL JOIN` or `FULL OUTER JOIN` | All rows from both sides with `NULL`s on the unmatched side | Fully executed (`join.rs:155-171`) |
 
-> **Constraint:** all four JOIN types require the join column to be the
-> right-side collection's column-store **primary key**. The executor
-> rejects `JOIN ... ON other_col = ...` at runtime with
+> **Constraint:** the join column must be either the right-side
+> collection's column-store **primary key**, or — for **INNER** and
+> **LEFT** joins only — a payload field covered by a **secondary index**
+> (`create_index`; string, number or boolean keys). An indexed non-PK key
+> may match several right-side points: one merged row is emitted per
+> match. RIGHT and FULL joins, and any non-PK column without a secondary
+> index, are rejected at runtime with
 > `"JOIN on table 'T' requires primary key 'PK', got 'other_col'"`
-> (see `validate_join_condition` in `join.rs:177-201`).
+> (see `validate_join_condition` in `join.rs` and
+> `Database::try_indexed_join` in `database/query_join.rs`).
 
 ### ON Condition
 
@@ -353,6 +358,8 @@ WHERE inventory.stock > 0
 ```
 
 **Lookup Join**: When the JOIN condition references the primary key (`id`) on both sides and no pushdown filters apply, the engine uses direct `collection.get()` lookups instead of building a full ColumnStore, achieving O(K) instead of O(N) retrieval.
+
+**Indexed Join**: When the join-side column carries a secondary index (and the join is INNER or LEFT, with no pushdown filters), the engine resolves matches through the index — `secondary_index_lookup` per left row — instead of materializing the ColumnStore, and emits one merged row per indexed match.
 
 ```sql
 -- Uses optimized lookup path (both sides reference id)
@@ -2070,6 +2077,7 @@ The result includes the estimated plan (identical to `EXPLAIN`) plus:
 | `nodes_visited` | u64 | For MATCH queries, an approximate (best-effort, lower-bound) graph-traversal node count (start nodes examined + nodes reached by following edges); 0 for non-MATCH queries |
 | `edges_traversed` | u64 | For MATCH queries, an approximate (best-effort, lower-bound) count of edges followed during traversal; 0 for non-MATCH queries |
 | `traversal_counters_approximate` | bool | `true` when `nodes_visited` / `edges_traversed` are strategy-dependent approximations (a lower bound), not exact measured counts; `false` for non-graph queries where both counters are 0. |
+| `executed_filter_strategy` | string \| absent | The filter strategy the executor **actually ran**, recorded at the dispatch site itself (`"pre-filtering (high selectivity)"`, `"pre-filtering (exact, brute-force scan)"`, or `"post-filtering (low selectivity)"`). Present for single SELECTs that went through the filtered vector-search dispatch — under the CBO `Parallel` strategy it describes the vector leg. **Omitted** for MATCH, compound queries, and arms where the pre/post-filter notion does not apply. Unlike the plan's `filter_strategy` (an estimate), this is ground truth: comparing the two surfaces plan/execution divergence. |
 
 > **Note:** `nodes_visited` / `edges_traversed` are an **approximate, best-effort
 > lower bound** on the graph traversal across all MATCH strategies — not exact

@@ -247,6 +247,13 @@ fn test_graph_parallel_insert_search_integrity() {
     use std::sync::Arc;
     use std::thread;
 
+    // The safety counters are process-global: snapshot before, compare after,
+    // so tests that legitimately exercise the violation detector cannot fail
+    // this one through the shared counter.
+    let violations_before = super::graph::safety_counters::HNSW_COUNTERS
+        .snapshot()
+        .invariant_violation_total;
+
     let engine = CpuDistance::new(DistanceMetric::Euclidean);
     let hnsw = Arc::new(NativeHnsw::new(engine, 16, 100, 500));
 
@@ -297,10 +304,10 @@ fn test_graph_parallel_insert_search_integrity() {
     // Deterministic: 50 pre-pop + 200 parallel = 250
     assert_eq!(hnsw.len(), 250, "All inserts must be reflected in count");
 
-    // Safety counters check
+    // Safety counters check: this test must not have added violations
     let snapshot = super::graph::safety_counters::HNSW_COUNTERS.snapshot();
     assert_eq!(
-        snapshot.invariant_violation_total, 0,
+        snapshot.invariant_violation_total, violations_before,
         "No lock-order violations during parallel graph operations"
     );
 }

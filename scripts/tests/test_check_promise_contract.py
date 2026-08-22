@@ -344,6 +344,85 @@ class ReleaseLinkGuardTests(unittest.TestCase):
         self.assertEqual(attempts, cpc.RELEASE_ASSET_ATTEMPTS)
 
 
+class StaleMajorTests(unittest.TestCase):
+    """The major-staleness gate: fatal without a scoped waiver, self-expiring."""
+
+    @staticmethod
+    def _claim(**overrides) -> dict:
+        claim = {
+            "id": "c1",
+            "executable": False,
+            "measured_version": "4.0.0",
+            "validation_command": "true",
+        }
+        claim.update(overrides)
+        return claim
+
+    def test_full_major_behind_is_fatal_without_waiver(self) -> None:
+        fatal, waived = cpc.stale_major_failures([self._claim()], "5.1.0")
+        self.assertEqual(len(fatal), 1)
+        self.assertEqual(waived, [])
+        self.assertIn("a full major behind", fatal[0])
+
+    def test_scoped_waiver_downgrades_to_report(self) -> None:
+        claim = self._claim(
+            stale_accepted={
+                "reason": "next release build",
+                "granted": "2026-08-21",
+                "for_workspace_major": 5,
+            }
+        )
+        fatal, waived = cpc.stale_major_failures([claim], "5.1.0")
+        self.assertEqual(fatal, [])
+        self.assertEqual(len(waived), 1)
+        self.assertIn("waived for 5.x", waived[0])
+
+    def test_waiver_expires_at_the_next_major(self) -> None:
+        claim = self._claim(
+            stale_accepted={
+                "reason": "next release build",
+                "granted": "2026-08-21",
+                "for_workspace_major": 5,
+            }
+        )
+        fatal, waived = cpc.stale_major_failures([claim], "6.0.0")
+        self.assertEqual(len(fatal), 1)
+        self.assertEqual(waived, [])
+
+    def test_empty_waiver_reason_does_not_waive(self) -> None:
+        claim = self._claim(
+            stale_accepted={"reason": "  ", "for_workspace_major": 5}
+        )
+        fatal, _ = cpc.stale_major_failures([claim], "5.1.0")
+        self.assertEqual(len(fatal), 1)
+
+    def test_minor_drift_stays_advisory(self) -> None:
+        fatal, waived = cpc.stale_major_failures(
+            [self._claim(measured_version="5.0.0")], "5.1.0"
+        )
+        self.assertEqual((fatal, waived), ([], []))
+
+    def test_executable_and_unknown_claims_are_ignored(self) -> None:
+        claims = [
+            self._claim(executable=True),
+            self._claim(measured_version="unknown"),
+            self._claim(measured_version=""),
+        ]
+        fatal, waived = cpc.stale_major_failures(claims, "5.1.0")
+        self.assertEqual((fatal, waived), ([], []))
+
+    def test_real_registry_has_no_unwaived_major_stale_claim(self) -> None:
+        import json
+
+        registry = cpc.registry_path(cpc.ROOT)
+        claims = json.loads(registry.read_text(encoding="utf-8"))["claims"]
+        version = cpc.workspace_version(cpc.ROOT)
+        fatal, _ = cpc.stale_major_failures(claims, version)
+        self.assertEqual(
+            fatal, [], "major-stale claims must be re-measured or carry a dated waiver"
+        )
+
+
 class RealRegistryExecutableClaimsTests(unittest.TestCase):
     """Integration tests against the real docs/reference/promise-contract.json."""
 

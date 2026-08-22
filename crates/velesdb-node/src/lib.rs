@@ -12,9 +12,14 @@
 //! since JS has no exception classes.
 //!
 //! ## License boundary
-//! Depends on `velesdb-memory` (memory semantics only), never `velesdb-core`. The
-//! addon is an in-process library, not a network service, so it stays inside the
-//! `VelesDB` Core License 1.0 "no hosted/managed service" restriction.
+//! Consumes `velesdb-memory`'s API surface only: no `velesdb-core` symbol is
+//! named anywhere in this crate, and CI pins the direct-dependency edge
+//! (`cargo tree --depth 1`). Core is still in the dependency tree —
+//! transitively, underneath `velesdb-memory`'s `persistence` feature — so the
+//! licensing argument rests on the consumed API surface, not on core's
+//! absence from the tree. The addon is an in-process library, not a network
+//! service, so it stays inside the `VelesDB` Core License 1.0 "no
+//! hosted/managed service" restriction.
 
 #![deny(unsafe_code)]
 // napi's panic→JS-error conversion relies on `panic = "unwind"` (the
@@ -149,9 +154,13 @@ fn warn_hash_embedder_not_semantic(semantic: bool) {
 ///
 /// Exposed to JS as `MemoryService` (matching the `PyO3` binding and the core
 /// type); the Rust struct keeps a distinct name only to avoid colliding with the
-/// imported [`velesdb_memory::MemoryService`] it wraps.
+/// imported [`velesdb_memory::MemoryService`] it wraps. `NodeMemoryService`
+/// rather than the old `MemoryStore`: that name collided with
+/// `velesdb_memory`'s storage-trait alias on the other side of the binding
+/// seam, exactly where ambiguity costs the most (#2018) — and being
+/// `js_name`-mapped, the Rust identifier is invisible to JS consumers.
 #[napi(js_name = "MemoryService")]
-pub struct MemoryStore {
+pub struct NodeMemoryService {
     inner: Arc<MemoryService<DynEmbedder>>,
     /// The embedder identity resolved at [`Self::open`] — what
     /// [`Self::memory_status`] reports as RUNNING. The service itself only
@@ -165,7 +174,7 @@ pub struct MemoryStore {
 }
 
 #[napi]
-impl MemoryStore {
+impl NodeMemoryService {
     /// Open (or create) a memory store at `path`.
     ///
     /// `embedder` is `"hash"` (default, offline), `"ollama"` or `"openai"`

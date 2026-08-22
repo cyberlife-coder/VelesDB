@@ -274,11 +274,13 @@ pub use error::{ParseError, ParseErrorKind};
 #[cfg(feature = "persistence")]
 pub(crate) use explain::strip_vector_predicates;
 pub use explain::{
-    build_leaf_node_stats, fallback_selectivity_threshold, set_fallback_selectivity_threshold,
-    ActualStats, AggregatePlan, ExplainOutput, FeedbackCalibration, FilterPlan, FilterStrategy,
-    FusionInfo, GroupByPlan, IndexLookupPlan, IndexType, JoinPlanNode, LimitPlan,
-    MatchTraversalPlan, NodeStats, OffsetPlan, PlanNode, PlanStep, PlanStepKind, QueryPlan,
-    SortPlan, TableScanPlan, VectorSearchPlan, DEFAULT_FALLBACK_SELECTIVITY_THRESHOLD,
+    build_leaf_node_stats, decide_filter_strategy, fallback_selectivity_threshold,
+    set_fallback_selectivity_threshold, ActualStats, AggregatePlan, ExplainOutput,
+    FeedbackCalibration, FilterDecisionMode, FilterPlan, FilterStrategy, FusionInfo, GroupByPlan,
+    IndexLookupPlan, IndexType, JoinPlanNode, LimitPlan, MatchTraversalPlan, NodeStats, OffsetPlan,
+    PlanNode, PlanStep, PlanStepKind, QueryPlan, SortPlan, TableScanPlan, VectorSearchPlan,
+    DEFAULT_FALLBACK_SELECTIVITY_THRESHOLD, EXACT_FULL_SCAN_MAX_SELECTIVITY,
+    EXACT_POST_FILTER_MIN_SELECTIVITY,
 };
 pub use parser::match_clause;
 pub use parser::Parser;

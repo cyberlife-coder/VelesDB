@@ -94,6 +94,9 @@ impl Collection {
         let calibrated = calibrate_cost_factors(&stats, &OperationCostFactors::default());
         stats.calibrated_cost_factors = Some(calibrated);
 
+        // Graph-shape view: single source shared with the MATCH planner.
+        stats.graph_stats = Some(self.compute_match_collection_stats());
+
         Ok(stats)
     }
 
@@ -238,16 +241,21 @@ impl Collection {
     /// Returns default stats on error (intentional for convenience).
     /// Use `analyze()` directly if error handling is required.
     #[must_use]
-    pub fn get_stats(&self) -> CollectionStats {
+    pub fn get_stats(&self) -> std::sync::Arc<CollectionStats> {
         let mut cached = self.query.cached_stats.lock();
         if let Some((ref stats, ts)) = *cached {
             if ts.elapsed() < STATS_TTL {
-                return stats.clone();
+                // Pointer clone. The pre-Arc shape deep-cloned the whole
+                // CollectionStats — two column maps plus a 64-bucket
+                // histogram per column — on every cache HIT, several times
+                // per query across the dispatch and oversampling sites.
+                return std::sync::Arc::clone(stats);
             }
         }
         match self.analyze() {
             Ok(stats) => {
-                *cached = Some((stats.clone(), Instant::now()));
+                let stats = std::sync::Arc::new(stats);
+                *cached = Some((std::sync::Arc::clone(&stats), Instant::now()));
                 stats
             }
             Err(e) => {
@@ -255,7 +263,7 @@ impl Collection {
                     "Failed to compute collection statistics: {}. Returning defaults.",
                     e
                 );
-                CollectionStats::default()
+                std::sync::Arc::new(CollectionStats::default())
             }
         }
     }

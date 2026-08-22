@@ -32,6 +32,10 @@ on:
         description: 'Fuzz duration in seconds'
         type: number
         default: 300
+      run_crossover:
+        description: 'Run deterministic cost-crossover harness'
+        type: boolean
+        default: true
 
 # Pas de concurrency cancel - ces tests sont importants
 permissions:
@@ -91,6 +95,45 @@ jobs:
             storage::vector_bytes:: --test-threads=1
         env:
           MIRIFLAGS: "-Zmiri-disable-isolation -Zmiri-symbolic-alignment-check"
+
+      # ContiguousVectors / AllocGuard - manual allocation, raw pointers, resize
+      - name: Miri - contiguous vectors & alloc guard
+        run: |
+          cargo miri test --no-default-features \
+            -p velesdb-core --lib -- \
+            perf_optimizations alloc_guard contiguous_resize --test-threads=1
+        env:
+          MIRIFLAGS: "-Zmiri-disable-isolation -Zmiri-symbolic-alignment-check"
+
+  # ===========================================================================
+  # Cost Crossover - travail déterministe par stratégie de filtre
+  # ===========================================================================
+  # Compte les évaluations de distance (jamais le wall-clock) par bande de
+  # sélectivité exacte, sur un corpus et un graphe HNSW entièrement
+  # déterministes : les chiffres sont comparables entre commits même sur des
+  # runners partagés. La table JSON du log est la mesure d'alimentation de la
+  # convergence des seuils (lots 3.2/2.2).
+  cost-crossover:
+    name: Cost Crossover (deterministic work counts)
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'schedule' || inputs.run_crossover }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # rust-toolchain.toml pins the toolchain; the rustup shim installs it
+      # on first cargo invocation.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: "velesdb-crossover"
+          save-if: true
+
+      - name: Cost crossover harness
+        run: |
+          cargo test -p velesdb-core --features persistence,internal-bench \
+            --test cost_crossover -- --test-threads=1 --nocapture
+          cargo test -p velesdb-core --features persistence,internal-bench \
+            --test adaptive_resume_evals -- --test-threads=1 --nocapture
 
   # ===========================================================================
   # Loom Concurrency Tests - Détecte deadlocks et data races
@@ -168,7 +211,8 @@ jobs:
           cd fuzz
           cargo +nightly fuzz run fuzz_velesql_parser \
             -- -max_total_time=${{ inputs.fuzz_duration || 300 }}
-        continue-on-error: true  # Fuzz may timeout without finding bugs; not a failure
+        # No continue-on-error: reaching max_total_time without a crash exits 0,
+        # so a non-zero exit here IS a found crash and must fail the job.
 
       # Distance metrics - données vectorielles
       - name: Fuzz distance metrics
@@ -176,7 +220,8 @@ jobs:
           cd fuzz
           cargo +nightly fuzz run fuzz_distance_metrics \
             -- -max_total_time=${{ inputs.fuzz_duration || 300 }}
-        continue-on-error: true  # Fuzz may timeout without finding bugs; not a failure
+        # No continue-on-error: reaching max_total_time without a crash exits 0,
+        # so a non-zero exit here IS a found crash and must fail the job.
 
       # Snapshot parser - fichiers de persistance
       - name: Fuzz snapshot parser
@@ -184,7 +229,8 @@ jobs:
           cd fuzz
           cargo +nightly fuzz run fuzz_snapshot_parser \
             -- -max_total_time=${{ inputs.fuzz_duration || 300 }}
-        continue-on-error: true  # Fuzz may timeout without finding bugs; not a failure
+        # No continue-on-error: reaching max_total_time without a crash exits 0,
+        # so a non-zero exit here IS a found crash and must fail the job.
 
       # Upload crash artifacts si trouvés
       - name: Upload crash artifacts

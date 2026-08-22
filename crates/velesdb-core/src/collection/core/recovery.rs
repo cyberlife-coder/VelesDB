@@ -269,10 +269,13 @@ fn remove_orphan_ids(vector_storage: &Arc<RwLock<MmapStorage>>, index: &Arc<Hnsw
 /// is compared to the storage bytes; on mismatch the storage value is
 /// re-upserted into the index (tombstoning the stale graph node).
 ///
-/// The byte comparison is exact: the graph stores vectors verbatim (the
-/// production distance engine is not pre-normalized), so an indexed vector
-/// that survived the crash is bit-identical to its storage copy. An id
-/// whose graph slot is missing is treated as stale.
+/// The byte comparison is exact up to the cosine normalization invariant:
+/// for cosine the graph stores unit-norm vectors (pre-normalized engine),
+/// so the storage copy is normalized with the same SIMD kernel before
+/// comparing — same input bytes through the same function yield the same
+/// output bytes, so a vector that survived the crash still compares
+/// bit-identical. Other metrics store vectors verbatim and compare raw. An
+/// id whose graph slot is missing is treated as stale.
 #[cfg(feature = "persistence")]
 fn reindex_stale_wal_ids(
     vector_storage: &Arc<RwLock<MmapStorage>>,
@@ -288,7 +291,10 @@ fn reindex_stale_wal_ids(
             continue; // Not indexed (deleted id — already handled by pass 2).
         };
         match storage.retrieve(id) {
-            Ok(Some(v)) if v.len() == dimension => {
+            Ok(Some(mut v)) if v.len() == dimension => {
+                if index.metric() == crate::DistanceMetric::Cosine {
+                    crate::simd_native::normalize_inplace_native(&mut v);
+                }
                 let matches = inner.with_contiguous_vectors(|vectors| {
                     vectors
                         .get(idx)

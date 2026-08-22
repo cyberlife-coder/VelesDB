@@ -1,0 +1,42 @@
+name: Registry Drift
+
+# The manifest↔registry guard (`check-version-sync.py
+# --check-memory-registries`) runs in exactly one place: the
+# `verify-registries` job of release-memory.yml, which by construction runs
+# only AFTER a publish. It proves a release propagated; it cannot see the
+# drift that motivated it (#1884): manifests and docs bumped to a version no
+# registry serves because no release was ever cut. If nobody tags, the guard
+# never runs, and that state stays invisible until a user hits it (#2030).
+#
+# This schedule decouples the check from the release train: it bounds the
+# lifetime of such drift to one day instead of "until the next tag". The
+# one legitimate red is the transient release window — manifest bumped,
+# publish still in flight — which lasts minutes, not days; a red here that
+# persists across two consecutive runs is real drift.
+#
+# Deliberately NOT a PR gate: "manifest > registry" is the normal transient
+# state of every release-prep PR, so the naive PR-time form would red on
+# exactly the PRs that fix it (the counter-example #2030 records).
+on:
+  workflow_dispatch:
+  schedule:
+    # Daily 05:23 UTC — off the busy on-the-hour spike.
+    - cron: '23 5 * * *'
+  pull_request:
+    paths:
+      - '.github/workflows/registry-drift.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  registry-drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: develop
+
+      - name: Manifest vs public registries
+        run: python3 scripts/check-version-sync.py --check-memory-registries

@@ -208,7 +208,7 @@ impl Database {
     pub(crate) fn match_stats_for(
         &self,
         name: &str,
-    ) -> Option<crate::velesql::match_planner::CollectionStats> {
+    ) -> Option<crate::velesql::match_planner::MatchGraphStats> {
         if let Some(vc) = self.vector_colls.read().get(name) {
             return Some(vc.inner.compute_match_collection_stats());
         }
@@ -298,6 +298,7 @@ impl Database {
         self.graph_colls.write().remove(name);
         self.metadata_colls.write().remove(name);
         self.collection_stats.write().remove(name);
+        self.join_store_cache.write().remove(name);
     }
 
     /// Creates a new collection with a specific type (Vector, Graph, or `MetadataOnly`).

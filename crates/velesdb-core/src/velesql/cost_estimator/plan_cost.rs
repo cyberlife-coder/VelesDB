@@ -108,7 +108,7 @@ impl CostEstimator<'_> {
     fn estimate_match_traversal_cost(&self, mt: &MatchTraversalPlan) -> Cost {
         // Approximate traversal fan-out: assume average degree ≈ 4 when the
         // core CollectionStats has no graph info; a future wiring will plug
-        // `match_planner::CollectionStats::avg_degree` through this path.
+        // `match_planner::MatchGraphStats::avg_degree` through this path.
         let avg_degree: f64 = 4.0;
         let depth = f64::from(mt.max_depth.max(1));
         // Frontier ≈ avg_degree^depth (geometric expansion), capped to total.

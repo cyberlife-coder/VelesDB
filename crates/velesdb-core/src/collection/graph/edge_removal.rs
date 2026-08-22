@@ -14,7 +14,7 @@ impl EdgeStore {
         if let Some(edge) = self.edges.remove(&edge_id) {
             let source = edge.source();
             self.purge_outgoing_index(edge_id, source);
-            self.purge_incoming_index(edge_id, edge.target());
+            self.purge_incoming_index(edge_id, edge.target(), edge.label());
             self.purge_label_indices(edge_id, source, edge.label());
             // Invalidate CSR snapshot (G1).
             self.csr_snapshot = None;
@@ -40,7 +40,7 @@ impl EdgeStore {
     /// Used by `ConcurrentEdgeStore` for cross-shard cleanup.
     pub fn remove_edge_incoming_only(&mut self, edge_id: u64) {
         if let Some(edge) = self.edges.remove(&edge_id) {
-            self.purge_incoming_index(edge_id, edge.target());
+            self.purge_incoming_index(edge_id, edge.target(), edge.label());
             // Invalidate CSR snapshot (G1).
             self.csr_snapshot = None;
         }
@@ -60,17 +60,20 @@ impl EdgeStore {
         // Remove outgoing edges: clean incoming + label indices for each
         for edge_id in outgoing_ids {
             if let Some(edge) = self.edges.remove(&edge_id) {
-                self.purge_incoming_index(edge_id, edge.target());
+                self.purge_incoming_index(edge_id, edge.target(), edge.label());
                 self.purge_label_indices(edge_id, node_id, edge.label());
             }
         }
 
-        // Remove incoming edges: clean outgoing + label indices for each
+        // Remove incoming edges: clean outgoing + label indices for each.
+        // `incoming` was drained wholesale above; the label mirror still
+        // needs its per-(node, label) entries purged.
         for edge_id in incoming_ids {
             if let Some(edge) = self.edges.remove(&edge_id) {
                 let source = edge.source();
                 self.purge_outgoing_index(edge_id, source);
                 self.purge_label_indices(edge_id, source, edge.label());
+                self.purge_incoming_index(edge_id, node_id, edge.label());
             }
         }
 
@@ -80,9 +83,19 @@ impl EdgeStore {
 
     /// Removes `edge_id` from the incoming index of `target_node`.
     #[inline]
-    fn purge_incoming_index(&mut self, edge_id: u64, target_node: u64) {
+    fn purge_incoming_index(&mut self, edge_id: u64, target_node: u64, label: &str) {
         if let Some(ids) = self.incoming.get_mut(&target_node) {
             ids.retain(|&id| id != edge_id);
+        }
+        if let Some(ids) = self
+            .incoming_by_label
+            .get_mut(&(target_node, label.to_string()))
+        {
+            ids.retain(|&id| id != edge_id);
+            if ids.is_empty() {
+                self.incoming_by_label
+                    .remove(&(target_node, label.to_string()));
+            }
         }
     }
 

@@ -71,3 +71,31 @@ fn debug_redacts_a_custom_header_value_but_keeps_its_name() {
          configured with the wrong scheme diagnosable at all: {printed}"
     );
 }
+
+/// An `https://` base URL must fail at the *network* (nothing listens on the
+/// discard port), never at the scheme: before #2025 the client was built
+/// without TLS, and every https endpoint — a cloud OpenAI-compatible
+/// provider, `OpenRouter` for extraction — died with a "TLS not enabled"
+/// transport error before a single byte left the machine. The same env vars
+/// now reach http:// (local) and https:// (cloud) alike; this pins the
+/// capability so a dependency-feature regression cannot silently take it
+/// back.
+#[test]
+fn https_scheme_reaches_the_network_instead_of_dying_on_missing_tls() {
+    let agent = bounded_agent(AgentBudget::uniform(std::time::Duration::from_secs(2)));
+    let client = HttpJsonClient::new("https://127.0.0.1:9", Auth::None, agent);
+    let failure = client
+        .post_json("/v1/embeddings", "{}")
+        .expect_err("nothing listens on the discard port");
+    let cause = failure.cause.to_lowercase();
+    assert!(
+        !cause.contains("tls") && !cause.contains("scheme"),
+        "https must be refused by the network, not by a client built without \
+         TLS — got: {cause}"
+    );
+    assert!(
+        cause.contains("connect") || cause.contains("connection"),
+        "the failure should be the TCP connect (proof the scheme was \
+         accepted and dialing began), got: {cause}"
+    );
+}

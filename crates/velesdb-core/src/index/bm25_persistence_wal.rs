@@ -69,6 +69,8 @@ pub(crate) fn wal_path_for_bm25(dir: &Path) -> PathBuf {
 /// written, or if the text is too large to encode in a `u32`-prefixed
 /// entry.
 #[inline]
+#[cfg(test)] // Production paths batch through `wal_append_batch`; the
+             // single-frame writer remains as the replay tests' reference encoder.
 pub(crate) fn wal_append_add_document(wal_path: &Path, id: u64, text: &str) -> Result<()> {
     let text_bytes = text.as_bytes();
     let text_len = encode_text_len(text_bytes)?;
@@ -215,6 +217,7 @@ fn write_op_frame(w: &mut std::io::BufWriter<std::fs::File>, op: WalOp<'_>) -> R
 /// Returns [`Error::Index`] if the WAL file cannot be opened or
 /// written.
 #[inline]
+#[cfg(test)] // See `wal_append_add_document` — reference encoder for tests.
 pub(crate) fn wal_append_remove_document(wal_path: &Path, id: u64) -> Result<()> {
     let body_len = u32::try_from(REMOVE_ENTRY_HEADER)
         .map_err(|_| Error::Index("BM25 WAL: remove header too large".to_string()))?;

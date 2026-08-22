@@ -135,9 +135,15 @@ impl ConcurrentEdgeStore {
     /// Gets incoming edges filtered by label (thread-safe).
     #[must_use]
     pub fn get_incoming_by_label(&self, node_id: u64, label: &str) -> Vec<GraphEdge> {
-        self.get_incoming(node_id)
+        // Composite (target, label) index — the pre-fix shape cloned every
+        // incoming edge of the node and filtered afterwards, O(in-degree)
+        // with a String + properties clone per edge on super-nodes.
+        let shard = &self.shards[self.shard_index(node_id)];
+        let guard = shard.read();
+        guard
+            .get_incoming_by_label(node_id, label)
             .into_iter()
-            .filter(|e| e.label() == label)
+            .cloned()
             .collect()
     }
 
@@ -219,15 +225,14 @@ impl ConcurrentEdgeStore {
         visited.into_iter().collect()
     }
 
-    /// Returns the total edge count across all shards.
+    /// Returns the total edge count.
     ///
-    /// Uses outgoing edge count to avoid double-counting edges that span shards.
+    /// Reads the `edge_ids` registry length — every edge is registered there
+    /// exactly once regardless of how many shards it spans, so this is O(1)
+    /// where the per-shard `outgoing` walk was O(distinct source nodes).
     #[must_use]
     pub fn edge_count(&self) -> usize {
-        self.shards
-            .iter()
-            .map(|s| s.read().outgoing_edge_count())
-            .sum()
+        self.edge_ids.read().len()
     }
 
     /// Returns `len()` — alias for `edge_count()` for API parity with `EdgeStore`.
@@ -244,11 +249,26 @@ impl ConcurrentEdgeStore {
 
     /// Returns the number of distinct edge labels in the graph.
     ///
-    /// Reads from the CSR snapshot's interned label table, triggering a
-    /// lazy rebuild if dirty. Returns 0 when the store has no edges.
+    /// Planner-grade read: honors the issue-#905 write debounce instead of
+    /// forcing a full CSR rebuild on every call — the pre-fix behavior made
+    /// a single edge insert charge the NEXT `MATCH` query an O(E) clone of
+    /// the whole edge set just to refresh this count. The value may lag live
+    /// writes by up to `CSR_REBUILD_WRITE_THRESHOLD` mutations, which is
+    /// well inside what a selectivity heuristic tolerates.
+    ///
+    /// The one forced rebuild left is the bootstrap: a store that has edges
+    /// but has never built a snapshot (label table still empty) rebuilds
+    /// once so small graphs — and every fresh collection — report exact
+    /// counts immediately.
     #[must_use]
     pub fn label_count(&self) -> usize {
-        self.ensure_csr_fresh();
+        let bootstrap_needed = {
+            let snapshot = self.csr_snapshot.load();
+            snapshot.distinct_label_count() == 0 && !self.edge_ids.read().is_empty()
+        };
+        if bootstrap_needed || self.csr_rebuild_due() {
+            self.ensure_csr_fresh();
+        }
         let snapshot = self.csr_snapshot.load();
         snapshot.distinct_label_count()
     }

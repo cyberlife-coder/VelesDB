@@ -153,7 +153,7 @@ unversioned `/…` form is kept for backward compatibility — its responses car
 - **Authentication is a flat list of API keys.** No users, no roles, no per-collection scoping. Keys are read at startup, so rotation requires a restart (both old and new key can be active during the transition).
 - **Rate limiting is per process and in memory.** Replicas do not share a budget; put a shared limiter in front if you need a global one.
 - **CORS is permissive by default** (`allowed_origins = ["*"]`); the server warns about it at startup. Restrict `[cors]` before exposing a browser-facing deployment.
-- **Swagger UI is opt-in at build time** (`--features swagger-ui`); the released default build does not serve `/swagger-ui` or `/api-docs/openapi.json`.
+- **Swagger UI is opt-in at build time** (`--features swagger-ui`); the released default build does not serve `/swagger-ui` or `/api-docs/openapi.json`. Building with that feature needs network access: `utoipa-swagger-ui`'s build script downloads the Swagger UI distribution, so it fails in air-gapped builds. Offline, skip the feature and point any OpenAPI viewer at [docs/openapi.json](../../docs/openapi.json) instead.
 - **The `/v1` prefix is added by the binary.** Embedding `velesdb_server::routes::api_routes()` in your own Axum application gives you the unversioned routes; nest them yourself if you want the versioned form.
 - Engine-level limits (query length caps, GROUP BY ceilings, scan caps) are listed in [docs/reference/KNOWN_LIMITATIONS.md](../../docs/reference/KNOWN_LIMITATIONS.md).
 
@@ -187,4 +187,4 @@ VelesDB Core License 1.0 — see [LICENSE](../../LICENSE).
 
 ---
 
-`velesdb-server v5.1.0` · Last updated: 2026-08-10 · Applies to: velesdb-core 5.1.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)
+`velesdb-server v5.2.0` · Last updated: 2026-08-22 · Applies to: velesdb-core 5.2.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)

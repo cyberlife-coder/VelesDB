@@ -1,9 +1,31 @@
-use super::{like_match, CompiledLikePattern};
+use super::{compare_geo_distance, like_match, CompiledLikePattern};
 use crate::filter::Condition;
+use crate::velesql::CompareOp;
 use serde_json::json;
 
 fn payload(json: serde_json::Value) -> serde_json::Value {
     json
+}
+
+// A haversine distance is built from several sin/cos/sqrt/atan2 calls, so two
+// otherwise-equal distances can differ by an amount well above `f64::EPSILON`
+// (the ULP at magnitude 1.0) once the magnitude is realistic (meters). This
+// difference sits strictly between the old absolute tolerance and the new
+// relative one, so it reproduces the false "not equal" the absolute epsilon
+// used to produce while still being far too small to be a genuine distance
+// difference.
+#[test]
+fn geo_distance_eq_tolerates_realistic_float_noise() {
+    let dist = 1000.0;
+    let threshold = dist + 1e-13;
+    assert!(compare_geo_distance(dist, threshold, CompareOp::Eq));
+    assert!(!compare_geo_distance(dist, threshold, CompareOp::NotEq));
+}
+
+#[test]
+fn geo_distance_eq_still_rejects_real_differences() {
+    assert!(!compare_geo_distance(1000.0, 1000.5, CompareOp::Eq));
+    assert!(compare_geo_distance(1000.0, 1000.5, CompareOp::NotEq));
 }
 
 // Verify that comparing against null never matches ordering predicates.

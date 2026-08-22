@@ -99,6 +99,24 @@ impl SearchState {
         }
     }
 
+    /// Non-destructive sorted snapshot of the current result set.
+    ///
+    /// Used by the resumable-search path to publish phase-1 results while
+    /// the heaps and visited set stay alive for a possible escalation.
+    /// Copies at most `ef` entries and applies the same partial sort as
+    /// [`Self::into_sorted_results`].
+    pub(super) fn peek_sorted_results(&self, limit: Option<usize>) -> Vec<(NodeId, f32)> {
+        let mut result_vec: Vec<(NodeId, f32)> =
+            self.results.iter().map(|&(d, n)| (n, d.0)).collect();
+        let cmp = |a: &(NodeId, f32), b: &(NodeId, f32)| a.1.total_cmp(&b.1);
+        if let Some(k) = limit {
+            crate::index::top_k_partial_sort(&mut result_vec, k, cmp);
+        } else {
+            result_vec.sort_by(cmp);
+        }
+        result_vec
+    }
+
     /// Consumes the state and returns results sorted by distance ascending.
     ///
     /// When `limit` is `Some(k)`, uses partial sort (`select_nth_unstable_by`)
@@ -108,9 +126,14 @@ impl SearchState {
     /// The visited set is released back to the thread-local pool by the
     /// [`Drop`] impl when `self` goes out of scope.
     pub(super) fn into_sorted_results(mut self, limit: Option<usize>) -> Vec<(NodeId, f32)> {
-        let results = std::mem::take(&mut self.results);
-        let mut result_vec: Vec<(NodeId, f32)> =
-            results.into_iter().map(|(d, n)| (n, d.0)).collect();
+        let mut results = std::mem::take(&mut self.results);
+        let mut result_vec: Vec<(NodeId, f32)> = Vec::with_capacity(results.len());
+        result_vec.extend(results.drain().map(|(d, n)| (n, d.0)));
+        // `drain` keeps the heap's capacity, so hand it back to the pool —
+        // consuming it with `into_iter` (the previous shape) left `Drop`
+        // holding an empty default and the pool permanently dry: every query
+        // re-allocated the heap it was designed to reuse.
+        release_result_heap(results);
         let cmp = |a: &(NodeId, f32), b: &(NodeId, f32)| a.1.total_cmp(&b.1);
         if let Some(k) = limit {
             crate::index::top_k_partial_sort(&mut result_vec, k, cmp);
@@ -162,7 +185,7 @@ pub(super) fn gather_unvisited_neighbors<'a>(
     visited: &mut BitVecVisited,
     vectors: &'a ContiguousVectors,
     use_prefetch: bool,
-) -> SmallVec<[(NodeId, &'a [f32]); 32]> {
+) -> SmallVec<[(NodeId, &'a [f32]); 64]> {
     let mut batch = SmallVec::new();
 
     // Speculatively prefetch the first GATHER_PREFETCH_AHEAD neighbor vectors.

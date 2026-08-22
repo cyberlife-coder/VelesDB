@@ -125,9 +125,6 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     }
 
     /// Applies a permutation to vectors, neighbor lists, and the entry point.
-    ///
-    /// After reordering, builds a PDX columnar layout from the reordered
-    /// vectors for SIMD-parallel distance computation.
     fn apply_permutation(&self, new_order: &[NodeId]) -> crate::error::Result<()> {
         let count = new_order.len();
 
@@ -136,21 +133,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         self.reorder_vectors(new_order)?;
         self.remap_neighbor_ids(&old_to_new);
         self.update_entry_point(&old_to_new, count);
-        self.build_columnar_layout();
 
         Ok(())
-    }
-
-    /// Builds a PDX block-columnar layout from the current vector storage.
-    ///
-    /// This transposes row-major vectors into 64-vector blocks where each
-    /// dimension is contiguous, enabling SIMD-parallel distance computation.
-    fn build_columnar_layout(&self) {
-        let vectors_guard = self.vectors.read();
-        if let Some(vectors) = vectors_guard.as_ref() {
-            let pdx = super::super::columnar_vectors::ColumnarVectors::from_contiguous(vectors);
-            *self.columnar.write() = Some(pdx);
-        }
     }
 
     /// Builds a reverse mapping: `result[old_id] = new_id`.

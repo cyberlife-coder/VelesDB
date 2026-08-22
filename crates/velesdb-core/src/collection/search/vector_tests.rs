@@ -214,7 +214,8 @@ fn test_search_with_filter_bitmap_empty_result_for_nonexistent_value() {
 
 #[cfg(test)]
 mod selectivity_tests {
-    use super::super::vector::{estimate_real_selectivity, SELECTIVITY_THRESHOLD};
+    use super::super::vector::estimate_real_selectivity;
+    use crate::velesql::{EXACT_FULL_SCAN_MAX_SELECTIVITY, EXACT_POST_FILTER_MIN_SELECTIVITY};
 
     #[test]
     fn test_estimate_real_selectivity_nominal() {
@@ -252,8 +253,16 @@ mod selectivity_tests {
     #[test]
     fn test_selectivity_threshold_default_is_one_percent() {
         assert!(
-            (SELECTIVITY_THRESHOLD - 0.01).abs() < f64::EPSILON,
+            (EXACT_FULL_SCAN_MAX_SELECTIVITY - 0.01).abs() < f64::EPSILON,
             "default threshold should be 0.01 (1%)"
+        );
+    }
+
+    #[test]
+    fn test_post_filter_threshold_default_is_eighty_percent() {
+        assert!(
+            (EXACT_POST_FILTER_MIN_SELECTIVITY - 0.8).abs() < f64::EPSILON,
+            "default high threshold should be 0.8 (80%)"
         );
     }
 }
@@ -309,6 +318,7 @@ fn test_search_with_filter_and_opts_bitmap_empty_returns_empty() {
         ef_search: None,
         force_rerank: None,
         fusion_clause: None,
+        executed_strategy_probe: None,
     };
     let results = col
         .search_with_filter_and_opts(&[0.5, 0.5, 0.5, 0.5], 10, &filter, &opts)
@@ -335,6 +345,7 @@ fn test_search_with_filter_and_opts_no_bitmap_falls_back_to_post_filter() {
         ef_search: None,
         force_rerank: None,
         fusion_clause: None,
+        executed_strategy_probe: None,
     };
     let results = col
         .search_with_filter_and_opts(&[0.5, 0.5, 0.5, 0.5], 5, &filter, &opts)
@@ -384,6 +395,7 @@ fn test_filtered_perfect_search_over_cap_is_rejected() {
         ef_search: None,
         force_rerank: None,
         fusion_clause: None,
+        executed_strategy_probe: None,
     };
 
     let err = col
