@@ -86,6 +86,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: a shallow (depth-1) PR checkout only fetches the
+          # merge commit itself, not the base commit `git diff` needs. Two
+          # gates in this job are diff-scoped (SAFETY template, TODO/FIXME
+          # governance); without this they resolved zero changed files on
+          # every pull request and passed vacuously.
+          fetch-depth: 0
 
       - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
         with:
@@ -268,6 +275,13 @@ jobs:
             --features persistence,gpu,update-check \
             -- -A warnings -D clippy::undocumented_unsafe_blocks
 
+      # The verifier's own suite, in this required job rather than only via
+      # gate-contracts.yml's `unittest discover`: that workflow is not in
+      # `CI Success`'s needs, so a suite reached only from there is a suite
+      # whose red does not block a merge.
+      - name: SAFETY-template verifier self-test
+        run: python3 -m unittest scripts.tests.test_verify_unsafe_safety_template
+
       - name: Verify SAFETY template (production code)
         run: |
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
@@ -285,7 +299,7 @@ jobs:
           # were previously unchecked, which let one incomplete template slip
           # through (F-3.2).
           mapfile -t PROD_RS_FILES < <(
-            git diff --name-only "$BASE_SHA" "${{ github.sha }}" \
+            git diff --name-only --diff-filter=d "$BASE_SHA" "${{ github.sha }}" \
               | grep '\.rs$' \
               | grep -E '^crates/[^/]+/src/' \
               | grep -v '/tests/' \
@@ -310,7 +324,7 @@ jobs:
           fi
 
           mapfile -t CORE_RS_FILES < <(
-            git diff --name-only "$BASE_SHA" "${{ github.sha }}" \
+            git diff --name-only --diff-filter=d "$BASE_SHA" "${{ github.sha }}" \
               | grep '\.rs$' \
               | grep '^crates/velesdb-core/src/' \
               | grep -v '/tests/' \

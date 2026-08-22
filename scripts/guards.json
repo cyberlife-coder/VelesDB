@@ -210,7 +210,7 @@
    ],
    "blind_spot": {
     "issue": null,
-    "summary": "Runs only on production .rs files changed by the PR, so it never re-reads unsafe blocks that predate it."
+    "summary": "Runs only on production .rs files changed by the PR, so it never re-reads unsafe blocks that predate it. Until the `lint` job checked out full history, that diff resolved to nothing at all and the gate read no files on any pull request; test_ci_gate_reachability now pins the fetch-depth."
    }
   },
   {
@@ -252,7 +252,7 @@
    ],
    "blind_spot": {
     "issue": null,
-    "summary": "Diff-scoped to changed velesdb-core production files, like the unsafe guard."
+    "summary": "Diff-scoped to changed velesdb-core production files, like the unsafe guard \u2014 and it shared the same shallow-checkout blind spot, now pinned by test_ci_gate_reachability."
    }
   },
   {
