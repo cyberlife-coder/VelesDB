@@ -118,6 +118,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **TS SDK: REST `upsert`/`upsertBatch` no longer drop `sparseVector`.**
+  The REST backend sent only `{id, vector, payload}` while the server
+  accepts `sparse_vector` and the streaming backend always forwarded it —
+  a sparse-carrying upsert silently produced an empty sparse index and
+  degraded hybrid search. Both paths now forward it; wire-body tests pin
+  the contract.
+
 - **The bitmap under-fill retry explored nothing.** It doubled
   `candidates_k` at the same `ef`, but the graph's result heap is bounded
   by `ef`, so the retry re-ran the identical traversal and returned the

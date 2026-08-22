@@ -216,10 +216,18 @@ export async function upsert(
   const restId = parseRestPointId(doc.id);
   const vector = toNumberArray(doc.vector);
 
+  // sparseVector must reach the wire: the server accepts `sparse_vector`
+  // on upsert, and dropping it silently produced an empty sparse index and
+  // degraded hybrid search (the streaming backend always forwarded it).
+  const point: Record<string, unknown> = { id: restId, vector, payload: doc.payload };
+  if (doc.sparseVector) {
+    point.sparse_vector = sparseVectorToRestFormat(doc.sparseVector);
+  }
+
   const response = await transport.requestJson(
     'POST',
     `${collectionPath(collection)}/points`,
-    { points: [{ id: restId, vector, payload: doc.payload }] }
+    { points: [point] }
   );
   throwOnError(response, `Collection '${collection}'`);
 }
@@ -229,11 +237,18 @@ export async function upsertBatch(
   collection: string,
   docs: VectorDocument[]
 ): Promise<void> {
-  const vectors = docs.map(doc => ({
-    id: parseRestPointId(doc.id),
-    vector: toNumberArray(doc.vector),
-    payload: doc.payload,
-  }));
+  const vectors = docs.map(doc => {
+    // Same wire contract as single upsert: forward sparseVector when present.
+    const point: Record<string, unknown> = {
+      id: parseRestPointId(doc.id),
+      vector: toNumberArray(doc.vector),
+      payload: doc.payload,
+    };
+    if (doc.sparseVector) {
+      point.sparse_vector = sparseVectorToRestFormat(doc.sparseVector);
+    }
+    return point;
+  });
 
   const response = await transport.requestJson(
     'POST',
