@@ -206,7 +206,9 @@ impl NativeHnswIndex {
 
         let result = self.upsert_mapping(id);
 
-        if let Err(e) = self.inner.read().insert((vector, result.idx)) {
+        // Bound so the graph read guard is released before the rollback.
+        let inserted = self.inner.read().insert((vector, result.idx));
+        if let Err(e) = inserted {
             self.rollback_upsert(id, &result);
             return Err(e);
         }
@@ -242,7 +244,9 @@ impl NativeHnswIndex {
             rollback_info.push((*id, result));
         }
 
-        let assigned_ids = match self.inner.read().parallel_insert(&data) {
+        // Bound so the graph read guard is released before `rollback_batch`.
+        let inserted = self.inner.read().parallel_insert(&data);
+        let assigned_ids = match inserted {
             Ok(ids) => ids,
             Err(e) => {
                 // RF-DEDUP #448 Group D — reverse-order rollback shared with

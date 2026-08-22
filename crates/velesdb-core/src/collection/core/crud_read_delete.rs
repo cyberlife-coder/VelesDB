@@ -406,7 +406,9 @@ impl Collection {
             .ids()
             .into_iter()
             .collect();
-        for id in self.storage.payload_storage.read().ids() {
+        // Bound so `payload_storage` (lock-order 3) is not held across the loop.
+        let payload_ids = self.storage.payload_storage.read().ids();
+        for id in payload_ids {
             ids.insert(id);
         }
         ids.into_iter().collect()

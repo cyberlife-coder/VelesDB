@@ -133,7 +133,10 @@ impl HnswIndex {
         vector: &[f32],
         result: &UpsertResult,
     ) -> bool {
-        let assigned_id = match self.inner.read().insert((vector, result.idx)) {
+        // Bound so the graph read guard is released before the rollback path
+        // touches `mappings`.
+        let inserted = self.inner.read().insert((vector, result.idx));
+        let assigned_id = match inserted {
             Ok(id) => id,
             Err(e) => {
                 self.rollback_upsert(id, result);

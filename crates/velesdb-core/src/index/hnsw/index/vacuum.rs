@@ -208,7 +208,10 @@ impl HnswIndex {
         }
         let new_inner = new_inner.promote_to_rabitq(self.dimension);
         #[cfg(feature = "persistence")]
-        if let Some(rabitq) = self.inner.read().rabitq_quantizer() {
+        // Bound: the guard would otherwise be held across the full re-encode
+        // pass in `install_trained_rabitq`.
+        let carried = self.inner.read().rabitq_quantizer();
+        if let Some(rabitq) = carried {
             // Single encode pass with the carried-over quantizer; an
             // untrained collection stays untrained (no state change).
             new_inner

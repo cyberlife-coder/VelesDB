@@ -402,7 +402,10 @@ impl Bm25Index {
             return Some(existing);
         }
 
-        let allocated = if let Some(recycled) = self.free_doc_ids.write().pop() {
+        // Bound: the `if let` would hold the `free_doc_ids` WRITE guard across
+        // the `else` branch, which takes a second write lock (`next_doc_id`).
+        let recycled = self.free_doc_ids.write().pop();
+        let allocated = if let Some(recycled) = recycled {
             recycled
         } else {
             let mut next = self.next_doc_id.write();

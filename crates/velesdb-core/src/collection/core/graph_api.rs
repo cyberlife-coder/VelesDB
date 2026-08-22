@@ -211,7 +211,10 @@ impl Collection {
     /// Returns `Error::SchemaValidation` if any label in `_labels` is not
     /// declared in the strict schema.
     fn validate_node_labels_against_schema(&self, payload: &serde_json::Value) -> Result<()> {
-        let schema = match self.storage.config.read().graph_schema.clone() {
+        // `config` is lock-order position 1 (outermost); bind the clone so the
+        // guard does not span the validation loop below.
+        let declared = self.storage.config.read().graph_schema.clone();
+        let schema = match declared {
             Some(s) if !s.is_schemaless() => s,
             _ => return Ok(()),
         };
@@ -231,7 +234,8 @@ impl Collection {
     /// acquisition order to 3 → 1 (see LOCK ORDERING in
     /// `collection/types.rs`).
     fn non_schemaless_graph_schema(&self) -> Option<GraphSchema> {
-        match self.storage.config.read().graph_schema.clone() {
+        let declared = self.storage.config.read().graph_schema.clone();
+        match declared {
             Some(s) if !s.is_schemaless() => Some(s),
             _ => None,
         }
