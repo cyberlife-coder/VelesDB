@@ -139,8 +139,6 @@ impl Collection {
             payload_storage,
             index,
             text_index,
-            sq8_cache: Arc::new(RwLock::new(HashMap::new())),
-            binary_cache: Arc::new(RwLock::new(HashMap::new())),
             pq_cache: Arc::new(RwLock::new(HashMap::new())),
             pq_quantizer: Arc::new(RwLock::new(None)),
             pq_training_buffer: Arc::new(RwLock::new(VecDeque::new())),

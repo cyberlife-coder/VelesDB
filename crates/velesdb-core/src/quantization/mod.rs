@@ -114,22 +114,22 @@ pub const STORAGE_MODE_NAMES: &[&str] = &["full", "sq8", "binary", "pq", "rabitq
 
 /// Storage mode for vectors.
 ///
-/// # Capacity mode vs search-path mode
+/// # What each mode actually does
 ///
-/// | Mode | Kind | Collection search path |
-/// |------|------|------------------------|
-/// | `Full` | full-precision | f32 (baseline) |
-/// | `SQ8` | **Capacity Mode** | full-precision f32 (memory only, no throughput gain) |
-/// | `Binary` | **Capacity Mode** | full-precision f32 (memory only, no throughput gain) |
-/// | `ProductQuantization` | search-path mode | ADC-rescored (wired) |
-/// | `RaBitQ` | search-path mode | quantized traversal (wired end-to-end) |
+/// | Mode | Collection storage + search path |
+/// |------|----------------------------------|
+/// | `Full` | f32 (baseline) |
+/// | `SQ8` | f32 — behaves as `Full` today; int8 traversal tracked in #2112 |
+/// | `Binary` | f32 — behaves as `Full` today (use `RaBitQ` for compressed search) |
+/// | `ProductQuantization` | f32 storage + ADC-rescored search (wired) |
+/// | `RaBitQ` | quantized traversal, wired end-to-end |
 ///
-/// **Capacity Modes (`SQ8`, `Binary`)** reduce the in-memory footprint of the
-/// quantization primitives, but the collection search path stays
-/// full-precision f32 for those modes — selecting them does not gain search
-/// throughput. **Search-path modes (`RaBitQ`, `ProductQuantization`)** are the
-/// quantized paths wired into the query hot path. See
-/// `docs/guides/QUANTIZATION.md`.
+/// **Search-path modes (`RaBitQ`, `ProductQuantization`)** are the quantized
+/// paths wired into the query hot path. `SQ8` and `Binary` are accepted and
+/// persisted so the intent survives a reopen, but they change neither memory
+/// use nor throughput yet — the earlier "Capacity Mode" framing overstated
+/// them (they filled quantized side-caches that no search path ever read).
+/// See `docs/guides/QUANTIZATION.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
@@ -137,14 +137,20 @@ pub enum StorageMode {
     /// Full precision f32 storage (default).
     #[default]
     Full,
-    /// **Capacity Mode.** 8-bit scalar quantization for 4x memory reduction.
-    /// Reduces the quantization primitive's footprint only; the collection
-    /// search path stays full-precision f32 and gains no search throughput.
+    /// Accepted and persisted, but currently behaves exactly like [`Full`]:
+    /// vectors are stored and searched full-precision f32, with no memory or
+    /// throughput gain. The SQ8 codec ([`QuantizedVector`]) and an int8
+    /// traversal engine exist in-tree; wiring them into an HNSW backend (the
+    /// `RaBitQ` pattern) is tracked in issue #2112. Selecting this mode today
+    /// reserves the intent without changing behavior.
+    ///
+    /// [`Full`]: StorageMode::Full
     SQ8,
-    /// **Capacity Mode.** 1-bit binary quantization for 32x memory reduction.
-    /// Best for edge/IoT devices with limited RAM. Reduces footprint only; the
-    /// collection search path stays full-precision f32 and gains no search
-    /// throughput (use `RaBitQ` for a quantized search path).
+    /// Accepted and persisted, but currently behaves exactly like [`Full`] —
+    /// same status as [`SQ8`](StorageMode::SQ8). For a real quantized search
+    /// path use [`RaBitQ`](StorageMode::RaBitQ) (32x, wired end-to-end).
+    ///
+    /// [`Full`]: StorageMode::Full
     Binary,
     /// Product Quantization (PQ) for aggressive lossy compression (8x-16x
     /// typical). Search-path mode: wired into the query hot path for ADC
