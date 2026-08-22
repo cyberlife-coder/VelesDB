@@ -311,6 +311,35 @@ impl VectorCollection {
         index_name: &str,
         strategy: &crate::fusion::FusionStrategy,
     ) -> Result<Vec<SearchResult>> {
+        self.hybrid_sparse_search_filtered(
+            dense_vector,
+            sparse_query,
+            k,
+            index_name,
+            strategy,
+            None,
+        )
+    }
+
+    /// [`Self::hybrid_sparse_search`] with an optional metadata filter.
+    ///
+    /// The filter applies to **both** branches before fusion (dense
+    /// pre-filter, sparse post-filter — see `execute_both_branches`), so a
+    /// fused result never surfaces a point the filter excludes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if dense or sparse search fails, or fusion errors.
+    #[allow(clippy::too_many_arguments)]
+    pub fn hybrid_sparse_search_filtered(
+        &self,
+        dense_vector: &[f32],
+        sparse_query: &crate::index::sparse::SparseVector,
+        k: usize,
+        index_name: &str,
+        strategy: &crate::fusion::FusionStrategy,
+        filter: Option<&crate::filter::Filter>,
+    ) -> Result<Vec<SearchResult>> {
         let candidate_k = k.saturating_mul(2).max(k + 10);
 
         let (dense_results, sparse_results) = self.inner.execute_both_branches(
@@ -318,7 +347,7 @@ impl VectorCollection {
             sparse_query,
             index_name,
             candidate_k,
-            None,
+            filter,
         );
 
         if dense_results.is_empty() && sparse_results.is_empty() {

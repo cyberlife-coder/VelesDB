@@ -118,6 +118,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The hybrid dense+sparse metadata filter now binds BOTH branches — and
+  the REST endpoint finally reads it at all.** Two layered defects: the
+  server's `/search` hybrid dense+sparse path never read the request's
+  `filter` (silently returning unfiltered fused results), and even when a
+  filter reached core's `execute_both_branches` (the VelesQL hybrid path),
+  only the sparse branch applied it — dense-only candidates the filter
+  excludes leaked into fusion. The dense branch now routes through the
+  filtered dense search (bitmap pre-filter + oversampling), the facade
+  gains `hybrid_sparse_search_filtered`, and the server wires the request
+  filter through it. A facade test pins that no fused result can carry an
+  excluded point.
+
+- **The REST weighted-fusion defaults rejoin the #1545 canon.** The REST
+  surface froze the pre-#1545 weights (0.5/0.3/0.2) in two places — the
+  `api_types` serde defaults and the server's strategy parser — while
+  every other surface used the canonical 0.6/0.3/0.1 from core's fusion
+  module. Both now derive from the canonical constants; a weightless
+  `strategy: "weighted"` REST request behaves like the same request on
+  every other surface. Behavioral change for REST clients that relied on
+  the forked defaults: pass explicit weights to keep the old blend.
+
 - **TS SDK: REST `upsert`/`upsertBatch` no longer drop `sparseVector`.**
   The REST backend sent only `{id, vector, payload}` while the server
   accepts `sparse_vector` and the streaming backend always forwarded it —

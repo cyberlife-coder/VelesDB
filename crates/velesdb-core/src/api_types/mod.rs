@@ -66,21 +66,29 @@ pub const fn default_rrf_k() -> u32 {
 }
 
 /// Default average weight for weighted fusion.
+///
+/// Derived from [`crate::fusion::DEFAULT_WEIGHTED_AVG_WEIGHT`] — the fusion
+/// module is the single source of truth for these defaults (#1545); this
+/// wrapper exists only because serde `default` needs a function path. The
+/// REST surface previously froze the pre-#1545 values (0.5/0.3/0.2) here,
+/// forking the default fusion behavior from every other surface.
 #[must_use]
 pub const fn default_avg_weight() -> f32 {
-    0.5
+    crate::fusion::DEFAULT_WEIGHTED_AVG_WEIGHT
 }
 
 /// Default max weight for weighted fusion.
+/// See [`default_avg_weight`] for the single-source rationale.
 #[must_use]
 pub const fn default_max_weight() -> f32 {
-    0.3
+    crate::fusion::DEFAULT_WEIGHTED_MAX_WEIGHT
 }
 
 /// Default hit weight for weighted fusion.
+/// See [`default_avg_weight`] for the single-source rationale.
 #[must_use]
 pub const fn default_hit_weight() -> f32 {
-    0.2
+    crate::fusion::DEFAULT_WEIGHTED_HIT_WEIGHT
 }
 
 /// Default dense weight for relative score fusion.

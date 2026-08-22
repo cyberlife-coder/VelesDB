@@ -162,9 +162,12 @@ fn deserialize_multi_query_search_request_defaults() {
     assert_eq!(req.top_k, 10);
     assert_eq!(req.strategy, "rrf");
     assert_eq!(req.rrf_k, 60);
-    assert!((req.avg_weight - 0.5).abs() < f32::EPSILON);
+    // Canonical #1545 defaults — this surface shipped the pre-#1545 fork
+    // (0.5/0.3/0.2) until the serde defaults were re-derived from
+    // crate::fusion's constants.
+    assert!((req.avg_weight - 0.6).abs() < f32::EPSILON);
     assert!((req.max_weight - 0.3).abs() < f32::EPSILON);
-    assert!((req.hit_weight - 0.2).abs() < f32::EPSILON);
+    assert!((req.hit_weight - 0.1).abs() < f32::EPSILON);
 }
 
 #[test]
@@ -459,9 +462,11 @@ fn test_velesql_contract_version() {
 
 #[test]
 fn test_default_fusion_weights() {
-    assert!((default_avg_weight() - 0.5).abs() < f32::EPSILON);
+    // Values pinned to the #1545 canon; the derivation itself is pinned by
+    // weighted_fusion_defaults_are_the_canonical_constants below.
+    assert!((default_avg_weight() - 0.6).abs() < f32::EPSILON);
     assert!((default_max_weight() - 0.3).abs() < f32::EPSILON);
-    assert!((default_hit_weight() - 0.2).abs() < f32::EPSILON);
+    assert!((default_hit_weight() - 0.1).abs() < f32::EPSILON);
 }
 
 // ============================================================================
@@ -918,4 +923,25 @@ fn scroll_request_cursor_accepts_null() {
     let input = json!({});
     let req: ScrollRequest = serde_json::from_value(input).unwrap();
     assert_eq!(req.cursor, None);
+}
+
+/// The REST weighted-fusion serde defaults must be the fusion module's
+/// canonical constants (#1545) — this surface previously froze the
+/// pre-#1545 literals 0.5/0.3/0.2, forking the default behavior of a
+/// weightless `weighted` request from every other surface. Double pin:
+/// the derivation AND the canonical values.
+#[test]
+fn weighted_fusion_defaults_are_the_canonical_constants() {
+    assert!(
+        (default_avg_weight() - crate::fusion::DEFAULT_WEIGHTED_AVG_WEIGHT).abs() < f32::EPSILON
+    );
+    assert!(
+        (default_max_weight() - crate::fusion::DEFAULT_WEIGHTED_MAX_WEIGHT).abs() < f32::EPSILON
+    );
+    assert!(
+        (default_hit_weight() - crate::fusion::DEFAULT_WEIGHTED_HIT_WEIGHT).abs() < f32::EPSILON
+    );
+    assert!((default_avg_weight() - 0.6).abs() < f32::EPSILON);
+    assert!((default_max_weight() - 0.3).abs() < f32::EPSILON);
+    assert!((default_hit_weight() - 0.1).abs() < f32::EPSILON);
 }
