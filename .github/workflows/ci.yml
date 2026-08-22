@@ -293,6 +293,18 @@ jobs:
             BASE_SHA="$(git rev-list --max-parents=0 HEAD)"
           fi
 
+          # An unreachable base is the failure a diff-scoped step cannot
+          # survive quietly: `git diff` errors, the surrounding `mapfile`/`if`
+          # swallows the status, and the step concludes "nothing changed"
+          # having looked at nothing. Prove the object is here before trusting
+          # an empty result.
+          if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            echo "::error::base commit $BASE_SHA is not in this checkout — a" \
+                 "diff against it reads zero files instead of failing." \
+                 "Give this job actions/checkout with fetch-depth: 0."
+            exit 1
+          fi
+
           # F-3.12: validate SAFETY templates in EVERY production crate, not
           # just velesdb-core. Bindings (velesdb-python, velesdb-wasm,
           # velesdb-mobile, tauri-plugin-velesdb) contain unsafe blocks too and
@@ -306,6 +318,8 @@ jobs:
               | grep -v '/benches/' \
               | grep -Ev '_tests?\.rs$'
           )
+          CHANGED_TOTAL="$(git diff --name-only --diff-filter=d "$BASE_SHA" "${{ github.sha }}" | wc -l)"
+          echo "SAFETY template: $CHANGED_TOTAL changed file(s) in range, ${#PROD_RS_FILES[@]} production Rust."
           if [[ ${#PROD_RS_FILES[@]} -eq 0 ]]; then
             echo "No changed production Rust files to validate."
             exit 0
@@ -323,6 +337,18 @@ jobs:
             BASE_SHA="$(git rev-list --max-parents=0 HEAD)"
           fi
 
+          # An unreachable base is the failure a diff-scoped step cannot
+          # survive quietly: `git diff` errors, the surrounding `mapfile`/`if`
+          # swallows the status, and the step concludes "nothing changed"
+          # having looked at nothing. Prove the object is here before trusting
+          # an empty result.
+          if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            echo "::error::base commit $BASE_SHA is not in this checkout — a" \
+                 "diff against it reads zero files instead of failing." \
+                 "Give this job actions/checkout with fetch-depth: 0."
+            exit 1
+          fi
+
           mapfile -t CORE_RS_FILES < <(
             git diff --name-only --diff-filter=d "$BASE_SHA" "${{ github.sha }}" \
               | grep '\.rs$' \
@@ -331,6 +357,8 @@ jobs:
               | grep -v '/benches/' \
               | grep -Ev '_tests?\.rs$'
           )
+          CHANGED_TOTAL="$(git diff --name-only --diff-filter=d "$BASE_SHA" "${{ github.sha }}" | wc -l)"
+          echo "TODO governance: $CHANGED_TOTAL changed file(s) in range, ${#CORE_RS_FILES[@]} production Rust."
           if [[ ${#CORE_RS_FILES[@]} -eq 0 ]]; then
             echo "No changed production Rust files to validate."
             exit 0
@@ -1058,6 +1086,18 @@ jobs:
           if [[ -z "$BASE_SHA" || "$BASE_SHA" == "0000000000000000000000000000000000000000" ]]; then
             BASE_SHA="$(git rev-list --max-parents=0 HEAD)"
           fi
+
+          # An unreachable base is the failure a diff-scoped step cannot
+          # survive quietly: `git diff` errors, the surrounding `mapfile`/`if`
+          # swallows the status, and the step concludes "nothing changed"
+          # having looked at nothing. Prove the object is here before trusting
+          # an empty result.
+          if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            echo "::error::base commit $BASE_SHA is not in this checkout — a" \
+                 "diff against it reads zero files instead of failing." \
+                 "Give this job actions/checkout with fetch-depth: 0."
+            exit 1
+          fi
           if git diff --name-only "$BASE_SHA" "${{ github.sha }}" | grep -q '^crates/velesdb-node/'; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
             echo "crates/velesdb-node/** changed — Windows leg will build."
@@ -1454,6 +1494,18 @@ jobs:
           fi
           if [[ -z "$BASE_SHA" || "$BASE_SHA" == "0000000000000000000000000000000000000000" ]]; then
             BASE_SHA="$(git rev-list --max-parents=0 HEAD)"
+          fi
+
+          # An unreachable base is the failure a diff-scoped step cannot
+          # survive quietly: `git diff` errors, the surrounding `mapfile`/`if`
+          # swallows the status, and the step concludes "nothing changed"
+          # having looked at nothing. Prove the object is here before trusting
+          # an empty result.
+          if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            echo "::error::base commit $BASE_SHA is not in this checkout — a" \
+                 "diff against it reads zero files instead of failing." \
+                 "Give this job actions/checkout with fetch-depth: 0."
+            exit 1
           fi
           if git diff --name-only "$BASE_SHA" "${{ github.sha }}" | grep -qE '^crates/velesdb-core/src/(index|simd_native|quantization|fusion|wal|storage)/|^crates/velesdb-python/|^benchmarks/velesdb_benchmark\.py$|^\.github/workflows/ci\.yml$'; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"

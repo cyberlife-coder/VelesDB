@@ -148,6 +148,20 @@ CHECKOUT_RE = re.compile(r"uses:\s*actions/checkout@")
 FETCH_DEPTH_RE = re.compile(r"^\s*fetch-depth:\s*0\s*$", re.MULTILINE)
 
 
+BASE_REACHABLE_RE = re.compile(r"git cat-file -e \"\$BASE_SHA\^\{commit\}\"")
+
+
+def asserts_base_is_reachable(block: str) -> bool:
+    """Whether a job proves the base commit exists before diffing against it.
+
+    `fetch-depth: 0` is the fix; this is the alarm for every other way the
+    base can go missing (a force-push that orphans it, a rewritten base
+    branch). Without it the diff fails into an empty list and the step
+    reports "nothing changed".
+    """
+    return bool(BASE_REACHABLE_RE.search(block))
+
+
 def jobs_diffing_against_base(text: str) -> "set[str]":
     """Jobs whose steps resolve a file list from a base-vs-head `git diff`."""
     stripped = strip_comments(text)
@@ -1096,6 +1110,34 @@ class DiffScopedGateReachabilityTests(unittest.TestCase):
         block = job_block(strip_comments(self.text), "lint")
         self.assertTrue(checkout_is_full_history(block))
         self.assertFalse(checkout_is_full_history(block.replace("fetch-depth: 0", "", 1)))
+
+    def test_every_diffing_job_refuses_an_unreachable_base(self) -> None:
+        # Belt and braces to fetch-depth: the depth fix makes the base
+        # present, this makes its ABSENCE loud instead of silent, for the
+        # failure modes fetch-depth cannot cover.
+        missing = sorted(
+            job
+            for job in jobs_diffing_against_base(self.text)
+            if not asserts_base_is_reachable(job_block(strip_comments(self.text), job))
+        )
+        self.assertEqual(
+            missing,
+            [],
+            f"job(s) diffing against a base they never prove is present: {missing}. "
+            "A missing base makes `git diff` fail into an empty file list, which "
+            "reads exactly like 'nothing changed'. Add the `git cat-file -e "
+            "\"$BASE_SHA^{commit}\"` check before the diff.",
+        )
+
+    def test_removing_the_reachability_check_is_detected(self) -> None:
+        # `lint` carries one check per diff-scoped gate, so the negative
+        # control has to remove EVERY occurrence — dropping just the first
+        # leaves the second matching and proves nothing.
+        block = job_block(strip_comments(self.text), "lint")
+        self.assertTrue(asserts_base_is_reachable(block))
+        self.assertFalse(
+            asserts_base_is_reachable(block.replace("git cat-file -e", "true #"))
+        )
 
     def test_this_changes_own_suite_runs_in_the_required_job(self) -> None:
         # Same reasoning as the mcp-doc-contract suites above: the verifier's
