@@ -3,7 +3,7 @@
 //! Extracted from `perf_optimizations.rs` to reduce NLOC.
 //! Contains reorder permutation, dot-product batching, Drop, and free SIMD helpers.
 
-use super::perf_optimizations::ContiguousVectors;
+use super::perf_optimizations::{ArenaBacking, ContiguousVectors};
 use std::alloc::dealloc;
 use std::ptr::{self, NonNull};
 
@@ -17,6 +17,24 @@ impl ContiguousVectors {
     /// `new_order[i]` contains the old index of the vector that should occupy
     /// position `i` after reordering. The permutation must have exactly
     /// `self.len()` elements and every index must be `< self.len()`.
+    ///
+    /// # A file-backed arena is demoted to the heap
+    ///
+    /// Reordering copies into a fresh heap buffer, so an arena that was
+    /// file-mapped **stops being file-mapped here**: its mapping is released,
+    /// its exclusive lock with it, and the file is left on disk holding the
+    /// pre-reorder bytes. Two consequences a caller has to know about:
+    ///
+    /// - The pages stop being evictable, which is the property the mapped
+    ///   backing existed for (#2112). A quantized index that reorders is back
+    ///   to `f32 + graph + codes` resident.
+    /// - [`flush_backing`](Self::flush_backing) becomes a no-op that still
+    ///   returns `Ok`, because there is no longer a mapping to flush.
+    ///
+    /// This is stated rather than fixed because no production path takes a
+    /// file-backed arena yet; preserving the backing across a reorder costs a
+    /// second copy and belongs with the wiring that gives it a caller, where
+    /// it can be measured. Whoever does that wiring owns this.
     ///
     /// # Errors
     ///
@@ -64,16 +82,33 @@ impl ContiguousVectors {
         // Transfer ownership — guard will not free on drop
         let _ = guard.into_raw();
 
-        // Deallocate old buffer
-        let old_layout = Self::layout(self.dimension, self.capacity)?;
-        // SAFETY: self.data was allocated with old_layout, is non-null (NonNull invariant).
-        // - Condition 1: old_layout matches the allocation parameters.
-        // - Condition 2: Pointer is non-null per NonNull invariant.
-        // SAFETY: Free old buffer after data migration to reordered buffer.
-        unsafe { dealloc(self.data.as_ptr().cast::<u8>(), old_layout) };
+        self.adopt_reordered_buffer(new_ptr)
+    }
+
+    /// Installs the freshly reordered heap buffer and releases the old one.
+    ///
+    /// Reordering always lands the arena on the heap, so a file-mapped arena
+    /// changes backing here. Taking the old backing out *first* is what keeps
+    /// a mapped pointer away from `dealloc`: only a `Heap` predecessor
+    /// reaches the allocator, and a `FileMapped` one is released by dropping
+    /// it (#2112).
+    fn adopt_reordered_buffer(&mut self, new_ptr: NonNull<f32>) -> crate::error::Result<()> {
+        let previous = std::mem::replace(&mut self.backing, ArenaBacking::Heap);
+        let old_data = self.data;
+        let old_capacity = self.capacity;
 
         self.data = new_ptr;
         self.capacity = self.count;
+
+        if previous.is_heap() {
+            let old_layout = Self::layout(self.dimension, old_capacity)?;
+            // SAFETY: `old_data` was allocated with `old_layout` and is non-null
+            // (NonNull invariant).
+            // - Condition 1: the `is_heap` branch proves the allocator owns it.
+            // - Condition 2: `old_layout` matches its allocation parameters.
+            // SAFETY: Free the pre-reorder buffer now that its data has moved.
+            unsafe { dealloc(old_data.as_ptr().cast::<u8>(), old_layout) };
+        }
         Ok(())
     }
 
@@ -143,6 +178,14 @@ impl ContiguousVectors {
 
 impl Drop for ContiguousVectors {
     fn drop(&mut self) {
+        // A file-mapped arena's bytes belong to the mapping, not the
+        // allocator: releasing them is dropping `backing`, which happens on
+        // its own after this. Handing that pointer to `dealloc` would be
+        // undefined behaviour, so the backing is checked before anything else
+        // in this function touches the allocator (#2112).
+        if !self.backing.is_heap() {
+            return;
+        }
         // EPIC-032/US-002: No null check needed - NonNull guarantees non-null
         // Layout was valid at construction; it must still be valid at drop.
         let Ok(layout) = Self::layout(self.dimension, self.capacity) else {

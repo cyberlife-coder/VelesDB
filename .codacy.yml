@@ -198,6 +198,19 @@ exclude_paths:
   # non-overlapping invariants) as the pre-extraction version. Covered by
   # Miri CI.
   - "crates/velesdb-core/src/contiguous_resize.rs"
+  # File-backed vector arena (#2112 Phase B) — the third member of the
+  # ContiguousVectors family, alongside contiguous_ops.rs and
+  # contiguous_resize.rs above. Two unsafe blocks, both unavoidable:
+  # MmapMut::map_mut cannot be called safely, and addressing the data region
+  # past the reserved header needs pointer arithmetic. Both carry // SAFETY:
+  # documentation with numbered conditions, and the file passes
+  # scripts/verify_unsafe_safety_template.py --strict, which (unlike this
+  # rule) does distinguish documented from undocumented unsafe.
+  #
+  # Not covered by Miri: the interesting paths are mmap-backed and Miri cannot
+  # execute them. The equivalent heap path it can check lives in the two
+  # siblings above and is unchanged.
+  - "crates/velesdb-core/src/contiguous_file_arena.rs"
 
 # ---------------------------------------------------------------------------
 # Per-engine exclusions — targeted suppression without losing other checks
