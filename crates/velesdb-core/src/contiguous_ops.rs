@@ -18,6 +18,24 @@ impl ContiguousVectors {
     /// position `i` after reordering. The permutation must have exactly
     /// `self.len()` elements and every index must be `< self.len()`.
     ///
+    /// # A file-backed arena is demoted to the heap
+    ///
+    /// Reordering copies into a fresh heap buffer, so an arena that was
+    /// file-mapped **stops being file-mapped here**: its mapping is released,
+    /// its exclusive lock with it, and the file is left on disk holding the
+    /// pre-reorder bytes. Two consequences a caller has to know about:
+    ///
+    /// - The pages stop being evictable, which is the property the mapped
+    ///   backing existed for (#2112). A quantized index that reorders is back
+    ///   to `f32 + graph + codes` resident.
+    /// - [`flush_backing`](Self::flush_backing) becomes a no-op that still
+    ///   returns `Ok`, because there is no longer a mapping to flush.
+    ///
+    /// This is stated rather than fixed because no production path takes a
+    /// file-backed arena yet; preserving the backing across a reorder costs a
+    /// second copy and belongs with the wiring that gives it a caller, where
+    /// it can be measured. Whoever does that wiring owns this.
+    ///
     /// # Errors
     ///
     /// Returns an error if:
