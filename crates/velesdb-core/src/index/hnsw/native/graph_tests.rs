@@ -625,3 +625,226 @@ fn test_snapshot_version_detects_staleness_without_explicit_clear() {
         "invalidate_gpu_caches must also clear the snapshot mutex (belt-and-suspenders)"
     );
 }
+
+/// A quantized collection keeps its f32 arena on disk, a Full one does not.
+///
+/// The whole point of #2112: in SQ8/RaBitQ the traversal runs on codes and
+/// f32 is read only to re-rank, so those pages may be evicted. In Full the
+/// f32 *is* the traversal data, so mapping it would fault a page per hop.
+/// This pins the split at the level a user actually configures.
+#[cfg(feature = "persistence")]
+#[test]
+fn only_a_quantized_index_puts_its_arena_on_disk() {
+    use crate::index::hnsw::{HnswIndex, HnswParams};
+
+    fn arena_files(dir: &std::path::Path) -> usize {
+        std::fs::read_dir(dir)
+            .expect("read_dir")
+            .flatten()
+            .filter(|e| crate::index::hnsw::native::arena_home::ArenaHome::is_arena_file(&e.path()))
+            .count()
+    }
+
+    for (mode, expected) in [
+        (crate::StorageMode::Full, 0),
+        (crate::StorageMode::SQ8, 1),
+        (crate::StorageMode::RaBitQ, 1),
+    ] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut params = HnswParams::auto(16);
+        params.storage_mode = mode;
+        let index = HnswIndex::with_params_in_dir(
+            16,
+            crate::DistanceMetric::Cosine,
+            params,
+            true,
+            Some(dir.path().to_path_buf()),
+        )
+        .expect("index");
+
+        assert_eq!(
+            arena_files(dir.path()),
+            expected,
+            "{mode:?} should hold {expected} arena file(s) on disk"
+        );
+
+        // Dropping the index must take its arena file with it: the file is a
+        // cache of `.vectors`, so leaving it behind is pure waste.
+        drop(index);
+        assert_eq!(
+            arena_files(dir.path()),
+            0,
+            "{mode:?}: dropping the index must remove its arena file"
+        );
+    }
+}
+
+/// A stale arena from a killed process is swept, and nothing else is.
+#[cfg(feature = "persistence")]
+#[test]
+fn sweeping_removes_only_arena_files() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let arena = dir.path().join("hnsw-99.arena");
+    let vectors = dir.path().join("native_hnsw.vectors");
+    std::fs::write(&arena, b"stale").expect("write arena");
+    std::fs::write(&vectors, b"precious").expect("write vectors");
+
+    crate::index::hnsw::sweep_stale_arenas(dir.path());
+
+    assert!(!arena.exists(), "a stale arena must be swept");
+    assert!(
+        vectors.exists(),
+        "the sweep must not touch the durable vector file"
+    );
+}
+
+/// A quantized collection maps its arena, searches correctly, and cleans up.
+///
+/// The end-to-end claim of #2112 Phase B, at the level a user configures:
+/// an SQ8 collection's f32 arena is a file, the results are the same as they
+/// would be on the heap, and closing the collection leaves nothing behind.
+#[cfg(feature = "persistence")]
+#[test]
+fn a_quantized_collection_maps_its_arena_and_cleans_up() {
+    use crate::index::hnsw::{HnswIndex, HnswParams};
+    use crate::index::VectorIndex;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dimension = 8;
+    // Directions must be genuinely distinct: under Cosine a vector and any
+    // positive multiple of it are the same point, so a fixture that varies
+    // only the magnitude of one axis makes "nearest neighbour" ambiguous and
+    // the assertion below meaningless.
+    let vectors: Vec<Vec<f32>> = (0..64)
+        .map(|i| {
+            (0..dimension)
+                .map(|d| {
+                    let step = u32::try_from(i * dimension + d).expect("fits u32");
+                    // Deterministic spread; no RNG, so a failure names the slot.
+                    f32::from((step.wrapping_mul(2_654_435_761) >> 20) as u16) + 1.0
+                })
+                .collect()
+        })
+        .collect();
+
+    let arena_count = || {
+        std::fs::read_dir(dir.path())
+            .expect("read_dir")
+            .flatten()
+            .filter(|e| crate::index::hnsw::native::arena_home::ArenaHome::is_arena_file(&e.path()))
+            .count()
+    };
+
+    let mut params = HnswParams::auto(dimension);
+    params.storage_mode = crate::StorageMode::SQ8;
+    let index = HnswIndex::with_params_in_dir(
+        dimension,
+        crate::DistanceMetric::Cosine,
+        params,
+        true,
+        Some(dir.path().to_path_buf()),
+    )
+    .expect("index");
+
+    for (i, v) in vectors.iter().enumerate() {
+        index.insert(i as u64, v);
+    }
+    assert_eq!(arena_count(), 1, "the f32 arena should be a file on disk");
+
+    // Every vector must be findable as its own nearest neighbour. Reading
+    // them back is what proves the mapped arena is actually serving the
+    // re-rank, not merely existing.
+    for (i, v) in vectors.iter().enumerate() {
+        let hits = index.search(v, 1);
+        assert_eq!(
+            hits.first().map(|r| r.id),
+            Some(i as u64),
+            "vector {i} should be its own nearest neighbour"
+        );
+    }
+
+    drop(index);
+    assert_eq!(
+        arena_count(),
+        0,
+        "closing the index must leave no arena file behind"
+    );
+}
+
+/// A fresh quantized index does not pre-create a huge arena file.
+///
+/// `HnswParams::auto` defaults `max_elements` to 100 000, which at 768
+/// dimensions sizes the arena at ~292 MB. The heap arena pre-allocates that
+/// because growing it copies the whole block; a mapped arena grows by
+/// extending the file, so pre-sizing buys nothing and would put a
+/// third-of-a-gigabyte file on a device before the collection holds a single
+/// vector. This pins the cap rather than leaving it to a constant nobody
+/// re-reads.
+#[cfg(feature = "persistence")]
+#[test]
+fn a_fresh_arena_does_not_pre_size_to_max_elements() {
+    use crate::index::hnsw::{HnswIndex, HnswParams};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dimension = 768;
+    let mut params = HnswParams::auto(dimension);
+    params.storage_mode = crate::StorageMode::SQ8;
+    assert!(
+        params.max_elements >= 100_000,
+        "this test is only meaningful while the default is large, got {}",
+        params.max_elements
+    );
+
+    let index = HnswIndex::with_params_in_dir(
+        dimension,
+        crate::DistanceMetric::Cosine,
+        params,
+        true,
+        Some(dir.path().to_path_buf()),
+    )
+    .expect("index");
+
+    let bytes: u64 = std::fs::read_dir(dir.path())
+        .expect("read_dir")
+        .flatten()
+        .filter(|e| crate::index::hnsw::native::arena_home::ArenaHome::is_arena_file(&e.path()))
+        .map(|e| e.metadata().expect("metadata").len())
+        .sum();
+
+    assert!(
+        bytes < 32 * 1024 * 1024,
+        "an empty index should not reserve {} MB of arena",
+        bytes / 1_048_576
+    );
+    drop(index);
+}
+
+/// Blocks are reserved, not left as holes.
+///
+/// A sparse mapping finds its blocks only when a page is first written, and
+/// a full filesystem then has no error to return through a store
+/// instruction: the kernel raises SIGBUS and the process dies. The heap
+/// arena returns a recoverable `AllocationFailed`, so the mapped one must
+/// surface a full disk at setup instead. Reserved blocks are what make that
+/// possible, and `allocated_size` is how you tell.
+#[cfg(all(unix, feature = "persistence"))]
+#[test]
+fn an_arena_reserves_its_blocks_rather_than_leaving_holes() {
+    use crate::perf_optimizations::ContiguousVectors;
+    use std::os::unix::fs::MetadataExt;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("reserved.arena");
+    let (dimension, capacity) = (64, 4096);
+    let arena = ContiguousVectors::new_file_backed(&path, dimension, capacity).expect("arena");
+
+    let meta = std::fs::metadata(&path).expect("metadata");
+    let allocated = meta.blocks() * 512;
+    assert!(
+        allocated >= meta.len(),
+        "arena must have blocks reserved for its whole length: {allocated} allocated \
+         for {} apparent bytes — a hole here is a SIGBUS on a full disk",
+        meta.len()
+    );
+    drop(arena);
+}

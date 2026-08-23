@@ -34,6 +34,7 @@
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_sign_loss)]
 
+pub(in crate::index::hnsw) mod arena_home;
 mod backend_adapter;
 mod batch_schedule;
 mod distance;

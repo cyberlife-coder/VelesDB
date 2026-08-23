@@ -12,9 +12,7 @@
 
 use super::native::rabitq_precision::RaBitQPrecisionHnsw;
 use super::native::sq8_precision::Sq8PrecisionHnsw;
-use super::native::{
-    CachedSimdDistance, NativeHnsw, NativeNeighbour, ResumableSearch, DEFAULT_ALPHA,
-};
+use super::native::{CachedSimdDistance, NativeHnsw, NativeNeighbour, ResumableSearch};
 use crate::distance::DistanceMetric;
 use std::path::Path;
 
@@ -59,35 +57,36 @@ pub struct NativeHnswInner {
     metric: DistanceMetric,
 }
 
-impl NativeHnswInner {
-    /// Creates a new `NativeHnswInner` with a specific storage mode.
+/// Everything needed to build a [`NativeHnswInner`].
+///
+/// A struct rather than an eighth positional parameter: the constructor had
+/// already earned a `too_many_arguments` allow at seven, and four of them are
+/// `usize`, so a transposed pair compiles and misbehaves silently. Named
+/// fields make that a compile error instead.
+pub(crate) struct InnerBuild<'a> {
+    /// Distance metric the graph is built for.
+    pub metric: DistanceMetric,
+    /// M — connections per node above layer 0.
+    pub max_connections: usize,
+    /// Capacity hint for layer pre-allocation.
+    pub max_elements: usize,
+    /// Beam width during construction.
+    pub ef_construction: usize,
+    /// Vector dimension; `0` defers arena allocation to the first insert.
+    pub dimension: usize,
+    /// Selects the backend, and with it whether a mapped arena applies.
+    pub storage_mode: crate::StorageMode,
+    /// VAMANA diversification factor.
+    pub alpha: f32,
+    /// Directory for the f32 arena file, when it should live on disk.
     ///
-    /// [`StorageMode::RaBitQ`] selects the binary-traversal backend and
-    /// [`StorageMode::SQ8`] the int8-traversal backend; every other mode
-    /// runs the Standard f32 backend.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if vector storage pre-allocation fails.
-    pub fn new_with_storage_mode(
-        metric: DistanceMetric,
-        max_connections: usize,
-        max_elements: usize,
-        ef_construction: usize,
-        dimension: usize,
-        storage_mode: crate::StorageMode,
-    ) -> crate::error::Result<Self> {
-        Self::new_with_options(
-            metric,
-            max_connections,
-            max_elements,
-            ef_construction,
-            dimension,
-            storage_mode,
-            DEFAULT_ALPHA,
-        )
-    }
+    /// Honoured only by the quantized backends — see [`NativeHnswInner::build`]
+    /// for why a `Full` graph must keep its arena in memory. `None` anywhere
+    /// else, including for a collection with no directory of its own.
+    pub arena_dir: Option<&'a std::path::Path>,
+}
 
+impl NativeHnswInner {
     /// Creates a new `NativeHnswInner` with full configuration options.
     ///
     /// This is the canonical constructor; all other `new*` methods delegate here.
@@ -95,7 +94,6 @@ impl NativeHnswInner {
     /// # Errors
     ///
     /// Returns an error if vector storage pre-allocation fails.
-    #[allow(clippy::too_many_arguments)]
     pub fn new_with_options(
         metric: DistanceMetric,
         max_connections: usize,
@@ -105,39 +103,73 @@ impl NativeHnswInner {
         storage_mode: crate::StorageMode,
         alpha: f32,
     ) -> crate::error::Result<Self> {
-        let distance = CachedSimdDistance::new_prenormalized(metric, dimension);
-        let backend = match storage_mode {
+        Self::build(&InnerBuild {
+            metric,
+            max_connections,
+            max_elements,
+            ef_construction,
+            dimension,
+            storage_mode,
+            alpha,
+            arena_dir: None,
+        })
+    }
+
+    /// Builds a backend from a fully-specified [`InnerBuild`].
+    ///
+    /// The canonical constructor; `new_with_options` is the positional
+    /// shorthand for the common case of a graph with no arena directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if vector storage pre-allocation or mapping fails.
+    pub(crate) fn build(opts: &InnerBuild<'_>) -> crate::error::Result<Self> {
+        let distance = CachedSimdDistance::new_prenormalized(opts.metric, opts.dimension);
+        // `arena_dir` is honoured for every mode here, on purpose. Whether a
+        // mapped arena *suits* a graph depends on how that graph will be
+        // read, which only the caller knows: vacuum builds a `Full` graph it
+        // is about to promote to a quantized one, and that graph must be
+        // mapped even though its mode says otherwise. Deciding it here would
+        // make that case unreachable, so the policy lives with the callers —
+        // see `HnswIndex::with_params_in_dir`.
+        let backend = match opts.storage_mode {
             crate::StorageMode::RaBitQ => {
-                HnswBackend::RaBitQ(Box::new(RaBitQPrecisionHnsw::new_with_alpha(
+                HnswBackend::RaBitQ(Box::new(RaBitQPrecisionHnsw::with_optional_arena_dir(
                     distance,
-                    dimension,
-                    max_connections,
-                    ef_construction,
-                    max_elements,
-                    alpha,
+                    opts.dimension,
+                    opts.max_connections,
+                    opts.ef_construction,
+                    opts.max_elements,
+                    opts.alpha,
+                    opts.arena_dir,
                 )?))
             }
             crate::StorageMode::SQ8 => {
-                HnswBackend::Sq8(Box::new(Sq8PrecisionHnsw::new_with_alpha(
+                HnswBackend::Sq8(Box::new(Sq8PrecisionHnsw::with_optional_arena_dir(
                     distance,
-                    dimension,
-                    max_connections,
-                    ef_construction,
-                    max_elements,
-                    alpha,
+                    opts.dimension,
+                    opts.max_connections,
+                    opts.ef_construction,
+                    opts.max_elements,
+                    opts.alpha,
+                    opts.arena_dir,
                 )?))
             }
             _ => Self::new_standard_backend(
                 distance,
-                max_connections,
-                ef_construction,
-                max_elements,
-                dimension,
-                alpha,
+                opts.max_connections,
+                opts.ef_construction,
+                opts.max_elements,
+                opts.dimension,
+                opts.alpha,
+                opts.arena_dir,
             )?,
         };
 
-        Ok(Self { backend, metric })
+        Ok(Self {
+            backend,
+            metric: opts.metric,
+        })
     }
 
     /// Builds the Standard (full-f32) backend.
@@ -149,6 +181,7 @@ impl NativeHnswInner {
     /// # Errors
     ///
     /// Returns an error if vector storage pre-allocation fails.
+    #[allow(clippy::too_many_arguments)]
     fn new_standard_backend(
         distance: CachedSimdDistance,
         max_connections: usize,
@@ -156,7 +189,23 @@ impl NativeHnswInner {
         max_elements: usize,
         dimension: usize,
         alpha: f32,
+        arena_dir: Option<&std::path::Path>,
     ) -> crate::error::Result<HnswBackend> {
+        #[cfg(feature = "persistence")]
+        if let Some(dir) = arena_dir {
+            let inner = NativeHnsw::standard_in_dir(
+                distance,
+                max_connections,
+                ef_construction,
+                max_elements,
+                dimension,
+                alpha,
+                dir,
+            )?;
+            return Ok(HnswBackend::Standard(inner));
+        }
+        #[cfg(not(feature = "persistence"))]
+        let _ = arena_dir;
         let inner = if dimension > 0 {
             NativeHnsw::new_with_dimension_and_alpha(
                 distance,
@@ -606,7 +655,15 @@ impl NativeHnswInner {
         storage_mode: crate::StorageMode,
     ) -> std::io::Result<Self> {
         let distance = CachedSimdDistance::new_prenormalized(metric, dimension);
-        let inner = NativeHnsw::file_load(path, basename, distance)?;
+        // Same gate as `build`, for the same reason: only a backend that
+        // traverses on codes can afford an evictable f32 arena. `path` is the
+        // collection directory, which is where the arena file belongs — it is
+        // a cache of `{basename}.vectors`, deleted when this graph drops.
+        let arena_dir = match storage_mode {
+            crate::StorageMode::RaBitQ | crate::StorageMode::SQ8 => Some(path),
+            _ => None,
+        };
+        let inner = NativeHnsw::file_load_with_arena(path, basename, distance, arena_dir)?;
 
         let backend = match storage_mode {
             // Wrap the loaded graph in the matching quantized backend. The

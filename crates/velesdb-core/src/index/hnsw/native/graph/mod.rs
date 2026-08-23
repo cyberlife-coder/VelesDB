@@ -129,6 +129,21 @@ pub struct NativeHnsw<D: DistanceEngine> {
     /// clear the snapshot mutex (belt-and-suspenders).
     #[cfg(feature = "gpu")]
     pub(in crate::index::hnsw::native) gpu_snapshot_version: AtomicU64,
+    /// The arena file this graph owns, when its vectors live on disk.
+    ///
+    /// # Drop order
+    ///
+    /// Declared **last**, and specifically after `vectors`: dropping this
+    /// unlinks the file, and the mapping in `vectors` must be released first.
+    /// Rust drops fields in declaration order, so the position *is* the
+    /// mechanism — the same technique `HnswIndex` uses for `inner` before
+    /// `io_holder`. `graph_field_order_keeps_the_arena_alive_until_unmapped`
+    /// pins it.
+    ///
+    /// `None` for a heap-backed graph, which is every `Full`-mode graph and
+    /// every graph built without a collection directory.
+    pub(in crate::index::hnsw::native) arena_home:
+        Option<crate::index::hnsw::native::arena_home::ArenaHome>,
 }
 
 /// Cached GPU vector snapshot: `(version, dimension, flat_vectors)`.
@@ -138,6 +153,26 @@ pub struct NativeHnsw<D: DistanceEngine> {
 /// (O(1) pointer bump) instead of copying ~1.5GB.
 #[cfg(feature = "gpu")]
 pub(in crate::index::hnsw::native) type GpuVectorsSnapshot = (u64, usize, std::sync::Arc<[f32]>);
+
+/// How many vectors a mapped arena is sized for before it has any.
+///
+/// The heap arena pre-allocates `max_elements` because growing it means
+/// copying the whole block. A mapped arena does not: `grow` extends the file
+/// and re-maps, leaving every written page where it is, so pre-sizing buys
+/// nothing and costs a great deal. `HnswParams::auto` defaults
+/// `max_elements` to 100 000, which at 768 dimensions is a **292 MB file
+/// created before the collection holds a single vector** — measured, not
+/// estimated. On the small devices this feature exists for, that is the
+/// difference between a working install and a full disk.
+///
+/// So the initial size is capped and growth does the rest.
+#[cfg(feature = "persistence")]
+fn initial_arena_capacity(max_elements: usize) -> usize {
+    /// ~12 MB at 768 dimensions: large enough that a small collection never
+    /// grows, small enough that an empty one costs nothing worth counting.
+    const CAP: usize = 4096;
+    max_elements.min(CAP)
+}
 
 impl<D: DistanceEngine> NativeHnsw<D> {
     /// Creates a new native HNSW index with VAMANA diversification (`alpha = 1.2`).
@@ -157,6 +192,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             ef_construction,
             max_elements,
             DEFAULT_ALPHA,
+            None,
             None,
         )
     }
@@ -212,7 +248,130 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             max_elements,
             alpha,
             Some(storage),
+            None,
         ))
+    }
+
+    /// As [`new_with_dimension_and_alpha`], but the arena lives in `dir`.
+    ///
+    /// Only quantized backends should ask for this. In `Full` mode the f32
+    /// vectors *are* the traversal data, so every hop would fault a page and
+    /// the mapping would cost latency for nothing; in `SQ8`/`RaBitQ` the
+    /// traversal runs entirely on the codes and the f32 is touched only by
+    /// `rerank_with_exact_f32`, on `k * oversampling` candidates. That
+    /// difference is the whole reason this constructor exists (#2112).
+    ///
+    /// [`new_with_dimension_and_alpha`]: Self::new_with_dimension_and_alpha
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the arena file cannot be created or mapped.
+    #[cfg(feature = "persistence")]
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::index::hnsw) fn new_file_backed_with_alpha(
+        distance: D,
+        max_connections: usize,
+        ef_construction: usize,
+        max_elements: usize,
+        dimension: usize,
+        alpha: f32,
+        dir: &std::path::Path,
+    ) -> crate::error::Result<Self> {
+        let home = crate::index::hnsw::native::arena_home::ArenaHome::claim(dir);
+        let storage =
+            Self::new_arena(Some(&home), dimension, initial_arena_capacity(max_elements))?;
+        Ok(Self::build(
+            distance,
+            max_connections,
+            ef_construction,
+            max_elements,
+            alpha,
+            Some(storage),
+            Some(home),
+        ))
+    }
+
+    /// A graph whose arena lives in `dir`, sized eagerly or lazily.
+    ///
+    /// `dimension == 0` means the caller does not know it yet, so the arena
+    /// is deferred to the first insert — the home is claimed now either way,
+    /// so the lazy path in `allocate_and_store_vector` finds it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the arena file cannot be created or mapped.
+    #[cfg(feature = "persistence")]
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::index::hnsw) fn standard_in_dir(
+        distance: D,
+        max_connections: usize,
+        ef_construction: usize,
+        max_elements: usize,
+        dimension: usize,
+        alpha: f32,
+        dir: &std::path::Path,
+    ) -> crate::error::Result<Self> {
+        if dimension > 0 {
+            return Self::new_file_backed_with_alpha(
+                distance,
+                max_connections,
+                ef_construction,
+                max_elements,
+                dimension,
+                alpha,
+                dir,
+            );
+        }
+        let home = crate::index::hnsw::native::arena_home::ArenaHome::claim(dir);
+        Ok(Self::build(
+            distance,
+            max_connections,
+            ef_construction,
+            max_elements,
+            alpha,
+            None,
+            Some(home),
+        ))
+    }
+
+    /// Builds an arena of `capacity` vectors, on disk when `home` says so.
+    ///
+    /// The single place that answers "heap or file?" for this graph. All four
+    /// sites that can create an arena — the two constructors, the lazy
+    /// first-insert path, and the batch-reserve path — route through it, so a
+    /// graph cannot end up with a heap arena on one path and a mapped one on
+    /// another.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the allocation or the file mapping fails.
+    pub(in crate::index::hnsw::native) fn new_arena(
+        home: Option<&crate::index::hnsw::native::arena_home::ArenaHome>,
+        dimension: usize,
+        capacity: usize,
+    ) -> crate::error::Result<ContiguousVectors> {
+        #[cfg(feature = "persistence")]
+        if let Some(home) = home {
+            // A mapped arena is an optimisation, never a requirement: it
+            // lowers the resident set and changes nothing a caller can
+            // observe. So a filesystem that will not host one — read-only
+            // directory, no space, no permission, a platform where the
+            // mapping is refused — must cost the optimisation and nothing
+            // else. Failing here instead would mean this feature could stop a
+            // collection from opening that opened fine before it existed,
+            // which is not a trade worth making for a memory saving.
+            match ContiguousVectors::new_file_backed(home.path(), dimension, capacity) {
+                Ok(mapped) => return Ok(mapped),
+                Err(e) => tracing::warn!(
+                    "vector arena at {:?} could not be mapped ({e}); \
+                     falling back to an in-memory arena, which costs memory, not correctness",
+                    home.path()
+                ),
+            }
+        }
+        #[cfg(not(feature = "persistence"))]
+        let _ = home;
+        ContiguousVectors::new(dimension, capacity)
     }
 
     /// Creates a new native HNSW index with VAMANA-style diversification.
@@ -231,6 +390,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             max_elements,
             alpha,
             None,
+            None,
         )
     }
 
@@ -242,6 +402,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         max_elements: usize,
         alpha: f32,
         vectors: Option<ContiguousVectors>,
+        arena_home: Option<crate::index::hnsw::native::arena_home::ArenaHome>,
     ) -> Self {
         let max_connections_0 = max_connections * 2;
         let level_mult = 1.0 / (max_connections as f64).ln();
@@ -273,6 +434,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             // counter to invalidate all subsequent reads.
             #[cfg(feature = "gpu")]
             gpu_snapshot_version: AtomicU64::new(0),
+            arena_home,
         }
     }
 

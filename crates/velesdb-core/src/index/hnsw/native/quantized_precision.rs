@@ -201,15 +201,54 @@ impl<D: DistanceEngine, C: TraversalCodec> QuantizedPrecisionHnsw<D, C> {
         max_elements: usize,
         alpha: f32,
     ) -> crate::error::Result<Self> {
+        Self::with_optional_arena_dir(
+            distance,
+            dimension,
+            max_connections,
+            ef_construction,
+            max_elements,
+            alpha,
+            None,
+        )
+    }
+
+    /// As [`new_with_alpha`], with the f32 arena optionally living in a file.
+    ///
+    /// This backend is exactly the case the mapped arena was built for: the
+    /// traversal runs on `store` (the codes), and the f32 in `inner` is read
+    /// only by `rerank_with_exact_f32`, on `k * oversampling` candidates. So
+    /// the arena's pages can be evicted with no effect on search structure —
+    /// which drops the resident floor from `f32 + graph + codes` to
+    /// `graph + codes` (#2112).
+    ///
+    /// `None` keeps the heap arena, which is what a collection without a
+    /// directory gets.
+    ///
+    /// [`new_with_alpha`]: Self::new_with_alpha
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if vector storage pre-allocation or mapping fails.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::index::hnsw) fn with_optional_arena_dir(
+        distance: D,
+        dimension: usize,
+        max_connections: usize,
+        ef_construction: usize,
+        max_elements: usize,
+        alpha: f32,
+        arena_dir: Option<&std::path::Path>,
+    ) -> crate::error::Result<Self> {
         let codec_enabled = C::supports_metric(distance.metric());
         Ok(Self {
-            inner: NativeHnsw::new_with_dimension_and_alpha(
+            inner: Self::build_inner_graph(
                 distance,
                 max_connections,
                 ef_construction,
                 max_elements,
                 dimension,
                 alpha,
+                arena_dir,
             )?,
             quantizer: RwLock::new(None),
             store: RwLock::new(None),
@@ -219,6 +258,48 @@ impl<D: DistanceEngine, C: TraversalCodec> QuantizedPrecisionHnsw<D, C> {
             install_gate: RwLock::new(()),
             codec_enabled,
         })
+    }
+
+    /// Builds the f32 graph, mapped or heap-backed.
+    ///
+    /// Split out so `with_optional_arena_dir` stays one construction
+    /// expression rather than branching around the whole struct literal.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if vector storage pre-allocation or mapping fails.
+    #[allow(clippy::too_many_arguments)]
+    fn build_inner_graph(
+        distance: D,
+        max_connections: usize,
+        ef_construction: usize,
+        max_elements: usize,
+        dimension: usize,
+        alpha: f32,
+        arena_dir: Option<&std::path::Path>,
+    ) -> crate::error::Result<NativeHnsw<D>> {
+        #[cfg(feature = "persistence")]
+        if let Some(dir) = arena_dir {
+            return NativeHnsw::new_file_backed_with_alpha(
+                distance,
+                max_connections,
+                ef_construction,
+                max_elements,
+                dimension,
+                alpha,
+                dir,
+            );
+        }
+        #[cfg(not(feature = "persistence"))]
+        let _ = arena_dir;
+        NativeHnsw::new_with_dimension_and_alpha(
+            distance,
+            max_connections,
+            ef_construction,
+            max_elements,
+            dimension,
+            alpha,
+        )
     }
 
     /// Creates a quantized-precision HNSW from a pre-loaded `NativeHnsw` graph.

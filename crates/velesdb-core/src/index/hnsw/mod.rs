@@ -68,3 +68,18 @@ pub use index::HnswIndex;
 
 /// Native HNSW index with direct access to underlying graph.
 pub use native_index::NativeHnswIndex;
+
+/// Removes f32 arena files a previous run left behind in `dir`.
+///
+/// A graph deletes its own arena on drop; a crash or a kill skips that. The
+/// leftovers are unreadable to anyone — the per-instance token that named
+/// them is gone — so they are pure waste. Call once when opening a
+/// collection, before any graph claims a new one — never later: it cannot
+/// tell a live arena from an abandoned one, so a late call deletes the file
+/// out from under a running graph.
+///
+/// Best-effort: a file that will not go away is a diagnostic, never a reason
+/// to refuse to open a collection whose real data is intact.
+pub(crate) fn sweep_stale_arenas(dir: &std::path::Path) {
+    native::arena_home::ArenaHome::sweep_stale(dir);
+}

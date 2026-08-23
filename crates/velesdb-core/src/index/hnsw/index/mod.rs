@@ -110,6 +110,16 @@ pub struct HnswIndex {
     /// invariant is already structurally enforced.
     #[allow(dead_code)] // Retained for field-layout invariant; dropped after inner
     pub(crate) io_holder: Option<Box<HnswIo>>,
+    /// Directory this index may keep its f32 arena file in.
+    ///
+    /// Remembered rather than passed per call because the index rebuilds
+    /// itself: `vacuum` constructs a whole replacement graph, and without
+    /// this the replacement would come back heap-backed and silently undo
+    /// the mapping on every compaction (#2112).
+    ///
+    /// `None` for an index with no collection directory, and honoured only
+    /// by the quantized backends.
+    pub(crate) arena_dir: Option<std::path::PathBuf>,
 }
 
 impl HnswIndex {
