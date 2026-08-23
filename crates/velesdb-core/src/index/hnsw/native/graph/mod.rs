@@ -154,6 +154,26 @@ pub struct NativeHnsw<D: DistanceEngine> {
 #[cfg(feature = "gpu")]
 pub(in crate::index::hnsw::native) type GpuVectorsSnapshot = (u64, usize, std::sync::Arc<[f32]>);
 
+/// How many vectors a mapped arena is sized for before it has any.
+///
+/// The heap arena pre-allocates `max_elements` because growing it means
+/// copying the whole block. A mapped arena does not: `grow` extends the file
+/// and re-maps, leaving every written page where it is, so pre-sizing buys
+/// nothing and costs a great deal. `HnswParams::auto` defaults
+/// `max_elements` to 100 000, which at 768 dimensions is a **292 MB file
+/// created before the collection holds a single vector** — measured, not
+/// estimated. On the small devices this feature exists for, that is the
+/// difference between a working install and a full disk.
+///
+/// So the initial size is capped and growth does the rest.
+#[cfg(feature = "persistence")]
+fn initial_arena_capacity(max_elements: usize) -> usize {
+    /// ~12 MB at 768 dimensions: large enough that a small collection never
+    /// grows, small enough that an empty one costs nothing worth counting.
+    const CAP: usize = 4096;
+    max_elements.min(CAP)
+}
+
 impl<D: DistanceEngine> NativeHnsw<D> {
     /// Creates a new native HNSW index with VAMANA diversification (`alpha = 1.2`).
     ///
@@ -258,7 +278,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         dir: &std::path::Path,
     ) -> crate::error::Result<Self> {
         let home = crate::index::hnsw::native::arena_home::ArenaHome::claim(dir);
-        let storage = Self::new_arena(Some(&home), dimension, max_elements)?;
+        let storage =
+            Self::new_arena(Some(&home), dimension, initial_arena_capacity(max_elements))?;
         Ok(Self::build(
             distance,
             max_connections,
@@ -331,7 +352,22 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     ) -> crate::error::Result<ContiguousVectors> {
         #[cfg(feature = "persistence")]
         if let Some(home) = home {
-            return ContiguousVectors::new_file_backed(home.path(), dimension, capacity);
+            // A mapped arena is an optimisation, never a requirement: it
+            // lowers the resident set and changes nothing a caller can
+            // observe. So a filesystem that will not host one — read-only
+            // directory, no space, no permission, a platform where the
+            // mapping is refused — must cost the optimisation and nothing
+            // else. Failing here instead would mean this feature could stop a
+            // collection from opening that opened fine before it existed,
+            // which is not a trade worth making for a memory saving.
+            match ContiguousVectors::new_file_backed(home.path(), dimension, capacity) {
+                Ok(mapped) => return Ok(mapped),
+                Err(e) => tracing::warn!(
+                    "vector arena at {:?} could not be mapped ({e}); \
+                     falling back to an in-memory arena, which costs memory, not correctness",
+                    home.path()
+                ),
+            }
         }
         #[cfg(not(feature = "persistence"))]
         let _ = home;

@@ -228,7 +228,20 @@ impl FileArena {
             file.set_len(0)?;
         }
         if file.metadata()?.len() < total_len {
-            file.set_len(total_len)?;
+            // `allocate`, not `set_len`. `set_len` extends the file without
+            // reserving a single block, so the mapping is backed by holes and
+            // the blocks are found only when a page is first written. If the
+            // filesystem is full at that moment the kernel has no error to
+            // return through a store instruction — it raises **SIGBUS** and
+            // the process dies. The heap arena this replaces returns
+            // `AllocationFailed` and lets the caller carry on, and a
+            // local-first database on a small device must not trade a
+            // recoverable error for a fatal signal.
+            //
+            // `posix_fallocate` (what this is on Linux) reserves the blocks
+            // up front, so a full disk surfaces here, as an `io::Error`, on a
+            // line that can handle it.
+            fs2::FileExt::allocate(file, total_len)?;
         }
         Ok(total)
     }
@@ -284,6 +297,18 @@ impl FileArena {
         //   `map_mut` requires.
         // SAFETY: Map the arena's backing file into the address space.
         let map = unsafe { MmapOptions::new().len(len).map_mut(file) }?;
+        // The arena is read by re-rank, on a scattered handful of candidates
+        // per query — never sequentially. Telling the kernel so stops it
+        // reading ahead around every faulted page, which is wasted I/O and
+        // wasted page cache on exactly the device this feature exists for.
+        // `MmapStorage` gives its own mapping the same advice.
+        //
+        // Best-effort: an advisory hint that a platform declines changes
+        // nothing about correctness.
+        #[cfg(unix)]
+        if let Err(e) = map.advise(memmap2::Advice::Random) {
+            tracing::debug!("madvise(MADV_RANDOM) on the vector arena failed: {e}");
+        }
         Ok(map)
     }
 

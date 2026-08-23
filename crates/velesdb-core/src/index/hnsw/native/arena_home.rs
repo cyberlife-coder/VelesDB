@@ -25,6 +25,31 @@
 //! makes throwing it away free: `.vectors` remains the durable copy, and a
 //! reopened collection simply builds a fresh arena from it.
 //!
+//! # What this costs, and why the end state is different
+//!
+//! Being a second copy is not free, and the cost is write volume rather than
+//! space. Loading a collection writes every vector through the mapping, so
+//! those pages are dirty; the kernel writes them back on its own schedule,
+//! and then the file is deleted when the graph drops. The vector data is
+//! therefore written to disk roughly **twice per collection lifetime** —
+//! once into `.vectors`, once into an arena nobody will ever read again.
+//!
+//! Nothing here should try to hurry that along. An explicit `msync` would
+//! only force the useless half of that writeback to happen sooner, spending
+//! flash endurance to persist bytes already durable in `.vectors`; the pages
+//! become reclaimable either way once the kernel has written them, which is
+//! the property the resident-set argument actually needs.
+//!
+//! The trade is deliberate: on a memory-constrained device, spending write
+//! bandwidth to move the f32 arena out of the resident set is usually worth
+//! it, since that arena is the single largest thing a quantized index holds.
+//! But it *is* a trade, and it is the reason the end state is not this
+//! design. Mapping `{basename}.vectors` itself removes the duplicate
+//! entirely — no second copy, no second write, no deletion — and the only
+//! thing standing in the way is that the arena is native-endian where
+//! `.vectors` is explicitly little-endian. That is a format question, not an
+//! architectural one, and it is tracked separately.
+//!
 //! [`FileArena`]: crate::contiguous_file_arena::FileArena
 
 use std::path::{Path, PathBuf};

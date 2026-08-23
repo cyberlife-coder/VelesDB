@@ -770,3 +770,81 @@ fn a_quantized_collection_maps_its_arena_and_cleans_up() {
         "closing the index must leave no arena file behind"
     );
 }
+
+/// A fresh quantized index does not pre-create a huge arena file.
+///
+/// `HnswParams::auto` defaults `max_elements` to 100 000, which at 768
+/// dimensions sizes the arena at ~292 MB. The heap arena pre-allocates that
+/// because growing it copies the whole block; a mapped arena grows by
+/// extending the file, so pre-sizing buys nothing and would put a
+/// third-of-a-gigabyte file on a device before the collection holds a single
+/// vector. This pins the cap rather than leaving it to a constant nobody
+/// re-reads.
+#[cfg(feature = "persistence")]
+#[test]
+fn a_fresh_arena_does_not_pre_size_to_max_elements() {
+    use crate::index::hnsw::{HnswIndex, HnswParams};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dimension = 768;
+    let mut params = HnswParams::auto(dimension);
+    params.storage_mode = crate::StorageMode::SQ8;
+    assert!(
+        params.max_elements >= 100_000,
+        "this test is only meaningful while the default is large, got {}",
+        params.max_elements
+    );
+
+    let index = HnswIndex::with_params_in_dir(
+        dimension,
+        crate::DistanceMetric::Cosine,
+        params,
+        true,
+        Some(dir.path().to_path_buf()),
+    )
+    .expect("index");
+
+    let bytes: u64 = std::fs::read_dir(dir.path())
+        .expect("read_dir")
+        .flatten()
+        .filter(|e| crate::index::hnsw::native::arena_home::ArenaHome::is_arena_file(&e.path()))
+        .map(|e| e.metadata().expect("metadata").len())
+        .sum();
+
+    assert!(
+        bytes < 32 * 1024 * 1024,
+        "an empty index should not reserve {} MB of arena",
+        bytes / 1_048_576
+    );
+    drop(index);
+}
+
+/// Blocks are reserved, not left as holes.
+///
+/// A sparse mapping finds its blocks only when a page is first written, and
+/// a full filesystem then has no error to return through a store
+/// instruction: the kernel raises SIGBUS and the process dies. The heap
+/// arena returns a recoverable `AllocationFailed`, so the mapped one must
+/// surface a full disk at setup instead. Reserved blocks are what make that
+/// possible, and `allocated_size` is how you tell.
+#[cfg(all(unix, feature = "persistence"))]
+#[test]
+fn an_arena_reserves_its_blocks_rather_than_leaving_holes() {
+    use crate::perf_optimizations::ContiguousVectors;
+    use std::os::unix::fs::MetadataExt;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("reserved.arena");
+    let (dimension, capacity) = (64, 4096);
+    let arena = ContiguousVectors::new_file_backed(&path, dimension, capacity).expect("arena");
+
+    let meta = std::fs::metadata(&path).expect("metadata");
+    let allocated = meta.blocks() * 512;
+    assert!(
+        allocated >= meta.len(),
+        "arena must have blocks reserved for its whole length: {allocated} allocated \
+         for {} apparent bytes — a hole here is a SIGBUS on a full disk",
+        meta.len()
+    );
+    drop(arena);
+}
