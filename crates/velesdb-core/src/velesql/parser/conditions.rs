@@ -43,13 +43,6 @@ impl Parser {
         Self::parse_or_expr_with_depth(or_expr, 0)
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn parse_or_expr(
-        pair: pest::iterators::Pair<Rule>,
-    ) -> Result<Condition, ParseError> {
-        Self::parse_or_expr_with_depth(pair, 0)
-    }
-
     fn ensure_depth(depth: usize, input: &str) -> Result<(), ParseError> {
         if depth > Self::MAX_CONDITION_DEPTH {
             global_guardrails_metrics().record_parser_depth_limit_rejected();
@@ -65,13 +58,6 @@ impl Parser {
         Self::parse_binary_chain(pair, depth, Self::parse_and_expr_with_depth, |l, r| {
             Condition::Or(Box::new(l), Box::new(r))
         })
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn parse_and_expr(
-        pair: pest::iterators::Pair<Rule>,
-    ) -> Result<Condition, ParseError> {
-        Self::parse_and_expr_with_depth(pair, 0)
     }
 
     fn parse_and_expr_with_depth(
@@ -106,13 +92,6 @@ impl Parser {
         }
 
         Ok(result)
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn parse_primary_expr(
-        pair: pest::iterators::Pair<Rule>,
-    ) -> Result<Condition, ParseError> {
-        Self::parse_primary_expr_with_depth(pair, 0)
     }
 
     fn parse_primary_expr_with_depth(
