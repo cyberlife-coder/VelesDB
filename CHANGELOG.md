@@ -22,6 +22,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the in-tree int8 dual-precision traversal engine into a real SQ8 backend
   is tracked in #2112. (#2112)
 
+### Fixed
+
+- **Jaccard scores come back as similarities on every HNSW path.** The
+  HNSW score transform passed the engine's `1 - jaccard` traversal
+  distance through while the metric is declared higher-is-better, so the
+  bitmap-filtered, brute-force-parallel, dual-precision/RaBitQ rerank and
+  delta-merge paths ranked the *worst* candidates first and disagreed
+  with the exact path on the same query. (#2100)
+
+- **The GraphFirst filtered scan stopped clamping every metric into
+  [-1, 1].** Euclidean/Hamming distances and raw dot products beyond 1
+  collapsed into an artificial 1.0 tie (arbitrary top-k, meaningless
+  score) and the clamp never removed the NaN it claimed to guard; NaN
+  scores now map to the metric's worst key instead. (#2101)
+
+- **Score-level fusion honors score polarity.** Average, Maximum,
+  Weighted and RSF fused Euclidean/Hamming distance branches as if
+  higher were better — inverted or degenerate fused rankings across
+  multi-query, `NEAR_FUSED`, hybrid dense+sparse and dense+text. Branch
+  polarity is now declared via `fusion::ScoreDirection`, derived from
+  the metric. (#2102)
+
+- **SIMD cosine no longer zeroes small-magnitude vectors.** The shared
+  finish step guarded on the *product* of squared norms against
+  `EPSILON²`, so vectors with norms around 3.4e-4 scored 0.0 on
+  AVX2/AVX-512/NEON while the scalar path returned the true cosine.
+  (#2103)
+
+- **The RaBitQ estimator is de-biased by the arcsine law.** The
+  symmetric binary inner product satisfies `E[ip] = 1 - 2θ/π`, not
+  `cos θ`; using it raw overestimated every non-zero angle's distance
+  (+15% at 60°) and distorted cross-norm ranking. (#2104)
+
+- **Storage latency percentiles use nearest-rank.** The floor-based
+  target reported 1µs for any window where `count × p < 100` — a single
+  500ms mmap resize was invisible to the P99 monitoring it exists for.
+  (#2105)
+
+- **The circuit breaker could deadlock the whole service under load.**
+  `check()` held `opened_at` (read) while asking for `state` (write) and
+  `record_failure()` held `state` (write) while asking for `opened_at`
+  (write) — opposite orders on two paths the query pipeline calls on every
+  request, so an open breaker under concurrent traffic could wedge both.
+  The two values now live under one lock, which makes the conflicting order
+  unrepresentable; `clippy::significant_drop_in_scrutinee` is promoted to
+  `deny` so the shape cannot return, and the 17 other guards that spanned a
+  `match`/`if let`/`for` expression (including two held across a disk write
+  in `flush_secondary_indexes`, and the collection-cache lookups whose disk
+  fallback takes the same map for write) are bound before the expression.
+  (#2109, #2110)
+
 ## [5.2.0] - 2026-08-22
 
 ### Changed
