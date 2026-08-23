@@ -5,11 +5,8 @@
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::point::Point;
-use crate::quantization::StorageMode;
 use crate::storage::VectorStorage;
 use std::collections::{BTreeMap, HashMap};
-
-use super::crud_helpers::QuantizationGuards;
 
 impl Collection {
     /// Checks whether label index updates are needed for this batch.
@@ -58,24 +55,14 @@ impl Collection {
         }
     }
 
-    /// Conditionally caches a quantized vector for a single point.
+    /// Caches the PQ code for a single point when the mode carries a guard.
     pub(super) fn maybe_quantize(
         collection: &Collection,
         point: &Point,
-        storage_mode: StorageMode,
-        quant_guards: &mut QuantizationGuards<'_>,
-        quant_done: bool,
+        pq_guard: &mut Option<super::crud_helpers::PqCacheGuard<'_>>,
     ) {
-        if !quant_done {
-            let (sq8, binary, pq) = (
-                quant_guards.sq8.as_deref_mut(),
-                quant_guards.binary.as_deref_mut(),
-                quant_guards.pq.as_deref_mut(),
-            );
-            collection.cache_quantized_vector(point, storage_mode, sq8, binary, pq);
-        } else if matches!(storage_mode, StorageMode::ProductQuantization) {
-            let pq = quant_guards.pq.as_deref_mut();
-            collection.cache_quantized_vector(point, storage_mode, None, None, pq);
+        if pq_guard.is_some() {
+            collection.cache_pq_vector(point, pq_guard.as_deref_mut());
         }
     }
 
@@ -95,31 +82,6 @@ impl Collection {
             if let Some(new_val) = new {
                 label_idx.index_from_payload(*id, new_val);
             }
-        }
-    }
-
-    /// Attempts parallel quantization for SQ8/Binary modes.
-    pub(super) fn try_parallel_quantize(
-        &self,
-        points: &[Point],
-        storage_mode: StorageMode,
-    ) -> bool {
-        #[cfg(feature = "persistence")]
-        match storage_mode {
-            StorageMode::SQ8 => {
-                self.batch_quantize_sq8_parallel(points);
-                true
-            }
-            StorageMode::Binary => {
-                self.batch_quantize_binary_parallel(points);
-                true
-            }
-            _ => false,
-        }
-        #[cfg(not(feature = "persistence"))]
-        {
-            let _ = (points, storage_mode);
-            false
         }
     }
 
