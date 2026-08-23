@@ -88,6 +88,7 @@ impl Collection {
             .store(0, std::sync::atomic::Ordering::Relaxed);
         self.flush_pq_codebook()?;
         self.flush_rabitq_quantizer()?;
+        self.flush_sq8_quantizer()?;
         Ok(())
     }
 
@@ -162,6 +163,24 @@ impl Collection {
 
     #[cfg(not(feature = "persistence"))]
     fn flush_rabitq_quantizer(&self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Persists the lazily-trained SQ8 quantizer to `sq8.idx` on every full
+    /// flush (parity with [`Self::flush_rabitq_quantizer`]).
+    ///
+    /// No-op when the backend is not SQ8 or no quantizer is trained yet.
+    #[cfg(feature = "persistence")]
+    fn flush_sq8_quantizer(&self) -> Result<()> {
+        let Some(quantizer) = self.storage.index.sq8_quantizer() else {
+            return Ok(());
+        };
+        quantizer.save(&self.storage.path)?;
+        Ok(())
+    }
+
+    #[cfg(not(feature = "persistence"))]
+    fn flush_sq8_quantizer(&self) -> Result<()> {
         Ok(())
     }
 

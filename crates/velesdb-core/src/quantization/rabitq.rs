@@ -149,7 +149,7 @@ fn xor_popcount_ip(q_bits: &[u64], enc_bits: &[u64], num_words: usize, dim: usiz
 /// the repeated center-normalize-rotate-bitsign preprocessing pipeline.
 ///
 /// `pub(crate)` for Phase 3 integration (`RaBitQ` HNSW search path).
-pub(crate) struct PreparedQuery {
+pub struct PreparedQuery {
     /// Squared L2 norm of the centered query.
     pub(crate) norm_sq: f32,
     /// L2 norm of the centered query.

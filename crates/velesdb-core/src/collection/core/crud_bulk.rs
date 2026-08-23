@@ -80,11 +80,12 @@ impl Collection {
         let sparse_batch = Self::collect_sparse_batch(points);
 
         // The V2 fast path writes vectors directly into the graph store and
-        // bypasses RaBitQPrecisionHnsw::insert — on a RaBitQ backend that
-        // would desynchronize the positional encoding store from the node
-        // ids. RaBitQ collections always take the standard path.
-        let use_v2 =
-            self.streaming.async_index_builder.is_some() && !self.storage.index.is_rabitq_backend();
+        // bypasses the quantized backends' insert — on a RaBitQ or SQ8
+        // backend that would desynchronize the positional encoding store
+        // from the node ids. Quantized collections always take the standard
+        // path.
+        let use_v2 = self.streaming.async_index_builder.is_some()
+            && !self.storage.index.is_quantized_backend();
         let count = if use_v2 {
             self.upsert_bulk_v2_path(&vector_refs, points, &sparse_batch, fsync)?
         } else {
