@@ -493,8 +493,15 @@ impl Collection {
             .map(|sd| (sd.doc_id, sd.score))
             .collect();
 
+        // Dense scores carry the collection metric's polarity (distances for
+        // Euclidean/Hamming); sparse scores are always higher-is-better
+        // relevance. Score-level strategies must align them (#2102).
+        let directions = [
+            self.storage.config.read().metric.score_direction(),
+            crate::fusion::ScoreDirection::HigherIsBetter,
+        ];
         let fused = strategy
-            .fuse(vec![dense_results, sparse_tuples])
+            .fuse_with_directions(vec![dense_results, sparse_tuples], &directions)
             .map_err(|e| Error::Config(format!("Fusion error: {e}")))?;
 
         Ok(self.resolve_fused_results(&fused, limit))

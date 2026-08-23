@@ -203,19 +203,40 @@ impl HnswIndex {
             .parallel_insert(&refs_for_hnsw)
             .map_err(|e| VacuumError::RebuildFailed(e.to_string()))?;
 
-        if target_mode != crate::StorageMode::RaBitQ {
-            return Ok(new_inner);
+        match target_mode {
+            crate::StorageMode::RaBitQ => {
+                let new_inner = new_inner.promote_to_rabitq(self.dimension);
+                // Bound before the `if let`: the old-index read guard would
+                // otherwise be held across `install_trained_rabitq`'s full
+                // O(n*d) re-encode pass. Carrying the quantizer out first
+                // releases it immediately (#2109's lock-guard family).
+                #[cfg(feature = "persistence")]
+                let carried = self.inner.read().rabitq_quantizer();
+                #[cfg(feature = "persistence")]
+                if let Some(rabitq) = carried {
+                    // Single encode pass with the carried-over quantizer; an
+                    // untrained collection stays untrained (no state change).
+                    new_inner
+                        .install_trained_rabitq(rabitq)
+                        .map_err(|e| VacuumError::RebuildFailed(e.to_string()))?;
+                }
+                Ok(new_inner)
+            }
+            crate::StorageMode::SQ8 => {
+                let new_inner = new_inner.promote_to_sq8(self.dimension);
+                // Same binding, same reason: `install_trained_sq8` re-encodes
+                // every vector, and the guard must not span it.
+                #[cfg(feature = "persistence")]
+                let carried = self.inner.read().sq8_quantizer();
+                #[cfg(feature = "persistence")]
+                if let Some(quantizer) = carried {
+                    new_inner
+                        .install_trained_sq8(quantizer)
+                        .map_err(|e| VacuumError::RebuildFailed(e.to_string()))?;
+                }
+                Ok(new_inner)
+            }
+            _ => Ok(new_inner),
         }
-        let new_inner = new_inner.promote_to_rabitq(self.dimension);
-        #[cfg(feature = "persistence")]
-        if let Some(rabitq) = self.inner.read().rabitq_quantizer() {
-            // Single encode pass with the carried-over quantizer; an
-            // untrained collection stays untrained (no state change).
-            new_inner
-                .install_trained_rabitq(rabitq)
-                .map_err(|e| VacuumError::RebuildFailed(e.to_string()))?;
-        }
-
-        Ok(new_inner)
     }
 }

@@ -1136,158 +1136,46 @@ fn test_dedup_map_consolidation_correctness() {
     assert_eq!(coll.len(), 2, "should have 2 unique points");
 }
 
-/// Issue #425: Phase 2 must NOT skip when StorageMode is SQ8.
-///
-/// Regression: quantization caching requires per-point processing in Phase 2.
+/// SQ8/Binary storage modes are accepted and behave exactly like `Full`:
+/// vectors are stored and searched full-precision f32. The per-upsert
+/// quantized side-caches these modes used to fill were removed — nothing
+/// ever read them (see `StorageMode` docs and the tracking issue for a real
+/// int8 traversal backend). This pins the observable contract instead:
+/// upsert, search ordering, and delete all work under both modes.
 #[test]
-fn test_phase2_runs_for_sq8_storage_mode() {
-    let dir = tempfile::tempdir().unwrap();
-    let coll = Collection::create_with_options(
-        dir.path().to_path_buf(),
-        4,
-        DistanceMetric::Cosine,
-        StorageMode::SQ8,
-    )
-    .unwrap();
+fn test_sq8_and_binary_modes_behave_as_full_precision() {
+    for mode in [StorageMode::SQ8, StorageMode::Binary] {
+        let dir = tempfile::tempdir().unwrap();
+        let coll = Collection::create_with_options(
+            dir.path().to_path_buf(),
+            4,
+            DistanceMetric::Cosine,
+            mode,
+        )
+        .unwrap();
 
-    let points = vec![Point::without_payload(1, vec![1.0, 0.0, 0.0, 0.0])];
-    coll.upsert(points).unwrap();
+        coll.upsert(vec![
+            Point::without_payload(1, vec![1.0, 0.0, 0.0, 0.0]),
+            Point::without_payload(2, vec![0.0, 1.0, 0.0, 0.0]),
+            Point::without_payload(3, vec![0.9, 0.1, 0.0, 0.0]),
+        ])
+        .unwrap();
 
-    // SQ8 cache should have been populated by Phase 2
-    assert_eq!(
-        coll.storage.sq8_cache.read().len(),
-        1,
-        "SQ8 cache should be populated — Phase 2 must not skip"
-    );
-}
-
-/// Issue #486: Parallel SQ8 quantization produces correct cache entries.
-///
-/// Verifies that the parallel quantization path (rayon) populates
-/// the cache for all points and that each entry exists.
-#[test]
-fn test_parallel_sq8_quantization_correctness() {
-    let dir = tempfile::tempdir().unwrap();
-    let coll = Collection::create_with_options(
-        dir.path().to_path_buf(),
-        4,
-        DistanceMetric::Cosine,
-        StorageMode::SQ8,
-    )
-    .unwrap();
-
-    // Insert 50 points to exercise the parallel path (rayon splits work)
-    let points: Vec<Point> = (0u64..50)
-        .map(|id| {
-            #[allow(clippy::cast_precision_loss)]
-            let v = vec![id as f32 * 0.1, 0.2, 0.3, 0.4];
-            Point::without_payload(id, v)
-        })
-        .collect();
-    coll.upsert(points.clone()).unwrap();
-
-    // Verify all 50 entries are in the SQ8 cache
-    let cache = coll.storage.sq8_cache.read();
-    assert_eq!(
-        cache.len(),
-        50,
-        "all 50 points should have SQ8 cache entries"
-    );
-
-    // Verify each point has a cache entry (parallel and sequential produce the same result)
-    for p in &points {
-        assert!(
-            cache.contains_key(&p.id),
-            "SQ8 cache should contain entry for id={}",
-            p.id
-        );
-    }
-
-    // Content correctness: the parallel result must equal a fresh sequential
-    // quantization of the same input (catches all-zero / all-128 / mis-scaled
-    // regressions). QuantizedVector has no PartialEq, so compare fields.
-    for (idx, id) in [(0usize, 0u64), (49usize, 49u64)] {
-        let expected = crate::quantization::QuantizedVector::from_f32(&points[idx].vector);
-        let actual = cache.get(&id).expect("entry must exist");
+        let results = coll.search(&[1.0, 0.0, 0.0, 0.0], 2).unwrap();
+        let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
         assert_eq!(
-            actual.data, expected.data,
-            "SQ8 data bytes must match sequential quantization for id={id}"
+            ids,
+            vec![1, 3],
+            "{mode:?}: full-precision cosine ordering must hold"
         );
-        assert!(
-            actual.data.iter().any(|&b| b != 0),
-            "SQ8 data must not be all-zero for id={id}"
-        );
-        assert!(
-            (actual.min - expected.min).abs() < f32::EPSILON,
-            "min mismatch for id={id}"
-        );
-        assert!(
-            (actual.max - expected.max).abs() < f32::EPSILON,
-            "max mismatch for id={id}"
-        );
-    }
-}
 
-/// Issue #486: Parallel Binary quantization produces correct cache entries.
-#[test]
-fn test_parallel_binary_quantization_correctness() {
-    let dir = tempfile::tempdir().unwrap();
-    let coll = Collection::create_with_options(
-        dir.path().to_path_buf(),
-        4,
-        DistanceMetric::Cosine,
-        StorageMode::Binary,
-    )
-    .unwrap();
-
-    let points: Vec<Point> = (0u64..50)
-        .map(|id| {
-            #[allow(clippy::cast_precision_loss)]
-            let v = vec![id as f32 * 0.1 - 2.5, 0.2, -0.3, 0.4];
-            Point::without_payload(id, v)
-        })
-        .collect();
-    coll.upsert(points.clone()).unwrap();
-
-    let cache = coll.storage.binary_cache.read();
-    assert_eq!(
-        cache.len(),
-        50,
-        "all 50 points should have Binary cache entries"
-    );
-
-    for p in &points {
-        assert!(
-            cache.contains_key(&p.id),
-            "Binary cache should contain entry for id={}",
-            p.id
-        );
-    }
-
-    // Bit values must match the deterministic encoding (value >= 0.0 -> bit set),
-    // and must be paired with the correct id by the parallel path. Cover the
-    // sign-flip boundary at dim 0: id<25 -> [-,+,-,+]=0x0A, id>=25 -> [+,+,-,+]=0x0B.
-    for p in &points {
-        let expected = crate::quantization::BinaryQuantizedVector::from_f32(&p.vector);
-        let cached = cache.get(&p.id).unwrap();
+        coll.delete(&[1]).unwrap();
+        let results = coll.search(&[1.0, 0.0, 0.0, 0.0], 1).unwrap();
         assert_eq!(
-            cached.data, expected.data,
-            "binary bits for id={} must match canonical encoding (got {:?}, want {:?})",
-            p.id, cached.data, expected.data
+            results[0].point.id, 3,
+            "{mode:?}: delete must remove the point from search"
         );
     }
-    // Spot-check the absolute encoding so an all-zero/flipped-bit regression in
-    // from_f32 itself is also caught (not just self-consistency):
-    assert_eq!(
-        cache.get(&0).unwrap().data,
-        vec![0x0A],
-        "id=0 vec [-2.5,0.2,-0.3,0.4] -> 0b1010"
-    );
-    assert_eq!(
-        cache.get(&49).unwrap().data,
-        vec![0x0B],
-        "id=49 vec [+,0.2,-0.3,0.4] -> 0b1011"
-    );
 }
 
 /// Issue #486: Multi-batch upsert produces searchable results without

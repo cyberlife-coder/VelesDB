@@ -193,7 +193,8 @@ impl Collection {
     ///
     /// # Returns
     ///
-    /// Vector of `SearchResult` sorted by fused score descending.
+    /// Vector of `SearchResult` sorted best-first (descending fused score for
+    /// similarity metrics, ascending fused distance for Euclidean/Hamming).
     ///
     /// # Errors
     ///
@@ -215,8 +216,11 @@ impl Collection {
         let batch_results = self.search_and_merge_delta(vectors, overfetch_k, metric)?;
         let filtered = self.apply_pre_fusion_filter(batch_results, filter);
 
+        // Every branch carries this collection's metric scores, so score-level
+        // strategies must honor the metric's polarity (#2102).
+        let directions = vec![metric.score_direction(); filtered.len()];
         let fused = fusion
-            .fuse(filtered)
+            .fuse_with_directions(filtered, &directions)
             .map_err(|e| Error::Config(format!("Fusion error: {e}")))?;
 
         Ok(self.hydrate_fused_results(&fused, top_k))
@@ -360,8 +364,10 @@ impl Collection {
 
         let batch_results = self.search_and_merge_delta(vectors, overfetch_k, metric)?;
 
+        // Same polarity contract as `multi_query_search` (#2102).
+        let directions = vec![metric.score_direction(); batch_results.len()];
         let fused = fusion
-            .fuse(batch_results)
+            .fuse_with_directions(batch_results, &directions)
             .map_err(|e| Error::Config(format!("Fusion error: {e}")))?;
 
         Ok(fused.into_iter().take(top_k).collect())

@@ -271,8 +271,6 @@ impl Collection {
         // LOCK ORDER: vector_storage(2) → payload_storage(3) → caches(4) → label_index(7).
         let mut vector_storage = self.storage.vector_storage.write();
         let mut payload_storage = self.storage.payload_storage.write();
-        let mut sq8_cache = self.storage.sq8_cache.write();
-        let mut binary_cache = self.storage.binary_cache.write();
         let mut pq_cache = self.storage.pq_cache.write();
         let mut label_idx = self.graph.label_index.write();
 
@@ -293,8 +291,6 @@ impl Collection {
 
         for (&id, old_payload) in ids.iter().zip(&old_payloads) {
             self.storage.index.remove(id);
-            sq8_cache.remove(&id);
-            binary_cache.remove(&id);
             pq_cache.remove(&id);
             self.storage.text_index.remove_document(id);
             self.update_secondary_indexes_on_delete(id, old_payload.as_ref());
@@ -307,8 +303,6 @@ impl Collection {
         drop(label_idx);
         drop(vector_storage);
         drop(payload_storage);
-        drop(sq8_cache);
-        drop(binary_cache);
         drop(pq_cache);
         self.storage.config.write().point_count = point_count;
         Ok(())
@@ -406,7 +400,9 @@ impl Collection {
             .ids()
             .into_iter()
             .collect();
-        for id in self.storage.payload_storage.read().ids() {
+        // Bound so `payload_storage` (lock-order 3) is not held across the loop.
+        let payload_ids = self.storage.payload_storage.read().ids();
+        for id in payload_ids {
             ids.insert(id);
         }
         ids.into_iter().collect()

@@ -10,7 +10,7 @@ use std::cmp::Ordering;
 /// Uses `f32::total_cmp` for IEEE 754 total ordering, ensuring Ord/Eq/PartialEq
 /// consistency even with NaN values. This prevents heap corruption during HNSW search.
 #[derive(Debug, Clone, Copy)]
-pub(super) struct OrderedFloat(pub f32);
+pub struct OrderedFloat(pub f32);
 
 impl PartialEq for OrderedFloat {
     fn eq(&self, other: &Self) -> bool {

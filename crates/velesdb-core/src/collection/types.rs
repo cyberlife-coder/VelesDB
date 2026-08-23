@@ -23,9 +23,7 @@ use crate::index::sparse::SparseInvertedIndex;
 use crate::index::{Bm25Index, HnswIndex, SecondaryIndex};
 #[cfg(feature = "persistence")]
 use crate::point::Point;
-use crate::quantization::{
-    BinaryQuantizedVector, PQVector, ProductQuantizer, QuantizedVector, StorageMode,
-};
+use crate::quantization::{PQVector, ProductQuantizer, StorageMode};
 use crate::storage::{LogPayloadStorage, MmapStorage, VectorStorage};
 use crate::velesql::{QueryCache, QueryPlanner};
 use parking_lot::{Mutex, RwLock};
@@ -191,7 +189,7 @@ impl Default for RuntimeLimits {
 //   3. payload_storage
 //   3b. edge_wal_lock    (see below — sometimes nested inside 3, sometimes
 //                          acquired alone)
-//   4. sq8_cache / binary_cache / pq_cache  (any order among themselves)
+//   4. pq_cache
 //   5. pq_quantizer → pq_training_buffer
 //   6. secondary_indexes
 //   7. property_index / range_index         (any order among themselves)
@@ -249,16 +247,6 @@ pub(crate) struct StorageState {
 
     /// BM25 index for full-text search.
     pub(super) text_index: Arc<Bm25Index>,
-
-    /// SQ8 quantized vectors cache (for SQ8 storage mode).
-    ///
-    /// Lock order position: **4**.
-    pub(super) sq8_cache: Arc<RwLock<HashMap<u64, QuantizedVector>>>,
-
-    /// Binary quantized vectors cache (for Binary storage mode).
-    ///
-    /// Lock order position: **4**.
-    pub(super) binary_cache: Arc<RwLock<HashMap<u64, BinaryQuantizedVector>>>,
 
     /// PQ quantized vectors cache (for ProductQuantization storage mode).
     ///

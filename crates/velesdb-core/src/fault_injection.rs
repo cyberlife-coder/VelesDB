@@ -61,7 +61,7 @@ pub(crate) static SAVE_CONFIG_FAIL_AT: AtomicUsize = AtomicUsize::new(SAVE_CONFI
 /// The "fail after N" semantics are what makes this guard useful for
 /// Phase-2 rollback tests: when a REST handler first creates a
 /// collection (Phase 1) and then applies advanced config (Phase 2),
-/// the test needs Phase 1's save_config() calls to succeed and only
+/// the test needs Phase 1's `save_config()` calls to succeed and only
 /// Phase 2's to fail. Activate the guard with
 /// `fail_at = <count of Phase 1 calls>` — Phase 1 then completes
 /// normally, Phase 2 immediately hits the injected failure, and the

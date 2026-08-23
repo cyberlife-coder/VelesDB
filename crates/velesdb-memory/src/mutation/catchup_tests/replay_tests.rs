@@ -356,7 +356,8 @@ impl Embedder for ReplayBlockingEmbedder {
     fn embed(&self, _text: &str) -> Result<Vec<f32>, EmbedError> {
         let mut blocked = self.gate.0.lock();
         if *blocked {
-            if let Some(entered) = self.entered.lock().take() {
+            let entered_guard = self.entered.lock().take();
+            if let Some(entered) = entered_guard {
                 let _ = entered.send(());
             }
             while *blocked {
@@ -375,7 +376,8 @@ impl Embedder for BlockingEmbedder {
     fn embed(&self, _text: &str) -> Result<Vec<f32>, EmbedError> {
         let mut blocked = self.gate.0.lock();
         if *blocked {
-            if let Some(entered) = self.entered.lock().take() {
+            let entered_guard = self.entered.lock().take();
+            if let Some(entered) = entered_guard {
                 let _ = entered.send(());
             }
             while *blocked {
