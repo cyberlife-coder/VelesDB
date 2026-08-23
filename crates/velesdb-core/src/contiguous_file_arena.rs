@@ -87,7 +87,35 @@ pub(crate) struct FileArena {
     map: MmapMut,
     file: File,
     path: PathBuf,
+    /// The data-region pointer, derived once per mapping.
+    ///
+    /// Held here rather than recomputed because it is a property of the
+    /// mapping, not of a call: deriving it needs `&mut` (for `as_mut_ptr`) and
+    /// can fail, and neither belongs on an accessor that every caller uses.
+    /// `grow` re-derives it, which is the only event that can move it.
+    data: NonNull<f32>,
 }
+
+// SAFETY: `FileArena` is `Send` because everything it owns is, and the raw
+// pointer it caches addresses memory the kernel owns rather than this thread.
+// - Condition 1: `MmapMut`, `File` and `PathBuf` are all `Send`.
+// - Condition 2: `data` points into `map`, whose address is assigned by the
+//   kernel and unaffected by moving this struct, so the pointer stays valid
+//   wherever the arena goes.
+// - Condition 3: the exclusive lock taken in `from_file` means no other
+//   `FileArena` addresses the same bytes, so moving this one cannot create an
+//   alias on the receiving thread.
+// SAFETY: Moving an arena between threads leaves its mapping intact and unique.
+unsafe impl Send for FileArena {}
+// SAFETY: `FileArena` is `Sync` because shared references expose no mutation.
+// - Condition 1: `&self` reaches only `data_ptr`, `flush` and `path`; none of
+//   them writes through the mapping, and every mutating entry point
+//   (`grow`) takes `&mut self`.
+// - Condition 2: handing out the cached pointer is not itself a write — the
+//   caller's own aliasing rules govern what it does with it, exactly as for
+//   the heap backing.
+// SAFETY: Concurrent shared references to an arena cannot mutate it.
+unsafe impl Sync for FileArena {}
 
 impl FileArena {
     /// Creates (or truncates) `path` and maps `byte_len` bytes of vector data.
@@ -129,11 +157,17 @@ impl FileArena {
     fn from_file(file: File, path: PathBuf, byte_len: usize) -> io::Result<Self> {
         Self::lock_exclusive(&file, &path)?;
         let total = Self::total_len(byte_len)?;
-        if file.metadata()?.len() < total {
-            file.set_len(total)?;
+        if file.metadata()?.len() < total as u64 {
+            file.set_len(total as u64)?;
         }
-        let map = Self::map(&file, total)?;
-        Ok(Self { map, file, path })
+        let mut map = Self::map(&file, total)?;
+        let data = Self::derive_data_ptr(&mut map)?;
+        Ok(Self {
+            map,
+            file,
+            path,
+            data,
+        })
     }
 
     /// Claims the file for this arena alone.
@@ -160,29 +194,23 @@ impl FileArena {
     }
 
     /// `DATA_OFFSET + byte_len`, refusing an overflowing request.
-    fn total_len(byte_len: usize) -> io::Result<u64> {
-        let total = byte_len.checked_add(DATA_OFFSET).ok_or_else(|| {
+    ///
+    /// Deliberately `usize`: that is the width a mapping can actually have on
+    /// this target, so every internal length stays in it and the one `u64`
+    /// this type needs is produced at `set_len`'s boundary and nowhere else.
+    /// Round-tripping through `u64` would add a `u64 -> usize` conversion that
+    /// can fail and a `usize -> u64` one that never can.
+    fn total_len(byte_len: usize) -> io::Result<usize> {
+        byte_len.checked_add(DATA_OFFSET).ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "vector arena size overflows usize",
-            )
-        })?;
-        u64::try_from(total).map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "vector arena size overflows u64",
+                "vector arena size overflows this target's address space",
             )
         })
     }
 
-    /// Maps `total` bytes of `file` for read and write.
-    fn map(file: &File, total: u64) -> io::Result<MmapMut> {
-        let len = usize::try_from(total).map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "vector arena size exceeds this target's address space",
-            )
-        })?;
+    /// Maps `len` bytes of `file` for read and write.
+    fn map(file: &File, len: usize) -> io::Result<MmapMut> {
         // SAFETY: `MmapMut::map_mut` requires a file that stays valid for the
         // mapping's lifetime and is not concurrently truncated.
         // - Condition 1: `file` is owned by the returned `FileArena`, so it
@@ -198,10 +226,18 @@ impl FileArena {
 
     /// Pointer to the first f32 of the data region.
     ///
+    /// Infallible and `&self`: the fallible derivation happens once, when the
+    /// mapping is established or re-established.
+    pub(crate) const fn data_ptr(&self) -> NonNull<f32> {
+        self.data
+    }
+
+    /// Derives the data-region pointer from a mapping.
+    ///
     /// # Errors
     ///
-    /// Returns [`io::ErrorKind::InvalidData`] if the mapping is somehow
-    /// shorter than the header, which would mean the file was truncated
+    /// Returns [`io::ErrorKind::InvalidData`] if the mapping is shorter than
+    /// the reserved header, which would mean the file was truncated
     /// underneath us.
     // Reason: no structural fix exists — producing this pointer is the whole
     // point of the function. The alignment is *proven* rather than assumed: an
@@ -211,8 +247,8 @@ impl FileArena {
     // feeds are built with `from_raw_parts`, which requires alignment for
     // soundness.
     #[allow(clippy::cast_ptr_alignment)]
-    pub(crate) fn data_ptr(&mut self) -> io::Result<NonNull<f32>> {
-        if self.map.len() < DATA_OFFSET {
+    fn derive_data_ptr(map: &mut MmapMut) -> io::Result<NonNull<f32>> {
+        if map.len() < DATA_OFFSET {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "vector arena mapping is shorter than its header",
@@ -225,7 +261,7 @@ impl FileArena {
         //   non-null and page-aligned, so the offset pointer is non-null and
         //   at least 4096-byte aligned.
         // SAFETY: Address the data region that follows the reserved header.
-        let ptr = unsafe { self.map.as_mut_ptr().add(DATA_OFFSET) };
+        let ptr = unsafe { map.as_mut_ptr().add(DATA_OFFSET) };
         NonNull::new(ptr.cast::<f32>()).ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -248,11 +284,17 @@ impl FileArena {
     /// arena is unchanged and still usable.
     pub(crate) fn grow(&mut self, byte_len: usize) -> io::Result<()> {
         let total = Self::total_len(byte_len)?;
-        if self.map.len() as u64 >= total {
+        if self.map.len() >= total {
             return Ok(());
         }
-        self.file.set_len(total)?;
-        let fresh = Self::map(&self.file, total)?;
+        self.file.set_len(total as u64)?;
+        let mut fresh = Self::map(&self.file, total)?;
+        let data = Self::derive_data_ptr(&mut fresh)?;
+        // The pointer moves first: it already addresses `fresh`, whose pages
+        // survive the move into `self.map`. Assigning the map first would
+        // munmap the old region while `self.data` still named it, leaving the
+        // arena briefly holding a dangling pointer for no gain.
+        self.data = data;
         // Only now is the old mapping released.
         self.map = fresh;
         Ok(())

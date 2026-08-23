@@ -67,6 +67,7 @@ impl ContiguousVectors {
             return Ok(());
         }
 
+        #[cfg(feature = "persistence")]
         if !self.backing.is_heap() {
             return self.resize_file_backed(new_capacity);
         }
@@ -122,36 +123,11 @@ impl ContiguousVectors {
                 "failed to grow the file-backed vector arena to {byte_len} bytes: {e}"
             ))
         })?;
-        // Re-derive the pointer: growing re-maps, so the old address is stale.
-        let data = arena.data_ptr().map_err(|e| {
-            crate::error::Error::AllocationFailed(format!(
-                "grown vector arena produced no usable data pointer: {e}"
-            ))
-        })?;
-        self.data = data;
+        // Growing re-maps, so the old address is stale; `grow` refreshed the
+        // arena's own pointer and this reads it back.
+        self.data = arena.data_ptr();
         self.capacity = new_capacity;
         Ok(())
-    }
-
-    /// Without `persistence` there is no file-backed variant to grow.
-    ///
-    /// [`ArenaBacking::Heap`] is then the only constructible backing, so this
-    /// is unreachable rather than merely unused — it exists to keep `resize`
-    /// free of `cfg` noise.
-    ///
-    /// [`ArenaBacking::Heap`]: crate::perf_optimizations::ArenaBacking::Heap
-    ///
-    /// # Errors
-    ///
-    /// Always returns [`Error::Internal`].
-    ///
-    /// [`Error::Internal`]: crate::error::Error::Internal
-    #[cfg(not(feature = "persistence"))]
-    #[allow(clippy::unnecessary_wraps)]
-    fn resize_file_backed(&mut self, _new_capacity: usize) -> crate::error::Result<()> {
-        Err(crate::error::Error::Internal(
-            "file-backed vector arenas require the persistence feature".to_string(),
-        ))
     }
 
     /// Allocates a new buffer and copies existing data into it.

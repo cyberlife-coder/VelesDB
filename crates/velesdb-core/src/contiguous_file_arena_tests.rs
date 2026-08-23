@@ -267,9 +267,11 @@ fn a_second_arena_over_the_same_file_is_refused() {
 
     let err = ContiguousVectors::new_file_backed(&path, 8, 16)
         .expect_err("a second mapping of the same file must be refused");
+    // A held arena is a locked resource, not an I/O mishap: the caller can
+    // tell "someone else has this" from "the disk is full".
     assert!(
-        err.to_string().contains("already mapped"),
-        "error should explain the aliasing hazard, got: {err}"
+        matches!(err, crate::error::Error::DatabaseLocked(ref p) if p.contains("excl.arena")),
+        "a refused lock should surface as DatabaseLocked naming the path, got: {err:?}"
     );
 
     // Releasing the first frees the file for a later holder — the lock is

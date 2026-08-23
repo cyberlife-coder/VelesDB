@@ -101,8 +101,9 @@ impl fmt::Debug for ArenaBacking {
 //   lock before mapping and holds it for the mapping's whole life — that lock
 //   is what makes this condition true rather than hoped for.
 // - Condition 2: Mutation requires `&mut self` or lock-guarded interior access.
-// - Condition 3: `MmapMut` is itself `Send`, so the mapped variant adds no
-//   thread-affinity of its own.
+// - Condition 3: the mapped variant is `Send` on its own terms — `FileArena`
+//   carries its own justified impl next to the mapping it describes, rather
+//   than being covered by this one at a distance.
 // SAFETY: Moving ownership of this container between threads is sound.
 unsafe impl Send for ContiguousVectors {}
 // SAFETY: `ContiguousVectors` is `Sync` because shared access is read-only.
@@ -251,13 +252,13 @@ impl ContiguousVectors {
         let byte_len = Self::byte_size(dimension, capacity)?;
         crate::alloc_guard::check_alloc_bound(byte_len)?;
 
-        let mut arena = if truncate {
+        let arena = if truncate {
             FileArena::create(path, byte_len)
         } else {
             FileArena::open(path, byte_len)
         }
-        .map_err(crate::error::Error::Io)?;
-        let data = arena.data_ptr().map_err(crate::error::Error::Io)?;
+        .map_err(|e| Self::arena_open_error(path, e))?;
+        let data = arena.data_ptr();
 
         Ok(Self {
             data,
@@ -266,6 +267,25 @@ impl ContiguousVectors {
             capacity,
             backing: ArenaBacking::FileMapped(Box::new(arena)),
         })
+    }
+
+    /// Classifies a failure to open an arena file.
+    ///
+    /// A refused exclusive lock means another holder has this arena, which is
+    /// a different situation from a full disk or a missing directory and the
+    /// caller can act on it differently. Collapsing both into
+    /// [`Error::Io`] would throw that away, so the lock case is surfaced as
+    /// the same locked-resource error `Database::open` uses for its data
+    /// directory.
+    ///
+    /// [`Error::Io`]: crate::error::Error::Io
+    #[cfg(feature = "persistence")]
+    fn arena_open_error(path: &std::path::Path, error: std::io::Error) -> crate::error::Error {
+        if error.kind() == std::io::ErrorKind::WouldBlock {
+            crate::error::Error::DatabaseLocked(path.display().to_string())
+        } else {
+            crate::error::Error::Io(error)
+        }
     }
 
     /// Flushes a file-backed arena's dirty pages to disk.
