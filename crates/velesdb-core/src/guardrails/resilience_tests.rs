@@ -203,3 +203,59 @@ fn circuit_halfopen_failure_reopens() {
     cb.record_failure();
     assert_eq!(cb.state(), CircuitState::Open);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Regression: CircuitBreaker lock-order (ABBA deadlock)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `check()` and `record_failure()` used to take the breaker's two locks in
+/// opposite orders — `check` held `opened_at` (read) while asking for `state`
+/// (write), `record_failure` held `state` (write) while asking for `opened_at`
+/// (write). Both are called on every query by the pipeline, so a breaker that
+/// is `Open` under concurrent load could deadlock: each thread holds what the
+/// other waits for.
+///
+/// The two values now live under one lock, so the ordering cannot conflict.
+/// This test hammers both paths from several threads and fails on a watchdog
+/// timeout rather than hanging the suite if the ordering is ever reintroduced.
+#[test]
+fn circuit_breaker_concurrent_check_and_failure_make_progress() {
+    use std::sync::mpsc;
+    use std::sync::Arc;
+    use std::thread;
+    use std::time::Duration;
+
+    // threshold 1 + recovery 0 keeps the breaker cycling through the exact
+    // transition that used to nest the locks (Open -> HalfOpen in `check`,
+    // -> Open again in `record_failure`).
+    let cb = Arc::new(CircuitBreaker::new(1, 0));
+    cb.record_failure();
+    assert_eq!(cb.state(), CircuitState::Open, "precondition: breaker open");
+
+    let (tx, rx) = mpsc::channel();
+    let mut handles = Vec::new();
+    for t in 0..4 {
+        let cb = Arc::clone(&cb);
+        let tx = tx.clone();
+        handles.push(thread::spawn(move || {
+            for _ in 0..2_000 {
+                if t % 2 == 0 {
+                    let _ = cb.check();
+                } else {
+                    cb.record_failure();
+                }
+            }
+            // Only reached if no thread is wedged on a lock.
+            let _ = tx.send(t);
+        }));
+    }
+    drop(tx);
+
+    for _ in 0..4 {
+        rx.recv_timeout(Duration::from_secs(30))
+            .expect("circuit breaker deadlocked: a worker never finished (lock-order regression)");
+    }
+    for h in handles {
+        h.join().expect("worker panicked");
+    }
+}

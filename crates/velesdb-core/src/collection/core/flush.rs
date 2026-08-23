@@ -287,12 +287,14 @@ impl Collection {
             .swap(false, Ordering::AcqRel)
         {
             let property_index_path = self.storage.path.join("property_index.bin");
-            if let Err(e) = self
+            // Bound: the `if let` would keep the index read guard alive for the
+            // whole expression, blocking writers for the duration of a disk write.
+            let saved = self
                 .graph
                 .property_index
                 .read()
-                .save_to_file(&property_index_path)
-            {
+                .save_to_file(&property_index_path);
+            if let Err(e) = saved {
                 // Re-mark so the next flush retries the write.
                 self.graph
                     .property_index_dirty
@@ -303,12 +305,13 @@ impl Collection {
 
         if self.graph.range_index_dirty.swap(false, Ordering::AcqRel) {
             let range_index_path = self.storage.path.join("range_index.bin");
-            if let Err(e) = self
+            // Bound for the same reason as `property_index` above.
+            let saved = self
                 .graph
                 .range_index
                 .read()
-                .save_to_file(&range_index_path)
-            {
+                .save_to_file(&range_index_path);
+            if let Err(e) = saved {
                 self.graph.range_index_dirty.store(true, Ordering::Release);
                 return Err(e.into());
             }

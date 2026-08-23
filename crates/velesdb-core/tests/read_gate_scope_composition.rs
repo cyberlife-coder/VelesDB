@@ -72,7 +72,8 @@ impl ScopingObserver {
 
 impl DatabaseObserver for ScopingObserver {
     fn on_query_request(&self, _ctx: &QueryAccessContext) -> velesdb_core::Result<AccessDecision> {
-        match self.scope.read().clone() {
+        let scoped = self.scope.read().clone();
+        match scoped {
             None => Ok(AccessDecision::Allow),
             Some(cond) => {
                 // `AccessScope` is `#[non_exhaustive]`; construct via Default

@@ -108,7 +108,10 @@ impl Database {
     /// Returns `None` if the collection does not exist on disk.
     #[must_use]
     pub fn get_graph_collection(&self, name: &str) -> Option<GraphCollection> {
-        if let Some(c) = self.graph_colls.read().get(name).cloned() {
+        // Bound before the `if let` — see `get_vector_collection`: the disk
+        // fallback takes `graph_colls` for WRITE.
+        let cached = self.graph_colls.read().get(name).cloned();
+        if let Some(c) = cached {
             return Some(c);
         }
         self.open_graph_collection_from_disk(name)

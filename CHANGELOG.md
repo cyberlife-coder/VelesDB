@@ -45,6 +45,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   500ms mmap resize was invisible to the P99 monitoring it exists for.
   (#2105)
 
+- **The circuit breaker could deadlock the whole service under load.**
+  `check()` held `opened_at` (read) while asking for `state` (write) and
+  `record_failure()` held `state` (write) while asking for `opened_at`
+  (write) — opposite orders on two paths the query pipeline calls on every
+  request, so an open breaker under concurrent traffic could wedge both.
+  The two values now live under one lock, which makes the conflicting order
+  unrepresentable; `clippy::significant_drop_in_scrutinee` is promoted to
+  `deny` so the shape cannot return, and the 17 other guards that spanned a
+  `match`/`if let`/`for` expression (including two held across a disk write
+  in `flush_secondary_indexes`, and the collection-cache lookups whose disk
+  fallback takes the same map for write) are bound before the expression.
+  (#2109, #2110)
+
 ## [5.2.0] - 2026-08-22
 
 ### Changed
