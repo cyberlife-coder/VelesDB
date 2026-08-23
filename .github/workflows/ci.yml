@@ -299,10 +299,21 @@ jobs:
           # having looked at nothing. Prove the object is here before trusting
           # an empty result.
           if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
-            echo "::error::base commit $BASE_SHA is not in this checkout — a" \
-                 "diff against it reads zero files instead of failing." \
-                 "Give this job actions/checkout with fetch-depth: 0."
-            exit 1
+            if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+              # With fetch-depth: 0 a PR base is always present, so its
+              # absence is a misconfiguration — and validating nothing in
+              # silence is exactly how this gate spent its whole life.
+              echo "::error::base commit $BASE_SHA is not in this checkout — a" \
+                   "diff against it reads zero files instead of failing." \
+                   "Give this job actions/checkout with fetch-depth: 0."
+              exit 1
+            fi
+            # On push, `before` legitimately vanishes when a branch is
+            # force-pushed. Widen to the whole history rather than fail the
+            # branch: stricter than the range it replaces, never a false red.
+            echo "::warning::push base $BASE_SHA is unreachable (force-push?) —" \
+                 "validating full history instead of the pushed range."
+            BASE_SHA="$(git rev-list --max-parents=0 HEAD)"
           fi
 
           # F-3.12: validate SAFETY templates in EVERY production crate, not
@@ -310,16 +321,18 @@ jobs:
           # velesdb-mobile, tauri-plugin-velesdb) contain unsafe blocks too and
           # were previously unchecked, which let one incomplete template slip
           # through (F-3.2).
+          mapfile -t CHANGED_FILES < <(
+            git diff --name-only --diff-filter=d "$BASE_SHA" "${{ github.sha }}"
+          )
           mapfile -t PROD_RS_FILES < <(
-            git diff --name-only --diff-filter=d "$BASE_SHA" "${{ github.sha }}" \
+            printf '%s\n' "${CHANGED_FILES[@]}" \
               | grep '\.rs$' \
               | grep -E '^crates/[^/]+/src/' \
               | grep -v '/tests/' \
               | grep -v '/benches/' \
               | grep -Ev '_tests?\.rs$'
           )
-          CHANGED_TOTAL="$(git diff --name-only --diff-filter=d "$BASE_SHA" "${{ github.sha }}" | wc -l)"
-          echo "SAFETY template: $CHANGED_TOTAL changed file(s) in range, ${#PROD_RS_FILES[@]} production Rust."
+          echo "SAFETY template: ${#CHANGED_FILES[@]} changed file(s) in range, ${#PROD_RS_FILES[@]} production Rust."
           if [[ ${#PROD_RS_FILES[@]} -eq 0 ]]; then
             echo "No changed production Rust files to validate."
             exit 0
@@ -343,22 +356,35 @@ jobs:
           # having looked at nothing. Prove the object is here before trusting
           # an empty result.
           if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
-            echo "::error::base commit $BASE_SHA is not in this checkout — a" \
-                 "diff against it reads zero files instead of failing." \
-                 "Give this job actions/checkout with fetch-depth: 0."
-            exit 1
+            if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+              # With fetch-depth: 0 a PR base is always present, so its
+              # absence is a misconfiguration — and validating nothing in
+              # silence is exactly how this gate spent its whole life.
+              echo "::error::base commit $BASE_SHA is not in this checkout — a" \
+                   "diff against it reads zero files instead of failing." \
+                   "Give this job actions/checkout with fetch-depth: 0."
+              exit 1
+            fi
+            # On push, `before` legitimately vanishes when a branch is
+            # force-pushed. Widen to the whole history rather than fail the
+            # branch: stricter than the range it replaces, never a false red.
+            echo "::warning::push base $BASE_SHA is unreachable (force-push?) —" \
+                 "validating full history instead of the pushed range."
+            BASE_SHA="$(git rev-list --max-parents=0 HEAD)"
           fi
 
+          mapfile -t CHANGED_FILES < <(
+            git diff --name-only --diff-filter=d "$BASE_SHA" "${{ github.sha }}"
+          )
           mapfile -t CORE_RS_FILES < <(
-            git diff --name-only --diff-filter=d "$BASE_SHA" "${{ github.sha }}" \
+            printf '%s\n' "${CHANGED_FILES[@]}" \
               | grep '\.rs$' \
               | grep '^crates/velesdb-core/src/' \
               | grep -v '/tests/' \
               | grep -v '/benches/' \
               | grep -Ev '_tests?\.rs$'
           )
-          CHANGED_TOTAL="$(git diff --name-only --diff-filter=d "$BASE_SHA" "${{ github.sha }}" | wc -l)"
-          echo "TODO governance: $CHANGED_TOTAL changed file(s) in range, ${#CORE_RS_FILES[@]} production Rust."
+          echo "TODO governance: ${#CHANGED_FILES[@]} changed file(s) in range, ${#CORE_RS_FILES[@]} production Rust."
           if [[ ${#CORE_RS_FILES[@]} -eq 0 ]]; then
             echo "No changed production Rust files to validate."
             exit 0
@@ -1093,10 +1119,21 @@ jobs:
           # having looked at nothing. Prove the object is here before trusting
           # an empty result.
           if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
-            echo "::error::base commit $BASE_SHA is not in this checkout — a" \
-                 "diff against it reads zero files instead of failing." \
-                 "Give this job actions/checkout with fetch-depth: 0."
-            exit 1
+            if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+              # With fetch-depth: 0 a PR base is always present, so its
+              # absence is a misconfiguration — and validating nothing in
+              # silence is exactly how this gate spent its whole life.
+              echo "::error::base commit $BASE_SHA is not in this checkout — a" \
+                   "diff against it reads zero files instead of failing." \
+                   "Give this job actions/checkout with fetch-depth: 0."
+              exit 1
+            fi
+            # On push, `before` legitimately vanishes when a branch is
+            # force-pushed. Widen to the whole history rather than fail the
+            # branch: stricter than the range it replaces, never a false red.
+            echo "::warning::push base $BASE_SHA is unreachable (force-push?) —" \
+                 "validating full history instead of the pushed range."
+            BASE_SHA="$(git rev-list --max-parents=0 HEAD)"
           fi
           if git diff --name-only "$BASE_SHA" "${{ github.sha }}" | grep -q '^crates/velesdb-node/'; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
@@ -1502,10 +1539,21 @@ jobs:
           # having looked at nothing. Prove the object is here before trusting
           # an empty result.
           if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
-            echo "::error::base commit $BASE_SHA is not in this checkout — a" \
-                 "diff against it reads zero files instead of failing." \
-                 "Give this job actions/checkout with fetch-depth: 0."
-            exit 1
+            if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+              # With fetch-depth: 0 a PR base is always present, so its
+              # absence is a misconfiguration — and validating nothing in
+              # silence is exactly how this gate spent its whole life.
+              echo "::error::base commit $BASE_SHA is not in this checkout — a" \
+                   "diff against it reads zero files instead of failing." \
+                   "Give this job actions/checkout with fetch-depth: 0."
+              exit 1
+            fi
+            # On push, `before` legitimately vanishes when a branch is
+            # force-pushed. Widen to the whole history rather than fail the
+            # branch: stricter than the range it replaces, never a false red.
+            echo "::warning::push base $BASE_SHA is unreachable (force-push?) —" \
+                 "validating full history instead of the pushed range."
+            BASE_SHA="$(git rev-list --max-parents=0 HEAD)"
           fi
           if git diff --name-only "$BASE_SHA" "${{ github.sha }}" | grep -qE '^crates/velesdb-core/src/(index|simd_native|quantization|fusion|wal|storage)/|^crates/velesdb-python/|^benchmarks/velesdb_benchmark\.py$|^\.github/workflows/ci\.yml$'; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"

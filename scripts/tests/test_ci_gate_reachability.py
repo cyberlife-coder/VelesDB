@@ -172,6 +172,32 @@ def jobs_diffing_against_base(text: str) -> "set[str]":
     }
 
 
+MAPFILE_OPEN_RE = re.compile(r"^\s*mapfile -t \w+ < <\(\s*$")
+
+
+def guard_input_listings(block: str) -> "list[str]":
+    """The `git diff --name-only` lines that FEED a guard a list of paths.
+
+    Only these must exclude deletions: their paths are handed to a script
+    that opens them. A `git diff | grep -q` path FILTER must NOT exclude
+    deletions — removing a file is a change the filtered job still needs to
+    react to, so filtering deletions out there would make a deletion-only
+    pull request skip the job.
+    """
+    lines = block.split("\n")
+    listings, inside = [], False
+    for line in lines:
+        if MAPFILE_OPEN_RE.match(line):
+            inside = True
+            continue
+        if inside:
+            if line.strip().startswith(")"):
+                inside = False
+            elif "git diff --name-only" in line:
+                listings.append(line)
+    return listings
+
+
 def checkout_is_full_history(block: str) -> bool:
     """Whether a job's `actions/checkout` asks for the full history.
 
@@ -1166,17 +1192,48 @@ class DiffScopedGateReachabilityTests(unittest.TestCase):
         # A rename or a removal leaves a path in `git diff --name-only` that
         # is no longer on disk; the guards then warn per missing file. The
         # file list must be filtered at the source instead.
+        checked = 0
         for job in sorted(jobs_diffing_against_base(self.text)):
             block = job_block(strip_comments(self.text), job)
-            for line in BASE_SHA_DIFF_RE.pattern and [
-                ln for ln in block.split("\n") if BASE_SHA_DIFF_RE.search(ln)
-            ]:
-                if "mapfile" in block and "--name-only" in line:
+            for line in guard_input_listings(block):
+                checked += 1
+                with self.subTest(job=job, line=line.strip()):
                     self.assertIn(
                         "--diff-filter=d",
                         line,
-                        f"{job}: a changed-file list feeding a guard must exclude "
-                        "deletions (`--diff-filter=d`), which no longer exist on disk",
+                        f"{job}: a path list handed to a guard must exclude "
+                        "deletions (`--diff-filter=d`) — a removed path is still "
+                        "named by `--name-only` but is gone from disk, so the "
+                        "guard warns on a file it cannot open",
+                    )
+        self.assertTrue(checked, "no guard-input listing found — fix the parser")
+
+    def test_a_path_filter_must_keep_deletions(self) -> None:
+        # The mirror of the rule above, and the reason it is scoped to
+        # `mapfile` rather than to every base diff: `node-windows-changed`
+        # and `perf-path-changed` only `grep -q` the names to decide whether
+        # to run. Deleting a file under crates/velesdb-node/ is a change that
+        # job must still react to, so excluding deletions there would make a
+        # deletion-only PR skip it.
+        for job in ("node-windows-changed", "perf-path-changed"):
+            block = job_block(strip_comments(self.text), job)
+            with self.subTest(job=job):
+                self.assertEqual(
+                    guard_input_listings(block),
+                    [],
+                    f"{job} is a path filter, not a guard input",
+                )
+                filters = [
+                    line
+                    for line in block.split("\n")
+                    if BASE_SHA_DIFF_RE.search(line) and "grep -q" in line
+                ]
+                self.assertTrue(filters, f"{job} no longer greps a base diff")
+                for line in filters:
+                    self.assertNotIn(
+                        "--diff-filter=d",
+                        line,
+                        f"{job}: a path filter must SEE deletions",
                     )
 
 
