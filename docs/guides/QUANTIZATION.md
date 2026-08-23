@@ -18,34 +18,46 @@ persistence behavior. The compression ratios, recall impact, and training cost
 per method are consolidated in one place:
 [Tuning Guide — When to Use Each Mode](TUNING_GUIDE.md#when-to-use-each-mode).
 
-### Capacity mode vs search-path mode
+### What each storage mode actually does
 
 The compression figures above describe the quantization **primitives**. In the
-**collection search path**, only some modes are wired up — the rest are capacity
-modes that shrink memory without changing how search runs:
+**collection search path**, only some modes are wired up:
 
-| Storage mode | Kind | Collection search path |
-|--------------|------|------------------------|
-| `full` | full-precision | f32 (baseline) |
-| `sq8` | **Capacity Mode** | full-precision f32 — memory only, no throughput gain |
-| `binary` | **Capacity Mode** | full-precision f32 — memory only, no throughput gain |
-| `pq` | search-path mode | ADC-rescored (wired) |
-| `rabitq` | search-path mode | quantized traversal (wired end-to-end) |
+| Storage mode | Collection storage + search path |
+|--------------|----------------------------------|
+| `full` | f32 (baseline) |
+| `sq8` | int8 graph traversal + exact f32 re-ranking (Euclidean/Cosine; other metrics stay f32) |
+| `binary` | f32 — behaves as `full` today |
+| `pq` | f32 storage + ADC-rescored search (wired) |
+| `rabitq` | quantized traversal (wired end-to-end) |
 
-Pick `sq8`/`binary` only for the primitive-level memory savings; pick `rabitq`
-(or `pq`) when you want the quantized path in the query hot path.
+Pick `rabitq`, `sq8` (Euclidean/Cosine) or `pq` when you want a quantized
+query hot path. `binary` is accepted and persisted so the intent survives a
+reopen, but currently changes neither memory use nor the search path — use
+`rabitq` for a real 1-bit query path.
 
 ---
 
 ## 🚀 SQ8: 4x Compression
 
-> **Status: cache not consumed by collection search.**
-> A collection in `storage='sq8'` mode maintains a cache of SQ8-quantized
-> vectors at insertion time, but no search path reads this cache today:
-> queries run at full f32 precision. Choosing SQ8 at the collection level
-> therefore ADDS memory instead of reducing it, pending a reduced-memory
-> storage mode. The SQ8 primitives below (`QuantizedVector`, SIMD
-> distances) are, however, fully functional for direct programmatic use.
+> **Status: wired into the collection query path for Euclidean and Cosine,
+> including across restarts.**
+> A collection created with `storage='sq8'` uses the int8-traversal HNSW
+> backend (`Sq8PrecisionHnsw`): graph traversal reads 1 byte per dimension
+> instead of 4 (4x memory-bandwidth reduction in the hot loop) and the
+> final top-k is re-ranked with exact f32 distances. The quantizer trains
+> lazily after 1000 inserts or explicitly via `TRAIN QUANTIZER` with
+> `type=sq8`; both persist to `sq8.idx` (the lazy one on each full flush)
+> and are re-installed on reopen with an O(n·d) re-encode, mirroring
+> RaBitQ. Int8 traversal engages at 10 000+ vectors; below that, and on
+> metrics whose ordering int8 L2 cannot preserve (DotProduct, Hamming,
+> Jaccard), search stays exact f32.
+
+> **Resident-memory caveat:** same as RaBitQ below — the f32 vectors stay
+> resident for exact re-ranking and the 1-byte codes are held *alongside*
+> them. The 4x figure is the size of the codes, not of the resident set. A
+> codes-resident variant for small-RAM devices is part of
+> [#2112](https://github.com/cyberlife-coder/VelesDB/issues/2112).
 
 Each `f32` value (4 bytes) is converted to a `u8` (1 byte):
 
@@ -84,11 +96,11 @@ println!("Memory saved: {}%",
 
 ## ⚡ Binary: 32x Compression
 
-> **Status: cache not consumed by collection search.**
-> Same as SQ8: `storage='binary'` mode fills a cache of binary vectors
-> that no search path reads (search runs at full f32 precision). For
-> effective 32x compression in the query path, use RaBitQ. The
-> `BinaryQuantizedVector` primitives remain directly usable.
+> **Status: collection mode behaves as `full`.**
+> Same as SQ8: `storage='binary'` mode stores and searches full-precision
+> f32 (its never-read insertion-time cache was removed). For effective 32x
+> compression in the query path, use RaBitQ. The `BinaryQuantizedVector`
+> primitives remain directly usable.
 
 Each `f32` value becomes **1 bit**:
 - Value ≥ 0 → 1
@@ -219,6 +231,14 @@ OPQ applies an orthogonal rotation to the vectors before PQ quantization. This r
 > 1000-insertion threshold) is also persisted to `rabitq.idx` on a full
 > flush, at parity with the PQ codebook.
 
+> **Resident-memory caveat:** the RaBitQ backend keeps the full-precision
+> f32 vectors in the index for exact re-ranking, with the 1-bit codes held
+> *alongside* them. The 32x figure is the size of the codes, not of the
+> resident set — today the mode buys traversal speed (32x memory-bandwidth
+> reduction in the hot loop), not a smaller RAM floor. A codes-resident
+> variant for small-RAM devices is part of
+> [#2112](https://github.com/cyberlife-coder/VelesDB/issues/2112).
+
 ### How does it work?
 
 RaBitQ combines binary compression (1 bit per dimension) with a **random orthogonal rotation** that preserves distances. Unlike naive binary quantization, the orthogonal rotation spreads the information more uniformly across all bits.
@@ -252,9 +272,9 @@ The cross-method comparison table (compression, Recall@10, training cost per
 method) moved to the
 [Tuning Guide — When to Use Each Mode](TUNING_GUIDE.md#when-to-use-each-mode),
 the single home for those numbers. Keep in mind the wiring caveat: in the
-collection query path only **RaBitQ** and **PQ** are wired up today (see the
-status callouts above) — the SQ8/Binary modes maintain caches there that search
-does not consume yet.
+collection query path **RaBitQ**, **SQ8** (Euclidean/Cosine) and **PQ** are
+wired up today (see the status callouts above) — the Binary collection mode
+behaves as `full`.
 
 ---
 
@@ -262,18 +282,17 @@ does not consume yet.
 
 | Scenario | Recommendation |
 |----------|----------------|
-| **General production** | SQ8 |
+| **General production** | f32 (default); `sq8` on Euclidean/Cosine at 10K+ vectors for a lighter traversal hot loop |
 | **Large dataset (100K+)** | PQ m=8 + rescore |
-| **Very limited RAM** | Binary or RaBitQ |
+| **Very limited RAM** | f32 with modest HNSW `M` — no current mode shrinks the resident set (see [#2112](https://github.com/cyberlife-coder/VelesDB/issues/2112)) |
 | **Maximum precision** | f32 (no quantization) |
 | **High compression + good recall** | RaBitQ |
-| **Fingerprints/hashes** | Binary |
+| **Fingerprints/hashes** | `BinaryQuantizedVector` primitives (direct use) |
 | **Correlated data** | PQ + OPQ |
 
 > Note: these recommendations compare the methods as such. In the collection
-> query path, only **RaBitQ** and **PQ** are wired up today (see the status
-> callouts above) — the SQ8/Binary modes maintain caches there that search
-> does not consume yet.
+> query path, **RaBitQ**, **SQ8** (Euclidean/Cosine) and **PQ** are wired up
+> today (see the status callouts above); the Binary mode is not.
 
 ---
 

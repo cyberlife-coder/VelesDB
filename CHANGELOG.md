@@ -7,6 +7,108 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`StorageMode::SQ8` is a real search-path mode on Euclidean and Cosine.**
+  Collections created with `storage='sq8'` now run the VSAG-style
+  dual-precision HNSW backend: graph traversal compares int8 codes (1
+  byte/dimension read instead of 4) and the final top-k is re-ranked with
+  exact f32 distances (recall@10 >= 0.95 pinned on 10K vectors through the
+  default configuration). The quantizer trains lazily after 1000 inserts or
+  via the new `TRAIN QUANTIZER ... WITH (type=sq8)`, persists to `sq8.idx`
+  (lazy training persists on each full flush, parity with RaBitQ), and is
+  re-installed on reopen before gap recovery. On metrics whose ordering
+  int8 L2 cannot preserve (DotProduct/Hamming/Jaccard) the mode stays exact
+  f32, and `TRAIN QUANTIZER type=sq8` is rejected up front. Resident memory
+  is unchanged: the f32 vectors stay resident for re-ranking and the codes
+  are additive — the codes-resident variant remains #2112 Phase B. (#2112)
+
+### Removed
+
+- **`DualPrecisionHnsw` and `DualPrecisionConfig`** (public in
+  `index::hnsw::native`). The prototype was wired into no collection path,
+  carried a latent cosine bug (raw query against normalized stored vectors
+  in its rerank), and duplicated the `RaBitQ` traversal loop; its behavior
+  pins moved onto the wired `Sq8PrecisionHnsw`. Also breaking for direct
+  API users: `RaBitQPrecisionHnsw` is now a type alias over the generic
+  backend and its `from_inner` dropped the unused distance-engine
+  parameter.
+
+### Changed
+
+- **The `RaBitQ` traversal backend became a codec: one quantized-precision
+  state machine, two codecs.** `RaBitQPrecisionHnsw`'s concurrent
+  insert/train/install machinery and its graph traversal are now the
+  codec-generic `QuantizedPrecisionHnsw<D, C>`/`TraversalCodec` pair, with
+  RaBitQ a behavior-preserving alias over it (same defaults, same lock
+  order, on-disk format unchanged) and SQ8 the second codec. The unwired
+  `DualPrecisionHnsw` prototype and its duplicated traversal loop are
+  deleted; its tests are ported onto the wired backend. (#2112)
+
+- **`StorageMode::SQ8`/`Binary` stopped paying for quantization nobody
+  reads.** Every upsert into these modes ran a parallel quantization pass
+  and filled unbounded in-memory side-caches (one entry per vector) that no
+  search path ever consumed — pure CPU plus unbounded RAM (~1 byte/dim/vector
+  for SQ8) with zero effect on results, since the on-disk store and the HNSW
+  index are full-precision f32 in these modes regardless. The dead caches
+  and their fill/delete plumbing are removed; both modes are still accepted
+  and persisted, and now honestly documented as behaving like `Full`
+  (rustdoc + `docs/guides/QUANTIZATION.md`, whose "General production: SQ8"
+  recommendation is corrected). Search results are byte-identical. Wiring
+  the in-tree int8 dual-precision traversal engine into a real SQ8 backend
+  is tracked in #2112. (#2112)
+
+### Fixed
+
+- **Jaccard scores come back as similarities on every HNSW path.** The
+  HNSW score transform passed the engine's `1 - jaccard` traversal
+  distance through while the metric is declared higher-is-better, so the
+  bitmap-filtered, brute-force-parallel, dual-precision/RaBitQ rerank and
+  delta-merge paths ranked the *worst* candidates first and disagreed
+  with the exact path on the same query. (#2100)
+
+- **The GraphFirst filtered scan stopped clamping every metric into
+  [-1, 1].** Euclidean/Hamming distances and raw dot products beyond 1
+  collapsed into an artificial 1.0 tie (arbitrary top-k, meaningless
+  score) and the clamp never removed the NaN it claimed to guard; NaN
+  scores now map to the metric's worst key instead. (#2101)
+
+- **Score-level fusion honors score polarity.** Average, Maximum,
+  Weighted and RSF fused Euclidean/Hamming distance branches as if
+  higher were better — inverted or degenerate fused rankings across
+  multi-query, `NEAR_FUSED`, hybrid dense+sparse and dense+text. Branch
+  polarity is now declared via `fusion::ScoreDirection`, derived from
+  the metric. (#2102)
+
+- **SIMD cosine no longer zeroes small-magnitude vectors.** The shared
+  finish step guarded on the *product* of squared norms against
+  `EPSILON²`, so vectors with norms around 3.4e-4 scored 0.0 on
+  AVX2/AVX-512/NEON while the scalar path returned the true cosine.
+  (#2103)
+
+- **The RaBitQ estimator is de-biased by the arcsine law.** The
+  symmetric binary inner product satisfies `E[ip] = 1 - 2θ/π`, not
+  `cos θ`; using it raw overestimated every non-zero angle's distance
+  (+15% at 60°) and distorted cross-norm ranking. (#2104)
+
+- **Storage latency percentiles use nearest-rank.** The floor-based
+  target reported 1µs for any window where `count × p < 100` — a single
+  500ms mmap resize was invisible to the P99 monitoring it exists for.
+  (#2105)
+
+- **The circuit breaker could deadlock the whole service under load.**
+  `check()` held `opened_at` (read) while asking for `state` (write) and
+  `record_failure()` held `state` (write) while asking for `opened_at`
+  (write) — opposite orders on two paths the query pipeline calls on every
+  request, so an open breaker under concurrent traffic could wedge both.
+  The two values now live under one lock, which makes the conflicting order
+  unrepresentable; `clippy::significant_drop_in_scrutinee` is promoted to
+  `deny` so the shape cannot return, and the 17 other guards that spanned a
+  `match`/`if let`/`for` expression (including two held across a disk write
+  in `flush_secondary_indexes`, and the collection-cache lookups whose disk
+  fallback takes the same map for write) are bound before the expression.
+  (#2109, #2110)
+
 ## [5.2.0] - 2026-08-22
 
 ### Changed

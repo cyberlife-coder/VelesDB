@@ -180,6 +180,11 @@ fn asymmetric_remainder_sum(
 }
 
 /// Quantization parameters learned from training data.
+///
+/// This is the TRAINED per-dimension quantizer the SQ8 HNSW backend runs
+/// on — not to be confused with [`crate::quantization::QuantizedVector`],
+/// the standalone per-vector min/max codec (each vector carries its own
+/// range, no training, no shared parameters).
 #[derive(Debug, Clone)]
 pub struct ScalarQuantizer {
     /// Minimum value per dimension
@@ -193,6 +198,11 @@ pub struct ScalarQuantizer {
 }
 
 /// Quantized vector storage (int8 per dimension).
+///
+/// Codes only — the shared per-dimension parameters live in the
+/// [`ScalarQuantizer`] that produced them. Distinct from the
+/// self-describing [`crate::quantization::QuantizedVector`] primitive,
+/// which embeds a per-vector min/max instead.
 #[derive(Debug, Clone)]
 pub struct QuantizedVector {
     /// Quantized values [0, 255]
@@ -346,6 +356,122 @@ impl ScalarQuantizer {
         debug_assert_eq!(quantized.len(), self.dimension);
 
         distance_l2_asymmetric_simd(query, quantized, &self.min_vals, &self.inv_scales)
+    }
+}
+
+/// On-disk form of [`ScalarQuantizer`]: `inv_scales` is derived, so only the
+/// trained per-dimension `min_vals`/`scales` are persisted.
+#[cfg(feature = "persistence")]
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PersistedScalarQuantizer {
+    dimension: usize,
+    min_vals: Vec<f32>,
+    scales: Vec<f32>,
+}
+
+/// Size cap for `sq8.idx`: 2 f32 vectors per dimension — even a 65 536-dim
+/// quantizer is ~512 KiB, so anything past the cap is corruption, not data.
+#[cfg(feature = "persistence")]
+const MAX_SQ8_INDEX_BYTES: u64 = 16 * 1024 * 1024;
+
+#[cfg(feature = "persistence")]
+impl ScalarQuantizer {
+    /// Saves the trained quantizer to `<dir>/sq8.idx` using postcard with
+    /// atomic write (parity with `RaBitQIndex::save` / `rabitq.idx`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::Error::Io`] if serialization or file I/O fails.
+    pub fn save(&self, dir: &std::path::Path) -> Result<(), crate::error::Error> {
+        let persisted = PersistedScalarQuantizer {
+            dimension: self.dimension,
+            min_vals: self.min_vals.clone(),
+            scales: self.scales.clone(),
+        };
+        let data = postcard::to_allocvec(&persisted).map_err(|e| {
+            crate::error::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("failed to serialize SQ8 quantizer: {e}"),
+            ))
+        })?;
+        let final_path = dir.join("sq8.idx");
+        crate::storage::atomic_write::atomic_write(&final_path, &data).map_err(|e| {
+            crate::error::Error::Io(std::io::Error::new(
+                e.kind(),
+                format!("failed to write SQ8 quantizer: {e}"),
+            ))
+        })
+    }
+
+    /// Loads a trained quantizer from `<dir>/sq8.idx`. Returns `None` if the
+    /// file doesn't exist.
+    ///
+    /// The decoded quantizer is validated so a corrupt artifact is rejected
+    /// here rather than producing mismatched per-dimension indexing in the
+    /// distance kernels.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::Error::Io`] if deserialization or file I/O
+    /// fails, or [`crate::error::Error::IndexCorrupted`] if the file exceeds
+    /// the size cap or the decoded shape is inconsistent with `dimension`.
+    pub fn load(dir: &std::path::Path) -> Result<Option<Self>, crate::error::Error> {
+        let path = dir.join("sq8.idx");
+        if !path.exists() {
+            return Ok(None);
+        }
+        let file_len = std::fs::metadata(&path)?.len();
+        if file_len > MAX_SQ8_INDEX_BYTES {
+            return Err(crate::error::Error::IndexCorrupted(format!(
+                "SQ8 quantizer file is {file_len} bytes, exceeds cap {MAX_SQ8_INDEX_BYTES}"
+            )));
+        }
+        let data = std::fs::read(&path)?;
+        let persisted: PersistedScalarQuantizer = postcard::from_bytes(&data).map_err(|e| {
+            crate::error::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("failed to deserialize SQ8 quantizer: {e}"),
+            ))
+        })?;
+        Self::from_persisted(persisted).map(Some)
+    }
+
+    /// Validates a decoded artifact and rebuilds the derived `inv_scales`.
+    fn from_persisted(persisted: PersistedScalarQuantizer) -> Result<Self, crate::error::Error> {
+        let PersistedScalarQuantizer {
+            dimension,
+            min_vals,
+            scales,
+        } = persisted;
+        if dimension == 0 {
+            return Err(crate::error::Error::IndexCorrupted(
+                "SQ8 quantizer has zero dimension".into(),
+            ));
+        }
+        if min_vals.len() != dimension || scales.len() != dimension {
+            return Err(crate::error::Error::IndexCorrupted(format!(
+                "SQ8 quantizer shape mismatch: {} min_vals / {} scales for dimension {dimension}",
+                min_vals.len(),
+                scales.len()
+            )));
+        }
+        // A zero, negative, or non-finite scale cannot come from `train`
+        // (which floors the range at 255/epsilon or pins scale to 1.0) —
+        // reject rather than let `1.0 / scale` poison every distance.
+        if min_vals.iter().any(|v| !v.is_finite())
+            || scales.iter().any(|s| !s.is_finite() || *s <= 0.0)
+        {
+            return Err(crate::error::Error::IndexCorrupted(
+                "SQ8 quantizer contains non-finite or non-positive parameters".into(),
+            ));
+        }
+        let inv_scales: Vec<f32> = scales.iter().map(|&s| 1.0 / s).collect();
+        Ok(Self {
+            min_vals,
+            scales,
+            inv_scales,
+            dimension,
+        })
     }
 }
 

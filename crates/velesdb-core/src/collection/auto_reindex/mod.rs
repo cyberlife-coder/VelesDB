@@ -207,9 +207,12 @@ impl AutoReindexManager {
         dimension: usize,
     ) -> bool {
         // Check cooldown
-        if let Some(last) = *self.last_reindex_timestamp.read() {
-            let config = self.config.read();
-            if last.elapsed() < config.cooldown {
+        // Bound: the `if let` guard would stay alive while `config` is taken,
+        // nesting two locks that no declared rank orders.
+        let last_reindex = *self.last_reindex_timestamp.read();
+        if let Some(last) = last_reindex {
+            let cooldown = self.config.read().cooldown;
+            if last.elapsed() < cooldown {
                 return false;
             }
         }

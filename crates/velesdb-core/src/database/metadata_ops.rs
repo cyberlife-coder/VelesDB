@@ -38,7 +38,10 @@ impl Database {
     /// Returns `None` if the collection does not exist on disk.
     #[must_use]
     pub fn get_metadata_collection(&self, name: &str) -> Option<MetadataCollection> {
-        if let Some(c) = self.metadata_colls.read().get(name).cloned() {
+        // Bound before the `if let` — see `get_vector_collection`: the disk
+        // fallback takes `metadata_colls` for WRITE.
+        let cached = self.metadata_colls.read().get(name).cloned();
+        if let Some(c) = cached {
             return Some(c);
         }
         self.open_metadata_collection_from_disk(name)

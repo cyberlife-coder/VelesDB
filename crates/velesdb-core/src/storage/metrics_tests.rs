@@ -119,16 +119,19 @@ fn test_latency_stats_single_sample() {
     assert_eq!(stats.count, 1);
     assert_eq!(stats.min_us, 500);
     assert_eq!(stats.max_us, 500);
-    // PERF-001: single-sample edge case. percentile target = count*p/100 rounds
-    // down to 0, so bucket 0 immediately satisfies the cumulative check and the
-    // value is capped to value_for_bucket(0) = 1µs. Guards this approximation.
+    // Regression (#2105): nearest-rank with a minimum rank of 1 must land on
+    // the sample's own bucket. The old floor-based target rounded to 0, so
+    // bucket 0 satisfied the cumulative check immediately and a single 500µs
+    // resize was reported as 1µs — blinding the P99 monitoring exactly in the
+    // low-count windows where rare slow events live. 500µs falls in the log2
+    // bucket [256, 512), whose midpoint 384 is the reported approximation.
     assert_eq!(
-        stats.p50_us, 1,
-        "single-sample P50 collapses to bucket 0 (1µs)"
+        stats.p50_us, 384,
+        "single-sample P50 must land in the sample's bucket (midpoint 384µs)"
     );
     assert_eq!(
-        stats.p99_us, 1,
-        "single-sample P99 collapses to bucket 0 (1µs)"
+        stats.p99_us, 384,
+        "single-sample P99 must land in the sample's bucket (midpoint 384µs)"
     );
 }
 

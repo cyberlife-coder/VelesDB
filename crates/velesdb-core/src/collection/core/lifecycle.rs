@@ -139,8 +139,6 @@ impl Collection {
             payload_storage,
             index,
             text_index,
-            sq8_cache: Arc::new(RwLock::new(HashMap::new())),
-            binary_cache: Arc::new(RwLock::new(HashMap::new())),
             pq_cache: Arc::new(RwLock::new(HashMap::new())),
             pq_quantizer: Arc::new(RwLock::new(None)),
             pq_training_buffer: Arc::new(RwLock::new(VecDeque::new())),
@@ -452,6 +450,8 @@ impl Collection {
         let (index, rebuilt) = Self::rebuild_if_unverifiable(config, index, &wal_ids)?;
         #[cfg(feature = "persistence")]
         super::quantizer_restore::preinstall_persisted_rabitq(path, config.dimension, &index)?;
+        #[cfg(feature = "persistence")]
+        super::quantizer_restore::preinstall_persisted_sq8(path, config.dimension, &index)?;
         let changed =
             super::recovery::run_crash_recovery(config, vector_storage, &index, &wal_ids)?;
         if rebuilt || changed {

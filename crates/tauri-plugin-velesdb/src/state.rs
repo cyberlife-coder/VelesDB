@@ -81,8 +81,12 @@ impl StateInner {
     /// inner [`Arc<Database>`] and is dropped before the handle is returned, so
     /// no state lock is ever held across a core operation.
     fn db_handle(&self) -> Result<Arc<Database>> {
-        if let Some(db) = self.db.read().as_ref() {
-            return Ok(Arc::clone(db));
+        // Bound before the `if let`: inside the scrutinee the guard would live
+        // to the end of the expression, contradicting the scoping this doc
+        // comment promises — and `open()` below takes `db` for write.
+        let cached = self.db.read().as_ref().map(Arc::clone);
+        if let Some(db) = cached {
+            return Ok(db);
         }
         self.open()?;
         let db_guard = self.db.read();
@@ -101,7 +105,10 @@ impl StateInner {
     /// the database. Every later call takes the read lock just long enough to
     /// clone the existing [`Arc`].
     fn memory_handle(&self) -> Result<Arc<AgentMemory>> {
-        if let Some(existing) = self.memory.read().clone() {
+        // Bound for the same reason as `db_handle`: the `memory` write lock is
+        // taken further down this function.
+        let cached = self.memory.read().clone();
+        if let Some(existing) = cached {
             return Ok(existing);
         }
         let db = self.db_handle()?;

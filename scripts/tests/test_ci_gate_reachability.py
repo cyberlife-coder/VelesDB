@@ -135,6 +135,81 @@ def guard_invocations(text: str, script: str) -> "list[str]":
     return [line for line in GUARD_INVOCATION_RE.findall(text) if script in line]
 
 
+# A gate scoped to "the files this PR changed" resolves that list with
+# `git diff <base>..<head>`. On a pull request `actions/checkout` fetches only
+# the merge commit unless told otherwise, so the base commit is simply absent
+# and the diff errors out — inside `mapfile < <(...)`, where the failure is
+# invisible and the list comes back empty. The gate then reports "no changed
+# files to validate" and exits 0 on every pull request. That is the shape this
+# module exists to refuse: a guard that runs, reports success, and reads
+# nothing.
+BASE_SHA_DIFF_RE = re.compile(r"git diff [^\n|]*\$(?:\{)?BASE_SHA")
+CHECKOUT_RE = re.compile(r"uses:\s*actions/checkout@")
+FETCH_DEPTH_RE = re.compile(r"^\s*fetch-depth:\s*0\s*$", re.MULTILINE)
+
+
+BASE_REACHABLE_RE = re.compile(r"git cat-file -e \"\$BASE_SHA\^\{commit\}\"")
+
+
+def asserts_base_is_reachable(block: str) -> bool:
+    """Whether a job proves the base commit exists before diffing against it.
+
+    `fetch-depth: 0` is the fix; this is the alarm for every other way the
+    base can go missing (a force-push that orphans it, a rewritten base
+    branch). Without it the diff fails into an empty list and the step
+    reports "nothing changed".
+    """
+    return bool(BASE_REACHABLE_RE.search(block))
+
+
+def jobs_diffing_against_base(text: str) -> "set[str]":
+    """Jobs whose steps resolve a file list from a base-vs-head `git diff`."""
+    stripped = strip_comments(text)
+    return {
+        job
+        for job in job_names(stripped)
+        if BASE_SHA_DIFF_RE.search(job_block(stripped, job))
+    }
+
+
+MAPFILE_OPEN_RE = re.compile(r"^\s*mapfile -t \w+ < <\(\s*$")
+
+
+def guard_input_listings(block: str) -> "list[str]":
+    """The `git diff --name-only` lines that FEED a guard a list of paths.
+
+    Only these must exclude deletions: their paths are handed to a script
+    that opens them. A `git diff | grep -q` path FILTER must NOT exclude
+    deletions — removing a file is a change the filtered job still needs to
+    react to, so filtering deletions out there would make a deletion-only
+    pull request skip the job.
+    """
+    lines = block.split("\n")
+    listings, inside = [], False
+    for line in lines:
+        if MAPFILE_OPEN_RE.match(line):
+            inside = True
+            continue
+        if inside:
+            if line.strip().startswith(")"):
+                inside = False
+            elif "git diff --name-only" in line:
+                listings.append(line)
+    return listings
+
+
+def checkout_is_full_history(block: str) -> bool:
+    """Whether a job's `actions/checkout` asks for the full history.
+
+    `fetch-depth: 0` is the only value that guarantees the base commit is
+    present; any positive depth is a gamble on how far the branch has moved.
+    """
+    if not CHECKOUT_RE.search(block):
+        # No checkout at all: nothing to diff against either way.
+        return False
+    return bool(FETCH_DEPTH_RE.search(block))
+
+
 def load_guard_registry() -> dict:
     """``scripts/guards.json`` — the declared set of repository guards."""
     return json.loads(GUARDS_REGISTRY.read_text(encoding="utf-8"))
@@ -1013,6 +1088,153 @@ class GuardRegistryDisarmTests(unittest.TestCase):
             required_ci_jobs(),
             f"`{exempt}` is chain-exempt, so a guard parked there blocks nothing",
         )
+
+
+class DiffScopedGateReachabilityTests(unittest.TestCase):
+    """A diff-scoped gate needs the history its diff reads.
+
+    `lint` carried two of them — the SAFETY-template verifier and the
+    TODO/FIXME governance check — against a default depth-1 checkout, so both
+    validated zero files on every pull request while reporting success. The
+    three other jobs that diff against the base already asked for
+    `fetch-depth: 0` and even carry the comment explaining why, which is what
+    makes this a mechanical invariant rather than a matter of taste.
+    """
+
+    def setUp(self) -> None:
+        self.text = CI_WORKFLOW.read_text(encoding="utf-8")
+
+    def test_every_job_diffing_against_the_base_checks_out_full_history(self) -> None:
+        diffing = jobs_diffing_against_base(self.text)
+        self.assertTrue(
+            diffing,
+            "no job diffs against a base SHA any more — drop this suite or fix the parser",
+        )
+        shallow = sorted(
+            job
+            for job in diffing
+            if not checkout_is_full_history(job_block(strip_comments(self.text), job))
+        )
+        self.assertEqual(
+            shallow,
+            [],
+            f"job(s) resolving a changed-file list from `git diff $BASE_SHA` "
+            f"without `fetch-depth: 0`: {shallow}. On a pull request the base "
+            "commit is not in a depth-1 checkout, so the diff fails, the file "
+            "list comes back empty and the gate passes having read nothing. "
+            "Add `with: {fetch-depth: 0}` to that job's actions/checkout step.",
+        )
+
+    def test_the_lint_job_is_one_of_them(self) -> None:
+        # Pins the regression specifically: `lint` is where both diff-scoped
+        # guards in scripts/guards.json declare they run.
+        self.assertIn("lint", jobs_diffing_against_base(self.text))
+
+    def test_a_shallow_checkout_on_a_diffing_job_is_detected(self) -> None:
+        # RED-then-GREEN on the real file: removing the fetch-depth from
+        # `lint` must make the invariant fail, or the test proves nothing.
+        block = job_block(strip_comments(self.text), "lint")
+        self.assertTrue(checkout_is_full_history(block))
+        self.assertFalse(checkout_is_full_history(block.replace("fetch-depth: 0", "", 1)))
+
+    def test_every_diffing_job_refuses_an_unreachable_base(self) -> None:
+        # Belt and braces to fetch-depth: the depth fix makes the base
+        # present, this makes its ABSENCE loud instead of silent, for the
+        # failure modes fetch-depth cannot cover.
+        missing = sorted(
+            job
+            for job in jobs_diffing_against_base(self.text)
+            if not asserts_base_is_reachable(job_block(strip_comments(self.text), job))
+        )
+        self.assertEqual(
+            missing,
+            [],
+            f"job(s) diffing against a base they never prove is present: {missing}. "
+            "A missing base makes `git diff` fail into an empty file list, which "
+            "reads exactly like 'nothing changed'. Add the `git cat-file -e "
+            "\"$BASE_SHA^{commit}\"` check before the diff.",
+        )
+
+    def test_removing_the_reachability_check_is_detected(self) -> None:
+        # `lint` carries one check per diff-scoped gate, so the negative
+        # control has to remove EVERY occurrence — dropping just the first
+        # leaves the second matching and proves nothing.
+        block = job_block(strip_comments(self.text), "lint")
+        self.assertTrue(asserts_base_is_reachable(block))
+        self.assertFalse(
+            asserts_base_is_reachable(block.replace("git cat-file -e", "true #"))
+        )
+
+    def test_this_changes_own_suite_runs_in_the_required_job(self) -> None:
+        # Same reasoning as the mcp-doc-contract suites above: the verifier's
+        # self-test must run in `lint`, which `CI Success` reads, and not only
+        # in gate-contracts.yml, whose result blocks nothing.
+        self.assertIn(
+            "scripts.tests.test_verify_unsafe_safety_template",
+            job_block(self.text, "lint"),
+        )
+
+    def test_a_job_that_does_not_diff_is_not_required_to_be_deep(self) -> None:
+        # The invariant must stay scoped to gates that need the history:
+        # a synthetic job with a checkout and no base diff is not flagged.
+        synthetic = (
+            "jobs:\n"
+            "  shallow-ok:\n"
+            "    steps:\n"
+            "      - uses: actions/checkout@v7\n"
+            "      - run: cargo fmt --all -- --check\n"
+            "  ci-success:\n"
+            "    needs: [shallow-ok]\n"
+        )
+        self.assertEqual(jobs_diffing_against_base(synthetic), set())
+
+    def test_the_diff_gates_skip_deleted_paths(self) -> None:
+        # A rename or a removal leaves a path in `git diff --name-only` that
+        # is no longer on disk; the guards then warn per missing file. The
+        # file list must be filtered at the source instead.
+        checked = 0
+        for job in sorted(jobs_diffing_against_base(self.text)):
+            block = job_block(strip_comments(self.text), job)
+            for line in guard_input_listings(block):
+                checked += 1
+                with self.subTest(job=job, line=line.strip()):
+                    self.assertIn(
+                        "--diff-filter=d",
+                        line,
+                        f"{job}: a path list handed to a guard must exclude "
+                        "deletions (`--diff-filter=d`) — a removed path is still "
+                        "named by `--name-only` but is gone from disk, so the "
+                        "guard warns on a file it cannot open",
+                    )
+        self.assertTrue(checked, "no guard-input listing found — fix the parser")
+
+    def test_a_path_filter_must_keep_deletions(self) -> None:
+        # The mirror of the rule above, and the reason it is scoped to
+        # `mapfile` rather than to every base diff: `node-windows-changed`
+        # and `perf-path-changed` only `grep -q` the names to decide whether
+        # to run. Deleting a file under crates/velesdb-node/ is a change that
+        # job must still react to, so excluding deletions there would make a
+        # deletion-only PR skip it.
+        for job in ("node-windows-changed", "perf-path-changed"):
+            block = job_block(strip_comments(self.text), job)
+            with self.subTest(job=job):
+                self.assertEqual(
+                    guard_input_listings(block),
+                    [],
+                    f"{job} is a path filter, not a guard input",
+                )
+                filters = [
+                    line
+                    for line in block.split("\n")
+                    if BASE_SHA_DIFF_RE.search(line) and "grep -q" in line
+                ]
+                self.assertTrue(filters, f"{job} no longer greps a base diff")
+                for line in filters:
+                    self.assertNotIn(
+                        "--diff-filter=d",
+                        line,
+                        f"{job}: a path filter must SEE deletions",
+                    )
 
 
 if __name__ == "__main__":

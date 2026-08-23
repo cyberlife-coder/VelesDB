@@ -1,15 +1,11 @@
-//! Internal helpers for CRUD operations: quantization caching, secondary index
-//! updates, `DedupMap`, and `QuantizationGuards`.
+//! Internal helpers for CRUD operations: PQ quantization caching, secondary
+//! index updates, and `DedupMap`.
 
 use crate::collection::types::Collection;
 use crate::index::{JsonValue, SecondaryIndex};
 use crate::point::Point;
-use crate::quantization::{
-    BinaryQuantizedVector, PQVector, ProductQuantizer, QuantizedVector, StorageMode,
-};
+use crate::quantization::{PQVector, ProductQuantizer, StorageMode};
 use parking_lot::RwLockWriteGuard;
-#[cfg(feature = "persistence")]
-use rayon::prelude::*;
 use std::collections::HashMap;
 
 const PQ_TRAINING_SAMPLES: usize = 128;
@@ -20,37 +16,20 @@ const PQ_TRAINING_SAMPLES: usize = 128;
 /// and `write_deduped_vectors` to avoid redundant map construction (Issue #425).
 pub(super) type DedupMap = HashMap<u64, usize>;
 
-/// Write-lock guards for quantization caches, acquired once per batch.
-pub(super) struct QuantizationGuards<'a> {
-    pub(super) sq8: Option<RwLockWriteGuard<'a, HashMap<u64, QuantizedVector>>>,
-    pub(super) binary: Option<RwLockWriteGuard<'a, HashMap<u64, BinaryQuantizedVector>>>,
-    pub(super) pq: Option<RwLockWriteGuard<'a, HashMap<u64, PQVector>>>,
-}
+/// Write-lock guard over the PQ cache, acquired once per batch.
+///
+/// `ProductQuantization` is the only storage mode with per-upsert quantization
+/// work: its quantizer carries shared lazy-training state, so points are
+/// processed sequentially under one guard. (SQ8/Binary used to fill sibling
+/// caches here, but nothing ever read them — see `StorageMode`'s docs.)
+pub(super) type PqCacheGuard<'a> = RwLockWriteGuard<'a, HashMap<u64, PQVector>>;
 
-impl<'a> QuantizationGuards<'a> {
-    /// Acquires all quantization cache guards matching `mode`.
-    pub(super) fn acquire(collection: &'a Collection, mode: StorageMode) -> Self {
-        Self {
-            sq8: matches!(mode, StorageMode::SQ8).then(|| collection.storage.sq8_cache.write()),
-            binary: matches!(mode, StorageMode::Binary)
-                .then(|| collection.storage.binary_cache.write()),
-            pq: matches!(mode, StorageMode::ProductQuantization)
-                .then(|| collection.storage.pq_cache.write()),
-        }
-    }
-
-    /// Acquires only the PQ cache guard (for when SQ8/Binary were handled in parallel).
-    ///
-    /// Issue #486: After parallel quantization for SQ8/Binary, only PQ mode
-    /// still needs a guard for sequential processing.
-    pub(super) fn acquire_pq_only(collection: &'a Collection, mode: StorageMode) -> Self {
-        Self {
-            sq8: None,
-            binary: None,
-            pq: matches!(mode, StorageMode::ProductQuantization)
-                .then(|| collection.storage.pq_cache.write()),
-        }
-    }
+/// Acquires the PQ cache guard when `mode` needs it, `None` otherwise.
+pub(super) fn pq_cache_guard(
+    collection: &Collection,
+    mode: StorageMode,
+) -> Option<PqCacheGuard<'_>> {
+    matches!(mode, StorageMode::ProductQuantization).then(|| collection.storage.pq_cache.write())
 }
 
 fn auto_num_subspaces(dimension: usize) -> usize {
@@ -62,40 +41,11 @@ fn auto_num_subspaces(dimension: usize) -> usize {
 }
 
 impl Collection {
-    /// Caches a quantized representation of `point`'s vector according to `storage_mode`.
-    pub(crate) fn cache_quantized_vector(
-        &self,
-        point: &Point,
-        storage_mode: StorageMode,
-        sq8_cache: Option<&mut std::collections::HashMap<u64, QuantizedVector>>,
-        binary_cache: Option<&mut std::collections::HashMap<u64, BinaryQuantizedVector>>,
-        pq_cache: Option<&mut std::collections::HashMap<u64, PQVector>>,
-    ) {
-        match storage_mode {
-            StorageMode::SQ8 => {
-                if let Some(cache) = sq8_cache {
-                    let quantized = QuantizedVector::from_f32(&point.vector);
-                    cache.insert(point.id, quantized);
-                }
-            }
-            StorageMode::Binary => {
-                if let Some(cache) = binary_cache {
-                    let quantized = BinaryQuantizedVector::from_f32(&point.vector);
-                    cache.insert(point.id, quantized);
-                }
-            }
-            StorageMode::ProductQuantization => {
-                self.cache_pq_vector(point, pq_cache);
-            }
-            StorageMode::Full | StorageMode::RaBitQ => {}
-        }
-    }
-
-    /// Handles the Product Quantization arm of `cache_quantized_vector`.
+    /// Caches the PQ code for `point` (ProductQuantization mode only).
     ///
     /// Trains the quantizer on first `PQ_TRAINING_SAMPLES` points, then
     /// backfills and quantizes subsequent points.
-    fn cache_pq_vector(
+    pub(super) fn cache_pq_vector(
         &self,
         point: &Point,
         pq_cache: Option<&mut std::collections::HashMap<u64, PQVector>>,
@@ -220,43 +170,6 @@ impl Collection {
                     }
                 }
             }
-        }
-    }
-
-    /// Batch-quantizes SQ8 vectors in parallel and inserts into cache.
-    ///
-    /// Issue #486: `QuantizedVector::from_f32()` is a pure function (no shared
-    /// state), so the computation can run in parallel via rayon. Only the final
-    /// cache insertion requires the write lock, held briefly for a batch insert.
-    ///
-    /// Uses last-writer-wins dedup: for intra-batch duplicate IDs, only the
-    /// last occurrence's quantized vector is cached (matching the WAL dedup
-    /// semantics in `write_deduped_vectors`).
-    #[cfg(feature = "persistence")]
-    pub(super) fn batch_quantize_sq8_parallel(&self, points: &[Point]) {
-        let quantized: Vec<(u64, QuantizedVector)> = points
-            .par_iter()
-            .map(|p| (p.id, QuantizedVector::from_f32(&p.vector)))
-            .collect();
-        let mut cache = self.storage.sq8_cache.write();
-        for (id, qv) in quantized {
-            cache.insert(id, qv);
-        }
-    }
-
-    /// Batch-quantizes Binary vectors in parallel and inserts into cache.
-    ///
-    /// Issue #486: Same parallel strategy as SQ8 — `BinaryQuantizedVector::from_f32()`
-    /// is a pure function, parallelized via rayon.
-    #[cfg(feature = "persistence")]
-    pub(super) fn batch_quantize_binary_parallel(&self, points: &[Point]) {
-        let quantized: Vec<(u64, BinaryQuantizedVector)> = points
-            .par_iter()
-            .map(|p| (p.id, BinaryQuantizedVector::from_f32(&p.vector)))
-            .collect();
-        let mut cache = self.storage.binary_cache.write();
-        for (id, bqv) in quantized {
-            cache.insert(id, bqv);
         }
     }
 
