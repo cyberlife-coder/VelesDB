@@ -52,13 +52,22 @@ pub fn fast_rsqrt(x: f32) -> f32 {
 #[inline]
 #[must_use]
 pub(crate) fn cosine_finish_fast(dot: f32, norm_a_sq: f32, norm_b_sq: f32) -> f32 {
-    // Guard: both norms must be significant for meaningful cosine
-    let denom_sq = norm_a_sq * norm_b_sq;
-    if denom_sq < f32::EPSILON * f32::EPSILON {
+    // Zero-norm guard on the operands, matching `cosine_scalar`. Guarding the
+    // product instead would zero out legitimate small-magnitude vectors: with
+    // ‖a‖ = ‖b‖ ≈ 3.4e-4 the product already dips under EPSILON² while the
+    // true cosine is well defined (and the scalar fallback returns it).
+    if norm_a_sq == 0.0 || norm_b_sq == 0.0 {
         return 0.0;
     }
-    // 1 sqrt + 1 div instead of 2 sqrt + 1 mul + 1 div (~3 cycles saved)
-    (dot / denom_sq.sqrt()).clamp(-1.0, 1.0)
+    let denom_sq = norm_a_sq * norm_b_sq;
+    if denom_sq > f32::MIN_POSITIVE {
+        // 1 sqrt + 1 div instead of 2 sqrt + 1 mul + 1 div (~3 cycles saved)
+        (dot / denom_sq.sqrt()).clamp(-1.0, 1.0)
+    } else {
+        // The product underflowed (or is subnormal): fall back to the exact
+        // two-sqrt form, which keeps the denominator representable.
+        (dot / (norm_a_sq.sqrt() * norm_b_sq.sqrt())).clamp(-1.0, 1.0)
+    }
 }
 
 /// Fast cosine similarity using Newton-Raphson rsqrt.

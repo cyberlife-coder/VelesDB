@@ -159,6 +159,19 @@ impl DistanceMetric {
         }
     }
 
+    /// Returns this metric's score polarity for fusion
+    /// ([`ScoreDirection`](crate::fusion::ScoreDirection)).
+    ///
+    /// Derived from [`Self::higher_is_better`] so the two can never drift.
+    #[must_use]
+    pub const fn score_direction(&self) -> crate::fusion::ScoreDirection {
+        if self.higher_is_better() {
+            crate::fusion::ScoreDirection::HigherIsBetter
+        } else {
+            crate::fusion::ScoreDirection::LowerIsBetter
+        }
+    }
+
     /// Sorts search results by distance/similarity according to the metric.
     ///
     /// - **Similarity metrics** (`Cosine`, `DotProduct`, `Jaccard`): sorts descending (higher = better)

@@ -128,10 +128,10 @@ impl LockFreeHistogram {
         self.sum.load(Ordering::Relaxed) / count
     }
 
-    /// Returns an approximate percentile value (0-100).
+    /// Returns an approximate percentile value (0-100), nearest-rank method.
     ///
-    /// Uses linear interpolation within buckets for accuracy.
-    /// Result is capped by the actual max value recorded.
+    /// Resolution is the log2 bucket midpoint, capped by the actual max
+    /// value recorded.
     #[must_use]
     pub fn percentile(&self, p: u8) -> u64 {
         let total = self.count.load(Ordering::Relaxed);
@@ -141,8 +141,13 @@ impl LockFreeHistogram {
 
         let max_val = self.max();
 
+        // Nearest-rank: the smallest sample whose cumulative count reaches
+        // ceil(total * p / 100), never below rank 1. A floor here (the old
+        // formula) yields target 0 whenever total * p < 100, which made the
+        // very first bucket "reach" it and reported 1µs for every low-count
+        // window — exactly where rare slow events live.
         #[allow(clippy::cast_possible_truncation)]
-        let target = (u128::from(total) * u128::from(p.min(100)) / 100) as u64;
+        let target = ((u128::from(total) * u128::from(p.min(100))).div_ceil(100) as u64).max(1);
         let mut cumulative = 0u64;
 
         for (i, bucket) in self.buckets.iter().enumerate() {

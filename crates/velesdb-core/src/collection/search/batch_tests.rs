@@ -185,3 +185,72 @@ fn test_batch_with_filters_respects_per_call_k() {
         "k=5 should return more results than k=2"
     );
 }
+
+// -----------------------------------------------------------------------
+// Regression (#2102): multi-query fusion on a distance metric must rank
+// the NEAREST documents first. Pre-fix, score-level strategies fused raw
+// Euclidean distances as if higher were better and returned the farthest.
+// -----------------------------------------------------------------------
+
+fn setup_euclidean_collection() -> (tempfile::TempDir, Collection) {
+    use crate::distance::DistanceMetric;
+    let dir = tempfile::tempdir().expect("test: tempdir");
+    let col = Collection::create(
+        std::path::PathBuf::from(dir.path()),
+        2,
+        DistanceMetric::Euclidean,
+    )
+    .expect("test: collection");
+    col.upsert(vec![
+        make_point_with_payload(1, vec![0.1, 0.0], serde_json::json!({})),
+        make_point_with_payload(2, vec![5.0, 0.0], serde_json::json!({})),
+        make_point_with_payload(3, vec![9.0, 0.0], serde_json::json!({})),
+    ])
+    .expect("test: upsert");
+    (dir, col)
+}
+
+#[test]
+fn test_multi_query_euclidean_maximum_ranks_nearest_first() {
+    let (_dir, col) = setup_euclidean_collection();
+    let q1: Vec<f32> = vec![0.0, 0.0];
+    let q2: Vec<f32> = vec![0.2, 0.0];
+    let queries: Vec<&[f32]> = vec![&q1, &q2];
+
+    let results = col
+        .multi_query_search(&queries, 3, crate::fusion::FusionStrategy::Maximum, None)
+        .expect("test: multi query");
+
+    let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+    assert_eq!(
+        ids,
+        vec![1, 2, 3],
+        "nearest-first order for Euclidean fusion, got scores {:?}",
+        results.iter().map(|r| r.score).collect::<Vec<_>>()
+    );
+    // "Best" per doc across queries is its SMALLEST distance, in metric units.
+    assert!(
+        (results[0].score - 0.1).abs() < 1e-5,
+        "doc1 best distance is 0.1 from both queries, got {}",
+        results[0].score
+    );
+}
+
+#[test]
+fn test_multi_query_euclidean_average_ranks_nearest_first() {
+    let (_dir, col) = setup_euclidean_collection();
+    let q1: Vec<f32> = vec![0.0, 0.0];
+    let queries: Vec<&[f32]> = vec![&q1];
+
+    let results = col
+        .multi_query_search(&queries, 3, crate::fusion::FusionStrategy::Average, None)
+        .expect("test: multi query");
+
+    let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+    assert_eq!(ids, vec![1, 2, 3], "ascending average distance");
+    assert!(
+        results.windows(2).all(|w| w[0].score <= w[1].score),
+        "scores must ascend in metric units: {:?}",
+        results.iter().map(|r| r.score).collect::<Vec<_>>()
+    );
+}

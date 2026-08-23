@@ -554,8 +554,11 @@ impl Collection {
     ///
     /// # SecDev
     ///
-    /// All cosine scores are clamped to `[-1.0, 1.0]` to prevent silent NaN propagation
-    /// from zero-norm vectors.
+    /// A NaN score (corrupt or NaN-bearing stored vector) is mapped to the
+    /// metric's worst key so it can never outrank a real result. Scores are
+    /// otherwise reported verbatim: Euclidean/Hamming distances and raw dot
+    /// products legitimately exceed 1, and cosine is already clamped inside
+    /// `DistanceMetric::calculate`.
     pub(crate) fn scan_and_score_by_vector(
         &self,
         metadata_filter: &crate::filter::Filter,
@@ -606,11 +609,22 @@ impl Collection {
             );
         }
 
+        // Regression (#2101): this used to clamp every metric into [-1, 1],
+        // which collapsed all Euclidean/Hamming distances > 1 and all raw dot
+        // products > 1 into an artificial tie at 1.0 (arbitrary top-k), while
+        // not even removing NaN — clamp() propagates it. Only NaN needs
+        // guarding, with the metric-appropriate worst key (same convention as
+        // `similarity_scores_for_field`).
+        let worst = if higher_is_better {
+            f32::NEG_INFINITY
+        } else {
+            f32::INFINITY
+        };
         let mut topk = super::bounded_top_k::BoundedTopK::new(limit, higher_is_better);
         for mut r in scan.results {
             // Exact distance computation using the stored vector.
-            // Clamp is mandatory (SecDev) to guard against NaN from zero-norm vectors.
-            r.score = metric.calculate(&r.point.vector, query).clamp(-1.0, 1.0);
+            let raw = metric.calculate(&r.point.vector, query);
+            r.score = if raw.is_nan() { worst } else { raw };
             topk.offer(r);
         }
 
