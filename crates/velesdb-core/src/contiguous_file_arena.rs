@@ -118,49 +118,80 @@ unsafe impl Send for FileArena {}
 // SAFETY: Concurrent shared references to an arena cannot mutate it.
 unsafe impl Sync for FileArena {}
 
+/// What an opening arena does with the bytes the file already holds.
+///
+/// A named choice rather than a `bool` parameter, because the two callers read
+/// as opposites at the call site (`create` discards, `open` keeps) and the
+/// distinction decides whether the arena starts zeroed or starts from disk.
+#[derive(Clone, Copy)]
+enum ExistingBytes {
+    /// Empty the file first, so the arena starts zero-filled.
+    Discard,
+    /// The file's contents *are* the arena; only ever grow it.
+    Keep,
+}
+
 impl FileArena {
-    /// Creates (or truncates) `path` and maps `byte_len` bytes of vector data.
+    /// Creates `path` if absent and maps `byte_len` bytes of vector data,
+    /// discarding whatever the file held.
     ///
     /// The file is sized to `DATA_OFFSET + byte_len`. A freshly extended file
     /// reads as zeros, which is the same guarantee `alloc_zeroed` gives the
     /// anonymous backing — `insert_at` relies on it when it leaves gaps.
     ///
+    /// Note what this does **not** do: pass `truncate(true)` to `OpenOptions`.
+    /// That would empty the file at `open` time, which is before the exclusive
+    /// lock is taken, so a call destined to be refused would already have
+    /// destroyed the bytes another arena was mapping — and left that arena's
+    /// mapping addressing pages past a shrunken end of file, where a read
+    /// raises `SIGBUS`. The lock exists to prevent exactly that, so nothing
+    /// that alters the file may happen before it. Discarding is therefore a
+    /// [`ExistingBytes::Discard`] request carried through to
+    /// [`size_locked_file`](Self::size_locked_file), which runs under the lock.
+    ///
     /// # Errors
     ///
-    /// Returns any I/O error from creating, sizing, or mapping the file.
+    /// Returns any I/O error from creating, sizing, or mapping the file, and
+    /// [`io::ErrorKind::WouldBlock`] if another holder has the arena.
     pub(crate) fn create(path: &Path, byte_len: usize) -> io::Result<Self> {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
-            .truncate(true)
+            // Explicitly *not* at open time — see this function's doc. The
+            // discard happens under the lock instead.
+            .truncate(false)
             .open(path)?;
-        Self::from_file(file, path.to_path_buf(), byte_len)
+        Self::from_file(file, path.to_path_buf(), byte_len, ExistingBytes::Discard)
     }
 
     /// Maps an existing file whose data region already holds vector bytes.
     ///
-    /// Unlike [`create`](Self::create) this never truncates: the contents are
+    /// Unlike [`create`](Self::create) this never discards: the contents are
     /// the arena. The file is only ever grown, to `DATA_OFFSET + byte_len`.
     ///
     /// # Errors
     ///
-    /// Returns any I/O error from opening, sizing, or mapping the file.
+    /// Returns any I/O error from opening, sizing, or mapping the file, and
+    /// [`io::ErrorKind::WouldBlock`] if another holder has the arena.
     pub(crate) fn open(path: &Path, byte_len: usize) -> io::Result<Self> {
         let file = OpenOptions::new().read(true).write(true).open(path)?;
-        Self::from_file(file, path.to_path_buf(), byte_len)
+        Self::from_file(file, path.to_path_buf(), byte_len, ExistingBytes::Keep)
     }
 
-    /// Sizes `file` to hold `byte_len` data bytes and maps the whole thing.
+    /// Locks `file`, sizes it to hold `byte_len` data bytes, and maps it.
     ///
-    /// Locks before mapping: a second holder must be refused while the bytes
-    /// are still unmapped, not after two aliases already exist.
-    fn from_file(file: File, path: PathBuf, byte_len: usize) -> io::Result<Self> {
+    /// The lock comes first, and every step that can alter the file follows
+    /// it. A refused arena must leave the file exactly as it found it, because
+    /// the holder it was refused in favour of has it mapped.
+    fn from_file(
+        file: File,
+        path: PathBuf,
+        byte_len: usize,
+        existing: ExistingBytes,
+    ) -> io::Result<Self> {
         Self::lock_exclusive(&file, &path)?;
-        let total = Self::total_len(byte_len)?;
-        if file.metadata()?.len() < total as u64 {
-            file.set_len(total as u64)?;
-        }
+        let total = Self::size_locked_file(&file, byte_len, existing)?;
         let mut map = Self::map(&file, total)?;
         let data = Self::derive_data_ptr(&mut map)?;
         Ok(Self {
@@ -169,6 +200,34 @@ impl FileArena {
             path,
             data,
         })
+    }
+
+    /// Brings an already-locked file to `DATA_OFFSET + byte_len` bytes.
+    ///
+    /// Returns that total so the caller maps exactly what was sized.
+    ///
+    /// # Errors
+    ///
+    /// Returns any I/O error from reading the file's length or resizing it.
+    fn size_locked_file(
+        file: &File,
+        byte_len: usize,
+        existing: ExistingBytes,
+    ) -> io::Result<usize> {
+        let total = Self::total_len(byte_len)?;
+        // The single `usize -> u64` conversion this type needs: every internal
+        // length is a `usize`, and only the file API speaks `u64`.
+        let total_len = total as u64;
+        if matches!(existing, ExistingBytes::Discard) {
+            // Emptying the file first is what makes the grow below hand back
+            // zeros rather than stale vectors. Safe here and nowhere earlier:
+            // the lock is held, so no other arena has these bytes mapped.
+            file.set_len(0)?;
+        }
+        if file.metadata()?.len() < total_len {
+            file.set_len(total_len)?;
+        }
+        Ok(total)
     }
 
     /// Claims the file for this arena alone.
@@ -298,7 +357,7 @@ impl FileArena {
         if self.map.len() >= total {
             return Ok(());
         }
-        self.file.set_len(total as u64)?;
+        Self::size_locked_file(&self.file, byte_len, ExistingBytes::Keep)?;
         let mut fresh = Self::map(&self.file, total)?;
         let data = Self::derive_data_ptr(&mut fresh)?;
         // The pointer moves first: it already addresses `fresh`, whose pages

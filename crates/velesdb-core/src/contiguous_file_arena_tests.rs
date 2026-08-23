@@ -279,3 +279,67 @@ fn a_second_arena_over_the_same_file_is_refused() {
     drop(first);
     drop(ContiguousVectors::new_file_backed(&path, 8, 16).expect("reopen after release"));
 }
+
+/// A refused second arena must not have already destroyed the first's bytes.
+///
+/// The hazard is ordering, not aliasing: `create` used to pass
+/// `truncate(true)` to `OpenOptions`, which empties the file at open time —
+/// *before* the exclusive lock is taken. A call destined to be refused had
+/// therefore already discarded the bytes the winning arena was mapping, and
+/// that arena's mapping then addressed pages past a shrunken end of file,
+/// where a read raises `SIGBUS`. The lock existed precisely to stop a second
+/// holder touching these bytes, and the truncate flag walked around it.
+///
+/// This test failed with `signal: 7, SIGBUS` before the fix, which is why it
+/// asserts on the *first* arena rather than on the refusal alone: refusing
+/// correctly while having already destroyed the file is the bug.
+#[test]
+fn a_refused_second_arena_leaves_the_first_intact() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("trunc.arena");
+    let dimension = 4;
+    let mut first = ContiguousVectors::new_file_backed(&path, dimension, 16).expect("first arena");
+    let written = fill(&mut first, 8, dimension);
+
+    let err = ContiguousVectors::new_file_backed(&path, dimension, 16)
+        .expect_err("a second mapping of the same file must be refused");
+    assert!(
+        matches!(err, crate::error::Error::DatabaseLocked(_)),
+        "expected a locked-resource error, got: {err:?}"
+    );
+
+    // Reading through the surviving mapping is the assertion: if the refused
+    // call had resized the file, this faults instead of comparing.
+    assert_contents(&first, &written);
+}
+
+/// Creating over a stale file still yields a zeroed arena.
+///
+/// Moving the discard out of `OpenOptions` and under the lock must not lose
+/// the guarantee it provided: `create` starts from zeros, never from whatever
+/// a previous, larger arena left behind.
+#[test]
+fn creating_over_an_existing_file_discards_its_contents() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("stale.arena");
+    let dimension = 4;
+
+    {
+        let mut old = ContiguousVectors::new_file_backed(&path, dimension, 64).expect("first");
+        fill(&mut old, 64, dimension);
+        old.flush_backing().expect("flush");
+    }
+
+    let mut fresh = ContiguousVectors::new_file_backed(&path, dimension, 16).expect("recreate");
+    fresh
+        .insert_at(8, &vector(dimension, 8))
+        .expect("insert_at");
+
+    for gap in [0_usize, 7] {
+        assert_eq!(
+            fresh.get(gap).expect("gap slot present"),
+            vec![0.0_f32; dimension].as_slice(),
+            "slot {gap} must be zeroed, not carried over from the old arena"
+        );
+    }
+}
