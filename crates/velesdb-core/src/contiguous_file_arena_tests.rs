@@ -195,3 +195,60 @@ fn reorder_moves_a_mapped_arena_onto_the_heap() {
     // wrong backing would fault or corrupt the allocator under Miri/ASan.
     drop(storage);
 }
+
+/// The mapped data pointer is f32-aligned — a soundness invariant, not a
+/// preference.
+///
+/// `ContiguousVectors` hands out `&[f32]` via `slice::from_raw_parts`, whose
+/// contract requires alignment. A misaligned arena would be undefined
+/// behaviour at the first `get`, not merely slow, so this is pinned rather
+/// than left to the arithmetic in `DATA_OFFSET`.
+#[test]
+fn mapped_data_pointer_is_aligned_for_f32_slices() {
+    let dir = tempdir().expect("tempdir");
+    let dimension = 3; // odd, so a stride bug cannot hide behind a power of two
+    let mut storage =
+        ContiguousVectors::new_file_backed(&dir.path().join("al.arena"), dimension, 16)
+            .expect("file arena");
+    fill(&mut storage, 40, dimension); // forces a re-map partway through
+
+    let addr = storage.as_flat_slice().as_ptr() as usize;
+    assert_eq!(
+        addr % std::mem::align_of::<f32>(),
+        0,
+        "data pointer {addr:#x} must satisfy from_raw_parts' alignment contract"
+    );
+    assert_eq!(
+        addr % DATA_OFFSET,
+        0,
+        "data region should start on the page boundary DATA_OFFSET promises"
+    );
+}
+
+/// An arena file is native-endian, so a round-trip through it is only
+/// meaningful on one machine.
+///
+/// Pins the constraint the module documents: the bytes are the arena, not a
+/// converted interchange form. On a little-endian target the mapped bytes
+/// therefore match `f32::to_le_bytes`; the assertion is written so it states
+/// what it depends on rather than silently assuming it.
+#[test]
+#[cfg(target_endian = "little")]
+fn arena_bytes_are_the_raw_native_representation() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("e.arena");
+    let dimension = 2;
+    let mut storage = ContiguousVectors::new_file_backed(&path, dimension, 16).expect("file arena");
+    storage.push(&[1.5_f32, -2.25]).expect("push");
+    storage.flush_backing().expect("flush");
+
+    let raw = std::fs::read(&path).expect("read arena file");
+    let data = &raw[DATA_OFFSET..DATA_OFFSET + 8];
+    let mut expected = Vec::new();
+    expected.extend_from_slice(&1.5_f32.to_le_bytes());
+    expected.extend_from_slice(&(-2.25_f32).to_le_bytes());
+    assert_eq!(
+        data, expected,
+        "the data region is the f32 values themselves, unconverted"
+    );
+}

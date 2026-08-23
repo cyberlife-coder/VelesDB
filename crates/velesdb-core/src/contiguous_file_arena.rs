@@ -22,6 +22,19 @@
 //! extending the file leaves the existing pages in place, where the heap path
 //! has to `memcpy` the whole arena into a bigger block.
 //!
+//! # Byte order
+//!
+//! The mapped bytes are native-endian f32: the arena *is* the file, so no
+//! conversion happens on either side. That makes an arena file
+//! self-consistent on any target but **not portable between targets of
+//! different endianness** — it is an index-local cache, not an interchange
+//! format, and must be rebuilt rather than copied across such a boundary.
+//!
+//! Worth stating because the neighbouring `{basename}.vectors` format does
+//! the opposite: it converts explicitly (`to_le_bytes`/`from_le_bytes`), so it
+//! *is* portable. Anything that later maps that file directly inherits this
+//! constraint and must gate on `target_endian`.
+//!
 //! # Availability
 //!
 //! `persistence`-only. Without it (WASM, `--no-default-features`) there is no
@@ -40,9 +53,16 @@ use std::ptr::NonNull;
 /// satisfies the arena's 64-byte cache-line preference. The header itself
 /// occupies the first bytes of that page; the rest is reserved padding.
 ///
-/// Note this is a *layout* constant, not an alignment requirement: every SIMD
-/// kernel in this crate loads unaligned (`loadu`), so a misaligned arena would
-/// be correct but slower. The padding buys cache-line behaviour, not safety.
+/// A whole page is deliberate overkill, and the reason is soundness rather
+/// than speed. [`ContiguousVectors`] hands out `&[f32]` built with
+/// `slice::from_raw_parts`, whose contract requires the pointer to be
+/// *properly aligned* — a misaligned arena would be undefined behaviour at the
+/// first `get`, long before any SIMD ran. (The SIMD kernels themselves all
+/// load unaligned, so they would not have been the ones to complain.) Starting
+/// the data region on a page boundary keeps that requirement satisfied by
+/// construction instead of by arithmetic that a later edit could break.
+///
+/// [`ContiguousVectors`]: crate::perf_optimizations::ContiguousVectors
 pub(crate) const DATA_OFFSET: usize = 4096;
 
 /// A file mapping that owns the bytes behind a [`ContiguousVectors`] buffer.
@@ -148,12 +168,13 @@ impl FileArena {
     /// Returns [`io::ErrorKind::InvalidData`] if the mapping is somehow
     /// shorter than the header, which would mean the file was truncated
     /// underneath us.
-    // Reason: no structural fix exists — the cast is the point of the
-    // function. The alignment it warns about is *proven* here rather than
-    // assumed: an mmap base is page-aligned by the kernel and `DATA_OFFSET`
-    // is a whole page, so the result is 4096-byte aligned, far beyond f32's
-    // 4. (The arena would be sound even misaligned: every SIMD kernel in this
-    // crate loads unaligned.)
+    // Reason: no structural fix exists — producing this pointer is the whole
+    // point of the function. The alignment is *proven* rather than assumed: an
+    // mmap base is page-aligned by the kernel and `DATA_OFFSET` is a whole
+    // page, so the result is 4096-byte aligned against f32's requirement of 4.
+    // That proof is load-bearing, not decorative: the slices this pointer
+    // feeds are built with `from_raw_parts`, which requires alignment for
+    // soundness.
     #[allow(clippy::cast_ptr_alignment)]
     pub(crate) fn data_ptr(&mut self) -> io::Result<NonNull<f32>> {
         if self.map.len() < DATA_OFFSET {
