@@ -65,7 +65,8 @@ use std::ptr::NonNull;
 /// [`ContiguousVectors`]: crate::perf_optimizations::ContiguousVectors
 pub(crate) const DATA_OFFSET: usize = 4096;
 
-/// A file mapping that owns the bytes behind a [`ContiguousVectors`] buffer.
+/// A file mapping that owns the bytes behind a
+/// [`ContiguousVectors`](crate::perf_optimizations::ContiguousVectors) buffer.
 ///
 /// # Invariants
 ///
@@ -277,6 +278,16 @@ impl FileArena {
     /// any step leaves the existing mapping — and therefore every live pointer
     /// into it — untouched. Growing never copies: the pages already written
     /// stay where they are.
+    ///
+    /// Extending the file while the old mapping is still live is the ordering
+    /// [`MmapStorage::ensure_capacity`] already uses for the same operation,
+    /// so this is the repository's established pattern rather than a new one.
+    /// Worth knowing before changing it: no CI job runs this crate's tests on
+    /// Windows — the compatibility matrix only `cargo check`s there — so the
+    /// ordering is held in common with the primary storage engine on purpose,
+    /// not validated independently here.
+    ///
+    /// [`MmapStorage::ensure_capacity`]: crate::storage::MmapStorage
     ///
     /// # Errors
     ///
