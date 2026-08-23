@@ -252,3 +252,28 @@ fn arena_bytes_are_the_raw_native_representation() {
         "the data region is the f32 values themselves, unconverted"
     );
 }
+
+/// A second arena over the same file is refused.
+///
+/// This is the invariant the `unsafe impl Send`/`Sync` on `ContiguousVectors`
+/// depend on. A heap arena is unique because the allocator says so; a path is
+/// not, and two mappings of one file are two `&mut [f32]` aliases of the same
+/// bytes. Enforcing it beats documenting it, so the second open fails.
+#[test]
+fn a_second_arena_over_the_same_file_is_refused() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("excl.arena");
+    let first = ContiguousVectors::new_file_backed(&path, 8, 16).expect("first arena");
+
+    let err = ContiguousVectors::new_file_backed(&path, 8, 16)
+        .expect_err("a second mapping of the same file must be refused");
+    assert!(
+        err.to_string().contains("already mapped"),
+        "error should explain the aliasing hazard, got: {err}"
+    );
+
+    // Releasing the first frees the file for a later holder — the lock is
+    // scoped to the arena's life, not to the process.
+    drop(first);
+    drop(ContiguousVectors::new_file_backed(&path, 8, 16).expect("reopen after release"));
+}

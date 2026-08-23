@@ -74,6 +74,14 @@ pub(crate) const DATA_OFFSET: usize = 4096;
 ///   inline in this struct, so moving a `FileArena` does **not** move the
 ///   bytes. That is what makes it sound for `ContiguousVectors` to hold a
 ///   `NonNull` into the mapping while also owning the `FileArena`.
+/// - **This process holds an exclusive advisory lock on `file`, and no second
+///   `FileArena` can map the same path.** This one is not a nicety: an
+///   anonymous allocation is unique because the allocator says so, but a path
+///   is not, and two arenas over one file would be two `&mut [f32]` aliases of
+///   the same bytes — undefined behaviour that `ContiguousVectors`'
+///   `unsafe impl Send`/`Sync` would then carry across threads. The lock is
+///   what makes the uniqueness those impls assume actually true, so it is
+///   taken before the mapping and released only when `file` closes.
 /// - `path` is kept for diagnostics and for reopening after a grow.
 pub(crate) struct FileArena {
     map: MmapMut,
@@ -115,13 +123,40 @@ impl FileArena {
     }
 
     /// Sizes `file` to hold `byte_len` data bytes and maps the whole thing.
+    ///
+    /// Locks before mapping: a second holder must be refused while the bytes
+    /// are still unmapped, not after two aliases already exist.
     fn from_file(file: File, path: PathBuf, byte_len: usize) -> io::Result<Self> {
+        Self::lock_exclusive(&file, &path)?;
         let total = Self::total_len(byte_len)?;
         if file.metadata()?.len() < total {
             file.set_len(total)?;
         }
         let map = Self::map(&file, total)?;
         Ok(Self { map, file, path })
+    }
+
+    /// Claims the file for this arena alone.
+    ///
+    /// `flock` associates the lock with the open file description, so a second
+    /// `File` opened on the same path — in this process or another — is
+    /// refused rather than silently granted a second mapping.
+    ///
+    /// # Errors
+    ///
+    /// [`io::ErrorKind::WouldBlock`], naming the path, when another holder has
+    /// it. Callers surface that as a locked-resource error, not a retry.
+    fn lock_exclusive(file: &File, path: &Path) -> io::Result<()> {
+        fs2::FileExt::try_lock_exclusive(file).map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::WouldBlock,
+                format!(
+                    "vector arena {} is already mapped by another holder; \
+                     mapping it twice would alias the same bytes mutably ({e})",
+                    path.display()
+                ),
+            )
+        })
     }
 
     /// `DATA_OFFSET + byte_len`, refusing an overflowing request.

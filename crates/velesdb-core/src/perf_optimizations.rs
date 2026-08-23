@@ -94,14 +94,22 @@ impl fmt::Debug for ArenaBacking {
     }
 }
 
-// SAFETY: `ContiguousVectors` is `Send` because it owns its allocation.
-// - Condition 1: The backing buffer is uniquely owned by the struct.
+// SAFETY: `ContiguousVectors` is `Send` because it owns its buffer outright.
+// - Condition 1: The backing buffer is uniquely owned by the struct. For
+//   `ArenaBacking::Heap` the allocator establishes that. For `FileMapped` a
+//   path is NOT unique on its own, so `FileArena` takes an exclusive advisory
+//   lock before mapping and holds it for the mapping's whole life — that lock
+//   is what makes this condition true rather than hoped for.
 // - Condition 2: Mutation requires `&mut self` or lock-guarded interior access.
+// - Condition 3: `MmapMut` is itself `Send`, so the mapped variant adds no
+//   thread-affinity of its own.
 // SAFETY: Moving ownership of this container between threads is sound.
 unsafe impl Send for ContiguousVectors {}
 // SAFETY: `ContiguousVectors` is `Sync` because shared access is read-only.
 // - Condition 1: All writes happen through methods requiring mutable or exclusive lock access.
 // - Condition 2: Returned shared slices borrow immutably and cannot mutate internal state.
+// - Condition 3: no second mapping of the same bytes can exist to write them
+//   behind those shared references — see Condition 1 of the `Send` impl.
 // SAFETY: Concurrent shared references cannot violate aliasing rules.
 unsafe impl Sync for ContiguousVectors {}
 
