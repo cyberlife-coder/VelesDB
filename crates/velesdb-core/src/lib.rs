@@ -99,6 +99,12 @@ mod config_tests;
 mod config_validation;
 /// Cross-implementation conformance harness (frozen golden reference vectors).
 pub mod conformance;
+/// File-backed storage for the vector arena (`persistence` only).
+#[cfg(feature = "persistence")]
+pub mod contiguous_file_arena;
+#[cfg(all(test, feature = "persistence"))]
+#[path = "contiguous_file_arena_tests.rs"]
+mod contiguous_file_arena_tests;
 pub mod contiguous_ops;
 mod contiguous_resize;
 pub mod distance;

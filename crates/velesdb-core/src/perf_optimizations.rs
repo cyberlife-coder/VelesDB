@@ -52,6 +52,46 @@ pub struct ContiguousVectors {
     pub(crate) count: usize,
     /// Allocated capacity (number of vectors)
     pub(crate) capacity: usize,
+    /// Where `data` came from, and therefore how it must be released.
+    pub(crate) backing: ArenaBacking,
+}
+
+/// How a [`ContiguousVectors`] buffer was obtained.
+///
+/// The variant decides who frees `data` — which is why it lives next to the
+/// pointer rather than being inferred at each site. Getting this wrong means
+/// calling `dealloc` on a mapping, so the enum is the invariant.
+pub(crate) enum ArenaBacking {
+    /// `alloc_zeroed` on the arena's [`Layout`], released with `dealloc`.
+    ///
+    /// The default, and the only backing available without `persistence`.
+    Heap,
+    /// A file mapping that owns the bytes; released by dropping the mapping.
+    ///
+    /// Chosen when the index wants its f32 arena evictable rather than
+    /// resident — see [`crate::contiguous_file_arena`] for why (#2112).
+    #[cfg(feature = "persistence")]
+    FileMapped(Box<crate::contiguous_file_arena::FileArena>),
+}
+
+impl ArenaBacking {
+    /// Whether this buffer must be released with `dealloc`.
+    ///
+    /// The single place that answers "is this pointer the allocator's?", so a
+    /// new variant cannot silently fall into the deallocating branch.
+    pub(crate) const fn is_heap(&self) -> bool {
+        matches!(*self, Self::Heap)
+    }
+}
+
+impl fmt::Debug for ArenaBacking {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Self::Heap => f.write_str("Heap"),
+            #[cfg(feature = "persistence")]
+            Self::FileMapped(ref arena) => write!(f, "FileMapped({:?})", arena.path()),
+        }
+    }
 }
 
 // SAFETY: `ContiguousVectors` is `Send` because it owns its allocation.
@@ -71,6 +111,7 @@ impl fmt::Debug for ContiguousVectors {
             .field("dimension", &self.dimension)
             .field("count", &self.count)
             .field("capacity", &self.capacity)
+            .field("backing", &self.backing)
             .finish_non_exhaustive()
     }
 }
@@ -125,7 +166,115 @@ impl ContiguousVectors {
             dimension,
             count: 0,
             capacity,
+            backing: ArenaBacking::Heap,
         })
+    }
+
+    /// Creates a `ContiguousVectors` whose buffer is a file mapping.
+    ///
+    /// The arena behaves identically to a heap-backed one — same layout, same
+    /// accessors, same zero-fill guarantee — but its pages are evictable, so
+    /// they do not count against the resident set when nothing is touching
+    /// them. That is what lets a quantized index hold `codes + graph`
+    /// resident and page the f32 in only to re-rank (#2112).
+    ///
+    /// `path` is created or truncated: the caller owns the file's lifetime.
+    /// Use [`open_file_backed`](Self::open_file_backed) to adopt a file whose
+    /// contents are already the arena.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidDimension`] if `dimension` is out of range,
+    /// [`Error::AllocationFailed`] if the size overflows or the ceiling
+    /// rejects it, and [`Error::Io`] if the file cannot be created or mapped.
+    ///
+    /// [`Error::InvalidDimension`]: crate::error::Error::InvalidDimension
+    /// [`Error::AllocationFailed`]: crate::error::Error::AllocationFailed
+    /// [`Error::Io`]: crate::error::Error::Io
+    #[cfg(feature = "persistence")]
+    pub fn new_file_backed(
+        path: &std::path::Path,
+        dimension: usize,
+        capacity: usize,
+    ) -> crate::error::Result<Self> {
+        Self::file_backed(path, dimension, capacity, true)
+    }
+
+    /// Adopts an existing file as the arena without truncating it.
+    ///
+    /// The mapped bytes are taken as `count` already-written vectors, so this
+    /// is the load path: no deserialization, no copy, just a mapping.
+    ///
+    /// # Errors
+    ///
+    /// As [`new_file_backed`](Self::new_file_backed), plus
+    /// [`Error::Internal`] if `count` exceeds `capacity`.
+    ///
+    /// [`Error::Internal`]: crate::error::Error::Internal
+    #[cfg(feature = "persistence")]
+    pub fn open_file_backed(
+        path: &std::path::Path,
+        dimension: usize,
+        capacity: usize,
+        count: usize,
+    ) -> crate::error::Result<Self> {
+        if count > capacity {
+            return Err(crate::error::Error::Internal(format!(
+                "vector arena count {count} exceeds capacity {capacity}"
+            )));
+        }
+        let mut storage = Self::file_backed(path, dimension, capacity, false)?;
+        storage.count = count;
+        Ok(storage)
+    }
+
+    /// Shared construction for the two file-backed entry points.
+    #[cfg(feature = "persistence")]
+    fn file_backed(
+        path: &std::path::Path,
+        dimension: usize,
+        capacity: usize,
+        truncate: bool,
+    ) -> crate::error::Result<Self> {
+        use crate::contiguous_file_arena::FileArena;
+
+        validate_dimension(dimension)?;
+        let capacity = capacity.max(16);
+        let byte_len = Self::byte_size(dimension, capacity)?;
+        crate::alloc_guard::check_alloc_bound(byte_len)?;
+
+        let mut arena = if truncate {
+            FileArena::create(path, byte_len)
+        } else {
+            FileArena::open(path, byte_len)
+        }
+        .map_err(crate::error::Error::Io)?;
+        let data = arena.data_ptr().map_err(crate::error::Error::Io)?;
+
+        Ok(Self {
+            data,
+            dimension,
+            count: 0,
+            capacity,
+            backing: ArenaBacking::FileMapped(Box::new(arena)),
+        })
+    }
+
+    /// Flushes a file-backed arena's dirty pages to disk.
+    ///
+    /// A no-op on a heap-backed arena, which has no file to reach.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Io`] if the underlying `msync` fails.
+    ///
+    /// [`Error::Io`]: crate::error::Error::Io
+    pub fn flush_backing(&self) -> crate::error::Result<()> {
+        #[cfg(feature = "persistence")]
+        if let ArenaBacking::FileMapped(ref arena) = self.backing {
+            arena.flush().map_err(crate::error::Error::Io)?;
+        }
+        Ok(())
     }
 
     /// Returns the buffer size in bytes for `dimension * capacity` f32s.
