@@ -371,16 +371,22 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     /// - **Euclidean**: `sqrt(raw_distance)` — the search loop stores squared L2
     ///   to skip redundant sqrt during traversal; this restores the actual
     ///   Euclidean distance for user-visible scores.
-    /// - **Hamming**/**Jaccard**: raw distance (lower is better)
+    /// - **Hamming**: raw distance (lower is better)
+    /// - **Jaccard**: `(1.0 - distance).clamp(0.0, 1.0)` — the engine traverses
+    ///   on `1 - jaccard`, but `DistanceMetric::higher_is_better()` declares
+    ///   Jaccard a similarity, so every downstream sort/top-k/merge expects
+    ///   the similarity back (same contract as Cosine).
     /// - **DotProduct**: `-distance` (negated for consistency)
     #[must_use]
     pub fn transform_score(&self, raw_distance: f32) -> f32 {
         match self.distance.metric() {
-            DistanceMetric::Cosine => (1.0 - raw_distance).clamp(0.0, 1.0),
+            DistanceMetric::Cosine | DistanceMetric::Jaccard => {
+                (1.0 - raw_distance).clamp(0.0, 1.0)
+            }
             // Reason: CachedSimdDistance stores squared L2 during HNSW traversal
             // to avoid per-comparison sqrt. Apply sqrt here on the final k results.
             DistanceMetric::Euclidean => raw_distance.sqrt(),
-            DistanceMetric::Hamming | DistanceMetric::Jaccard => raw_distance,
+            DistanceMetric::Hamming => raw_distance,
             DistanceMetric::DotProduct => -raw_distance,
         }
     }

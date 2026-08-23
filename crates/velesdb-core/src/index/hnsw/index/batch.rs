@@ -142,7 +142,10 @@ impl HnswIndex {
             .map(|(idx, vec)| (*vec, *idx))
             .collect();
 
-        let assigned_ids = match self.inner.read().parallel_insert(&refs_for_hnsw) {
+        // Bound so the graph read guard is released before `rollback_batch`
+        // touches `mappings`.
+        let inserted = self.inner.read().parallel_insert(&refs_for_hnsw);
+        let assigned_ids = match inserted {
             Ok(ids) => ids,
             Err(e) => {
                 tracing::error!("insert_batch_parallel: parallel_insert failed: {e}");

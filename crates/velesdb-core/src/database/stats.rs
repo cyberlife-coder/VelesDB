@@ -53,7 +53,9 @@ impl Database {
     ) -> Result<Option<crate::collection::stats::CollectionStats>> {
         crate::validation::validate_collection_name(name)?;
 
-        if let Some(stats) = self.collection_stats.read().get(name).cloned() {
+        // Bound before the `if let` so the guard does not span the disk read below.
+        let cached = self.collection_stats.read().get(name).cloned();
+        if let Some(stats) = cached {
             return Ok(Some(stats));
         }
 

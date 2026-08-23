@@ -165,7 +165,12 @@ impl Database {
     /// Returns `None` if the collection does not exist on disk.
     #[must_use]
     pub fn get_vector_collection(&self, name: &str) -> Option<VectorCollection> {
-        if let Some(c) = self.vector_colls.read().get(name).cloned() {
+        // Bound before the `if let`: the guard would otherwise stay alive for
+        // the whole expression, and the disk fallback below takes `vector_colls`
+        // for WRITE — one refactor away from a self-deadlock on a non-reentrant
+        // `parking_lot` lock.
+        let cached = self.vector_colls.read().get(name).cloned();
+        if let Some(c) = cached {
             return Some(c);
         }
         self.open_vector_collection_from_disk(name)
