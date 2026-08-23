@@ -15,10 +15,10 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     fn allocate_and_store_vector(&self, vector: &[f32]) -> crate::error::Result<NodeId> {
         let mut guard = self.vectors.write();
         if guard.is_none() {
-            *guard = Some(crate::perf_optimizations::ContiguousVectors::new(
-                vector.len(),
-                16,
-            )?);
+            // Through `new_arena`, not `ContiguousVectors::new`: a graph whose
+            // arena belongs on disk must get a mapped one here too, or the
+            // lazy path would silently hand back a heap arena (#2112).
+            *guard = Some(Self::new_arena(self.arena_home.as_ref(), vector.len(), 16)?);
         }
         let storage = guard.as_mut().ok_or_else(|| {
             crate::error::Error::Internal("Vector storage missing after init".to_string())
@@ -239,7 +239,11 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     ) -> crate::error::Result<()> {
         let mut guard = self.vectors.write();
         if guard.is_none() {
-            *guard = Some(ContiguousVectors::new(dimension, batch_size.max(16))?);
+            *guard = Some(Self::new_arena(
+                self.arena_home.as_ref(),
+                dimension,
+                batch_size.max(16),
+            )?);
         }
         let storage = guard.as_mut().ok_or_else(|| {
             crate::error::Error::Internal("Vector storage missing after init".to_string())

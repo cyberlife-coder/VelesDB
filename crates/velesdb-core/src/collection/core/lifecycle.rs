@@ -216,7 +216,17 @@ impl Collection {
     ) -> Result<CollectionParts> {
         let vector_storage = Arc::new(RwLock::new(MmapStorage::new(&path, config.dimension)?));
         let payload_storage = Arc::new(RwLock::new(LogPayloadStorage::new(&path)?));
-        let index = Arc::new(Self::build_hnsw_index(&config, hnsw_params)?);
+        // Arena files from a run that never got to drop them are pure waste
+        // and unreadable to anyone — sweep before handing the directory out.
+        // Safe here because the database holds an exclusive lock on its data
+        // directory for as long as it is open, so no other process can be
+        // mapping one of these.
+        crate::index::hnsw::sweep_stale_arenas(&path);
+        let index = Arc::new(Self::build_hnsw_index(
+            &config,
+            hnsw_params,
+            Some(path.clone()),
+        )?);
         let text_index = Arc::new(Bm25Index::new());
         Ok(CollectionParts::new_with_empty_indexes(
             path,
@@ -238,11 +248,12 @@ impl Collection {
     fn build_hnsw_index(
         config: &CollectionConfig,
         hnsw_params: Option<crate::index::hnsw::HnswParams>,
+        arena_dir: Option<std::path::PathBuf>,
     ) -> Result<HnswIndex> {
         let mut params =
             hnsw_params.unwrap_or_else(|| crate::index::hnsw::HnswParams::auto(config.dimension));
         params.storage_mode = config.storage_mode;
-        HnswIndex::with_params(config.dimension, config.metric, params)
+        HnswIndex::with_params_in_dir(config.dimension, config.metric, params, true, arena_dir)
     }
 
     /// Rebuilds the BM25 full-text index from persisted payloads.
@@ -483,7 +494,11 @@ impl Collection {
              rebuilding from vector storage",
             wal_ids.len()
         );
-        let fresh = Self::build_hnsw_index(config, config.hnsw_params)?;
+        // Inherit the home from the index being replaced: this path has no
+        // directory of its own, and a rebuild must not silently demote a
+        // mapped arena to the heap.
+        let arena_dir = index.arena_dir.clone();
+        let fresh = Self::build_hnsw_index(config, config.hnsw_params, arena_dir)?;
         Ok((Arc::new(fresh), true))
     }
 
@@ -525,12 +540,20 @@ impl Collection {
         path: &std::path::Path,
         config: &CollectionConfig,
     ) -> Result<Arc<HnswIndex>> {
+        // Before anything claims an arena in this directory, and only here:
+        // the sweep removes every arena file it finds, so running it once a
+        // graph holds one would delete a live arena. This is the open-path
+        // twin of the sweep in `init_collection_parts` — without it, a
+        // collection that crashed would carry its orphan forever, and gain a
+        // new one on every subsequent crash.
+        crate::index::hnsw::sweep_stale_arenas(path);
         if let Some(idx) = Self::try_load_hnsw(path, config) {
             return Ok(Arc::new(idx));
         }
         Ok(Arc::new(Self::build_hnsw_index(
             config,
             config.hnsw_params,
+            Some(path.to_path_buf()),
         )?))
     }
 

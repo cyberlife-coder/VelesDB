@@ -146,15 +146,45 @@ impl HnswIndex {
         params: HnswParams,
         enable_vector_storage: bool,
     ) -> Result<Self> {
-        let inner = HnswInner::new_with_options(
+        Self::with_params_in_dir(dimension, metric, params, enable_vector_storage, None)
+    }
+
+    /// Builds an index that may keep its f32 arena in `arena_dir`.
+    ///
+    /// The directory is remembered on the index, not just used here, because
+    /// `vacuum` rebuilds the graph and has to put the replacement's arena
+    /// somewhere too.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the graph or its arena cannot be allocated.
+    pub(crate) fn with_params_in_dir(
+        dimension: usize,
+        metric: DistanceMetric,
+        params: HnswParams,
+        enable_vector_storage: bool,
+        arena_dir: Option<std::path::PathBuf>,
+    ) -> Result<Self> {
+        // The policy gate. A mapped arena pays off only where traversal runs
+        // on something other than the f32 — the quantized backends read it
+        // solely to re-rank a bounded candidate set, so their pages can be
+        // evicted freely. A `Full` graph traverses *on* the f32 and would
+        // fault a page per hop, so it keeps its heap arena whatever the
+        // caller offers (#2112).
+        let arena_dir = match params.storage_mode {
+            crate::StorageMode::RaBitQ | crate::StorageMode::SQ8 => arena_dir,
+            _ => None,
+        };
+        let inner = HnswInner::build(&crate::index::hnsw::native_inner::InnerBuild {
             metric,
-            params.max_connections,
-            params.max_elements,
-            params.ef_construction,
+            max_connections: params.max_connections,
+            max_elements: params.max_elements,
+            ef_construction: params.ef_construction,
             dimension,
-            params.storage_mode,
-            params.alpha,
-        )?;
+            storage_mode: params.storage_mode,
+            alpha: params.alpha,
+            arena_dir: arena_dir.as_deref(),
+        })?;
 
         let mappings = ShardedMappings::with_capacity(params.max_elements);
 
@@ -167,6 +197,7 @@ impl HnswIndex {
             rerank_latency_target_us: AtomicU64::new(0),
             rerank_latency_ema_us: AtomicU64::new(0),
             io_holder: None,
+            arena_dir,
         })
     }
 
@@ -291,6 +322,7 @@ impl HnswIndex {
             rerank_latency_target_us: AtomicU64::new(0),
             rerank_latency_ema_us: AtomicU64::new(0),
             io_holder: None,
+            arena_dir: Some(path.to_path_buf()),
         };
 
         #[cfg(feature = "persistence")]
