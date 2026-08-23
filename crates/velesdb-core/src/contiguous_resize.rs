@@ -67,9 +67,15 @@ impl ContiguousVectors {
             return Ok(());
         }
 
+        // Matching here rather than asking `is_heap` and re-destructuring in a
+        // helper: this way the mapped branch *has* the arena, so there is no
+        // "called on a heap-backed arena" state left to report at runtime.
         #[cfg(feature = "persistence")]
-        if !self.backing.is_heap() {
-            return self.resize_file_backed(new_capacity);
+        if let crate::perf_optimizations::ArenaBacking::FileMapped(ref mut arena) = self.backing {
+            let byte_len = Self::byte_size(self.dimension, new_capacity)?;
+            self.data = Self::grow_mapped(arena, byte_len)?;
+            self.capacity = new_capacity;
+            return Ok(());
         }
 
         let old_layout = Self::layout(self.dimension, self.capacity)?;
@@ -92,7 +98,7 @@ impl ContiguousVectors {
         Ok(())
     }
 
-    /// Grows a file-backed arena by extending and re-mapping its file.
+    /// Grows a mapped arena's file and returns the pointer to its data.
     ///
     /// No copy happens: the bytes already written keep their place on disk and
     /// the kernel hands back a mapping that covers more of the same file. The
@@ -102,6 +108,11 @@ impl ContiguousVectors {
     /// The freshly appended range reads as zeros, matching the `alloc_zeroed`
     /// guarantee `insert_at` depends on when it leaves gaps.
     ///
+    /// Takes the arena rather than `&mut self` so the heap case is not
+    /// representable: there is no branch here to get wrong, and the returned
+    /// pointer is the only thing the caller has to install. Growing re-maps,
+    /// so the caller's old address is stale and this value replaces it.
+    ///
     /// # Errors
     ///
     /// Returns [`Error::AllocationFailed`] if the file cannot be extended or
@@ -109,25 +120,16 @@ impl ContiguousVectors {
     ///
     /// [`Error::AllocationFailed`]: crate::error::Error::AllocationFailed
     #[cfg(feature = "persistence")]
-    fn resize_file_backed(&mut self, new_capacity: usize) -> crate::error::Result<()> {
-        use crate::perf_optimizations::ArenaBacking;
-
-        let byte_len = Self::byte_size(self.dimension, new_capacity)?;
-        let ArenaBacking::FileMapped(ref mut arena) = self.backing else {
-            return Err(crate::error::Error::Internal(
-                "resize_file_backed called on a heap-backed arena".to_string(),
-            ));
-        };
+    fn grow_mapped(
+        arena: &mut crate::contiguous_file_arena::FileArena,
+        byte_len: usize,
+    ) -> crate::error::Result<std::ptr::NonNull<f32>> {
         arena.grow(byte_len).map_err(|e| {
             crate::error::Error::AllocationFailed(format!(
                 "failed to grow the file-backed vector arena to {byte_len} bytes: {e}"
             ))
         })?;
-        // Growing re-maps, so the old address is stale; `grow` refreshed the
-        // arena's own pointer and this reads it back.
-        self.data = arena.data_ptr();
-        self.capacity = new_capacity;
-        Ok(())
+        Ok(arena.data_ptr())
     }
 
     /// Allocates a new buffer and copies existing data into it.

@@ -123,8 +123,11 @@ unsafe impl Sync for FileArena {}
 /// A named choice rather than a `bool` parameter, because the two callers read
 /// as opposites at the call site (`create` discards, `open` keeps) and the
 /// distinction decides whether the arena starts zeroed or starts from disk.
+///
+/// `pub(crate)` so `ContiguousVectors`' two file-backed constructors speak the
+/// same vocabulary instead of re-deriving it from a bool of their own.
 #[derive(Clone, Copy)]
-enum ExistingBytes {
+pub(crate) enum ExistingBytes {
     /// Empty the file first, so the arena starts zero-filled.
     Discard,
     /// The file's contents *are* the arena; only ever grow it.

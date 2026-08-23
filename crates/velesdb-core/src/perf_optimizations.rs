@@ -17,6 +17,8 @@
 //! eliminating null pointer checks and making invariants explicit. Memory is managed
 //! via RAII with `AllocGuard` for panic-safe resize operations.
 
+#[cfg(feature = "persistence")]
+use crate::contiguous_file_arena::ExistingBytes;
 use crate::validation::{validate_dimension, validate_dimension_match};
 use std::alloc::{alloc_zeroed, Layout};
 use std::fmt;
@@ -187,8 +189,9 @@ impl ContiguousVectors {
     /// them. That is what lets a quantized index hold `codes + graph`
     /// resident and page the f32 in only to re-rank (#2112).
     ///
-    /// `path` is created or truncated: the caller owns the file's lifetime.
-    /// Use [`open_file_backed`](Self::open_file_backed) to adopt a file whose
+    /// `path` is created if absent, and whatever it held is discarded — under
+    /// the arena's exclusive lock, never at open time. Use
+    /// [`open_file_backed`](Self::open_file_backed) to adopt a file whose
     /// contents are already the arena.
     ///
     /// # Errors
@@ -206,7 +209,7 @@ impl ContiguousVectors {
         dimension: usize,
         capacity: usize,
     ) -> crate::error::Result<Self> {
-        Self::file_backed(path, dimension, capacity, true)
+        Self::file_backed(path, dimension, capacity, ExistingBytes::Discard)
     }
 
     /// Adopts an existing file as the arena without truncating it.
@@ -232,7 +235,7 @@ impl ContiguousVectors {
                 "vector arena count {count} exceeds capacity {capacity}"
             )));
         }
-        let mut storage = Self::file_backed(path, dimension, capacity, false)?;
+        let mut storage = Self::file_backed(path, dimension, capacity, ExistingBytes::Keep)?;
         storage.count = count;
         Ok(storage)
     }
@@ -243,7 +246,7 @@ impl ContiguousVectors {
         path: &std::path::Path,
         dimension: usize,
         capacity: usize,
-        truncate: bool,
+        existing: ExistingBytes,
     ) -> crate::error::Result<Self> {
         use crate::contiguous_file_arena::FileArena;
 
@@ -252,10 +255,9 @@ impl ContiguousVectors {
         let byte_len = Self::byte_size(dimension, capacity)?;
         crate::alloc_guard::check_alloc_bound(byte_len)?;
 
-        let arena = if truncate {
-            FileArena::create(path, byte_len)
-        } else {
-            FileArena::open(path, byte_len)
+        let arena = match existing {
+            ExistingBytes::Discard => FileArena::create(path, byte_len),
+            ExistingBytes::Keep => FileArena::open(path, byte_len),
         }
         .map_err(|e| Self::arena_open_error(path, e))?;
         let data = arena.data_ptr();
