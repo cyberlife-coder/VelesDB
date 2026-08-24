@@ -95,8 +95,10 @@ impl Collection {
                     }
                 };
 
-                // BUG-2 FIX: Recompute similarity using the similarity() vector, not NEAR scores
-                let score = self.compute_metric_score(&candidate_vec, query_vec);
+                // BUG-2 FIX: Recompute similarity using the similarity() vector, not NEAR scores.
+                // A length mismatch can't be scored; exclude rather than fabricate a score
+                // (a fake 0.0 used to read as a perfect match for distance metrics).
+                let score = self.compute_metric_score(&candidate_vec, query_vec)?;
                 let passes = Self::compare_similarity(score, threshold_f32, op, higher_is_better);
 
                 if passes {
@@ -209,11 +211,13 @@ impl Collection {
             id,
             sim_field,
         )?;
-        let score = if vector.len() == sim_vec.len() && !vector.is_empty() {
-            scan.metric.calculate(&vector, sim_vec)
-        } else {
-            0.0
-        };
+        // A length-mismatched vector can't be scored against `sim_vec`; exclude
+        // rather than fabricate a score (a fake 0.0 used to read as a perfect
+        // match for distance metrics, letting it pass the inverted threshold).
+        if vector.len() != sim_vec.len() || vector.is_empty() {
+            return None;
+        }
+        let score = scan.metric.calculate(&vector, sim_vec);
         if Self::compare_similarity(
             score,
             threshold.value,
