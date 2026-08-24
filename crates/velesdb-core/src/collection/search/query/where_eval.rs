@@ -329,11 +329,13 @@ impl Collection {
         // one inside `compute_metric_score`, one for the direction).
         let metric = graph_cache.metric_snapshot(self);
         let query_vec = graph_cache.similarity_query_vector(sim, params)?;
-        let score = if record_vector.len() == query_vec.len() && !record_vector.is_empty() {
-            metric.calculate(record_vector, query_vec)
-        } else {
-            0.0
-        };
+        // A length-mismatched vector can't be scored against `query_vec`;
+        // fail the predicate rather than fabricate a score (a fake 0.0 used
+        // to read as a perfect match for distance metrics like Euclidean).
+        if record_vector.len() != query_vec.len() || record_vector.is_empty() {
+            return Ok(false);
+        }
+        let score = metric.calculate(record_vector, query_vec);
         #[allow(clippy::cast_possible_truncation)]
         // Reason: similarity thresholds are approximate floating bounds.
         let threshold = sim.threshold as f32;

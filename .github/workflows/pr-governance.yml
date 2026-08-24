@@ -16,7 +16,12 @@ on:
   workflow_call:
   pull_request:
     branches-ignore: [main, develop]
-    types: [opened, synchronize, reopened, ready_for_review]
+    # `edited` catches a retarget: it is the only event a base change emits,
+    # so without it this gate keeps reporting its verdict on the *old* base
+    # forever. A re-run cannot clear that — GitHub replays the original event
+    # payload, stale BASE_REF included. Guarded below so title and body edits
+    # do not re-run it.
+    types: [opened, synchronize, reopened, ready_for_review, edited]
 
 permissions:
   contents: read

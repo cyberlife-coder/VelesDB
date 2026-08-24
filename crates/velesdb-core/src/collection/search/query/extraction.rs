@@ -257,14 +257,19 @@ impl Collection {
     /// - **Jaccard**: Returns jaccard similarity (higher = more similar)
     ///
     /// Use `metric.higher_is_better()` to determine score interpretation.
-    pub(crate) fn compute_metric_score(&self, a: &[f32], b: &[f32]) -> f32 {
+    ///
+    /// Returns `None` when the pair can't be scored (length mismatch, or both
+    /// empty) — the metric has no value there. Reporting `0.0` used to stand
+    /// in for that case, but `0.0` reads as a perfect match for a distance
+    /// metric like Euclidean, letting a malformed vector pass a
+    /// `similarity() < threshold` filter as the best candidate. Callers must
+    /// skip the candidate on `None`, not substitute a score.
+    pub(crate) fn compute_metric_score(&self, a: &[f32], b: &[f32]) -> Option<f32> {
         if a.len() != b.len() || a.is_empty() {
-            return 0.0;
+            return None;
         }
-
-        // Use the collection's configured metric for consistent behavior
         let metric = self.storage.config.read().metric;
-        metric.calculate(a, b)
+        Some(metric.calculate(a, b))
     }
 }
 
