@@ -312,6 +312,33 @@ impl ContiguousVectors {
         Ok(())
     }
 
+    /// Drops a file-backed arena's resident pages, keeping its contents.
+    ///
+    /// A no-op on a heap-backed arena, which has nothing evictable to drop —
+    /// that asymmetry *is* the feature, and this method is how it gets
+    /// measured instead of asserted (#2112). Eviction is transparent: the
+    /// vectors read back unchanged either way. It flushes before discarding,
+    /// which is about making a later page-cache drop deterministic rather
+    /// than about correctness — `FileArena::evict` carries the measurements
+    /// behind that distinction.
+    ///
+    /// This exists for measurement, not for the search path. Nothing in a
+    /// query should call it: evicting pages a re-rank is about to fault back
+    /// in buys nothing and costs two I/Os.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Io`] if the flush that precedes the discard fails.
+    ///
+    /// [`Error::Io`]: crate::error::Error::Io
+    pub fn evict_backing(&self) -> crate::error::Result<()> {
+        #[cfg(feature = "persistence")]
+        if let ArenaBacking::FileMapped(ref arena) = self.backing {
+            arena.evict().map_err(crate::error::Error::Io)?;
+        }
+        Ok(())
+    }
+
     /// Returns the buffer size in bytes for `dimension * capacity` f32s.
     ///
     /// # Errors

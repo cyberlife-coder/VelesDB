@@ -109,8 +109,10 @@ pub(crate) struct FileArena {
 // SAFETY: Moving an arena between threads leaves its mapping intact and unique.
 unsafe impl Send for FileArena {}
 // SAFETY: `FileArena` is `Sync` because shared references expose no mutation.
-// - Condition 1: `&self` reaches only `data_ptr`, `flush` and `path`; none of
-//   them writes through the mapping, and every mutating entry point
+// - Condition 1: `&self` reaches only `data_ptr`, `flush`, `evict` and
+//   `path`. None writes through the mapping: `evict` discards resident pages
+//   and the next read re-faults the same bytes from the page cache, which is
+//   not a mutation any reader can observe. Every mutating entry point
 //   (`grow`) takes `&mut self`.
 // - Condition 2: handing out the cached pointer is not itself a write — the
 //   caller's own aliasing rules govern what it does with it, exactly as for
@@ -410,6 +412,58 @@ impl FileArena {
     /// The file this arena is mapped from.
     pub(crate) fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Drops this arena's resident pages, keeping its contents.
+    ///
+    /// This is what makes the evictability claim *testable*. The arena exists
+    /// so the kernel **can** reclaim these pages under memory pressure, and
+    /// the only honest way to measure what a reclaim costs is to cause one on
+    /// demand rather than wait for pressure a benchmark host does not have.
+    ///
+    /// # Why the flush, and what it is not for
+    ///
+    /// It is **not** for correctness. On Linux the pages of a `MAP_SHARED`
+    /// mapping *are* the file's page-cache pages, and the kernel never drops a
+    /// dirty one without writing it back — so `MADV_DONTNEED` cannot lose a
+    /// write, flush or no flush. That was checked rather than assumed: with
+    /// the flush removed, `evicting_preserves_every_vector` still passes.
+    ///
+    /// It is for **determinism**. A caller that wants genuinely cold pages
+    /// follows this with `POSIX_FADV_DONTNEED` on the file, which only drops
+    /// *clean* page-cache pages. Without the flush, how much gets dropped
+    /// depends on whether the kernel's writeback happened to have run — which
+    /// turns a measurement into a coin flip. Measured both ways at 100 000 ×
+    /// 768: 8.2 ms cold with the flush, 6.9 ms without, the difference being
+    /// pages writeback had not yet reached.
+    ///
+    /// The module doc argues against `msync` on the *routine* path, for flash
+    /// endurance. This is not that path: nothing in a query calls it.
+    ///
+    /// # Errors
+    ///
+    /// Returns any I/O error from the flush. A declined `madvise` is *not* an
+    /// error: eviction is advisory, a kernel that refuses leaves the pages
+    /// resident, and the arena reads correctly either way.
+    pub(crate) fn evict(&self) -> io::Result<()> {
+        self.flush()?;
+        #[cfg(unix)]
+        // SAFETY: `MADV_DONTNEED` over this arena's own mapping.
+        // - Condition 1: the range is `self.map`, so it stays mapped for as
+        //   long as `self` lives; the call cannot reach memory the arena does
+        //   not own.
+        // - Condition 2: discarded pages are repopulated from the file's
+        //   page cache, which holds every write made through this mapping, so
+        //   each `&[f32]` derived from it reads back what it read before.
+        // SAFETY: Reclaim the arena's resident pages so a cold re-rank can be
+        // measured rather than asserted.
+        if let Err(e) = unsafe {
+            self.map
+                .unchecked_advise(memmap2::UncheckedAdvice::DontNeed)
+        } {
+            tracing::debug!("madvise(MADV_DONTNEED) on the vector arena declined: {e}");
+        }
+        Ok(())
     }
 }
 
