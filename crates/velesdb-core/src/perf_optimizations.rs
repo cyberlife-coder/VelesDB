@@ -292,10 +292,10 @@ impl ContiguousVectors {
 
     /// Flushes a file-backed arena's dirty pages to disk.
     ///
-    /// A no-op on a heap-backed arena, which has no file to reach. Note that
-    /// this includes an arena that *used* to be file-backed: [`reorder`] moves
-    /// one onto the heap, after which this returns `Ok` without writing
-    /// anything. Call it before reordering, not after.
+    /// A no-op on a heap-backed arena, which has no file to reach. Every
+    /// arena that started file-backed still is: [`reorder`] permutes in place
+    /// and keeps the mapping, so this reaches the file before and after one
+    /// alike (#2112).
     ///
     /// [`reorder`]: Self::reorder
     ///

@@ -63,10 +63,11 @@
 //! cargo run --release --example resident_set --features persistence -- <mode> [N] [D]
 //! ```
 //!
-//! `mode` is `full`, `sq8`, or `cold`, and only one runs per invocation — see
-//! above for why. `N` and `D` default to the configuration #2112 names, so the
-//! three runs behind the published tables are `-- full`, `-- sq8` and
-//! `-- cold`. Linux only: no other platform
+//! `mode` is `full`, `sq8`, `cold`, `write` or `reorder`, and only one runs
+//! per invocation — see above for why. `N` and `D` default to the
+//! configuration #2112 names, so the runs behind the published tables are
+//! `-- full`, `-- sq8`, `-- cold`, `-- write` and `-- reorder`. Linux only:
+//! no other platform
 //! exposes the anonymous/file split, and reporting `VmRSS` alone would be
 //! reporting the very number this program exists to reject.
 
@@ -227,8 +228,12 @@ mod linux {
                 arena_write_cost(count, dimension);
                 return;
             }
+            "reorder" => {
+                reorder_cost(count, dimension);
+                return;
+            }
             other => {
-                eprintln!("unknown mode {other:?}; expected full | sq8 | cold | write");
+                eprintln!("unknown mode {other:?}; expected full | sq8 | cold | write | reorder");
                 std::process::exit(2);
             }
         };
@@ -323,6 +328,64 @@ mod linux {
             "major",
             time_scattered_reads(&arena, count, K, ROUNDS),
             warm,
+        );
+    }
+
+    /// What an in-place permutation costs, per backing.
+    ///
+    /// `reorder` used to gather into a fresh heap buffer, which demoted a
+    /// mapped arena to the heap (#2112). Permuting in place fixes that, and
+    /// the question this answers is what it costs to walk cycles through a
+    /// mapping instead of writing a second buffer sequentially.
+    ///
+    /// `gather_flat` is the comparison because it *is* the old shape: the
+    /// same scattered reads, into a freshly allocated arena-sized `Vec`. It
+    /// is a floor for the copying implementation, not a re-creation of it —
+    /// the real one also paid a `dealloc` and a backing swap.
+    ///
+    /// The permutation is a single cycle covering every vector, which is the
+    /// unfriendly case: no fixed points to skip, and each write lands in a
+    /// page unrelated to the last.
+    fn reorder_cost(count: usize, dimension: usize) {
+        let dir = tempfile::tempdir().expect("a writable temp dir");
+        let order: Vec<usize> = (0..count).map(|i| (i * 7 + 1) % count).collect();
+
+        println!("Reorder — {count} × {dimension}-d, one cycle over every vector");
+        let mut heap = ContiguousVectors::new(dimension, count).expect("a heap arena");
+        fill_arena(&mut heap, count, dimension);
+        report_reorder("heap", &mut heap, &order);
+
+        let mut mapped =
+            ContiguousVectors::new_file_backed(&dir.path().join("reorder.bin"), dimension, count)
+                .expect("a file-backed arena");
+        fill_arena(&mut mapped, count, dimension);
+        report_reorder("file-mapped", &mut mapped, &order);
+    }
+
+    /// Pushes `count` deterministic vectors into an arena.
+    fn fill_arena(arena: &mut ContiguousVectors, count: usize, dimension: usize) {
+        for i in 0..count {
+            arena.push(&vector(i, dimension)).expect("push succeeds");
+        }
+    }
+
+    /// Times one backing's in-place permutation against the copying shape.
+    fn report_reorder(label: &str, arena: &mut ContiguousVectors, order: &[usize]) {
+        let started = Instant::now();
+        let copied = arena.gather_flat(order);
+        let gather = started.elapsed();
+        std::hint::black_box(&copied);
+        let copied_mib = mib((copied.len() * std::mem::size_of::<f32>() / 1024) as u64);
+        drop(copied);
+
+        let started = Instant::now();
+        arena.reorder(order).expect("a permutation of 0..count");
+        let in_place = started.elapsed();
+
+        println!(
+            "  {label:<12} in place {:>7.3} s   gather copy {:>7.3} s   (copy needs +{copied_mib:.1} MiB)",
+            in_place.as_secs_f64(),
+            gather.as_secs_f64(),
         );
     }
 

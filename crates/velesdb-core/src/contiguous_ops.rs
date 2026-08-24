@@ -3,9 +3,8 @@
 //! Extracted from `perf_optimizations.rs` to reduce NLOC.
 //! Contains reorder permutation, dot-product batching, Drop, and free SIMD helpers.
 
-use super::perf_optimizations::{ArenaBacking, ContiguousVectors};
+use super::perf_optimizations::ContiguousVectors;
 use std::alloc::dealloc;
-use std::ptr::{self, NonNull};
 
 // =============================================================================
 // ContiguousVectors: Reorder + Dot-Product + Drop
@@ -15,33 +14,54 @@ impl ContiguousVectors {
     /// Reorders vectors according to the given permutation.
     ///
     /// `new_order[i]` contains the old index of the vector that should occupy
-    /// position `i` after reordering. The permutation must have exactly
-    /// `self.len()` elements and every index must be `< self.len()`.
+    /// position `i` after reordering. It must be a genuine permutation of
+    /// `0..self.len()`: exactly `self.len()` entries, each index appearing
+    /// exactly once.
     ///
-    /// # A file-backed arena is demoted to the heap
+    /// # The backing survives
     ///
-    /// Reordering copies into a fresh heap buffer, so an arena that was
-    /// file-mapped **stops being file-mapped here**: its mapping is released,
-    /// its exclusive lock with it, and the file is left on disk holding the
-    /// pre-reorder bytes. Two consequences a caller has to know about:
+    /// The permutation is applied **in place**, through whichever buffer the
+    /// arena already holds, so a file-mapped arena is still file-mapped when
+    /// this returns (#2112). Its pages stay evictable — the property the
+    /// mapped backing exists for — [`flush_backing`](Self::flush_backing)
+    /// still reaches the file, and the bytes that land on disk are the
+    /// reordered ones. The predecessor of this implementation gathered into a
+    /// fresh heap buffer and silently demoted the arena, which cost the
+    /// eviction saving and turned `flush_backing` into a no-op returning
+    /// `Ok`.
     ///
-    /// - The pages stop being evictable, which is the property the mapped
-    ///   backing existed for (#2112). A quantized index that reorders is back
-    ///   to `f32 + graph + codes` resident.
-    /// - [`flush_backing`](Self::flush_backing) becomes a no-op that still
-    ///   returns `Ok`, because there is no longer a mapping to flush.
+    /// In place is also what the heap arena wants: no second buffer means the
+    /// peak allocation during a reorder is the arena itself rather than twice
+    /// it. `capacity` is therefore left alone, where the copying version
+    /// shrank it to `count` and made the next `push` reallocate.
     ///
-    /// This is stated rather than fixed because no production path takes a
-    /// file-backed arena yet; preserving the backing across a reorder costs a
-    /// second copy and belongs with the wiring that gives it a caller, where
-    /// it can be measured. Whoever does that wiring owns this.
+    /// # Cost
+    ///
+    /// Each vector is written once, plus one scratch copy per permutation
+    /// cycle; the bookkeeping is a `bool` per vector and one vector of
+    /// scratch — 100 KiB and 3 KiB respectively at 100 000 × 768-d, against
+    /// the 293 MiB second arena the copy needed.
+    ///
+    /// Measured at 100 000 × 768-d over a single cycle covering every vector,
+    /// which is the unfriendly case (2026-08-24, 4-vCPU Linux container):
+    /// **0.044–0.053 s in place against 0.195–0.209 s** for the same
+    /// scattered reads gathered into a fresh buffer, and the two backings are
+    /// within noise of each other. Reproduce with the `reorder` mode of the
+    /// `resident_set` example.
+    ///
+    /// Those figures are with the arena resident, which is the state a
+    /// post-build reorder finds it in. On pages the kernel has already
+    /// reclaimed, in place faults them back — but so does a copy, which has
+    /// to read every vector too, so the ordering does not change.
     ///
     /// # Errors
     ///
     /// Returns an error if:
     /// - `new_order.len() != self.len()`
     /// - Any index in `new_order` is out of bounds
-    /// - The new buffer allocation fails
+    /// - Any index appears more than once — a non-bijective `new_order` would
+    ///   duplicate vectors and lose others, which the copying predecessor did
+    ///   silently
     pub fn reorder(&mut self, new_order: &[usize]) -> crate::error::Result<()> {
         if new_order.len() != self.count {
             return Err(crate::error::Error::Internal(format!(
@@ -53,94 +73,34 @@ impl ContiguousVectors {
         if self.count == 0 {
             return Ok(());
         }
+        validate_permutation(new_order, self.count)?;
 
-        self.reorder_copy(new_order)
-    }
-
-    /// Performs the out-of-place vector copy for reordering.
-    ///
-    /// Allocates a temporary buffer, copies vectors in permuted order, then
-    /// swaps the buffer into place. Uses `AllocGuard` for panic-safety.
-    fn reorder_copy(&mut self, new_order: &[usize]) -> crate::error::Result<()> {
-        use crate::alloc_guard::AllocGuard;
-
-        let new_layout = Self::layout(self.dimension, self.count)?;
-        let guard = AllocGuard::new_zeroed(new_layout).ok_or_else(|| {
-            crate::error::Error::AllocationFailed(format!(
-                "Reorder: failed to allocate {} bytes",
-                new_layout.size()
-            ))
-        })?;
-        let new_ptr = NonNull::new(guard.cast::<f32>()).ok_or_else(|| {
-            crate::error::Error::AllocationFailed(
-                "Reorder: AllocGuard returned null pointer".to_string(),
-            )
-        })?;
-
-        self.copy_permuted_vectors(new_ptr.as_ptr(), new_order)?;
-
-        // Transfer ownership — guard will not free on drop
-        let _ = guard.into_raw();
-
-        self.adopt_reordered_buffer(new_ptr)
-    }
-
-    /// Installs the freshly reordered heap buffer and releases the old one.
-    ///
-    /// Reordering always lands the arena on the heap, so a file-mapped arena
-    /// changes backing here. Taking the old backing out *first* is what keeps
-    /// a mapped pointer away from `dealloc`: only a `Heap` predecessor
-    /// reaches the allocator, and a `FileMapped` one is released by dropping
-    /// it (#2112).
-    fn adopt_reordered_buffer(&mut self, new_ptr: NonNull<f32>) -> crate::error::Result<()> {
-        let previous = std::mem::replace(&mut self.backing, ArenaBacking::Heap);
-        let old_data = self.data;
-        let old_capacity = self.capacity;
-
-        self.data = new_ptr;
-        self.capacity = self.count;
-
-        if previous.is_heap() {
-            let old_layout = Self::layout(self.dimension, old_capacity)?;
-            // SAFETY: `old_data` was allocated with `old_layout` and is non-null
-            // (NonNull invariant).
-            // - Condition 1: the `is_heap` branch proves the allocator owns it.
-            // - Condition 2: `old_layout` matches its allocation parameters.
-            // SAFETY: Free the pre-reorder buffer now that its data has moved.
-            unsafe { dealloc(old_data.as_ptr().cast::<u8>(), old_layout) };
-        }
+        let dimension = self.dimension;
+        permute_in_place(self.live_flat_mut(), dimension, new_order);
         Ok(())
     }
 
-    /// Copies vectors from the current buffer to `dst` in permuted order.
-    fn copy_permuted_vectors(
-        &self,
-        dst: *mut f32,
-        new_order: &[usize],
-    ) -> crate::error::Result<()> {
-        let dim = self.dimension;
-        for (new_idx, &old_idx) in new_order.iter().enumerate() {
-            if old_idx >= self.count {
-                return Err(crate::error::Error::Internal(format!(
-                    "Reorder index {old_idx} out of bounds (count={})",
-                    self.count
-                )));
-            }
-            // SAFETY: src is within the current allocation (old_idx < count, count <= capacity).
-            // dst is within the new allocation (new_idx < new_order.len() == count).
-            // Both buffers are distinct (non-overlapping) allocations with room for `dim` f32s.
-            // - Condition 1: old_idx < count ensures src offset is in bounds.
-            // - Condition 2: new_idx < count ensures dst offset is in bounds.
-            // SAFETY: Out-of-place copy for cache-locality reordering.
-            unsafe {
-                ptr::copy_nonoverlapping(
-                    self.data.as_ptr().add(old_idx * dim),
-                    dst.add(new_idx * dim),
-                    dim,
-                );
-            }
-        }
-        Ok(())
+    /// The `count * dimension` live f32s as one mutable slice.
+    ///
+    /// Private to this module: it hands out write access to the whole arena
+    /// at once, which only the permutation needs. Everything else goes
+    /// through `get_mut`, whose bounds check is the point.
+    fn live_flat_mut(&mut self) -> &mut [f32] {
+        // `count <= capacity` and `capacity * dimension` was validated to fit
+        // in `usize` at allocation time, so this product cannot overflow.
+        let total = self.count.saturating_mul(self.dimension);
+        // SAFETY: `data` addresses `capacity * dimension` initialized f32s —
+        // both the heap allocation (`alloc_zeroed`) and the mapped arena
+        // (a file zero-extended to its declared length) start zeroed.
+        // - Condition 1: `data` is a valid, aligned `NonNull<f32>` pointer,
+        //   for the mapped backing because `DATA_OFFSET` is a whole number of
+        //   pages and the mmap base is page-aligned.
+        // - Condition 2: `total <= capacity * dimension`, so the slice stays
+        //   inside the allocation.
+        // - Condition 3: `&mut self` excludes any other live reference to
+        //   these bytes for the slice's lifetime.
+        // SAFETY: The in-place permutation needs one mutable view of the arena.
+        unsafe { std::slice::from_raw_parts_mut(self.data.as_ptr(), total) }
     }
 
     /// Computes dot product with another vector using SIMD.
@@ -272,4 +232,86 @@ pub fn batch_cosine_similarities(vectors: &[&[f32]], query: &[f32]) -> Vec<f32> 
     }
 
     results
+}
+
+/// Rejects anything that is not a bijection of `0..count`.
+///
+/// Checked before the permutation rather than during it: the in-place
+/// algorithm follows cycles, and a repeated index makes a cycle that never
+/// closes. Validating first turns that into an error instead of a hang, and
+/// also catches the duplicate-vector case the copying implementation used to
+/// accept silently.
+fn validate_permutation(new_order: &[usize], count: usize) -> crate::error::Result<()> {
+    let mut seen = vec![false; count];
+    for &old_idx in new_order {
+        let slot = seen.get_mut(old_idx).ok_or_else(|| {
+            crate::error::Error::Internal(format!(
+                "Reorder index {old_idx} out of bounds (count={count})"
+            ))
+        })?;
+        if *slot {
+            return Err(crate::error::Error::Internal(format!(
+                "Reorder index {old_idx} appears twice; new_order must be a permutation"
+            )));
+        }
+        *slot = true;
+    }
+    Ok(())
+}
+
+/// Applies `new_order` to `flat` without a second arena.
+///
+/// A permutation decomposes into disjoint cycles, and each cycle can be
+/// rotated with a single vector of scratch space. `moved` is what keeps the
+/// outer loop from re-entering a cycle it already rotated.
+///
+/// `new_order` is a validated bijection of `0..new_order.len()` and `flat`
+/// holds `new_order.len() * dimension` f32s, so every index computed here is
+/// in bounds.
+fn permute_in_place(flat: &mut [f32], dimension: usize, new_order: &[usize]) {
+    let mut scratch = vec![0.0_f32; dimension];
+    let mut moved = vec![false; new_order.len()];
+
+    for start in 0..new_order.len() {
+        if moved[start] {
+            continue;
+        }
+        // A fixed point is its own cycle; rotating it would copy a vector
+        // out to scratch and straight back.
+        if new_order[start] == start {
+            moved[start] = true;
+            continue;
+        }
+        rotate_cycle(flat, dimension, new_order, start, &mut moved, &mut scratch);
+    }
+}
+
+/// Rotates the one permutation cycle that contains `start`.
+///
+/// `flat[start]` is parked in `scratch` first, which frees the slot the cycle
+/// needs; every other member is then pulled from its source, whose own move
+/// has not happened yet. The vector in scratch closes the cycle.
+fn rotate_cycle(
+    flat: &mut [f32],
+    dimension: usize,
+    new_order: &[usize],
+    start: usize,
+    moved: &mut [bool],
+    scratch: &mut [f32],
+) {
+    scratch.copy_from_slice(&flat[start * dimension..][..dimension]);
+    let mut dst = start;
+    loop {
+        moved[dst] = true;
+        let src = new_order[dst];
+        if src == start {
+            flat[dst * dimension..][..dimension].copy_from_slice(scratch);
+            return;
+        }
+        flat.copy_within(
+            src * dimension..src * dimension + dimension,
+            dst * dimension,
+        );
+        dst = src;
+    }
 }
