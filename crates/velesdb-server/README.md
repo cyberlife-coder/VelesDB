@@ -165,7 +165,7 @@ unversioned `/…` form is kept for backward compatibility — its responses car
 | macOS aarch64 (Apple Silicon) | Supported | `.tar.gz` release artifact |
 | macOS x86_64 (Intel) | Supported | `.tar.gz` release artifact |
 | Windows x86_64 (MSVC) | Supported | Portable `.zip`; no signed MSI installer yet |
-| Docker | Supported | Repository `Dockerfile`: `rust:1.97-bookworm` builder, `debian:bookworm-slim` runtime, non-root user, port 8080 |
+| Docker | Supported | Repository `Dockerfile`: `rust:1.98-bookworm` builder, `debian:bookworm-slim` runtime, non-root user, port 8080 |
 | Rust toolchain | 1.90 or later | Workspace MSRV, for `cargo install` and source builds |
 | `velesdb-core` | 5.0.0 | Same workspace version; non-optional dependency with `openapi` + `persistence` enabled |
 | HTTP clients | Any | Plain JSON over HTTP/1.1, described by an OpenAPI 3.0 document |
