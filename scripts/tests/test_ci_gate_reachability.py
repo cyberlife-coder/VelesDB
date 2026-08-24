@@ -1246,10 +1246,6 @@ class DiffScopedGateReachabilityTests(unittest.TestCase):
                     )
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 # ---------------------------------------------------------------------------
 # Retargeting a PR must re-run the gates
 # ---------------------------------------------------------------------------
@@ -1397,3 +1393,88 @@ class RetargetGuardParserTests(unittest.TestCase):
             f"  alpha:\n    name: A\n    steps:\n      - if: {self.GUARD}\n        run: true\n"
         )
         self.assertEqual(jobs_with_guard(text), ([], ["alpha"]))
+
+
+# ---------------------------------------------------------------------------
+# A run that does nothing must not cancel a run that does something
+# ---------------------------------------------------------------------------
+
+CANCEL_IN_PROGRESS_RE = re.compile(r"^\s*cancel-in-progress:\s*(.+?)\s*$", re.MULTILINE)
+
+
+def cancel_in_progress(text: str) -> str:
+    """The workflow-level `cancel-in-progress:` value, verbatim."""
+    match = CANCEL_IN_PROGRESS_RE.search(text)
+    return "" if match is None else match.group(1)
+
+
+class NoOpRunCannotCancelRealCiTests(unittest.TestCase):
+    """The guard makes a title edit cheap; this keeps it from making CI absent.
+
+    `edited` fires on every title and body edit, and every job guards against
+    it — so such a run skips all 27 of them. It still joins the concurrency
+    group, though, and with an unconditional `cancel-in-progress: true` it
+    *cancelled the real run it arrived behind*, leaving an all-skipped run in
+    its place. Branch protection accepts a `skipped` required check, so
+    `CI Success` then reported green having run nothing: #1465's hole (a
+    required check that reflects no actual work) reached through a much more
+    common door than the retarget this trigger was added for.
+
+    Seen in production on PR #2125 — run 4312 (`synchronize`) cancelled 28
+    seconds in by run 4313, a body edit.
+    """
+
+    def setUp(self) -> None:
+        self.ci = CI_WORKFLOW.read_text(encoding="utf-8")
+
+    def test_a_no_op_run_does_not_cancel_the_run_it_arrives_behind(self) -> None:
+        value = cancel_in_progress(self.ci)
+        self.assertTrue(value, "ci.yml declares no `cancel-in-progress:` — parser or workflow broke")
+        self.assertNotEqual(
+            value,
+            "true",
+            "an unconditional `cancel-in-progress` lets a title/body edit — whose jobs all "
+            "skip — cancel the real CI run and stand in for it. Branch protection accepts "
+            "the resulting skipped check, so `CI Success` goes green having run nothing.",
+        )
+        self.assertRegex(
+            value,
+            RETARGET_GUARD_RE,
+            "`cancel-in-progress` must carry the same predicate as the job guard: a run may "
+            "cancel another only when it is not itself a no-op.",
+        )
+
+    def test_the_predicate_is_spelled_the_same_as_the_job_guard(self) -> None:
+        """Two spellings of \"this run is a no-op\" is how the two drift apart."""
+        guard_in_cancel = RETARGET_GUARD_RE.search(cancel_in_progress(self.ci))
+        self.assertIsNotNone(guard_in_cancel)
+        block = self.ci[self.ci.index("\n  ci-success:") :].split("\n    steps:", 1)[0]
+        guard_in_job = RETARGET_GUARD_RE.search(block)
+        self.assertIsNotNone(guard_in_job)
+        self.assertEqual(
+            guard_in_cancel.group(0),
+            guard_in_job.group(0),
+            "the concurrency predicate and the job guard must be character-identical, so "
+            "editing one and not the other cannot silently reopen the hole",
+        )
+
+
+class CancelInProgressParserTests(unittest.TestCase):
+    """RED-then-GREEN on synthetic text, per this module's parser contract."""
+
+    def test_parser_reads_a_literal_and_an_expression(self) -> None:
+        self.assertEqual(
+            cancel_in_progress("concurrency:\n  group: g\n  cancel-in-progress: true\n"),
+            "true",
+        )
+        self.assertEqual(
+            cancel_in_progress("concurrency:\n  group: g\n  cancel-in-progress: ${{ a != b }}\n"),
+            "${{ a != b }}",
+        )
+
+    def test_parser_reports_absence_rather_than_guessing(self) -> None:
+        self.assertEqual(cancel_in_progress("concurrency:\n  group: g\n"), "")
+
+
+if __name__ == "__main__":
+    unittest.main()
