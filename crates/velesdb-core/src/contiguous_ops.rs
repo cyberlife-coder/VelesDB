@@ -43,11 +43,12 @@ impl ContiguousVectors {
     /// the 293 MiB second arena the copy needed.
     ///
     /// Measured at 100 000 × 768-d over a single cycle covering every vector,
-    /// which is the unfriendly case (2026-08-24, 4-vCPU Linux container):
-    /// **0.044–0.053 s in place against 0.195–0.209 s** for the same
-    /// scattered reads gathered into a fresh buffer, and the two backings are
-    /// within noise of each other. Reproduce with the `reorder` mode of the
-    /// `resident_set` example.
+    /// which is the unfriendly case (2026-08-24, 4-vCPU Linux container,
+    /// eight runs): **0.044–0.060 s in place against 0.158–0.209 s** for the
+    /// same scattered reads gathered into a fresh buffer, and the two
+    /// backings are within noise of each other. Ranges rather than points
+    /// because a single run of either understates the spread on a shared
+    /// host. Reproduce with the `reorder` mode of the `resident_set` example.
     ///
     /// Those figures are with the arena resident, which is the state a
     /// post-build reorder finds it in. On pages the kernel has already
