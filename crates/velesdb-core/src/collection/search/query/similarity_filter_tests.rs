@@ -137,4 +137,82 @@ mod scan_score_semantics {
             "NaN maps to the metric's worst key (INFINITY for distances)"
         );
     }
+
+    // ========================================================================
+    // Regression (#2106 item 2): a query vector whose length doesn't match
+    // the stored vector can't be scored, but the old fallback reported 0.0 —
+    // a perfect match for a distance metric like Euclidean. That let a
+    // malformed `similarity() < threshold` query pass a mismatched vector as
+    // the best possible candidate instead of excluding it.
+    // ========================================================================
+
+    /// `filter_by_similarity` must exclude a candidate it can't score against
+    /// a length-mismatched query vector, not pass it as a fabricated match.
+    #[test]
+    fn test_filter_by_similarity_excludes_length_mismatched_query_vector() {
+        let (_dir, col) = setup(
+            DistanceMetric::Euclidean,
+            vec![tagged_point(1, vec![3.0, 0.0])],
+        );
+        let candidates = vec![crate::point::SearchResult::new(
+            tagged_point(1, vec![3.0, 0.0]),
+            3.0,
+        )];
+
+        // 3-dim query against a 2-dim collection. `similarity() > 0.9` on a
+        // distance metric inverts to "distance < 0.9", so the fabricated 0.0
+        // used to sail through as the most similar point there is.
+        let results = col.filter_by_similarity(
+            candidates,
+            "vector",
+            &[0.0, 0.0, 0.0],
+            crate::velesql::CompareOp::Gt,
+            0.9,
+            10,
+        );
+
+        assert!(
+            results.is_empty(),
+            "a length-mismatched query vector must never pass as a match, got {results:?}"
+        );
+    }
+
+    /// The `NOT similarity()` scan must likewise exclude, not fabricate a
+    /// score for, a candidate whose vector length doesn't match the query.
+    #[test]
+    fn test_not_similarity_scan_excludes_length_mismatched_vector() {
+        let (_dir, col) = setup(
+            DistanceMetric::Euclidean,
+            vec![tagged_point(1, vec![3.0, 0.0])],
+        );
+
+        // NOT similarity(v, $v) < 0.1, queried with a 3-dim vector against
+        // the 2-dim collection. Pre-fix, the mismatched point fabricated a
+        // 0.0 distance — which passed the `< 0.1` inner threshold and so was
+        // wrongly *excluded* by the NOT. It can't be scored either way, so
+        // the correct outcome is exclusion from the result set entirely.
+        let condition =
+            crate::velesql::Condition::Similarity(crate::velesql::SimilarityCondition {
+                field: "vector".to_string(),
+                vector: crate::velesql::VectorExpr::Literal(vec![0.0, 0.0, 0.0]),
+                operator: crate::velesql::CompareOp::Lt,
+                threshold: 0.1,
+            });
+        let condition = crate::velesql::Condition::Not(Box::new(condition));
+
+        let results = col
+            .execute_not_similarity_query_over(
+                &condition,
+                &std::collections::HashMap::new(),
+                10,
+                None,
+            )
+            .expect("test: NOT similarity scan");
+
+        assert!(
+            results.is_empty(),
+            "a length-mismatched vector can't be scored, so it must not appear \
+             on either side of NOT similarity(); got {results:?}"
+        );
+    }
 }

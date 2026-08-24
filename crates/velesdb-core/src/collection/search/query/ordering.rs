@@ -252,10 +252,8 @@ impl Collection {
                         None => return Ok(worst),
                     }
                 };
-                if vec.len() != order_vec.len() || vec.is_empty() {
-                    return Ok(worst);
-                }
-                Ok(self.compute_metric_score(&vec, order_vec))
+                // `None` covers the length-mismatched and empty cases.
+                Ok(self.compute_metric_score(&vec, order_vec).unwrap_or(worst))
             })
             .collect()
     }
