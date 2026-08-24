@@ -60,6 +60,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A vector that can't be scored is excluded, not scored 0.0.** Every
+  `similarity()` path fell back to `0.0` when the candidate and query
+  vectors had different lengths — but for a distance metric (Euclidean,
+  Hamming) `0.0` is a *perfect* match, so `WHERE similarity(v, $q) > t`
+  admitted the malformed candidate as the single most similar point in
+  the collection, and `ORDER BY` ranked it first. The fallback is gone
+  from all four sites: `compute_metric_score` now returns `Option<f32>`,
+  and the similarity filter, the `NOT similarity()` scan, the graph-
+  predicate WHERE evaluator and the anchored exact scan each drop the
+  candidate. `ORDER BY similarity()` keeps its existing metric-aware
+  worst sentinel. (#2106)
+
 - **Jaccard scores come back as similarities on every HNSW path.** The
   HNSW score transform passed the engine's `1 - jaccard` traversal
   distance through while the metric is declared higher-is-better, so the
