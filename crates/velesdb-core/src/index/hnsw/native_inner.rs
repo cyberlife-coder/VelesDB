@@ -659,6 +659,17 @@ impl NativeHnswInner {
         // traverses on codes can afford an evictable f32 arena. `path` is the
         // collection directory, which is where the arena file belongs — it is
         // a cache of `{basename}.vectors`, deleted when this graph drops.
+        //
+        // The mode decides this, and nothing else does: there is deliberately
+        // no switch. Measured at 100 000 x 768-d, filling the arena costs
+        // 58-62 ms on the heap against 0.30-1.35 s through the mapping (the
+        // second is I/O-bound and climbs across consecutive runs) — at worst
+        // 1.3% of the 106 s that separates an SQ8 build from a Full one, the
+        // rest being quantizer training and encoding. An opt-out would trade
+        // a new persisted setting and another dispatch branch for avoiding
+        // that, plus a cold-re-rank penalty a host with free memory never
+        // pays, since its pages are never reclaimed. See the resident-set
+        // tables in docs/guides/QUANTIZATION.md for what reopening it needs.
         let arena_dir = match storage_mode {
             crate::StorageMode::RaBitQ | crate::StorageMode::SQ8 => Some(path),
             _ => None,
