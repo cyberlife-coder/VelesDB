@@ -312,8 +312,36 @@ The residual 150.4 MiB is those codes plus the graph, which is the
 `codes + graph` the design aimed at. Total RSS rises 58.3 MiB: this buys a
 lower un-evictable floor, not a smaller process.
 
-The 4.8x build time is the honest other side: SQ8 trains a quantizer, encodes
-every vector, and writes the arena through a mapping instead of to the heap.
+The 4.8x build time is the honest other side — but almost none of it is the
+arena. Filling the same 100 000 vectors into each backing, with no graph and
+no quantizer in the frame:
+
+| Backing | Fill time |
+|---|---|
+| heap | 58–62 ms, stable across runs |
+| file-mapped | 0.30–1.35 s, rising with each consecutive run |
+
+The heap figure is steady; the mapped one is I/O-bound and climbs as repeated
+293 MiB writes fill the host's dirty-page pool, so it is reported as a range
+rather than a point. Even at its worst it is **1.3 s of the 106.4 s that
+separates an SQ8 build from a Full one — under 1.3%**. The rest is quantizer
+training and code encoding, which `SQ8` pays with any backing.
+
+### Why the arena is not configurable
+
+That 1.3% ceiling is the whole case. An opt-out would let a caller avoid at
+most ~1 s of build time and the cold-re-rank penalty, in exchange for
+234.6 MiB of un-evictable RAM, a new persisted setting, and another branch
+through the backend dispatch.
+
+It would also mostly avoid a cost that is not being paid. A host with free
+memory never has these pages reclaimed, so the 8-10 ms cold re-rank never
+happens there; the mapping only costs latency once memory is tight, which is
+exactly when its 61% saving is worth having. The trade is self-regulating.
+
+Two costs *are* paid unconditionally and are the honest counterweight: the
++11% total RSS, and the 0.24 s. Reopen this if either turns out to hurt a
+real deployment — measurements first, per the note above.
 
 ### Cold-page re-rank cost
 

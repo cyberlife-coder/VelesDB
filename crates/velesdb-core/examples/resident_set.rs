@@ -223,8 +223,12 @@ mod linux {
                 cold_page_cost(count, dimension);
                 return;
             }
+            "write" => {
+                arena_write_cost(count, dimension);
+                return;
+            }
             other => {
-                eprintln!("unknown mode {other:?}; expected full | sq8 | cold");
+                eprintln!("unknown mode {other:?}; expected full | sq8 | cold | write");
                 std::process::exit(2);
             }
         };
@@ -239,6 +243,44 @@ mod linux {
         // Alive to here: the reading above describes memory that must still be
         // held for it to mean anything.
         drop(db);
+    }
+
+    /// What the arena itself costs to fill, with nothing else in the frame.
+    ///
+    /// The `full` and `sq8` runs differ by two things at once — quantizer
+    /// training plus code encoding, *and* writing the f32 through a mapping
+    /// instead of to the heap — so their 4.8x build gap cannot be attributed
+    /// to either. Whether the mapped arena deserves an opt-out turns on which
+    /// term dominates, so this measures the arena term alone: the same
+    /// vectors pushed into each backing, no graph, no quantizer.
+    fn arena_write_cost(count: usize, dimension: usize) {
+        let dir = tempfile::tempdir().expect("a writable temp dir");
+        let vectors: Vec<Vec<f32>> = (0..count).map(|i| vector(i, dimension)).collect();
+
+        let mut heap = ContiguousVectors::new(dimension, count).expect("heap arena");
+        let heap_started = Instant::now();
+        for v in &vectors {
+            heap.push(v).expect("push succeeds");
+        }
+        let heap_elapsed = heap_started.elapsed();
+
+        let mut mapped =
+            ContiguousVectors::new_file_backed(&dir.path().join("arena.bin"), dimension, count)
+                .expect("file-backed arena");
+        let mapped_started = Instant::now();
+        for v in &vectors {
+            mapped.push(v).expect("push succeeds");
+        }
+        let mapped_elapsed = mapped_started.elapsed();
+
+        println!("Arena fill cost — {count} × {dimension}-d, no graph, no quantizer");
+        println!("  heap   {:>9.3} ms", heap_elapsed.as_secs_f64() * 1e3);
+        println!(
+            "  mapped {:>9.3} ms   ({:.2}× heap, +{:.1} ms)",
+            mapped_elapsed.as_secs_f64() * 1e3,
+            mapped_elapsed.as_secs_f64() / heap_elapsed.as_secs_f64().max(f64::MIN_POSITIVE),
+            (mapped_elapsed.as_secs_f64() - heap_elapsed.as_secs_f64()) * 1e3,
+        );
     }
 
     /// The honest price of evictability, isolated from graph traversal.

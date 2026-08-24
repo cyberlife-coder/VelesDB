@@ -156,6 +156,12 @@ All 5 variants (`Cosine`, `Euclidean`, `DotProduct`, `Hamming`, `Jaccard`) are s
 
 All 5 variants (`Full`, `SQ8`, `Binary`, `ProductQuantization`, `RaBitQ`) are supported in all 10 components (Haystack inherits via the Python binding pass-through).
 
+> **Documented divergence — the memory behaviour of `SQ8` and `RaBitQ` is not uniform across surfaces.** The API is: every component accepts and persists all 5 variants, which is what the 10/10 above measures. What differs is what the mode *does* to the resident set.
+>
+> Since #2112 those two modes keep their f32 vectors in a file-backed arena rather than an anonymous allocation, cutting anonymous RSS 61% at 100 000 × 768-d (see [QUANTIZATION.md](../guides/QUANTIZATION.md#measured-resident-set)). That arena is gated on the `persistence` feature and needs a writable collection directory. `velesdb-wasm` takes `velesdb-core` with `default-features = false`, so **on WASM and in the browser, `SQ8` and `RaBitQ` run with a heap arena and deliver no resident-set saving** — same mode name, same results, different memory profile. A native host that cannot host the arena file (read-only directory, no space) degrades the same way, by design and with a `warn!`.
+>
+> Nothing to fix in the bindings: they pass the mode through and core decides. It is recorded here because "supported everywhere" is true of the surface and would be misread as true of the benefit.
+
 | Component | Status |
 |-----------|--------|
 | Core | ✅ (source of truth) |
