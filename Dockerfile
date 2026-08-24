@@ -1,5 +1,5 @@
 # Build stage
-FROM rust:1.97-bookworm AS builder
+FROM rust:1.98-bookworm AS builder
 
 LABEL maintainer="VelesDB Team <contact@wiscale.fr>"
 LABEL version="5.2.0"
