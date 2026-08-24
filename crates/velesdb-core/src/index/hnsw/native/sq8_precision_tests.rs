@@ -277,3 +277,9 @@ fn test_concurrent_inserts_and_search_keep_store_aligned() {
         );
     }
 }
+
+/// A locality reorder must not desynchronize the int8 store from the graph.
+#[test]
+fn test_sq8_recall_survives_locality_reorder() {
+    suite::check_recall_survives_reorder::<Sq8Codec>();
+}

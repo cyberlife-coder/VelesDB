@@ -212,11 +212,27 @@ impl HnswIndex {
     /// Automatically skipped for small indices (< 1000 vectors) where the
     /// entire working set fits in L2 cache.
     ///
+    /// # Why the write lock
+    ///
+    /// The pass renumbers every node, and [`mappings`](Self::mappings) is
+    /// keyed by that numbering, so the two are only consistent together. A
+    /// read guard would let a search run between them and resolve external
+    /// ids against the old numbering — confident, wrong answers rather than
+    /// an error. `vacuum` takes the write lock to renumber for the same
+    /// reason. `ANALYZE` is the caller, so the exclusion lasts one
+    /// maintenance pass.
+    ///
     /// # Errors
     ///
     /// Returns an error if vector storage reordering fails.
     pub fn reorder_for_locality(&self) -> crate::error::Result<()> {
-        self.inner.read().reorder_for_locality()
+        let guard = self.inner.write();
+        let reordered = guard.reorder_for_locality()?;
+        if let Some(old_to_new) = reordered {
+            self.mappings.remap_indices(&old_to_new);
+        }
+        drop(guard);
+        Ok(())
     }
 }
 

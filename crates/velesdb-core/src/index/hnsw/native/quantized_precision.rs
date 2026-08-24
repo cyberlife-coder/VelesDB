@@ -591,6 +591,61 @@ impl<D: DistanceEngine, C: TraversalCodec> QuantizedPrecisionHnsw<D, C> {
         Ok(true)
     }
 
+    /// Reorders the graph for cache locality and rebuilds the store to match.
+    ///
+    /// The inner pass renumbers every node, and this backend's store is
+    /// positional — entry N holds node N's code — so a reorder that stopped
+    /// at the graph would leave every code describing a different vector
+    /// than the node it is read for. Traversal then walks a graph scored on
+    /// unrelated codes while the re-rank reports honest distances for
+    /// whatever that walk reached, so nothing downstream looks wrong:
+    /// measured at 2 000 x 64-d, recall@10 went from 1.000 to **0.000**
+    /// with no error anywhere (#2112).
+    ///
+    /// The store is rebuilt by re-encoding rather than permuted. Encoding is
+    /// deterministic, so the two produce the same store, and re-encoding
+    /// reuses the path that `install_trained_quantizer` already relies on
+    /// instead of adding a positional-permutation duty to every codec — one
+    /// more place a future store shape could get it wrong.
+    ///
+    /// A no-op beyond the graph pass when the backend is untrained or the
+    /// codec is disabled for this metric: there is no store to hold aligned.
+    ///
+    /// # Locking
+    ///
+    /// The install gate (write) drains in-flight inserts, exactly as
+    /// [`install_trained_quantizer`] needs it to — an insert that pushed to
+    /// the old store mid-reorder would land at a position the permutation
+    /// has already moved. `quantizer.write()` is then held across the whole
+    /// operation, and the vectors guard taken inside
+    /// `encode_all_in_node_order` is released before `store.write()`, which
+    /// keeps the documented `quantizer -> store` order (see
+    /// `docs/CONCURRENCY_MODEL.md`).
+    ///
+    /// [`install_trained_quantizer`]: Self::install_trained_quantizer
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the graph pass fails, or if re-encoding any
+    /// stored vector does.
+    pub(in crate::index::hnsw) fn reorder_for_locality(
+        &self,
+    ) -> crate::error::Result<Option<Vec<usize>>> {
+        let _gate = self.install_gate.write();
+        let quantizer_guard = self.quantizer.write();
+
+        let Some(old_to_new) = self.inner.reorder_for_locality()? else {
+            return Ok(None);
+        };
+        let Some(quantizer) = quantizer_guard.as_ref() else {
+            return Ok(Some(old_to_new));
+        };
+
+        let store = self.encode_all_in_node_order(quantizer)?;
+        *self.store.write() = Some(store);
+        Ok(Some(old_to_new))
+    }
+
     /// Encodes every vector in `inner` (`NodeId` order `0..len`) into a
     /// fresh store.
     ///
