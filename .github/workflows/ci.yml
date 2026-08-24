@@ -75,9 +75,27 @@ on:
   workflow_dispatch:
 
 # Annuler les runs précédents pour la même branche/PR
+#
+# `cancel-in-progress` carries the *same predicate as every job's guard*, and
+# that is the whole point: a run whose jobs all skip must not be allowed to
+# cancel a run whose jobs are doing the work. Without this, editing a PR's
+# title or body while CI is running killed that CI and replaced it with an
+# all-skipped run — and because branch protection accepts a `skipped` required
+# check, `CI Success` then reported green with nothing having run. That is
+# #1465's hole (a required check that does not reflect any actual work) reached
+# through a far more common door than the retarget `edited` was added for. Hit
+# in production on PR #2125: run 4312 (`synchronize`) was cancelled 28s in by
+# run 4313 (`edited`, a body edit), which skipped all 27 guarded jobs.
+#
+# Keeping the predicate character-identical to the job guard is deliberate —
+# two spellings of "this run is a no-op" is how the two drift apart and the
+# hole reopens. Pinned by scripts/tests/test_ci_gate_reachability.py.
+#
+# A no-op run does not cancel; it queues behind the real run and finishes in
+# seconds. A real run still cancels whatever is stale, no-op or not.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event.action != 'edited' || github.event.changes.base != null }}
 
 permissions:
   contents: read
