@@ -264,3 +264,51 @@ fn test_extract_metadata_filter_or_with_sparse_vector_search_returns_none() {
         "OR containing SparseVectorSearch must return None"
     );
 }
+
+// ============================================================================
+// Regression (#2106 item 2): an unscorable pair (length mismatch, or empty)
+// used to report 0.0 — a perfect score for a distance metric like Euclidean.
+// The signature now says "no score" instead of inventing one.
+// ============================================================================
+
+#[cfg(feature = "persistence")]
+mod metric_score_absence {
+    use crate::collection::Collection;
+    use crate::distance::DistanceMetric;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    fn collection(metric: DistanceMetric) -> (TempDir, Collection) {
+        let dir = tempfile::tempdir().expect("test: tempdir");
+        let col =
+            Collection::create(PathBuf::from(dir.path()), 2, metric).expect("test: collection");
+        (dir, col)
+    }
+
+    #[test]
+    fn test_compute_metric_score_reports_no_score_on_length_mismatch() {
+        for metric in [DistanceMetric::Euclidean, DistanceMetric::Cosine] {
+            let (_dir, col) = collection(metric);
+            assert_eq!(
+                col.compute_metric_score(&[1.0, 2.0], &[1.0, 2.0, 3.0]),
+                None,
+                "{metric:?}: a length mismatch has no score, not 0.0"
+            );
+        }
+    }
+
+    #[test]
+    fn test_compute_metric_score_reports_no_score_on_empty_vectors() {
+        let (_dir, col) = collection(DistanceMetric::Euclidean);
+        assert_eq!(col.compute_metric_score(&[], &[]), None);
+    }
+
+    #[test]
+    fn test_compute_metric_score_returns_the_metric_value_when_scorable() {
+        let (_dir, col) = collection(DistanceMetric::Euclidean);
+        let score = col
+            .compute_metric_score(&[3.0, 4.0], &[0.0, 0.0])
+            .expect("test: equal lengths are scorable");
+        assert!((score - 5.0).abs() < 1e-5, "euclidean 3-4-5, got {score}");
+    }
+}
