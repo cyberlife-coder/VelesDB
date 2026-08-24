@@ -51,7 +51,24 @@ on:
     # so leaving `types:` implicit here would have silently narrowed it: a
     # draft turned "ready" with no new commit would never be re-governed.
     # Pinned by scripts/tests/test_ci_gate_reachability.py.
-    types: [opened, synchronize, reopened, ready_for_review]
+    # `edited` is here for exactly one reason: **retargeting a PR**. Changing
+    # a PR's base emits `edited` and nothing else — no `synchronize`, no
+    # `reopened` — so without it a PR retargeted onto develop never gets a CI
+    # run at all, and `CI Success` (a required check) is simply absent. That
+    # is the #1465 failure mode again: not red, *missing*, which blocks the
+    # merge with no way out but an unrelated push. Hit in production on
+    # PR #2118, opened against a feature branch and retargeted here.
+    #
+    # `edited` also fires on every title and body edit, which must NOT cost a
+    # full CI run — so every job in this workflow carries a guard admitting
+    # `edited` only when `changes.base` is present. `ci-success` carries it
+    # too, and that is load-bearing: it asserts `result == 'success'` for each
+    # of its needs, so leaving it unguarded while its needs skipped would turn
+    # every title edit red. All jobs skipping together yields a `skipped`
+    # check-run, which branch protection accepts.
+    #
+    # Pinned by scripts/tests/test_ci_gate_reachability.py.
+    types: [opened, synchronize, reopened, ready_for_review, edited]
   # Manual trigger so coverage can be refreshed on demand (e.g. after a
   # config-only commit to main that skipped the path-filtered CI, leaving the
   # Codacy coverage badge stale).
@@ -83,6 +100,7 @@ jobs:
   # ===========================================================================
   lint:
     name: Lint & Format
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -457,6 +475,7 @@ jobs:
   # ===========================================================================
   test:
     name: Tests
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -568,6 +587,7 @@ jobs:
   # ===========================================================================
   security:
     name: Security Audit
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -596,6 +616,7 @@ jobs:
   # ===========================================================================
   hygiene:
     name: Hygiene (typos, taplo, machete)
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -637,6 +658,7 @@ jobs:
   # `cargo check` runs are the cost this gate is allowed to have.
   memory-feature-matrix:
     name: Memory Feature Matrix
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -664,6 +686,7 @@ jobs:
 
   wasm-check:
     name: WASM Build Check
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -720,6 +743,7 @@ jobs:
   # ===========================================================================
   openapi-drift:
     name: OpenAPI Drift Check
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -768,6 +792,12 @@ jobs:
   #
   # No toolchain, no build: pure Python over committed text, seconds.
   # ===========================================================================
+  # Deliberately carries NO job-level `if:` — not even the retarget guard
+  # every other job here has. This is the job that runs the guard suites' own
+  # self-tests, so a condition that can skip it is a condition that can disarm
+  # them. It therefore runs on title-only edits too, which costs one cheap
+  # Python job. `test_the_gate_job_cannot_opt_out_of_blocking` pins the
+  # absence; `RETARGET_GUARD_EXEMPT` records the exemption.
   mcp-doc-contract:
     name: MCP Doc Contract
     runs-on: ubuntu-latest
@@ -850,6 +880,7 @@ jobs:
   # ===========================================================================
   bench-sift1m-compile:
     name: Bench SIFT1M Compile Check
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -885,7 +916,7 @@ jobs:
     # Runs on PRs too (and gates CI Success) so connector regressions are
     # caught before merge — the LangChain suite once rotted to 21 failures
     # while this job was push-only and advisory.
-    if: github.event_name == 'pull_request' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'))
+    if: (github.event_name == 'pull_request' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'))) && (github.event.action != 'edited' || github.event.changes.base != null)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -965,6 +996,7 @@ jobs:
   # ===========================================================================
   python-sdk-tests:
     name: Python SDK Tests
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
     needs: test
     timeout-minutes: 25
@@ -1003,6 +1035,7 @@ jobs:
   # excluded from `cargo test --workspace`, so this is its ONLY functional gate.
   node-binding-tests:
     name: Node Binding Tests
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
     needs: test
     timeout-minutes: 25
@@ -1090,6 +1123,7 @@ jobs:
   # ===========================================================================
   node-windows-changed:
     name: Node Binding (Windows) — path filter
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
     outputs:
       relevant: ${{ steps.filter.outputs.relevant }}
@@ -1173,6 +1207,7 @@ jobs:
   # ===========================================================================
   node-binding-tests-windows:
     name: Node Binding Tests (Windows)
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: windows-latest
     needs: [test, node-windows-changed]
     timeout-minutes: 25
@@ -1224,7 +1259,7 @@ jobs:
     # llvm-cov + gpu features runs well within this.
     timeout-minutes: 45
     needs: test
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    if: (github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')) && (github.event.action != 'edited' || github.event.changes.base != null)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -1295,6 +1330,7 @@ jobs:
   # ===========================================================================
   velesql-conformance:
     name: VelesQL Conformance
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1346,6 +1382,7 @@ jobs:
   # ===========================================================================
   perf-smoke:
     name: Perf Smoke Test
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
     needs: test
     steps:
@@ -1393,7 +1430,7 @@ jobs:
     name: Benchmarks
     runs-on: ubuntu-latest
     needs: test
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: (github.ref == 'refs/heads/main' && github.event_name == 'push') && (github.event.action != 'edited' || github.event.changes.base != null)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -1431,7 +1468,7 @@ jobs:
     name: SonarCloud Analysis
     runs-on: ubuntu-latest
     needs: [lint, test, security, coverage]
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+    if: (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')) && (github.event.action != 'edited' || github.event.changes.base != null)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1474,26 +1511,32 @@ jobs:
   # ===========================================================================
   gate-contracts:
     name: Gate Contracts
+    if: github.event.action != 'edited' || github.event.changes.base != null
     uses: ./.github/workflows/gate-contracts.yml
 
   doc-contract:
     name: Doc Contract
+    if: github.event.action != 'edited' || github.event.changes.base != null
     uses: ./.github/workflows/doc-contract.yml
 
   promise-contract:
     name: Promise Contract
+    if: github.event.action != 'edited' || github.event.changes.base != null
     uses: ./.github/workflows/promise-contract.yml
 
   production-gates:
     name: Production Gates
+    if: github.event.action != 'edited' || github.event.changes.base != null
     uses: ./.github/workflows/production-gates.yml
 
   propagation-guard:
     name: Propagation Guard
+    if: github.event.action != 'edited' || github.event.changes.base != null
     uses: ./.github/workflows/propagation-guard.yml
 
   binary-size:
     name: Binary Size Gate
+    if: github.event.action != 'edited' || github.event.changes.base != null
     uses: ./.github/workflows/binary-size.yml
 
   # ===========================================================================
@@ -1510,6 +1553,7 @@ jobs:
   # ===========================================================================
   perf-path-changed:
     name: Perf Gate (E2E) — path filter
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
     outputs:
       relevant: ${{ steps.filter.outputs.relevant }}
@@ -1565,6 +1609,7 @@ jobs:
 
   perf-gate-e2e:
     name: Perf Gate (E2E) — recall ≥ 0.95 + p50 sanity floor (10K/384D)
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
     needs: [test, perf-path-changed]
     timeout-minutes: 30
@@ -1696,6 +1741,7 @@ jobs:
   # pr-governance.yml declares `pull-requests: read` too.
   pr-governance:
     name: PR Governance
+    if: github.event.action != 'edited' || github.event.changes.base != null
     permissions:
       contents: read
       pull-requests: read
@@ -1708,7 +1754,7 @@ jobs:
     name: CI Success
     runs-on: ubuntu-latest
     needs: [lint, test, security, hygiene, wasm-check, memory-feature-matrix, openapi-drift, mcp-doc-contract, velesql-conformance, perf-smoke, bench-sift1m-compile, perf-gate-e2e, python-sdk-tests, python-integrations, node-binding-tests, node-binding-tests-windows, gate-contracts, doc-contract, promise-contract, production-gates, propagation-guard, binary-size, pr-governance, sonarcloud]
-    if: always()
+    if: (always()) && (github.event.action != 'edited' || github.event.changes.base != null)
     steps:
       # sonarcloud is intentionally absent from the gate below: it is an
       # external service (skipped on forks / token-less runs) and must not

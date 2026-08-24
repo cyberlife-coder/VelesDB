@@ -114,10 +114,19 @@ def chain_comparisons(text: str) -> "list[tuple[str, str, str]]":
 def chain_failure_branch(text: str) -> str:
     """The `|| { … }` tail of the chain — what runs when a job is not green."""
     chain = _chain_text(text)
-    marker = chain.find("||")
+    # Narrowed to the `run:` body first. Everything after ci-success's
+    # `needs:` is in scope here, its `if:` included, and a job condition may
+    # legitimately contain `||` — the retarget guard does. Scanning from the
+    # shell block keeps this on the chain's own tail while still seeing a
+    # branch neutered to something brace-less like `|| true`.
+    run_at = chain.find("run:")
+    if run_at == -1:
+        raise AssertionError("the ci-success job has no `run:` chain")
+    body = chain[run_at:]
+    marker = body.find("||")
     if marker == -1:
         raise AssertionError("the ci-success chain has no `|| …` failure branch")
-    return chain[marker:chain.find("\n", marker)]
+    return body[marker:body.find("\n", marker)]
 
 
 def job_block(text: str, job: str) -> str:
@@ -1074,7 +1083,7 @@ class GuardRegistryDisarmTests(unittest.TestCase):
     def test_dropping_ready_for_review_from_ci_is_detected(self) -> None:
         text = CI_WORKFLOW.read_text(encoding="utf-8")
         broken = text.replace(
-            "    types: [opened, synchronize, reopened, ready_for_review]\n", "", 1
+            "    types: [opened, synchronize, reopened, ready_for_review, edited]\n", "", 1
         )
         self.assertIn("ready_for_review", trigger_block(text, "pull_request"))
         self.assertNotIn("ready_for_review", trigger_block(broken, "pull_request"))
@@ -1239,3 +1248,152 @@ class DiffScopedGateReachabilityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------------------
+# Retargeting a PR must re-run the gates
+# ---------------------------------------------------------------------------
+
+PR_TYPES_RE = re.compile(r"^\s*types:\s*\[([^\]]*)\]", re.MULTILINE)
+JOB_ID_RE = re.compile(r"^  ([a-z][a-z0-9_-]*):$", re.MULTILINE)
+# The clause that admits `edited` only for a base change. Whitespace-tolerant
+# so reformatting the expression does not read as removing it.
+# The one job that must NOT carry the guard, with its reason — same shape as
+# CHAIN_EXEMPT above. `mcp-doc-contract` runs the guard suites' own self-tests,
+# and `test_the_gate_job_cannot_opt_out_of_blocking` forbids it any job-level
+# `if:` at all: a condition that can skip it can disarm them. It pays for that
+# by running on title-only edits, which is one cheap Python job.
+RETARGET_GUARD_EXEMPT = {"mcp-doc-contract": "runs the guard self-tests; must never be skippable"}
+
+RETARGET_GUARD_RE = re.compile(
+    r"github\.event\.action\s*!=\s*'edited'\s*\|\|\s*github\.event\.changes\.base\s*!=\s*null"
+)
+
+
+def pull_request_types(text: str) -> list[str]:
+    """Event types the workflow's `pull_request:` trigger subscribes to."""
+    match = PR_TYPES_RE.search(text)
+    if match is None:
+        return []
+    return [t.strip() for t in match.group(1).split(",") if t.strip()]
+
+
+def jobs_with_guard(text: str) -> tuple[list[str], list[str]]:
+    """Splits ci.yml's top-level jobs into (guarded, unguarded)."""
+    starts = [(m.group(1), m.start()) for m in JOB_ID_RE.finditer(text)]
+    # `on:` keys (push/pull_request/workflow_dispatch) match the job shape;
+    # everything from `jobs:` onward is a real job.
+    jobs_at = text.index("\njobs:\n")
+    starts = [(name, at) for name, at in starts if at > jobs_at]
+    guarded, unguarded = [], []
+    for index, (name, at) in enumerate(starts):
+        end = starts[index + 1][1] if index + 1 < len(starts) else len(text)
+        block = text[at:end]
+        head = block.split("\n    steps:", 1)[0]
+        (guarded if RETARGET_GUARD_RE.search(head) else unguarded).append(name)
+    return guarded, unguarded
+
+
+class RetargetRerunTests(unittest.TestCase):
+    """Changing a PR's base must not leave a stale verdict or absent checks.
+
+    Retargeting emits `pull_request.edited` and nothing else — no
+    `synchronize`, no `reopened`. Before this, neither workflow listened to
+    it, with two consequences seen in production on PR #2118:
+
+      * `PR Governance` kept reporting its refusal against the *old* base
+        forever. Re-running cannot clear that: GitHub replays the original
+        event payload, stale `BASE_REF` included.
+      * `ci.yml` (filtered to `branches: [main, develop]`) had never run at
+        all for a PR opened against a feature branch, so after retargeting
+        onto develop the required `CI Success` check was *absent* — the
+        #1465 failure mode, which blocks a merge with no way out.
+    """
+
+    def setUp(self) -> None:
+        self.ci = CI_WORKFLOW.read_text(encoding="utf-8")
+        self.governance = (WORKFLOW_DIR / "pr-governance.yml").read_text(encoding="utf-8")
+
+    def test_both_workflows_listen_for_a_retarget(self) -> None:
+        for label, text in (("ci.yml", self.ci), ("pr-governance.yml", self.governance)):
+            with self.subTest(workflow=label):
+                self.assertIn(
+                    "edited",
+                    pull_request_types(text),
+                    f"{label} must subscribe to `edited`, the only event a base change emits; "
+                    "without it a retargeted PR keeps a stale verdict and never re-runs",
+                )
+
+    def test_every_ci_job_guards_against_a_title_only_edit(self) -> None:
+        guarded, unguarded = jobs_with_guard(self.ci)
+        unguarded = [j for j in unguarded if j not in RETARGET_GUARD_EXEMPT]
+        self.assertEqual(
+            unguarded,
+            [],
+            "`edited` also fires on every title/body edit. Each job must admit it only "
+            "when `github.event.changes.base` is set, or routine description edits cost a "
+            f"full CI run. Unguarded: {unguarded}",
+        )
+        self.assertGreater(len(guarded), 20, "job discovery looks broken, not the guard")
+
+    def test_the_exempt_job_really_is_unguarded(self) -> None:
+        """An exemption nobody exercises is an exemption that has rotted."""
+        _guarded, unguarded = jobs_with_guard(self.ci)
+        for job in RETARGET_GUARD_EXEMPT:
+            with self.subTest(job=job):
+                self.assertIn(
+                    job,
+                    unguarded,
+                    f"`{job}` is listed exempt but now carries the guard — drop the "
+                    "exemption, or the list is documenting a rule that no longer holds",
+                )
+
+    def test_ci_success_carries_the_guard_too(self) -> None:
+        block = self.ci[self.ci.index("\n  ci-success:") :]
+        self.assertRegex(
+            block.split("\n    steps:", 1)[0],
+            RETARGET_GUARD_RE,
+            "ci-success asserts `result == 'success'` for each of its needs, so leaving it "
+            "unguarded while its needs skip on a title edit turns every such edit RED. It "
+            "must skip with them — a skipped check-run is accepted by branch protection.",
+        )
+
+
+class RetargetGuardParserTests(unittest.TestCase):
+    """RED-then-GREEN on synthetic text, per this module's parser contract."""
+
+    GUARD = "github.event.action != 'edited' || github.event.changes.base != null"
+
+    def test_types_parser_reads_the_list(self) -> None:
+        self.assertEqual(
+            pull_request_types("on:\n  pull_request:\n    types: [opened, edited]\n"),
+            ["opened", "edited"],
+        )
+        self.assertEqual(pull_request_types("on:\n  push:\n"), [])
+
+    def test_guard_parser_separates_guarded_from_unguarded(self) -> None:
+        text = (
+            "on:\n  pull_request:\n    types: [opened]\n"
+            "\njobs:\n"
+            f"  alpha:\n    name: A\n    if: {self.GUARD}\n    steps:\n      - run: true\n"
+            "  beta:\n    name: B\n    steps:\n      - run: true\n"
+        )
+        guarded, unguarded = jobs_with_guard(text)
+        self.assertEqual((guarded, unguarded), (["alpha"], ["beta"]))
+
+    def test_guard_parser_accepts_a_composed_condition(self) -> None:
+        text = (
+            "on:\n  pull_request:\n    types: [opened]\n"
+            "\njobs:\n"
+            f"  alpha:\n    name: A\n    if: (always()) && ({self.GUARD})\n    steps:\n      - run: true\n"
+        )
+        self.assertEqual(jobs_with_guard(text), (["alpha"], []))
+
+    def test_guard_parser_ignores_a_match_inside_steps(self) -> None:
+        """A guard in a step is not a guard on the job."""
+        text = (
+            "on:\n  pull_request:\n    types: [opened]\n"
+            "\njobs:\n"
+            f"  alpha:\n    name: A\n    steps:\n      - if: {self.GUARD}\n        run: true\n"
+        )
+        self.assertEqual(jobs_with_guard(text), ([], ["alpha"]))
