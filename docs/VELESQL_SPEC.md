@@ -2289,9 +2289,12 @@ CREATE METADATA COLLECTION tags
 | `rabitq` | search-path mode | quantized traversal (wired end-to-end) |
 
 Choose `rabitq`, `sq8` (Euclidean/Cosine) or `pq` (via `TRAIN QUANTIZER`)
-for a quantized search path. All quantized paths keep the f32 vectors
-resident for exact re-ranking, so none of them shrinks the resident-memory
-floor.
+for a quantized search path. All quantized paths keep the f32 vectors for
+exact re-ranking, so total resident memory does not shrink — for `rabitq`
+and `sq8` it rises, because the codes are additive. What `rabitq` and `sq8`
+do shrink is the *un-evictable* share: their f32 sits in a file-backed arena
+the kernel can reclaim. Measured at 100 000 x 768-d, anonymous RSS falls 61%
+while total RSS rises 11%. See `docs/guides/QUANTIZATION.md`.
 
 #### Schema Type Names
 

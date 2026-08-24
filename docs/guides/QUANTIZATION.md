@@ -53,11 +53,16 @@ reopen, but currently changes neither memory use nor the search path — use
 > metrics whose ordering int8 L2 cannot preserve (DotProduct, Hamming,
 > Jaccard), search stays exact f32.
 
-> **Resident-memory caveat:** same as RaBitQ below — the f32 vectors stay
-> resident for exact re-ranking and the 1-byte codes are held *alongside*
-> them. The 4x figure is the size of the codes, not of the resident set. A
-> codes-resident variant for small-RAM devices is part of
-> [#2112](https://github.com/cyberlife-coder/VelesDB/issues/2112).
+> **What the 4x figure is, and what it is not:** it is the size of the
+> codes. The f32 vectors are still there — exact re-ranking needs them — but
+> since [#2112](https://github.com/cyberlife-coder/VelesDB/issues/2112) they
+> live in a file-backed arena rather than an anonymous allocation, so the
+> kernel can reclaim them. Measured at 100 000 x 768-d: **anonymous RSS falls
+> from 385 MiB to 150 MiB**, a 61% cut in the memory a device without swap
+> cannot get back. Total RSS *rises* 11% over `Full` — the f32 moves rather
+> than disappears, and the codes are additive on top. The trade is more total
+> memory for less un-evictable memory. See
+> [Measured resident set](#measured-resident-set) below.
 
 Each `f32` value (4 bytes) is converted to a `u8` (1 byte):
 
@@ -231,13 +236,15 @@ OPQ applies an orthogonal rotation to the vectors before PQ quantization. This r
 > 1000-insertion threshold) is also persisted to `rabitq.idx` on a full
 > flush, at parity with the PQ codebook.
 
-> **Resident-memory caveat:** the RaBitQ backend keeps the full-precision
-> f32 vectors in the index for exact re-ranking, with the 1-bit codes held
-> *alongside* them. The 32x figure is the size of the codes, not of the
-> resident set — today the mode buys traversal speed (32x memory-bandwidth
-> reduction in the hot loop), not a smaller RAM floor. A codes-resident
-> variant for small-RAM devices is part of
-> [#2112](https://github.com/cyberlife-coder/VelesDB/issues/2112).
+> **What the 32x figure is, and what it is not:** it is the size of the
+> codes. The backend keeps the full-precision f32 for exact re-ranking, with
+> the 1-bit codes alongside. Since
+> [#2112](https://github.com/cyberlife-coder/VelesDB/issues/2112) that f32
+> sits in a file-backed arena, so it is evictable rather than pinned; the mode
+> buys both traversal speed (32x memory-bandwidth reduction in the hot loop)
+> and a lower un-evictable floor. The measurement below was taken on SQ8; the
+> arena is shared by both quantized backends, so RaBitQ moves the same 4
+> bytes per dimension out of anonymous memory.
 
 ### How does it work?
 
@@ -278,13 +285,66 @@ behaves as `full`.
 
 ---
 
+## Measured resident set
+
+Taken 2026-08-24 on a 4-vCPU Linux container, 16 GiB RAM, via
+`cargo run --release --example resident_set --features persistence -- <mode>`
+with `mode` one of `full`, `sq8`, `cold`, one per process. Numbers
+are deltas across building one collection of **100 000 x 768-d** vectors, each
+mode in its own process — the first collection built in a process absorbs
+every one-time cost (thread pools, allocator arenas), so measuring both in one
+run charges the whole difference to whichever ran first.
+
+| Mode | Anonymous RSS | File-backed RSS | Total | Build |
+|---|---|---|---|---|
+| `Full` (heap arena) | **385.0 MiB** | 132.9 MiB | 517.9 MiB | 28.2 s |
+| `SQ8` (file-backed arena) | **150.4 MiB** | 425.8 MiB | 576.2 MiB | 134.6 s |
+| Delta | **−234.6 MiB (−61%)** | +292.9 MiB | +58.3 MiB (+11%) | 4.8x |
+
+**Read the anonymous column.** A mapped file's pages count toward total RSS
+while they are resident, so `VmRSS` barely moves and reporting it would hide
+the change. What matters on a device without swap is `RssAnon`: the kernel can
+reclaim file-backed pages by dropping them, and anonymous pages only by
+swapping. The file-backed arena moves 293.0 MiB — exactly `100 000 x 768 x 4` —
+out of the column that cannot be reclaimed — anonymous RSS falls 234.6 MiB,
+not the full 293.0, because the 73.2 MiB of codes land in that same column.
+The residual 150.4 MiB is those codes plus the graph, which is the
+`codes + graph` the design aimed at. Total RSS rises 58.3 MiB: this buys a
+lower un-evictable floor, not a smaller process.
+
+The 4.8x build time is the honest other side: SQ8 trains a quantizer, encodes
+every vector, and writes the arena through a mapping instead of to the heap.
+
+### Cold-page re-rank cost
+
+The price of evictability, measured on 100 scattered vectors — a re-rank-shaped
+access — with every dimension read, since a 3 KiB vector straddles one or two
+pages and a distance touches all of them.
+
+| State | Median | vs warm |
+|---|---|---|
+| warm | 0.14 ms | — |
+| pages dropped, page cache warm | 0.55 ms | +0.4 ms |
+| pages dropped, page cache dropped | 8–10 ms | +8 to +9 ms |
+
+The two cold rows are different events and the gap between them is a factor of
+15. `MADV_DONTNEED` alone takes the process's pages while the file's contents
+stay cached, so the next touch is a minor fault. Reclaim under real memory
+pressure takes the cache too, and the next touch is a disk read — that bottom
+row is what an edge device actually pays, and it varies about 15% run to run
+on shared storage.
+
+Budget roughly **8-10 ms of added latency on the first query after a reclaim**,
+per 100 candidates re-ranked. Subsequent queries touching the same vectors are
+warm again.
+
 ## Choosing the right method
 
 | Scenario | Recommendation |
 |----------|----------------|
 | **General production** | f32 (default); `sq8` on Euclidean/Cosine at 10K+ vectors for a lighter traversal hot loop |
 | **Large dataset (100K+)** | PQ m=8 + rescore |
-| **Very limited RAM** | f32 with modest HNSW `M` — no current mode shrinks the resident set (see [#2112](https://github.com/cyberlife-coder/VelesDB/issues/2112)) |
+| **Very limited RAM** | `sq8` or `rabitq` — the f32 arena is file-backed, cutting anonymous RSS 61% at 100K x 768-d; budget ~8 ms per cold re-rank |
 | **Maximum precision** | f32 (no quantization) |
 | **High compression + good recall** | RaBitQ |
 | **Fingerprints/hashes** | `BinaryQuantizedVector` primitives (direct use) |

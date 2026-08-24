@@ -127,11 +127,14 @@ pub const STORAGE_MODE_NAMES: &[&str] = &["full", "sq8", "binary", "pq", "rabitq
 ///
 /// **Search-path modes (`RaBitQ`, `SQ8`, `ProductQuantization`)** are the
 /// quantized paths wired into the query hot path. All of them keep the f32
-/// vectors resident for exact re-ranking, so none of them shrinks the
-/// resident-memory floor — the codes are additive (see the resident-memory
-/// note in `docs/guides/QUANTIZATION.md`). `Binary` is accepted and
-/// persisted so the intent survives a reopen, but changes neither memory
-/// use nor the search path today.
+/// vectors for exact re-ranking, so total resident memory is not reduced —
+/// for `RaBitQ` and `SQ8` it rises, since the codes are additive. What those
+/// two shrink is the *un-evictable* floor: their f32 lives in a file-backed
+/// arena the kernel can reclaim. Measured at 100 000 x 768-d, anonymous RSS
+/// falls 61% (385 -> 150 MiB) while total RSS rises 11%. See the measured
+/// tables in `docs/guides/QUANTIZATION.md`. `Binary` is accepted and persisted so
+/// the intent survives a reopen, but changes neither memory use nor the
+/// search path today.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
@@ -146,8 +149,11 @@ pub enum StorageMode {
     /// type=sq8`) and persists to `sq8.idx`; traversal engages at 10 000+
     /// vectors, below which search stays exact f32. On other metrics (int8
     /// L2 cannot preserve their ordering) the collection behaves as
-    /// [`Full`]. Resident memory is NOT reduced: f32 vectors stay resident
-    /// for re-ranking and the codes are additive.
+    /// [`Full`]. The f32 kept for re-ranking sits in a file-backed arena, so
+    /// it is evictable rather than pinned. Measured at 100 000 x 768-d against
+    /// [`Full`]: anonymous RSS 385 -> 150 MiB (-61%), total RSS +11% because
+    /// the codes are additive, and the first re-rank after a reclaim pays
+    /// 8-10 ms per 100 candidates.
     ///
     /// [`Full`]: StorageMode::Full
     SQ8,

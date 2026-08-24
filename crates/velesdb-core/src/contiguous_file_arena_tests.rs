@@ -343,3 +343,57 @@ fn creating_over_an_existing_file_discards_its_contents() {
         );
     }
 }
+
+/// Eviction must not change a single vector.
+///
+/// The property callers depend on: dropping the resident pages is invisible
+/// to anyone reading the arena. Everything above `ContiguousVectors` treats a
+/// mapped arena as memory, and a re-rank that scored against re-faulted pages
+/// holding anything other than the original vectors would return wrong
+/// neighbours with no error anywhere.
+///
+/// Note what this does *not* pin. It passes with `evict`'s flush removed,
+/// which was checked: on Linux the mapping's pages are the file's page-cache
+/// pages, so `MADV_DONTNEED` cannot lose a write. The flush is there to make
+/// a subsequent page-cache drop deterministic, not to keep this test green.
+///
+/// Sized to span many pages — a single-page arena would pass on luck.
+#[test]
+fn evicting_preserves_every_vector() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("evict.arena");
+    let dimension = 128;
+    let count = 512; // 256 KiB — 64 pages, well past a single-page fluke.
+
+    let mut arena = ContiguousVectors::new_file_backed(&path, dimension, count).expect("create");
+    let written = fill(&mut arena, count, dimension);
+
+    arena.evict_backing().expect("eviction succeeds");
+
+    for (i, expected) in written.iter().enumerate() {
+        assert_eq!(
+            arena.get(i).expect("slot present"),
+            expected.as_slice(),
+            "vector {i} changed across an evict; the flush before MADV_DONTNEED is missing \
+             or ineffective, and a re-rank would score against wrong vectors"
+        );
+    }
+}
+
+/// Eviction is a no-op on a heap arena, not an error.
+///
+/// The measurement path calls this on whatever arena it is handed. A heap
+/// arena has no file to drop pages to, and that asymmetry is the feature —
+/// it must not surface as a failure.
+#[test]
+fn evicting_a_heap_arena_is_a_no_op() {
+    let dimension = 8;
+    let mut arena = ContiguousVectors::new(dimension, 16).expect("heap arena");
+    let written = fill(&mut arena, 16, dimension);
+
+    arena.evict_backing().expect("a heap arena reports success");
+
+    for (i, expected) in written.iter().enumerate() {
+        assert_eq!(arena.get(i).expect("slot present"), expected.as_slice());
+    }
+}

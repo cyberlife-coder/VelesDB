@@ -164,6 +164,11 @@ name = "profile_batch_insert"
 path = "examples/profile_batch_insert.rs"
 required-features = ["persistence"]
 
+[[example]]
+name = "resident_set"
+path = "examples/resident_set.rs"
+required-features = ["persistence"]
+
 [[test]]
 name = "scale_recall_100k"
 required-features = ["persistence"]
