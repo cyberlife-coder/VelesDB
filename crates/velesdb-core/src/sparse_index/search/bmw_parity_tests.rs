@@ -357,6 +357,47 @@ fn test_sparse_search_upsert_across_segments_uses_latest_weight() {
     );
 }
 
+// ---------- REGRESSION: exact cancellation must not duplicate a document ----------
+//
+// The dense accumulator used to infer "have I seen this document before?"
+// from `scores[idx] == 0.0`. A negative query weight can drive an
+// accumulated score back to exactly zero — the "like A but not B" shape,
+// where both vectors carry a shared term at the same weight — after which
+// the next term's posting sees a zero and records the document a second
+// time. The duplicate then occupies a slot in the top-k heap, evicting a
+// document that belongs there.
+
+#[test]
+fn test_sparse_search_cancelling_query_returns_distinct_documents() {
+    let index = SparseInvertedIndex::new();
+    index.insert(0, &SparseVector::new(vec![(1, 1.0), (2, 1.0), (3, 1.0)]));
+    index.insert(1, &SparseVector::new(vec![(1, 5.0)]));
+    index.insert(2, &SparseVector::new(vec![(3, 0.75)]));
+
+    // doc 0 = 1.0 - 1.0 + 2.0 = 2.0, doc 1 = 5.0, doc 2 = 1.5.
+    // Term 2 cancels doc 0's running score to exactly 0.0 before term 3 runs.
+    let query = SparseVector::new(vec![(1, 1.0), (2, -1.0), (3, 2.0)]);
+
+    let ms = sparse_search(&index, &query, 3);
+    let bf = brute_force_search(&index, &query, 3);
+
+    let mut seen: HashSet<u64> = HashSet::new();
+    for doc in &ms {
+        assert!(
+            seen.insert(doc.doc_id),
+            "doc {} returned more than once: {:?}",
+            doc.doc_id,
+            doc_ids(&ms)
+        );
+    }
+    assert_eq!(
+        doc_ids(&bf),
+        doc_ids(&ms),
+        "cancelling query: IDs diverge from brute-force"
+    );
+    assert_scores_close(&bf, &ms, "cancelling query");
+}
+
 #[test]
 fn test_sparse_search_deterministic_across_invocations() {
     let corpus = gen_positive_corpus(500, 11);

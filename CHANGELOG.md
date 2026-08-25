@@ -66,6 +66,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A sparse query whose score cancels to zero no longer returns the same
+  document twice.** `linear_scan_dense` tracked "have I recorded this
+  document?" by testing `scores[idx] == 0.0`, reading membership out of the
+  accumulated value. A negative query weight — the "like A but not B" shape,
+  where both sides carry a shared term at the same weight — drives the running
+  score back to exactly zero, and the next term's posting then recorded the
+  document a second time. The duplicate is not merely a repeated row: it takes
+  a slot in the top-k heap, so a genuine result is evicted. On a three-document
+  fixture the correct `[1, 0, 2]` came back as `[1, 0, 0]`. Membership is now
+  an explicit `seen` array, which also restores parity with the hash-map
+  accumulator the router picks for sparse ID spaces — the two are chosen on
+  performance grounds and must be observationally identical. (#2106)
+
 - **Clearing a point's text now takes it out of full-text search.** The BM25
   index only ever saw the incoming payload, so a payload that still existed but
   no longer yielded indexable text wrote nothing and the point kept matching a

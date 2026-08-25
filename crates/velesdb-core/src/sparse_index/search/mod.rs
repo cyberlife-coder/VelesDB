@@ -40,9 +40,11 @@ const SMALL_CORPUS_LINEAR_THRESHOLD: u64 = 100_000;
 /// Maximum doc ID for which we use a dense accumulator array.
 /// Above this threshold we fall back to a hash map.
 ///
-/// Capped at `1_000_000` to bound the worst-case allocation to ~4 MB
-/// (`(max_doc_id + 1) * size_of::<f32>() == ~4 MB`). The density check
-/// in `linear_scan_search` further restricts this path to compact ID spaces.
+/// Capped at `1_000_000` to bound the worst-case allocation to ~5 MB — a
+/// `f32` score plus a `bool` membership flag per slot
+/// (`(max_doc_id + 1) * (size_of::<f32>() + size_of::<bool>())`). The density
+/// check in `linear_scan_search` further restricts this path to compact ID
+/// spaces.
 const MAX_DENSE_ACCUMULATOR: u64 = 1_000_000;
 
 /// Searches the sparse inverted index for the top-k documents by inner product.
