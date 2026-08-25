@@ -66,6 +66,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Clearing a point's text now takes it out of full-text search.** The BM25
+  index only ever saw the incoming payload, so a payload that still existed but
+  no longer yielded indexable text wrote nothing and the point kept matching a
+  term its payload no longer contains. `add_document` replaces the previous
+  version, so *changing* the text was always correct — only *clearing* it went
+  stale, on every write path. The rule is now stated once and applied from the
+  old payload as well as the new: a point is searchable exactly when its current
+  payload yields indexable text. A point that never carried text is still not
+  written to the index, so a bulk load of text-free vectors costs nothing — that
+  is what deciding on the old payload buys over removing whenever there is no
+  text. A repeated id inside one batch resolves to the batch's own earlier
+  occurrence, matching the label path. (#2112)
+
 - **A bulk upsert no longer leaves a point indexed under labels it dropped.**
   Both bulk paths indexed the incoming payload and never removed the old
   labels, on the recorded assumption that "for the bulk path, points are

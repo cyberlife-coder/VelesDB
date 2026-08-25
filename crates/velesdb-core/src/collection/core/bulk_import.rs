@@ -88,7 +88,7 @@ impl Collection {
 
         self.store_vectors_and_payload_entries(&vector_refs, &payload_entries)?;
 
-        self.update_text_index_from_raw(ids, payloads)?;
+        self.update_text_index_from_raw(ids, payloads, &old_payloads)?;
         self.update_label_index_from_raw(ids, payloads, &old_payloads);
         self.update_secondary_indexes_from_raw(ids, payloads, &old_payloads);
 
@@ -293,9 +293,14 @@ impl Collection {
 
     /// Updates BM25 text index from raw payload slices (WAL-then-apply).
     ///
-    /// Points with `Some(payload)` get their text indexed; points with
-    /// `None` payload get their stale BM25 entry removed. Mirrors the
-    /// contract of `bulk_update_text_index` in `crud_indexing.rs`.
+    /// Mirrors the contract of `classify_text_mutations` in
+    /// `crud_indexing.rs`, whose doc holds the truth table: a point is
+    /// searchable exactly when its current payload yields indexable text, so
+    /// the mutation follows from comparing the old payload with the new. A
+    /// payload that still exists but no longer yields text is a **removal**,
+    /// not a no-op — that case is why this takes `old_payloads`, which is
+    /// already collected upstream for the histogram decrements and already
+    /// handed to the secondary and label indexes.
     ///
     /// Issue #389: each mutation is appended to the BM25 WAL BEFORE it
     /// is applied in-memory so that a crash between the two replays
@@ -306,19 +311,25 @@ impl Collection {
         &self,
         ids: &[u64],
         payloads: Option<&[Option<serde_json::Value>]>,
+        old_payloads: &[Option<serde_json::Value>],
     ) -> Result<()> {
         let Some(ps) = payloads else { return Ok(()) };
+        let mut seen: HashMap<u64, Option<&serde_json::Value>> = HashMap::with_capacity(ids.len());
         let mut adds: Vec<(u64, String)> = Vec::new();
         let mut removes: Vec<u64> = Vec::new();
-        for (i, opt) in ps.iter().enumerate() {
-            if let Some(payload) = opt {
-                let text = Self::extract_text_from_payload(payload);
-                if !text.is_empty() {
-                    adds.push((ids[i], text));
-                }
-            } else {
-                removes.push(ids[i]);
+        for (i, &id) in ids.iter().enumerate() {
+            let new_payload = ps.get(i).and_then(Option::as_ref);
+            let pre_batch_old = old_payloads.get(i).and_then(Option::as_ref);
+            let effective_old = match seen.get(&id) {
+                Some(&previous) => previous,
+                None => pre_batch_old,
+            };
+            match Self::indexable_text(new_payload) {
+                Some(text) => adds.push((id, text)),
+                None if Self::indexable_text(effective_old).is_some() => removes.push(id),
+                None => {}
             }
+            seen.insert(id, new_payload);
         }
         if adds.is_empty() && removes.is_empty() {
             return Ok(());
