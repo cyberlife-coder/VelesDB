@@ -79,6 +79,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   accumulator the router picks for sparse ID spaces — the two are chosen on
   performance grounds and must be observationally identical. (#2106)
 
+- **Latency histograms bucket on the bound they export.** Both millisecond
+  histograms — graph operations and MATCH queries — placed an observation with
+  `ms < bound` while exporting the counts under Prometheus `le` labels, and
+  `le` is *less than or equal*. A request taking exactly 5 ms was counted in
+  `le="0.01"` and left out of `le="0.005"`, so every dashboard percentile and
+  every SLO burn-rate alert read a bucket that excluded the requests sitting
+  on its own boundary — the values latency bounds are most often written to.
+  The graph exporter also kept its `le` labels in a second, hand-written array
+  beside the bounds that drive bucketing; the labels are now derived from
+  those bounds, so the two cannot drift. (#2106)
+
 - **Clearing a point's text now takes it out of full-text search.** The BM25
   index only ever saw the incoming payload, so a payload that still existed but
   no longer yielded indexable text wrote nothing and the point kept matching a
