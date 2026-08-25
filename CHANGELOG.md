@@ -114,6 +114,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hot path on Euclidean, so reusing it would have silently changed that
   contract. (#2106)
 
+- **AVX-512 detection now requires the AVX2 + FMA baseline it falls back on.**
+  `detect_simd_level` granted `SimdLevel::Avx512` on `avx512f` alone, but the
+  dispatcher is not a strict hierarchy: an AVX-512 arm with no kernel for the
+  input width falls through to the AVX2 kernel — Hamming and Jaccard below 16
+  elements, and `scale_inplace` throughout — and those carry
+  `#[target_feature(enable = "avx2")]`. Their safety contract was met by an ISA
+  folk theorem ("Avx512 implies Avx2 support", as the SAFETY comment put it)
+  rather than by a check. Every shipping AVX-512 part does advertise AVX2, so
+  no physical CPU was affected; a hypervisor masking CPUID need not, and the
+  failure there is an illegal instruction. Detection now requires `avx2` and
+  `fma` for both non-scalar levels, which makes the fall-through sound by
+  construction and the `SimdLevel::Avx512` doc true. (#2106)
+
 - **`TRAIN QUANTIZER ... TYPE opq` is refused on Hamming and Jaccard
   collections.** OPQ keeps its codes in a rotated basis and the rescore path
   rotates the query to match. A rotation preserves inner products and norms,
