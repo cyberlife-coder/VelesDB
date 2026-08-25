@@ -66,6 +66,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A bulk upsert no longer leaves a point indexed under labels it dropped.**
+  Both bulk paths indexed the incoming payload and never removed the old
+  labels, on the recorded assumption that "for the bulk path, points are
+  always new inserts (no old payload to remove from the label index)". The
+  same functions collect the pre-batch payloads for histogram decrements, so
+  overwrites plainly reach them: after `upsert_bulk` changed a point's
+  `_labels` from `Doc` to `Archived`, it stayed indexed under **both**, and
+  `MATCH (d:Doc)` returned a point that is no longer a `Doc`. The
+  single-upsert path has always done remove-then-index; the bulk paths now
+  run the same sequence through the same helpers. Three shapes were wrong and
+  are each pinned: a changed label, a payload that drops labels entirely (the
+  early return asked only whether *incoming* points carried `_labels`, so it
+  never reached the loop), and a label carried on both sides of the update
+  (removal must precede indexing or it is added and taken straight back out).
+  `upsert_bulk_from_raw` had the identical gap — it already hands the old
+  payloads to the secondary indexes, and the label index was the one left
+  out. (#2112)
+
 - **`NOT (similarity(...) AND metadata)` no longer drops the rows it should
   return.** The `NOT similarity()` scan inverted the similarity leaf and
   separately pushed the metadata leaves down through

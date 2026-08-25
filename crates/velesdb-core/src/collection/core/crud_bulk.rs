@@ -126,7 +126,7 @@ impl Collection {
         };
 
         // WAL + payload write (same durability guarantees as standard path).
-        self.store_vectors_and_payloads_inner(vector_refs, points, fsync)?;
+        self.store_vectors_and_payloads_inner(vector_refs, points, &old_payloads, fsync)?;
 
         // Write directly to the graph's ContiguousVectors so vectors are
         // immediately visible to rerank/brute-force while HNSW construction
@@ -175,7 +175,7 @@ impl Collection {
             Self::collect_old_payloads(points, &storage)
         };
 
-        self.store_vectors_and_payloads_inner(vector_refs, points, fsync)?;
+        self.store_vectors_and_payloads_inner(vector_refs, points, &old_payloads, fsync)?;
 
         let inserted = self.bulk_index_or_defer(vector_refs);
         self.finalize_bulk_upsert(points, &old_payloads, sparse_batch)?;
@@ -215,13 +215,14 @@ impl Collection {
         &self,
         vector_refs: &[(u64, &[f32])],
         points: &[Point],
+        old_payloads: &[Option<serde_json::Value>],
         fsync: bool,
     ) -> Result<()> {
         #[cfg(feature = "persistence")]
         {
             let (vec_result, pay_result) = rayon::join(
                 || self.bulk_store_vectors_inner(vector_refs, fsync),
-                || self.bulk_store_payloads_inner(points, fsync),
+                || self.bulk_store_payloads_inner(points, old_payloads, fsync),
             );
             vec_result?;
             pay_result?;
@@ -230,7 +231,7 @@ impl Collection {
         #[cfg(not(feature = "persistence"))]
         {
             self.bulk_store_vectors_inner(vector_refs, fsync)?;
-            self.bulk_store_payloads_inner(points, fsync)?;
+            self.bulk_store_payloads_inner(points, old_payloads, fsync)?;
         }
 
         Ok(())
@@ -281,7 +282,12 @@ impl Collection {
     ///
     /// When `fsync` is `false`, WAL entries are written and the buffer is
     /// flushed to the OS kernel, but `sync_all()` is skipped.
-    fn bulk_store_payloads_inner(&self, points: &[Point], fsync: bool) -> Result<()> {
+    fn bulk_store_payloads_inner(
+        &self,
+        points: &[Point],
+        old_payloads: &[Option<serde_json::Value>],
+        fsync: bool,
+    ) -> Result<()> {
         let entries: Vec<(u64, &serde_json::Value)> = points
             .iter()
             .filter_map(|p| p.payload.as_ref().map(|pl| (p.id, pl)))
@@ -315,30 +321,56 @@ impl Collection {
         // per_point_updates for the single-upsert path). Without this,
         // MATCH queries with label patterns (e.g., `(d:Doc)`) return
         // empty results for points inserted via upsert_bulk / REST API.
-        Self::update_label_index_bulk(&self.graph.label_index, points);
+        self.update_label_index_bulk(points, old_payloads);
 
         Ok(())
     }
 
-    /// Batch-updates the label index for bulk-inserted points.
+    /// Batch-updates the label index for bulk-upserted points.
     ///
-    /// For the bulk path, points are always new inserts (no old payload to
-    /// remove from the label index), so we only need to index the new payloads.
+    /// This used to index the incoming payloads and nothing else, justified by
+    /// "for the bulk path, points are always new inserts (no old payload to
+    /// remove from the label index)". That was never true: both bulk paths
+    /// call [`collect_old_payloads`](Self::collect_old_payloads) precisely
+    /// because a bulk upsert overwrites existing points, and the pre-batch
+    /// payload it returns is the one whose labels have to come back out.
+    /// Re-upserting a point with `_labels` changed from `Doc` to `Archived`
+    /// left it indexed under both, so `MATCH (d:Doc)` returned a point that
+    /// is no longer a `Doc`.
+    ///
+    /// It now runs the same remove-then-index sequence as the single-upsert
+    /// path, through the same helpers, so the two cannot drift again:
+    ///
+    /// - [`needs_label_updates`](Self::needs_label_updates) also asks whether
+    ///   an *old* payload carried labels. Asking only about the incoming
+    ///   points made a payload that dropped its labels return before the loop
+    ///   and keep the stale entry forever.
+    /// - [`resolve_effective_old`](Self::resolve_effective_old) resolves the
+    ///   old payload for a duplicate id within one batch to the previous
+    ///   occurrence rather than the pre-batch value.
+    /// - [`apply_label_updates`](Self::apply_label_updates) removes before it
+    ///   indexes, which is what keeps a label carried on *both* sides of the
+    ///   update from being added and then taken straight back out.
     ///
     /// LOCK ORDER: label_index(7) — after payload_storage(3).
     fn update_label_index_bulk(
-        label_index: &parking_lot::RwLock<crate::collection::graph::LabelIndex>,
+        &self,
         points: &[Point],
+        old_payloads: &[Option<serde_json::Value>],
     ) {
-        if !Self::any_point_has_labels(points) {
+        if !Self::needs_label_updates(points, old_payloads) {
             return;
         }
-        let mut label_idx = label_index.write();
-        for point in points {
-            if let Some(ref payload) = point.payload {
-                label_idx.index_from_payload(point.id, payload);
-            }
+        let mut seen: std::collections::HashMap<u64, Option<&serde_json::Value>> =
+            std::collections::HashMap::with_capacity(points.len());
+        let mut label_updates = Vec::with_capacity(points.len());
+        for (point, pre_batch_old) in points.iter().zip(old_payloads) {
+            let effective_old =
+                Self::resolve_effective_old(&seen, point.id, pre_batch_old.as_ref());
+            label_updates.push((point.id, effective_old.cloned(), point.payload.clone()));
+            seen.insert(point.id, point.payload.as_ref());
         }
+        Self::apply_label_updates(&self.graph.label_index, &label_updates);
     }
 
     /// Applies sparse batch with WAL-before-apply for bulk insert.
