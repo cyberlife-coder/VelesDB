@@ -114,6 +114,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hot path on Euclidean, so reusing it would have silently changed that
   contract. (#2106)
 
+- **`TRAIN QUANTIZER ... TYPE opq` is refused on Hamming and Jaccard
+  collections.** OPQ keeps its codes in a rotated basis and the rescore path
+  rotates the query to match. A rotation preserves inner products and norms,
+  so cosine, Euclidean and dot product survive it — Hamming and Jaccard are
+  defined component by component on the original axes, and a rotated "binary"
+  vector is not binary at all. The combination trained happily and every later
+  rescore measured the metric in a space where it means nothing. The rule now
+  lives on the metric as `DistanceMetric::is_rotation_invariant`, mirroring the
+  guard `train_sq8` already had. A codebook trained before this guard is still
+  on disk somewhere, so open-time restore applies the same rule: a rotated
+  `codebook.pq` on such a collection is not installed and the collection scores
+  exact f32, the warn-and-degrade the dimension-mismatch arm beside it already
+  used. Plain PQ has no rotation and stays available for these metrics.
+  (#2106)
+
 - **Clearing a point's text now takes it out of full-text search.** The BM25
   index only ever saw the incoming payload, so a payload that still existed but
   no longer yielded indexable text wrote nothing and the point kept matching a

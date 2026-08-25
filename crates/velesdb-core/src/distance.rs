@@ -159,6 +159,24 @@ impl DistanceMetric {
         }
     }
 
+    /// Returns whether an orthogonal change of basis leaves this metric
+    /// unchanged.
+    ///
+    /// OPQ stores codes in a rotated space and rescoring rotates the query to
+    /// match. That is sound only for metrics built from inner products and
+    /// norms, which a rotation preserves: cosine, dot product, Euclidean.
+    /// Hamming and Jaccard are defined component by component on the original
+    /// axes — a rotated "binary" vector is no longer binary — so the same
+    /// trick computes a number that has no relation to the metric the user
+    /// asked for.
+    #[must_use]
+    pub const fn is_rotation_invariant(&self) -> bool {
+        match self {
+            Self::Cosine | Self::Euclidean | Self::DotProduct => true,
+            Self::Hamming | Self::Jaccard => false,
+        }
+    }
+
     /// Returns this metric's score polarity for fusion
     /// ([`ScoreDirection`](crate::fusion::ScoreDirection)).
     ///

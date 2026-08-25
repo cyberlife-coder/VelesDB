@@ -50,7 +50,10 @@ impl Collection {
         // Warn-and-degrade like the RaBitQ restore below: a stale or foreign
         // codebook would fail to encode every vector (empty cache + silent
         // f32 fallback), so reject it once here instead.
-        let dimension = self.storage.config.read().dimension;
+        let (dimension, metric) = {
+            let config = self.storage.config.read();
+            (config.dimension, config.metric)
+        };
         if pq.codebook.dimension != dimension {
             tracing::warn!(
                 codebook_dim = pq.codebook.dimension,
@@ -63,6 +66,21 @@ impl Collection {
         // standalone rotation.opq artifact covers codebooks saved without it.
         if pq.rotation.is_none() {
             pq.rotation = ProductQuantizer::load_rotation(&self.storage.path)?;
+        }
+        // An OPQ rotation puts the codes in a different basis, which Hamming
+        // and Jaccard do not survive — the rescore path rotates the query to
+        // match, and a rotated "binary" vector is not binary. `train_opq`
+        // refuses that combination now, but a codebook trained before the
+        // guard is still on disk somewhere. Dropping the rotation is not a
+        // repair (the codes themselves live in the rotated basis), so degrade
+        // the whole quantizer and let the collection score exact f32.
+        if pq.rotation.is_some() && !metric.is_rotation_invariant() {
+            tracing::warn!(
+                ?metric,
+                "codebook.pq carries an OPQ rotation, which does not preserve this metric; \
+                 quantizer not installed"
+            );
+            return Ok(());
         }
 
         let cache = self.encode_pq_cache(&pq);
