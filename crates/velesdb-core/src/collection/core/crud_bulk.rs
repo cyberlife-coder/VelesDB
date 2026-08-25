@@ -313,7 +313,7 @@ impl Collection {
         // bulk insertion of text-bearing points at roughly one fsync each. The
         // batch below writes every frame under a single open + flush + fsync.
         if !entries.is_empty() || !self.storage.text_index.is_empty() {
-            self.bulk_update_text_index(points)?;
+            self.bulk_update_text_index(points, old_payloads)?;
         }
 
         // Issue #486: Update label index for bulk-inserted points.

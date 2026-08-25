@@ -1715,3 +1715,93 @@ fn bulk_upsert_from_raw_drops_stale_labels() {
         "the raw path must drop the label the point no longer carries"
     );
 }
+
+/// A point whose payload carries `content` text.
+#[cfg(test)]
+fn texted_point(id: u64, payload: serde_json::Value) -> Point {
+    Point {
+        id,
+        vector: vec![1.0, 0.0, 0.0, 0.0],
+        payload: Some(payload),
+        sparse_vectors: None,
+    }
+}
+
+/// Clearing a point's text must take it out of full-text search.
+///
+/// The BM25 index only ever saw the incoming payload: a payload that still
+/// exists but no longer yields indexable text wrote nothing, so the document
+/// kept matching a term its payload no longer contains. `add_document`
+/// already replaces on re-index, which is why *changing* the text was fine
+/// and only *clearing* it went stale.
+#[test]
+fn clearing_text_removes_the_point_from_full_text_search() {
+    for bulk in [true, false] {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let coll = Collection::create(dir.path().to_path_buf(), 4, DistanceMetric::Cosine)
+            .expect("create");
+        let with_text = texted_point(1, serde_json::json!({ "content": "zebra" }));
+        let without = texted_point(1, serde_json::json!({ "other": 1 }));
+
+        if bulk {
+            coll.upsert_bulk(&[with_text]).expect("insert");
+            coll.upsert_bulk(&[without]).expect("clear text");
+        } else {
+            coll.upsert(vec![with_text]).expect("insert");
+            coll.upsert(vec![without]).expect("clear text");
+        }
+
+        assert!(
+            coll.storage.text_index.search("zebra", 10).is_empty(),
+            "bulk={bulk}: the payload no longer contains 'zebra', so it must not match"
+        );
+    }
+}
+
+/// Changing the text keeps only the new terms searchable.
+///
+/// Non-regression: `add_document` removes the previous version first, so this
+/// case was already correct and must stay so.
+#[test]
+fn changing_text_leaves_only_the_new_terms_searchable() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let coll =
+        Collection::create(dir.path().to_path_buf(), 4, DistanceMetric::Cosine).expect("create");
+
+    coll.upsert_bulk(&[texted_point(1, serde_json::json!({ "content": "zebra" }))])
+        .expect("insert");
+    coll.upsert_bulk(&[texted_point(1, serde_json::json!({ "content": "giraffe" }))])
+        .expect("update");
+
+    assert!(
+        coll.storage.text_index.search("zebra", 10).is_empty(),
+        "the old term must not survive"
+    );
+    assert_eq!(
+        coll.storage.text_index.search("giraffe", 10).len(),
+        1,
+        "the new term must be searchable"
+    );
+}
+
+/// A repeated id within one batch is settled by its last payload.
+///
+/// The pre-batch payload is `None` for the duplicate, so deciding on that
+/// alone would miss that the batch's own earlier occurrence indexed the text.
+#[test]
+fn a_repeated_id_in_one_batch_is_settled_by_its_last_payload() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let coll =
+        Collection::create(dir.path().to_path_buf(), 4, DistanceMetric::Cosine).expect("create");
+
+    coll.upsert_bulk(&[
+        texted_point(1, serde_json::json!({ "content": "zebra" })),
+        texted_point(1, serde_json::json!({ "other": 1 })),
+    ])
+    .expect("bulk with a duplicate id");
+
+    assert!(
+        coll.storage.text_index.search("zebra", 10).is_empty(),
+        "the last payload in the batch carries no text, so nothing must match"
+    );
+}

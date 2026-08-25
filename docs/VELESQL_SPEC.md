@@ -641,6 +641,18 @@ LIMIT 10
 > **Tip**: For strict text filtering (exclude results that do not contain a keyword),
 > use `CONTAINS_TEXT` instead of `MATCH`. See the CONTAINS_TEXT section below.
 
+#### What is searchable
+
+A point is searchable exactly when its **current** payload yields indexable
+text. Upserting it with a payload that no longer carries any takes it out of
+the text index, so `MATCH` never returns a point over a term its payload has
+since lost — the same rule that governs `_labels` and the secondary indexes.
+Re-upserting with *different* text replaces the old terms rather than adding
+to them.
+
+A point that has never carried text is not written to the index at all, so a
+bulk load of vectors without text costs nothing here.
+
 ### Strict Text Filter (CONTAINS_TEXT, v3.8+)
 
 The `CONTAINS_TEXT` operator performs case-sensitive substring matching on a
