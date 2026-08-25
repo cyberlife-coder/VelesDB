@@ -66,6 +66,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`TRAIN QUANTIZER` no longer reports an empty corpus for a collection that
+  has no payloads.** Training enumerated the collection through
+  `Collection::all_ids`, which is the *payload* store's view and says so in its
+  own doc: "Only returns IDs that have payload entries stored. Points inserted
+  with `None` payload may not appear." A collection used for pure vector search
+  carries no payloads at all, so that view was empty and every quantizer type —
+  pq, opq, rabitq and sq8, which share the extraction — failed with
+  `[VELES-029] Training failed: no vectors available for training` about a
+  collection holding its full count. Measured on a 256-point collection:
+  `all_ids` 0, `all_point_ids` 256, `point_count` 256. Training now uses
+  `all_point_ids`, documented as the authoritative set because it unions vector
+  and payload storage; the existing `is_empty` filter already drops the
+  metadata-only points it additionally brings in. (#2095)
+
 - **Clearing a point's text now takes it out of full-text search.** The BM25
   index only ever saw the incoming payload, so a payload that still existed but
   no longer yielded indexable text wrote nothing and the point kept matching a
