@@ -89,7 +89,7 @@ impl Collection {
         self.store_vectors_and_payload_entries(&vector_refs, &payload_entries)?;
 
         self.update_text_index_from_raw(ids, payloads)?;
-        self.update_label_index_from_raw(ids, payloads);
+        self.update_label_index_from_raw(ids, payloads, &old_payloads);
         self.update_secondary_indexes_from_raw(ids, payloads, &old_payloads);
 
         let inserted = self.bulk_index_or_defer(&vector_refs);
@@ -338,26 +338,53 @@ impl Collection {
     /// Batch-updates the label index from raw payload slices.
     ///
     /// Mirrors `update_text_index_from_raw` but for the label index.
-    /// Only indexes payloads that contain `_labels` arrays.
+    ///
+    /// This indexed the incoming payloads only, so a raw bulk *upsert* that
+    /// changed a point's `_labels` left it listed under the old ones too.
+    /// `old_payloads` is already collected a few lines up for the histogram
+    /// decrements, and already handed to `update_secondary_indexes_from_raw`
+    /// right below — the label index was the one index left out.
+    ///
+    /// Removal precedes indexing so a label carried on both sides of the
+    /// update survives, and the within-batch duplicate rule matches the
+    /// `Point` path: a repeated id removes the previous occurrence's labels,
+    /// not the pre-batch ones (which `old_payloads` already reports as `None`
+    /// for duplicates).
     ///
     /// LOCK ORDER: label_index(7) -- after payload_storage(3).
     fn update_label_index_from_raw(
         &self,
         ids: &[u64],
         payloads: Option<&[Option<serde_json::Value>]>,
+        old_payloads: &[Option<serde_json::Value>],
     ) {
         let Some(ps) = payloads else { return };
-        let has_labels = ps
-            .iter()
-            .any(|opt| opt.as_ref().is_some_and(|v| v.get("_labels").is_some()));
-        if !has_labels {
+        let carries_labels = |opt: &Option<serde_json::Value>| {
+            opt.as_ref().is_some_and(|v| v.get("_labels").is_some())
+        };
+        // An update that *drops* every label has no labels on the incoming
+        // side and still has stale entries to remove, so the old payloads
+        // decide this too.
+        if !ps.iter().any(carries_labels) && !old_payloads.iter().any(carries_labels) {
             return;
         }
+        let mut seen: std::collections::HashMap<u64, Option<&serde_json::Value>> =
+            std::collections::HashMap::with_capacity(ids.len());
         let mut label_idx = self.graph.label_index.write();
-        for (i, opt) in ps.iter().enumerate() {
-            if let Some(payload) = opt {
-                label_idx.index_from_payload(ids[i], payload);
+        for (i, &id) in ids.iter().enumerate() {
+            let pre_batch_old = old_payloads.get(i).and_then(Option::as_ref);
+            let effective_old = match seen.get(&id) {
+                Some(&previous) => previous,
+                None => pre_batch_old,
+            };
+            if let Some(old) = effective_old {
+                label_idx.remove_from_payload(id, old);
             }
+            let new_payload = ps.get(i).and_then(Option::as_ref);
+            if let Some(payload) = new_payload {
+                label_idx.index_from_payload(id, payload);
+            }
+            seen.insert(id, new_payload);
         }
     }
 }
