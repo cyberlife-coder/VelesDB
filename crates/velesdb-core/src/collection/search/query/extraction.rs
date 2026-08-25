@@ -175,9 +175,23 @@ impl Collection {
             Condition::Group(inner) => {
                 Self::extract_metadata_filter(inner).map(|c| Condition::Group(Box::new(c)))
             }
-            // Handle NOT: preserve NOT wrapper if inner condition exists
-            // Note: NOT similarity() is rejected earlier in validation, so we only
-            // need to handle NOT with metadata conditions here
+            // Handle NOT: preserve NOT wrapper if inner condition exists.
+            //
+            // This is only sound when the negation applies to metadata alone.
+            // Re-wrapping what survives the recursion drops any non-metadata
+            // leaf out of the negation first, so `NOT (similarity AND meta)`
+            // reduces to `NOT meta` — the similarity conjunct silently gone,
+            // and the negation distributed over an `AND` it no longer spans.
+            //
+            // A comment here used to justify that with "NOT similarity() is
+            // rejected earlier in validation". It was true until EPIC-044
+            // US-003 enabled the full-scan path, and nothing updated it.
+            // The `NOT similarity()` scan therefore no longer uses this
+            // function to decide anything: it evaluates the whole condition
+            // per candidate through the shared WHERE evaluator, which applies
+            // De Morgan correctly (#2112). Callers that still push the result
+            // down as a payload filter must not hand it a `NOT` spanning a
+            // similarity leaf.
             Condition::Not(inner) => {
                 Self::extract_metadata_filter(inner).map(|c| Condition::Not(Box::new(c)))
             }

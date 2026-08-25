@@ -433,6 +433,34 @@ WHERE vector NEAR $v AND NOT (category = 'spam')
 LIMIT 10
 ```
 
+`NOT` distributes over `AND` and `OR` by De Morgan's laws, as in SQL:
+`NOT (A AND B)` admits every row failing *either* conjunct, and
+`NOT (A OR B)` only rows failing *both*. This holds when one side is a
+`similarity()` predicate.
+
+#### Three-valued logic
+
+WHERE evaluates in SQL's three-valued logic: a predicate is true, false, or
+**unknown**. A `similarity()` predicate is unknown for a row whose vector
+cannot be scored against the query vector — different lengths, an empty
+vector, or no vector on that field. Unknown is not false, and the difference
+is only visible under negation:
+
+| Expression | Result |
+|---|---|
+| `sim` unknown | row excluded (WHERE admits only *known* true) |
+| `NOT sim` where `sim` is unknown | row excluded — `NOT unknown` is unknown |
+| `unknown AND false` | `false`, so `NOT (unknown AND false)` admits the row |
+| `unknown AND true` | unknown |
+| `unknown OR true` | `true` |
+| `unknown OR false` | unknown |
+
+The fourth row is the case worth reading twice: when the metadata side alone
+settles a conjunction, the row is decided without ever scoring the vector, and
+the negation admits it. Treating unknown as false instead would both admit
+rows nothing was computed for (under `NOT`) and hide rows the metadata had
+already decided.
+
 ### IN / NOT IN
 
 Test membership in a list of values:
