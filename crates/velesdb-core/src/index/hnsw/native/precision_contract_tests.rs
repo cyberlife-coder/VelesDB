@@ -451,3 +451,86 @@ pub(super) fn check_recall_10k<C: TraversalCodec>() {
         "recall@{k} should be >= 0.95 through the default config, got {avg_recall:.3}"
     );
 }
+
+/// A BFS locality reorder must not desynchronize the codes from the graph.
+///
+/// `ANALYZE` calls `reorder_for_locality()`, which renumbers every node. The
+/// codec's store is **positional** — entry N holds node N's code — so it has
+/// to be rebuilt against the new numbering; if it is not, traversal scores
+/// every candidate against another node's code while the re-rank quietly
+/// reports honest distances for whatever that traversal happened to reach.
+/// Measured before the fix: 1.000 to 0.000, no error raised.
+///
+/// Quality is compared by **score**, not by id: a reorder renumbers nodes by
+/// design, so comparing raw node ids across one would fail even for a
+/// correct index. What must survive is that the k best distances are still
+/// the k best distances.
+pub(super) fn check_recall_survives_reorder<C: TraversalCodec>() {
+    let (dim, n, k, ef_search) = (64, 2_000, 10, 200);
+    let hnsw = euclidean_backend::<C>(dim, 32, 200, n);
+    let vectors: Vec<Vec<f32>> = (0..n)
+        .map(|i| {
+            (0..dim)
+                .map(|j| ((i * dim + j) as f32 * 0.001).sin())
+                .collect()
+        })
+        .collect();
+    for v in &vectors {
+        hnsw.insert(v).expect("test");
+    }
+    assert!(hnsw.is_quantizer_trained(), "auto-trained at 1000 inserts");
+
+    let queries = [0, 500, 1234, 1999];
+    let before = mean_score_recall(&hnsw, &vectors, &queries, k, ef_search);
+    assert!(
+        before >= 0.95,
+        "baseline recall must hold before the reorder, got {before:.3}"
+    );
+
+    // Through the wrapper, which is what the backend dispatch calls: the
+    // inner graph cannot keep the store aligned on its own.
+    hnsw.reorder_for_locality().expect("test");
+
+    let after = mean_score_recall(&hnsw, &vectors, &queries, k, ef_search);
+    assert!(
+        after >= 0.95,
+        "recall@{k} collapsed from {before:.3} to {after:.3} across a locality \
+         reorder — the codes no longer describe the nodes they are indexed by"
+    );
+}
+
+/// Mean fraction of a query's returned scores that are genuine top-k scores.
+///
+/// Brute force gives the k best distances; a search that reached the right
+/// neighbourhood returns those same values whatever ids the nodes now carry.
+#[allow(clippy::cast_precision_loss)]
+fn mean_score_recall<C: TraversalCodec>(
+    hnsw: &Backend<C>,
+    vectors: &[Vec<f32>],
+    queries: &[usize],
+    k: usize,
+    ef_search: usize,
+) -> f64 {
+    const TOLERANCE: f32 = 1e-4;
+    let total: f64 = queries
+        .iter()
+        .map(|&qi| {
+            let query = &vectors[qi];
+            let best: Vec<f32> = brute_force_top_ids(vectors, query, DistanceMetric::Euclidean, k)
+                .into_iter()
+                .map(|i| DistanceMetric::Euclidean.calculate(query, &vectors[i]))
+                .collect();
+            // `search_bounded` with a zero floor, not `search`: the default
+            // `min_index_size` (10 000) would route a 2 000-vector index to
+            // the exact-f32 fallback, and a test that never reads a code
+            // cannot notice the codes being wrong.
+            let hit = hnsw
+                .search_bounded(query, k, ef_search, C::DEFAULT_OVERSAMPLING, 0)
+                .iter()
+                .filter(|(_, score)| best.iter().any(|b| (b - score).abs() <= TOLERANCE))
+                .count();
+            hit as f64 / k as f64
+        })
+        .sum();
+    total / queries.len() as f64
+}

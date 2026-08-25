@@ -19,9 +19,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (lazy training persists on each full flush, parity with RaBitQ), and is
   re-installed on reopen before gap recovery. On metrics whose ordering
   int8 L2 cannot preserve (DotProduct/Hamming/Jaccard) the mode stays exact
-  f32, and `TRAIN QUANTIZER type=sq8` is rejected up front. Resident memory
-  is unchanged: the f32 vectors stay resident for re-ranking and the codes
-  are additive — the codes-resident variant remains #2112 Phase B. (#2112)
+  f32, and `TRAIN QUANTIZER type=sq8` is rejected up front. The f32 vectors
+  stay in the index for re-ranking, but a quantized mode now holds them in a
+  file-backed arena the kernel can reclaim: at 100 000 x 768-d that moves
+  293.0 MiB out of anonymous RSS, cutting it **61%** (385.0 -> 150.4 MiB),
+  while total RSS rises 11% and a cold re-rank costs ~8 ms. Measured, not
+  projected — see
+  [Measured resident set](docs/guides/QUANTIZATION.md#measured-resident-set).
+  Getting the codes themselves out of the resident set remains #2112
+  Phase B. (#2112)
 
 ### Removed
 
@@ -59,6 +65,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is tracked in #2112. (#2112)
 
 ### Fixed
+
+- **`ANALYZE` no longer returns wrong points on collections over 1 000
+  vectors.** `analyze_collection` runs `reorder_for_locality()`, which
+  renumbers every graph node — and `HnswIndex`'s external-id mappings are
+  keyed by that numbering, so they were left pointing at whatever vector had
+  moved into each slot. Nothing failed: every lookup still resolved, to the
+  wrong point. On a 1 100-point Euclidean collection a self-query's correct
+  top-5 `[500, 501, 499, 502, 498]` came back as `[575, 601, 586, 560, 588]`
+  after `ANALYZE`. `vacuum` renumbers too and has always rebuilt the mappings;
+  the reorder path never did. It now remaps both directions under the index
+  write lock, so a search cannot observe the half-renumbered state. Affects
+  every storage mode. (#2112)
+
+- **A quantized collection no longer loses its search quality to `ANALYZE`.**
+  The `SQ8` and `RaBitQ` backends index their code store positionally — entry
+  N holds node N's code — and the reorder dispatch went straight to the inner
+  graph, leaving every code describing a different node. Traversal then walked
+  a graph scored on unrelated codes while the exact-f32 re-rank reported
+  honest distances for whatever that walk reached, so no error surfaced
+  anywhere: measured through the int8 path at 2 000 x 64-d, recall@10 went
+  from 1.000 to **0.000** (RaBitQ: 0.025). The quantized backends now own
+  their reorder and rebuild the store in the new node order, under the same
+  install gate that protects a quantizer install. (#2112)
+
+- **A BFS reorder no longer silently un-does the file-backed arena.**
+  `ContiguousVectors::reorder` gathered into a fresh heap buffer and swapped
+  the backing to `Heap`, so the first `reorder_for_locality()` on a quantized
+  collection put the f32 arena back into anonymous RSS, gave up the 61% cut,
+  released the mapping and its exclusive lock, and turned `flush_backing()`
+  into a no-op that still returned `Ok`. The permutation is now applied in
+  place by rotating each cycle through one vector of scratch, so the backing
+  survives, `capacity` is no longer shrunk to `count`, and the peak
+  allocation during a reorder is the arena rather than twice it. At
+  100 000 x 768-d that is 0.044-0.060 s against 0.158-0.209 s for the copying
+  shape (eight runs), with no 293 MiB second buffer. A `new_order` that repeats an index is
+  now rejected instead of silently duplicating one vector and dropping
+  another. (#2112)
 
 - **A vector that can't be scored is excluded, not scored 0.0.** Every
   `similarity()` path fell back to `0.0` when the candidate and query

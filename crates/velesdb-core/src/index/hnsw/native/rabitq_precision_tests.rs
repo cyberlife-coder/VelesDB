@@ -151,3 +151,9 @@ fn test_rabitq_dot_product_rerank_keeps_best_candidates() {
 fn test_rabitq_cosine_unnormalized_query_matches_normalized() {
     suite::check_cosine_scale_invariance::<RaBitQCodec>(64);
 }
+
+/// A locality reorder must not desynchronize the RaBitQ store from the graph.
+#[test]
+fn test_rabitq_recall_survives_locality_reorder() {
+    suite::check_recall_survives_reorder::<RaBitQCodec>();
+}

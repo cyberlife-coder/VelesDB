@@ -173,13 +173,16 @@ fn open_refuses_a_count_beyond_capacity() {
     );
 }
 
-/// Reordering a file-backed arena moves it onto the heap and frees the map.
+/// Reordering a file-backed arena keeps it file-backed.
 ///
-/// The dangerous shape this pins: `reorder` allocates a fresh heap buffer and
-/// deallocates the old one. If the backing were not switched first, that
-/// `dealloc` would be handed a mapped pointer.
+/// The regression this pins: `reorder` used to gather into a fresh heap
+/// buffer and swap the backing to `Heap`, which silently cost the arena the
+/// one property it exists for — its pages stopped being evictable — and made
+/// `flush_backing` a no-op that still returned `Ok`. Nothing in the vectors
+/// read back would have shown it, which is why the backing is asserted
+/// directly.
 #[test]
-fn reorder_moves_a_mapped_arena_onto_the_heap() {
+fn reorder_keeps_a_mapped_arena_mapped() {
     let dir = tempdir().expect("tempdir");
     let dimension = 4;
     let mut storage =
@@ -191,9 +194,112 @@ fn reorder_moves_a_mapped_arena_onto_the_heap() {
 
     let expected: Vec<Vec<f32>> = written.iter().rev().cloned().collect();
     assert_contents(&storage, &expected);
-    // Dropping here exercises the heap path on a formerly mapped arena; a
-    // wrong backing would fault or corrupt the allocator under Miri/ASan.
+    assert!(
+        format!("{storage:?}").contains("FileMapped"),
+        "arena must still be file-mapped after a reorder, got: {storage:?}"
+    );
+    // The capacity the file was sized for survives too: an in-place
+    // permutation has no reason to shrink it, and shrinking would make the
+    // next push re-map.
+    assert_eq!(storage.capacity(), 16, "reorder must not resize the arena");
     drop(storage);
+}
+
+/// The reordered bytes are the ones on disk.
+///
+/// `flush_backing` reaching the file is the observable end of "the mapping
+/// survived": with the pre-#2112 heap demotion this file still held the
+/// insertion-order bytes, and a reopen would have served them.
+#[test]
+fn reorder_writes_the_new_order_through_to_the_file() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("persisted.arena");
+    let dimension = 4;
+    let mut storage = ContiguousVectors::new_file_backed(&path, dimension, 16).expect("file arena");
+    let written = fill(&mut storage, 4, dimension);
+
+    storage.reorder(&[3, 2, 1, 0]).expect("reorder");
+    storage.flush_backing().expect("flush");
+
+    // Read the raw file rather than reopening: the arena still holds its
+    // exclusive lock, and reading the bytes underneath a live mapping is what
+    // proves `flush_backing` reached the file — a reopen would also pass on
+    // the writeback that `munmap` does anyway.
+    let expected: Vec<f32> = written.iter().rev().flatten().copied().collect();
+    assert_eq!(on_disk_vectors(&path, expected.len()), expected);
+}
+
+/// Reads `len` f32s from an arena file's data section.
+///
+/// Native byte order, because that is what the mapping wrote — the v1 layout
+/// is deliberately host-native (#2112); a portable one is tracked separately.
+fn on_disk_vectors(path: &std::path::Path, len: usize) -> Vec<f32> {
+    let bytes = std::fs::read(path).expect("read arena file");
+    let data = &bytes[DATA_OFFSET..];
+    data.chunks_exact(std::mem::size_of::<f32>())
+        .take(len)
+        .map(|c| {
+            let mut word = [0_u8; 4];
+            word.copy_from_slice(c);
+            f32::from_ne_bytes(word)
+        })
+        .collect()
+}
+
+/// A `new_order` that is not a bijection is refused, not applied.
+///
+/// The copying implementation accepted one: a repeated index duplicated a
+/// vector and dropped whichever index was missing, with no error. The
+/// in-place algorithm walks cycles, so the same input would not terminate —
+/// validating up front is what turns a hang into a message.
+#[test]
+fn reorder_refuses_a_permutation_that_repeats_an_index() {
+    let dir = tempdir().expect("tempdir");
+    let dimension = 4;
+    let mut storage =
+        ContiguousVectors::new_file_backed(&dir.path().join("dup.arena"), dimension, 16)
+            .expect("file arena");
+    let written = fill(&mut storage, 4, dimension);
+
+    let err = storage
+        .reorder(&[0, 1, 1, 3])
+        .expect_err("a repeated index is not a permutation");
+    assert!(
+        err.to_string().contains("appears twice"),
+        "error should name the violation, got: {err}"
+    );
+    assert_contents(&storage, &written);
+}
+
+/// A mapped arena and a heap arena come out of the same permutation identical.
+///
+/// The arena's claim is indistinguishability; a reorder is the operation
+/// where the two backings most recently diverged, so it is checked rather
+/// than assumed.
+#[test]
+fn reorder_agrees_between_the_two_backings() {
+    let dir = tempdir().expect("tempdir");
+    let dimension = 3;
+    let count = 9;
+    // A single 9-cycle plus a fixed point exercises both branches of the
+    // outer loop: `[1, 2, 3, 4, 5, 6, 7, 0, 8]` maps slot 8 to itself.
+    let order = [1, 2, 3, 4, 5, 6, 7, 0, 8];
+
+    let mut mapped =
+        ContiguousVectors::new_file_backed(&dir.path().join("cmp.arena"), dimension, 16)
+            .expect("file arena");
+    let written = fill(&mut mapped, count, dimension);
+    let mut heap = ContiguousVectors::new(dimension, 16).expect("heap arena");
+    for v in &written {
+        heap.push(v).expect("push");
+    }
+
+    mapped.reorder(&order).expect("reorder mapped");
+    heap.reorder(&order).expect("reorder heap");
+
+    let expected: Vec<Vec<f32>> = order.iter().map(|&old| written[old].clone()).collect();
+    assert_contents(&mapped, &expected);
+    assert_contents(&heap, &expected);
 }
 
 /// The mapped data pointer is f32-aligned — a soundness invariant, not a

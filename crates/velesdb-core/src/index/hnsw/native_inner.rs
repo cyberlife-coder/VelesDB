@@ -606,14 +606,19 @@ impl NativeHnswInner {
     /// Skips reordering for small indices (< 1000 vectors) where the entire
     /// working set fits in L2 cache.
     ///
+    /// A quantized backend goes through its own wrapper rather than straight
+    /// to `inner`: reordering renumbers the nodes, and the wrapper's code
+    /// store is indexed by node id, so only the wrapper can keep the two in
+    /// step (#2112).
+    ///
     /// # Errors
     ///
     /// Returns an error if vector storage reordering fails.
-    pub fn reorder_for_locality(&self) -> crate::error::Result<()> {
+    pub fn reorder_for_locality(&self) -> crate::error::Result<Option<Vec<usize>>> {
         match &self.backend {
             HnswBackend::Standard(hnsw) => hnsw.reorder_for_locality(),
-            HnswBackend::RaBitQ(rabitq) => rabitq.inner.reorder_for_locality(),
-            HnswBackend::Sq8(sq8) => sq8.inner.reorder_for_locality(),
+            HnswBackend::RaBitQ(rabitq) => rabitq.reorder_for_locality(),
+            HnswBackend::Sq8(sq8) => sq8.reorder_for_locality(),
         }
     }
 }

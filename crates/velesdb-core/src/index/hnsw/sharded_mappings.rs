@@ -393,6 +393,44 @@ impl ShardedMappings {
         self.tombstone_slots.store(0, Ordering::Relaxed);
     }
 
+    /// Renumbers every internal index through `old_to_new`.
+    ///
+    /// The graph owns the node numbering, and a BFS locality reorder changes
+    /// it. Both directions of this map are keyed by that numbering, so they
+    /// have to move with it — `vacuum` renumbers too and rebuilds them from
+    /// scratch for the same reason. Skipping it does not fail: every lookup
+    /// still resolves, to a different vector than the one asked for, so a
+    /// query returns confident, wrong answers (#2112).
+    ///
+    /// `old_to_new[i]` is the new index of the node that was `i`. Entries
+    /// beyond its length are left alone: those are index slots with no graph
+    /// node behind them (the orphan slots `tombstone_slots` counts), and
+    /// since every remapped value is `< old_to_new.len()` they cannot
+    /// collide with one.
+    ///
+    /// Tombstoned nodes need no special case — deletion removes the mapping
+    /// and leaves the node, so they simply have no entry to move.
+    ///
+    /// Not atomic against concurrent readers. The caller holds the index
+    /// write lock across the graph permutation and this call, which is what
+    /// keeps a search from observing the half-renumbered state.
+    pub fn remap_indices(&self, old_to_new: &[usize]) {
+        let renumber = |idx: usize| old_to_new.get(idx).copied().unwrap_or(idx);
+
+        let moved: Vec<(u64, usize)> = self
+            .id_to_idx
+            .iter()
+            .map(|entry| (*entry.key(), renumber(*entry.value())))
+            .collect();
+
+        self.id_to_idx.clear();
+        self.idx_to_id.clear();
+        for (id, idx) in moved {
+            self.id_to_idx.insert(id, idx);
+            self.idx_to_id.insert(idx, id);
+        }
+    }
+
     /// Creates mappings from existing data (for deserialization).
     ///
     /// # Arguments
