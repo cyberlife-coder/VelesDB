@@ -38,22 +38,6 @@ pub trait DistanceEngine: Send + Sync {
 // Shared SIMD distance helpers (RF-DEDUP: eliminates 3x copy-paste)
 // =============================================================================
 
-/// Computes SIMD-accelerated distance for any metric via `simd_native`.
-///
-/// This is the single source of truth for metric-to-SIMD dispatch.
-/// All SIMD-based `DistanceEngine` implementations delegate here.
-#[allow(dead_code)] // Reason: Central dispatch — used by CpuDistance; kept as reference impl
-#[inline]
-pub(crate) fn simd_distance_for_metric(metric: DistanceMetric, a: &[f32], b: &[f32]) -> f32 {
-    match metric {
-        DistanceMetric::Cosine => 1.0 - crate::simd_native::cosine_similarity_native(a, b),
-        DistanceMetric::Euclidean => crate::simd_native::euclidean_native(a, b),
-        DistanceMetric::DotProduct => -crate::simd_native::dot_product_native(a, b),
-        DistanceMetric::Hamming => crate::simd_native::hamming_distance_native(a, b),
-        DistanceMetric::Jaccard => 1.0 - crate::simd_native::jaccard_similarity_native(a, b),
-    }
-}
-
 /// Batch distance with CPU prefetch hints to hide memory latency.
 ///
 /// Returns `SmallVec<[f32; 64]>` to avoid heap allocation for real batch
@@ -193,24 +177,16 @@ impl DistanceEngine for CachedSimdDistance {
 // Scalar implementations (baseline for comparison)
 // =============================================================================
 
+/// Cosine distance, derived from the same similarity kernel as production.
+///
+/// `cosine_scalar` clamps to `[-1, 1]` and scores a zero-norm pair 0.0, so the
+/// distance stays in `[0, 2]` and a zero vector is maximally distant — the
+/// same contract `CachedSimdDistance` enforces on its pre-normalized arm. The
+/// hand-rolled copy this replaced omitted the clamp, so two identical vectors
+/// could come back at a distance slightly below zero.
 #[inline]
 fn cosine_distance_scalar(a: &[f32], b: &[f32]) -> f32 {
-    let mut dot = 0.0_f32;
-    let mut norm_a = 0.0_f32;
-    let mut norm_b = 0.0_f32;
-
-    for (x, y) in a.iter().zip(b.iter()) {
-        dot += x * y;
-        norm_a += x * x;
-        norm_b += y * y;
-    }
-
-    let denom = (norm_a * norm_b).sqrt();
-    if denom == 0.0 {
-        1.0
-    } else {
-        1.0 - (dot / denom)
-    }
+    1.0 - crate::simd_native::scalar::cosine_scalar(a, b)
 }
 
 #[inline]
@@ -228,32 +204,24 @@ fn dot_product_scalar(a: &[f32], b: &[f32]) -> f32 {
     -a.iter().zip(b.iter()).map(|(x, y)| x * y).sum::<f32>()
 }
 
+/// Hamming distance, delegating to the kernel production falls back on.
+///
+/// A baseline that computes a *different* formula is worse than no baseline:
+/// a parity test between it and the SIMD path reports a divergence as "the
+/// SIMD kernel is wrong". This engine's job is to be the same metric without
+/// the vectorization, so the formula has exactly one definition —
+/// [`crate::simd_native::scalar::hamming_scalar`], which buckets each
+/// component at the 0.5 binary threshold.
 #[inline]
 fn hamming_distance_scalar(a: &[f32], b: &[f32]) -> f32 {
-    // SAFETY (cast): Vector dimensions are bounded by collection config (max 65536).
-    // f32 has 24-bit mantissa, so counts up to 2^24 (16M) are exact.
-    #[allow(clippy::cast_precision_loss)]
-    let count = a
-        .iter()
-        .zip(b.iter())
-        .filter(|(x, y)| (x.to_bits() ^ y.to_bits()) != 0)
-        .count() as f32;
-    count
+    crate::simd_native::scalar::hamming_scalar(a, b)
 }
 
+/// Jaccard distance, derived from the same similarity kernel as production.
+///
+/// `jaccard_scalar` returns a *similarity*, and an empty union scores 1.0
+/// (two all-zero vectors are identical), so the distance is 0.0 there.
 #[inline]
 fn jaccard_distance_scalar(a: &[f32], b: &[f32]) -> f32 {
-    let mut intersection = 0.0_f32;
-    let mut union = 0.0_f32;
-
-    for (x, y) in a.iter().zip(b.iter()) {
-        intersection += x.min(*y);
-        union += x.max(*y);
-    }
-
-    if union == 0.0 {
-        1.0
-    } else {
-        1.0 - (intersection / union)
-    }
+    1.0 - crate::simd_native::scalar::jaccard_scalar(a, b)
 }

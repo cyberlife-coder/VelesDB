@@ -97,6 +97,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hops with the default 0.8 the two functions answered 0.035 and 0.328 — a
   ninefold gap between two documented spellings of one contract. (#2106)
 
+- **The scalar distance baseline computes the same metric as production.**
+  `CpuDistance` exists to be the un-vectorized reference the SIMD kernels are
+  checked against, and it implemented different formulas: Hamming compared raw
+  bit patterns instead of bucketing at the 0.5 binary threshold (so `[1,2,3]`
+  against `[4,5,6]` scored 3 where production scores 0), and Jaccard called an
+  empty union maximally distant where production calls it identical. A
+  reference that disagrees with its subject makes a real SIMD bug and a
+  reference bug indistinguishable. All three non-Euclidean metrics now
+  delegate to the scalar kernels production falls back on — which also gives
+  cosine the `[-1, 1]` clamp the hand-rolled copy omitted — and a parity test
+  pins baseline against SIMD across adversarial inputs. Euclidean still
+  differs on purpose: the hot path returns squared L2. The unused
+  `simd_distance_for_metric` dispatch was removed; its `dead_code`
+  justification claimed a caller it did not have, and it disagreed with the
+  hot path on Euclidean, so reusing it would have silently changed that
+  contract. (#2106)
+
 - **Clearing a point's text now takes it out of full-text search.** The BM25
   index only ever saw the incoming payload, so a payload that still existed but
   no longer yielded indexable text wrote nothing and the point kept matching a
