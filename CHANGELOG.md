@@ -90,6 +90,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   beside the bounds that drive bucketing; the labels are now derived from
   those bounds, so the two cannot drift. (#2106)
 
+- **`PathScorer::score_rel_types` charges one decay factor per hop.** It raised
+  `distance_decay` to the hop's ordinal, compounding to `decay^(n(n+1)/2)`,
+  while `score_length` on the same path returned `decay^n` and the
+  `distance_decay` field documents "each hop reduces score by 20%". At five
+  hops with the default 0.8 the two functions answered 0.035 and 0.328 — a
+  ninefold gap between two documented spellings of one contract. (#2106)
+
 - **Clearing a point's text now takes it out of full-text search.** The BM25
   index only ever saw the incoming payload, so a payload that still existed but
   no longer yielded indexable text wrote nothing and the point kept matching a

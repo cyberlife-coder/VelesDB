@@ -243,10 +243,32 @@ fn test_path_scorer_score_rel_types() {
 
     let score = scorer.score_rel_types(&["A", "B"]);
 
-    // First hop: 0.8 * 1.0 = 0.8
-    // Second hop: 0.8^2 * 0.5 = 0.64 * 0.5 = 0.32
-    // Product: 0.8 * 0.32 = 0.256
-    assert!((score - 0.256).abs() < 0.001);
+    // One decay factor per hop, times that hop's relationship weight:
+    // (0.8 * 1.0) * (0.8 * 0.5) = 0.8 * 0.4 = 0.32
+    assert!((score - 0.32).abs() < 0.001);
+}
+
+/// `score_rel_types` and `score_length` must agree on the same path.
+///
+/// They are two spellings of one contract — "each hop costs one decay
+/// factor" — and a caller picks between them only by whether it has the
+/// relationship types to hand. `score_rel_types` used to raise the decay to
+/// the hop's ordinal, giving `decay^(n(n+1)/2)`: at five hops with the
+/// default 0.8 that is 0.035 against `score_length`'s 0.328, a ninefold gap
+/// between two functions documented to do the same thing.
+#[test]
+fn test_path_scorer_rel_types_agrees_with_length_under_default_weights() {
+    let scorer = PathScorer::new().with_decay(0.8);
+
+    for hops in 0..=5_usize {
+        let rel_types = vec!["ANY"; hops];
+        let by_types = scorer.score_rel_types(&rel_types);
+        let by_length = scorer.score_length(hops);
+        assert!(
+            (by_types - by_length).abs() < 1e-6,
+            "{hops} hops: score_rel_types {by_types} != score_length {by_length}"
+        );
+    }
 }
 
 #[test]
