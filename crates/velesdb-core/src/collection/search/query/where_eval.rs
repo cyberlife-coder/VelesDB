@@ -244,16 +244,27 @@ impl Collection {
             from_aliases,
             guards,
         };
-        self.eval_condition(condition, &ctx, graph_cache)
+        // UNKNOWN excludes the row, exactly as SQL's `WHERE` does: only a
+        // predicate that is *known* true admits it.
+        Ok(self
+            .eval_condition(condition, &ctx, graph_cache)?
+            .unwrap_or(false))
     }
 
-    /// Recursively evaluates a single condition node.
+    /// Recursively evaluates a single condition node, three-valued.
+    ///
+    /// `None` is SQL's UNKNOWN: the predicate could not be decided for this
+    /// record — today only a `similarity()` leaf whose vector cannot be scored
+    /// produces it. It is deliberately NOT folded into `false` here, because
+    /// the two differ under negation: `NOT false` admits the row, `NOT
+    /// UNKNOWN` does not. Collapsing them at the leaf is what made
+    /// `NOT similarity()` return rows it could not actually score.
     fn eval_condition(
         &self,
         condition: &Condition,
         ctx: &WhereEvalCtx<'_>,
         graph_cache: &mut GraphMatchEvalCache,
-    ) -> Result<bool> {
+    ) -> Result<Option<bool>> {
         match condition {
             Condition::GraphMatch(predicate) => {
                 let ids = graph_cache.get_or_compute(
@@ -263,53 +274,81 @@ impl Collection {
                     ctx.from_aliases,
                     ctx.guards,
                 )?;
-                Ok(ids.contains(&ctx.id))
+                Ok(Some(ids.contains(&ctx.id)))
             }
             Condition::And(left, right) => {
                 self.eval_short_circuit_and(left, right, ctx, graph_cache)
             }
             Condition::Or(left, right) => self.eval_short_circuit_or(left, right, ctx, graph_cache),
-            Condition::Not(inner) => self.eval_condition(inner, ctx, graph_cache).map(|v| !v),
+            Condition::Not(inner) => Ok(self
+                .eval_condition(inner, ctx, graph_cache)?
+                .map(|known| !known)),
             Condition::Group(inner) => self.eval_condition(inner, ctx, graph_cache),
             Condition::Similarity(sim) => {
                 self.evaluate_similarity(sim, ctx.vector, ctx.params, graph_cache)
             }
-            Condition::VectorSearch(_) | Condition::VectorFusedSearch(_) => Ok(true),
+            Condition::VectorSearch(_) | Condition::VectorFusedSearch(_) => Ok(Some(true)),
             // #904: reuse the per-query cached `Filter` for this metadata leaf
             // instead of rebuilding it (and cloning the AST) on every row.
             other => {
                 let filter = graph_cache.metadata_filter(other);
-                Ok(Self::payload_passes_filter(filter, ctx.payload))
+                Ok(Some(Self::payload_passes_filter(filter, ctx.payload)))
             }
         }
     }
 
-    /// Evaluates AND with short-circuit: returns false immediately if left is false.
+    /// Evaluates AND, three-valued, still short-circuiting on `false`.
+    ///
+    /// `false AND anything` is `false` even when the other side is UNKNOWN, so
+    /// a known-false left still skips the right. An UNKNOWN left cannot
+    /// short-circuit: the right may yet be `false` and decide the conjunction.
     fn eval_short_circuit_and(
         &self,
         left: &Condition,
         right: &Condition,
         ctx: &WhereEvalCtx<'_>,
         graph_cache: &mut GraphMatchEvalCache,
-    ) -> Result<bool> {
-        if !self.eval_condition(left, ctx, graph_cache)? {
-            return Ok(false);
+    ) -> Result<Option<bool>> {
+        let left_value = self.eval_condition(left, ctx, graph_cache)?;
+        if left_value == Some(false) {
+            return Ok(Some(false));
         }
-        self.eval_condition(right, ctx, graph_cache)
+        let right_value = self.eval_condition(right, ctx, graph_cache)?;
+        if right_value == Some(false) {
+            return Ok(Some(false));
+        }
+        // Neither side is false: true only when both are known true.
+        Ok(match (left_value, right_value) {
+            (Some(true), Some(true)) => Some(true),
+            _ => None,
+        })
     }
 
-    /// Evaluates OR with short-circuit: returns true immediately if left is true.
+    /// Evaluates OR, three-valued, still short-circuiting on `true`.
+    ///
+    /// The mirror of [`Self::eval_short_circuit_and`]: `true OR anything` is
+    /// `true` even against UNKNOWN, while an UNKNOWN left must still let the
+    /// right run in case it is `true`.
     fn eval_short_circuit_or(
         &self,
         left: &Condition,
         right: &Condition,
         ctx: &WhereEvalCtx<'_>,
         graph_cache: &mut GraphMatchEvalCache,
-    ) -> Result<bool> {
-        if self.eval_condition(left, ctx, graph_cache)? {
-            return Ok(true);
+    ) -> Result<Option<bool>> {
+        let left_value = self.eval_condition(left, ctx, graph_cache)?;
+        if left_value == Some(true) {
+            return Ok(Some(true));
         }
-        self.eval_condition(right, ctx, graph_cache)
+        let right_value = self.eval_condition(right, ctx, graph_cache)?;
+        if right_value == Some(true) {
+            return Ok(Some(true));
+        }
+        // Neither side is true: false only when both are known false.
+        Ok(match (left_value, right_value) {
+            (Some(false), Some(false)) => Some(false),
+            _ => None,
+        })
     }
 
     /// Evaluates a similarity condition against a record's vector.
@@ -319,9 +358,9 @@ impl Collection {
         vector: Option<&[f32]>,
         params: &std::collections::HashMap<String, serde_json::Value>,
         graph_cache: &mut GraphMatchEvalCache,
-    ) -> Result<bool> {
+    ) -> Result<Option<bool>> {
         let Some(record_vector) = vector else {
-            return Ok(false);
+            return Ok(None);
         };
         // Per-query invariants come from the eval cache: the resolved query
         // vector (was one alloc+copy or `$param` re-parse per row) and the
@@ -329,22 +368,24 @@ impl Collection {
         // one inside `compute_metric_score`, one for the direction).
         let metric = graph_cache.metric_snapshot(self);
         let query_vec = graph_cache.similarity_query_vector(sim, params)?;
-        // A length-mismatched vector can't be scored against `query_vec`;
-        // fail the predicate rather than fabricate a score (a fake 0.0 used
-        // to read as a perfect match for distance metrics like Euclidean).
+        // A length-mismatched vector can't be scored against `query_vec`, so
+        // the predicate is UNKNOWN rather than false — fabricating a score
+        // used to read as a perfect match for distance metrics like
+        // Euclidean, and answering `false` would let an enclosing `NOT` admit
+        // a row nothing was ever computed for.
         if record_vector.len() != query_vec.len() || record_vector.is_empty() {
-            return Ok(false);
+            return Ok(None);
         }
         let score = metric.calculate(record_vector, query_vec);
         #[allow(clippy::cast_possible_truncation)]
         // Reason: similarity thresholds are approximate floating bounds.
         let threshold = sim.threshold as f32;
-        Ok(Self::compare_score(
+        Ok(Some(Self::compare_score(
             score,
             threshold,
             sim.operator,
             metric.higher_is_better(),
-        ))
+        )))
     }
 
     /// Compares a score against a threshold using the given operator and metric direction.

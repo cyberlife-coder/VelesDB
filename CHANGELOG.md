@@ -66,6 +66,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`NOT (similarity(...) AND metadata)` no longer drops the rows it should
+  return.** The `NOT similarity()` scan inverted the similarity leaf and
+  separately pushed the metadata leaves down through
+  `extract_metadata_filter` — which wraps what it finds under a `NOT` in its
+  own `NOT` — then AND-ed the two. That distributes the negation over the
+  connective, which is De Morgan's error: `NOT (A AND B)` was executed as
+  `NOT A AND NOT B`. On a three-row fixture the correct `[2, 3]` came back as
+  `[]`, and `NOT (A OR B)` returned `[2, 3]` where `[3]` was correct. Neither
+  raised an error. The scan now decides each candidate with
+  `evaluate_where_condition_for_record`, the same evaluator the graph and
+  aggregation paths use, so the engine has one WHERE semantics rather than one
+  per execution path; the similarity leaf is still extracted, but only to
+  score the rows that pass. A stale comment in `extraction.rs` recorded the
+  assumption that broke — "NOT similarity() is rejected earlier in
+  validation" — which stopped being true when EPIC-044 US-003 enabled the
+  full-scan path. (#2112)
+
+- **WHERE now evaluates in three-valued logic.** A `similarity()` predicate is
+  UNKNOWN for a row whose vector cannot be scored (length mismatch, empty, or
+  absent), where it previously answered `false`. The two are indistinguishable
+  until something negates them: `NOT false` admits the row, `NOT UNKNOWN` must
+  not, so the old answer let `NOT similarity()` return rows nothing had been
+  computed for. `AND` and `OR` follow Kleene's tables and keep short-circuiting
+  on the value that decides them (`false` for `AND`, `true` for `OR`), and a
+  top-level UNKNOWN excludes the row exactly as SQL's `WHERE` does. One
+  consequence is a row that is now *returned* where it used to be dropped:
+  under `NOT (unscoreable AND meta)` with `meta` false, the conjunction is
+  false whatever the vector would have scored, so the negation is a known
+  true. Documented in `docs/VELESQL_SPEC.md`. (#2112)
+
 - **`ANALYZE` no longer returns wrong points on collections over 1 000
   vectors.** `analyze_collection` runs `reorder_for_locality()`, which
   renumbers every graph node — and `HnswIndex`'s external-id mappings are
