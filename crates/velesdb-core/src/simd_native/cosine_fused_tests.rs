@@ -10,8 +10,20 @@
 
 use super::cosine_similarity_native;
 
-// Tolerance for f32 SIMD vs scalar comparison
-const EPSILON: f32 = 5e-3;
+// Tolerance for f32 SIMD vs scalar comparison.
+//
+// `1e-4` is `simd_native_tests::SIMD_ABS_TOLERANCE`, the constant the rest of
+// the SIMD suite already uses; the previous `5e-3` was 500x looser than these
+// kernels need, which cost detection on the main loop for nothing.
+//
+// Tightening it does NOT make this test tail-sensitive, and no tolerance
+// would: every size below is an exact multiple of its kernel's stride (512
+// and 768 of the 4-acc's 64; 1024 of the 8-acc's 128), so `end_main ==
+// end_ptr` and the masked remainder branch never executes. Injecting a
+// dropped tail element into `x86_avx512.rs` leaves this test green at 5e-3
+// and at 1e-4 alike. Tail coverage is `cosine_tail_tests.rs`, which picks
+// dimensions that actually reach the remainder.
+const EPSILON: f32 = 1e-4;
 
 // ============================================================================
 // Fused Cosine Tests

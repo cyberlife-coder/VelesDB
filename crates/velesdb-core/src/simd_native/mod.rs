@@ -136,6 +136,10 @@ mod simd_native_dispatch_tests;
 mod cosine_fused_tests;
 
 #[cfg(test)]
+#[path = "cosine_tail_tests.rs"]
+mod cosine_tail_tests;
+
+#[cfg(test)]
 mod harley_seal_tests;
 
 #[cfg(test)]
