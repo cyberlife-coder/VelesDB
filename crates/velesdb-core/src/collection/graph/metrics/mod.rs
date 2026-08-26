@@ -127,26 +127,18 @@ impl LatencyHistogram {
 ///
 /// ```rust,ignore
 /// use velesdb_core::collection::graph::GraphMetrics;
-/// use std::time::Instant;
 ///
 /// let metrics = GraphMetrics::new();
 ///
-/// // Record an edge insertion
-/// let start = Instant::now();
-/// // ... perform insertion ...
-/// metrics.record_edge_insert(start.elapsed());
+/// // Record an edge insertion (counters only — see `record_edge_inserts_batch`
+/// // for the batch path, which is what feeds `edge_insert_latency`)
+/// metrics.record_edge_insert();
 ///
 /// // Get statistics
 /// println!("Total edges inserted: {}", metrics.edge_inserts_total());
-/// println!("Avg insert latency: {:.2}µs", metrics.edge_insert_latency.avg_ns() / 1000.0);
 /// ```
 #[derive(Debug, Default)]
 pub struct GraphMetrics {
-    // Node counters
-    nodes_total: AtomicU64,
-    node_inserts_total: AtomicU64,
-    node_deletes_total: AtomicU64,
-
     // Edge counters
     edges_total: AtomicU64,
     edge_inserts_total: AtomicU64,
@@ -157,10 +149,10 @@ pub struct GraphMetrics {
     traversal_nodes_visited: AtomicU64,
 
     // Latency histograms
-    /// Edge insertion latency histogram
+    /// Edge insertion latency histogram. Populated by the batch insert path
+    /// only — the single-edge path records counters without a clock read
+    /// (see `record_edge_insert`).
     pub edge_insert_latency: LatencyHistogram,
-    /// Edge deletion latency histogram
-    pub edge_delete_latency: LatencyHistogram,
     /// Traversal latency histogram
     pub traversal_latency: LatencyHistogram,
     /// Query latency histogram
@@ -175,49 +167,19 @@ impl GraphMetrics {
     }
 
     // =========================================================================
-    // Node metrics
-    // =========================================================================
-
-    /// Records a node insertion.
-    pub fn record_node_insert(&self) {
-        self.node_inserts_total.fetch_add(1, Ordering::Relaxed);
-        self.nodes_total.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Records a node deletion.
-    ///
-    /// Uses saturating subtraction to prevent underflow if called
-    /// more times than `record_node_insert`.
-    pub fn record_node_delete(&self) {
-        self.node_deletes_total.fetch_add(1, Ordering::Relaxed);
-        self.nodes_total
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |x| {
-                Some(x.saturating_sub(1))
-            })
-            .ok();
-    }
-
-    /// Returns total node count.
-    #[must_use]
-    pub fn nodes_total(&self) -> u64 {
-        self.nodes_total.load(Ordering::Relaxed)
-    }
-
-    /// Returns total node insertions.
-    #[must_use]
-    pub fn node_inserts_total(&self) -> u64 {
-        self.node_inserts_total.load(Ordering::Relaxed)
-    }
-
-    // =========================================================================
     // Edge metrics
     // =========================================================================
 
-    /// Records an edge insertion with latency.
-    pub fn record_edge_insert(&self, latency: Duration) {
+    /// Records an edge insertion.
+    ///
+    /// Counters only — no clock read. The single-edge path runs per write, so
+    /// a per-call `Instant::now()` plus histogram bucketing was a real cost
+    /// paid on every insert; nothing reads it. `edge_insert_latency` is
+    /// still fed by `record_edge_inserts_batch`, which pays that cost once
+    /// per batch instead of once per edge.
+    pub fn record_edge_insert(&self) {
         self.edge_inserts_total.fetch_add(1, Ordering::Relaxed);
         self.edges_total.fetch_add(1, Ordering::Relaxed);
-        self.edge_insert_latency.observe(latency);
     }
 
     /// Records a batch edge insertion.
@@ -233,17 +195,19 @@ impl GraphMetrics {
         self.edge_insert_latency.observe(latency);
     }
 
-    /// Records an edge deletion with latency.
+    /// Records an edge deletion.
+    ///
+    /// Counters only — no clock read. See `record_edge_insert` for why: the
+    /// per-delete `Instant::now()` this used to take had no reader.
     ///
     /// Uses saturating subtraction to prevent underflow.
-    pub fn record_edge_delete(&self, latency: Duration) {
+    pub fn record_edge_delete(&self) {
         self.edge_deletes_total.fetch_add(1, Ordering::Relaxed);
         self.edges_total
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |x| {
                 Some(x.saturating_sub(1))
             })
             .ok();
-        self.edge_delete_latency.observe(latency);
     }
 
     /// Returns total edge count.
@@ -305,19 +269,6 @@ impl GraphMetrics {
     #[must_use]
     pub fn to_prometheus(&self) -> String {
         let mut output = String::with_capacity(2048);
-
-        // Node metrics
-        output.push_str("# HELP velesdb_graph_nodes_total Current number of nodes\n");
-        output.push_str("# TYPE velesdb_graph_nodes_total gauge\n");
-        let _ = writeln!(output, "velesdb_graph_nodes_total {}\n", self.nodes_total());
-
-        output.push_str("# HELP velesdb_graph_node_inserts_total Total node insertions\n");
-        output.push_str("# TYPE velesdb_graph_node_inserts_total counter\n");
-        let _ = writeln!(
-            output,
-            "velesdb_graph_node_inserts_total {}\n",
-            self.node_inserts_total()
-        );
 
         // Edge metrics
         output.push_str("# HELP velesdb_graph_edges_total Current number of edges\n");
@@ -390,16 +341,12 @@ impl GraphMetrics {
 
     /// Resets all metrics to zero.
     pub fn reset(&self) {
-        self.nodes_total.store(0, Ordering::Relaxed);
-        self.node_inserts_total.store(0, Ordering::Relaxed);
-        self.node_deletes_total.store(0, Ordering::Relaxed);
         self.edges_total.store(0, Ordering::Relaxed);
         self.edge_inserts_total.store(0, Ordering::Relaxed);
         self.edge_deletes_total.store(0, Ordering::Relaxed);
         self.traversals_total.store(0, Ordering::Relaxed);
         self.traversal_nodes_visited.store(0, Ordering::Relaxed);
         self.edge_insert_latency.reset();
-        self.edge_delete_latency.reset();
         self.traversal_latency.reset();
         self.query_latency.reset();
     }

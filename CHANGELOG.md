@@ -66,6 +66,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Cosine search scores keep their sign, on every path.** `transform_score`
+  on the HNSW graph path shared one match arm with Jaccard and clamped to
+  `[0, 1]`, so a genuinely negative cosine came back as exactly `0.0` — while
+  brute force, the exact rerank and `DistanceMetric::calculate` all returned
+  the cosine itself. Which path runs is not something the caller chooses: it
+  falls out of corpus size (≤ 100 points goes brute force), `SearchQuality`,
+  and even `k` (the rerank stage needs `len() > k * 2`). The same index and
+  query returned `-0.557` at `k=10` and `0.0` at `k=80`.
+
+  The two ranges also met inside a single result list. `merge_delta`
+  concatenates HNSW results with delta-buffer results scored through
+  `calculate` and sorts them together, so a freshly written point at true
+  cosine `-0.2` sorted *below* an indexed point at `-0.5` that had been
+  clamped to zero; VelesQL's `Parallel` execution strategy merges a scan leg
+  and an HNSW leg the same way. And because every dissimilar document
+  clamped to the same `0.0`, the ordering among anti-correlated matches was
+  not merely wrong — it was gone.
+
+  The range now has one definition, `DistanceMetric::score_range`, with
+  `clamp_score` applying it; the graph path and the GPU rerank derive from it
+  instead of each carrying a table. Cosine is `[-1, 1]`, Jaccard keeps its
+  true `[0, 1]` floor, and the unbounded metrics declare no range. The GPU
+  path's local table needed a `_ =>` catch-all; `score_range` matches every
+  variant, so a new metric now fails to compile rather than silently landing
+  in the wildcard. Two tests that had written the old range down as a rule
+  are corrected to state what is actually true of their fixtures.
+
+  Restoring the sign exposed a heuristic the clamp had been hiding.
+  `search_adaptive` decides whether to widen `ef` from the first/last score
+  gap divided by `min(|first|, |last|)` — a baseline that assumes zero is the
+  metric's floor. It is, for an unbounded distance. On a similarity over
+  `[-1, 1]` zero sits mid-range, so a merely mediocre tail of `-0.01` against
+  a `0.9` top reads as a spread of 91 and escalates a query that is not hard.
+  Cosine never hit that only because every non-positive score clamped to
+  exactly `0.0`, which made the baseline zero and the guard fail: phase 2 had
+  never escalated on this metric at all. The baseline is now the tail's
+  distance from `score_range`'s floor, which is unchanged for the unbounded
+  metrics (whose floor is zero) and keeps easy cosine queries cheap while
+  still escalating a genuinely heterogeneous neighbourhood. The rule moved
+  into a pure `should_escalate` so it is testable rather than inlined
+  arithmetic. (#2106)
+
 - **`TRAIN QUANTIZER` no longer reports an empty corpus for a collection that
   has no payloads.** Training enumerated the collection through
   `Collection::all_ids`, which is the *payload* store's view and says so in its

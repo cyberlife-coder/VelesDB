@@ -202,7 +202,6 @@ impl ConcurrentEdgeStore {
     /// Returns `Error::EdgeExists` if an edge with the same ID already exists.
     pub fn add_edge(&self, edge: GraphEdge) -> Result<()> {
         let edge_id = edge.id();
-        let start = Instant::now();
 
         {
             // CRITICAL: Hold edge_ids lock throughout the entire operation to prevent race
@@ -252,7 +251,7 @@ impl ConcurrentEdgeStore {
         self.invalidate_snapshot();
         self.rebuild_snapshot_best_effort();
         // Record after all shard locks drop so the atomic ops never overlap a held lock.
-        self.metrics.record_edge_insert(start.elapsed());
+        self.metrics.record_edge_insert();
         Ok(())
     }
 
@@ -373,7 +372,6 @@ impl ConcurrentEdgeStore {
     ///
     /// Lock ordering: edge_ids FIRST, then shards in ascending order.
     pub(crate) fn remove_edge_detailed(&self, edge_id: u64) -> EdgeRemoval {
-        let start = Instant::now();
         {
             let mut ids = self.edge_ids.write();
 
@@ -428,7 +426,7 @@ impl ConcurrentEdgeStore {
         self.invalidate_snapshot();
         self.rebuild_snapshot_best_effort();
         // Record after all shard locks drop (removed path only).
-        self.metrics.record_edge_delete(start.elapsed());
+        self.metrics.record_edge_delete();
         EdgeRemoval::Removed
     }
 

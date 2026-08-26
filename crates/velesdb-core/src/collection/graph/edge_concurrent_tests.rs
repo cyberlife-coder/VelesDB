@@ -1468,7 +1468,6 @@ fn test_metrics_record_edge_inserts() {
     let m = store.metrics();
     assert_eq!(m.edge_inserts_total(), 3, "3 inserts recorded");
     assert_eq!(m.edges_total(), 3, "3 live edges");
-    assert_eq!(m.edge_insert_latency.count(), 3, "3 latency observations");
 }
 
 #[test]
@@ -1485,11 +1484,6 @@ fn test_metrics_record_edge_delete() {
     let m = store.metrics();
     assert_eq!(m.edge_deletes_total(), 1, "1 delete recorded");
     assert_eq!(m.edges_total(), 2, "edges_total decremented to 2");
-    assert_eq!(
-        m.edge_delete_latency.count(),
-        1,
-        "1 delete latency observed"
-    );
 }
 
 #[test]
