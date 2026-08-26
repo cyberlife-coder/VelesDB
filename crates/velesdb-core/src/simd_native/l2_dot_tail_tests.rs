@@ -28,6 +28,12 @@
 //! - `warmup_tests.rs` looks like it reaches the 4-acc tail at 767, but that
 //!   767 is a *value* inside the generator; the vector is 768 long, a multiple
 //!   of 64.
+//! - `simd_native_tests.rs` — the crate-level suite, one directory up from
+//!   this one rather than beside it, which is why an earlier note here called
+//!   it absent. It exists. Its dimensions are 0, 16, 19, 32, 100, 384, 768 and
+//!   1536: 19 and 100 reach the 2-acc mask, and every one at or above 512 is
+//!   an exact multiple of its kernel's stride. It changes the file list, not
+//!   the conclusion.
 //!
 //! So the 2-acc mask was already exercised and the 4-acc and 8-acc remainders
 //! — both stages of each — were not.
