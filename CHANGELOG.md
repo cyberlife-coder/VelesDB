@@ -108,6 +108,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   into a pure `should_escalate` so it is testable rather than inlined
   arithmetic. (#2106)
 
+- **`TRAIN QUANTIZER` no longer reports an empty corpus for a collection that
+  has no payloads.** Training enumerated the collection through
+  `Collection::all_ids`, which is the *payload* store's view and says so in its
+  own doc: "Only returns IDs that have payload entries stored. Points inserted
+  with `None` payload may not appear." A collection used for pure vector search
+  carries no payloads at all, so that view was empty and every quantizer type —
+  pq, opq, rabitq and sq8, which share the extraction — failed with
+  `[VELES-029] Training failed: no vectors available for training` about a
+  collection holding its full count. Measured on a 256-point collection:
+  `all_ids` 0, `all_point_ids` 256, `point_count` 256. Training now uses
+  `all_point_ids`, documented as the authoritative set because it unions vector
+  and payload storage; the existing `is_empty` filter already drops the
+  metadata-only points it additionally brings in. (#2095)
+
+- **`Database.train_pq` (Python) accepts every collection name core does.**
+  The binding rendered VelesQL as text —
+  `format!("TRAIN QUANTIZER ON {collection_name} WITH (m={m}, k={k}")` — and
+  parsed it back. Interpolating a name into a query string is what forced the
+  method to carry its own identifier rule ("prevent VelesQL injection via
+  string interpolation"), and that rule was a second definition of what a
+  collection may be called. It drifted from `velesdb_core::validation` three
+  ways: it rejected the interior hyphen core accepts and pins (`a-b`, with
+  `docs-v2` as the doc example); it passed a leading digit the grammar's
+  `regular_identifier` then refused, surfacing as "Failed to construct TRAIN
+  query"; and it passed the empty string vacuously, rendering
+  `TRAIN QUANTIZER ON  WITH (...)`. The binding now builds the statement AST
+  directly through `Query::new_train`, as `velesdb-mobile` and
+  `tauri-plugin-velesdb` already do. No identifier text is produced, so there
+  is no charset rule to keep in step and all three cases dissolve together;
+  a bad name now fails in the engine with the engine's own error. (#2095)
+
 - **Clearing a point's text now takes it out of full-text search.** The BM25
   index only ever saw the incoming payload, so a payload that still existed but
   no longer yielded indexable text wrote nothing and the point kept matching a
