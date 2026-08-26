@@ -367,21 +367,26 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
 
     /// Transforms raw distance to appropriate score based on metric type.
     ///
-    /// - **Cosine**: `(1.0 - distance).clamp(0.0, 1.0)` (similarity in `[0,1]`)
+    /// - **Cosine** and **Jaccard**: `1.0 - distance`, clamped through
+    ///   [`DistanceMetric::clamp_score`]. The engine traverses on
+    ///   `1 - similarity` for both, and `DistanceMetric::higher_is_better()`
+    ///   declares both similarities, so every downstream sort/top-k/merge
+    ///   expects the similarity back — but the two do **not** share a range,
+    ///   and taking it from the metric is what keeps this path agreeing with
+    ///   brute force and the exact rerank. Flooring cosine at zero, as a
+    ///   shared arm with Jaccard once did, tied every anti-correlated match at
+    ///   `0.0` and made the score depend on which path `k` happened to select.
     /// - **Euclidean**: `sqrt(raw_distance)` — the search loop stores squared L2
     ///   to skip redundant sqrt during traversal; this restores the actual
     ///   Euclidean distance for user-visible scores.
     /// - **Hamming**: raw distance (lower is better)
-    /// - **Jaccard**: `(1.0 - distance).clamp(0.0, 1.0)` — the engine traverses
-    ///   on `1 - jaccard`, but `DistanceMetric::higher_is_better()` declares
-    ///   Jaccard a similarity, so every downstream sort/top-k/merge expects
-    ///   the similarity back (same contract as Cosine).
     /// - **DotProduct**: `-distance` (negated for consistency)
     #[must_use]
     pub fn transform_score(&self, raw_distance: f32) -> f32 {
-        match self.distance.metric() {
+        let metric = self.distance.metric();
+        match metric {
             DistanceMetric::Cosine | DistanceMetric::Jaccard => {
-                (1.0 - raw_distance).clamp(0.0, 1.0)
+                metric.clamp_score(1.0 - raw_distance)
             }
             // Reason: CachedSimdDistance stores squared L2 during HNSW traversal
             // to avoid per-comparison sqrt. Apply sqrt here on the final k results.

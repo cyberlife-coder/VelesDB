@@ -161,18 +161,17 @@ impl HnswIndex {
     /// slightly outside their theoretical range. Clamping guarantees
     /// downstream assertions and comparisons are never violated.
     ///
-    /// Only Cosine ([-1, 1]) and Jaccard ([0, 1]) are bounded.
-    /// DotProduct, Euclidean, and Hamming are unbounded.
+    /// Which metrics are bounded, and to what, is
+    /// [`DistanceMetric::score_range`]'s to say — this path needs a clamp for
+    /// its own reason (GPU rounding) but must not carry a second copy of the
+    /// range table, or the two drift and the same document scores differently
+    /// depending on which engine ranked it. The wildcard arm the local table
+    /// needed is gone with it: `score_range` matches every variant, so adding
+    /// a metric fails to compile there instead of silently landing in `_`.
     #[cfg(feature = "gpu")]
     #[inline]
     pub(crate) fn clamp_score_for_metric(&self, score: f32) -> f32 {
-        use crate::distance::DistanceMetric;
-        match self.metric {
-            DistanceMetric::Cosine => score.clamp(-1.0, 1.0),
-            DistanceMetric::Jaccard => score.clamp(0.0, 1.0),
-            // DotProduct, Euclidean, Hamming: unbounded
-            _ => score,
-        }
+        self.metric.clamp_score(score)
     }
 
     /// Re-ranks candidates using GPU batch distance computation.
