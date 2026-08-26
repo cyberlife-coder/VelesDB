@@ -123,6 +123,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A manual CI dispatch can no longer turn a green `CI Success` red.**
+  `ci-success` asserts `result == 'success'` for every job it reads, and
+  `python-integrations` admitted only `pull_request` and `push`. Under
+  `workflow_dispatch` it came back `skipped`, never `success`, so the gate was
+  unsatisfiable under that trigger however green everything else was — the one
+  manual escape hatch this workflow documents for the #1465 "required check is
+  absent" failure mode could only ever produce a red verdict. That is worse
+  than the hole it plugs: an absent check blocks a merge, a red one *replaces
+  a green check-run of the same name* on the head SHA. Seen on PR #2141, where
+  a dispatch run overwrote the green `CI Success` an earlier `pull_request` run
+  had already recorded for the same commit.
+
+  The job now admits `workflow_dispatch` too, and the rule is pinned rather
+  than left to review: `test_ci_gate_reachability.py` now asserts that every
+  job the chain reads can run under every trigger the `on:` block declares.
+  `sonarcloud` is out of scope by construction — it is in `needs` but
+  deliberately absent from the chain, so it may skip freely. Both directions
+  were mutation-checked: reverting the guard and, separately, narrowing `lint`
+  to `pull_request` each turn the new suite red at the offending job and
+  trigger.
+
 - **Cosine search scores keep their sign, on every path.** `transform_score`
   on the HNSW graph path shared one match arm with Jaccard and clamped to
   `[0, 1]`, so a genuinely negative cosine came back as exactly `0.0` — while

@@ -934,7 +934,23 @@ jobs:
     # Runs on PRs too (and gates CI Success) so connector regressions are
     # caught before merge — the LangChain suite once rotted to 21 failures
     # while this job was push-only and advisory.
-    if: (github.event_name == 'pull_request' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'))) && (github.event.action != 'edited' || github.event.changes.base != null)
+    #
+    # `workflow_dispatch` is in the list because this job's result is asserted
+    # by the ci-success chain, and a chain entry that cannot run under a
+    # declared trigger makes the gate unsatisfiable under it. Leaving it out
+    # meant a manual dispatch — the documented escape hatch for the #1465
+    # "required check is absent" failure mode — could only ever produce a RED
+    # `CI Success`, because this one need came back `skipped` while every
+    # other job passed. That is worse than the hole it was meant to plug: an
+    # absent check blocks, a red one *overwrites a green check-run of the same
+    # name* on the head SHA. Hit on PR #2141, where dispatch run 4378 replaced
+    # the green verdict of pull_request run 4380 on the same commit.
+    #
+    # `push` needs no such clause: ci.yml's push trigger is already filtered to
+    # main/develop, exactly the refs this condition admits.
+    #
+    # Pinned by scripts/tests/test_ci_gate_reachability.py.
+    if: (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'))) && (github.event.action != 'edited' || github.event.changes.base != null)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

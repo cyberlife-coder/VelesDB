@@ -1476,5 +1476,182 @@ class CancelInProgressParserTests(unittest.TestCase):
         self.assertEqual(cancel_in_progress("concurrency:\n  group: g\n"), "")
 
 
+# ---------------------------------------------------------------------------
+# Every trigger the workflow declares must be able to satisfy the gate
+# ---------------------------------------------------------------------------
+
+# `on:` keys that are events, in the position PR_TRIGGER_RE would find them.
+# Anchored at four spaces under `on:` so a job key never matches.
+DECLARED_TRIGGER_RE = re.compile(r"^  ([a-z_]+):\s*$", re.MULTILINE)
+EVENT_NAME_RE = re.compile(r"github\.event_name\s*==\s*'([a-z_]+)'")
+
+# Triggers a chain-checked job may exclude, and why. Empty on purpose: there is
+# currently no trigger under which the gate is allowed to be unsatisfiable, and
+# an entry here would be a documented hole rather than an accidental one.
+TRIGGER_EXEMPT: "dict[tuple[str, str], str]" = {}
+
+
+def declared_triggers(text: str) -> "list[str]":
+    """Events the workflow's `on:` block subscribes to, in declaration order."""
+    stripped = strip_comments(text)
+    start = stripped.find("\non:\n")
+    if start == -1:
+        raise AssertionError("no `on:` block found")
+    end = stripped.find("\njobs:\n", start)
+    block = stripped[start : end if end != -1 else len(stripped)]
+    return DECLARED_TRIGGER_RE.findall(block)
+
+
+def job_condition(text: str, job: str) -> str:
+    """One job's whole `if:` value, folded continuation lines included.
+
+    Reading only the `if:` line would make a condition written as a YAML block
+    (`if: >-` with the expression indented beneath) parse as *no* condition —
+    and "no condition" is the reachable-everywhere verdict below, so a
+    reformat nobody thought of as a change would silently empty the check.
+    """
+    head = job_block(strip_comments(text), job).split("\n    steps:", 1)[0]
+    lines = head.split("\n")
+    for index, line in enumerate(lines):
+        if not line.startswith("    if:"):
+            continue
+        parts = [line[len("    if:") :].strip()]
+        for follower in lines[index + 1 :]:
+            if follower.strip() and not follower.startswith("      "):
+                break
+            parts.append(follower.strip())
+        return " ".join(part for part in parts if part)
+    return ""
+
+
+def job_event_names(text: str, job: str) -> "set[str]":
+    """The `github.event_name == '…'` literals in one job's `if:`.
+
+    An empty set means the job does not constrain the event at all, which is
+    the reachable-everywhere case — not the unreachable one.
+    """
+    return set(EVENT_NAME_RE.findall(job_condition(text, job)))
+
+
+class GateReachableUnderEveryTriggerTests(unittest.TestCase):
+    """A gate entry that cannot run under a trigger makes the gate unsatisfiable.
+
+    `ci-success` asserts `result == 'success'` for each job it reads. A job
+    that its own `if:` excludes for the current event comes back `skipped`,
+    never `success`, so the chain fails however green everything else is.
+
+    This bit in production on PR #2141. `python-integrations` admitted only
+    `pull_request` and `push`, so a manual `workflow_dispatch` — the escape
+    hatch this file's own comments name for the #1465 "required check is
+    absent" failure mode — could only ever produce a RED `CI Success`. That is
+    strictly worse than the hole it plugs: an absent check blocks a merge, a
+    red one *replaces a green check-run of the same name* on the head SHA.
+    Dispatch run 4378 overwrote the green verdict pull_request run 4380 had
+    already recorded for the same commit.
+
+    The rule is mechanical rather than a review habit: for every job the chain
+    reads, the set of events its `if:` admits must cover every event the `on:`
+    block declares. `sonarcloud` is out of scope by construction — it is in
+    `needs` but deliberately absent from the chain (see CHAIN_EXEMPT), so it
+    can skip freely.
+    """
+
+    def setUp(self) -> None:
+        self.ci = CI_WORKFLOW.read_text(encoding="utf-8")
+
+    def test_the_workflow_declares_the_triggers_this_suite_assumes(self) -> None:
+        """Fail loudly if trigger discovery breaks, rather than vacuously pass."""
+        triggers = declared_triggers(self.ci)
+        for expected in ("push", "pull_request", "workflow_dispatch"):
+            self.assertIn(expected, triggers, f"trigger discovery found {triggers}")
+
+    def test_every_chain_entry_can_run_under_every_declared_trigger(self) -> None:
+        triggers = declared_triggers(self.ci)
+        unreachable = []
+        for job in sorted(chain_checked_jobs(self.ci)):
+            admitted = job_event_names(self.ci, job)
+            if not admitted:
+                continue
+            for trigger in triggers:
+                if trigger not in admitted and (job, trigger) not in TRIGGER_EXEMPT:
+                    unreachable.append(f"{job} cannot run on {trigger}")
+        self.assertEqual(
+            unreachable,
+            [],
+            "`ci-success` demands `success` from each of these, so a trigger the job "
+            "excludes makes the gate unsatisfiable under that trigger — a required check "
+            f"that is permanently red. Add the event to the job's `if:`. Found: {unreachable}",
+        )
+
+    def test_the_job_that_regressed_admits_the_manual_trigger(self) -> None:
+        """The specific case above, named so a regression reads as itself."""
+        self.assertIn(
+            "workflow_dispatch",
+            job_event_names(self.ci, "python-integrations"),
+            "a manual dispatch is the documented way out of an absent `CI Success`; "
+            "with this job excluded it can only ever produce a red one",
+        )
+
+    def test_the_exempt_job_is_out_of_the_chain_not_merely_tolerated(self) -> None:
+        """`sonarcloud` skips on dispatch; that is only safe while it is unread."""
+        self.assertNotIn("sonarcloud", chain_checked_jobs(self.ci))
+        self.assertIn("sonarcloud", CHAIN_EXEMPT)
+
+
+class TriggerReachabilityParserTests(unittest.TestCase):
+    """RED-then-GREEN on synthetic text, per this module's parser contract."""
+
+    WORKFLOW = (
+        "name: X\n"
+        "\non:\n"
+        "  push:\n    branches: [main]\n"
+        "  pull_request:\n    types: [opened]\n"
+        "  workflow_dispatch:\n"
+        "\njobs:\n"
+        "  alpha:\n    name: A\n"
+        "    if: github.event_name == 'pull_request' || github.event_name == 'push'\n"
+        "    steps:\n      - run: true\n"
+        "  beta:\n    name: B\n    steps:\n      - run: true\n"
+    )
+
+    def test_trigger_parser_reads_the_on_block_and_stops_at_jobs(self) -> None:
+        self.assertEqual(
+            declared_triggers(self.WORKFLOW),
+            ["push", "pull_request", "workflow_dispatch"],
+        )
+
+    def test_event_parser_reads_a_disjunction(self) -> None:
+        self.assertEqual(
+            job_event_names(self.WORKFLOW, "alpha"), {"pull_request", "push"}
+        )
+
+    def test_a_job_that_does_not_constrain_the_event_reads_as_unconstrained(self) -> None:
+        self.assertEqual(job_event_names(self.WORKFLOW, "beta"), set())
+
+    def test_event_parser_reads_a_folded_condition(self) -> None:
+        """A condition written as a YAML block is still a condition."""
+        text = (
+            "name: X\n"
+            "\non:\n  push:\n  workflow_dispatch:\n"
+            "\njobs:\n"
+            "  alpha:\n    name: A\n"
+            "    if: >-\n"
+            "      github.event_name == 'push' ||\n"
+            "      github.event_name == 'workflow_dispatch'\n"
+            "    steps:\n      - run: true\n"
+        )
+        self.assertEqual(
+            job_event_names(text, "alpha"), {"push", "workflow_dispatch"}
+        )
+
+    def test_a_commented_out_condition_does_not_count_as_admitting(self) -> None:
+        """The disarm this module's `strip_comments` exists for, at job level."""
+        text = self.WORKFLOW.replace(
+            "    if: github.event_name == 'pull_request' || github.event_name == 'push'\n",
+            "    # if: github.event_name == 'pull_request'\n",
+        )
+        self.assertEqual(job_event_names(text, "alpha"), set())
+
+
 if __name__ == "__main__":
     unittest.main()
