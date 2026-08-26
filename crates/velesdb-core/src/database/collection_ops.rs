@@ -242,6 +242,25 @@ impl Database {
         None
     }
 
+    /// Renders every graph collection's metrics as a Prometheus exposition.
+    ///
+    /// One `GraphMetrics` exists per edge store, so the samples are tagged
+    /// with the collection they came from and each family is declared once;
+    /// see `collection::graph::graph_metrics_to_prometheus`. Returns an empty
+    /// string when the database holds no graph collection.
+    #[must_use]
+    pub fn graph_metrics_prometheus(&self) -> String {
+        let graph_colls = self.graph_colls.read();
+        let mut sorted: Vec<_> = graph_colls
+            .iter()
+            .map(|(name, coll)| (name.as_str(), coll.metrics()))
+            .collect();
+        // Stable output: a scrape diff should reflect metric movement, not
+        // HashMap iteration order.
+        sorted.sort_by_key(|(name, _)| *name);
+        crate::collection::graph::graph_metrics_to_prometheus(&sorted)
+    }
+
     /// Lists all collection names in the database.
     ///
     /// Includes collections created via any typed API (vector, graph, metadata).

@@ -111,6 +111,15 @@ impl GraphCollection {
     ///
     /// # Errors
     ///
+    /// This graph collection's operational metrics.
+    #[must_use]
+    pub fn metrics(&self) -> &crate::collection::graph::GraphMetrics {
+        // Reaches the edge store's counters directly: `Collection::graph` is
+        // `pub(crate)`, and graph_api.rs — where a `Collection` accessor would
+        // naturally sit — is over its frozen line budget and may only shrink.
+        self.inner.graph.edge_store.metrics()
+    }
+
     /// Returns an error if any flush operation fails.
     pub fn flush(&self) -> Result<()> {
         self.inner.flush()

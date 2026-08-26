@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Graph metrics reach `/metrics`.** `GraphMetrics` was updated on every edge
+  write and every traversal and read by nothing: across the whole workspace,
+  `to_prometheus` had exactly two callers and both were its own unit tests. The
+  server's `/metrics` handler assembled an entirely different set of types
+  (`operational_metrics`, `global_guardrails_metrics`, `traversal_metrics`, the
+  query-duration histogram), so nothing the graph recorded ever left the
+  process. A stale comment on `match_metrics.rs` asserting these were
+  "consumed by velesdb-server" is what let the surface look wired.
+
+  Exporting it was not a one-line call from the handler. A `GraphMetrics`
+  lives on an edge store, so there is one per collection, while the metric
+  names are shared: concatenating a per-collection block would have repeated
+  `# HELP`/`# TYPE` for a single family and published several samples under an
+  identical, empty label set — a scraper rejects the duplicated declaration
+  and keeps only the last of the duplicated series, so the exposition would be
+  invalid and silently lossy at once. The unlabelled `to_prometheus(&self)` is
+  therefore replaced by a free function over `(collection, &GraphMetrics)`
+  pairs that declares each family once and tags every sample with
+  `collection="…"`. Collection names are `[A-Za-z0-9_-]`, so no label value can
+  need escaping — asserted against `validate_collection_name` rather than
+  trusted to a comment. `Database::graph_metrics_prometheus` sorts by name so a
+  scrape diff reflects metric movement rather than `HashMap` order, and returns
+  an empty string when no graph collection exists rather than advertising
+  families with no samples. (#2091)
+
 - **`StorageMode::SQ8` is a real search-path mode on Euclidean and Cosine.**
   Collections created with `storage='sq8'` now run the VSAG-style
   dual-precision HNSW backend: graph traversal compares int8 codes (1

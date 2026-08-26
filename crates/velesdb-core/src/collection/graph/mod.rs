@@ -100,7 +100,7 @@ pub use edge_concurrent::ConcurrentEdgeStore;
 pub(crate) use edge_outcome::EdgeRemoval;
 pub use label_index::LabelIndex;
 pub use label_table::{LabelId, LabelTable};
-pub use metrics::{GraphMetrics, LatencyHistogram};
+pub use metrics::{to_prometheus as graph_metrics_to_prometheus, GraphMetrics, LatencyHistogram};
 pub use node::GraphNode;
 pub use property_index::PropertyIndex;
 pub use range_index::RangeIndex;
