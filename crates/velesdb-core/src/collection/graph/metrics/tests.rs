@@ -47,24 +47,11 @@ fn test_latency_histogram_reset() {
 fn test_graph_metrics_edge_insert() {
     let metrics = GraphMetrics::new();
 
-    metrics.record_edge_insert(Duration::from_millis(5));
-    metrics.record_edge_insert(Duration::from_millis(10));
+    metrics.record_edge_insert();
+    metrics.record_edge_insert();
 
     assert_eq!(metrics.edges_total(), 2);
     assert_eq!(metrics.edge_inserts_total(), 2);
-    assert_eq!(metrics.edge_insert_latency.count(), 2);
-}
-
-#[test]
-fn test_graph_metrics_node_operations() {
-    let metrics = GraphMetrics::new();
-
-    metrics.record_node_insert();
-    metrics.record_node_insert();
-    metrics.record_node_delete();
-
-    assert_eq!(metrics.nodes_total(), 1);
-    assert_eq!(metrics.node_inserts_total(), 2);
 }
 
 #[test]
@@ -83,16 +70,13 @@ fn test_graph_metrics_traversal() {
 fn test_graph_metrics_prometheus_format() {
     let metrics = GraphMetrics::new();
 
-    metrics.record_edge_insert(Duration::from_millis(5));
-    metrics.record_node_insert();
+    metrics.record_edge_inserts_batch(1, Duration::from_millis(5));
     metrics.record_traversal(Duration::from_millis(10), 100);
 
     let output = metrics.to_prometheus();
 
     // Verify Prometheus format
-    assert!(output.contains("# HELP velesdb_graph_nodes_total"));
-    assert!(output.contains("# TYPE velesdb_graph_nodes_total gauge"));
-    assert!(output.contains("velesdb_graph_nodes_total 1"));
+    assert!(output.contains("# HELP velesdb_graph_edges_total"));
     assert!(output.contains("velesdb_graph_edges_total 1"));
     assert!(output.contains("velesdb_graph_edge_insert_duration_seconds_bucket"));
 }
@@ -101,13 +85,11 @@ fn test_graph_metrics_prometheus_format() {
 fn test_graph_metrics_reset() {
     let metrics = GraphMetrics::new();
 
-    metrics.record_edge_insert(Duration::from_millis(5));
-    metrics.record_node_insert();
+    metrics.record_edge_inserts_batch(1, Duration::from_millis(5));
 
     metrics.reset();
 
     assert_eq!(metrics.edges_total(), 0);
-    assert_eq!(metrics.nodes_total(), 0);
     assert_eq!(metrics.edge_insert_latency.count(), 0);
 }
 
