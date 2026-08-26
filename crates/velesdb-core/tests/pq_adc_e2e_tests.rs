@@ -151,15 +151,23 @@ fn test_pq_train_and_search_maintains_recall() {
             .search(&normalized_query, k)
             .expect("test: PQ search must succeed");
 
-        // THEN: all results have valid IDs and non-negative scores
+        // THEN: all results have valid IDs and in-range scores.
+        //
+        // The corpus is sign-mixed (components drawn from [-1, 1]), so a
+        // cosine here is genuinely signed and the bound that matters is the
+        // metric's own range, not a floor at zero. Asserting `>= 0.0` was
+        // asserting a property of the old HNSW clamp rather than of cosine.
         assert!(
             !results.is_empty(),
             "PQ search must return at least one result"
         );
+        let (low, high) = DistanceMetric::Cosine
+            .score_range()
+            .expect("cosine is a bounded metric");
         for r in &results {
             assert!(
-                r.score >= 0.0,
-                "PQ search score must be non-negative, got {}",
+                r.score >= low && r.score <= high,
+                "PQ search score must lie in cosine's range [{low}, {high}], got {}",
                 r.score
             );
             assert!(

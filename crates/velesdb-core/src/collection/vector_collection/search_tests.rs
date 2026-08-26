@@ -206,9 +206,17 @@ fn test_search_ids_returns_id_score_pairs() {
     assert_eq!(results.len(), 3);
     // Exact match (id=1) should be closest.
     assert_eq!(results[0].id, 1);
-    // Scores should be non-negative for cosine distance.
+    // Cosine spans [-1, 1]; these fixture vectors all sit in the non-negative
+    // orthant, so *their* cosines cannot be negative. The bound is a property
+    // of this fixture, not of the metric — asserting it as a metric contract
+    // is how the graph path's `[0, 1]` clamp went unnoticed.
     for r in &results {
-        assert!(r.score >= 0.0, "cosine scores should be non-negative");
+        assert!(
+            r.score >= 0.0,
+            "non-negative fixture vectors cannot yield a negative cosine, got {}",
+            r.score
+        );
+        assert!(r.score <= 1.0, "cosine cannot exceed 1, got {}", r.score);
     }
 }
 

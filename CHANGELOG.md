@@ -66,6 +66,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Cosine search scores keep their sign, on every path.** `transform_score`
+  on the HNSW graph path shared one match arm with Jaccard and clamped to
+  `[0, 1]`, so a genuinely negative cosine came back as exactly `0.0` — while
+  brute force, the exact rerank and `DistanceMetric::calculate` all returned
+  the cosine itself. Which path runs is not something the caller chooses: it
+  falls out of corpus size (≤ 100 points goes brute force), `SearchQuality`,
+  and even `k` (the rerank stage needs `len() > k * 2`). The same index and
+  query returned `-0.557` at `k=10` and `0.0` at `k=80`.
+
+  The two ranges also met inside a single result list. `merge_delta`
+  concatenates HNSW results with delta-buffer results scored through
+  `calculate` and sorts them together, so a freshly written point at true
+  cosine `-0.2` sorted *below* an indexed point at `-0.5` that had been
+  clamped to zero; VelesQL's `Parallel` execution strategy merges a scan leg
+  and an HNSW leg the same way. And because every dissimilar document
+  clamped to the same `0.0`, the ordering among anti-correlated matches was
+  not merely wrong — it was gone.
+
+  The range now has one definition, `DistanceMetric::score_range`, with
+  `clamp_score` applying it; the graph path and the GPU rerank derive from it
+  instead of each carrying a table. Cosine is `[-1, 1]`, Jaccard keeps its
+  true `[0, 1]` floor, and the unbounded metrics declare no range. The GPU
+  path's local table needed a `_ =>` catch-all; `score_range` matches every
+  variant, so a new metric now fails to compile rather than silently landing
+  in the wildcard. Two tests that had written the old range down as a rule
+  are corrected to state what is actually true of their fixtures.
+
+  Restoring the sign exposed a heuristic the clamp had been hiding.
+  `search_adaptive` decides whether to widen `ef` from the first/last score
+  gap divided by `min(|first|, |last|)` — a baseline that assumes zero is the
+  metric's floor. It is, for an unbounded distance. On a similarity over
+  `[-1, 1]` zero sits mid-range, so a merely mediocre tail of `-0.01` against
+  a `0.9` top reads as a spread of 91 and escalates a query that is not hard.
+  Cosine never hit that only because every non-positive score clamped to
+  exactly `0.0`, which made the baseline zero and the guard fail: phase 2 had
+  never escalated on this metric at all. The baseline is now the tail's
+  distance from `score_range`'s floor, which is unchanged for the unbounded
+  metrics (whose floor is zero) and keeps easy cosine queries cheap while
+  still escalating a genuinely heterogeneous neighbourhood. The rule moved
+  into a pure `should_escalate` so it is testable rather than inlined
+  arithmetic. (#2106)
+
+- **`TRAIN QUANTIZER` no longer reports an empty corpus for a collection that
+  has no payloads.** Training enumerated the collection through
+  `Collection::all_ids`, which is the *payload* store's view and says so in its
+  own doc: "Only returns IDs that have payload entries stored. Points inserted
+  with `None` payload may not appear." A collection used for pure vector search
+  carries no payloads at all, so that view was empty and every quantizer type —
+  pq, opq, rabitq and sq8, which share the extraction — failed with
+  `[VELES-029] Training failed: no vectors available for training` about a
+  collection holding its full count. Measured on a 256-point collection:
+  `all_ids` 0, `all_point_ids` 256, `point_count` 256. Training now uses
+  `all_point_ids`, documented as the authoritative set because it unions vector
+  and payload storage; the existing `is_empty` filter already drops the
+  metadata-only points it additionally brings in. (#2095)
+
+- **`Database.train_pq` (Python) accepts every collection name core does.**
+  The binding rendered VelesQL as text —
+  `format!("TRAIN QUANTIZER ON {collection_name} WITH (m={m}, k={k}")` — and
+  parsed it back. Interpolating a name into a query string is what forced the
+  method to carry its own identifier rule ("prevent VelesQL injection via
+  string interpolation"), and that rule was a second definition of what a
+  collection may be called. It drifted from `velesdb_core::validation` three
+  ways: it rejected the interior hyphen core accepts and pins (`a-b`, with
+  `docs-v2` as the doc example); it passed a leading digit the grammar's
+  `regular_identifier` then refused, surfacing as "Failed to construct TRAIN
+  query"; and it passed the empty string vacuously, rendering
+  `TRAIN QUANTIZER ON  WITH (...)`. The binding now builds the statement AST
+  directly through `Query::new_train`, as `velesdb-mobile` and
+  `tauri-plugin-velesdb` already do. No identifier text is produced, so there
+  is no charset rule to keep in step and all three cases dissolve together;
+  a bad name now fails in the engine with the engine's own error. (#2095)
+
 - **A sparse query whose score cancels to zero no longer returns the same
   document twice.** `linear_scan_dense` tracked "have I recorded this
   document?" by testing `scores[idx] == 0.0`, reading membership out of the
