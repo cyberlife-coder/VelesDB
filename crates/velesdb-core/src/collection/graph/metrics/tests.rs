@@ -162,7 +162,11 @@ fn an_observation_above_the_last_bound_overflows() {
 #[test]
 fn exported_bucket_labels_are_the_recorded_bounds_in_seconds() {
     let metrics = GraphMetrics::new();
-    metrics.record_edge_insert(Duration::from_millis(5));
+    // The batch path is the only remaining producer for `edge_insert_latency`:
+    // the single-edge `record_edge_insert` bumps counters without a clock read,
+    // so it would leave the histogram empty and these bucket assertions would
+    // fail for an unrelated reason.
+    metrics.record_edge_inserts_batch(1, Duration::from_millis(5));
 
     let output = metrics.to_prometheus();
 
