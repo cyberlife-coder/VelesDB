@@ -17,6 +17,7 @@
 #![allow(clippy::missing_panics_doc)]
 #![allow(clippy::similar_names)]
 
+use super::ptr_span::has_at_least;
 use super::reduction::hsum_avx256;
 use super::scalar::cosine_finish_fast;
 
@@ -46,11 +47,11 @@ unsafe fn cosine_avx2_remainder(
     mut nb_acc: std::arch::x86_64::__m256,
 ) -> f32 {
     // SAFETY: AVX2+FMA guaranteed by #[target_feature]; unaligned loads are safe.
-    // Loop guards ensure pointer arithmetic stays within the original slice bounds.
+    // `has_at_least` keeps every pointer the loops form inside the slice.
     use std::arch::x86_64::*;
 
     // Vectorized 8-wide remainder to reduce scalar tail to at most 7 elements
-    while a_ptr.add(8) <= end_ptr {
+    while has_at_least(a_ptr, end_ptr, 8) {
         let va = _mm256_loadu_ps(a_ptr);
         let vb = _mm256_loadu_ps(b_ptr);
         dot_acc = _mm256_fmadd_ps(va, vb, dot_acc);
@@ -264,7 +265,7 @@ pub(crate) unsafe fn hamming_avx2(a: &[f32], b: &[f32]) -> f32 {
     let acc23 = _mm256_add_ps(acc2, acc3);
     let mut acc = _mm256_add_ps(acc01, acc23);
 
-    while a_ptr.add(8) <= end_ptr {
+    while has_at_least(a_ptr, end_ptr, 8) {
         // SAFETY: Guard ensures 8 elements remain.
         acc = hamming_avx2_fp_acc(a_ptr, b_ptr, threshold, one_vec, acc);
         a_ptr = a_ptr.add(8);
@@ -394,11 +395,11 @@ unsafe fn jaccard_avx2_remainder(
     mut acc_union: std::arch::x86_64::__m256,
 ) -> f32 {
     // SAFETY: AVX2 guaranteed by #[target_feature]; unaligned loads are safe.
-    // Loop guards ensure pointer arithmetic stays within the original slice bounds.
+    // `has_at_least` keeps every pointer the loops form inside the slice.
     use std::arch::x86_64::*;
 
     // Vectorized 8-wide remainder to reduce scalar tail to at most 7 elements
-    while a_ptr.add(8) <= end_ptr {
+    while has_at_least(a_ptr, end_ptr, 8) {
         let va = _mm256_loadu_ps(a_ptr);
         let vb = _mm256_loadu_ps(b_ptr);
         acc_inter = _mm256_add_ps(acc_inter, _mm256_min_ps(va, vb));

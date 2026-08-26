@@ -123,6 +123,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The AVX kernels no longer compute out-of-bounds pointers (#2106 item 9).**
+  Eleven loops guarded themselves with `while p.add(N) <= end_ptr`, and that is
+  undefined behaviour on the final evaluation — the one that ends the loop.
+  `pointer::add` requires the *computed* pointer to stay inside the same
+  allocated object, one past the end included; when fewer than `N` elements
+  remain it does not, and never dereferencing the result does not save it.
+  Miri reports it as an out-of-bounds pointer computation, reproduced here on
+  the guard shape with the intrinsics stripped out:
+
+  ```
+  error: Undefined Behavior: in-bounds pointer arithmetic failed: attempting to
+  offset pointer by 32 bytes, but got alloc271+0x40 which is only 16 bytes from
+  the end of the allocation
+     --> while p.add(8) <= end
+  ```
+
+  Every compiler in use today emits the obvious address comparison, which is
+  why this never produced a wrong answer — but LLVM is entitled to assume an
+  `inbounds` GEP is in bounds, and one feeding a comparison is precisely the
+  shape a future optimisation may fold. The defect is that the code asks a
+  question it has no right to ask.
+
+  `simd_native::ptr_span::has_at_least` asks it of the *distance* between the
+  two cursors instead, on integers, where the arithmetic is defined for every
+  input; the index-form guards already in the tree (`i + 16 <= len`) are the
+  same idea for the loops that carry indices rather than pointers. All eleven
+  sites now use it — eight in `x86_avx512.rs`, three in
+  `x86_avx2_similarity.rs` — and the file-level claim that "loop guards ensure
+  pointer arithmetic stays within the original slice bounds", which was the
+  false one, is replaced by a pointer to the guard that now makes it true.
+
+  Equivalence with the old guard is pinned exhaustively rather than sampled:
+  for every length 0..=80, every cursor position within it, and every lane
+  width in use, the new guard returns what `p.add(count) <= end` would have
+  returned, and the consuming loop runs exactly `len / count` times leaving
+  `len % count` for the scalar tail. A cursor past the end — unreachable
+  through the kernels' own loop structure — is pinned to fail closed rather
+  than wrap to a span that would walk off the buffer. `ptr_span_tests.rs`
+  carries no intrinsics on purpose, so unlike the kernels it can be run under
+  Miri. (#2106)
+
 - **A manual CI dispatch can no longer turn a green `CI Success` red.**
   `ci-success` asserts `result == 'success'` for every job it reads, and
   `python-integrations` admitted only `pull_request` and `push`. Under
