@@ -269,83 +269,81 @@ impl GraphMetrics {
     // Export
     // =========================================================================
 
-    /// Exports metrics in Prometheus text format.
-    #[must_use]
-    pub fn to_prometheus(&self) -> String {
-        let mut output = String::with_capacity(2048);
-
-        // Edge metrics
-        output.push_str("# HELP velesdb_graph_edges_total Current number of edges\n");
-        output.push_str("# TYPE velesdb_graph_edges_total gauge\n");
-        let _ = writeln!(output, "velesdb_graph_edges_total {}\n", self.edges_total());
-
-        output.push_str("# HELP velesdb_graph_edge_inserts_total Total edge insertions\n");
-        output.push_str("# TYPE velesdb_graph_edge_inserts_total counter\n");
+    /// Appends this store's samples for every family, tagged with `collection`.
+    ///
+    /// Emits sample lines only — never `# HELP` or `# TYPE`. Those belong to
+    /// the metric *family*, not to one collection, and are written once by
+    /// [`to_prometheus`].
+    fn append_samples(&self, output: &mut String, collection: &str) {
         let _ = writeln!(
             output,
-            "velesdb_graph_edge_inserts_total {}\n",
+            "velesdb_graph_edges_total{{collection=\"{collection}\"}} {}",
+            self.edges_total()
+        );
+        let _ = writeln!(
+            output,
+            "velesdb_graph_edge_inserts_total{{collection=\"{collection}\"}} {}",
             self.edge_inserts_total()
         );
-
-        // Latency histograms
-        Self::append_histogram_prometheus(&mut output, "edge_insert", &self.edge_insert_latency);
-        Self::append_histogram_prometheus(&mut output, "traversal", &self.traversal_latency);
-
-        // Traversal metrics
-        output.push_str("# HELP velesdb_graph_traversals_total Total traversals executed\n");
-        output.push_str("# TYPE velesdb_graph_traversals_total counter\n");
         let _ = writeln!(
             output,
-            "velesdb_graph_traversals_total {}\n",
+            "velesdb_graph_edge_deletes_total{{collection=\"{collection}\"}} {}",
+            self.edge_deletes_total()
+        );
+        let _ = writeln!(
+            output,
+            "velesdb_graph_traversals_total{{collection=\"{collection}\"}} {}",
             self.traversals_total()
         );
-
-        output
+        let _ = writeln!(
+            output,
+            "velesdb_graph_traversal_nodes_visited_total{{collection=\"{collection}\"}} {}",
+            self.traversal_nodes_visited()
+        );
     }
 
-    fn append_histogram_prometheus(output: &mut String, name: &str, histogram: &LatencyHistogram) {
-        let counts = histogram.bucket_counts();
-        let mut cumulative = 0u64;
+    /// Appends this store's histogram samples, tagged with `collection`.
+    ///
+    /// Sample lines only, for the same reason as [`Self::append_samples`].
+    /// The `le` labels are derived from `BUCKET_BOUNDS_MS`, the same array
+    /// that decides which bucket an observation lands in, so the exported
+    /// bound can never disagree with the bucket that counted it.
+    fn append_histogram_samples(&self, output: &mut String, collection: &str) {
+        // Zipped against HISTOGRAM_FAMILIES rather than re-listing the names:
+        // the preamble in `to_prometheus` walks that same array, so a family
+        // added on one side cannot go undeclared on the other.
+        let histograms = [&self.edge_insert_latency, &self.traversal_latency];
+        for (infix, histogram) in HISTOGRAM_FAMILIES.into_iter().zip(histograms) {
+            let counts = histogram.bucket_counts();
+            let mut cumulative = 0u64;
 
-        let _ = writeln!(
-            output,
-            "# HELP velesdb_graph_{}_duration_seconds {} latency histogram",
-            name,
-            name.replace('_', " ")
-        );
-        let _ = writeln!(
-            output,
-            "# TYPE velesdb_graph_{name}_duration_seconds histogram"
-        );
-
-        // Labels are derived from the bounds that drive `record`, so the
-        // exported `le` can never drift from the bucket a sample landed in.
-        for (i, &bound_ms) in BUCKET_BOUNDS_MS.iter().enumerate() {
-            cumulative += counts[i];
-            let bound = bound_ms as f64 / 1000.0;
+            for (i, &bound_ms) in BUCKET_BOUNDS_MS.iter().enumerate() {
+                cumulative += counts[i];
+                #[allow(clippy::cast_precision_loss)]
+                let bound = bound_ms as f64 / 1000.0;
+                let _ = writeln!(
+                    output,
+                    "velesdb_graph_{infix}_duration_seconds_bucket{{collection=\"{collection}\",le=\"{bound}\"}} {cumulative}"
+                );
+            }
+            cumulative += counts[BUCKET_BOUNDS_MS.len()];
             let _ = writeln!(
                 output,
-                "velesdb_graph_{name}_duration_seconds_bucket{{le=\"{bound}\"}} {cumulative}",
+                "velesdb_graph_{infix}_duration_seconds_bucket{{collection=\"{collection}\",le=\"+Inf\"}} {cumulative}"
+            );
+
+            #[allow(clippy::cast_precision_loss)]
+            let sum_seconds = histogram.sum_ns() as f64 / 1_000_000_000.0;
+            let _ = writeln!(
+                output,
+                "velesdb_graph_{infix}_duration_seconds_sum{{collection=\"{collection}\"}} {sum_seconds}"
+            );
+            let _ = writeln!(
+                output,
+                "velesdb_graph_{infix}_duration_seconds_count{{collection=\"{collection}\"}} {}",
+                histogram.count()
             );
         }
-        cumulative += counts[BUCKET_BOUNDS_MS.len()];
-        let _ = writeln!(
-            output,
-            "velesdb_graph_{name}_duration_seconds_bucket{{le=\"+Inf\"}} {cumulative}",
-        );
-
-        let _ = writeln!(
-            output,
-            "velesdb_graph_{}_duration_seconds_sum {}",
-            name,
-            histogram.sum_ns() as f64 / 1_000_000_000.0
-        );
-        let _ = writeln!(
-            output,
-            "velesdb_graph_{}_duration_seconds_count {}\n",
-            name,
-            histogram.count()
-        );
     }
 
     /// Resets all metrics to zero.
@@ -359,4 +357,93 @@ impl GraphMetrics {
         self.traversal_latency.reset();
         self.query_latency.reset();
     }
+}
+
+/// The metric families this module exports, each with its Prometheus type.
+///
+/// Declared once here so the `# HELP`/`# TYPE` preamble and the sample lines
+/// cannot drift apart: [`to_prometheus`] walks this list, and every entry it
+/// names is emitted by [`GraphMetrics::append_samples`].
+const COUNTER_FAMILIES: [(&str, &str, &str); 5] = [
+    (
+        "velesdb_graph_edges_total",
+        "gauge",
+        "Current number of edges",
+    ),
+    (
+        "velesdb_graph_edge_inserts_total",
+        "counter",
+        "Total edge insertions",
+    ),
+    (
+        "velesdb_graph_edge_deletes_total",
+        "counter",
+        "Total edge deletions",
+    ),
+    (
+        "velesdb_graph_traversals_total",
+        "counter",
+        "Total traversals executed",
+    ),
+    (
+        "velesdb_graph_traversal_nodes_visited_total",
+        "counter",
+        "Total nodes visited across traversals",
+    ),
+];
+
+/// Latency histogram families, as (metric infix, accessor).
+const HISTOGRAM_FAMILIES: [&str; 2] = ["edge_insert", "traversal"];
+
+/// Renders the graph metrics of several collections as one Prometheus
+/// exposition.
+///
+/// A `GraphMetrics` lives on an edge store, so there is one per collection,
+/// while the metric names are shared across all of them. Concatenating a
+/// per-collection block would therefore repeat `# HELP` and `# TYPE` for the
+/// same family and publish several samples under an identical — empty — label
+/// set. Prometheus rejects a duplicated family declaration and, for the
+/// duplicated series, keeps whichever it saw last: the exposition would be
+/// invalid and silently lossy at once.
+///
+/// Each family is instead declared once, and every sample carries the
+/// collection it came from. Collection names are `[A-Za-z0-9_-]` only
+/// (`validation::is_valid_name_char`), so no label value can contain a quote,
+/// a backslash or a newline and none needs escaping — pinned by
+/// `a_collection_name_can_never_need_label_escaping`.
+///
+/// Returns an empty string for an empty input rather than a preamble
+/// describing families with no samples.
+#[must_use]
+pub fn to_prometheus(per_collection: &[(&str, &GraphMetrics)]) -> String {
+    if per_collection.is_empty() {
+        return String::new();
+    }
+
+    let mut output = String::with_capacity(1024 * per_collection.len());
+
+    // Preamble: every family declared exactly once, counters then histograms.
+    for (name, kind, help) in COUNTER_FAMILIES {
+        let _ = writeln!(output, "# HELP {name} {help}");
+        let _ = writeln!(output, "# TYPE {name} {kind}");
+    }
+    for infix in HISTOGRAM_FAMILIES {
+        let _ = writeln!(
+            output,
+            "# HELP velesdb_graph_{infix}_duration_seconds {} latency histogram",
+            infix.replace('_', " ")
+        );
+        let _ = writeln!(
+            output,
+            "# TYPE velesdb_graph_{infix}_duration_seconds histogram"
+        );
+    }
+
+    // Samples: one labelled block per collection.
+    for (collection, metrics) in per_collection {
+        metrics.append_samples(&mut output, collection);
+        metrics.append_histogram_samples(&mut output, collection);
+    }
+
+    output
 }
