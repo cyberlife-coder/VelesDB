@@ -104,14 +104,11 @@ impl GraphCollection {
         super::VectorCollection { inner: self.inner }
     }
 
-    /// Flushes all state to disk.
-    ///
-    /// Issue #423: This fast-path flush skips `vectors.idx` serialization.
-    /// The WAL provides crash recovery for the vector index.
-    ///
-    /// # Errors
-    ///
     /// This graph collection's operational metrics.
+    ///
+    /// Reads what the edge write and traversal paths already record, so an
+    /// exporter can publish it; the counters are bumped regardless of whether
+    /// anything reads them.
     #[must_use]
     pub fn metrics(&self) -> &crate::collection::graph::GraphMetrics {
         // Reaches the edge store's counters directly: `Collection::graph` is
@@ -120,6 +117,13 @@ impl GraphCollection {
         self.inner.graph.edge_store.metrics()
     }
 
+    /// Flushes all state to disk.
+    ///
+    /// Issue #423: This fast-path flush skips `vectors.idx` serialization.
+    /// The WAL provides crash recovery for the vector index.
+    ///
+    /// # Errors
+    ///
     /// Returns an error if any flush operation fails.
     pub fn flush(&self) -> Result<()> {
         self.inner.flush()
