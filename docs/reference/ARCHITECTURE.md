@@ -192,7 +192,7 @@ VelesDB core architecture is explicitly **hybrid by design**:
 │  ┌──────────────────┐  ┌──────────────────┐  ┌────────────────────────┐ │
 │  │   LabelTable     │  │   BfsIterator    │  │    GraphMetrics        │ │
 │  │ String interning │  │ Streaming BFS    │  │  LatencyHistogram      │ │
-│  │  LabelId (u32)   │  │ memory-bounded   │  │  node/edge counters    │ │
+│  │  LabelId (u32)   │  │ memory-bounded   │  │  edge counters         │ │
 │  └──────────────────┘  └──────────────────┘  └────────────────────────┘ │
 └─────────────────────────────────────────────────────────────────────────┘
 ```

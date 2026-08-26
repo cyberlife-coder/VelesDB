@@ -273,7 +273,7 @@ per-artifact load-time validation (file-length-bounded counts).
 and the vector branch has little or no visible influence.
 
 **Why**: `maximum` and `average` operate on the **raw** per-branch scores with
-no normalization. Vector similarity is bounded (cosine ∈ [0, 1]) while BM25 is
+no normalization. Vector similarity is bounded (cosine ∈ [-1, 1]) while BM25 is
 unbounded (routinely > 1, often 5–20 on longer queries), so under `maximum` the
 BM25 score almost always wins, and under `average` it dwarfs the vector
 contribution. These strategies are designed for branches whose scores share a
