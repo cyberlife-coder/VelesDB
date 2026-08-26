@@ -140,6 +140,10 @@ mod cosine_fused_tests;
 mod cosine_tail_tests;
 
 #[cfg(test)]
+#[path = "l2_dot_tail_tests.rs"]
+mod l2_dot_tail_tests;
+
+#[cfg(test)]
 mod harley_seal_tests;
 
 #[cfg(test)]

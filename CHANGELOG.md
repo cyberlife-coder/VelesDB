@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Squared-L2 and dot-product masked tails are covered (#2106 item 14).**
+  Both kernels handle their remainder in two stages — a 16-wide bridge loop,
+  then one masked chunk — and no named test reached either at the 4-accumulator
+  or 8-accumulator width. Checked rather than assumed:
+  `distance_engine_tests.rs` uses 128/256/384/512/768/1024/1536/3072, every one
+  at or above 512 an exact multiple of its kernel's stride;
+  `simd_native_dispatch_tests.rs` reaches the 2-acc mask at 100/127/255 and
+  nothing wider; and `warmup_tests.rs` only appears to reach 767, which is a
+  value inside its generator, not the vector length (768, a multiple of 64).
+
+  `l2_dot_tail_tests.rs` names a dimension for every stage: 513 for a mask with
+  no bridge, 533 for one bridge pass then a 5-wide mask, 544 for two bridge
+  passes with the mask skipped, 575 for the widest 4-acc remainder, and
+  1025/1041/1279 for the same three shapes at 8-acc — with the exact multiples
+  kept alongside as controls so a failure localizes to the main loop or the
+  tail. The reference is accumulated in `f64` rather than as a second f32 loop,
+  so a disagreement says which side is wrong, and the bound is relative because
+  these are sums of up to 2048 terms.
+
+  It also ties `batch_dot_product_native` to `dot_product_native` at every one
+  of those dimensions. The batch entry point resolves the kernel once from the
+  dimension and applies it per candidate — a second dispatch site with the same
+  thresholds and its own chance to pick the wrong arm, previously bound to the
+  single-vector path by nothing.
+
+  Every guarantee was mutation-checked. Dropping one element from the masked
+  chunk of each of the six kernels fails at the expected dimension (L2 4-acc at
+  513, L2 8-acc at 1025, dot 2-acc at 1, dot 4-acc at 513, dot 8-acc at 1025),
+  and double-counting the L2 4-acc bridge body fails at 533 — which is what
+  proves the bridge is reached at all, the stage the audit recorded as
+  unreachable. (#2106)
+
 - **Graph metrics reach `/metrics`.** `GraphMetrics` was updated on every edge
   write and every traversal and read by nothing: across the whole workspace,
   `to_prometheus` had exactly two callers and both were its own unit tests. The
