@@ -23,14 +23,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 /// Latency histogram buckets (milliseconds).
+///
+/// These are the upper bounds exported as Prometheus `le` labels, and a
+/// Prometheus bucket is inclusive: an observation equal to a bound belongs to
+/// that bound's bucket, not the next one.
 const BUCKET_BOUNDS_MS: [u64; 9] = [1, 5, 10, 50, 100, 500, 1000, 5000, 10000];
 
 /// Simple latency histogram with fixed buckets.
 ///
-/// Buckets: <1ms, <5ms, <10ms, <50ms, <100ms, <500ms, <1s, <5s, <10s, ≥10s
+/// Buckets: ≤1ms, ≤5ms, ≤10ms, ≤50ms, ≤100ms, ≤500ms, ≤1s, ≤5s, ≤10s, >10s
 #[derive(Debug, Default)]
 pub struct LatencyHistogram {
-    /// Bucket counts [<1ms, <5ms, <10ms, <50ms, <100ms, <500ms, <1s, <5s, <10s, ≥10s]
+    /// Bucket counts [≤1ms, ≤5ms, ≤10ms, ≤50ms, ≤100ms, ≤500ms, ≤1s, ≤5s, ≤10s, >10s]
     buckets: [AtomicU64; 10],
     /// Sum of all observed durations in nanoseconds
     sum_ns: AtomicU64,
@@ -71,8 +75,8 @@ impl LatencyHistogram {
         };
         let bucket_idx = BUCKET_BOUNDS_MS
             .iter()
-            .position(|&bound| ms < bound)
-            .unwrap_or(9);
+            .position(|&bound| ms <= bound)
+            .unwrap_or(BUCKET_BOUNDS_MS.len());
         self.buckets[bucket_idx].fetch_add(1, Ordering::Relaxed);
     }
 
@@ -300,9 +304,6 @@ impl GraphMetrics {
     }
 
     fn append_histogram_prometheus(output: &mut String, name: &str, histogram: &LatencyHistogram) {
-        let bucket_bounds = [
-            "0.001", "0.005", "0.01", "0.05", "0.1", "0.5", "1", "5", "10", "+Inf",
-        ];
         let counts = histogram.bucket_counts();
         let mut cumulative = 0u64;
 
@@ -317,13 +318,21 @@ impl GraphMetrics {
             "# TYPE velesdb_graph_{name}_duration_seconds histogram"
         );
 
-        for (i, &bound) in bucket_bounds.iter().enumerate() {
+        // Labels are derived from the bounds that drive `record`, so the
+        // exported `le` can never drift from the bucket a sample landed in.
+        for (i, &bound_ms) in BUCKET_BOUNDS_MS.iter().enumerate() {
             cumulative += counts[i];
+            let bound = bound_ms as f64 / 1000.0;
             let _ = writeln!(
                 output,
                 "velesdb_graph_{name}_duration_seconds_bucket{{le=\"{bound}\"}} {cumulative}",
             );
         }
+        cumulative += counts[BUCKET_BOUNDS_MS.len()];
+        let _ = writeln!(
+            output,
+            "velesdb_graph_{name}_duration_seconds_bucket{{le=\"+Inf\"}} {cumulative}",
+        );
 
         let _ = writeln!(
             output,

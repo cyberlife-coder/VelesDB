@@ -139,6 +139,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is no charset rule to keep in step and all three cases dissolve together;
   a bad name now fails in the engine with the engine's own error. (#2095)
 
+- **A sparse query whose score cancels to zero no longer returns the same
+  document twice.** `linear_scan_dense` tracked "have I recorded this
+  document?" by testing `scores[idx] == 0.0`, reading membership out of the
+  accumulated value. A negative query weight — the "like A but not B" shape,
+  where both sides carry a shared term at the same weight — drives the running
+  score back to exactly zero, and the next term's posting then recorded the
+  document a second time. The duplicate is not merely a repeated row: it takes
+  a slot in the top-k heap, so a genuine result is evicted. On a three-document
+  fixture the correct `[1, 0, 2]` came back as `[1, 0, 0]`. Membership is now
+  an explicit `seen` array, which also restores parity with the hash-map
+  accumulator the router picks for sparse ID spaces — the two are chosen on
+  performance grounds and must be observationally identical. (#2106)
+
+- **Latency histograms bucket on the bound they export.** Both millisecond
+  histograms — graph operations and MATCH queries — placed an observation with
+  `ms < bound` while exporting the counts under Prometheus `le` labels, and
+  `le` is *less than or equal*. A request taking exactly 5 ms was counted in
+  `le="0.01"` and left out of `le="0.005"`, so every dashboard percentile and
+  every SLO burn-rate alert read a bucket that excluded the requests sitting
+  on its own boundary — the values latency bounds are most often written to.
+  The graph exporter also kept its `le` labels in a second, hand-written array
+  beside the bounds that drive bucketing; the labels are now derived from
+  those bounds, so the two cannot drift. (#2106)
+
+- **`PathScorer::score_rel_types` charges one decay factor per hop.** It raised
+  `distance_decay` to the hop's ordinal, compounding to `decay^(n(n+1)/2)`,
+  while `score_length` on the same path returned `decay^n` and the
+  `distance_decay` field documents "each hop reduces score by 20%". At five
+  hops with the default 0.8 the two functions answered 0.035 and 0.328 — a
+  ninefold gap between two documented spellings of one contract. (#2106)
+
+- **The scalar distance baseline computes the same metric as production.**
+  `CpuDistance` exists to be the un-vectorized reference the SIMD kernels are
+  checked against, and it implemented different formulas: Hamming compared raw
+  bit patterns instead of bucketing at the 0.5 binary threshold (so `[1,2,3]`
+  against `[4,5,6]` scored 3 where production scores 0), and Jaccard called an
+  empty union maximally distant where production calls it identical. A
+  reference that disagrees with its subject makes a real SIMD bug and a
+  reference bug indistinguishable. All three non-Euclidean metrics now
+  delegate to the scalar kernels production falls back on — which also gives
+  cosine the `[-1, 1]` clamp the hand-rolled copy omitted — and a parity test
+  pins baseline against SIMD across adversarial inputs. Euclidean still
+  differs on purpose: the hot path returns squared L2. The unused
+  `simd_distance_for_metric` dispatch was removed; its `dead_code`
+  justification claimed a caller it did not have, and it disagreed with the
+  hot path on Euclidean, so reusing it would have silently changed that
+  contract. (#2106)
+
+- **AVX-512 detection now requires the AVX2 + FMA baseline it falls back on.**
+  `detect_simd_level` granted `SimdLevel::Avx512` on `avx512f` alone, but the
+  dispatcher is not a strict hierarchy: an AVX-512 arm with no kernel for the
+  input width falls through to the AVX2 kernel — Hamming and Jaccard below 16
+  elements, and `scale_inplace` throughout — and those carry
+  `#[target_feature(enable = "avx2")]`. Their safety contract was met by an ISA
+  folk theorem ("Avx512 implies Avx2 support", as the SAFETY comment put it)
+  rather than by a check. Every shipping AVX-512 part does advertise AVX2, so
+  no physical CPU was affected; a hypervisor masking CPUID need not, and the
+  failure there is an illegal instruction. Detection now requires `avx2` and
+  `fma` for both non-scalar levels, which makes the fall-through sound by
+  construction and the `SimdLevel::Avx512` doc true. (#2106)
+
+- **`TRAIN QUANTIZER ... TYPE opq` is refused on Hamming and Jaccard
+  collections.** OPQ keeps its codes in a rotated basis and the rescore path
+  rotates the query to match. A rotation preserves inner products and norms,
+  so cosine, Euclidean and dot product survive it — Hamming and Jaccard are
+  defined component by component on the original axes, and a rotated "binary"
+  vector is not binary at all. The combination trained happily and every later
+  rescore measured the metric in a space where it means nothing. The rule now
+  lives on the metric as `DistanceMetric::is_rotation_invariant`, mirroring the
+  guard `train_sq8` already had. A codebook trained before this guard is still
+  on disk somewhere, so open-time restore applies the same rule: a rotated
+  `codebook.pq` on such a collection is not installed and the collection scores
+  exact f32, the warn-and-degrade the dimension-mismatch arm beside it already
+  used. Plain PQ has no rotation and stays available for these metrics.
+  (#2106)
+
 - **Clearing a point's text now takes it out of full-text search.** The BM25
   index only ever saw the incoming payload, so a payload that still existed but
   no longer yielded indexable text wrote nothing and the point kept matching a

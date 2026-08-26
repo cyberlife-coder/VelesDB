@@ -139,7 +139,7 @@ pub(crate) fn cosine_scalar(a: &[f32], b: &[f32]) -> f32 {
 /// Uses binary threshold at 0.5 for consistency with SIMD versions.
 /// This is the standard interpretation for binary/categorical vectors.
 #[inline]
-pub(super) fn hamming_scalar(a: &[f32], b: &[f32]) -> f32 {
+pub(crate) fn hamming_scalar(a: &[f32], b: &[f32]) -> f32 {
     a.iter()
         .zip(b.iter())
         .filter(|(&x, &y)| (x > 0.5) != (y > 0.5))
@@ -148,7 +148,7 @@ pub(super) fn hamming_scalar(a: &[f32], b: &[f32]) -> f32 {
 
 /// Scalar Jaccard similarity implementation.
 #[inline]
-pub(super) fn jaccard_scalar(a: &[f32], b: &[f32]) -> f32 {
+pub(crate) fn jaccard_scalar(a: &[f32], b: &[f32]) -> f32 {
     let (intersection, union) = jaccard_scalar_accum(a, b);
     if union == 0.0 {
         1.0

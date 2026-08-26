@@ -60,7 +60,8 @@ fn hamming_simd(a: &[f32], b: &[f32]) -> f32 {
         #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx512 | SimdLevel::Avx2 if a.len() >= 8 => {
             // SAFETY: AVX2 hamming kernel requires CPU feature + minimum dim.
-            // - Condition 1: `simd_level()` confirmed AVX2+ (Avx512 implies Avx2 support).
+            // - Condition 1: `detect_simd_level` grants neither Avx2 nor Avx512
+            //   without the avx2 + fma baseline, so this arm has avx2 either way.
             // SAFETY: fallthrough for Avx512 with short vectors that don't meet 16-element minimum.
             unsafe { crate::simd_native::hamming_avx2(a, b) }
         }
@@ -98,7 +99,8 @@ fn jaccard_simd(a: &[f32], b: &[f32]) -> f32 {
         #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx512 | SimdLevel::Avx2 if a.len() >= 8 => {
             // SAFETY: AVX2 jaccard kernel requires CPU feature + minimum dim.
-            // - Condition 1: `simd_level()` confirmed AVX2+ (Avx512 implies Avx2 support).
+            // - Condition 1: `detect_simd_level` grants neither Avx2 nor Avx512
+            //   without the avx2 + fma baseline, so this arm has avx2 either way.
             // SAFETY: fallthrough for Avx512 with short vectors that don't meet 16-element minimum.
             unsafe { crate::simd_native::jaccard_avx2(a, b) }
         }

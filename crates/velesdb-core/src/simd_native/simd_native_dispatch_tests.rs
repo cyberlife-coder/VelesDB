@@ -204,3 +204,51 @@ fn test_euclidean_dispatch_thresholds() {
         );
     }
 }
+
+// ============================================================================
+// Feature-detection contract
+// ============================================================================
+
+/// Every non-scalar x86 level implies the AVX2 + FMA baseline.
+///
+/// `Avx512` arms fall through to AVX2 kernels for inputs narrower than their
+/// own minimum — `hamming`, `jaccard` and `scale_inplace` all do — and those
+/// kernels carry `#[target_feature(enable = "avx2")]`. Detection used to
+/// grant `Avx512` on `avx512f` alone, so the fall-through rested on "every
+/// AVX-512 CPU has AVX2" rather than on a check; a hypervisor masking CPUID
+/// breaks that, and the failure mode is an illegal instruction. This asserts
+/// the property on whatever CPU runs the suite, so it fails exactly on the
+/// hardware where the omission would have bitten.
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn every_non_scalar_level_implies_the_avx2_baseline() {
+    use super::{simd_level, SimdLevel};
+
+    let baseline = is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma");
+    match simd_level() {
+        SimdLevel::Avx512 | SimdLevel::Avx2 => assert!(
+            baseline,
+            "level {:?} was granted without avx2 + fma",
+            simd_level()
+        ),
+        SimdLevel::Neon | SimdLevel::Scalar => {}
+    }
+}
+
+/// AVX-512F alone must not grant the `Avx512` level.
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn avx512_level_requires_more_than_avx512f() {
+    use super::{simd_level, SimdLevel};
+
+    if simd_level() == SimdLevel::Avx512 {
+        assert!(
+            is_x86_feature_detected!("avx512f"),
+            "Avx512 must still require avx512f"
+        );
+        assert!(
+            is_x86_feature_detected!("avx2"),
+            "Avx512 must not be granted without avx2"
+        );
+    }
+}

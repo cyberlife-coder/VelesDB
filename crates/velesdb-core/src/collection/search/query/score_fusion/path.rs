@@ -77,6 +77,13 @@ impl PathScorer {
     }
 
     /// Scores a path given only relationship types (simplified API).
+    ///
+    /// Each hop contributes one `distance_decay` factor and its relationship
+    /// weight, so an `n`-hop path with default weights scores exactly
+    /// [`Self::score_length`]`(n)`. Raising the decay to the hop's ordinal
+    /// instead would compound it to `decay^(n(n+1)/2)`, which contradicts both
+    /// `score_length` and the "each hop reduces score by 20%" contract on
+    /// [`Self::distance_decay`].
     #[must_use]
     pub fn score_rel_types(&self, rel_types: &[&str]) -> f32 {
         if rel_types.is_empty() {
@@ -85,14 +92,13 @@ impl PathScorer {
 
         let mut score = 1.0;
 
-        for (i, rel_type) in rel_types.iter().enumerate() {
-            let hop_decay = self.distance_decay.powi(i as i32 + 1);
+        for rel_type in rel_types {
             let rel_weight = self
                 .rel_type_weights
                 .get(*rel_type)
                 .copied()
                 .unwrap_or(self.default_weight);
-            score *= hop_decay * rel_weight;
+            score *= self.distance_decay * rel_weight;
         }
 
         score.clamp(0.0, 1.0)

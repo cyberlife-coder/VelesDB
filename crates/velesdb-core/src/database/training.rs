@@ -165,11 +165,26 @@ impl Database {
     }
 
     /// Trains an Optimized Product Quantizer (with rotation) and persists it.
+    ///
+    /// OPQ keeps its codes in a rotated basis and rescoring rotates the query
+    /// to match, so training is rejected on metrics an orthogonal transform
+    /// does not preserve — see [`crate::DistanceMetric::is_rotation_invariant`].
+    /// Without this, `TRAIN QUANTIZER ... TYPE opq` on a Hamming or Jaccard
+    /// collection succeeded and every later rescore measured the metric in a
+    /// space where it means nothing.
     fn train_opq(
         collection: &crate::collection::Collection,
         vectors: &[Vec<f32>],
         params: &TrainParams,
     ) -> Result<Vec<SearchResult>> {
+        let metric = collection.config().metric;
+        if !metric.is_rotation_invariant() {
+            return Err(Error::InvalidQuantizerConfig(format!(
+                "OPQ rotates vectors into another basis, which does not preserve {metric:?}; \
+                 train plain PQ instead, or use a cosine/euclidean/dot-product collection"
+            )));
+        }
+
         let pq = crate::quantization::train_opq(vectors, params.m, params.k, true, 10)
             .map_err(|e| Error::TrainingFailed(e.to_string()))?;
 

@@ -26,6 +26,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 /// Bucket bounds for latency histogram in milliseconds.
+///
+/// These are the upper bounds exported as Prometheus `le` labels, and a
+/// Prometheus bucket is inclusive: an observation equal to a bound belongs to
+/// that bound's bucket, not the next one.
 pub const LATENCY_BUCKETS_MS: [u64; 10] = [1, 5, 10, 25, 50, 100, 250, 500, 1000, 5000];
 
 /// MATCH query metrics collector (EPIC-050 US-001).
@@ -98,7 +102,7 @@ impl MatchMetrics {
         // Find the right bucket
         let bucket_idx = LATENCY_BUCKETS_MS
             .iter()
-            .position(|&bound| ms < bound)
+            .position(|&bound| ms <= bound)
             .unwrap_or(LATENCY_BUCKETS_MS.len());
 
         self.latency_buckets[bucket_idx].fetch_add(1, Ordering::Relaxed);
