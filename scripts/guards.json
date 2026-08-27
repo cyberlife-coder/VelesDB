@@ -1105,6 +1105,56 @@
      }
     }
    ]
+  },
+  {
+   "script": "scripts/check-drop-tightening.py",
+   "purpose": "Freeze the clippy::significant_drop_tightening backlog per file so it can only shrink, the precondition for promoting the lint to deny alongside significant_drop_in_scrutinee (#2110).",
+   "workflow": ".github/workflows/ci.yml",
+   "job": "drop-tightening-check",
+   "required": true,
+   "mode": "strict",
+   "self_test": "scripts.tests.test_check_drop_tightening",
+   "self_test_required": true,
+   "blind_spot": {
+    "issue": 2110,
+    "summary": "Covers velesdb-core and velesdb-server only - the crates that build without GTK, so the baseline stays regenerable by anyone. They hold all 326 findings measured on 2026-08-27 (velesdb-core's lib is linted even when only velesdb-server is named, because a workspace path dependency is a primary unit and is not --cap-lints'd), but velesdb-cli, velesdb-memory, velesdb-migrate, velesdb-mobile, velesdb-wasm and tauri-plugin-velesdb are unmeasured and a new site in one of them lands unseen. Widening needs a measured baseline from a machine that can build them, never an estimate. Counts are per file rather than per site, so moving a finding between two baselined files is invisible when the totals offset."
+   },
+   "must_refuse": [
+    {
+     "vector": "a file that gained a finding above its frozen count",
+     "files": {
+      "baseline.txt": "crates/velesdb-core/src/a.rs\t1\n",
+      "clippy.json": "{\"reason\":\"compiler-message\",\"message\":{\"code\":{\"code\":\"clippy::significant_drop_tightening\"},\"level\":\"warning\",\"spans\":[{\"file_name\":\"crates/velesdb-core/src/a.rs\",\"is_primary\":true}]}}\n{\"reason\":\"compiler-message\",\"message\":{\"code\":{\"code\":\"clippy::significant_drop_tightening\"},\"level\":\"warning\",\"spans\":[{\"file_name\":\"crates/velesdb-core/src/a.rs\",\"is_primary\":true}]}}\n"
+     },
+     "accepts": {
+      "baseline.txt": "crates/velesdb-core/src/a.rs\t1\n",
+      "clippy.json": "{\"reason\":\"compiler-message\",\"message\":{\"code\":{\"code\":\"clippy::significant_drop_tightening\"},\"level\":\"warning\",\"spans\":[{\"file_name\":\"crates/velesdb-core/src/a.rs\",\"is_primary\":true}]}}\n"
+     },
+     "argv": [
+      "--from-json",
+      "{root}/clippy.json",
+      "--baseline",
+      "{root}/baseline.txt"
+     ]
+    },
+    {
+     "vector": "a finding in a file the frozen baseline does not list",
+     "files": {
+      "baseline.txt": "crates/velesdb-core/src/a.rs\t1\n",
+      "clippy.json": "{\"reason\":\"compiler-message\",\"message\":{\"code\":{\"code\":\"clippy::significant_drop_tightening\"},\"level\":\"warning\",\"spans\":[{\"file_name\":\"crates/velesdb-core/src/a.rs\",\"is_primary\":true}]}}\n{\"reason\":\"compiler-message\",\"message\":{\"code\":{\"code\":\"clippy::significant_drop_tightening\"},\"level\":\"warning\",\"spans\":[{\"file_name\":\"crates/velesdb-core/src/brand_new.rs\",\"is_primary\":true}]}}\n"
+     },
+     "accepts": {
+      "baseline.txt": "crates/velesdb-core/src/a.rs\t1\ncrates/velesdb-core/src/brand_new.rs\t1\n",
+      "clippy.json": "{\"reason\":\"compiler-message\",\"message\":{\"code\":{\"code\":\"clippy::significant_drop_tightening\"},\"level\":\"warning\",\"spans\":[{\"file_name\":\"crates/velesdb-core/src/a.rs\",\"is_primary\":true}]}}\n{\"reason\":\"compiler-message\",\"message\":{\"code\":{\"code\":\"clippy::significant_drop_tightening\"},\"level\":\"warning\",\"spans\":[{\"file_name\":\"crates/velesdb-core/src/brand_new.rs\",\"is_primary\":true}]}}\n"
+     },
+     "argv": [
+      "--from-json",
+      "{root}/clippy.json",
+      "--baseline",
+      "{root}/baseline.txt"
+     ]
+    }
+   ]
   }
  ],
  "unwired": [

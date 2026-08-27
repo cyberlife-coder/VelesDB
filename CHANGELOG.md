@@ -9,6 +9,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The `clippy::significant_drop_tightening` backlog is frozen where it stands
+  (#2110).** `Cargo.toml` denies `significant_drop_in_scrutinee` — a guard
+  living to the end of a `match`/`if let`/`for` scrutinee is how the
+  CircuitBreaker ABBA deadlock (#2109) reached production — and allows its
+  sibling, which flags a guard held past its last use. The sibling was left off
+  pending a drain. The drain never started, and nothing measured it.
+
+  **The tracked figure was wrong.** #2110 records "192 sites"; re-measured
+  against `develop` @ `64a21b65` the real count was **326 diagnostics across 75
+  files** for `velesdb-core` + `velesdb-server` with `--all-targets` (135 for
+  `velesdb-core --lib` alone). 192 is reproducible only as a `grep -c` over
+  clippy's human-readable output, which counts note lines rather than findings.
+  There are also **zero** `allow(clippy::significant_drop_tightening)`
+  attributes in the tree, so "drain the 192 sites" does not describe removing
+  192 allows down to zero — promoting the lint will *add* allows for the sites
+  that hold a guard deliberately.
+
+  `scripts/check-drop-tightening.py` + `scripts/drop-tightening-baseline.txt`
+  freeze the per-file counts, mirroring `check-file-budgets.py`: a new file, a
+  grown count, a stale entry above the true count, and a drained file still
+  listed all fail. The lint is `allow`ed workspace-wide, so it is re-enabled
+  with `--force-warn`, which overrides both the `[workspace.lints]` entry and
+  CI's `-D warnings` — the findings come back as warnings and the run still
+  exits 0.
+
+  The `Drop-Tightening Backlog Frozen` job is deliberately its own, not a step
+  folded into `lint`: `--force-warn` changes the rustc argument fingerprint, so
+  folding it in would either rebuild inside `lint` anyway or force `lint`'s
+  clippy invocation through a JSON-parsing wrapper — and a wrapper that can
+  stop failing silently is worse than a second job. As a separate job it cannot
+  weaken the primary lint gate.
+
+  Verified end to end rather than by construction: injecting one
+  guard-held-too-long site into `database/collection_ops.rs` makes the gate fail
+  with `grew from 8 to 10`, and removing it restores the pass. 19 unit tests
+  drive `--from-json` with synthetic diagnostics (so they need no toolchain) and
+  two `must_refuse` vectors in `scripts/guards.json` run the same refusals
+  through the shared harness.
+
+  Scope is `velesdb-core` + `velesdb-server` — the crates that build without
+  GTK, so the baseline is one anybody can regenerate and verify. That is
+  recorded as the guard's registered blind spot rather than papered over:
+  widening it needs a measured baseline from a machine that can build the
+  remaining crates, never an estimate.
+
 - **Squared-L2 and dot-product masked tails are covered (#2106 item 14).**
   Both kernels handle their remainder in two stages — a 16-wide bridge loop,
   then one masked chunk — and no named test reached either at the 4-accumulator
@@ -244,6 +289,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is tracked in #2112. (#2112)
 
 ### Fixed
+
+- **`store_batch_async` pays one durability barrier instead of one per vector
+  (#2078).** Despite its name, it looped over `VectorStorage::store`, and
+  `MmapStorage::store` under `DurabilityMode::Fsync` issues its own `flush` +
+  `sync_all` per call. A 2 000-vector batch therefore paid 2 000 fsyncs, every
+  one of them while holding the storage write lock — so the function billed as
+  the one "for large batches that would otherwise block the async executor"
+  was the slowest way in the crate to write them, and stalled every concurrent
+  writer for the duration.
+
+  `VectorStorage::store_batch` already exists for exactly this, coalescing the
+  WAL entries into one grouped write and deliberately leaving the barrier to
+  the caller; the fix is to call it and then `flush` once. Measured on 2 000
+  vectors × 128 dimensions at the default `Fsync`: **11–21× faster across three
+  runs** (320–540 ms down to 22–28 ms).
+
+  The durability guarantee on return is unchanged, because `flush` dispatches
+  on the same mode the per-vector path consulted — and marginally stronger,
+  since the mmap is flushed too, which the loop never did. Error behaviour
+  improves as well: `store_batch` validates every dimension before writing
+  anything, so a malformed entry now rejects the batch rather than leaving the
+  prefix before it committed.
+
+  The one pre-existing test asserted only that the returned count was 100 —
+  something the broken loop satisfied just as well — and never read a vector
+  back. Three tests now pin what that count was standing in for: every vector
+  is retrievable, a bad dimension commits nothing, and the batch survives
+  closing and reopening the directory without the caller flushing.
+
+  The write lock is scoped to the store-and-flush rather than to the whole
+  closure. The barrier is the last thing it is needed for, and every concurrent
+  writer waits behind it; holding it across the return bought nothing. The
+  tests read under the lock and assert after releasing it, for the same reason
+  — an assertion panics, and unwinding while holding the guard is worth
+  avoiding even in a test.
 
 - **A non-finite fusion weight can no longer reorder a result set (#2095).**
   Every weight rule in `fusion/strategy.rs` was an ordering comparison —
