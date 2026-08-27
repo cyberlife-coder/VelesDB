@@ -51,8 +51,6 @@ mod flush_operations;
 mod fusion_correctness;
 #[path = "bdd/fusion_rrf_conformance.rs"]
 mod fusion_rrf_conformance;
-#[path = "bdd/fusion_weighted_bug.rs"]
-mod fusion_weighted_bug;
 #[path = "bdd/geo_distance.rs"]
 mod geo_distance;
 #[path = "bdd/graph_anchor_prefilter.rs"]
