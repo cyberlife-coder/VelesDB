@@ -168,11 +168,18 @@ pub(crate) fn resolve_sparse_input(
 /// | Relative Score | `rsf`, `relative_score` | `dense_w`, `sparse_w` (default 0.5 / 0.5) |
 /// | Average | `average`, `avg` | — |
 /// | Maximum | `maximum`, `max` | — |
-/// | Weighted | `weighted` | `avg_w`, `max_w`, `hit_w` (default 0.5 / 0.3 / 0.2) |
+/// | Weighted | `weighted` | `avg_w`, `max_w`, `hit_w` (default 0.6 / 0.3 / 0.1) |
+///
+/// The weighted defaults are the #1545 canon, read from
+/// [`velesdb_core::DEFAULT_WEIGHTED_AVG_WEIGHT`] and its siblings; this table
+/// listed the pre-#1545 literals 0.5 / 0.3 / 0.2 for as long as the code did,
+/// and kept listing them after #2093 fixed the code.
 ///
 /// Unknown strategies yield a 400 Bad Request response listing the
-/// supported values. This propagates the full `velesdb_core::FusionStrategy`
-/// enum to the REST surface (findings PROP-FUS-HYBRID / PROP-FUS-SPARSE).
+/// supported values, as do weights the strategy refuses (negative, non-finite,
+/// or not summing to 1.0). This propagates the full
+/// `velesdb_core::FusionStrategy` enum to the REST surface (findings
+/// PROP-FUS-HYBRID / PROP-FUS-SPARSE).
 #[allow(clippy::result_large_err)]
 pub(crate) fn parse_fusion_strategy(
     fusion: Option<&crate::types::FusionRequest>,
@@ -205,13 +212,23 @@ pub(crate) fn parse_fusion_strategy(
         }
         "average" | "avg" => Ok(velesdb_core::FusionStrategy::Average),
         "maximum" | "max" => Ok(velesdb_core::FusionStrategy::Maximum),
-        "weighted" => Ok(velesdb_core::FusionStrategy::Weighted {
+        "weighted" => velesdb_core::FusionStrategy::weighted(
             // Canonical defaults from core's fusion module (#1545) — this
             // arm previously froze the pre-#1545 literals 0.5/0.3/0.2,
             // forking the REST default from every other surface.
-            avg_weight: f.avg_w.unwrap_or(velesdb_core::DEFAULT_WEIGHTED_AVG_WEIGHT),
-            max_weight: f.max_w.unwrap_or(velesdb_core::DEFAULT_WEIGHTED_MAX_WEIGHT),
-            hit_weight: f.hit_w.unwrap_or(velesdb_core::DEFAULT_WEIGHTED_HIT_WEIGHT),
+            f.avg_w.unwrap_or(velesdb_core::DEFAULT_WEIGHTED_AVG_WEIGHT),
+            f.max_w.unwrap_or(velesdb_core::DEFAULT_WEIGHTED_MAX_WEIGHT),
+            f.hit_w.unwrap_or(velesdb_core::DEFAULT_WEIGHTED_HIT_WEIGHT),
+        )
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: format!("Invalid weighted fusion weights: {e}"),
+                    code: None,
+                }),
+            )
+                .into_response()
         }),
         other => Err((
             StatusCode::BAD_REQUEST,
