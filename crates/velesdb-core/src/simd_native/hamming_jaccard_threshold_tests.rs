@@ -4,19 +4,35 @@
     clippy::cast_sign_loss,
     clippy::float_cmp
 )]
-//! Tests for Harley-Seal population count (EPIC-052/US-003)
+//! Threshold-based f32 Hamming and Jaccard dispatch (#2106 item 17).
 //!
-//! Tests that Harley-Seal AVX2 correctly computes population count for Hamming/Jaccard.
+//! This file was called `harley_seal_tests.rs` and its header claimed to cover
+//! "threshold dispatch population count". **No threshold dispatch or carry-save-adder network
+//! exists anywhere in this tree** — a sweep for `harley`, `carry.save` and `csa`
+//! finds nothing but the name itself. Binary popcount, where it happens at all,
+//! is `vcntq_u8`, `VPOPCNTDQ` or `u64::count_ones`, and all three are correct.
+//!
+//! What these tests actually exercise is the *threshold* form of the two
+//! metrics: `hamming_distance_native` and `jaccard_similarity_native` over f32
+//! vectors, where a component counts as a set bit when it exceeds 0.5. That is
+//! a different algorithm from popcount over packed bits, and naming it after
+//! one it does not use cost a reader the only cheap signal they had about which
+//! code path a failure implicates.
+//!
+//! The name is now what the file does. `hamming_jaccard_tests.rs` next door
+//! covers the same two entry points across dimension thresholds and batch
+//! shapes; this one stays separate because it is about the 0.5 threshold
+//! semantics rather than dispatch width.
 
 use super::{hamming_distance_native, jaccard_similarity_native};
 
 // ============================================================================
-// Harley-Seal Hamming Tests
+// Threshold Hamming Tests
 // ============================================================================
 
 #[test]
-fn test_harley_seal_hamming_correctness() {
-    // Test binary vectors with Harley-Seal
+fn test_threshold_hamming_correctness() {
+    // Binary-valued f32 vectors through the 0.5 threshold
     // Vectors with values > 0.5 are considered "1", else "0"
     let a: Vec<f32> = vec![1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0];
     let b: Vec<f32> = vec![1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0];
@@ -27,14 +43,14 @@ fn test_harley_seal_hamming_correctness() {
 
     assert!(
         (result - expected).abs() < 1e-6,
-        "Harley-Seal Hamming failed: got {}, expected {}",
+        "threshold dispatch Hamming failed: got {}, expected {}",
         result,
         expected
     );
 }
 
 #[test]
-fn test_harley_seal_hamming_all_ones() {
+fn test_threshold_hamming_all_ones() {
     // All identical vectors should give 0
     for size in [32, 64, 128, 256, 512, 768] {
         let a: Vec<f32> = vec![1.0; size];
@@ -48,7 +64,7 @@ fn test_harley_seal_hamming_all_ones() {
 }
 
 #[test]
-fn test_harley_seal_hamming_all_zeros() {
+fn test_threshold_hamming_all_zeros() {
     // All zeros vectors should give 0
     for size in [32, 64, 128, 256, 512, 768] {
         let a: Vec<f32> = vec![0.0; size];
@@ -62,7 +78,7 @@ fn test_harley_seal_hamming_all_zeros() {
 }
 
 #[test]
-fn test_harley_seal_hamming_opposite() {
+fn test_threshold_hamming_opposite() {
     // Completely opposite vectors
     let size = 256;
     let a: Vec<f32> = (0..size)
@@ -77,18 +93,18 @@ fn test_harley_seal_hamming_opposite() {
 
     assert!(
         (result - expected).abs() < 1e-6,
-        "Harley-Seal Hamming opposite failed: got {}, expected {}",
+        "threshold dispatch Hamming opposite failed: got {}, expected {}",
         result,
         expected
     );
 }
 
 // ============================================================================
-// Harley-Seal Jaccard Tests
+// Threshold Jaccard Tests
 // ============================================================================
 
 #[test]
-fn test_harley_seal_jaccard_correctness() {
+fn test_threshold_jaccard_correctness() {
     // Test with set-like vectors (30% density)
     let size = 100;
     // Sets A and B with known overlap
@@ -106,14 +122,14 @@ fn test_harley_seal_jaccard_correctness() {
 
     assert!(
         (result - expected).abs() < 1e-5,
-        "Harley-Seal Jaccard failed: got {}, expected {}",
+        "threshold dispatch Jaccard failed: got {}, expected {}",
         result,
         expected
     );
 }
 
 #[test]
-fn test_harley_seal_jaccard_identical() {
+fn test_threshold_jaccard_identical() {
     // Identical sets should have Jaccard = 1.0
     for size in [32, 64, 128, 256] {
         let a: Vec<f32> = (0..size)
@@ -131,7 +147,7 @@ fn test_harley_seal_jaccard_identical() {
 }
 
 #[test]
-fn test_harley_seal_jaccard_disjoint() {
+fn test_threshold_jaccard_disjoint() {
     // Disjoint sets should have Jaccard = 0.0
     let size = 100;
     let a: Vec<f32> = (0..size).map(|i| if i < 50 { 1.0 } else { 0.0 }).collect();
@@ -148,7 +164,7 @@ fn test_harley_seal_jaccard_disjoint() {
 
 #[test]
 #[ignore = "performance test - run with --ignored or PERF_TESTS=1"]
-fn test_harley_seal_jaccard_performance() {
+fn test_threshold_jaccard_performance() {
     // Performance test for 768D
     let size = 768;
     let a: Vec<f32> = (0..size)
@@ -172,10 +188,10 @@ fn test_harley_seal_jaccard_performance() {
     let avg_ns = elapsed.as_nanos() as f64 / 1000.0;
 
     // Should be < 200ns per call on CI (allowing for slower CI runners)
-    // Target < 35ns with Harley-Seal when optimized
+    // Target < 35ns with threshold dispatch when optimized
     assert!(
         avg_ns < 200.0,
-        "Jaccard similarity too slow: {:.2}ns per call (target < 35ns with Harley-Seal, < 200ns CI)",
+        "Jaccard similarity too slow: {:.2}ns per call (target < 35ns with threshold dispatch, < 200ns CI)",
         avg_ns
     );
 }
@@ -185,8 +201,8 @@ fn test_harley_seal_jaccard_performance() {
 // ============================================================================
 
 #[test]
-fn test_harley_seal_vs_scalar_hamming() {
-    // Compare Harley-Seal with scalar reference
+fn test_threshold_vs_scalar_hamming() {
+    // Compare threshold dispatch with scalar reference
     for size in [32, 64, 128, 256, 512, 768] {
         let a: Vec<f32> = (0..size)
             .map(|i| if (i * 7) % 5 == 0 { 1.0 } else { 0.0 })
@@ -206,7 +222,7 @@ fn test_harley_seal_vs_scalar_hamming() {
 
         assert!(
             (result - expected).abs() < 1e-6,
-            "Harley-Seal vs scalar failed for size {}: got {}, expected {}",
+            "threshold dispatch vs scalar failed for size {}: got {}, expected {}",
             size,
             result,
             expected
@@ -215,8 +231,8 @@ fn test_harley_seal_vs_scalar_hamming() {
 }
 
 #[test]
-fn test_harley_seal_vs_scalar_jaccard() {
-    // Compare Harley-Seal Jaccard with scalar reference
+fn test_threshold_vs_scalar_jaccard() {
+    // Compare threshold dispatch Jaccard with scalar reference
     for size in [32, 64, 128, 256, 512] {
         let a: Vec<f32> = (0..size)
             .map(|i| if (i * 7) % 5 == 0 { 1.0 } else { 0.0 })
@@ -234,7 +250,7 @@ fn test_harley_seal_vs_scalar_jaccard() {
 
         assert!(
             (result - expected).abs() < 1e-6,
-            "Harley-Seal Jaccard vs scalar failed for size {}: got {}, expected {}",
+            "threshold dispatch Jaccard vs scalar failed for size {}: got {}, expected {}",
             size,
             result,
             expected
