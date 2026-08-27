@@ -113,16 +113,30 @@ mod scan_score_semantics {
 
     /// A NaN-bearing stored vector must sort last (worst key), never first —
     /// the old clamp let NaN through into the top-k comparator.
+    /// A stored NaN still sorts last, even though one can no longer be inserted.
+    ///
+    /// `Collection::upsert` now refuses a non-finite component (#2106 items 4
+    /// and 16), so this seeds finite vectors and then writes the NaN straight
+    /// into the vector store — which is the route that remains open and the
+    /// reason this guard is still load-bearing: a database written before that
+    /// validation existed is not re-validated on open, and its NaN would
+    /// otherwise sort *first* under a naive comparator.
     #[test]
     fn test_scan_score_nan_vector_sorts_last() {
         let (_dir, col) = setup(
             DistanceMetric::Euclidean,
             vec![
                 tagged_point(1, vec![3.0, 0.0]),
-                tagged_point(2, vec![f32::NAN, 0.0]),
+                tagged_point(2, vec![5.0, 0.0]),
                 tagged_point(3, vec![7.0, 0.0]),
             ],
         );
+        {
+            use crate::storage::VectorStorage;
+            let mut vs = col.storage.vector_storage.write();
+            vs.store(2, &[f32::NAN, 0.0])
+                .expect("test: seed a stored NaN");
+        }
 
         let results = col.scan_and_score_by_vector(&cat_filter(), &[0.0, 0.0], 3);
 

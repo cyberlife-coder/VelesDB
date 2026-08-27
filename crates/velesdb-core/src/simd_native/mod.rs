@@ -161,5 +161,9 @@ mod distance_engine_tests;
 mod hamming_jaccard_tests;
 
 #[cfg(all(test, target_arch = "x86_64"))]
+#[path = "nan_contract_tests.rs"]
+mod nan_contract_tests;
+
+#[cfg(all(test, target_arch = "x86_64"))]
 #[path = "ptr_span_tests.rs"]
 mod ptr_span_tests;

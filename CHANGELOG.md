@@ -145,6 +145,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   targets are bench targets, so a lib-only check would miss the code the
   feature exists for.
 
+- **A non-finite vector component can no longer enter or query the database
+  (#2106 items 4 and 16).** The dense ingest path validated dimension and
+  nothing else, so a `NaN` or an infinity reached storage. Its sparse sibling
+  has always refused non-finite values — this is the dense path catching up to a
+  decision the codebase had already made.
+
+  This is not garbage-in-garbage-out. NaN compares `false` against everything,
+  so **one** stored NaN makes HNSW's ordering arbitrary for every subsequent
+  query, including well-formed ones. Measuring what the kernels do with one
+  turned up something the audit did not have: the divergence it recorded as an
+  aarch64 concern is live on x86 too, and worse than a scalar/SIMD split.
+  `jaccard_similarity_native(a, b)` returns a finite score when the NaN sits in
+  `a` and `NaN` when the identical NaN sits in `b`, from dimension 8 upward —
+  `_mm256_min_ps(va, vb)` yields `vb` whenever either operand is NaN, while the
+  scalar path's `f32::min` yields whichever operand is *not*. Jaccard is
+  symmetric by definition, so `J(a, b) != J(b, a)` was reachable from stored
+  data on the default platform.
+
+  The fix is at the boundary, not in the kernels: `validate_vector_is_finite`
+  refuses the value on upsert and on search, so no kernel ever sees one.
+  Branching on NaN inside the hot SIMD loops would tax every well-formed query
+  to serve a malformed one. The read side needed one call — every typed wrapper
+  (`VectorCollection`, `MetadataCollection`, `GraphCollection`) delegates to the
+  same `Collection::search` — and it costs one `O(dim)` pass against a search
+  that is `O(dim × candidates)`.
+
+  `simd_native::nan_contract_tests` pins the measured kernel behaviour so the
+  guard cannot later be deleted as unnecessary: those tests are the evidence of
+  what returns the moment it goes. The aarch64 half of item 4 is left
+  deliberately unmeasured rather than asserted from the intrinsic's
+  documentation.
+
 - **The AVX kernels no longer compute out-of-bounds pointers (#2106 item 9).**
   Eleven loops guarded themselves with `while p.add(N) <= end_ptr`, and that is
   undefined behaviour on the final evaluation — the one that ends the loop.
