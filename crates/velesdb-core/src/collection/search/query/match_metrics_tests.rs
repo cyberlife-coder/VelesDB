@@ -141,3 +141,18 @@ fn every_match_latency_bound_is_inclusive() {
         "a latency above the last bound still overflows"
     );
 }
+
+/// `global_match_metrics` is a single shared collector, not a fresh instance
+/// per call — the same guarantee `Database::match_metrics_prometheus` relies
+/// on to expose what MATCH dispatch actually recorded.
+#[test]
+fn global_match_metrics_is_one_shared_instance() {
+    let before = global_match_metrics().total_queries.load(Ordering::Relaxed);
+    global_match_metrics().record_success(Duration::from_millis(1), 1, 1);
+    let after = global_match_metrics().total_queries.load(Ordering::Relaxed);
+    assert_eq!(
+        after,
+        before + 1,
+        "record_success on one call must be visible through another"
+    );
+}

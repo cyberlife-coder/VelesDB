@@ -66,6 +66,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an empty string when no graph collection exists rather than advertising
   families with no samples. (#2091)
 
+- **MATCH query metrics reach `/metrics`.** `MatchMetrics` was updated on
+  every MATCH dispatch — throughput, success/failure counts, the latency
+  histogram, result counts — and, like `GraphMetrics` before #2091, read by
+  nothing but its own unit tests: `to_prometheus` had no caller in
+  `velesdb-server`, despite the module's own comment claiming it did. Fixed
+  the same way: the module's private `LazyLock` static is now
+  `match_metrics::global_match_metrics()`, `Database::match_metrics_prometheus`
+  exposes it, and the `/metrics` handler calls it. Unlike graph metrics this
+  collector is process-wide rather than per-collection — MATCH queries are
+  not yet attributed to the collection they touch — so no label-collision
+  handling was needed. `QueryTimer` and the `avg_*` accessors on the same
+  struct still have no caller outside this module's tests; left alone rather
+  than widened into this change. (#2106)
+
 - **`StorageMode::SQ8` is a real search-path mode on Euclidean and Cosine.**
   Collections created with `storage='sq8'` now run the VSAG-style
   dual-precision HNSW backend: graph traversal compares int8 codes (1
