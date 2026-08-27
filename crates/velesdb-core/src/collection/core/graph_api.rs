@@ -199,27 +199,6 @@ impl Collection {
         Ok(replayed)
     }
 
-    /// Enforces strict-schema node-type validation for a node payload write.
-    ///
-    /// In schemaless mode (the default) or when the payload carries no
-    /// `_labels`, this is a no-op. In strict mode every declared label is
-    /// checked against the schema before any mutation takes place, so an
-    /// undeclared node type is rejected atomically with no partial write.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::SchemaValidation` if any label in `_labels` is not
-    /// declared in the strict schema.
-    fn validate_node_labels_against_schema(&self, payload: &serde_json::Value) -> Result<()> {
-        let Some(schema) = self.non_schemaless_graph_schema() else {
-            return Ok(());
-        };
-        for label in extract_labels(payload) {
-            schema.validate_node_type(&label)?;
-        }
-        Ok(())
-    }
-
     /// Returns the collection's graph schema, but only when it declares a
     /// non-schemaless mode (`None` otherwise, including "no schema at all").
     ///
@@ -229,7 +208,7 @@ impl Collection {
     /// acquisition order to 3 → 1 (see LOCK ORDERING in
     /// `collection/types.rs`).
     /// The clone is bound first so the `config` guard dies with that statement.
-    fn non_schemaless_graph_schema(&self) -> Option<GraphSchema> {
+    pub(super) fn non_schemaless_graph_schema(&self) -> Option<GraphSchema> {
         let declared = self.storage.config.read().graph_schema.clone();
         match declared {
             Some(s) if !s.is_schemaless() => Some(s),
@@ -692,63 +671,6 @@ impl Collection {
     // -------------------------------------------------------------------------
     // Node payload (graph node properties)
     // -------------------------------------------------------------------------
-
-    /// Stores a JSON payload for a graph node.
-    ///
-    /// Also maintains the label index: if the payload contains a `_labels`
-    /// array, each label is indexed for O(1) lookup in `find_start_nodes()`.
-    /// On update (existing node), old labels are removed before new ones
-    /// are inserted.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if storage fails.
-    pub fn store_node_payload(&self, node_id: u64, payload: &serde_json::Value) -> Result<()> {
-        // Parity item E: gate the node payload size at the cold ingest boundary
-        // before any mutation. Graph node writes bypass `enforce_upsert_limits`
-        // (they take a raw `&Value`, not a `Point`), so apply the shared
-        // payload-size gate here. `max_vectors_per_collection` is intentionally
-        // not checked: vector-less node writes never touch `config.point_count`,
-        // so a projected count would be meaningless on this path.
-        Self::enforce_payload_value_size(node_id, payload, self.runtime_limits().max_payload_size)?;
-
-        // Reject undeclared node types before any mutation. Schemaless and
-        // payloads without `_labels` short-circuit at zero cost.
-        // LOCK ORDER: payload_storage(3) → label_index(7) → graph_range_indexes(7).
-        self.validate_node_labels_against_schema(payload)?;
-
-        let mut storage = self.storage.payload_storage.write();
-
-        // Remove old labels and property indexes if this is an update.
-        let mut label_idx = self.graph.label_index.write();
-        if let Ok(Some(old_payload)) = storage.retrieve(node_id) {
-            label_idx.remove_from_payload(node_id, &old_payload);
-            // Release label_index before touching graph property indexes
-            // (both are at lock order 7, no ordering between them).
-            drop(label_idx);
-            self.deindex_node_properties(node_id, &old_payload);
-            label_idx = self.graph.label_index.write();
-        }
-
-        storage.store(node_id, payload)?;
-        label_idx.index_from_payload(node_id, payload);
-        drop(label_idx);
-        drop(storage);
-
-        // Populate graph property indexes (EPIC-047).
-        self.index_node_properties(node_id, payload);
-
-        // Node payload writes bypass the upsert mirror hooks — drop the
-        // payload mirror so it can never serve stale columnar data.
-        self.storage.payload_mirror.invalidate();
-
-        // Bump write generation so any cached plan for this collection is
-        // invalidated on the next query (CACHE-01).
-        self.generations
-            .write_generation
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Ok(())
-    }
 
     /// Retrieves the JSON payload for a graph node.
     ///

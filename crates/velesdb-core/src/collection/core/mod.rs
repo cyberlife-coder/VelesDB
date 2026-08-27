@@ -21,6 +21,7 @@ mod flush;
 #[cfg(all(test, feature = "persistence"))]
 mod flush_defer_tests;
 mod graph_api;
+mod graph_api_node_payload;
 #[cfg(test)]
 mod graph_api_tests;
 #[cfg(all(test, feature = "persistence"))]
