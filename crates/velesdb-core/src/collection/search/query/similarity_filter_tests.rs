@@ -113,16 +113,30 @@ mod scan_score_semantics {
 
     /// A NaN-bearing stored vector must sort last (worst key), never first —
     /// the old clamp let NaN through into the top-k comparator.
+    /// A stored NaN still sorts last, even though one can no longer be inserted.
+    ///
+    /// `Collection::upsert` now refuses a non-finite component (#2106 items 4
+    /// and 16), so this seeds finite vectors and then writes the NaN straight
+    /// into the vector store — which is the route that remains open and the
+    /// reason this guard is still load-bearing: a database written before that
+    /// validation existed is not re-validated on open, and its NaN would
+    /// otherwise sort *first* under a naive comparator.
     #[test]
     fn test_scan_score_nan_vector_sorts_last() {
         let (_dir, col) = setup(
             DistanceMetric::Euclidean,
             vec![
                 tagged_point(1, vec![3.0, 0.0]),
-                tagged_point(2, vec![f32::NAN, 0.0]),
+                tagged_point(2, vec![5.0, 0.0]),
                 tagged_point(3, vec![7.0, 0.0]),
             ],
         );
+        {
+            use crate::storage::VectorStorage;
+            let mut vs = col.storage.vector_storage.write();
+            vs.store(2, &[f32::NAN, 0.0])
+                .expect("test: seed a stored NaN");
+        }
 
         let results = col.scan_and_score_by_vector(&cat_filter(), &[0.0, 0.0], 3);
 
@@ -174,6 +188,176 @@ mod scan_score_semantics {
         assert!(
             results.is_empty(),
             "a length-mismatched query vector must never pass as a match, got {results:?}"
+        );
+    }
+
+    /// Builds a `NOT (...)` condition over a similarity leaf and a metadata
+    /// leaf, so the scan is handed the exact shape De Morgan applies to.
+    fn not_of(inner: crate::velesql::Condition) -> crate::velesql::Condition {
+        crate::velesql::Condition::Not(Box::new(inner))
+    }
+
+    /// `similarity(vector, [1,0]) > threshold`.
+    fn sim_gt(threshold: f64) -> crate::velesql::Condition {
+        crate::velesql::Condition::Similarity(crate::velesql::SimilarityCondition {
+            field: "vector".to_string(),
+            vector: crate::velesql::VectorExpr::Literal(vec![1.0, 0.0]),
+            operator: crate::velesql::CompareOp::Gt,
+            threshold,
+        })
+    }
+
+    /// `cat = 'a'` — true for `tagged_point`, false for `other_point`.
+    fn cat_is_a() -> crate::velesql::Condition {
+        crate::velesql::Condition::Comparison(crate::velesql::Comparison {
+            column: "cat".to_string(),
+            operator: crate::velesql::CompareOp::Eq,
+            value: crate::velesql::Value::String("a".to_string()),
+        })
+    }
+
+    /// A point whose payload fails `cat = 'a'`.
+    fn other_point(id: u64, vector: Vec<f32>) -> Point {
+        Point {
+            id,
+            vector,
+            payload: Some(serde_json::json!({"cat": "b"})),
+            sparse_vectors: None,
+        }
+    }
+
+    /// `NOT (A AND B)` must mean `NOT A OR NOT B`, not `NOT A AND NOT B`.
+    ///
+    /// The scan used to invert the similarity leaf and separately push the
+    /// metadata leaf down through `extract_metadata_filter`, which wraps it in
+    /// its own `NOT`. The two were then AND-ed — distributing the negation
+    /// over the conjunction, which is exactly the De Morgan error. Rows that
+    /// satisfy `NOT B` but fail `NOT A` were dropped with no error.
+    #[test]
+    fn test_not_similarity_honours_de_morgan_over_conjunction() {
+        // Cosine on 2-d unit-ish vectors against the query [1, 0]:
+        //   id 1 [1,0]  -> similarity 1.0  (A true: sim > 0.5)
+        //   id 2 [0,1]  -> similarity 0.0  (A false)
+        // id 1 has cat='a' (B true), id 3 has cat='b' (B false).
+        let (_dir, col) = setup(
+            DistanceMetric::Cosine,
+            vec![
+                tagged_point(1, vec![1.0, 0.0]),
+                tagged_point(2, vec![0.0, 1.0]),
+                other_point(3, vec![1.0, 0.0]),
+            ],
+        );
+
+        let condition = not_of(crate::velesql::Condition::And(
+            Box::new(sim_gt(0.5)),
+            Box::new(cat_is_a()),
+        ));
+
+        let results = col
+            .execute_not_similarity_query_over(
+                &condition,
+                &std::collections::HashMap::new(),
+                10,
+                None,
+            )
+            .expect("test: NOT similarity scan");
+        let mut ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+        ids.sort_unstable();
+
+        // NOT (sim > 0.5 AND cat = 'a')
+        //   id 1: A=true,  B=true  -> NOT(true)  = false -> excluded
+        //   id 2: A=false, B=true  -> NOT(false) = true  -> included
+        //   id 3: A=true,  B=false -> NOT(false) = true  -> included
+        assert_eq!(
+            ids,
+            vec![2, 3],
+            "NOT (A AND B) must admit every row failing either conjunct"
+        );
+    }
+
+    /// `NOT (A OR B)` must mean `NOT A AND NOT B`.
+    #[test]
+    fn test_not_similarity_honours_de_morgan_over_disjunction() {
+        let (_dir, col) = setup(
+            DistanceMetric::Cosine,
+            vec![
+                tagged_point(1, vec![1.0, 0.0]),
+                tagged_point(2, vec![0.0, 1.0]),
+                other_point(3, vec![0.0, 1.0]),
+            ],
+        );
+
+        let condition = not_of(crate::velesql::Condition::Or(
+            Box::new(sim_gt(0.5)),
+            Box::new(cat_is_a()),
+        ));
+
+        let results = col
+            .execute_not_similarity_query_over(
+                &condition,
+                &std::collections::HashMap::new(),
+                10,
+                None,
+            )
+            .expect("test: NOT similarity scan");
+        let mut ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+        ids.sort_unstable();
+
+        // NOT (sim > 0.5 OR cat = 'a')
+        //   id 1: A=true,  B=true  -> excluded
+        //   id 2: A=false, B=true  -> excluded
+        //   id 3: A=false, B=false -> NOT(false) = true -> included
+        assert_eq!(ids, vec![3], "NOT (A OR B) admits only rows failing both");
+    }
+
+    /// A row whose metadata alone decides the answer is returned even when its
+    /// vector cannot be scored.
+    ///
+    /// This is the one place the "unscoreable is excluded" rule must NOT be
+    /// read as "drop the row": under `NOT (A AND B)` with `B` false, the
+    /// conjunction is false whatever `A` would have been, so the negation is
+    /// true. Three-valued logic gets this right by construction —
+    /// `UNKNOWN AND false` is `false`, not `UNKNOWN`.
+    #[test]
+    fn test_not_similarity_decides_on_metadata_when_vector_is_unscoreable() {
+        let (_dir, col) = setup(
+            DistanceMetric::Cosine,
+            vec![
+                tagged_point(1, vec![1.0, 0.0]),
+                other_point(2, vec![1.0, 0.0]),
+            ],
+        );
+
+        // A 3-dim literal against a 2-dim collection: the similarity leaf is
+        // UNKNOWN for every row.
+        let unscoreable =
+            crate::velesql::Condition::Similarity(crate::velesql::SimilarityCondition {
+                field: "vector".to_string(),
+                vector: crate::velesql::VectorExpr::Literal(vec![1.0, 0.0, 0.0]),
+                operator: crate::velesql::CompareOp::Gt,
+                threshold: 0.5,
+            });
+        let condition = not_of(crate::velesql::Condition::And(
+            Box::new(unscoreable),
+            Box::new(cat_is_a()),
+        ));
+
+        let results = col
+            .execute_not_similarity_query_over(
+                &condition,
+                &std::collections::HashMap::new(),
+                10,
+                None,
+            )
+            .expect("test: NOT similarity scan");
+        let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+
+        // id 1: UNKNOWN AND true  = UNKNOWN -> NOT UNKNOWN = UNKNOWN -> excluded
+        // id 2: UNKNOWN AND false = false   -> NOT false    = true    -> included
+        assert_eq!(
+            ids,
+            vec![2],
+            "the row whose metadata alone settles the conjunction must be returned"
         );
     }
 

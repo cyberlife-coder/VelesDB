@@ -151,15 +151,23 @@ fn test_pq_train_and_search_maintains_recall() {
             .search(&normalized_query, k)
             .expect("test: PQ search must succeed");
 
-        // THEN: all results have valid IDs and non-negative scores
+        // THEN: all results have valid IDs and in-range scores.
+        //
+        // The corpus is sign-mixed (components drawn from [-1, 1]), so a
+        // cosine here is genuinely signed and the bound that matters is the
+        // metric's own range, not a floor at zero. Asserting `>= 0.0` was
+        // asserting a property of the old HNSW clamp rather than of cosine.
         assert!(
             !results.is_empty(),
             "PQ search must return at least one result"
         );
+        let (low, high) = DistanceMetric::Cosine
+            .score_range()
+            .expect("cosine is a bounded metric");
         for r in &results {
             assert!(
-                r.score >= 0.0,
-                "PQ search score must be non-negative, got {}",
+                r.score >= low && r.score <= high,
+                "PQ search score must lie in cosine's range [{low}, {high}], got {}",
                 r.score
             );
             assert!(
@@ -343,4 +351,63 @@ fn test_pq_empty_collection_search_returns_empty() {
         results.is_empty(),
         "search on empty collection must return empty results"
     );
+}
+
+/// GIVEN: A Hamming or Jaccard collection with vectors
+/// WHEN:  `TRAIN QUANTIZER ... TYPE opq` is executed
+/// THEN:  Training is refused, and plain PQ still works
+///
+/// OPQ stores codes in a rotated basis and the rescore path rotates the query
+/// to match. A rotation preserves inner products and norms, so cosine,
+/// Euclidean and dot product survive it; Hamming and Jaccard are defined
+/// component by component on the original axes and do not. The combination
+/// used to be accepted, and every later rescore measured the metric in a
+/// space where it means nothing.
+#[test]
+fn test_opq_training_refused_on_metrics_a_rotation_does_not_preserve() {
+    for (name, metric) in [
+        ("opq_hamming", DistanceMetric::Hamming),
+        ("opq_jaccard", DistanceMetric::Jaccard),
+    ] {
+        let (_dir, db) = create_test_db();
+        db.create_collection(name, 16, metric)
+            .expect("test: create collection");
+        insert_vectors(&db, name, &generate_vectors(64, 16, 7));
+
+        let err = execute_sql(
+            &db,
+            &format!("TRAIN QUANTIZER ON {name} WITH (type='opq', m=4, k=8)"),
+        )
+        .expect_err("OPQ on a rotation-sensitive metric must be refused");
+        let message = err.to_string();
+        assert!(
+            message.contains("OPQ"),
+            "{metric:?}: the error must name OPQ as the problem, got: {message}"
+        );
+
+        // Plain PQ has no rotation, so it stays available for these metrics.
+        execute_sql(&db, &format!("TRAIN QUANTIZER ON {name} WITH (m=4, k=8)"))
+            .unwrap_or_else(|e| panic!("{metric:?}: plain PQ must still train: {e}"));
+    }
+}
+
+/// OPQ remains available on the metrics a rotation does preserve.
+#[test]
+fn test_opq_training_accepted_on_rotation_invariant_metrics() {
+    for (name, metric) in [
+        ("opq_cosine", DistanceMetric::Cosine),
+        ("opq_euclidean", DistanceMetric::Euclidean),
+        ("opq_dot", DistanceMetric::DotProduct),
+    ] {
+        let (_dir, db) = create_test_db();
+        db.create_collection(name, 16, metric)
+            .expect("test: create collection");
+        insert_vectors(&db, name, &generate_vectors(64, 16, 11));
+
+        execute_sql(
+            &db,
+            &format!("TRAIN QUANTIZER ON {name} WITH (type='opq', m=4, k=8)"),
+        )
+        .unwrap_or_else(|e| panic!("{metric:?}: OPQ must remain available: {e}"));
+    }
 }

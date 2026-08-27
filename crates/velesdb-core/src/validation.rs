@@ -43,6 +43,42 @@ pub fn validate_dimension_match(expected: usize, actual: usize) -> Result<()> {
     Ok(())
 }
 
+/// Validates that every component of a dense vector is finite.
+///
+/// A `NaN` or an infinity has no meaning as a vector component, and letting one
+/// reach storage is not a garbage-in-garbage-out problem — it is persistent
+/// corruption. NaN compares `false` against everything, so a single stored NaN
+/// makes HNSW's ordering arbitrary for *every subsequent query*, not just the
+/// one that inserted it.
+///
+/// It also makes the distance kernels disagree with themselves. On x86,
+/// `jaccard_similarity_native` returns a finite score when the NaN is in the
+/// first argument and `NaN` when it is in the second, from dimension 8 upward —
+/// because `_mm256_min_ps(a, b)` yields `b` when either operand is NaN, while
+/// the scalar path's `f32::min` returns whichever operand is *not* NaN. Jaccard
+/// is symmetric by definition, so that is a contract violation reachable from
+/// stored data. `simd_native::nan_contract_tests` pins the measurement.
+///
+/// Rather than branch on NaN inside the hot SIMD loops — which would cost every
+/// well-formed query to serve a malformed one — the value is refused here, at
+/// the cold boundary. The sparse ingest path already refuses non-finite values
+/// (`api_types::requests`); this is the dense path catching up.
+///
+/// # Errors
+///
+/// Returns [`crate::error::Error::InvalidVector`] naming the first offending
+/// index and its value.
+pub fn validate_vector_is_finite(vector: &[f32]) -> Result<()> {
+    for (index, &value) in vector.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(Error::InvalidVector(format!(
+                "vector component at index {index} is not finite: {value}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Validates that a collection name is safe for use as a filesystem directory.
 ///
 /// # Rules

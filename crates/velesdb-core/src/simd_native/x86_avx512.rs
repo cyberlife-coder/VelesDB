@@ -23,9 +23,9 @@ use crate::simd_4acc_l2_loop;
 use crate::simd_8acc_dot_loop;
 use crate::simd_8acc_l2_loop;
 
+use super::ptr_span::has_at_least;
 use super::reduction::hsum_avx512;
-use super::scalar;
-use super::scalar::cosine_finish_fast;
+use super::scalar::{self, cosine_finish_fast};
 
 // =============================================================================
 // Dot Product
@@ -124,7 +124,7 @@ pub(crate) unsafe fn dot_product_avx512_4acc(a: &[f32], b: &[f32]) -> f32 {
     );
 
     // Process remaining 16-element chunks with same accumulator
-    while a_p.add(16) <= end_ptr {
+    while has_at_least(a_p, end_ptr, 16) {
         let va = _mm512_loadu_ps(a_p);
         let vb = _mm512_loadu_ps(b_p);
         acc = _mm512_fmadd_ps(va, vb, acc);
@@ -190,7 +190,7 @@ pub(crate) unsafe fn dot_product_avx512_8acc(a: &[f32], b: &[f32]) -> f32 {
     );
 
     // Process remaining 16-element chunks with single accumulator
-    while a_p.add(16) <= end_ptr {
+    while has_at_least(a_p, end_ptr, 16) {
         acc = _mm512_fmadd_ps(_mm512_loadu_ps(a_p), _mm512_loadu_ps(b_p), acc);
         a_p = a_p.add(16);
         b_p = b_p.add(16);
@@ -246,7 +246,7 @@ pub(crate) unsafe fn squared_l2_avx512_4acc(a: &[f32], b: &[f32]) -> f32 {
     );
 
     // Process remaining 16-element chunks
-    while a_p.add(16) <= end_ptr {
+    while has_at_least(a_p, end_ptr, 16) {
         let va = _mm512_loadu_ps(a_p);
         let vb = _mm512_loadu_ps(b_p);
         let diff = _mm512_sub_ps(va, vb);
@@ -352,7 +352,7 @@ pub(crate) unsafe fn squared_l2_avx512_8acc(a: &[f32], b: &[f32]) -> f32 {
     );
 
     // Process remaining 16-element chunks
-    while a_p.add(16) <= end_ptr {
+    while has_at_least(a_p, end_ptr, 16) {
         let diff = _mm512_sub_ps(_mm512_loadu_ps(a_p), _mm512_loadu_ps(b_p));
         acc = _mm512_fmadd_ps(diff, diff, acc);
         a_p = a_p.add(16);
@@ -535,7 +535,7 @@ pub(crate) unsafe fn cosine_fused_avx512_4acc(a: &[f32], b: &[f32]) -> f32 {
 
     // Remainder with masked loads (up to 63 elements)
     let mut rem_dot = dot_acc;
-    while cur_a.add(16) <= end_ptr {
+    while has_at_least(cur_a, end_ptr, 16) {
         let va = _mm512_loadu_ps(cur_a);
         let vb = _mm512_loadu_ps(cur_b);
         rem_dot = _mm512_fmadd_ps(va, vb, rem_dot);
@@ -802,7 +802,7 @@ unsafe fn cosine_8acc_remainder(
     use std::arch::x86_64::*;
 
     // Process remaining 16-element full chunks
-    while (*cur_a).add(16) <= end_ptr {
+    while has_at_least(*cur_a, end_ptr, 16) {
         // SAFETY: Loop guard ensures 16 elements remain
         let va = _mm512_loadu_ps(*cur_a);
         let vb = _mm512_loadu_ps(*cur_b);
@@ -1286,7 +1286,7 @@ unsafe fn jaccard_8acc_remainder(
     use std::arch::x86_64::*;
 
     // Process remaining 16-element full chunks
-    while cur_a.add(16) <= end_ptr {
+    while has_at_least(cur_a, end_ptr, 16) {
         // SAFETY: Loop guard ensures 16 elements remain
         let va = _mm512_loadu_ps(cur_a);
         let vb = _mm512_loadu_ps(cur_b);
@@ -1327,7 +1327,7 @@ unsafe fn jaccard_4acc_remainder(
     use std::arch::x86_64::*;
 
     // Process remaining 16-element full chunks (up to 3 iterations)
-    while cur_a.add(16) <= end_ptr {
+    while has_at_least(cur_a, end_ptr, 16) {
         // SAFETY: Loop guard ensures 16 elements remain
         let va = _mm512_loadu_ps(cur_a);
         let vb = _mm512_loadu_ps(cur_b);

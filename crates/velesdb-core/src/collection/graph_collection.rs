@@ -104,6 +104,19 @@ impl GraphCollection {
         super::VectorCollection { inner: self.inner }
     }
 
+    /// This graph collection's operational metrics.
+    ///
+    /// Reads what the edge write and traversal paths already record, so an
+    /// exporter can publish it; the counters are bumped regardless of whether
+    /// anything reads them.
+    #[must_use]
+    pub fn metrics(&self) -> &crate::collection::graph::GraphMetrics {
+        // Reaches the edge store's counters directly: `Collection::graph` is
+        // `pub(crate)`, and graph_api.rs — where a `Collection` accessor would
+        // naturally sit — is over its frozen line budget and may only shrink.
+        self.inner.graph.edge_store.metrics()
+    }
+
     /// Flushes all state to disk.
     ///
     /// Issue #423: This fast-path flush skips `vectors.idx` serialization.

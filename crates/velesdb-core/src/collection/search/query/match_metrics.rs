@@ -7,9 +7,20 @@
 //! - Traversal depth distribution
 //! - Result cardinality statistics
 //!
-//! Note: These metrics are consumed by velesdb-server, not directly by core.
+//! Note: **nothing consumes these metrics yet.** Nothing records into them
+//! either — `MatchMetrics` is not constructed anywhere outside this module's
+//! own tests, so `to_prometheus` would export a permanently-zero family.
+//!
+//! This comment used to assert the opposite ("consumed by velesdb-server"),
+//! and that false assurance is what let the surface sit unexamined: a reader
+//! checking whether it was live got a confident yes. It is corrected rather
+//! than deleted because the underlying question is a real one — MATCH *is* a
+//! shipped query path, and its latency, error rate and traversal-depth
+//! distribution are worth having. Wiring it is tracked separately; unlike the
+//! graph metrics of #2091, which were already being recorded and merely thrown
+//! away, there is no existing signal here to recover — the write path has to
+//! be added first.
 
-// remaining items (to_prometheus, QueryTimer, avg_*) are consumed by velesdb-server.
 #![allow(clippy::format_push_string)]
 // Prometheus format is clearer with push_str+format
 
@@ -26,6 +37,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 /// Bucket bounds for latency histogram in milliseconds.
+///
+/// These are the upper bounds exported as Prometheus `le` labels, and a
+/// Prometheus bucket is inclusive: an observation equal to a bound belongs to
+/// that bound's bucket, not the next one.
 pub const LATENCY_BUCKETS_MS: [u64; 10] = [1, 5, 10, 25, 50, 100, 250, 500, 1000, 5000];
 
 /// MATCH query metrics collector (EPIC-050 US-001).
@@ -98,7 +113,7 @@ impl MatchMetrics {
         // Find the right bucket
         let bucket_idx = LATENCY_BUCKETS_MS
             .iter()
-            .position(|&bound| ms < bound)
+            .position(|&bound| ms <= bound)
             .unwrap_or(LATENCY_BUCKETS_MS.len());
 
         self.latency_buckets[bucket_idx].fetch_add(1, Ordering::Relaxed);

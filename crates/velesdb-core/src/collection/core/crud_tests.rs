@@ -1570,3 +1570,238 @@ fn test_execute_match_with_similarity_order_by_overrides_score() {
         "ORDER BY n.age DESC must override the vector score sort (which would be 3,2,1)"
     );
 }
+
+/// Helper: the ids currently indexed under `label`.
+#[cfg(test)]
+fn label_members(coll: &Collection, label: &str) -> Vec<u32> {
+    coll.graph
+        .label_index
+        .read()
+        .lookup(label)
+        .map(|b| b.iter().collect())
+        .unwrap_or_default()
+}
+
+/// A labelled point, so the fixtures differ only in their `_labels`.
+#[cfg(test)]
+fn labelled_point(id: u64, labels: &[&str]) -> Point {
+    Point {
+        id,
+        vector: vec![1.0, 0.0, 0.0, 0.0],
+        payload: Some(serde_json::json!({ "_labels": labels })),
+        sparse_vectors: None,
+    }
+}
+
+/// `upsert_bulk` must drop the labels a re-upserted point no longer carries.
+///
+/// The bulk path only ever indexed the incoming payload, on the recorded
+/// assumption that "points are always new inserts (no old payload to remove
+/// from the label index)". The same functions collect the pre-batch payloads
+/// for histogram decrements, so overwrites plainly do reach it: after
+/// changing `_labels` from `Doc` to `Archived`, the point stayed indexed
+/// under BOTH, and `MATCH (d:Doc)` returned a point that is no longer a Doc.
+#[test]
+fn bulk_upsert_drops_labels_the_point_no_longer_carries() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let coll =
+        Collection::create(dir.path().to_path_buf(), 4, DistanceMetric::Cosine).expect("create");
+
+    coll.upsert_bulk(&[labelled_point(1, &["Doc"])])
+        .expect("bulk insert");
+    assert_eq!(label_members(&coll, "Doc"), vec![1], "indexed on insert");
+
+    coll.upsert_bulk(&[labelled_point(1, &["Archived"])])
+        .expect("bulk update");
+
+    assert_eq!(
+        label_members(&coll, "Archived"),
+        vec![1],
+        "new label indexed"
+    );
+    assert!(
+        label_members(&coll, "Doc").is_empty(),
+        "the point is no longer a Doc, so Doc must not still list it"
+    );
+}
+
+/// Clearing every label must empty the index, not leave the old one.
+///
+/// This shape also defeated the early return: the guard asked only whether
+/// any *incoming* point carried `_labels`, so a payload that dropped them
+/// returned before the loop and the stale entry survived forever.
+#[test]
+fn bulk_upsert_clearing_labels_removes_the_old_ones() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let coll =
+        Collection::create(dir.path().to_path_buf(), 4, DistanceMetric::Cosine).expect("create");
+
+    coll.upsert_bulk(&[labelled_point(1, &["Doc"])])
+        .expect("bulk insert");
+    coll.upsert_bulk(&[Point {
+        id: 1,
+        vector: vec![1.0, 0.0, 0.0, 0.0],
+        payload: Some(serde_json::json!({ "title": "no labels now" })),
+        sparse_vectors: None,
+    }])
+    .expect("bulk update");
+
+    assert!(
+        label_members(&coll, "Doc").is_empty(),
+        "a payload that carries no _labels must leave none behind"
+    );
+}
+
+/// A label the point keeps across an update must survive the removal.
+///
+/// The order matters: remove the old labels *before* indexing the new ones,
+/// or a label present on both sides is added and then taken straight back
+/// out.
+#[test]
+fn bulk_upsert_keeps_a_label_present_on_both_sides() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let coll =
+        Collection::create(dir.path().to_path_buf(), 4, DistanceMetric::Cosine).expect("create");
+
+    coll.upsert_bulk(&[labelled_point(1, &["Doc", "Draft"])])
+        .expect("bulk insert");
+    coll.upsert_bulk(&[labelled_point(1, &["Doc", "Final"])])
+        .expect("bulk update");
+
+    assert_eq!(label_members(&coll, "Doc"), vec![1], "Doc is still carried");
+    assert_eq!(label_members(&coll, "Final"), vec![1], "Final was added");
+    assert!(
+        label_members(&coll, "Draft").is_empty(),
+        "Draft was dropped by the update"
+    );
+}
+
+/// The zero-copy raw path has the same duty.
+///
+/// `upsert_bulk_from_raw` already collects the pre-batch payloads and hands
+/// them to the secondary indexes; only the label index was left indexing the
+/// new payload alone.
+#[test]
+fn bulk_upsert_from_raw_drops_stale_labels() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let coll =
+        Collection::create(dir.path().to_path_buf(), 4, DistanceMetric::Cosine).expect("create");
+    let vector = [1.0_f32, 0.0, 0.0, 0.0];
+
+    coll.upsert_bulk_from_raw(
+        &vector,
+        &[1],
+        4,
+        Some(&[Some(serde_json::json!({ "_labels": ["Doc"] }))]),
+    )
+    .expect("raw insert");
+    assert_eq!(label_members(&coll, "Doc"), vec![1], "indexed on insert");
+
+    coll.upsert_bulk_from_raw(
+        &vector,
+        &[1],
+        4,
+        Some(&[Some(serde_json::json!({ "_labels": ["Archived"] }))]),
+    )
+    .expect("raw update");
+
+    assert_eq!(
+        label_members(&coll, "Archived"),
+        vec![1],
+        "new label indexed"
+    );
+    assert!(
+        label_members(&coll, "Doc").is_empty(),
+        "the raw path must drop the label the point no longer carries"
+    );
+}
+
+/// A point whose payload carries `content` text.
+#[cfg(test)]
+fn texted_point(id: u64, payload: serde_json::Value) -> Point {
+    Point {
+        id,
+        vector: vec![1.0, 0.0, 0.0, 0.0],
+        payload: Some(payload),
+        sparse_vectors: None,
+    }
+}
+
+/// Clearing a point's text must take it out of full-text search.
+///
+/// The BM25 index only ever saw the incoming payload: a payload that still
+/// exists but no longer yields indexable text wrote nothing, so the document
+/// kept matching a term its payload no longer contains. `add_document`
+/// already replaces on re-index, which is why *changing* the text was fine
+/// and only *clearing* it went stale.
+#[test]
+fn clearing_text_removes_the_point_from_full_text_search() {
+    for bulk in [true, false] {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let coll = Collection::create(dir.path().to_path_buf(), 4, DistanceMetric::Cosine)
+            .expect("create");
+        let with_text = texted_point(1, serde_json::json!({ "content": "zebra" }));
+        let without = texted_point(1, serde_json::json!({ "other": 1 }));
+
+        if bulk {
+            coll.upsert_bulk(&[with_text]).expect("insert");
+            coll.upsert_bulk(&[without]).expect("clear text");
+        } else {
+            coll.upsert(vec![with_text]).expect("insert");
+            coll.upsert(vec![without]).expect("clear text");
+        }
+
+        assert!(
+            coll.storage.text_index.search("zebra", 10).is_empty(),
+            "bulk={bulk}: the payload no longer contains 'zebra', so it must not match"
+        );
+    }
+}
+
+/// Changing the text keeps only the new terms searchable.
+///
+/// Non-regression: `add_document` removes the previous version first, so this
+/// case was already correct and must stay so.
+#[test]
+fn changing_text_leaves_only_the_new_terms_searchable() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let coll =
+        Collection::create(dir.path().to_path_buf(), 4, DistanceMetric::Cosine).expect("create");
+
+    coll.upsert_bulk(&[texted_point(1, serde_json::json!({ "content": "zebra" }))])
+        .expect("insert");
+    coll.upsert_bulk(&[texted_point(1, serde_json::json!({ "content": "giraffe" }))])
+        .expect("update");
+
+    assert!(
+        coll.storage.text_index.search("zebra", 10).is_empty(),
+        "the old term must not survive"
+    );
+    assert_eq!(
+        coll.storage.text_index.search("giraffe", 10).len(),
+        1,
+        "the new term must be searchable"
+    );
+}
+
+/// A repeated id within one batch is settled by its last payload.
+///
+/// The pre-batch payload is `None` for the duplicate, so deciding on that
+/// alone would miss that the batch's own earlier occurrence indexed the text.
+#[test]
+fn a_repeated_id_in_one_batch_is_settled_by_its_last_payload() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let coll =
+        Collection::create(dir.path().to_path_buf(), 4, DistanceMetric::Cosine).expect("create");
+
+    coll.upsert_bulk(&[
+        texted_point(1, serde_json::json!({ "content": "zebra" })),
+        texted_point(1, serde_json::json!({ "other": 1 })),
+    ])
+    .expect("bulk with a duplicate id");
+
+    assert!(
+        coll.storage.text_index.search("zebra", 10).is_empty(),
+        "the last payload in the batch carries no text, so nothing must match"
+    );
+}

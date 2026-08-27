@@ -14,6 +14,7 @@ use crate::options::{AutoReindexOptions, HnswOptions, VelesConfigOptions};
 use crate::utils::{self, parse_metric, parse_storage_mode};
 
 use velesdb_core::collection::auto_reindex::AutoReindexManager;
+use velesdb_core::velesql::{Query, TrainStatement, WithValue};
 use velesdb_core::{
     AnyCollection, CollectionType, Database as CoreDatabase, DatabaseObserver, GraphSchema,
 };
@@ -538,26 +539,43 @@ impl Database {
         k: usize,
         opq: bool,
     ) -> PyResult<String> {
-        // Validate collection_name to prevent VelesQL injection via string interpolation.
-        if !collection_name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_')
-        {
-            return Err(PyValueError::new_err(format!(
-                "Invalid collection name '{collection_name}': only ASCII letters, digits, \
-                 and underscores are allowed"
-            )));
-        }
-
-        let mut query = format!("TRAIN QUANTIZER ON {collection_name} WITH (m={m}, k={k}");
+        // Build the statement, rather than printing VelesQL and parsing it
+        // back. The round-trip was what forced this method to invent an
+        // identifier sanitizer ("prevent VelesQL injection via string
+        // interpolation"), and that sanitizer drifted from
+        // `velesdb_core::validation`: it rejected the interior hyphen core
+        // accepts and pins as a doc example (`docs-v2`), while passing a
+        // leading digit the grammar's `regular_identifier` then refused, and
+        // passing the empty string, which produced `TRAIN QUANTIZER ON  WITH
+        // (...)`. Constructing the AST emits no identifier text at all, so
+        // there is no charset rule to keep in step and all three dissolve
+        // together. `velesdb-mobile` and `tauri-plugin-velesdb` already build
+        // this statement the same way.
+        let mut params = std::collections::HashMap::new();
+        params.insert(
+            "m".to_string(),
+            WithValue::Integer(i64::try_from(m).map_err(|_| {
+                PyValueError::new_err(format!(
+                    "m={m} exceeds the maximum supported subspace count"
+                ))
+            })?),
+        );
+        params.insert(
+            "k".to_string(),
+            WithValue::Integer(i64::try_from(k).map_err(|_| {
+                PyValueError::new_err(format!(
+                    "k={k} exceeds the maximum supported centroid count"
+                ))
+            })?),
+        );
         if opq {
-            query.push_str(", type=opq");
+            params.insert("type".to_string(), WithValue::Identifier("opq".to_string()));
         }
-        query.push(')');
 
-        let parsed = velesdb_core::velesql::Parser::parse(&query).map_err(|e| {
-            PyValueError::new_err(format!("Failed to construct TRAIN query: {}", e.message))
-        })?;
+        let parsed = Query::new_train(TrainStatement {
+            collection: collection_name.to_string(),
+            params,
+        });
 
         // Drop the GIL for the training run: k-means codebook fitting is
         // CPU-bound Rust work that scales with the collection size and easily

@@ -9,6 +9,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Squared-L2 and dot-product masked tails are covered (#2106 item 14).**
+  Both kernels handle their remainder in two stages — a 16-wide bridge loop,
+  then one masked chunk — and no named test reached either at the 4-accumulator
+  or 8-accumulator width. Checked rather than assumed:
+  `distance_engine_tests.rs` uses 128/256/384/512/768/1024/1536/3072, every one
+  at or above 512 an exact multiple of its kernel's stride;
+  `simd_native_dispatch_tests.rs` reaches the 2-acc mask at 100/127/255 and
+  nothing wider; and `warmup_tests.rs` only appears to reach 767, which is a
+  value inside its generator, not the vector length (768, a multiple of 64).
+
+  `l2_dot_tail_tests.rs` names a dimension for every stage: 513 for a mask with
+  no bridge, 533 for one bridge pass then a 5-wide mask, 544 for two bridge
+  passes with the mask skipped, 575 for the widest 4-acc remainder, and
+  1025/1041/1279 for the same three shapes at 8-acc — with the exact multiples
+  kept alongside as controls so a failure localizes to the main loop or the
+  tail. The reference is accumulated in `f64` rather than as a second f32 loop,
+  so a disagreement says which side is wrong, and the bound is relative because
+  these are sums of up to 2048 terms.
+
+  It also ties `batch_dot_product_native` to `dot_product_native` at every one
+  of those dimensions. The batch entry point resolves the kernel once from the
+  dimension and applies it per candidate — a second dispatch site with the same
+  thresholds and its own chance to pick the wrong arm, previously bound to the
+  single-vector path by nothing.
+
+  Every guarantee was mutation-checked. Dropping one element from the masked
+  chunk of each of the six kernels fails at the expected dimension (L2 4-acc at
+  513, L2 8-acc at 1025, dot 2-acc at 1, dot 4-acc at 513, dot 8-acc at 1025),
+  and double-counting the L2 4-acc bridge body fails at 533 — which is what
+  proves the bridge is reached at all, the stage the audit recorded as
+  unreachable. (#2106)
+
+- **Graph metrics reach `/metrics`.** `GraphMetrics` was updated on every edge
+  write and every traversal and read by nothing: across the whole workspace,
+  `to_prometheus` had exactly two callers and both were its own unit tests. The
+  server's `/metrics` handler assembled an entirely different set of types
+  (`operational_metrics`, `global_guardrails_metrics`, `traversal_metrics`, the
+  query-duration histogram), so nothing the graph recorded ever left the
+  process. A stale comment on `match_metrics.rs` asserting these were
+  "consumed by velesdb-server" is what let the surface look wired.
+
+  Exporting it was not a one-line call from the handler. A `GraphMetrics`
+  lives on an edge store, so there is one per collection, while the metric
+  names are shared: concatenating a per-collection block would have repeated
+  `# HELP`/`# TYPE` for a single family and published several samples under an
+  identical, empty label set — a scraper rejects the duplicated declaration
+  and keeps only the last of the duplicated series, so the exposition would be
+  invalid and silently lossy at once. The unlabelled `to_prometheus(&self)` is
+  therefore replaced by a free function over `(collection, &GraphMetrics)`
+  pairs that declares each family once and tags every sample with
+  `collection="…"`. Collection names are `[A-Za-z0-9_-]`, so no label value can
+  need escaping — asserted against `validate_collection_name` rather than
+  trusted to a comment. `Database::graph_metrics_prometheus` sorts by name so a
+  scrape diff reflects metric movement rather than `HashMap` order, and returns
+  an empty string when no graph collection exists rather than advertising
+  families with no samples. (#2091)
+
 - **`StorageMode::SQ8` is a real search-path mode on Euclidean and Cosine.**
   Collections created with `storage='sq8'` now run the VSAG-style
   dual-precision HNSW backend: graph traversal compares int8 codes (1
@@ -31,6 +88,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **The unwired `score_fusion` module is retired rather than repaired (#2106
+  items 6 and 7).** 1583 lines: the module, its 553-line test file, and the BDD
+  characterization test that existed to document its defects.
+
+  The items asked "fix or retire". Retire, and the reasons are checkable rather
+  than aesthetic:
+
+  - **It duplicates a feature that already ships and works.** The live fusion
+    path is `crate::fusion::FusionStrategy` driven by VelesQL's `FusionClause`
+    (`collection/search/text_fusion.rs`, exercised by
+    `examples/python/fusion_strategies.py`). `score_fusion` is a second,
+    parallel implementation of the same idea that shares no code with it — the
+    module's own doc says it is "named `ScoreFusionMethod` to distinguish from
+    the public `crate::fusion::FusionStrategy`".
+  - **It was never shipped.** Marked EPIC-049 US-004, it has never appeared in
+    this changelog under any release.
+  - **The code says so itself.** `mod.rs` carried
+    `#[allow(unused_imports)] // Re-exported for test access`.
+  - **Its only Rust consumer was a test asserting it is broken.**
+    `tests/bdd/fusion_weighted_bug.rs` locked in `Weighted == Average` and
+    called it "a DEAD-PATH defect". Alongside it: the pseudo-RRF
+    `1/(60+(1-s)*100)` divides by zero at `s = 1.6` and goes negative beyond,
+    and `BoostCombination::Max` folds from an identity of 1.0 so an all-penalty
+    boost set is ignored.
+
+  Fixing three bugs in an unshipped duplicate would have added a maintained
+  surface with no consumer. Git history keeps it for anyone who wants to revive
+  the epic — including the per-hop decay fix landed for item 8, which went in
+  before its home turned out to be dead.
+
+  Three greps that look like consumers are name collisions, checked and
+  discounted: `QueryPhase::ScoreFusion` is a tracing-span label,
+  `text_fusion.rs`'s `score_fusion_strategy` is a private local function, and
+  `example_relative_score_fusion` is a Python example of VelesQL RSF.
+
+
 - **`DualPrecisionHnsw` and `DualPrecisionConfig`** (public in
   `index::hnsw::native`). The prototype was wired into no collection path,
   carried a latent cosine bug (raw query against normalized stored vectors
@@ -41,6 +134,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parameter.
 
 ### Changed
+
+- **`mean_average_precision` now takes the corpus-wide relevant count, and MAP
+  penalises what a search missed (#2106 item 12).** The signature was
+  `&[Vec<bool>]` and the implementation divided by the number of relevant items
+  *retrieved*, while the doc comment stated the textbook
+  `AP = (1/R)·Sum P(k)·rel(k)` with `R` the total relevant in the corpus. The two
+  disagree exactly where the metric earns its keep: retrieving **1 of 10**
+  relevant documents, at rank 1, scored a flawless `AP = 1.0` for 10% recall. A
+  ranking-quality metric blind to what it missed always flatters a system that
+  returns one confident result and stops.
+
+  The doc was not the thing to fix. `&[bool]` over retrieved positions simply
+  cannot express `R`, so the signature moved instead: `&[(&[bool], usize)]`, each
+  query pairing its relevance flags with the corpus total. A caller with no
+  corpus-wide count reproduces the old behaviour by passing the retrieved count —
+  explicitly, at the call site, rather than silently inside the metric. A
+  `total_relevant` below the retrieved count is a caller error describing an
+  impossible corpus; the denominator is raised to the retrieved count so a bad
+  input cannot push `AP` above 1.0 and corrupt an average over many queries.
+
+  The four pre-existing tests could not have caught this: every one used
+  `total_relevant == retrieved`, the single case where both denominators agree.
+  Two new tests encode the defect itself — 1-of-10 scoring 0.1 rather than 1.0,
+  and AP falling monotonically as recall falls with the ranking held fixed — and
+  both go red when the old normalisation is restored, while all four old tests
+  stay green.
+
 
 - **The `RaBitQ` traversal backend became a codec: one quantized-precision
   state machine, two codecs.** `RaBitQPrecisionHnsw`'s concurrent
@@ -65,6 +185,332 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is tracked in #2112. (#2112)
 
 ### Fixed
+
+- **A PR can no longer break `internal-bench` and merge green.** The feature is
+  not bench-only: it gates seven sites of *production* source —
+  `index/hnsw/index/search.rs`, `index/hnsw/native/distance.rs`,
+  `index/hnsw/mod.rs`, `velesql/cache.rs` and `lib.rs` — and nothing on a pull
+  request ever compiled it. The two workflows that do, `quality-deep.yml` and
+  `bench-scalability.yml`, run weekly, so a cfg regression could merge on a
+  Tuesday and surface the following Sunday with no obvious culprit SHA. That is
+  the failure mode `memory-feature-matrix` was added to close for
+  `velesdb-memory`; `internal-bench` had the same hole and no gate.
+
+  Demonstrated rather than asserted: renaming `eval_count::record_eval`, which
+  only the `internal-bench` call sites reach, leaves today's CI build green in
+  0.18 s and fails the new job with `E0425: cannot find function record_eval`.
+
+  `Internal Bench Compiles` runs `cargo check` over the library, benches and
+  tests under `persistence,internal-bench`, and is read by the `ci-success`
+  chain. Deliberately a compile and not a bench run — the cost this gate is
+  allowed to have is a compile, the same bargain `memory-feature-matrix`
+  strikes. `--benches` is load-bearing: the feature's `required-features`
+  targets are bench targets, so a lib-only check would miss the code the
+  feature exists for.
+
+- **A non-finite vector component can no longer enter or query the database
+  (#2106 items 4 and 16).** The dense ingest path validated dimension and
+  nothing else, so a `NaN` or an infinity reached storage. Its sparse sibling
+  has always refused non-finite values — this is the dense path catching up to a
+  decision the codebase had already made.
+
+  This is not garbage-in-garbage-out. NaN compares `false` against everything,
+  so **one** stored NaN makes HNSW's ordering arbitrary for every subsequent
+  query, including well-formed ones. Measuring what the kernels do with one
+  turned up something the audit did not have: the divergence it recorded as an
+  aarch64 concern is live on x86 too, and worse than a scalar/SIMD split.
+  `jaccard_similarity_native(a, b)` returns a finite score when the NaN sits in
+  `a` and `NaN` when the identical NaN sits in `b`, from dimension 8 upward —
+  `_mm256_min_ps(va, vb)` yields `vb` whenever either operand is NaN, while the
+  scalar path's `f32::min` yields whichever operand is *not*. Jaccard is
+  symmetric by definition, so `J(a, b) != J(b, a)` was reachable from stored
+  data on the default platform.
+
+  The fix is at the boundary, not in the kernels: `validate_vector_is_finite`
+  refuses the value on upsert and on search, so no kernel ever sees one.
+  Branching on NaN inside the hot SIMD loops would tax every well-formed query
+  to serve a malformed one. The read side needed one call — every typed wrapper
+  (`VectorCollection`, `MetadataCollection`, `GraphCollection`) delegates to the
+  same `Collection::search` — and it costs one `O(dim)` pass against a search
+  that is `O(dim × candidates)`.
+
+  `simd_native::nan_contract_tests` pins the measured kernel behaviour so the
+  guard cannot later be deleted as unnecessary: those tests are the evidence of
+  what returns the moment it goes. The aarch64 half of item 4 is left
+  deliberately unmeasured rather than asserted from the intrinsic's
+  documentation.
+
+- **The AVX kernels no longer compute out-of-bounds pointers (#2106 item 9).**
+  Eleven loops guarded themselves with `while p.add(N) <= end_ptr`, and that is
+  undefined behaviour on the final evaluation — the one that ends the loop.
+  `pointer::add` requires the *computed* pointer to stay inside the same
+  allocated object, one past the end included; when fewer than `N` elements
+  remain it does not, and never dereferencing the result does not save it.
+  Miri reports it as an out-of-bounds pointer computation, reproduced here on
+  the guard shape with the intrinsics stripped out:
+
+  ```
+  error: Undefined Behavior: in-bounds pointer arithmetic failed: attempting to
+  offset pointer by 32 bytes, but got alloc271+0x40 which is only 16 bytes from
+  the end of the allocation
+     --> while p.add(8) <= end
+  ```
+
+  Every compiler in use today emits the obvious address comparison, which is
+  why this never produced a wrong answer — but LLVM is entitled to assume an
+  `inbounds` GEP is in bounds, and one feeding a comparison is precisely the
+  shape a future optimisation may fold. The defect is that the code asks a
+  question it has no right to ask.
+
+  `simd_native::ptr_span::has_at_least` asks it of the *distance* between the
+  two cursors instead, on integers, where the arithmetic is defined for every
+  input; the index-form guards already in the tree (`i + 16 <= len`) are the
+  same idea for the loops that carry indices rather than pointers. All eleven
+  sites now use it — eight in `x86_avx512.rs`, three in
+  `x86_avx2_similarity.rs` — and the file-level claim that "loop guards ensure
+  pointer arithmetic stays within the original slice bounds", which was the
+  false one, is replaced by a pointer to the guard that now makes it true.
+
+  Equivalence with the old guard is pinned exhaustively rather than sampled:
+  for every length 0..=80, every cursor position within it, and every lane
+  width in use, the new guard returns what `p.add(count) <= end` would have
+  returned, and the consuming loop runs exactly `len / count` times leaving
+  `len % count` for the scalar tail. A cursor past the end — unreachable
+  through the kernels' own loop structure — is pinned to fail closed rather
+  than wrap to a span that would walk off the buffer. `ptr_span_tests.rs`
+  carries no intrinsics on purpose, so unlike the kernels it can be run under
+  Miri. (#2106)
+
+- **A manual CI dispatch can no longer turn a green `CI Success` red.**
+  `ci-success` asserts `result == 'success'` for every job it reads, and
+  `python-integrations` admitted only `pull_request` and `push`. Under
+  `workflow_dispatch` it came back `skipped`, never `success`, so the gate was
+  unsatisfiable under that trigger however green everything else was — the one
+  manual escape hatch this workflow documents for the #1465 "required check is
+  absent" failure mode could only ever produce a red verdict. That is worse
+  than the hole it plugs: an absent check blocks a merge, a red one *replaces
+  a green check-run of the same name* on the head SHA. Seen on PR #2141, where
+  a dispatch run overwrote the green `CI Success` an earlier `pull_request` run
+  had already recorded for the same commit.
+
+  The job now admits `workflow_dispatch` too, and the rule is pinned rather
+  than left to review: `test_ci_gate_reachability.py` now asserts that every
+  job the chain reads can run under every trigger the `on:` block declares.
+  `sonarcloud` is out of scope by construction — it is in `needs` but
+  deliberately absent from the chain, so it may skip freely. Both directions
+  were mutation-checked: reverting the guard and, separately, narrowing `lint`
+  to `pull_request` each turn the new suite red at the offending job and
+  trigger.
+
+- **Cosine search scores keep their sign, on every path.** `transform_score`
+  on the HNSW graph path shared one match arm with Jaccard and clamped to
+  `[0, 1]`, so a genuinely negative cosine came back as exactly `0.0` — while
+  brute force, the exact rerank and `DistanceMetric::calculate` all returned
+  the cosine itself. Which path runs is not something the caller chooses: it
+  falls out of corpus size (≤ 100 points goes brute force), `SearchQuality`,
+  and even `k` (the rerank stage needs `len() > k * 2`). The same index and
+  query returned `-0.557` at `k=10` and `0.0` at `k=80`.
+
+  The two ranges also met inside a single result list. `merge_delta`
+  concatenates HNSW results with delta-buffer results scored through
+  `calculate` and sorts them together, so a freshly written point at true
+  cosine `-0.2` sorted *below* an indexed point at `-0.5` that had been
+  clamped to zero; VelesQL's `Parallel` execution strategy merges a scan leg
+  and an HNSW leg the same way. And because every dissimilar document
+  clamped to the same `0.0`, the ordering among anti-correlated matches was
+  not merely wrong — it was gone.
+
+  The range now has one definition, `DistanceMetric::score_range`, with
+  `clamp_score` applying it; the graph path and the GPU rerank derive from it
+  instead of each carrying a table. Cosine is `[-1, 1]`, Jaccard keeps its
+  true `[0, 1]` floor, and the unbounded metrics declare no range. The GPU
+  path's local table needed a `_ =>` catch-all; `score_range` matches every
+  variant, so a new metric now fails to compile rather than silently landing
+  in the wildcard. Two tests that had written the old range down as a rule
+  are corrected to state what is actually true of their fixtures.
+
+  Restoring the sign exposed a heuristic the clamp had been hiding.
+  `search_adaptive` decides whether to widen `ef` from the first/last score
+  gap divided by `min(|first|, |last|)` — a baseline that assumes zero is the
+  metric's floor. It is, for an unbounded distance. On a similarity over
+  `[-1, 1]` zero sits mid-range, so a merely mediocre tail of `-0.01` against
+  a `0.9` top reads as a spread of 91 and escalates a query that is not hard.
+  Cosine never hit that only because every non-positive score clamped to
+  exactly `0.0`, which made the baseline zero and the guard fail: phase 2 had
+  never escalated on this metric at all. The baseline is now the tail's
+  distance from `score_range`'s floor, which is unchanged for the unbounded
+  metrics (whose floor is zero) and keeps easy cosine queries cheap while
+  still escalating a genuinely heterogeneous neighbourhood. The rule moved
+  into a pure `should_escalate` so it is testable rather than inlined
+  arithmetic. (#2106)
+
+- **`TRAIN QUANTIZER` no longer reports an empty corpus for a collection that
+  has no payloads.** Training enumerated the collection through
+  `Collection::all_ids`, which is the *payload* store's view and says so in its
+  own doc: "Only returns IDs that have payload entries stored. Points inserted
+  with `None` payload may not appear." A collection used for pure vector search
+  carries no payloads at all, so that view was empty and every quantizer type —
+  pq, opq, rabitq and sq8, which share the extraction — failed with
+  `[VELES-029] Training failed: no vectors available for training` about a
+  collection holding its full count. Measured on a 256-point collection:
+  `all_ids` 0, `all_point_ids` 256, `point_count` 256. Training now uses
+  `all_point_ids`, documented as the authoritative set because it unions vector
+  and payload storage; the existing `is_empty` filter already drops the
+  metadata-only points it additionally brings in. (#2095)
+
+- **`Database.train_pq` (Python) accepts every collection name core does.**
+  The binding rendered VelesQL as text —
+  `format!("TRAIN QUANTIZER ON {collection_name} WITH (m={m}, k={k}")` — and
+  parsed it back. Interpolating a name into a query string is what forced the
+  method to carry its own identifier rule ("prevent VelesQL injection via
+  string interpolation"), and that rule was a second definition of what a
+  collection may be called. It drifted from `velesdb_core::validation` three
+  ways: it rejected the interior hyphen core accepts and pins (`a-b`, with
+  `docs-v2` as the doc example); it passed a leading digit the grammar's
+  `regular_identifier` then refused, surfacing as "Failed to construct TRAIN
+  query"; and it passed the empty string vacuously, rendering
+  `TRAIN QUANTIZER ON  WITH (...)`. The binding now builds the statement AST
+  directly through `Query::new_train`, as `velesdb-mobile` and
+  `tauri-plugin-velesdb` already do. No identifier text is produced, so there
+  is no charset rule to keep in step and all three cases dissolve together;
+  a bad name now fails in the engine with the engine's own error. (#2095)
+
+- **A sparse query whose score cancels to zero no longer returns the same
+  document twice.** `linear_scan_dense` tracked "have I recorded this
+  document?" by testing `scores[idx] == 0.0`, reading membership out of the
+  accumulated value. A negative query weight — the "like A but not B" shape,
+  where both sides carry a shared term at the same weight — drives the running
+  score back to exactly zero, and the next term's posting then recorded the
+  document a second time. The duplicate is not merely a repeated row: it takes
+  a slot in the top-k heap, so a genuine result is evicted. On a three-document
+  fixture the correct `[1, 0, 2]` came back as `[1, 0, 0]`. Membership is now
+  an explicit `seen` array, which also restores parity with the hash-map
+  accumulator the router picks for sparse ID spaces — the two are chosen on
+  performance grounds and must be observationally identical. (#2106)
+
+- **Latency histograms bucket on the bound they export.** Both millisecond
+  histograms — graph operations and MATCH queries — placed an observation with
+  `ms < bound` while exporting the counts under Prometheus `le` labels, and
+  `le` is *less than or equal*. A request taking exactly 5 ms was counted in
+  `le="0.01"` and left out of `le="0.005"`, so every dashboard percentile and
+  every SLO burn-rate alert read a bucket that excluded the requests sitting
+  on its own boundary — the values latency bounds are most often written to.
+  The graph exporter also kept its `le` labels in a second, hand-written array
+  beside the bounds that drive bucketing; the labels are now derived from
+  those bounds, so the two cannot drift. (#2106)
+
+- **`PathScorer::score_rel_types` charges one decay factor per hop.** It raised
+  `distance_decay` to the hop's ordinal, compounding to `decay^(n(n+1)/2)`,
+  while `score_length` on the same path returned `decay^n` and the
+  `distance_decay` field documents "each hop reduces score by 20%". At five
+  hops with the default 0.8 the two functions answered 0.035 and 0.328 — a
+  ninefold gap between two documented spellings of one contract. (#2106)
+
+- **The scalar distance baseline computes the same metric as production.**
+  `CpuDistance` exists to be the un-vectorized reference the SIMD kernels are
+  checked against, and it implemented different formulas: Hamming compared raw
+  bit patterns instead of bucketing at the 0.5 binary threshold (so `[1,2,3]`
+  against `[4,5,6]` scored 3 where production scores 0), and Jaccard called an
+  empty union maximally distant where production calls it identical. A
+  reference that disagrees with its subject makes a real SIMD bug and a
+  reference bug indistinguishable. All three non-Euclidean metrics now
+  delegate to the scalar kernels production falls back on — which also gives
+  cosine the `[-1, 1]` clamp the hand-rolled copy omitted — and a parity test
+  pins baseline against SIMD across adversarial inputs. Euclidean still
+  differs on purpose: the hot path returns squared L2. The unused
+  `simd_distance_for_metric` dispatch was removed; its `dead_code`
+  justification claimed a caller it did not have, and it disagreed with the
+  hot path on Euclidean, so reusing it would have silently changed that
+  contract. (#2106)
+
+- **AVX-512 detection now requires the AVX2 + FMA baseline it falls back on.**
+  `detect_simd_level` granted `SimdLevel::Avx512` on `avx512f` alone, but the
+  dispatcher is not a strict hierarchy: an AVX-512 arm with no kernel for the
+  input width falls through to the AVX2 kernel — Hamming and Jaccard below 16
+  elements, and `scale_inplace` throughout — and those carry
+  `#[target_feature(enable = "avx2")]`. Their safety contract was met by an ISA
+  folk theorem ("Avx512 implies Avx2 support", as the SAFETY comment put it)
+  rather than by a check. Every shipping AVX-512 part does advertise AVX2, so
+  no physical CPU was affected; a hypervisor masking CPUID need not, and the
+  failure there is an illegal instruction. Detection now requires `avx2` and
+  `fma` for both non-scalar levels, which makes the fall-through sound by
+  construction and the `SimdLevel::Avx512` doc true. (#2106)
+
+- **`TRAIN QUANTIZER ... TYPE opq` is refused on Hamming and Jaccard
+  collections.** OPQ keeps its codes in a rotated basis and the rescore path
+  rotates the query to match. A rotation preserves inner products and norms,
+  so cosine, Euclidean and dot product survive it — Hamming and Jaccard are
+  defined component by component on the original axes, and a rotated "binary"
+  vector is not binary at all. The combination trained happily and every later
+  rescore measured the metric in a space where it means nothing. The rule now
+  lives on the metric as `DistanceMetric::is_rotation_invariant`, mirroring the
+  guard `train_sq8` already had. A codebook trained before this guard is still
+  on disk somewhere, so open-time restore applies the same rule: a rotated
+  `codebook.pq` on such a collection is not installed and the collection scores
+  exact f32, the warn-and-degrade the dimension-mismatch arm beside it already
+  used. Plain PQ has no rotation and stays available for these metrics.
+  (#2106)
+
+- **Clearing a point's text now takes it out of full-text search.** The BM25
+  index only ever saw the incoming payload, so a payload that still existed but
+  no longer yielded indexable text wrote nothing and the point kept matching a
+  term its payload no longer contains. `add_document` replaces the previous
+  version, so *changing* the text was always correct — only *clearing* it went
+  stale, on every write path. The rule is now stated once and applied from the
+  old payload as well as the new: a point is searchable exactly when its current
+  payload yields indexable text. A point that never carried text is still not
+  written to the index, so a bulk load of text-free vectors costs nothing — that
+  is what deciding on the old payload buys over removing whenever there is no
+  text. A repeated id inside one batch resolves to the batch's own earlier
+  occurrence, matching the label path. (#2112)
+
+- **A bulk upsert no longer leaves a point indexed under labels it dropped.**
+  Both bulk paths indexed the incoming payload and never removed the old
+  labels, on the recorded assumption that "for the bulk path, points are
+  always new inserts (no old payload to remove from the label index)". The
+  same functions collect the pre-batch payloads for histogram decrements, so
+  overwrites plainly reach them: after `upsert_bulk` changed a point's
+  `_labels` from `Doc` to `Archived`, it stayed indexed under **both**, and
+  `MATCH (d:Doc)` returned a point that is no longer a `Doc`. The
+  single-upsert path has always done remove-then-index; the bulk paths now
+  run the same sequence through the same helpers. Three shapes were wrong and
+  are each pinned: a changed label, a payload that drops labels entirely (the
+  early return asked only whether *incoming* points carried `_labels`, so it
+  never reached the loop), and a label carried on both sides of the update
+  (removal must precede indexing or it is added and taken straight back out).
+  `upsert_bulk_from_raw` had the identical gap — it already hands the old
+  payloads to the secondary indexes, and the label index was the one left
+  out. (#2112)
+
+- **`NOT (similarity(...) AND metadata)` no longer drops the rows it should
+  return.** The `NOT similarity()` scan inverted the similarity leaf and
+  separately pushed the metadata leaves down through
+  `extract_metadata_filter` — which wraps what it finds under a `NOT` in its
+  own `NOT` — then AND-ed the two. That distributes the negation over the
+  connective, which is De Morgan's error: `NOT (A AND B)` was executed as
+  `NOT A AND NOT B`. On a three-row fixture the correct `[2, 3]` came back as
+  `[]`, and `NOT (A OR B)` returned `[2, 3]` where `[3]` was correct. Neither
+  raised an error. The scan now decides each candidate with
+  `evaluate_where_condition_for_record`, the same evaluator the graph and
+  aggregation paths use, so the engine has one WHERE semantics rather than one
+  per execution path; the similarity leaf is still extracted, but only to
+  score the rows that pass. A stale comment in `extraction.rs` recorded the
+  assumption that broke — "NOT similarity() is rejected earlier in
+  validation" — which stopped being true when EPIC-044 US-003 enabled the
+  full-scan path. (#2112)
+
+- **WHERE now evaluates in three-valued logic.** A `similarity()` predicate is
+  UNKNOWN for a row whose vector cannot be scored (length mismatch, empty, or
+  absent), where it previously answered `false`. The two are indistinguishable
+  until something negates them: `NOT false` admits the row, `NOT UNKNOWN` must
+  not, so the old answer let `NOT similarity()` return rows nothing had been
+  computed for. `AND` and `OR` follow Kleene's tables and keep short-circuiting
+  on the value that decides them (`false` for `AND`, `true` for `OR`), and a
+  top-level UNKNOWN excludes the row exactly as SQL's `WHERE` does. One
+  consequence is a row that is now *returned* where it used to be dropped:
+  under `NOT (unscoreable AND meta)` with `meta` false, the conjunction is
+  false whatever the vector would have scored, so the negation is a known
+  true. Documented in `docs/VELESQL_SPEC.md`. (#2112)
 
 - **`ANALYZE` no longer returns wrong points on collections over 1 000
   vectors.** `analyze_collection` runs `reorder_for_locality()`, which

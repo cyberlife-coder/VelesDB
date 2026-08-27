@@ -38,6 +38,8 @@ mod lifecycle_tests;
 mod open_reload_tests;
 #[cfg(feature = "persistence")]
 mod quantizer_restore;
+#[cfg(all(test, feature = "persistence"))]
+mod quantizer_restore_tests;
 mod recovery;
 #[cfg(all(test, feature = "persistence"))]
 mod recovery_tests;

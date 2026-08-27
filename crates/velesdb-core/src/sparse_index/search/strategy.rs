@@ -112,13 +112,18 @@ fn linear_scan_dense(
     #[allow(clippy::cast_possible_truncation)]
     let size = (max_doc_id + 1) as usize;
     let mut scores = vec![0.0_f32; size];
+    // Membership is a fact about the scan, not about the value: a negative
+    // query weight can drive an accumulated score back to exactly `0.0`, so
+    // testing `scores[idx] == 0.0` would record the same document twice and
+    // let the duplicate evict a genuine result from the top-k heap.
+    let mut seen = vec![false; size];
     let mut touched: Vec<u64> = Vec::new();
 
     for (qw, postings) in term_postings {
         for entry in postings {
             #[allow(clippy::cast_possible_truncation)]
             let idx = entry.doc_id as usize;
-            if scores[idx] == 0.0 {
+            if !std::mem::replace(&mut seen[idx], true) {
                 touched.push(entry.doc_id);
             }
             scores[idx] += qw * entry.weight;
@@ -152,3 +157,7 @@ fn linear_scan_hashmap(k: usize, term_postings: &[(f32, Vec<PostingEntry>)]) -> 
 
     extract_sorted_results(heap)
 }
+
+#[cfg(test)]
+#[path = "strategy_tests.rs"]
+mod tests;

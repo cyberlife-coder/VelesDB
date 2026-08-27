@@ -104,7 +104,8 @@ fn scale_inplace_native(v: &mut [f32], factor: f32) {
         #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx512 | SimdLevel::Avx2 if v.len() >= 8 => {
             // SAFETY: AVX2 scale kernel requires CPU feature + minimum dim.
-            // - Condition 1: `simd_level()` confirmed AVX2+ after runtime detection.
+            // - Condition 1: `detect_simd_level` grants neither Avx2 nor Avx512
+            //   without the avx2 + fma baseline, so this arm has avx2 either way.
             // SAFETY: broadcast factor and multiply 8 floats per iteration.
             unsafe { scale_inplace_avx2(v, factor) };
         }

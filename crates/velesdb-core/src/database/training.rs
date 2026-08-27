@@ -98,7 +98,16 @@ impl Database {
         collection: &crate::collection::Collection,
         sample_limit: Option<usize>,
     ) -> Result<Vec<Vec<f32>>> {
-        let all_ids = collection.all_ids();
+        // `all_point_ids`, not `all_ids`: the latter enumerates the payload
+        // store and documents that "points inserted with `None` payload may
+        // not appear". A collection used for pure vector search carries no
+        // payloads at all, so training saw an empty corpus and every
+        // `TRAIN QUANTIZER` on it — pq, opq, rabitq, sq8 — failed with "no
+        // vectors available for training" while the collection held its full
+        // count. `all_point_ids` unions vector and payload storage and is the
+        // authoritative set; the `is_empty` filter below already drops the
+        // metadata-only points it also brings in.
+        let all_ids = collection.all_point_ids();
         // get_raw: PQ training only consumes vectors; TTL-expired points are
         // still valid training samples and must not shrink the corpus.
         let points = collection.get_raw(&all_ids);
@@ -156,11 +165,26 @@ impl Database {
     }
 
     /// Trains an Optimized Product Quantizer (with rotation) and persists it.
+    ///
+    /// OPQ keeps its codes in a rotated basis and rescoring rotates the query
+    /// to match, so training is rejected on metrics an orthogonal transform
+    /// does not preserve — see [`crate::DistanceMetric::is_rotation_invariant`].
+    /// Without this, `TRAIN QUANTIZER ... TYPE opq` on a Hamming or Jaccard
+    /// collection succeeded and every later rescore measured the metric in a
+    /// space where it means nothing.
     fn train_opq(
         collection: &crate::collection::Collection,
         vectors: &[Vec<f32>],
         params: &TrainParams,
     ) -> Result<Vec<SearchResult>> {
+        let metric = collection.config().metric;
+        if !metric.is_rotation_invariant() {
+            return Err(Error::InvalidQuantizerConfig(format!(
+                "OPQ rotates vectors into another basis, which does not preserve {metric:?}; \
+                 train plain PQ instead, or use a cosine/euclidean/dot-product collection"
+            )));
+        }
+
         let pq = crate::quantization::train_opq(vectors, params.m, params.k, true, 10)
             .map_err(|e| Error::TrainingFailed(e.to_string()))?;
 

@@ -702,6 +702,47 @@ jobs:
       - name: mcp + persistence (daemon)
         run: cargo check -p velesdb-memory --no-default-features --features mcp,persistence
 
+  # ===========================================================================
+  # `internal-bench` compiles (#2106 follow-up)
+  # ===========================================================================
+  # `internal-bench` is not a bench-only feature. It gates seven sites of
+  # production source — `index/hnsw/index/search.rs`, `index/hnsw/native/
+  # distance.rs`, `index/hnsw/mod.rs`, `velesql/cache.rs` and `lib.rs` — and
+  # until this job existed nothing on a pull request ever compiled it. The two
+  # workflows that do (quality-deep.yml, bench-scalability.yml) run weekly, so
+  # a PR could break the feature, merge green, and surface the breakage the
+  # following Sunday with no obvious culprit SHA.
+  #
+  # That is the same bargain `memory-feature-matrix` above already strikes, and
+  # it is deliberately a `cargo check`, not a bench run: the cost this gate is
+  # allowed to have is a compile. Catching the cfg regression is the point;
+  # measuring anything is not.
+  #
+  # `--benches` is load-bearing — the feature's `required-features` targets
+  # (Cargo.toml:440, :445) are bench targets, so a lib-only check would miss
+  # exactly the code the feature exists for.
+  internal-bench-check:
+    name: Internal Bench Compiles
+    if: github.event.action != 'edited' || github.event.changes.base != null
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: "velesdb-ci-internal-bench"
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
+
+      - name: Library and benches under internal-bench
+        run: cargo check -p velesdb-core --benches --features persistence,internal-bench
+
+      - name: Tests under internal-bench
+        run: cargo check -p velesdb-core --tests --features persistence,internal-bench
+
   wasm-check:
     name: WASM Build Check
     if: github.event.action != 'edited' || github.event.changes.base != null
@@ -934,7 +975,23 @@ jobs:
     # Runs on PRs too (and gates CI Success) so connector regressions are
     # caught before merge — the LangChain suite once rotted to 21 failures
     # while this job was push-only and advisory.
-    if: (github.event_name == 'pull_request' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'))) && (github.event.action != 'edited' || github.event.changes.base != null)
+    #
+    # `workflow_dispatch` is in the list because this job's result is asserted
+    # by the ci-success chain, and a chain entry that cannot run under a
+    # declared trigger makes the gate unsatisfiable under it. Leaving it out
+    # meant a manual dispatch — the documented escape hatch for the #1465
+    # "required check is absent" failure mode — could only ever produce a RED
+    # `CI Success`, because this one need came back `skipped` while every
+    # other job passed. That is worse than the hole it was meant to plug: an
+    # absent check blocks, a red one *overwrites a green check-run of the same
+    # name* on the head SHA. Hit on PR #2141, where dispatch run 4378 replaced
+    # the green verdict of pull_request run 4380 on the same commit.
+    #
+    # `push` needs no such clause: ci.yml's push trigger is already filtered to
+    # main/develop, exactly the refs this condition admits.
+    #
+    # Pinned by scripts/tests/test_ci_gate_reachability.py.
+    if: (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'))) && (github.event.action != 'edited' || github.event.changes.base != null)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -1771,7 +1828,7 @@ jobs:
   ci-success:
     name: CI Success
     runs-on: ubuntu-latest
-    needs: [lint, test, security, hygiene, wasm-check, memory-feature-matrix, openapi-drift, mcp-doc-contract, velesql-conformance, perf-smoke, bench-sift1m-compile, perf-gate-e2e, python-sdk-tests, python-integrations, node-binding-tests, node-binding-tests-windows, gate-contracts, doc-contract, promise-contract, production-gates, propagation-guard, binary-size, pr-governance, sonarcloud]
+    needs: [lint, test, security, hygiene, wasm-check, memory-feature-matrix, internal-bench-check, openapi-drift, mcp-doc-contract, velesql-conformance, perf-smoke, bench-sift1m-compile, perf-gate-e2e, python-sdk-tests, python-integrations, node-binding-tests, node-binding-tests-windows, gate-contracts, doc-contract, promise-contract, production-gates, propagation-guard, binary-size, pr-governance, sonarcloud]
     if: (always()) && (github.event.action != 'edited' || github.event.changes.base != null)
     steps:
       # sonarcloud is intentionally absent from the gate below: it is an
@@ -1783,6 +1840,7 @@ jobs:
           [[ "${{ needs.test.result }}" == "success" ]] && \
           [[ "${{ needs.wasm-check.result }}" == "success" ]] && \
           [[ "${{ needs.memory-feature-matrix.result }}" == "success" ]] && \
+          [[ "${{ needs.internal-bench-check.result }}" == "success" ]] && \
           [[ "${{ needs.openapi-drift.result }}" == "success" ]] && \
           [[ "${{ needs.mcp-doc-contract.result }}" == "success" ]] && \
           [[ "${{ needs.velesql-conformance.result }}" == "success" ]] && \

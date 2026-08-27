@@ -191,7 +191,11 @@ fn test_sq8_install_refused_on_unsupported_metric() {
 
 /// The query and the codes must both live in the normalized (stored) vector
 /// space, the rerank must sort by similarity (higher = better), and scores
-/// must be clamped to [0, 1].
+/// must land inside cosine's own range.
+///
+/// That range is `[-1, 1]`, not `[0, 1]`: this fixture's planted neighbours
+/// are all strongly correlated with the query, so its scores happen to be
+/// positive, but that is a property of the planting, not of the metric.
 #[test]
 fn test_int8_cosine_rerank_keeps_best_candidates() {
     let (dim, k) = (32, 10);
@@ -207,10 +211,18 @@ fn test_int8_cosine_rerank_keeps_best_candidates() {
         DistanceMetric::Cosine,
         k,
     );
+    let (low, high) = DistanceMetric::Cosine
+        .score_range()
+        .expect("test: cosine is a bounded metric");
     for (id, score) in &results {
         assert!(
-            (0.0..=1.0).contains(score),
-            "Cosine score for node {id} should be in [0,1], got {score}"
+            (low..=high).contains(score),
+            "Cosine score for node {id} should be in [{low},{high}], got {score}"
+        );
+        assert!(
+            *score > 0.0,
+            "this fixture plants correlated neighbours, so node {id} should \
+             score positively; got {score}"
         );
     }
 }

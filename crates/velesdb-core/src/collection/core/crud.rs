@@ -77,6 +77,7 @@ impl Collection {
         self.enforce_upsert_limits(points)?;
         for point in points {
             validate_dimension_match(dimension, point.dimension())?;
+            crate::validation::validate_vector_is_finite(&point.vector)?;
         }
         Ok(())
     }
@@ -400,7 +401,7 @@ impl Collection {
         // flushed by `batch_store_all`, so the BM25 WAL never leads payload
         // durability. A failure propagates with the in-memory index untouched.
         if !skip_bm25 {
-            self.bulk_update_text_index(points)?;
+            self.bulk_update_text_index(points, old_payloads)?;
         }
         let needs_label_updates = Self::needs_label_updates(points, old_payloads);
         let mut label_updates = Self::alloc_label_buffer(needs_label_updates, points.len());
@@ -464,7 +465,7 @@ impl Collection {
         // Issue #389 + #1797: one BM25 WAL barrier for the whole batch,
         // sequenced after the payload flush so the BM25 WAL never leads
         // payload durability — the same envelope as the vector upsert path.
-        self.bulk_update_text_index(&points)?;
+        self.bulk_update_text_index(&points, &old_payloads_for_hist)?;
 
         // config(1) only — payload_storage(3) and label_index(7) both released above.
         self.storage.config.write().point_count = point_count;

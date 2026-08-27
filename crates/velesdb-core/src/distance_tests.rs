@@ -297,3 +297,147 @@ fn test_parse_ip_alias() {
         Some(DistanceMetric::DotProduct)
     );
 }
+
+// ---------------------------------------------------------------------------
+// Score contract (`score_range` / `clamp_score`)
+// ---------------------------------------------------------------------------
+
+/// The declared range must match what `calculate` can actually produce.
+///
+/// These two travelled separately once: `transform_score` on the HNSW path
+/// floored cosine at 0.0 while `calculate` returned the real cosine, so the
+/// same document scored differently depending on which path ranked it.
+#[test]
+fn score_range_matches_what_calculate_produces() {
+    let aligned = vec![1.0_f32, 0.0, 0.0];
+    let opposed = vec![-1.0_f32, 0.0, 0.0];
+
+    let cosine = DistanceMetric::Cosine.calculate(&aligned, &opposed);
+    let (low, high) = DistanceMetric::Cosine
+        .score_range()
+        .expect("cosine is a bounded metric");
+    assert!(
+        (cosine - low).abs() < 1e-6,
+        "opposed vectors must reach the declared floor {low}, got {cosine}"
+    );
+    assert!((high - 1.0).abs() < f32::EPSILON);
+
+    // Jaccard over non-negative weights cannot go below zero.
+    let disjoint_a = vec![1.0_f32, 0.0];
+    let disjoint_b = vec![0.0_f32, 1.0];
+    let jaccard = DistanceMetric::Jaccard.calculate(&disjoint_a, &disjoint_b);
+    let (j_low, j_high) = DistanceMetric::Jaccard
+        .score_range()
+        .expect("jaccard is a bounded metric");
+    assert!((j_low - 0.0).abs() < f32::EPSILON);
+    assert!((j_high - 1.0).abs() < f32::EPSILON);
+    assert!(jaccard >= j_low && jaccard <= j_high);
+}
+
+/// Cosine keeps its sign; Jaccard keeps its floor.
+#[test]
+fn clamp_score_respects_each_metrics_own_floor() {
+    assert!((DistanceMetric::Cosine.clamp_score(-0.5) + 0.5).abs() < f32::EPSILON);
+    assert!(DistanceMetric::Jaccard.clamp_score(-0.5).abs() < f32::EPSILON);
+}
+
+/// Drift past a boundary is absorbed; a value inside the range is untouched.
+#[test]
+fn clamp_score_absorbs_boundary_drift_without_moving_interior_values() {
+    assert!((DistanceMetric::Cosine.clamp_score(1.000_001) - 1.0).abs() < f32::EPSILON);
+    assert!((DistanceMetric::Cosine.clamp_score(-1.000_001) + 1.0).abs() < f32::EPSILON);
+    assert!((DistanceMetric::Cosine.clamp_score(0.25) - 0.25).abs() < f32::EPSILON);
+}
+
+/// An unbounded metric is passed through, not squeezed into someone's range.
+#[test]
+fn clamp_score_leaves_unbounded_metrics_alone() {
+    for metric in [
+        DistanceMetric::Euclidean,
+        DistanceMetric::Hamming,
+        DistanceMetric::DotProduct,
+    ] {
+        assert!(
+            metric.score_range().is_none(),
+            "{metric:?} is unbounded and must declare no range"
+        );
+        for value in [-42.0_f32, 0.0, 1.5, 9_000.0] {
+            assert!(
+                (metric.clamp_score(value) - value).abs() < f32::EPSILON,
+                "{metric:?} must pass {value} through unchanged"
+            );
+        }
+    }
+}
+
+/// On in-contract input, a bounded metric's `calculate` already lands inside
+/// its declared range, so the clamp is the identity.
+///
+/// "In contract" differs per metric and that is the point: cosine is defined
+/// for any real vector, so an anti-correlated pair belongs in its set;
+/// Jaccard is defined over set-like (non-negative) weights, so it gets
+/// non-negative pairs. See
+/// [`jaccard_calculate_escapes_its_declared_range_on_negative_weights`] for
+/// what happens outside that contract.
+#[test]
+fn clamp_score_is_the_identity_on_real_calculate_output() {
+    let cosine_pairs: [(&[f32], &[f32]); 4] = [
+        (&[1.0, 0.0, 0.0], &[1.0, 0.0, 0.0]),
+        (&[1.0, 0.0, 0.0], &[-1.0, 0.0, 0.0]),
+        (&[1.0, 2.0, 3.0], &[3.0, 2.0, 1.0]),
+        (&[0.0, 0.0, 0.0], &[0.0, 0.0, 0.0]),
+    ];
+    let jaccard_pairs: [(&[f32], &[f32]); 4] = [
+        (&[1.0, 0.0, 0.0], &[1.0, 0.0, 0.0]),
+        (&[1.0, 0.0, 0.0], &[0.0, 1.0, 0.0]),
+        (&[1.0, 2.0, 3.0], &[3.0, 2.0, 1.0]),
+        (&[0.0, 0.0, 0.0], &[0.0, 0.0, 0.0]),
+    ];
+
+    for (metric, pairs) in [
+        (DistanceMetric::Cosine, cosine_pairs),
+        (DistanceMetric::Jaccard, jaccard_pairs),
+    ] {
+        for (a, b) in pairs {
+            let raw = metric.calculate(a, b);
+            let clamped = metric.clamp_score(raw);
+            assert!(
+                (raw - clamped).abs() < f32::EPSILON,
+                "{metric:?} produced {raw} on {a:?} vs {b:?}, outside its declared range"
+            );
+        }
+    }
+}
+
+/// Jaccard's kernels do not enforce their own range on out-of-contract input.
+///
+/// `jaccard_scalar` is `intersection / union` with no clamp, where
+/// `cosine_scalar` ends in `.clamp(-1.0, 1.0)` — the asymmetry is visible in
+/// the same file. Feed a negative weight (meaningless for a set-like metric,
+/// but nothing rejects it at insert) and `calculate` returns -1.0 while the
+/// HNSW graph path, which goes through `transform_score` -> `clamp_score`,
+/// returns 0.0. That is the same shape of path disagreement this module's
+/// score contract exists to prevent, one metric over.
+///
+/// Closing it means clamping inside the Jaccard kernels on all three ISAs
+/// (scalar, AVX2/AVX-512, NEON); this test pins the current behaviour so the
+/// gap is a live, named fact rather than a silent one, and fails loudly the
+/// moment someone fixes it.
+#[test]
+fn jaccard_calculate_escapes_its_declared_range_on_negative_weights() {
+    let positive = vec![1.0_f32, 0.0, 0.0];
+    let negative = vec![-1.0_f32, 0.0, 0.0];
+
+    let raw = DistanceMetric::Jaccard.calculate(&positive, &negative);
+    let (low, _) = DistanceMetric::Jaccard
+        .score_range()
+        .expect("jaccard is bounded");
+
+    assert!(
+        raw < low,
+        "expected the known unclamped kernel output below the declared floor {low}, got {raw}"
+    );
+    // The declared contract still holds wherever `clamp_score` is applied,
+    // which is what every score-producing path now routes through.
+    assert!((DistanceMetric::Jaccard.clamp_score(raw) - low).abs() < f32::EPSILON);
+}

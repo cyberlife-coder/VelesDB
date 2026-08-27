@@ -159,6 +159,24 @@ impl DistanceMetric {
         }
     }
 
+    /// Returns whether an orthogonal change of basis leaves this metric
+    /// unchanged.
+    ///
+    /// OPQ stores codes in a rotated space and rescoring rotates the query to
+    /// match. That is sound only for metrics built from inner products and
+    /// norms, which a rotation preserves: cosine, dot product, Euclidean.
+    /// Hamming and Jaccard are defined component by component on the original
+    /// axes — a rotated "binary" vector is no longer binary — so the same
+    /// trick computes a number that has no relation to the metric the user
+    /// asked for.
+    #[must_use]
+    pub const fn is_rotation_invariant(&self) -> bool {
+        match self {
+            Self::Cosine | Self::Euclidean | Self::DotProduct => true,
+            Self::Hamming | Self::Jaccard => false,
+        }
+    }
+
     /// Returns this metric's score polarity for fusion
     /// ([`ScoreDirection`](crate::fusion::ScoreDirection)).
     ///
@@ -169,6 +187,45 @@ impl DistanceMetric {
             crate::fusion::ScoreDirection::HigherIsBetter
         } else {
             crate::fusion::ScoreDirection::LowerIsBetter
+        }
+    }
+
+    /// The closed range this metric's user-visible scores occupy, or `None`
+    /// when the metric is unbounded.
+    ///
+    /// This is the one definition of the score contract. A caller cannot tell
+    /// which path produced its results — `HnswIndex` reaches a score through
+    /// brute force, through the exact rerank, or through the graph's
+    /// `transform_score`, chosen by corpus size, quality and `k` — so those
+    /// paths must not each carry their own table. They derive from this one.
+    ///
+    /// - **Cosine** is `[-1, 1]`. An anti-correlated pair has a genuinely
+    ///   negative similarity; flooring it at zero does not merely lose the
+    ///   sign, it ties every anti-correlated match at one value and destroys
+    ///   the ordering among them.
+    /// - **Jaccard** is `[0, 1]`: `intersection / union` over non-negative
+    ///   weights cannot go below zero.
+    /// - **Euclidean**, **Hamming** and **`DotProduct`** are unbounded — a
+    ///   distance grows with the data, and an inner product is not normalized.
+    #[must_use]
+    pub const fn score_range(&self) -> Option<(f32, f32)> {
+        match self {
+            Self::Cosine => Some((-1.0, 1.0)),
+            Self::Jaccard => Some((0.0, 1.0)),
+            Self::Euclidean | Self::Hamming | Self::DotProduct => None,
+        }
+    }
+
+    /// Clamps `score` into [`Self::score_range`], leaving unbounded metrics
+    /// untouched.
+    ///
+    /// Absorbs floating-point drift at the boundary without moving a value
+    /// that is genuinely inside the range.
+    #[must_use]
+    pub fn clamp_score(&self, score: f32) -> f32 {
+        match self.score_range() {
+            Some((low, high)) => score.clamp(low, high),
+            None => score,
         }
     }
 

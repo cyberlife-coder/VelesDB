@@ -312,6 +312,13 @@ impl Collection {
         validate_dimension_match(config.dimension, query.len())?;
         drop(config);
 
+        // Every typed wrapper — VectorCollection, MetadataCollection,
+        // GraphCollection — delegates its `search` here, so this one call
+        // closes the read side against the same non-finite input the ingest
+        // path refuses. One O(dim) pass per query, against a search that is
+        // O(dim x candidates); the hot loops stay branch-free.
+        crate::validation::validate_vector_is_finite(query)?;
+
         // Use HNSW index for fast ANN search
         let index_results = self.search_ids_with_adc_if_pq(query, k);
 
