@@ -147,6 +147,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **`WalBatcher` is retired rather than wired (#2078).** 441 lines: the module
+  and its 245-line test file, which was the only thing that ever called it.
+
+  The issue asked for a decision between wiring the group-commit front and
+  removing it. The audit that settled it turned up an argument the issue did
+  not have: **`WalBatcher` was never a group-commit protocol.** `submit`
+  (`wal_batcher.rs:124-140`) took its mutex only long enough to extend a
+  `Vec<u8>` and bump a counter, then returned `Ok`. Only the submitter whose
+  increment crossed `max_batch_size` flushed; every other one was told its
+  write had succeeded while its bytes were still in memory. A real group commit
+  makes the non-leaders *wait* for the leader's fsync. Wiring this was therefore
+  never "connect the existing module" — it was "build the barrier it never had".
+
+  Two further findings, each sufficient on its own. `commit_delay_us` — the
+  section's central knob — is read by nothing, including the batcher: there is
+  no thread, no condvar and no timer in the file, so the "max delay before
+  flush" setting did nothing even inside the module it configured. And the
+  amortization it was written to provide already ships:
+  `LogPayloadStorage::store_batch`/`store_batch_deferred` and
+  `MmapStorage::store_batch` each pay one barrier per call and are wired into
+  `crud.rs`, `crud_bulk.rs` and `bulk_import.rs`.
+
+  `docs/CORE_WIRING_DEBT.md:56-80` already recorded why wiring was blocked
+  anyway — `LogPayloadStorage` resolves a record's file offset *inside*
+  `write_store_record` at write time, so a deferred write cannot update the
+  index at submit time — and why it would have bought nothing if it weren't:
+  `Collection::payload_storage` is an `Arc<RwLock<..>>` whose outer `.write()`
+  already serializes every writer.
+
+  Nothing outside the module could reach it: `pub(crate)` since #1861, with no
+  root re-export, and `MIGRATION_v5.0.0.md:56-63` already told users it had left
+  the public API. It was never announced as a shipped feature in any release.
+
+  **`WalBatchConfig` and the `[wal_batch]` table stay for now**, so existing
+  TOML files keep loading, with the #2082 warning still firing when `enabled =
+  true`. Removing them is a Rust API break — `VelesConfig` is constructed
+  literally in the tree — and the `ENGINE_SECTIONS` whitelist entry must go in
+  the same change, or `#[serde(default)]` would turn a surviving `[wal_batch]`
+  table into a parse failure. That half is for the next major.
+
+  `docs/guides/CONFIGURATION.md` is corrected in the same pass: its
+  reserved-sections callout covered #2087's four sections but not this one, so
+  the guide still listed `[wal_batch]` among the sections reaching "the running
+  engine" with nothing to qualify it.
+
 - **The unwired `score_fusion` module is retired rather than repaired (#2106
   items 6 and 7).** 1583 lines: the module, its 553-line test file, and the BDD
   characterization test that existed to document its defects.

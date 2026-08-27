@@ -283,13 +283,18 @@ const fn default_max_batch_size() -> usize {
 
 /// Configuration for WAL group commit batching.
 ///
-/// **Reserved — parsed but not yet wired.** Setting `enabled = true` changes
-/// nothing today: no group commit occurs, and every write keeps its own
-/// durability barrier (batch APIs already amortize to one barrier per call).
+/// **Deprecated — parsed and ignored.** Setting `enabled = true` changes
+/// nothing: no group commit occurs, and every write keeps its own durability
+/// barrier (the batch APIs already amortize to one barrier per call).
 /// [`VelesConfig::validate`] logs a warning when the flag is set so a config
-/// cannot promise behavior the engine does not deliver. Wiring the
-/// `WalBatcher` (or removing this section) is tracked in issue #2078 — the
-/// decision needs a multi-writer measurement, not a default.
+/// cannot promise behavior the engine does not deliver.
+///
+/// Issue #2078 resolved to retire this rather than wire it: the `WalBatcher`
+/// it configured acknowledged a write before its bytes were durable, so it was
+/// a write coalescer and not a group-commit protocol, and its `commit_delay_us`
+/// was read by nothing — not even the batcher. The module is deleted. This
+/// struct and the `[wal_batch]` table stay only so existing TOML files keep
+/// loading; both go at the next major, which is the Rust API break.
 ///
 /// When wired, group commit would batch multiple concurrent writes into a
 /// single `sync_all()` call, amortizing the fsync cost across the batch.
