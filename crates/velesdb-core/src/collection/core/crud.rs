@@ -77,6 +77,7 @@ impl Collection {
         self.enforce_upsert_limits(points)?;
         for point in points {
             validate_dimension_match(dimension, point.dimension())?;
+            crate::validation::validate_vector_is_finite(&point.vector)?;
         }
         Ok(())
     }
