@@ -18,6 +18,16 @@ pub enum FusionError {
         /// The negative weight value.
         weight: f32,
     },
+    /// Non-finite weight or smoothing constant provided (NaN or +/-infinity).
+    ///
+    /// Ordering comparisons against NaN are all false, so a NaN slips through
+    /// every `< 0.0` / `<= 0.0` guard and then poisons the fused score of
+    /// every document the branch touches. Rejecting it here keeps the range
+    /// checks meaningful.
+    NonFiniteWeight {
+        /// The non-finite value.
+        weight: f32,
+    },
     /// Weight slice length does not match the number of result branches.
     WeightCountMismatch {
         /// Number of weights provided.
@@ -42,6 +52,9 @@ impl std::fmt::Display for FusionError {
             }
             Self::NegativeWeight { weight } => {
                 write!(f, "Weights must be non-negative, got {weight:.4}")
+            }
+            Self::NonFiniteWeight { weight } => {
+                write!(f, "Weights must be finite, got {weight}")
             }
             Self::WeightCountMismatch { weights, branches } => write!(
                 f,
@@ -182,12 +195,11 @@ impl FusionStrategy {
     ///
     /// # Errors
     ///
-    /// Returns an error if any weight is negative or `k` ≤ 0.
+    /// Returns an error if any weight or `k` is non-finite, if any weight is
+    /// negative, or if `k` ≤ 0.
     pub fn weighted_rrf(weights: Vec<f32>, k: f32) -> Result<Self, FusionError> {
         validate_non_negative(&weights)?;
-        if k <= 0.0 {
-            return Err(FusionError::NegativeWeight { weight: k });
-        }
+        validate_smoothing_constant(k)?;
         Ok(Self::WeightedRRF { weights, k })
     }
 
@@ -198,6 +210,7 @@ impl FusionStrategy {
     /// Returns an error if:
     /// - Weights do not sum to 1.0 (within 0.001 tolerance)
     /// - Any weight is negative
+    /// - Any weight is non-finite (NaN or +/-infinity)
     pub fn relative_score(dense_weight: f32, sparse_weight: f32) -> Result<Self, FusionError> {
         validate_non_negative(&[dense_weight, sparse_weight])?;
         validate_weight_sum(dense_weight + sparse_weight)?;
@@ -214,6 +227,7 @@ impl FusionStrategy {
     /// Returns an error if:
     /// - Weights do not sum to 1.0 (within 0.001 tolerance)
     /// - Any weight is negative
+    /// - Any weight is non-finite (NaN or +/-infinity)
     pub fn weighted(
         avg_weight: f32,
         max_weight: f32,
@@ -577,9 +591,7 @@ impl FusionStrategy {
         k: f32,
     ) -> Result<Vec<(u64, f32)>, FusionError> {
         validate_non_negative(weights)?;
-        if k <= 0.0 {
-            return Err(FusionError::NegativeWeight { weight: k });
-        }
+        validate_smoothing_constant(k)?;
         if weights.len() != branches.len() {
             return Err(FusionError::WeightCountMismatch {
                 weights: weights.len(),
@@ -620,9 +632,30 @@ impl Default for FusionStrategy {
 /// Validates that no weight in the slice is negative.
 fn validate_non_negative(weights: &[f32]) -> Result<(), FusionError> {
     for &w in weights {
+        // Finiteness first: `w < 0.0` is false for NaN, so a NaN would pass
+        // the range check and reach the kernel, where it turns the fused
+        // score of every document in its branch into NaN.
+        if !w.is_finite() {
+            return Err(FusionError::NonFiniteWeight { weight: w });
+        }
         if w < 0.0 {
             return Err(FusionError::NegativeWeight { weight: w });
         }
+    }
+    Ok(())
+}
+
+/// Validates a rank-smoothing constant: finite and strictly positive.
+///
+/// `k` sits in the denominator of every reciprocal-rank contribution, so a
+/// NaN propagates the same way a NaN weight does, and a zero divides the
+/// top-ranked document's contribution by zero.
+fn validate_smoothing_constant(k: f32) -> Result<(), FusionError> {
+    if !k.is_finite() {
+        return Err(FusionError::NonFiniteWeight { weight: k });
+    }
+    if k <= 0.0 {
+        return Err(FusionError::NegativeWeight { weight: k });
     }
     Ok(())
 }

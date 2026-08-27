@@ -200,6 +200,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A non-finite fusion weight can no longer reorder a result set (#2095).**
+  Every weight rule in `fusion/strategy.rs` was an ordering comparison —
+  `w < 0.0` for weights, `k <= 0.0` for the rank-smoothing constant — and every
+  ordering comparison against `NaN` is false. A `NaN` therefore satisfied all of
+  them, `FusionStrategy::weighted`, `relative_score` and `weighted_rrf` each
+  returned `Ok`, and the kernel then produced a `NaN` contribution for every
+  document in that branch.
+
+  The consequence is worse than a `NaN` score. `sort_descending` orders by a
+  partial comparison, so the `NaN`-scored documents did not sink — measured on a
+  two-branch fusion with one `NaN` weight, the result was
+  `[(1, NaN), (2, NaN), (3, 0.0164)]`: the only document carrying a real score
+  ranked **last**, behind two documents with no score at all. A caller reading
+  the top-k got a confident, silently inverted answer.
+
+  `validate_non_negative` now checks finiteness before range, and the two
+  hand-rolled `k <= 0.0` guards are replaced by a shared
+  `validate_smoothing_constant`, so the rule is stated once for both the
+  constructor and `fuse` (which revalidates, because the enum variants are
+  public and can be built as literals). The new `FusionError::NonFiniteWeight`
+  joins a `#[non_exhaustive]` enum, so no downstream `match` breaks.
+
+  Both guards are mutation-checked: deleting the weight-side finiteness test
+  fails 5 of the 8 new tests, deleting the `k`-side one fails the other 2, and
+  the pre-existing 56 fusion tests stay green either way.
+
+- **REST fusion weights are validated instead of applied verbatim (#2095).**
+  Three of the four arms that build a weighted `FusionStrategy` from an HTTP
+  body did it with a struct literal, which accepts any `f32` that deserialized.
+  The core constructors — the ones enforcing non-negative, finite, summing to
+  1.0 — were never called, so `/collections/{name}/search/multi` and the
+  `fusion` block of `/search`, `/search/ids` and `/search/hybrid` accepted
+  weights such as `avg_w = -0.2, max_w = 0.9, hit_w = 0.3` and returned `200`
+  with a ranking that honoured none of the contract the weights imply.
+
+  All four arms now go through the validating constructors and report the core
+  message verbatim as a `400`, so the server carries no second copy of the
+  weight rules to drift from. `multi.rs` splits the decision into a pure
+  `build_fusion_strategy(&req) -> Result<_, String>` and a thin shell that owns
+  the metrics and the HTTP response, which is what makes the eight new cases
+  testable without standing up an `AppState`.
+
+  The rustdoc table above `pipeline::parse_fusion_strategy` is corrected in the
+  same pass: it advertised the pre-#1545 weighted defaults `0.5 / 0.3 / 0.2` and
+  went on advertising them after #2093 fixed the code to read
+  `DEFAULT_WEIGHTED_AVG_WEIGHT` and its siblings (`0.6 / 0.3 / 0.1`).
+
+  Not addressed here, and recorded rather than dropped: `velesdb-cli` and
+  `tauri-plugin-velesdb` each carry a fifth and sixth hand-written copy of the
+  same name-to-strategy mapping, and the CLI's copy still hardcodes the
+  pre-#1545 `0.5 / 0.3 / 0.2`. Collapsing all six onto one core entry point is
+  the single-sourcing work of #2095 section B.
+
 - **A PR can no longer break `internal-bench` and merge green.** The feature is
   not bench-only: it gates seven sites of *production* source —
   `index/hnsw/index/search.rs`, `index/hnsw/native/distance.rs`,
