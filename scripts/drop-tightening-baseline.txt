@@ -62,7 +62,6 @@ crates/velesdb-core/src/index/io_counters_tests.rs	1
 crates/velesdb-core/src/index/secondary/mod.rs	6
 crates/velesdb-core/src/sparse_index/inverted_index.rs	4
 crates/velesdb-core/src/storage/async_ops.rs	2
-crates/velesdb-core/src/storage/async_ops_tests.rs	2
 crates/velesdb-core/src/storage/compaction.rs	2
 crates/velesdb-core/src/storage/compaction_tests.rs	2
 crates/velesdb-core/src/storage/guard_tests.rs	6

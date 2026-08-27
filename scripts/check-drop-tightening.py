@@ -11,7 +11,7 @@ drain (#2110).
 
 The drain never started, and nothing measured it. #2110 recorded "192 sites"
 on 2026-08-22; re-measured against `develop` @ `86b063ea` the real figure is
-**328 diagnostics across 76 files** for `velesdb-core` + `velesdb-server` with
+**326 diagnostics across 75 files** for `velesdb-core` + `velesdb-server` with
 `--all-targets` (135 for `velesdb-core --lib` alone). 192 is reproducible only
 as a `grep -c` over clippy's human-readable output, which counts note lines
 rather than findings. A number nobody can recompute cannot be drained against,
@@ -46,7 +46,7 @@ workspace: those are the crates that build without GTK, so the baseline is
 one anybody can regenerate and verify. `velesdb-core`'s library is linted
 even when only `velesdb-server` is named — a workspace path dependency is a
 primary unit, so it is not `--cap-lints`ed — which is why the two crates
-cover 326 of the 328. Widening to the crates that need GTK is a follow-up
+account for all 326. Widening to the crates that need GTK is a follow-up
 for someone who can build them; it must be a measured baseline, not an
 estimate, or this guard reintroduces the defect it exists to fix.
 

@@ -1117,7 +1117,7 @@
    "self_test_required": true,
    "blind_spot": {
     "issue": 2110,
-    "summary": "Covers velesdb-core and velesdb-server only - the crates that build without GTK, so the baseline stays regenerable by anyone. They hold the 328 findings measured on 2026-08-27 (velesdb-core's lib is linted even when only velesdb-server is named, because a workspace path dependency is a primary unit and is not --cap-lints'd), but velesdb-cli, velesdb-memory, velesdb-migrate, velesdb-mobile, velesdb-wasm and tauri-plugin-velesdb are unmeasured and a new site in one of them lands unseen. Widening needs a measured baseline from a machine that can build them, never an estimate. Counts are per file rather than per site, so moving a finding between two baselined files is invisible when the totals offset."
+    "summary": "Covers velesdb-core and velesdb-server only - the crates that build without GTK, so the baseline stays regenerable by anyone. They hold all 326 findings measured on 2026-08-27 (velesdb-core's lib is linted even when only velesdb-server is named, because a workspace path dependency is a primary unit and is not --cap-lints'd), but velesdb-cli, velesdb-memory, velesdb-migrate, velesdb-mobile, velesdb-wasm and tauri-plugin-velesdb are unmeasured and a new site in one of them lands unseen. Widening needs a measured baseline from a machine that can build them, never an estimate. Counts are per file rather than per site, so moving a finding between two baselined files is invisible when the totals offset."
    },
    "must_refuse": [
     {
