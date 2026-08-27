@@ -186,6 +186,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`store_batch_async` pays one durability barrier instead of one per vector
+  (#2078).** Despite its name, it looped over `VectorStorage::store`, and
+  `MmapStorage::store` under `DurabilityMode::Fsync` issues its own `flush` +
+  `sync_all` per call. A 2 000-vector batch therefore paid 2 000 fsyncs, every
+  one of them while holding the storage write lock — so the function billed as
+  the one "for large batches that would otherwise block the async executor"
+  was the slowest way in the crate to write them, and stalled every concurrent
+  writer for the duration.
+
+  `VectorStorage::store_batch` already exists for exactly this, coalescing the
+  WAL entries into one grouped write and deliberately leaving the barrier to
+  the caller; the fix is to call it and then `flush` once. Measured on 2 000
+  vectors × 128 dimensions at the default `Fsync`: **11–21× faster across three
+  runs** (320–540 ms down to 22–28 ms).
+
+  The durability guarantee on return is unchanged, because `flush` dispatches
+  on the same mode the per-vector path consulted — and marginally stronger,
+  since the mmap is flushed too, which the loop never did. Error behaviour
+  improves as well: `store_batch` validates every dimension before writing
+  anything, so a malformed entry now rejects the batch rather than leaving the
+  prefix before it committed.
+
+  The one pre-existing test asserted only that the returned count was 100 —
+  something the broken loop satisfied just as well — and never read a vector
+  back. Three tests now pin what that count was standing in for: every vector
+  is retrievable, a bad dimension commits nothing, and the batch survives
+  closing and reopening the directory without the caller flushing.
+
 - **A PR can no longer break `internal-bench` and merge green.** The feature is
   not bench-only: it gates seven sites of *production* source —
   `index/hnsw/index/search.rs`, `index/hnsw/native/distance.rs`,

@@ -100,10 +100,25 @@ pub async fn flush_async(storage: Arc<RwLock<MmapStorage>>) -> io::Result<()> {
     .map_err(|e| io::Error::other(format!("Task join error: {e}")))?
 }
 
-/// Asynchronously stores a batch of vectors.
+/// Asynchronously stores a batch of vectors, paying one durability barrier
+/// for the whole batch.
 ///
 /// Wraps bulk insertion in `spawn_blocking` for large batches that would
 /// otherwise block the async executor.
+///
+/// This used to loop over [`VectorStorage::store`], which under
+/// [`DurabilityMode::Fsync`](super::DurabilityMode::Fsync) issues its own
+/// `flush` + `sync_all` per vector — so a 10 000-vector batch paid 10 000
+/// fsyncs, every one of them while holding the storage write lock, which is
+/// the opposite of what the name promises. [`VectorStorage::store_batch`]
+/// coalesces the WAL entries into a single grouped write and deliberately
+/// leaves the barrier to the caller; the explicit `flush` afterwards is that
+/// barrier.
+///
+/// The durability guarantee on return is unchanged — every entry is on disk
+/// when this resolves under `Fsync` — because `flush` dispatches on the same
+/// mode the per-vector path consulted. It is in fact marginally stronger: the
+/// mmap is flushed too, which the per-vector loop never did.
 ///
 /// # Arguments
 ///
@@ -112,18 +127,23 @@ pub async fn flush_async(storage: Arc<RwLock<MmapStorage>>) -> io::Result<()> {
 ///
 /// # Errors
 ///
-/// Returns an error if any store operation fails.
+/// Returns an error if any dimension is wrong, if the write fails, or if the
+/// durability barrier fails. Dimensions are validated for the whole batch
+/// before anything is written, so a malformed entry rejects the batch instead
+/// of leaving the prefix before it committed.
 pub async fn store_batch_async(
     storage: Arc<RwLock<MmapStorage>>,
     vectors: Vec<(u64, Vec<f32>)>,
 ) -> io::Result<usize> {
     tokio::task::spawn_blocking(move || {
+        let borrowed: Vec<(u64, &[f32])> = vectors
+            .iter()
+            .map(|(id, vector)| (*id, vector.as_slice()))
+            .collect();
+
         let mut guard = storage.write();
-        let mut count = 0;
-        for (id, vector) in vectors {
-            guard.store(id, &vector)?;
-            count += 1;
-        }
+        let count = guard.store_batch(&borrowed)?;
+        guard.flush()?;
         Ok(count)
     })
     .await
