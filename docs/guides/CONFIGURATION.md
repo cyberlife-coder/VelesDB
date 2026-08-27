@@ -45,18 +45,22 @@ To point at a file anywhere else, pass it explicitly:
 | `velesdb-server` | `--config <path>` | `VELESDB_CONFIG` |
 | `velesdb` (CLI) | `--config <path>` (global — REPL and every one-shot command) | `VELESDB_CONFIG` |
 
-> **Reserved sections (issue #2087).** Of the engine sections below, only
-> `[limits]` is applied by the engine today. `[search]`, `[hnsw]`,
-> `[storage]` and `[quantization]` are parsed and validated but not yet
-> wired — setting them away from their defaults logs a warning at load.
-> Query-time overrides (`WITH (ef_search = N)`) are a separate, working
-> mechanism, as are per-collection creation options.
+> **Reserved sections.** Of the engine sections below, only `[limits]` is
+> applied by the engine today. `[search]`, `[hnsw]`, `[storage]` and
+> `[quantization]` are parsed and validated but not yet wired (issue #2087),
+> and `[wal_batch]` is parsed and ignored (issue #2078) — its group-commit
+> front was deleted as unwired, and the batch write APIs already pay one
+> durability barrier per call. Setting any of them away from their defaults
+> logs a warning at load. Query-time overrides (`WITH (ef_search = N)`) are a
+> separate, working mechanism, as are per-collection creation options.
 
 Both binaries can load the **same** file, but only the *engine* sections —
 `[search]`, `[hnsw]`, `[storage]`, `[limits]`, `[quantization]`,
 `[wal_batch]` — reach `VelesConfig` and, via
 [`Database::open_with_config`](../../crates/velesdb-core/src/database/mod.rs),
-the running engine. Every other top-level table is silently dropped before
+the running engine. Reaching `VelesConfig` is not the same as changing
+behaviour: see the reserved-sections note above for which of them the engine
+actually acts on. Every other top-level table is silently dropped before
 `VelesConfig` ever sees it — most importantly `[server]`, `[auth]`,
 `[tls]`, `[cors]`, which stay exclusively `velesdb-server`'s own transport
 config. This matters because `VelesConfig` *also* has its own same-named
