@@ -7,19 +7,11 @@
 //! - Traversal depth distribution
 //! - Result cardinality statistics
 //!
-//! Note: **nothing consumes these metrics yet.** Nothing records into them
-//! either — `MatchMetrics` is not constructed anywhere outside this module's
-//! own tests, so `to_prometheus` would export a permanently-zero family.
-//!
-//! This comment used to assert the opposite ("consumed by velesdb-server"),
-//! and that false assurance is what let the surface sit unexamined: a reader
-//! checking whether it was live got a confident yes. It is corrected rather
-//! than deleted because the underlying question is a real one — MATCH *is* a
-//! shipped query path, and its latency, error rate and traversal-depth
-//! distribution are worth having. Wiring it is tracked separately; unlike the
-//! graph metrics of #2091, which were already being recorded and merely thrown
-//! away, there is no existing signal here to recover — the write path has to
-//! be added first.
+//! [`global_match_metrics`] is the single process-wide collector every MATCH
+//! query records into (`match_dispatch::dispatch_match_strategy`).
+//! [`MatchMetrics::to_prometheus`] reaches `/metrics` via
+//! `Database::match_metrics_prometheus`. `QueryTimer` and the `avg_*`
+//! accessors have no caller outside this module's own tests.
 
 #![allow(clippy::format_push_string)]
 // Prometheus format is clearer with push_str+format
@@ -34,7 +26,21 @@
 #![allow(clippy::cast_sign_loss)]
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
+
+/// Process-wide MATCH query metrics collector (EPIC-050).
+///
+/// One collector for the whole database: MATCH queries are not currently
+/// attributed to the collection they touch. Per-collection registries are a
+/// future enhancement, tracked alongside the rest of this module.
+static GLOBAL_MATCH_METRICS: LazyLock<MatchMetrics> = LazyLock::new(MatchMetrics::new);
+
+/// Returns the process-wide MATCH query metrics collector.
+#[must_use]
+pub fn global_match_metrics() -> &'static MatchMetrics {
+    &GLOBAL_MATCH_METRICS
+}
 
 /// Bucket bounds for latency histogram in milliseconds.
 ///

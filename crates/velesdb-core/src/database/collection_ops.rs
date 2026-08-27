@@ -261,6 +261,17 @@ impl Database {
         crate::collection::graph::graph_metrics_to_prometheus(&sorted)
     }
 
+    /// Renders the process-wide MATCH query metrics as a Prometheus
+    /// exposition (EPIC-050 US-002).
+    ///
+    /// Unlike graph metrics, MATCH metrics are not tagged per collection:
+    /// `MATCH` queries currently record into one global collector regardless
+    /// of which collection they touch (`match_metrics::global_match_metrics`).
+    #[must_use]
+    pub fn match_metrics_prometheus(&self) -> String {
+        crate::collection::search::query::match_metrics::global_match_metrics().to_prometheus()
+    }
+
     /// Lists all collection names in the database.
     ///
     /// Includes collections created via any typed API (vector, graph, metadata).
