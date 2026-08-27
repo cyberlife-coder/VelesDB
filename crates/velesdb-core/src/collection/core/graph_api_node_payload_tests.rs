@@ -51,15 +51,19 @@ fn label_members(collection: &Collection, label: &str) -> Vec<u64> {
 /// and the batch so a property left indexed against a superseded payload names
 /// the node it is wrongly attached to, instead of showing up as a bare count.
 fn range_index_shape(collection: &Collection) -> Vec<(String, Vec<u64>)> {
-    let indexes = collection.graph.graph_range_indexes.read();
-    let mut shape: Vec<(String, Vec<u64>)> = indexes
-        .iter()
-        .map(|(key, index)| {
-            let mut ids = index.lookup_range(None, None);
-            ids.sort_unstable();
-            (key.clone(), ids)
-        })
-        .collect();
+    // Scoped so the read guard is released before the sort, not held to the
+    // end of the function.
+    let mut shape: Vec<(String, Vec<u64>)> = {
+        let indexes = collection.graph.graph_range_indexes.read();
+        indexes
+            .iter()
+            .map(|(key, index)| {
+                let mut ids = index.lookup_range(None, None);
+                ids.sort_unstable();
+                (key.clone(), ids)
+            })
+            .collect()
+    };
     shape.sort();
     shape
 }

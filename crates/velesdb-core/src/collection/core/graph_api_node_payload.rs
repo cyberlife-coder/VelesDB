@@ -94,14 +94,22 @@ impl Collection {
 
         // Un-index whatever these ids carried before. Must complete before the
         // write below, which replaces the payloads it reads here.
+        //
+        // Read first, then un-index, rather than interleaving the two: the
+        // retrieves hit the WAL, and holding `label_index` across N of them
+        // would block every reader of the label index for the whole I/O pass.
+        // The guard is taken once for the removals, not once per node — taking
+        // it per node is part of the cost this batch exists to remove.
         let mut superseded: Vec<(u64, Value)> = Vec::new();
+        for &(node_id, _) in &deduped {
+            if let Ok(Some(old_payload)) = storage.retrieve(node_id) {
+                superseded.push((node_id, old_payload));
+            }
+        }
         {
             let mut label_idx = self.graph.label_index.write();
-            for &(node_id, _) in &deduped {
-                if let Ok(Some(old_payload)) = storage.retrieve(node_id) {
-                    label_idx.remove_from_payload(node_id, &old_payload);
-                    superseded.push((node_id, old_payload));
-                }
+            for (node_id, old_payload) in &superseded {
+                label_idx.remove_from_payload(*node_id, old_payload);
             }
         }
         // `label_index` released before the graph property indexes: both sit at
