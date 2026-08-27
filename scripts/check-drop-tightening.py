@@ -10,12 +10,16 @@ That sibling is contention rather than deadlock, so it was left off pending a
 drain (#2110).
 
 The drain never started, and nothing measured it. #2110 recorded "192 sites"
-on 2026-08-22; re-measured against `develop` @ `86b063ea` the real figure is
-**326 diagnostics across 75 files** for `velesdb-core` + `velesdb-server` with
-`--all-targets` (135 for `velesdb-core --lib` alone). 192 is reproducible only
-as a `grep -c` over clippy's human-readable output, which counts note lines
-rather than findings. A number nobody can recompute cannot be drained against,
-and — with no guard in the tree — it can grow faster than anyone drains it.
+on 2026-08-22; re-measured on 2026-08-27 the real figure was **326 diagnostics
+across 75 files** for `velesdb-core` + `velesdb-server` with `--all-targets`
+(135 for `velesdb-core --lib` alone), and #2151 has since drained 2 of them.
+192 is reproducible only as a `grep -c` over clippy's human-readable output,
+which counts note lines rather than findings. A number nobody can recompute
+cannot be drained against, and — with no guard in the tree — it can grow faster
+than anyone drains it.
+
+The live figure is whatever `scripts/drop-tightening-baseline.txt` sums to;
+this paragraph records where the count started, not where it is.
 
 This guard is the missing half. It does not drain anything and it does not
 promote the lint; it freezes the per-file counts so the backlog can only
@@ -46,7 +50,7 @@ workspace: those are the crates that build without GTK, so the baseline is
 one anybody can regenerate and verify. `velesdb-core`'s library is linted
 even when only `velesdb-server` is named — a workspace path dependency is a
 primary unit, so it is not `--cap-lints`ed — which is why the two crates
-account for all 326. Widening to the crates that need GTK is a follow-up
+account for all of them. Widening to the crates that need GTK is a follow-up
 for someone who can build them; it must be a measured baseline, not an
 estimate, or this guard reintroduces the defect it exists to fix.
 
