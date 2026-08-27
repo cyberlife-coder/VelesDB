@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pending a drain. The drain never started, and nothing measured it.
 
   **The tracked figure was wrong.** #2110 records "192 sites"; re-measured
-  against `develop` @ `64a21b65` the real count is **326 diagnostics across 75
+  against `develop` @ `64a21b65` the real count was **326 diagnostics across 75
   files** for `velesdb-core` + `velesdb-server` with `--all-targets` (135 for
   `velesdb-core --lib` alone). 192 is reproducible only as a `grep -c` over
   clippy's human-readable output, which counts note lines rather than findings.
