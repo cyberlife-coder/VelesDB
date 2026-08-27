@@ -537,13 +537,11 @@ fn test_hit_rate_empty() {
 #[test]
 fn test_map_perfect() {
     // Arrange: all results are relevant (perfect precision at every position)
-    let relevance_lists = vec![
-        vec![true, true, true], // Query 1: all relevant
-        vec![true, true, true], // Query 2: all relevant
-    ];
+    // Every relevant item retrieved, all at the top: AP = 1.0 per query.
+    let queries: Vec<(&[bool], usize)> = vec![(&[true, true, true], 3), (&[true, true, true], 3)];
 
     // Act
-    let map = mean_average_precision(&relevance_lists);
+    let map = mean_average_precision(&queries);
 
     // Assert: 1.0 (perfect MAP)
     assert!((map - 1.0).abs() < f64::EPSILON, "Expected 1.0, got {map}");
@@ -551,11 +549,12 @@ fn test_map_perfect() {
 
 #[test]
 fn test_map_no_relevant() {
-    // Arrange: no relevant results
-    let relevance_lists = vec![vec![false, false, false], vec![false, false, false]];
+    // Arrange: nothing relevant retrieved, and nothing relevant to find.
+    let queries: Vec<(&[bool], usize)> =
+        vec![(&[false, false, false], 0), (&[false, false, false], 0)];
 
     // Act
-    let map = mean_average_precision(&relevance_lists);
+    let map = mean_average_precision(&queries);
 
     // Assert: 0.0
     assert!((map - 0.0).abs() < f64::EPSILON, "Expected 0.0, got {map}");
@@ -563,14 +562,15 @@ fn test_map_no_relevant() {
 
 #[test]
 fn test_map_mixed() {
-    // Arrange: mixed relevance
-    // Query 1: [true, false, true] -> AP = (1/1 + 2/3) / 2 = 0.833...
-    // Query 2: [false, true, false] -> AP = 1/2 / 1 = 0.5
+    // Arrange: mixed relevance, every relevant item retrieved.
+    // Query 1: [true, false, true], R = 2 -> AP = (1/1 + 2/3) / 2 = 0.833...
+    // Query 2: [false, true, false], R = 1 -> AP = (1/2) / 1 = 0.5
     // MAP = (0.833 + 0.5) / 2 = 0.666...
-    let relevance_lists = vec![vec![true, false, true], vec![false, true, false]];
+    let queries: Vec<(&[bool], usize)> =
+        vec![(&[true, false, true], 2), (&[false, true, false], 1)];
 
     // Act
-    let map = mean_average_precision(&relevance_lists);
+    let map = mean_average_precision(&queries);
 
     // Assert: should be around 0.666
     let q1_ap = 1.0_f64.midpoint(2.0_f64 / 3.0);
@@ -584,12 +584,81 @@ fn test_map_mixed() {
 #[test]
 fn test_map_empty() {
     // Arrange: no queries
-    let relevance_lists: Vec<Vec<bool>> = vec![];
+    let queries: Vec<(&[bool], usize)> = vec![];
 
     // Act
-    let map = mean_average_precision(&relevance_lists);
+    let map = mean_average_precision(&queries);
 
     // Assert: 0.0
+    assert!((map - 0.0).abs() < f64::EPSILON, "Expected 0.0, got {map}");
+}
+
+/// The defect this signature exists to make unrepresentable (#2106 item 12).
+///
+/// One relevant document out of ten, returned at rank 1. The old shape divided
+/// by the retrieved-relevant count — one — and reported a flawless `1.0` for
+/// 10% recall. Textbook AP divides by the corpus total, so it reports 0.1: high
+/// precision on what came back, and no credit for the nine that did not.
+#[test]
+fn test_map_penalises_missed_relevant_documents() {
+    let queries: Vec<(&[bool], usize)> = vec![(&[true], 10)];
+
+    let map = mean_average_precision(&queries);
+
+    assert!(
+        (map - 0.1).abs() < 1e-10,
+        "retrieving 1 of 10 relevant at rank 1 must score 0.1, not a perfect \
+         1.0; got {map}"
+    );
+}
+
+/// Recall is what separates the two denominators, so vary only that.
+///
+/// Same ranking, same precision at every position — only the corpus size
+/// changes. AP must fall as the number of documents missed rises. Under the old
+/// normalisation all three of these scored 1.0.
+#[test]
+fn test_map_falls_as_recall_falls_with_the_ranking_held_fixed() {
+    let scores: Vec<f64> = [2usize, 4, 8]
+        .into_iter()
+        .map(|total_relevant| mean_average_precision(&[(&[true, true] as &[bool], total_relevant)]))
+        .collect();
+
+    assert!(
+        (scores[0] - 1.0).abs() < 1e-10,
+        "retrieving both of 2 relevant must be perfect, got {}",
+        scores[0]
+    );
+    assert!(
+        scores[0] > scores[1] && scores[1] > scores[2],
+        "AP must decrease as more relevant documents go unretrieved: {scores:?}"
+    );
+}
+
+/// A `total_relevant` smaller than what was retrieved cannot produce `AP > 1`.
+///
+/// It describes a corpus with fewer relevant items than the results contain, so
+/// it is a caller error. Clamping the denominator keeps the value inside its
+/// documented `[0, 1]` range rather than letting a bad input quietly corrupt an
+/// average over many queries.
+#[test]
+fn test_map_stays_within_range_when_total_relevant_is_understated() {
+    let map = mean_average_precision(&[(&[true, true, true] as &[bool], 1)]);
+
+    assert!(
+        (0.0..=1.0).contains(&map),
+        "an understated total must not push AP above 1.0, got {map}"
+    );
+    assert!(
+        (map - 1.0).abs() < f64::EPSILON,
+        "expected the clamp to yield 1.0, got {map}"
+    );
+}
+
+/// Nothing relevant exists, so no ranking of it earns credit.
+#[test]
+fn test_map_scores_zero_when_the_corpus_holds_nothing_relevant() {
+    let map = mean_average_precision(&[(&[false, false] as &[bool], 0)]);
     assert!((map - 0.0).abs() < f64::EPSILON, "Expected 0.0, got {map}");
 }
 

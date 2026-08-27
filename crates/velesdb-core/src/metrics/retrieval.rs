@@ -251,53 +251,82 @@ pub fn hit_rate<T: Eq + Hash + Copy>(query_results: &[(Vec<T>, Vec<T>)], k: usiz
 
 /// Calculates Mean Average Precision (MAP).
 ///
-/// MAP is the mean of Average Precision (AP) over all queries.
-/// AP rewards systems that return relevant items early in the result list.
+/// MAP is the mean of Average Precision (AP) over all queries. AP rewards a
+/// system that returns relevant items early *and* penalises one that misses
+/// relevant items entirely — the second half is why `total_relevant` is a
+/// parameter rather than something derived from the flags.
 ///
 /// # Formula
 ///
-/// `AP = (1/R) * Σ P(k) * rel(k)` where R is total relevant items
-/// `MAP = (1/Q) * Σ AP_q` where Q is number of queries
+/// `AP = (1/R) * Σ P(k) * rel(k)` where `R` is the total number of relevant
+/// items **in the corpus**, not the number this query happened to retrieve.
+/// `MAP = (1/Q) * Σ AP_q` where `Q` is the number of queries.
+///
+/// # Why the signature carries `total_relevant`
+///
+/// This used to take `&[Vec<bool>]` and divide by the count of relevant items
+/// *retrieved*, while its documentation stated the formula above. The two
+/// disagree exactly where the metric earns its keep: retrieving 1 of 10
+/// relevant documents, at rank 1, scored `AP = 1.0` — a perfect score for 10%
+/// recall. A ranking quality metric that cannot see what it missed will always
+/// flatter a system that returns one confident result and stops.
+///
+/// The old shape could not express the fix: `&[bool]` over retrieved positions
+/// simply does not know `R`. So the signature moved rather than the doc. Where
+/// a caller genuinely has no corpus-wide count, passing the retrieved-relevant
+/// count reproduces the previous behaviour — explicitly, at the call site,
+/// instead of silently inside the metric.
 ///
 /// # Arguments
 ///
-/// * `relevance_lists` - For each query, a list of booleans indicating relevance
-///   at each position (true = relevant, false = not relevant)
+/// * `queries` - one entry per query: the relevance flags at each retrieved
+///   position (`true` = relevant), paired with the total number of relevant
+///   items in the corpus for that query.
 ///
 /// # Returns
 ///
-/// A value between 0.0 and 1.0, where 1.0 means perfect precision at every position.
+/// A value between 0.0 and 1.0. A query whose `total_relevant` is 0 contributes
+/// 0.0: there was nothing to find, so no ranking of it can be credited.
+///
+/// `total_relevant` below the number actually retrieved is a caller error — it
+/// describes a corpus with fewer relevant items than the results contain. Rather
+/// than return an `AP > 1.0` that would quietly corrupt an average, the
+/// denominator is raised to the retrieved count, which keeps the result inside
+/// its documented range.
 #[must_use]
-pub fn mean_average_precision(relevance_lists: &[Vec<bool>]) -> f64 {
-    if relevance_lists.is_empty() {
+pub fn mean_average_precision(queries: &[(&[bool], usize)]) -> f64 {
+    if queries.is_empty() {
         return 0.0;
     }
 
-    let total_ap: f64 = relevance_lists
+    let total_ap: f64 = queries
         .iter()
-        .map(|relevances| {
-            let mut relevant_count = 0;
+        .map(|(relevances, total_relevant)| {
+            let mut retrieved_relevant = 0u32;
             let mut precision_sum = 0.0;
 
-            for (i, &is_relevant) in relevances.iter().enumerate() {
+            for (index, &is_relevant) in relevances.iter().enumerate() {
                 if is_relevant {
-                    relevant_count += 1;
+                    retrieved_relevant += 1;
                     #[allow(clippy::cast_precision_loss)]
-                    let precision_at_i = f64::from(relevant_count) / (i + 1) as f64;
-                    precision_sum += precision_at_i;
+                    let precision_at_index = f64::from(retrieved_relevant) / (index + 1) as f64;
+                    precision_sum += precision_at_index;
                 }
             }
 
-            if relevant_count == 0 {
+            let denominator = (*total_relevant).max(retrieved_relevant as usize);
+            if denominator == 0 {
                 0.0
             } else {
-                precision_sum / f64::from(relevant_count)
+                #[allow(clippy::cast_precision_loss)]
+                let denominator = denominator as f64;
+                precision_sum / denominator
             }
         })
         .sum();
 
     #[allow(clippy::cast_precision_loss)]
-    let map = total_ap / relevance_lists.len() as f64;
+    let map = total_ap / queries.len() as f64;
     map
 }
 
