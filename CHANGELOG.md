@@ -9,6 +9,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The `clippy::significant_drop_tightening` backlog is frozen where it stands
+  (#2110).** `Cargo.toml` denies `significant_drop_in_scrutinee` — a guard
+  living to the end of a `match`/`if let`/`for` scrutinee is how the
+  CircuitBreaker ABBA deadlock (#2109) reached production — and allows its
+  sibling, which flags a guard held past its last use. The sibling was left off
+  pending a drain. The drain never started, and nothing measured it.
+
+  **The tracked figure was wrong.** #2110 records "192 sites"; re-measured
+  against `develop` @ `64a21b65` the real count is **326 diagnostics across 75
+  files** for `velesdb-core` + `velesdb-server` with `--all-targets` (135 for
+  `velesdb-core --lib` alone). 192 is reproducible only as a `grep -c` over
+  clippy's human-readable output, which counts note lines rather than findings.
+  There are also **zero** `allow(clippy::significant_drop_tightening)`
+  attributes in the tree, so "drain the 192 sites" does not describe removing
+  192 allows down to zero — promoting the lint will *add* allows for the sites
+  that hold a guard deliberately.
+
+  `scripts/check-drop-tightening.py` + `scripts/drop-tightening-baseline.txt`
+  freeze the per-file counts, mirroring `check-file-budgets.py`: a new file, a
+  grown count, a stale entry above the true count, and a drained file still
+  listed all fail. The lint is `allow`ed workspace-wide, so it is re-enabled
+  with `--force-warn`, which overrides both the `[workspace.lints]` entry and
+  CI's `-D warnings` — the findings come back as warnings and the run still
+  exits 0.
+
+  The `Drop-Tightening Backlog Frozen` job is deliberately its own, not a step
+  folded into `lint`: `--force-warn` changes the rustc argument fingerprint, so
+  folding it in would either rebuild inside `lint` anyway or force `lint`'s
+  clippy invocation through a JSON-parsing wrapper — and a wrapper that can
+  stop failing silently is worse than a second job. As a separate job it cannot
+  weaken the primary lint gate.
+
+  Verified end to end rather than by construction: injecting one
+  guard-held-too-long site into `database/collection_ops.rs` makes the gate fail
+  with `grew from 8 to 10`, and removing it restores the pass. 19 unit tests
+  drive `--from-json` with synthetic diagnostics (so they need no toolchain) and
+  two `must_refuse` vectors in `scripts/guards.json` run the same refusals
+  through the shared harness.
+
+  Scope is `velesdb-core` + `velesdb-server` — the crates that build without
+  GTK, so the baseline is one anybody can regenerate and verify. That is
+  recorded as the guard's registered blind spot rather than papered over:
+  widening it needs a measured baseline from a machine that can build the
+  remaining crates, never an estimate.
+
 - **Squared-L2 and dot-product masked tails are covered (#2106 item 14).**
   Both kernels handle their remainder in two stages — a 16-wide bridge loop,
   then one masked chunk — and no named test reached either at the 4-accumulator
