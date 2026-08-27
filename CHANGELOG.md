@@ -228,6 +228,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is retrievable, a bad dimension commits nothing, and the batch survives
   closing and reopening the directory without the caller flushing.
 
+  The write lock is scoped to the store-and-flush rather than to the whole
+  closure. The barrier is the last thing it is needed for, and every concurrent
+  writer waits behind it; holding it across the return bought nothing. The
+  tests read under the lock and assert after releasing it, for the same reason
+  — an assertion panics, and unwinding while holding the guard is worth
+  avoiding even in a test.
+
 - **A non-finite fusion weight can no longer reorder a result set (#2095).**
   Every weight rule in `fusion/strategy.rs` was an ordering comparison —
   `w < 0.0` for weights, `k <= 0.0` for the rank-smoothing constant — and every

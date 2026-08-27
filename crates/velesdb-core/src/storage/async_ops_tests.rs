@@ -41,13 +41,19 @@ async fn store_batch_async_stores_every_vector_it_counts() {
         .expect("test: batch must store");
     assert_eq!(count, 100);
 
-    let guard = storage.read();
-    for i in 0..100u64 {
-        let stored = guard
-            .retrieve(i)
-            .expect("test: retrieve must not fail")
-            .unwrap_or_else(|| panic!("test: vector {i} is missing"));
-        assert_eq!(stored, vec![i as f32, 1.0, 2.0, 3.0], "vector {i}");
+    // Read under the lock, assert after releasing it: a failing assertion
+    // panics, and unwinding while holding the guard is worth avoiding even in
+    // a test.
+    let stored: Vec<Option<Vec<f32>>> = {
+        let guard = storage.read();
+        (0..100u64)
+            .map(|i| guard.retrieve(i).expect("test: retrieve must not fail"))
+            .collect()
+    };
+
+    for (i, entry) in stored.into_iter().enumerate() {
+        let vector = entry.unwrap_or_else(|| panic!("test: vector {i} is missing"));
+        assert_eq!(vector, vec![i as f32, 1.0, 2.0, 3.0], "vector {i}");
     }
 }
 
@@ -71,15 +77,22 @@ async fn store_batch_async_rejects_the_whole_batch_on_a_bad_dimension() {
         .await
         .expect_err("test: a wrong dimension must reject the batch");
 
-    let guard = storage.read();
-    for id in [1u64, 2, 3] {
-        assert!(
-            guard
-                .retrieve(id)
-                .expect("test: retrieve must not fail")
-                .is_none(),
-            "vector {id} was committed by a batch that failed"
-        );
+    let committed: Vec<(u64, bool)> = {
+        let guard = storage.read();
+        [1u64, 2, 3]
+            .into_iter()
+            .map(|id| {
+                let present = guard
+                    .retrieve(id)
+                    .expect("test: retrieve must not fail")
+                    .is_some();
+                (id, present)
+            })
+            .collect()
+    };
+
+    for (id, present) in committed {
+        assert!(!present, "vector {id} was committed by a batch that failed");
     }
 }
 

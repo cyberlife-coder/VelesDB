@@ -141,9 +141,16 @@ pub async fn store_batch_async(
             .map(|(id, vector)| (*id, vector.as_slice()))
             .collect();
 
-        let mut guard = storage.write();
-        let count = guard.store_batch(&borrowed)?;
-        guard.flush()?;
+        // Scoped so the write lock is released before this closure returns,
+        // rather than at the end of it: the barrier is the last thing the lock
+        // is needed for, and every concurrent writer waits on it.
+        let count = {
+            let mut guard = storage.write();
+            let count = guard.store_batch(&borrowed)?;
+            guard.flush()?;
+            count
+        };
+
         Ok(count)
     })
     .await
