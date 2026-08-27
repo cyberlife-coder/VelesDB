@@ -123,6 +123,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A PR can no longer break `internal-bench` and merge green.** The feature is
+  not bench-only: it gates seven sites of *production* source —
+  `index/hnsw/index/search.rs`, `index/hnsw/native/distance.rs`,
+  `index/hnsw/mod.rs`, `velesql/cache.rs` and `lib.rs` — and nothing on a pull
+  request ever compiled it. The two workflows that do, `quality-deep.yml` and
+  `bench-scalability.yml`, run weekly, so a cfg regression could merge on a
+  Tuesday and surface the following Sunday with no obvious culprit SHA. That is
+  the failure mode `memory-feature-matrix` was added to close for
+  `velesdb-memory`; `internal-bench` had the same hole and no gate.
+
+  Demonstrated rather than asserted: renaming `eval_count::record_eval`, which
+  only the `internal-bench` call sites reach, leaves today's CI build green in
+  0.18 s and fails the new job with `E0425: cannot find function record_eval`.
+
+  `Internal Bench Compiles` runs `cargo check` over the library, benches and
+  tests under `persistence,internal-bench`, and is read by the `ci-success`
+  chain. Deliberately a compile and not a bench run — the cost this gate is
+  allowed to have is a compile, the same bargain `memory-feature-matrix`
+  strikes. `--benches` is load-bearing: the feature's `required-features`
+  targets are bench targets, so a lib-only check would miss the code the
+  feature exists for.
+
 - **A non-finite vector component can no longer enter or query the database
   (#2106 items 4 and 16).** The dense ingest path validated dimension and
   nothing else, so a `NaN` or an infinity reached storage. Its sparse sibling
