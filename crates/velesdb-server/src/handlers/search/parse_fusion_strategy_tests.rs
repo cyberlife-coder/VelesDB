@@ -121,6 +121,62 @@ fn test_relative_score_alias() {
     ));
 }
 
+/// The `weighted` arm built its strategy as a struct literal, so the core
+/// weight rules were never consulted and any `f32` the request carried was
+/// applied verbatim by the fusion kernel (#2095).
+#[test]
+fn test_weighted_rejects_weights_that_do_not_sum_to_one() {
+    let mut req = strat("weighted");
+    req.avg_w = Some(0.9);
+    req.max_w = Some(0.9);
+    req.hit_w = Some(0.9);
+    let result = parse_fusion_strategy(Some(&req));
+    assert!(
+        result.is_err(),
+        "weights summing to 2.7 must return Err (400 response)"
+    );
+}
+
+#[test]
+fn test_weighted_rejects_a_negative_component() {
+    let mut req = strat("weighted");
+    req.avg_w = Some(-0.2);
+    req.max_w = Some(0.9);
+    req.hit_w = Some(0.3);
+    let result = parse_fusion_strategy(Some(&req));
+    assert!(
+        result.is_err(),
+        "a negative weight must return Err (400 response)"
+    );
+}
+
+#[test]
+fn test_weighted_rejects_non_finite_components() {
+    for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let mut req = strat("weighted");
+        req.avg_w = Some(bad);
+        let result = parse_fusion_strategy(Some(&req));
+        assert!(
+            result.is_err(),
+            "weight {bad} must return Err (400 response)"
+        );
+    }
+}
+
+#[test]
+fn test_rsf_rejects_non_finite_components() {
+    for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let mut req = strat("rsf");
+        req.dense_w = Some(bad);
+        req.sparse_w = Some(0.5);
+        let result = parse_fusion_strategy(Some(&req));
+        assert!(
+            result.is_err(),
+            "weight {bad} must return Err (400 response)"
+        );
+    }
+}
+
 #[test]
 fn test_unknown_strategy_returns_error() {
     let req = strat("nonexistent");

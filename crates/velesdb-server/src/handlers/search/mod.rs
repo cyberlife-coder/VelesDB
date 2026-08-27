@@ -5,6 +5,10 @@ pub(crate) mod multi;
 mod pipeline;
 mod workers;
 
+#[cfg(test)]
+#[path = "build_fusion_strategy_tests.rs"]
+mod build_fusion_strategy_tests;
+
 use axum::{
     extract::{Path, State},
     http::StatusCode,
