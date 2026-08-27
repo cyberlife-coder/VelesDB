@@ -7,9 +7,20 @@
 //! - Traversal depth distribution
 //! - Result cardinality statistics
 //!
-//! Note: These metrics are consumed by velesdb-server, not directly by core.
+//! Note: **nothing consumes these metrics yet.** Nothing records into them
+//! either — `MatchMetrics` is not constructed anywhere outside this module's
+//! own tests, so `to_prometheus` would export a permanently-zero family.
+//!
+//! This comment used to assert the opposite ("consumed by velesdb-server"),
+//! and that false assurance is what let the surface sit unexamined: a reader
+//! checking whether it was live got a confident yes. It is corrected rather
+//! than deleted because the underlying question is a real one — MATCH *is* a
+//! shipped query path, and its latency, error rate and traversal-depth
+//! distribution are worth having. Wiring it is tracked separately; unlike the
+//! graph metrics of #2091, which were already being recorded and merely thrown
+//! away, there is no existing signal here to recover — the write path has to
+//! be added first.
 
-// remaining items (to_prometheus, QueryTimer, avg_*) are consumed by velesdb-server.
 #![allow(clippy::format_push_string)]
 // Prometheus format is clearer with push_str+format
 
