@@ -88,6 +88,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **The unwired `score_fusion` module is retired rather than repaired (#2106
+  items 6 and 7).** 1583 lines: the module, its 553-line test file, and the BDD
+  characterization test that existed to document its defects.
+
+  The items asked "fix or retire". Retire, and the reasons are checkable rather
+  than aesthetic:
+
+  - **It duplicates a feature that already ships and works.** The live fusion
+    path is `crate::fusion::FusionStrategy` driven by VelesQL's `FusionClause`
+    (`collection/search/text_fusion.rs`, exercised by
+    `examples/python/fusion_strategies.py`). `score_fusion` is a second,
+    parallel implementation of the same idea that shares no code with it — the
+    module's own doc says it is "named `ScoreFusionMethod` to distinguish from
+    the public `crate::fusion::FusionStrategy`".
+  - **It was never shipped.** Marked EPIC-049 US-004, it has never appeared in
+    this changelog under any release.
+  - **The code says so itself.** `mod.rs` carried
+    `#[allow(unused_imports)] // Re-exported for test access`.
+  - **Its only Rust consumer was a test asserting it is broken.**
+    `tests/bdd/fusion_weighted_bug.rs` locked in `Weighted == Average` and
+    called it "a DEAD-PATH defect". Alongside it: the pseudo-RRF
+    `1/(60+(1-s)*100)` divides by zero at `s = 1.6` and goes negative beyond,
+    and `BoostCombination::Max` folds from an identity of 1.0 so an all-penalty
+    boost set is ignored.
+
+  Fixing three bugs in an unshipped duplicate would have added a maintained
+  surface with no consumer. Git history keeps it for anyone who wants to revive
+  the epic — including the per-hop decay fix landed for item 8, which went in
+  before its home turned out to be dead.
+
+  Three greps that look like consumers are name collisions, checked and
+  discounted: `QueryPhase::ScoreFusion` is a tracing-span label,
+  `text_fusion.rs`'s `score_fusion_strategy` is a private local function, and
+  `example_relative_score_fusion` is a Python example of VelesQL RSF.
+
+
 - **`DualPrecisionHnsw` and `DualPrecisionConfig`** (public in
   `index::hnsw::native`). The prototype was wired into no collection path,
   carried a latent cosine bug (raw query against normalized stored vectors
