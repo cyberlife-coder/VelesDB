@@ -99,6 +99,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`mean_average_precision` now takes the corpus-wide relevant count, and MAP
+  penalises what a search missed (#2106 item 12).** The signature was
+  `&[Vec<bool>]` and the implementation divided by the number of relevant items
+  *retrieved*, while the doc comment stated the textbook
+  `AP = (1/R)·Sum P(k)·rel(k)` with `R` the total relevant in the corpus. The two
+  disagree exactly where the metric earns its keep: retrieving **1 of 10**
+  relevant documents, at rank 1, scored a flawless `AP = 1.0` for 10% recall. A
+  ranking-quality metric blind to what it missed always flatters a system that
+  returns one confident result and stops.
+
+  The doc was not the thing to fix. `&[bool]` over retrieved positions simply
+  cannot express `R`, so the signature moved instead: `&[(&[bool], usize)]`, each
+  query pairing its relevance flags with the corpus total. A caller with no
+  corpus-wide count reproduces the old behaviour by passing the retrieved count —
+  explicitly, at the call site, rather than silently inside the metric. A
+  `total_relevant` below the retrieved count is a caller error describing an
+  impossible corpus; the denominator is raised to the retrieved count so a bad
+  input cannot push `AP` above 1.0 and corrupt an average over many queries.
+
+  The four pre-existing tests could not have caught this: every one used
+  `total_relevant == retrieved`, the single case where both denominators agree.
+  Two new tests encode the defect itself — 1-of-10 scoring 0.1 rather than 1.0,
+  and AP falling monotonically as recall falls with the ranking held fixed — and
+  both go red when the old normalisation is restored, while all four old tests
+  stay green.
+
+
 - **The `RaBitQ` traversal backend became a codec: one quantized-precision
   state machine, two codecs.** `RaBitQPrecisionHnsw`'s concurrent
   insert/train/install machinery and its graph traversal are now the
