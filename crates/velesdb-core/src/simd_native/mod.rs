@@ -149,7 +149,8 @@ mod cosine_tail_tests;
 mod l2_dot_tail_tests;
 
 #[cfg(test)]
-mod harley_seal_tests;
+#[path = "hamming_jaccard_threshold_tests.rs"]
+mod hamming_jaccard_threshold_tests;
 
 #[cfg(test)]
 mod warmup_tests;

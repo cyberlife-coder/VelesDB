@@ -178,11 +178,13 @@ fn test_fused_cosine_performance() {
     let elapsed = start.elapsed();
     let avg_ns = elapsed.as_nanos() as f64 / 1000.0;
 
-    // Should be < 200ns per call on CI (allowing for slower CI runners)
-    // Target < 35ns with Harley-Seal when optimized
+    // Should be < 200ns per call on CI (allowing for slower CI runners).
+    // The 35ns figure is the fused-kernel target; it used to be attributed to
+    // "Harley-Seal", an algorithm that exists nowhere in this tree and would
+    // have no role in cosine even if it did — popcount does not appear on this
+    // path at all (#2106 item 17).
     assert!(
         avg_ns < 200.0,
-        "Cosine similarity too slow: {:.2}ns per call (target < 35ns with Harley-Seal, < 200ns CI)",
-        avg_ns
+        "Cosine similarity too slow: {avg_ns:.2}ns per call (target < 35ns fused, < 200ns CI)"
     );
 }
