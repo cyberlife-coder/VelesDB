@@ -24,7 +24,7 @@ use serde_json::Value;
 
 use crate::collection::types::Collection;
 use crate::error::Result;
-use crate::storage::PayloadStorage;
+use crate::storage::{LogPayloadStorage, PayloadStorage};
 
 use super::graph_property_index_wiring::extract_labels;
 
@@ -65,22 +65,7 @@ impl Collection {
         }
 
         let deduped = dedup_last_wins(entries);
-
-        // Validate the whole batch before touching anything. Beyond the
-        // all-or-nothing contract above, this ordering is required:
-        // `validate_node_labels_against_schema` reads `config` (lock order 1)
-        // and `payload_storage` below is order 3, so resolving the schema after
-        // the storage guard would invert the documented order to 3 -> 1.
-        let max_payload_size = self.runtime_limits().max_payload_size;
-        for &(node_id, payload) in &deduped {
-            // Parity item E: graph node writes take a raw `&Value` rather than
-            // a `Point`, so they bypass `enforce_upsert_limits` and need the
-            // shared payload-size gate here. `max_vectors_per_collection` is
-            // deliberately not checked: vector-less node writes never touch
-            // `config.point_count`, so a projected count would be meaningless.
-            Self::enforce_payload_value_size(node_id, payload, max_payload_size)?;
-            self.validate_node_labels_against_schema(payload)?;
-        }
+        self.validate_node_payload_batch(&deduped)?;
 
         // LOCK ORDER: payload_storage(3) → label_index(7) → graph_range_indexes(7).
         //
@@ -92,45 +77,13 @@ impl Collection {
         // then index the payload it just superseded.
         let mut storage = self.storage.payload_storage.write();
 
-        // Un-index whatever these ids carried before. Must complete before the
-        // write below, which replaces the payloads it reads here.
-        //
-        // Read first, then un-index, rather than interleaving the two: the
-        // retrieves hit the WAL, and holding `label_index` across N of them
-        // would block every reader of the label index for the whole I/O pass.
-        // The guard is taken once for the removals, not once per node — taking
-        // it per node is part of the cost this batch exists to remove.
-        let mut superseded: Vec<(u64, Value)> = Vec::new();
-        for &(node_id, _) in &deduped {
-            if let Ok(Some(old_payload)) = storage.retrieve(node_id) {
-                superseded.push((node_id, old_payload));
-            }
-        }
-        {
-            let mut label_idx = self.graph.label_index.write();
-            for (node_id, old_payload) in &superseded {
-                label_idx.remove_from_payload(*node_id, old_payload);
-            }
-        }
-        // `label_index` released before the graph property indexes: both sit at
-        // lock order 7, with no ordering between them.
-        for (node_id, old_payload) in &superseded {
-            self.deindex_node_properties(*node_id, old_payload);
-        }
+        self.unindex_superseded_payloads(&storage, &deduped);
 
         // The one barrier. `store_batch` applies the configured durability
         // mode once for the group, where N calls to `store` applied it N times.
         storage.store_batch(&deduped)?;
 
-        {
-            let mut label_idx = self.graph.label_index.write();
-            for &(node_id, payload) in &deduped {
-                label_idx.index_from_payload(node_id, payload);
-            }
-        }
-        for &(node_id, payload) in &deduped {
-            self.index_node_properties(node_id, payload);
-        }
+        self.index_node_payload_batch(&deduped);
         drop(storage);
 
         // Node payload writes bypass the upsert mirror hooks — drop the
@@ -144,6 +97,70 @@ impl Collection {
             .write_generation
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(())
+    }
+
+    /// Rejects the batch before any mutation, so a bad entry commits nothing.
+    ///
+    /// Called before `payload_storage` is acquired, and that is required rather
+    /// than tidy: `validate_node_labels_against_schema` reads `config` (lock
+    /// order 1) and `payload_storage` is order 3, so validating after the
+    /// storage guard would invert the documented order to 3 -> 1.
+    fn validate_node_payload_batch(&self, deduped: &[(u64, &Value)]) -> Result<()> {
+        let max_payload_size = self.runtime_limits().max_payload_size;
+        for &(node_id, payload) in deduped {
+            // Parity item E: graph node writes take a raw `&Value` rather than
+            // a `Point`, so they bypass `enforce_upsert_limits` and need the
+            // shared payload-size gate here. `max_vectors_per_collection` is
+            // deliberately not checked: vector-less node writes never touch
+            // `config.point_count`, so a projected count would be meaningless.
+            Self::enforce_payload_value_size(node_id, payload, max_payload_size)?;
+            self.validate_node_labels_against_schema(payload)?;
+        }
+        Ok(())
+    }
+
+    /// Strips the label and property entries these ids carried before.
+    ///
+    /// Must complete before the write that replaces the payloads it reads.
+    /// Reads first and un-indexes second rather than interleaving the two: the
+    /// retrieves hit the WAL, and holding `label_index` across N of them would
+    /// block every reader of the label index for the whole I/O pass. The guard
+    /// is taken once for the removals, not once per node — taking it per node
+    /// is part of the cost this batch exists to remove.
+    fn unindex_superseded_payloads(&self, storage: &LogPayloadStorage, deduped: &[(u64, &Value)]) {
+        let mut superseded: Vec<(u64, Value)> = Vec::new();
+        for &(node_id, _) in deduped {
+            if let Ok(Some(old_payload)) = storage.retrieve(node_id) {
+                superseded.push((node_id, old_payload));
+            }
+        }
+
+        {
+            let mut label_idx = self.graph.label_index.write();
+            for (node_id, old_payload) in &superseded {
+                label_idx.remove_from_payload(*node_id, old_payload);
+            }
+        }
+
+        // `label_index` released before the graph property indexes: both sit at
+        // lock order 7, with no ordering between them.
+        for (node_id, old_payload) in &superseded {
+            self.deindex_node_properties(*node_id, old_payload);
+        }
+    }
+
+    /// Indexes the batch's new payloads, mirroring
+    /// [`Self::unindex_superseded_payloads`] and holding `label_index` once.
+    fn index_node_payload_batch(&self, deduped: &[(u64, &Value)]) {
+        {
+            let mut label_idx = self.graph.label_index.write();
+            for &(node_id, payload) in deduped {
+                label_idx.index_from_payload(node_id, payload);
+            }
+        }
+        for &(node_id, payload) in deduped {
+            self.index_node_properties(node_id, payload);
+        }
     }
 
     /// Enforces strict-schema node-type validation for a node payload write.
