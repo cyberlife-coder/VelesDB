@@ -10,14 +10,8 @@ use crate::error::Result;
 use crate::point::SearchResult;
 use crate::velesql::{CompareOp, Condition};
 
+use super::match_metrics::global_match_metrics;
 use super::MAX_LIMIT;
-
-/// Global MATCH query metrics collector (EPIC-050).
-///
-/// Uses `LazyLock` for thread-safe one-time initialisation.
-/// Per-collection metrics registries are a future enhancement.
-static MATCH_METRICS: std::sync::LazyLock<super::match_metrics::MatchMetrics> =
-    std::sync::LazyLock::new(super::match_metrics::MatchMetrics::new);
 
 impl Collection {
     /// Computes collection statistics for MATCH query planning.
@@ -54,8 +48,8 @@ impl Collection {
     /// Dispatches a MATCH query through the graph traversal path.
     ///
     /// Calls the cost-based `MatchQueryPlanner` to select an execution strategy,
-    /// records query metrics via the global `MATCH_METRICS` collector, then
-    /// delegates to the graph traversal engine.
+    /// records query metrics via [`global_match_metrics`], then delegates to
+    /// the graph traversal engine.
     pub(super) fn dispatch_match_query(
         &self,
         match_clause: &crate::velesql::MatchClause,
@@ -147,10 +141,10 @@ impl Collection {
         let max_depth = crate::velesql::match_planner::MatchQueryPlanner::count_hops(match_clause);
         match &result {
             Ok(results) => {
-                MATCH_METRICS.record_success(start.elapsed(), results.len(), max_depth);
+                global_match_metrics().record_success(start.elapsed(), results.len(), max_depth);
             }
             Err(_) => {
-                MATCH_METRICS.record_failure(start.elapsed());
+                global_match_metrics().record_failure(start.elapsed());
             }
         }
 

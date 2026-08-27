@@ -7,9 +7,12 @@
 //! - Traversal depth distribution
 //! - Result cardinality statistics
 //!
-//! Note: These metrics are consumed by velesdb-server, not directly by core.
+//! [`global_match_metrics`] is the single process-wide collector every MATCH
+//! query records into (`match_dispatch::dispatch_match_strategy`).
+//! [`MatchMetrics::to_prometheus`] reaches `/metrics` via
+//! `Database::match_metrics_prometheus`. `QueryTimer` and the `avg_*`
+//! accessors have no caller outside this module's own tests.
 
-// remaining items (to_prometheus, QueryTimer, avg_*) are consumed by velesdb-server.
 #![allow(clippy::format_push_string)]
 // Prometheus format is clearer with push_str+format
 
@@ -23,7 +26,21 @@
 #![allow(clippy::cast_sign_loss)]
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
+
+/// Process-wide MATCH query metrics collector (EPIC-050).
+///
+/// One collector for the whole database: MATCH queries are not currently
+/// attributed to the collection they touch. Per-collection registries are a
+/// future enhancement, tracked alongside the rest of this module.
+static GLOBAL_MATCH_METRICS: LazyLock<MatchMetrics> = LazyLock::new(MatchMetrics::new);
+
+/// Returns the process-wide MATCH query metrics collector.
+#[must_use]
+pub fn global_match_metrics() -> &'static MatchMetrics {
+    &GLOBAL_MATCH_METRICS
+}
 
 /// Bucket bounds for latency histogram in milliseconds.
 ///
