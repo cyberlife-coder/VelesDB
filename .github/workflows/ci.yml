@@ -1861,8 +1861,17 @@ jobs:
   # is a larger decision than this defect warrants. The next push re-runs
   # everything and blocks normally.
   #
-  # The cost is one cheap job (checkout + Python, no toolchain) per body edit,
-  # and freshness may now report a stale branch on an edit that did not cause
+  # The cost is one cheap job (checkout + Python, no toolchain) per body edit —
+  # cheap to RUN, but not necessarily quick to REPORT. An `edited` run joins
+  # this workflow's concurrency group with `cancel-in-progress` false, so it
+  # queues behind any run already in flight instead of starting at once. On
+  # #2159, the PR that made this change, the `edited` run sat pending with zero
+  # jobs for ~44 minutes while the `opened` run worked through the heavy jobs.
+  # Edit a quiet PR and the verdict is seconds away; edit a busy one and it
+  # waits for the running CI. Worth knowing before treating this as fast
+  # feedback.
+  #
+  # Freshness may also now report a stale branch on an edit that did not cause
   # it — true information, arriving earlier than it used to, not a false
   # positive. `RETARGET_GUARD_EXEMPT` records this exemption.
   pr-governance:
