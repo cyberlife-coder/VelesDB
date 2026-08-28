@@ -17,7 +17,6 @@ crates/velesdb-core/src/collection/core/flush.rs	6
 crates/velesdb-core/src/collection/core/index_management.rs	20
 crates/velesdb-core/src/collection/core/quantizer_restore.rs	2
 crates/velesdb-core/src/collection/core/statistics.rs	4
-crates/velesdb-core/src/collection/graph/edge_concurrent/cascade.rs	2
 crates/velesdb-core/src/collection/graph/edge_concurrent/mod.rs	8
 crates/velesdb-core/src/collection/graph/edge_concurrent/persistence.rs	2
 crates/velesdb-core/src/collection/graph/edge_concurrent/query.rs	6
