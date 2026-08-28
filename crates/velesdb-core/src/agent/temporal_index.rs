@@ -53,6 +53,11 @@ impl TemporalIndex {
     /// Inserts an entry into the index.
     ///
     /// If the ID already exists, it will be updated with the new timestamp.
+    // Both guards span the whole update deliberately: `id_to_timestamp` and
+    // `by_timestamp` are two halves of one index, and releasing either between
+    // the two writes exposes a window where a reader sees an id in one map and
+    // not the other.
+    #[allow(clippy::significant_drop_tightening)]
     pub fn insert(&self, id: u64, timestamp: i64) {
         let mut id_to_ts = self.id_to_timestamp.write();
         let mut by_ts = self.by_timestamp.write();
@@ -108,6 +113,7 @@ impl TemporalIndex {
                 results.push(TemporalEntry { id, timestamp: ts });
             }
         }
+        drop(by_ts);
 
         results
     }
@@ -145,6 +151,7 @@ impl TemporalIndex {
                 }
             }
         }
+        drop(by_ts);
 
         results
     }
@@ -179,6 +186,7 @@ impl TemporalIndex {
                 }
             }
         }
+        drop(by_ts);
 
         results
     }
@@ -202,6 +210,10 @@ impl TemporalIndex {
     }
 
     /// Clears all entries from the index.
+    // Same pair invariant as `insert`: dropping `by_timestamp` after its clear
+    // but before `id_to_timestamp`'s would leave a reader seeing a populated
+    // id map against an empty timestamp map.
+    #[allow(clippy::significant_drop_tightening)]
     pub fn clear(&self) {
         let mut id_to_ts = self.id_to_timestamp.write();
         let mut by_ts = self.by_timestamp.write();
@@ -228,6 +240,7 @@ impl TemporalIndex {
             buf.extend_from_slice(&id.to_le_bytes());
             buf.extend_from_slice(&ts.to_le_bytes());
         }
+        drop(id_to_ts);
 
         buf
     }

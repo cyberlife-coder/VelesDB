@@ -139,6 +139,10 @@ impl Collection {
     /// With `candidates` (GraphFirst anchor ids), only those ids are
     /// scanned, so the fetch is exact at `limit` within the graph matches;
     /// `None` scans the whole collection.
+    // The two storage guards are handed to `MatchStorageGuards` by reference
+    // and read throughout the scan, including through `PayloadMemo`. They are
+    // acquired once precisely so the scan does not re-take them mid-flight.
+    #[allow(clippy::significant_drop_tightening)]
     pub(crate) fn execute_not_similarity_query_over(
         &self,
         condition: &crate::velesql::Condition,
@@ -386,6 +390,12 @@ impl Collection {
     /// (e.g. [`Self::scan_and_score_by_vector`]) need `unscanned_ids` to
     /// detect — and surface — silent truncation. Behavior and results are
     /// byte-identical to `execute_scan_query`.
+    // vector_storage(2) before payload_storage(3), and held together for the
+    // whole scan. This pair's order is not incidental: it was reversed here
+    // and caused the deadlock recorded in
+    // .investigation/http-deadlock-2026-07-22/. Tightening either guard
+    // reopens that ordering question, so both are held deliberately.
+    #[allow(clippy::significant_drop_tightening)]
     pub(crate) fn execute_scan_query_tracked(
         &self,
         filter: &crate::filter::Filter,
@@ -526,6 +536,10 @@ impl Collection {
 
     /// Scans a pre-filtered set of candidate IDs with the full filter,
     /// tracking how many candidate ids were left unvisited at `limit`.
+    // Same documented pair and the same post-mortem as
+    // `execute_scan_query_tracked`: vector_storage(2) before
+    // payload_storage(3), both held across the scan.
+    #[allow(clippy::significant_drop_tightening)]
     fn scan_candidate_ids(
         &self,
         candidate_ids: &[u64],
