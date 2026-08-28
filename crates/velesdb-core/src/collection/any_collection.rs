@@ -236,12 +236,15 @@ impl AnyCollection {
         match self {
             Self::Vector(c) => c.upsert(points),
             Self::Graph(c) => {
-                for p in points {
-                    if let Some(payload) = p.payload.as_ref() {
-                        c.upsert_node_payload(p.id, payload)?;
-                    }
-                }
-                Ok(())
+                // One barrier for the batch, matching the Vector and Metadata
+                // arms. This used to loop the single-node path, paying an
+                // fsync, an auto-snapshot check and two label-index
+                // acquisitions per node (#2153).
+                let entries: Vec<(u64, &serde_json::Value)> = points
+                    .iter()
+                    .filter_map(|p| p.payload.as_ref().map(|payload| (p.id, payload)))
+                    .collect();
+                c.upsert_node_payloads(&entries)
             }
             Self::Metadata(c) => c.upsert(points),
         }

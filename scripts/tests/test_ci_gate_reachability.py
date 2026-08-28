@@ -1254,12 +1254,24 @@ PR_TYPES_RE = re.compile(r"^\s*types:\s*\[([^\]]*)\]", re.MULTILINE)
 JOB_ID_RE = re.compile(r"^  ([a-z][a-z0-9_-]*):$", re.MULTILINE)
 # The clause that admits `edited` only for a base change. Whitespace-tolerant
 # so reformatting the expression does not read as removing it.
-# The one job that must NOT carry the guard, with its reason — same shape as
+# The jobs that must NOT carry the guard, with their reasons — same shape as
 # CHAIN_EXEMPT above. `mcp-doc-contract` runs the guard suites' own self-tests,
 # and `test_the_gate_job_cannot_opt_out_of_blocking` forbids it any job-level
 # `if:` at all: a condition that can skip it can disarm them. It pays for that
 # by running on title-only edits, which is one cheap Python job.
-RETARGET_GUARD_EXEMPT = {"mcp-doc-contract": "runs the guard self-tests; must never be skippable"}
+#
+# `pr-governance` is exempt for a different reason: the guard admits `edited`
+# only for a base change, and this is the one job whose INPUT is the title and
+# body. Guarded, it was skipped exactly when the thing it reads changed, so a
+# PR opened clean and then edited to reintroduce an attribution trailer was
+# never re-checked — which is how the trailer on #2157 survived its first edit.
+# It surfaces such a violation rather than blocking it: `CI Success` keeps its
+# own guard, so the required check stays skipped on a body edit and the next
+# push blocks normally.
+RETARGET_GUARD_EXEMPT = {
+    "mcp-doc-contract": "runs the guard self-tests; must never be skippable",
+    "pr-governance": "reads the title and body; skipping it on an edit is skipping its input",
+}
 
 RETARGET_GUARD_RE = re.compile(
     r"github\.event\.action\s*!=\s*'edited'\s*\|\|\s*github\.event\.changes\.base\s*!=\s*null"
