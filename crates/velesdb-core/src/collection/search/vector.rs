@@ -74,8 +74,8 @@ impl Collection {
         index_results: Vec<ScoredResult>,
     ) -> Vec<ScoredResult> {
         let pq_cache = self.storage.pq_cache.read();
-        let quantizer = self.storage.pq_quantizer.read();
-        let Some(quantizer) = quantizer.as_ref() else {
+        let quantizer_guard = self.storage.pq_quantizer.read();
+        let Some(quantizer) = quantizer_guard.as_ref() else {
             return index_results.into_iter().take(k).collect();
         };
 
@@ -84,6 +84,10 @@ impl Collection {
         } else {
             rescore_per_item(query, quantizer, metric, &pq_cache, &index_results)
         };
+        // Rescoring is both guards' last use; the sort and truncate below read
+        // neither the cache nor the quantizer.
+        drop(quantizer_guard);
+        drop(pq_cache);
 
         resolve::sort_scored_by_metric(&mut rescored, higher_is_better);
         rescored.truncate(k);
@@ -289,6 +293,9 @@ impl Collection {
 
         let mut results =
             resolve::resolve_scored_results(&index_results, &*vector_storage, &*payload_storage);
+        // Resolution is both guards' last use; tagging reads only `results`.
+        drop(payload_storage);
+        drop(vector_storage);
         tag_vector_component_scores(&mut results);
         results
     }
@@ -327,6 +334,9 @@ impl Collection {
 
         let mut results =
             resolve::resolve_scored_results(&index_results, &*vector_storage, &*payload_storage);
+        // Resolution is both guards' last use; tagging reads only `results`.
+        drop(payload_storage);
+        drop(vector_storage);
         tag_vector_component_scores(&mut results);
         Ok(results)
     }

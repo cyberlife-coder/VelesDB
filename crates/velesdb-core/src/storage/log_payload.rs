@@ -403,6 +403,12 @@ impl LogPayloadStorage {
     ///
     /// Returns an error if the WAL write or sync fails; the index is left
     /// untouched in that case.
+    // The wal/index/write_offset triple is held together for the whole record
+    // write on purpose: the WAL bytes, the index entries they describe and the
+    // offset that bounds them must move as one, or a concurrent reader can see
+    // an offset past bytes the index does not yet describe. The block they sit
+    // in already exists to release all three before the auto-snapshot check.
+    #[allow(clippy::significant_drop_tightening)]
     pub fn delete_batch(&mut self, ids: &[u64]) -> io::Result<()> {
         /// Tombstone record size: Marker(1) + ID(8) + CRC32(4).
         const TOMBSTONE_BYTES: u64 = 1 + 8 + 4;
@@ -512,6 +518,9 @@ impl PayloadStorage for LogPayloadStorage {
         Ok(Some(payload))
     }
 
+    // Same wal/index/write_offset triple and the same reason as
+    // `delete_batch`: the three move together or not at all.
+    #[allow(clippy::significant_drop_tightening)]
     fn delete(&mut self, id: u64) -> io::Result<()> {
         // If the id is not in the index there is nothing for a tombstone to
         // shadow on WAL replay. Without this guard, callers that issue
