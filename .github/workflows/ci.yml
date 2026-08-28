@@ -1844,9 +1844,38 @@ jobs:
   # `permissions:` is explicit because a called workflow cannot exceed its
   # caller: ci.yml grants `contents: read` at the top level, and
   # pr-governance.yml declares `pull-requests: read` too.
+  #
+  # Deliberately carries NO retarget guard, for the same class of reason
+  # mcp-doc-contract does not: the guard admits `edited` only when the base
+  # changed, and this is the one job whose INPUT is the title and body. Guarded,
+  # it was skipped exactly when the thing it reads changed — so a PR opened
+  # clean and then edited to reintroduce an attribution trailer was never
+  # re-checked. That is not hypothetical: it is how the trailer on #2157
+  # survived its first edit, and it was caught by hand rather than by this gate.
+  #
+  # What this buys and what it does not. It SURFACES a violation on a body
+  # edit; it does not BLOCK one, because `CI Success` — the only required check
+  # on develop and main — keeps its own retarget guard and stays skipped on such
+  # an edit. Making it block would mean running the required gate with most of
+  # its needs skipped, i.e. rewriting the chain's `== "success"` contract, which
+  # is a larger decision than this defect warrants. The next push re-runs
+  # everything and blocks normally.
+  #
+  # The cost is one cheap job (checkout + Python, no toolchain) per body edit —
+  # cheap to RUN, but not necessarily quick to REPORT. An `edited` run joins
+  # this workflow's concurrency group with `cancel-in-progress` false, so it
+  # queues behind any run already in flight instead of starting at once. On
+  # #2159, the PR that made this change, the `edited` run sat pending with zero
+  # jobs for ~44 minutes while the `opened` run worked through the heavy jobs.
+  # Edit a quiet PR and the verdict is seconds away; edit a busy one and it
+  # waits for the running CI. Worth knowing before treating this as fast
+  # feedback.
+  #
+  # Freshness may also now report a stale branch on an edit that did not cause
+  # it — true information, arriving earlier than it used to, not a false
+  # positive. `RETARGET_GUARD_EXEMPT` records this exemption.
   pr-governance:
     name: PR Governance
-    if: github.event.action != 'edited' || github.event.changes.base != null
     permissions:
       contents: read
       pull-requests: read
