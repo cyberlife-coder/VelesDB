@@ -1,4 +1,3 @@
-crates/velesdb-core/src/collection/core/graph_api.rs	1021
 crates/velesdb-core/src/simd_native/x86_avx512.rs	1469
 crates/velesdb-memory/src/context.rs	1097
 crates/velesdb-memory/src/extract.rs	1559

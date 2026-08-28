@@ -290,6 +290,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`AnyCollection::upsert`'s graph arm pays one durability barrier instead of
+  one per node (#2153).** The `Vector` and `Metadata` arms reach `crud.rs` and
+  pay a single barrier for the whole batch; the `Graph` arm looped the
+  single-node path, so under the default `DurabilityMode::Fsync` an N-node
+  upsert cost **N** `flush` + `sync_all` pairs, N `maybe_auto_snapshot` checks,
+  and two `label_index` acquisitions per node. Same class as the
+  `store_batch_async` defect fixed in #2151, one layer up in the collection
+  facade. Measured on this branch at the default `Fsync`: 500 nodes 86.6 ms ->
+  4.5 ms (19.2x), 2 000 nodes 320.4 ms -> 16.0 ms (20.1x).
+
+  Rather than add a second procedure beside the first, `store_node_payload` is
+  now a batch of one: `PayloadStorage::store` and
+  `LogPayloadStorage::store_batch` both funnel into `store_batch_inner`, so a
+  one-element batch writes byte-identical WAL and pays exactly the barrier the
+  single-node contract already promised. One procedure means the label index,
+  the property indexes and the mirror invalidation cannot drift between the
+  paths.
+
+  Two behaviours are new rather than merely faster. Duplicate ids inside a batch
+  resolve last-wins — load-bearing, because the un-index step reads each node's
+  pre-batch payload and a repeated id would otherwise leave the first payload's
+  label and property entries attached to a node that no longer carries them.
+  And the whole batch is validated before anything is written, so a schema
+  violation commits nothing; the per-node loop wrote each node as it went and
+  left the prefix behind.
+
+  `graph_api.rs` drops from 1021 to 943 lines and leaves
+  `scripts/file-budgets-baseline.txt` entirely.
+
 - **The no-AI-attribution rule is enforced on every surface it names, not just
   commits (CLAUDE.md #5).** The rule reads "not in code, comments, commits, PR
   titles or bodies, issues, or docs". Only commits were guarded, so four of

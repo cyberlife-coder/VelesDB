@@ -393,6 +393,20 @@ impl GraphCollection {
         self.inner.store_node_payload(node_id, payload)
     }
 
+    /// Inserts or updates many node payloads under one durability barrier.
+    ///
+    /// Batched counterpart of [`upsert_node_payload`](Self::upsert_node_payload),
+    /// which pays a barrier per call: looping it cost one fsync per node
+    /// (#2153). Duplicate ids resolve last-wins, and the batch is validated in
+    /// full before anything is written, so a rejected batch commits nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if storage fails or any payload fails validation.
+    pub fn upsert_node_payloads(&self, entries: &[(u64, &serde_json::Value)]) -> Result<()> {
+        self.inner.store_node_payloads(entries)
+    }
+
     /// Inserts or updates a node payload, optionally with an embedding vector.
     ///
     /// # Errors
