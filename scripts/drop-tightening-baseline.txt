@@ -16,7 +16,6 @@ crates/velesdb-core/src/collection/core/crud_read_delete.rs	2
 crates/velesdb-core/src/collection/core/crud_tests.rs	11
 crates/velesdb-core/src/collection/core/flush.rs	6
 crates/velesdb-core/src/collection/core/graph_property_index_wiring.rs	2
-crates/velesdb-core/src/collection/core/index_management.rs	20
 crates/velesdb-core/src/collection/core/quantizer_restore.rs	2
 crates/velesdb-core/src/collection/core/statistics.rs	4
 crates/velesdb-core/src/collection/graph/edge_concurrent/cascade.rs	2
@@ -55,7 +54,7 @@ crates/velesdb-core/src/index/hnsw/native/backend_adapter_tests.rs	1
 crates/velesdb-core/src/index/hnsw/native/graph/insert.rs	8
 crates/velesdb-core/src/index/hnsw/native/graph/reorder.rs	4
 crates/velesdb-core/src/index/hnsw/native/graph_io.rs	6
-crates/velesdb-core/src/index/hnsw/native/quantized_precision.rs	18
+crates/velesdb-core/src/index/hnsw/native/quantized_precision.rs	12
 crates/velesdb-core/src/index/hnsw/native/quantized_traversal.rs	2
 crates/velesdb-core/src/index/hnsw/native_index.rs	4
 crates/velesdb-core/src/index/io_counters_tests.rs	1
