@@ -3,7 +3,7 @@ crates/velesdb-core/benches/pq_recall_benchmark.rs	1
 crates/velesdb-core/benches/pq_recall_multidist.rs	3
 crates/velesdb-core/src/agent/memory_helpers_tests.rs	3
 crates/velesdb-core/src/agent/semantic_memory.rs	2
-crates/velesdb-core/src/agent/temporal_index.rs	12
+crates/velesdb-core/src/agent/temporal_index.rs	4
 crates/velesdb-core/src/agent/ttl.rs	2
 crates/velesdb-core/src/cache/bloom.rs	6
 crates/velesdb-core/src/collection/auto_reindex/mod.rs	4
@@ -30,7 +30,7 @@ crates/velesdb-core/src/collection/query_cost/query_executor.rs	2
 crates/velesdb-core/src/collection/search/batch.rs	8
 crates/velesdb-core/src/collection/search/query/aggregation/grouped.rs	4
 crates/velesdb-core/src/collection/search/query/aggregation/mod.rs	4
-crates/velesdb-core/src/collection/search/query/hybrid_sparse.rs	10
+crates/velesdb-core/src/collection/search/query/hybrid_sparse.rs	6
 crates/velesdb-core/src/collection/search/query/match_exec/mod.rs	2
 crates/velesdb-core/src/collection/search/query/match_exec/similarity.rs	4
 crates/velesdb-core/src/collection/search/query/match_exec/vector_first.rs	2
