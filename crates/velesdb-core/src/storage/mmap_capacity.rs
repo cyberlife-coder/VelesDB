@@ -67,6 +67,7 @@ impl MmapStorage {
             did_resize = true;
             bytes_resized = new_len.saturating_sub(current_len);
         }
+        drop(mmap);
 
         self.metrics()
             .record_ensure_capacity(start.elapsed(), did_resize, bytes_resized);

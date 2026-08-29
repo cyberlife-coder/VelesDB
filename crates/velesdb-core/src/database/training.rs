@@ -84,8 +84,8 @@ impl Database {
         collection: &crate::collection::Collection,
         force: bool,
     ) -> Result<()> {
-        let quantizer = collection.pq_quantizer_read();
-        if quantizer.is_some() && !force {
+        let already_trained = collection.pq_quantizer_read().is_some();
+        if already_trained && !force {
             return Err(Error::InvalidQuantizerConfig(
                 "Quantizer already trained. Use force=true to retrain.".into(),
             ));
