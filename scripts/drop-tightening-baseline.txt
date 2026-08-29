@@ -39,10 +39,8 @@ crates/velesdb-core/src/collection/search/query/similarity_filter.rs	10
 crates/velesdb-core/src/collection/search/text.rs	4
 crates/velesdb-core/src/collection/search/vector.rs	10
 crates/velesdb-core/src/collection/search/vector_filter.rs	2
-crates/velesdb-core/src/collection/streaming/async_index_builder.rs	2
 crates/velesdb-core/src/database/collection_ops.rs	8
 crates/velesdb-core/src/database/database_tests.rs	2
-crates/velesdb-core/src/database/training.rs	2
 crates/velesdb-core/src/gpu/gpu_csr.rs	2
 crates/velesdb-core/src/guardrails/resilience.rs	6
 crates/velesdb-core/src/index/bm25.rs	4
@@ -66,7 +64,6 @@ crates/velesdb-core/src/storage/compaction_tests.rs	2
 crates/velesdb-core/src/storage/guard_tests.rs	6
 crates/velesdb-core/src/storage/log_payload.rs	8
 crates/velesdb-core/src/storage/mmap/vector_io.rs	4
-crates/velesdb-core/src/storage/mmap_capacity.rs	2
 crates/velesdb-core/src/storage/sharded_index.rs	2
 crates/velesdb-core/src/storage/tests.rs	12
 crates/velesdb-core/src/vector_ref_tests.rs	2

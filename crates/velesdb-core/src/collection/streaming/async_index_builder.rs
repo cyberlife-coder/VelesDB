@@ -125,6 +125,7 @@ impl AsyncIndexBuilder {
                 (*id, dist)
             })
             .collect();
+        drop(buf);
 
         metric.sort_results(&mut results);
         results.truncate(k);
