@@ -213,6 +213,7 @@ impl Collection {
         let mut payload_storage = self.storage.payload_storage.write();
         Self::write_deduped_payloads(points, &mut payload_storage, dedup_map)?;
         payload_storage.flush()?;
+        drop(payload_storage);
         Ok(())
     }
 

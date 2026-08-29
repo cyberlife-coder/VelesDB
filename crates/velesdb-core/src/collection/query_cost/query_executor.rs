@@ -42,11 +42,12 @@ impl PlanCache {
     #[must_use]
     pub fn get(&self, key: u64) -> Option<CandidatePlan> {
         let mut cache = self.cache.write();
-        if let Some(entry) = cache.get_mut(&key) {
+        let result = cache.get_mut(&key).map(|entry| {
             entry.access_count += 1;
-            return Some(entry.plan.clone());
-        }
-        None
+            entry.plan.clone()
+        });
+        drop(cache);
+        result
     }
 
     /// Inserts a plan into the cache.
