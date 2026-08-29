@@ -99,6 +99,7 @@ fn test_concurrent_upsert_and_search_no_deadlock() {
 }
 
 #[test]
+#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn test_upsert_indexes_sparse_vectors() {
     use crate::index::sparse::SparseVector;
 
@@ -141,6 +142,7 @@ fn test_upsert_indexes_sparse_vectors() {
 }
 
 #[test]
+#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn test_delete_removes_from_sparse_indexes() {
     use crate::index::sparse::SparseVector;
 
@@ -175,6 +177,7 @@ fn test_delete_removes_from_sparse_indexes() {
 
 #[test]
 #[allow(clippy::cast_possible_truncation)]
+#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn test_u32_max_term_id() {
     use crate::index::sparse::search::sparse_search;
     use crate::index::sparse::SparseVector;
@@ -950,6 +953,7 @@ fn test_upsert_bulk_from_raw_parity_with_upsert_bulk() {
 /// Regression: ensures that adding a secondary index forces Phase 2 to run,
 /// so payload-based indexes are correctly updated on upsert.
 #[test]
+#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn test_phase2_runs_when_secondary_indexes_exist() {
     let dir = tempfile::tempdir().unwrap();
     let coll = Collection::create(dir.path().to_path_buf(), 4, DistanceMetric::Cosine).unwrap();
@@ -1040,6 +1044,7 @@ fn test_phase2_fast_path_correctness_no_secondaries() {
 /// Regression: sparse vectors must be collected in Phase 2 and written
 /// to sparse indexes even when no other secondary processing is needed.
 #[test]
+#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn test_phase2_does_not_skip_with_sparse_vectors() {
     use crate::index::sparse::SparseVector;
 
@@ -1289,6 +1294,7 @@ fn test_upsert_bulk_multi_batch_search_correctness() {
 /// under "Person". Previously, `has_any_labels` only checked new payloads,
 /// so label removal was silently skipped (Devin review finding).
 #[test]
+#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn test_upsert_removes_stale_labels_from_label_index() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let collection = Collection::create(PathBuf::from(temp_dir.path()), 4, DistanceMetric::Cosine)
@@ -1338,6 +1344,7 @@ fn test_upsert_removes_stale_labels_from_label_index() {
 ///
 /// Devin review finding (2026-04-02).
 #[test]
+#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn test_can_skip_phase2_respects_populated_label_index() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let collection = Collection::create(PathBuf::from(temp_dir.path()), 4, DistanceMetric::Cosine)

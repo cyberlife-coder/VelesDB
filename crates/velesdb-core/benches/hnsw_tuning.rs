@@ -72,6 +72,7 @@ fn calculate_recall(hnsw_results: &[ScoredResult], ground_truth: &[u64]) -> f64 
 
 /// Benchmark `ef_search` parameter sweep.
 /// Tests recall and latency at different `ef_search` values.
+#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn bench_ef_search_sweep(c: &mut Criterion) {
     let mut group = c.benchmark_group("ef_search_sweep");
     group.sample_size(20);

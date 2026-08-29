@@ -67,6 +67,7 @@ impl Drop for Watch<'_> {
 ///
 /// Counts are taken AFTER each syscall succeeds, so a failed open or fsync
 /// is not counted: what is measured is durable work, not attempts.
+#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 pub(crate) fn count_wal_io<T>(wal_path: &Path, f: impl FnOnce() -> T) -> (T, WalIoCounts) {
     let guard = SERIALISE
         .lock()

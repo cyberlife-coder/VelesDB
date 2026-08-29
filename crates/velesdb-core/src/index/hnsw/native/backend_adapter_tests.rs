@@ -1187,6 +1187,7 @@ fn assert_unit_batch_parity<D: DistanceEngine + Send + Sync>(
 }
 
 /// Returns the vector stored in the graph for `node_id`.
+#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn stored_vector<D: DistanceEngine>(hnsw: &NativeHnsw<D>, node_id: usize) -> Vec<f32> {
     let guard = hnsw.vectors.read();
     let storage = guard.as_ref().expect("storage initialized");

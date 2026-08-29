@@ -157,6 +157,7 @@ fn test_reindex_cannot_start_twice() {
 }
 
 #[test]
+#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn test_reindex_progress_updates() {
     let manager = AutoReindexManager::with_defaults();
     let progress_values = Arc::new(Mutex::new(Vec::new()));
@@ -340,6 +341,7 @@ fn test_set_auto_reindex_toggle() {
 }
 
 #[test]
+#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn test_events_emitted_correctly() {
     let manager = AutoReindexManager::with_defaults();
     let events = Arc::new(Mutex::new(Vec::new()));
@@ -370,6 +372,7 @@ fn test_events_emitted_correctly() {
 }
 
 #[test]
+#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn test_start_reindex_with_params() {
     let manager = AutoReindexManager::with_defaults();
     let captured_params = Arc::new(Mutex::new(None));

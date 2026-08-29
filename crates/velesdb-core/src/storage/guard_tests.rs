@@ -28,6 +28,7 @@ fn make_guard<'a>(
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
+#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn guard_as_slice_valid_epoch() {
     let data: Vec<f32> = vec![1.0, 2.0, 3.0];
     let mmap = MmapMut::map_anon(4096).expect("anon mmap");
@@ -40,6 +41,7 @@ fn guard_as_slice_valid_epoch() {
 }
 
 #[test]
+#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn guard_try_deref_same_as_slice() {
     let data: Vec<f32> = vec![4.0, 5.0];
     let mmap = MmapMut::map_anon(4096).expect("anon mmap");
@@ -62,6 +64,7 @@ fn guard_try_deref_same_as_slice() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
+#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn guard_as_slice_epoch_mismatch() {
     let data: Vec<f32> = vec![1.0, 2.0];
     let mmap = MmapMut::map_anon(4096).expect("anon mmap");
@@ -81,6 +84,7 @@ fn guard_as_slice_epoch_mismatch() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
+#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn guard_deref_returns_empty_on_mismatch() {
     let data: Vec<f32> = vec![9.0, 8.0, 7.0];
     let mmap = MmapMut::map_anon(4096).expect("anon mmap");
@@ -95,6 +99,7 @@ fn guard_deref_returns_empty_on_mismatch() {
 }
 
 #[test]
+#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn guard_as_ref_returns_empty_on_mismatch() {
     let data: Vec<f32> = vec![1.0];
     let mmap = MmapMut::map_anon(4096).expect("anon mmap");
@@ -109,6 +114,7 @@ fn guard_as_ref_returns_empty_on_mismatch() {
 }
 
 #[test]
+#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn guard_deref_valid_epoch_returns_data() {
     let data: Vec<f32> = vec![3.125, 2.71];
     let mmap = MmapMut::map_anon(4096).expect("anon mmap");

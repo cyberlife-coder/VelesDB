@@ -179,6 +179,7 @@ fn measure_recall(
 }
 
 #[allow(clippy::too_many_lines)]
+#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn pq_recall_benchmarks(c: &mut Criterion) {
     // Generate shared dataset and queries (uniform random for well-separated neighbors)
     let dataset = generate_random_data(NUM_VECTORS, DIMENSION, 42);

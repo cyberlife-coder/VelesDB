@@ -88,6 +88,7 @@ fn test_vector_guard_deref() {
 }
 
 #[test]
+#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn test_vector_guard_with_real_lock() {
     use parking_lot::RwLock;
     static DATA: [f32; 3] = [1.0, 2.0, 3.0];
