@@ -18,10 +18,6 @@ impl MmapStorage {
     /// Uses aggressive pre-allocation to minimize blocking:
     /// - Exponential growth (2x) for amortized O(1)
     /// - 64MB minimum growth to reduce resize frequency
-    // The guard IS the mapping being replaced: it must span the flush, the
-    // set_len and the remap, or a reader could touch the old mapping mid-
-    // resize. Nothing here can be tightened without unmapping under readers.
-    #[expect(clippy::significant_drop_tightening)]
     pub(crate) fn ensure_capacity(&mut self, required_len: usize) -> io::Result<()> {
         let start = Instant::now();
         let mut did_resize = false;
@@ -71,6 +67,11 @@ impl MmapStorage {
             did_resize = true;
             bytes_resized = new_len.saturating_sub(current_len);
         }
+        // The guard is the mapping being replaced: it must span the flush, the
+        // set_len and the remap above, or a reader could touch the old mapping
+        // mid-resize. It is released here, before the metrics call, which does
+        // not touch the mapping.
+        drop(mmap);
 
         self.metrics()
             .record_ensure_capacity(start.elapsed(), did_resize, bytes_resized);
