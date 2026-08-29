@@ -35,6 +35,7 @@ impl ConcurrentEdgeStore {
             .iter()
             .map(|e| (e.id(), e.source()))
             .collect();
+        drop(guard);
         (outgoing, incoming)
     }
 

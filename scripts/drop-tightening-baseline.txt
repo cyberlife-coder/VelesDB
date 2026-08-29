@@ -9,17 +9,14 @@ crates/velesdb-core/src/cache/bloom.rs	6
 crates/velesdb-core/src/collection/auto_reindex/mod.rs	4
 crates/velesdb-core/src/collection/auto_reindex/tests.rs	3
 crates/velesdb-core/src/collection/core/bulk_import.rs	2
-crates/velesdb-core/src/collection/core/crud.rs	2
 crates/velesdb-core/src/collection/core/crud_bulk.rs	4
 crates/velesdb-core/src/collection/core/crud_indexing.rs	2
 crates/velesdb-core/src/collection/core/crud_read_delete.rs	2
 crates/velesdb-core/src/collection/core/crud_tests.rs	11
 crates/velesdb-core/src/collection/core/flush.rs	6
-crates/velesdb-core/src/collection/core/graph_property_index_wiring.rs	2
 crates/velesdb-core/src/collection/core/index_management.rs	20
 crates/velesdb-core/src/collection/core/quantizer_restore.rs	2
 crates/velesdb-core/src/collection/core/statistics.rs	4
-crates/velesdb-core/src/collection/graph/edge_concurrent/cascade.rs	2
 crates/velesdb-core/src/collection/graph/edge_concurrent/mod.rs	8
 crates/velesdb-core/src/collection/graph/edge_concurrent/persistence.rs	2
 crates/velesdb-core/src/collection/graph/edge_concurrent/query.rs	6
@@ -27,7 +24,6 @@ crates/velesdb-core/src/collection/graph/edge_concurrent/snapshot.rs	4
 crates/velesdb-core/src/collection/graph/property_index_tests.rs	1
 crates/velesdb-core/src/collection/payload_mirror/mirror_tests.rs	1
 crates/velesdb-core/src/collection/payload_mirror/mod.rs	2
-crates/velesdb-core/src/collection/query_cost/query_executor.rs	2
 crates/velesdb-core/src/collection/search/batch.rs	8
 crates/velesdb-core/src/collection/search/query/aggregation/grouped.rs	4
 crates/velesdb-core/src/collection/search/query/aggregation/mod.rs	4
