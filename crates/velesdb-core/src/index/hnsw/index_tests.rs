@@ -3317,7 +3317,7 @@ mod full_scan_property_tests {
         /// identical to a naive exhaustive distance computation on the same
         /// bitmap vectors, sorted by the metric.
         #[test]
-        #[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
+        #[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
         fn prop_full_scan_exactness(
             n_vectors in 5u64..50,
             bitmap_ids in proptest::collection::vec(0u32..50, 1..20),

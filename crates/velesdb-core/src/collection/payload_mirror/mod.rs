@@ -354,7 +354,7 @@ impl PayloadMirror {
         let Some(state) = guard.as_ref() else {
             return MirrorAnswer::NotBuilt;
         };
-        match translate::condition_bitmap(state, condition) {
+        let answer = match translate::condition_bitmap(state, condition) {
             Some(eval) => MirrorAnswer::Ids(
                 eval.bits
                     .iter()
@@ -362,7 +362,9 @@ impl PayloadMirror {
                     .collect(),
             ),
             None => MirrorAnswer::Unsupported,
-        }
+        };
+        drop(guard);
+        answer
     }
 }
 

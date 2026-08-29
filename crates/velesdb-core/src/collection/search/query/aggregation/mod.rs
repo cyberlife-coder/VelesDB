@@ -204,6 +204,10 @@ impl Collection {
     }
 
     /// Runs the ungrouped aggregation scan (parallel or sequential).
+    // Both storage guards are lent by reference into MatchStorageGuards and
+    // read throughout the scan, including the rayon parallel path. Order is
+    // the decree recorded below; see .investigation/http-deadlock-2026-07-22/.
+    #[expect(clippy::significant_drop_tightening)]
     fn run_ungrouped_aggregation(
         &self,
         stmt: &crate::velesql::SelectStatement,

@@ -16,7 +16,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     // `storage` borrows out of it, and because a concurrent search takes the
     // same lock for reading: holding it is what makes "arena exists" and
     // "vector is in it" indivisible to every reader.
-    #[allow(clippy::significant_drop_tightening)]
+    #[expect(clippy::significant_drop_tightening)]
     fn allocate_and_store_vector(&self, vector: &[f32]) -> crate::error::Result<NodeId> {
         let mut guard = self.vectors.write();
         if guard.is_none() {
@@ -241,7 +241,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// Cold path: the write lock may be held during a buffer resize.
     // Same lazy-init-then-use shape as `allocate_and_store_vector`: the guard
     // spans arena creation and the reservation that depends on it.
-    #[allow(clippy::significant_drop_tightening)]
+    #[expect(clippy::significant_drop_tightening)]
     fn reserve_vector_capacity(
         &self,
         dimension: usize,
@@ -279,7 +279,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     // states the contract: a concurrent search takes the vectors read lock and
     // is excluded for exactly as long as this write lock is held, so the batch
     // becomes visible all at once.
-    #[allow(clippy::significant_drop_tightening)]
+    #[expect(clippy::significant_drop_tightening)]
     fn bulk_push_vectors(&self, vectors: &[&[f32]]) -> crate::error::Result<NodeId> {
         let mut guard = self.vectors.write();
         let storage = guard.as_mut().ok_or_else(|| {

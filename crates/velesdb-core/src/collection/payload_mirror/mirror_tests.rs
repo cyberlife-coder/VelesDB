@@ -129,7 +129,7 @@ fn test_mirror_stays_in_sync_after_upsert_and_delete() {
 }
 
 /// Returns `(row_count, deleted_row_count)` of the mirror's `ColumnStore`.
-#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
+#[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn mirror_store_counts(col: &Collection) -> (usize, usize) {
     let guard = col.storage.payload_mirror.state.read();
     let state = guard.as_ref().expect("mirror must be built");

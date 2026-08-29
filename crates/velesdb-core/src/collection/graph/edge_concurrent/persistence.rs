@@ -65,6 +65,7 @@ impl ConcurrentEdgeStore {
                 let _ = merged.add_edge(edge.clone());
             }
         }
+        drop(ids);
         merged
     }
 }

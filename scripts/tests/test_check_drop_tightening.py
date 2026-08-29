@@ -189,18 +189,15 @@ class BaselineFileTests(unittest.TestCase):
 class ClippyCommandTests(unittest.TestCase):
     """The invocation is the guard's contract with CI; pin its load-bearing parts."""
 
-    def test_force_warn_re_enables_the_workspace_allowed_lint(self):
+    def test_force_warn_is_absent_so_expect_annotations_hold(self):
+        """`--force-warn` overrides `#[expect]`, so it would re-count every
+        documented deliberate hold and un-drain the baseline. The lint is
+        enabled via `#![warn(...)]` in the scanned crate roots instead."""
         command = cdt.clippy_command()
-        self.assertIn("--force-warn", command)
-        self.assertEqual(
-            command[command.index("--force-warn") + 1],
-            cdt.LINT,
-            "--force-warn must name the lint being counted",
-        )
-        self.assertLess(
-            command.index("--"),
-            command.index("--force-warn"),
-            "--force-warn is a rustc flag and must follow the cargo/rustc separator",
+        self.assertNotIn(
+            "--force-warn",
+            command,
+            "force-warn overrides #[expect] and re-counts documented holds",
         )
 
     def test_json_output_and_all_targets_are_requested(self):

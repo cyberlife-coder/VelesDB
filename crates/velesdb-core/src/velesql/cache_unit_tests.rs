@@ -80,7 +80,7 @@ fn test_query_cache_eviction() {
 }
 
 #[test]
-#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
+#[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn test_query_cache_hit_keeps_clock_ring_unique() {
     // Issue #903: a hit no longer rewrites LRU order (CLOCK promotion sets a
     // referenced bit instead). The ring must still contain each key once and
@@ -173,7 +173,7 @@ fn test_query_cache_hit_returns_shared_arc() {
 }
 
 #[test]
-#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
+#[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn test_query_cache_concurrent_invariant_no_order_duplicates() {
     use std::sync::Arc;
     use std::thread;

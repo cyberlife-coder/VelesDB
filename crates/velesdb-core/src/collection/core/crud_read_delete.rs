@@ -327,6 +327,10 @@ impl Collection {
     }
 
     /// Deletes IDs from sparse indexes with WAL-before-apply.
+    // The comment below is the contract: one exclusive guard from WAL append
+    // through apply, or compaction can snapshot between the phases and drop
+    // the delete record.
+    #[expect(clippy::significant_drop_tightening)]
     fn delete_from_sparse_indexes(&self, ids: &[u64]) -> Result<()> {
         // Hold one exclusive guard from WAL append through apply so compaction
         // cannot snapshot between the two phases and then discard the record.

@@ -205,7 +205,7 @@ impl ConcurrentEdgeStore {
     // and the error path rolls the first back -- releasing either between the
     // two halves would expose a half-linked edge, or lose the rollback. The
     // ascending-index acquisition below is what keeps that pair deadlock-free.
-    #[allow(clippy::significant_drop_tightening)]
+    #[expect(clippy::significant_drop_tightening)]
     pub fn add_edge(&self, edge: GraphEdge) -> Result<()> {
         let edge_id = edge.id();
 
@@ -277,7 +277,7 @@ impl ConcurrentEdgeStore {
     // locks, so the id map and the shards cannot disagree about which edges
     // exist. That outer-to-inner order is also what stops this path deadlocking
     // against the single-edge one.
-    #[allow(clippy::significant_drop_tightening)]
+    #[expect(clippy::significant_drop_tightening)]
     pub fn add_edges_batch(&self, edges: Vec<GraphEdge>) -> usize {
         if edges.is_empty() {
             return 0;
@@ -385,7 +385,7 @@ impl ConcurrentEdgeStore {
     // Mirror of `add_edge`: a cross-shard removal drops the outgoing and
     // incoming halves under both guards at once, acquired in ascending index
     // order. Releasing one early would leave a dangling half-edge.
-    #[allow(clippy::significant_drop_tightening)]
+    #[expect(clippy::significant_drop_tightening)]
     pub(crate) fn remove_edge_detailed(&self, edge_id: u64) -> EdgeRemoval {
         {
             let mut ids = self.edge_ids.write();

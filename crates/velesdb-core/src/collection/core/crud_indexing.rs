@@ -322,6 +322,10 @@ impl Collection {
     }
 
     /// Applies buffered sparse vector upserts with WAL-before-apply semantics.
+    // The comment below is the contract: WAL append and in-memory apply stay
+    // indivisible with respect to compaction, which takes this lock through
+    // its reset.
+    #[expect(clippy::significant_drop_tightening)]
     pub(super) fn apply_sparse_batch_upsert(
         &self,
         sparse_batch: &[(u64, BTreeMap<String, crate::index::sparse::SparseVector>)],

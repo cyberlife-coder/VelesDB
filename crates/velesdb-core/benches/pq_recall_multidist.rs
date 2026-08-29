@@ -1,3 +1,4 @@
+#![warn(clippy::significant_drop_tightening)]
 //! Multi-distribution PQ recall accuracy benchmark suite (5K vectors, 128d).
 //!
 //! Measures recall@10 for PQ, OPQ, and `RaBitQ` quantization methods across
@@ -255,7 +256,7 @@ fn measure_recall_with_ef(
 // ---------------------------------------------------------------------------
 
 #[allow(clippy::too_many_lines)]
-#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
+#[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn clustered_recall_benchmarks(c: &mut Criterion) {
     let dataset = generate_clustered_data(NUM_VECTORS, DIMENSION, NUM_CLUSTERS, SIGMA, 42);
     let queries = generate_clustered_data(NUM_QUERIES, DIMENSION, NUM_CLUSTERS, SIGMA, 999);
@@ -447,7 +448,7 @@ fn clustered_recall_benchmarks(c: &mut Criterion) {
 // Benchmark Group 2: Binary {0,1} (2 variants, default ef_search=128)
 // ---------------------------------------------------------------------------
 
-#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
+#[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn binary_recall_benchmarks(c: &mut Criterion) {
     let dataset = generate_binary_data(NUM_VECTORS, DIMENSION, BINARY_DENSITY, 42);
     let queries = generate_binary_data(NUM_QUERIES, DIMENSION, BINARY_DENSITY, 999);
@@ -517,7 +518,7 @@ fn binary_recall_benchmarks(c: &mut Criterion) {
 // Benchmark Group 3: Exact search baselines (3 distributions)
 // ---------------------------------------------------------------------------
 
-#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
+#[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn exact_recall_benchmarks(c: &mut Criterion) {
     let uniform_data = generate_random_data(NUM_VECTORS, DIMENSION, 42);
     let uniform_queries = generate_random_data(NUM_QUERIES, DIMENSION, 123);

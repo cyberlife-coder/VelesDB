@@ -315,7 +315,7 @@ fn test_property_index_corrupted_data() {
 // =========================================================================
 
 #[test]
-#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
+#[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn test_property_index_persists_across_collection_reopen() {
     use crate::collection::types::Collection;
     use crate::distance::DistanceMetric;

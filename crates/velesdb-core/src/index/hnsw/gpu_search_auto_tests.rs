@@ -62,7 +62,7 @@ fn build_small_index(dim: usize, count: u64, metric: DistanceMetric) -> HnswInde
 /// THEN it returns the same ranked set as the direct `inner.search` call,
 ///      proving the CPU fallback path inside `search_auto` is honoured.
 #[test]
-#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
+#[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn search_auto_matches_cpu_search_below_gpu_threshold_cosine() {
     let dim = 64;
     let k = 10;
@@ -116,7 +116,7 @@ fn search_auto_matches_cpu_search_below_gpu_threshold_cosine() {
 /// squared-L2 → L2 sqrt transform; it guards against wrapper-introduced
 /// score divergence in `search_auto`.
 #[test]
-#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
+#[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn search_auto_matches_cpu_search_below_gpu_threshold_euclidean() {
     let dim = 32;
     let k = 5;
@@ -259,7 +259,7 @@ fn search_auto_wiring_preserves_score_ordering_on_accurate_quality() {
 /// `should_traverse_gpu` at small sizes.
 #[test]
 #[cfg(feature = "gpu")]
-#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
+#[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn search_auto_below_threshold_matches_cpu_under_gpu_feature() {
     let dim = 64;
     let k = 10;

@@ -142,7 +142,7 @@ impl Collection {
     // The two storage guards are handed to `MatchStorageGuards` by reference
     // and read throughout the scan, including through `PayloadMemo`. They are
     // acquired once precisely so the scan does not re-take them mid-flight.
-    #[allow(clippy::significant_drop_tightening)]
+    #[expect(clippy::significant_drop_tightening)]
     pub(crate) fn execute_not_similarity_query_over(
         &self,
         condition: &crate::velesql::Condition,
@@ -395,7 +395,7 @@ impl Collection {
     // and caused the deadlock recorded in
     // .investigation/http-deadlock-2026-07-22/. Tightening either guard
     // reopens that ordering question, so both are held deliberately.
-    #[allow(clippy::significant_drop_tightening)]
+    #[expect(clippy::significant_drop_tightening)]
     pub(crate) fn execute_scan_query_tracked(
         &self,
         filter: &crate::filter::Filter,
@@ -539,7 +539,7 @@ impl Collection {
     // Same documented pair and the same post-mortem as
     // `execute_scan_query_tracked`: vector_storage(2) before
     // payload_storage(3), both held across the scan.
-    #[allow(clippy::significant_drop_tightening)]
+    #[expect(clippy::significant_drop_tightening)]
     fn scan_candidate_ids(
         &self,
         candidate_ids: &[u64],

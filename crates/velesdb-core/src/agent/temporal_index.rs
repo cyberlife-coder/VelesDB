@@ -57,7 +57,7 @@ impl TemporalIndex {
     // `by_timestamp` are two halves of one index, and releasing either between
     // the two writes exposes a window where a reader sees an id in one map and
     // not the other.
-    #[allow(clippy::significant_drop_tightening)]
+    #[expect(clippy::significant_drop_tightening)]
     pub fn insert(&self, id: u64, timestamp: i64) {
         let mut id_to_ts = self.id_to_timestamp.write();
         let mut by_ts = self.by_timestamp.write();
@@ -213,7 +213,7 @@ impl TemporalIndex {
     // Same pair invariant as `insert`: dropping `by_timestamp` after its clear
     // but before `id_to_timestamp`'s would leave a reader seeing a populated
     // id map against an empty timestamp map.
-    #[allow(clippy::significant_drop_tightening)]
+    #[expect(clippy::significant_drop_tightening)]
     pub fn clear(&self) {
         let mut id_to_ts = self.id_to_timestamp.write();
         let mut by_ts = self.by_timestamp.write();

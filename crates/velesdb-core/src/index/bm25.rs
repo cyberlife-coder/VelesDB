@@ -291,7 +291,7 @@ impl Bm25Index {
         let idf_cache = Self::build_idf_cache(query_terms, &inv_idx, n);
         let candidate_union = Self::build_candidate_union(query_terms, &inv_idx);
 
-        candidate_union
+        let scored = candidate_union
             .iter()
             .filter_map(|doc_id_u32| {
                 let doc_id = *doc_to_point.get(&doc_id_u32)?;
@@ -299,7 +299,11 @@ impl Bm25Index {
                 let score = Self::score_document_fast(doc, query_terms, &idf_cache, k1, b, avgdl);
                 (score > 0.0).then_some((doc_id, score))
             })
-            .collect()
+            .collect();
+        drop(doc_to_point);
+        drop(docs);
+        drop(inv_idx);
+        scored
     }
 
     /// Builds an IDF cache for each query term.
@@ -415,6 +419,10 @@ impl Bm25Index {
         };
 
         map.insert(point_id, allocated);
+        // The forward map is written; releasing it before the reverse-map lock
+        // un-nests the two. Readers of `doc_to_point` never take `point_to_doc`,
+        // so the pair was never atomic for them to begin with.
+        drop(map);
         self.doc_to_point.write().insert(allocated, point_id);
         Some(allocated)
     }

@@ -110,7 +110,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     // written file a consistent snapshot. Releasing it earlier would mean
     // copying the entire arena first -- hundreds of MiB at production sizes --
     // to avoid a read lock that excludes no other reader.
-    #[allow(clippy::significant_drop_tightening)]
+    #[expect(clippy::significant_drop_tightening)]
     fn dump_vectors_file(&self, path: &Path, basename: &str) -> std::io::Result<u64> {
         let vectors_path = path.join(format!("{basename}.vectors"));
         let vectors_guard = self.vectors.read();
@@ -164,7 +164,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     // Same snapshot argument as `dump_vectors_file`: the layers guard spans
     // the dump so the written graph is internally consistent. The per-node
     // neighbour locks inside are released before each write.
-    #[allow(clippy::significant_drop_tightening)]
+    #[expect(clippy::significant_drop_tightening)]
     fn dump_graph_file(&self, path: &Path, basename: &str, count: u64) -> std::io::Result<()> {
         let graph_path = path.join(format!("{basename}.graph"));
         let layers = self.layers.read();

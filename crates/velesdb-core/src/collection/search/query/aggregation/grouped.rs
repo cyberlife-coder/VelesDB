@@ -53,6 +53,10 @@ impl Collection {
     }
 
     /// Scans all points, applies WHERE filter, and groups by key.
+    // Both storage guards are lent by reference into MatchStorageGuards and
+    // read throughout the scan. Acquisition order is the decree recorded
+    // below (2 then 3); see .investigation/http-deadlock-2026-07-22/.
+    #[expect(clippy::significant_drop_tightening)]
     fn scan_and_group(
         &self,
         stmt: &crate::velesql::SelectStatement,

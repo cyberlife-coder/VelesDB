@@ -324,6 +324,10 @@ impl CsrCache {
     /// the rebuild. Correctness depends on the caller contract above —
     /// without the shared layer snapshot, the write would still be
     /// atomic but the data committed could be stale.
+    // The write guard spans the generation re-check and the store on purpose:
+    // that pairing is the fix for the stale-CSR race the comment below
+    // describes. Publishing outside the guard reintroduces it.
+    #[expect(clippy::significant_drop_tightening)]
     pub fn get_or_rebuild(&self, layer: &Layer, num_nodes: usize) -> CsrGraph {
         // Caller contract: the layers read lock must be held so concurrent
         // rebuilders observe the same layer topology. In release builds

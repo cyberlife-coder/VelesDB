@@ -43,7 +43,7 @@ fn validate_dimension_swapped_values_are_distinct() {
 // --- rebuild_stored_ids ---
 
 #[test]
-#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
+#[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn rebuild_stored_ids_populates_from_points() {
     let stored_ids = RwLock::new(HashSet::new());
     let points = vec![
@@ -62,7 +62,7 @@ fn rebuild_stored_ids_populates_from_points() {
 }
 
 #[test]
-#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
+#[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn rebuild_stored_ids_clears_previous_ids() {
     let mut initial = HashSet::new();
     initial.insert(1);
@@ -91,7 +91,7 @@ fn rebuild_stored_ids_empty_points_clears_all() {
 }
 
 #[test]
-#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
+#[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn rebuild_stored_ids_deduplicates() {
     let stored_ids = RwLock::new(HashSet::new());
     let points = vec![

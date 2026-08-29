@@ -49,6 +49,7 @@ impl ConcurrentEdgeStore {
             .into_iter()
             .cloned()
             .collect();
+        drop(guard);
         (edges, total)
     }
 
@@ -66,6 +67,7 @@ impl ConcurrentEdgeStore {
             .into_iter()
             .cloned()
             .collect();
+        drop(guard);
         (edges, total)
     }
 
@@ -293,6 +295,7 @@ impl ConcurrentEdgeStore {
                 result.push(edge.clone());
             }
         }
+        drop(ids);
         result
     }
 

@@ -1,3 +1,4 @@
+#![warn(clippy::significant_drop_tightening)]
 #![allow(clippy::doc_markdown)]
 //! `VelesDB` Server - REST API for the `VelesDB` vector database.
 

@@ -411,7 +411,7 @@ impl<D: DistanceEngine, C: TraversalCodec> QuantizedPrecisionHnsw<D, C> {
     // search path takes (store.read -> vectors.read). Releasing it earlier
     // would let a search observe a node in the graph whose code is not yet in
     // the store, which is the inconsistency the ordering exists to prevent.
-    #[allow(clippy::significant_drop_tightening)]
+    #[expect(clippy::significant_drop_tightening)]
     fn insert_encoded(
         &self,
         quantizer: &C::Quantizer,
@@ -440,7 +440,7 @@ impl<D: DistanceEngine, C: TraversalCodec> QuantizedPrecisionHnsw<D, C> {
     // contents are complete and in NodeId order. Tightening this would let a
     // vector reach the graph before its buffer entry, so a concurrent drain
     // could train over a sample set that does not match the nodes.
-    #[allow(clippy::significant_drop_tightening)]
+    #[expect(clippy::significant_drop_tightening)]
     fn insert_training_phase(
         &self,
         vector: &[f32],
@@ -581,7 +581,7 @@ impl<D: DistanceEngine, C: TraversalCodec> QuantizedPrecisionHnsw<D, C> {
     // design: store must become visible before the quantizer, because search
     // checks the quantizer first and would otherwise traverse with codes that
     // are not there yet. Both guards are the mechanism enforcing that.
-    #[allow(clippy::significant_drop_tightening)]
+    #[expect(clippy::significant_drop_tightening)]
     pub fn install_trained_quantizer(
         &self,
         quantizer: Arc<C::Quantizer>,
@@ -650,7 +650,7 @@ impl<D: DistanceEngine, C: TraversalCodec> QuantizedPrecisionHnsw<D, C> {
     // inner pass renumbers every node and this backend's store is positional,
     // so any window between the renumber and the store rebuild exposes codes
     // indexed by stale NodeIds.
-    #[allow(clippy::significant_drop_tightening)]
+    #[expect(clippy::significant_drop_tightening)]
     pub(in crate::index::hnsw) fn reorder_for_locality(
         &self,
     ) -> crate::error::Result<Option<Vec<usize>>> {
@@ -704,7 +704,7 @@ impl<D: DistanceEngine, C: TraversalCodec> QuantizedPrecisionHnsw<D, C> {
     // The gate and quantizer guard are held across training on purpose: they
     // are what makes the re-check under the write lock meaningful. Releasing
     // either early would let a second thread train and install concurrently.
-    #[allow(clippy::significant_drop_tightening)]
+    #[expect(clippy::significant_drop_tightening)]
     fn train_codec(&self) -> crate::error::Result<()> {
         if !C::can_train() {
             return Ok(());
@@ -750,7 +750,7 @@ impl<D: DistanceEngine, C: TraversalCodec> QuantizedPrecisionHnsw<D, C> {
     // The store read guard is held for the whole traversal on purpose: the
     // codec distances read out of it throughout, and dropping it early would
     // let an install or reorder swap the store mid-search.
-    #[allow(clippy::significant_drop_tightening)]
+    #[expect(clippy::significant_drop_tightening)]
     fn search_quantized(
         &self,
         query: &[f32],

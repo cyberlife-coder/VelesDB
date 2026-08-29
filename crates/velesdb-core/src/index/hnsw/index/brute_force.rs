@@ -51,6 +51,7 @@ impl HnswIndex {
             self.metric.top_k_scored_results(&mut scored, k);
             scored
         });
+        drop(inner);
 
         Ok(results)
     }

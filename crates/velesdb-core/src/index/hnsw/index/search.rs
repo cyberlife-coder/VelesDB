@@ -86,7 +86,9 @@ impl HnswIndex {
     ) -> Vec<ScoredResult> {
         let inner = self.inner.read();
         let neighbours = inner.search_auto(query, k, ef_search);
-        self.map_graph_results(&inner, &neighbours)
+        let mapped = self.map_graph_results(&inner, &neighbours);
+        drop(inner);
+        mapped
     }
 
     /// Maps raw graph results `(node_id, raw_dist)` to user-facing
@@ -173,6 +175,7 @@ impl HnswIndex {
                 }
             }
         }
+        drop(inner);
         results
     }
 
@@ -408,6 +411,11 @@ impl HnswIndex {
     /// GPU/RaBitQ paths, which keep no CPU-side state. This saves 2-4x latency
     /// on easy queries and roughly a third of the distance evaluations on
     /// escalated ones.
+    // One read guard spans both phases on purpose, as the comment below
+    // records: re-locking through search_hnsw_only would be a recursive
+    // read() on a parking_lot RwLock, which can deadlock behind a queued
+    // writer.
+    #[expect(clippy::significant_drop_tightening)]
     fn search_adaptive(
         &self,
         query: &[f32],

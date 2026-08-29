@@ -115,6 +115,7 @@ impl Collection {
                 }
             }
         }
+        drop(storage);
         cache
     }
 

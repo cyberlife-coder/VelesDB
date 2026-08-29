@@ -132,7 +132,7 @@ impl Collection {
     // value rather than behind an `Arc` -- releasing the guard first would
     // mean deep-copying a codebook just to avoid a read lock over I/O. The
     // write happens on flush only, and a read guard excludes no other reader.
-    #[allow(clippy::significant_drop_tightening)]
+    #[expect(clippy::significant_drop_tightening)]
     #[cfg(feature = "persistence")]
     fn flush_pq_codebook(&self) -> Result<()> {
         let guard = self.storage.pq_quantizer.read();
@@ -389,7 +389,7 @@ impl Collection {
     // records: mutation paths hold this same guard from WAL append through
     // in-memory application, so releasing it mid-compaction would let a write
     // land between a snapshot publication and its WAL reset.
-    #[allow(clippy::significant_drop_tightening)]
+    #[expect(clippy::significant_drop_tightening)]
     fn flush_sparse_indexes(&self) -> Result<()> {
         // Exclusive across snapshot publication and WAL reset. Mutation paths
         // hold the same guard from WAL append through in-memory application.

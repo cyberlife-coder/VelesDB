@@ -272,6 +272,7 @@ impl Collection {
         if fsync {
             storage.flush()?;
         }
+        drop(storage);
         Ok(())
     }
 
@@ -374,6 +375,9 @@ impl Collection {
     }
 
     /// Applies sparse batch with WAL-before-apply for bulk insert.
+    // Exclusive across WAL append and in-memory apply, so compaction cannot
+    // snapshot between the two and then discard the record (WAL-before-apply).
+    #[expect(clippy::significant_drop_tightening)]
     fn apply_sparse_batch_bulk(
         &self,
         sparse_batch: &BTreeMap<String, Vec<(u64, crate::index::sparse::SparseVector)>>,

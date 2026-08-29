@@ -162,6 +162,8 @@ impl Collection {
                 matches.then_some((sr.id, sr.score, payload))
             })
             .collect();
+        // Phase 1 read every payload it needs; phase 2 touches vectors only.
+        drop(payload_storage);
 
         resolve::sort_scored_ids_by_metric(&mut passing, higher_is_better);
 
@@ -186,6 +188,7 @@ impl Collection {
                 score,
             ));
         }
+        drop(vector_storage);
         super::vector::tag_vector_component_scores(&mut results);
         results
     }

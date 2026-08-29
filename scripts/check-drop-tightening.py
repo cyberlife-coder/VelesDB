@@ -28,12 +28,20 @@ to `deny` the way `significant_drop_in_scrutinee` already is.
 
 Mechanics
 ---------
-The lint is `allow`ed workspace-wide, so it is re-enabled with
-`--force-warn`, which overrides both the `[workspace.lints]` entry and CI's
-`-D warnings`: the findings come back as warnings and the run still exits 0.
+The lint is enabled at `warn` via `#![warn(clippy::significant_drop_tightening)]`
+in every crate root this guard scans (velesdb-core's lib.rs, velesdb-server's
+main.rs, and the bench roots that carry expectations), so plain clippy reports
+it. Deliberate holds are annotated `#[expect(clippy::significant_drop_tightening)]`
+with a comment saying what breaks if they are tightened; the compiler fails any
+expectation whose lint stops firing (`unfulfilled_lint_expectations`), so an
+exemption cannot rot. `--force-warn` must NOT be used here: it overrides
+`#[expect]` and would re-count every documented hold, turning the drained
+baseline back into a number.
 Diagnostics are read from `--message-format=json` and counted per primary
 span file, then compared to `scripts/drop-tightening-baseline.txt`
-(`path<TAB>count`, one entry per file, sorted).
+(`path<TAB>count`, one entry per file, sorted). The baseline is empty: the
+backlog is drained, and any new un-annotated site fails both this guard and
+the lint job's `-D warnings`.
 
 The comparison can only tighten, mirroring `check-file-budgets.py`:
 
@@ -83,9 +91,10 @@ FEATURES = "persistence,gpu,update-check"
 
 DRAIN_GUIDANCE = (
     "either shorten the guard's scope (bind it in a block, or `drop()` it "
-    "after its last use) or, if it is held deliberately, give the site an "
-    "item-level #[allow(clippy::significant_drop_tightening)] with a comment "
-    "saying what breaks if it is tightened"
+    "after its last use) or, if it is held deliberately, give the enclosing "
+    "item #[expect(clippy::significant_drop_tightening)] with a comment "
+    "saying what breaks if it is tightened -- expect, not allow, so the "
+    "compiler fails the annotation if the hold is ever tightened anyway"
 )
 
 
@@ -100,8 +109,6 @@ def clippy_command() -> "list[str]":
         FEATURES,
         "--message-format=json",
         "--",
-        "--force-warn",
-        LINT,
     ]
     return command
 

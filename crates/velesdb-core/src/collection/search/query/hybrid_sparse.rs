@@ -238,7 +238,7 @@ impl Collection {
     // search because `filter_fn` closes over them and runs per candidate
     // inside it. Releasing either early would leave the closure reading a
     // guard that is gone; the numbered order is the documented one.
-    #[allow(clippy::significant_drop_tightening)]
+    #[expect(clippy::significant_drop_tightening)]
     fn sparse_search_with_id_filter(
         &self,
         index_name: &str,
@@ -362,7 +362,7 @@ impl Collection {
     // Both branches take payload_storage(3) before sparse_indexes(9), the
     // order recorded inline below, and hold them for the whole filtered
     // search because the filter closure reads through them per candidate.
-    #[allow(clippy::significant_drop_tightening)]
+    #[expect(clippy::significant_drop_tightening)]
     pub(crate) fn execute_both_branches(
         &self,
         dense_vector: &[f32],

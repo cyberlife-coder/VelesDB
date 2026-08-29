@@ -363,6 +363,10 @@ impl Collection {
     /// for duplicates).
     ///
     /// LOCK ORDER: label_index(7) -- after payload_storage(3).
+    // The label_index guard spans the whole un-index/re-index batch on purpose,
+    // the same design as store_node_payloads: releasing it mid-batch would let
+    // a reader see labels from a half-applied bulk import.
+    #[expect(clippy::significant_drop_tightening)]
     fn update_label_index_from_raw(
         &self,
         ids: &[u64],

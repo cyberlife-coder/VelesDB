@@ -730,7 +730,7 @@ fn test_context_fragmentation_ratio_precise() {
 /// vector or hit a panic.
 #[test]
 #[allow(clippy::cast_precision_loss)]
-#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
+#[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn test_concurrent_reads_during_compaction() {
     use std::sync::Arc;
     use std::thread;

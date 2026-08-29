@@ -276,6 +276,10 @@ impl SparseInvertedIndex {
                 was_in_frozen = true;
             }
         }
+        // Both segments are updated; the count below is a Relaxed heuristic
+        // (see `doc_count`) and needs neither guard.
+        drop(frozen_vec);
+        drop(seg);
 
         if was_in_mutable || was_in_frozen {
             self.doc_count.fetch_sub(1, Ordering::Relaxed);

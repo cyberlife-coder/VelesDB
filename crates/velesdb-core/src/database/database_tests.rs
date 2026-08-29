@@ -1125,7 +1125,7 @@ fn test_execute_train_missing_m_is_required() {
 
 #[test]
 #[allow(clippy::cast_possible_truncation)]
-#[allow(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
+#[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn test_database_open_loads_sparse_index() {
     use crate::index::sparse::persistence::{compact, wal_append_upsert};
     use crate::index::sparse::types::SparseVector;
