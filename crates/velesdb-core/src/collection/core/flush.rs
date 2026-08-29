@@ -127,6 +127,12 @@ impl Collection {
     /// No-op when no PQ quantizer has been trained yet. The codebook is also
     /// saved by the explicit `TRAIN QUANTIZER` path (`database/training.rs`),
     /// so this covers the lazy-training case to prevent codebook loss on restart.
+    // The read guard spans the codebook and rotation writes because `pq`
+    // borrows out of it, and `pq_quantizer` holds a `ProductQuantizer` by
+    // value rather than behind an `Arc` -- releasing the guard first would
+    // mean deep-copying a codebook just to avoid a read lock over I/O. The
+    // write happens on flush only, and a read guard excludes no other reader.
+    #[allow(clippy::significant_drop_tightening)]
     #[cfg(feature = "persistence")]
     fn flush_pq_codebook(&self) -> Result<()> {
         let guard = self.storage.pq_quantizer.read();
@@ -379,6 +385,11 @@ impl Collection {
     }
 
     /// Compacts all named sparse indexes to disk (EPIC-062 / SPARSE-04).
+    // Deliberately exclusive for the whole loop, as the comment below
+    // records: mutation paths hold this same guard from WAL append through
+    // in-memory application, so releasing it mid-compaction would let a write
+    // land between a snapshot publication and its WAL reset.
+    #[allow(clippy::significant_drop_tightening)]
     fn flush_sparse_indexes(&self) -> Result<()> {
         // Exclusive across snapshot publication and WAL reset. Mutation paths
         // hold the same guard from WAL append through in-memory application.
@@ -429,6 +440,10 @@ impl Collection {
         let tmp_path = self.storage.path.join("config.json.tmp");
         let config_data = serde_json::to_string_pretty(&*config)
             .map_err(|e| Error::Serialization(e.to_string()))?;
+        // Serialization is the guard's last use. Everything below is disk I/O
+        // ending in two fsyncs, and none of it should run under the config
+        // lock.
+        drop(config);
 
         let file = std::fs::File::create(&tmp_path)?;
         let mut writer = std::io::BufWriter::new(file);

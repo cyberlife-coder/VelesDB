@@ -13,7 +13,7 @@ crates/velesdb-core/src/collection/core/crud_bulk.rs	4
 crates/velesdb-core/src/collection/core/crud_indexing.rs	2
 crates/velesdb-core/src/collection/core/crud_read_delete.rs	2
 crates/velesdb-core/src/collection/core/crud_tests.rs	11
-crates/velesdb-core/src/collection/core/flush.rs	6
+crates/velesdb-core/src/collection/core/flush.rs	4
 crates/velesdb-core/src/collection/core/graph_property_index_wiring.rs	2
 crates/velesdb-core/src/collection/core/quantizer_restore.rs	2
 crates/velesdb-core/src/collection/core/statistics.rs	4
@@ -39,7 +39,6 @@ crates/velesdb-core/src/collection/streaming/async_index_builder.rs	2
 crates/velesdb-core/src/database/database_tests.rs	2
 crates/velesdb-core/src/database/training.rs	2
 crates/velesdb-core/src/gpu/gpu_csr.rs	2
-crates/velesdb-core/src/guardrails/resilience.rs	6
 crates/velesdb-core/src/index/bm25.rs	4
 crates/velesdb-core/src/index/hnsw/gpu_search_auto_tests.rs	3
 crates/velesdb-core/src/index/hnsw/index/brute_force.rs	2
