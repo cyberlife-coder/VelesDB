@@ -140,11 +140,25 @@ class CompareTests(unittest.TestCase):
 
 
 class BaselineFileTests(unittest.TestCase):
-    def test_the_checked_in_baseline_parses(self):
+    def test_the_checked_in_baseline_parses_and_stays_drained(self):
+        """The backlog is drained: the frozen baseline is EMPTY by design.
+
+        Every deliberate hold is an `#[expect(clippy::significant_drop_tightening)]`
+        the compiler verifies, so no finding reaches the count. A non-empty
+        baseline would mean an un-annotated site was frozen in instead of being
+        tightened or documented -- the regression this pin exists to refuse.
+        Any entry that does appear must still parse as repo-relative + positive,
+        so a partial regression cannot also be a malformed one.
+        """
         baseline = cdt.load_baseline(
             REPO_ROOT / "scripts" / "drop-tightening-baseline.txt"
         )
-        self.assertGreater(len(baseline), 0, "the frozen baseline must not be empty")
+        self.assertEqual(
+            dict(baseline),
+            {},
+            "the drained baseline must stay empty: tighten the new site or give "
+            "its enclosing item a documented #[expect], never re-freeze a count",
+        )
         for path, count in baseline.items():
             self.assertTrue(
                 path.startswith("crates/"),
