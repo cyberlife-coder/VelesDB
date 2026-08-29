@@ -12,6 +12,11 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// # Errors
     ///
     /// Returns an error if storage allocation or push fails.
+    // The write guard spans lazy arena creation and the push because
+    // `storage` borrows out of it, and because a concurrent search takes the
+    // same lock for reading: holding it is what makes "arena exists" and
+    // "vector is in it" indivisible to every reader.
+    #[expect(clippy::significant_drop_tightening)]
     fn allocate_and_store_vector(&self, vector: &[f32]) -> crate::error::Result<NodeId> {
         let mut guard = self.vectors.write();
         if guard.is_none() {
@@ -55,6 +60,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         for layer in layers.iter_mut() {
             layer.ensure_capacity(total_nodes.saturating_sub(1));
         }
+        // The capacity counter is atomic and independent of the layer data.
+        drop(layers);
         self.pre_allocated_capacity
             .store(total_nodes, Ordering::Relaxed);
     }
@@ -232,6 +239,9 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// Initializes vector storage if needed and pre-reserves capacity.
     ///
     /// Cold path: the write lock may be held during a buffer resize.
+    // Same lazy-init-then-use shape as `allocate_and_store_vector`: the guard
+    // spans arena creation and the reservation that depends on it.
+    #[expect(clippy::significant_drop_tightening)]
     fn reserve_vector_capacity(
         &self,
         dimension: usize,
@@ -265,6 +275,11 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// vector: graph construction (Phase B) only starts after this method
     /// returns, and any concurrent search takes the vectors read lock, which
     /// is excluded while this write lock is held.
+    // Held for the whole batch push deliberately -- the doc comment above
+    // states the contract: a concurrent search takes the vectors read lock and
+    // is excluded for exactly as long as this write lock is held, so the batch
+    // becomes visible all at once.
+    #[expect(clippy::significant_drop_tightening)]
     fn bulk_push_vectors(&self, vectors: &[&[f32]]) -> crate::error::Result<NodeId> {
         let mut guard = self.vectors.write();
         let storage = guard.as_mut().ok_or_else(|| {

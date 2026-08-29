@@ -1,3 +1,4 @@
+#![warn(clippy::significant_drop_tightening)]
 //! PQ recall accuracy benchmark suite (5K vectors, 128d, uniform random).
 //!
 //! Measures recall@10 for PQ, OPQ, and `RaBitQ` quantization methods
@@ -179,6 +180,7 @@ fn measure_recall(
 }
 
 #[allow(clippy::too_many_lines)]
+#[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn pq_recall_benchmarks(c: &mut Criterion) {
     // Generate shared dataset and queries (uniform random for well-separated neighbors)
     let dataset = generate_random_data(NUM_VECTORS, DIMENSION, 42);

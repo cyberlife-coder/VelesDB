@@ -113,6 +113,7 @@ impl ConcurrentEdgeStore {
         }
         let label_table = self.label_table.read();
         let new_snapshot = SnapshotBuilder::build(&merged, &label_table);
+        drop(label_table);
         self.csr_snapshot.store(Arc::new(new_snapshot));
         Ok(())
     }
@@ -147,6 +148,8 @@ impl ConcurrentEdgeStore {
             }
         }
 
+        // Every edge is in the snapshot; the id map is not read again.
+        drop(ids);
         // Compact once to eliminate any fragmentation from insert order.
         snapshot.compact();
 

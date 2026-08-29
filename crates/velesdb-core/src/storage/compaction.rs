@@ -604,6 +604,11 @@ impl CompactionContext<'_> {
     ///   every store record carries the full vector value and deletes replay
     ///   in order;
     /// - after promotion, before truncation: same convergent replay.
+    // The WAL guard spans promotion, the durability barrier and the
+    // truncation: this is the crash-consistency critical section the doc
+    // comment above describes, and no reader may observe a truncated WAL
+    // before the renames it justifies are durable.
+    #[expect(clippy::significant_drop_tightening)]
     fn finalize_commit(&self, idx_tmp_path: &Path) -> io::Result<()> {
         let mut wal = self.wal.write();
 

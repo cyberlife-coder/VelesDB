@@ -89,12 +89,14 @@ impl RateLimiter {
         bucket.last_update = now;
 
         // Try to consume a token
-        if bucket.tokens >= 1.0 {
+        let verdict = if bucket.tokens >= 1.0 {
             bucket.tokens -= 1.0;
             Ok(())
         } else {
             Err(GuardRailViolation::RateLimitExceeded { limit_qps })
-        }
+        };
+        drop(clients);
+        verdict
     }
 
     /// Evicts a single bucket to make room for a new client.
@@ -162,6 +164,7 @@ impl RateLimiter {
         // With limit_qps = 100_000, it takes 10 seconds to refill 1M tokens.
         bucket.tokens = -1_000_000.0;
         bucket.last_update = now;
+        drop(clients);
     }
 }
 
@@ -260,6 +263,7 @@ impl CircuitBreaker {
         if core.state == CircuitState::Open {
             core.state = CircuitState::HalfOpen;
         }
+        drop(core);
         Ok(())
     }
 

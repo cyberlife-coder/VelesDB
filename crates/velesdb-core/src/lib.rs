@@ -1,3 +1,4 @@
+#![warn(clippy::significant_drop_tightening)]
 // The crate README is pulled into the crate documentation verbatim. This is not
 // cosmetic: it makes `cargo test --doc --package velesdb-core` (CI step "Check
 // doctests compile") type-check every ```rust block in `README.md`. A README

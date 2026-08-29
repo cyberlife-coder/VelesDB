@@ -234,6 +234,11 @@ impl Collection {
     ///
     /// `payload_storage(3)` is acquired before `sparse_indexes(9)` to respect
     /// the canonical lock order defined in `docs/CONCURRENCY_MODEL.md`.
+    // `payload_storage`(3) and `sparse_indexes`(9) are both held across the
+    // search because `filter_fn` closes over them and runs per candidate
+    // inside it. Releasing either early would leave the closure reading a
+    // guard that is gone; the numbered order is the documented one.
+    #[expect(clippy::significant_drop_tightening)]
     fn sparse_search_with_id_filter(
         &self,
         index_name: &str,
@@ -354,6 +359,10 @@ impl Collection {
     /// In the `persistence` path, the two branches run via `rayon::join`; the
     /// dense closure never touches `sparse_indexes`, so there is no ordering
     /// conflict between the two parallel closures.
+    // Both branches take payload_storage(3) before sparse_indexes(9), the
+    // order recorded inline below, and hold them for the whole filtered
+    // search because the filter closure reads through them per candidate.
+    #[expect(clippy::significant_drop_tightening)]
     pub(crate) fn execute_both_branches(
         &self,
         dense_vector: &[f32],
@@ -544,6 +553,9 @@ impl Collection {
             };
             out.push(SearchResult::new(point, score));
         }
+        // The loop is both guards' last use; nothing below reads storage.
+        drop(payload_storage);
+        drop(vector_storage);
         out
     }
 

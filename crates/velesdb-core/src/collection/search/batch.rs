@@ -81,6 +81,8 @@ impl Collection {
                 filtered
             })
             .collect();
+        drop(payload_storage);
+        drop(vector_storage);
 
         Ok(all_results)
     }
@@ -173,6 +175,8 @@ impl Collection {
             .par_iter()
             .map(|query_results| resolve::resolve_scored_results(query_results, vs, ps))
             .collect();
+        drop(payload_storage);
+        drop(vector_storage);
 
         Ok(results)
     }

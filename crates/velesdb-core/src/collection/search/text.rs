@@ -117,6 +117,8 @@ impl Collection {
             &*vector_storage,
             &*payload_storage,
         );
+        drop(payload_storage);
+        drop(vector_storage);
         // Tag each result with its BM25 component score.
         for result in &mut results {
             result.component_scores = Some(smallvec::smallvec![("bm25_score", result.score),]);

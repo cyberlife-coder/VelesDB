@@ -106,6 +106,11 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     }
 
     /// Writes vector data to `{basename}.vectors`.
+    // The read guard spans the whole dump on purpose: it is what makes the
+    // written file a consistent snapshot. Releasing it earlier would mean
+    // copying the entire arena first -- hundreds of MiB at production sizes --
+    // to avoid a read lock that excludes no other reader.
+    #[expect(clippy::significant_drop_tightening)]
     fn dump_vectors_file(&self, path: &Path, basename: &str) -> std::io::Result<u64> {
         let vectors_path = path.join(format!("{basename}.vectors"));
         let vectors_guard = self.vectors.read();
@@ -156,6 +161,10 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     }
 
     /// Writes graph structure to `{basename}.graph`.
+    // Same snapshot argument as `dump_vectors_file`: the layers guard spans
+    // the dump so the written graph is internally consistent. The per-node
+    // neighbour locks inside are released before each write.
+    #[expect(clippy::significant_drop_tightening)]
     fn dump_graph_file(&self, path: &Path, basename: &str, count: u64) -> std::io::Result<()> {
         let graph_path = path.join(format!("{basename}.graph"));
         let layers = self.layers.read();
@@ -230,6 +239,9 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
                     let neighbor_u32 = neighbor as u32;
                     scratch.extend_from_slice(&neighbor_u32.to_le_bytes());
                 }
+                // The node's neighbours are all in `scratch` now; the write
+                // below is disk I/O and must not run under this node's lock.
+                drop(neighbors);
                 writer.write_all(&scratch)?;
             }
         }

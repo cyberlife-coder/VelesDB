@@ -177,6 +177,7 @@ impl AutoReindexManager {
         };
 
         let should_reindex = config.enabled && ratio >= config.param_divergence_threshold;
+        drop(config);
 
         let reason = if should_reindex {
             Some(ReindexReason::ParamDivergence {
@@ -268,6 +269,7 @@ impl AutoReindexManager {
                 ));
             }
         }
+        drop(config);
 
         Ok(())
     }

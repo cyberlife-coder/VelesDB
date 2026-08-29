@@ -104,6 +104,9 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         }
 
         self.bfs_walk(&layers[0], &mut queue, &mut visited, &mut order, count);
+        // The BFS is the guard's last use; the unvisited sweep reads only
+        // the local `visited` bitmap.
+        drop(layers);
         self.append_unvisited(&visited, &mut order);
 
         order
@@ -175,6 +178,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         if let Some(storage) = guard.as_mut() {
             storage.reorder(new_order)?;
         }
+        drop(guard);
         Ok(())
     }
 

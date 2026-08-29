@@ -223,16 +223,24 @@ impl QueryCache {
         parsed: &Arc<Query>,
         record_stats: bool,
     ) {
-        let mut inner = self.inner.write();
-
         if record_stats {
             self.stats.misses.fetch_add(1, Ordering::Relaxed);
         }
-
+        // Both allocations happen before the exclusive guard is taken: two
+        // Strings and an Arc clone have no business inside the critical
+        // section every cache reader queues behind.
         let key = CacheKey {
             hash,
             original_query: raw_query.to_string(),
         };
+        let new_entry = CacheEntry {
+            original_query: raw_query.to_string(),
+            canonical_query,
+            parsed: Arc::clone(parsed),
+            referenced: AtomicBool::new(false),
+        };
+
+        let mut inner = self.inner.write();
 
         // Replacing an existing entry for the same query is not a net size change,
         // so only evict when inserting a genuinely new key.
@@ -240,13 +248,6 @@ impl QueryCache {
         if is_new_key {
             self.evict_until_below_bound(&mut inner, record_stats);
         }
-
-        let new_entry = CacheEntry {
-            original_query: raw_query.to_string(),
-            canonical_query,
-            parsed: Arc::clone(parsed),
-            referenced: AtomicBool::new(false),
-        };
 
         let bucket = inner.map.entry(hash).or_default();
         bucket.retain(|entry| entry.original_query != raw_query);
@@ -257,6 +258,7 @@ impl QueryCache {
             self.size.fetch_add(1, Ordering::Relaxed);
         }
         debug_assert_eq!(self.size.load(Ordering::Relaxed), inner.order.len());
+        drop(inner);
     }
 
     /// CLOCK / second-chance eviction: sweep the insertion-order ring until the
@@ -332,6 +334,7 @@ impl QueryCache {
         let mut inner = self.inner.write();
         inner.map.clear();
         inner.order.clear();
+        drop(inner);
         self.size.store(0, Ordering::Relaxed);
         self.stats.clear();
     }

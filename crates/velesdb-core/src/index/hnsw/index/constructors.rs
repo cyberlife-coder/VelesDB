@@ -336,6 +336,9 @@ impl HnswIndex {
     /// Installs `<path>/rabitq.idx` into the `RaBitQ` backend, when both exist.
     ///
     /// No-op for the Standard backend or when the file is absent.
+    // The guard spans the mode check and the install so the two cannot be
+    // separated by a concurrent (re)configuration; this runs once, at open.
+    #[expect(clippy::significant_drop_tightening)]
     #[cfg(feature = "persistence")]
     fn install_persisted_rabitq(&self, path: &Path) -> std::io::Result<()> {
         let inner = self.inner.read();
@@ -368,6 +371,8 @@ impl HnswIndex {
     ///
     /// No-op for other backends or when the file is absent — mirror of
     /// [`Self::install_persisted_rabitq`].
+    // Same open-time atomicity as install_persisted_rabitq above.
+    #[expect(clippy::significant_drop_tightening)]
     #[cfg(feature = "persistence")]
     fn install_persisted_sq8(&self, path: &Path) -> std::io::Result<()> {
         let inner = self.inner.read();

@@ -102,6 +102,8 @@ impl<D: DistanceEngine, C: TraversalCodec> QuantizedPrecisionHnsw<D, C> {
                     }
                 }
             });
+            // Per-iteration: the neighbour walk is done before the loop check.
+            drop(layers);
 
             if !improved {
                 break;

@@ -258,7 +258,11 @@ impl Database {
         // Stable output: a scrape diff should reflect metric movement, not
         // HashMap iteration order.
         sorted.sort_by_key(|(name, _)| *name);
-        crate::collection::graph::graph_metrics_to_prometheus(&sorted)
+        let rendered = crate::collection::graph::graph_metrics_to_prometheus(&sorted);
+        // `sorted` borrows names out of the guard, so it goes first.
+        drop(sorted);
+        drop(graph_colls);
+        rendered
     }
 
     /// Renders the process-wide MATCH query metrics as a Prometheus
@@ -287,6 +291,11 @@ impl Database {
         for k in metadata_colls.keys() {
             names.insert(k.clone());
         }
+        // Every key is cloned, so the three maps are read as one consistent
+        // snapshot and then released together before the sort below.
+        drop(metadata_colls);
+        drop(graph_colls);
+        drop(vector_colls);
         let mut result: Vec<String> = names.into_iter().collect();
         result.sort();
         result
