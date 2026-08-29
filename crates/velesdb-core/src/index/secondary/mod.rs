@@ -226,6 +226,7 @@ impl SecondaryIndex {
                     }
                     bm |= &ids.bitmap;
                 }
+                drop(guard);
                 Some(bm)
             }
         }
@@ -275,7 +276,9 @@ impl SecondaryIndex {
         if covered != point_count {
             return None;
         }
-        Some(walk_ordered(&guard, descending, limit))
+        let ordered = walk_ordered(&guard, descending, limit);
+        drop(guard);
+        Some(ordered)
     }
 
     /// Returns the point IDs of the leading lead-key buckets (in `descending`
@@ -303,7 +306,9 @@ impl SecondaryIndex {
         if covered != point_count {
             return None;
         }
-        Some(walk_whole_buckets(&guard, descending, min_rows))
+        let buckets = walk_whole_buckets(&guard, descending, min_rows);
+        drop(guard);
+        Some(buckets)
     }
 }
 
