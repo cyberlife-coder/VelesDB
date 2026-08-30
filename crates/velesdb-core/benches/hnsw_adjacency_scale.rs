@@ -36,12 +36,29 @@
 //!
 //! **2. Machine noise larger than the effect.** Even on a byte-identical
 //! graph, process-to-process spread reached 22–25 % on a shared cloud
-//! container. A single-digit effect is unmeasurable there no matter how many
-//! samples are taken *inside* one process. Before trusting a difference from
-//! this benchmark, run the identical configuration twice and check that the
-//! two agree more closely than the difference being claimed. If they do not,
-//! the machine cannot arbitrate the question and a quieter one is needed —
-//! that is a fact about the hardware, not a reason to average harder.
+//! container under concurrent load. A single-digit effect is unmeasurable
+//! there no matter how many samples are taken *inside* one process. Before
+//! trusting a difference from this benchmark, run the identical configuration
+//! twice and check that the two agree more closely than the difference being
+//! claimed. If they do not, the machine cannot arbitrate the question and a
+//! quieter one is needed — that is a fact about the hardware, not a reason to
+//! average harder.
+//!
+//! Two calibrations measured on one idle 4-core Xeon, 33 MiB L3, to show how
+//! sharply this varies — and that it is worth re-measuring rather than
+//! assumed:
+//!
+//! | nodes | spread between two runs of the *same* binary |
+//! |---|---|
+//! | 200 000 | 0.35 % |
+//! | 1 000 000 | ~5 % |
+//!
+//! The same container had shown 22–25 % while busy compiling. Idling it was
+//! what made 200K resolvable; nothing about the hardware changed. At 1M the
+//! working set leaves cache entirely and per-process page placement dominates,
+//! so the noise floor rises with size — an effect worth a few percent is
+//! decidable at 200K and *not* decidable at 1M on this machine, which is the
+//! opposite of the intuition that bigger inputs average noise away.
 //!
 //! # Reading the output
 //!
@@ -50,6 +67,15 @@
 //! layout change can only cost; above it, the locality argument starts to be
 //! testable. With `M0 = 32` and 8-byte ids, adjacency crosses a 33 MiB L3
 //! somewhere around 130K nodes.
+//!
+//! Compare the **sum** of adjacency and vectors, not adjacency alone. A search
+//! touches a vector at every hop, so both compete for the same cache: at 200K
+//! and 64d the printed figures are ~53 MB of adjacency next to ~48 MB of
+//! vectors, and halving the adjacency still leaves the pair far above a 33 MiB
+//! L3. Reading the adjacency column on its own suggests a narrower layout
+//! would become cache-resident there. It does not, and the measurement says so
+//! — narrowing ids to 4 bytes cost 2.6 % at 200K on the machine tabulated
+//! above, and was lost in the noise at 1M.
 //!
 //! # Sizing
 //!
@@ -111,6 +137,14 @@ fn node_counts() -> Vec<usize> {
 /// Reported rather than measured: the point is the order of magnitude next to
 /// last-level cache, not exact allocator accounting. Assumes the default `M0`
 /// and a full adjacency list per node, so it is an upper bound.
+///
+/// `id_bytes` is a parameter and not `size_of::<NodeId>()` because a bench
+/// binary **cannot observe the width the build actually uses** — the neighbour
+/// id type is `pub(crate)`. The caller therefore prints both plausible widths
+/// rather than asserting one. An earlier version passed `size_of::<usize>()`
+/// and printed a single figure, which reported "adjacency ~267 MB" for a build
+/// storing 4-byte ids that in truth held ~150 MB. This line exists to be
+/// compared against L3; a confidently wrong number is worse than none.
 fn adjacency_bytes(nodes: usize, m0: usize, id_bytes: usize) -> usize {
     nodes * (m0 * id_bytes + std::mem::size_of::<usize>() * 3)
 }
@@ -157,12 +191,14 @@ fn bench_search_by_graph_size(c: &mut Criterion) {
         }
         index.set_searching_mode();
 
-        let adj_mb = adjacency_bytes(nodes, 32, std::mem::size_of::<usize>()) / (1024 * 1024);
+        let adj8_mb = adjacency_bytes(nodes, 32, 8) / (1024 * 1024);
+        let adj4_mb = adjacency_bytes(nodes, 32, 4) / (1024 * 1024);
         let vec_mb = nodes * dim * 4 / (1024 * 1024);
         let checksum = results_checksum(&index, dim);
         println!(
-            "  [{nodes} nodes x {dim}d] adjacency ~{adj_mb} MB, vectors ~{vec_mb} MB, \
-             checksum {checksum} — compare adjacency against this machine's L3, and only \
+            "  [{nodes} nodes x {dim}d] adjacency ~{adj8_mb} MB @8-byte ids / ~{adj4_mb} MB \
+             @4-byte ids (this bench cannot see which the build stores), vectors ~{vec_mb} MB, \
+             checksum {checksum} — compare the working set against this machine's L3, and only \
              compare runs whose checksums match"
         );
 
