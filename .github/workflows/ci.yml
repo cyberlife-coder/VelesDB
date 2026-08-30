@@ -817,7 +817,15 @@ jobs:
     # Runs on PRs too (and gates CI Success) so connector regressions are
     # caught before merge — the LangChain suite once rotted to 21 failures
     # while this job was push-only and advisory.
-    if: github.event_name == 'pull_request' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'))
+    #
+    # `workflow_dispatch` is in the list because this job's result is asserted
+    # by the ci-success chain, and a chain entry that cannot run under a
+    # declared trigger makes the gate unsatisfiable under it. Without it a
+    # manual dispatch can only ever produce a RED `CI Success`: this one need
+    # comes back `skipped` while every other job passes. Observed on run 4477
+    # of this branch — 30 jobs green, `CI Success` red on this need alone,
+    # which would have made REL-06 unsatisfiable for the wheel republish.
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'))
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
