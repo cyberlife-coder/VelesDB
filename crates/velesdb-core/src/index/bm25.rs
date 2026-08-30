@@ -169,10 +169,19 @@ impl Bm25Index {
             return;
         }
 
-        // Count term frequencies
+        // Count term frequencies.
+        //
+        // Look up by &str BEFORE inserting: `entry()` demands an owned key,
+        // which would allocate one String per token even for repeats within
+        // the same document. The owned copy is made only the first time a
+        // token is seen in this document.
         let mut term_freqs: FxHashMap<String, u32> = FxHashMap::default();
         for token in &tokens {
-            *term_freqs.entry(token.clone()).or_insert(0) += 1;
+            if let Some(count) = term_freqs.get_mut(token.as_str()) {
+                *count += 1;
+            } else {
+                term_freqs.insert(token.clone(), 1);
+            }
         }
 
         // Reason: Document token count is bounded by practical text length limits.
@@ -197,13 +206,22 @@ impl Bm25Index {
 
         // Update inverted index with adaptive PostingList.
         // PostingList auto-promotes to Roaring when cardinality exceeds threshold.
+        //
+        // Look up by &str BEFORE inserting: `entry()` demands an owned key,
+        // which allocates a String per document per term even when the term
+        // is already in the corpus vocabulary (the common case once the
+        // index has ingested more than a handful of documents). The owned
+        // copy is made only on the term's first appearance in the index.
         {
             let mut inv_idx = self.inverted_index.write();
             for term in doc.term_freqs.keys() {
-                inv_idx
-                    .entry(term.clone())
-                    .or_insert_with(PostingList::new)
-                    .insert(id_u32);
+                if let Some(posting_list) = inv_idx.get_mut(term.as_str()) {
+                    posting_list.insert(id_u32);
+                } else {
+                    let mut posting_list = PostingList::new();
+                    posting_list.insert(id_u32);
+                    inv_idx.insert(term.clone(), posting_list);
+                }
             }
         }
 
