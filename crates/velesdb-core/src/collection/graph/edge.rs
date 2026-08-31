@@ -133,9 +133,30 @@ pub struct EdgeStore {
     pub(super) outgoing: HashMap<u64, Vec<u64>>,
     /// Incoming edges: target_id -> Vec<edge_id>
     pub(super) incoming: HashMap<u64, Vec<u64>>,
-    /// Secondary index: label -> Vec<edge_id> for fast label queries
+    /// Secondary index: label -> Vec<edge_id> for fast label queries.
+    ///
+    /// **Serialized — changing this type is a format break.** See the note on
+    /// `outgoing_by_label` below; it applies to both.
     pub(super) by_label: HashMap<String, Vec<u64>>,
-    /// Composite index: (source_id, label) -> Vec<edge_id> for fast filtered traversal
+    /// Composite index: (source_id, label) -> Vec<edge_id> for fast filtered
+    /// traversal.
+    ///
+    /// **Serialized — changing this type is a format break, and a silent one.**
+    /// This field and `by_label` are written into `edge_store.bin` by postcard,
+    /// which is not self-describing, and nothing in the path carries a format
+    /// version: `PostcardPersistence` is a blanket trait over raw bytes. A file
+    /// the new code cannot deserialize does not surface as a loud error either
+    /// — per `helpers.rs`, callers fall back to an **empty store**, so the
+    /// symptom is a graph that lost its edges.
+    ///
+    /// This is why #2089 stopped short here. Keying these by `LabelId` (the
+    /// unwired `LabelTable`) or nesting them the way `incoming_by_label` is
+    /// nested below would remove the last per-hop `String` allocation on
+    /// `-[:TYPE]->`, and it is worth doing — but only behind a format decision,
+    /// the same one #2090 needs for the BM25 dictionary. Marking them
+    /// `#[serde(skip)]` and rebuilding on load is a defensible answer, and is
+    /// still a format change, since removing a field moves the postcard layout
+    /// exactly as changing one does.
     pub(super) outgoing_by_label: HashMap<(u64, String), Vec<u64>>,
     /// Nested index: target_id -> label -> Vec<edge_id> — the incoming
     /// mirror of `outgoing_by_label`, so `<-[:TYPE]-` patterns stop paying
