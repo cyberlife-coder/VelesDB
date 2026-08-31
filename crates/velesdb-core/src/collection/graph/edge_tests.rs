@@ -351,6 +351,59 @@ fn test_get_incoming_by_label() {
 }
 
 #[test]
+fn test_incoming_label_index_prunes_emptied_entries() {
+    let mut store = EdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(1, 100, 500, "FOLLOWS").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(2, 200, 500, "BLOCKS").expect("valid"))
+        .expect("add");
+
+    assert_eq!(store.incoming_by_label.len(), 1, "one target node indexed");
+
+    store.remove_edge(1);
+    assert!(
+        store.get_incoming_by_label(500, "FOLLOWS").is_empty(),
+        "the removed label must no longer resolve"
+    );
+    assert_eq!(
+        store.incoming_by_label[&500].len(),
+        1,
+        "the emptied label must not linger beside BLOCKS"
+    );
+
+    store.remove_edge(2);
+    assert!(
+        !store.incoming_by_label.contains_key(&500),
+        "a node with no incoming labels left must not keep an entry"
+    );
+}
+
+#[test]
+fn test_rebuild_incoming_label_index_matches_live_edges() {
+    let mut store = EdgeStore::new();
+    for (id, source, label) in [
+        (1u64, 100u64, "FOLLOWS"),
+        (2, 200, "FOLLOWS"),
+        (3, 300, "BLOCKS"),
+    ] {
+        store
+            .add_edge(GraphEdge::new(id, source, 500, label).expect("valid"))
+            .expect("add");
+    }
+
+    // Rebuilding from the live edges must reproduce the index the inserts
+    // built — this is the path a postcard load takes, since the index is
+    // `serde(skip)`.
+    store.rebuild_incoming_label_index();
+
+    assert_eq!(store.get_incoming_by_label(500, "FOLLOWS").len(), 2);
+    assert_eq!(store.get_incoming_by_label(500, "BLOCKS").len(), 1);
+    assert!(store.get_incoming_by_label(500, "LIKES").is_empty());
+}
+
+#[test]
 fn test_contains_edge() {
     let mut store = EdgeStore::new();
 

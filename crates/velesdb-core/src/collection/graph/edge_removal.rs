@@ -87,15 +87,23 @@ impl EdgeStore {
         if let Some(ids) = self.incoming.get_mut(&target_node) {
             ids.retain(|&id| id != edge_id);
         }
-        if let Some(ids) = self
-            .incoming_by_label
-            .get_mut(&(target_node, label.to_string()))
-        {
-            ids.retain(|&id| id != edge_id);
-            if ids.is_empty() {
-                self.incoming_by_label
-                    .remove(&(target_node, label.to_string()));
+        // Nested index: probe by `&str`, so purging allocates nothing. The
+        // composite key this replaced needed two `to_string()` per call, one
+        // to look up and one to remove (#2089).
+        let node_now_empty = {
+            let Some(per_label) = self.incoming_by_label.get_mut(&target_node) else {
+                return;
+            };
+            if let Some(ids) = per_label.get_mut(label) {
+                ids.retain(|&id| id != edge_id);
+                if ids.is_empty() {
+                    per_label.remove(label);
+                }
             }
+            per_label.is_empty()
+        };
+        if node_now_empty {
+            self.incoming_by_label.remove(&target_node);
         }
     }
 

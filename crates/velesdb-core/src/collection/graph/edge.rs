@@ -137,15 +137,21 @@ pub struct EdgeStore {
     pub(super) by_label: HashMap<String, Vec<u64>>,
     /// Composite index: (source_id, label) -> Vec<edge_id> for fast filtered traversal
     pub(super) outgoing_by_label: HashMap<(u64, String), Vec<u64>>,
-    /// Composite index: (target_id, label) -> Vec<edge_id> — the incoming
+    /// Nested index: target_id -> label -> Vec<edge_id> — the incoming
     /// mirror of `outgoing_by_label`, so `<-[:TYPE]-` patterns stop paying
     /// O(in-degree) full-edge clones on super-nodes.
+    ///
+    /// Nested rather than keyed by `(u64, String)` so a lookup can borrow:
+    /// no `Borrow` path exists into a tuple, so a composite key forces every
+    /// `<-[:TYPE]-` hop to allocate a `String` purely to build a probe key
+    /// (#2089). Nesting lets `HashMap<String, _>::get` take the `&str`
+    /// directly, and lets an insert probe before it allocates.
     ///
     /// `serde(skip)`: the snapshot format is postcard (not self-describing),
     /// so a new serialized field would break every existing edge_store.bin.
     /// The index is fully derivable and rebuilt in `load_from_file`.
     #[serde(skip)]
-    pub(super) incoming_by_label: HashMap<(u64, String), Vec<u64>>,
+    pub(super) incoming_by_label: HashMap<u64, HashMap<String, Vec<u64>>>,
     /// Zero-copy CSR snapshot for BFS traversal (G1).
     /// Built on-demand via `build_read_snapshot()`, invalidated by writes.
     #[serde(skip)]
@@ -194,7 +200,8 @@ impl EdgeStore {
             incoming: HashMap::with_capacity(expected_nodes),
             by_label: HashMap::with_capacity(expected_labels),
             outgoing_by_label: HashMap::with_capacity(outgoing_by_label_cap),
-            incoming_by_label: HashMap::with_capacity(outgoing_by_label_cap),
+            // Keyed by node, not by (node, label): one entry per node.
+            incoming_by_label: HashMap::with_capacity(expected_nodes),
             csr_snapshot: None,
         }
     }
@@ -255,12 +262,20 @@ impl EdgeStore {
 
         if index_outgoing {
             let source = edge.source();
-            let label = edge.label().to_string();
+            let label = edge.label();
             self.outgoing.entry(source).or_default().push(id);
-            // Label indices are owned by the source shard (US-003)
-            self.by_label.entry(label.clone()).or_default().push(id);
+            // Label indices are owned by the source shard (US-003).
+            // Probe before `entry`: `entry` demands an owned key, so it
+            // allocates even for a label the map already holds. The label
+            // vocabulary is tiny next to the edge count, so after warmup
+            // every insert takes the borrowing path (#2089).
+            if let Some(ids) = self.by_label.get_mut(label) {
+                ids.push(id);
+            } else {
+                self.by_label.insert(label.to_owned(), vec![id]);
+            }
             self.outgoing_by_label
-                .entry((source, label))
+                .entry((source, label.to_owned()))
                 .or_default()
                 .push(id);
         }
@@ -268,10 +283,7 @@ impl EdgeStore {
         if index_incoming {
             let target = edge.target();
             self.incoming.entry(target).or_default().push(id);
-            self.incoming_by_label
-                .entry((target, edge.label().to_string()))
-                .or_default()
-                .push(id);
+            Self::push_incoming_label(&mut self.incoming_by_label, target, edge.label(), id);
         }
 
         self.edges.insert(id, edge);
@@ -404,7 +416,30 @@ impl EdgeStore {
     /// Gets incoming edges filtered by label.
     #[must_use]
     pub fn get_incoming_by_label(&self, node_id: u64, label: &str) -> Vec<&GraphEdge> {
-        self.resolve_edge_ids(self.incoming_by_label.get(&(node_id, label.to_string())))
+        self.resolve_edge_ids(
+            self.incoming_by_label
+                .get(&node_id)
+                .and_then(|per_label| per_label.get(label)),
+        )
+    }
+
+    /// Pushes `edge_id` into the incoming label mirror under `(target, label)`.
+    ///
+    /// Takes the index rather than `&mut self` so callers can hold a borrow of
+    /// another field (`edges`) across the call. Probes before inserting, for
+    /// the reason given on `insert_edge`.
+    fn push_incoming_label(
+        index: &mut HashMap<u64, HashMap<String, Vec<u64>>>,
+        target: u64,
+        label: &str,
+        edge_id: u64,
+    ) {
+        let per_label = index.entry(target).or_default();
+        if let Some(ids) = per_label.get_mut(label) {
+            ids.push(edge_id);
+        } else {
+            per_label.insert(label.to_owned(), vec![edge_id]);
+        }
     }
 
     /// Rebuilds the (unserialized) `incoming_by_label` index from the live
@@ -414,10 +449,12 @@ impl EdgeStore {
         for ids in self.incoming.values() {
             for &id in ids {
                 if let Some(edge) = self.edges.get(&id) {
-                    self.incoming_by_label
-                        .entry((edge.target(), edge.label().to_string()))
-                        .or_default()
-                        .push(id);
+                    Self::push_incoming_label(
+                        &mut self.incoming_by_label,
+                        edge.target(),
+                        edge.label(),
+                        id,
+                    );
                 }
             }
         }
