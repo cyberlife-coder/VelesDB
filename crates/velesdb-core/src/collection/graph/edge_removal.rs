@@ -87,14 +87,13 @@ impl EdgeStore {
         if let Some(ids) = self.incoming.get_mut(&target_node) {
             ids.retain(|&id| id != edge_id);
         }
-        if let Some(ids) = self
-            .incoming_by_label
-            .get_mut(&(target_node, label.to_string()))
-        {
+        // Build the composite key once — `get_mut`/`remove` used to each
+        // allocate their own copy of the same (node, label) key.
+        let key = (target_node, label.to_string());
+        if let Some(ids) = self.incoming_by_label.get_mut(&key) {
             ids.retain(|&id| id != edge_id);
             if ids.is_empty() {
-                self.incoming_by_label
-                    .remove(&(target_node, label.to_string()));
+                self.incoming_by_label.remove(&key);
             }
         }
     }

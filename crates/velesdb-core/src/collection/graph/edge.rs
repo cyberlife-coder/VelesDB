@@ -255,12 +255,19 @@ impl EdgeStore {
 
         if index_outgoing {
             let source = edge.source();
-            let label = edge.label().to_string();
+            let label = edge.label();
             self.outgoing.entry(source).or_default().push(id);
-            // Label indices are owned by the source shard (US-003)
-            self.by_label.entry(label.clone()).or_default().push(id);
+            // Label indices are owned by the source shard (US-003).
+            // Probe with the borrowed label first so an already-seen label
+            // (the common case — label cardinality is low) costs no clone.
+            match self.by_label.get_mut(label) {
+                Some(ids) => ids.push(id),
+                None => {
+                    self.by_label.insert(label.to_string(), vec![id]);
+                }
+            }
             self.outgoing_by_label
-                .entry((source, label))
+                .entry((source, label.to_string()))
                 .or_default()
                 .push(id);
         }
