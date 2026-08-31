@@ -50,6 +50,24 @@
 //!
 //! Lowering the vocabulary is the cheap way to lengthen posting lists without
 //! paying for a larger corpus: list length is `docs * avg_nnz / vocab`.
+//!
+//! # A trap inside this bench's own sweep range
+//!
+//! `sparse_search` picks its strategy from `doc_count`:
+//! `SMALL_CORPUS_LINEAR_THRESHOLD` is 100 000 documents, below which every
+//! query takes `linear_scan_search` and above which it can reach
+//! `maxscore_search`. That boundary sits **inside** the range this bench
+//! sweeps, and crossing it dominates everything else.
+//!
+//! Measured here, two passes each, checksums matching: 90 000 documents ran in
+//! 537 µs and 522 µs; 110 000 ran in 22.8 ms and 23.0 ms. Twenty-two percent
+//! more data, forty-two times the latency — the jump is at the threshold, not
+//! in the volume.
+//!
+//! So a comparison that straddles 100 000 documents measures the strategy
+//! switch, not whatever change is under test. **Keep both arms of any A/B on
+//! the same side of that boundary**, and read a size sweep that crosses it as
+//! two separate curves rather than one.
 
 #![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 
