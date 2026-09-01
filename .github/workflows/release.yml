@@ -610,7 +610,7 @@ jobs:
         # Prebuilt binary — NOT `cargo install wasm-pack --locked`, whose own
         # lockfile pins cargo-platform 0.3.3 (MSRV 1.91) and fails to compile
         # under the pinned RUST_VERSION (1.90). Matches ci.yml's wasm job.
-        uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518 # v2.86.5
+        uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d # v2.87.0
         with:
           tool: wasm-pack
 
