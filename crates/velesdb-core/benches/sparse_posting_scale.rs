@@ -69,6 +69,25 @@
 //! the same side of that boundary**, and read a size sweep that crosses it as
 //! two separate curves rather than one.
 //!
+//! # What the id stride costs, measured
+//!
+//! The same warning applies to `VELESDB_SPARSE_SCALE_ID_STRIDE`, and here is
+//! the size of it. At 200 000 documents with skewed queries — identical corpus,
+//! identical queries, only the id labelling moving — stride 4 leaves
+//! `max_doc_id` at 799 996, just under `doc_count * 4`, and stride 5 puts it at
+//! 999 995, just over. The accumulator flips between those two and little else
+//! does:
+//!
+//! ```text
+//! stride 4  (dense)    554.7 µs / 527.6 µs
+//! stride 5  (hashmap)  771.2 µs / 798.0 µs
+//! ```
+//!
+//! **~45 %**, against a pass-to-pass spread of 3–5 %. So a stride is not a free
+//! relabelling: it buys access to the other accumulator and charges for it.
+//! Comparing a strided run against a compact one measures that charge on top of
+//! whatever is under test.
+//!
 //! # Query shape (#2177 step 1)
 //!
 //! `VELESDB_SPARSE_SCALE_QUERY_SHAPE` selects the query generator:
@@ -125,6 +144,20 @@ const DEFAULT_DOCS: &[usize] = &[10_000, 50_000, 200_000];
 
 /// Vocabulary size used when `VELESDB_SPARSE_SCALE_VOCAB` is unset.
 const DEFAULT_VOCAB: u32 = 30_000;
+
+/// Spacing between consecutive document ids when `VELESDB_SPARSE_SCALE_ID_STRIDE`
+/// is unset. 1 gives the compact `0..n` space every other sweep here uses.
+const DEFAULT_ID_STRIDE: u64 = 1;
+
+/// `MAX_DENSE_ACCUMULATOR` as it read when this bench was written.
+///
+/// Reported, never used to decide anything. The real constant is private to
+/// `sparse_index::search`, so a bench genuinely cannot observe which
+/// accumulator a run took — it can only print the two inputs it does know and
+/// name the third. Asserting a regime it cannot see is how a header comes to
+/// lie about its own configuration, which is the defect #2165 fixed on
+/// `hnsw_adjacency_scale` and which the first draft of this line repeated.
+const DENSE_CAP_AT_WRITING: u64 = 1_000_000;
 
 /// Nonzeros per skewed-shape query: real SPLADE queries carry far fewer
 /// terms than documents do (#2177 step 1).
@@ -189,6 +222,37 @@ fn scale_vocab() -> u32 {
         .unwrap_or(DEFAULT_VOCAB)
 }
 
+/// Reads the document-id stride from the environment.
+///
+/// This knob exists to reach `linear_scan_search`'s **other** accumulator.
+/// The dense-versus-hashmap choice is not made on corpus size but on id
+/// compactness:
+///
+/// ```text
+/// use_dense = max_doc_id <= MAX_DENSE_ACCUMULATOR
+///          && max_doc_id < doc_count * 4
+/// ```
+///
+/// so a stride of 4 or more puts `max_doc_id` past `doc_count * 4` and routes
+/// to `linear_scan_hashmap` at any corpus size, with the same number of
+/// postings and the same memory as the compact run. Without this, every sweep
+/// measures the dense accumulator only, and the hashmap variant — the one
+/// #2182's routing change reaches but never measured — stays invisible.
+///
+/// **Checksums do not carry across strides, and that is not a defect.** The
+/// checksum folds `doc_id`, so relabelling ids necessarily changes it. What is
+/// preserved is the thing the comparison needs: scores depend on weights
+/// alone, and `i * stride` is order-preserving, so a stride run retrieves the
+/// same documents in the same rank order with every id multiplied by the
+/// stride. Compare checksums between runs at equal stride — never across two.
+fn scale_id_stride() -> u64 {
+    std::env::var("VELESDB_SPARSE_SCALE_ID_STRIDE")
+        .ok()
+        .and_then(|raw| raw.trim().parse().ok())
+        .filter(|&v| v > 0)
+        .unwrap_or(DEFAULT_ID_STRIDE)
+}
+
 /// Generates sparse vectors over `vocab` terms, deterministic in `seed`.
 ///
 /// `weight(rng, rank)` decides each nonzero's weight from its draw rank, so
@@ -240,13 +304,13 @@ fn generate_queries(shape: QueryShape, n: usize, vocab: u32, seed: u64) -> Vec<S
 }
 
 /// Builds the index sequentially, so the same corpus yields the same index.
-fn build_index(corpus: &[SparseVector]) -> SparseInvertedIndex {
+fn build_index(corpus: &[SparseVector], id_stride: u64) -> SparseInvertedIndex {
     let index = SparseInvertedIndex::new();
     let docs: Vec<(u64, SparseVector)> = corpus
         .iter()
         .cloned()
         .enumerate()
-        .map(|(i, v)| (i as u64, v))
+        .map(|(i, v)| (i as u64 * id_stride, v))
         .collect();
     index.insert_batch_chunk(&docs);
     index
@@ -288,6 +352,7 @@ fn result_checksum(index: &SparseInvertedIndex, queries: &[SparseVector], k: usi
 fn sparse_posting_scale(c: &mut Criterion) {
     let vocab = scale_vocab();
     let shape = QueryShape::from_env();
+    let id_stride = scale_id_stride();
     let mut group = c.benchmark_group("sparse_posting_scale");
     group.sample_size(10);
 
@@ -296,7 +361,7 @@ fn sparse_posting_scale(c: &mut Criterion) {
         let queries = generate_queries(shape, QUERY_COUNT, vocab, 123);
 
         let build_started = Instant::now();
-        let index = build_index(&corpus);
+        let index = build_index(&corpus, id_stride);
         let build_secs = build_started.elapsed().as_secs_f64();
 
         let total_postings: usize = corpus.iter().map(SparseVector::nnz).sum();
@@ -315,15 +380,23 @@ postings={total_postings} (~{per_term:.0}/term) \
 frozen_segments={segments} build={build_secs:.1}s\n\
   bytes touched per query ~{touched_mib:.1} MiB at {POSTING_ENTRY_BYTES} B/entry \
 — compare against last-level cache; padding is free below it\n\
+  id_stride={id_stride} max_doc_id={max_doc_id} vs doc_count*4={compact_cap} \
+— dense also needs max_doc_id <= MAX_DENSE_ACCUMULATOR, a private constant \
+this bench cannot read ({DENSE_CAP_AT_WRITING} when written)\n\
   result checksum {checksum:#018x} — only compare runs whose checksums match",
             shape_label = shape.label(),
+            max_doc_id = (docs as u64 - 1) * id_stride,
+            compact_cap = docs as u64 * 4,
             per_term = total_postings as f64 / f64::from(vocab),
             segments = docs / velesdb_core::index::sparse::inverted_index::FREEZE_THRESHOLD,
             touched_mib = touched as f64 / (1024.0 * 1024.0),
         );
 
         group.bench_function(
-            format!("top10_{docs}docs_{vocab}vocab_{}", shape.label()),
+            format!(
+                "top10_{docs}docs_{vocab}vocab_{}_stride{id_stride}",
+                shape.label()
+            ),
             |b| {
                 let mut qi = 0;
                 b.iter(|| {
