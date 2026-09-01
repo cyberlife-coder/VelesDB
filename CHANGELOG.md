@@ -62,14 +62,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
-- **The `VELESDB_*` environment-variable table is flagged as broken (#2185).**
-  Re-verifying it end to end while wiring `[hnsw]` showed that no documented
-  engine variable reaches its field — `VELESDB_HNSW_M`,
-  `VELESDB_HNSW_EF_CONSTRUCTION` and `VELESDB_LIMITS_MAX_COLLECTIONS` all load
-  as the default, the last one despite an explicit rustdoc promise that it
-  works. `docs/guides/CONFIGURATION.md` now carries a banner saying so. The
-  fix is a behaviour change — currently-inert variables would start taking
-  effect — so it is tracked separately rather than folded in here.
+- **The `VELESDB_*` environment-variable defect was found here (#2185).**
+  Re-verifying the table end to end while wiring `[hnsw]` — which #2087's
+  validation bar requires — showed that no documented engine variable reached
+  its field: `VELESDB_HNSW_M`, `VELESDB_HNSW_EF_CONSTRUCTION` and
+  `VELESDB_LIMITS_MAX_COLLECTIONS` all loaded as their defaults, the last one
+  despite an explicit rustdoc promise that it works. The fix is a behaviour
+  change — currently-inert variables start taking effect — so it is tracked and
+  shipped separately as #2185 rather than folded into this wiring.
 
 ### Added
 

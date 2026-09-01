@@ -377,13 +377,6 @@ hot_reload = false
 
 All options can be set via environment variables with the `VELESDB_` prefix:
 
-> **Known defect — this table does not currently work for `VelesConfig`.**
-> Every engine variable below was verified end to end while wiring `[hnsw]`
-> and none of them reaches its field: `VELESDB_HNSW_M`,
-> `VELESDB_HNSW_EF_CONSTRUCTION` and `VELESDB_LIMITS_MAX_COLLECTIONS` all
-> load as the default. Set these keys in the TOML file until this is fixed.
-> Tracked in issue #2185.
-
 | Variable | TOML Equivalent | Example |
 |----------|-----------------|---------|
 | `VELESDB_SEARCH_DEFAULT_MODE` | `search.default_mode` | `balanced` |
