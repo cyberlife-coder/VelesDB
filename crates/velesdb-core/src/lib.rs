@@ -94,6 +94,8 @@ pub mod column_store;
 mod column_store_tests;
 pub mod compression;
 pub mod config;
+#[cfg(test)]
+mod config_env_tests;
 pub mod config_quantization;
 #[cfg(test)]
 mod config_tests;

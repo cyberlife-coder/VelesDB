@@ -12,6 +12,7 @@
 
 use figment::{
     providers::{Env, Format, Serialized, Toml},
+    value::{Uncased, UncasedStr},
     Figment,
 };
 use serde::{Deserialize, Serialize};
@@ -401,9 +402,69 @@ impl VelesConfig {
         let figment = Figment::new()
             .merge(Serialized::defaults(Self::default()))
             .merge(Toml::file(path.as_ref()))
-            .merge(Env::prefixed("VELESDB_").split("_").lowercase(false));
+            .merge(Self::env_provider());
 
         Self::finish(&figment)
+    }
+
+    /// Every top-level table of this struct, as a `VELESDB_*` variable would
+    /// name it. Ordered longest-first so that a section whose name prefixes
+    /// another cannot claim its variables (none do today; the ordering keeps
+    /// that true for whatever is added next).
+    ///
+    /// Wider than [`Self::ENGINE_SECTIONS`] on purpose: `server` and
+    /// `logging` are fields here too, and a variable naming one must resolve
+    /// to that field rather than fall through as an unprefixed key.
+    const ENV_SECTIONS: &'static [&'static str] = &[
+        "quantization",
+        "wal_batch",
+        "logging",
+        "storage",
+        "limits",
+        "search",
+        "server",
+        "hnsw",
+    ];
+
+    /// Maps one `VELESDB_`-stripped variable name onto the config path it
+    /// addresses, splitting **only** at the boundary of a known section.
+    ///
+    /// `VELESDB_HNSW_EF_CONSTRUCTION` must reach `hnsw.ef_construction`, not
+    /// `hnsw.ef.construction`. Figment's `split("_")` treats every underscore
+    /// as a nesting separator, which no field carrying an underscore in its
+    /// name survives — and that is most of them (`max_collections`,
+    /// `ef_construction`, `query_timeout_ms`, ...). Splitting at the section
+    /// boundary and nowhere else is what the documented names actually mean.
+    ///
+    /// A name whose first token is not a section passes through lowercased and
+    /// unsplit, so `VELESDB_CONFIG`, `VELESDB_NO_UPDATE_CHECK` and the
+    /// server's own `VELESDB_HOST` / `VELESDB_PORT` keep matching nothing
+    /// here, exactly as they do today.
+    ///
+    /// Issue #2185: before this, the provider also carried `lowercase(false)`,
+    /// which left the key uppercase and made even the single-token
+    /// `VELESDB_HNSW_M` miss `hnsw.m`. Between the two defects, no documented
+    /// engine variable reached its field.
+    pub(crate) fn env_key_to_config_path(key: &UncasedStr) -> Uncased<'_> {
+        let lowered = key.as_str().to_ascii_lowercase();
+        for section in Self::ENV_SECTIONS {
+            if let Some(field) = lowered
+                .strip_prefix(section)
+                .and_then(|rest| rest.strip_prefix('_'))
+            {
+                if !field.is_empty() {
+                    return Uncased::from_owned(format!("{section}.{field}"));
+                }
+            }
+        }
+        Uncased::from_owned(lowered)
+    }
+
+    /// The `VELESDB_*` environment layer, built once so both loaders resolve
+    /// variable names identically — the same single-mapping-point discipline
+    /// `HnswParams::from_config` follows for the `[hnsw]` table.
+    fn env_provider() -> Env {
+        Env::prefixed("VELESDB_").map(Self::env_key_to_config_path)
     }
 
     /// Creates a configuration from a TOML string.
@@ -488,7 +549,7 @@ impl VelesConfig {
         let figment = Figment::new()
             .merge(Serialized::defaults(Self::default()))
             .merge(Toml::string(&filtered))
-            .merge(Env::prefixed("VELESDB_").split("_").lowercase(false));
+            .merge(Self::env_provider());
 
         Self::finish(&figment)
     }
