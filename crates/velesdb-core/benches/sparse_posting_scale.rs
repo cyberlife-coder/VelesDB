@@ -68,6 +68,22 @@
 //! switch, not whatever change is under test. **Keep both arms of any A/B on
 //! the same side of that boundary**, and read a size sweep that crosses it as
 //! two separate curves rather than one.
+//!
+//! # Query shape (#2177 step 1)
+//!
+//! `VELESDB_SPARSE_SCALE_QUERY_SHAPE` selects the query generator:
+//!
+//! - `uniform` (default): 50–200 terms, uniform weights — inherited from
+//!   `sparse_benchmark`, and the worst case for `MaxScore` pruning, whose
+//!   upper bounds need the score separation uniform weights deny it.
+//! - `skewed`: 20–50 terms with geometrically decaying weights — the shape
+//!   of a real SPLADE query, which is what #2177's step 1 asks to measure.
+//!
+//! The corpus generator is shared by both shapes, so the index under test is
+//! identical; only the queries differ. Checksums are therefore comparable
+//! only within one shape — across shapes they are different queries by
+//! construction, and the header line names the shape so a run cannot be
+//! misfiled.
 
 #![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 
@@ -110,6 +126,43 @@ const DEFAULT_DOCS: &[usize] = &[10_000, 50_000, 200_000];
 /// Vocabulary size used when `VELESDB_SPARSE_SCALE_VOCAB` is unset.
 const DEFAULT_VOCAB: u32 = 30_000;
 
+/// Nonzeros per skewed-shape query: real SPLADE queries carry far fewer
+/// terms than documents do (#2177 step 1).
+const SKEWED_QUERY_NNZ_RANGE: std::ops::RangeInclusive<usize> = 20..=50;
+
+/// First-rank weight of a skewed query; later ranks decay geometrically.
+const SKEWED_MAX_WEIGHT: f32 = 2.0;
+
+/// Per-rank geometric decay of skewed query weights: rank 0 gets 2.0, rank
+/// 49 gets ~0.011 — the strong separation `MaxScore`'s pruning feeds on and
+/// uniform weights deny it.
+const SKEWED_WEIGHT_DECAY: f32 = 0.9;
+
+/// Which query generator a run uses. Selected by
+/// `VELESDB_SPARSE_SCALE_QUERY_SHAPE`; anything but `skewed` (including
+/// unset) is the historical uniform shape, so existing runs stay comparable.
+#[derive(Clone, Copy)]
+enum QueryShape {
+    Uniform,
+    Skewed,
+}
+
+impl QueryShape {
+    fn from_env() -> Self {
+        match std::env::var("VELESDB_SPARSE_SCALE_QUERY_SHAPE").as_deref() {
+            Ok("skewed") => Self::Skewed,
+            _ => Self::Uniform,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Uniform => "uniform",
+            Self::Skewed => "skewed",
+        }
+    }
+}
+
 /// Reads a comma-separated list of corpus sizes from the environment.
 fn scale_docs() -> Vec<usize> {
     let Ok(raw) = std::env::var("VELESDB_SPARSE_SCALE_DOCS") else {
@@ -136,23 +189,54 @@ fn scale_vocab() -> u32 {
         .unwrap_or(DEFAULT_VOCAB)
 }
 
-/// Generates a SPLADE-like corpus over `vocab` terms, deterministic in `seed`.
-fn generate_corpus(n: usize, vocab: u32, seed: u64) -> Vec<SparseVector> {
+/// Generates sparse vectors over `vocab` terms, deterministic in `seed`.
+///
+/// `weight(rng, rank)` decides each nonzero's weight from its draw rank, so
+/// one skeleton serves both the uniform corpus/query shape and the skewed
+/// query shape without duplicating the dedup loop.
+fn generate_vectors(
+    n: usize,
+    vocab: u32,
+    seed: u64,
+    nnz_range: std::ops::RangeInclusive<usize>,
+    weight: impl Fn(&mut StdRng, usize) -> f32,
+) -> Vec<SparseVector> {
     let mut rng = StdRng::seed_from_u64(seed);
     (0..n)
         .map(|_| {
-            let nnz = rng.random_range(NNZ_RANGE).min(vocab as usize);
+            let nnz = rng.random_range(nnz_range.clone()).min(vocab as usize);
             let mut pairs: Vec<(u32, f32)> = Vec::with_capacity(nnz);
             let mut used = HashSet::new();
             while pairs.len() < nnz {
                 let term_id = rng.random_range(0..vocab);
                 if used.insert(term_id) {
-                    pairs.push((term_id, rng.random_range(0.01_f32..2.0)));
+                    let w = weight(&mut rng, pairs.len());
+                    pairs.push((term_id, w));
                 }
             }
             SparseVector::new(pairs)
         })
         .collect()
+}
+
+/// Generates a SPLADE-like corpus over `vocab` terms, deterministic in `seed`.
+fn generate_corpus(n: usize, vocab: u32, seed: u64) -> Vec<SparseVector> {
+    generate_vectors(n, vocab, seed, NNZ_RANGE, |rng, _rank| {
+        rng.random_range(0.01_f32..2.0)
+    })
+}
+
+/// Generates queries for the selected shape, deterministic in `seed`.
+fn generate_queries(shape: QueryShape, n: usize, vocab: u32, seed: u64) -> Vec<SparseVector> {
+    match shape {
+        QueryShape::Uniform => generate_corpus(n, vocab, seed),
+        QueryShape::Skewed => {
+            generate_vectors(n, vocab, seed, SKEWED_QUERY_NNZ_RANGE, |_rng, rank| {
+                SKEWED_MAX_WEIGHT
+                    * SKEWED_WEIGHT_DECAY.powi(i32::try_from(rank).unwrap_or(i32::MAX))
+            })
+        }
+    }
 }
 
 /// Builds the index sequentially, so the same corpus yields the same index.
@@ -203,12 +287,13 @@ fn result_checksum(index: &SparseInvertedIndex, queries: &[SparseVector], k: usi
 
 fn sparse_posting_scale(c: &mut Criterion) {
     let vocab = scale_vocab();
+    let shape = QueryShape::from_env();
     let mut group = c.benchmark_group("sparse_posting_scale");
     group.sample_size(10);
 
     for &docs in &scale_docs() {
         let corpus = generate_corpus(docs, vocab, 42);
-        let queries = generate_corpus(QUERY_COUNT, vocab, 123);
+        let queries = generate_queries(shape, QUERY_COUNT, vocab, 123);
 
         let build_started = Instant::now();
         let index = build_index(&corpus);
@@ -225,25 +310,29 @@ fn sparse_posting_scale(c: &mut Criterion) {
         // Printed, never asserted: the bench cannot know this machine's cache
         // sizes, and the point is to let a reader place each row against theirs.
         println!(
-            "\n[sparse_posting_scale] docs={docs} vocab={vocab} \
+            "\n[sparse_posting_scale] docs={docs} vocab={vocab} query_shape={shape_label} \
 postings={total_postings} (~{per_term:.0}/term) \
 frozen_segments={segments} build={build_secs:.1}s\n\
   bytes touched per query ~{touched_mib:.1} MiB at {POSTING_ENTRY_BYTES} B/entry \
 — compare against last-level cache; padding is free below it\n\
   result checksum {checksum:#018x} — only compare runs whose checksums match",
+            shape_label = shape.label(),
             per_term = total_postings as f64 / f64::from(vocab),
             segments = docs / velesdb_core::index::sparse::inverted_index::FREEZE_THRESHOLD,
             touched_mib = touched as f64 / (1024.0 * 1024.0),
         );
 
-        group.bench_function(format!("top10_{docs}docs_{vocab}vocab"), |b| {
-            let mut qi = 0;
-            b.iter(|| {
-                let query = &queries[qi % queries.len()];
-                qi += 1;
-                sparse_search(black_box(&index), black_box(query), 10)
-            });
-        });
+        group.bench_function(
+            format!("top10_{docs}docs_{vocab}vocab_{}", shape.label()),
+            |b| {
+                let mut qi = 0;
+                b.iter(|| {
+                    let query = &queries[qi % queries.len()];
+                    qi += 1;
+                    sparse_search(black_box(&index), black_box(query), 10)
+                });
+            },
+        );
     }
 
     group.finish();
