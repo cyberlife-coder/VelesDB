@@ -31,7 +31,8 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
-use crate::index::bm25::{Bm25Index, Bm25Snapshot};
+use crate::index::bm25::Bm25Index;
+use crate::index::bm25_term_dict::parse_snapshot;
 use crate::storage::atomic_write::atomic_write;
 
 /// Snapshot filename under a collection directory.
@@ -79,8 +80,11 @@ pub(crate) fn load_snapshot(dir: &Path) -> Result<Option<Bm25Index>> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(Error::Index(format!("BM25 snapshot read: {e}"))),
     };
-    let snapshot: Bm25Snapshot = postcard::from_bytes(&bytes)
-        .map_err(|e| Error::Index(format!("BM25 snapshot deserialize: {e}")))?;
+    // `parse_snapshot` dispatches on the leading version field: current
+    // snapshots deserialize directly, version-1 (pre-#2090) snapshots are
+    // migrated in memory. Corruption surfaces as `Err`, per the contract
+    // above.
+    let snapshot = parse_snapshot(&bytes)?;
     Ok(Some(Bm25Index::from_snapshot(snapshot)?))
 }
 

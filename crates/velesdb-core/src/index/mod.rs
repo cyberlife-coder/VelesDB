@@ -11,6 +11,9 @@ pub(crate) mod bm25_persistence;
 mod bm25_persistence_tests;
 #[cfg(feature = "persistence")]
 pub(crate) mod bm25_persistence_wal;
+mod bm25_term_dict;
+#[cfg(test)]
+mod bm25_term_dict_tests;
 #[cfg(test)]
 mod bm25_tests;
 pub mod hnsw;

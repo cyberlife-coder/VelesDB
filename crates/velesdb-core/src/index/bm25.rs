@@ -38,6 +38,7 @@
 //! // Returns [(1, score)] - document 1 matches "rust"
 //! ```
 
+use super::bm25_term_dict::{TermDict, TermId};
 use super::posting_list::PostingList;
 use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
@@ -59,10 +60,14 @@ impl Default for Bm25Params {
 }
 
 /// A document stored in the BM25 index.
+///
+/// Terms are stored as [`TermId`]s resolved against the owning index's
+/// [`TermDict`] (#2090) — the term string itself lives once in the
+/// dictionary, not once per document.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Document {
     /// Term frequencies in this document
-    pub(crate) term_freqs: FxHashMap<String, u32>,
+    pub(crate) term_freqs: FxHashMap<TermId, u32>,
     /// Total number of terms in the document
     pub(crate) length: u32,
 }
@@ -79,6 +84,11 @@ pub(crate) struct Bm25Snapshot {
     /// Schema version for forward-compat (bump on breaking changes).
     pub(crate) version: u32,
     pub(crate) params: Bm25Params,
+    /// Interned terms indexed by [`TermId`] — the wire form of the
+    /// index's [`TermDict`]. Version-1 snapshots (no dictionary,
+    /// `String`-keyed documents) are migrated on load by
+    /// [`super::bm25_term_dict::parse_snapshot`].
+    pub(crate) term_dict: Vec<String>,
     pub(crate) documents: FxHashMap<u64, Document>,
     pub(crate) point_to_doc: FxHashMap<u64, u32>,
     pub(crate) doc_to_point: FxHashMap<u32, u64>,
@@ -89,7 +99,11 @@ pub(crate) struct Bm25Snapshot {
 }
 
 /// Current [`Bm25Snapshot`] schema version. Bump on breaking changes.
-pub(crate) const BM25_SNAPSHOT_VERSION: u32 = 1;
+///
+/// Version 2 (#2090): terms interned in a `term_dict`, documents keyed
+/// by [`TermId`]. Version 1 (`String`-keyed documents) is still readable
+/// via [`super::bm25_term_dict::parse_snapshot`].
+pub(crate) const BM25_SNAPSHOT_VERSION: u32 = 2;
 
 /// BM25 full-text search index.
 ///
@@ -104,8 +118,17 @@ pub(crate) const BM25_SNAPSHOT_VERSION: u32 = 1;
 pub struct Bm25Index {
     /// BM25 parameters
     params: Bm25Params,
-    /// Inverted index: term -> adaptive posting list (auto-promotes to Roaring)
-    inverted_index: RwLock<FxHashMap<String, PostingList>>,
+    /// Term dictionary: term string -> [`TermId`] (#2090). Grows
+    /// monotonically — removing a document never un-interns terms.
+    ///
+    /// Lock order (stable across all paths): `term_dict` →
+    /// `inverted_index` → `documents` → `point_to_doc` → `doc_to_point`
+    /// → `free_doc_ids` → `next_doc_id` → `doc_count` →
+    /// `total_doc_length`. No path takes a lower-positioned lock while
+    /// holding a higher-positioned one.
+    term_dict: RwLock<TermDict>,
+    /// Inverted index: term id -> adaptive posting list (auto-promotes to Roaring)
+    inverted_index: RwLock<FxHashMap<TermId, PostingList>>,
     /// Document storage: id -> Document
     documents: RwLock<FxHashMap<u64, Document>>,
     /// Point ID -> internal BM25 doc ID mapping.
@@ -134,6 +157,7 @@ impl Bm25Index {
     pub fn with_params(params: Bm25Params) -> Self {
         Self {
             params,
+            term_dict: RwLock::new(TermDict::default()),
             inverted_index: RwLock::new(FxHashMap::default()),
             documents: RwLock::new(FxHashMap::default()),
             point_to_doc: RwLock::new(FxHashMap::default()),
@@ -169,20 +193,7 @@ impl Bm25Index {
             return;
         }
 
-        // Count term frequencies.
-        //
-        // Look up by &str BEFORE inserting: `entry()` demands an owned key,
-        // which would allocate one String per token even for repeats within
-        // the same document. The owned copy is made only the first time a
-        // token is seen in this document.
-        let mut term_freqs: FxHashMap<String, u32> = FxHashMap::default();
-        for token in &tokens {
-            if let Some(count) = term_freqs.get_mut(token.as_str()) {
-                *count += 1;
-            } else {
-                term_freqs.insert(token.clone(), 1);
-            }
-        }
+        let term_freqs = self.intern_term_freqs(&tokens);
 
         // Reason: Document token count is bounded by practical text length limits.
         // Even a 1GB document with single-char tokens would have ~1B tokens, fitting in u32.
@@ -205,23 +216,15 @@ impl Bm25Index {
         };
 
         // Update inverted index with adaptive PostingList.
-        // PostingList auto-promotes to Roaring when cardinality exceeds threshold.
-        //
-        // Look up by &str BEFORE inserting: `entry()` demands an owned key,
-        // which allocates a String per document per term even when the term
-        // is already in the corpus vocabulary (the common case once the
-        // index has ingested more than a handful of documents). The owned
-        // copy is made only on the term's first appearance in the index.
+        // PostingList auto-promotes to Roaring when cardinality exceeds
+        // threshold. `TermId` is `Copy`, so `entry()` allocates nothing.
         {
             let mut inv_idx = self.inverted_index.write();
-            for term in doc.term_freqs.keys() {
-                if let Some(posting_list) = inv_idx.get_mut(term.as_str()) {
-                    posting_list.insert(id_u32);
-                } else {
-                    let mut posting_list = PostingList::new();
-                    posting_list.insert(id_u32);
-                    inv_idx.insert(term.clone(), posting_list);
-                }
+            for term_id in doc.term_freqs.keys() {
+                inv_idx
+                    .entry(*term_id)
+                    .or_insert_with(PostingList::new)
+                    .insert(id_u32);
             }
         }
 
@@ -244,6 +247,29 @@ impl Bm25Index {
             let mut total = self.total_doc_length.write();
             *total += u64::from(doc_length);
         }
+    }
+
+    /// Counts term frequencies, interning each token into the dictionary.
+    ///
+    /// A token already in the corpus vocabulary (the common case once the
+    /// index has ingested more than a handful of documents) costs one hash
+    /// lookup and zero allocations; the term string is copied only on its
+    /// first appearance in the whole index. The dictionary write lock is
+    /// scoped to this function and released before any other index lock is
+    /// taken (lock order: `term_dict` first).
+    fn intern_term_freqs(&self, tokens: &[String]) -> FxHashMap<TermId, u32> {
+        let mut term_freqs: FxHashMap<TermId, u32> = FxHashMap::default();
+        let mut dict = self.term_dict.write();
+        for token in tokens {
+            // Dictionary full (`u32::MAX` distinct terms): skip the term,
+            // mirroring the doc-id overflow contract of `add_document`.
+            let Some(term_id) = dict.intern(token) else {
+                continue;
+            };
+            *term_freqs.entry(term_id).or_insert(0) += 1;
+        }
+        drop(dict);
+        term_freqs
     }
 
     /// Removes a document from the index.
@@ -282,19 +308,35 @@ impl Bm25Index {
             return Vec::new();
         }
 
+        // Resolve query terms to ids once per query. A term absent from the
+        // dictionary appears in no document: its BM25 contribution is
+        // exactly +0.0 (tf == 0 for every candidate), so dropping it here
+        // leaves every score bit-identical. Duplicate query terms are kept —
+        // they contribute once each, as before.
+        let query_ids: Vec<TermId> = {
+            let dict = self.term_dict.read();
+            query_terms
+                .iter()
+                .filter_map(|term| dict.get(term))
+                .collect()
+        };
+        if query_ids.is_empty() {
+            return Vec::new();
+        }
+
         let total_length = *self.total_doc_length.read();
         let avgdl = total_length as f32 / doc_count as f32;
 
-        let mut scores = self.score_candidates(&query_terms, doc_count, avgdl);
+        let mut scores = self.score_candidates(&query_ids, doc_count, avgdl);
         Self::top_k_sort(&mut scores, k);
         scores
     }
 
-    /// Scores all candidate documents for the given query terms.
+    /// Scores all candidate documents for the given query term ids.
     #[allow(clippy::cast_precision_loss)]
     fn score_candidates(
         &self,
-        query_terms: &[String],
+        query_ids: &[TermId],
         doc_count: usize,
         avgdl: f32,
     ) -> Vec<(u64, f32)> {
@@ -306,15 +348,15 @@ impl Bm25Index {
         let doc_to_point = self.doc_to_point.read();
         let n = doc_count as f32;
 
-        let idf_cache = Self::build_idf_cache(query_terms, &inv_idx, n);
-        let candidate_union = Self::build_candidate_union(query_terms, &inv_idx);
+        let idf_cache = Self::build_idf_cache(query_ids, &inv_idx, n);
+        let candidate_union = Self::build_candidate_union(query_ids, &inv_idx);
 
         let scored = candidate_union
             .iter()
             .filter_map(|doc_id_u32| {
                 let doc_id = *doc_to_point.get(&doc_id_u32)?;
                 let doc = docs.get(&doc_id)?;
-                let score = Self::score_document_fast(doc, query_terms, &idf_cache, k1, b, avgdl);
+                let score = Self::score_document_fast(doc, query_ids, &idf_cache, k1, b, avgdl);
                 (score > 0.0).then_some((doc_id, score))
             })
             .collect();
@@ -324,36 +366,36 @@ impl Bm25Index {
         scored
     }
 
-    /// Builds an IDF cache for each query term.
+    /// Builds an IDF cache for each query term id.
     #[allow(clippy::cast_precision_loss)]
-    fn build_idf_cache<'a>(
-        query_terms: &'a [String],
-        inv_idx: &FxHashMap<String, PostingList>,
+    fn build_idf_cache(
+        query_ids: &[TermId],
+        inv_idx: &FxHashMap<TermId, PostingList>,
         n: f32,
-    ) -> FxHashMap<&'a str, f32> {
-        query_terms
+    ) -> FxHashMap<TermId, f32> {
+        query_ids
             .iter()
-            .map(|term| {
-                let df = inv_idx.get(term).map_or(0, PostingList::len);
+            .map(|&id| {
+                let df = inv_idx.get(&id).map_or(0, PostingList::len);
                 let idf_val = if df == 0 {
                     0.0
                 } else {
                     let df_f = df as f32;
                     ((n - df_f + 0.5) / (df_f + 0.5) + 1.0).ln()
                 };
-                (term.as_str(), idf_val)
+                (id, idf_val)
             })
             .collect()
     }
 
-    /// Builds a union of posting lists for all query terms.
+    /// Builds a union of posting lists for all query term ids.
     fn build_candidate_union(
-        query_terms: &[String],
-        inv_idx: &FxHashMap<String, PostingList>,
+        query_ids: &[TermId],
+        inv_idx: &FxHashMap<TermId, PostingList>,
     ) -> PostingList {
         let mut candidate_union = PostingList::new();
-        for term in query_terms {
-            if let Some(posting_list) = inv_idx.get(term) {
+        for id in query_ids {
+            if let Some(posting_list) = inv_idx.get(id) {
                 candidate_union = candidate_union.union(posting_list);
             }
         }
@@ -371,8 +413,8 @@ impl Bm25Index {
     #[allow(clippy::cast_precision_loss)]
     fn score_document_fast(
         doc: &Document,
-        query_terms: &[String],
-        idf_cache: &FxHashMap<&str, f32>,
+        query_ids: &[TermId],
+        idf_cache: &FxHashMap<TermId, f32>,
         k1: f32,
         b: f32,
         avgdl: f32,
@@ -380,15 +422,15 @@ impl Bm25Index {
         let doc_len = doc.length as f32;
         let len_norm = 1.0 - b + b * doc_len / avgdl;
 
-        query_terms
+        query_ids
             .iter()
-            .map(|term| {
-                let tf = doc.term_freqs.get(term).copied().unwrap_or(0) as f32;
+            .map(|id| {
+                let tf = doc.term_freqs.get(id).copied().unwrap_or(0) as f32;
                 if tf == 0.0 {
                     return 0.0;
                 }
 
-                let idf = idf_cache.get(term.as_str()).copied().unwrap_or(0.0);
+                let idf = idf_cache.get(id).copied().unwrap_or(0.0);
 
                 // BM25 term score (optimized: len_norm pre-computed)
                 let numerator = tf * (k1 + 1.0);
@@ -523,11 +565,12 @@ impl Bm25Index {
     #[must_use]
     pub(crate) fn to_snapshot(&self) -> Bm25Snapshot {
         // Lock acquisition order (stable across to_snapshot / load paths):
-        //   documents → point_to_doc → doc_to_point → free_doc_ids
-        //   → next_doc_id → doc_count → total_doc_length.
+        //   term_dict → documents → point_to_doc → doc_to_point
+        //   → free_doc_ids → next_doc_id → doc_count → total_doc_length.
         // Holding multiple read locks simultaneously is safe: parking_lot
         // RwLock reads never block each other, and no code path takes a
         // write lock *after* a read lock on a lower-positioned field.
+        let term_dict = self.term_dict.read();
         let documents = self.documents.read();
         let point_to_doc = self.point_to_doc.read();
         let doc_to_point = self.doc_to_point.read();
@@ -538,6 +581,7 @@ impl Bm25Index {
         Bm25Snapshot {
             version: BM25_SNAPSHOT_VERSION,
             params: self.params,
+            term_dict: term_dict.to_strings(),
             documents: documents.clone(),
             point_to_doc: point_to_doc.clone(),
             doc_to_point: doc_to_point.clone(),
@@ -588,9 +632,9 @@ impl Bm25Index {
                     );
                     continue;
                 };
-                for term in doc.term_freqs.keys() {
+                for term_id in doc.term_freqs.keys() {
                     inv_idx
-                        .entry(term.clone())
+                        .entry(*term_id)
                         .or_insert_with(PostingList::new)
                         .insert(doc_id_u32);
                 }
@@ -598,6 +642,7 @@ impl Bm25Index {
         }
 
         // Install primary state under the same lock order as to_snapshot.
+        *index.term_dict.write() = TermDict::from_strings(std::mem::take(&mut snapshot.term_dict));
         *index.documents.write() = snapshot.documents;
         *index.point_to_doc.write() = snapshot.point_to_doc;
         *index.doc_to_point.write() = snapshot.doc_to_point;
