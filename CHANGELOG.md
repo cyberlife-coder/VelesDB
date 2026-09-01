@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **`browserslist` advisory in `examples/react-wasm-search` (GHSA-c83g-rgw3-j3cx,
+  GHSA-73wf-gq98-2v4g).** Both were published upstream while PRs were in
+  flight: the `npm advisories (examples/react-wasm-search)` gate passed at
+  17:02 UTC and failed at 17:38 on an unchanged lockfile, and reproduces on
+  `develop` itself. `browserslist` 4.28.2 → 4.28.8 via `npm audit fix
+  --package-lock-only`, which also carries its data tables
+  (`caniuse-lite`, `electron-to-chromium`, `node-releases`,
+  `baseline-browser-mapping`) forward. All dev-only, all within the same
+  major — no `--force`, so `package.json` constraints are untouched. The
+  three other lockfiles in the repo audit clean.
 ### Fixed
 
 - **No `VELESDB_*` environment variable reached its config field (#2185).** The
