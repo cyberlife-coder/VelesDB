@@ -662,6 +662,45 @@ fn test_remove_node_edges_evicts_empty_index_buckets_on_other_endpoint() {
     assert!(store.incoming_by_label.is_empty());
 }
 
+/// Same eviction contract via `remove_edge_outgoing_only`, the cross-shard
+/// removal path `ConcurrentEdgeStore` uses when it owns only the source
+/// shard's half of an edge.
+#[test]
+fn test_remove_edge_outgoing_only_evicts_empty_index_buckets() {
+    let mut store = EdgeStore::new();
+    store
+        .add_edge_outgoing_only(GraphEdge::new(1, 100, 200, "KNOWS").expect("valid"))
+        .expect("add");
+
+    store.remove_edge_outgoing_only(1);
+
+    assert!(
+        !store.outgoing.contains_key(&100),
+        "empty outgoing bucket for 100 should be evicted, not left empty"
+    );
+    assert!(store.by_label.is_empty());
+    assert!(store.outgoing_by_label.is_empty());
+}
+
+/// Same eviction contract via `remove_edge_incoming_only`, the cross-shard
+/// removal path `ConcurrentEdgeStore` uses when it owns only the target
+/// shard's half of an edge.
+#[test]
+fn test_remove_edge_incoming_only_evicts_empty_index_buckets() {
+    let mut store = EdgeStore::new();
+    store
+        .add_edge_incoming_only(GraphEdge::new(1, 100, 200, "KNOWS").expect("valid"))
+        .expect("add");
+
+    store.remove_edge_incoming_only(1);
+
+    assert!(
+        !store.incoming.contains_key(&200),
+        "empty incoming bucket for 200 should be evicted, not left empty"
+    );
+    assert!(store.incoming_by_label.is_empty());
+}
+
 // =============================================================================
 // G1: CSR Snapshot — zero-copy BFS via contiguous memory layout
 // =============================================================================
