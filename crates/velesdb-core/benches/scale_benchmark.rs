@@ -97,15 +97,25 @@ fn bench_scale(c: &mut Criterion) {
             },
         );
 
-        // Build index for search benchmarks (using batch insert for realistic graph)
+        // Build the index the SEARCH benchmarks below read, sequentially.
+        //
+        // This used `insert_batch_parallel` "for a realistic graph". The graph
+        // it produced was realistic and also **different on every run**:
+        // parallel insertion orders by whichever thread reaches the index
+        // first, so two runs of one unchanged binary build two different
+        // graphs, and the search timings below differ by which graph they got.
+        // Criterion cannot see it — it builds once and then varies only the
+        // searches, so its intervals describe search-to-search variance inside
+        // one graph and never the build (#2172).
+        //
+        // The parallel insert path is still measured: the `insert` group above
+        // benchmarks it directly, which is where a rebuilt-per-iteration graph
+        // is the subject rather than a confound.
         let index = HnswIndex::new(dim, DistanceMetric::Cosine).expect("bench: create index");
         let vectors: Vec<Vec<f32>> = (0..n_vectors).map(|i| generate_vector(dim, i)).collect();
-        let batch: Vec<(u64, &[f32])> = vectors
-            .iter()
-            .enumerate()
-            .map(|(i, v)| (i as u64, v.as_slice()))
-            .collect();
-        index.insert_batch_parallel(batch);
+        for (i, vector) in vectors.iter().enumerate() {
+            index.insert(i as u64, vector);
+        }
 
         let queries: Vec<Vec<f32>> = (0..n_queries)
             .map(|i| generate_vector(dim, n_vectors + i as u64))
