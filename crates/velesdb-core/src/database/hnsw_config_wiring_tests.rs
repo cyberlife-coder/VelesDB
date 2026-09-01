@@ -279,3 +279,57 @@ fn test_params_from_config_leaves_unmapped_fields_alone() {
     assert_eq!(params.storage_mode, auto.storage_mode);
     assert!((params.alpha - auto.alpha).abs() < f32::EPSILON);
 }
+
+// -------------------------------------------------------------------------
+// The inert-entry warning, narrowed
+// -------------------------------------------------------------------------
+//
+// A `tracing` warning is not observable from a test, so these assert the list
+// it is built from. What they protect is the claim the wiring makes: a knob
+// that now works must stop being reported as inert, and one that still does
+// nothing must keep being reported — a warning that fires on working knobs
+// would train readers to ignore it, which is the failure mode #2087 is about.
+
+#[test]
+fn test_default_config_reports_nothing_inert() {
+    assert!(VelesConfig::default().inert_engine_entries().is_empty());
+}
+
+#[test]
+fn test_configured_hnsw_m_and_ef_construction_are_not_inert() {
+    assert!(
+        config_with_hnsw(Some(40), Some(500))
+            .inert_engine_entries()
+            .is_empty(),
+        "the two wired [hnsw] knobs must no longer be reported as inert"
+    );
+}
+
+#[test]
+fn test_max_layers_is_still_reported_inert_by_field() {
+    let mut config = VelesConfig::default();
+    config.hnsw.max_layers = 12;
+    // Named as the single field, not as `[hnsw]`: the rest of the section
+    // works, and flagging it wholesale would be the misleading half.
+    assert_eq!(config.inert_engine_entries(), vec!["hnsw.max_layers"]);
+}
+
+#[test]
+fn test_max_layers_reported_alongside_a_configured_wired_knob() {
+    let mut config = config_with_hnsw(Some(40), Some(500));
+    config.hnsw.max_layers = 12;
+    // Setting a wired knob must not mask the inert one sharing its section.
+    assert_eq!(config.inert_engine_entries(), vec!["hnsw.max_layers"]);
+}
+
+#[test]
+fn test_still_unwired_sections_are_reported_wholesale() {
+    let mut config = VelesConfig::default();
+    config.search.max_results = 42;
+    config.storage.mmap_cache_mb = 2048;
+    assert_eq!(
+        config.inert_engine_entries(),
+        vec!["[search]", "[storage]"],
+        "sections with no wired knob stay reported as whole sections"
+    );
+}

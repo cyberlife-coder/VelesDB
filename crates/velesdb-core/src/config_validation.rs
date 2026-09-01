@@ -105,6 +105,30 @@ impl VelesConfig {
     /// Serde-value comparison instead of `PartialEq` derives: the sections
     /// carry enums and nested types, and this runs once per config load.
     fn warn_inert_engine_sections(&self) {
+        let inert = self.inert_engine_entries();
+        if !inert.is_empty() {
+            tracing::warn!(
+                // Entries are a mix of whole sections and single keys now
+                // that `[hnsw]` is partly wired, hence `inert` rather than
+                // the former `sections`.
+                inert = inert.join(", "),
+                "these config entries are parsed and validated but not \
+                 applied by the engine; see issue #2087. [limits] and \
+                 [hnsw]'s m / ef_construction are applied. Query-time \
+                 WITH (...) overrides are unaffected."
+            );
+        }
+    }
+
+    /// The config entries this build parses and validates but does not apply,
+    /// as they would be named in a TOML file.
+    ///
+    /// Split out of [`Self::warn_inert_engine_sections`] so the set is
+    /// assertable: a `tracing` warning is not observable from a test, and the
+    /// claim this list makes — that a configured `hnsw.m` is *not* inert while
+    /// `hnsw.max_layers` still is — is precisely what the #2087 wiring has to
+    /// keep honest as more knobs land.
+    pub(crate) fn inert_engine_entries(&self) -> Vec<&'static str> {
         fn deviates<T: serde::Serialize>(actual: &T, default: &T) -> bool {
             match (serde_json::to_value(actual), serde_json::to_value(default)) {
                 (Ok(a), Ok(d)) => a != d,
@@ -112,7 +136,7 @@ impl VelesConfig {
             }
         }
 
-        let mut inert: Vec<&str> = Vec::new();
+        let mut inert: Vec<&'static str> = Vec::new();
         if deviates(&self.search, &crate::config::SearchConfig::default()) {
             inert.push("[search]");
         }
@@ -131,18 +155,7 @@ impl VelesConfig {
         ) {
             inert.push("[quantization]");
         }
-        if !inert.is_empty() {
-            tracing::warn!(
-                // Entries are a mix of whole sections and single keys now
-                // that `[hnsw]` is partly wired, hence `inert` rather than
-                // the former `sections`.
-                inert = inert.join(", "),
-                "these config entries are parsed and validated but not \
-                 applied by the engine; see issue #2087. [limits] and \
-                 [hnsw]'s m / ef_construction are applied. Query-time \
-                 WITH (...) overrides are unaffected."
-            );
-        }
+        inert
     }
 
     /// `[wal_batch]` is parsed but not wired (issue #2078): warn — rather
