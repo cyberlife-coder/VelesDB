@@ -436,6 +436,10 @@ name = "sparse_benchmark"
 harness = false
 
 [[bench]]
+name = "sparse_posting_scale"
+harness = false
+
+[[bench]]
 name = "pq_recall_multidist"
 harness = false
 
