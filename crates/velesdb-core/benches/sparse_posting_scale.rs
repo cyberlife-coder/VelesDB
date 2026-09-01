@@ -69,6 +69,25 @@
 //! the same side of that boundary**, and read a size sweep that crosses it as
 //! two separate curves rather than one.
 //!
+//! # What the id stride costs, measured
+//!
+//! The same warning applies to `VELESDB_SPARSE_SCALE_ID_STRIDE`, and here is
+//! the size of it. At 200 000 documents with skewed queries — identical corpus,
+//! identical queries, only the id labelling moving — stride 4 leaves
+//! `max_doc_id` at 799 996, just under `doc_count * 4`, and stride 5 puts it at
+//! 999 995, just over. The accumulator flips between those two and little else
+//! does:
+//!
+//! ```text
+//! stride 4  (dense)    554.7 µs / 527.6 µs
+//! stride 5  (hashmap)  771.2 µs / 798.0 µs
+//! ```
+//!
+//! **~45 %**, against a pass-to-pass spread of 3–5 %. So a stride is not a free
+//! relabelling: it buys access to the other accumulator and charges for it.
+//! Comparing a strided run against a compact one measures that charge on top of
+//! whatever is under test.
+//!
 //! # Query shape (#2177 step 1)
 //!
 //! `VELESDB_SPARSE_SCALE_QUERY_SHAPE` selects the query generator:
