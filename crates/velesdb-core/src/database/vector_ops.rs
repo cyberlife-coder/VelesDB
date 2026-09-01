@@ -30,8 +30,17 @@ impl Database {
     /// not a config reload's.
     ///
     /// Resolution is layered here, in the only component that owns a
-    /// `VelesConfig`, so `Collection` and the index stay config-free and a
-    /// direct `VectorCollection::create` caller is unaffected.
+    /// `VelesConfig`, so a direct `VectorCollection::create` caller is
+    /// unaffected by any file on disk: it receives a `HnswParams` value that
+    /// is already an answer.
+    ///
+    /// That is a claim about *decisions*, not about imports.
+    /// [`HnswParams::from_config`](crate::index::hnsw::HnswParams::from_config)
+    /// names `config::HnswConfig` in its signature, exactly as
+    /// `RuntimeLimits::from_config` names `LimitsConfig` — one pure mapping
+    /// function per table, sitting beside the type it produces. What neither
+    /// module does is *read* configuration: nothing below this function
+    /// consults a `VelesConfig`, and the precedence chain exists only here.
     ///
     /// `storage_mode` is left at whatever `HnswParams::auto` produced: every
     /// constructor downstream overwrites it with the collection's own storage
