@@ -95,6 +95,43 @@ impl HnswParams {
         }
     }
 
+    /// Builds creation-time parameters for `dimension`, applying the
+    /// configured [`[hnsw]`](crate::config::HnswConfig) section on top of
+    /// [`HnswParams::auto`].
+    ///
+    /// This is the **single mapping point** between the `[hnsw]` TOML table
+    /// and the engine, the same role `RuntimeLimits::from_config` plays for
+    /// `[limits]`, so the field correspondence cannot drift across the
+    /// creation paths that consult it.
+    ///
+    /// A section field left `None` leaves the auto-tuned value untouched —
+    /// a default [`HnswConfig`](crate::config::HnswConfig) therefore produces
+    /// exactly `HnswParams::auto(dimension)`, byte for byte. Wiring the
+    /// section is a no-op for anyone who did not set it.
+    ///
+    /// `hnsw.max_layers` has no counterpart here: the HNSW layer count is
+    /// drawn per node by the level generator and no engine path caps it, so
+    /// the knob stays inert and [`VelesConfig::validate`] keeps warning about
+    /// it (issue #2087).
+    ///
+    /// `storage_mode` is deliberately not sourced from config either: it is a
+    /// per-collection property, and every constructor overwrites this field
+    /// with the collection's own storage mode (see
+    /// `Collection::build_hnsw_index`).
+    ///
+    /// [`VelesConfig::validate`]: crate::config::VelesConfig::validate
+    #[must_use]
+    pub fn from_config(dimension: usize, hnsw: &crate::config::HnswConfig) -> Self {
+        let mut params = Self::auto(dimension);
+        if let Some(m) = hnsw.m {
+            params.max_connections = m;
+        }
+        if let Some(ef) = hnsw.ef_construction {
+            params.ef_construction = ef;
+        }
+        params
+    }
+
     /// Creates parameters optimized for a specific dataset size.
     ///
     /// Targets high recall up to 1M vectors under benchmark-calibrated settings.

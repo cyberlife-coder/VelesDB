@@ -7,6 +7,71 @@ use crate::{CollectionType, DistanceMetric, Result, StorageMode};
 use super::Database;
 
 impl Database {
+    /// Resolves the HNSW parameters for a collection about to be created.
+    ///
+    /// Implements the `[hnsw]` half of the configuration precedence chain
+    /// (issue #2087). From strongest to weakest:
+    ///
+    /// 1. **Per-collection creation argument** — the `m` / `ef_construction`
+    ///    passed to the constructor, or a whole `HnswParams` handed to
+    ///    [`Database::create_vector_collection_with_params`], which does not
+    ///    consult the config at all.
+    /// 2. **`VelesConfig`'s `[hnsw]` section** — the deployment-wide default.
+    /// 3. **Built-in engine default** — `HnswParams::auto(dimension)`.
+    ///
+    /// Per-query `WITH (...)` overrides sit above all three but never reach
+    /// here: they tune `ef_search` at query time, whereas everything resolved
+    /// in this function is graph *topology*, fixed when the index is built.
+    ///
+    /// Because the resolved params are persisted in the collection's
+    /// `config.json`, a collection keeps the topology it was created with:
+    /// editing `[hnsw]` later changes new collections only. Applying it to an
+    /// existing one is a full index rebuild, which is `auto_reindex`'s job,
+    /// not a config reload's.
+    ///
+    /// Resolution is layered here, in the only component that owns a
+    /// `VelesConfig`, so `Collection` and the index stay config-free and a
+    /// direct `VectorCollection::create` caller is unaffected.
+    ///
+    /// `storage_mode` is left at whatever `HnswParams::auto` produced: every
+    /// constructor downstream overwrites it with the collection's own storage
+    /// mode argument.
+    ///
+    /// Returns `None` when **no** level chose anything — neither argument, and
+    /// an untouched `[hnsw]` section. That is not the same as returning
+    /// `HnswParams::auto(dimension)`: a collection persists this value, and
+    /// `hnsw_params: None` on disk means "nobody ever chose", exactly as
+    /// `pq_rescore_oversampling: None` does a field away. Materializing a
+    /// snapshot of today's auto-tuned defaults into that slot would build the
+    /// identical index and destroy the distinction a later migration reads.
+    /// Callers that need a concrete value regardless say so at the call site
+    /// with `unwrap_or_else(|| HnswParams::auto(dimension))`.
+    pub(super) fn resolve_hnsw_params(
+        &self,
+        dimension: usize,
+        m: Option<usize>,
+        ef_construction: Option<usize>,
+    ) -> Option<HnswParams> {
+        if m.is_none()
+            && ef_construction.is_none()
+            && self.config.hnsw.m.is_none()
+            && self.config.hnsw.ef_construction.is_none()
+        {
+            return None;
+        }
+
+        // Level 2 first, then level 1 on top of it, so a per-field argument
+        // overrides only the field it names.
+        let mut params = HnswParams::from_config(dimension, &self.config.hnsw);
+        if let Some(m) = m {
+            params.max_connections = m;
+        }
+        if let Some(ef) = ef_construction {
+            params.ef_construction = ef;
+        }
+        Some(params)
+    }
+
     /// Creates a new vector collection.
     ///
     /// # Errors
@@ -37,15 +102,33 @@ impl Database {
         self.ensure_collection_name_available(name)?;
         self.enforce_vector_dimension_limit(dimension)?;
         let path = self.data_dir.join(name);
-        let coll = VectorCollection::create(path, name, dimension, metric, storage_mode)?;
+        // #2087: no per-collection HNSW argument here, so the `[hnsw]` section
+        // is the strongest level that applies. An untouched section resolves
+        // to `None` and takes the original constructor, so this path is
+        // byte-for-byte unchanged for anyone who did not configure `[hnsw]` —
+        // including the `hnsw_params: None` it persists.
+        let coll = match self.resolve_hnsw_params(dimension, None, None) {
+            Some(params) => VectorCollection::create_with_hnsw_params(
+                path,
+                dimension,
+                metric,
+                storage_mode,
+                params,
+            )?,
+            None => VectorCollection::create(path, name, dimension, metric, storage_mode)?,
+        };
         self.register_vector_collection(name, &coll, dimension, metric, storage_mode);
         Ok(())
     }
 
     /// Creates a new vector collection with custom HNSW parameters.
     ///
-    /// When `m` or `ef_construction` are `Some`, those values override the
-    /// dimension-based auto-tuned defaults from [`HnswParams::auto`].
+    /// When `m` or `ef_construction` are `Some`, those values win over the
+    /// configured `[hnsw]` section, which in turn wins over the
+    /// dimension-based auto-tuned defaults from [`HnswParams::auto`] — see
+    /// [`Database::resolve_hnsw_params`] for the full chain. The two
+    /// arguments are resolved independently, so pinning one still takes the
+    /// other from config.
     ///
     /// Shortcut for [`Database::create_vector_collection_with_params`] that
     /// only overrides `max_connections` and `ef_construction`.
@@ -65,14 +148,23 @@ impl Database {
         self.ensure_collection_name_available(name)?;
         self.enforce_vector_dimension_limit(dimension)?;
         let path = self.data_dir.join(name);
-        let coll = VectorCollection::create_with_hnsw(
+        // #2087: each argument is resolved on its own — a caller that pins
+        // only `m` still picks up `ef_construction` from `[hnsw]`.
+        //
+        // Materialized unconditionally, unlike the path above: this
+        // constructor already persisted `Some(HnswParams::auto(dimension))`
+        // before the wiring, so keeping `None` here would be the behaviour
+        // change rather than avoiding one.
+        let params = self
+            .resolve_hnsw_params(dimension, m, ef_construction)
+            .unwrap_or_else(|| HnswParams::auto(dimension));
+        let coll = VectorCollection::create_with_params(
             path,
-            name,
             dimension,
             metric,
             storage_mode,
-            m,
-            ef_construction,
+            params,
+            None,
         )?;
         self.register_vector_collection(name, &coll, dimension, metric, storage_mode);
         Ok(())
@@ -93,6 +185,12 @@ impl Database {
     /// The storage mode argument wins over `hnsw_params.storage_mode` if
     /// they disagree — the field on `HnswParams` is a legacy denormalised
     /// copy that the engine keeps in sync with the collection-level value.
+    ///
+    /// The configured `[hnsw]` section is **not** consulted: `hnsw_params` is
+    /// already a complete answer, and silently merging a deployment default
+    /// into a fully specified value would make the result depend on a file the
+    /// caller did not mention. Callers wanting the config as a base should
+    /// build from [`HnswParams::from_config`] and adjust from there.
     ///
     /// # Errors
     ///

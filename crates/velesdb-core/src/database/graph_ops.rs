@@ -31,6 +31,10 @@ impl Database {
     /// variant configures a vector dimension and distance metric so that nodes
     /// can store embeddings and support similarity search.
     ///
+    /// The node-embedding index takes its parameters from the configured
+    /// `[hnsw]` section on top of the auto-tuned defaults — see
+    /// [`Database::resolve_hnsw_params`].
+    ///
     /// # Errors
     ///
     /// Returns an error if a collection with the same name already exists.
@@ -45,7 +49,17 @@ impl Database {
         self.ensure_collection_name_available(name)?;
         self.enforce_vector_dimension_limit(dimension)?;
         let path = self.data_dir.join(name);
-        let coll = GraphCollection::create(path, name, Some(dimension), metric, schema.clone())?;
+        // #2087: node embeddings mean a real HNSW index, so the `[hnsw]`
+        // section applies here exactly as it does to a vector collection.
+        let params = self.resolve_hnsw_params(dimension, None, None);
+        let coll = GraphCollection::create_with_hnsw_params(
+            path,
+            name,
+            Some(dimension),
+            metric,
+            schema.clone(),
+            params,
+        )?;
         self.register_graph_collection(name, &coll, Some(dimension), metric, &schema);
         Ok(())
     }
@@ -63,7 +77,17 @@ impl Database {
             self.enforce_vector_dimension_limit(d)?;
         }
         let path = self.data_dir.join(name);
-        let coll = GraphCollection::create(path, name, dimension, metric, schema.clone())?;
+        // #2087: only a graph collection that carries embeddings has an HNSW
+        // index to configure; without a dimension there is nothing to apply.
+        let params = dimension.and_then(|d| self.resolve_hnsw_params(d, None, None));
+        let coll = GraphCollection::create_with_hnsw_params(
+            path,
+            name,
+            dimension,
+            metric,
+            schema.clone(),
+            params,
+        )?;
         self.register_graph_collection(name, &coll, dimension, metric, schema);
         Ok(())
     }

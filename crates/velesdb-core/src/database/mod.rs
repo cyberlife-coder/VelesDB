@@ -57,6 +57,8 @@ mod ddl_executor_tests;
 #[cfg(all(test, feature = "persistence"))]
 mod graph_ops_tests;
 #[cfg(all(test, feature = "persistence"))]
+mod hnsw_config_wiring_tests;
+#[cfg(all(test, feature = "persistence"))]
 mod query_engine_tests;
 #[cfg(all(test, feature = "persistence"))]
 mod query_join_tests;

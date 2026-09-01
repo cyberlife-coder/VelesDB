@@ -602,10 +602,10 @@ impl SearchConfigOptions {
 /// Global HNSW index defaults mapped to
 /// [`velesdb_core::config::HnswConfig`] (the `[hnsw]` TOML section).
 ///
-/// Distinct from the per-collection [`HnswOptions`] passed to
-/// `Database.create_collection` — this section sets the database-wide
-/// defaults instead. `None` fields fall back to the engine defaults
-/// (`m`/`ef_construction` auto by dimension, `max_layers=0` = auto).
+/// Distinct from the per-collection [`HnswOptions`], which wins over it.
+/// `m` / `ef_construction` apply at collection creation (issue #2087):
+/// per-collection option > this section > auto by dimension, fixing topology
+/// for new collections only. `max_layers` is reserved — applied by nothing.
 #[pyclass(module = "velesdb", from_py_object)]
 #[derive(Clone, Debug, Default)]
 pub struct HnswConfigOptions {
