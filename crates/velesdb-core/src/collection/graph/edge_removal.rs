@@ -3,6 +3,13 @@
 //! Extracted from `edge.rs` to keep file NLOC under the 500 threshold.
 //! Contains `remove_edge`, `remove_node_edges`, and the internal
 //! `purge_*` index-cleanup helpers.
+//!
+//! Every `purge_*` helper drops the map key itself once its bucket empties,
+//! not just the `edge_id` inside it — a node or label that no longer has any
+//! edge must not keep a permanently empty `Vec` alive. Node ids are
+//! effectively never reused, so leaving the key behind means `outgoing` and
+//! `incoming` (persisted fields, unlike the `serde(skip)` label indices)
+//! grow without bound under add/remove churn and never shrink back down.
 
 use super::edge::EdgeStore;
 use super::label_table::LabelId;
@@ -97,6 +104,9 @@ impl EdgeStore {
     fn purge_incoming_index(&mut self, edge_id: u64, target_node: u64, label_id: Option<LabelId>) {
         if let Some(ids) = self.incoming.get_mut(&target_node) {
             ids.retain(|&id| id != edge_id);
+            if ids.is_empty() {
+                self.incoming.remove(&target_node);
+            }
         }
         let Some(label_id) = label_id else { return };
         if let Some(ids) = self.incoming_by_label.get_mut(&(target_node, label_id)) {
@@ -112,6 +122,9 @@ impl EdgeStore {
     fn purge_outgoing_index(&mut self, edge_id: u64, source_node: u64) {
         if let Some(ids) = self.outgoing.get_mut(&source_node) {
             ids.retain(|&id| id != edge_id);
+            if ids.is_empty() {
+                self.outgoing.remove(&source_node);
+            }
         }
     }
 
@@ -123,9 +136,15 @@ impl EdgeStore {
         let Some(label_id) = label_id else { return };
         if let Some(ids) = self.by_label.get_mut(&label_id) {
             ids.retain(|&id| id != edge_id);
+            if ids.is_empty() {
+                self.by_label.remove(&label_id);
+            }
         }
         if let Some(ids) = self.outgoing_by_label.get_mut(&(source_node, label_id)) {
             ids.retain(|&id| id != edge_id);
+            if ids.is_empty() {
+                self.outgoing_by_label.remove(&(source_node, label_id));
+            }
         }
     }
 }
