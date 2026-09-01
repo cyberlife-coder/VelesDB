@@ -126,6 +126,10 @@ const DEFAULT_DOCS: &[usize] = &[10_000, 50_000, 200_000];
 /// Vocabulary size used when `VELESDB_SPARSE_SCALE_VOCAB` is unset.
 const DEFAULT_VOCAB: u32 = 30_000;
 
+/// Spacing between consecutive document ids when `VELESDB_SPARSE_SCALE_ID_STRIDE`
+/// is unset. 1 gives the compact `0..n` space every other sweep here uses.
+const DEFAULT_ID_STRIDE: u64 = 1;
+
 /// Nonzeros per skewed-shape query: real SPLADE queries carry far fewer
 /// terms than documents do (#2177 step 1).
 const SKEWED_QUERY_NNZ_RANGE: std::ops::RangeInclusive<usize> = 20..=50;
@@ -189,6 +193,37 @@ fn scale_vocab() -> u32 {
         .unwrap_or(DEFAULT_VOCAB)
 }
 
+/// Reads the document-id stride from the environment.
+///
+/// This knob exists to reach `linear_scan_search`'s **other** accumulator.
+/// The dense-versus-hashmap choice is not made on corpus size but on id
+/// compactness:
+///
+/// ```text
+/// use_dense = max_doc_id <= MAX_DENSE_ACCUMULATOR
+///          && max_doc_id < doc_count * 4
+/// ```
+///
+/// so a stride of 4 or more puts `max_doc_id` past `doc_count * 4` and routes
+/// to `linear_scan_hashmap` at any corpus size, with the same number of
+/// postings and the same memory as the compact run. Without this, every sweep
+/// measures the dense accumulator only, and the hashmap variant — the one
+/// #2182's routing change reaches but never measured — stays invisible.
+///
+/// **Checksums do not carry across strides, and that is not a defect.** The
+/// checksum folds `doc_id`, so relabelling ids necessarily changes it. What is
+/// preserved is the thing the comparison needs: scores depend on weights
+/// alone, and `i * stride` is order-preserving, so a stride run retrieves the
+/// same documents in the same rank order with every id multiplied by the
+/// stride. Compare checksums between runs at equal stride — never across two.
+fn scale_id_stride() -> u64 {
+    std::env::var("VELESDB_SPARSE_SCALE_ID_STRIDE")
+        .ok()
+        .and_then(|raw| raw.trim().parse().ok())
+        .filter(|&v| v > 0)
+        .unwrap_or(DEFAULT_ID_STRIDE)
+}
+
 /// Generates sparse vectors over `vocab` terms, deterministic in `seed`.
 ///
 /// `weight(rng, rank)` decides each nonzero's weight from its draw rank, so
@@ -240,13 +275,13 @@ fn generate_queries(shape: QueryShape, n: usize, vocab: u32, seed: u64) -> Vec<S
 }
 
 /// Builds the index sequentially, so the same corpus yields the same index.
-fn build_index(corpus: &[SparseVector]) -> SparseInvertedIndex {
+fn build_index(corpus: &[SparseVector], id_stride: u64) -> SparseInvertedIndex {
     let index = SparseInvertedIndex::new();
     let docs: Vec<(u64, SparseVector)> = corpus
         .iter()
         .cloned()
         .enumerate()
-        .map(|(i, v)| (i as u64, v))
+        .map(|(i, v)| (i as u64 * id_stride, v))
         .collect();
     index.insert_batch_chunk(&docs);
     index
@@ -288,6 +323,7 @@ fn result_checksum(index: &SparseInvertedIndex, queries: &[SparseVector], k: usi
 fn sparse_posting_scale(c: &mut Criterion) {
     let vocab = scale_vocab();
     let shape = QueryShape::from_env();
+    let id_stride = scale_id_stride();
     let mut group = c.benchmark_group("sparse_posting_scale");
     group.sample_size(10);
 
@@ -296,7 +332,7 @@ fn sparse_posting_scale(c: &mut Criterion) {
         let queries = generate_queries(shape, QUERY_COUNT, vocab, 123);
 
         let build_started = Instant::now();
-        let index = build_index(&corpus);
+        let index = build_index(&corpus, id_stride);
         let build_secs = build_started.elapsed().as_secs_f64();
 
         let total_postings: usize = corpus.iter().map(SparseVector::nnz).sum();
@@ -315,15 +351,26 @@ postings={total_postings} (~{per_term:.0}/term) \
 frozen_segments={segments} build={build_secs:.1}s\n\
   bytes touched per query ~{touched_mib:.1} MiB at {POSTING_ENTRY_BYTES} B/entry \
 — compare against last-level cache; padding is free below it\n\
+  id_stride={id_stride} max_doc_id={max_doc_id} → linear scan takes its \
+{accumulator} accumulator\n\
   result checksum {checksum:#018x} — only compare runs whose checksums match",
             shape_label = shape.label(),
+            max_doc_id = (docs as u64 - 1) * id_stride,
+            accumulator = if (docs as u64 - 1) * id_stride < (docs as u64) * 4 {
+                "dense"
+            } else {
+                "hashmap"
+            },
             per_term = total_postings as f64 / f64::from(vocab),
             segments = docs / velesdb_core::index::sparse::inverted_index::FREEZE_THRESHOLD,
             touched_mib = touched as f64 / (1024.0 * 1024.0),
         );
 
         group.bench_function(
-            format!("top10_{docs}docs_{vocab}vocab_{}", shape.label()),
+            format!(
+                "top10_{docs}docs_{vocab}vocab_{}_stride{id_stride}",
+                shape.label()
+            ),
             |b| {
                 let mut qi = 0;
                 b.iter(|| {
