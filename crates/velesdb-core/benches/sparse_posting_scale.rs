@@ -78,11 +78,24 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
 
-use velesdb_core::index::sparse::{sparse_search, SparseInvertedIndex, SparseVector};
+use velesdb_core::index::sparse::{sparse_search, PostingEntry, SparseInvertedIndex, SparseVector};
 
-/// Bytes one `PostingEntry` occupies today: `u64` + `f32` + 4 bytes of tail
-/// padding forced by align-8 on the `u64`. The figure #2092 wants to shrink.
-const POSTING_ENTRY_BYTES: usize = 16;
+/// Bytes one `PostingEntry` occupies — asked of the compiler, never written
+/// down.
+///
+/// This bench exists to arbitrate #2092, whose proposal is to shrink this
+/// exact struct. A literal here would keep reporting the pre-change footprint
+/// for post-change code: the `bytes touched per query` line — the one figure
+/// this file is built to produce — would read identically before and after the
+/// shrink, and an A/B would conclude the layout change did nothing. The
+/// instrument would be blind to the only change it exists to measure.
+///
+/// Same defect class as #2165, where the adjacency bench printed a width it
+/// could not observe. There the neighbour id type was `pub(crate)` and the
+/// honest fix was to print both plausible widths; `PostingEntry` is `pub` and
+/// reachable through the path this file already imports, so here the compiler
+/// can simply be asked.
+const POSTING_ENTRY_BYTES: usize = std::mem::size_of::<PostingEntry>();
 
 /// Nonzeros per generated document, matching `sparse_benchmark`'s SPLADE-like
 /// shape so the two benches describe the same kind of corpus.
