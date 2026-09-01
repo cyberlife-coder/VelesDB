@@ -130,6 +130,16 @@ const DEFAULT_VOCAB: u32 = 30_000;
 /// is unset. 1 gives the compact `0..n` space every other sweep here uses.
 const DEFAULT_ID_STRIDE: u64 = 1;
 
+/// `MAX_DENSE_ACCUMULATOR` as it read when this bench was written.
+///
+/// Reported, never used to decide anything. The real constant is private to
+/// `sparse_index::search`, so a bench genuinely cannot observe which
+/// accumulator a run took — it can only print the two inputs it does know and
+/// name the third. Asserting a regime it cannot see is how a header comes to
+/// lie about its own configuration, which is the defect #2165 fixed on
+/// `hnsw_adjacency_scale` and which the first draft of this line repeated.
+const DENSE_CAP_AT_WRITING: u64 = 1_000_000;
+
 /// Nonzeros per skewed-shape query: real SPLADE queries carry far fewer
 /// terms than documents do (#2177 step 1).
 const SKEWED_QUERY_NNZ_RANGE: std::ops::RangeInclusive<usize> = 20..=50;
@@ -351,16 +361,13 @@ postings={total_postings} (~{per_term:.0}/term) \
 frozen_segments={segments} build={build_secs:.1}s\n\
   bytes touched per query ~{touched_mib:.1} MiB at {POSTING_ENTRY_BYTES} B/entry \
 — compare against last-level cache; padding is free below it\n\
-  id_stride={id_stride} max_doc_id={max_doc_id} → linear scan takes its \
-{accumulator} accumulator\n\
+  id_stride={id_stride} max_doc_id={max_doc_id} vs doc_count*4={compact_cap} \
+— dense also needs max_doc_id <= MAX_DENSE_ACCUMULATOR, a private constant \
+this bench cannot read ({DENSE_CAP_AT_WRITING} when written)\n\
   result checksum {checksum:#018x} — only compare runs whose checksums match",
             shape_label = shape.label(),
             max_doc_id = (docs as u64 - 1) * id_stride,
-            accumulator = if (docs as u64 - 1) * id_stride < (docs as u64) * 4 {
-                "dense"
-            } else {
-                "hashmap"
-            },
+            compact_cap = docs as u64 * 4,
             per_term = total_postings as f64 / f64::from(vocab),
             segments = docs / velesdb_core::index::sparse::inverted_index::FREEZE_THRESHOLD,
             touched_mib = touched as f64 / (1024.0 * 1024.0),
