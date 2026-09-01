@@ -167,11 +167,14 @@ fn bytes_touched_per_query(index: &SparseInvertedIndex, query: &SparseVector) ->
         .sum()
 }
 
-/// Order-independent checksum over fixed query results.
+/// Order-sensitive checksum over fixed query results.
 ///
-/// Two configurations are comparable only when these match: a differing
-/// checksum means the runs searched different indexes, and the latency gap
-/// includes that difference rather than isolating the change under test.
+/// The fold multiplies before adding, so both the result set AND its ranking
+/// must match — stricter than a set comparison, which is what an A/B of a
+/// layout change wants. Two configurations are comparable only when these
+/// match: a differing checksum means the runs searched different indexes (or
+/// ranked differently), and the latency gap includes that difference rather
+/// than isolating the change under test.
 fn result_checksum(index: &SparseInvertedIndex, queries: &[SparseVector], k: usize) -> u64 {
     let mut sum: u64 = 0;
     for query in queries {
