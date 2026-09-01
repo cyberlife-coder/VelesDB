@@ -1,7 +1,6 @@
 //! Tests for `traversal` module - Graph traversal algorithms.
 
 use super::csr_snapshot::SnapshotBuilder;
-use super::label_table::LabelTable;
 use super::traversal::*;
 use super::traversal_bidir::bfs_traverse_both;
 use super::traversal_csr::bfs_traverse_csr;
@@ -404,7 +403,7 @@ fn test_bfs_traverse_csr_expired_deadline_returns_partial() {
     store
         .add_edge(GraphEdge::new(101, 2, 3, "KNOWS").unwrap())
         .unwrap();
-    let snapshot = SnapshotBuilder::build(&store, &LabelTable::new());
+    let snapshot = SnapshotBuilder::build(&store);
 
     let expired = Instant::now()
         .checked_sub(Duration::from_millis(1))
@@ -428,7 +427,7 @@ fn test_bfs_traverse_csr_far_future_deadline_no_premature_abort() {
     store
         .add_edge(GraphEdge::new(101, 2, 3, "KNOWS").unwrap())
         .unwrap();
-    let snapshot = SnapshotBuilder::build(&store, &LabelTable::new());
+    let snapshot = SnapshotBuilder::build(&store);
 
     let future = Instant::now() + Duration::from_secs(3600);
     let with_deadline = TraversalConfig::with_range(1, 3).with_deadline(future);

@@ -13,6 +13,7 @@
 //! For concurrent access, use `ConcurrentEdgeStore` instead.
 
 use super::csr_snapshot::CsrSnapshot;
+use super::label_table::{LabelId, LabelTable};
 use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -133,10 +134,18 @@ pub struct EdgeStore {
     pub(super) outgoing: HashMap<u64, Vec<u64>>,
     /// Incoming edges: target_id -> Vec<edge_id>
     pub(super) incoming: HashMap<u64, Vec<u64>>,
-    /// Secondary index: label -> Vec<edge_id> for fast label queries
-    pub(super) by_label: HashMap<String, Vec<u64>>,
-    /// Composite index: (source_id, label) -> Vec<edge_id> for fast filtered traversal
-    pub(super) outgoing_by_label: HashMap<(u64, String), Vec<u64>>,
+    /// Secondary index: interned label -> Vec<edge_id> for fast label queries.
+    ///
+    /// `serde(skip)`: keyed by [`LabelId`], which is only meaningful against
+    /// this store's `label_table` — both are rebuilt in `load_from_file`
+    /// (#2089). Old snapshots that still serialize the String-keyed maps
+    /// load fine: postcard's `from_bytes` ignores trailing bytes.
+    #[serde(skip)]
+    pub(super) by_label: HashMap<LabelId, Vec<u64>>,
+    /// Composite index: (source_id, label) -> Vec<edge_id> for fast filtered
+    /// traversal. `serde(skip)`: same rebuild contract as `by_label`.
+    #[serde(skip)]
+    pub(super) outgoing_by_label: HashMap<(u64, LabelId), Vec<u64>>,
     /// Composite index: (target_id, label) -> Vec<edge_id> — the incoming
     /// mirror of `outgoing_by_label`, so `<-[:TYPE]-` patterns stop paying
     /// O(in-degree) full-edge clones on super-nodes.
@@ -145,7 +154,13 @@ pub struct EdgeStore {
     /// so a new serialized field would break every existing edge_store.bin.
     /// The index is fully derivable and rebuilt in `load_from_file`.
     #[serde(skip)]
-    pub(super) incoming_by_label: HashMap<(u64, String), Vec<u64>>,
+    pub(super) incoming_by_label: HashMap<(u64, LabelId), Vec<u64>>,
+    /// Interning table mapping label strings to the [`LabelId`]s that key the
+    /// three label indices above. Populated by `insert_edge`, rebuilt with
+    /// the indices in `load_from_file` (#2089 — wires the table the doc
+    /// comment always promised; labels are no longer stored per edge entry).
+    #[serde(skip)]
+    pub(super) label_table: LabelTable,
     /// Zero-copy CSR snapshot for BFS traversal (G1).
     /// Built on-demand via `build_read_snapshot()`, invalidated by writes.
     #[serde(skip)]
@@ -195,6 +210,7 @@ impl EdgeStore {
             by_label: HashMap::with_capacity(expected_labels),
             outgoing_by_label: HashMap::with_capacity(outgoing_by_label_cap),
             incoming_by_label: HashMap::with_capacity(outgoing_by_label_cap),
+            label_table: LabelTable::with_capacity(expected_labels),
             csr_snapshot: None,
         }
     }
@@ -253,14 +269,16 @@ impl EdgeStore {
             return Err(Error::EdgeExists(id));
         }
 
+        // One interning lookup per insert; no per-edge label allocation (#2089).
+        let label_id = self.intern_label(edge.label())?;
+
         if index_outgoing {
             let source = edge.source();
-            let label = edge.label().to_string();
             self.outgoing.entry(source).or_default().push(id);
             // Label indices are owned by the source shard (US-003)
-            self.by_label.entry(label.clone()).or_default().push(id);
+            self.by_label.entry(label_id).or_default().push(id);
             self.outgoing_by_label
-                .entry((source, label))
+                .entry((source, label_id))
                 .or_default()
                 .push(id);
         }
@@ -269,7 +287,7 @@ impl EdgeStore {
             let target = edge.target();
             self.incoming.entry(target).or_default().push(id);
             self.incoming_by_label
-                .entry((target, edge.label().to_string()))
+                .entry((target, label_id))
                 .or_default()
                 .push(id);
         }
@@ -380,7 +398,10 @@ impl EdgeStore {
     /// iterating through all outgoing edges (EPIC-019 US-003).
     #[must_use]
     pub fn get_outgoing_by_label(&self, node_id: u64, label: &str) -> Vec<&GraphEdge> {
-        self.resolve_edge_ids(self.outgoing_by_label.get(&(node_id, label.to_string())))
+        let Some(label_id) = self.label_table.get_id(label) else {
+            return Vec::new();
+        };
+        self.resolve_edge_ids(self.outgoing_by_label.get(&(node_id, label_id)))
     }
 
     /// Gets all edges with a specific label - O(k) where k = result count.
@@ -388,7 +409,10 @@ impl EdgeStore {
     /// Uses the `by_label` secondary index for fast lookup (EPIC-019 US-003).
     #[must_use]
     pub fn get_edges_by_label(&self, label: &str) -> Vec<&GraphEdge> {
-        self.resolve_edge_ids(self.by_label.get(label))
+        let Some(label_id) = self.label_table.get_id(label) else {
+            return Vec::new();
+        };
+        self.resolve_edge_ids(self.by_label.get(&label_id))
     }
 
     /// Resolves edge IDs from an index entry into edge references.
@@ -404,23 +428,63 @@ impl EdgeStore {
     /// Gets incoming edges filtered by label.
     #[must_use]
     pub fn get_incoming_by_label(&self, node_id: u64, label: &str) -> Vec<&GraphEdge> {
-        self.resolve_edge_ids(self.incoming_by_label.get(&(node_id, label.to_string())))
+        let Some(label_id) = self.label_table.get_id(label) else {
+            return Vec::new();
+        };
+        self.resolve_edge_ids(self.incoming_by_label.get(&(node_id, label_id)))
     }
 
-    /// Rebuilds the (unserialized) `incoming_by_label` index from the live
-    /// edges — called after loading a postcard snapshot.
-    pub(super) fn rebuild_incoming_label_index(&mut self) {
-        self.incoming_by_label.clear();
-        for ids in self.incoming.values() {
-            for &id in ids {
-                if let Some(edge) = self.edges.get(&id) {
-                    self.incoming_by_label
-                        .entry((edge.target(), edge.label().to_string()))
+    /// Interns `label` in this store's table, mapping the (practically
+    /// unreachable) `u32::MAX`-distinct-labels overflow to [`Error::Overflow`].
+    fn intern_label(&mut self, label: &str) -> Result<LabelId> {
+        intern_or_overflow(&mut self.label_table, label)
+    }
+
+    /// Rebuilds the (unserialized) label table and the three label indices
+    /// from the live edges — called after loading a postcard snapshot.
+    ///
+    /// Interning cannot overflow here: every label was already interned once
+    /// when its edge was first inserted, so the vocabulary fits `u32` by
+    /// construction; an overflow is reported all the same rather than
+    /// silently dropping index entries.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Overflow`] if the number of distinct labels exceeds
+    /// the `u32` domain of [`LabelId`].
+    pub(super) fn rebuild_label_indexes(&mut self) -> Result<()> {
+        // Destructured so the borrow checker sees the disjoint fields: the
+        // edge/index maps are read while the table and label maps are written.
+        let Self {
+            edges,
+            outgoing,
+            incoming,
+            by_label,
+            outgoing_by_label,
+            incoming_by_label,
+            label_table,
+            ..
+        } = self;
+        by_label.clear();
+        outgoing_by_label.clear();
+        incoming_by_label.clear();
+
+        // Iterate nodes in sorted order (same discipline as SnapshotBuilder):
+        // HashMap iteration order is randomized per instance, so an unsorted
+        // walk would hand every reload a different by-label result order.
+        for &node in &sorted_keys(outgoing) {
+            for &id in &outgoing[&node] {
+                if let Some(edge) = edges.get(&id) {
+                    let label_id = intern_or_overflow(label_table, edge.label())?;
+                    by_label.entry(label_id).or_default().push(id);
+                    outgoing_by_label
+                        .entry((edge.source(), label_id))
                         .or_default()
                         .push(id);
                 }
             }
         }
+        rebuild_incoming_labels(edges, incoming, incoming_by_label, label_table)
     }
 
     /// Checks if an edge with the given ID exists.
@@ -478,6 +542,47 @@ impl EdgeStore {
             }
         }
     }
+}
+
+/// Maps [`LabelTable::intern`]'s overflow (more than `u32::MAX` distinct
+/// labels — unreachable in practice) to [`Error::Overflow`].
+fn intern_or_overflow(table: &mut LabelTable, label: &str) -> Result<LabelId> {
+    table
+        .intern(label)
+        .map_err(|e| Error::Overflow(e.to_string()))
+}
+
+/// The incoming half of [`EdgeStore::rebuild_label_indexes`], split out to
+/// keep both halves under the complexity budget. Takes the already-borrowed
+/// disjoint fields rather than `&mut self` so the caller's destructuring
+/// still satisfies the borrow checker.
+fn rebuild_incoming_labels(
+    edges: &HashMap<u64, GraphEdge>,
+    incoming: &HashMap<u64, Vec<u64>>,
+    incoming_by_label: &mut HashMap<(u64, LabelId), Vec<u64>>,
+    label_table: &mut LabelTable,
+) -> Result<()> {
+    // Sorted for the same determinism reason as the outgoing half.
+    for &node in &sorted_keys(incoming) {
+        for &id in &incoming[&node] {
+            if let Some(edge) = edges.get(&id) {
+                let label_id = intern_or_overflow(label_table, edge.label())?;
+                incoming_by_label
+                    .entry((edge.target(), label_id))
+                    .or_default()
+                    .push(id);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The map's keys, sorted — so index rebuilds walk nodes in a stable order
+/// instead of the per-instance-random `HashMap` iteration order.
+fn sorted_keys<V>(map: &HashMap<u64, V>) -> Vec<u64> {
+    let mut keys: Vec<u64> = map.keys().copied().collect();
+    keys.sort_unstable();
+    keys
 }
 
 // Edge removal operations are in `edge_removal.rs`.

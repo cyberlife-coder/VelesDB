@@ -9,6 +9,7 @@
 #![allow(clippy::cast_possible_truncation)]
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use thiserror::Error;
 
 /// Error type for LabelTable operations.
@@ -66,10 +67,12 @@ impl LabelId {
 /// ```
 #[derive(Debug, Default)]
 pub struct LabelTable {
-    /// Stored strings indexed by LabelId
-    strings: Vec<String>,
-    /// Reverse lookup: string -> LabelId
-    ids: HashMap<String, LabelId>,
+    /// Stored strings indexed by `LabelId`. Each entry shares its allocation
+    /// with the `ids` key — the table owns one `Arc<str>` per distinct label,
+    /// not two `String`s (#2089, same treatment as the CSR builder's table).
+    strings: Vec<Arc<str>>,
+    /// Reverse lookup: string -> `LabelId`
+    ids: HashMap<Arc<str>, LabelId>,
 }
 
 impl LabelTable {
@@ -122,9 +125,9 @@ impl LabelTable {
         // Reason: len checked against u32::MAX above, truncation impossible
         #[allow(clippy::cast_possible_truncation)]
         let id = LabelId(len as u32);
-        let owned = s.to_owned();
-        self.strings.push(owned.clone());
-        self.ids.insert(owned, id);
+        let shared: Arc<str> = Arc::from(s);
+        self.strings.push(Arc::clone(&shared));
+        self.ids.insert(shared, id);
         Ok(id)
     }
 
@@ -139,7 +142,7 @@ impl LabelTable {
     /// The original string, or `None` if the ID is invalid
     #[must_use]
     pub fn resolve(&self, id: LabelId) -> Option<&str> {
-        self.strings.get(id.0 as usize).map(String::as_str)
+        self.strings.get(id.0 as usize).map(AsRef::as_ref)
     }
 
     /// Returns the number of unique labels in the table.
@@ -159,7 +162,7 @@ impl LabelTable {
         self.strings
             .iter()
             .enumerate()
-            .map(|(i, s)| (LabelId(i as u32), s.as_str()))
+            .map(|(i, s)| (LabelId(i as u32), s.as_ref()))
     }
 
     /// Gets the ID for a label if it exists, without interning.

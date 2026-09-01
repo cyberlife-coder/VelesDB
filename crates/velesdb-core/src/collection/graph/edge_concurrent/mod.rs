@@ -19,7 +19,6 @@ use super::clustered_index::ClusteredIndex;
 use super::csr_snapshot::{CsrSnapshot, SnapshotBuilder};
 use super::edge::{EdgeStore, GraphEdge};
 use super::edge_outcome::EdgeRemoval;
-use super::label_table::LabelTable;
 use super::metrics::GraphMetrics;
 use crate::error::{Error, Result};
 use arc_swap::ArcSwap;
@@ -102,8 +101,6 @@ pub struct ConcurrentEdgeStore {
     /// CSR snapshot is intentionally stale and callers must consult the
     /// authoritative per-shard data (see [`Self::csr_is_authoritative`]).
     pending_writes: AtomicU64,
-    /// Shared label table for interning edge labels during snapshot builds.
-    label_table: RwLock<LabelTable>,
     /// Lock-free operational metrics (edge inserts/deletes, traversals).
     ///
     /// Atomic counters and histograms only; observed on the Ok tail of each
@@ -147,7 +144,6 @@ impl ConcurrentEdgeStore {
             csr_snapshot: ArcSwap::from_pointee(SnapshotBuilder::empty()),
             csr_dirty: AtomicBool::new(false),
             pending_writes: AtomicU64::new(0),
-            label_table: RwLock::new(LabelTable::new()),
             metrics: GraphMetrics::new(),
         })
     }
