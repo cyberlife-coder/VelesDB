@@ -89,11 +89,18 @@ impl VelesConfig {
         Ok(())
     }
 
-    /// The `[search]`, `[hnsw]`, `[storage]` and `[quantization]` sections
-    /// are parsed and validated but not yet applied — only `[limits]`
-    /// reaches the engine (issue #2087). Warn — rather than reject — when a
-    /// config sets any of them away from its defaults, so existing files
-    /// keep loading while no deployment silently believes those knobs work.
+    /// The `[search]`, `[storage]` and `[quantization]` sections are parsed
+    /// and validated but not yet applied (issue #2087). Warn — rather than
+    /// reject — when a config sets any of them away from its defaults, so
+    /// existing files keep loading while no deployment silently believes
+    /// those knobs work.
+    ///
+    /// `[hnsw]` is no longer listed wholesale: `m` and `ef_construction` are
+    /// applied at collection creation. Only `max_layers` remains inert — the
+    /// layer count is drawn per node by the level generator and no engine
+    /// path caps it — so the warning narrows to that single field. Reporting
+    /// the field rather than the section is the point: a warning that fires
+    /// on knobs that now work would train readers to ignore it.
     ///
     /// Serde-value comparison instead of `PartialEq` derives: the sections
     /// carry enums and nested types, and this runs once per config load.
@@ -109,8 +116,8 @@ impl VelesConfig {
         if deviates(&self.search, &crate::config::SearchConfig::default()) {
             inert.push("[search]");
         }
-        if deviates(&self.hnsw, &crate::config::HnswConfig::default()) {
-            inert.push("[hnsw]");
+        if self.hnsw.max_layers != crate::config::HnswConfig::default().max_layers {
+            inert.push("hnsw.max_layers");
         }
         if deviates(
             &self.storage,
@@ -126,10 +133,14 @@ impl VelesConfig {
         }
         if !inert.is_empty() {
             tracing::warn!(
-                sections = inert.join(", "),
-                "these config sections are parsed and validated but not yet \
-                 applied by the engine — only [limits] is; see issue #2087. \
-                 Query-time WITH (...) overrides are unaffected."
+                // Entries are a mix of whole sections and single keys now
+                // that `[hnsw]` is partly wired, hence `inert` rather than
+                // the former `sections`.
+                inert = inert.join(", "),
+                "these config entries are parsed and validated but not \
+                 applied by the engine; see issue #2087. [limits] and \
+                 [hnsw]'s m / ef_construction are applied. Query-time \
+                 WITH (...) overrides are unaffected."
             );
         }
     }

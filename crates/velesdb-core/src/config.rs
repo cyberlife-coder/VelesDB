@@ -88,12 +88,14 @@ impl SearchMode {
 
 /// Search configuration section.
 ///
-/// **Reserved — parsed and validated, not yet applied.** Only `[limits]`
-/// reaches the engine today; [`VelesConfig::validate`] warns when this
-/// section deviates from its defaults so a config cannot silently promise
-/// behavior the engine does not deliver. Wiring these values as engine
-/// defaults is tracked in issue #2087. Per-query runtime overrides
-/// (`WITH (ef_search = N)`) are a separate, working mechanism.
+/// **Reserved — parsed and validated, not yet applied.** `[limits]` and
+/// `[hnsw]` reach the engine; this section does not.
+/// [`VelesConfig::validate`] warns when it deviates from its defaults so a
+/// config cannot silently promise behavior the engine does not deliver.
+/// Wiring is tracked in issue #2087 — `query_timeout_ms` in particular needs
+/// a query timeout the engine does not have, which is a feature of its own.
+/// Per-query runtime overrides (`WITH (ef_search = N)`) are a separate,
+/// working mechanism.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SearchConfig {
@@ -118,14 +120,31 @@ impl Default for SearchConfig {
     }
 }
 
-/// HNSW index configuration section.
+/// HNSW index configuration section — the deployment-wide default for the
+/// graph topology of every index the engine builds.
 ///
-/// **Reserved — parsed and validated, not yet applied.** Only `[limits]`
-/// reaches the engine today; [`VelesConfig::validate`] warns when this
-/// section deviates from its defaults so a config cannot silently promise
-/// behavior the engine does not deliver. Wiring these values as engine
-/// defaults is tracked in issue #2087. Per-query runtime overrides
-/// (`WITH (ef_search = N)`) are a separate, working mechanism.
+/// **Applied at collection creation** (issue #2087). `m` and
+/// `ef_construction` take effect through
+/// [`HnswParams::from_config`](crate::index::hnsw::HnswParams::from_config),
+/// under this precedence chain:
+///
+/// ```text
+/// per-collection creation argument  >  [hnsw] section  >  HnswParams::auto(dimension)
+/// ```
+///
+/// The values are **creation-time**: they are persisted into the collection's
+/// own config and fix the graph topology, so editing this section afterwards
+/// affects new collections only. Re-tuning an existing one means rebuilding
+/// its index (`auto_reindex`), not reloading a file.
+///
+/// Per-query runtime overrides (`WITH (ef_search = N)`) are a separate,
+/// working mechanism on a different axis: `ef_search` sizes the candidate pool
+/// of one query; nothing here does.
+///
+/// `max_layers` is the exception and is still inert:
+/// [`VelesConfig::validate`] warns when it is set. The HNSW layer count is
+/// drawn per node by the level generator and no engine path caps it, so
+/// honouring the knob is a feature, not a wiring.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HnswConfig {
@@ -136,6 +155,9 @@ pub struct HnswConfig {
     /// `None` = auto based on dimension.
     pub ef_construction: Option<usize>,
     /// Maximum number of layers (0 = auto).
+    ///
+    /// **Reserved — parsed and validated, not applied.** See the type-level
+    /// note above.
     pub max_layers: usize,
 }
 
@@ -149,11 +171,12 @@ pub mod server {
 
     /// Storage configuration section.
     ///
-    /// **Reserved — parsed and validated, not yet applied.** Only
-    /// `[limits]` reaches the engine today; `VelesConfig::validate` warns
-    /// when this section deviates from its defaults. Wiring is tracked in
-    /// issue #2087 (`data_dir` in particular conflicts with the path passed
-    /// to `Database::open` and may go through deprecation instead).
+    /// **Reserved — parsed and validated, not yet applied.** `[limits]`
+    /// and `[hnsw]` reach the engine; this section does not.
+    /// `VelesConfig::validate` warns when it deviates from its defaults.
+    /// Wiring is tracked in issue #2087 (`data_dir` in particular conflicts
+    /// with the path passed to `Database::open` and may go through
+    /// deprecation instead).
     #[derive(Debug, Clone, Serialize, Deserialize)]
     #[serde(default)]
     pub struct StorageConfig {

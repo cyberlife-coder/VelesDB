@@ -606,6 +606,14 @@ impl SearchConfigOptions {
 /// `Database.create_collection` — this section sets the database-wide
 /// defaults instead. `None` fields fall back to the engine defaults
 /// (`m`/`ef_construction` auto by dimension, `max_layers=0` = auto).
+///
+/// `m` and `ef_construction` are applied when a collection's index is created
+/// (issue #2087), under the precedence chain: per-collection [`HnswOptions`] >
+/// this section > auto by dimension. They are creation-time values, so
+/// changing them affects new collections only.
+///
+/// `max_layers` is **reserved**: it is validated but no engine path reads it,
+/// and the core logs a warning when it is set.
 #[pyclass(module = "velesdb", from_py_object)]
 #[derive(Clone, Debug, Default)]
 pub struct HnswConfigOptions {

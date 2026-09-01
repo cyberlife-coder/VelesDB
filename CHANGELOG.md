@@ -9,6 +9,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`[hnsw]` is applied by the engine (#2087).** `m` and `ef_construction`
+  from the configuration file now reach the HNSW index of every collection the
+  `Database` creates — vector collections and graph collections with node
+  embeddings alike. Before this, they were parsed and *validated* and read by
+  nothing: a config could be rejected for an out-of-range value on a knob that
+  did nothing, which signals harder than silence that the knob works.
+
+  The precedence chain is explicit and per-field:
+
+  ```text
+  per-collection creation argument  >  [hnsw] section  >  HnswParams::auto(dimension)
+  ```
+
+  A collection created with an explicit `m` and no `ef_construction` still
+  takes `ef_construction` from the section. `create_vector_collection_with_params`
+  bypasses the section entirely — a fully specified `HnswParams` is already an
+  answer, and merging a file the caller never mentioned into it would be
+  surprising. Resolution lives in `Database`, the only component that owns a
+  `VelesConfig`, so `Collection` and the index stay config-free.
+
+  These are **creation-time** values: they are persisted into the collection's
+  own config and fix its graph topology, so editing the section later affects
+  new collections only. Re-tuning an existing collection is an index rebuild
+  (`auto_reindex`), not a config reload.
+
+  **No behaviour changes without an explicit section.** A default `[hnsw]`
+  resolves to exactly `HnswParams::auto(dimension)`, and the creation paths
+  persist the same `pq_rescore_oversampling = Some(4)` they did before, so a
+  collection created without config is byte-for-byte what the pre-wiring code
+  produced. A test asserts this directly.
+
+  `hnsw.max_layers` stays inert and `[search]`, `[storage]`, `[quantization]`
+  stay unwired; `VelesConfig::validate` still warns for them, narrowed to name
+  the single inert field rather than the whole `[hnsw]` section — a warning
+  that fires on knobs that now work would train readers to ignore it.
+
+  New public API: `HnswParams::from_config`,
+  `VectorCollection::create_with_hnsw_params`,
+  `GraphCollection::create_with_hnsw_params`.
+
+### Fixed
+
+- **`VectorCollection::create_with_hnsw` documented a false equivalence.** It
+  claimed that passing `None` for both arguments was "equivalent to
+  `VectorCollection::create`". It is not: it persists
+  `pq_rescore_oversampling = None` ("no explicit override", which migrations
+  read differently) where `create` persists the engine default `Some(4)`. The
+  rustdoc now states the difference and points at
+  `create_with_hnsw_params` for a params override that keeps the `create`
+  default. Behaviour is unchanged.
+
+### Documentation
+
+- **The `VELESDB_*` environment-variable table is flagged as broken (#2185).**
+  Re-verifying it end to end while wiring `[hnsw]` showed that no documented
+  engine variable reaches its field — `VELESDB_HNSW_M`,
+  `VELESDB_HNSW_EF_CONSTRUCTION` and `VELESDB_LIMITS_MAX_COLLECTIONS` all load
+  as the default, the last one despite an explicit rustdoc promise that it
+  works. `docs/guides/CONFIGURATION.md` now carries a banner saying so. The
+  fix is a behaviour change — currently-inert variables would start taking
+  effect — so it is tracked separately rather than folded in here.
+
+### Added
+
 - **The `clippy::significant_drop_tightening` backlog is frozen where it stands
   (#2110).** `Cargo.toml` denies `significant_drop_in_scrutinee` — a guard
   living to the end of a `match`/`if let`/`for` scrutinee is how the
