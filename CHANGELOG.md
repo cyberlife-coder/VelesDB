@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **No `VELESDB_*` environment variable reached its config field (#2185).** The
+  figment provider was built `Env::prefixed("VELESDB_").split("_").lowercase(false)`,
+  which carried two independent defects, either fatal on its own:
+
+  - `lowercase(false)` left the key uppercase, so deserialization looked for a
+    field literally named `HNSW` rather than `hnsw`. This is what broke even the
+    single-token `VELESDB_HNSW_M`.
+  - `split("_")` treated **every** underscore as a nesting separator, so
+    `VELESDB_HNSW_EF_CONSTRUCTION` addressed `hnsw.ef.construction`. No field
+    with an underscore in its name was reachable — which is most of them
+    (`max_collections`, `ef_construction`, `query_timeout_ms`, `max_payload_size`).
+
+  Verified against `develop` before the fix: `VELESDB_HNSW_M`,
+  `VELESDB_HNSW_EF_CONSTRUCTION` and `VELESDB_LIMITS_MAX_COLLECTIONS` all loaded
+  as their defaults — the last one despite an explicit rustdoc promise on
+  `VelesConfig::load_from_path_engine_only` that it overrides the file.
+
+  The provider now splits at the **section boundary only**: the first underscore
+  following a known top-level table. Everything after it is the field name, kept
+  verbatim. A name whose first token is not a section passes through unsplit, so
+  `VELESDB_CONFIG`, `VELESDB_NO_UPDATE_CHECK` and the server's own
+  `VELESDB_HOST` / `VELESDB_PORT` keep matching nothing here, exactly as before.
+  Both `load_from_path` and `load_from_path_engine_only` share one provider, so
+  the two cannot drift.
+
+  **This is a behaviour change, not only a fix.** Variables that were inert now
+  take effect. An operator carrying a stale `VELESDB_LIMITS_MAX_COLLECTIONS=5`
+  in their environment will start getting `GuardRail` refusals on collection
+  creation after upgrading — the value they set, finally applied. Check the
+  environment of any deployment that exports `VELESDB_*` before upgrading.
+
+  A variable is exactly equivalent to its TOML key, so a **reserved** key stays
+  reserved when set this way: `VELESDB_SEARCH_MAX_RESULTS` is parsed, validated
+  and applied by nothing, same as `[search] max_results`.
+
+### Documentation
+
+- **`docs/guides/CONFIGURATION.md`'s env-var table conflated two config
+  systems.** `VELESDB_HOST`, `VELESDB_PORT`, `VELESDB_DATA_DIR`,
+  `VELESDB_RATE_LIMIT`, `VELESDB_API_KEYS` and `VELESDB_TLS_*` are
+  `velesdb-server`'s own transport variables and were listed as though they
+  addressed `VelesConfig` sections; they never will, since `[server]`/`[auth]`/
+  `[tls]` are filtered out by `load_from_path_engine_only`. They now have their
+  own table. `VELESDB_STORAGE_MODE` was listed as `storage.storage_mode`, which
+  no regular mapping produces — corrected to `VELESDB_STORAGE_STORAGE_MODE`.
+
 ### Added
 
 - **The `clippy::significant_drop_tightening` backlog is frozen where it stands
