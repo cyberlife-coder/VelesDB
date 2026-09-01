@@ -24,18 +24,25 @@ const FULL_SCAN_THRESHOLD: f32 = 0.3;
 /// Doc-count threshold below which the linear scan path is preferred
 /// unconditionally.
 ///
-/// At this size the dense accumulator (`4 * doc_count` bytes) fits in L2
-/// cache (`<= 400 KB` for 100K docs on typical x86-64 CPUs), so a single
-/// cache-hot pass over the posting entries beats the cursor / heap /
-/// binary-search overhead of `MaxScore` DAAT. Above this threshold the
-/// existing coverage-based heuristic chooses between DAAT and linear scan.
+/// Tied to [`MAX_DENSE_ACCUMULATOR`]: the whole regime where the linear
+/// scan gets its dense accumulator is routed to it (#2177). The old value
+/// of `100_000` created a cliff at the boundary — measured with the
+/// `sparse_posting_scale` bench (both query shapes, two passes each,
+/// checksums stable): crossing 100k docs cost **43×** per query on
+/// uniform queries and **14×** on skewed SPLADE-shaped ones, and the
+/// ratio stayed flat (~13×) in a crossover sweep up to 400k docs — there
+/// is no crossover inside the dense regime. The mechanism (confirmed by
+/// an operation-count probe on #2177): this `MaxScore` implementation
+/// scores the same candidate union a linear scan visits — it prunes no
+/// candidates, but pays cursor bookkeeping and a per-candidate min-scan
+/// over the essential lists, ~100–280 elementary ops per posting where
+/// the linear scan pays ~1.
 ///
-/// Empirical basis: on 10K SPLADE-like corpus, forcing linear scan dropped
-/// `sparse_search top10` latency from ~956 µs to ~60 µs — a 15x speedup
-/// that stems from the dense-accumulator path being cache-friendly for
-/// moderate corpora. Reassess this constant once a million-doc sparse
-/// benchmark is added.
-const SMALL_CORPUS_LINEAR_THRESHOLD: u64 = 100_000;
+/// Beyond this threshold (non-compact doc-id spaces above it, too) the
+/// coverage heuristic below still chooses between DAAT and linear scan;
+/// whether `MaxScore` earns its keep past 1M docs is unmeasured — see
+/// #2177 for the retirement question.
+const SMALL_CORPUS_LINEAR_THRESHOLD: u64 = MAX_DENSE_ACCUMULATOR;
 
 /// Maximum doc ID for which we use a dense accumulator array.
 /// Above this threshold we fall back to a hash map.
@@ -50,9 +57,10 @@ const MAX_DENSE_ACCUMULATOR: u64 = 1_000_000;
 /// Searches the sparse inverted index for the top-k documents by inner product.
 ///
 /// Routing strategy (in order):
-/// 1. Small corpora (`doc_count <= SMALL_CORPUS_LINEAR_THRESHOLD`) always use
-///    linear scan — the dense accumulator stays L2-resident and the tight
-///    loop beats DAAT overhead.
+/// 1. Corpora in the dense-accumulator regime
+///    (`doc_count <= SMALL_CORPUS_LINEAR_THRESHOLD`) always use linear
+///    scan — measured 14–43× faster than `MaxScore` at the former 100k
+///    boundary and still ~13× ahead at 400k (#2177).
 /// 2. Queries with any negative weight use linear scan (the `MaxScore` upper
 ///    bound is only valid for non-negative query / document weights — see
 ///    CRITICAL-1 below).
@@ -79,8 +87,8 @@ pub fn sparse_search(
     // contribution). Fall back to linear scan for any query with negative weights.
     let has_negative_weight = query.values.iter().any(|&w| w < 0.0);
 
-    // Small corpus fast path: dense linear scan keeps the entire accumulator
-    // in L2 cache and avoids DAAT's cursor/heap overhead.
+    // Dense-regime fast path: the linear scan's accumulator pays ~1
+    // elementary op per posting where this MaxScore pays ~100-280 (#2177).
     if doc_count <= SMALL_CORPUS_LINEAR_THRESHOLD || has_negative_weight {
         return linear_scan_search(index, query, k);
     }
