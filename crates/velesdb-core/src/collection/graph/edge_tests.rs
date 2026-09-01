@@ -598,6 +598,109 @@ fn test_remove_node_edges_cleans_label_index() {
     assert!(store.get_edges_by_label("FOLLOWS").is_empty());
 }
 
+/// A node/label whose last edge is removed must not keep an empty bucket
+/// alive in the index maps — `get_*` looking empty isn't enough to prove
+/// that, since a missing key and a key mapped to an empty `Vec` both read as
+/// empty through that API. `outgoing`/`incoming` are persisted fields, so a
+/// leaked key here also bloats every snapshot going forward.
+#[test]
+fn test_remove_edge_evicts_empty_index_buckets() {
+    let mut store = EdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "KNOWS").expect("valid"))
+        .expect("add");
+
+    store.remove_edge(1);
+
+    assert!(
+        !store.outgoing.contains_key(&100),
+        "empty outgoing bucket for 100 should be evicted, not left empty"
+    );
+    assert!(
+        !store.incoming.contains_key(&200),
+        "empty incoming bucket for 200 should be evicted, not left empty"
+    );
+    assert!(
+        store.by_label.is_empty(),
+        "empty by_label bucket for KNOWS should be evicted, not left empty"
+    );
+    assert!(
+        store.outgoing_by_label.is_empty(),
+        "empty outgoing_by_label bucket should be evicted, not left empty"
+    );
+    assert!(
+        store.incoming_by_label.is_empty(),
+        "empty incoming_by_label bucket should be evicted, not left empty"
+    );
+}
+
+/// Same eviction contract via the cascade-delete path (`remove_node_edges`),
+/// which purges the *other* endpoint of each edge through the same
+/// `purge_incoming_index`/`purge_outgoing_index`/`purge_label_indices` helpers.
+#[test]
+fn test_remove_node_edges_evicts_empty_index_buckets_on_other_endpoint() {
+    let mut store = EdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "KNOWS").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(2, 300, 100, "FOLLOWS").expect("valid"))
+        .expect("add");
+
+    store.remove_node_edges(100);
+
+    assert!(
+        !store.incoming.contains_key(&200),
+        "node 100's own removal must not leave an empty bucket at the far endpoint"
+    );
+    assert!(
+        !store.outgoing.contains_key(&300),
+        "node 100's own removal must not leave an empty bucket at the far endpoint"
+    );
+    assert!(store.by_label.is_empty());
+    assert!(store.outgoing_by_label.is_empty());
+    assert!(store.incoming_by_label.is_empty());
+}
+
+/// Same eviction contract via `remove_edge_outgoing_only`, the cross-shard
+/// removal path `ConcurrentEdgeStore` uses when it owns only the source
+/// shard's half of an edge.
+#[test]
+fn test_remove_edge_outgoing_only_evicts_empty_index_buckets() {
+    let mut store = EdgeStore::new();
+    store
+        .add_edge_outgoing_only(GraphEdge::new(1, 100, 200, "KNOWS").expect("valid"))
+        .expect("add");
+
+    store.remove_edge_outgoing_only(1);
+
+    assert!(
+        !store.outgoing.contains_key(&100),
+        "empty outgoing bucket for 100 should be evicted, not left empty"
+    );
+    assert!(store.by_label.is_empty());
+    assert!(store.outgoing_by_label.is_empty());
+}
+
+/// Same eviction contract via `remove_edge_incoming_only`, the cross-shard
+/// removal path `ConcurrentEdgeStore` uses when it owns only the target
+/// shard's half of an edge.
+#[test]
+fn test_remove_edge_incoming_only_evicts_empty_index_buckets() {
+    let mut store = EdgeStore::new();
+    store
+        .add_edge_incoming_only(GraphEdge::new(1, 100, 200, "KNOWS").expect("valid"))
+        .expect("add");
+
+    store.remove_edge_incoming_only(1);
+
+    assert!(
+        !store.incoming.contains_key(&200),
+        "empty incoming bucket for 200 should be evicted, not left empty"
+    );
+    assert!(store.incoming_by_label.is_empty());
+}
+
 // =============================================================================
 // G1: CSR Snapshot — zero-copy BFS via contiguous memory layout
 // =============================================================================

@@ -367,6 +367,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`EdgeStore`'s index maps kept an empty bucket alive for every node/label
+  that ever had an edge, instead of evicting the key once its `Vec` emptied.**
+  `purge_incoming_index`, `purge_outgoing_index` and `purge_label_indices` are
+  the three helpers behind every edge-removal path (`remove_edge`,
+  `remove_edge_outgoing_only`, `remove_edge_incoming_only`,
+  `remove_node_edges`), and only one of the five maps they touch
+  (`incoming_by_label`) ever removed its key when the bucket it pointed to
+  went empty — `outgoing`, `incoming`, `by_label` and `outgoing_by_label` kept
+  a stale key mapped to `vec![]` forever. Node ids are effectively never
+  reused, so long-running ingest-then-remove workloads grew these maps
+  without bound. `outgoing`/`incoming` are also the two fields without
+  `#[serde(skip)]`, so their leaked keys were written to every snapshot and
+  survived a reload — unlike the three label indices, which are rebuilt from
+  `edges` on load and so only leaked within a process's lifetime.
+  `csr_snapshot.rs`'s rebuild walks `outgoing_keys()` to size `node_to_index`,
+  so the leak also inflated the cost of every CSR rebuild after add/remove
+  churn. All four helpers now evict the key alongside the existing
+  `incoming_by_label` behaviour they were supposed to match; no format or
+  query-result change, verified by asserting the maps themselves return to
+  empty rather than only checking `get_outgoing`/`get_edges_by_label`, which
+  read the same whether a key is missing or mapped to an empty `Vec`.
+
 - **`AnyCollection::upsert`'s graph arm pays one durability barrier instead of
   one per node (#2153).** The `Vector` and `Metadata` arms reach `crud.rs` and
   pay a single barrier for the whole batch; the `Graph` arm looped the
