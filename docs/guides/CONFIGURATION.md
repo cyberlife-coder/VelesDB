@@ -377,24 +377,55 @@ hot_reload = false
 
 All options can be set via environment variables with the `VELESDB_` prefix:
 
+**Two config systems share the `VELESDB_` prefix.** The engine
+(`VelesConfig`) and the `velesdb-server` transport layer each read their own
+variables; a name resolves to one or the other, never both. They are listed
+separately because that distinction decides whether a variable does anything.
+
+### Engine variables (`VelesConfig`)
+
+`VELESDB_` + the section + `_` + the field, with underscores inside the field
+name kept as they are:
+
 | Variable | TOML Equivalent | Example |
 |----------|-----------------|---------|
 | `VELESDB_SEARCH_DEFAULT_MODE` | `search.default_mode` | `balanced` |
 | `VELESDB_SEARCH_EF_SEARCH` | `search.ef_search` | `256` |
+| `VELESDB_SEARCH_MAX_RESULTS` | `search.max_results` | `500` |
 | `VELESDB_HNSW_M` | `hnsw.m` | `48` |
 | `VELESDB_HNSW_EF_CONSTRUCTION` | `hnsw.ef_construction` | `600` |
+| `VELESDB_LIMITS_MAX_COLLECTIONS` | `limits.max_collections` | `50` |
+| `VELESDB_LIMITS_MAX_DIMENSIONS` | `limits.max_dimensions` | `4096` |
 | `VELESDB_STORAGE_DATA_DIR` | `storage.data_dir` | `/var/lib/velesdb` |
-| `VELESDB_STORAGE_MODE` | `storage.storage_mode` | `mmap` |
-| `VELESDB_HOST` | `server.host` | `0.0.0.0` |
-| `VELESDB_PORT` | `server.port` | `8080` |
-| `VELESDB_DATA_DIR` | `server.data_dir` | `/var/lib/velesdb` |
-| `VELESDB_RATE_LIMIT` | `server.rate_limit` | `100` |
-| `VELESDB_API_KEYS` | `auth.api_keys` | `key1,key2,key3` (comma-separated) |
-| `VELESDB_TLS_CERT` | `tls.cert` | `/etc/ssl/cert.pem` |
-| `VELESDB_TLS_KEY` | `tls.key` | `/etc/ssl/key.pem` |
+| `VELESDB_STORAGE_STORAGE_MODE` | `storage.storage_mode` | `mmap` |
+| `VELESDB_WAL_BATCH_ENABLED` | `wal_batch.enabled` | `false` |
 | `VELESDB_LOGGING_LEVEL` | `logging.level` | `debug` |
-| `VELESDB_LICENSE_KEY` | `premium.license_key` | `VELES-...` |
-| `VELESDB_NO_UPDATE_CHECK` | `update_check.enabled` | `1` (disables) |
+
+Setting one of these is exactly equivalent to setting its TOML key — so a
+**reserved** key stays reserved when set this way. `VELESDB_SEARCH_MAX_RESULTS`
+is parsed, validated and applied by nothing, just like `[search] max_results`;
+see the note at the top of this guide for what the engine acts on.
+
+Note `VELESDB_STORAGE_STORAGE_MODE`, not `VELESDB_STORAGE_MODE`: the section is
+`storage` and the field is `storage_mode`. Earlier revisions of this table
+listed the short form, which addresses `storage.mode` — no such field exists.
+
+### Server variables (`velesdb-server` only)
+
+These belong to the HTTP transport layer and are **not** `VelesConfig` fields.
+They have no effect on an embedded engine:
+
+| Variable | Purpose | Example |
+|----------|---------|---------|
+| `VELESDB_HOST` | Bind address | `0.0.0.0` |
+| `VELESDB_PORT` | Bind port | `8080` |
+| `VELESDB_DATA_DIR` | Server data directory | `/var/lib/velesdb` |
+| `VELESDB_RATE_LIMIT` | Requests per window | `100` |
+| `VELESDB_API_KEYS` | API keys | `key1,key2,key3` (comma-separated) |
+| `VELESDB_TLS_CERT` | TLS certificate path | `/etc/ssl/cert.pem` |
+| `VELESDB_TLS_KEY` | TLS key path | `/etc/ssl/key.pem` |
+| `VELESDB_LICENSE_KEY` | License key | `VELES-...` |
+| `VELESDB_NO_UPDATE_CHECK` | Disables the update check | `1` |
 | `VELESDB_CONFIG` | Config file path | `/etc/velesdb/velesdb.toml` |
 
 ### Name Mapping
@@ -404,6 +435,15 @@ The mapping follows this rule:
 VELESDB_{SECTION}_{KEY} (uppercase, underscores)
 → section.key (lowercase, underscores preserved)
 ```
+
+The split happens at the **section boundary only** — the first underscore that
+follows a known section name. Everything after it is the field name, kept
+verbatim, so `VELESDB_HNSW_EF_CONSTRUCTION` reaches `hnsw.ef_construction`
+rather than a non-existent `hnsw.ef.construction`. A name whose first token is
+not a section (`VELESDB_CONFIG`, `VELESDB_HOST`) is left alone and matches no
+engine field. Before issue #2185 the provider split at *every* underscore and
+kept the key uppercase, so no engine variable in the table above reached its
+field at all.
 
 ### Examples
 
