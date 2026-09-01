@@ -45,13 +45,16 @@ To point at a file anywhere else, pass it explicitly:
 | `velesdb-server` | `--config <path>` | `VELESDB_CONFIG` |
 | `velesdb` (CLI) | `--config <path>` (global — REPL and every one-shot command) | `VELESDB_CONFIG` |
 
-> **Reserved sections.** Of the engine sections below, only `[limits]` is
-> applied by the engine today. `[search]`, `[hnsw]`, `[storage]` and
-> `[quantization]` are parsed and validated but not yet wired (issue #2087),
-> and `[wal_batch]` is parsed and ignored (issue #2078) — its group-commit
-> front was deleted as unwired, and the batch write APIs already pay one
-> durability barrier per call. Setting any of them away from their defaults
-> logs a warning at load. Query-time overrides (`WITH (ef_search = N)`) are a
+> **What the engine actually applies.** `[limits]` is enforced at the
+> collection and ingest boundaries, and `[hnsw]`'s `m` / `ef_construction`
+> are applied when a collection's index is created (see the precedence chain
+> under [Section \[hnsw\]](#section-hnsw)). Everything else below is parsed
+> and validated but **not** wired: `[search]`, `[storage]`, `[quantization]`
+> and `hnsw.max_layers` (issue #2087), and `[wal_batch]` is parsed and
+> ignored (issue #2078) — its group-commit front was deleted as unwired, and
+> the batch write APIs already pay one durability barrier per call. Setting
+> any unwired key away from its default logs a warning at load, naming
+> exactly what is inert. Query-time overrides (`WITH (ef_search = N)`) are a
 > separate, working mechanism, as are per-collection creation options.
 
 Both binaries can load the **same** file, but only the *engine* sections —
@@ -59,8 +62,8 @@ Both binaries can load the **same** file, but only the *engine* sections —
 `[wal_batch]` — reach `VelesConfig` and, via
 [`Database::open_with_config`](../../crates/velesdb-core/src/database/mod.rs),
 the running engine. Reaching `VelesConfig` is not the same as changing
-behaviour: see the reserved-sections note above for which of them the engine
-actually acts on. Every other top-level table is silently dropped before
+behaviour: see the note above for which of them the engine actually acts
+on. Every other top-level table is silently dropped before
 `VelesConfig` ever sees it — most importantly `[server]`, `[auth]`,
 `[tls]`, `[cors]`, which stay exclusively `velesdb-server`'s own transport
 config. This matters because `VelesConfig` *also* has its own same-named
@@ -481,11 +484,40 @@ SELECT * FROM docs WHERE vector NEAR $v WITH (ef_search = 512);
 
 ### Section [hnsw]
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `m` | int\|"auto" | `"auto"` | Connections per node |
-| `ef_construction` | int\|"auto" | `"auto"` | Construction pool size |
-| `max_layers` | int | `0` | Max layers (0=auto) |
+| Key | Type | Default | Description | Applied |
+|-----|------|---------|-------------|---------|
+| `m` | int\|"auto" | `"auto"` | Connections per node | yes — at collection creation |
+| `ef_construction` | int\|"auto" | `"auto"` | Construction pool size | yes — at collection creation |
+| `max_layers` | int | `0` | Max layers (0=auto) | **no** — reserved (#2087) |
+
+**Precedence.** `m` and `ef_construction` are *defaults*. From strongest to
+weakest:
+
+```text
+per-collection creation argument  >  [hnsw] section  >  auto-tuned by dimension
+```
+
+Each field resolves on its own: a collection created with an explicit `m` and
+no `ef_construction` still takes `ef_construction` from this section. A caller
+that passes a complete `HnswParams` (`create_vector_collection_with_params`)
+bypasses the section entirely — a fully specified value is already an answer,
+and merging a file the caller never mentioned into it would be surprising.
+
+**These are creation-time values.** The resolved parameters are persisted into
+the collection's own config and fix its graph topology, so editing this section
+later affects **new collections only**. Re-tuning an existing collection means
+rebuilding its index (`auto_reindex`), not reloading a file.
+
+Graph collections created *with embeddings* build a real HNSW index over their
+node vectors and take the same defaults. A graph collection without embeddings
+has no index to configure and is unaffected.
+
+`max_layers` stays reserved: the HNSW layer count is drawn per node by the
+level generator and no engine path caps it, so honouring the knob is a feature
+rather than a wiring. `VelesConfig::validate` warns when it is set.
+
+Per-query `WITH (ef_search = N)` is a different axis and unrelated to this
+section — it sizes the candidate pool of one query; nothing here does.
 
 ### Section [storage]
 

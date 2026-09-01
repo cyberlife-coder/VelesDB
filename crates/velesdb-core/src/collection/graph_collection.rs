@@ -67,6 +67,37 @@ impl GraphCollection {
         })
     }
 
+    /// Creates a new `GraphCollection`, optionally with explicit HNSW
+    /// parameters for the node-embedding index.
+    ///
+    /// Only meaningful together with `dimension = Some(d)`: that is when a
+    /// graph collection carries node embeddings and builds an HNSW index over
+    /// them. Passing `hnsw_params = None` is identical to
+    /// [`GraphCollection::create`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory cannot be created or storage fails.
+    pub fn create_with_hnsw_params(
+        path: PathBuf,
+        name: &str,
+        dimension: Option<usize>,
+        metric: DistanceMetric,
+        schema: GraphSchema,
+        hnsw_params: Option<crate::index::hnsw::HnswParams>,
+    ) -> Result<Self> {
+        Ok(Self {
+            inner: Collection::create_graph_collection_with_hnsw_params(
+                path,
+                name,
+                schema,
+                dimension,
+                metric,
+                hnsw_params,
+            )?,
+        })
+    }
+
     /// Opens an existing `GraphCollection` from disk.
     ///
     /// # Errors

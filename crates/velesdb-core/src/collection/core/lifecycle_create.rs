@@ -233,9 +233,44 @@ impl Collection {
         embedding_dim: Option<usize>,
         metric: DistanceMetric,
     ) -> Result<Self> {
+        Self::create_graph_collection_with_hnsw_params(
+            path,
+            name,
+            schema,
+            embedding_dim,
+            metric,
+            None,
+        )
+    }
+
+    /// Creates a new graph collection, optionally with explicit HNSW
+    /// parameters for its node-embedding index.
+    ///
+    /// A graph collection with `embedding_dim = Some(d)` builds a full HNSW
+    /// index over its node vectors, exactly like a vector collection, so it
+    /// takes the same creation-time parameters — this is the constructor that
+    /// lets the configured `[hnsw]` section reach that index (issue #2087).
+    /// Passing `hnsw_params = None` reproduces
+    /// [`Collection::create_graph_collection`] byte for byte.
+    ///
+    /// `hnsw_params` is ignored in practice when `embedding_dim` is `None`:
+    /// such a collection has dimension 0 and never populates its index.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory cannot be created or the config cannot be saved.
+    pub fn create_graph_collection_with_hnsw_params(
+        path: PathBuf,
+        name: &str,
+        schema: crate::collection::graph::GraphSchema,
+        embedding_dim: Option<usize>,
+        metric: DistanceMetric,
+        hnsw_params: Option<crate::index::hnsw::HnswParams>,
+    ) -> Result<Self> {
         let config = CollectionConfig {
             graph_schema: Some(schema),
             embedding_dimension: embedding_dim,
+            hnsw_params,
             ..Self::base_config(
                 name.to_string(),
                 embedding_dim.unwrap_or(0),
@@ -243,6 +278,6 @@ impl Collection {
                 StorageMode::Full,
             )
         };
-        Self::create_from_config(path, config, None)
+        Self::create_from_config(path, config, hnsw_params)
     }
 }

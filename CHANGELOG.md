@@ -7,6 +7,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **`browserslist` advisory in `examples/react-wasm-search` (GHSA-c83g-rgw3-j3cx,
+  GHSA-73wf-gq98-2v4g).** Both were published upstream while PRs were in
+  flight: the `npm advisories (examples/react-wasm-search)` gate passed at
+  17:02 UTC and failed at 17:38 on an unchanged lockfile, and reproduces on
+  `develop` itself. `browserslist` 4.28.2 → 4.28.8 via `npm audit fix
+  --package-lock-only`, which also carries its data tables
+  (`caniuse-lite`, `electron-to-chromium`, `node-releases`,
+  `baseline-browser-mapping`) forward. All dev-only, all within the same
+  major — no `--force`, so `package.json` constraints are untouched. The
+  three other lockfiles in the repo audit clean.
+
+### Added
+
+- **`[hnsw]` is applied by the engine (#2087).** `m` and `ef_construction`
+  from the configuration file now reach the HNSW index of every collection the
+  `Database` creates — vector collections and graph collections with node
+  embeddings alike. Before this, they were parsed and *validated* and read by
+  nothing: a config could be rejected for an out-of-range value on a knob that
+  did nothing, which signals harder than silence that the knob works.
+
+  The precedence chain is explicit and per-field:
+
+  ```text
+  per-collection creation argument  >  [hnsw] section  >  HnswParams::auto(dimension)
+  ```
+
+  A collection created with an explicit `m` and no `ef_construction` still
+  takes `ef_construction` from the section. `create_vector_collection_with_params`
+  bypasses the section entirely — a fully specified `HnswParams` is already an
+  answer, and merging a file the caller never mentioned into it would be
+  surprising. Resolution lives in `Database`, the only component that owns a
+  `VelesConfig`, so `Collection` and the index stay config-free.
+
+  These are **creation-time** values: they are persisted into the collection's
+  own config and fix its graph topology, so editing the section later affects
+  new collections only. Re-tuning an existing collection is an index rebuild
+  (`auto_reindex`), not a config reload.
+
+  **No behaviour changes without an explicit section.** A default `[hnsw]`
+  resolves to exactly `HnswParams::auto(dimension)`, and the creation paths
+  persist the same `pq_rescore_oversampling = Some(4)` they did before, so a
+  collection created without config is byte-for-byte what the pre-wiring code
+  produced. A test asserts this directly.
+
+  `hnsw.max_layers` stays inert and `[search]`, `[storage]`, `[quantization]`
+  stay unwired; `VelesConfig::validate` still warns for them, narrowed to name
+  the single inert field rather than the whole `[hnsw]` section — a warning
+  that fires on knobs that now work would train readers to ignore it.
+
+  New public API: `HnswParams::from_config`,
+  `VectorCollection::create_with_hnsw_params`,
+  `GraphCollection::create_with_hnsw_params`.
+
+### Fixed
+
+- **`VectorCollection::create_with_hnsw` documented a false equivalence.** It
+  claimed that passing `None` for both arguments was "equivalent to
+  `VectorCollection::create`". It is not: it persists
+  `pq_rescore_oversampling = None` ("no explicit override", which migrations
+  read differently) where `create` persists the engine default `Some(4)`. The
+  rustdoc now states the difference and points at
+  `create_with_hnsw_params` for a params override that keeps the `create`
+  default. Behaviour is unchanged.
+
+### Documentation
+
+- **The `VELESDB_*` environment-variable defect was found here (#2185).**
+  Re-verifying the table end to end while wiring `[hnsw]` — which #2087's
+  validation bar requires — showed that no documented engine variable reached
+  its field: `VELESDB_HNSW_M`, `VELESDB_HNSW_EF_CONSTRUCTION` and
+  `VELESDB_LIMITS_MAX_COLLECTIONS` all loaded as their defaults, the last one
+  despite an explicit rustdoc promise that it works. The fix is a behaviour
+  change — currently-inert variables start taking effect — so it is tracked and
+  shipped separately as #2185 rather than folded into this wiring.
+
 ### Added
 
 - **The `clippy::significant_drop_tightening` backlog is frozen where it stands
