@@ -287,7 +287,8 @@ fn test_sparse_search_all_zero_query_returns_empty() {
 // `sparse_search` now routes every corpus ≤ SMALL_CORPUS_LINEAR_THRESHOLD
 // to linear_scan, so the existing router-level tests no longer exercise
 // `maxscore_search`. These tests call the DAAT path directly to keep it
-// under parity coverage — the fast path in production is for > 100K docs.
+// under parity coverage — in production DAAT can engage only past
+// SMALL_CORPUS_LINEAR_THRESHOLD (1M docs, #2177).
 
 #[test]
 fn test_maxscore_search_direct_matches_brute_force_1k_corpus() {
