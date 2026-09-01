@@ -121,6 +121,32 @@ fn bench_scale(c: &mut Criterion) {
             .map(|i| generate_vector(dim, n_vectors + i as u64))
             .collect();
 
+        // Make the determinism above checkable rather than merely asserted.
+        //
+        // "Built sequentially" is a claim about this file; the checksum is
+        // evidence about the graph that actually got built. Two runs that
+        // print the same value searched the same graph, so a latency
+        // difference between them is attributable to the code under test.
+        // Two that differ did not, and no amount of sampling repairs that —
+        // which is exactly the failure #2172 describes and this build order
+        // removes. `hnsw_adjacency_scale` and `sparse_posting_scale` print
+        // the same thing for the same reason.
+        let graph_checksum = queries.iter().fold(0_u64, |acc, query| {
+            index
+                .search_with_quality(query, k, SearchQuality::Balanced)
+                .unwrap_or_default()
+                .iter()
+                .fold(acc, |a, r| {
+                    a.wrapping_mul(31)
+                        .wrapping_add(r.id)
+                        .wrapping_add(u64::from(r.score.to_bits()))
+                })
+        });
+        println!(
+            "[scale_benchmark] dim={dim} n_vectors={n_vectors} k={k} \
+graph checksum {graph_checksum:#018x} — compare runs only when these match"
+        );
+
         // --- SEARCH benchmarks per quality mode ---
         group.throughput(Throughput::Elements(n_queries as u64));
         for (mode_name, quality) in [
