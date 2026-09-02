@@ -82,6 +82,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`save_working_context` refuses an empty `project` or `session`.** Both
+  are the id the state is filed under and listed by; an empty one hashed,
+  encoded and listed fine — as `""` — and was unrecoverable by anyone who did
+  not think to ask for the empty string. Now
+  `MemoryError::EmptyWorkingContextKey { key }` names which one, before
+  anything is written. Same audit, same file as the index bound above.
+
 - **`VectorCollection::create_with_hnsw` documented a false equivalence.** It
   claimed that passing `None` for both arguments was "equivalent to
   `VectorCollection::create`". It is not: it persists

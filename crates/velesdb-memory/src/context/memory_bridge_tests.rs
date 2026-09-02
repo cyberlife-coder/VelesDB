@@ -398,6 +398,33 @@ fn test_bound_sessions_evicts_the_oldest_saved_first_and_is_a_no_op_under_the_ca
 }
 
 #[test]
+fn test_save_working_context_refuses_an_empty_project_or_session_key() {
+    // Given a store; an empty or whitespace-only key would hash, encode and
+    // list just fine — as "" — and be unrecoverable by anyone who does not
+    // think to ask for the empty string.
+    let (_dir, svc) = open_service();
+    for (project, session, key) in [
+        ("", "session-a", "project"),
+        ("   ", "session-a", "project"),
+        ("veles", "", "session"),
+        ("veles", "\t\n", "session"),
+    ] {
+        // When saving under it
+        let err = svc
+            .save_working_context(project, session, &minimal_working())
+            .expect_err("an empty key must be refused");
+
+        // Then it is the key that is named, and nothing was written.
+        assert!(
+            matches!(err, MemoryError::EmptyWorkingContextKey { key: k } if k == key),
+            "{project:?}/{session:?}: {err:?}"
+        );
+    }
+    assert!(svc.list_working_contexts("veles").expect("list").is_empty());
+    assert!(svc.list_working_contexts("").expect("list").is_empty());
+}
+
+#[test]
 fn test_list_working_contexts_empty_for_unknown_project() {
     // Given a store with nothing saved
     let (_dir, svc) = open_service();

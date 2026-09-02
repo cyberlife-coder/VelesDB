@@ -216,8 +216,11 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     /// able to cause one on a call that carries nothing (issue #1654).
     ///
     /// # Errors
-    /// Returns [`MemoryError::EmptyWorkingContext`] if `working` records
-    /// nothing, [`MemoryError::WorkingContextCodec`] if serialization fails,
+    /// Returns [`MemoryError::EmptyWorkingContextKey`] if `project` or
+    /// `session` is empty or whitespace-only — they are the id the state is
+    /// saved and listed under — [`MemoryError::EmptyWorkingContext`] if
+    /// `working` records nothing, [`MemoryError::WorkingContextCodec`] if
+    /// serialization fails,
     /// [`MemoryError::ContextOverLimit`] if the serialized `working` exceeds
     /// [`crate::limits::MAX_FACT_BYTES`], or a storage/embedding error.
     pub fn save_working_context(
@@ -227,6 +230,11 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
         working: &WorkingContext,
     ) -> Result<u64, MemoryError> {
         let _generation = self.enter_generation();
+        for (key, value) in [("project", project), ("session", session)] {
+            if value.trim().is_empty() {
+                return Err(MemoryError::EmptyWorkingContextKey { key });
+            }
+        }
         if working.is_empty() {
             return Err(MemoryError::EmptyWorkingContext);
         }
