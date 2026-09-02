@@ -258,6 +258,31 @@ fn reconstruct_invalid_codes_returns_error() {
 }
 
 #[test]
+fn reconstruct_reports_range_error_without_overflow_on_empty_subspace() {
+    // A deserialized `PQCodebook` is never re-validated against `train()`'s
+    // non-zero-centroid invariant, so `reconstruct` must not underflow while
+    // formatting the "max" operand of its own out-of-range error.
+    use super::PQCodebook;
+
+    let codebook = PQCodebook {
+        centroids: vec![vec![]],
+        dimension: 2,
+        num_subspaces: 1,
+        num_centroids: 0,
+        subspace_dim: 2,
+    };
+    let pq = ProductQuantizer {
+        codebook,
+        rotation: None,
+    };
+    let bad_pq_vec = PQVector { codes: vec![0] };
+
+    let result = pq.reconstruct(&bad_pq_vec);
+
+    assert!(matches!(result, Err(Error::InvalidQuantizerConfig(_))));
+}
+
+#[test]
 fn kmeans_plusplus_init_produces_k_distinct_centroids() {
     use crate::quantization::pq_kmeans::kmeans_plusplus_init;
     use rand::SeedableRng;
