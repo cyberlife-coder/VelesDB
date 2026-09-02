@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """Verify release binary sizes stay within the advertised ceilings.
 
-The README advertises a "~10 MB binary" (`velesdb-server`, stripped release).
+The README advertises a "~14 MB binary" (`velesdb-server`, stripped release).
 Until this gate existed, that figure was prose only — nothing measured it, so a
 heavy dependency could have silently inflated the binary while the claim went
 stale. This script measures each release binary and fails if it exceeds its
 ceiling.
+
+That is not hypothetical: the figure said "~10 MB" until 6.0.0, measured at
+4.0.0 on Apple Silicon, while the Linux x86_64 build users download had been
+13.68 MiB since at least 5.2.0. The claim went stale exactly as described
+above, and this gate did not catch it -- see the next paragraph for why.
 
 The ceilings below are the FIRST ones this gate has ever enforced, and they are
 higher than the ones they replace. That needs saying plainly, because raising a
@@ -47,7 +52,10 @@ import sys
 MIB = 1024 * 1024
 
 # (binary file name, ceiling in bytes). `velesdb` is the CLI; `velesdb-server`
-# is the "~10 MB binary" the README headline refers to.
+# is the "~14 MB binary" the README headline refers to. Keep this prose in step
+# with the `binary_size` claim family in docs/reference/promise-contract.json:
+# the family propagates the figure across ten documentation surfaces, and this
+# file is not one of them, so nothing here fails when it moves.
 BINARIES = [
     ("velesdb-server", 14.25 * MIB),  # measured 13.68 MiB at 6.0.0 and at 5.2.0
     ("velesdb", 11.5 * MIB),  # measured 11.04 MiB at 6.0.0, 10.99 at 5.2.0
