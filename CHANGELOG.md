@@ -102,6 +102,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`fused_recall_benchmark` could not run past its first parameter point.**
+  It hung every fact off one entity hub and asserted the walk reached all of
+  them — the liveness gate that proves a search regression cannot benchmark a
+  no-op. Issue #1743 then capped a single node's expansion at
+  `MAX_WHY_NODE_DEGREE` (64) and the whole walk at `MAX_WHY_NODES` (500), so
+  at degree 200 the walk reached 66 nodes (64 + seed + hub), the assertion
+  panicked, and four of the bench's five measurements were never taken. The
+  empirical check for #1742's O(edges + nodes) traversal fix had been dead
+  since that cap landed; nothing noticed because CI's `Internal Bench
+  Compiles` only `cargo check`s `velesdb-core`'s benches.
+
+  The fixture is now a forest of hubs, each mentioning at most
+  `MAX_WHY_NODE_DEGREE` facts, so the reach the walk covers still grows into
+  the hundreds while every node stays inside the policy it actually runs
+  under. The sweep covers both regimes the caps create: three points under
+  `MAX_WHY_NODES` where the walk must reach every fact exactly, and one past
+  it where it must truncate at precisely the ceiling and the cost must
+  plateau. Relaxing the assertion to `min(degree, 64)` was rejected — past
+  64 the graph contribution is constant, and a bench that runs but no longer
+  stresses what it was built to stress is a dead guard that looks alive.
+  CI's `Internal Bench Compiles` job now also type-checks this crate's four
+  benches (`cargo check -p velesdb-memory --benches`), so the compile half
+  of a future death is caught on every PR; whether to *run* them per PR
+  stays a policy decision and is not taken here.
+
 - **`VectorCollection::create_with_hnsw` documented a false equivalence.** It
   claimed that passing `None` for both arguments was "equivalent to
   `VectorCollection::create`". It is not: it persists
