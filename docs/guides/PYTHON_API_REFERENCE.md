@@ -447,4 +447,4 @@ see [PYTHON_PERFORMANCE.md](PYTHON_PERFORMANCE.md).
 
 ---
 
-Last updated: 2026-08-08 · Applies to: velesdb-core 5.2.0
+Last updated: 2026-08-08 · Applies to: velesdb-core 6.0.0

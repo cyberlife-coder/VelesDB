@@ -145,7 +145,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-shell = "2"
 tauri-plugin-velesdb = "4.3.0"  # Add VelesDB plugin
-velesdb-core = { version = "5.2.0", features = ["persistence"] }  # Core types (Point, DistanceMetric)
+velesdb-core = { version = "6.0.0", features = ["persistence"] }  # Core types (Point, DistanceMetric)
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

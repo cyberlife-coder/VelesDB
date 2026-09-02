@@ -45,12 +45,21 @@ jobs:
           echo "Git Flow, branch freshness and attribution have nothing to assert."
 
       # The policy is executable repository code now, so the checkout must
-      # precede even the source/target-only half of the guard.
+      # precede even the source/target-only half of the guard -- and it must
+      # run on EVERY event, not just `pull_request`. It carried
+      # `if: github.event_name == 'pull_request'` while the tracked-content
+      # step below carries no condition at all, so on a push to main/develop
+      # that step ran with no repository on disk and died on
+      # `can't open file 'scripts/check-ai-attribution.py'` (exit 2). Every
+      # push run of ci.yml had been red since that step was added -- unnoticed
+      # because the required checks all run on pull_request, where the
+      # checkout did happen. `github.sha` is the fallback ref: on a push the
+      # pull_request payload is empty, and an empty `ref:` is not the same as
+      # an absent one.
       - name: Checkout head branch
-        if: ${{ github.event_name == 'pull_request' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
 
       - name: Enforce PR source and Git Flow rules

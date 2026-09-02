@@ -62,9 +62,22 @@ jobs:
         run: cargo build --release -p velesdb-server -p velesdb-cli -p velesdb-migrate
 
       - name: Check binary sizes against ceilings
+        # `set -o pipefail` is load-bearing, not hygiene. GitHub's default shell
+        # is `bash -e {0}`, where a pipeline's exit status is the LAST command's
+        # — so `check_binary_size.py | tee` reported tee's 0 and this job, a
+        # required check through `CI Success`, passed on every over-ceiling
+        # binary it ever measured. It did exactly that on #2193: the script
+        # printed `Binary size gate FAILED` for two binaries under a green
+        # check. Reachability keeps this honest
+        # (`test_a_strict_guard_is_not_disarmed_by_a_pipe`).
+        #
+        # The status is captured rather than allowed to abort the step, so the
+        # report still reaches the run summary on the run where it matters.
         run: |
+          set -o pipefail
+          status=0
           python scripts/check_binary_size.py --target-dir target/release \
-            | tee binary-size-report.txt
+            | tee binary-size-report.txt || status=$?
           {
             echo "## Binary Size Gate"
             echo ""
@@ -72,6 +85,7 @@ jobs:
             cat binary-size-report.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
 
       - name: Upload size report
         if: always()

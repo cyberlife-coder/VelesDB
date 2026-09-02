@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.0.0] - 2026-09-02
+
 ### Security
 
 - **`browserslist` advisory in `examples/react-wasm-search` (GHSA-c83g-rgw3-j3cx,
@@ -119,6 +121,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the embedder, every other collection already capped).
 
 ### Fixed
+
+- **The Binary Size Gate could not fail.** `binary-size.yml` ran
+  `python scripts/check_binary_size.py | tee binary-size-report.txt` under
+  GitHub's default `bash -e {0}`, where a pipeline's exit status is the last
+  command's. The step therefore took `tee`'s 0, and the job — a required check
+  through `CI Success` — reported success no matter what the guard returned. It
+  did exactly that on #2193: the guard printed `Binary size gate FAILED` for
+  two binaries under a green check. The step now sets `pipefail` and exits on
+  the guard's status, capturing it first so the report still reaches the run
+  summary on the run where it matters.
+
+  The registry entry had asserted the opposite: it called the over-ceiling half
+  "not vector-testable" and said it was "exercised for real on every release".
+  Both were wrong. The guard reads `st_size`, so a sparse fixture exceeds any
+  ceiling for free — `scripts/tests/test_check_binary_size.py` now covers that
+  half, the `<=` boundary, and a ceiling silently raised out from under what
+  the project ships. And the half declared "exercised for real" was the only
+  half the pipe made unreachable.
+
+  `scripts/tests/test_ci_gate_reachability.py` closes the class rather than the
+  instance: every strict guard is now checked for an invocation whose status a
+  pipe discards, on the *logical* command rather than the source line — the
+  `|` sat on a backslash continuation, which is why the existing disarm tokens
+  (`--mode warn`, `|| true`, `continue-on-error`) never saw it. No other strict
+  guard in the repository is piped away.
+
+- **Binary size ceilings re-baselined onto what the project actually ships.**
+  With the gate able to refuse, the old ceilings (12 / 10 / 9 MiB) turned out
+  never to have been cleared. Measured on one machine, same toolchain,
+  `x86_64-unknown-linux-gnu`: v5.2.0 — already published — builds `velesdb-server`
+  to 13.68 MiB and `velesdb` to 10.99 MiB, against 13.68 and 11.04 for 6.0.0.
+  6.0.0 adds 6320 bytes to the server binary, 0.04 %. This is a re-baseline onto
+  measured reality, not headroom granted to a regression; the new ceilings
+  (14.25 / 11.5 / 9 MiB) carry ~3 %, enough for a toolchain bump and tight
+  enough that a new multi-MB dependency still fails.
 
 - **`save_working_context` refuses an empty `project` or `session`.** Both
   are the id the state is filed under and listed by; an empty one hashed,
@@ -8731,7 +8768,8 @@ still genuinely pending is:
 > product), not part of the open-source Community roadmap — see the
 > "Scope & boundaries" section of the README.
 
-[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v5.2.0...HEAD
+[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v6.0.0...HEAD
+[6.0.0]: https://github.com/cyberlife-coder/VelesDB/compare/v5.2.0...v6.0.0
 [5.2.0]: https://github.com/cyberlife-coder/VelesDB/compare/v5.1.0...v5.2.0
 [5.1.0]: https://github.com/cyberlife-coder/VelesDB/compare/v5.0.0...v5.1.0
 [5.0.0]: https://github.com/cyberlife-coder/VelesDB/compare/v4.2.0...v5.0.0

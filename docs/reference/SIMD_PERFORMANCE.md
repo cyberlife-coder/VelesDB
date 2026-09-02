@@ -380,4 +380,4 @@ VelesDB Core is licensed under VelesDB Core License 1.0.
 
 ---
 
-Last updated: 2026-08-18 · Applies to: velesdb-core 5.2.0
+Last updated: 2026-08-18 · Applies to: velesdb-core 6.0.0
