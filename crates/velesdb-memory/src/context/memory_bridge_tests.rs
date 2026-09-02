@@ -328,6 +328,76 @@ fn test_list_working_contexts_returns_sessions_saved_under_a_project() {
 }
 
 #[test]
+fn test_bound_sessions_keeps_cap_entries_newest_first_and_pins_the_one_just_saved() {
+    use crate::limits::MAX_WORKING_SESSIONS_PER_PROJECT as CAP;
+
+    // Given CAP + 1 entries that all share one saved_at — the same-second
+    // flood where ordering cannot lean on the timestamp — and the session
+    // just saved sorting LAST by name, so an unpinned truncate would drop it
+    let mut sessions: Vec<WorkingContextSession> = (0..=CAP)
+        .map(|i| WorkingContextSession {
+            session: format!("session-{i:05}"),
+            saved_at: 1_700_000_000,
+        })
+        .collect();
+    let just_saved = format!("session-{CAP:05}");
+
+    // When bounding
+    bound_sessions(&mut sessions, &just_saved);
+
+    // Then exactly CAP survive, the just-saved one among them, and the one
+    // that left is the last by name among the unpinned tie.
+    assert_eq!(sessions.len(), CAP);
+    assert!(
+        sessions.iter().any(|s| s.session == just_saved),
+        "just-saved evicted"
+    );
+    let evicted = format!("session-{:05}", CAP - 1);
+    assert!(
+        sessions.iter().all(|s| s.session != evicted),
+        "the last unpinned tie-loser must be the one evicted"
+    );
+}
+
+#[test]
+fn test_bound_sessions_evicts_the_oldest_saved_first_and_is_a_no_op_under_the_cap() {
+    use crate::limits::MAX_WORKING_SESSIONS_PER_PROJECT as CAP;
+
+    // Under the cap nothing moves — not even the order.
+    let mut few: Vec<WorkingContextSession> = (0..3)
+        .map(|i| WorkingContextSession {
+            session: format!("s{i}"),
+            saved_at: 10 - i,
+        })
+        .collect();
+    let before: Vec<(String, u64)> = few
+        .iter()
+        .map(|s| (s.session.clone(), s.saved_at))
+        .collect();
+    bound_sessions(&mut few, "s0");
+    let after: Vec<(String, u64)> = few
+        .iter()
+        .map(|s| (s.session.clone(), s.saved_at))
+        .collect();
+    assert_eq!(after, before);
+
+    // Over it, the oldest saved_at leaves regardless of name.
+    let mut many: Vec<WorkingContextSession> = (0..=CAP)
+        .map(|i| WorkingContextSession {
+            session: format!("s{i}"),
+            saved_at: 1_000 + i as u64,
+        })
+        .collect();
+    bound_sessions(&mut many, "s5");
+    assert_eq!(many.len(), CAP);
+    assert!(
+        many.iter().all(|s| s.session != "s0"),
+        "oldest (s0) must be evicted"
+    );
+    assert!(many.iter().any(|s| s.session == "s5"));
+}
+
+#[test]
 fn test_list_working_contexts_empty_for_unknown_project() {
     // Given a store with nothing saved
     let (_dir, svc) = open_service();

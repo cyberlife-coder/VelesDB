@@ -152,6 +152,19 @@ pub const MAX_FRAGMENT_BYTES: usize = 1_048_576;
 /// single call can demand across every adapter.
 pub const MAX_FRAGMENTS: usize = 1_024;
 
+/// Cap on how many sessions one project's working-context index lists.
+///
+/// The index is ONE fact per project, rewritten whole on every
+/// `save_working_context`: serialised, embedded, stored. Without a bound it
+/// gains an entry per distinct session id and sheds one only when that
+/// session's fact is forgotten — so a long-lived project pays O(sessions)
+/// per save, forever, for a list whose only reader wants the most recent
+/// few. Past this cap the oldest-saved entries leave the index; their facts
+/// stay on disk and stay loadable by exact `project` + `session`, exactly as
+/// an entry a torn index lost already did — the listing forgets them, the
+/// store does not. The session being saved is never the one evicted.
+pub const MAX_WORKING_SESSIONS_PER_PROJECT: usize = 1_000;
+
 /// Maximum accepted size of a fragment's base64-encoded media payload
 /// (US-009, PR1: inline images) — 4 MiB of base64 text, roughly 3 MiB of raw
 /// bytes once decoded. Deliberately separate from [`MAX_FRAGMENT_BYTES`],

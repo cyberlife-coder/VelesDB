@@ -62,6 +62,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `VectorCollection::create_with_hnsw_params`,
   `GraphCollection::create_with_hnsw_params`.
 
+### Changed
+
+- **A project's working-context index is bounded at 1 000 sessions
+  (`MAX_WORKING_SESSIONS_PER_PROJECT`).** The index is one fact per project,
+  rewritten whole on every `save_working_context` — serialised, embedded,
+  stored. It gained an entry per distinct session id and shed one only when
+  that session's fact was forgotten, so a long-lived project paid
+  O(sessions) per save, forever, and `write_working_index` never checked the
+  1 MiB fact cap (that check guards the working-context *content*, not the
+  index). Past the cap the oldest-saved entries now leave the listing; their
+  facts stay on disk and `load_working_context` still finds them by exact
+  `project` + `session` — the semantic a torn index already had. The session
+  being saved is pinned and can never be the one evicted, even in a
+  same-second flood of other sessions. Found by the lock/resilience/memory
+  audit of `velesdb-memory`; the audit's other findings were negative (no
+  `std::sync` locks, no nested holds, the global index lock never held across
+  the embedder, every other collection already capped).
+
 ### Fixed
 
 - **`VectorCollection::create_with_hnsw` documented a false equivalence.** It

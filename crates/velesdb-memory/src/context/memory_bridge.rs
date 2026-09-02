@@ -171,6 +171,30 @@ static EVENT_SEQ: AtomicU64 = AtomicU64::new(0);
 /// upgrade if index writes ever become hot.
 static WORKING_INDEX_WRITE: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
+/// Keep the index at most [`crate::limits::MAX_WORKING_SESSIONS_PER_PROJECT`] entries,
+/// dropping the oldest-saved first. `just_saved` is pinned: it is the entry
+/// this very call put there, and a same-second flood of other sessions must
+/// not be able to evict it on a timestamp tie. The order among the rest is
+/// the read path's (`saved_at` desc, then session asc), so what survives is
+/// exactly what `list_working_contexts` would have shown first.
+fn bound_sessions(sessions: &mut Vec<WorkingContextSession>, just_saved: &str) {
+    use crate::limits::MAX_WORKING_SESSIONS_PER_PROJECT as CAP;
+    if sessions.len() <= CAP {
+        return;
+    }
+    let pinned = sessions
+        .iter()
+        .position(|s| s.session == just_saved)
+        .map(|at| sessions.swap_remove(at));
+    sessions.sort_by(|a, b| {
+        b.saved_at
+            .cmp(&a.saved_at)
+            .then_with(|| a.session.cmp(&b.session))
+    });
+    sessions.truncate(CAP - usize::from(pinned.is_some()));
+    sessions.extend(pinned);
+}
+
 /// The compilation half — `compile_context` and its helpers; see
 /// `memory_bridge_compile.rs`'s module doc for why it is split.
 #[path = "memory_bridge_compile.rs"]
@@ -559,6 +583,7 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
         // stored moments ago, before this call); this only sheds the ones a
         // `forget` orphaned.
         index.sessions = self.live_sessions(project, index.sessions)?;
+        bound_sessions(&mut index.sessions, session);
         let content =
             serde_json::to_string(&index).map_err(|err| MemoryError::WorkingContextCodec {
                 detail: format!("encoding the working-context index for project '{project}'"),

@@ -747,7 +747,9 @@ Discover what is resumable before guessing a session id.
 
 Returns `{ sessions: [ { session, saved_at } ] }`, most-recently-saved first;
 `saved_at` is Unix seconds. Empty (not an error) when the project never saved
-anything.
+anything. The listing holds at most 1 000 sessions per project — past that,
+the oldest-saved drop out of the list; their saved state stays on disk and
+`load_working_context` still finds it by exact `project` + `session`.
 
 ---
 

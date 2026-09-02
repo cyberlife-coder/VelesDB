@@ -687,7 +687,11 @@ pub struct WorkingContextSession {
 /// `MAX_RECALL_LIMIT`, imprecise) — this index is exact and O(1) to read.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct WorkingContextIndex {
-    /// Every session ever saved under this project.
+    /// The sessions saved under this project, at most
+    /// [`crate::limits::MAX_WORKING_SESSIONS_PER_PROJECT`] of them: past the
+    /// cap the oldest-saved leave the listing (their facts stay loadable by
+    /// exact id), and a session whose fact was forgotten is shed on the next
+    /// save.
     #[serde(default)]
     pub sessions: Vec<WorkingContextSession>,
 }
