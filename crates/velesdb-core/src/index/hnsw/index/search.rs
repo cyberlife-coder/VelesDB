@@ -86,7 +86,9 @@ impl HnswIndex {
     ) -> Vec<ScoredResult> {
         let inner = self.inner.read();
         let neighbours = inner.search_auto(query, k, ef_search);
-        self.map_graph_results(&inner, &neighbours)
+        let mapped = self.map_graph_results(&inner, &neighbours);
+        drop(inner);
+        mapped
     }
 
     /// Maps raw graph results `(node_id, raw_dist)` to user-facing
@@ -173,6 +175,7 @@ impl HnswIndex {
                 }
             }
         }
+        drop(inner);
         results
     }
 
@@ -408,6 +411,11 @@ impl HnswIndex {
     /// GPU/RaBitQ paths, which keep no CPU-side state. This saves 2-4x latency
     /// on easy queries and roughly a third of the distance evaluations on
     /// escalated ones.
+    // One read guard spans both phases on purpose, as the comment below
+    // records: re-locking through search_hnsw_only would be a recursive
+    // read() on a parking_lot RwLock, which can deadlock behind a queued
+    // writer.
+    #[expect(clippy::significant_drop_tightening)]
     fn search_adaptive(
         &self,
         query: &[f32],
@@ -429,23 +437,11 @@ impl HnswIndex {
 
         // Check result spread to determine if this is a hard query.
         // Use first/last scores -- ordering differs by metric (similarity=desc,
-        // distance=asc) so we take the absolute spread.
+        // distance=asc) so the spread is taken as an absolute gap.
         let score_a = results.first().map_or(0.0, |r| r.score);
         let score_b = results.last().map_or(0.0, |r| r.score);
-        let diff = (score_a - score_b).abs();
 
-        // Relative spread: normalize by the smaller absolute score to handle
-        // both similarity metrics (high scores) and distance metrics (low scores).
-        let baseline = score_a.abs().min(score_b.abs());
-        let spread = if baseline > f32::EPSILON {
-            diff / baseline
-        } else {
-            diff
-        };
-
-        // Threshold 2.0: empirically tuned. Easy queries have spread < 1.0,
-        // hard queries typically > 3.0.
-        if spread < 2.0 {
+        if !should_escalate(self.metric, score_a, score_b) {
             return results;
         }
 
@@ -479,3 +475,42 @@ impl HnswIndex {
         inner.set_searching_mode(true);
     }
 }
+
+/// Spread above which `search_adaptive` widens `ef` and runs a second pass.
+///
+/// Empirically tuned: easy queries sit below 1.0, hard ones above 3.0.
+const ESCALATION_SPREAD_THRESHOLD: f32 = 2.0;
+
+/// Whether the phase-1 result spread marks this as a hard query.
+///
+/// The spread is the first/last score gap relative to a baseline, and the
+/// baseline is the tail's distance from **the metric's floor**, not from zero.
+/// Zero is the floor only for an unbounded distance. On a bounded similarity
+/// it sits in the middle of the range, so `|score|` collapses toward zero for
+/// a merely mediocre tail and the ratio explodes on a query that is not hard
+/// at all — a cosine tail of `-0.01` against a `0.9` top would read as a
+/// spread of 91.
+///
+/// Cosine never reached that trap before, for the wrong reason: the graph
+/// path clamped every non-positive score to exactly `0.0`, so `baseline` was
+/// zero, the guard below failed, and phase 2 never escalated on this metric at
+/// all. Restoring cosine's sign is what makes the baseline matter, and taking
+/// the floor from [`DistanceMetric::score_range`] keeps easy queries cheap
+/// while letting a genuinely heterogeneous neighbourhood escalate.
+fn should_escalate(metric: DistanceMetric, first: f32, last: f32) -> bool {
+    let diff = (first - last).abs();
+    let baseline = match metric.score_range() {
+        Some((low, _)) => first.min(last) - low,
+        None => first.abs().min(last.abs()),
+    };
+    let spread = if baseline > f32::EPSILON {
+        diff / baseline
+    } else {
+        diff
+    };
+    spread >= ESCALATION_SPREAD_THRESHOLD
+}
+
+#[cfg(test)]
+#[path = "search_tests.rs"]
+mod tests;

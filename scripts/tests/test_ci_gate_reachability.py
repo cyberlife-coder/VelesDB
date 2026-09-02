@@ -114,10 +114,19 @@ def chain_comparisons(text: str) -> "list[tuple[str, str, str]]":
 def chain_failure_branch(text: str) -> str:
     """The `|| { … }` tail of the chain — what runs when a job is not green."""
     chain = _chain_text(text)
-    marker = chain.find("||")
+    # Narrowed to the `run:` body first. Everything after ci-success's
+    # `needs:` is in scope here, its `if:` included, and a job condition may
+    # legitimately contain `||` — the retarget guard does. Scanning from the
+    # shell block keeps this on the chain's own tail while still seeing a
+    # branch neutered to something brace-less like `|| true`.
+    run_at = chain.find("run:")
+    if run_at == -1:
+        raise AssertionError("the ci-success job has no `run:` chain")
+    body = chain[run_at:]
+    marker = body.find("||")
     if marker == -1:
         raise AssertionError("the ci-success chain has no `|| …` failure branch")
-    return chain[marker:chain.find("\n", marker)]
+    return body[marker:body.find("\n", marker)]
 
 
 def job_block(text: str, job: str) -> str:
@@ -133,6 +142,81 @@ def job_block(text: str, job: str) -> str:
 def guard_invocations(text: str, script: str) -> "list[str]":
     """Every `run:` line invoking ``script``."""
     return [line for line in GUARD_INVOCATION_RE.findall(text) if script in line]
+
+
+# A gate scoped to "the files this PR changed" resolves that list with
+# `git diff <base>..<head>`. On a pull request `actions/checkout` fetches only
+# the merge commit unless told otherwise, so the base commit is simply absent
+# and the diff errors out — inside `mapfile < <(...)`, where the failure is
+# invisible and the list comes back empty. The gate then reports "no changed
+# files to validate" and exits 0 on every pull request. That is the shape this
+# module exists to refuse: a guard that runs, reports success, and reads
+# nothing.
+BASE_SHA_DIFF_RE = re.compile(r"git diff [^\n|]*\$(?:\{)?BASE_SHA")
+CHECKOUT_RE = re.compile(r"uses:\s*actions/checkout@")
+FETCH_DEPTH_RE = re.compile(r"^\s*fetch-depth:\s*0\s*$", re.MULTILINE)
+
+
+BASE_REACHABLE_RE = re.compile(r"git cat-file -e \"\$BASE_SHA\^\{commit\}\"")
+
+
+def asserts_base_is_reachable(block: str) -> bool:
+    """Whether a job proves the base commit exists before diffing against it.
+
+    `fetch-depth: 0` is the fix; this is the alarm for every other way the
+    base can go missing (a force-push that orphans it, a rewritten base
+    branch). Without it the diff fails into an empty list and the step
+    reports "nothing changed".
+    """
+    return bool(BASE_REACHABLE_RE.search(block))
+
+
+def jobs_diffing_against_base(text: str) -> "set[str]":
+    """Jobs whose steps resolve a file list from a base-vs-head `git diff`."""
+    stripped = strip_comments(text)
+    return {
+        job
+        for job in job_names(stripped)
+        if BASE_SHA_DIFF_RE.search(job_block(stripped, job))
+    }
+
+
+MAPFILE_OPEN_RE = re.compile(r"^\s*mapfile -t \w+ < <\(\s*$")
+
+
+def guard_input_listings(block: str) -> "list[str]":
+    """The `git diff --name-only` lines that FEED a guard a list of paths.
+
+    Only these must exclude deletions: their paths are handed to a script
+    that opens them. A `git diff | grep -q` path FILTER must NOT exclude
+    deletions — removing a file is a change the filtered job still needs to
+    react to, so filtering deletions out there would make a deletion-only
+    pull request skip the job.
+    """
+    lines = block.split("\n")
+    listings, inside = [], False
+    for line in lines:
+        if MAPFILE_OPEN_RE.match(line):
+            inside = True
+            continue
+        if inside:
+            if line.strip().startswith(")"):
+                inside = False
+            elif "git diff --name-only" in line:
+                listings.append(line)
+    return listings
+
+
+def checkout_is_full_history(block: str) -> bool:
+    """Whether a job's `actions/checkout` asks for the full history.
+
+    `fetch-depth: 0` is the only value that guarantees the base commit is
+    present; any positive depth is a gamble on how far the branch has moved.
+    """
+    if not CHECKOUT_RE.search(block):
+        # No checkout at all: nothing to diff against either way.
+        return False
+    return bool(FETCH_DEPTH_RE.search(block))
 
 
 def load_guard_registry() -> dict:
@@ -206,6 +290,69 @@ def script_mentions_in_job(workflow_text: str, job: str, script: str) -> "list[s
     """
     block = strip_comments(job_block(workflow_text, job))
     return [line.strip() for line in block.split("\n") if script in line]
+
+
+# A guard's `run:` line can be disarmed without any of DISARM_TOKENS appearing:
+# put the guard on the left of a pipe. GitHub's default shell for `run:` is
+# `bash -e {0}` — no `pipefail` — so a pipeline's exit status is the LAST
+# command's, and `check_binary_size.py | tee report.txt` reports tee's 0. The
+# Binary Size Gate ran that way, as a required check through `CI Success`, and
+# printed `Binary size gate FAILED` under a green check on #2193.
+#
+# Two things hid it. The pipe sat on a backslash continuation, so no single
+# line held both the script and the `|`; and DISARM_TOKENS is a substring test
+# over one line at a time. Hence the join below: the check is on the LOGICAL
+# command, not the source line.
+#
+# A guard on the RIGHT of a pipe is fine — the pipeline's status is then its
+# own — which is why only the text after the script name is examined.
+SET_PIPEFAIL_RE = re.compile(r"\bset\s+-\S*o\s+pipefail\b")
+# An explicit `shell: bash` makes GitHub run the step under
+# `bash --noprofile --norc -eo pipefail {0}`, which is safe. The default
+# (no `shell:` key) is the unsafe one.
+EXPLICIT_BASH_SHELL_RE = re.compile(r"^\s*shell:\s*bash\s*$", re.MULTILINE)
+# A single `|`, not the `||` of a boolean OR.
+SINGLE_PIPE_RE = re.compile(r"(?<!\|)\|(?!\|)")
+STEP_START_RE = re.compile(r"^ {6}- ", re.MULTILINE)
+
+
+def step_blocks(job_block_text: str) -> "list[str]":
+    """Each step of a job block, as raw text.
+
+    Steps, not the whole job: `set -o pipefail` in one step says nothing about
+    the next, and a job-wide search would read one step's protection as cover
+    for another's.
+    """
+    starts = [m.start() for m in STEP_START_RE.finditer(job_block_text)]
+    bounds = starts + [len(job_block_text)]
+    return [job_block_text[bounds[i] : bounds[i + 1]] for i in range(len(starts))]
+
+
+def join_continuations(text: str) -> str:
+    """Fold `\\`-continued shell lines into the single command they are."""
+    return re.sub(r"\\\n\s*", " ", text)
+
+
+def invocations_piped_away(workflow_text: str, job: str, script: str) -> "list[str]":
+    """Commands in ``job`` that run ``script`` into a pipe that eats its status.
+
+    A step that sets `pipefail`, or asks for `shell: bash` and gets it from
+    GitHub, is not reported: there the pipeline fails when the guard does.
+    """
+    piped = []
+    block = strip_comments(job_block(workflow_text, job))
+    for step in step_blocks(block):
+        if script not in step:
+            continue
+        if SET_PIPEFAIL_RE.search(step) or EXPLICIT_BASH_SHELL_RE.search(step):
+            continue
+        for command in join_continuations(step).split("\n"):
+            if script not in command:
+                continue
+            _, _, after = command.partition(script)
+            if SINGLE_PIPE_RE.search(after):
+                piped.append(command.strip())
+    return piped
 
 
 def inline_step_blocks(workflow_text: str, job: str, steps: "list[str]") -> "dict[str, str]":
@@ -834,6 +981,28 @@ class GuardWiringTests(unittest.TestCase):
                             f"strict guard disarmed at its invocation: {line!r}",
                         )
 
+    def test_a_strict_guard_is_not_disarmed_by_a_pipe(self) -> None:
+        # The disarm shape DISARM_TOKENS cannot see. `check_binary_size.py`
+        # ran as `python … | tee binary-size-report.txt` under GitHub's default
+        # `bash -e {0}`, so the step took tee's exit status and the Binary Size
+        # Gate — required through `CI Success` — reported success while the
+        # script printed `Binary size gate FAILED` (#2193, two binaries over
+        # their ceilings). Every other disarm test above passed the whole time.
+        for entry in self.guards:
+            if entry["mode"] != "strict":
+                continue
+            piped = invocations_piped_away(
+                self._workflow_text(entry), entry["job"], entry["script"]
+            )
+            with self.subTest(script=entry["script"]):
+                self.assertEqual(
+                    piped,
+                    [],
+                    f"strict guard piped into another command without "
+                    f"`set -o pipefail`, so its exit status is discarded: "
+                    f"{piped!r}",
+                )
+
     def _required_test_surface(self) -> str:
         """Everything a required job can run, including through a called workflow.
 
@@ -999,7 +1168,7 @@ class GuardRegistryDisarmTests(unittest.TestCase):
     def test_dropping_ready_for_review_from_ci_is_detected(self) -> None:
         text = CI_WORKFLOW.read_text(encoding="utf-8")
         broken = text.replace(
-            "    types: [opened, synchronize, reopened, ready_for_review]\n", "", 1
+            "    types: [opened, synchronize, reopened, ready_for_review, edited]\n", "", 1
         )
         self.assertIn("ready_for_review", trigger_block(text, "pull_request"))
         self.assertNotIn("ready_for_review", trigger_block(broken, "pull_request"))
@@ -1012,6 +1181,718 @@ class GuardRegistryDisarmTests(unittest.TestCase):
             exempt,
             required_ci_jobs(),
             f"`{exempt}` is chain-exempt, so a guard parked there blocks nothing",
+        )
+
+
+class DiffScopedGateReachabilityTests(unittest.TestCase):
+    """A diff-scoped gate needs the history its diff reads.
+
+    `lint` carried two of them — the SAFETY-template verifier and the
+    TODO/FIXME governance check — against a default depth-1 checkout, so both
+    validated zero files on every pull request while reporting success. The
+    three other jobs that diff against the base already asked for
+    `fetch-depth: 0` and even carry the comment explaining why, which is what
+    makes this a mechanical invariant rather than a matter of taste.
+    """
+
+    def setUp(self) -> None:
+        self.text = CI_WORKFLOW.read_text(encoding="utf-8")
+
+    def test_every_job_diffing_against_the_base_checks_out_full_history(self) -> None:
+        diffing = jobs_diffing_against_base(self.text)
+        self.assertTrue(
+            diffing,
+            "no job diffs against a base SHA any more — drop this suite or fix the parser",
+        )
+        shallow = sorted(
+            job
+            for job in diffing
+            if not checkout_is_full_history(job_block(strip_comments(self.text), job))
+        )
+        self.assertEqual(
+            shallow,
+            [],
+            f"job(s) resolving a changed-file list from `git diff $BASE_SHA` "
+            f"without `fetch-depth: 0`: {shallow}. On a pull request the base "
+            "commit is not in a depth-1 checkout, so the diff fails, the file "
+            "list comes back empty and the gate passes having read nothing. "
+            "Add `with: {fetch-depth: 0}` to that job's actions/checkout step.",
+        )
+
+    def test_the_lint_job_is_one_of_them(self) -> None:
+        # Pins the regression specifically: `lint` is where both diff-scoped
+        # guards in scripts/guards.json declare they run.
+        self.assertIn("lint", jobs_diffing_against_base(self.text))
+
+    def test_a_shallow_checkout_on_a_diffing_job_is_detected(self) -> None:
+        # RED-then-GREEN on the real file: removing the fetch-depth from
+        # `lint` must make the invariant fail, or the test proves nothing.
+        block = job_block(strip_comments(self.text), "lint")
+        self.assertTrue(checkout_is_full_history(block))
+        self.assertFalse(checkout_is_full_history(block.replace("fetch-depth: 0", "", 1)))
+
+    def test_every_diffing_job_refuses_an_unreachable_base(self) -> None:
+        # Belt and braces to fetch-depth: the depth fix makes the base
+        # present, this makes its ABSENCE loud instead of silent, for the
+        # failure modes fetch-depth cannot cover.
+        missing = sorted(
+            job
+            for job in jobs_diffing_against_base(self.text)
+            if not asserts_base_is_reachable(job_block(strip_comments(self.text), job))
+        )
+        self.assertEqual(
+            missing,
+            [],
+            f"job(s) diffing against a base they never prove is present: {missing}. "
+            "A missing base makes `git diff` fail into an empty file list, which "
+            "reads exactly like 'nothing changed'. Add the `git cat-file -e "
+            "\"$BASE_SHA^{commit}\"` check before the diff.",
+        )
+
+    def test_removing_the_reachability_check_is_detected(self) -> None:
+        # `lint` carries one check per diff-scoped gate, so the negative
+        # control has to remove EVERY occurrence — dropping just the first
+        # leaves the second matching and proves nothing.
+        block = job_block(strip_comments(self.text), "lint")
+        self.assertTrue(asserts_base_is_reachable(block))
+        self.assertFalse(
+            asserts_base_is_reachable(block.replace("git cat-file -e", "true #"))
+        )
+
+    def test_this_changes_own_suite_runs_in_the_required_job(self) -> None:
+        # Same reasoning as the mcp-doc-contract suites above: the verifier's
+        # self-test must run in `lint`, which `CI Success` reads, and not only
+        # in gate-contracts.yml, whose result blocks nothing.
+        self.assertIn(
+            "scripts.tests.test_verify_unsafe_safety_template",
+            job_block(self.text, "lint"),
+        )
+
+    def test_a_job_that_does_not_diff_is_not_required_to_be_deep(self) -> None:
+        # The invariant must stay scoped to gates that need the history:
+        # a synthetic job with a checkout and no base diff is not flagged.
+        synthetic = (
+            "jobs:\n"
+            "  shallow-ok:\n"
+            "    steps:\n"
+            "      - uses: actions/checkout@v7\n"
+            "      - run: cargo fmt --all -- --check\n"
+            "  ci-success:\n"
+            "    needs: [shallow-ok]\n"
+        )
+        self.assertEqual(jobs_diffing_against_base(synthetic), set())
+
+    def test_the_diff_gates_skip_deleted_paths(self) -> None:
+        # A rename or a removal leaves a path in `git diff --name-only` that
+        # is no longer on disk; the guards then warn per missing file. The
+        # file list must be filtered at the source instead.
+        checked = 0
+        for job in sorted(jobs_diffing_against_base(self.text)):
+            block = job_block(strip_comments(self.text), job)
+            for line in guard_input_listings(block):
+                checked += 1
+                with self.subTest(job=job, line=line.strip()):
+                    self.assertIn(
+                        "--diff-filter=d",
+                        line,
+                        f"{job}: a path list handed to a guard must exclude "
+                        "deletions (`--diff-filter=d`) — a removed path is still "
+                        "named by `--name-only` but is gone from disk, so the "
+                        "guard warns on a file it cannot open",
+                    )
+        self.assertTrue(checked, "no guard-input listing found — fix the parser")
+
+    def test_a_path_filter_must_keep_deletions(self) -> None:
+        # The mirror of the rule above, and the reason it is scoped to
+        # `mapfile` rather than to every base diff: `node-windows-changed`
+        # and `perf-path-changed` only `grep -q` the names to decide whether
+        # to run. Deleting a file under crates/velesdb-node/ is a change that
+        # job must still react to, so excluding deletions there would make a
+        # deletion-only PR skip it.
+        for job in ("node-windows-changed", "perf-path-changed"):
+            block = job_block(strip_comments(self.text), job)
+            with self.subTest(job=job):
+                self.assertEqual(
+                    guard_input_listings(block),
+                    [],
+                    f"{job} is a path filter, not a guard input",
+                )
+                filters = [
+                    line
+                    for line in block.split("\n")
+                    if BASE_SHA_DIFF_RE.search(line) and "grep -q" in line
+                ]
+                self.assertTrue(filters, f"{job} no longer greps a base diff")
+                for line in filters:
+                    self.assertNotIn(
+                        "--diff-filter=d",
+                        line,
+                        f"{job}: a path filter must SEE deletions",
+                    )
+
+
+# ---------------------------------------------------------------------------
+# Retargeting a PR must re-run the gates
+# ---------------------------------------------------------------------------
+
+PR_TYPES_RE = re.compile(r"^\s*types:\s*\[([^\]]*)\]", re.MULTILINE)
+JOB_ID_RE = re.compile(r"^  ([a-z][a-z0-9_-]*):$", re.MULTILINE)
+# The clause that admits `edited` only for a base change. Whitespace-tolerant
+# so reformatting the expression does not read as removing it.
+# The jobs that must NOT carry the guard, with their reasons — same shape as
+# CHAIN_EXEMPT above. `mcp-doc-contract` runs the guard suites' own self-tests,
+# and `test_the_gate_job_cannot_opt_out_of_blocking` forbids it any job-level
+# `if:` at all: a condition that can skip it can disarm them. It pays for that
+# by running on title-only edits, which is one cheap Python job.
+#
+# `pr-governance` is exempt for a different reason: the guard admits `edited`
+# only for a base change, and this is the one job whose INPUT is the title and
+# body. Guarded, it was skipped exactly when the thing it reads changed, so a
+# PR opened clean and then edited to reintroduce an attribution trailer was
+# never re-checked — which is how the trailer on #2157 survived its first edit.
+# It surfaces such a violation rather than blocking it: `CI Success` keeps its
+# own guard, so the required check stays skipped on a body edit and the next
+# push blocks normally.
+RETARGET_GUARD_EXEMPT = {
+    "mcp-doc-contract": "runs the guard self-tests; must never be skippable",
+    "pr-governance": "reads the title and body; skipping it on an edit is skipping its input",
+}
+
+RETARGET_GUARD_RE = re.compile(
+    r"github\.event\.action\s*!=\s*'edited'\s*\|\|\s*github\.event\.changes\.base\s*!=\s*null"
+)
+
+
+def pull_request_types(text: str) -> list[str]:
+    """Event types the workflow's `pull_request:` trigger subscribes to."""
+    match = PR_TYPES_RE.search(text)
+    if match is None:
+        return []
+    return [t.strip() for t in match.group(1).split(",") if t.strip()]
+
+
+def jobs_with_guard(text: str) -> tuple[list[str], list[str]]:
+    """Splits ci.yml's top-level jobs into (guarded, unguarded)."""
+    starts = [(m.group(1), m.start()) for m in JOB_ID_RE.finditer(text)]
+    # `on:` keys (push/pull_request/workflow_dispatch) match the job shape;
+    # everything from `jobs:` onward is a real job.
+    jobs_at = text.index("\njobs:\n")
+    starts = [(name, at) for name, at in starts if at > jobs_at]
+    guarded, unguarded = [], []
+    for index, (name, at) in enumerate(starts):
+        end = starts[index + 1][1] if index + 1 < len(starts) else len(text)
+        block = text[at:end]
+        head = block.split("\n    steps:", 1)[0]
+        (guarded if RETARGET_GUARD_RE.search(head) else unguarded).append(name)
+    return guarded, unguarded
+
+
+class RetargetRerunTests(unittest.TestCase):
+    """Changing a PR's base must not leave a stale verdict or absent checks.
+
+    Retargeting emits `pull_request.edited` and nothing else — no
+    `synchronize`, no `reopened`. Before this, neither workflow listened to
+    it, with two consequences seen in production on PR #2118:
+
+      * `PR Governance` kept reporting its refusal against the *old* base
+        forever. Re-running cannot clear that: GitHub replays the original
+        event payload, stale `BASE_REF` included.
+      * `ci.yml` (filtered to `branches: [main, develop]`) had never run at
+        all for a PR opened against a feature branch, so after retargeting
+        onto develop the required `CI Success` check was *absent* — the
+        #1465 failure mode, which blocks a merge with no way out.
+    """
+
+    def setUp(self) -> None:
+        self.ci = CI_WORKFLOW.read_text(encoding="utf-8")
+        self.governance = (WORKFLOW_DIR / "pr-governance.yml").read_text(encoding="utf-8")
+
+    def test_both_workflows_listen_for_a_retarget(self) -> None:
+        for label, text in (("ci.yml", self.ci), ("pr-governance.yml", self.governance)):
+            with self.subTest(workflow=label):
+                self.assertIn(
+                    "edited",
+                    pull_request_types(text),
+                    f"{label} must subscribe to `edited`, the only event a base change emits; "
+                    "without it a retargeted PR keeps a stale verdict and never re-runs",
+                )
+
+    def test_every_ci_job_guards_against_a_title_only_edit(self) -> None:
+        guarded, unguarded = jobs_with_guard(self.ci)
+        unguarded = [j for j in unguarded if j not in RETARGET_GUARD_EXEMPT]
+        self.assertEqual(
+            unguarded,
+            [],
+            "`edited` also fires on every title/body edit. Each job must admit it only "
+            "when `github.event.changes.base` is set, or routine description edits cost a "
+            f"full CI run. Unguarded: {unguarded}",
+        )
+        self.assertGreater(len(guarded), 20, "job discovery looks broken, not the guard")
+
+    def test_the_exempt_job_really_is_unguarded(self) -> None:
+        """An exemption nobody exercises is an exemption that has rotted."""
+        _guarded, unguarded = jobs_with_guard(self.ci)
+        for job in RETARGET_GUARD_EXEMPT:
+            with self.subTest(job=job):
+                self.assertIn(
+                    job,
+                    unguarded,
+                    f"`{job}` is listed exempt but now carries the guard — drop the "
+                    "exemption, or the list is documenting a rule that no longer holds",
+                )
+
+    def test_ci_success_carries_the_guard_too(self) -> None:
+        block = self.ci[self.ci.index("\n  ci-success:") :]
+        self.assertRegex(
+            block.split("\n    steps:", 1)[0],
+            RETARGET_GUARD_RE,
+            "ci-success asserts `result == 'success'` for each of its needs, so leaving it "
+            "unguarded while its needs skip on a title edit turns every such edit RED. It "
+            "must skip with them — a skipped check-run is accepted by branch protection.",
+        )
+
+
+class RetargetGuardParserTests(unittest.TestCase):
+    """RED-then-GREEN on synthetic text, per this module's parser contract."""
+
+    GUARD = "github.event.action != 'edited' || github.event.changes.base != null"
+
+    def test_types_parser_reads_the_list(self) -> None:
+        self.assertEqual(
+            pull_request_types("on:\n  pull_request:\n    types: [opened, edited]\n"),
+            ["opened", "edited"],
+        )
+        self.assertEqual(pull_request_types("on:\n  push:\n"), [])
+
+    def test_guard_parser_separates_guarded_from_unguarded(self) -> None:
+        text = (
+            "on:\n  pull_request:\n    types: [opened]\n"
+            "\njobs:\n"
+            f"  alpha:\n    name: A\n    if: {self.GUARD}\n    steps:\n      - run: true\n"
+            "  beta:\n    name: B\n    steps:\n      - run: true\n"
+        )
+        guarded, unguarded = jobs_with_guard(text)
+        self.assertEqual((guarded, unguarded), (["alpha"], ["beta"]))
+
+    def test_guard_parser_accepts_a_composed_condition(self) -> None:
+        text = (
+            "on:\n  pull_request:\n    types: [opened]\n"
+            "\njobs:\n"
+            f"  alpha:\n    name: A\n    if: (always()) && ({self.GUARD})\n    steps:\n      - run: true\n"
+        )
+        self.assertEqual(jobs_with_guard(text), (["alpha"], []))
+
+    def test_guard_parser_ignores_a_match_inside_steps(self) -> None:
+        """A guard in a step is not a guard on the job."""
+        text = (
+            "on:\n  pull_request:\n    types: [opened]\n"
+            "\njobs:\n"
+            f"  alpha:\n    name: A\n    steps:\n      - if: {self.GUARD}\n        run: true\n"
+        )
+        self.assertEqual(jobs_with_guard(text), ([], ["alpha"]))
+
+
+# ---------------------------------------------------------------------------
+# A run that does nothing must not cancel a run that does something
+# ---------------------------------------------------------------------------
+
+CANCEL_IN_PROGRESS_RE = re.compile(r"^\s*cancel-in-progress:\s*(.+?)\s*$", re.MULTILINE)
+
+
+def cancel_in_progress(text: str) -> str:
+    """The workflow-level `cancel-in-progress:` value, verbatim."""
+    match = CANCEL_IN_PROGRESS_RE.search(text)
+    return "" if match is None else match.group(1)
+
+
+class NoOpRunCannotCancelRealCiTests(unittest.TestCase):
+    """The guard makes a title edit cheap; this keeps it from making CI absent.
+
+    `edited` fires on every title and body edit, and every job guards against
+    it — so such a run skips all 27 of them. It still joins the concurrency
+    group, though, and with an unconditional `cancel-in-progress: true` it
+    *cancelled the real run it arrived behind*, leaving an all-skipped run in
+    its place. Branch protection accepts a `skipped` required check, so
+    `CI Success` then reported green having run nothing: #1465's hole (a
+    required check that reflects no actual work) reached through a much more
+    common door than the retarget this trigger was added for.
+
+    Seen in production on PR #2125 — run 4312 (`synchronize`) cancelled 28
+    seconds in by run 4313, a body edit.
+    """
+
+    def setUp(self) -> None:
+        self.ci = CI_WORKFLOW.read_text(encoding="utf-8")
+
+    def test_a_no_op_run_does_not_cancel_the_run_it_arrives_behind(self) -> None:
+        value = cancel_in_progress(self.ci)
+        self.assertTrue(value, "ci.yml declares no `cancel-in-progress:` — parser or workflow broke")
+        self.assertNotEqual(
+            value,
+            "true",
+            "an unconditional `cancel-in-progress` lets a title/body edit — whose jobs all "
+            "skip — cancel the real CI run and stand in for it. Branch protection accepts "
+            "the resulting skipped check, so `CI Success` goes green having run nothing.",
+        )
+        self.assertRegex(
+            value,
+            RETARGET_GUARD_RE,
+            "`cancel-in-progress` must carry the same predicate as the job guard: a run may "
+            "cancel another only when it is not itself a no-op.",
+        )
+
+    def test_the_predicate_is_spelled_the_same_as_the_job_guard(self) -> None:
+        """Two spellings of \"this run is a no-op\" is how the two drift apart."""
+        guard_in_cancel = RETARGET_GUARD_RE.search(cancel_in_progress(self.ci))
+        self.assertIsNotNone(guard_in_cancel)
+        block = self.ci[self.ci.index("\n  ci-success:") :].split("\n    steps:", 1)[0]
+        guard_in_job = RETARGET_GUARD_RE.search(block)
+        self.assertIsNotNone(guard_in_job)
+        self.assertEqual(
+            guard_in_cancel.group(0),
+            guard_in_job.group(0),
+            "the concurrency predicate and the job guard must be character-identical, so "
+            "editing one and not the other cannot silently reopen the hole",
+        )
+
+
+class CancelInProgressParserTests(unittest.TestCase):
+    """RED-then-GREEN on synthetic text, per this module's parser contract."""
+
+    def test_parser_reads_a_literal_and_an_expression(self) -> None:
+        self.assertEqual(
+            cancel_in_progress("concurrency:\n  group: g\n  cancel-in-progress: true\n"),
+            "true",
+        )
+        self.assertEqual(
+            cancel_in_progress("concurrency:\n  group: g\n  cancel-in-progress: ${{ a != b }}\n"),
+            "${{ a != b }}",
+        )
+
+    def test_parser_reports_absence_rather_than_guessing(self) -> None:
+        self.assertEqual(cancel_in_progress("concurrency:\n  group: g\n"), "")
+
+
+# ---------------------------------------------------------------------------
+# Every trigger the workflow declares must be able to satisfy the gate
+# ---------------------------------------------------------------------------
+
+# `on:` keys that are events, in the position PR_TRIGGER_RE would find them.
+# Anchored at four spaces under `on:` so a job key never matches.
+DECLARED_TRIGGER_RE = re.compile(r"^  ([a-z_]+):\s*$", re.MULTILINE)
+EVENT_NAME_RE = re.compile(r"github\.event_name\s*==\s*'([a-z_]+)'")
+
+# Triggers a chain-checked job may exclude, and why. Empty on purpose: there is
+# currently no trigger under which the gate is allowed to be unsatisfiable, and
+# an entry here would be a documented hole rather than an accidental one.
+TRIGGER_EXEMPT: "dict[tuple[str, str], str]" = {}
+
+
+def declared_triggers(text: str) -> "list[str]":
+    """Events the workflow's `on:` block subscribes to, in declaration order."""
+    stripped = strip_comments(text)
+    start = stripped.find("\non:\n")
+    if start == -1:
+        raise AssertionError("no `on:` block found")
+    end = stripped.find("\njobs:\n", start)
+    block = stripped[start : end if end != -1 else len(stripped)]
+    return DECLARED_TRIGGER_RE.findall(block)
+
+
+def job_condition(text: str, job: str) -> str:
+    """One job's whole `if:` value, folded continuation lines included.
+
+    Reading only the `if:` line would make a condition written as a YAML block
+    (`if: >-` with the expression indented beneath) parse as *no* condition —
+    and "no condition" is the reachable-everywhere verdict below, so a
+    reformat nobody thought of as a change would silently empty the check.
+    """
+    head = job_block(strip_comments(text), job).split("\n    steps:", 1)[0]
+    lines = head.split("\n")
+    for index, line in enumerate(lines):
+        if not line.startswith("    if:"):
+            continue
+        parts = [line[len("    if:") :].strip()]
+        for follower in lines[index + 1 :]:
+            if follower.strip() and not follower.startswith("      "):
+                break
+            parts.append(follower.strip())
+        return " ".join(part for part in parts if part)
+    return ""
+
+
+def job_event_names(text: str, job: str) -> "set[str]":
+    """The `github.event_name == '…'` literals in one job's `if:`.
+
+    An empty set means the job does not constrain the event at all, which is
+    the reachable-everywhere case — not the unreachable one.
+    """
+    return set(EVENT_NAME_RE.findall(job_condition(text, job)))
+
+
+class GateReachableUnderEveryTriggerTests(unittest.TestCase):
+    """A gate entry that cannot run under a trigger makes the gate unsatisfiable.
+
+    `ci-success` asserts `result == 'success'` for each job it reads. A job
+    that its own `if:` excludes for the current event comes back `skipped`,
+    never `success`, so the chain fails however green everything else is.
+
+    This bit in production on PR #2141. `python-integrations` admitted only
+    `pull_request` and `push`, so a manual `workflow_dispatch` — the escape
+    hatch this file's own comments name for the #1465 "required check is
+    absent" failure mode — could only ever produce a RED `CI Success`. That is
+    strictly worse than the hole it plugs: an absent check blocks a merge, a
+    red one *replaces a green check-run of the same name* on the head SHA.
+    Dispatch run 4378 overwrote the green verdict pull_request run 4380 had
+    already recorded for the same commit.
+
+    The rule is mechanical rather than a review habit: for every job the chain
+    reads, the set of events its `if:` admits must cover every event the `on:`
+    block declares. `sonarcloud` is out of scope by construction — it is in
+    `needs` but deliberately absent from the chain (see CHAIN_EXEMPT), so it
+    can skip freely.
+    """
+
+    def setUp(self) -> None:
+        self.ci = CI_WORKFLOW.read_text(encoding="utf-8")
+
+    def test_the_workflow_declares_the_triggers_this_suite_assumes(self) -> None:
+        """Fail loudly if trigger discovery breaks, rather than vacuously pass."""
+        triggers = declared_triggers(self.ci)
+        for expected in ("push", "pull_request", "workflow_dispatch"):
+            self.assertIn(expected, triggers, f"trigger discovery found {triggers}")
+
+    def test_every_chain_entry_can_run_under_every_declared_trigger(self) -> None:
+        triggers = declared_triggers(self.ci)
+        unreachable = []
+        for job in sorted(chain_checked_jobs(self.ci)):
+            admitted = job_event_names(self.ci, job)
+            if not admitted:
+                continue
+            for trigger in triggers:
+                if trigger not in admitted and (job, trigger) not in TRIGGER_EXEMPT:
+                    unreachable.append(f"{job} cannot run on {trigger}")
+        self.assertEqual(
+            unreachable,
+            [],
+            "`ci-success` demands `success` from each of these, so a trigger the job "
+            "excludes makes the gate unsatisfiable under that trigger — a required check "
+            f"that is permanently red. Add the event to the job's `if:`. Found: {unreachable}",
+        )
+
+    def test_the_job_that_regressed_admits_the_manual_trigger(self) -> None:
+        """The specific case above, named so a regression reads as itself."""
+        self.assertIn(
+            "workflow_dispatch",
+            job_event_names(self.ci, "python-integrations"),
+            "a manual dispatch is the documented way out of an absent `CI Success`; "
+            "with this job excluded it can only ever produce a red one",
+        )
+
+    def test_the_exempt_job_is_out_of_the_chain_not_merely_tolerated(self) -> None:
+        """`sonarcloud` skips on dispatch; that is only safe while it is unread."""
+        self.assertNotIn("sonarcloud", chain_checked_jobs(self.ci))
+        self.assertIn("sonarcloud", CHAIN_EXEMPT)
+
+
+class TriggerReachabilityParserTests(unittest.TestCase):
+    """RED-then-GREEN on synthetic text, per this module's parser contract."""
+
+    WORKFLOW = (
+        "name: X\n"
+        "\non:\n"
+        "  push:\n    branches: [main]\n"
+        "  pull_request:\n    types: [opened]\n"
+        "  workflow_dispatch:\n"
+        "\njobs:\n"
+        "  alpha:\n    name: A\n"
+        "    if: github.event_name == 'pull_request' || github.event_name == 'push'\n"
+        "    steps:\n      - run: true\n"
+        "  beta:\n    name: B\n    steps:\n      - run: true\n"
+    )
+
+    def test_trigger_parser_reads_the_on_block_and_stops_at_jobs(self) -> None:
+        self.assertEqual(
+            declared_triggers(self.WORKFLOW),
+            ["push", "pull_request", "workflow_dispatch"],
+        )
+
+    def test_event_parser_reads_a_disjunction(self) -> None:
+        self.assertEqual(
+            job_event_names(self.WORKFLOW, "alpha"), {"pull_request", "push"}
+        )
+
+    def test_a_job_that_does_not_constrain_the_event_reads_as_unconstrained(self) -> None:
+        self.assertEqual(job_event_names(self.WORKFLOW, "beta"), set())
+
+    def test_event_parser_reads_a_folded_condition(self) -> None:
+        """A condition written as a YAML block is still a condition."""
+        text = (
+            "name: X\n"
+            "\non:\n  push:\n  workflow_dispatch:\n"
+            "\njobs:\n"
+            "  alpha:\n    name: A\n"
+            "    if: >-\n"
+            "      github.event_name == 'push' ||\n"
+            "      github.event_name == 'workflow_dispatch'\n"
+            "    steps:\n      - run: true\n"
+        )
+        self.assertEqual(
+            job_event_names(text, "alpha"), {"push", "workflow_dispatch"}
+        )
+
+    def test_a_commented_out_condition_does_not_count_as_admitting(self) -> None:
+        """The disarm this module's `strip_comments` exists for, at job level."""
+        text = self.WORKFLOW.replace(
+            "    if: github.event_name == 'pull_request' || github.event_name == 'push'\n",
+            "    # if: github.event_name == 'pull_request'\n",
+        )
+        self.assertEqual(job_event_names(text, "alpha"), set())
+
+
+class PipeDisarmParserTests(unittest.TestCase):
+    """`invocations_piped_away` sees the shape that shipped, and only it.
+
+    The fixture below is the Binary Size Gate step as it stood — the exact
+    text under which `CI Success` went green on a `Binary size gate FAILED`.
+    """
+
+    #: The pre-fix step, verbatim in shape: pipe on a backslash continuation.
+    SHIPPED = """jobs:
+  binary-size:
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check binary sizes against ceilings
+        run: |
+          python scripts/check_binary_size.py --target-dir target/release \\
+            | tee binary-size-report.txt
+          cat binary-size-report.txt
+"""
+
+    def test_the_shipped_shape_is_detected(self) -> None:
+        piped = invocations_piped_away(
+            self.SHIPPED, "binary-size", "scripts/check_binary_size.py"
+        )
+        self.assertEqual(len(piped), 1, piped)
+        self.assertIn("| tee", piped[0])
+
+    def test_a_single_line_pipe_is_detected_too(self) -> None:
+        """The continuation is what hid it, not what caused it."""
+        text = self.SHIPPED.replace(" \\\n           ", "")
+        self.assertTrue(
+            invocations_piped_away(
+                text, "binary-size", "scripts/check_binary_size.py"
+            )
+        )
+
+    def test_set_o_pipefail_clears_it(self) -> None:
+        text = self.SHIPPED.replace(
+            "        run: |\n", "        run: |\n          set -o pipefail\n"
+        )
+        self.assertEqual(
+            invocations_piped_away(
+                text, "binary-size", "scripts/check_binary_size.py"
+            ),
+            [],
+        )
+
+    def test_set_euo_pipefail_clears_it(self) -> None:
+        text = self.SHIPPED.replace(
+            "        run: |\n", "        run: |\n          set -euo pipefail\n"
+        )
+        self.assertEqual(
+            invocations_piped_away(
+                text, "binary-size", "scripts/check_binary_size.py"
+            ),
+            [],
+        )
+
+    def test_an_explicit_bash_shell_clears_it(self) -> None:
+        """GitHub runs `shell: bash` as `bash --noprofile --norc -eo pipefail`."""
+        text = self.SHIPPED.replace(
+            "        run: |\n", "        shell: bash\n        run: |\n"
+        )
+        self.assertEqual(
+            invocations_piped_away(
+                text, "binary-size", "scripts/check_binary_size.py"
+            ),
+            [],
+        )
+
+    def test_pipefail_in_a_neighbouring_step_does_not_cover_this_one(self) -> None:
+        text = self.SHIPPED.replace(
+            "      - uses: actions/checkout@v7\n",
+            "      - name: Something else\n        run: |\n"
+            "          set -o pipefail\n          echo hi\n",
+        )
+        self.assertTrue(
+            invocations_piped_away(
+                text, "binary-size", "scripts/check_binary_size.py"
+            ),
+            "one step's pipefail was read as cover for another's",
+        )
+
+    def test_a_guard_consuming_a_pipe_is_not_flagged(self) -> None:
+        """On the right of a pipe the pipeline's status IS the guard's."""
+        text = """jobs:
+  lint:
+    steps:
+      - name: Check
+        run: |
+          git diff --name-only | xargs python3 scripts/check_binary_size.py
+"""
+        self.assertEqual(
+            invocations_piped_away(text, "lint", "scripts/check_binary_size.py"), []
+        )
+
+    def test_a_boolean_or_is_not_read_as_a_pipe(self) -> None:
+        text = """jobs:
+  lint:
+    steps:
+      - name: Check
+        run: |
+          python3 scripts/check_binary_size.py || echo "over ceiling"
+"""
+        # `|| true` is DISARM_TOKENS' business; this parser must not double-report
+        # every `||` as a pipe, or it would flag the `|| status=$?` that keeps
+        # the real step's report reaching the run summary.
+        self.assertEqual(
+            invocations_piped_away(text, "lint", "scripts/check_binary_size.py"), []
+        )
+
+    def test_a_redirect_is_not_a_pipe(self) -> None:
+        text = """jobs:
+  lint:
+    steps:
+      - name: Check
+        run: |
+          python3 scripts/check_binary_size.py > report.txt
+"""
+        self.assertEqual(
+            invocations_piped_away(text, "lint", "scripts/check_binary_size.py"), []
+        )
+
+
+class PipeDisarmRealWorkflowTests(unittest.TestCase):
+    """The fix is in the tree, and the guard reads it as fixed."""
+
+    def test_the_binary_size_step_sets_pipefail(self) -> None:
+        text = (REPO_ROOT / ".github/workflows/binary-size.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("set -o pipefail", text)
+
+    def test_dropping_pipefail_from_the_real_workflow_is_detected(self) -> None:
+        text = (REPO_ROOT / ".github/workflows/binary-size.yml").read_text(
+            encoding="utf-8"
+        )
+        broken = text.replace("          set -o pipefail\n", "")
+        self.assertNotEqual(broken, text, "the anchor moved; this test is stale")
+        self.assertTrue(
+            invocations_piped_away(
+                broken, "binary-size", "scripts/check_binary_size.py"
+            ),
+            "removing `set -o pipefail` from the live workflow turns nothing red",
         )
 
 

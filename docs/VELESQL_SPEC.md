@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector + graph + column-store search in VelesDB.
 
-**Version**: 3.10.0 | Last updated: 2026-08-13 · Applies to: velesdb-core 5.2.0
+**Version**: 3.10.0 | Last updated: 2026-08-13 · Applies to: velesdb-core 6.0.0
 
 ---
 
@@ -433,6 +433,34 @@ WHERE vector NEAR $v AND NOT (category = 'spam')
 LIMIT 10
 ```
 
+`NOT` distributes over `AND` and `OR` by De Morgan's laws, as in SQL:
+`NOT (A AND B)` admits every row failing *either* conjunct, and
+`NOT (A OR B)` only rows failing *both*. This holds when one side is a
+`similarity()` predicate.
+
+#### Three-valued logic
+
+WHERE evaluates in SQL's three-valued logic: a predicate is true, false, or
+**unknown**. A `similarity()` predicate is unknown for a row whose vector
+cannot be scored against the query vector — different lengths, an empty
+vector, or no vector on that field. Unknown is not false, and the difference
+is only visible under negation:
+
+| Expression | Result |
+|---|---|
+| `sim` unknown | row excluded (WHERE admits only *known* true) |
+| `NOT sim` where `sim` is unknown | row excluded — `NOT unknown` is unknown |
+| `unknown AND false` | `false`, so `NOT (unknown AND false)` admits the row |
+| `unknown AND true` | unknown |
+| `unknown OR true` | `true` |
+| `unknown OR false` | unknown |
+
+The fourth row is the case worth reading twice: when the metadata side alone
+settles a conjunction, the row is decided without ever scoring the vector, and
+the negation admits it. Treating unknown as false instead would both admit
+rows nothing was computed for (under `NOT`) and hide rows the metadata had
+already decided.
+
 ### IN / NOT IN
 
 Test membership in a list of values:
@@ -612,6 +640,18 @@ LIMIT 10
 
 > **Tip**: For strict text filtering (exclude results that do not contain a keyword),
 > use `CONTAINS_TEXT` instead of `MATCH`. See the CONTAINS_TEXT section below.
+
+#### What is searchable
+
+A point is searchable exactly when its **current** payload yields indexable
+text. Upserting it with a payload that no longer carries any takes it out of
+the text index, so `MATCH` never returns a point over a term its payload has
+since lost — the same rule that governs `_labels` and the secondary indexes.
+Re-upserting with *different* text replaces the old terms rather than adding
+to them.
+
+A point that has never carried text is not written to the index at all, so a
+bulk load of vectors without text costs nothing here.
 
 ### Strict Text Filter (CONTAINS_TEXT, v3.8+)
 
@@ -2278,19 +2318,23 @@ CREATE METADATA COLLECTION tags
 | `m` | integer | 16 | HNSW M parameter (max links per node) |
 | `ef_construction` | integer | 200 | HNSW build-time expansion factor |
 
-**Capacity mode vs search-path mode.** The `storage` mode determines whether
-quantization affects only memory or also the search path:
+**What each `storage` mode does to the search path:**
 
 | `storage` | Kind | Collection search path |
 |-----------|------|------------------------|
 | `full` | full-precision | f32 (baseline) |
-| `sq8` | **Capacity Mode** | full-precision f32 — memory only, no throughput gain |
-| `binary` | **Capacity Mode** | full-precision f32 — memory only, no throughput gain |
+| `sq8` | search-path mode | int8 traversal + exact f32 re-rank (Euclidean/Cosine; other metrics stay f32) |
+| `binary` | full-precision | f32 — behaves as `full` today, no search-path change |
 | `pq` | search-path mode | ADC-rescored (wired) |
 | `rabitq` | search-path mode | quantized traversal (wired end-to-end) |
 
-Choose `sq8`/`binary` for memory savings only; choose `rabitq` (or `pq`, via
-`TRAIN QUANTIZER`) for a quantized search path.
+Choose `rabitq`, `sq8` (Euclidean/Cosine) or `pq` (via `TRAIN QUANTIZER`)
+for a quantized search path. All quantized paths keep the f32 vectors for
+exact re-ranking, so total resident memory does not shrink — for `rabitq`
+and `sq8` it rises, because the codes are additive. What `rabitq` and `sq8`
+do shrink is the *un-evictable* share: their f32 sits in a file-backed arena
+the kernel can reclaim. Measured at 100 000 x 768-d, anonymous RSS falls 61%
+while total RSS rises 11%. See `docs/guides/QUANTIZATION.md`.
 
 #### Schema Type Names
 
@@ -2656,9 +2700,9 @@ TRAIN QUANTIZER ON <collection> WITH (<parameters>)
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `m` | integer | 8 | Number of subspaces |
-| `k` | integer | 256 | Codebook size per subspace |
-| `type` | string | -- | Quantizer type: `pq`, `opq`, `rabitq` |
+| `m` | integer | -- (required for `pq`/`opq`) | Number of subspaces (ignored by `rabitq`/`sq8`) |
+| `k` | integer | 256 | Codebook size per subspace (`pq`/`opq` only) |
+| `type` | string | `pq` | Quantizer type: `pq`, `opq`, `rabitq`, `sq8` |
 | `oversampling` | integer | -- | Training oversampling ratio |
 | `sample` | integer | -- | Number of vectors to sample |
 | `force` | boolean | false | Force retrain if exists |
@@ -2692,14 +2736,18 @@ TRAIN QUANTIZER ON my_collection WITH (m = 8, k = 256);
 - Re-training overwrites the existing quantizer.
 - OPQ can be enabled via the `type` parameter.
 - Trained quantizers are persisted in the collection directory
-  (`codebook.pq` / `rotation.opq` for PQ/OPQ, `rabitq.idx` for RaBitQ) and
-  restored on database open: the PQ cache and RaBitQ encodings are rebuilt
-  by re-encoding the stored vectors (O(n) at open).
-- `type = rabitq` also installs the trained quantizer into the live index
-  when the collection was created with `storage = 'rabitq'`. For
-  collections created with another storage mode, training persists the
-  index and flips the collection's storage mode; the RaBitQ backend takes
-  effect at the next open.
+  (`codebook.pq` / `rotation.opq` for PQ/OPQ, `rabitq.idx` for RaBitQ,
+  `sq8.idx` for SQ8) and restored on database open: the PQ cache and the
+  RaBitQ/SQ8 encodings are rebuilt by re-encoding the stored vectors (O(n)
+  at open).
+- `type = rabitq` and `type = sq8` also install the trained quantizer into
+  the live index when the collection was created with the matching storage
+  mode. For collections created with another storage mode, training
+  persists the artifact and flips the collection's storage mode; the
+  quantized backend takes effect at the next open.
+- `type = sq8` is accepted only on Euclidean and Cosine collections — the
+  int8 traversal distance cannot preserve the ordering of the other
+  metrics, and training on them is rejected.
 
 ---
 

@@ -79,9 +79,6 @@ mod pushdown_tests;
 mod query_pipeline;
 #[cfg(test)]
 mod scan_cap_observability_tests;
-pub mod score_fusion;
-#[cfg(test)]
-mod score_fusion_tests;
 mod select_dispatch;
 pub(crate) mod set_operations;
 mod similarity_filter;

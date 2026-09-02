@@ -52,13 +52,22 @@ pub fn fast_rsqrt(x: f32) -> f32 {
 #[inline]
 #[must_use]
 pub(crate) fn cosine_finish_fast(dot: f32, norm_a_sq: f32, norm_b_sq: f32) -> f32 {
-    // Guard: both norms must be significant for meaningful cosine
-    let denom_sq = norm_a_sq * norm_b_sq;
-    if denom_sq < f32::EPSILON * f32::EPSILON {
+    // Zero-norm guard on the operands, matching `cosine_scalar`. Guarding the
+    // product instead would zero out legitimate small-magnitude vectors: with
+    // ‖a‖ = ‖b‖ ≈ 3.4e-4 the product already dips under EPSILON² while the
+    // true cosine is well defined (and the scalar fallback returns it).
+    if norm_a_sq == 0.0 || norm_b_sq == 0.0 {
         return 0.0;
     }
-    // 1 sqrt + 1 div instead of 2 sqrt + 1 mul + 1 div (~3 cycles saved)
-    (dot / denom_sq.sqrt()).clamp(-1.0, 1.0)
+    let denom_sq = norm_a_sq * norm_b_sq;
+    if denom_sq > f32::MIN_POSITIVE {
+        // 1 sqrt + 1 div instead of 2 sqrt + 1 mul + 1 div (~3 cycles saved)
+        (dot / denom_sq.sqrt()).clamp(-1.0, 1.0)
+    } else {
+        // The product underflowed (or is subnormal): fall back to the exact
+        // two-sqrt form, which keeps the denominator representable.
+        (dot / (norm_a_sq.sqrt() * norm_b_sq.sqrt())).clamp(-1.0, 1.0)
+    }
 }
 
 /// Fast cosine similarity using Newton-Raphson rsqrt.
@@ -130,7 +139,7 @@ pub(crate) fn cosine_scalar(a: &[f32], b: &[f32]) -> f32 {
 /// Uses binary threshold at 0.5 for consistency with SIMD versions.
 /// This is the standard interpretation for binary/categorical vectors.
 #[inline]
-pub(super) fn hamming_scalar(a: &[f32], b: &[f32]) -> f32 {
+pub(crate) fn hamming_scalar(a: &[f32], b: &[f32]) -> f32 {
     a.iter()
         .zip(b.iter())
         .filter(|(&x, &y)| (x > 0.5) != (y > 0.5))
@@ -139,7 +148,7 @@ pub(super) fn hamming_scalar(a: &[f32], b: &[f32]) -> f32 {
 
 /// Scalar Jaccard similarity implementation.
 #[inline]
-pub(super) fn jaccard_scalar(a: &[f32], b: &[f32]) -> f32 {
+pub(crate) fn jaccard_scalar(a: &[f32], b: &[f32]) -> f32 {
     let (intersection, union) = jaccard_scalar_accum(a, b);
     if union == 0.0 {
         1.0

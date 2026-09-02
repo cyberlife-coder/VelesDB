@@ -196,7 +196,11 @@ impl Collection {
                 if metadata_filter.is_some_and(|f| !f.matches(&payload)) {
                     continue;
                 }
-                let score = self.compute_metric_score(&point.vector, query);
+                // A length-mismatched vector can't be scored against `query`;
+                // skip it rather than fabricate a score (see compute_metric_score).
+                let Some(score) = self.compute_metric_score(&point.vector, query) else {
+                    continue;
+                };
                 scored.push(SearchResult::new(point, score));
             }
         }

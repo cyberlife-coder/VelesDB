@@ -29,26 +29,44 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// - After compaction of a dynamic index
     /// - Not needed for small indices (< 1000 vectors)
     ///
+    /// # What the caller has to do with the answer
+    ///
+    /// **This renumbers every node.** The returned `old_to_new` — `result[i]`
+    /// is the new id of the node that was `i` — is not a diagnostic: anything
+    /// outside this graph that is keyed by node id is stale until it has been
+    /// put through it. Two things are, and neither used to be:
+    ///
+    /// - `HnswIndex`'s external-id mappings. Without the remap, `ANALYZE` on
+    ///   a 1 100-point collection turned the correct answer
+    ///   `[500, 501, 499, 502, 498]` into `[575, 601, 586, 560, 588]` — every
+    ///   lookup still resolved, to the wrong vector.
+    /// - The quantized backends' positional code store, whose codes then
+    ///   describe other nodes: recall@10 measured 1.000 before a reorder and
+    ///   **0.000** after, with no error raised anywhere (#2112).
+    ///
+    /// `None` means the pass declined (below the threshold, or no entry
+    /// point) and nothing moved.
+    ///
     /// # Errors
     ///
     /// Returns an error if vector storage reordering fails.
-    pub fn reorder_for_locality(&self) -> crate::error::Result<()> {
+    pub fn reorder_for_locality(&self) -> crate::error::Result<Option<Vec<usize>>> {
         let count = self.count.load(Ordering::Relaxed);
         if count < REORDER_THRESHOLD {
-            return Ok(());
+            return Ok(None);
         }
 
         let entry = self.entry_point.load(Ordering::Acquire);
         if entry == NO_ENTRY_POINT {
-            return Ok(());
+            return Ok(None);
         }
 
         let permutation = self.compute_bfs_order(entry, count);
         if permutation.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
 
-        self.apply_permutation(&permutation)?;
+        let old_to_new = self.apply_permutation(&permutation)?;
 
         // Reordering rewrites both the vector buffer AND every neighbour
         // list, so any cached CSR / flat-vector snapshot built from the
@@ -62,7 +80,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         #[cfg(feature = "gpu")]
         self.invalidate_gpu_caches();
 
-        Ok(())
+        Ok(Some(old_to_new))
     }
 
     /// Computes BFS traversal order starting from the entry point on layer 0.
@@ -86,6 +104,9 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         }
 
         self.bfs_walk(&layers[0], &mut queue, &mut visited, &mut order, count);
+        // The BFS is the guard's last use; the unvisited sweep reads only
+        // the local `visited` bitmap.
+        drop(layers);
         self.append_unvisited(&visited, &mut order);
 
         order
@@ -125,7 +146,10 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     }
 
     /// Applies a permutation to vectors, neighbor lists, and the entry point.
-    fn apply_permutation(&self, new_order: &[NodeId]) -> crate::error::Result<()> {
+    ///
+    /// Returns the `old_to_new` map it used, so the caller can put whatever
+    /// it keys by node id through the same renumbering.
+    fn apply_permutation(&self, new_order: &[NodeId]) -> crate::error::Result<Vec<usize>> {
         let count = new_order.len();
 
         let old_to_new = Self::build_reverse_mapping(new_order, count);
@@ -134,7 +158,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         self.remap_neighbor_ids(&old_to_new);
         self.update_entry_point(&old_to_new, count);
 
-        Ok(())
+        Ok(old_to_new)
     }
 
     /// Builds a reverse mapping: `result[old_id] = new_id`.
@@ -154,6 +178,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         if let Some(storage) = guard.as_mut() {
             storage.reorder(new_order)?;
         }
+        drop(guard);
         Ok(())
     }
 

@@ -1,6 +1,6 @@
 # ⚙️ VelesDB Configuration
 
-*Version 5.2.0 — Last updated: 2026-08-08*
+*Version 6.0.0 — Last updated: 2026-08-08*
 
 Complete guide for configuring VelesDB via configuration file, environment variables, and runtime parameters.
 
@@ -45,18 +45,25 @@ To point at a file anywhere else, pass it explicitly:
 | `velesdb-server` | `--config <path>` | `VELESDB_CONFIG` |
 | `velesdb` (CLI) | `--config <path>` (global — REPL and every one-shot command) | `VELESDB_CONFIG` |
 
-> **Reserved sections (issue #2087).** Of the engine sections below, only
-> `[limits]` is applied by the engine today. `[search]`, `[hnsw]`,
-> `[storage]` and `[quantization]` are parsed and validated but not yet
-> wired — setting them away from their defaults logs a warning at load.
-> Query-time overrides (`WITH (ef_search = N)`) are a separate, working
-> mechanism, as are per-collection creation options.
+> **What the engine actually applies.** `[limits]` is enforced at the
+> collection and ingest boundaries, and `[hnsw]`'s `m` / `ef_construction`
+> are applied when a collection's index is created (see the precedence chain
+> under [Section \[hnsw\]](#section-hnsw)). Everything else below is parsed
+> and validated but **not** wired: `[search]`, `[storage]`, `[quantization]`
+> and `hnsw.max_layers` (issue #2087), and `[wal_batch]` is parsed and
+> ignored (issue #2078) — its group-commit front was deleted as unwired, and
+> the batch write APIs already pay one durability barrier per call. Setting
+> any unwired key away from its default logs a warning at load, naming
+> exactly what is inert. Query-time overrides (`WITH (ef_search = N)`) are a
+> separate, working mechanism, as are per-collection creation options.
 
 Both binaries can load the **same** file, but only the *engine* sections —
 `[search]`, `[hnsw]`, `[storage]`, `[limits]`, `[quantization]`,
 `[wal_batch]` — reach `VelesConfig` and, via
 [`Database::open_with_config`](../../crates/velesdb-core/src/database/mod.rs),
-the running engine. Every other top-level table is silently dropped before
+the running engine. Reaching `VelesConfig` is not the same as changing
+behaviour: see the note above for which of them the engine actually acts
+on. Every other top-level table is silently dropped before
 `VelesConfig` ever sees it — most importantly `[server]`, `[auth]`,
 `[tls]`, `[cors]`, which stay exclusively `velesdb-server`'s own transport
 config. This matters because `VelesConfig` *also* has its own same-named
@@ -119,7 +126,7 @@ data_dir = "./data"
 ```toml
 # =============================================================================
 # VelesDB Configuration File
-# Version: 5.2.0
+# Version: 6.0.0
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -370,24 +377,55 @@ hot_reload = false
 
 All options can be set via environment variables with the `VELESDB_` prefix:
 
+**Two config systems share the `VELESDB_` prefix.** The engine
+(`VelesConfig`) and the `velesdb-server` transport layer each read their own
+variables; a name resolves to one or the other, never both. They are listed
+separately because that distinction decides whether a variable does anything.
+
+### Engine variables (`VelesConfig`)
+
+`VELESDB_` + the section + `_` + the field, with underscores inside the field
+name kept as they are:
+
 | Variable | TOML Equivalent | Example |
 |----------|-----------------|---------|
 | `VELESDB_SEARCH_DEFAULT_MODE` | `search.default_mode` | `balanced` |
 | `VELESDB_SEARCH_EF_SEARCH` | `search.ef_search` | `256` |
+| `VELESDB_SEARCH_MAX_RESULTS` | `search.max_results` | `500` |
 | `VELESDB_HNSW_M` | `hnsw.m` | `48` |
 | `VELESDB_HNSW_EF_CONSTRUCTION` | `hnsw.ef_construction` | `600` |
+| `VELESDB_LIMITS_MAX_COLLECTIONS` | `limits.max_collections` | `50` |
+| `VELESDB_LIMITS_MAX_DIMENSIONS` | `limits.max_dimensions` | `4096` |
 | `VELESDB_STORAGE_DATA_DIR` | `storage.data_dir` | `/var/lib/velesdb` |
-| `VELESDB_STORAGE_MODE` | `storage.storage_mode` | `mmap` |
-| `VELESDB_HOST` | `server.host` | `0.0.0.0` |
-| `VELESDB_PORT` | `server.port` | `8080` |
-| `VELESDB_DATA_DIR` | `server.data_dir` | `/var/lib/velesdb` |
-| `VELESDB_RATE_LIMIT` | `server.rate_limit` | `100` |
-| `VELESDB_API_KEYS` | `auth.api_keys` | `key1,key2,key3` (comma-separated) |
-| `VELESDB_TLS_CERT` | `tls.cert` | `/etc/ssl/cert.pem` |
-| `VELESDB_TLS_KEY` | `tls.key` | `/etc/ssl/key.pem` |
+| `VELESDB_STORAGE_STORAGE_MODE` | `storage.storage_mode` | `mmap` |
+| `VELESDB_WAL_BATCH_ENABLED` | `wal_batch.enabled` | `false` |
 | `VELESDB_LOGGING_LEVEL` | `logging.level` | `debug` |
-| `VELESDB_LICENSE_KEY` | `premium.license_key` | `VELES-...` |
-| `VELESDB_NO_UPDATE_CHECK` | `update_check.enabled` | `1` (disables) |
+
+Setting one of these is exactly equivalent to setting its TOML key — so a
+**reserved** key stays reserved when set this way. `VELESDB_SEARCH_MAX_RESULTS`
+is parsed, validated and applied by nothing, just like `[search] max_results`;
+see the note at the top of this guide for what the engine acts on.
+
+Note `VELESDB_STORAGE_STORAGE_MODE`, not `VELESDB_STORAGE_MODE`: the section is
+`storage` and the field is `storage_mode`. Earlier revisions of this table
+listed the short form, which addresses `storage.mode` — no such field exists.
+
+### Server variables (`velesdb-server` only)
+
+These belong to the HTTP transport layer and are **not** `VelesConfig` fields.
+They have no effect on an embedded engine:
+
+| Variable | Purpose | Example |
+|----------|---------|---------|
+| `VELESDB_HOST` | Bind address | `0.0.0.0` |
+| `VELESDB_PORT` | Bind port | `8080` |
+| `VELESDB_DATA_DIR` | Server data directory | `/var/lib/velesdb` |
+| `VELESDB_RATE_LIMIT` | Requests per window | `100` |
+| `VELESDB_API_KEYS` | API keys | `key1,key2,key3` (comma-separated) |
+| `VELESDB_TLS_CERT` | TLS certificate path | `/etc/ssl/cert.pem` |
+| `VELESDB_TLS_KEY` | TLS key path | `/etc/ssl/key.pem` |
+| `VELESDB_LICENSE_KEY` | License key | `VELES-...` |
+| `VELESDB_NO_UPDATE_CHECK` | Disables the update check | `1` |
 | `VELESDB_CONFIG` | Config file path | `/etc/velesdb/velesdb.toml` |
 
 ### Name Mapping
@@ -397,6 +435,15 @@ The mapping follows this rule:
 VELESDB_{SECTION}_{KEY} (uppercase, underscores)
 → section.key (lowercase, underscores preserved)
 ```
+
+The split happens at the **section boundary only** — the first underscore that
+follows a known section name. Everything after it is the field name, kept
+verbatim, so `VELESDB_HNSW_EF_CONSTRUCTION` reaches `hnsw.ef_construction`
+rather than a non-existent `hnsw.ef.construction`. A name whose first token is
+not a section (`VELESDB_CONFIG`, `VELESDB_HOST`) is left alone and matches no
+engine field. Before issue #2185 the provider split at *every* underscore and
+kept the key uppercase, so no engine variable in the table above reached its
+field at all.
 
 ### Examples
 
@@ -477,11 +524,40 @@ SELECT * FROM docs WHERE vector NEAR $v WITH (ef_search = 512);
 
 ### Section [hnsw]
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `m` | int\|"auto" | `"auto"` | Connections per node |
-| `ef_construction` | int\|"auto" | `"auto"` | Construction pool size |
-| `max_layers` | int | `0` | Max layers (0=auto) |
+| Key | Type | Default | Description | Applied |
+|-----|------|---------|-------------|---------|
+| `m` | int\|"auto" | `"auto"` | Connections per node | yes — at collection creation |
+| `ef_construction` | int\|"auto" | `"auto"` | Construction pool size | yes — at collection creation |
+| `max_layers` | int | `0` | Max layers (0=auto) | **no** — reserved (#2087) |
+
+**Precedence.** `m` and `ef_construction` are *defaults*. From strongest to
+weakest:
+
+```text
+per-collection creation argument  >  [hnsw] section  >  auto-tuned by dimension
+```
+
+Each field resolves on its own: a collection created with an explicit `m` and
+no `ef_construction` still takes `ef_construction` from this section. A caller
+that passes a complete `HnswParams` (`create_vector_collection_with_params`)
+bypasses the section entirely — a fully specified value is already an answer,
+and merging a file the caller never mentioned into it would be surprising.
+
+**These are creation-time values.** The resolved parameters are persisted into
+the collection's own config and fix its graph topology, so editing this section
+later affects **new collections only**. Re-tuning an existing collection means
+rebuilding its index (`auto_reindex`), not reloading a file.
+
+Graph collections created *with embeddings* build a real HNSW index over their
+node vectors and take the same defaults. A graph collection without embeddings
+has no index to configure and is unaffected.
+
+`max_layers` stays reserved: the HNSW layer count is drawn per node by the
+level generator and no engine path caps it, so honouring the knob is a feature
+rather than a wiring. `VelesConfig::validate` warns when it is set.
+
+Per-query `WITH (ef_search = N)` is a different axis and unrelated to this
+section — it sizes the candidate pool of one query; nothing here does.
 
 ### Section [storage]
 
@@ -871,4 +947,4 @@ impl VelesConfig {
 
 ---
 
-*VelesDB Documentation — Last updated: 2026-08-08 · Applies to: velesdb-core 5.2.0*
+*VelesDB Documentation — Last updated: 2026-08-08 · Applies to: velesdb-core 6.0.0*

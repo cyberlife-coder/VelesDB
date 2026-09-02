@@ -146,15 +146,45 @@ impl HnswIndex {
         params: HnswParams,
         enable_vector_storage: bool,
     ) -> Result<Self> {
-        let inner = HnswInner::new_with_options(
+        Self::with_params_in_dir(dimension, metric, params, enable_vector_storage, None)
+    }
+
+    /// Builds an index that may keep its f32 arena in `arena_dir`.
+    ///
+    /// The directory is remembered on the index, not just used here, because
+    /// `vacuum` rebuilds the graph and has to put the replacement's arena
+    /// somewhere too.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the graph or its arena cannot be allocated.
+    pub(crate) fn with_params_in_dir(
+        dimension: usize,
+        metric: DistanceMetric,
+        params: HnswParams,
+        enable_vector_storage: bool,
+        arena_dir: Option<std::path::PathBuf>,
+    ) -> Result<Self> {
+        // The policy gate. A mapped arena pays off only where traversal runs
+        // on something other than the f32 — the quantized backends read it
+        // solely to re-rank a bounded candidate set, so their pages can be
+        // evicted freely. A `Full` graph traverses *on* the f32 and would
+        // fault a page per hop, so it keeps its heap arena whatever the
+        // caller offers (#2112).
+        let arena_dir = match params.storage_mode {
+            crate::StorageMode::RaBitQ | crate::StorageMode::SQ8 => arena_dir,
+            _ => None,
+        };
+        let inner = HnswInner::build(&crate::index::hnsw::native_inner::InnerBuild {
             metric,
-            params.max_connections,
-            params.max_elements,
-            params.ef_construction,
+            max_connections: params.max_connections,
+            max_elements: params.max_elements,
+            ef_construction: params.ef_construction,
             dimension,
-            params.storage_mode,
-            params.alpha,
-        )?;
+            storage_mode: params.storage_mode,
+            alpha: params.alpha,
+            arena_dir: arena_dir.as_deref(),
+        })?;
 
         let mappings = ShardedMappings::with_capacity(params.max_elements);
 
@@ -167,6 +197,7 @@ impl HnswIndex {
             rerank_latency_target_us: AtomicU64::new(0),
             rerank_latency_ema_us: AtomicU64::new(0),
             io_holder: None,
+            arena_dir,
         })
     }
 
@@ -257,10 +288,12 @@ impl HnswIndex {
         use crate::index::hnsw::persistence;
 
         let meta = persistence::load_meta(path)?;
-        let storage_mode = if desired_mode == Some(crate::StorageMode::RaBitQ) {
-            crate::StorageMode::RaBitQ
-        } else {
-            meta.storage_mode
+        // A quantized desired mode wins over the persisted meta: it covers
+        // `TRAIN QUANTIZER` flipping the collection storage mode AFTER the
+        // last index save (the persisted meta still says `Full`).
+        let storage_mode = match desired_mode {
+            Some(mode @ (crate::StorageMode::RaBitQ | crate::StorageMode::SQ8)) => mode,
+            _ => meta.storage_mode,
         };
 
         // Load HNSW graph (caller-specific — see persistence::load_sidecars).
@@ -289,10 +322,13 @@ impl HnswIndex {
             rerank_latency_target_us: AtomicU64::new(0),
             rerank_latency_ema_us: AtomicU64::new(0),
             io_holder: None,
+            arena_dir: Some(path.to_path_buf()),
         };
 
         #[cfg(feature = "persistence")]
         index.install_persisted_rabitq(path)?;
+        #[cfg(feature = "persistence")]
+        index.install_persisted_sq8(path)?;
 
         Ok(index)
     }
@@ -300,6 +336,9 @@ impl HnswIndex {
     /// Installs `<path>/rabitq.idx` into the `RaBitQ` backend, when both exist.
     ///
     /// No-op for the Standard backend or when the file is absent.
+    // The guard spans the mode check and the install so the two cannot be
+    // separated by a concurrent (re)configuration; this runs once, at open.
+    #[expect(clippy::significant_drop_tightening)]
     #[cfg(feature = "persistence")]
     fn install_persisted_rabitq(&self, path: &Path) -> std::io::Result<()> {
         let inner = self.inner.read();
@@ -324,6 +363,40 @@ impl HnswIndex {
         }
         inner
             .install_trained_rabitq(std::sync::Arc::new(rabitq))
+            .map_err(std::io::Error::other)?;
+        Ok(())
+    }
+
+    /// Installs `<path>/sq8.idx` into the SQ8 backend, when both exist.
+    ///
+    /// No-op for other backends or when the file is absent — mirror of
+    /// [`Self::install_persisted_rabitq`].
+    // Same open-time atomicity as install_persisted_rabitq above.
+    #[expect(clippy::significant_drop_tightening)]
+    #[cfg(feature = "persistence")]
+    fn install_persisted_sq8(&self, path: &Path) -> std::io::Result<()> {
+        let inner = self.inner.read();
+        if inner.storage_mode() != crate::StorageMode::SQ8 {
+            return Ok(());
+        }
+        let Some(quantizer) = crate::index::hnsw::native::ScalarQuantizer::load(path)
+            .map_err(std::io::Error::other)?
+        else {
+            return Ok(());
+        };
+        // Warn-and-degrade like the collection-level restore: a stale or
+        // foreign sq8.idx must not make the index un-openable — search
+        // stays on exact f32 distances instead.
+        if quantizer.dimension != self.dimension {
+            tracing::warn!(
+                sq8_dim = quantizer.dimension,
+                index_dim = self.dimension,
+                "sq8.idx dimension mismatch; quantizer not installed"
+            );
+            return Ok(());
+        }
+        inner
+            .install_trained_sq8(std::sync::Arc::new(quantizer))
             .map_err(std::io::Error::other)?;
         Ok(())
     }
@@ -452,8 +525,46 @@ impl HnswIndex {
         self.inner.read().rabitq_quantizer()
     }
 
-    /// Returns `true` when this index runs the `RaBitQ` backend.
-    pub(crate) fn is_rabitq_backend(&self) -> bool {
-        self.inner.read().is_rabitq_backend()
+    /// Installs a trained SQ8 quantizer into the live backend.
+    ///
+    /// Returns `Ok(true)` when the backend is SQ8 and the quantizer was
+    /// installed (existing vectors re-encoded in `NodeId` order, O(n·d)),
+    /// `Ok(false)` for any other backend (no-op).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if re-encoding a stored vector fails.
+    #[cfg(feature = "persistence")]
+    pub(crate) fn install_trained_sq8(
+        &self,
+        quantizer: std::sync::Arc<crate::index::hnsw::native::ScalarQuantizer>,
+    ) -> crate::error::Result<bool> {
+        self.inner.read().install_trained_sq8(quantizer)
+    }
+
+    /// Returns true when the backend is SQ8 with a trained quantizer.
+    #[cfg(feature = "persistence")]
+    #[must_use]
+    pub(crate) fn is_sq8_quantizer_trained(&self) -> bool {
+        self.inner.read().is_sq8_quantizer_trained()
+    }
+
+    /// Returns the trained SQ8 quantizer, if any (SQ8 backend only).
+    ///
+    /// Used by the collection flush path to persist a lazily-trained
+    /// quantizer to `sq8.idx` (parity with the `RaBitQ` flush).
+    #[cfg(feature = "persistence")]
+    #[must_use]
+    pub(crate) fn sq8_quantizer(
+        &self,
+    ) -> Option<std::sync::Arc<crate::index::hnsw::native::ScalarQuantizer>> {
+        self.inner.read().sq8_quantizer()
+    }
+
+    /// Returns `true` when this index runs a quantized backend (`RaBitQ` or
+    /// SQ8) whose positional code store requires inserts to flow through the
+    /// backend itself.
+    pub(crate) fn is_quantized_backend(&self) -> bool {
+        self.inner.read().is_quantized_backend()
     }
 }

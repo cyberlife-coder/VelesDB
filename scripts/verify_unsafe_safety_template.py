@@ -56,18 +56,57 @@ SKIP_LINE_PATTERN = re.compile(
 )
 
 
+def code_before_comment(line: str) -> str:
+    """The executable part of `line`: everything before its `//` comment.
+
+    Quoted string literals are masked first so a `//` inside a string (e.g.
+    a URL) does not truncate real code. A comment cannot contain executable
+    `unsafe`, so prose that merely *mentions* `unsafe impl` — such as the
+    block in `native_inner.rs` explaining why a type deliberately has NO
+    `unsafe impl` — must not be reported as an undocumented unsafe site.
+    """
+    masked = re.sub(r'"(?:[^"\\]|\\.)*"', '""', line)
+    comment_at = masked.find('//')
+    return line if comment_at == -1 else line[:comment_at]
+
+
+def strip_comments(content: str) -> str:
+    """Blank out comment text, preserving line count and column offsets.
+
+    Line/doc comments are truncated by :func:`code_before_comment`; `/* */`
+    block comments are blanked in place. Newlines are kept so the caller's
+    `count('\n')` line arithmetic stays exact.
+    """
+    # Block comments first: replace every non-newline character with a space.
+    def blank(match: "re.Match[str]") -> str:
+        return ''.join('\n' if ch == '\n' else ' ' for ch in match.group(0))
+
+    without_blocks = re.sub(r'/\*.*?\*/', blank, content, flags=re.DOTALL)
+    scrubbed = []
+    for line in without_blocks.split('\n'):
+        code = code_before_comment(line)
+        scrubbed.append(code + ' ' * (len(line) - len(code)))
+    return '\n'.join(scrubbed)
+
+
 def find_unsafe_sites(content: str) -> List[Tuple[int, str]]:
-    """Find all unsafe block/impl sites with their line numbers."""
+    """Find all unsafe block/impl sites with their line numbers.
+
+    Matching runs on a comment-scrubbed copy of the file (same line and
+    column offsets), so only real `unsafe {` / `unsafe impl` items count;
+    the reported context line still comes from the original source.
+    """
     sites = []
     lines = content.split('\n')
-    
-    for match in UNSAFE_BLOCK_PATTERN.finditer(content):
+    scrubbed = strip_comments(content)
+
+    for match in UNSAFE_BLOCK_PATTERN.finditer(scrubbed):
         # Calculate line number
-        line_num = content[:match.start()].count('\n') + 1
+        line_num = scrubbed[:match.start()].count('\n') + 1
         # Get the line content for context
         line_content = lines[line_num - 1] if line_num <= len(lines) else ""
         sites.append((line_num, line_content.strip()))
-    
+
     return sites
 
 

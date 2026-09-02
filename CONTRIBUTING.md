@@ -103,6 +103,7 @@ All new/modified code must satisfy these limits (enforced by Codacy and CI):
 | Unsafe blocks | Must have `// SAFETY:` comment | CI (`verify_unsafe_safety_template.py`) |
 | TODO format | Must carry an issue tag: `[EPIC-XXX/US-YYY]`, `(PREFIX-NNN)`, `#123`, or `#issue` | CI (`check-todo-annotations.py`) |
 | `.unwrap()` | Forbidden in production code | CI (`check_prod_unwraps.py`) |
+| Wrapper adapters | An `impl Trait for Box<T>`/`Arc<T>`/`Rc<T>`, or for a `type DynTrait = Box<dyn Trait>` alias, must forward **every** method the trait declares — rustc only demands the required ones, so a dropped default-bodied method compiles and silently runs the default | CI (`check-trait-forwarding.py`) |
 | Recall@10 | **>= 0.95** (if search path modified) | CI + local validation |
 
 Every guard script this repository runs is declared in

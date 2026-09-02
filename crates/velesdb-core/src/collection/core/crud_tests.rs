@@ -99,6 +99,7 @@ fn test_concurrent_upsert_and_search_no_deadlock() {
 }
 
 #[test]
+#[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn test_upsert_indexes_sparse_vectors() {
     use crate::index::sparse::SparseVector;
 
@@ -141,6 +142,7 @@ fn test_upsert_indexes_sparse_vectors() {
 }
 
 #[test]
+#[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn test_delete_removes_from_sparse_indexes() {
     use crate::index::sparse::SparseVector;
 
@@ -175,6 +177,7 @@ fn test_delete_removes_from_sparse_indexes() {
 
 #[test]
 #[allow(clippy::cast_possible_truncation)]
+#[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn test_u32_max_term_id() {
     use crate::index::sparse::search::sparse_search;
     use crate::index::sparse::SparseVector;
@@ -950,6 +953,7 @@ fn test_upsert_bulk_from_raw_parity_with_upsert_bulk() {
 /// Regression: ensures that adding a secondary index forces Phase 2 to run,
 /// so payload-based indexes are correctly updated on upsert.
 #[test]
+#[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn test_phase2_runs_when_secondary_indexes_exist() {
     let dir = tempfile::tempdir().unwrap();
     let coll = Collection::create(dir.path().to_path_buf(), 4, DistanceMetric::Cosine).unwrap();
@@ -1040,6 +1044,7 @@ fn test_phase2_fast_path_correctness_no_secondaries() {
 /// Regression: sparse vectors must be collected in Phase 2 and written
 /// to sparse indexes even when no other secondary processing is needed.
 #[test]
+#[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn test_phase2_does_not_skip_with_sparse_vectors() {
     use crate::index::sparse::SparseVector;
 
@@ -1136,158 +1141,46 @@ fn test_dedup_map_consolidation_correctness() {
     assert_eq!(coll.len(), 2, "should have 2 unique points");
 }
 
-/// Issue #425: Phase 2 must NOT skip when StorageMode is SQ8.
-///
-/// Regression: quantization caching requires per-point processing in Phase 2.
+/// SQ8/Binary storage modes are accepted and behave exactly like `Full`:
+/// vectors are stored and searched full-precision f32. The per-upsert
+/// quantized side-caches these modes used to fill were removed — nothing
+/// ever read them (see `StorageMode` docs and the tracking issue for a real
+/// int8 traversal backend). This pins the observable contract instead:
+/// upsert, search ordering, and delete all work under both modes.
 #[test]
-fn test_phase2_runs_for_sq8_storage_mode() {
-    let dir = tempfile::tempdir().unwrap();
-    let coll = Collection::create_with_options(
-        dir.path().to_path_buf(),
-        4,
-        DistanceMetric::Cosine,
-        StorageMode::SQ8,
-    )
-    .unwrap();
+fn test_sq8_and_binary_modes_behave_as_full_precision() {
+    for mode in [StorageMode::SQ8, StorageMode::Binary] {
+        let dir = tempfile::tempdir().unwrap();
+        let coll = Collection::create_with_options(
+            dir.path().to_path_buf(),
+            4,
+            DistanceMetric::Cosine,
+            mode,
+        )
+        .unwrap();
 
-    let points = vec![Point::without_payload(1, vec![1.0, 0.0, 0.0, 0.0])];
-    coll.upsert(points).unwrap();
+        coll.upsert(vec![
+            Point::without_payload(1, vec![1.0, 0.0, 0.0, 0.0]),
+            Point::without_payload(2, vec![0.0, 1.0, 0.0, 0.0]),
+            Point::without_payload(3, vec![0.9, 0.1, 0.0, 0.0]),
+        ])
+        .unwrap();
 
-    // SQ8 cache should have been populated by Phase 2
-    assert_eq!(
-        coll.storage.sq8_cache.read().len(),
-        1,
-        "SQ8 cache should be populated — Phase 2 must not skip"
-    );
-}
-
-/// Issue #486: Parallel SQ8 quantization produces correct cache entries.
-///
-/// Verifies that the parallel quantization path (rayon) populates
-/// the cache for all points and that each entry exists.
-#[test]
-fn test_parallel_sq8_quantization_correctness() {
-    let dir = tempfile::tempdir().unwrap();
-    let coll = Collection::create_with_options(
-        dir.path().to_path_buf(),
-        4,
-        DistanceMetric::Cosine,
-        StorageMode::SQ8,
-    )
-    .unwrap();
-
-    // Insert 50 points to exercise the parallel path (rayon splits work)
-    let points: Vec<Point> = (0u64..50)
-        .map(|id| {
-            #[allow(clippy::cast_precision_loss)]
-            let v = vec![id as f32 * 0.1, 0.2, 0.3, 0.4];
-            Point::without_payload(id, v)
-        })
-        .collect();
-    coll.upsert(points.clone()).unwrap();
-
-    // Verify all 50 entries are in the SQ8 cache
-    let cache = coll.storage.sq8_cache.read();
-    assert_eq!(
-        cache.len(),
-        50,
-        "all 50 points should have SQ8 cache entries"
-    );
-
-    // Verify each point has a cache entry (parallel and sequential produce the same result)
-    for p in &points {
-        assert!(
-            cache.contains_key(&p.id),
-            "SQ8 cache should contain entry for id={}",
-            p.id
-        );
-    }
-
-    // Content correctness: the parallel result must equal a fresh sequential
-    // quantization of the same input (catches all-zero / all-128 / mis-scaled
-    // regressions). QuantizedVector has no PartialEq, so compare fields.
-    for (idx, id) in [(0usize, 0u64), (49usize, 49u64)] {
-        let expected = crate::quantization::QuantizedVector::from_f32(&points[idx].vector);
-        let actual = cache.get(&id).expect("entry must exist");
+        let results = coll.search(&[1.0, 0.0, 0.0, 0.0], 2).unwrap();
+        let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
         assert_eq!(
-            actual.data, expected.data,
-            "SQ8 data bytes must match sequential quantization for id={id}"
+            ids,
+            vec![1, 3],
+            "{mode:?}: full-precision cosine ordering must hold"
         );
-        assert!(
-            actual.data.iter().any(|&b| b != 0),
-            "SQ8 data must not be all-zero for id={id}"
-        );
-        assert!(
-            (actual.min - expected.min).abs() < f32::EPSILON,
-            "min mismatch for id={id}"
-        );
-        assert!(
-            (actual.max - expected.max).abs() < f32::EPSILON,
-            "max mismatch for id={id}"
-        );
-    }
-}
 
-/// Issue #486: Parallel Binary quantization produces correct cache entries.
-#[test]
-fn test_parallel_binary_quantization_correctness() {
-    let dir = tempfile::tempdir().unwrap();
-    let coll = Collection::create_with_options(
-        dir.path().to_path_buf(),
-        4,
-        DistanceMetric::Cosine,
-        StorageMode::Binary,
-    )
-    .unwrap();
-
-    let points: Vec<Point> = (0u64..50)
-        .map(|id| {
-            #[allow(clippy::cast_precision_loss)]
-            let v = vec![id as f32 * 0.1 - 2.5, 0.2, -0.3, 0.4];
-            Point::without_payload(id, v)
-        })
-        .collect();
-    coll.upsert(points.clone()).unwrap();
-
-    let cache = coll.storage.binary_cache.read();
-    assert_eq!(
-        cache.len(),
-        50,
-        "all 50 points should have Binary cache entries"
-    );
-
-    for p in &points {
-        assert!(
-            cache.contains_key(&p.id),
-            "Binary cache should contain entry for id={}",
-            p.id
-        );
-    }
-
-    // Bit values must match the deterministic encoding (value >= 0.0 -> bit set),
-    // and must be paired with the correct id by the parallel path. Cover the
-    // sign-flip boundary at dim 0: id<25 -> [-,+,-,+]=0x0A, id>=25 -> [+,+,-,+]=0x0B.
-    for p in &points {
-        let expected = crate::quantization::BinaryQuantizedVector::from_f32(&p.vector);
-        let cached = cache.get(&p.id).unwrap();
+        coll.delete(&[1]).unwrap();
+        let results = coll.search(&[1.0, 0.0, 0.0, 0.0], 1).unwrap();
         assert_eq!(
-            cached.data, expected.data,
-            "binary bits for id={} must match canonical encoding (got {:?}, want {:?})",
-            p.id, cached.data, expected.data
+            results[0].point.id, 3,
+            "{mode:?}: delete must remove the point from search"
         );
     }
-    // Spot-check the absolute encoding so an all-zero/flipped-bit regression in
-    // from_f32 itself is also caught (not just self-consistency):
-    assert_eq!(
-        cache.get(&0).unwrap().data,
-        vec![0x0A],
-        "id=0 vec [-2.5,0.2,-0.3,0.4] -> 0b1010"
-    );
-    assert_eq!(
-        cache.get(&49).unwrap().data,
-        vec![0x0B],
-        "id=49 vec [+,0.2,-0.3,0.4] -> 0b1011"
-    );
 }
 
 /// Issue #486: Multi-batch upsert produces searchable results without
@@ -1401,6 +1294,7 @@ fn test_upsert_bulk_multi_batch_search_correctness() {
 /// under "Person". Previously, `has_any_labels` only checked new payloads,
 /// so label removal was silently skipped (Devin review finding).
 #[test]
+#[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn test_upsert_removes_stale_labels_from_label_index() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let collection = Collection::create(PathBuf::from(temp_dir.path()), 4, DistanceMetric::Cosine)
@@ -1450,6 +1344,7 @@ fn test_upsert_removes_stale_labels_from_label_index() {
 ///
 /// Devin review finding (2026-04-02).
 #[test]
+#[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn test_can_skip_phase2_respects_populated_label_index() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let collection = Collection::create(PathBuf::from(temp_dir.path()), 4, DistanceMetric::Cosine)
@@ -1680,5 +1575,240 @@ fn test_execute_match_with_similarity_order_by_overrides_score() {
         ordered_ids,
         vec![2, 3, 1],
         "ORDER BY n.age DESC must override the vector score sort (which would be 3,2,1)"
+    );
+}
+
+/// Helper: the ids currently indexed under `label`.
+#[cfg(test)]
+fn label_members(coll: &Collection, label: &str) -> Vec<u32> {
+    coll.graph
+        .label_index
+        .read()
+        .lookup(label)
+        .map(|b| b.iter().collect())
+        .unwrap_or_default()
+}
+
+/// A labelled point, so the fixtures differ only in their `_labels`.
+#[cfg(test)]
+fn labelled_point(id: u64, labels: &[&str]) -> Point {
+    Point {
+        id,
+        vector: vec![1.0, 0.0, 0.0, 0.0],
+        payload: Some(serde_json::json!({ "_labels": labels })),
+        sparse_vectors: None,
+    }
+}
+
+/// `upsert_bulk` must drop the labels a re-upserted point no longer carries.
+///
+/// The bulk path only ever indexed the incoming payload, on the recorded
+/// assumption that "points are always new inserts (no old payload to remove
+/// from the label index)". The same functions collect the pre-batch payloads
+/// for histogram decrements, so overwrites plainly do reach it: after
+/// changing `_labels` from `Doc` to `Archived`, the point stayed indexed
+/// under BOTH, and `MATCH (d:Doc)` returned a point that is no longer a Doc.
+#[test]
+fn bulk_upsert_drops_labels_the_point_no_longer_carries() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let coll =
+        Collection::create(dir.path().to_path_buf(), 4, DistanceMetric::Cosine).expect("create");
+
+    coll.upsert_bulk(&[labelled_point(1, &["Doc"])])
+        .expect("bulk insert");
+    assert_eq!(label_members(&coll, "Doc"), vec![1], "indexed on insert");
+
+    coll.upsert_bulk(&[labelled_point(1, &["Archived"])])
+        .expect("bulk update");
+
+    assert_eq!(
+        label_members(&coll, "Archived"),
+        vec![1],
+        "new label indexed"
+    );
+    assert!(
+        label_members(&coll, "Doc").is_empty(),
+        "the point is no longer a Doc, so Doc must not still list it"
+    );
+}
+
+/// Clearing every label must empty the index, not leave the old one.
+///
+/// This shape also defeated the early return: the guard asked only whether
+/// any *incoming* point carried `_labels`, so a payload that dropped them
+/// returned before the loop and the stale entry survived forever.
+#[test]
+fn bulk_upsert_clearing_labels_removes_the_old_ones() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let coll =
+        Collection::create(dir.path().to_path_buf(), 4, DistanceMetric::Cosine).expect("create");
+
+    coll.upsert_bulk(&[labelled_point(1, &["Doc"])])
+        .expect("bulk insert");
+    coll.upsert_bulk(&[Point {
+        id: 1,
+        vector: vec![1.0, 0.0, 0.0, 0.0],
+        payload: Some(serde_json::json!({ "title": "no labels now" })),
+        sparse_vectors: None,
+    }])
+    .expect("bulk update");
+
+    assert!(
+        label_members(&coll, "Doc").is_empty(),
+        "a payload that carries no _labels must leave none behind"
+    );
+}
+
+/// A label the point keeps across an update must survive the removal.
+///
+/// The order matters: remove the old labels *before* indexing the new ones,
+/// or a label present on both sides is added and then taken straight back
+/// out.
+#[test]
+fn bulk_upsert_keeps_a_label_present_on_both_sides() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let coll =
+        Collection::create(dir.path().to_path_buf(), 4, DistanceMetric::Cosine).expect("create");
+
+    coll.upsert_bulk(&[labelled_point(1, &["Doc", "Draft"])])
+        .expect("bulk insert");
+    coll.upsert_bulk(&[labelled_point(1, &["Doc", "Final"])])
+        .expect("bulk update");
+
+    assert_eq!(label_members(&coll, "Doc"), vec![1], "Doc is still carried");
+    assert_eq!(label_members(&coll, "Final"), vec![1], "Final was added");
+    assert!(
+        label_members(&coll, "Draft").is_empty(),
+        "Draft was dropped by the update"
+    );
+}
+
+/// The zero-copy raw path has the same duty.
+///
+/// `upsert_bulk_from_raw` already collects the pre-batch payloads and hands
+/// them to the secondary indexes; only the label index was left indexing the
+/// new payload alone.
+#[test]
+fn bulk_upsert_from_raw_drops_stale_labels() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let coll =
+        Collection::create(dir.path().to_path_buf(), 4, DistanceMetric::Cosine).expect("create");
+    let vector = [1.0_f32, 0.0, 0.0, 0.0];
+
+    coll.upsert_bulk_from_raw(
+        &vector,
+        &[1],
+        4,
+        Some(&[Some(serde_json::json!({ "_labels": ["Doc"] }))]),
+    )
+    .expect("raw insert");
+    assert_eq!(label_members(&coll, "Doc"), vec![1], "indexed on insert");
+
+    coll.upsert_bulk_from_raw(
+        &vector,
+        &[1],
+        4,
+        Some(&[Some(serde_json::json!({ "_labels": ["Archived"] }))]),
+    )
+    .expect("raw update");
+
+    assert_eq!(
+        label_members(&coll, "Archived"),
+        vec![1],
+        "new label indexed"
+    );
+    assert!(
+        label_members(&coll, "Doc").is_empty(),
+        "the raw path must drop the label the point no longer carries"
+    );
+}
+
+/// A point whose payload carries `content` text.
+#[cfg(test)]
+fn texted_point(id: u64, payload: serde_json::Value) -> Point {
+    Point {
+        id,
+        vector: vec![1.0, 0.0, 0.0, 0.0],
+        payload: Some(payload),
+        sparse_vectors: None,
+    }
+}
+
+/// Clearing a point's text must take it out of full-text search.
+///
+/// The BM25 index only ever saw the incoming payload: a payload that still
+/// exists but no longer yields indexable text wrote nothing, so the document
+/// kept matching a term its payload no longer contains. `add_document`
+/// already replaces on re-index, which is why *changing* the text was fine
+/// and only *clearing* it went stale.
+#[test]
+fn clearing_text_removes_the_point_from_full_text_search() {
+    for bulk in [true, false] {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let coll = Collection::create(dir.path().to_path_buf(), 4, DistanceMetric::Cosine)
+            .expect("create");
+        let with_text = texted_point(1, serde_json::json!({ "content": "zebra" }));
+        let without = texted_point(1, serde_json::json!({ "other": 1 }));
+
+        if bulk {
+            coll.upsert_bulk(&[with_text]).expect("insert");
+            coll.upsert_bulk(&[without]).expect("clear text");
+        } else {
+            coll.upsert(vec![with_text]).expect("insert");
+            coll.upsert(vec![without]).expect("clear text");
+        }
+
+        assert!(
+            coll.storage.text_index.search("zebra", 10).is_empty(),
+            "bulk={bulk}: the payload no longer contains 'zebra', so it must not match"
+        );
+    }
+}
+
+/// Changing the text keeps only the new terms searchable.
+///
+/// Non-regression: `add_document` removes the previous version first, so this
+/// case was already correct and must stay so.
+#[test]
+fn changing_text_leaves_only_the_new_terms_searchable() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let coll =
+        Collection::create(dir.path().to_path_buf(), 4, DistanceMetric::Cosine).expect("create");
+
+    coll.upsert_bulk(&[texted_point(1, serde_json::json!({ "content": "zebra" }))])
+        .expect("insert");
+    coll.upsert_bulk(&[texted_point(1, serde_json::json!({ "content": "giraffe" }))])
+        .expect("update");
+
+    assert!(
+        coll.storage.text_index.search("zebra", 10).is_empty(),
+        "the old term must not survive"
+    );
+    assert_eq!(
+        coll.storage.text_index.search("giraffe", 10).len(),
+        1,
+        "the new term must be searchable"
+    );
+}
+
+/// A repeated id within one batch is settled by its last payload.
+///
+/// The pre-batch payload is `None` for the duplicate, so deciding on that
+/// alone would miss that the batch's own earlier occurrence indexed the text.
+#[test]
+fn a_repeated_id_in_one_batch_is_settled_by_its_last_payload() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let coll =
+        Collection::create(dir.path().to_path_buf(), 4, DistanceMetric::Cosine).expect("create");
+
+    coll.upsert_bulk(&[
+        texted_point(1, serde_json::json!({ "content": "zebra" })),
+        texted_point(1, serde_json::json!({ "other": 1 })),
+    ])
+    .expect("bulk with a duplicate id");
+
+    assert!(
+        coll.storage.text_index.search("zebra", 10).is_empty(),
+        "the last payload in the batch carries no text, so nothing must match"
     );
 }

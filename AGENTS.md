@@ -1,6 +1,6 @@
 # AGENTS.md — VelesDB
 
-Local-first unified database (Vector + Graph + ColumnStore) under VelesQL. Rust workspace, single ~10 MB binary.
+Local-first unified database (Vector + Graph + ColumnStore) under VelesQL. Rust workspace, single ~14 MB binary.
 Authoritative docs (don't duplicate them here — read them): [QUALITY_BAR.md](QUALITY_BAR.md), [CONTRIBUTING.md](CONTRIBUTING.md), [ARCHITECTURE.md](docs/reference/ARCHITECTURE.md), [CONCURRENCY_MODEL.md](docs/CONCURRENCY_MODEL.md).
 
 ---
@@ -23,6 +23,10 @@ Bias toward caution over speed. For trivial tasks, use judgment.
 
 **7. Complete the binding memory loop.** For VelesDB design and implementation, follow `velesdb-learning-loop`: recall before the first repository edit, remember non-trivial decisions, relate each decision or incident to its cause with an outgoing edge, and return feedback for every recalled memory that helped or misled. (`PreToolUse`/`PostToolUse` recall sentinel plus the blocking `Stop` checklist; `scripts/tests/test_learning_loop_policy.py`.) The edit guard is an opt-in guardrail, not a security boundary: shell mutations remain outside it, and the last three steps are enforced by policy plus the stop continuation rather than individual tool denials.
 
+**8. A recorded decision is not a defect.** Two places in this repository hold conclusions someone already reached with evidence, and both read like oversights if you skip them. **Open design issues carry their state in the most recent status comment** — #2112 lists five things deferred on purpose (each with the reason: an endianness constraint, a vacuum invariant, flash endurance, an unreachable path, a missing measurement), #2106 records which of its 19 findings are fixed and what survived the fix. **Module docs record *why*, not only what** — `contiguous_file_arena.rs` and `index/hnsw/native/arena_home.rs` explain that the arena is deliberately written twice per collection lifetime and that `flush_backing` deliberately has no caller. Read the issue comment and the module doc before "fixing" either. Reopening a documented deferral without *new* evidence is churn; if you believe one is wrong, say why with evidence and let the maintainer decide. And never claim a performance or memory win that has not been measured — #2112's own acceptance criteria say "demonstrated in a test or bench artifact — not asserted in prose".
+
+**9. An omission needs a live guard, not a remembered one.** The counterweight to principle 8. A comment that justifies *not* doing something — "so we only need to handle X", "no production path takes Y yet", "Z is rejected earlier in validation" — is a claim about code somewhere else, and it stops being true the moment that other code moves. Three of them did, each hiding a silent defect: #2129 (the reorder deferral held while no path took a file-backed arena; #2118 wired one three PRs later), #2131 (`NOT similarity()` "is rejected earlier in validation" — until EPIC-044 US-003 enabled the full-scan path), #2132 ("points are always new inserts" on a path named `upsert_bulk`, whose own callers collect the pre-batch payloads *because* it overwrites). None failed a test; all three returned confident wrong answers. So: when you write such a comment, name the guard that makes it true and point at it, so a reader can check the guard still exists; when you read one, verify it against today's code before relying on it. What the comment licenses is the discriminator — prose that explains a fallback the code takes anyway, or an invariant local to the same function, held up every time it was checked (`ordering.rs`'s V008 claim, `log_payload`'s crash contract, `native_inner`'s total match).
+
 ---
 
 ## Non-negotiable constraints (CI-enforced — a PR breaking any cannot merge)
@@ -36,6 +40,11 @@ Bias toward caution over speed. For trivial tasks, use judgment.
 - **Recall@10 ≥ 0.95** if you touch the search path (`index/hnsw/`, `simd_native/`, `quantization/`, `fusion/`, or Python result conversion). See [QUALITY_BAR.md](QUALITY_BAR.md) Gate 1.
 - **TODOs:** every `TODO`/`FIXME`/`HACK` carries a tracker tag — `TODO(EPIC-XXX)`, `[EPIC-XXX/US-YYY]`, `(PREFIX-NNN)` or `#123`; bare markers fail. (`scripts/check-todo-annotations.py`)
 - **Git Flow:** branch off and target `develop`, never `main`. Release/hotfix branches target `main`.
+- **No stacked PRs.** The Git Flow gate accepts only `main` and `develop` as bases, and `ci.yml`
+  is filtered to those two — so a PR opened against another branch never runs it and its required
+  `CI Success` check ends up *absent*, not red, which blocks the merge with no way out but an
+  unrelated push (#1465, and again on #2118). If your work depends on unmerged work, wait for the
+  merge. Retargeting afterwards now re-runs the gates (#2124) but starts from a clean slate.
 - **Crate quirks that `ls` won't tell you:** `velesdb-python` is excluded from the strict clippy
   line above (N-API/PyO3 link); `velesdb-node` builds with the `release-node` profile
   and mobile device builds with `release-mobile` (both `panic = "unwind"`); `velesdb-wasm` has no `persistence` feature.

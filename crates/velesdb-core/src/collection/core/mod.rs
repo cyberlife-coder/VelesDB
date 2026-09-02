@@ -21,6 +21,7 @@ mod flush;
 #[cfg(all(test, feature = "persistence"))]
 mod flush_defer_tests;
 mod graph_api;
+mod graph_api_node_payload;
 #[cfg(test)]
 mod graph_api_tests;
 #[cfg(all(test, feature = "persistence"))]
@@ -38,6 +39,8 @@ mod lifecycle_tests;
 mod open_reload_tests;
 #[cfg(feature = "persistence")]
 mod quantizer_restore;
+#[cfg(all(test, feature = "persistence"))]
+mod quantizer_restore_tests;
 mod recovery;
 #[cfg(all(test, feature = "persistence"))]
 mod recovery_tests;

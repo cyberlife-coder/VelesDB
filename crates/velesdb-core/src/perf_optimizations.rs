@@ -17,6 +17,8 @@
 //! eliminating null pointer checks and making invariants explicit. Memory is managed
 //! via RAII with `AllocGuard` for panic-safe resize operations.
 
+#[cfg(feature = "persistence")]
+use crate::contiguous_file_arena::ExistingBytes;
 use crate::validation::{validate_dimension, validate_dimension_match};
 use std::alloc::{alloc_zeroed, Layout};
 use std::fmt;
@@ -52,16 +54,65 @@ pub struct ContiguousVectors {
     pub(crate) count: usize,
     /// Allocated capacity (number of vectors)
     pub(crate) capacity: usize,
+    /// Where `data` came from, and therefore how it must be released.
+    pub(crate) backing: ArenaBacking,
 }
 
-// SAFETY: `ContiguousVectors` is `Send` because it owns its allocation.
-// - Condition 1: The backing buffer is uniquely owned by the struct.
+/// How a [`ContiguousVectors`] buffer was obtained.
+///
+/// The variant decides who frees `data` — which is why it lives next to the
+/// pointer rather than being inferred at each site. Getting this wrong means
+/// calling `dealloc` on a mapping, so the enum is the invariant.
+pub(crate) enum ArenaBacking {
+    /// `alloc_zeroed` on the arena's [`Layout`], released with `dealloc`.
+    ///
+    /// The default, and the only backing available without `persistence`.
+    Heap,
+    /// A file mapping that owns the bytes; released by dropping the mapping.
+    ///
+    /// Chosen when the index wants its f32 arena evictable rather than
+    /// resident — see [`crate::contiguous_file_arena`] for why (#2112).
+    #[cfg(feature = "persistence")]
+    FileMapped(Box<crate::contiguous_file_arena::FileArena>),
+}
+
+impl ArenaBacking {
+    /// Whether this buffer must be released with `dealloc`.
+    ///
+    /// The single place that answers "is this pointer the allocator's?", so a
+    /// new variant cannot silently fall into the deallocating branch.
+    pub(crate) const fn is_heap(&self) -> bool {
+        matches!(*self, Self::Heap)
+    }
+}
+
+impl fmt::Debug for ArenaBacking {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Self::Heap => f.write_str("Heap"),
+            #[cfg(feature = "persistence")]
+            Self::FileMapped(ref arena) => write!(f, "FileMapped({:?})", arena.path()),
+        }
+    }
+}
+
+// SAFETY: `ContiguousVectors` is `Send` because it owns its buffer outright.
+// - Condition 1: The backing buffer is uniquely owned by the struct. For
+//   `ArenaBacking::Heap` the allocator establishes that. For `FileMapped` a
+//   path is NOT unique on its own, so `FileArena` takes an exclusive advisory
+//   lock before mapping and holds it for the mapping's whole life — that lock
+//   is what makes this condition true rather than hoped for.
 // - Condition 2: Mutation requires `&mut self` or lock-guarded interior access.
+// - Condition 3: the mapped variant is `Send` on its own terms — `FileArena`
+//   carries its own justified impl next to the mapping it describes, rather
+//   than being covered by this one at a distance.
 // SAFETY: Moving ownership of this container between threads is sound.
 unsafe impl Send for ContiguousVectors {}
 // SAFETY: `ContiguousVectors` is `Sync` because shared access is read-only.
 // - Condition 1: All writes happen through methods requiring mutable or exclusive lock access.
 // - Condition 2: Returned shared slices borrow immutably and cannot mutate internal state.
+// - Condition 3: no second mapping of the same bytes can exist to write them
+//   behind those shared references — see Condition 1 of the `Send` impl.
 // SAFETY: Concurrent shared references cannot violate aliasing rules.
 unsafe impl Sync for ContiguousVectors {}
 
@@ -71,6 +122,7 @@ impl fmt::Debug for ContiguousVectors {
             .field("dimension", &self.dimension)
             .field("count", &self.count)
             .field("capacity", &self.capacity)
+            .field("backing", &self.backing)
             .finish_non_exhaustive()
     }
 }
@@ -125,7 +177,166 @@ impl ContiguousVectors {
             dimension,
             count: 0,
             capacity,
+            backing: ArenaBacking::Heap,
         })
+    }
+
+    /// Creates a `ContiguousVectors` whose buffer is a file mapping.
+    ///
+    /// The arena behaves identically to a heap-backed one — same layout, same
+    /// accessors, same zero-fill guarantee — but its pages are evictable, so
+    /// they do not count against the resident set when nothing is touching
+    /// them. That is what lets a quantized index hold `codes + graph`
+    /// resident and page the f32 in only to re-rank (#2112).
+    ///
+    /// `path` is created if absent, and whatever it held is discarded — under
+    /// the arena's exclusive lock, never at open time. Use
+    /// [`open_file_backed`](Self::open_file_backed) to adopt a file whose
+    /// contents are already the arena.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidDimension`] if `dimension` is out of range,
+    /// [`Error::AllocationFailed`] if the size overflows or the ceiling
+    /// rejects it, and [`Error::Io`] if the file cannot be created or mapped.
+    ///
+    /// [`Error::InvalidDimension`]: crate::error::Error::InvalidDimension
+    /// [`Error::AllocationFailed`]: crate::error::Error::AllocationFailed
+    /// [`Error::Io`]: crate::error::Error::Io
+    #[cfg(feature = "persistence")]
+    pub fn new_file_backed(
+        path: &std::path::Path,
+        dimension: usize,
+        capacity: usize,
+    ) -> crate::error::Result<Self> {
+        Self::file_backed(path, dimension, capacity, ExistingBytes::Discard)
+    }
+
+    /// Adopts an existing file as the arena without truncating it.
+    ///
+    /// The mapped bytes are taken as `count` already-written vectors, so this
+    /// is the load path: no deserialization, no copy, just a mapping.
+    ///
+    /// # Errors
+    ///
+    /// As [`new_file_backed`](Self::new_file_backed), plus
+    /// [`Error::Internal`] if `count` exceeds `capacity`.
+    ///
+    /// [`Error::Internal`]: crate::error::Error::Internal
+    #[cfg(feature = "persistence")]
+    pub fn open_file_backed(
+        path: &std::path::Path,
+        dimension: usize,
+        capacity: usize,
+        count: usize,
+    ) -> crate::error::Result<Self> {
+        if count > capacity {
+            return Err(crate::error::Error::Internal(format!(
+                "vector arena count {count} exceeds capacity {capacity}"
+            )));
+        }
+        let mut storage = Self::file_backed(path, dimension, capacity, ExistingBytes::Keep)?;
+        storage.count = count;
+        Ok(storage)
+    }
+
+    /// Shared construction for the two file-backed entry points.
+    #[cfg(feature = "persistence")]
+    fn file_backed(
+        path: &std::path::Path,
+        dimension: usize,
+        capacity: usize,
+        existing: ExistingBytes,
+    ) -> crate::error::Result<Self> {
+        use crate::contiguous_file_arena::FileArena;
+
+        validate_dimension(dimension)?;
+        let capacity = capacity.max(16);
+        let byte_len = Self::byte_size(dimension, capacity)?;
+        crate::alloc_guard::check_alloc_bound(byte_len)?;
+
+        let arena = match existing {
+            ExistingBytes::Discard => FileArena::create(path, byte_len),
+            ExistingBytes::Keep => FileArena::open(path, byte_len),
+        }
+        .map_err(|e| Self::arena_open_error(path, e))?;
+        let data = arena.data_ptr();
+
+        Ok(Self {
+            data,
+            dimension,
+            count: 0,
+            capacity,
+            backing: ArenaBacking::FileMapped(Box::new(arena)),
+        })
+    }
+
+    /// Classifies a failure to open an arena file.
+    ///
+    /// A refused exclusive lock means another holder has this arena, which is
+    /// a different situation from a full disk or a missing directory and the
+    /// caller can act on it differently. Collapsing both into
+    /// [`Error::Io`] would throw that away, so the lock case is surfaced as
+    /// the same locked-resource error `Database::open` uses for its data
+    /// directory.
+    ///
+    /// [`Error::Io`]: crate::error::Error::Io
+    #[cfg(feature = "persistence")]
+    fn arena_open_error(path: &std::path::Path, error: std::io::Error) -> crate::error::Error {
+        if error.kind() == std::io::ErrorKind::WouldBlock {
+            crate::error::Error::DatabaseLocked(path.display().to_string())
+        } else {
+            crate::error::Error::Io(error)
+        }
+    }
+
+    /// Flushes a file-backed arena's dirty pages to disk.
+    ///
+    /// A no-op on a heap-backed arena, which has no file to reach. Every
+    /// arena that started file-backed still is: [`reorder`] permutes in place
+    /// and keeps the mapping, so this reaches the file before and after one
+    /// alike (#2112).
+    ///
+    /// [`reorder`]: Self::reorder
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Io`] if the underlying `msync` fails.
+    ///
+    /// [`Error::Io`]: crate::error::Error::Io
+    pub fn flush_backing(&self) -> crate::error::Result<()> {
+        #[cfg(feature = "persistence")]
+        if let ArenaBacking::FileMapped(ref arena) = self.backing {
+            arena.flush().map_err(crate::error::Error::Io)?;
+        }
+        Ok(())
+    }
+
+    /// Drops a file-backed arena's resident pages, keeping its contents.
+    ///
+    /// A no-op on a heap-backed arena, which has nothing evictable to drop —
+    /// that asymmetry *is* the feature, and this method is how it gets
+    /// measured instead of asserted (#2112). Eviction is transparent: the
+    /// vectors read back unchanged either way. It flushes before discarding,
+    /// which is about making a later page-cache drop deterministic rather
+    /// than about correctness — `FileArena::evict` carries the measurements
+    /// behind that distinction.
+    ///
+    /// This exists for measurement, not for the search path. Nothing in a
+    /// query should call it: evicting pages a re-rank is about to fault back
+    /// in buys nothing and costs two I/Os.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Io`] if the flush that precedes the discard fails.
+    ///
+    /// [`Error::Io`]: crate::error::Error::Io
+    pub fn evict_backing(&self) -> crate::error::Result<()> {
+        #[cfg(feature = "persistence")]
+        if let ArenaBacking::FileMapped(ref arena) = self.backing {
+            arena.evict().map_err(crate::error::Error::Io)?;
+        }
+        Ok(())
     }
 
     /// Returns the buffer size in bytes for `dimension * capacity` f32s.

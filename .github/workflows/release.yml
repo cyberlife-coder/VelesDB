@@ -387,6 +387,26 @@ jobs:
             3.10
             3.11
       - uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
+        env:
+          # ring's pregenerated ARM assembly opens on a guard —
+          # `#error "ARM assembler must define __ARM_ARCH"` (ring-core/asm_base.h:73)
+          # — and the manylinux2014 cross image's gcc does not define that macro when
+          # it assembles a .S file. That is what cost 5.2.0 its manylinux_2_17_aarch64
+          # wheel while every other wheel published: the job failed identically on two
+          # attempts, deterministic rather than flaky (#2107). ring reaches this crate
+          # through velesdb-memory -> ureq -> rustls.
+          #
+          # Set unconditionally rather than per-matrix-entry because the name is
+          # already target-scoped: `cc` reads CFLAGS_<target with underscores>, so only
+          # the entry building aarch64-unknown-linux-gnu consumes it. The aarch64 musl
+          # wheel targets aarch64-unknown-linux-musl under a toolchain that defines the
+          # macro itself and never published broken, so it stays untouched; every
+          # non-aarch64 entry ignores the variable outright. 8 is the manylinux aarch64
+          # baseline (ARMv8-A), which is what the pregenerated assembly is built for.
+          #
+          # It survives the docker boundary because CFLAGS is one of maturin-action's
+          # ALLOWED_ENV_PREFIXES, so the action forwards it into the build container.
+          CFLAGS_aarch64_unknown_linux_gnu: -D__ARM_ARCH=8
         with:
           target: ${{ matrix.target }}
           working-directory: crates/velesdb-python
@@ -590,7 +610,7 @@ jobs:
         # Prebuilt binary — NOT `cargo install wasm-pack --locked`, whose own
         # lockfile pins cargo-platform 0.3.3 (MSRV 1.91) and fails to compile
         # under the pinned RUST_VERSION (1.90). Matches ci.yml's wasm job.
-        uses: taiki-e/install-action@82cd3e7658a6f96c86c0234aeeda1748937cb0a1 # v2.85.13
+        uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d # v2.87.0
         with:
           tool: wasm-pack
 

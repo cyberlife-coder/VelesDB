@@ -288,6 +288,7 @@ fn test_payload_storage_complex_json() {
 // =========================================================================
 
 #[test]
+#[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn test_retrieve_ref_returns_slice_without_allocation() {
     // Arrange
     let dir = tempdir().unwrap();
@@ -305,6 +306,7 @@ fn test_retrieve_ref_returns_slice_without_allocation() {
 }
 
 #[test]
+#[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn test_retrieve_ref_nonexistent_returns_none() {
     // Arrange
     let dir = tempdir().unwrap();
@@ -318,6 +320,7 @@ fn test_retrieve_ref_nonexistent_returns_none() {
 }
 
 #[test]
+#[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn test_retrieve_ref_multiple_concurrent_reads() {
     // Arrange
     let dir = tempdir().unwrap();
@@ -335,6 +338,7 @@ fn test_retrieve_ref_multiple_concurrent_reads() {
 }
 
 #[test]
+#[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn test_retrieve_ref_data_integrity_after_update() {
     // Arrange
     let dir = tempdir().unwrap();
@@ -351,6 +355,7 @@ fn test_retrieve_ref_data_integrity_after_update() {
 
 #[test]
 #[allow(clippy::cast_precision_loss, clippy::float_cmp)]
+#[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn test_retrieve_ref_large_dimension() {
     // Arrange - 768D vector (typical embedding size)
     let dir = tempdir().unwrap();
@@ -744,6 +749,7 @@ fn test_compaction_then_resize_data_integrity() {
 /// Verify that VectorSliceGuard becomes invalid after a resize triggers
 /// epoch increment. Guards created before resize must detect staleness.
 #[test]
+#[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn test_guard_invalidation_after_resize() {
     let dir = tempdir().unwrap();
     let dim = 4;
@@ -780,6 +786,7 @@ fn test_guard_invalidation_after_resize() {
 /// in metrics and that data remains consistent after resize.
 #[test]
 #[allow(clippy::cast_precision_loss)]
+#[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn test_resize_epoch_increments_and_data_consistency() {
     let dir = tempdir().unwrap();
     // Use 768D vectors to force resize at ~5461 vectors
@@ -914,6 +921,7 @@ fn test_epoch_mismatch_detection() {
 /// subsequent guards.
 #[test]
 #[allow(clippy::cast_precision_loss)]
+#[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn test_interleaved_store_and_snapshot_reads() {
     let dir = tempdir().unwrap();
     let dim = 8;

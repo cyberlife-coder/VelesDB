@@ -71,6 +71,10 @@ impl BloomFilter {
             let (word_index, bit_mask) = self.bit_position(item, i);
             bits[word_index] |= bit_mask;
         }
+        // Released before `count` is taken, so the two locks no longer nest.
+        // `count` only feeds `estimated_fpr`, so a reader between the two sees
+        // a slightly stale estimate, never a wrong membership answer.
+        drop(bits);
 
         *self.count.write() += 1;
     }
@@ -111,6 +115,8 @@ impl BloomFilter {
         for word in bits.iter_mut() {
             *word = 0;
         }
+        // Same un-nesting as `insert`.
+        drop(bits);
         *self.count.write() = 0;
     }
 
@@ -119,6 +125,7 @@ impl BloomFilter {
     pub fn estimated_fpr(&self) -> f64 {
         let bits = self.bits.read();
         let set_bits: usize = bits.iter().map(|w| w.count_ones() as usize).sum();
+        drop(bits);
         let fill_ratio = set_bits as f64 / self.num_bits as f64;
         fill_ratio.powi(self.num_hashes as i32)
     }

@@ -1,0 +1,477 @@
+//! File-backed storage for a [`ContiguousVectors`] buffer.
+//!
+//! # Why this exists
+//!
+//! A quantized index keeps two representations of every vector: the codes it
+//! traverses on, and the f32 it re-ranks with. The codes are small; the f32 is
+//! not. While that f32 arena is an anonymous allocation it is **un-evictable**,
+//! so the index's resident set is `f32 + graph + codes` — larger than the
+//! unquantized index it was supposed to shrink (#2112).
+//!
+//! Backing the arena with a file makes those pages evictable: the kernel can
+//! reclaim them under pressure and fault them back in when a re-rank touches
+//! them. The resident floor becomes `codes + graph`, which is the whole point
+//! of the quantized modes on a small device.
+//!
+//! # Why the pages are the same bytes the index already persists
+//!
+//! `{basename}.vectors` was already a raw little-endian f32 blob behind a
+//! short header — the arena's own memory layout, written out one value at a
+//! time. Mapping that file instead of deserializing it into a fresh
+//! allocation removes a full copy from load and makes growth allocation-free:
+//! extending the file leaves the existing pages in place, where the heap path
+//! has to `memcpy` the whole arena into a bigger block.
+//!
+//! # Byte order
+//!
+//! The mapped bytes are native-endian f32: the arena *is* the file, so no
+//! conversion happens on either side. That makes an arena file
+//! self-consistent on any target but **not portable between targets of
+//! different endianness** — it is an index-local cache, not an interchange
+//! format, and must be rebuilt rather than copied across such a boundary.
+//!
+//! Worth stating because the neighbouring `{basename}.vectors` format does
+//! the opposite: it converts explicitly (`to_le_bytes`/`from_le_bytes`), so it
+//! *is* portable. Anything that later maps that file directly inherits this
+//! constraint and must gate on `target_endian`.
+//!
+//! # Availability
+//!
+//! `persistence`-only. Without it (WASM, `--no-default-features`) there is no
+//! filesystem to map and [`ContiguousVectors`] keeps its anonymous backing;
+//! this module is not compiled at all.
+
+use memmap2::{MmapMut, MmapOptions};
+use std::fs::{File, OpenOptions};
+use std::io;
+use std::path::{Path, PathBuf};
+use std::ptr::NonNull;
+
+/// Byte offset of the f32 region inside a file-backed arena.
+///
+/// One page, so the mapped data region starts page-aligned — which also
+/// satisfies the arena's 64-byte cache-line preference. The header itself
+/// occupies the first bytes of that page; the rest is reserved padding.
+///
+/// A whole page is deliberate overkill, and the reason is soundness rather
+/// than speed. [`ContiguousVectors`] hands out `&[f32]` built with
+/// `slice::from_raw_parts`, whose contract requires the pointer to be
+/// *properly aligned* — a misaligned arena would be undefined behaviour at the
+/// first `get`, long before any SIMD ran. (The SIMD kernels themselves all
+/// load unaligned, so they would not have been the ones to complain.) Starting
+/// the data region on a page boundary keeps that requirement satisfied by
+/// construction instead of by arithmetic that a later edit could break.
+///
+/// [`ContiguousVectors`]: crate::perf_optimizations::ContiguousVectors
+pub(crate) const DATA_OFFSET: usize = 4096;
+
+/// A file mapping that owns the bytes behind a
+/// [`ContiguousVectors`](crate::perf_optimizations::ContiguousVectors) buffer.
+///
+/// # Invariants
+///
+/// - `map` is a mapping of at least `DATA_OFFSET + byte_len` bytes of `file`.
+/// - The address the mapping lives at is owned by the kernel, not stored
+///   inline in this struct, so moving a `FileArena` does **not** move the
+///   bytes. That is what makes it sound for `ContiguousVectors` to hold a
+///   `NonNull` into the mapping while also owning the `FileArena`.
+/// - **This process holds an exclusive advisory lock on `file`, and no second
+///   `FileArena` can map the same path.** This one is not a nicety: an
+///   anonymous allocation is unique because the allocator says so, but a path
+///   is not, and two arenas over one file would be two `&mut [f32]` aliases of
+///   the same bytes — undefined behaviour that `ContiguousVectors`'
+///   `unsafe impl Send`/`Sync` would then carry across threads. The lock is
+///   what makes the uniqueness those impls assume actually true, so it is
+///   taken before the mapping and released only when `file` closes.
+/// - `path` is kept for diagnostics and for reopening after a grow.
+pub(crate) struct FileArena {
+    map: MmapMut,
+    file: File,
+    path: PathBuf,
+    /// The data-region pointer, derived once per mapping.
+    ///
+    /// Held here rather than recomputed because it is a property of the
+    /// mapping, not of a call: deriving it needs `&mut` (for `as_mut_ptr`) and
+    /// can fail, and neither belongs on an accessor that every caller uses.
+    /// `grow` re-derives it, which is the only event that can move it.
+    data: NonNull<f32>,
+}
+
+// SAFETY: `FileArena` is `Send` because everything it owns is, and the raw
+// pointer it caches addresses memory the kernel owns rather than this thread.
+// - Condition 1: `MmapMut`, `File` and `PathBuf` are all `Send`.
+// - Condition 2: `data` points into `map`, whose address is assigned by the
+//   kernel and unaffected by moving this struct, so the pointer stays valid
+//   wherever the arena goes.
+// - Condition 3: the exclusive lock taken in `from_file` means no other
+//   `FileArena` addresses the same bytes, so moving this one cannot create an
+//   alias on the receiving thread.
+// SAFETY: Moving an arena between threads leaves its mapping intact and unique.
+unsafe impl Send for FileArena {}
+// SAFETY: `FileArena` is `Sync` because shared references expose no mutation.
+// - Condition 1: `&self` reaches only `data_ptr`, `flush`, `evict` and
+//   `path`. None writes through the mapping: `evict` discards resident pages
+//   and the next read re-faults the same bytes from the page cache, which is
+//   not a mutation any reader can observe. Every mutating entry point
+//   (`grow`) takes `&mut self`.
+// - Condition 2: handing out the cached pointer is not itself a write — the
+//   caller's own aliasing rules govern what it does with it, exactly as for
+//   the heap backing.
+// SAFETY: Concurrent shared references to an arena cannot mutate it.
+unsafe impl Sync for FileArena {}
+
+/// What an opening arena does with the bytes the file already holds.
+///
+/// A named choice rather than a `bool` parameter, because the two callers read
+/// as opposites at the call site (`create` discards, `open` keeps) and the
+/// distinction decides whether the arena starts zeroed or starts from disk.
+///
+/// `pub(crate)` so `ContiguousVectors`' two file-backed constructors speak the
+/// same vocabulary instead of re-deriving it from a bool of their own.
+#[derive(Clone, Copy)]
+pub(crate) enum ExistingBytes {
+    /// Empty the file first, so the arena starts zero-filled.
+    Discard,
+    /// The file's contents *are* the arena; only ever grow it.
+    Keep,
+}
+
+impl FileArena {
+    /// Creates `path` if absent and maps `byte_len` bytes of vector data,
+    /// discarding whatever the file held.
+    ///
+    /// The file is sized to `DATA_OFFSET + byte_len`. A freshly extended file
+    /// reads as zeros, which is the same guarantee `alloc_zeroed` gives the
+    /// anonymous backing — `insert_at` relies on it when it leaves gaps.
+    ///
+    /// Note what this does **not** do: pass `truncate(true)` to `OpenOptions`.
+    /// That would empty the file at `open` time, which is before the exclusive
+    /// lock is taken, so a call destined to be refused would already have
+    /// destroyed the bytes another arena was mapping — and left that arena's
+    /// mapping addressing pages past a shrunken end of file, where a read
+    /// raises `SIGBUS`. The lock exists to prevent exactly that, so nothing
+    /// that alters the file may happen before it. Discarding is therefore a
+    /// [`ExistingBytes::Discard`] request carried through to
+    /// [`size_locked_file`](Self::size_locked_file), which runs under the lock.
+    ///
+    /// # Errors
+    ///
+    /// Returns any I/O error from creating, sizing, or mapping the file, and
+    /// [`io::ErrorKind::WouldBlock`] if another holder has the arena.
+    pub(crate) fn create(path: &Path, byte_len: usize) -> io::Result<Self> {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            // Explicitly *not* at open time — see this function's doc. The
+            // discard happens under the lock instead.
+            .truncate(false)
+            .open(path)?;
+        Self::from_file(file, path.to_path_buf(), byte_len, ExistingBytes::Discard)
+    }
+
+    /// Maps an existing file whose data region already holds vector bytes.
+    ///
+    /// Unlike [`create`](Self::create) this never discards: the contents are
+    /// the arena. The file is only ever grown, to `DATA_OFFSET + byte_len`.
+    ///
+    /// # Errors
+    ///
+    /// Returns any I/O error from opening, sizing, or mapping the file, and
+    /// [`io::ErrorKind::WouldBlock`] if another holder has the arena.
+    pub(crate) fn open(path: &Path, byte_len: usize) -> io::Result<Self> {
+        let file = OpenOptions::new().read(true).write(true).open(path)?;
+        Self::from_file(file, path.to_path_buf(), byte_len, ExistingBytes::Keep)
+    }
+
+    /// Locks `file`, sizes it to hold `byte_len` data bytes, and maps it.
+    ///
+    /// The lock comes first, and every step that can alter the file follows
+    /// it. A refused arena must leave the file exactly as it found it, because
+    /// the holder it was refused in favour of has it mapped.
+    fn from_file(
+        file: File,
+        path: PathBuf,
+        byte_len: usize,
+        existing: ExistingBytes,
+    ) -> io::Result<Self> {
+        Self::lock_exclusive(&file, &path)?;
+        let total = Self::size_locked_file(&file, byte_len, existing)?;
+        let mut map = Self::map(&file, total)?;
+        let data = Self::derive_data_ptr(&mut map)?;
+        Ok(Self {
+            map,
+            file,
+            path,
+            data,
+        })
+    }
+
+    /// Brings an already-locked file to `DATA_OFFSET + byte_len` bytes.
+    ///
+    /// Returns that total so the caller maps exactly what was sized.
+    ///
+    /// # Errors
+    ///
+    /// Returns any I/O error from reading the file's length or resizing it.
+    fn size_locked_file(
+        file: &File,
+        byte_len: usize,
+        existing: ExistingBytes,
+    ) -> io::Result<usize> {
+        let total = Self::total_len(byte_len)?;
+        // The single `usize -> u64` conversion this type needs: every internal
+        // length is a `usize`, and only the file API speaks `u64`.
+        let total_len = total as u64;
+        if matches!(existing, ExistingBytes::Discard) {
+            // Emptying the file first is what makes the grow below hand back
+            // zeros rather than stale vectors. Safe here and nowhere earlier:
+            // the lock is held, so no other arena has these bytes mapped.
+            file.set_len(0)?;
+        }
+        if file.metadata()?.len() < total_len {
+            // `allocate`, not `set_len`. `set_len` extends the file without
+            // reserving a single block, so the mapping is backed by holes and
+            // the blocks are found only when a page is first written. If the
+            // filesystem is full at that moment the kernel has no error to
+            // return through a store instruction — it raises **SIGBUS** and
+            // the process dies. The heap arena this replaces returns
+            // `AllocationFailed` and lets the caller carry on, and a
+            // local-first database on a small device must not trade a
+            // recoverable error for a fatal signal.
+            //
+            // `posix_fallocate` (what this is on Linux) reserves the blocks
+            // up front, so a full disk surfaces here, as an `io::Error`, on a
+            // line that can handle it.
+            fs2::FileExt::allocate(file, total_len)?;
+        }
+        Ok(total)
+    }
+
+    /// Claims the file for this arena alone.
+    ///
+    /// `flock` associates the lock with the open file description, so a second
+    /// `File` opened on the same path — in this process or another — is
+    /// refused rather than silently granted a second mapping.
+    ///
+    /// # Errors
+    ///
+    /// [`io::ErrorKind::WouldBlock`], naming the path, when another holder has
+    /// it. Callers surface that as a locked-resource error, not a retry.
+    fn lock_exclusive(file: &File, path: &Path) -> io::Result<()> {
+        fs2::FileExt::try_lock_exclusive(file).map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::WouldBlock,
+                format!(
+                    "vector arena {} is already mapped by another holder; \
+                     mapping it twice would alias the same bytes mutably ({e})",
+                    path.display()
+                ),
+            )
+        })
+    }
+
+    /// `DATA_OFFSET + byte_len`, refusing an overflowing request.
+    ///
+    /// Deliberately `usize`: that is the width a mapping can actually have on
+    /// this target, so every internal length stays in it and the one `u64`
+    /// this type needs is produced at `set_len`'s boundary and nowhere else.
+    /// Round-tripping through `u64` would add a `u64 -> usize` conversion that
+    /// can fail and a `usize -> u64` one that never can.
+    fn total_len(byte_len: usize) -> io::Result<usize> {
+        byte_len.checked_add(DATA_OFFSET).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "vector arena size overflows this target's address space",
+            )
+        })
+    }
+
+    /// Maps `len` bytes of `file` for read and write.
+    fn map(file: &File, len: usize) -> io::Result<MmapMut> {
+        // SAFETY: `MmapMut::map_mut` requires a file that stays valid for the
+        // mapping's lifetime and is not concurrently truncated.
+        // - Condition 1: `file` is owned by the returned `FileArena`, so it
+        //   outlives every use of the mapping.
+        // - Condition 2: the file was just sized to at least `len` bytes, and
+        //   this type only ever grows it — never truncates.
+        // - Condition 3: the file is open for both read and write, which
+        //   `map_mut` requires.
+        // SAFETY: Map the arena's backing file into the address space.
+        let map = unsafe { MmapOptions::new().len(len).map_mut(file) }?;
+        // The arena is read by re-rank, on a scattered handful of candidates
+        // per query — never sequentially. Telling the kernel so stops it
+        // reading ahead around every faulted page, which is wasted I/O and
+        // wasted page cache on exactly the device this feature exists for.
+        // `MmapStorage` gives its own mapping the same advice.
+        //
+        // Best-effort: an advisory hint that a platform declines changes
+        // nothing about correctness.
+        #[cfg(unix)]
+        if let Err(e) = map.advise(memmap2::Advice::Random) {
+            tracing::debug!("madvise(MADV_RANDOM) on the vector arena failed: {e}");
+        }
+        Ok(map)
+    }
+
+    /// Pointer to the first f32 of the data region.
+    ///
+    /// Infallible and `&self`: the fallible derivation happens once, when the
+    /// mapping is established or re-established.
+    pub(crate) const fn data_ptr(&self) -> NonNull<f32> {
+        self.data
+    }
+
+    /// Derives the data-region pointer from a mapping.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::InvalidData`] if the mapping is shorter than
+    /// the reserved header, which would mean the file was truncated
+    /// underneath us.
+    // Reason: no structural fix exists — producing this pointer is the whole
+    // point of the function. The alignment is *proven* rather than assumed: an
+    // mmap base is page-aligned by the kernel and `DATA_OFFSET` is a whole
+    // page, so the result is 4096-byte aligned against f32's requirement of 4.
+    // That proof is load-bearing, not decorative: the slices this pointer
+    // feeds are built with `from_raw_parts`, which requires alignment for
+    // soundness.
+    #[allow(clippy::cast_ptr_alignment)]
+    fn derive_data_ptr(map: &mut MmapMut) -> io::Result<NonNull<f32>> {
+        if map.len() < DATA_OFFSET {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "vector arena mapping is shorter than its header",
+            ));
+        }
+        // SAFETY: `add` requires the result to stay inside the allocation.
+        // - Condition 1: the length check above proves `DATA_OFFSET` is within
+        //   the mapping.
+        // - Condition 2: `as_mut_ptr` returns the mapping's base, which is
+        //   non-null and page-aligned, so the offset pointer is non-null and
+        //   at least 4096-byte aligned.
+        // SAFETY: Address the data region that follows the reserved header.
+        let ptr = unsafe { map.as_mut_ptr().add(DATA_OFFSET) };
+        NonNull::new(ptr.cast::<f32>()).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "vector arena mapping produced a null data pointer",
+            )
+        })
+    }
+
+    /// Grows the mapping so the data region holds at least `byte_len` bytes.
+    ///
+    /// Ordering is load-bearing: the file is extended and the replacement
+    /// mapping established **before** the old one is dropped, so a failure at
+    /// any step leaves the existing mapping — and therefore every live pointer
+    /// into it — untouched. Growing never copies: the pages already written
+    /// stay where they are.
+    ///
+    /// Extending the file while the old mapping is still live is the ordering
+    /// [`MmapStorage::ensure_capacity`] already uses for the same operation,
+    /// so this is the repository's established pattern rather than a new one.
+    /// Worth knowing before changing it: no CI job runs this crate's tests on
+    /// Windows — the compatibility matrix only `cargo check`s there — so the
+    /// ordering is held in common with the primary storage engine on purpose,
+    /// not validated independently here.
+    ///
+    /// [`MmapStorage::ensure_capacity`]: crate::storage::MmapStorage
+    ///
+    /// # Errors
+    ///
+    /// Returns any I/O error from sizing or re-mapping the file. On error the
+    /// arena is unchanged and still usable.
+    pub(crate) fn grow(&mut self, byte_len: usize) -> io::Result<()> {
+        let total = Self::total_len(byte_len)?;
+        if self.map.len() >= total {
+            return Ok(());
+        }
+        Self::size_locked_file(&self.file, byte_len, ExistingBytes::Keep)?;
+        let mut fresh = Self::map(&self.file, total)?;
+        let data = Self::derive_data_ptr(&mut fresh)?;
+        // The pointer moves first: it already addresses `fresh`, whose pages
+        // survive the move into `self.map`. Assigning the map first would
+        // munmap the old region while `self.data` still named it, leaving the
+        // arena briefly holding a dangling pointer for no gain.
+        self.data = data;
+        // Only now is the old mapping released.
+        self.map = fresh;
+        Ok(())
+    }
+
+    /// Flushes dirty pages to the backing file.
+    ///
+    /// # Errors
+    ///
+    /// Returns any I/O error from the underlying `msync`.
+    pub(crate) fn flush(&self) -> io::Result<()> {
+        self.map.flush()
+    }
+
+    /// The file this arena is mapped from.
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Drops this arena's resident pages, keeping its contents.
+    ///
+    /// This is what makes the evictability claim *testable*. The arena exists
+    /// so the kernel **can** reclaim these pages under memory pressure, and
+    /// the only honest way to measure what a reclaim costs is to cause one on
+    /// demand rather than wait for pressure a benchmark host does not have.
+    ///
+    /// # Why the flush, and what it is not for
+    ///
+    /// It is **not** for correctness. On Linux the pages of a `MAP_SHARED`
+    /// mapping *are* the file's page-cache pages, and the kernel never drops a
+    /// dirty one without writing it back — so `MADV_DONTNEED` cannot lose a
+    /// write, flush or no flush. That was checked rather than assumed: with
+    /// the flush removed, `evicting_preserves_every_vector` still passes.
+    ///
+    /// It is for **determinism**. A caller that wants genuinely cold pages
+    /// follows this with `POSIX_FADV_DONTNEED` on the file, which only drops
+    /// *clean* page-cache pages. Without the flush, how much gets dropped
+    /// depends on whether the kernel's writeback happened to have run — which
+    /// turns a measurement into a coin flip. Measured both ways at 100 000 ×
+    /// 768: 8.2 ms cold with the flush, 6.9 ms without, the difference being
+    /// pages writeback had not yet reached.
+    ///
+    /// The module doc argues against `msync` on the *routine* path, for flash
+    /// endurance. This is not that path: nothing in a query calls it.
+    ///
+    /// # Errors
+    ///
+    /// Returns any I/O error from the flush. A declined `madvise` is *not* an
+    /// error: eviction is advisory, a kernel that refuses leaves the pages
+    /// resident, and the arena reads correctly either way.
+    pub(crate) fn evict(&self) -> io::Result<()> {
+        self.flush()?;
+        #[cfg(unix)]
+        // SAFETY: `MADV_DONTNEED` over this arena's own mapping.
+        // - Condition 1: the range is `self.map`, so it stays mapped for as
+        //   long as `self` lives; the call cannot reach memory the arena does
+        //   not own.
+        // - Condition 2: discarded pages are repopulated from the file's
+        //   page cache, which holds every write made through this mapping, so
+        //   each `&[f32]` derived from it reads back what it read before.
+        // SAFETY: Reclaim the arena's resident pages so a cold re-rank can be
+        // measured rather than asserted.
+        if let Err(e) = unsafe {
+            self.map
+                .unchecked_advise(memmap2::UncheckedAdvice::DontNeed)
+        } {
+            tracing::debug!("madvise(MADV_DONTNEED) on the vector arena declined: {e}");
+        }
+        Ok(())
+    }
+}
+
+impl std::fmt::Debug for FileArena {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FileArena")
+            .field("path", &self.path)
+            .field("mapped_bytes", &self.map.len())
+            .finish_non_exhaustive()
+    }
+}

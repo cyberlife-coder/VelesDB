@@ -80,6 +80,9 @@ impl Collection {
     /// (2) before `payload_storage` (3) — and passes them down so WHERE
     /// evaluation (including similarity re-checks) never re-acquires a
     /// storage lock under them.
+    // Both guards are lent by reference into MatchStorageGuards for the
+    // whole candidate walk, in decree order (2 then 3).
+    #[expect(clippy::significant_drop_tightening)]
     fn filter_candidates_by_graph(
         &self,
         candidates: &[crate::point::SearchResult],

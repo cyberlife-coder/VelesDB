@@ -89,12 +89,14 @@ impl RateLimiter {
         bucket.last_update = now;
 
         // Try to consume a token
-        if bucket.tokens >= 1.0 {
+        let verdict = if bucket.tokens >= 1.0 {
             bucket.tokens -= 1.0;
             Ok(())
         } else {
             Err(GuardRailViolation::RateLimitExceeded { limit_qps })
-        }
+        };
+        drop(clients);
+        verdict
     }
 
     /// Evicts a single bucket to make room for a new client.
@@ -162,6 +164,7 @@ impl RateLimiter {
         // With limit_qps = 100_000, it takes 10 seconds to refill 1M tokens.
         bucket.tokens = -1_000_000.0;
         bucket.last_update = now;
+        drop(clients);
     }
 }
 
@@ -181,19 +184,34 @@ pub enum CircuitState {
     HalfOpen,
 }
 
+/// Transition state and the instant the breaker opened, under one lock.
+///
+/// These two values are a single state machine: `opened_at` is only
+/// meaningful while `state` is [`CircuitState::Open`], and every transition
+/// reads or writes both. Holding them in separate locks made the acquisition
+/// order differ per method — `check` took `opened_at` then `state`, while
+/// `record_failure` took `state` then `opened_at` — an ABBA deadlock between
+/// two paths the query pipeline calls on every request. Fusing them removes
+/// the ordering question instead of documenting it.
+#[derive(Debug, Clone, Copy)]
+struct CircuitCore {
+    /// Current state.
+    state: CircuitState,
+    /// Time when the circuit opened; `Some` exactly while `state` is `Open`.
+    opened_at: Option<Instant>,
+}
+
 /// Circuit breaker for automatic failure protection (EPIC-048 US-006).
 #[derive(Debug)]
 pub struct CircuitBreaker {
-    /// Current state.
-    state: parking_lot::RwLock<CircuitState>,
+    /// State machine (transition state + open instant) under a single lock.
+    core: parking_lot::RwLock<CircuitCore>,
     /// Consecutive failure count.
     failure_count: AtomicU64,
     /// Failure threshold before opening.
     failure_threshold: u32,
     /// Recovery time in seconds.
     recovery_seconds: u64,
-    /// Time when circuit was opened.
-    opened_at: parking_lot::RwLock<Option<Instant>>,
 }
 
 impl CircuitBreaker {
@@ -201,11 +219,13 @@ impl CircuitBreaker {
     #[must_use]
     pub fn new(failure_threshold: u32, recovery_seconds: u64) -> Self {
         Self {
-            state: parking_lot::RwLock::new(CircuitState::Closed),
+            core: parking_lot::RwLock::new(CircuitCore {
+                state: CircuitState::Closed,
+                opened_at: None,
+            }),
             failure_count: AtomicU64::new(0),
             failure_threshold,
             recovery_seconds,
-            opened_at: parking_lot::RwLock::new(None),
         }
     }
 
@@ -216,34 +236,47 @@ impl CircuitBreaker {
     /// Returns [`GuardRailViolation::CircuitOpen`] when the breaker is open and
     /// recovery time has not elapsed.
     pub fn check(&self) -> Result<(), GuardRailViolation> {
-        let state = *self.state.read();
-        match state {
-            CircuitState::Closed | CircuitState::HalfOpen => Ok(()),
-            CircuitState::Open => {
-                // Check if recovery time has passed
-                if let Some(opened_at) = *self.opened_at.read() {
-                    let elapsed = opened_at.elapsed().as_secs();
-                    if elapsed >= self.recovery_seconds {
-                        // Transition to half-open
-                        *self.state.write() = CircuitState::HalfOpen;
-                        return Ok(());
-                    }
-                    return Err(GuardRailViolation::CircuitOpen {
-                        recovery_in_seconds: self.recovery_seconds.saturating_sub(elapsed),
-                    });
-                }
-                // Should not happen, but allow request
-                Ok(())
-            }
+        // One read, copied out: the guard dies at the end of this statement,
+        // so no lock is held while the transition below takes the write lock.
+        let core = *self.core.read();
+        if core.state != CircuitState::Open {
+            return Ok(());
         }
+        // `opened_at` is `Some` for every `Open` state the transitions produce;
+        // a `None` here would mean a corrupt state machine, so allow the request
+        // rather than reject traffic on an invariant we cannot repair.
+        let Some(opened_at) = core.opened_at else {
+            return Ok(());
+        };
+
+        let elapsed = opened_at.elapsed().as_secs();
+        if elapsed < self.recovery_seconds {
+            return Err(GuardRailViolation::CircuitOpen {
+                recovery_in_seconds: self.recovery_seconds.saturating_sub(elapsed),
+            });
+        }
+
+        // Transition to half-open. The read guard was released above, so
+        // re-check the state: another thread may have moved the breaker in
+        // between (this is a probe transition, not a lost update).
+        let mut core = self.core.write();
+        if core.state == CircuitState::Open {
+            core.state = CircuitState::HalfOpen;
+        }
+        drop(core);
+        Ok(())
     }
 
     /// Records a successful request.
     pub fn record_success(&self) {
         self.failure_count.store(0, Ordering::Relaxed);
-        let mut state = self.state.write();
-        if *state == CircuitState::HalfOpen {
-            *state = CircuitState::Closed;
+        let mut core = self.core.write();
+        if core.state == CircuitState::HalfOpen {
+            core.state = CircuitState::Closed;
+            // Keeps `opened_at.is_some() == (state == Open)` true. Unobservable
+            // on its own (it is only read while `Open`), but the invariant is
+            // now the type's, so it is upheld at every transition.
+            core.opened_at = None;
         }
     }
 
@@ -253,19 +286,19 @@ impl CircuitBreaker {
         // window. Without this, a thread could compute count >= threshold, be preempted, and
         // then resume after the circuit has already gone through Open → HalfOpen — incorrectly
         // resetting opened_at and extending the recovery window.
-        let mut state = self.state.write();
+        let mut core = self.core.write();
         let count = self.failure_count.fetch_add(1, Ordering::Relaxed) + 1;
         if count >= u64::from(self.failure_threshold)
-            && (*state == CircuitState::Closed || *state == CircuitState::HalfOpen)
+            && (core.state == CircuitState::Closed || core.state == CircuitState::HalfOpen)
         {
-            *state = CircuitState::Open;
-            *self.opened_at.write() = Some(Instant::now());
+            core.state = CircuitState::Open;
+            core.opened_at = Some(Instant::now());
         }
     }
 
     /// Returns the current state.
     #[must_use]
     pub fn state(&self) -> CircuitState {
-        *self.state.read()
+        self.core.read().state
     }
 }

@@ -483,6 +483,9 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error when vector storage access fails for any matched node.
+    // Both guards span the whole hydration loop: every iteration reads
+    // payload and vector. Order is the post-mortem decree recorded below.
+    #[expect(clippy::significant_drop_tightening)]
     pub fn match_results_to_search_results(
         &self,
         match_results: Vec<MatchResult>,

@@ -7,7 +7,7 @@
 //! - `AdjacencySource` trait for generic traversal
 
 use super::edge::EdgeStore;
-use super::label_table::{LabelId, LabelTable};
+use super::label_table::LabelId;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::Arc;
 
@@ -293,14 +293,18 @@ impl CsrSnapshot {
 // SnapshotBuilder
 // ---------------------------------------------------------------------------
 
-/// Builds a [`CsrSnapshot`] from an [`EdgeStore`] and [`LabelTable`].
+/// Builds a [`CsrSnapshot`] from an [`EdgeStore`].
 ///
 /// This is a stateless namespace — no persistent state is held.
 /// Construction complexity is O(N + E) where N = nodes, E = edges.
 pub(crate) struct SnapshotBuilder;
 
 impl SnapshotBuilder {
-    /// Builds a `CsrSnapshot` from the given `EdgeStore` and `LabelTable`.
+    /// Builds a `CsrSnapshot` from the given `EdgeStore`.
+    ///
+    /// Labels are interned locally: the snapshot's `LabelId`s index its own
+    /// `label_table` vec, independent of the store's table (#2089 removed
+    /// the always-discarded `&LabelTable` parameter this once took).
     ///
     /// # Algorithm
     ///
@@ -310,7 +314,7 @@ impl SnapshotBuilder {
     /// 4. For each node in order, iterate outgoing edges and fill
     ///    `targets`, `edge_ids`, `label_ids`.
     /// 5. Accumulate `offsets`.
-    pub fn build(edge_store: &EdgeStore, _label_table: &LabelTable) -> CsrSnapshot {
+    pub fn build(edge_store: &EdgeStore) -> CsrSnapshot {
         // 1. Collect unique source node_ids
         let mut node_ids: Vec<u64> = edge_store.outgoing_keys();
 
@@ -350,29 +354,9 @@ impl SnapshotBuilder {
             edge_store.for_each_outgoing_edge(nid, |edge| {
                 targets.push(edge.target());
                 edge_ids_buf.push(edge.id());
-
                 // Always use local interning for label_ids stored in CSR.
                 // label_at() resolves against the local label_table vec.
-                //
-                // Look up by &str BEFORE inserting: `entry()` demands an owned
-                // key, which would allocate one String per EDGE just to probe
-                // a map whose distinct-key count is the label vocabulary
-                // (typically tens). The owned Arc<str> is built only on the
-                // first sighting of a label, and that one allocation is shared
-                // between the vec entry and the map key.
-                let label_str = edge.label();
-                let local_idx = if let Some(&idx) = label_to_idx.get(label_str) {
-                    idx
-                } else {
-                    let idx = label_table_vec.len();
-                    #[allow(clippy::cast_possible_truncation)]
-                    // Reason: label count bounded by schema size
-                    let idx = idx as u32;
-                    let shared: Arc<str> = Arc::from(label_str);
-                    label_table_vec.push(Arc::clone(&shared));
-                    label_to_idx.insert(shared, idx);
-                    idx
-                };
+                let local_idx = intern_local(&mut label_to_idx, &mut label_table_vec, edge.label());
                 label_ids_buf.push(LabelId::from_u32(local_idx));
             });
         }
@@ -408,4 +392,30 @@ impl SnapshotBuilder {
             label_to_idx: FxHashMap::default(),
         }
     }
+}
+
+/// Interns `label_str` into the snapshot-local label table, returning its
+/// index.
+///
+/// Looks up by `&str` BEFORE inserting: `entry()` demands an owned key,
+/// which would allocate one String per EDGE just to probe a map whose
+/// distinct-key count is the label vocabulary (typically tens). The owned
+/// `Arc<str>` is built only on the first sighting of a label, and that one
+/// allocation is shared between the vec entry and the map key.
+fn intern_local(
+    label_to_idx: &mut FxHashMap<Arc<str>, u32>,
+    label_table: &mut Vec<Arc<str>>,
+    label_str: &str,
+) -> u32 {
+    if let Some(&idx) = label_to_idx.get(label_str) {
+        return idx;
+    }
+    let idx = label_table.len();
+    #[allow(clippy::cast_possible_truncation)]
+    // Reason: label count bounded by schema size
+    let idx = idx as u32;
+    let shared: Arc<str> = Arc::from(label_str);
+    label_table.push(Arc::clone(&shared));
+    label_to_idx.insert(shared, idx);
+    idx
 }

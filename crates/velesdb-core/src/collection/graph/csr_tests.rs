@@ -16,7 +16,6 @@
 
 use super::csr_snapshot::SnapshotBuilder;
 use super::edge::{EdgeStore, GraphEdge};
-use super::label_table::LabelTable;
 use super::traversal::{bfs_traverse, TraversalConfig};
 use super::traversal_csr::bfs_traverse_csr;
 use std::collections::HashSet;
@@ -29,8 +28,7 @@ use std::collections::HashSet;
 #[test]
 fn test_csr_empty_graph() {
     let store = EdgeStore::new();
-    let label_table = LabelTable::new();
-    let snapshot = SnapshotBuilder::build(&store, &label_table);
+    let snapshot = SnapshotBuilder::build(&store);
 
     assert_eq!(snapshot.offsets(), &[0]);
     assert_eq!(snapshot.node_count(), 0);
@@ -64,8 +62,7 @@ fn test_csr_single_node_no_edges() {
         .add_edge(GraphEdge::new(1, 100, 200, "KNOWS").expect("valid"))
         .expect("add");
 
-    let label_table = LabelTable::new();
-    let snapshot = SnapshotBuilder::build(&store, &label_table);
+    let snapshot = SnapshotBuilder::build(&store);
 
     // Node 100 has outgoing edges, node 200 does not
     assert!(snapshot.contains_node(100));
@@ -91,8 +88,7 @@ fn test_csr_neighbors_returns_correct_slice() {
         .add_edge(GraphEdge::new(13, 3, 1, "FOLLOWS").expect("valid"))
         .expect("add");
 
-    let label_table = LabelTable::new();
-    let snapshot = SnapshotBuilder::build(&store, &label_table);
+    let snapshot = SnapshotBuilder::build(&store);
 
     // Node 1 → {2, 3}
     let n1: HashSet<u64> = snapshot.neighbors(1).iter().copied().collect();
@@ -128,8 +124,7 @@ fn test_csr_unknown_node_returns_empty() {
         .add_edge(GraphEdge::new(1, 100, 200, "A").expect("valid"))
         .expect("add");
 
-    let label_table = LabelTable::new();
-    let snapshot = SnapshotBuilder::build(&store, &label_table);
+    let snapshot = SnapshotBuilder::build(&store);
 
     assert!(snapshot.neighbors(999).is_empty());
     assert!(snapshot.edge_ids(999).is_empty());
@@ -149,8 +144,7 @@ fn test_csr_label_at_correct() {
         .add_edge(GraphEdge::new(11, 1, 3, "FOLLOWS").expect("valid"))
         .expect("add");
 
-    let label_table = LabelTable::new();
-    let snapshot = SnapshotBuilder::build(&store, &label_table);
+    let snapshot = SnapshotBuilder::build(&store);
 
     let targets = snapshot.neighbors(1);
     let eids = snapshot.edge_ids(1);
@@ -183,8 +177,7 @@ fn test_csr_has_label() {
         .add_edge(GraphEdge::new(11, 2, 3, "FOLLOWS").expect("valid"))
         .expect("add");
 
-    let label_table = LabelTable::new();
-    let snapshot = SnapshotBuilder::build(&store, &label_table);
+    let snapshot = SnapshotBuilder::build(&store);
 
     assert!(snapshot.has_label("KNOWS"));
     assert!(snapshot.has_label("FOLLOWS"));
@@ -206,8 +199,7 @@ fn test_csr_deterministic_node_order() {
         .add_edge(GraphEdge::new(3, 200, 300, "B").expect("valid"))
         .expect("add");
 
-    let label_table = LabelTable::new();
-    let snapshot = SnapshotBuilder::build(&store, &label_table);
+    let snapshot = SnapshotBuilder::build(&store);
 
     // offsets should reflect sorted node order: 100, 200, 300
     assert_eq!(snapshot.node_count(), 3);
@@ -230,8 +222,8 @@ mod property_tests {
     use super::*;
     use proptest::prelude::*;
 
-    /// Generates a random `(EdgeStore, LabelTable)` with 1-50 nodes and 0-200 edges.
-    fn arb_edge_store() -> impl Strategy<Value = (EdgeStore, LabelTable)> {
+    /// Generates a random `EdgeStore` with 1-50 nodes and 0-200 edges.
+    fn arb_edge_store() -> impl Strategy<Value = EdgeStore> {
         // Generate node count, then edge list
         (1_u64..=50, 0_usize..=200).prop_flat_map(|(max_node, edge_count)| {
             let labels = vec!["KNOWS", "FOLLOWS", "LIKES", "WORKS_AT", "CREATED"];
@@ -241,7 +233,6 @@ mod property_tests {
             )
             .prop_map(move |edges| {
                 let mut store = EdgeStore::new();
-                let label_table = LabelTable::new();
                 let labels = vec!["KNOWS", "FOLLOWS", "LIKES", "WORKS_AT", "CREATED"];
                 for (i, (src, tgt, label_idx)) in edges.into_iter().enumerate() {
                     let label = labels[label_idx];
@@ -251,7 +242,7 @@ mod property_tests {
                         let _ = store.add_edge(edge);
                     }
                 }
-                (store, label_table)
+                store
             })
         })
     }
@@ -261,8 +252,8 @@ mod property_tests {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(100))]
         #[test]
-        fn prop_csr_structural_invariants((store, label_table) in arb_edge_store()) {
-            let snapshot = SnapshotBuilder::build(&store, &label_table);
+        fn prop_csr_structural_invariants(store in arb_edge_store()) {
+            let snapshot = SnapshotBuilder::build(&store);
 
             let total_edges = snapshot.edge_count();
             let node_count = snapshot.node_count();
@@ -311,8 +302,8 @@ mod property_tests {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(100))]
         #[test]
-        fn prop_csr_round_trip((store, label_table) in arb_edge_store()) {
-            let snapshot = SnapshotBuilder::build(&store, &label_table);
+        fn prop_csr_round_trip(store in arb_edge_store()) {
+            let snapshot = SnapshotBuilder::build(&store);
 
             // For each source node in the EdgeStore, verify the CSR contains
             // the same set of (target, edge_id) pairs.
@@ -365,10 +356,10 @@ mod property_tests {
         #![proptest_config(ProptestConfig::with_cases(100))]
         #[test]
         fn prop_bfs_equivalence(
-            (store, label_table) in arb_edge_store(),
+            store in arb_edge_store(),
             config in arb_traversal_config(),
         ) {
-            let snapshot = SnapshotBuilder::build(&store, &label_table);
+            let snapshot = SnapshotBuilder::build(&store);
 
             // Pick a source node from the store (first source node, or skip if empty).
             let source_nodes: Vec<u64> = store.all_edges().iter().map(|e| e.source()).collect();
@@ -399,10 +390,10 @@ mod property_tests {
         #![proptest_config(ProptestConfig::with_cases(100))]
         #[test]
         fn prop_bfs_limit(
-            (store, label_table) in arb_edge_store(),
+            store in arb_edge_store(),
             limit in 1_usize..100,
         ) {
-            let snapshot = SnapshotBuilder::build(&store, &label_table);
+            let snapshot = SnapshotBuilder::build(&store);
 
             let source_nodes: Vec<u64> = store.all_edges().iter().map(|e| e.source()).collect();
             if let Some(&source_id) = source_nodes.first() {
@@ -429,8 +420,7 @@ fn test_bfs_csr_missing_source() {
         .add_edge(GraphEdge::new(1, 10, 20, "KNOWS").expect("valid"))
         .expect("add");
 
-    let label_table = LabelTable::new();
-    let snapshot = SnapshotBuilder::build(&store, &label_table);
+    let snapshot = SnapshotBuilder::build(&store);
 
     let config = TraversalConfig::with_range(1, 3);
     let results = bfs_traverse_csr(&snapshot, 999, &config);
@@ -452,8 +442,7 @@ fn test_bfs_csr_depth_range() {
         .add_edge(GraphEdge::new(102, 3, 4, "KNOWS").expect("valid"))
         .expect("add");
 
-    let label_table = LabelTable::new();
-    let snapshot = SnapshotBuilder::build(&store, &label_table);
+    let snapshot = SnapshotBuilder::build(&store);
 
     // min_depth=2, max_depth=3 → should only return nodes at depth 2 and 3
     let config = TraversalConfig::with_range(2, 3);
@@ -484,8 +473,7 @@ fn test_bfs_csr_limit_respected() {
             .expect("add");
     }
 
-    let label_table = LabelTable::new();
-    let snapshot = SnapshotBuilder::build(&store, &label_table);
+    let snapshot = SnapshotBuilder::build(&store);
 
     let config = TraversalConfig::with_range(1, 1).with_limit(3);
     let results = bfs_traverse_csr(&snapshot, 1, &config);
@@ -641,8 +629,7 @@ fn test_no_filter_returns_all() {
         .add_edge(GraphEdge::new(3, 10, 40, "FOLLOWS").expect("valid"))
         .expect("add");
 
-    let label_table = LabelTable::new();
-    let snapshot = SnapshotBuilder::build(&store, &label_table);
+    let snapshot = SnapshotBuilder::build(&store);
 
     let no_filter = NoFilter;
     let filtered: Vec<(u64, u64, _)> = snapshot.neighbors_filtered(10, &no_filter).collect();
@@ -673,8 +660,7 @@ fn test_label_filter_selective() {
         .add_edge(GraphEdge::new(4, 10, 50, "FOLLOWS").expect("valid"))
         .expect("add");
 
-    let label_table = LabelTable::new();
-    let snapshot = SnapshotBuilder::build(&store, &label_table);
+    let snapshot = SnapshotBuilder::build(&store);
 
     // Find the LabelId for "KNOWS" from the snapshot's label_ids
     // We need to identify which LabelId corresponds to "KNOWS"
@@ -723,8 +709,7 @@ fn test_bfs_filtered_vs_post_filter() {
         .add_edge(GraphEdge::new(13, 1, 5, "LIKES").expect("valid"))
         .expect("add");
 
-    let label_table = LabelTable::new();
-    let snapshot = SnapshotBuilder::build(&store, &label_table);
+    let snapshot = SnapshotBuilder::build(&store);
 
     // Find the LabelId for "KNOWS"
     let all_n: Vec<(u64, u64, _)> = snapshot.neighbors_filtered(1, &NoFilter).collect();
@@ -784,9 +769,9 @@ mod predicate_property_tests {
     use proptest::prelude::*;
     use rustc_hash::FxHashSet;
 
-    /// Generates a random `(EdgeStore, LabelTable)` with 1-50 nodes and 0-200 edges.
+    /// Generates a random `EdgeStore` with 1-50 nodes and 0-200 edges.
     /// (Duplicated from property_tests to keep module self-contained.)
-    fn arb_edge_store() -> impl Strategy<Value = (EdgeStore, LabelTable)> {
+    fn arb_edge_store() -> impl Strategy<Value = EdgeStore> {
         (1_u64..=50, 0_usize..=200).prop_flat_map(|(max_node, edge_count)| {
             let labels = vec!["KNOWS", "FOLLOWS", "LIKES", "WORKS_AT", "CREATED"];
             prop::collection::vec(
@@ -795,7 +780,6 @@ mod predicate_property_tests {
             )
             .prop_map(move |edges| {
                 let mut store = EdgeStore::new();
-                let label_table = LabelTable::new();
                 let labels = vec!["KNOWS", "FOLLOWS", "LIKES", "WORKS_AT", "CREATED"];
                 for (i, (src, tgt, label_idx)) in edges.into_iter().enumerate() {
                     let label = labels[label_idx];
@@ -804,7 +788,7 @@ mod predicate_property_tests {
                         let _ = store.add_edge(edge);
                     }
                 }
-                (store, label_table)
+                store
             })
         })
     }
@@ -815,10 +799,10 @@ mod predicate_property_tests {
         #![proptest_config(ProptestConfig::with_cases(100))]
         #[test]
         fn prop_predicate_pushdown(
-            (store, label_table) in arb_edge_store(),
+            store in arb_edge_store(),
             filter_bits in proptest::bits::u8::between(0, 5),
         ) {
-            let snapshot = SnapshotBuilder::build(&store, &label_table);
+            let snapshot = SnapshotBuilder::build(&store);
 
             // Build a LabelFilter from the random bits
             let mut allowed = FxHashSet::default();
@@ -885,8 +869,7 @@ fn test_adjacency_source_equivalence() {
         .add_edge(GraphEdge::new(3, 20, 30, "FOLLOWS").expect("valid"))
         .expect("add");
 
-    let label_table = LabelTable::new();
-    let snapshot = SnapshotBuilder::build(&store, &label_table);
+    let snapshot = SnapshotBuilder::build(&store);
 
     // Compare AdjacencySource::neighbors for each source node
     for &nid in &[10u64, 20, 30] {

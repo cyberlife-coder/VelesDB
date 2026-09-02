@@ -373,6 +373,9 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if the query cannot be executed or a guard-rail is violated.
+    // Both guards are lent by reference into MatchStorageGuards for the whole
+    // match execution; the decree order (2 then 3) is recorded below.
+    #[expect(clippy::significant_drop_tightening)]
     pub fn execute_match_with_context(
         &self,
         match_clause: &MatchClause,

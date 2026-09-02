@@ -12,6 +12,7 @@
 
 use figment::{
     providers::{Env, Format, Serialized, Toml},
+    value::{Uncased, UncasedStr},
     Figment,
 };
 use serde::{Deserialize, Serialize};
@@ -88,12 +89,14 @@ impl SearchMode {
 
 /// Search configuration section.
 ///
-/// **Reserved — parsed and validated, not yet applied.** Only `[limits]`
-/// reaches the engine today; [`VelesConfig::validate`] warns when this
-/// section deviates from its defaults so a config cannot silently promise
-/// behavior the engine does not deliver. Wiring these values as engine
-/// defaults is tracked in issue #2087. Per-query runtime overrides
-/// (`WITH (ef_search = N)`) are a separate, working mechanism.
+/// **Reserved — parsed and validated, not yet applied.** `[limits]` and
+/// `[hnsw]` reach the engine; this section does not.
+/// [`VelesConfig::validate`] warns when it deviates from its defaults so a
+/// config cannot silently promise behavior the engine does not deliver.
+/// Wiring is tracked in issue #2087 — `query_timeout_ms` in particular needs
+/// a query timeout the engine does not have, which is a feature of its own.
+/// Per-query runtime overrides (`WITH (ef_search = N)`) are a separate,
+/// working mechanism.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SearchConfig {
@@ -118,14 +121,31 @@ impl Default for SearchConfig {
     }
 }
 
-/// HNSW index configuration section.
+/// HNSW index configuration section — the deployment-wide default for the
+/// graph topology of every index the engine builds.
 ///
-/// **Reserved — parsed and validated, not yet applied.** Only `[limits]`
-/// reaches the engine today; [`VelesConfig::validate`] warns when this
-/// section deviates from its defaults so a config cannot silently promise
-/// behavior the engine does not deliver. Wiring these values as engine
-/// defaults is tracked in issue #2087. Per-query runtime overrides
-/// (`WITH (ef_search = N)`) are a separate, working mechanism.
+/// **Applied at collection creation** (issue #2087). `m` and
+/// `ef_construction` take effect through
+/// [`HnswParams::from_config`](crate::index::hnsw::HnswParams::from_config),
+/// under this precedence chain:
+///
+/// ```text
+/// per-collection creation argument  >  [hnsw] section  >  HnswParams::auto(dimension)
+/// ```
+///
+/// The values are **creation-time**: they are persisted into the collection's
+/// own config and fix the graph topology, so editing this section afterwards
+/// affects new collections only. Re-tuning an existing one means rebuilding
+/// its index (`auto_reindex`), not reloading a file.
+///
+/// Per-query runtime overrides (`WITH (ef_search = N)`) are a separate,
+/// working mechanism on a different axis: `ef_search` sizes the candidate pool
+/// of one query; nothing here does.
+///
+/// `max_layers` is the exception and is still inert:
+/// [`VelesConfig::validate`] warns when it is set. The HNSW layer count is
+/// drawn per node by the level generator and no engine path caps it, so
+/// honouring the knob is a feature, not a wiring.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HnswConfig {
@@ -136,6 +156,9 @@ pub struct HnswConfig {
     /// `None` = auto based on dimension.
     pub ef_construction: Option<usize>,
     /// Maximum number of layers (0 = auto).
+    ///
+    /// **Reserved — parsed and validated, not applied.** See the type-level
+    /// note above.
     pub max_layers: usize,
 }
 
@@ -149,11 +172,12 @@ pub mod server {
 
     /// Storage configuration section.
     ///
-    /// **Reserved — parsed and validated, not yet applied.** Only
-    /// `[limits]` reaches the engine today; `VelesConfig::validate` warns
-    /// when this section deviates from its defaults. Wiring is tracked in
-    /// issue #2087 (`data_dir` in particular conflicts with the path passed
-    /// to `Database::open` and may go through deprecation instead).
+    /// **Reserved — parsed and validated, not yet applied.** `[limits]`
+    /// and `[hnsw]` reach the engine; this section does not.
+    /// `VelesConfig::validate` warns when it deviates from its defaults.
+    /// Wiring is tracked in issue #2087 (`data_dir` in particular conflicts
+    /// with the path passed to `Database::open` and may go through
+    /// deprecation instead).
     #[derive(Debug, Clone, Serialize, Deserialize)]
     #[serde(default)]
     pub struct StorageConfig {
@@ -283,13 +307,18 @@ const fn default_max_batch_size() -> usize {
 
 /// Configuration for WAL group commit batching.
 ///
-/// **Reserved — parsed but not yet wired.** Setting `enabled = true` changes
-/// nothing today: no group commit occurs, and every write keeps its own
-/// durability barrier (batch APIs already amortize to one barrier per call).
+/// **Deprecated — parsed and ignored.** Setting `enabled = true` changes
+/// nothing: no group commit occurs, and every write keeps its own durability
+/// barrier (the batch APIs already amortize to one barrier per call).
 /// [`VelesConfig::validate`] logs a warning when the flag is set so a config
-/// cannot promise behavior the engine does not deliver. Wiring the
-/// `WalBatcher` (or removing this section) is tracked in issue #2078 — the
-/// decision needs a multi-writer measurement, not a default.
+/// cannot promise behavior the engine does not deliver.
+///
+/// Issue #2078 resolved to retire this rather than wire it: the `WalBatcher`
+/// it configured acknowledged a write before its bytes were durable, so it was
+/// a write coalescer and not a group-commit protocol, and its `commit_delay_us`
+/// was read by nothing — not even the batcher. The module is deleted. This
+/// struct and the `[wal_batch]` table stay only so existing TOML files keep
+/// loading; both go at the next major, which is the Rust API break.
 ///
 /// When wired, group commit would batch multiple concurrent writes into a
 /// single `sync_all()` call, amortizing the fsync cost across the batch.
@@ -373,9 +402,69 @@ impl VelesConfig {
         let figment = Figment::new()
             .merge(Serialized::defaults(Self::default()))
             .merge(Toml::file(path.as_ref()))
-            .merge(Env::prefixed("VELESDB_").split("_").lowercase(false));
+            .merge(Self::env_provider());
 
         Self::finish(&figment)
+    }
+
+    /// Every top-level table of this struct, as a `VELESDB_*` variable would
+    /// name it. Ordered longest-first so that a section whose name prefixes
+    /// another cannot claim its variables (none do today; the ordering keeps
+    /// that true for whatever is added next).
+    ///
+    /// Wider than [`Self::ENGINE_SECTIONS`] on purpose: `server` and
+    /// `logging` are fields here too, and a variable naming one must resolve
+    /// to that field rather than fall through as an unprefixed key.
+    const ENV_SECTIONS: &'static [&'static str] = &[
+        "quantization",
+        "wal_batch",
+        "logging",
+        "storage",
+        "limits",
+        "search",
+        "server",
+        "hnsw",
+    ];
+
+    /// Maps one `VELESDB_`-stripped variable name onto the config path it
+    /// addresses, splitting **only** at the boundary of a known section.
+    ///
+    /// `VELESDB_HNSW_EF_CONSTRUCTION` must reach `hnsw.ef_construction`, not
+    /// `hnsw.ef.construction`. Figment's `split("_")` treats every underscore
+    /// as a nesting separator, which no field carrying an underscore in its
+    /// name survives — and that is most of them (`max_collections`,
+    /// `ef_construction`, `query_timeout_ms`, ...). Splitting at the section
+    /// boundary and nowhere else is what the documented names actually mean.
+    ///
+    /// A name whose first token is not a section passes through lowercased and
+    /// unsplit, so `VELESDB_CONFIG`, `VELESDB_NO_UPDATE_CHECK` and the
+    /// server's own `VELESDB_HOST` / `VELESDB_PORT` keep matching nothing
+    /// here, exactly as they do today.
+    ///
+    /// Issue #2185: before this, the provider also carried `lowercase(false)`,
+    /// which left the key uppercase and made even the single-token
+    /// `VELESDB_HNSW_M` miss `hnsw.m`. Between the two defects, no documented
+    /// engine variable reached its field.
+    pub(crate) fn env_key_to_config_path(key: &UncasedStr) -> Uncased<'_> {
+        let lowered = key.as_str().to_ascii_lowercase();
+        for section in Self::ENV_SECTIONS {
+            if let Some(field) = lowered
+                .strip_prefix(section)
+                .and_then(|rest| rest.strip_prefix('_'))
+            {
+                if !field.is_empty() {
+                    return Uncased::from_owned(format!("{section}.{field}"));
+                }
+            }
+        }
+        Uncased::from_owned(lowered)
+    }
+
+    /// The `VELESDB_*` environment layer, built once so both loaders resolve
+    /// variable names identically — the same single-mapping-point discipline
+    /// `HnswParams::from_config` follows for the `[hnsw]` table.
+    fn env_provider() -> Env {
+        Env::prefixed("VELESDB_").map(Self::env_key_to_config_path)
     }
 
     /// Creates a configuration from a TOML string.
@@ -460,7 +549,7 @@ impl VelesConfig {
         let figment = Figment::new()
             .merge(Serialized::defaults(Self::default()))
             .merge(Toml::string(&filtered))
-            .merge(Env::prefixed("VELESDB_").split("_").lowercase(false));
+            .merge(Self::env_provider());
 
         Self::finish(&figment)
     }

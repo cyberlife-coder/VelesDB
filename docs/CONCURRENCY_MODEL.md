@@ -86,9 +86,9 @@ breaks the exclusion for *future* openers; nothing in-tree does this.
 | Metrics counters | `AtomicU64` | None | Lock-free |
 | Edge ID registry | `RwLock<HashMap>` | Low | Global, for existence checks |
 | CsrSnapshot | `ArcSwap<Arc<CsrSnapshot>>` | None | Lock-free reads via atomic swap; lazy rebuild on dirty flag |
-| RaBitQ index | `parking_lot::RwLock` | None (after training) | Write-once then read-only |
-| RaBitQ store | `parking_lot::RwLock` | Low | Write per insert (~10ns hold) |
-| RaBitQ training buffer | `parking_lot::Mutex` | Low | Pre-training only |
+| Quantizer (RaBitQ/SQ8) | `parking_lot::RwLock` | None (after training) | Write-once then read-only |
+| Code store (RaBitQ/SQ8) | `parking_lot::RwLock` | Low | Write per insert (~10ns hold) |
+| Training buffer (RaBitQ/SQ8) | `parking_lot::Mutex` | Low | Pre-training only |
 | MmapStorage (compaction) | `parking_lot::RwLock` | High (during compaction) | Exclusive write lock for full compaction duration |
 
 ## Thread Safety Guarantees
@@ -339,54 +339,62 @@ default, `--purge`/`--stub` to fix); see
 [#1469](https://github.com/cyberlife-coder/VelesDB/issues/1469) and
 `guides/GRAPH_PATTERNS.md`.
 
-## RaBitQ Interior Mutability
+## Quantized-Precision Backend Interior Mutability (RaBitQ, SQ8)
 
 ### Lock Layout
 
-`RaBitQPrecisionHnsw` uses interior mutability for its quantization index,
-encoded vector store, and pre-training buffer:
+The codec-generic `QuantizedPrecisionHnsw<D, C>` (`RaBitQPrecisionHnsw` and
+`Sq8PrecisionHnsw` are aliases over it) uses interior mutability for its
+trained quantizer, encoded vector store, and pre-training buffer — the
+contract below is written once in `quantized_precision.rs` and holds for
+every codec:
 
 | Field | Type | Access Pattern |
 |-------|------|---------------|
-| `rabitq_index` | `RwLock<Option<Arc<RaBitQIndex>>>` | Write-locked once during training, then read-only |
-| `rabitq_store` | `RwLock<Option<RaBitQVectorStore>>` | Write during insert (push encoded vector) |
+| `quantizer` | `RwLock<Option<Arc<C::Quantizer>>>` | Write-locked once during training, then read-only |
+| `store` | `RwLock<Option<C::Store>>` | Write during insert (push encoded vector) |
 | `training_buffer` | `Mutex<Vec<Vec<f32>>>` | Write during pre-training inserts |
+| `install_gate` | `RwLock<()>` | Read across each insert; write for training/install |
 
 ### Training Lock Order
 
-During `train_rabitq()`, locks are acquired and released in this order:
+During `train_codec()`, locks are acquired and released in this order:
 
 ```
-rabitq_index.write() → rabitq_store.write() → training_buffer.lock()
+install_gate.write() → quantizer.write() → store.write() → training_buffer.lock()
 ```
 
 Locks are released between acquisitions (not held simultaneously). The
 training function uses a **double-check locking** pattern: it first checks
-`rabitq_index` under a read lock, and if training is needed, re-checks
+`quantizer` under a read lock, and if training is needed, re-checks
 under a write lock to prevent duplicate training from concurrent threads.
 
-`install_trained_rabitq()` (quantizer restore at open / `TRAIN QUANTIZER`
-live install) follows the same `rabitq_index → rabitq_store →
-training_buffer` order. It holds `rabitq_index.write()` for the whole
+`install_trained_quantizer()` (quantizer restore at open / `TRAIN
+QUANTIZER` live install) follows the same `quantizer → store →
+training_buffer` order. It holds `quantizer.write()` for the whole
 re-encode so concurrent inserts cannot interleave store pushes, and it
 reads the `inner.vectors` snapshot **and releases it** before taking
-`rabitq_store.write()` — never waiting on the store lock while holding
-`vectors` (a search thread holds `rabitq_store.read()` while acquiring
-`inner.vectors.read()`).
+`store.write()` — never waiting on the store lock while holding
+`vectors` (a search thread holds `store.read()` while acquiring
+`inner.vectors.read()`). The install gate (write) is taken first: every
+in-flight insert holds it for read across its whole body, so the rebuild's
+snapshot can never miss an insert that already passed the trained check —
+the store is positional (entry N = node N) and one missed push would shift
+every subsequent encoding onto the wrong node.
 
-### Store-Before-Index Ordering
+### Store-Before-Quantizer Ordering
 
-When training completes, the store is set BEFORE the index:
+When training completes, the store is set BEFORE the quantizer:
 
 ```
-rabitq_store.write() ← set encoded vectors
-rabitq_index.write() ← set trained index
+store.write()     ← set encoded vectors
+quantizer.write() ← set trained quantizer
 ```
 
 This ordering prevents an inconsistent snapshot where a search thread sees
-a trained index but an empty store. A search thread that acquires
-`rabitq_index.read()` and sees `Some(...)` is guaranteed that
-`rabitq_store.read()` also contains `Some(...)` with all pre-training
+a trained quantizer but an empty store. A search thread that acquires
+`quantizer.read()` and sees `Some(...)` is guaranteed that
+`store.read()` also contains `Some(...)` with all pre-training
 vectors already encoded.
 
 ## RaBitQ Contention Analysis
@@ -988,4 +996,4 @@ invariants, see [SOUNDNESS.md: HNSW Batch Insertion Ordering](SOUNDNESS.md#hnsw-
 
 ---
 
-*Last updated: 2026-08-09 · Applies to: velesdb-core 5.2.0 (this revision: corrected the lock-order enforcement section — `assert_lock_order` is unwired in production, the HNSW tracker is debug-only, warn-only and partial, the collection tier is convention-only — and the CSR snapshot thread-safety section to describe the lock-free `ArcSwap` + dirty-flag protocol; previous revision noted: HNSW persisted-graph reload at open; storage compaction concurrency)*
+*Last updated: 2026-08-09 · Applies to: velesdb-core 6.0.0 (this revision: corrected the lock-order enforcement section — `assert_lock_order` is unwired in production, the HNSW tracker is debug-only, warn-only and partial, the collection tier is convention-only — and the CSR snapshot thread-safety section to describe the lock-free `ArcSwap` + dirty-flag protocol; previous revision noted: HNSW persisted-graph reload at open; storage compaction concurrency)*

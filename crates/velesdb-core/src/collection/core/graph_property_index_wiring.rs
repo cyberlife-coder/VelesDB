@@ -255,6 +255,8 @@ impl Collection {
         let covering = mgr.find_covering_indexes(label, properties);
         let index_name = covering.first()?;
         let idx = mgr.get(index_name)?;
-        Some(idx.lookup(values).to_vec())
+        let result = idx.lookup(values).to_vec();
+        drop(mgr);
+        Some(result)
     }
 }

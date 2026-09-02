@@ -67,6 +67,37 @@ impl GraphCollection {
         })
     }
 
+    /// Creates a new `GraphCollection`, optionally with explicit HNSW
+    /// parameters for the node-embedding index.
+    ///
+    /// Only meaningful together with `dimension = Some(d)`: that is when a
+    /// graph collection carries node embeddings and builds an HNSW index over
+    /// them. Passing `hnsw_params = None` is identical to
+    /// [`GraphCollection::create`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory cannot be created or storage fails.
+    pub fn create_with_hnsw_params(
+        path: PathBuf,
+        name: &str,
+        dimension: Option<usize>,
+        metric: DistanceMetric,
+        schema: GraphSchema,
+        hnsw_params: Option<crate::index::hnsw::HnswParams>,
+    ) -> Result<Self> {
+        Ok(Self {
+            inner: Collection::create_graph_collection_with_hnsw_params(
+                path,
+                name,
+                schema,
+                dimension,
+                metric,
+                hnsw_params,
+            )?,
+        })
+    }
+
     /// Opens an existing `GraphCollection` from disk.
     ///
     /// # Errors
@@ -102,6 +133,19 @@ impl GraphCollection {
     #[must_use]
     pub fn into_vector_view(self) -> super::VectorCollection {
         super::VectorCollection { inner: self.inner }
+    }
+
+    /// This graph collection's operational metrics.
+    ///
+    /// Reads what the edge write and traversal paths already record, so an
+    /// exporter can publish it; the counters are bumped regardless of whether
+    /// anything reads them.
+    #[must_use]
+    pub fn metrics(&self) -> &crate::collection::graph::GraphMetrics {
+        // Reaches the edge store's counters directly: `Collection::graph` is
+        // `pub(crate)`, and graph_api.rs — where a `Collection` accessor would
+        // naturally sit — is over its frozen line budget and may only shrink.
+        self.inner.graph.edge_store.metrics()
     }
 
     /// Flushes all state to disk.
@@ -378,6 +422,20 @@ impl GraphCollection {
     /// Returns an error if storage fails.
     pub fn upsert_node_payload(&self, node_id: u64, payload: &serde_json::Value) -> Result<()> {
         self.inner.store_node_payload(node_id, payload)
+    }
+
+    /// Inserts or updates many node payloads under one durability barrier.
+    ///
+    /// Batched counterpart of [`upsert_node_payload`](Self::upsert_node_payload),
+    /// which pays a barrier per call: looping it cost one fsync per node
+    /// (#2153). Duplicate ids resolve last-wins, and the batch is validated in
+    /// full before anything is written, so a rejected batch commits nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if storage fails or any payload fails validation.
+    pub fn upsert_node_payloads(&self, entries: &[(u64, &serde_json::Value)]) -> Result<()> {
+        self.inner.store_node_payloads(entries)
     }
 
     /// Inserts or updates a node payload, optionally with an embedding vector.

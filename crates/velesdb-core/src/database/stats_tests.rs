@@ -243,3 +243,84 @@ fn histogram_survives_database_reopen() {
     );
     assert!(!hist.stale, "fresh histogram should not be stale");
 }
+
+/// `ANALYZE` must not change which points a query returns.
+///
+/// The regression this pins: `analyze_collection` runs `reorder_for_locality`
+/// above 1 000 points, which renumbers every graph node — and the external-id
+/// mappings are keyed by that numbering. Nothing failed when they were left
+/// behind: every lookup still resolved, to a different point than the one
+/// found. On this fixture the correct `[500, 501, 499, 502, 498]` came back
+/// as `[575, 601, 586, 560, 588]` (#2112).
+///
+/// A self-query is used so the expected answer is known independently of the
+/// index, and the vectors are given distinct directions so the ordering is
+/// strict — `vec![i; dim]` under cosine makes every point parallel to every
+/// other, and any permutation of the ties would satisfy the assertion.
+#[test]
+#[cfg(feature = "persistence")]
+fn analyze_preserves_the_points_a_query_returns() {
+    assert_analyze_preserves_results(1_100);
+}
+
+/// The same collection below the reorder threshold, where no renumbering
+/// happens — so a failure above can be attributed to the reorder rather than
+/// to `ANALYZE`'s other work.
+#[test]
+#[cfg(feature = "persistence")]
+fn analyze_below_the_reorder_threshold_preserves_results() {
+    assert_analyze_preserves_results(900);
+}
+
+/// Builds an `n`-point collection, records a self-query's top-5, runs
+/// `ANALYZE`, and requires the same five ids in the same order.
+#[cfg(feature = "persistence")]
+fn assert_analyze_preserves_results(n: u64) {
+    let (_dir, db) = temp_database();
+    db.create_collection("analyze_ids", 4, DistanceMetric::Euclidean)
+        .expect("create collection");
+    let coll = db
+        .get_vector_collection("analyze_ids")
+        .expect("collection exists");
+
+    let points: Vec<Point> = (1..=n)
+        .map(|i| Point {
+            id: i,
+            vector: vec![
+                (i as f32 * 0.013).sin(),
+                (i as f32 * 0.029).cos(),
+                (i as f32 * 0.007).sin(),
+                (i as f32 * 0.041).cos(),
+            ],
+            payload: None,
+            sparse_vectors: None,
+        })
+        .collect();
+    let query = points[499].vector.clone();
+    coll.upsert(points).expect("upsert");
+
+    let before = top_ids(&coll, &query);
+    assert_eq!(
+        before.first().copied(),
+        Some(500),
+        "the fixture is only meaningful if the self-query finds itself first"
+    );
+
+    db.analyze_collection("analyze_ids").expect("analyze");
+
+    assert_eq!(
+        before,
+        top_ids(&coll, &query),
+        "ANALYZE changed the ids a query returns"
+    );
+}
+
+/// The ids of a collection's top-5 for `query`.
+#[cfg(feature = "persistence")]
+fn top_ids(coll: &crate::VectorCollection, query: &[f32]) -> Vec<u64> {
+    coll.search(query, 5)
+        .expect("search")
+        .iter()
+        .map(|r| r.point.id)
+        .collect()
+}

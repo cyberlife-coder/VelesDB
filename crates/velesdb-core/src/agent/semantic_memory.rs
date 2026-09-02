@@ -638,6 +638,7 @@ impl SemanticMemory {
         for (id, _, _) in facts {
             ids.insert(*id);
         }
+        drop(ids);
         Ok(())
     }
 

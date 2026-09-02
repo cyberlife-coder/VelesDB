@@ -172,6 +172,63 @@
    ]
   },
   {
+   "script": "scripts/check-trait-forwarding.py",
+   "purpose": "Every adapter that exists only to delegate forwards its trait WHOLE: the generic wrapper `impl<T: Trait + ?Sized> Trait for Box<T>|Arc<T>|Rc<T>`, and the erased alias `impl Trait for DynTrait` where `type DynTrait = Box<dyn Trait>` (the shape a binding holds). rustc already refuses an impl missing a *required* method, so a partial forwarding can only drop a method with a default body — which compiles and silently runs the default instead of the concrete override (the #1690-#1692 gap family). A plain `impl Trait for Backend` is deliberately exempt: a concrete backend is entitled to the default. velesdb-memory's doctrine (src/lib.rs) states the rule; this guard is what makes it hold without a reviewer noticing.",
+   "workflow": ".github/workflows/ci.yml",
+   "job": "lint",
+   "required": true,
+   "mode": "strict",
+   "self_test": "scripts.tests.test_check_trait_forwarding",
+   "self_test_required": true,
+   "blind_spot": {
+    "issue": null,
+    "summary": "Presence, not delegation: a forwarded method whose body ignores `(**self)` and reimplements the default satisfies the guard — only review catches that. Three further limits, each currently vacuous under crates/*/src: a `#[cfg]`-gated trait method is demanded unconditionally; an impl or alias produced by a macro is invisible to the text scan; and a trait defined outside the scanned tree is reported SKIPPED rather than checked, so a forwarding of a foreign trait is announced as unverified instead of passing quietly."
+   },
+   "must_refuse": [
+    {
+     "vector": "a wrapper forwarding that drops the trait's defaulted method — the #1692 shape rustc cannot catch",
+     "files": {
+      "crates/velesdb-memory/src/extract.rs": "pub struct Doc;\npub struct Graph;\n\n/// Reproduces the #1692 shape: a defaulted method next to a required one.\npub trait Extractor: Send + Sync {\n    fn extract(&self, input: &str) -> Doc;\n\n    fn extract_graph(&self, input: &str) -> Graph {\n        let _ = input;\n        Graph\n    }\n}\n\nimpl<T: Extractor + ?Sized> Extractor for std::sync::Arc<T> {\n    fn extract(&self, input: &str) -> Doc {\n        (**self).extract(input)\n    }\n}\n"
+     },
+     "accepts": {
+      "crates/velesdb-memory/src/extract.rs": "pub struct Doc;\npub struct Graph;\n\n/// Reproduces the #1692 shape: a defaulted method next to a required one.\npub trait Extractor: Send + Sync {\n    fn extract(&self, input: &str) -> Doc;\n\n    fn extract_graph(&self, input: &str) -> Graph {\n        let _ = input;\n        Graph\n    }\n}\n\nimpl<T: Extractor + ?Sized> Extractor for std::sync::Arc<T> {\n    fn extract(&self, input: &str) -> Doc {\n        (**self).extract(input)\n    }\n\n    fn extract_graph(&self, input: &str) -> Graph {\n        (**self).extract_graph(input)\n    }\n}\n"
+     },
+     "argv": [
+      "--root",
+      "{root}"
+     ]
+    },
+    {
+     "vector": "a partial forwarding whose trait is declared in a different file, so the miss is invisible at the impl site",
+     "files": {
+      "crates/velesdb-memory/src/context/estimator.rs": "pub trait TokenEstimator: Send + Sync {\n    fn estimate(&self, text: &str) -> usize;\n\n    fn bytes_per_token_hint(&self) -> f32 {\n        4.0\n    }\n}\n",
+      "crates/velesdb-memory/src/context/boxed.rs": "use super::estimator::TokenEstimator;\n\nimpl<T: TokenEstimator + ?Sized> TokenEstimator for Box<T> {\n    fn estimate(&self, text: &str) -> usize {\n        (**self).estimate(text)\n    }\n}\n"
+     },
+     "accepts": {
+      "crates/velesdb-memory/src/context/estimator.rs": "pub trait TokenEstimator: Send + Sync {\n    fn estimate(&self, text: &str) -> usize;\n\n    fn bytes_per_token_hint(&self) -> f32 {\n        4.0\n    }\n}\n",
+      "crates/velesdb-memory/src/context/boxed.rs": "use super::estimator::TokenEstimator;\n\nimpl<T: TokenEstimator + ?Sized> TokenEstimator for Box<T> {\n    fn estimate(&self, text: &str) -> usize {\n        (**self).estimate(text)\n    }\n\n    fn bytes_per_token_hint(&self) -> f32 {\n        (**self).bytes_per_token_hint()\n    }\n}\n"
+     },
+     "argv": [
+      "--root",
+      "{root}"
+     ]
+    },
+    {
+     "vector": "a partial forwarding on an erased `Dyn*` alias — the shape a binding holds, and the one with no generic parameter to pattern-match on",
+     "files": {
+      "crates/velesdb-memory/src/rerank.rs": "pub trait Reranker {\n    fn rerank(&self, query: &str) -> u8;\n\n    fn rerank_batch(&self, queries: &[&str]) -> u8 {\n        queries.len() as u8\n    }\n}\n\n/// The shape a binding holds: no generic parameter, so the wrapper pattern\n/// alone never sees this impl.\npub type DynReranker = Box<dyn Reranker + Send + Sync>;\n\nimpl Reranker for DynReranker {\n    fn rerank(&self, query: &str) -> u8 {\n        (**self).rerank(query)\n    }\n}\n"
+     },
+     "accepts": {
+      "crates/velesdb-memory/src/rerank.rs": "pub trait Reranker {\n    fn rerank(&self, query: &str) -> u8;\n\n    fn rerank_batch(&self, queries: &[&str]) -> u8 {\n        queries.len() as u8\n    }\n}\n\n/// The shape a binding holds: no generic parameter, so the wrapper pattern\n/// alone never sees this impl.\npub type DynReranker = Box<dyn Reranker + Send + Sync>;\n\nimpl Reranker for DynReranker {\n    fn rerank(&self, query: &str) -> u8 {\n        (**self).rerank(query)\n    }\n\n    fn rerank_batch(&self, queries: &[&str]) -> u8 {\n        (**self).rerank_batch(queries)\n    }\n}\n"
+     },
+     "argv": [
+      "--root",
+      "{root}"
+     ]
+    }
+   ]
+  },
+  {
    "script": "scripts/verify_unsafe_safety_template.py",
    "purpose": "Every unsafe block carries a // SAFETY: comment (Gate 4).",
    "workflow": ".github/workflows/ci.yml",
@@ -210,7 +267,7 @@
    ],
    "blind_spot": {
     "issue": null,
-    "summary": "Runs only on production .rs files changed by the PR, so it never re-reads unsafe blocks that predate it."
+    "summary": "Runs only on production .rs files changed by the PR, so it never re-reads unsafe blocks that predate it. Until the `lint` job checked out full history, that diff resolved to nothing at all and the gate read no files on any pull request; test_ci_gate_reachability now pins the fetch-depth."
    }
   },
   {
@@ -252,7 +309,7 @@
    ],
    "blind_spot": {
     "issue": null,
-    "summary": "Diff-scoped to changed velesdb-core production files, like the unsafe guard."
+    "summary": "Diff-scoped to changed velesdb-core production files, like the unsafe guard \u2014 and it shared the same shallow-checkout blind spot, now pinned by test_ci_gate_reachability."
    }
   },
   {
@@ -722,11 +779,11 @@
    "job": "binary-size",
    "required": true,
    "mode": "strict",
-   "self_test": null,
-   "self_test_required": false,
+   "self_test": "scripts.tests.test_check_binary_size",
+   "self_test_required": true,
    "blind_spot": {
     "issue": null,
-    "summary": "The vector below proves the MISSING half only. The OVER-CEILING half is not vector-testable: the smallest ceiling is 9 MiB, so a fixture exceeding one would mean carrying 9 MiB of literal bytes in this registry. That half is exercised for real on every release, against the binaries the release build produced."
+    "summary": "Measures the apparent size of three binaries on the CI runner's target only (linux x86_64): the macOS and Windows release artifacts and the wasm bundle are outside its reach, as is any growth that stays under a ceiling. This field previously claimed the OVER-CEILING half was not vector-testable (a fixture exceeding a ceiling would mean carrying 9 MiB of literal bytes in this registry) and that it was exercised for real on every release. Both were false. The guard reads st_size, so a sparse fixture exceeds any ceiling for free - scripts.tests.test_check_binary_size now covers that half, including the boundary and a silently-raised ceiling. And the release build did produce over-ceiling binaries: binary-size.yml piped the guard into tee under a shell without pipefail, so the job took tee's exit status and reported success while the guard printed FAILED (#2193). The half declared exercised for real was the only half that could never turn a build red."
    },
    "required_via": "binary-size",
    "must_refuse": [
@@ -903,11 +960,26 @@
       "--root",
       "{root}"
      ]
-    }
+    },
+    {
+    "vector": "a pull request body carrying the attribution footer tooling appends on publish",
+    "files": {
+     "pr-body.md": "## Description\n\nA real change.\n\n---\n_Generated by [Claude Code](https://claude.ai/code)_\n"
+    },
+    "accepts": {
+     "pr-body.md": "## Description\n\nA real change.\n"
+    },
+    "argv": [
+     "--text",
+     "{root}/pr-body.md",
+     "--surface",
+     "pull request body"
+    ]
+   }
    ],
    "blind_spot": {
     "issue": null,
-    "summary": "Reads the RAW identity (%an <%ae>, never %aN): a .mailmap line in this repository already maps anthropic to the maintainer, and the mapped name would launder the case being looked for. Admission is by whole identity, so an impostor of an admitted bot does not inherit it."
+    "summary": "Reads the RAW identity (%an <%ae>, never %aN): a .mailmap line in this repository already maps anthropic to the maintainer, and the mapped name would launder the case being looked for. Admission is by whole identity, so an impostor of an admitted bot does not inherit it. --text covers the pull request title and description and --tree covers tracked repository content, but NOT issue or PR comments: no workflow trigger delivers a comment body to this guard today, so a footer pasted into a comment is still caught only by review. Title and body are read from the event payload, and ci.yml skips an 'edited' event that does not change the base (the #22 fix that stopped no-op edits cancelling real runs), so a footer added by EDITING a description after the run is not re-checked; creation, pushes and reopens are. --tree strips a comment or blockquote leader before applying the rule, which the commit-message path deliberately does not, so a source line quoting a trailer behind // or # is refused there and accepted in a commit message describing it. --tree has no must_refuse vector: the harness materialises a refusal by copying the tracked tree (base: repository), and a mode that then reads every file in that copy exhausts the runner. Its refusal is covered by unit tests instead, including a positive control that the checked-in tree passes. Its URL pattern is also unanchored, unlike the trailer patterns, so a body that quotes the footer verbatim in order to DESCRIBE the rule is refused along with one that carries it; write the URL in parts when documenting it, as this repo's own tests do."
    },
    "required_via": "pr-governance"
   },
@@ -1103,6 +1175,56 @@
       "crates/velesdb-core/src/new_writer.rs": "pub fn w(p: &std::path::Path) -> std::io::Result<()> {\n    let f = std::fs::File::create(p)?;\n    f.sync_all()\n}\n",
       "scripts/durability-barrier-baseline.txt": "# empty baseline for the refusal-vector harness\n"
      }
+    }
+   ]
+  },
+  {
+   "script": "scripts/check-drop-tightening.py",
+   "purpose": "Freeze the clippy::significant_drop_tightening backlog per file so it can only shrink, the precondition for promoting the lint to deny alongside significant_drop_in_scrutinee (#2110).",
+   "workflow": ".github/workflows/ci.yml",
+   "job": "drop-tightening-check",
+   "required": true,
+   "mode": "strict",
+   "self_test": "scripts.tests.test_check_drop_tightening",
+   "self_test_required": true,
+   "blind_spot": {
+    "issue": 2110,
+    "summary": "Covers velesdb-core and velesdb-server only - the crates that build without GTK, so the baseline stays regenerable by anyone. They hold all 326 findings measured on 2026-08-27 (velesdb-core's lib is linted even when only velesdb-server is named, because a workspace path dependency is a primary unit and is not --cap-lints'd), but velesdb-cli, velesdb-memory, velesdb-migrate, velesdb-mobile, velesdb-wasm and tauri-plugin-velesdb are unmeasured and a new site in one of them lands unseen. Widening needs a measured baseline from a machine that can build them, never an estimate. Counts are per file rather than per site, so moving a finding between two baselined files is invisible when the totals offset."
+   },
+   "must_refuse": [
+    {
+     "vector": "a file that gained a finding above its frozen count",
+     "files": {
+      "baseline.txt": "crates/velesdb-core/src/a.rs\t1\n",
+      "clippy.json": "{\"reason\":\"compiler-message\",\"message\":{\"code\":{\"code\":\"clippy::significant_drop_tightening\"},\"level\":\"warning\",\"spans\":[{\"file_name\":\"crates/velesdb-core/src/a.rs\",\"is_primary\":true}]}}\n{\"reason\":\"compiler-message\",\"message\":{\"code\":{\"code\":\"clippy::significant_drop_tightening\"},\"level\":\"warning\",\"spans\":[{\"file_name\":\"crates/velesdb-core/src/a.rs\",\"is_primary\":true}]}}\n"
+     },
+     "accepts": {
+      "baseline.txt": "crates/velesdb-core/src/a.rs\t1\n",
+      "clippy.json": "{\"reason\":\"compiler-message\",\"message\":{\"code\":{\"code\":\"clippy::significant_drop_tightening\"},\"level\":\"warning\",\"spans\":[{\"file_name\":\"crates/velesdb-core/src/a.rs\",\"is_primary\":true}]}}\n"
+     },
+     "argv": [
+      "--from-json",
+      "{root}/clippy.json",
+      "--baseline",
+      "{root}/baseline.txt"
+     ]
+    },
+    {
+     "vector": "a finding in a file the frozen baseline does not list",
+     "files": {
+      "baseline.txt": "crates/velesdb-core/src/a.rs\t1\n",
+      "clippy.json": "{\"reason\":\"compiler-message\",\"message\":{\"code\":{\"code\":\"clippy::significant_drop_tightening\"},\"level\":\"warning\",\"spans\":[{\"file_name\":\"crates/velesdb-core/src/a.rs\",\"is_primary\":true}]}}\n{\"reason\":\"compiler-message\",\"message\":{\"code\":{\"code\":\"clippy::significant_drop_tightening\"},\"level\":\"warning\",\"spans\":[{\"file_name\":\"crates/velesdb-core/src/brand_new.rs\",\"is_primary\":true}]}}\n"
+     },
+     "accepts": {
+      "baseline.txt": "crates/velesdb-core/src/a.rs\t1\ncrates/velesdb-core/src/brand_new.rs\t1\n",
+      "clippy.json": "{\"reason\":\"compiler-message\",\"message\":{\"code\":{\"code\":\"clippy::significant_drop_tightening\"},\"level\":\"warning\",\"spans\":[{\"file_name\":\"crates/velesdb-core/src/a.rs\",\"is_primary\":true}]}}\n{\"reason\":\"compiler-message\",\"message\":{\"code\":{\"code\":\"clippy::significant_drop_tightening\"},\"level\":\"warning\",\"spans\":[{\"file_name\":\"crates/velesdb-core/src/brand_new.rs\",\"is_primary\":true}]}}\n"
+     },
+     "argv": [
+      "--from-json",
+      "{root}/clippy.json",
+      "--baseline",
+      "{root}/baseline.txt"
+     ]
     }
    ]
   }

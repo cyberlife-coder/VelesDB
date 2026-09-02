@@ -19,7 +19,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "5.2.0"
+version = "6.0.0"
 edition = "2021"
 rust-version = "1.90"
 license-file = "LICENSE"
@@ -86,7 +86,7 @@ base64 = "0.23"
 smallvec = { version = "1", features = ["serde"] }
 
 # Internal workspace crates
-velesdb-core = { path = "crates/velesdb-core", version = "5.2.0", default-features = false }
+velesdb-core = { path = "crates/velesdb-core", version = "6.0.0", default-features = false }
 
 [profile.release]
 lto = true
@@ -170,10 +170,16 @@ struct_field_names = "allow"
 # Clippy set to allow since Codacy is the hard gate for this metric.
 too_many_lines = "allow"
 
+# Lock-guard lifetime. NOT a style preference: a guard living to the end of a
+# `match`/`if let`/`for` expression is how the CircuitBreaker ABBA deadlock
+# (#2109) reached production, so `in_scrutinee` is a hard gate. `tightening`
+# stays off for now — 192 sites, contention rather than deadlock; tracked in
+# #2110 and to be enabled the same way once that backlog is drained.
+significant_drop_in_scrutinee = "deny"
+significant_drop_tightening = "allow"
+
 # Code style preferences (no bug risk)
 ptr_as_ptr = "allow"
-significant_drop_tightening = "allow"
-significant_drop_in_scrutinee = "allow"
 set_contains_or_insert = "allow"
 useless_let_if_seq = "allow"
 manual_assert = "allow"

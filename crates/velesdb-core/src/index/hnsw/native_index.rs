@@ -164,7 +164,7 @@ impl NativeHnswIndex {
         let inner = self.inner.read();
         let neighbors = inner.search_auto(query, k, ef_search);
 
-        neighbors
+        let results: Vec<ScoredResult> = neighbors
             .into_iter()
             .filter_map(|(node_id, raw_dist)| {
                 self.mappings.get_id(node_id).map(|id| {
@@ -172,7 +172,9 @@ impl NativeHnswIndex {
                     ScoredResult::new(id, score)
                 })
             })
-            .collect()
+            .collect();
+        drop(inner);
+        results
     }
 
     /// Registers an ID with upsert semantics.
@@ -206,7 +208,9 @@ impl NativeHnswIndex {
 
         let result = self.upsert_mapping(id);
 
-        if let Err(e) = self.inner.read().insert((vector, result.idx)) {
+        // Bound so the graph read guard is released before the rollback.
+        let inserted = self.inner.read().insert((vector, result.idx));
+        if let Err(e) = inserted {
             self.rollback_upsert(id, &result);
             return Err(e);
         }
@@ -242,7 +246,9 @@ impl NativeHnswIndex {
             rollback_info.push((*id, result));
         }
 
-        let assigned_ids = match self.inner.read().parallel_insert(&data) {
+        // Bound so the graph read guard is released before `rollback_batch`.
+        let inserted = self.inner.read().parallel_insert(&data);
+        let assigned_ids = match inserted {
             Ok(ids) => ids,
             Err(e) => {
                 // RF-DEDUP #448 Group D — reverse-order rollback shared with
@@ -341,6 +347,11 @@ impl NativeHnswIndex {
     /// - **Recall validation**: Compare HNSW results against brute-force
     /// - **Small datasets**: When n < 10k, brute-force may be faster
     /// - **Critical accuracy**: When 100% recall is required
+    // Held across the rayon scan deliberately; the comment below explains
+    // why this cannot deadlock a worker (inserts mutate under read guards
+    // through interior mutability, so no exclusive write() exists to queue
+    // behind).
+    #[expect(clippy::significant_drop_tightening)]
     #[must_use]
     pub fn brute_force_search_parallel(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {
         use rayon::prelude::*;

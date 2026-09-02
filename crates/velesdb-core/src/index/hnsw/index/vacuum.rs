@@ -171,6 +171,21 @@ impl HnswIndex {
     /// (re-encodes the compacted vectors in NodeId order — without this, a
     /// vacuumed RaBitQ index would fall back to f32 search until the next
     /// collection open).
+    /// Where the replacement graph's f32 arena belongs, given what it will
+    /// become.
+    ///
+    /// Keyed on the *target* mode, not the mode the replacement is built
+    /// with: `build_vacuum_replacement` deliberately builds through a
+    /// `Full` backend and promotes afterwards, and the promotion moves the
+    /// graph as-is. A heap arena chosen here would therefore survive the
+    /// promotion and quietly undo the mapping on every compaction (#2112).
+    fn arena_dir_for(&self, target_mode: crate::StorageMode) -> Option<&std::path::Path> {
+        match target_mode {
+            crate::StorageMode::RaBitQ | crate::StorageMode::SQ8 => self.arena_dir.as_deref(),
+            _ => None,
+        }
+    }
+
     fn build_vacuum_replacement(
         &self,
         active_vectors: &[(u64, Vec<f32>)],
@@ -182,14 +197,24 @@ impl HnswIndex {
         // threshold (then re-encode everything a second time on install) —
         // and would silently SELF-train an untrained collection from
         // compaction order. The graph is promoted afterwards.
-        let new_inner = HnswInner::new_with_storage_mode(
-            self.metric,
-            params.max_connections,
-            active_vectors.len().max(1000), // max_elements with reasonable minimum
-            params.ef_construction,
-            self.dimension,
-            crate::StorageMode::Full,
-        )
+        //
+        // The arena dir still has to be `target_mode`'s, not `Full`'s: the
+        // graph built here is the one `promote_to_*` hands to the quantized
+        // wrapper, so if it were built heap-backed the promotion would carry
+        // a heap arena and every vacuum would silently undo the mapping
+        // (#2112). Building it mapped up front is safe precisely because
+        // arenas are per-instance — the old index is still serving reads from
+        // its own file, and the two never contend.
+        let new_inner = HnswInner::build(&crate::index::hnsw::native_inner::InnerBuild {
+            metric: self.metric,
+            max_connections: params.max_connections,
+            max_elements: active_vectors.len().max(1000),
+            ef_construction: params.ef_construction,
+            dimension: self.dimension,
+            storage_mode: crate::StorageMode::Full,
+            alpha: params.alpha,
+            arena_dir: self.arena_dir_for(target_mode),
+        })
         .map_err(|e| VacuumError::RebuildFailed(e.to_string()))?;
 
         // Insertion references: idx = sequential, matches graph allocation.
@@ -203,19 +228,54 @@ impl HnswIndex {
             .parallel_insert(&refs_for_hnsw)
             .map_err(|e| VacuumError::RebuildFailed(e.to_string()))?;
 
-        if target_mode != crate::StorageMode::RaBitQ {
-            return Ok(new_inner);
-        }
-        let new_inner = new_inner.promote_to_rabitq(self.dimension);
-        #[cfg(feature = "persistence")]
-        if let Some(rabitq) = self.inner.read().rabitq_quantizer() {
-            // Single encode pass with the carried-over quantizer; an
-            // untrained collection stays untrained (no state change).
-            new_inner
-                .install_trained_rabitq(rabitq)
-                .map_err(|e| VacuumError::RebuildFailed(e.to_string()))?;
-        }
+        self.promote_replacement(new_inner, target_mode)
+    }
 
-        Ok(new_inner)
+    /// Promotes a freshly rebuilt `Full` graph to `target_mode` and carries
+    /// the old index's trained quantizer onto it.
+    ///
+    /// Split from `build_vacuum_replacement` to keep that function inside the
+    /// complexity gate; the two halves are genuinely separate steps — build
+    /// the graph, then decide what it becomes.
+    fn promote_replacement(
+        &self,
+        new_inner: HnswInner,
+        target_mode: crate::StorageMode,
+    ) -> Result<HnswInner, VacuumError> {
+        match target_mode {
+            crate::StorageMode::RaBitQ => {
+                let new_inner = new_inner.promote_to_rabitq(self.dimension);
+                // Bound before the `if let`: the old-index read guard would
+                // otherwise be held across `install_trained_rabitq`'s full
+                // O(n*d) re-encode pass. Carrying the quantizer out first
+                // releases it immediately (#2109's lock-guard family).
+                #[cfg(feature = "persistence")]
+                let carried = self.inner.read().rabitq_quantizer();
+                #[cfg(feature = "persistence")]
+                if let Some(rabitq) = carried {
+                    // Single encode pass with the carried-over quantizer; an
+                    // untrained collection stays untrained (no state change).
+                    new_inner
+                        .install_trained_rabitq(rabitq)
+                        .map_err(|e| VacuumError::RebuildFailed(e.to_string()))?;
+                }
+                Ok(new_inner)
+            }
+            crate::StorageMode::SQ8 => {
+                let new_inner = new_inner.promote_to_sq8(self.dimension);
+                // Same binding, same reason: `install_trained_sq8` re-encodes
+                // every vector, and the guard must not span it.
+                #[cfg(feature = "persistence")]
+                let carried = self.inner.read().sq8_quantizer();
+                #[cfg(feature = "persistence")]
+                if let Some(quantizer) = carried {
+                    new_inner
+                        .install_trained_sq8(quantizer)
+                        .map_err(|e| VacuumError::RebuildFailed(e.to_string()))?;
+                }
+                Ok(new_inner)
+            }
+            _ => Ok(new_inner),
+        }
     }
 }

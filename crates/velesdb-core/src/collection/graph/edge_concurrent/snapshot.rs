@@ -74,7 +74,7 @@ impl ConcurrentEdgeStore {
     /// method walks every shard and takes a read lock on each one in turn;
     /// holding a same-shard write lock deadlocks against the reader, and
     /// holding an `edge_ids` write lock deadlocks against the downstream
-    /// `label_table` / snapshot consumers in the same lock-order chain.
+    /// snapshot consumers in the same lock-order chain.
     ///
     /// The only two supported call sites are:
     ///
@@ -111,8 +111,7 @@ impl ConcurrentEdgeStore {
                 let _ = merged.add_edge(edge.clone());
             }
         }
-        let label_table = self.label_table.read();
-        let new_snapshot = SnapshotBuilder::build(&merged, &label_table);
+        let new_snapshot = SnapshotBuilder::build(&merged);
         self.csr_snapshot.store(Arc::new(new_snapshot));
         Ok(())
     }
@@ -147,6 +146,8 @@ impl ConcurrentEdgeStore {
             }
         }
 
+        // Every edge is in the snapshot; the id map is not read again.
+        drop(ids);
         // Compact once to eliminate any fragmentation from insert order.
         snapshot.compact();
 

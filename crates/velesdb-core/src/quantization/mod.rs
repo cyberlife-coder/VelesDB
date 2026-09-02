@@ -13,13 +13,14 @@
 //! ## Engine integration status
 //!
 //! The figures above describe the quantization primitives themselves. In the
-//! collection query path: `RaBitQ` (binary traversal backend) and PQ (ADC
-//! rescoring) are wired end-to-end. Persistence across reopens covers
-//! TRAIN-QUANTIZER-produced artifacts (`rabitq.idx`, `codebook.pq`); a PQ
-//! quantizer trained lazily from inserts (no TRAIN statement) is in-memory
-//! only and retrains after a restart. SQ8/Binary collection modes currently
-//! maintain caches that no search path consumes — collection search stays
-//! full-precision f32 for those modes. See `docs/guides/QUANTIZATION.md`.
+//! collection query path: `RaBitQ` (binary traversal backend), SQ8 (int8
+//! traversal backend, Euclidean/Cosine) and PQ (ADC rescoring) are wired
+//! end-to-end. Persistence across reopens covers TRAIN-QUANTIZER-produced
+//! artifacts (`rabitq.idx`, `sq8.idx`, `codebook.pq`) plus lazily-trained
+//! `RaBitQ`/SQ8 quantizers (persisted by the full flush); a PQ quantizer
+//! trained lazily from inserts (no TRAIN statement) is in-memory only and
+//! retrains after a restart. The Binary collection mode stays full-precision
+//! f32 in the search path. See `docs/guides/QUANTIZATION.md`.
 
 use std::io;
 
@@ -75,7 +76,7 @@ pub use pq_opq::train_opq;
 
 // Re-export RaBitQ quantization
 #[cfg(feature = "persistence")]
-pub(crate) use rabitq::PreparedQuery;
+pub use rabitq::PreparedQuery;
 pub use rabitq::{RaBitQCorrection, RaBitQIndex, RaBitQVector};
 #[cfg(feature = "persistence")]
 pub(crate) use rabitq_store::RaBitQVectorStore;
@@ -114,22 +115,26 @@ pub const STORAGE_MODE_NAMES: &[&str] = &["full", "sq8", "binary", "pq", "rabitq
 
 /// Storage mode for vectors.
 ///
-/// # Capacity mode vs search-path mode
+/// # What each mode actually does
 ///
-/// | Mode | Kind | Collection search path |
-/// |------|------|------------------------|
-/// | `Full` | full-precision | f32 (baseline) |
-/// | `SQ8` | **Capacity Mode** | full-precision f32 (memory only, no throughput gain) |
-/// | `Binary` | **Capacity Mode** | full-precision f32 (memory only, no throughput gain) |
-/// | `ProductQuantization` | search-path mode | ADC-rescored (wired) |
-/// | `RaBitQ` | search-path mode | quantized traversal (wired end-to-end) |
+/// | Mode | Collection storage + search path |
+/// |------|----------------------------------|
+/// | `Full` | f32 (baseline) |
+/// | `SQ8` | int8 graph traversal + exact f32 re-ranking (Euclidean/Cosine; other metrics stay f32) |
+/// | `Binary` | f32 — behaves as `Full` today (use `RaBitQ` for compressed search) |
+/// | `ProductQuantization` | f32 storage + ADC-rescored search (wired) |
+/// | `RaBitQ` | quantized traversal, wired end-to-end |
 ///
-/// **Capacity Modes (`SQ8`, `Binary`)** reduce the in-memory footprint of the
-/// quantization primitives, but the collection search path stays
-/// full-precision f32 for those modes — selecting them does not gain search
-/// throughput. **Search-path modes (`RaBitQ`, `ProductQuantization`)** are the
-/// quantized paths wired into the query hot path. See
-/// `docs/guides/QUANTIZATION.md`.
+/// **Search-path modes (`RaBitQ`, `SQ8`, `ProductQuantization`)** are the
+/// quantized paths wired into the query hot path. All of them keep the f32
+/// vectors for exact re-ranking, so total resident memory is not reduced —
+/// for `RaBitQ` and `SQ8` it rises, since the codes are additive. What those
+/// two shrink is the *un-evictable* floor: their f32 lives in a file-backed
+/// arena the kernel can reclaim. Measured at 100 000 x 768-d, anonymous RSS
+/// falls 61% (385 -> 150 MiB) while total RSS rises 11%. See the measured
+/// tables in `docs/guides/QUANTIZATION.md`. `Binary` is accepted and persisted so
+/// the intent survives a reopen, but changes neither memory use nor the
+/// search path today.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
@@ -137,14 +142,26 @@ pub enum StorageMode {
     /// Full precision f32 storage (default).
     #[default]
     Full,
-    /// **Capacity Mode.** 8-bit scalar quantization for 4x memory reduction.
-    /// Reduces the quantization primitive's footprint only; the collection
-    /// search path stays full-precision f32 and gains no search throughput.
+    /// 8-bit scalar quantization. Search-path mode for Euclidean and Cosine:
+    /// graph traversal compares int8 codes (1 byte/dimension read instead of
+    /// 4) and the final top-k is re-ranked with exact f32 distances. The
+    /// quantizer trains lazily after 1000 inserts (or via `TRAIN QUANTIZER
+    /// type=sq8`) and persists to `sq8.idx`; traversal engages at 10 000+
+    /// vectors, below which search stays exact f32. On other metrics (int8
+    /// L2 cannot preserve their ordering) the collection behaves as
+    /// [`Full`]. The f32 kept for re-ranking sits in a file-backed arena, so
+    /// it is evictable rather than pinned. Measured at 100 000 x 768-d against
+    /// [`Full`]: anonymous RSS 385 -> 150 MiB (-61%), total RSS +11% because
+    /// the codes are additive, and the first re-rank after a reclaim pays
+    /// 8-10 ms per 100 candidates.
+    ///
+    /// [`Full`]: StorageMode::Full
     SQ8,
-    /// **Capacity Mode.** 1-bit binary quantization for 32x memory reduction.
-    /// Best for edge/IoT devices with limited RAM. Reduces footprint only; the
-    /// collection search path stays full-precision f32 and gains no search
-    /// throughput (use `RaBitQ` for a quantized search path).
+    /// Accepted and persisted, but currently behaves exactly like [`Full`] —
+    /// same status as [`SQ8`](StorageMode::SQ8). For a real quantized search
+    /// path use [`RaBitQ`](StorageMode::RaBitQ) (32x, wired end-to-end).
+    ///
+    /// [`Full`]: StorageMode::Full
     Binary,
     /// Product Quantization (PQ) for aggressive lossy compression (8x-16x
     /// typical). Search-path mode: wired into the query hot path for ADC

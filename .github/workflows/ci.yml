@@ -51,16 +51,51 @@ on:
     # so leaving `types:` implicit here would have silently narrowed it: a
     # draft turned "ready" with no new commit would never be re-governed.
     # Pinned by scripts/tests/test_ci_gate_reachability.py.
-    types: [opened, synchronize, reopened, ready_for_review]
+    # `edited` is here for exactly one reason: **retargeting a PR**. Changing
+    # a PR's base emits `edited` and nothing else — no `synchronize`, no
+    # `reopened` — so without it a PR retargeted onto develop never gets a CI
+    # run at all, and `CI Success` (a required check) is simply absent. That
+    # is the #1465 failure mode again: not red, *missing*, which blocks the
+    # merge with no way out but an unrelated push. Hit in production on
+    # PR #2118, opened against a feature branch and retargeted here.
+    #
+    # `edited` also fires on every title and body edit, which must NOT cost a
+    # full CI run — so every job in this workflow carries a guard admitting
+    # `edited` only when `changes.base` is present. `ci-success` carries it
+    # too, and that is load-bearing: it asserts `result == 'success'` for each
+    # of its needs, so leaving it unguarded while its needs skipped would turn
+    # every title edit red. All jobs skipping together yields a `skipped`
+    # check-run, which branch protection accepts.
+    #
+    # Pinned by scripts/tests/test_ci_gate_reachability.py.
+    types: [opened, synchronize, reopened, ready_for_review, edited]
   # Manual trigger so coverage can be refreshed on demand (e.g. after a
   # config-only commit to main that skipped the path-filtered CI, leaving the
   # Codacy coverage badge stale).
   workflow_dispatch:
 
 # Annuler les runs précédents pour la même branche/PR
+#
+# `cancel-in-progress` carries the *same predicate as every job's guard*, and
+# that is the whole point: a run whose jobs all skip must not be allowed to
+# cancel a run whose jobs are doing the work. Without this, editing a PR's
+# title or body while CI is running killed that CI and replaced it with an
+# all-skipped run — and because branch protection accepts a `skipped` required
+# check, `CI Success` then reported green with nothing having run. That is
+# #1465's hole (a required check that does not reflect any actual work) reached
+# through a far more common door than the retarget `edited` was added for. Hit
+# in production on PR #2125: run 4312 (`synchronize`) was cancelled 28s in by
+# run 4313 (`edited`, a body edit), which skipped all 27 guarded jobs.
+#
+# Keeping the predicate character-identical to the job guard is deliberate —
+# two spellings of "this run is a no-op" is how the two drift apart and the
+# hole reopens. Pinned by scripts/tests/test_ci_gate_reachability.py.
+#
+# A no-op run does not cancel; it queues behind the real run and finishes in
+# seconds. A real run still cancels whatever is stale, no-op or not.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event.action != 'edited' || github.event.changes.base != null }}
 
 permissions:
   contents: read
@@ -83,9 +118,17 @@ jobs:
   # ===========================================================================
   lint:
     name: Lint & Format
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: a shallow (depth-1) PR checkout only fetches the
+          # merge commit itself, not the base commit `git diff` needs. Two
+          # gates in this job are diff-scoped (SAFETY template, TODO/FIXME
+          # governance); without this they resolved zero changed files on
+          # every pull request and passed vacuously.
+          fetch-depth: 0
 
       - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
         with:
@@ -268,6 +311,13 @@ jobs:
             --features persistence,gpu,update-check \
             -- -A warnings -D clippy::undocumented_unsafe_blocks
 
+      # The verifier's own suite, in this required job rather than only via
+      # gate-contracts.yml's `unittest discover`: that workflow is not in
+      # `CI Success`'s needs, so a suite reached only from there is a suite
+      # whose red does not block a merge.
+      - name: SAFETY-template verifier self-test
+        run: python3 -m unittest scripts.tests.test_verify_unsafe_safety_template
+
       - name: Verify SAFETY template (production code)
         run: |
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
@@ -279,19 +329,46 @@ jobs:
             BASE_SHA="$(git rev-list --max-parents=0 HEAD)"
           fi
 
+          # An unreachable base is the failure a diff-scoped step cannot
+          # survive quietly: `git diff` errors, the surrounding `mapfile`/`if`
+          # swallows the status, and the step concludes "nothing changed"
+          # having looked at nothing. Prove the object is here before trusting
+          # an empty result.
+          if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+              # With fetch-depth: 0 a PR base is always present, so its
+              # absence is a misconfiguration — and validating nothing in
+              # silence is exactly how this gate spent its whole life.
+              echo "::error::base commit $BASE_SHA is not in this checkout — a" \
+                   "diff against it reads zero files instead of failing." \
+                   "Give this job actions/checkout with fetch-depth: 0."
+              exit 1
+            fi
+            # On push, `before` legitimately vanishes when a branch is
+            # force-pushed. Widen to the whole history rather than fail the
+            # branch: stricter than the range it replaces, never a false red.
+            echo "::warning::push base $BASE_SHA is unreachable (force-push?) —" \
+                 "validating full history instead of the pushed range."
+            BASE_SHA="$(git rev-list --max-parents=0 HEAD)"
+          fi
+
           # F-3.12: validate SAFETY templates in EVERY production crate, not
           # just velesdb-core. Bindings (velesdb-python, velesdb-wasm,
           # velesdb-mobile, tauri-plugin-velesdb) contain unsafe blocks too and
           # were previously unchecked, which let one incomplete template slip
           # through (F-3.2).
+          mapfile -t CHANGED_FILES < <(
+            git diff --name-only --diff-filter=d "$BASE_SHA" "${{ github.sha }}"
+          )
           mapfile -t PROD_RS_FILES < <(
-            git diff --name-only "$BASE_SHA" "${{ github.sha }}" \
+            printf '%s\n' "${CHANGED_FILES[@]}" \
               | grep '\.rs$' \
               | grep -E '^crates/[^/]+/src/' \
               | grep -v '/tests/' \
               | grep -v '/benches/' \
               | grep -Ev '_tests?\.rs$'
           )
+          echo "SAFETY template: ${#CHANGED_FILES[@]} changed file(s) in range, ${#PROD_RS_FILES[@]} production Rust."
           if [[ ${#PROD_RS_FILES[@]} -eq 0 ]]; then
             echo "No changed production Rust files to validate."
             exit 0
@@ -309,14 +386,41 @@ jobs:
             BASE_SHA="$(git rev-list --max-parents=0 HEAD)"
           fi
 
+          # An unreachable base is the failure a diff-scoped step cannot
+          # survive quietly: `git diff` errors, the surrounding `mapfile`/`if`
+          # swallows the status, and the step concludes "nothing changed"
+          # having looked at nothing. Prove the object is here before trusting
+          # an empty result.
+          if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+              # With fetch-depth: 0 a PR base is always present, so its
+              # absence is a misconfiguration — and validating nothing in
+              # silence is exactly how this gate spent its whole life.
+              echo "::error::base commit $BASE_SHA is not in this checkout — a" \
+                   "diff against it reads zero files instead of failing." \
+                   "Give this job actions/checkout with fetch-depth: 0."
+              exit 1
+            fi
+            # On push, `before` legitimately vanishes when a branch is
+            # force-pushed. Widen to the whole history rather than fail the
+            # branch: stricter than the range it replaces, never a false red.
+            echo "::warning::push base $BASE_SHA is unreachable (force-push?) —" \
+                 "validating full history instead of the pushed range."
+            BASE_SHA="$(git rev-list --max-parents=0 HEAD)"
+          fi
+
+          mapfile -t CHANGED_FILES < <(
+            git diff --name-only --diff-filter=d "$BASE_SHA" "${{ github.sha }}"
+          )
           mapfile -t CORE_RS_FILES < <(
-            git diff --name-only "$BASE_SHA" "${{ github.sha }}" \
+            printf '%s\n' "${CHANGED_FILES[@]}" \
               | grep '\.rs$' \
               | grep '^crates/velesdb-core/src/' \
               | grep -v '/tests/' \
               | grep -v '/benches/' \
               | grep -Ev '_tests?\.rs$'
           )
+          echo "TODO governance: ${#CHANGED_FILES[@]} changed file(s) in range, ${#CORE_RS_FILES[@]} production Rust."
           if [[ ${#CORE_RS_FILES[@]} -eq 0 ]]; then
             echo "No changed production Rust files to validate."
             exit 0
@@ -344,6 +448,14 @@ jobs:
       - name: Check durability barriers on file-creating write paths
         run: python3 scripts/check-durability-barrier.py
 
+      # velesdb-memory's doctrine (crates/velesdb-memory/src/lib.rs) requires a
+      # `Box`/`Arc` adapter to forward the WHOLE trait. rustc only demands the
+      # *required* methods, so a partial forwarding can only ever drop one with
+      # a default body — it compiles, and the wrapper silently runs the default
+      # instead of the concrete override. That is the #1690-#1692 gap family.
+      - name: Check wrapper adapters forward their trait whole
+        run: python3 scripts/check-trait-forwarding.py
+
       - name: Check for .unwrap() in production code
         run: python3 scripts/check_prod_unwraps.py
 
@@ -365,6 +477,9 @@ jobs:
 
       - name: Test file-budgets audit script
         run: python3 -m unittest scripts.tests.test_check_file_budgets
+
+      - name: Test trait-forwarding audit script
+        run: python3 -m unittest scripts.tests.test_check_trait_forwarding
 
       - name: Audit feature claims vs exports
         run: python3 scripts/check-feature-claims.py
@@ -389,6 +504,7 @@ jobs:
   # ===========================================================================
   test:
     name: Tests
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -500,6 +616,7 @@ jobs:
   # ===========================================================================
   security:
     name: Security Audit
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -528,12 +645,13 @@ jobs:
   # ===========================================================================
   hygiene:
     name: Hygiene (typos, taplo, machete)
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install hygiene tools (prebuilt)
-        uses: taiki-e/install-action@82cd3e7658a6f96c86c0234aeeda1748937cb0a1 # v2.85.13
+        uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d # v2.87.0
         with:
           tool: typos@1.42.3,taplo-cli@0.10.0,cargo-machete@0.9.2
 
@@ -569,6 +687,7 @@ jobs:
   # `cargo check` runs are the cost this gate is allowed to have.
   memory-feature-matrix:
     name: Memory Feature Matrix
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -594,8 +713,90 @@ jobs:
       - name: mcp + persistence (daemon)
         run: cargo check -p velesdb-memory --no-default-features --features mcp,persistence
 
+  # ===========================================================================
+  # `internal-bench` compiles (#2106 follow-up)
+  # ===========================================================================
+  # `internal-bench` is not a bench-only feature. It gates seven sites of
+  # production source — `index/hnsw/index/search.rs`, `index/hnsw/native/
+  # distance.rs`, `index/hnsw/mod.rs`, `velesql/cache.rs` and `lib.rs` — and
+  # until this job existed nothing on a pull request ever compiled it. The two
+  # workflows that do (quality-deep.yml, bench-scalability.yml) run weekly, so
+  # a PR could break the feature, merge green, and surface the breakage the
+  # following Sunday with no obvious culprit SHA.
+  #
+  # That is the same bargain `memory-feature-matrix` above already strikes, and
+  # it is deliberately a `cargo check`, not a bench run: the cost this gate is
+  # allowed to have is a compile. Catching the cfg regression is the point;
+  # measuring anything is not.
+  #
+  # `--benches` is load-bearing — the feature's `required-features` targets
+  # (Cargo.toml:440, :445) are bench targets, so a lib-only check would miss
+  # exactly the code the feature exists for.
+  internal-bench-check:
+    name: Internal Bench Compiles
+    if: github.event.action != 'edited' || github.event.changes.base != null
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: "velesdb-ci-internal-bench"
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
+
+      - name: Library and benches under internal-bench
+        run: cargo check -p velesdb-core --benches --features persistence,internal-bench
+
+      # velesdb-memory's four criterion benches were built by nothing in CI,
+      # so one of them stayed dead for weeks after #1743 changed the policy
+      # it asserted on (its liveness gate panicked at the second parameter
+      # point). Type-checking them here is the cheapest reach that would
+      # have caught the compile half of that; running them stays a policy
+      # decision (cost per PR vs a weekly sweep, the feature-powerset
+      # trade-off) and is deliberately not taken in this job.
+      - name: velesdb-memory benches type-check
+        run: cargo check -p velesdb-memory --benches --features persistence,context
+
+      - name: Tests under internal-bench
+        run: cargo check -p velesdb-core --tests --features persistence,internal-bench
+
+  drop-tightening-check:
+    name: Drop-Tightening Backlog Frozen
+    if: github.event.action != 'edited' || github.event.changes.base != null
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: clippy
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: "velesdb-ci-drop-tightening"
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
+
+      # Deliberately its own job rather than a step folded into `lint`.
+      # `--force-warn` changes the rustc argument fingerprint, so folding it in
+      # would either rebuild inside `lint` anyway or force `lint`'s clippy
+      # invocation through a JSON-parsing wrapper — and a wrapper that can stop
+      # failing silently is worse than a second job. This one cannot weaken the
+      # primary lint gate because it does not touch it.
+      - name: Backlog frozen at the baseline
+        run: python3 scripts/check-drop-tightening.py --verbose
+
   wasm-check:
     name: WASM Build Check
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -637,7 +838,7 @@ jobs:
       # to empty binaries under the native test job and are invisible to the
       # cargo check above — without this step they never run in CI at all.
       - name: Install wasm-pack
-        uses: taiki-e/install-action@82cd3e7658a6f96c86c0234aeeda1748937cb0a1 # v2.85.13
+        uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d # v2.87.0
         with:
           tool: wasm-pack
 
@@ -652,6 +853,7 @@ jobs:
   # ===========================================================================
   openapi-drift:
     name: OpenAPI Drift Check
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -700,6 +902,12 @@ jobs:
   #
   # No toolchain, no build: pure Python over committed text, seconds.
   # ===========================================================================
+  # Deliberately carries NO job-level `if:` — not even the retarget guard
+  # every other job here has. This is the job that runs the guard suites' own
+  # self-tests, so a condition that can skip it is a condition that can disarm
+  # them. It therefore runs on title-only edits too, which costs one cheap
+  # Python job. `test_the_gate_job_cannot_opt_out_of_blocking` pins the
+  # absence; `RETARGET_GUARD_EXEMPT` records the exemption.
   mcp-doc-contract:
     name: MCP Doc Contract
     runs-on: ubuntu-latest
@@ -782,6 +990,7 @@ jobs:
   # ===========================================================================
   bench-sift1m-compile:
     name: Bench SIFT1M Compile Check
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -817,7 +1026,23 @@ jobs:
     # Runs on PRs too (and gates CI Success) so connector regressions are
     # caught before merge — the LangChain suite once rotted to 21 failures
     # while this job was push-only and advisory.
-    if: github.event_name == 'pull_request' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'))
+    #
+    # `workflow_dispatch` is in the list because this job's result is asserted
+    # by the ci-success chain, and a chain entry that cannot run under a
+    # declared trigger makes the gate unsatisfiable under it. Leaving it out
+    # meant a manual dispatch — the documented escape hatch for the #1465
+    # "required check is absent" failure mode — could only ever produce a RED
+    # `CI Success`, because this one need came back `skipped` while every
+    # other job passed. That is worse than the hole it was meant to plug: an
+    # absent check blocks, a red one *overwrites a green check-run of the same
+    # name* on the head SHA. Hit on PR #2141, where dispatch run 4378 replaced
+    # the green verdict of pull_request run 4380 on the same commit.
+    #
+    # `push` needs no such clause: ci.yml's push trigger is already filtered to
+    # main/develop, exactly the refs this condition admits.
+    #
+    # Pinned by scripts/tests/test_ci_gate_reachability.py.
+    if: (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'))) && (github.event.action != 'edited' || github.event.changes.base != null)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -897,6 +1122,7 @@ jobs:
   # ===========================================================================
   python-sdk-tests:
     name: Python SDK Tests
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
     needs: test
     timeout-minutes: 25
@@ -935,6 +1161,7 @@ jobs:
   # excluded from `cargo test --workspace`, so this is its ONLY functional gate.
   node-binding-tests:
     name: Node Binding Tests
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
     needs: test
     timeout-minutes: 25
@@ -1022,6 +1249,7 @@ jobs:
   # ===========================================================================
   node-windows-changed:
     name: Node Binding (Windows) — path filter
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
     outputs:
       relevant: ${{ steps.filter.outputs.relevant }}
@@ -1042,6 +1270,29 @@ jobs:
             BASE_SHA="${{ github.event.before }}"
           fi
           if [[ -z "$BASE_SHA" || "$BASE_SHA" == "0000000000000000000000000000000000000000" ]]; then
+            BASE_SHA="$(git rev-list --max-parents=0 HEAD)"
+          fi
+
+          # An unreachable base is the failure a diff-scoped step cannot
+          # survive quietly: `git diff` errors, the surrounding `mapfile`/`if`
+          # swallows the status, and the step concludes "nothing changed"
+          # having looked at nothing. Prove the object is here before trusting
+          # an empty result.
+          if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+              # With fetch-depth: 0 a PR base is always present, so its
+              # absence is a misconfiguration — and validating nothing in
+              # silence is exactly how this gate spent its whole life.
+              echo "::error::base commit $BASE_SHA is not in this checkout — a" \
+                   "diff against it reads zero files instead of failing." \
+                   "Give this job actions/checkout with fetch-depth: 0."
+              exit 1
+            fi
+            # On push, `before` legitimately vanishes when a branch is
+            # force-pushed. Widen to the whole history rather than fail the
+            # branch: stricter than the range it replaces, never a false red.
+            echo "::warning::push base $BASE_SHA is unreachable (force-push?) —" \
+                 "validating full history instead of the pushed range."
             BASE_SHA="$(git rev-list --max-parents=0 HEAD)"
           fi
           if git diff --name-only "$BASE_SHA" "${{ github.sha }}" | grep -q '^crates/velesdb-node/'; then
@@ -1082,6 +1333,7 @@ jobs:
   # ===========================================================================
   node-binding-tests-windows:
     name: Node Binding Tests (Windows)
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: windows-latest
     needs: [test, node-windows-changed]
     timeout-minutes: 25
@@ -1133,7 +1385,7 @@ jobs:
     # llvm-cov + gpu features runs well within this.
     timeout-minutes: 45
     needs: test
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    if: (github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')) && (github.event.action != 'edited' || github.event.changes.base != null)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -1156,7 +1408,7 @@ jobs:
       # `cargo install` from source — faster and avoids the compile/network
       # flakes that lost the runner mid-job on earlier release runs.
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@82cd3e7658a6f96c86c0234aeeda1748937cb0a1 # v2.85.13
+        uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d # v2.87.0
         with:
           tool: cargo-llvm-cov
 
@@ -1204,6 +1456,7 @@ jobs:
   # ===========================================================================
   velesql-conformance:
     name: VelesQL Conformance
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1255,6 +1508,7 @@ jobs:
   # ===========================================================================
   perf-smoke:
     name: Perf Smoke Test
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
     needs: test
     steps:
@@ -1302,7 +1556,7 @@ jobs:
     name: Benchmarks
     runs-on: ubuntu-latest
     needs: test
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: (github.ref == 'refs/heads/main' && github.event_name == 'push') && (github.event.action != 'edited' || github.event.changes.base != null)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -1340,7 +1594,7 @@ jobs:
     name: SonarCloud Analysis
     runs-on: ubuntu-latest
     needs: [lint, test, security, coverage]
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+    if: (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')) && (github.event.action != 'edited' || github.event.changes.base != null)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1353,7 +1607,7 @@ jobs:
         continue-on-error: true
 
       - name: Set up JDK 17
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
         with:
           distribution: 'zulu'
           java-version: '17'
@@ -1383,26 +1637,32 @@ jobs:
   # ===========================================================================
   gate-contracts:
     name: Gate Contracts
+    if: github.event.action != 'edited' || github.event.changes.base != null
     uses: ./.github/workflows/gate-contracts.yml
 
   doc-contract:
     name: Doc Contract
+    if: github.event.action != 'edited' || github.event.changes.base != null
     uses: ./.github/workflows/doc-contract.yml
 
   promise-contract:
     name: Promise Contract
+    if: github.event.action != 'edited' || github.event.changes.base != null
     uses: ./.github/workflows/promise-contract.yml
 
   production-gates:
     name: Production Gates
+    if: github.event.action != 'edited' || github.event.changes.base != null
     uses: ./.github/workflows/production-gates.yml
 
   propagation-guard:
     name: Propagation Guard
+    if: github.event.action != 'edited' || github.event.changes.base != null
     uses: ./.github/workflows/propagation-guard.yml
 
   binary-size:
     name: Binary Size Gate
+    if: github.event.action != 'edited' || github.event.changes.base != null
     uses: ./.github/workflows/binary-size.yml
 
   # ===========================================================================
@@ -1419,6 +1679,7 @@ jobs:
   # ===========================================================================
   perf-path-changed:
     name: Perf Gate (E2E) — path filter
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
     outputs:
       relevant: ${{ steps.filter.outputs.relevant }}
@@ -1441,6 +1702,29 @@ jobs:
           if [[ -z "$BASE_SHA" || "$BASE_SHA" == "0000000000000000000000000000000000000000" ]]; then
             BASE_SHA="$(git rev-list --max-parents=0 HEAD)"
           fi
+
+          # An unreachable base is the failure a diff-scoped step cannot
+          # survive quietly: `git diff` errors, the surrounding `mapfile`/`if`
+          # swallows the status, and the step concludes "nothing changed"
+          # having looked at nothing. Prove the object is here before trusting
+          # an empty result.
+          if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+              # With fetch-depth: 0 a PR base is always present, so its
+              # absence is a misconfiguration — and validating nothing in
+              # silence is exactly how this gate spent its whole life.
+              echo "::error::base commit $BASE_SHA is not in this checkout — a" \
+                   "diff against it reads zero files instead of failing." \
+                   "Give this job actions/checkout with fetch-depth: 0."
+              exit 1
+            fi
+            # On push, `before` legitimately vanishes when a branch is
+            # force-pushed. Widen to the whole history rather than fail the
+            # branch: stricter than the range it replaces, never a false red.
+            echo "::warning::push base $BASE_SHA is unreachable (force-push?) —" \
+                 "validating full history instead of the pushed range."
+            BASE_SHA="$(git rev-list --max-parents=0 HEAD)"
+          fi
           if git diff --name-only "$BASE_SHA" "${{ github.sha }}" | grep -qE '^crates/velesdb-core/src/(index|simd_native|quantization|fusion|wal|storage)/|^crates/velesdb-python/|^benchmarks/velesdb_benchmark\.py$|^\.github/workflows/ci\.yml$'; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
             echo "search hot path changed — perf gate will run."
@@ -1451,6 +1735,7 @@ jobs:
 
   perf-gate-e2e:
     name: Perf Gate (E2E) — recall ≥ 0.95 + p50 sanity floor (10K/384D)
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
     needs: [test, perf-path-changed]
     timeout-minutes: 30
@@ -1580,6 +1865,36 @@ jobs:
   # `permissions:` is explicit because a called workflow cannot exceed its
   # caller: ci.yml grants `contents: read` at the top level, and
   # pr-governance.yml declares `pull-requests: read` too.
+  #
+  # Deliberately carries NO retarget guard, for the same class of reason
+  # mcp-doc-contract does not: the guard admits `edited` only when the base
+  # changed, and this is the one job whose INPUT is the title and body. Guarded,
+  # it was skipped exactly when the thing it reads changed — so a PR opened
+  # clean and then edited to reintroduce an attribution trailer was never
+  # re-checked. That is not hypothetical: it is how the trailer on #2157
+  # survived its first edit, and it was caught by hand rather than by this gate.
+  #
+  # What this buys and what it does not. It SURFACES a violation on a body
+  # edit; it does not BLOCK one, because `CI Success` — the only required check
+  # on develop and main — keeps its own retarget guard and stays skipped on such
+  # an edit. Making it block would mean running the required gate with most of
+  # its needs skipped, i.e. rewriting the chain's `== "success"` contract, which
+  # is a larger decision than this defect warrants. The next push re-runs
+  # everything and blocks normally.
+  #
+  # The cost is one cheap job (checkout + Python, no toolchain) per body edit —
+  # cheap to RUN, but not necessarily quick to REPORT. An `edited` run joins
+  # this workflow's concurrency group with `cancel-in-progress` false, so it
+  # queues behind any run already in flight instead of starting at once. On
+  # #2159, the PR that made this change, the `edited` run sat pending with zero
+  # jobs for ~44 minutes while the `opened` run worked through the heavy jobs.
+  # Edit a quiet PR and the verdict is seconds away; edit a busy one and it
+  # waits for the running CI. Worth knowing before treating this as fast
+  # feedback.
+  #
+  # Freshness may also now report a stale branch on an edit that did not cause
+  # it — true information, arriving earlier than it used to, not a false
+  # positive. `RETARGET_GUARD_EXEMPT` records this exemption.
   pr-governance:
     name: PR Governance
     permissions:
@@ -1593,8 +1908,8 @@ jobs:
   ci-success:
     name: CI Success
     runs-on: ubuntu-latest
-    needs: [lint, test, security, hygiene, wasm-check, memory-feature-matrix, openapi-drift, mcp-doc-contract, velesql-conformance, perf-smoke, bench-sift1m-compile, perf-gate-e2e, python-sdk-tests, python-integrations, node-binding-tests, node-binding-tests-windows, gate-contracts, doc-contract, promise-contract, production-gates, propagation-guard, binary-size, pr-governance, sonarcloud]
-    if: always()
+    needs: [lint, test, security, hygiene, wasm-check, memory-feature-matrix, internal-bench-check, drop-tightening-check, openapi-drift, mcp-doc-contract, velesql-conformance, perf-smoke, bench-sift1m-compile, perf-gate-e2e, python-sdk-tests, python-integrations, node-binding-tests, node-binding-tests-windows, gate-contracts, doc-contract, promise-contract, production-gates, propagation-guard, binary-size, pr-governance, sonarcloud]
+    if: (always()) && (github.event.action != 'edited' || github.event.changes.base != null)
     steps:
       # sonarcloud is intentionally absent from the gate below: it is an
       # external service (skipped on forks / token-less runs) and must not
@@ -1605,6 +1920,8 @@ jobs:
           [[ "${{ needs.test.result }}" == "success" ]] && \
           [[ "${{ needs.wasm-check.result }}" == "success" ]] && \
           [[ "${{ needs.memory-feature-matrix.result }}" == "success" ]] && \
+          [[ "${{ needs.internal-bench-check.result }}" == "success" ]] && \
+          [[ "${{ needs.drop-tightening-check.result }}" == "success" ]] && \
           [[ "${{ needs.openapi-drift.result }}" == "success" ]] && \
           [[ "${{ needs.mcp-doc-contract.result }}" == "success" ]] && \
           [[ "${{ needs.velesql-conformance.result }}" == "success" ]] && \

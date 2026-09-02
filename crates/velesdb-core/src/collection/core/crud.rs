@@ -3,9 +3,9 @@
 //! Read and delete operations are in `crud_read_delete.rs`.
 //! Bulk-specific methods (`upsert_bulk`, `upsert_bulk_from_raw`) are in `crud_bulk.rs`.
 //! Quantization caching helpers, secondary-index update helpers,
-//! `DedupMap`, and `QuantizationGuards` are in `crud_helpers.rs`.
+//! `DedupMap`, and the PQ cache guard are in `crud_helpers.rs`.
 
-use super::crud_helpers::{DedupMap, QuantizationGuards};
+use super::crud_helpers::DedupMap;
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::point::Point;
@@ -77,6 +77,7 @@ impl Collection {
         self.enforce_upsert_limits(points)?;
         for point in points {
             validate_dimension_match(dimension, point.dimension())?;
+            crate::validation::validate_vector_is_finite(&point.vector)?;
         }
         Ok(())
     }
@@ -212,6 +213,7 @@ impl Collection {
         let mut payload_storage = self.storage.payload_storage.write();
         Self::write_deduped_payloads(points, &mut payload_storage, dedup_map)?;
         payload_storage.flush()?;
+        drop(payload_storage);
         Ok(())
     }
 
@@ -311,11 +313,12 @@ impl Collection {
     ///
     /// Issue #425: For the common case (`StorageMode::Full`, no secondary
     /// indexes, empty BM25 index, no sparse vectors in the batch), Phase 2
-    /// does zero useful work. Skipping avoids `QuantizationGuards` acquisition,
+    /// does zero useful work. Skipping avoids PQ cache guard acquisition,
     /// `seen_payloads` HashMap allocation, and the per-point loop.
     fn can_skip_phase2(&self, points: &[Point], storage_mode: StorageMode) -> bool {
-        // Quantization caching is a no-op only for Full and RaBitQ modes
-        let no_quantization = matches!(storage_mode, StorageMode::Full | StorageMode::RaBitQ);
+        // PQ is the only mode with per-upsert quantization caching; every
+        // other mode (Full, RaBitQ, SQ8, Binary) does none here.
+        let no_quantization = !matches!(storage_mode, StorageMode::ProductQuantization);
         if !no_quantization {
             return false;
         }
@@ -370,25 +373,12 @@ impl Collection {
             return Ok(Vec::new());
         }
 
-        // Issue #486: Parallel quantization for SQ8/Binary — compute all
-        // quantized vectors via rayon, then batch-insert under a single
-        // write lock. PQ mode is handled sequentially (shared training state).
-        let quant_done = self.try_parallel_quantize(points, storage_mode);
+        // PQ is the only mode with per-upsert quantization work; its quantizer
+        // carries shared lazy-training state, so points run sequentially under
+        // one cache guard.
+        let mut pq_guard = super::crud_helpers::pq_cache_guard(self, storage_mode);
 
-        let mut quant_guards = if quant_done {
-            // Quantization already applied — no guards needed for SQ8/Binary
-            QuantizationGuards::acquire_pq_only(self, storage_mode)
-        } else {
-            QuantizationGuards::acquire(self, storage_mode)
-        };
-
-        self.per_point_sequential_updates(
-            points,
-            old_payloads,
-            storage_mode,
-            &mut quant_guards,
-            quant_done,
-        )
+        self.per_point_sequential_updates(points, old_payloads, &mut pq_guard)
     }
 
     /// Runs the sequential per-point loop for secondary indexes, BM25, sparse
@@ -399,9 +389,7 @@ impl Collection {
         &self,
         points: &[Point],
         old_payloads: &[Option<serde_json::Value>],
-        storage_mode: StorageMode,
-        quant_guards: &mut QuantizationGuards<'_>,
-        quant_done: bool,
+        pq_guard: &mut Option<super::crud_helpers::PqCacheGuard<'_>>,
     ) -> Result<Vec<(u64, BTreeMap<String, crate::index::sparse::SparseVector>)>> {
         let mut sparse_batch = Vec::new();
         let mut seen_payloads: HashMap<u64, Option<&serde_json::Value>> =
@@ -414,7 +402,7 @@ impl Collection {
         // flushed by `batch_store_all`, so the BM25 WAL never leads payload
         // durability. A failure propagates with the in-memory index untouched.
         if !skip_bm25 {
-            self.bulk_update_text_index(points)?;
+            self.bulk_update_text_index(points, old_payloads)?;
         }
         let needs_label_updates = Self::needs_label_updates(points, old_payloads);
         let mut label_updates = Self::alloc_label_buffer(needs_label_updates, points.len());
@@ -422,7 +410,7 @@ impl Collection {
         for (point, pre_batch_old) in points.iter().zip(old_payloads) {
             let effective_old =
                 Self::resolve_effective_old(&seen_payloads, point.id, pre_batch_old.as_ref());
-            Self::maybe_quantize(self, point, storage_mode, quant_guards, quant_done);
+            Self::maybe_quantize(self, point, pq_guard);
             self.update_secondary_indexes_on_upsert(
                 point.id,
                 effective_old,
@@ -478,7 +466,7 @@ impl Collection {
         // Issue #389 + #1797: one BM25 WAL barrier for the whole batch,
         // sequenced after the payload flush so the BM25 WAL never leads
         // payload durability — the same envelope as the vector upsert path.
-        self.bulk_update_text_index(&points)?;
+        self.bulk_update_text_index(&points, &old_payloads_for_hist)?;
 
         // config(1) only — payload_storage(3) and label_index(7) both released above.
         self.storage.config.write().point_count = point_count;

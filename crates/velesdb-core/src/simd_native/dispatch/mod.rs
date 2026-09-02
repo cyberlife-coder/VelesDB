@@ -20,7 +20,7 @@ pub use hamming::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SimdLevel {
-    /// AVX-512F available (x86_64 only).
+    /// AVX-512F on top of the AVX2 + FMA baseline (x86_64 only).
     Avx512,
     /// AVX2 + FMA available (x86_64 only).
     Avx2,
@@ -48,14 +48,29 @@ pub(super) fn squared_l2_scalar(a: &[f32], b: &[f32]) -> f32 {
         .sum()
 }
 
+/// AVX2 + FMA — the baseline every non-scalar x86 level is built on.
+///
+/// `Avx512` is not a superset of `Avx2` in this dispatcher: an AVX-512 arm
+/// that has no kernel for the input width falls through to the AVX2 kernel
+/// (`hamming`, `jaccard`, `scale_inplace`), and those carry
+/// `#[target_feature(enable = "avx2")]`. Granting `Avx512` on `avx512f` alone
+/// would satisfy their safety contract with an ISA folk theorem rather than a
+/// check — every shipping AVX-512 part does advertise AVX2, but a hypervisor
+/// that masks CPUID need not, and the result there is an illegal instruction.
+/// Requiring the baseline makes the fall-through sound by construction.
+#[cfg(target_arch = "x86_64")]
+fn has_avx2_baseline() -> bool {
+    is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma")
+}
+
 fn detect_simd_level() -> SimdLevel {
     let level;
 
     #[cfg(target_arch = "x86_64")]
     {
-        if is_x86_feature_detected!("avx512f") {
+        if is_x86_feature_detected!("avx512f") && has_avx2_baseline() {
             level = SimdLevel::Avx512;
-        } else if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+        } else if has_avx2_baseline() {
             level = SimdLevel::Avx2;
         } else {
             level = SimdLevel::Scalar;

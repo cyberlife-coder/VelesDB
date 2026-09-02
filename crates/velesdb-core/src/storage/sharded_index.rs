@@ -114,6 +114,7 @@ impl ShardedIndex {
         let shard_idx = Self::shard_index(id);
         let mut shard = self.shards[shard_idx].write();
         let removed = shard.entries.remove(&id);
+        drop(shard);
         if removed.is_some() {
             self.entry_count
                 .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);

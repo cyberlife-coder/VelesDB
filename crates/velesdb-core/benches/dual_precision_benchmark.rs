@@ -1,7 +1,7 @@
-//! Benchmark: `NativeHnsw` vs `DualPrecisionHnsw`
+//! Benchmark: `NativeHnsw` vs `Sq8PrecisionHnsw`
 //!
-//! Compares the original float32 implementation with the new
-//! dual-precision (int8 traversal + float32 re-ranking) approach.
+//! Compares the float32 baseline with the SQ8 dual-precision backend
+//! (int8 traversal + float32 re-ranking).
 //!
 //! Run with: `cargo bench --bench dual_precision_benchmark`
 
@@ -9,7 +9,7 @@
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use velesdb_core::distance::DistanceMetric;
-use velesdb_core::index::hnsw::native::{CachedSimdDistance, DualPrecisionHnsw, NativeHnsw};
+use velesdb_core::index::hnsw::native::{CachedSimdDistance, NativeHnsw, Sq8PrecisionHnsw};
 
 fn generate_vector(dim: usize, seed: u64) -> Vec<f32> {
     (0..dim)
@@ -39,15 +39,14 @@ fn bench_search_latency(c: &mut Criterion) {
         native_hnsw.insert(v).expect("bench");
     }
 
-    // === Build DualPrecisionHnsw (new) ===
+    // === Build Sq8PrecisionHnsw ===
     let engine_dual = CachedSimdDistance::new(DistanceMetric::Euclidean, dim);
-    let mut dual_hnsw =
-        DualPrecisionHnsw::new(engine_dual, dim, 32, 200, num_vectors).expect("bench");
+    let dual_hnsw = Sq8PrecisionHnsw::new(engine_dual, dim, 32, 200, num_vectors).expect("bench");
     for v in &vectors {
         dual_hnsw.insert(v).expect("bench");
     }
     // Force training if not already done
-    dual_hnsw.force_train_quantizer();
+    dual_hnsw.force_train_quantizer().expect("bench");
 
     // === Benchmark NativeHnsw ===
     group.bench_with_input(
@@ -63,7 +62,7 @@ fn bench_search_latency(c: &mut Criterion) {
 
     // === Benchmark DualPrecisionHnsw ===
     group.bench_with_input(
-        BenchmarkId::new("DualPrecision_int8", format!("{num_vectors}x{dim}d")),
+        BenchmarkId::new("Sq8Precision_int8", format!("{num_vectors}x{dim}d")),
         &(),
         |b, ()| {
             b.iter(|| {
@@ -117,17 +116,16 @@ fn bench_memory_footprint(c: &mut Criterion) {
     );
 
     group.bench_with_input(
-        BenchmarkId::new("insert_dual_precision", "1000x768"),
+        BenchmarkId::new("insert_sq8_precision", "1000x768"),
         &(),
         |b, ()| {
             b.iter(|| {
                 let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, dim);
-                let mut hnsw =
-                    DualPrecisionHnsw::new(engine, dim, 32, 200, num_vectors).expect("bench");
+                let hnsw = Sq8PrecisionHnsw::new(engine, dim, 32, 200, num_vectors).expect("bench");
                 for v in &vectors {
                     hnsw.insert(v).expect("bench");
                 }
-                hnsw.force_train_quantizer();
+                hnsw.force_train_quantizer().expect("bench");
                 black_box(hnsw.len())
             });
         },

@@ -13,10 +13,10 @@
 //!
 //! The budget still binds. Growth goes into child modules that keep private
 //! access (`fused_recall.rs` and `online_migration.rs` are the pattern —
-//! `#[path]` children of `service`, not siblings), never into this file; the
-//! next named cut is the working-context bridge (#1967, decided together with
-//! the store facetting of #1959). A change that adds an operation body here
-//! instead of a child module needs to say why in review.
+//! `#[path]` children of `service`, not siblings), never into this file. The
+//! working-context bridge was the last named cut and it is done: it left along
+//! the store-facet line of #1959, as #1967 asked. A change that adds an
+//! operation body here instead of a child module needs to say why in review.
 
 use std::collections::{HashMap, HashSet};
 #[cfg(feature = "persistence")]

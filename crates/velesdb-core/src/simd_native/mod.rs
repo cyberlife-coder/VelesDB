@@ -8,6 +8,7 @@
 //! - `scalar` — Scalar fallback implementations and fast-rsqrt helpers
 //! - `tail_unroll` — Remainder/tail handling macros for SIMD loops
 //! - `prefetch` — CPU cache prefetch utilities
+//! - `ptr_span` — remaining-length guards for the pointer-walked kernels
 //! - `reduction` — Shared horizontal sum helpers for SIMD accumulators
 //! - `x86_avx512` — AVX-512F kernel implementations (x86_64 only)
 //! - `x86_avx2` — AVX2+FMA dot product and squared L2 kernels (x86_64 only)
@@ -35,6 +36,8 @@
 // =============================================================================
 
 pub mod prefetch;
+#[cfg(target_arch = "x86_64")]
+pub(crate) mod ptr_span;
 pub(crate) mod reduction;
 pub mod scalar;
 mod tail_unroll;
@@ -57,7 +60,9 @@ pub use prefetch::{
 // =============================================================================
 // SAFETY: Shared invariants for SIMD unsafe blocks in this module tree.
 // - Condition 1: All pointer arithmetic is derived from slice pointers with loop bounds
-//   proving in-range access for each lane width.
+//   proving in-range access for each lane width. Where a loop walks cursors rather
+//   than indices, the bound is `ptr_span::has_at_least`, which measures the distance
+//   between them instead of forming the past-the-end pointer the check is about.
 // - Condition 2: Target-featured functions are called only after runtime feature checks
 //   or on architectures where the feature is guaranteed.
 // - Condition 3: Unaligned loads use `*_loadu_*`/masked-load intrinsics or equivalent
@@ -136,7 +141,16 @@ mod simd_native_dispatch_tests;
 mod cosine_fused_tests;
 
 #[cfg(test)]
-mod harley_seal_tests;
+#[path = "cosine_tail_tests.rs"]
+mod cosine_tail_tests;
+
+#[cfg(test)]
+#[path = "l2_dot_tail_tests.rs"]
+mod l2_dot_tail_tests;
+
+#[cfg(test)]
+#[path = "hamming_jaccard_threshold_tests.rs"]
+mod hamming_jaccard_threshold_tests;
 
 #[cfg(test)]
 mod warmup_tests;
@@ -146,3 +160,11 @@ mod distance_engine_tests;
 
 #[cfg(test)]
 mod hamming_jaccard_tests;
+
+#[cfg(all(test, target_arch = "x86_64"))]
+#[path = "nan_contract_tests.rs"]
+mod nan_contract_tests;
+
+#[cfg(all(test, target_arch = "x86_64"))]
+#[path = "ptr_span_tests.rs"]
+mod ptr_span_tests;

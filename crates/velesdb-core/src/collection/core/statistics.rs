@@ -101,6 +101,9 @@ impl Collection {
     }
 
     /// Samples up to 1000 payloads to compute size, distinct values, and null counts.
+    // The read guard spans the sampling loop and the function ends with it;
+    // every retrieve in the loop needs it and nothing after the loop exists.
+    #[expect(clippy::significant_drop_tightening)]
     fn sample_payload_stats(
         &self,
     ) -> (u64, HashMap<String, HashSet<String>>, HashMap<String, u64>) {
@@ -241,6 +244,11 @@ impl Collection {
     /// Returns default stats on error (intentional for convenience).
     /// Use `analyze()` directly if error handling is required.
     #[must_use]
+    // The cache mutex is held across analyze() deliberately: it is the
+    // single-flight that stops N concurrent readers from all recomputing the
+    // statistics when the TTL lapses. analyze() takes storage read locks under
+    // it, which is the documented outer-to-inner direction.
+    #[expect(clippy::significant_drop_tightening)]
     pub fn get_stats(&self) -> std::sync::Arc<CollectionStats> {
         let mut cached = self.query.cached_stats.lock();
         if let Some((ref stats, ts)) = *cached {

@@ -164,6 +164,11 @@ name = "profile_batch_insert"
 path = "examples/profile_batch_insert.rs"
 required-features = ["persistence"]
 
+[[example]]
+name = "resident_set"
+path = "examples/resident_set.rs"
+required-features = ["persistence"]
+
 [[test]]
 name = "scale_recall_100k"
 required-features = ["persistence"]
@@ -178,6 +183,10 @@ harness = false
 
 [[bench]]
 name = "hnsw_benchmark"
+harness = false
+
+[[bench]]
+name = "hnsw_adjacency_scale"
 harness = false
 
 [[bench]]
@@ -424,6 +433,10 @@ harness = false
 
 [[bench]]
 name = "sparse_benchmark"
+harness = false
+
+[[bench]]
+name = "sparse_posting_scale"
 harness = false
 
 [[bench]]

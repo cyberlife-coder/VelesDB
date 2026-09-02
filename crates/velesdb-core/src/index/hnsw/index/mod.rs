@@ -110,6 +110,16 @@ pub struct HnswIndex {
     /// invariant is already structurally enforced.
     #[allow(dead_code)] // Retained for field-layout invariant; dropped after inner
     pub(crate) io_holder: Option<Box<HnswIo>>,
+    /// Directory this index may keep its f32 arena file in.
+    ///
+    /// Remembered rather than passed per call because the index rebuilds
+    /// itself: `vacuum` constructs a whole replacement graph, and without
+    /// this the replacement would come back heap-backed and silently undo
+    /// the mapping on every compaction (#2112).
+    ///
+    /// `None` for an index with no collection directory, and honoured only
+    /// by the quantized backends.
+    pub(crate) arena_dir: Option<std::path::PathBuf>,
 }
 
 impl HnswIndex {
@@ -133,7 +143,10 @@ impl HnswIndex {
         vector: &[f32],
         result: &UpsertResult,
     ) -> bool {
-        let assigned_id = match self.inner.read().insert((vector, result.idx)) {
+        // Bound so the graph read guard is released before the rollback path
+        // touches `mappings`.
+        let inserted = self.inner.read().insert((vector, result.idx));
+        let assigned_id = match inserted {
             Ok(id) => id,
             Err(e) => {
                 self.rollback_upsert(id, result);
@@ -199,11 +212,27 @@ impl HnswIndex {
     /// Automatically skipped for small indices (< 1000 vectors) where the
     /// entire working set fits in L2 cache.
     ///
+    /// # Why the write lock
+    ///
+    /// The pass renumbers every node, and [`mappings`](Self::mappings) is
+    /// keyed by that numbering, so the two are only consistent together. A
+    /// read guard would let a search run between them and resolve external
+    /// ids against the old numbering — confident, wrong answers rather than
+    /// an error. `vacuum` takes the write lock to renumber for the same
+    /// reason. `ANALYZE` is the caller, so the exclusion lasts one
+    /// maintenance pass.
+    ///
     /// # Errors
     ///
     /// Returns an error if vector storage reordering fails.
     pub fn reorder_for_locality(&self) -> crate::error::Result<()> {
-        self.inner.read().reorder_for_locality()
+        let guard = self.inner.write();
+        let reordered = guard.reorder_for_locality()?;
+        if let Some(old_to_new) = reordered {
+            self.mappings.remap_indices(&old_to_new);
+        }
+        drop(guard);
+        Ok(())
     }
 }
 

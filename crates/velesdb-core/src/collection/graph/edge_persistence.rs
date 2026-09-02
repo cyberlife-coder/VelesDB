@@ -5,7 +5,6 @@
 use super::csr_snapshot::{CsrSnapshot, SnapshotBuilder};
 use super::edge::EdgeStore;
 use super::helpers::PostcardPersistence;
-use super::label_table::LabelTable;
 
 // ---------------------------------------------------------------------------
 // CSR snapshot methods (G1: zero-copy BFS)
@@ -25,8 +24,7 @@ impl EdgeStore {
     ///
     /// The snapshot is automatically invalidated by any write operation.
     pub fn build_read_snapshot(&mut self) {
-        let label_table = LabelTable::new();
-        self.csr_snapshot = Some(SnapshotBuilder::build(self, &label_table));
+        self.csr_snapshot = Some(SnapshotBuilder::build(self));
     }
 
     /// Returns a reference to the CSR snapshot, if built.
@@ -92,10 +90,20 @@ impl EdgeStore {
 
     /// Deserializes an edge store from bytes.
     ///
+    /// Rebuilds the (unserialized) label table and label indices, so by-label
+    /// queries work on the returned store exactly as on the one serialized —
+    /// `serde(skip)` fields would otherwise come back empty (#2089).
+    ///
     /// # Errors
     /// Returns an error if deserialization fails (e.g., corrupted data).
     pub fn from_bytes(bytes: &[u8]) -> std::result::Result<Self, postcard::Error> {
-        <Self as PostcardPersistence>::from_bytes(bytes)
+        let mut store = <Self as PostcardPersistence>::from_bytes(bytes)?;
+        store
+            .rebuild_label_indexes()
+            // Unreachable in practice (u32::MAX distinct labels); surfaced as
+            // a deserialization failure rather than a silently unindexed store.
+            .map_err(|_| postcard::Error::SerdeDeCustom)?;
+        Ok(store)
     }
 
     /// Saves the edge store to a file.
@@ -108,14 +116,16 @@ impl EdgeStore {
 
     /// Loads an edge store from a file.
     ///
-    /// Automatically builds a CSR snapshot after loading for zero-copy
-    /// BFS traversal (G1).
+    /// Rebuilds the (unserialized) label table and label indices, then
+    /// builds a CSR snapshot for zero-copy BFS traversal (G1).
     ///
     /// # Errors
     /// Returns an error if file I/O or deserialization fails.
     pub fn load_from_file(path: &std::path::Path) -> std::io::Result<Self> {
         let mut store = <Self as PostcardPersistence>::load_from_file(path)?;
-        store.rebuild_incoming_label_index();
+        store
+            .rebuild_label_indexes()
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
         store.build_read_snapshot();
         Ok(store)
     }

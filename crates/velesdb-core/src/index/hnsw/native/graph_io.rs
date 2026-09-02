@@ -106,6 +106,11 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     }
 
     /// Writes vector data to `{basename}.vectors`.
+    // The read guard spans the whole dump on purpose: it is what makes the
+    // written file a consistent snapshot. Releasing it earlier would mean
+    // copying the entire arena first -- hundreds of MiB at production sizes --
+    // to avoid a read lock that excludes no other reader.
+    #[expect(clippy::significant_drop_tightening)]
     fn dump_vectors_file(&self, path: &Path, basename: &str) -> std::io::Result<u64> {
         let vectors_path = path.join(format!("{basename}.vectors"));
         let vectors_guard = self.vectors.read();
@@ -156,6 +161,10 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     }
 
     /// Writes graph structure to `{basename}.graph`.
+    // Same snapshot argument as `dump_vectors_file`: the layers guard spans
+    // the dump so the written graph is internally consistent. The per-node
+    // neighbour locks inside are released before each write.
+    #[expect(clippy::significant_drop_tightening)]
     fn dump_graph_file(&self, path: &Path, basename: &str, count: u64) -> std::io::Result<()> {
         let graph_path = path.join(format!("{basename}.graph"));
         let layers = self.layers.read();
@@ -230,6 +239,9 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
                     let neighbor_u32 = neighbor as u32;
                     scratch.extend_from_slice(&neighbor_u32.to_le_bytes());
                 }
+                // The node's neighbours are all in `scratch` now; the write
+                // below is disk I/O and must not run under this node's lock.
+                drop(neighbors);
                 writer.write_all(&scratch)?;
             }
         }
@@ -248,8 +260,29 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     ///
     /// Returns `io::Error` if file operations fail or data is corrupted.
     pub fn file_load(path: &Path, basename: &str, distance: D) -> std::io::Result<Self> {
+        Self::file_load_with_arena(path, basename, distance, None)
+    }
+
+    /// As [`file_load`](Self::file_load), but the reloaded arena may live in
+    /// `arena_dir` instead of on the heap.
+    ///
+    /// `.vectors` stays the durable copy either way — the arena is a cache of
+    /// it, which is what lets the graph delete the arena on drop. Passing a
+    /// directory only decides where the loaded f32 is *held*, never what is
+    /// read.
+    ///
+    /// # Errors
+    ///
+    /// Returns `io::Error` if file operations fail or data is corrupted.
+    pub(in crate::index::hnsw) fn file_load_with_arena(
+        path: &Path,
+        basename: &str,
+        distance: D,
+        arena_dir: Option<&Path>,
+    ) -> std::io::Result<Self> {
+        let arena_home = arena_dir.map(crate::index::hnsw::native::arena_home::ArenaHome::claim);
         let vectors_path = path.join(format!("{basename}.vectors"));
-        let (mut vectors, count) = Self::load_vectors_file(&vectors_path)?;
+        let (mut vectors, count) = Self::load_vectors_file(&vectors_path, arena_home.as_ref())?;
 
         // Indexes written before the pre-normalized cosine engine store raw
         // vectors. Cosine is scale-invariant, so normalizing here never
@@ -297,6 +330,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             entry_point: std::sync::atomic::AtomicUsize::new(entry_point),
             max_layer: std::sync::atomic::AtomicUsize::new(graph.max_layer),
             count: std::sync::atomic::AtomicUsize::new(count),
+            arena_home,
             rng_state: std::sync::atomic::AtomicU64::new(0x5DEE_CE66_D1A4_B5B5),
             max_connections: graph.max_connections,
             max_connections_0: graph.max_connections_0,
@@ -319,6 +353,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
 
     fn load_vectors_file(
         path: &Path,
+        arena_home: Option<&crate::index::hnsw::native::arena_home::ArenaHome>,
     ) -> std::io::Result<(Option<crate::perf_optimizations::ContiguousVectors>, usize)> {
         let file = File::open(path)?;
         let file_len = file.metadata()?.len();
@@ -335,7 +370,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         // file cannot possibly back. Header = version(4) + count(8) + dim(4).
         Self::validate_vectors_file_len(count, dimension, file_len)?;
 
-        let storage = Self::read_vector_data(&mut reader, count, dimension)?;
+        let storage = Self::read_vector_data(&mut reader, count, dimension, arena_home)?;
         Ok((Some(storage), count))
     }
 
@@ -390,6 +425,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         reader: &mut BufReader<File>,
         count: usize,
         dimension: usize,
+        arena_home: Option<&crate::index::hnsw::native::arena_home::ArenaHome>,
     ) -> std::io::Result<crate::perf_optimizations::ContiguousVectors> {
         // The (count, dimension) here was already validated to fit within the
         // actual file length by `validate_vectors_file_len`, so this is a real,
@@ -406,9 +442,8 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             .ok_or_else(|| corrupt("vector payload size overflows usize"))?;
 
         crate::alloc_guard::with_min_alloc_byte_limit(min_bytes, || {
-            let mut storage =
-                crate::perf_optimizations::ContiguousVectors::new(dimension, count.max(16))
-                    .map_err(|e| std::io::Error::other(e.to_string()))?;
+            let mut storage = Self::new_arena(arena_home, dimension, count.max(16))
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
             let mut buf4 = [0u8; 4];
             let mut buf_vec = vec![0f32; dimension];
             for _ in 0..count {

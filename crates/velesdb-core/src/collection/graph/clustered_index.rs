@@ -221,20 +221,25 @@ impl ClusteredIndex {
         self.index.get(&node_id).map_or(0, |(_, len)| *len)
     }
 
+    /// Shrinks free slot `i` by `needed` bytes: splits it if slack remains,
+    /// removes it on an exact fit, and updates `free_bytes` either way.
+    /// Returns the offset consumed from that slot.
+    fn consume_free_slot(&mut self, i: usize, needed: usize) -> usize {
+        let (offset, length) = self.free_slots[i];
+        if length > needed {
+            self.free_slots[i] = (offset + needed, length - needed);
+        } else {
+            self.free_slots.swap_remove(i);
+        }
+        self.free_bytes = self.free_bytes.saturating_sub(needed);
+        offset
+    }
+
     fn allocate_slot(&mut self, needed: usize) -> usize {
         // First-fit allocation from free list
         for i in 0..self.free_slots.len() {
-            let (offset, length) = self.free_slots[i];
-            if length >= needed {
-                if length > needed {
-                    // Split the slot
-                    self.free_slots[i] = (offset + needed, length - needed);
-                } else {
-                    // Exact fit
-                    self.free_slots.swap_remove(i);
-                }
-                self.free_bytes = self.free_bytes.saturating_sub(needed);
-                return offset;
+            if self.free_slots[i].1 >= needed {
+                return self.consume_free_slot(i, needed);
             }
         }
 
@@ -254,12 +259,7 @@ impl ClusteredIndex {
         for i in 0..self.free_slots.len() {
             let (free_offset, free_length) = self.free_slots[i];
             if free_offset == offset && free_length >= needed {
-                if free_length > needed {
-                    self.free_slots[i] = (free_offset + needed, free_length - needed);
-                } else {
-                    self.free_slots.swap_remove(i);
-                }
-                self.free_bytes = self.free_bytes.saturating_sub(needed);
+                self.consume_free_slot(i, needed);
                 return true;
             }
         }

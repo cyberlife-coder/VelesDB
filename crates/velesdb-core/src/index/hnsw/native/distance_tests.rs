@@ -520,14 +520,17 @@ fn test_cosine_scalar_zero_norm() {
 
 #[test]
 fn test_jaccard_scalar_zero_union() {
-    // Test division by zero case
+    // Division-by-zero case. `jaccard_scalar` scores an empty union 1.0 —
+    // two all-zero vectors are identical, the conventional J(∅,∅) = 1 — so
+    // the distance is 0.0. The baseline used to answer 1.0 here, calling the
+    // same pair maximally distant while production called them identical.
     let engine = CpuDistance::new(DistanceMetric::Jaccard);
     let a = vec![0.0, 0.0, 0.0];
     let b = vec![0.0, 0.0, 0.0];
     let dist = engine.distance(&a, &b);
     assert!(
-        (dist - 1.0).abs() < 1e-5,
-        "Zero union should return distance 1.0"
+        dist.abs() < 1e-5,
+        "empty union means identical: distance 0.0, got {dist}"
     );
 }
 
@@ -556,10 +559,71 @@ fn test_hamming_scalar_all_same() {
 #[test]
 fn test_hamming_scalar_all_different() {
     let engine = CpuDistance::new(DistanceMetric::Hamming);
-    let a = vec![1.0, 2.0, 3.0];
-    let b = vec![4.0, 5.0, 6.0];
+    let a = vec![1.0, 0.0, 1.0];
+    let b = vec![0.0, 1.0, 0.0];
     let dist = engine.distance(&a, &b);
     assert!((dist - 3.0).abs() < 1e-5);
+}
+
+/// Hamming buckets each component at 0.5 before comparing.
+///
+/// The baseline used to compare raw bit patterns, so `[1,2,3]` against
+/// `[4,5,6]` scored 3 — every component "differs" — while production scored
+/// 0, because all six values are on the same side of the threshold. Hamming
+/// is defined on binary vectors; a baseline that reads the mantissa is
+/// measuring something else entirely.
+#[test]
+fn test_hamming_thresholds_at_half_rather_than_comparing_bit_patterns() {
+    let engine = CpuDistance::new(DistanceMetric::Hamming);
+
+    let above = vec![1.0, 2.0, 3.0];
+    let also_above = vec![4.0, 5.0, 6.0];
+    assert!(
+        engine.distance(&above, &also_above).abs() < 1e-5,
+        "values on the same side of 0.5 are the same bit"
+    );
+
+    let below = vec![0.0, 0.1, 0.4];
+    assert!(
+        (engine.distance(&above, &below) - 3.0).abs() < 1e-5,
+        "values straddling 0.5 differ in every position"
+    );
+}
+
+/// The scalar baseline and the production SIMD engine must agree.
+///
+/// `CpuDistance` exists to be the un-vectorized reference the SIMD kernels
+/// are checked against; when it implements a different formula, a real SIMD
+/// bug and a reference bug are indistinguishable. Euclidean is excluded on
+/// purpose: `CachedSimdDistance` returns *squared* L2 for the HNSW hot loop
+/// (documented at its `distance` impl) while the baseline takes the square
+/// root.
+#[test]
+fn test_cpu_baseline_agrees_with_cached_simd_on_adversarial_inputs() {
+    let cases: [(&[f32], &[f32]); 4] = [
+        (&[1.0, 2.0, 3.0], &[4.0, 5.0, 6.0]),
+        (&[0.0, 0.0, 0.0], &[0.0, 0.0, 0.0]),
+        (&[1.0, 0.0, 1.0, 0.0], &[1.0, 1.0, 0.0, 0.0]),
+        (&[0.9, 0.4, 0.6, 0.1], &[0.4, 0.9, 0.1, 0.6]),
+    ];
+
+    for metric in [
+        DistanceMetric::Cosine,
+        DistanceMetric::DotProduct,
+        DistanceMetric::Hamming,
+        DistanceMetric::Jaccard,
+    ] {
+        for (a, b) in cases {
+            let cpu = CpuDistance::new(metric);
+            let cached = CachedSimdDistance::new(metric, a.len());
+            let baseline = cpu.distance(a, b);
+            let simd = cached.distance(a, b);
+            assert!(
+                (baseline - simd).abs() < 1e-5,
+                "{metric:?} on {a:?} vs {b:?}: baseline {baseline} != simd {simd}"
+            );
+        }
+    }
 }
 
 // =========================================================================

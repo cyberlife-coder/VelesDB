@@ -126,9 +126,27 @@ fn test_transform_score_cosine() {
     let engine = CachedSimdDistance::new(DistanceMetric::Cosine, 32);
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
 
-    // Cosine: similarity = 1 - distance
+    // Cosine: similarity = 1 - distance, over the metric's own [-1, 1].
     assert!((hnsw.transform_score(0.3) - 0.7).abs() < f32::EPSILON);
-    assert!((hnsw.transform_score(1.5) - 0.0).abs() < f32::EPSILON); // clamped
+    // A raw distance above 1.0 means the pair is anti-correlated. The
+    // similarity is genuinely negative and keeps its sign; flooring it at 0.0
+    // here (a shared match arm with Jaccard once did) tied every
+    // anti-correlated match at zero and disagreed with the brute-force and
+    // rerank paths, which have always returned the cosine itself.
+    assert!((hnsw.transform_score(1.5) - (-0.5)).abs() < f32::EPSILON);
+    // The clamp still absorbs drift past the true bound.
+    assert!((hnsw.transform_score(2.5) - (-1.0)).abs() < f32::EPSILON);
+}
+
+#[test]
+fn test_transform_score_jaccard_keeps_its_zero_floor() {
+    let engine = CachedSimdDistance::new(DistanceMetric::Jaccard, 32);
+    let hnsw = NativeHnsw::new(engine, 16, 100, 100);
+
+    // Jaccard is intersection/union: it cannot go below zero, so unlike
+    // cosine its floor at 0.0 is the metric's real bound, not a lost sign.
+    assert!((hnsw.transform_score(0.3) - 0.7).abs() < f32::EPSILON);
+    assert!((hnsw.transform_score(1.5) - 0.0).abs() < f32::EPSILON);
 }
 
 #[test]
@@ -1169,6 +1187,7 @@ fn assert_unit_batch_parity<D: DistanceEngine + Send + Sync>(
 }
 
 /// Returns the vector stored in the graph for `node_id`.
+#[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn stored_vector<D: DistanceEngine>(hnsw: &NativeHnsw<D>, node_id: usize) -> Vec<f32> {
     let guard = hnsw.vectors.read();
     let storage = guard.as_ref().expect("storage initialized");

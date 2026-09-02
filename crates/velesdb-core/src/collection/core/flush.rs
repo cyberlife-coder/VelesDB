@@ -88,6 +88,7 @@ impl Collection {
             .store(0, std::sync::atomic::Ordering::Relaxed);
         self.flush_pq_codebook()?;
         self.flush_rabitq_quantizer()?;
+        self.flush_sq8_quantizer()?;
         Ok(())
     }
 
@@ -126,6 +127,12 @@ impl Collection {
     /// No-op when no PQ quantizer has been trained yet. The codebook is also
     /// saved by the explicit `TRAIN QUANTIZER` path (`database/training.rs`),
     /// so this covers the lazy-training case to prevent codebook loss on restart.
+    // The read guard spans the codebook and rotation writes because `pq`
+    // borrows out of it, and `pq_quantizer` holds a `ProductQuantizer` by
+    // value rather than behind an `Arc` -- releasing the guard first would
+    // mean deep-copying a codebook just to avoid a read lock over I/O. The
+    // write happens on flush only, and a read guard excludes no other reader.
+    #[expect(clippy::significant_drop_tightening)]
     #[cfg(feature = "persistence")]
     fn flush_pq_codebook(&self) -> Result<()> {
         let guard = self.storage.pq_quantizer.read();
@@ -162,6 +169,24 @@ impl Collection {
 
     #[cfg(not(feature = "persistence"))]
     fn flush_rabitq_quantizer(&self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Persists the lazily-trained SQ8 quantizer to `sq8.idx` on every full
+    /// flush (parity with [`Self::flush_rabitq_quantizer`]).
+    ///
+    /// No-op when the backend is not SQ8 or no quantizer is trained yet.
+    #[cfg(feature = "persistence")]
+    fn flush_sq8_quantizer(&self) -> Result<()> {
+        let Some(quantizer) = self.storage.index.sq8_quantizer() else {
+            return Ok(());
+        };
+        quantizer.save(&self.storage.path)?;
+        Ok(())
+    }
+
+    #[cfg(not(feature = "persistence"))]
+    fn flush_sq8_quantizer(&self) -> Result<()> {
         Ok(())
     }
 
@@ -287,12 +312,14 @@ impl Collection {
             .swap(false, Ordering::AcqRel)
         {
             let property_index_path = self.storage.path.join("property_index.bin");
-            if let Err(e) = self
+            // Bound: the `if let` would keep the index read guard alive for the
+            // whole expression, blocking writers for the duration of a disk write.
+            let saved = self
                 .graph
                 .property_index
                 .read()
-                .save_to_file(&property_index_path)
-            {
+                .save_to_file(&property_index_path);
+            if let Err(e) = saved {
                 // Re-mark so the next flush retries the write.
                 self.graph
                     .property_index_dirty
@@ -303,12 +330,13 @@ impl Collection {
 
         if self.graph.range_index_dirty.swap(false, Ordering::AcqRel) {
             let range_index_path = self.storage.path.join("range_index.bin");
-            if let Err(e) = self
+            // Bound for the same reason as `property_index` above.
+            let saved = self
                 .graph
                 .range_index
                 .read()
-                .save_to_file(&range_index_path)
-            {
+                .save_to_file(&range_index_path);
+            if let Err(e) = saved {
                 self.graph.range_index_dirty.store(true, Ordering::Release);
                 return Err(e.into());
             }
@@ -357,6 +385,11 @@ impl Collection {
     }
 
     /// Compacts all named sparse indexes to disk (EPIC-062 / SPARSE-04).
+    // Deliberately exclusive for the whole loop, as the comment below
+    // records: mutation paths hold this same guard from WAL append through
+    // in-memory application, so releasing it mid-compaction would let a write
+    // land between a snapshot publication and its WAL reset.
+    #[expect(clippy::significant_drop_tightening)]
     fn flush_sparse_indexes(&self) -> Result<()> {
         // Exclusive across snapshot publication and WAL reset. Mutation paths
         // hold the same guard from WAL append through in-memory application.
@@ -407,6 +440,10 @@ impl Collection {
         let tmp_path = self.storage.path.join("config.json.tmp");
         let config_data = serde_json::to_string_pretty(&*config)
             .map_err(|e| Error::Serialization(e.to_string()))?;
+        // Serialization is the guard's last use. Everything below is disk I/O
+        // ending in two fsyncs, and none of it should run under the config
+        // lock.
+        drop(config);
 
         let file = std::fs::File::create(&tmp_path)?;
         let mut writer = std::io::BufWriter::new(file);

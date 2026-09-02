@@ -1,62 +1,62 @@
-//! `RaBitQ` graph traversal for `RaBitQPrecisionHnsw`.
+//! Codec-generic graph traversal for [`QuantizedPrecisionHnsw`].
 //!
-//! Implements the layer-0 expansion and greedy upper-layer descent using
-//! `RaBitQ` binary distances (XOR + popcount with affine correction).
+//! Implements the layer-0 expansion and greedy upper-layer descent using the
+//! codec's compact distances (`RaBitQ` XOR + popcount, SQ8 int8 L2).
 //!
-//! Separated from `rabitq_precision.rs` to keep each file under 500 NLOC.
+//! Separated from `quantized_precision.rs` to keep each file under 500 NLOC.
 
 use super::distance::DistanceEngine;
 use super::graph::NO_ENTRY_POINT;
 use super::layer::NodeId;
-use super::rabitq_precision::RaBitQPrecisionHnsw;
-use crate::quantization::{PreparedQuery, RaBitQIndex, RaBitQVectorStore};
+use super::quantized_precision::{QuantizedPrecisionHnsw, TraversalCodec};
 use rustc_hash::FxHashSet;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::sync::atomic::Ordering;
 
-/// Ordered distance wrapper for the `RaBitQ` traversal heaps.
+/// Ordered distance wrapper for the traversal heaps.
 ///
-/// Uses `total_cmp` for consistent NaN-safe ordering.
+/// Compares by distance only; [`TraversalCodec::Dist`] is totally ordered
+/// (`Ord`), so the heaps stay coherent for every codec.
 #[derive(Clone, Copy)]
-struct DistNode {
-    dist: f32,
+struct DistNode<T> {
+    dist: T,
     node: NodeId,
 }
 
-impl PartialEq for DistNode {
+impl<T: Ord> PartialEq for DistNode<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.dist.total_cmp(&other.dist) == std::cmp::Ordering::Equal
+        self.dist == other.dist
     }
 }
 
-impl Eq for DistNode {}
+impl<T: Ord> Eq for DistNode<T> {}
 
-impl PartialOrd for DistNode {
+impl<T: Ord> PartialOrd for DistNode<T> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for DistNode {
+impl<T: Ord> Ord for DistNode<T> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.dist.total_cmp(&other.dist)
+        self.dist.cmp(&other.dist)
     }
 }
 
-impl<D: DistanceEngine> RaBitQPrecisionHnsw<D> {
-    /// Search using `RaBitQ` binary distances for graph traversal.
+impl<D: DistanceEngine, C: TraversalCodec> QuantizedPrecisionHnsw<D, C> {
+    /// Search using codec distances for graph traversal.
     ///
-    /// Phase 1: Greedy descent through upper layers using `RaBitQ` distances.
+    /// Phase 1: Greedy descent through upper layers using codec distances.
     /// Phase 2: Layer-0 expansion with `ef_search` candidates.
-    pub(super) fn search_layer_rabitq(
+    pub(super) fn search_layer_quantized(
         &self,
-        prepared: &PreparedQuery,
+        prepared: &C::Prepared,
         k: usize,
         ef_search: usize,
-        rabitq: &RaBitQIndex,
-        store: &RaBitQVectorStore,
-    ) -> Vec<(NodeId, f32)> {
+        quantizer: &C::Quantizer,
+        store: &C::Store,
+    ) -> Vec<(NodeId, C::Dist)> {
         let ep = self.inner.entry_point.load(Ordering::Acquire);
         if ep == NO_ENTRY_POINT {
             return Vec::new();
@@ -67,32 +67,33 @@ impl<D: DistanceEngine> RaBitQPrecisionHnsw<D> {
         // Phase 1: Greedy descent from top layer to layer 1
         let mut current_ep = ep;
         for layer_idx in (1..=max_layer).rev() {
-            current_ep = self.greedy_search_rabitq(prepared, current_ep, layer_idx, rabitq, store);
+            current_ep =
+                self.greedy_search_quantized(prepared, current_ep, layer_idx, quantizer, store);
         }
 
         // Phase 2: Layer 0 expansion
-        self.expand_layer0_rabitq(prepared, current_ep, ef_search.max(k), k, rabitq, store)
+        self.expand_layer0_quantized(prepared, current_ep, ef_search.max(k), k, quantizer, store)
     }
 
-    /// Greedy search in a single upper layer using `RaBitQ` distances.
-    fn greedy_search_rabitq(
+    /// Greedy search in a single upper layer using codec distances.
+    fn greedy_search_quantized(
         &self,
-        prepared: &PreparedQuery,
+        prepared: &C::Prepared,
         entry: NodeId,
         layer: usize,
-        rabitq: &RaBitQIndex,
-        store: &RaBitQVectorStore,
+        quantizer: &C::Quantizer,
+        store: &C::Store,
     ) -> NodeId {
         let mut current = entry;
         let mut current_dist =
-            rabitq_distance(prepared, store, rabitq, current).unwrap_or(f32::MAX);
+            C::distance(quantizer, store, prepared, current).unwrap_or(C::MAX_DIST);
 
         loop {
             let mut improved = false;
             let layers = self.inner.layers.read();
             let _ = layers[layer].with_neighbors(current, |neighbors| {
                 for &neighbor in neighbors {
-                    if let Some(dist) = rabitq_distance(prepared, store, rabitq, neighbor) {
+                    if let Some(dist) = C::distance(quantizer, store, prepared, neighbor) {
                         if dist < current_dist {
                             current = neighbor;
                             current_dist = dist;
@@ -101,6 +102,8 @@ impl<D: DistanceEngine> RaBitQPrecisionHnsw<D> {
                     }
                 }
             });
+            // Per-iteration: the neighbour walk is done before the loop check.
+            drop(layers);
 
             if !improved {
                 break;
@@ -110,26 +113,26 @@ impl<D: DistanceEngine> RaBitQPrecisionHnsw<D> {
         current
     }
 
-    /// Expands layer 0 with `ef` candidates using `RaBitQ` distances.
+    /// Expands layer 0 with `ef` candidates using codec distances.
     ///
-    /// Returns the top-k candidates sorted by `RaBitQ` distance.
-    fn expand_layer0_rabitq(
+    /// Returns the top-k candidates sorted by codec distance.
+    fn expand_layer0_quantized(
         &self,
-        prepared: &PreparedQuery,
+        prepared: &C::Prepared,
         ep: NodeId,
         ef: usize,
         k: usize,
-        rabitq: &RaBitQIndex,
-        store: &RaBitQVectorStore,
-    ) -> Vec<(NodeId, f32)> {
+        quantizer: &C::Quantizer,
+        store: &C::Store,
+    ) -> Vec<(NodeId, C::Dist)> {
         let mut visited: FxHashSet<NodeId> = FxHashSet::default();
-        let mut candidates: BinaryHeap<Reverse<DistNode>> = BinaryHeap::new();
-        let mut results: BinaryHeap<DistNode> = BinaryHeap::new();
+        let mut candidates: BinaryHeap<Reverse<DistNode<C::Dist>>> = BinaryHeap::new();
+        let mut results: BinaryHeap<DistNode<C::Dist>> = BinaryHeap::new();
 
-        Self::init_rabitq_search(
+        Self::init_quantized_search(
             prepared,
             ep,
-            rabitq,
+            quantizer,
             store,
             &mut visited,
             &mut candidates,
@@ -137,17 +140,17 @@ impl<D: DistanceEngine> RaBitQPrecisionHnsw<D> {
         );
 
         while let Some(Reverse(closest)) = candidates.pop() {
-            let furthest_dist = results.peek().map_or(f32::MAX, |r| r.dist);
+            let furthest_dist = results.peek().map_or(C::MAX_DIST, |r| r.dist);
             if closest.dist > furthest_dist && results.len() >= ef {
                 break;
             }
 
             let layers = self.inner.layers.read();
             let _ = layers[0].with_neighbors(closest.node, |neighbors| {
-                Self::process_rabitq_neighbors(
+                Self::process_quantized_neighbors(
                     prepared,
                     neighbors,
-                    rabitq,
+                    quantizer,
                     store,
                     ef,
                     &mut visited,
@@ -157,24 +160,24 @@ impl<D: DistanceEngine> RaBitQPrecisionHnsw<D> {
             });
         }
 
-        let mut result_vec: Vec<(NodeId, f32)> =
+        let mut result_vec: Vec<(NodeId, C::Dist)> =
             results.into_iter().map(|dn| (dn.node, dn.dist)).collect();
-        result_vec.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
+        result_vec.sort_unstable_by(|a, b| a.1.cmp(&b.1));
         result_vec.truncate(k);
         result_vec
     }
 
     /// Seeds the search state with the entry point.
-    fn init_rabitq_search(
-        prepared: &PreparedQuery,
+    fn init_quantized_search(
+        prepared: &C::Prepared,
         ep: NodeId,
-        rabitq: &RaBitQIndex,
-        store: &RaBitQVectorStore,
+        quantizer: &C::Quantizer,
+        store: &C::Store,
         visited: &mut FxHashSet<NodeId>,
-        candidates: &mut BinaryHeap<Reverse<DistNode>>,
-        results: &mut BinaryHeap<DistNode>,
+        candidates: &mut BinaryHeap<Reverse<DistNode<C::Dist>>>,
+        results: &mut BinaryHeap<DistNode<C::Dist>>,
     ) {
-        if let Some(dist) = rabitq_distance(prepared, store, rabitq, ep) {
+        if let Some(dist) = C::distance(quantizer, store, prepared, ep) {
             let dn = DistNode { dist, node: ep };
             candidates.push(Reverse(dn));
             results.push(dn);
@@ -182,26 +185,26 @@ impl<D: DistanceEngine> RaBitQPrecisionHnsw<D> {
         }
     }
 
-    /// Evaluates neighbor candidates using `RaBitQ` distances.
+    /// Evaluates neighbor candidates using codec distances.
     #[allow(clippy::too_many_arguments)]
-    fn process_rabitq_neighbors(
-        prepared: &PreparedQuery,
+    fn process_quantized_neighbors(
+        prepared: &C::Prepared,
         neighbors: &[NodeId],
-        rabitq: &RaBitQIndex,
-        store: &RaBitQVectorStore,
+        quantizer: &C::Quantizer,
+        store: &C::Store,
         ef: usize,
         visited: &mut FxHashSet<NodeId>,
-        candidates: &mut BinaryHeap<Reverse<DistNode>>,
-        results: &mut BinaryHeap<DistNode>,
+        candidates: &mut BinaryHeap<Reverse<DistNode<C::Dist>>>,
+        results: &mut BinaryHeap<DistNode<C::Dist>>,
     ) {
         for &neighbor in neighbors {
             if !visited.insert(neighbor) {
                 continue;
             }
-            let Some(dist) = rabitq_distance(prepared, store, rabitq, neighbor) else {
+            let Some(dist) = C::distance(quantizer, store, prepared, neighbor) else {
                 continue;
             };
-            let furthest = results.peek().map_or(f32::MAX, |r| r.dist);
+            let furthest = results.peek().map_or(C::MAX_DIST, |r| r.dist);
 
             if dist < furthest || results.len() < ef {
                 let dn = DistNode {
@@ -216,19 +219,4 @@ impl<D: DistanceEngine> RaBitQPrecisionHnsw<D> {
             }
         }
     }
-}
-
-/// Computes the `RaBitQ` distance from a prepared query to a stored vector.
-///
-/// Returns `None` if the node is not in the `RaBitQ` store (inserted before
-/// training, not yet encoded).
-fn rabitq_distance(
-    prepared: &PreparedQuery,
-    store: &RaBitQVectorStore,
-    rabitq: &RaBitQIndex,
-    node: NodeId,
-) -> Option<f32> {
-    let bits = store.get_bits_slice(node)?;
-    let correction = *store.get_correction(node)?;
-    Some(rabitq.distance_from_prepared_slice(prepared, bits, correction))
 }

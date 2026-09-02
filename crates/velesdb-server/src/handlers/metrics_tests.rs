@@ -74,3 +74,26 @@ async fn test_plan_cache_metrics_in_prometheus_output() {
         "should contain plan cache hit rate"
     );
 }
+
+#[tokio::test]
+async fn test_match_metrics_in_prometheus_output() {
+    let state = test_app_state();
+    let response = prometheus_metrics(State(state)).await.into_response();
+    let body = axum::body::to_bytes(response.into_body(), 1_000_000)
+        .await
+        .unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+
+    assert!(
+        text.contains("velesdb_match_queries_total"),
+        "should contain MATCH query throughput"
+    );
+    assert!(
+        text.contains("velesdb_match_latency_seconds"),
+        "should contain the MATCH latency histogram"
+    );
+    assert!(
+        text.contains("velesdb_match_guardrail_hits_total"),
+        "should contain MATCH guard-rail hits"
+    );
+}

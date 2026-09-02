@@ -105,6 +105,12 @@ impl Collection {
         for id in ids {
             Self::backfill_single_payload(&*payload_storage, id, field_name, &mut tree_guard);
         }
+        // The loop is every guard's last use; the log below needs none of them.
+        // Dropped in borrow order — `tree_guard` borrows out of `indexes`.
+        drop(tree_guard);
+        drop(indexes);
+        drop(payload_storage);
+
         if !is_new {
             tracing::debug!(
                 field = field_name,
@@ -315,12 +321,14 @@ impl Collection {
     pub fn secondary_index_lookup(&self, field_name: &str, value: &JsonValue) -> Option<Vec<u64>> {
         let indexes = self.query.secondary_indexes.read();
         let index = indexes.get(field_name)?;
-        match index {
+        let ids = match index {
             SecondaryIndex::BTree(tree) => tree
                 .read()
                 .get(value)
                 .map(crate::index::secondary::IdSet::to_vec),
-        }
+        };
+        drop(indexes);
+        ids
     }
 
     /// Builds a pre-filter bitmap from a [`Filter`] using secondary indexes.
@@ -404,7 +412,9 @@ impl Collection {
         // `None` here means an indexed ID exceeded u32::MAX (incomplete bitmap);
         // propagate it so the caller falls back to a full scan. An empty bitmap
         // is a valid "no matches" pre-filter and is returned as-is.
-        index.to_bitmap(&key)
+        let bitmap = index.to_bitmap(&key);
+        drop(guard);
+        bitmap
     }
 
     /// Builds a bitmap for `IN(field, values)` by unioning per-value B-tree lookups.
@@ -432,6 +442,7 @@ impl Collection {
                 acc |= index.to_bitmap(&key)?;
             }
         }
+        drop(guard);
         Some(acc)
     }
 
@@ -469,7 +480,9 @@ impl Collection {
             crate::filter::Condition::Lte { .. } => (Bound::Unbounded, Bound::Included(&key)),
             _ => return None,
         };
-        index.range_bitmap(from, to)
+        let bitmap = index.range_bitmap(from, to);
+        drop(guard);
+        bitmap
     }
 
     /// Intersects bitmaps from AND-ed conditions.
@@ -529,6 +542,7 @@ impl Collection {
     pub fn create_property_index(&self, label: &str, property: &str) -> Result<()> {
         let mut index = self.graph.property_index.write();
         index.create_index(label, property);
+        drop(index);
         self.graph
             .property_index_dirty
             .store(true, std::sync::atomic::Ordering::Release);
@@ -549,6 +563,7 @@ impl Collection {
     pub fn create_range_index(&self, label: &str, property: &str) -> Result<()> {
         let mut index = self.graph.range_index.write();
         index.create_index(label, property);
+        drop(index);
         self.graph
             .range_index_dirty
             .store(true, std::sync::atomic::Ordering::Release);
@@ -601,6 +616,9 @@ impl Collection {
                 memory_bytes: 0,
             });
         }
+        // Released before `range_index` is taken, so the two order-7 reads no
+        // longer overlap at all.
+        drop(prop_index);
 
         // List range indexes
         let range_idx = self.graph.range_index.read();
@@ -613,6 +631,7 @@ impl Collection {
                 memory_bytes: 0,
             });
         }
+        drop(range_idx);
 
         indexes
     }

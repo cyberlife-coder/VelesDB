@@ -23,14 +23,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 /// Latency histogram buckets (milliseconds).
+///
+/// These are the upper bounds exported as Prometheus `le` labels, and a
+/// Prometheus bucket is inclusive: an observation equal to a bound belongs to
+/// that bound's bucket, not the next one.
 const BUCKET_BOUNDS_MS: [u64; 9] = [1, 5, 10, 50, 100, 500, 1000, 5000, 10000];
 
 /// Simple latency histogram with fixed buckets.
 ///
-/// Buckets: <1ms, <5ms, <10ms, <50ms, <100ms, <500ms, <1s, <5s, <10s, ≥10s
+/// Buckets: ≤1ms, ≤5ms, ≤10ms, ≤50ms, ≤100ms, ≤500ms, ≤1s, ≤5s, ≤10s, >10s
 #[derive(Debug, Default)]
 pub struct LatencyHistogram {
-    /// Bucket counts [<1ms, <5ms, <10ms, <50ms, <100ms, <500ms, <1s, <5s, <10s, ≥10s]
+    /// Bucket counts [≤1ms, ≤5ms, ≤10ms, ≤50ms, ≤100ms, ≤500ms, ≤1s, ≤5s, ≤10s, >10s]
     buckets: [AtomicU64; 10],
     /// Sum of all observed durations in nanoseconds
     sum_ns: AtomicU64,
@@ -71,8 +75,8 @@ impl LatencyHistogram {
         };
         let bucket_idx = BUCKET_BOUNDS_MS
             .iter()
-            .position(|&bound| ms < bound)
-            .unwrap_or(9);
+            .position(|&bound| ms <= bound)
+            .unwrap_or(BUCKET_BOUNDS_MS.len());
         self.buckets[bucket_idx].fetch_add(1, Ordering::Relaxed);
     }
 
@@ -127,26 +131,18 @@ impl LatencyHistogram {
 ///
 /// ```rust,ignore
 /// use velesdb_core::collection::graph::GraphMetrics;
-/// use std::time::Instant;
 ///
 /// let metrics = GraphMetrics::new();
 ///
-/// // Record an edge insertion
-/// let start = Instant::now();
-/// // ... perform insertion ...
-/// metrics.record_edge_insert(start.elapsed());
+/// // Record an edge insertion (counters only — see `record_edge_inserts_batch`
+/// // for the batch path, which is what feeds `edge_insert_latency`)
+/// metrics.record_edge_insert();
 ///
 /// // Get statistics
 /// println!("Total edges inserted: {}", metrics.edge_inserts_total());
-/// println!("Avg insert latency: {:.2}µs", metrics.edge_insert_latency.avg_ns() / 1000.0);
 /// ```
 #[derive(Debug, Default)]
 pub struct GraphMetrics {
-    // Node counters
-    nodes_total: AtomicU64,
-    node_inserts_total: AtomicU64,
-    node_deletes_total: AtomicU64,
-
     // Edge counters
     edges_total: AtomicU64,
     edge_inserts_total: AtomicU64,
@@ -157,10 +153,10 @@ pub struct GraphMetrics {
     traversal_nodes_visited: AtomicU64,
 
     // Latency histograms
-    /// Edge insertion latency histogram
+    /// Edge insertion latency histogram. Populated by the batch insert path
+    /// only — the single-edge path records counters without a clock read
+    /// (see `record_edge_insert`).
     pub edge_insert_latency: LatencyHistogram,
-    /// Edge deletion latency histogram
-    pub edge_delete_latency: LatencyHistogram,
     /// Traversal latency histogram
     pub traversal_latency: LatencyHistogram,
     /// Query latency histogram
@@ -175,49 +171,19 @@ impl GraphMetrics {
     }
 
     // =========================================================================
-    // Node metrics
-    // =========================================================================
-
-    /// Records a node insertion.
-    pub fn record_node_insert(&self) {
-        self.node_inserts_total.fetch_add(1, Ordering::Relaxed);
-        self.nodes_total.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Records a node deletion.
-    ///
-    /// Uses saturating subtraction to prevent underflow if called
-    /// more times than `record_node_insert`.
-    pub fn record_node_delete(&self) {
-        self.node_deletes_total.fetch_add(1, Ordering::Relaxed);
-        self.nodes_total
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |x| {
-                Some(x.saturating_sub(1))
-            })
-            .ok();
-    }
-
-    /// Returns total node count.
-    #[must_use]
-    pub fn nodes_total(&self) -> u64 {
-        self.nodes_total.load(Ordering::Relaxed)
-    }
-
-    /// Returns total node insertions.
-    #[must_use]
-    pub fn node_inserts_total(&self) -> u64 {
-        self.node_inserts_total.load(Ordering::Relaxed)
-    }
-
-    // =========================================================================
     // Edge metrics
     // =========================================================================
 
-    /// Records an edge insertion with latency.
-    pub fn record_edge_insert(&self, latency: Duration) {
+    /// Records an edge insertion.
+    ///
+    /// Counters only — no clock read. The single-edge path runs per write, so
+    /// a per-call `Instant::now()` plus histogram bucketing was a real cost
+    /// paid on every insert; nothing reads it. `edge_insert_latency` is
+    /// still fed by `record_edge_inserts_batch`, which pays that cost once
+    /// per batch instead of once per edge.
+    pub fn record_edge_insert(&self) {
         self.edge_inserts_total.fetch_add(1, Ordering::Relaxed);
         self.edges_total.fetch_add(1, Ordering::Relaxed);
-        self.edge_insert_latency.observe(latency);
     }
 
     /// Records a batch edge insertion.
@@ -233,17 +199,19 @@ impl GraphMetrics {
         self.edge_insert_latency.observe(latency);
     }
 
-    /// Records an edge deletion with latency.
+    /// Records an edge deletion.
+    ///
+    /// Counters only — no clock read. See `record_edge_insert` for why: the
+    /// per-delete `Instant::now()` this used to take had no reader.
     ///
     /// Uses saturating subtraction to prevent underflow.
-    pub fn record_edge_delete(&self, latency: Duration) {
+    pub fn record_edge_delete(&self) {
         self.edge_deletes_total.fetch_add(1, Ordering::Relaxed);
         self.edges_total
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |x| {
                 Some(x.saturating_sub(1))
             })
             .ok();
-        self.edge_delete_latency.observe(latency);
     }
 
     /// Returns total edge count.
@@ -301,106 +269,181 @@ impl GraphMetrics {
     // Export
     // =========================================================================
 
-    /// Exports metrics in Prometheus text format.
-    #[must_use]
-    pub fn to_prometheus(&self) -> String {
-        let mut output = String::with_capacity(2048);
-
-        // Node metrics
-        output.push_str("# HELP velesdb_graph_nodes_total Current number of nodes\n");
-        output.push_str("# TYPE velesdb_graph_nodes_total gauge\n");
-        let _ = writeln!(output, "velesdb_graph_nodes_total {}\n", self.nodes_total());
-
-        output.push_str("# HELP velesdb_graph_node_inserts_total Total node insertions\n");
-        output.push_str("# TYPE velesdb_graph_node_inserts_total counter\n");
+    /// Appends this store's samples for every family, tagged with `collection`.
+    ///
+    /// Emits sample lines only — never `# HELP` or `# TYPE`. Those belong to
+    /// the metric *family*, not to one collection, and are written once by
+    /// [`to_prometheus`].
+    fn append_samples(&self, output: &mut String, collection: &str) {
         let _ = writeln!(
             output,
-            "velesdb_graph_node_inserts_total {}\n",
-            self.node_inserts_total()
+            "velesdb_graph_edges_total{{collection=\"{collection}\"}} {}",
+            self.edges_total()
         );
-
-        // Edge metrics
-        output.push_str("# HELP velesdb_graph_edges_total Current number of edges\n");
-        output.push_str("# TYPE velesdb_graph_edges_total gauge\n");
-        let _ = writeln!(output, "velesdb_graph_edges_total {}\n", self.edges_total());
-
-        output.push_str("# HELP velesdb_graph_edge_inserts_total Total edge insertions\n");
-        output.push_str("# TYPE velesdb_graph_edge_inserts_total counter\n");
         let _ = writeln!(
             output,
-            "velesdb_graph_edge_inserts_total {}\n",
+            "velesdb_graph_edge_inserts_total{{collection=\"{collection}\"}} {}",
             self.edge_inserts_total()
         );
-
-        // Latency histograms
-        Self::append_histogram_prometheus(&mut output, "edge_insert", &self.edge_insert_latency);
-        Self::append_histogram_prometheus(&mut output, "traversal", &self.traversal_latency);
-
-        // Traversal metrics
-        output.push_str("# HELP velesdb_graph_traversals_total Total traversals executed\n");
-        output.push_str("# TYPE velesdb_graph_traversals_total counter\n");
         let _ = writeln!(
             output,
-            "velesdb_graph_traversals_total {}\n",
+            "velesdb_graph_edge_deletes_total{{collection=\"{collection}\"}} {}",
+            self.edge_deletes_total()
+        );
+        let _ = writeln!(
+            output,
+            "velesdb_graph_traversals_total{{collection=\"{collection}\"}} {}",
             self.traversals_total()
         );
-
-        output
+        let _ = writeln!(
+            output,
+            "velesdb_graph_traversal_nodes_visited_total{{collection=\"{collection}\"}} {}",
+            self.traversal_nodes_visited()
+        );
     }
 
-    fn append_histogram_prometheus(output: &mut String, name: &str, histogram: &LatencyHistogram) {
-        let bucket_bounds = [
-            "0.001", "0.005", "0.01", "0.05", "0.1", "0.5", "1", "5", "10", "+Inf",
-        ];
-        let counts = histogram.bucket_counts();
-        let mut cumulative = 0u64;
+    /// Appends this store's histogram samples, tagged with `collection`.
+    ///
+    /// Sample lines only, for the same reason as [`Self::append_samples`].
+    /// The `le` labels are derived from `BUCKET_BOUNDS_MS`, the same array
+    /// that decides which bucket an observation lands in, so the exported
+    /// bound can never disagree with the bucket that counted it.
+    fn append_histogram_samples(&self, output: &mut String, collection: &str) {
+        // Zipped against HISTOGRAM_FAMILIES rather than re-listing the names:
+        // the preamble in `to_prometheus` walks that same array, so a family
+        // added on one side cannot go undeclared on the other.
+        let histograms = [&self.edge_insert_latency, &self.traversal_latency];
+        for (infix, histogram) in HISTOGRAM_FAMILIES.into_iter().zip(histograms) {
+            let counts = histogram.bucket_counts();
+            let mut cumulative = 0u64;
 
-        let _ = writeln!(
-            output,
-            "# HELP velesdb_graph_{}_duration_seconds {} latency histogram",
-            name,
-            name.replace('_', " ")
-        );
-        let _ = writeln!(
-            output,
-            "# TYPE velesdb_graph_{name}_duration_seconds histogram"
-        );
-
-        for (i, &bound) in bucket_bounds.iter().enumerate() {
-            cumulative += counts[i];
+            for (i, &bound_ms) in BUCKET_BOUNDS_MS.iter().enumerate() {
+                cumulative += counts[i];
+                #[allow(clippy::cast_precision_loss)]
+                let bound = bound_ms as f64 / 1000.0;
+                let _ = writeln!(
+                    output,
+                    "velesdb_graph_{infix}_duration_seconds_bucket{{collection=\"{collection}\",le=\"{bound}\"}} {cumulative}"
+                );
+            }
+            cumulative += counts[BUCKET_BOUNDS_MS.len()];
             let _ = writeln!(
                 output,
-                "velesdb_graph_{name}_duration_seconds_bucket{{le=\"{bound}\"}} {cumulative}",
+                "velesdb_graph_{infix}_duration_seconds_bucket{{collection=\"{collection}\",le=\"+Inf\"}} {cumulative}"
+            );
+
+            #[allow(clippy::cast_precision_loss)]
+            let sum_seconds = histogram.sum_ns() as f64 / 1_000_000_000.0;
+            let _ = writeln!(
+                output,
+                "velesdb_graph_{infix}_duration_seconds_sum{{collection=\"{collection}\"}} {sum_seconds}"
+            );
+            let _ = writeln!(
+                output,
+                "velesdb_graph_{infix}_duration_seconds_count{{collection=\"{collection}\"}} {}",
+                histogram.count()
             );
         }
-
-        let _ = writeln!(
-            output,
-            "velesdb_graph_{}_duration_seconds_sum {}",
-            name,
-            histogram.sum_ns() as f64 / 1_000_000_000.0
-        );
-        let _ = writeln!(
-            output,
-            "velesdb_graph_{}_duration_seconds_count {}\n",
-            name,
-            histogram.count()
-        );
     }
 
     /// Resets all metrics to zero.
     pub fn reset(&self) {
-        self.nodes_total.store(0, Ordering::Relaxed);
-        self.node_inserts_total.store(0, Ordering::Relaxed);
-        self.node_deletes_total.store(0, Ordering::Relaxed);
         self.edges_total.store(0, Ordering::Relaxed);
         self.edge_inserts_total.store(0, Ordering::Relaxed);
         self.edge_deletes_total.store(0, Ordering::Relaxed);
         self.traversals_total.store(0, Ordering::Relaxed);
         self.traversal_nodes_visited.store(0, Ordering::Relaxed);
         self.edge_insert_latency.reset();
-        self.edge_delete_latency.reset();
         self.traversal_latency.reset();
         self.query_latency.reset();
     }
+}
+
+/// The metric families this module exports, each with its Prometheus type.
+///
+/// Declared once here so the `# HELP`/`# TYPE` preamble and the sample lines
+/// cannot drift apart: [`to_prometheus`] walks this list, and every entry it
+/// names is emitted by [`GraphMetrics::append_samples`].
+const COUNTER_FAMILIES: [(&str, &str, &str); 5] = [
+    (
+        "velesdb_graph_edges_total",
+        "gauge",
+        "Current number of edges",
+    ),
+    (
+        "velesdb_graph_edge_inserts_total",
+        "counter",
+        "Total edge insertions",
+    ),
+    (
+        "velesdb_graph_edge_deletes_total",
+        "counter",
+        "Total edge deletions",
+    ),
+    (
+        "velesdb_graph_traversals_total",
+        "counter",
+        "Total traversals executed",
+    ),
+    (
+        "velesdb_graph_traversal_nodes_visited_total",
+        "counter",
+        "Total nodes visited across traversals",
+    ),
+];
+
+/// Latency histogram families, as (metric infix, accessor).
+const HISTOGRAM_FAMILIES: [&str; 2] = ["edge_insert", "traversal"];
+
+/// Renders the graph metrics of several collections as one Prometheus
+/// exposition.
+///
+/// A `GraphMetrics` lives on an edge store, so there is one per collection,
+/// while the metric names are shared across all of them. Concatenating a
+/// per-collection block would therefore repeat `# HELP` and `# TYPE` for the
+/// same family and publish several samples under an identical — empty — label
+/// set. Prometheus rejects a duplicated family declaration and, for the
+/// duplicated series, keeps whichever it saw last: the exposition would be
+/// invalid and silently lossy at once.
+///
+/// Each family is instead declared once, and every sample carries the
+/// collection it came from. Collection names are `[A-Za-z0-9_-]` only
+/// (`validation::is_valid_name_char`), so no label value can contain a quote,
+/// a backslash or a newline and none needs escaping — pinned by
+/// `a_collection_name_can_never_need_label_escaping`.
+///
+/// Returns an empty string for an empty input rather than a preamble
+/// describing families with no samples.
+#[must_use]
+pub fn to_prometheus(per_collection: &[(&str, &GraphMetrics)]) -> String {
+    if per_collection.is_empty() {
+        return String::new();
+    }
+
+    let mut output = String::with_capacity(1024 * per_collection.len());
+
+    // Preamble: every family declared exactly once, counters then histograms.
+    for (name, kind, help) in COUNTER_FAMILIES {
+        let _ = writeln!(output, "# HELP {name} {help}");
+        let _ = writeln!(output, "# TYPE {name} {kind}");
+    }
+    for infix in HISTOGRAM_FAMILIES {
+        let _ = writeln!(
+            output,
+            "# HELP velesdb_graph_{infix}_duration_seconds {} latency histogram",
+            infix.replace('_', " ")
+        );
+        let _ = writeln!(
+            output,
+            "# TYPE velesdb_graph_{infix}_duration_seconds histogram"
+        );
+    }
+
+    // Samples: one labelled block per collection.
+    for (collection, metrics) in per_collection {
+        metrics.append_samples(&mut output, collection);
+        metrics.append_histogram_samples(&mut output, collection);
+    }
+
+    output
 }

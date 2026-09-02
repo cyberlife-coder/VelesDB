@@ -29,13 +29,13 @@ Development builds skip wasm-opt for faster iteration.
 
 | Build | Aspirational target | Measured (`@wiscale/velesdb-wasm` npm artifact) | Notes |
 |-------|---------------------|-----------------------------------------------|-------|
-| Release (gzipped) | < 200 KB | ~674 KB | Full feature set (VelesQL execution, graph, BM25) outgrew the original vector-only target |
+| Release (gzipped) | < 200 KB | ~710 KB | Full feature set (VelesQL execution, graph, BM25) outgrew the original vector-only target |
 | Release (raw) | < 800 KB | ~2.0 MB | Before compression |
 | Dev | N/A | N/A | Speed over size |
 
 > The original targets predate VelesQL-in-WASM and the graph store; they are
 > kept as the optimization goal for a future feature-gated "core-only" build.
-> The published claim is the measured figure (~674 KB gzipped,
+> The published claim is the measured figure (~710 KB gzipped,
 > `@wiscale/velesdb-wasm` npm artifact, measured 2026-07-25 — see
 > `docs/reference/promise-contract.json` for the validation command).
 
@@ -100,3 +100,4 @@ wasm-opt -Os --print-stack-ir pkg/velesdb_wasm_bg.wasm -o /dev/null
 |------|--------|
 | 2026-01-29 | Initial documentation (US-006) |
 | 2026-08-08 | Measured sizes aligned with the published npm artifact (~674 KB gzipped, ~2.0 MB raw); version labeling unified |
+| 2026-09-02 | Re-measured at 6.0.0 with `wasm-pack build --target web --release`, the command release.yml publishes from, against the artifact (~710 KB gzipped, ~2.0 MB raw): 2114045 bytes raw, 726700 gzipped. The ~674 KB figure dated from 4.0.0 and had drifted 5.4% low; raw is unchanged. wasm-opt must run for the number to mean anything - without it the same tree gives 2294177 raw / 703535 gzipped |

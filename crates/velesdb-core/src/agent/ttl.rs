@@ -235,6 +235,7 @@ impl MemoryTtl {
             buf.extend_from_slice(&entry.expires_at.to_le_bytes());
             buf.extend_from_slice(&entry.created_at.to_le_bytes());
         }
+        drop(entries);
 
         buf
     }

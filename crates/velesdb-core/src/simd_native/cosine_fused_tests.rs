@@ -10,8 +10,20 @@
 
 use super::cosine_similarity_native;
 
-// Tolerance for f32 SIMD vs scalar comparison
-const EPSILON: f32 = 5e-3;
+// Tolerance for f32 SIMD vs scalar comparison.
+//
+// `1e-4` is `simd_native_tests::SIMD_ABS_TOLERANCE`, the constant the rest of
+// the SIMD suite already uses; the previous `5e-3` was 500x looser than these
+// kernels need, which cost detection on the main loop for nothing.
+//
+// Tightening it does NOT make this test tail-sensitive, and no tolerance
+// would: every size below is an exact multiple of its kernel's stride (512
+// and 768 of the 4-acc's 64; 1024 of the 8-acc's 128), so `end_main ==
+// end_ptr` and the masked remainder branch never executes. Injecting a
+// dropped tail element into `x86_avx512.rs` leaves this test green at 5e-3
+// and at 1e-4 alike. Tail coverage is `cosine_tail_tests.rs`, which picks
+// dimensions that actually reach the remainder.
+const EPSILON: f32 = 1e-4;
 
 // ============================================================================
 // Fused Cosine Tests
@@ -98,6 +110,36 @@ fn test_fused_cosine_zero_vectors() {
 }
 
 #[test]
+fn test_fused_cosine_small_magnitude_vectors() {
+    // Regression (#2103): the SIMD finish step guarded on the *product* of
+    // squared norms (< EPSILON²), zeroing out legitimate vectors with norms
+    // around 3.4e-4 while the scalar fallback returned the true cosine. The
+    // result then flipped between 1.0 and 0.0 with dimension and CPU features.
+    for magnitude in [1e-3f32, 1e-4, 1e-5] {
+        // Cover the scalar fallback (dim < 4/8) and every SIMD kernel width,
+        // including tail-exercising odd dims.
+        for size in [3usize, 4, 7, 8, 15, 16, 17, 64, 100, 768] {
+            let a: Vec<f32> = vec![magnitude; size];
+            let result = cosine_similarity_native(&a, &a);
+            assert!(
+                (result - 1.0).abs() < 1e-3,
+                "identical vectors of magnitude {magnitude} at dim {size} \
+                 must have cosine ~1.0, got {result}"
+            );
+        }
+    }
+
+    // Anti-parallel small vectors must stay -1.0, not collapse to 0.0.
+    let a = vec![1e-4f32; 16];
+    let b: Vec<f32> = a.iter().map(|x| -x).collect();
+    let result = cosine_similarity_native(&a, &b);
+    assert!(
+        (result + 1.0).abs() < 1e-3,
+        "opposite small-magnitude vectors must have cosine ~-1.0, got {result}"
+    );
+}
+
+#[test]
 fn test_fused_cosine_opposite_vectors() {
     // Opposite vectors should have cosine = -1.0
     let a: Vec<f32> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
@@ -136,11 +178,13 @@ fn test_fused_cosine_performance() {
     let elapsed = start.elapsed();
     let avg_ns = elapsed.as_nanos() as f64 / 1000.0;
 
-    // Should be < 200ns per call on CI (allowing for slower CI runners)
-    // Target < 35ns with Harley-Seal when optimized
+    // Should be < 200ns per call on CI (allowing for slower CI runners).
+    // The 35ns figure is the fused-kernel target; it used to be attributed to
+    // "Harley-Seal", an algorithm that exists nowhere in this tree and would
+    // have no role in cosine even if it did — popcount does not appear on this
+    // path at all (#2106 item 17).
     assert!(
         avg_ns < 200.0,
-        "Cosine similarity too slow: {:.2}ns per call (target < 35ns with Harley-Seal, < 200ns CI)",
-        avg_ns
+        "Cosine similarity too slow: {avg_ns:.2}ns per call (target < 35ns fused, < 200ns CI)"
     );
 }

@@ -19,3 +19,384 @@ fn test_not_similarity_guard_rejects_above_ceiling() {
         "error should explain the scan-limit rejection, got: {msg}"
     );
 }
+
+// ============================================================================
+// Regression (#2101): the GraphFirst exact-rescoring scan clamped every
+// metric's score into [-1, 1]. Euclidean/Hamming distances > 1 and raw dot
+// products > 1 all collapsed to an artificial 1.0 tie, so the "top-k" was
+// insertion-order arbitrary and the user-visible score meaningless. The
+// clamp also failed its stated purpose: clamp() propagates NaN.
+// ============================================================================
+
+#[cfg(feature = "persistence")]
+mod scan_score_semantics {
+    use crate::collection::Collection;
+    use crate::distance::DistanceMetric;
+    use crate::filter::{Condition, Filter};
+    use crate::point::Point;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    fn tagged_point(id: u64, vector: Vec<f32>) -> Point {
+        Point {
+            id,
+            vector,
+            payload: Some(serde_json::json!({"cat": "a"})),
+            sparse_vectors: None,
+        }
+    }
+
+    fn setup(metric: DistanceMetric, points: Vec<Point>) -> (TempDir, Collection) {
+        let dir = tempfile::tempdir().expect("test: tempdir");
+        let col =
+            Collection::create(PathBuf::from(dir.path()), 2, metric).expect("test: collection");
+        col.upsert(points).expect("test: upsert");
+        (dir, col)
+    }
+
+    fn cat_filter() -> Filter {
+        Filter::new(Condition::Eq {
+            field: "cat".into(),
+            value: serde_json::json!("a"),
+        })
+    }
+
+    /// Euclidean distances above 1 must be reported verbatim and ranked
+    /// ascending — pre-fix all three clamped to 1.0 (total tie).
+    #[test]
+    fn test_scan_score_euclidean_distances_above_one_not_clamped() {
+        let (_dir, col) = setup(
+            DistanceMetric::Euclidean,
+            vec![
+                tagged_point(1, vec![7.0, 0.0]),
+                tagged_point(2, vec![3.0, 0.0]),
+                tagged_point(3, vec![10.0, 0.0]),
+            ],
+        );
+
+        let results = col.scan_and_score_by_vector(&cat_filter(), &[0.0, 0.0], 3);
+
+        let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+        assert_eq!(ids, vec![2, 1, 3], "ascending true distance 3 < 7 < 10");
+        for (result, want) in results.iter().zip([3.0f32, 7.0, 10.0]) {
+            assert!(
+                (result.score - want).abs() < 1e-5,
+                "id {} score {} != true distance {want}",
+                result.point.id,
+                result.score
+            );
+        }
+    }
+
+    /// Raw dot products above 1 must be reported verbatim and ranked
+    /// descending — pre-fix both clamped to 1.0.
+    #[test]
+    fn test_scan_score_dot_product_above_one_not_clamped() {
+        let (_dir, col) = setup(
+            DistanceMetric::DotProduct,
+            vec![
+                tagged_point(1, vec![2.0, 0.0]),
+                tagged_point(2, vec![5.0, 3.0]),
+            ],
+        );
+
+        let results = col.scan_and_score_by_vector(&cat_filter(), &[1.0, 0.0], 2);
+
+        let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+        assert_eq!(ids, vec![2, 1], "descending raw dot 5.0 > 2.0");
+        assert!(
+            (results[0].score - 5.0).abs() < 1e-5,
+            "raw dot 5.0 must survive, got {}",
+            results[0].score
+        );
+    }
+
+    /// A NaN-bearing stored vector must sort last (worst key), never first —
+    /// the old clamp let NaN through into the top-k comparator.
+    /// A stored NaN still sorts last, even though one can no longer be inserted.
+    ///
+    /// `Collection::upsert` now refuses a non-finite component (#2106 items 4
+    /// and 16), so this seeds finite vectors and then writes the NaN straight
+    /// into the vector store — which is the route that remains open and the
+    /// reason this guard is still load-bearing: a database written before that
+    /// validation existed is not re-validated on open, and its NaN would
+    /// otherwise sort *first* under a naive comparator.
+    #[test]
+    fn test_scan_score_nan_vector_sorts_last() {
+        let (_dir, col) = setup(
+            DistanceMetric::Euclidean,
+            vec![
+                tagged_point(1, vec![3.0, 0.0]),
+                tagged_point(2, vec![5.0, 0.0]),
+                tagged_point(3, vec![7.0, 0.0]),
+            ],
+        );
+        {
+            use crate::storage::VectorStorage;
+            let mut vs = col.storage.vector_storage.write();
+            vs.store(2, &[f32::NAN, 0.0])
+                .expect("test: seed a stored NaN");
+        }
+
+        let results = col.scan_and_score_by_vector(&cat_filter(), &[0.0, 0.0], 3);
+
+        let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+        assert_eq!(
+            ids,
+            vec![1, 3, 2],
+            "NaN point must rank after every finite distance"
+        );
+        assert!(
+            results[2].score.is_infinite(),
+            "NaN maps to the metric's worst key (INFINITY for distances)"
+        );
+    }
+
+    // ========================================================================
+    // Regression (#2106 item 2): a query vector whose length doesn't match
+    // the stored vector can't be scored, but the old fallback reported 0.0 —
+    // a perfect match for a distance metric like Euclidean. That let a
+    // malformed `similarity() < threshold` query pass a mismatched vector as
+    // the best possible candidate instead of excluding it.
+    // ========================================================================
+
+    /// `filter_by_similarity` must exclude a candidate it can't score against
+    /// a length-mismatched query vector, not pass it as a fabricated match.
+    #[test]
+    fn test_filter_by_similarity_excludes_length_mismatched_query_vector() {
+        let (_dir, col) = setup(
+            DistanceMetric::Euclidean,
+            vec![tagged_point(1, vec![3.0, 0.0])],
+        );
+        let candidates = vec![crate::point::SearchResult::new(
+            tagged_point(1, vec![3.0, 0.0]),
+            3.0,
+        )];
+
+        // 3-dim query against a 2-dim collection. `similarity() > 0.9` on a
+        // distance metric inverts to "distance < 0.9", so the fabricated 0.0
+        // used to sail through as the most similar point there is.
+        let results = col.filter_by_similarity(
+            candidates,
+            "vector",
+            &[0.0, 0.0, 0.0],
+            crate::velesql::CompareOp::Gt,
+            0.9,
+            10,
+        );
+
+        assert!(
+            results.is_empty(),
+            "a length-mismatched query vector must never pass as a match, got {results:?}"
+        );
+    }
+
+    /// Builds a `NOT (...)` condition over a similarity leaf and a metadata
+    /// leaf, so the scan is handed the exact shape De Morgan applies to.
+    fn not_of(inner: crate::velesql::Condition) -> crate::velesql::Condition {
+        crate::velesql::Condition::Not(Box::new(inner))
+    }
+
+    /// `similarity(vector, [1,0]) > threshold`.
+    fn sim_gt(threshold: f64) -> crate::velesql::Condition {
+        crate::velesql::Condition::Similarity(crate::velesql::SimilarityCondition {
+            field: "vector".to_string(),
+            vector: crate::velesql::VectorExpr::Literal(vec![1.0, 0.0]),
+            operator: crate::velesql::CompareOp::Gt,
+            threshold,
+        })
+    }
+
+    /// `cat = 'a'` — true for `tagged_point`, false for `other_point`.
+    fn cat_is_a() -> crate::velesql::Condition {
+        crate::velesql::Condition::Comparison(crate::velesql::Comparison {
+            column: "cat".to_string(),
+            operator: crate::velesql::CompareOp::Eq,
+            value: crate::velesql::Value::String("a".to_string()),
+        })
+    }
+
+    /// A point whose payload fails `cat = 'a'`.
+    fn other_point(id: u64, vector: Vec<f32>) -> Point {
+        Point {
+            id,
+            vector,
+            payload: Some(serde_json::json!({"cat": "b"})),
+            sparse_vectors: None,
+        }
+    }
+
+    /// `NOT (A AND B)` must mean `NOT A OR NOT B`, not `NOT A AND NOT B`.
+    ///
+    /// The scan used to invert the similarity leaf and separately push the
+    /// metadata leaf down through `extract_metadata_filter`, which wraps it in
+    /// its own `NOT`. The two were then AND-ed — distributing the negation
+    /// over the conjunction, which is exactly the De Morgan error. Rows that
+    /// satisfy `NOT B` but fail `NOT A` were dropped with no error.
+    #[test]
+    fn test_not_similarity_honours_de_morgan_over_conjunction() {
+        // Cosine on 2-d unit-ish vectors against the query [1, 0]:
+        //   id 1 [1,0]  -> similarity 1.0  (A true: sim > 0.5)
+        //   id 2 [0,1]  -> similarity 0.0  (A false)
+        // id 1 has cat='a' (B true), id 3 has cat='b' (B false).
+        let (_dir, col) = setup(
+            DistanceMetric::Cosine,
+            vec![
+                tagged_point(1, vec![1.0, 0.0]),
+                tagged_point(2, vec![0.0, 1.0]),
+                other_point(3, vec![1.0, 0.0]),
+            ],
+        );
+
+        let condition = not_of(crate::velesql::Condition::And(
+            Box::new(sim_gt(0.5)),
+            Box::new(cat_is_a()),
+        ));
+
+        let results = col
+            .execute_not_similarity_query_over(
+                &condition,
+                &std::collections::HashMap::new(),
+                10,
+                None,
+            )
+            .expect("test: NOT similarity scan");
+        let mut ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+        ids.sort_unstable();
+
+        // NOT (sim > 0.5 AND cat = 'a')
+        //   id 1: A=true,  B=true  -> NOT(true)  = false -> excluded
+        //   id 2: A=false, B=true  -> NOT(false) = true  -> included
+        //   id 3: A=true,  B=false -> NOT(false) = true  -> included
+        assert_eq!(
+            ids,
+            vec![2, 3],
+            "NOT (A AND B) must admit every row failing either conjunct"
+        );
+    }
+
+    /// `NOT (A OR B)` must mean `NOT A AND NOT B`.
+    #[test]
+    fn test_not_similarity_honours_de_morgan_over_disjunction() {
+        let (_dir, col) = setup(
+            DistanceMetric::Cosine,
+            vec![
+                tagged_point(1, vec![1.0, 0.0]),
+                tagged_point(2, vec![0.0, 1.0]),
+                other_point(3, vec![0.0, 1.0]),
+            ],
+        );
+
+        let condition = not_of(crate::velesql::Condition::Or(
+            Box::new(sim_gt(0.5)),
+            Box::new(cat_is_a()),
+        ));
+
+        let results = col
+            .execute_not_similarity_query_over(
+                &condition,
+                &std::collections::HashMap::new(),
+                10,
+                None,
+            )
+            .expect("test: NOT similarity scan");
+        let mut ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+        ids.sort_unstable();
+
+        // NOT (sim > 0.5 OR cat = 'a')
+        //   id 1: A=true,  B=true  -> excluded
+        //   id 2: A=false, B=true  -> excluded
+        //   id 3: A=false, B=false -> NOT(false) = true -> included
+        assert_eq!(ids, vec![3], "NOT (A OR B) admits only rows failing both");
+    }
+
+    /// A row whose metadata alone decides the answer is returned even when its
+    /// vector cannot be scored.
+    ///
+    /// This is the one place the "unscoreable is excluded" rule must NOT be
+    /// read as "drop the row": under `NOT (A AND B)` with `B` false, the
+    /// conjunction is false whatever `A` would have been, so the negation is
+    /// true. Three-valued logic gets this right by construction —
+    /// `UNKNOWN AND false` is `false`, not `UNKNOWN`.
+    #[test]
+    fn test_not_similarity_decides_on_metadata_when_vector_is_unscoreable() {
+        let (_dir, col) = setup(
+            DistanceMetric::Cosine,
+            vec![
+                tagged_point(1, vec![1.0, 0.0]),
+                other_point(2, vec![1.0, 0.0]),
+            ],
+        );
+
+        // A 3-dim literal against a 2-dim collection: the similarity leaf is
+        // UNKNOWN for every row.
+        let unscoreable =
+            crate::velesql::Condition::Similarity(crate::velesql::SimilarityCondition {
+                field: "vector".to_string(),
+                vector: crate::velesql::VectorExpr::Literal(vec![1.0, 0.0, 0.0]),
+                operator: crate::velesql::CompareOp::Gt,
+                threshold: 0.5,
+            });
+        let condition = not_of(crate::velesql::Condition::And(
+            Box::new(unscoreable),
+            Box::new(cat_is_a()),
+        ));
+
+        let results = col
+            .execute_not_similarity_query_over(
+                &condition,
+                &std::collections::HashMap::new(),
+                10,
+                None,
+            )
+            .expect("test: NOT similarity scan");
+        let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+
+        // id 1: UNKNOWN AND true  = UNKNOWN -> NOT UNKNOWN = UNKNOWN -> excluded
+        // id 2: UNKNOWN AND false = false   -> NOT false    = true    -> included
+        assert_eq!(
+            ids,
+            vec![2],
+            "the row whose metadata alone settles the conjunction must be returned"
+        );
+    }
+
+    /// The `NOT similarity()` scan must likewise exclude, not fabricate a
+    /// score for, a candidate whose vector length doesn't match the query.
+    #[test]
+    fn test_not_similarity_scan_excludes_length_mismatched_vector() {
+        let (_dir, col) = setup(
+            DistanceMetric::Euclidean,
+            vec![tagged_point(1, vec![3.0, 0.0])],
+        );
+
+        // NOT similarity(v, $v) < 0.1, queried with a 3-dim vector against
+        // the 2-dim collection. Pre-fix, the mismatched point fabricated a
+        // 0.0 distance — which passed the `< 0.1` inner threshold and so was
+        // wrongly *excluded* by the NOT. It can't be scored either way, so
+        // the correct outcome is exclusion from the result set entirely.
+        let condition =
+            crate::velesql::Condition::Similarity(crate::velesql::SimilarityCondition {
+                field: "vector".to_string(),
+                vector: crate::velesql::VectorExpr::Literal(vec![0.0, 0.0, 0.0]),
+                operator: crate::velesql::CompareOp::Lt,
+                threshold: 0.1,
+            });
+        let condition = crate::velesql::Condition::Not(Box::new(condition));
+
+        let results = col
+            .execute_not_similarity_query_over(
+                &condition,
+                &std::collections::HashMap::new(),
+                10,
+                None,
+            )
+            .expect("test: NOT similarity scan");
+
+        assert!(
+            results.is_empty(),
+            "a length-mismatched vector can't be scored, so it must not appear \
+             on either side of NOT similarity(); got {results:?}"
+        );
+    }
+}

@@ -1539,6 +1539,66 @@ fn test_brute_force_buffered_repeated_calls_stable() {
 }
 
 // =========================================================================
+// Regression (#2100): Jaccard is declared a similarity by higher_is_better,
+// so transform_score must return `1 - engine_distance` (the similarity),
+// exactly like Cosine. Pre-fix it passed the raw `1 - jaccard` distance
+// through, so every descending sort/top-k over HNSW scores ranked the
+// WORST candidates first and user-visible scores were inverted.
+// =========================================================================
+
+/// Dim-4 Jaccard fixture with hand-computed similarities against
+/// q=[1,1,0,0]: id1=1.0 (identical), id2=0.5 (Σmin/Σmax=1/2), id3=0.0.
+fn jaccard_fixture() -> (HnswIndex, Vec<f32>) {
+    let index = HnswIndex::new(4, DistanceMetric::Jaccard).unwrap();
+    index.insert(1, &[1.0, 1.0, 0.0, 0.0]);
+    index.insert(2, &[1.0, 0.0, 0.0, 0.0]);
+    index.insert(3, &[0.0, 0.0, 1.0, 1.0]);
+    (index, vec![1.0, 1.0, 0.0, 0.0])
+}
+
+#[test]
+fn test_jaccard_hnsw_scores_are_similarities() {
+    let (index, query) = jaccard_fixture();
+    let results = index.search(&query, 3);
+
+    assert_eq!(results.len(), 3);
+    assert_eq!(
+        results[0].id, 1,
+        "exact match must rank first, got {results:?}"
+    );
+    // Scores must be the Jaccard SIMILARITY (1.0, 0.5, 0.0), not the
+    // internal 1-sim traversal distance (0.0, 0.5, 1.0).
+    for (result, want) in results.iter().zip([1.0f32, 0.5, 0.0]) {
+        assert!(
+            (result.score - want).abs() < 1e-6,
+            "id {} score {} != similarity {want}",
+            result.id,
+            result.score
+        );
+    }
+}
+
+#[test]
+fn test_jaccard_bitmap_filtered_search_keeps_best_not_worst() {
+    let (index, query) = jaccard_fixture();
+    let allowed: roaring::RoaringBitmap = [1u32, 2, 3].into_iter().collect();
+
+    let results = index
+        .search_with_quality_and_bitmap(&query, 1, SearchQuality::Balanced, &allowed)
+        .unwrap();
+
+    // Pre-fix, the descending top-k over raw distances kept id3 (the
+    // completely dissimilar vector) and dropped the exact match.
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].id, 1, "top-1 must be the exact match");
+    assert!(
+        (results[0].score - 1.0).abs() < 1e-6,
+        "exact match must score similarity 1.0, got {}",
+        results[0].score
+    );
+}
+
+// =========================================================================
 // Stress Tests
 // =========================================================================
 
@@ -3257,6 +3317,7 @@ mod full_scan_property_tests {
         /// identical to a naive exhaustive distance computation on the same
         /// bitmap vectors, sorted by the metric.
         #[test]
+        #[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
         fn prop_full_scan_exactness(
             n_vectors in 5u64..50,
             bitmap_ids in proptest::collection::vec(0u32..50, 1..20),

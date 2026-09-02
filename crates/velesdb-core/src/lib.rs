@@ -1,3 +1,4 @@
+#![warn(clippy::significant_drop_tightening)]
 // The crate README is pulled into the crate documentation verbatim. This is not
 // cosmetic: it makes `cargo test --doc --package velesdb-core` (CI step "Check
 // doctests compile") type-check every ```rust block in `README.md`. A README
@@ -93,12 +94,20 @@ pub mod column_store;
 mod column_store_tests;
 pub mod compression;
 pub mod config;
+#[cfg(test)]
+mod config_env_tests;
 pub mod config_quantization;
 #[cfg(test)]
 mod config_tests;
 mod config_validation;
 /// Cross-implementation conformance harness (frozen golden reference vectors).
 pub mod conformance;
+/// File-backed storage for the vector arena (`persistence` only).
+#[cfg(feature = "persistence")]
+pub mod contiguous_file_arena;
+#[cfg(all(test, feature = "persistence"))]
+#[path = "contiguous_file_arena_tests.rs"]
+mod contiguous_file_arena_tests;
 pub mod contiguous_ops;
 mod contiguous_resize;
 pub mod distance;

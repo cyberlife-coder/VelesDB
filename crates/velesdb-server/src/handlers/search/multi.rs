@@ -18,43 +18,57 @@ use super::pipeline::{
 use super::workers::run_blocking_search;
 use crate::handlers::helpers::{apply_pre_check, extract_client_id, get_vector_collection_or_404};
 
-/// Parse the fusion strategy name into a `FusionStrategy`, returning a 400
-/// response (and bumping the error counter) for an unknown strategy.
-#[allow(clippy::result_large_err)]
-fn parse_fusion_strategy(
+/// Build the `FusionStrategy` a multi-query request asks for, or the message
+/// explaining why it cannot be built.
+///
+/// Split from [`parse_fusion_strategy`] so the decision is testable without
+/// an `AppState`: everything here is a pure function of the request body,
+/// and the caller owns the metrics and the HTTP shell.
+///
+/// The weighted strategies go through their validating constructors rather
+/// than being built as struct literals. The literals accepted any `f32` the
+/// JSON body carried, so a negative weight, a set that did not sum to 1.0, or
+/// a non-finite value reached the fusion kernel and came back as a silently
+/// wrong ranking instead of an error (#2095). The weight rules stay on the
+/// core constructors and their message is reported verbatim, so the server
+/// never carries a second, driftable copy of the same contract.
+pub(super) fn build_fusion_strategy(
     req: &MultiQuerySearchRequest,
-    state: &AppState,
-) -> Result<velesdb_core::FusionStrategy, axum::response::Response> {
+) -> Result<velesdb_core::FusionStrategy, String> {
     use velesdb_core::FusionStrategy;
     match req.strategy.to_lowercase().as_str() {
         "average" | "avg" => Ok(FusionStrategy::Average),
         "maximum" | "max" => Ok(FusionStrategy::Maximum),
         "rrf" => Ok(FusionStrategy::RRF { k: req.rrf_k }),
-        "weighted" => Ok(FusionStrategy::Weighted {
-            avg_weight: req.avg_weight,
-            max_weight: req.max_weight,
-            hit_weight: req.hit_weight,
-        }),
-        "relative_score" | "rsf" => Ok(FusionStrategy::RelativeScore {
-            dense_weight: req.dense_weight,
-            sparse_weight: req.sparse_weight,
-        }),
-        _ => {
-            state.operational_metrics.inc_errors();
-            Err((
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: format!(
-                        "Invalid strategy: {}. Valid: average, maximum, rrf, weighted, \
-                         relative_score",
-                        req.strategy
-                    ),
-                    code: None,
-                }),
-            )
-                .into_response())
+        "weighted" => FusionStrategy::weighted(req.avg_weight, req.max_weight, req.hit_weight)
+            .map_err(|error| format!("Invalid weighted fusion weights: {error}")),
+        "relative_score" | "rsf" => {
+            FusionStrategy::relative_score(req.dense_weight, req.sparse_weight)
+                .map_err(|error| format!("Invalid relative_score fusion weights: {error}"))
         }
+        _ => Err(format!(
+            "Invalid strategy: {}. Valid: average, maximum, rrf, weighted, relative_score",
+            req.strategy
+        )),
     }
+}
+
+/// Parse the fusion strategy the request asks for, returning a 400 response
+/// (and bumping the error counter) for an unknown strategy or for weights the
+/// strategy refuses.
+#[allow(clippy::result_large_err)]
+fn parse_fusion_strategy(
+    req: &MultiQuerySearchRequest,
+    state: &AppState,
+) -> Result<velesdb_core::FusionStrategy, axum::response::Response> {
+    build_fusion_strategy(req).map_err(|error| {
+        state.operational_metrics.inc_errors();
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse { error, code: None }),
+        )
+            .into_response()
+    })
 }
 
 /// Validate every query vector's dimension, returning a 400 on the first

@@ -5,11 +5,8 @@
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::point::Point;
-use crate::quantization::StorageMode;
 use crate::storage::VectorStorage;
 use std::collections::{BTreeMap, HashMap};
-
-use super::crud_helpers::QuantizationGuards;
 
 impl Collection {
     /// Checks whether label index updates are needed for this batch.
@@ -58,24 +55,14 @@ impl Collection {
         }
     }
 
-    /// Conditionally caches a quantized vector for a single point.
+    /// Caches the PQ code for a single point when the mode carries a guard.
     pub(super) fn maybe_quantize(
         collection: &Collection,
         point: &Point,
-        storage_mode: StorageMode,
-        quant_guards: &mut QuantizationGuards<'_>,
-        quant_done: bool,
+        pq_guard: &mut Option<super::crud_helpers::PqCacheGuard<'_>>,
     ) {
-        if !quant_done {
-            let (sq8, binary, pq) = (
-                quant_guards.sq8.as_deref_mut(),
-                quant_guards.binary.as_deref_mut(),
-                quant_guards.pq.as_deref_mut(),
-            );
-            collection.cache_quantized_vector(point, storage_mode, sq8, binary, pq);
-        } else if matches!(storage_mode, StorageMode::ProductQuantization) {
-            let pq = quant_guards.pq.as_deref_mut();
-            collection.cache_quantized_vector(point, storage_mode, None, None, pq);
+        if pq_guard.is_some() {
+            collection.cache_pq_vector(point, pq_guard.as_deref_mut());
         }
     }
 
@@ -95,31 +82,6 @@ impl Collection {
             if let Some(new_val) = new {
                 label_idx.index_from_payload(*id, new_val);
             }
-        }
-    }
-
-    /// Attempts parallel quantization for SQ8/Binary modes.
-    pub(super) fn try_parallel_quantize(
-        &self,
-        points: &[Point],
-        storage_mode: StorageMode,
-    ) -> bool {
-        #[cfg(feature = "persistence")]
-        match storage_mode {
-            StorageMode::SQ8 => {
-                self.batch_quantize_sq8_parallel(points);
-                true
-            }
-            StorageMode::Binary => {
-                self.batch_quantize_binary_parallel(points);
-                true
-            }
-            _ => false,
-        }
-        #[cfg(not(feature = "persistence"))]
-        {
-            let _ = (points, storage_mode);
-            false
         }
     }
 
@@ -165,8 +127,12 @@ impl Collection {
     /// # Errors
     ///
     /// Propagates any WAL open / write / flush / fsync failure.
-    pub(super) fn bulk_update_text_index(&self, points: &[Point]) -> Result<()> {
-        let (adds, removes) = Self::classify_text_mutations(points);
+    pub(super) fn bulk_update_text_index(
+        &self,
+        points: &[Point],
+        old_payloads: &[Option<serde_json::Value>],
+    ) -> Result<()> {
+        let (adds, removes) = Self::classify_text_mutations(points, old_payloads);
         if adds.is_empty() && removes.is_empty() {
             return Ok(());
         }
@@ -184,23 +150,68 @@ impl Collection {
 
     /// Splits a batch into the BM25 mutations it implies.
     ///
-    /// The three cases stay separate here rather than being decided inline, so
-    /// that "a payload with no indexable string writes nothing" is a visible
-    /// decision and not an accident of control flow.
-    fn classify_text_mutations(points: &[Point]) -> (Vec<(u64, String)>, Vec<u64>) {
+    /// The rule is that the index mirrors the payload: a point is searchable
+    /// exactly when its current payload yields indexable text. Everything
+    /// follows from that one predicate, applied to the old payload and the
+    /// new one.
+    ///
+    /// | previously indexable | now indexable | mutation |
+    /// |---|---|---|
+    /// | no  | yes | add |
+    /// | yes | yes | add (`add_document` replaces in place) |
+    /// | yes | no  | **remove** |
+    /// | no  | no  | none — no WAL record, no index lock |
+    ///
+    /// The third row is the one this used to get wrong. A comment here
+    /// recorded "a payload with no indexable string writes nothing" as a
+    /// deliberate decision, and it was — but only the *insert* case was in
+    /// view. On an upsert it meant a point that had its text removed kept
+    /// matching a term its payload no longer contains, with nothing to
+    /// signal it. Changing the text was always fine, because `add_document`
+    /// removes the previous version first; only clearing it went stale.
+    ///
+    /// The fourth row is why this needs the old payload rather than simply
+    /// removing whenever there is no text: a bulk insert of points that never
+    /// carry text would otherwise write one tombstone per point for documents
+    /// that were never indexed. Deciding on the old payload keeps that path
+    /// writing nothing, which is also what it did before.
+    ///
+    /// `resolve_effective_old` is what makes a repeated id inside one batch
+    /// resolve to the batch's own earlier occurrence: `old_payloads` reports
+    /// `None` for a duplicate, so the pre-batch value alone would miss that
+    /// the batch had already indexed it.
+    fn classify_text_mutations(
+        points: &[Point],
+        old_payloads: &[Option<serde_json::Value>],
+    ) -> (Vec<(u64, String)>, Vec<u64>) {
+        debug_assert_eq!(
+            points.len(),
+            old_payloads.len(),
+            "old_payloads is positional: a short slice would silently drop removals"
+        );
+        let mut seen: HashMap<u64, Option<&serde_json::Value>> =
+            HashMap::with_capacity(points.len());
         let mut adds: Vec<(u64, String)> = Vec::new();
         let mut removes: Vec<u64> = Vec::new();
-        for point in points {
-            if let Some(payload) = &point.payload {
-                let text = Self::extract_text_from_payload(payload);
-                if !text.is_empty() {
-                    adds.push((point.id, text));
-                }
-            } else {
-                removes.push(point.id);
+        for (index, point) in points.iter().enumerate() {
+            let pre_batch_old = old_payloads.get(index).and_then(Option::as_ref);
+            let effective_old = Self::resolve_effective_old(&seen, point.id, pre_batch_old);
+            match Self::indexable_text(point.payload.as_ref()) {
+                Some(text) => adds.push((point.id, text)),
+                None if Self::indexable_text(effective_old).is_some() => removes.push(point.id),
+                None => {}
             }
+            seen.insert(point.id, point.payload.as_ref());
         }
         (adds, removes)
+    }
+
+    /// The text a payload contributes to BM25, or `None` when it contributes
+    /// nothing — an absent payload and one with no indexable string are the
+    /// same thing to the index.
+    pub(super) fn indexable_text(payload: Option<&serde_json::Value>) -> Option<String> {
+        let text = Self::extract_text_from_payload(payload?);
+        (!text.is_empty()).then_some(text)
     }
 
     /// Writes the whole batch to the BM25 WAL under one durability barrier.
@@ -311,6 +322,10 @@ impl Collection {
     }
 
     /// Applies buffered sparse vector upserts with WAL-before-apply semantics.
+    // The comment below is the contract: WAL append and in-memory apply stay
+    // indivisible with respect to compaction, which takes this lock through
+    // its reset.
+    #[expect(clippy::significant_drop_tightening)]
     pub(super) fn apply_sparse_batch_upsert(
         &self,
         sparse_batch: &[(u64, BTreeMap<String, crate::index::sparse::SparseVector>)],

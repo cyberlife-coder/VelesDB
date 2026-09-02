@@ -7,6 +7,9 @@
 //! Metrics exposed:
 //! - `velesdb_info`: Server version info
 //! - `velesdb_up`: Server availability gauge
+//! - `velesdb_graph_*`: per-collection graph counters and latency histograms
+//! - `velesdb_match_*`: MATCH query throughput, latency histogram and
+//!   guard-rail hits (process-wide, not per collection)
 
 #![allow(dead_code)] // Functions exposed via feature flag, used when prometheus feature enabled
 
@@ -81,6 +84,14 @@ fn write_metrics(output: &mut String, state: &AppState) -> std::fmt::Result {
 
     // Graph traversal metrics: nodes visited, depth, edges scanned.
     output.push_str(&state.traversal_metrics.export_prometheus());
+
+    // Graph metrics, per graph collection. Empty when the database holds
+    // none, so no family is declared without samples.
+    output.push_str(&state.db.graph_metrics_prometheus());
+
+    // MATCH query metrics: throughput, latency histogram, guard-rail hits.
+    // Process-wide (not per collection) — see `Database::match_metrics_prometheus`.
+    output.push_str(&state.db.match_metrics_prometheus());
 
     // Query duration histogram (8-bucket + sum + count).
     output.push_str(&state.query_duration_histogram.export_prometheus(

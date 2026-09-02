@@ -295,8 +295,9 @@ impl VectorStorage for MmapStorage {
             ));
         }
 
-        let bytes = &mmap[offset..end];
-        Ok(Some(bytes_to_vector(bytes, self.dimension)))
+        let vector = bytes_to_vector(&mmap[offset..end], self.dimension);
+        drop(mmap);
+        Ok(Some(vector))
     }
 
     fn delete(&mut self, id: u64) -> io::Result<()> {
@@ -503,6 +504,7 @@ impl MmapStorage {
             })?;
             mmap[offset..end].copy_from_slice(vector_bytes);
         }
+        drop(mmap);
 
         Ok(())
     }

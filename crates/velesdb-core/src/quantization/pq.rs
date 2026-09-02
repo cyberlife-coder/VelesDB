@@ -234,7 +234,7 @@ impl ProductQuantizer {
                 return Err(Error::InvalidQuantizerConfig(format!(
                     "code index {code_idx} out of range for subspace {subspace} \
                      (max {})",
-                    self.codebook.centroids[subspace].len() - 1
+                    self.codebook.centroids[subspace].len().saturating_sub(1)
                 )));
             }
             let centroid = &self.codebook.centroids[subspace][code_idx];

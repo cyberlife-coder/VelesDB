@@ -242,6 +242,40 @@ impl Database {
         None
     }
 
+    /// Renders every graph collection's metrics as a Prometheus exposition.
+    ///
+    /// One `GraphMetrics` exists per edge store, so the samples are tagged
+    /// with the collection they came from and each family is declared once;
+    /// see `collection::graph::graph_metrics_to_prometheus`. Returns an empty
+    /// string when the database holds no graph collection.
+    #[must_use]
+    pub fn graph_metrics_prometheus(&self) -> String {
+        let graph_colls = self.graph_colls.read();
+        let mut sorted: Vec<_> = graph_colls
+            .iter()
+            .map(|(name, coll)| (name.as_str(), coll.metrics()))
+            .collect();
+        // Stable output: a scrape diff should reflect metric movement, not
+        // HashMap iteration order.
+        sorted.sort_by_key(|(name, _)| *name);
+        let rendered = crate::collection::graph::graph_metrics_to_prometheus(&sorted);
+        // `sorted` borrows names out of the guard, so it goes first.
+        drop(sorted);
+        drop(graph_colls);
+        rendered
+    }
+
+    /// Renders the process-wide MATCH query metrics as a Prometheus
+    /// exposition (EPIC-050 US-002).
+    ///
+    /// Unlike graph metrics, MATCH metrics are not tagged per collection:
+    /// `MATCH` queries currently record into one global collector regardless
+    /// of which collection they touch (`match_metrics::global_match_metrics`).
+    #[must_use]
+    pub fn match_metrics_prometheus(&self) -> String {
+        crate::collection::search::query::match_metrics::global_match_metrics().to_prometheus()
+    }
+
     /// Lists all collection names in the database.
     ///
     /// Includes collections created via any typed API (vector, graph, metadata).
@@ -257,6 +291,11 @@ impl Database {
         for k in metadata_colls.keys() {
             names.insert(k.clone());
         }
+        // Every key is cloned, so the three maps are read as one consistent
+        // snapshot and then released together before the sort below.
+        drop(metadata_colls);
+        drop(graph_colls);
+        drop(vector_colls);
         let mut result: Vec<String> = names.into_iter().collect();
         result.sort();
         result

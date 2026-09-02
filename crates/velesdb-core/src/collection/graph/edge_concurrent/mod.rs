@@ -19,7 +19,6 @@ use super::clustered_index::ClusteredIndex;
 use super::csr_snapshot::{CsrSnapshot, SnapshotBuilder};
 use super::edge::{EdgeStore, GraphEdge};
 use super::edge_outcome::EdgeRemoval;
-use super::label_table::LabelTable;
 use super::metrics::GraphMetrics;
 use crate::error::{Error, Result};
 use arc_swap::ArcSwap;
@@ -102,8 +101,6 @@ pub struct ConcurrentEdgeStore {
     /// CSR snapshot is intentionally stale and callers must consult the
     /// authoritative per-shard data (see [`Self::csr_is_authoritative`]).
     pending_writes: AtomicU64,
-    /// Shared label table for interning edge labels during snapshot builds.
-    label_table: RwLock<LabelTable>,
     /// Lock-free operational metrics (edge inserts/deletes, traversals).
     ///
     /// Atomic counters and histograms only; observed on the Ok tail of each
@@ -147,7 +144,6 @@ impl ConcurrentEdgeStore {
             csr_snapshot: ArcSwap::from_pointee(SnapshotBuilder::empty()),
             csr_dirty: AtomicBool::new(false),
             pending_writes: AtomicU64::new(0),
-            label_table: RwLock::new(LabelTable::new()),
             metrics: GraphMetrics::new(),
         })
     }
@@ -200,9 +196,14 @@ impl ConcurrentEdgeStore {
     /// # Errors
     ///
     /// Returns `Error::EdgeExists` if an edge with the same ID already exists.
+    // The two shard guards are held together on purpose. A cross-shard edge
+    // writes an outgoing half to one shard and an incoming half to the other,
+    // and the error path rolls the first back -- releasing either between the
+    // two halves would expose a half-linked edge, or lose the rollback. The
+    // ascending-index acquisition below is what keeps that pair deadlock-free.
+    #[expect(clippy::significant_drop_tightening)]
     pub fn add_edge(&self, edge: GraphEdge) -> Result<()> {
         let edge_id = edge.id();
-        let start = Instant::now();
 
         {
             // CRITICAL: Hold edge_ids lock throughout the entire operation to prevent race
@@ -252,7 +253,7 @@ impl ConcurrentEdgeStore {
         self.invalidate_snapshot();
         self.rebuild_snapshot_best_effort();
         // Record after all shard locks drop so the atomic ops never overlap a held lock.
-        self.metrics.record_edge_insert(start.elapsed());
+        self.metrics.record_edge_insert();
         Ok(())
     }
 
@@ -268,6 +269,11 @@ impl ConcurrentEdgeStore {
     /// # Returns
     ///
     /// Number of edges successfully added.
+    // `edge_ids` is held across the whole batch, above the per-edge shard
+    // locks, so the id map and the shards cannot disagree about which edges
+    // exist. That outer-to-inner order is also what stops this path deadlocking
+    // against the single-edge one.
+    #[expect(clippy::significant_drop_tightening)]
     pub fn add_edges_batch(&self, edges: Vec<GraphEdge>) -> usize {
         if edges.is_empty() {
             return 0;
@@ -372,8 +378,11 @@ impl ConcurrentEdgeStore {
     /// # Concurrency Safety
     ///
     /// Lock ordering: edge_ids FIRST, then shards in ascending order.
+    // Mirror of `add_edge`: a cross-shard removal drops the outgoing and
+    // incoming halves under both guards at once, acquired in ascending index
+    // order. Releasing one early would leave a dangling half-edge.
+    #[expect(clippy::significant_drop_tightening)]
     pub(crate) fn remove_edge_detailed(&self, edge_id: u64) -> EdgeRemoval {
-        let start = Instant::now();
         {
             let mut ids = self.edge_ids.write();
 
@@ -428,7 +437,7 @@ impl ConcurrentEdgeStore {
         self.invalidate_snapshot();
         self.rebuild_snapshot_best_effort();
         // Record after all shard locks drop (removed path only).
-        self.metrics.record_edge_delete(start.elapsed());
+        self.metrics.record_edge_delete();
         EdgeRemoval::Removed
     }
 

@@ -598,6 +598,109 @@ fn test_remove_node_edges_cleans_label_index() {
     assert!(store.get_edges_by_label("FOLLOWS").is_empty());
 }
 
+/// A node/label whose last edge is removed must not keep an empty bucket
+/// alive in the index maps — `get_*` looking empty isn't enough to prove
+/// that, since a missing key and a key mapped to an empty `Vec` both read as
+/// empty through that API. `outgoing`/`incoming` are persisted fields, so a
+/// leaked key here also bloats every snapshot going forward.
+#[test]
+fn test_remove_edge_evicts_empty_index_buckets() {
+    let mut store = EdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "KNOWS").expect("valid"))
+        .expect("add");
+
+    store.remove_edge(1);
+
+    assert!(
+        !store.outgoing.contains_key(&100),
+        "empty outgoing bucket for 100 should be evicted, not left empty"
+    );
+    assert!(
+        !store.incoming.contains_key(&200),
+        "empty incoming bucket for 200 should be evicted, not left empty"
+    );
+    assert!(
+        store.by_label.is_empty(),
+        "empty by_label bucket for KNOWS should be evicted, not left empty"
+    );
+    assert!(
+        store.outgoing_by_label.is_empty(),
+        "empty outgoing_by_label bucket should be evicted, not left empty"
+    );
+    assert!(
+        store.incoming_by_label.is_empty(),
+        "empty incoming_by_label bucket should be evicted, not left empty"
+    );
+}
+
+/// Same eviction contract via the cascade-delete path (`remove_node_edges`),
+/// which purges the *other* endpoint of each edge through the same
+/// `purge_incoming_index`/`purge_outgoing_index`/`purge_label_indices` helpers.
+#[test]
+fn test_remove_node_edges_evicts_empty_index_buckets_on_other_endpoint() {
+    let mut store = EdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "KNOWS").expect("valid"))
+        .expect("add");
+    store
+        .add_edge(GraphEdge::new(2, 300, 100, "FOLLOWS").expect("valid"))
+        .expect("add");
+
+    store.remove_node_edges(100);
+
+    assert!(
+        !store.incoming.contains_key(&200),
+        "node 100's own removal must not leave an empty bucket at the far endpoint"
+    );
+    assert!(
+        !store.outgoing.contains_key(&300),
+        "node 100's own removal must not leave an empty bucket at the far endpoint"
+    );
+    assert!(store.by_label.is_empty());
+    assert!(store.outgoing_by_label.is_empty());
+    assert!(store.incoming_by_label.is_empty());
+}
+
+/// Same eviction contract via `remove_edge_outgoing_only`, the cross-shard
+/// removal path `ConcurrentEdgeStore` uses when it owns only the source
+/// shard's half of an edge.
+#[test]
+fn test_remove_edge_outgoing_only_evicts_empty_index_buckets() {
+    let mut store = EdgeStore::new();
+    store
+        .add_edge_outgoing_only(GraphEdge::new(1, 100, 200, "KNOWS").expect("valid"))
+        .expect("add");
+
+    store.remove_edge_outgoing_only(1);
+
+    assert!(
+        !store.outgoing.contains_key(&100),
+        "empty outgoing bucket for 100 should be evicted, not left empty"
+    );
+    assert!(store.by_label.is_empty());
+    assert!(store.outgoing_by_label.is_empty());
+}
+
+/// Same eviction contract via `remove_edge_incoming_only`, the cross-shard
+/// removal path `ConcurrentEdgeStore` uses when it owns only the target
+/// shard's half of an edge.
+#[test]
+fn test_remove_edge_incoming_only_evicts_empty_index_buckets() {
+    let mut store = EdgeStore::new();
+    store
+        .add_edge_incoming_only(GraphEdge::new(1, 100, 200, "KNOWS").expect("valid"))
+        .expect("add");
+
+    store.remove_edge_incoming_only(1);
+
+    assert!(
+        !store.incoming.contains_key(&200),
+        "empty incoming bucket for 200 should be evicted, not left empty"
+    );
+    assert!(store.incoming_by_label.is_empty());
+}
+
 // =============================================================================
 // G1: CSR Snapshot — zero-copy BFS via contiguous memory layout
 // =============================================================================
@@ -845,4 +948,86 @@ fn test_csr_has_label() {
     assert!(snapshot.has_label("KNOWS"));
     assert!(snapshot.has_label("FOLLOWS"));
     assert!(!snapshot.has_label("LIKES"));
+}
+
+/// `from_bytes` must hand back a store whose (unserialized) label table and
+/// label indices are rebuilt — not silently empty (#2089).
+#[test]
+fn test_from_bytes_rebuilds_label_indexes() {
+    let mut store = EdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(1, 100, 200, "KNOWS").unwrap())
+        .unwrap();
+    store
+        .add_edge(GraphEdge::new(2, 100, 300, "LIKES").unwrap())
+        .unwrap();
+
+    let bytes = store.to_bytes().unwrap();
+    let restored = EdgeStore::from_bytes(&bytes).unwrap();
+
+    assert_eq!(restored.len(), 2);
+    assert_eq!(restored.get_edges_by_label("KNOWS").len(), 1);
+    assert_eq!(restored.get_outgoing_by_label(100, "LIKES").len(), 1);
+    assert_eq!(restored.get_incoming_by_label(200, "KNOWS").len(), 1);
+    assert!(restored.get_outgoing_by_label(100, "ABSENT").is_empty());
+}
+
+/// Pre-#2089 `edge_store.bin` files serialized two extra String-keyed label
+/// maps after the `incoming` field. Postcard's `from_bytes` reads the three
+/// surviving fields and ignores the trailing bytes, so those files must keep
+/// loading — with the label indices rebuilt from the edges.
+#[test]
+fn test_from_bytes_reads_legacy_format_with_trailing_label_maps() {
+    /// The serialized field layout of the pre-#2089 `EdgeStore`, in order.
+    #[derive(serde::Serialize)]
+    struct LegacyEdgeStore {
+        edges: HashMap<u64, GraphEdge>,
+        outgoing: HashMap<u64, Vec<u64>>,
+        incoming: HashMap<u64, Vec<u64>>,
+        by_label: HashMap<String, Vec<u64>>,
+        outgoing_by_label: HashMap<(u64, String), Vec<u64>>,
+    }
+
+    let edge = GraphEdge::new(7, 100, 200, "KNOWS").unwrap();
+    let legacy = LegacyEdgeStore {
+        edges: HashMap::from([(7, edge)]),
+        outgoing: HashMap::from([(100, vec![7])]),
+        incoming: HashMap::from([(200, vec![7])]),
+        by_label: HashMap::from([("KNOWS".to_string(), vec![7])]),
+        outgoing_by_label: HashMap::from([((100, "KNOWS".to_string()), vec![7])]),
+    };
+    let legacy_bytes = postcard::to_allocvec(&legacy).unwrap();
+
+    let restored = EdgeStore::from_bytes(&legacy_bytes).unwrap();
+    assert_eq!(restored.len(), 1);
+    assert_eq!(restored.get_outgoing(100).len(), 1);
+    assert_eq!(restored.get_edges_by_label("KNOWS").len(), 1);
+    assert_eq!(restored.get_outgoing_by_label(100, "KNOWS").len(), 1);
+    assert_eq!(restored.get_incoming_by_label(200, "KNOWS").len(), 1);
+}
+
+/// Rebuilt label indices must not inherit `HashMap`'s per-instance-random
+/// iteration order: two loads of the same bytes return by-label results in
+/// the same order (#2089 review follow-up).
+#[test]
+fn test_from_bytes_label_order_is_deterministic() {
+    let mut store = EdgeStore::new();
+    for id in 0..50 {
+        let source = 100 + (id * 37) % 50;
+        store
+            .add_edge(GraphEdge::new(id, source, 999, "KNOWS").unwrap())
+            .unwrap();
+    }
+    let bytes = store.to_bytes().unwrap();
+
+    let ids = |s: &EdgeStore| -> Vec<u64> {
+        s.get_edges_by_label("KNOWS")
+            .iter()
+            .map(|e| e.id())
+            .collect()
+    };
+    let first = EdgeStore::from_bytes(&bytes).unwrap();
+    let second = EdgeStore::from_bytes(&bytes).unwrap();
+    assert_eq!(ids(&first), ids(&second), "same bytes, same order");
+    assert_eq!(first.get_edges_by_label("KNOWS").len(), 50);
 }
