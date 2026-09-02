@@ -355,6 +355,57 @@ def invocations_piped_away(workflow_text: str, job: str, script: str) -> "list[s
     return piped
 
 
+# A guard can also be disarmed by never having a repository to read. Steps and
+# their `actions/checkout` are conditioned independently, so a checkout guarded
+# by `if: github.event_name == 'pull_request'` alongside an unconditional step
+# that runs `scripts/…` means that step executes with nothing on disk. It does
+# not fail loudly as a guard: python exits 2 on "can't open file", which is a
+# crash, not a refusal.
+#
+# That shipped: pr-governance.yml's tracked-content scan carried no condition
+# while its checkout carried one, so every `push` run of ci.yml on main and
+# develop was red from the moment the step was added — unnoticed, because the
+# required checks all run on `pull_request`, the one event where the checkout
+# did happen.
+CHECKOUT_STEP_RE = re.compile(r"uses:\s*actions/checkout@")
+SCRIPT_INVOCATION_RE = re.compile(r"\bscripts/[\w./-]+\.(?:py|sh)\b")
+STEP_IF_RE = re.compile(r"^ {8}if:\s*(.+)$", re.MULTILINE)
+
+
+def step_condition(step_block: str) -> str:
+    """A step's own `if:` expression, or "" when it is unconditional."""
+    match = STEP_IF_RE.search(step_block)
+    return match.group(1).strip() if match else ""
+
+
+def steps_running_scripts_without_checkout(
+    workflow_text: str, job: str
+) -> "list[tuple[str, str, str]]":
+    """Steps of ``job`` that can run a scripts/ path with no repository present.
+
+    Reported as (step name, step condition, checkout condition). A step is
+    reported when the checkout is conditioned and the step is not conditioned
+    identically: the step then has at least one event on which it runs and the
+    checkout does not.
+    """
+    block = strip_comments(job_block(workflow_text, job))
+    steps = step_blocks(block)
+    checkouts = [s for s in steps if CHECKOUT_STEP_RE.search(s)]
+    if not checkouts:
+        return []
+    offenders = []
+    for step in steps:
+        if CHECKOUT_STEP_RE.search(step) or not SCRIPT_INVOCATION_RE.search(step):
+            continue
+        condition = step_condition(step)
+        for checkout in checkouts:
+            guard = step_condition(checkout)
+            if guard and guard != condition:
+                offenders.append((step.split("\n")[0].strip(), condition, guard))
+                break
+    return offenders
+
+
 def inline_step_blocks(workflow_text: str, job: str, steps: "list[str]") -> "dict[str, str]":
     """The live YAML of each named step of ``job``, keyed by step name.
 
@@ -1001,6 +1052,27 @@ class GuardWiringTests(unittest.TestCase):
                     f"strict guard piped into another command without "
                     f"`set -o pipefail`, so its exit status is discarded: "
                     f"{piped!r}",
+                )
+
+    def test_a_guard_step_cannot_run_without_its_checkout(self) -> None:
+        # The other way to disarm a guard without touching its invocation:
+        # let it run on an event where nothing checked the repository out.
+        # pr-governance.yml did exactly that -- an unconditional
+        # tracked-content scan next to a `pull_request`-only checkout -- and
+        # every push run of ci.yml on main and develop was red for it, with
+        # python exiting 2 on "can't open file" rather than refusing anything.
+        for entry in self.guards:
+            if entry.get("inline_steps"):
+                continue
+            offenders = steps_running_scripts_without_checkout(
+                self._workflow_text(entry), entry["job"]
+            )
+            with self.subTest(script=entry["script"]):
+                self.assertEqual(
+                    offenders,
+                    [],
+                    "step runs a scripts/ path on events its checkout skips, so "
+                    f"the file is absent and the guard crashes: {offenders!r}",
                 )
 
     def _required_test_surface(self) -> str:
@@ -1893,6 +1965,83 @@ class PipeDisarmRealWorkflowTests(unittest.TestCase):
                 broken, "binary-size", "scripts/check_binary_size.py"
             ),
             "removing `set -o pipefail` from the live workflow turns nothing red",
+        )
+
+
+class CheckoutReachabilityParserTests(unittest.TestCase):
+    """`steps_running_scripts_without_checkout` sees the shape that shipped."""
+
+    #: pr-governance.yml as it stood: guarded checkout, unguarded script step.
+    SHIPPED = """jobs:
+  governance:
+    steps:
+      - name: Checkout head branch
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Reject AI attribution in tracked content
+        run: |
+          python3 scripts/check-ai-attribution.py --tree
+"""
+
+    def test_the_shipped_shape_is_detected(self) -> None:
+        offenders = steps_running_scripts_without_checkout(self.SHIPPED, "governance")
+        self.assertEqual(len(offenders), 1, offenders)
+        self.assertIn("tracked content", offenders[0][0])
+
+    def test_an_unconditional_checkout_clears_it(self) -> None:
+        text = self.SHIPPED.replace(
+            "        if: ${{ github.event_name == 'pull_request' }}\n", "", 1
+        )
+        self.assertEqual(
+            steps_running_scripts_without_checkout(text, "governance"), []
+        )
+
+    def test_a_step_sharing_the_checkout_condition_is_not_flagged(self) -> None:
+        """Both gated on the same event: the step never runs checkout-less."""
+        text = self.SHIPPED.replace(
+            "      - name: Reject AI attribution in tracked content\n        run: |",
+            "      - name: Reject AI attribution in tracked content\n"
+            "        if: ${{ github.event_name == 'pull_request' }}\n        run: |",
+        )
+        self.assertEqual(
+            steps_running_scripts_without_checkout(text, "governance"), []
+        )
+
+    def test_a_step_running_no_script_is_not_flagged(self) -> None:
+        text = self.SHIPPED.replace(
+            "          python3 scripts/check-ai-attribution.py --tree", "          echo hi"
+        )
+        self.assertEqual(
+            steps_running_scripts_without_checkout(text, "governance"), []
+        )
+
+
+class CheckoutReachabilityRealWorkflowTests(unittest.TestCase):
+    """The fix is in the tree, and removing it is detected."""
+
+    WORKFLOW = REPO_ROOT / ".github/workflows/pr-governance.yml"
+
+    def test_the_governance_checkout_is_unconditional(self) -> None:
+        text = self.WORKFLOW.read_text(encoding="utf-8")
+        self.assertEqual(
+            steps_running_scripts_without_checkout(text, "governance"), []
+        )
+
+    def test_re_guarding_the_checkout_is_detected(self) -> None:
+        text = self.WORKFLOW.read_text(encoding="utf-8")
+        broken = text.replace(
+            "      - name: Checkout head branch\n        uses: actions/checkout@",
+            "      - name: Checkout head branch\n"
+            "        if: ${{ github.event_name == 'pull_request' }}\n"
+            "        uses: actions/checkout@",
+            1,
+        )
+        self.assertNotEqual(broken, text, "the anchor moved; this test is stale")
+        self.assertTrue(
+            steps_running_scripts_without_checkout(broken, "governance"),
+            "re-guarding the checkout turns nothing red",
         )
 
 
