@@ -448,6 +448,14 @@ jobs:
       - name: Check durability barriers on file-creating write paths
         run: python3 scripts/check-durability-barrier.py
 
+      # velesdb-memory's doctrine (crates/velesdb-memory/src/lib.rs) requires a
+      # `Box`/`Arc` adapter to forward the WHOLE trait. rustc only demands the
+      # *required* methods, so a partial forwarding can only ever drop one with
+      # a default body — it compiles, and the wrapper silently runs the default
+      # instead of the concrete override. That is the #1690-#1692 gap family.
+      - name: Check wrapper adapters forward their trait whole
+        run: python3 scripts/check-trait-forwarding.py
+
       - name: Check for .unwrap() in production code
         run: python3 scripts/check_prod_unwraps.py
 
@@ -469,6 +477,9 @@ jobs:
 
       - name: Test file-budgets audit script
         run: python3 -m unittest scripts.tests.test_check_file_budgets
+
+      - name: Test trait-forwarding audit script
+        run: python3 -m unittest scripts.tests.test_check_trait_forwarding
 
       - name: Audit feature claims vs exports
         run: python3 scripts/check-feature-claims.py
