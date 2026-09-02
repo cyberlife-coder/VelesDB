@@ -22,6 +22,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A guard that no adapter forwards its trait partially (#1967).**
+  `scripts/check-trait-forwarding.py` reads every adapter under `crates/*/src`
+  that exists only to delegate — the generic wrapper
+  `impl<T: Trait + ?Sized> Trait for Box<T> | Arc<T> | Rc<T>`, and the erased
+  alias `impl Trait for DynTrait` where `type DynTrait = Box<dyn Trait>` —
+  and demands the impl define every method the trait declares. An ordinary
+  `impl Trait for Backend` is deliberately exempt: a concrete backend is
+  entitled to the trait's default, which is what a default is for.
+
+  The bug it prevents is narrow, which is exactly why it needs a machine.
+  rustc already refuses an `impl` that omits a *required* method, so a partial
+  forwarding can only ever drop a method that has a **default body** — and
+  then it compiles: `Arc<Concrete>` silently runs the trait's default instead
+  of `Concrete`'s override. `Extractor::extract_graph` is the shape that
+  already cost the repo a bug (the #1690–#1692 gap family): forward only
+  `extract`, and every `Arc`-held backend loses the relations and attributes
+  it actually produced. `velesdb-memory`'s doctrine in `src/lib.rs` states the
+  rule — "an adapter forwards the **whole** trait" — and until now only review
+  enforced it.
+
+  Five forwardings are checked today — four generic wrappers (`Reranker`,
+  `Embedder`, `Extractor`, `TokenEstimator`) and one erased alias
+  (`DynReranker`, which is what the Node binding wraps a JS callback in);
+  all five are whole. The alias shape carries no generic parameter, so a
+  wrapper-only pattern never sees it, and it is precisely where a dropped
+  method would be lost for every JS caller while the Rust tests, which use the
+  concrete type, stayed green.
+
+  Supertrait methods are deliberately not demanded: the storage facets of
+  #1959 are separate traits, and the doctrine's unit is the facet. A trait
+  defined outside the scanned tree is reported `SKIPPED` rather than passed,
+  so a miss the guard cannot see never reads as a clean run.
+
+  Wired into `ci.yml`'s `lint` job with its self-test, registered in
+  `scripts/guards.json` with three executable refusal vectors and its blind
+  spot (presence, not delegation: a forwarded method whose body reimplements
+  the default rather than calling `(**self)` still satisfies the guard).
+
 - **`[hnsw]` is applied by the engine (#2087).** `m` and `ef_construction`
   from the configuration file now reach the HNSW index of every collection the
   `Database` creates — vector collections and graph collections with node
@@ -88,6 +126,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not think to ask for the empty string. Now
   `MemoryError::EmptyWorkingContextKey { key }` names which one, before
   anything is written. Same audit, same file as the index bound above.
+- **`fused_recall_benchmark` could not run past its first parameter point.**
+  It hung every fact off one entity hub and asserted the walk reached all of
+  them — the liveness gate that proves a search regression cannot benchmark a
+  no-op. Issue #1743 then capped a single node's expansion at
+  `MAX_WHY_NODE_DEGREE` (64) and the whole walk at `MAX_WHY_NODES` (500), so
+  at degree 200 the walk reached 66 nodes (64 + seed + hub), the assertion
+  panicked, and four of the bench's five measurements were never taken. The
+  empirical check for #1742's O(edges + nodes) traversal fix had been dead
+  since that cap landed; nothing noticed because CI's `Internal Bench
+  Compiles` only `cargo check`s `velesdb-core`'s benches.
+
+  The fixture is now a forest of hubs, each mentioning at most
+  `MAX_WHY_NODE_DEGREE` facts, so the reach the walk covers still grows into
+  the hundreds while every node stays inside the policy it actually runs
+  under. The sweep covers both regimes the caps create: three points under
+  `MAX_WHY_NODES` where the walk must reach every fact exactly, and one past
+  it where it must truncate at precisely the ceiling and the cost must
+  plateau. Relaxing the assertion to `min(degree, 64)` was rejected — past
+  64 the graph contribution is constant, and a bench that runs but no longer
+  stresses what it was built to stress is a dead guard that looks alive.
+  CI's `Internal Bench Compiles` job now also type-checks this crate's four
+  benches (`cargo check -p velesdb-memory --benches`), so the compile half
+  of a future death is caught on every PR; whether to *run* them per PR
+  stays a policy decision and is not taken here.
 
 - **`VectorCollection::create_with_hnsw` documented a false equivalence.** It
   claimed that passing `None` for both arguments was "equivalent to
