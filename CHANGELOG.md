@@ -100,8 +100,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `VectorCollection::create_with_hnsw_params`,
   `GraphCollection::create_with_hnsw_params`.
 
+### Changed
+
+- **A project's working-context index is bounded at 1 000 sessions
+  (`MAX_WORKING_SESSIONS_PER_PROJECT`).** The index is one fact per project,
+  rewritten whole on every `save_working_context` — serialised, embedded,
+  stored. It gained an entry per distinct session id and shed one only when
+  that session's fact was forgotten, so a long-lived project paid
+  O(sessions) per save, forever, and `write_working_index` never checked the
+  1 MiB fact cap (that check guards the working-context *content*, not the
+  index). Past the cap the oldest-saved entries now leave the listing; their
+  facts stay on disk and `load_working_context` still finds them by exact
+  `project` + `session` — the semantic a torn index already had. The session
+  being saved is pinned and can never be the one evicted, even in a
+  same-second flood of other sessions. Found by the lock/resilience/memory
+  audit of `velesdb-memory`; the audit's other findings were negative (no
+  `std::sync` locks, no nested holds, the global index lock never held across
+  the embedder, every other collection already capped).
+
 ### Fixed
 
+- **`save_working_context` refuses an empty `project` or `session`.** Both
+  are the id the state is filed under and listed by; an empty one hashed,
+  encoded and listed fine — as `""` — and was unrecoverable by anyone who did
+  not think to ask for the empty string. Now
+  `MemoryError::EmptyWorkingContextKey { key }` names which one, before
+  anything is written. Same audit, same file as the index bound above.
 - **`fused_recall_benchmark` could not run past its first parameter point.**
   It hung every fact off one entity hub and asserted the walk reached all of
   them — the liveness gate that proves a search regression cannot benchmark a

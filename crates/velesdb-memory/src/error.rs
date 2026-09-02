@@ -259,6 +259,19 @@ pub enum MemoryError {
     )]
     EmptyWorkingContext,
 
+    /// [`crate::service::MemoryService::save_working_context`] was given an
+    /// empty (or whitespace-only) `project` or `session`. Both are the KEY the
+    /// state is filed under and listed by: an empty one is accepted by every
+    /// hash and every JSON encoder, so without this check it would save
+    /// fine, list as `""`, and be unrecoverable by anyone who does not think
+    /// to ask for the empty string. Refused before anything is written.
+    #[cfg(feature = "context")]
+    #[error("working-context {key} is empty: it is the id this state is saved and listed under")]
+    EmptyWorkingContextKey {
+        /// Which key was empty: `"project"` or `"session"`.
+        key: &'static str,
+    },
+
     /// A persisted working context could not be (de)serialized — the stored
     /// payload predates or postdates this crate's schema.
     ///
@@ -354,7 +367,9 @@ impl MemoryError {
             | Self::MetadataTooLarge { .. } => ErrorCategory::InvalidInput,
             Self::Unsupported(_) => ErrorCategory::Unsupported,
             #[cfg(feature = "context")]
-            Self::EmptyWorkingContext => ErrorCategory::InvalidInput,
+            Self::EmptyWorkingContext | Self::EmptyWorkingContextKey { .. } => {
+                ErrorCategory::InvalidInput
+            }
             #[cfg(feature = "context")]
             Self::ContextBudget { .. } | Self::ContextOverLimit(_) | Self::SegmentationError(_) => {
                 ErrorCategory::InvalidInput
