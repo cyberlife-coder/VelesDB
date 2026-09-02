@@ -740,6 +740,16 @@ jobs:
       - name: Library and benches under internal-bench
         run: cargo check -p velesdb-core --benches --features persistence,internal-bench
 
+      # velesdb-memory's four criterion benches were built by nothing in CI,
+      # so one of them stayed dead for weeks after #1743 changed the policy
+      # it asserted on (its liveness gate panicked at the second parameter
+      # point). Type-checking them here is the cheapest reach that would
+      # have caught the compile half of that; running them stays a policy
+      # decision (cost per PR vs a weekly sweep, the feature-powerset
+      # trade-off) and is deliberately not taken in this job.
+      - name: velesdb-memory benches type-check
+        run: cargo check -p velesdb-memory --benches --features persistence,context
+
       - name: Tests under internal-bench
         run: cargo check -p velesdb-core --tests --features persistence,internal-bench
 

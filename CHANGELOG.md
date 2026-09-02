@@ -84,6 +84,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plateau. Relaxing the assertion to `min(degree, 64)` was rejected — past
   64 the graph contribution is constant, and a bench that runs but no longer
   stresses what it was built to stress is a dead guard that looks alive.
+  CI's `Internal Bench Compiles` job now also type-checks this crate's four
+  benches (`cargo check -p velesdb-memory --benches`), so the compile half
+  of a future death is caught on every PR; whether to *run* them per PR
+  stays a policy decision and is not taken here.
 
 - **`VectorCollection::create_with_hnsw` documented a false equivalence.** It
   claimed that passing `None` for both arguments was "equivalent to
