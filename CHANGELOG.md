@@ -22,6 +22,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A guard that no adapter forwards its trait partially (#1967).**
+  `scripts/check-trait-forwarding.py` reads every adapter under `crates/*/src`
+  that exists only to delegate — the generic wrapper
+  `impl<T: Trait + ?Sized> Trait for Box<T> | Arc<T> | Rc<T>`, and the erased
+  alias `impl Trait for DynTrait` where `type DynTrait = Box<dyn Trait>` —
+  and demands the impl define every method the trait declares. An ordinary
+  `impl Trait for Backend` is deliberately exempt: a concrete backend is
+  entitled to the trait's default, which is what a default is for.
+
+  The bug it prevents is narrow, which is exactly why it needs a machine.
+  rustc already refuses an `impl` that omits a *required* method, so a partial
+  forwarding can only ever drop a method that has a **default body** — and
+  then it compiles: `Arc<Concrete>` silently runs the trait's default instead
+  of `Concrete`'s override. `Extractor::extract_graph` is the shape that
+  already cost the repo a bug (the #1690–#1692 gap family): forward only
+  `extract`, and every `Arc`-held backend loses the relations and attributes
+  it actually produced. `velesdb-memory`'s doctrine in `src/lib.rs` states the
+  rule — "an adapter forwards the **whole** trait" — and until now only review
+  enforced it.
+
+  Five forwardings are checked today — four generic wrappers (`Reranker`,
+  `Embedder`, `Extractor`, `TokenEstimator`) and one erased alias
+  (`DynReranker`, which is what the Node binding wraps a JS callback in);
+  all five are whole. The alias shape carries no generic parameter, so a
+  wrapper-only pattern never sees it, and it is precisely where a dropped
+  method would be lost for every JS caller while the Rust tests, which use the
+  concrete type, stayed green.
+
+  Supertrait methods are deliberately not demanded: the storage facets of
+  #1959 are separate traits, and the doctrine's unit is the facet. A trait
+  defined outside the scanned tree is reported `SKIPPED` rather than passed,
+  so a miss the guard cannot see never reads as a clean run.
+
+  Wired into `ci.yml`'s `lint` job with its self-test, registered in
+  `scripts/guards.json` with three executable refusal vectors and its blind
+  spot (presence, not delegation: a forwarded method whose body reimplements
+  the default rather than calling `(**self)` still satisfies the guard).
+
 - **`[hnsw]` is applied by the engine (#2087).** `m` and `ef_construction`
   from the configuration file now reach the HNSW index of every collection the
   `Database` creates — vector collections and graph collections with node
