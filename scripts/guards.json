@@ -172,6 +172,63 @@
    ]
   },
   {
+   "script": "scripts/check-trait-forwarding.py",
+   "purpose": "Every adapter that exists only to delegate forwards its trait WHOLE: the generic wrapper `impl<T: Trait + ?Sized> Trait for Box<T>|Arc<T>|Rc<T>`, and the erased alias `impl Trait for DynTrait` where `type DynTrait = Box<dyn Trait>` (the shape a binding holds). rustc already refuses an impl missing a *required* method, so a partial forwarding can only drop a method with a default body — which compiles and silently runs the default instead of the concrete override (the #1690-#1692 gap family). A plain `impl Trait for Backend` is deliberately exempt: a concrete backend is entitled to the default. velesdb-memory's doctrine (src/lib.rs) states the rule; this guard is what makes it hold without a reviewer noticing.",
+   "workflow": ".github/workflows/ci.yml",
+   "job": "lint",
+   "required": true,
+   "mode": "strict",
+   "self_test": "scripts.tests.test_check_trait_forwarding",
+   "self_test_required": true,
+   "blind_spot": {
+    "issue": null,
+    "summary": "Presence, not delegation: a forwarded method whose body ignores `(**self)` and reimplements the default satisfies the guard — only review catches that. Three further limits, each currently vacuous under crates/*/src: a `#[cfg]`-gated trait method is demanded unconditionally; an impl or alias produced by a macro is invisible to the text scan; and a trait defined outside the scanned tree is reported SKIPPED rather than checked, so a forwarding of a foreign trait is announced as unverified instead of passing quietly."
+   },
+   "must_refuse": [
+    {
+     "vector": "a wrapper forwarding that drops the trait's defaulted method — the #1692 shape rustc cannot catch",
+     "files": {
+      "crates/velesdb-memory/src/extract.rs": "pub struct Doc;\npub struct Graph;\n\n/// Reproduces the #1692 shape: a defaulted method next to a required one.\npub trait Extractor: Send + Sync {\n    fn extract(&self, input: &str) -> Doc;\n\n    fn extract_graph(&self, input: &str) -> Graph {\n        let _ = input;\n        Graph\n    }\n}\n\nimpl<T: Extractor + ?Sized> Extractor for std::sync::Arc<T> {\n    fn extract(&self, input: &str) -> Doc {\n        (**self).extract(input)\n    }\n}\n"
+     },
+     "accepts": {
+      "crates/velesdb-memory/src/extract.rs": "pub struct Doc;\npub struct Graph;\n\n/// Reproduces the #1692 shape: a defaulted method next to a required one.\npub trait Extractor: Send + Sync {\n    fn extract(&self, input: &str) -> Doc;\n\n    fn extract_graph(&self, input: &str) -> Graph {\n        let _ = input;\n        Graph\n    }\n}\n\nimpl<T: Extractor + ?Sized> Extractor for std::sync::Arc<T> {\n    fn extract(&self, input: &str) -> Doc {\n        (**self).extract(input)\n    }\n\n    fn extract_graph(&self, input: &str) -> Graph {\n        (**self).extract_graph(input)\n    }\n}\n"
+     },
+     "argv": [
+      "--root",
+      "{root}"
+     ]
+    },
+    {
+     "vector": "a partial forwarding whose trait is declared in a different file, so the miss is invisible at the impl site",
+     "files": {
+      "crates/velesdb-memory/src/context/estimator.rs": "pub trait TokenEstimator: Send + Sync {\n    fn estimate(&self, text: &str) -> usize;\n\n    fn bytes_per_token_hint(&self) -> f32 {\n        4.0\n    }\n}\n",
+      "crates/velesdb-memory/src/context/boxed.rs": "use super::estimator::TokenEstimator;\n\nimpl<T: TokenEstimator + ?Sized> TokenEstimator for Box<T> {\n    fn estimate(&self, text: &str) -> usize {\n        (**self).estimate(text)\n    }\n}\n"
+     },
+     "accepts": {
+      "crates/velesdb-memory/src/context/estimator.rs": "pub trait TokenEstimator: Send + Sync {\n    fn estimate(&self, text: &str) -> usize;\n\n    fn bytes_per_token_hint(&self) -> f32 {\n        4.0\n    }\n}\n",
+      "crates/velesdb-memory/src/context/boxed.rs": "use super::estimator::TokenEstimator;\n\nimpl<T: TokenEstimator + ?Sized> TokenEstimator for Box<T> {\n    fn estimate(&self, text: &str) -> usize {\n        (**self).estimate(text)\n    }\n\n    fn bytes_per_token_hint(&self) -> f32 {\n        (**self).bytes_per_token_hint()\n    }\n}\n"
+     },
+     "argv": [
+      "--root",
+      "{root}"
+     ]
+    },
+    {
+     "vector": "a partial forwarding on an erased `Dyn*` alias — the shape a binding holds, and the one with no generic parameter to pattern-match on",
+     "files": {
+      "crates/velesdb-memory/src/rerank.rs": "pub trait Reranker {\n    fn rerank(&self, query: &str) -> u8;\n\n    fn rerank_batch(&self, queries: &[&str]) -> u8 {\n        queries.len() as u8\n    }\n}\n\n/// The shape a binding holds: no generic parameter, so the wrapper pattern\n/// alone never sees this impl.\npub type DynReranker = Box<dyn Reranker + Send + Sync>;\n\nimpl Reranker for DynReranker {\n    fn rerank(&self, query: &str) -> u8 {\n        (**self).rerank(query)\n    }\n}\n"
+     },
+     "accepts": {
+      "crates/velesdb-memory/src/rerank.rs": "pub trait Reranker {\n    fn rerank(&self, query: &str) -> u8;\n\n    fn rerank_batch(&self, queries: &[&str]) -> u8 {\n        queries.len() as u8\n    }\n}\n\n/// The shape a binding holds: no generic parameter, so the wrapper pattern\n/// alone never sees this impl.\npub type DynReranker = Box<dyn Reranker + Send + Sync>;\n\nimpl Reranker for DynReranker {\n    fn rerank(&self, query: &str) -> u8 {\n        (**self).rerank(query)\n    }\n\n    fn rerank_batch(&self, queries: &[&str]) -> u8 {\n        (**self).rerank_batch(queries)\n    }\n}\n"
+     },
+     "argv": [
+      "--root",
+      "{root}"
+     ]
+    }
+   ]
+  },
+  {
    "script": "scripts/verify_unsafe_safety_template.py",
    "purpose": "Every unsafe block carries a // SAFETY: comment (Gate 4).",
    "workflow": ".github/workflows/ci.yml",
