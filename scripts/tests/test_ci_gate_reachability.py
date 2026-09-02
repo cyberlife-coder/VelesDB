@@ -292,6 +292,69 @@ def script_mentions_in_job(workflow_text: str, job: str, script: str) -> "list[s
     return [line.strip() for line in block.split("\n") if script in line]
 
 
+# A guard's `run:` line can be disarmed without any of DISARM_TOKENS appearing:
+# put the guard on the left of a pipe. GitHub's default shell for `run:` is
+# `bash -e {0}` — no `pipefail` — so a pipeline's exit status is the LAST
+# command's, and `check_binary_size.py | tee report.txt` reports tee's 0. The
+# Binary Size Gate ran that way, as a required check through `CI Success`, and
+# printed `Binary size gate FAILED` under a green check on #2193.
+#
+# Two things hid it. The pipe sat on a backslash continuation, so no single
+# line held both the script and the `|`; and DISARM_TOKENS is a substring test
+# over one line at a time. Hence the join below: the check is on the LOGICAL
+# command, not the source line.
+#
+# A guard on the RIGHT of a pipe is fine — the pipeline's status is then its
+# own — which is why only the text after the script name is examined.
+SET_PIPEFAIL_RE = re.compile(r"\bset\s+-\S*o\s+pipefail\b")
+# An explicit `shell: bash` makes GitHub run the step under
+# `bash --noprofile --norc -eo pipefail {0}`, which is safe. The default
+# (no `shell:` key) is the unsafe one.
+EXPLICIT_BASH_SHELL_RE = re.compile(r"^\s*shell:\s*bash\s*$", re.MULTILINE)
+# A single `|`, not the `||` of a boolean OR.
+SINGLE_PIPE_RE = re.compile(r"(?<!\|)\|(?!\|)")
+STEP_START_RE = re.compile(r"^ {6}- ", re.MULTILINE)
+
+
+def step_blocks(job_block_text: str) -> "list[str]":
+    """Each step of a job block, as raw text.
+
+    Steps, not the whole job: `set -o pipefail` in one step says nothing about
+    the next, and a job-wide search would read one step's protection as cover
+    for another's.
+    """
+    starts = [m.start() for m in STEP_START_RE.finditer(job_block_text)]
+    bounds = starts + [len(job_block_text)]
+    return [job_block_text[bounds[i] : bounds[i + 1]] for i in range(len(starts))]
+
+
+def join_continuations(text: str) -> str:
+    """Fold `\\`-continued shell lines into the single command they are."""
+    return re.sub(r"\\\n\s*", " ", text)
+
+
+def invocations_piped_away(workflow_text: str, job: str, script: str) -> "list[str]":
+    """Commands in ``job`` that run ``script`` into a pipe that eats its status.
+
+    A step that sets `pipefail`, or asks for `shell: bash` and gets it from
+    GitHub, is not reported: there the pipeline fails when the guard does.
+    """
+    piped = []
+    block = strip_comments(job_block(workflow_text, job))
+    for step in step_blocks(block):
+        if script not in step:
+            continue
+        if SET_PIPEFAIL_RE.search(step) or EXPLICIT_BASH_SHELL_RE.search(step):
+            continue
+        for command in join_continuations(step).split("\n"):
+            if script not in command:
+                continue
+            _, _, after = command.partition(script)
+            if SINGLE_PIPE_RE.search(after):
+                piped.append(command.strip())
+    return piped
+
+
 def inline_step_blocks(workflow_text: str, job: str, steps: "list[str]") -> "dict[str, str]":
     """The live YAML of each named step of ``job``, keyed by step name.
 
@@ -917,6 +980,28 @@ class GuardWiringTests(unittest.TestCase):
                             line,
                             f"strict guard disarmed at its invocation: {line!r}",
                         )
+
+    def test_a_strict_guard_is_not_disarmed_by_a_pipe(self) -> None:
+        # The disarm shape DISARM_TOKENS cannot see. `check_binary_size.py`
+        # ran as `python … | tee binary-size-report.txt` under GitHub's default
+        # `bash -e {0}`, so the step took tee's exit status and the Binary Size
+        # Gate — required through `CI Success` — reported success while the
+        # script printed `Binary size gate FAILED` (#2193, two binaries over
+        # their ceilings). Every other disarm test above passed the whole time.
+        for entry in self.guards:
+            if entry["mode"] != "strict":
+                continue
+            piped = invocations_piped_away(
+                self._workflow_text(entry), entry["job"], entry["script"]
+            )
+            with self.subTest(script=entry["script"]):
+                self.assertEqual(
+                    piped,
+                    [],
+                    f"strict guard piped into another command without "
+                    f"`set -o pipefail`, so its exit status is discarded: "
+                    f"{piped!r}",
+                )
 
     def _required_test_surface(self) -> str:
         """Everything a required job can run, including through a called workflow.
@@ -1663,6 +1748,152 @@ class TriggerReachabilityParserTests(unittest.TestCase):
             "    # if: github.event_name == 'pull_request'\n",
         )
         self.assertEqual(job_event_names(text, "alpha"), set())
+
+
+class PipeDisarmParserTests(unittest.TestCase):
+    """`invocations_piped_away` sees the shape that shipped, and only it.
+
+    The fixture below is the Binary Size Gate step as it stood — the exact
+    text under which `CI Success` went green on a `Binary size gate FAILED`.
+    """
+
+    #: The pre-fix step, verbatim in shape: pipe on a backslash continuation.
+    SHIPPED = """jobs:
+  binary-size:
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check binary sizes against ceilings
+        run: |
+          python scripts/check_binary_size.py --target-dir target/release \\
+            | tee binary-size-report.txt
+          cat binary-size-report.txt
+"""
+
+    def test_the_shipped_shape_is_detected(self) -> None:
+        piped = invocations_piped_away(
+            self.SHIPPED, "binary-size", "scripts/check_binary_size.py"
+        )
+        self.assertEqual(len(piped), 1, piped)
+        self.assertIn("| tee", piped[0])
+
+    def test_a_single_line_pipe_is_detected_too(self) -> None:
+        """The continuation is what hid it, not what caused it."""
+        text = self.SHIPPED.replace(" \\\n           ", "")
+        self.assertTrue(
+            invocations_piped_away(
+                text, "binary-size", "scripts/check_binary_size.py"
+            )
+        )
+
+    def test_set_o_pipefail_clears_it(self) -> None:
+        text = self.SHIPPED.replace(
+            "        run: |\n", "        run: |\n          set -o pipefail\n"
+        )
+        self.assertEqual(
+            invocations_piped_away(
+                text, "binary-size", "scripts/check_binary_size.py"
+            ),
+            [],
+        )
+
+    def test_set_euo_pipefail_clears_it(self) -> None:
+        text = self.SHIPPED.replace(
+            "        run: |\n", "        run: |\n          set -euo pipefail\n"
+        )
+        self.assertEqual(
+            invocations_piped_away(
+                text, "binary-size", "scripts/check_binary_size.py"
+            ),
+            [],
+        )
+
+    def test_an_explicit_bash_shell_clears_it(self) -> None:
+        """GitHub runs `shell: bash` as `bash --noprofile --norc -eo pipefail`."""
+        text = self.SHIPPED.replace(
+            "        run: |\n", "        shell: bash\n        run: |\n"
+        )
+        self.assertEqual(
+            invocations_piped_away(
+                text, "binary-size", "scripts/check_binary_size.py"
+            ),
+            [],
+        )
+
+    def test_pipefail_in_a_neighbouring_step_does_not_cover_this_one(self) -> None:
+        text = self.SHIPPED.replace(
+            "      - uses: actions/checkout@v7\n",
+            "      - name: Something else\n        run: |\n"
+            "          set -o pipefail\n          echo hi\n",
+        )
+        self.assertTrue(
+            invocations_piped_away(
+                text, "binary-size", "scripts/check_binary_size.py"
+            ),
+            "one step's pipefail was read as cover for another's",
+        )
+
+    def test_a_guard_consuming_a_pipe_is_not_flagged(self) -> None:
+        """On the right of a pipe the pipeline's status IS the guard's."""
+        text = """jobs:
+  lint:
+    steps:
+      - name: Check
+        run: |
+          git diff --name-only | xargs python3 scripts/check_binary_size.py
+"""
+        self.assertEqual(
+            invocations_piped_away(text, "lint", "scripts/check_binary_size.py"), []
+        )
+
+    def test_a_boolean_or_is_not_read_as_a_pipe(self) -> None:
+        text = """jobs:
+  lint:
+    steps:
+      - name: Check
+        run: |
+          python3 scripts/check_binary_size.py || echo "over ceiling"
+"""
+        # `|| true` is DISARM_TOKENS' business; this parser must not double-report
+        # every `||` as a pipe, or it would flag the `|| status=$?` that keeps
+        # the real step's report reaching the run summary.
+        self.assertEqual(
+            invocations_piped_away(text, "lint", "scripts/check_binary_size.py"), []
+        )
+
+    def test_a_redirect_is_not_a_pipe(self) -> None:
+        text = """jobs:
+  lint:
+    steps:
+      - name: Check
+        run: |
+          python3 scripts/check_binary_size.py > report.txt
+"""
+        self.assertEqual(
+            invocations_piped_away(text, "lint", "scripts/check_binary_size.py"), []
+        )
+
+
+class PipeDisarmRealWorkflowTests(unittest.TestCase):
+    """The fix is in the tree, and the guard reads it as fixed."""
+
+    def test_the_binary_size_step_sets_pipefail(self) -> None:
+        text = (REPO_ROOT / ".github/workflows/binary-size.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("set -o pipefail", text)
+
+    def test_dropping_pipefail_from_the_real_workflow_is_detected(self) -> None:
+        text = (REPO_ROOT / ".github/workflows/binary-size.yml").read_text(
+            encoding="utf-8"
+        )
+        broken = text.replace("          set -o pipefail\n", "")
+        self.assertNotEqual(broken, text, "the anchor moved; this test is stale")
+        self.assertTrue(
+            invocations_piped_away(
+                broken, "binary-size", "scripts/check_binary_size.py"
+            ),
+            "removing `set -o pipefail` from the live workflow turns nothing red",
+        )
 
 
 if __name__ == "__main__":

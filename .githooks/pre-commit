@@ -55,9 +55,16 @@ else
     fi
     echo -e "${GREEN}✅ Undocumented unsafe blocks check OK${NC}"
 
-    # 3. Run tests (exclude velesdb-python due to PyO3 env issues)
+    # 3. Run tests. Both excluded crates link against a host interpreter that a
+    #    plain `cargo test` binary does not have: velesdb-python against PyO3's,
+    #    velesdb-node against Node's N-API. The latter was missing here, so on
+    #    Linux this step could not pass for ANY commit -- rust-lld refuses
+    #    `undefined symbol: napi_reference_unref` where a macOS link would have
+    #    resolved it lazily. AGENTS.md's pre-push block excludes both for the
+    #    same reason and lints them separately; CI covers node in the dedicated
+    #    `node-binding-tests` job, which builds through `napi build`.
     echo -e "\n${YELLOW}🧪 Running tests...${NC}"
-    if ! cargo test --workspace --exclude velesdb-python --lib; then
+    if ! cargo test --workspace --exclude velesdb-python --exclude velesdb-node --lib; then
         echo -e "${RED}❌ Tests failed. Fix them before committing.${NC}"
         exit 1
     fi

@@ -106,4 +106,4 @@ Normal : dépend du CPU, de `ef_search`, des filtres/payloads et du dataset.
 - [E-commerce Example](../examples/ecommerce_recommendation/) — Full Vector + Graph + Filter demo in Rust
 
 ---
-Last updated: 2026-07-25 · Applies to: velesdb-core 5.2.0
+Last updated: 2026-07-25 · Applies to: velesdb-core 6.0.0

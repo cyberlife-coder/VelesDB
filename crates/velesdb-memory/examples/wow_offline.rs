@@ -145,6 +145,6 @@ fn show_why(
     );
     println!("   {GREEN}✓  ask Marcus Lee — he shipped it in checkout.{OFF}");
     println!("\n{BOLD}Vector finds. ColumnStore scopes. The graph connects.{OFF}");
-    println!("{DIM}Offline. No API key. One ~9 MB binary.{OFF}   velesdb.com\n");
+    println!("{DIM}Offline. No API key. One ~14 MB binary.{OFF}   velesdb.com\n");
     Ok(())
 }

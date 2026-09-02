@@ -1,7 +1,7 @@
 # CLAUDE.md — VelesDB
 
 Local-first unified database (Vector + Graph + ColumnStore) under VelesQL. Rust
-workspace, single ~10 MB binary.
+workspace, single ~14 MB binary.
 
 Read and follow [`AGENTS.md`](AGENTS.md) before making any change; it is the
 canonical repository contract — working principles, the CI-enforced constraints

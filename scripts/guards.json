@@ -779,11 +779,11 @@
    "job": "binary-size",
    "required": true,
    "mode": "strict",
-   "self_test": null,
-   "self_test_required": false,
+   "self_test": "scripts.tests.test_check_binary_size",
+   "self_test_required": true,
    "blind_spot": {
     "issue": null,
-    "summary": "The vector below proves the MISSING half only. The OVER-CEILING half is not vector-testable: the smallest ceiling is 9 MiB, so a fixture exceeding one would mean carrying 9 MiB of literal bytes in this registry. That half is exercised for real on every release, against the binaries the release build produced."
+    "summary": "Measures the apparent size of three binaries on the CI runner's target only (linux x86_64): the macOS and Windows release artifacts and the wasm bundle are outside its reach, as is any growth that stays under a ceiling. This field previously claimed the OVER-CEILING half was not vector-testable (a fixture exceeding a ceiling would mean carrying 9 MiB of literal bytes in this registry) and that it was exercised for real on every release. Both were false. The guard reads st_size, so a sparse fixture exceeds any ceiling for free - scripts.tests.test_check_binary_size now covers that half, including the boundary and a silently-raised ceiling. And the release build did produce over-ceiling binaries: binary-size.yml piped the guard into tee under a shell without pipefail, so the job took tee's exit status and reported success while the guard printed FAILED (#2193). The half declared exercised for real was the only half that could never turn a build red."
    },
    "required_via": "binary-size",
    "must_refuse": [
