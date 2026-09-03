@@ -675,7 +675,11 @@ pub struct WorkingContextSession {
     pub session: String,
     /// Unix seconds this session was last saved — updated on every
     /// `save_working_context` call under this project + session, not just
-    /// the first (a resave never duplicates the entry).
+    /// the first (a resave never duplicates the entry). `0` on
+    /// `wasm32-unknown-unknown`, which has no clock; the listing's
+    /// most-recently-saved-first order does not depend on it (it is carried
+    /// by the index's write order), so the ORDER holds there while the
+    /// VALUE does not.
     pub saved_at: u64,
 }
 

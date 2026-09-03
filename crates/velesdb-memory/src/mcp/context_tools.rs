@@ -228,8 +228,9 @@ pub(super) struct ListWorkingContextsParams {
 /// Output of the `list_working_contexts` tool.
 #[derive(Debug, serde::Serialize, JsonSchema)]
 pub(super) struct ListWorkingContextsResult {
-    /// Every session saved under this project, most-recently-saved first.
-    /// Empty (not an error) when the project never saved anything.
+    /// Every session saved under this project, most-recently-saved first
+    /// (`saved_at` is `0` on WASM, which has no clock; the order still holds
+    /// there). Empty (not an error) when the project never saved anything.
     pub sessions: Vec<WorkingContextSession>,
 }
 

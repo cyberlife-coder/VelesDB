@@ -83,6 +83,15 @@ cargo check -p velesdb-memory --no-default-features
 cargo check -p velesdb-memory --no-default-features --features context
 cargo check -p velesdb-memory
 cargo check -p velesdb-memory --no-default-features --features mcp,persistence
+# Each velesdb-memory feature in ISOLATION, with --all-targets — mirrors the
+# Lint job's loop (#1765). `--all-targets` is the point: it compiles every
+# integration test and example under that one feature, which the four
+# shapes above never do. A test that imports a `persistence`-gated item
+# without a crate-level `#![cfg(feature = "persistence")]` passes all four
+# shapes and fails here (#2202 found this the hard way).
+for feat in mcp http context persistence embedder-http extractor-http ollama extract; do
+  cargo check -p velesdb-memory --no-default-features --features "$feat" --all-targets
+done
 # Functional wasm gate — catches std APIs that abort on wasm32 (e.g. SystemTime::now):
 wasm-pack test --node crates/velesdb-wasm
 # Guards and contracts. Every one of these blocks a PR through `CI Success`, and

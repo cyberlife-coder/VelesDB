@@ -342,7 +342,11 @@ export interface WorkingContext {
 export interface WorkingContextSession {
   /** The session id, as passed to {@link MemoryService.saveWorkingContext}. */
   session: string;
-  /** Unix seconds this session was last saved. */
+  /**
+   * Unix seconds this session was last saved. `0` under WASM, which has no
+   * clock — the listing's most-recently-saved-first order does not depend on
+   * it, so the order holds while the value does not.
+   */
   saved_at: number;
 }
 
