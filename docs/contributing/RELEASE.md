@@ -87,7 +87,8 @@ tag. Dans ce cas, utiliser le workflow permanent `tag-release.yml` :
 1. Ouvrir **Actions → Create Release Tag → Run workflow**.
 2. Sélectionner `develop` ou `main` comme branche du workflow.
 3. Saisir le tag `vX.Y.Z`, le SHA complet du commit dont le CI est vert sur
-   `main`, et le message du tag annoté.
+   `main`, et le message du tag annoté. Pour le train `velesdb-memory`, voir la
+   sous-section suivante : même workflow, tag et branche différents.
 
 Le workflow refuse un SHA qui n'est pas dans l'historique de `main` et un tag
 qui existe déjà. Après avoir poussé le tag, il déclenche explicitement

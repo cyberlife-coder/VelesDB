@@ -1,5 +1,16 @@
 #!/usr/bin/env bash
 # Create one guarded annotated release tag, then push that exact ref.
+#
+# One entry point for both release trains. The tag says which train it belongs
+# to and therefore which branch it must descend from, so a caller cannot pair a
+# tag with the wrong branch:
+#
+#     vX.Y.Z[-pre]                    -> origin/main      (workspace)
+#     velesdb-memory-vX.Y.Z[-pre]     -> origin/develop   (velesdb-memory 0.x)
+#
+# Whether the crate version matches the tag is release-memory.yml's / release.yml's
+# job, not this script's: here the contract is only that the ref is correct and
+# safe to push.
 
 set -euo pipefail
 
