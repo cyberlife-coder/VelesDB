@@ -364,6 +364,29 @@ class VersionGuardTests(FreshnessGuardTestCase):
         self.write("docs/ALPHA.md", ALPHA_CLEAN + historical)
         self.assertGuardPasses("versions")
 
+    def test_a_wrapped_sentence_keeps_its_historical_qualifier(self) -> None:
+        # `since` and the version it frames land on different lines. A
+        # line-scoped window reads the second line alone and calls the
+        # reference stale; the qualifier governs the sentence, not the line.
+        wrapped = (
+            "\nThe scheme is the whole switch: `https://` reaches a hosted\n"
+            "provider (supported since\n"
+            "velesdb-core 3.12.0) with nothing to rebuild.\n"
+        )
+        self.write("docs/ALPHA.md", ALPHA_CLEAN + wrapped)
+        self.assertGuardPasses("versions")
+
+    def test_a_qualifier_in_a_neighbouring_paragraph_does_not_carry_over(
+        self,
+    ) -> None:
+        # Widening the window to the sentence must not widen it to the page.
+        leaky = (
+            "\nTLS support was introduced a while ago.\n"
+            "\nInstall velesdb-core 3.12.0 for this guide.\n"
+        )
+        self.write("docs/ALPHA.md", ALPHA_CLEAN + leaky)
+        self.assertGuardFails("versions", "[prose-core-version]", "says 3.12.0")
+
     def test_memory_prose_uses_the_independent_memory_version(self) -> None:
         self.write(
             "docs/ALPHA.md",

@@ -802,4 +802,4 @@ so the MCP taxonomy cannot drift from the bindings':
 
 ---
 
-Last updated: 2026-08-09 · Applies to: velesdb-memory 0.14.1
+Last updated: 2026-09-03 · Applies to: velesdb-memory 0.14.2

@@ -304,6 +304,43 @@ class SurfaceLabelTests(unittest.TestCase):
             self.assertEqual(caa.audit_text(clean, surface), [])
 
 
+class RemedyTests(unittest.TestCase):
+    """The remedy must be sufficient, not merely correct.
+
+    Telling an author to edit the body is true and incomplete: the edit
+    re-runs this guard (`pr-governance` carries no retarget guard) but not
+    `CI Success`, which is skipped on `edited` and keeps the failing
+    conclusion. Three pull requests in a row looped on that gap.
+    """
+
+    def _stderr(self, surface: str) -> str:
+        import io
+        import tempfile
+
+        trailer = "Co-Authored-By: Claude <noreply@anthropic.com>"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "text.md"
+            path.write_text(f"A change.\n\n{trailer}\n", encoding="utf-8")
+            out, err = sys.stdout, sys.stderr
+            sys.stdout, sys.stderr = io.StringIO(), io.StringIO()
+            try:
+                caa.main(["--text", str(path), "--surface", surface])
+                return sys.stderr.getvalue()
+            finally:
+                sys.stdout, sys.stderr = out, err
+
+    def test_a_pull_request_surface_is_told_to_push(self) -> None:
+        for surface in ("pull request title", "pull request body"):
+            with self.subTest(surface=surface):
+                message = self._stderr(surface)
+                self.assertIn("PUSH", message)
+                self.assertIn("CI Success", message)
+
+    def test_a_non_pull_request_surface_is_not(self) -> None:
+        """The push half is specific to the required-chain gap, not general."""
+        self.assertNotIn("PUSH", self._stderr("issue"))
+
+
 class SingleSourceTests(unittest.TestCase):
     """The two call sites delegate; neither re-spells the rule."""
 

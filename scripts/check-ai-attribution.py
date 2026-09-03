@@ -357,6 +357,25 @@ def main(argv: "list[str] | None" = None) -> int:
             "your tooling appends it on publish, strip it afterwards — the "
             "rule covers published prose, not just commits."
         )
+        if "pull request" in args.surface:
+            # Editing alone does not clear the merge block, and saying only
+            # "edit it" has now sent three PRs in a row into a loop of
+            # edit-and-re-read. `pr-governance` deliberately carries no
+            # retarget guard, so the edit DOES re-run this guard and post a
+            # green verdict — but `CI Success`, the one required check, keeps
+            # its guard and stays skipped on `edited`, so the PR still holds
+            # the failing conclusion from the run that opened it. Only a push
+            # re-runs the required chain. A re-run of the old run cannot do it
+            # either: GitHub replays the original event payload, attribution
+            # trailer included.
+            remedy += (
+                "\nThen PUSH a commit. The edit re-runs this guard and posts "
+                "a passing verdict, but `CI Success` is skipped on an `edited` "
+                "event, so the pull request keeps the failing conclusion until "
+                "a push re-runs the required chain. Re-running the old run "
+                "does not work: GitHub replays the original payload, trailer "
+                "included."
+            )
     else:
         try:
             violations = audit(args.range, args.root)
