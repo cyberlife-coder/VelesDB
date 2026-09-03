@@ -238,36 +238,26 @@
     {
       "id": "readme_binary_size_9mb",
       "file": "README.md",
-      "must_contain": "~10 MB binary",
-      "validation_command": "cargo build --release -p velesdb-server && strip target/release/velesdb-server && du -h target/release/velesdb-server  # measured 2026-07-25 on aarch64-apple-darwin: 10433384 bytes = 10M",
+      "must_contain": "~14 MB binary",
+      "validation_command": "cargo build --release -p velesdb-server && stat -c%s target/release/velesdb-server  # measured 2026-09-02 on x86_64-unknown-linux-gnu: 14345984 bytes = 13.68 MiB",
       "executable": false,
-      "source": "v1.18.0 stripped local builds on Apple Silicon: velesdb-server 9.1 MB, velesdb-cli 7.3 MB, velesdb-migrate 6.2 MB; v1.18.0 published release artifacts span 7.5-12.4 MB across platforms. README footnote [3] states the 7-13 MB provenance range.",
-      "last_updated": "2026-06-12",
-      "measured_on": "2026-07-25",
-      "measured_machine": "aarch64-apple-darwin (size varies by target)",
-      "measured_version": "4.0.0",
-      "stale_accepted": {
-        "reason": "binary size can only be re-measured on a release build of the reference toolchain; scheduled for the next release cut, figure verified against Binary Size Gate ceilings meanwhile",
-        "granted": "2026-08-21",
-        "for_workspace_major": 5
-      }
+      "source": "Measured 2026-09-02 from `cargo build --release -p velesdb-server` on x86_64-unknown-linux-gnu: 14345984 bytes (13.68 MiB); [profile.release] already sets strip = true. The Binary Size Gate measured 13.78 MiB for the same commit on ubuntu-latest with toolchain 1.90, a 10 KB delta. The figure this replaces (~10 MB) was measured at 4.0.0 on aarch64-apple-darwin and was never true for the Linux x86_64 build users download: v5.2.0, already published, builds to 14339664 bytes (13.68 MiB) on the same machine, so 6.0.0 adds 6320 bytes (0.04%) rather than regressing. Two things kept that invisible. binary-size.yml piped the gate's exit status into tee under a shell without pipefail, so the required check could not fail on an over-ceiling binary (#2193). And this entry's previous source cited a \"README footnote [3]\" stating a 7-13 MB provenance range - that footnote does not exist; README.md carries no footnotes at all, so readers saw a flat ~10 MB with no range. Apple Silicon is smaller and has not been re-measured since 4.0.0; ~14 MB is quoted for the largest target rather than the smallest.",
+      "last_updated": "2026-09-02",
+      "measured_on": "2026-09-02",
+      "measured_machine": "x86_64-unknown-linux-gnu (size varies by target; this is the largest)",
+      "measured_version": "6.0.0"
     },
     {
       "id": "readme_wasm_bundle_gzipped",
       "file": "README.md",
-      "must_contain": "~674 KB gzipped",
-      "validation_command": "npm pack @wiscale/velesdb-wasm && gzip -c package/velesdb_wasm_bg.wasm | wc -c  # measured 2026-07-25: 689752 bytes = 674 KB",
+      "must_contain": "~710 KB gzipped",
+      "validation_command": "cd crates/velesdb-wasm && wasm-pack build --target web --release && gzip -c pkg/velesdb_wasm_bg.wasm | wc -c  # measured 2026-09-02: 726700 bytes = 710 KiB (raw 2114045 = 2.02 MiB)",
       "executable": false,
-      "source": "@wiscale/velesdb-wasm v3.12.0 published npm package: velesdb_wasm_bg.wasm gzip -9 = 549,285 bytes (~536 KiB / ~549 kB), measured 2026-07-20. Replaces the stale ~430 KB v1.18.0 figure (+25-28% drift found by sequential re-verification).",
-      "last_updated": "2026-06-12",
-      "measured_on": "2026-07-25",
-      "measured_machine": "platform-independent (published artifact)",
-      "measured_version": "4.0.0",
-      "stale_accepted": {
-        "reason": "bundle size requires the published npm artifact of the next release; the WASM Build Check job bounds regressions meanwhile",
-        "granted": "2026-08-21",
-        "for_workspace_major": 5
-      }
+      "source": "Measured 2026-09-02 at 6.0.0 with `wasm-pack build --target web --release`, the command release.yml:623 publishes from: pkg/velesdb_wasm_bg.wasm is 2114045 bytes raw and 726700 gzipped (level 6) = 710 KiB. The ~674 KB it replaces was measured on the published 4.0.0 npm package and had drifted 5.4% low over two majors. This entry's previous waiver said the figure could only come from the published npm artifact of the next release, and that \"the WASM Build Check job bounds regressions meanwhile\" - that job runs cargo check, quantization-parity tests and wasm-bindgen tests and never measures bundle size, so nothing bounded anything. The validation_command above removes the chicken-and-egg by measuring the same artifact from source, before the tag rather than after it. Caveat on the last percent: the measurement used wasm-pack 0.13.1 with binaryen 117, while CI installs the latest wasm-pack via taiki-e/install-action, which may pin a different binaryen; wasm-opt settings come from [package.metadata.wasm-pack.profile.release] (-Os, SIMD, bulk-memory, nontrapping-float-to-int) either way. wasm-opt MUST run for this number to mean anything - skipping it yields 703535 gzipped from a larger 2294177-byte raw bundle, which is not the published artifact.",
+      "last_updated": "2026-09-02",
+      "measured_on": "2026-09-02",
+      "measured_machine": "x86_64-unknown-linux-gnu, wasm-pack 0.13.1 + binaryen 117 (platform-independent artifact; toolchain-sensitive at the percent level)",
+      "measured_version": "6.0.0"
     },
     {
       "id": "readme_rest_endpoint_count",
@@ -349,9 +339,9 @@
       "executable": false,
       "source": "Issue #1686: the live-schema MCP regression test compares the accepted wire form for every repeated field-name and scalar-type pair.",
       "last_updated": "2026-08-15",
-      "measured_on": "2026-08-17",
+      "measured_on": "2026-09-02",
       "measured_machine": "platform-independent (wire-schema contract)",
-      "measured_version": "5.1.0"
+      "measured_version": "6.0.0"
     },
     {
       "id": "mcp_lenient_scalar_rejects_incompatible_forms",
@@ -361,93 +351,93 @@
       "executable": false,
       "source": "Issue #1686: the live MCP server must reject invalid strings and incompatible scalar or container values at every non-string scalar input slot.",
       "last_updated": "2026-08-15",
-      "measured_on": "2026-08-17",
+      "measured_on": "2026-09-02",
       "measured_machine": "platform-independent (wire-schema contract)",
-      "measured_version": "5.1.0"
+      "measured_version": "6.0.0"
     }
   ],
   "claim_families": [
     {
       "id": "binary_size",
       "canonical_claim_id": "readme_binary_size_9mb",
-      "canonical_value": "~10 MB",
+      "canonical_value": "~14 MB",
       "members": [
         {
           "file": "README.md",
-          "value": "~10 MB",
-          "must_contain": "One ~10 MB binary"
+          "value": "~14 MB",
+          "must_contain": "One ~14 MB binary"
         },
         {
           "file": "README.md",
-          "value": "~10 MB",
-          "must_contain": "| **Binary size** | ~10 MB |"
+          "value": "~14 MB",
+          "must_contain": "| **Binary size** | ~14 MB |"
         },
         {
           "file": "docs/README.md",
-          "value": "~10 MB",
-          "must_contain": "One ~10 MB binary"
+          "value": "~14 MB",
+          "must_contain": "One ~14 MB binary"
         },
         {
           "file": "docs/WHY_VELESDB.md",
-          "value": "~10 MB",
-          "must_contain": "single embeddable ~10 MB binary"
+          "value": "~14 MB",
+          "must_contain": "single embeddable ~14 MB binary"
         },
         {
           "file": "ARCHITECTURE.md",
-          "value": "~10 MB",
-          "must_contain": "single ~10 MB binary"
+          "value": "~14 MB",
+          "must_contain": "single ~14 MB binary"
         },
         {
           "file": "docs/BUSINESS_MODEL.md",
-          "value": "~10 MB",
-          "must_contain": "single binary (~10 MB)"
+          "value": "~14 MB",
+          "must_contain": "single binary (~14 MB)"
         },
         {
           "file": "docs/guides/BUSINESS_SCENARIOS.md",
-          "value": "~10 MB",
-          "must_contain": "**~10 MB binary**"
+          "value": "~14 MB",
+          "must_contain": "**~14 MB binary**"
         },
         {
           "file": "AGENTS.md",
-          "value": "~10 MB",
-          "must_contain": "single ~10 MB binary"
+          "value": "~14 MB",
+          "must_contain": "single ~14 MB binary"
         },
         {
           "file": "CLAUDE.md",
-          "value": "~10 MB",
-          "must_contain": "single ~10 MB binary"
+          "value": "~14 MB",
+          "must_contain": "single ~14 MB binary"
         }
       ]
     },
     {
       "id": "wasm_bundle_size",
       "canonical_claim_id": "readme_wasm_bundle_gzipped",
-      "canonical_value": "~674 KB",
+      "canonical_value": "~710 KB",
       "members": [
         {
           "file": "README.md",
-          "value": "~674 KB",
-          "must_contain": "WASM build is ~674 KB gzipped"
+          "value": "~710 KB",
+          "must_contain": "WASM build is ~710 KB gzipped"
         },
         {
           "file": "README.md",
-          "value": "~674 KB",
-          "must_contain": "WASM, ~674 KB gzipped"
+          "value": "~710 KB",
+          "must_contain": "WASM, ~710 KB gzipped"
         },
         {
           "file": "docs/wasm/bundle-optimization.md",
-          "value": "~674 KB",
-          "must_contain": "| Release (gzipped) | < 200 KB | ~674 KB |"
+          "value": "~710 KB",
+          "must_contain": "| Release (gzipped) | < 200 KB | ~710 KB |"
         },
         {
           "file": "docs/wasm/bundle-optimization.md",
-          "value": "~674 KB",
-          "must_contain": "measured figure (~674 KB gzipped,"
+          "value": "~710 KB",
+          "must_contain": "measured figure (~710 KB gzipped,"
         },
         {
           "file": "docs/wasm/bundle-optimization.md",
-          "value": "~674 KB",
-          "must_contain": "artifact (~674 KB gzipped, ~2.0 MB raw)"
+          "value": "~710 KB",
+          "must_contain": "artifact (~710 KB gzipped, ~2.0 MB raw)"
         }
       ]
     },

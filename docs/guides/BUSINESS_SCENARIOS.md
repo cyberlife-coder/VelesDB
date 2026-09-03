@@ -113,7 +113,7 @@ LIMIT 10
 | Metric | Before | After VelesDB |
 |--------|--------|---------------|
 | Context retrieval | 100-200ms | **< 1ms** |
-| Memory footprint | 500MB+ | **~10 MB binary** |
+| Memory footprint | 500MB+ | **~14 MB binary** |
 | Works offline | No | **Yes** |
 
 ---

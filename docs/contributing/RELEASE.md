@@ -20,8 +20,11 @@ VelesDB utilise **4 workflows GitHub Actions** :
 ```bash
 # Apply the bump to every policed manifest (X.Y.Z = target release version)
 python3 scripts/bump_version.py X.Y.Z
-# Regenerate the OpenAPI snapshots (derived from the crate version)
-cargo test -p velesdb-server --features openapi generate_openapi_spec_files -- --include-ignored --test-threads=1
+# Regenerate the OpenAPI snapshots (derived from the crate version).
+# UPDATE_OPENAPI_SNAPSHOT=1 is what makes the test WRITE: without it the same
+# test only compares against the committed files and fails on the drift the
+# bump just created, leaving docs/openapi.{json,yaml} at the old version.
+UPDATE_OPENAPI_SNAPSHOT=1 cargo test -p velesdb-server --features openapi generate_openapi_spec_files -- --include-ignored --test-threads=1
 cargo build  # refresh Cargo.lock
 python3 scripts/check-version-sync.py  # must report: All versions match
 ```

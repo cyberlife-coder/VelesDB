@@ -8,7 +8,7 @@
 </p>
 <h1 align="center">VelesDB</h1>
 <p align="center">
-  <strong>One ~10 MB binary fuses vector + graph + columnar under a single query language — with an agent memory that shows its evidence and a deterministic context compiler that cuts your real, billed token spend.</strong><br/>
+  <strong>One ~14 MB binary fuses vector + graph + columnar under a single query language — with an agent memory that shows its evidence and a deterministic context compiler that cuts your real, billed token spend.</strong><br/>
   Local-first: nothing leaves the machine, no LLM and no API key in the memory path. Every number below links to a committed harness you can rerun.
 </p>
 <p align="center">
@@ -65,7 +65,7 @@ No Rust toolchain? `npm i @wiscale/velesdb-memory-node`, or grab a prebuilt `.mc
 
 **Cargo (Rust + REST server):** `cargo install velesdb-server velesdb-cli` — **Docker** (multi-arch linux/amd64 + linux/arm64): `docker run -d -p 8080:8080 -v velesdb_data:/data --name velesdb ghcr.io/cyberlife-coder/velesdb:latest`, then `curl http://localhost:8080/health`.
 
-**Browser / edge:** the WASM build is ~674 KB gzipped and runs entirely client-side ([TypeScript SDK](sdks/typescript)). **REST:** 54 REST endpoints ([OpenAPI spec](docs/openapi.yaml)). Full matrix: [installation guide](docs/guides/INSTALLATION.md).
+**Browser / edge:** the WASM build is ~710 KB gzipped and runs entirely client-side ([TypeScript SDK](sdks/typescript)). **REST:** 54 REST endpoints ([OpenAPI spec](docs/openapi.yaml)). Full matrix: [installation guide](docs/guides/INSTALLATION.md).
 
 </details>
 
@@ -221,7 +221,7 @@ No figure here is an estimate from a slide; each links to the log or script in t
 | Embed the engine | [`velesdb-core`](https://crates.io/crates/velesdb-core) (Rust) | The engine itself |
 | Give my agent memory | [`velesdb-memory`](crates/velesdb-memory) | MCP server + context compiler, any MCP client; `.mcpb` bundles on the [MCP Registry](https://registry.modelcontextprotocol.io/?q=velesdb-memory) |
 | Call it from Node | [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) | Memory wedge ([full engine via server + TS SDK](crates/velesdb-node/README.md#need-the-full-engine)) |
-| Run it in a browser | [`@wiscale/velesdb-sdk`](https://www.npmjs.com/package/@wiscale/velesdb-sdk) | WASM, ~674 KB gzipped, fully client-side |
+| Run it in a browser | [`@wiscale/velesdb-sdk`](https://www.npmjs.com/package/@wiscale/velesdb-sdk) | WASM, ~710 KB gzipped, fully client-side |
 | Serve it over HTTP | [`velesdb-server`](https://crates.io/crates/velesdb-server) | 54 REST endpoints — [API reference](docs/reference/api-reference.md) · [OpenAPI](docs/openapi.yaml) · [server security](docs/guides/SERVER_SECURITY.md) |
 | Ship on mobile/desktop | [`velesdb-mobile`](crates/velesdb-mobile) · [Tauri plugin](crates/tauri-plugin-velesdb) | iOS / Android / desktop |
 
@@ -254,7 +254,7 @@ Tool parity per surface is published honestly — including where a surface is s
 | **Query language** | VelesQL (SQL + NEAR + MATCH) | Python API | JSON API / gRPC | SQL + operators |
 | **Embeddings from text** | Opt-in [local / OpenAI adapters](crates/velesdb-python/python/velesdb/embed.py); no bundled model | [Embedding functions](https://docs.trychroma.com/docs/embeddings/embedding-functions), with a default local model in Python/TypeScript | Opt-in client-side [FastEmbed](https://qdrant.tech/documentation/fastembed/fastembed-semantic-search/) | None; bring vectors from an external model |
 | **Deployment** | Embedded / Server / WASM / Mobile | Server (Python) | Server (Rust) | Requires PostgreSQL |
-| **Binary size** | ~10 MB | ~500 MB (with deps) | ~50 MB | N/A (PG extension) |
+| **Binary size** | ~14 MB | ~500 MB (with deps) | ~50 MB | N/A (PG extension) |
 | **Browser / Mobile** | Yes / Yes | No | No | No |
 | **Offline / Local-first** | Yes | Partial | No | No |
 

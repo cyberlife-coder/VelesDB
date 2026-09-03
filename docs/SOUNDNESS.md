@@ -1062,7 +1062,7 @@ let data_as_bytes: &mut [u8] = unsafe {
 
 ---
 
-*Last updated: 2026-08-09 · Applies to: velesdb-core 5.2.0 (this stamp tracks
+*Last updated: 2026-08-09 · Applies to: velesdb-core 6.0.0 (this stamp tracks
 the document revision; this revision adds the `parking_lot`-features invariant to
 the `VectorSliceGuard` entry. The underlying unsafe audit was last run in full on
 2026-06-12, as stated at the top of this page)*
