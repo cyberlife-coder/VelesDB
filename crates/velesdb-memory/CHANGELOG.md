@@ -13,6 +13,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A corrupt working-context index erased the whole project's listing.**
+  `update_working_index` rebuilt an unreadable index from EMPTY and wrote that
+  over it. Every other session under the project left `list_working_contexts`
+  for good while its fact sat intact on disk, reachable only by someone who
+  already knew the exact `project` + `session`. The read path's error — what
+  the code's own comment said a human would act on — was destroyed by the
+  very next save, and in an agent workload that save is moments away. The
+  index is a derived cache and the facts are the ground truth, so it is now
+  rebuilt FROM the facts: `MemoryError::WorkingContextCodec` triggers a
+  bounded walk (`FactStore::list`, capped at the same
+  `MAX_WORKING_SESSIONS_PER_PROJECT` every other write honors) for the facts
+  carrying this project's working-context markers. `saved_at` is not
+  recoverable — it lives in the index alone, never on a fact — so recovered
+  entries carry 0, sorting after anything stamped since. A backend whose
+  `list` is the defaulted `Unsupported` refusal degrades to the previous
+  empty rebuild rather than failing: not bricking saves was the original
+  code's one legitimate goal, and it is preserved.
+
 - **The working-context index grew without bound (#2193).** A project's index
   is one fact rewritten whole on every `save_working_context`; it gained an
   entry per distinct session and shed one only when that session's fact was

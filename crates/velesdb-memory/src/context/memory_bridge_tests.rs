@@ -1161,3 +1161,143 @@ fn oversized_fragment_compiles_and_embeds_a_capped_text() {
         "the STORED content must stay whole — only the embedded text is capped"
     );
 }
+
+/// Returns an unparseable index body only while `armed` — a transient read
+/// failure (a torn page, a partial write later repaired), the case that
+/// separates "the listing is gone because the data is gone" from "the
+/// listing is gone because the write path threw it away".
+struct TransientlyCorruptStore {
+    inner: NativeStore,
+    torn: u64,
+    armed: std::sync::atomic::AtomicBool,
+}
+
+impl FactStore for TransientlyCorruptStore {
+    delegate_untouched_store_methods!();
+
+    fn get(&self, id: u64) -> Result<Option<(String, Vec<f32>)>, MemoryError> {
+        if id == self.torn && self.armed.load(std::sync::atomic::Ordering::SeqCst) {
+            return Ok(Some(("}{ not json".to_owned(), vec![0.0; DIM])));
+        }
+        self.inner.get(id)
+    }
+
+    fn get_metadata_batch(&self, ids: &[u64]) -> Result<Vec<Option<Metadata>>, MemoryError> {
+        self.inner.get_metadata_batch(ids)
+    }
+
+    fn list(
+        &self,
+        cursor: Option<u64>,
+        limit: usize,
+    ) -> Result<(Vec<crate::storage::RawListedFact>, Option<u64>), MemoryError> {
+        self.inner.list(cursor, limit)
+    }
+}
+
+#[test]
+fn test_a_transient_index_corruption_does_not_erase_the_listing() {
+    // Given three saved sessions and a healthy listing
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let native = NativeStore::open(dir.path(), DIM).expect("open native store");
+    let svc = MemoryService::with_store(
+        TransientlyCorruptStore {
+            inner: native,
+            torn: working_index_id("veles"),
+            armed: std::sync::atomic::AtomicBool::new(false),
+        },
+        HashEmbedder::new(DIM),
+    );
+    for session in ["alpha", "beta", "gamma"] {
+        svc.save_working_context("veles", session, &minimal_working())
+            .expect("save");
+    }
+    assert_eq!(svc.list_working_contexts("veles").expect("list").len(), 3);
+
+    // When one save coincides with an unreadable index
+    svc.store
+        .armed
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    svc.save_working_context("veles", "delta", &minimal_working())
+        .expect("a corrupt index must never brick saving");
+    svc.store
+        .armed
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+
+    // Then every session is still listed. Before the rebuild the write path
+    // started from an EMPTY index and overwrote the corrupt one with a
+    // single entry: alpha, beta and gamma left the listing forever while
+    // their facts sat intact on disk, and the read-path error a human was
+    // supposed to act on was destroyed by that same write.
+    let mut listed: Vec<String> = svc
+        .list_working_contexts("veles")
+        .expect("list after")
+        .into_iter()
+        .map(|s| s.session)
+        .collect();
+    listed.sort();
+    assert_eq!(listed, ["alpha", "beta", "delta", "gamma"]);
+
+    // And the facts themselves were never in doubt.
+    for session in ["alpha", "beta", "gamma", "delta"] {
+        assert!(svc
+            .load_working_context("veles", session)
+            .expect("load")
+            .is_some());
+    }
+}
+
+/// A store that can hold facts but cannot walk them — `FactStore::list` is
+/// defaulted to `Unsupported` precisely so an out-of-crate backend keeps
+/// compiling, and the recovery must degrade rather than fail.
+struct UnwalkableStore {
+    inner: NativeStore,
+    torn: u64,
+}
+
+impl FactStore for UnwalkableStore {
+    delegate_untouched_store_methods!();
+
+    fn get(&self, id: u64) -> Result<Option<(String, Vec<f32>)>, MemoryError> {
+        if id == self.torn {
+            return Ok(Some(("}{ not json".to_owned(), vec![0.0; DIM])));
+        }
+        self.inner.get(id)
+    }
+
+    fn get_metadata_batch(&self, ids: &[u64]) -> Result<Vec<Option<Metadata>>, MemoryError> {
+        self.inner.get_metadata_batch(ids)
+    }
+}
+
+#[test]
+fn test_a_backend_that_cannot_enumerate_still_saves_through_a_corrupt_index() {
+    // Given a backend whose `list` is the defaulted refusal, and a corrupt index
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let native = NativeStore::open(dir.path(), DIM).expect("open native store");
+    let svc = MemoryService::with_store(
+        UnwalkableStore {
+            inner: native,
+            torn: working_index_id("veles"),
+        },
+        HashEmbedder::new(DIM),
+    );
+
+    // The FIRST save cannot reach the corruption path: no index fact exists
+    // yet, so `working_index` answers `Ok(None)` on the absent marker and
+    // never reads a body. It is what PUTS the marker there.
+    svc.save_working_context("veles", "alpha", &minimal_working())
+        .expect("first save creates the index");
+
+    // When a second save reads that now-marked index and finds it unreadable
+    let saved = svc.save_working_context("veles", "beta", &minimal_working());
+
+    // Then the save still succeeds. The listing cannot be recovered here —
+    // nothing can walk the facts — but refusing the save would brick the
+    // project forever, which is the outcome the rebuild exists to avoid, not
+    // to introduce.
+    assert!(
+        saved.is_ok(),
+        "a backend that cannot enumerate must still save: {saved:?}"
+    );
+}
