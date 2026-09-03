@@ -465,6 +465,65 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
             .collect())
     }
 
+    /// Reconstruct `project`'s session list by walking the store for its
+    /// working-context facts — the recovery path for an index that cannot be
+    /// read. The index is a derived cache; every fact it lists carries
+    /// [`CTX_WORKING_FIELD`], [`CTX_PROJECT_FIELD`] and [`CTX_SESSION_FIELD`],
+    /// so the listing can be rebuilt from the facts themselves.
+    ///
+    /// `saved_at` is NOT recoverable: it lives in the index alone, never on
+    /// the fact. Recovered entries carry 0, which sorts them after anything
+    /// stamped since — an honest "unknown", and a far smaller harm than
+    /// dropping them. The session being saved right now is stamped with the
+    /// real clock by the caller, which finds it already present here.
+    ///
+    /// Returns `Ok(None)` when the backend cannot enumerate.
+    /// [`FactStore::list`] is defaulted to [`MemoryError::Unsupported`] on
+    /// purpose, so an out-of-crate backend that cannot walk keeps saving
+    /// rather than failing — it just cannot recover the listing.
+    ///
+    /// Walks at most [`crate::limits::MAX_WORKING_SESSIONS_PER_PROJECT`]
+    /// matches: the rebuilt index is bounded by the same cap every other
+    /// write honors, so a huge store cannot turn this rare path into an
+    /// unbounded walk.
+    fn rebuild_working_index(
+        &self,
+        project: &str,
+    ) -> Result<Option<Vec<WorkingContextSession>>, MemoryError> {
+        const PAGE: usize = 256;
+        let wanted = Value::String(project.to_owned());
+        let mut sessions = Vec::new();
+        let mut cursor = None;
+        loop {
+            let (facts, next) = match self.store.list(cursor, PAGE) {
+                Ok(page) => page,
+                Err(MemoryError::Unsupported(_)) => return Ok(None),
+                Err(err) => return Err(err),
+            };
+            for fact in facts {
+                if fact.payload.get(CTX_WORKING_FIELD) != Some(&Value::Bool(true))
+                    || fact.payload.get(CTX_PROJECT_FIELD) != Some(&wanted)
+                {
+                    continue;
+                }
+                let Some(Value::String(session)) = fact.payload.get(CTX_SESSION_FIELD) else {
+                    continue;
+                };
+                sessions.push(WorkingContextSession {
+                    session: session.clone(),
+                    saved_at: 0,
+                });
+                if sessions.len() >= crate::limits::MAX_WORKING_SESSIONS_PER_PROJECT {
+                    return Ok(Some(sessions));
+                }
+            }
+            match next {
+                Some(at) => cursor = Some(at),
+                None => return Ok(Some(sessions)),
+            }
+        }
+    }
+
     /// Every session still resumable under `project`'s working-context index
     /// (V2a-1 quick win), most-recently-saved first. Empty when the project
     /// never saved anything — that, and only that, is the empty case.
@@ -568,14 +627,29 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
         // Read-modify-write of a single shared fact: held for the whole
         // sequence, otherwise a concurrent save silently erases this entry.
         let _guard = WORKING_INDEX_WRITE.lock();
-        // A corrupt index must not brick saving for the whole project. The
-        // read path surfaces the error — that is where a human can act on it
-        // — but propagating it here would make every future save of every
-        // session under this project fail forever, with no way back: the
-        // only writer of the index is this function. Rebuild instead.
+        // A corrupt index must not brick saving for the whole project:
+        // propagating the error here would make every future save of every
+        // session under it fail forever, with no way back, since the only
+        // writer of the index is this function.
+        //
+        // But starting from EMPTY was silent, permanent data loss. The rebuilt
+        // index overwrites the corrupt one, so the read path's error — the
+        // thing the caller was told to act on — is destroyed by the very next
+        // save, and in an agent workload that save is moments away. Every
+        // other session under the project leaves the listing for good while
+        // its fact sits intact on disk, reachable only by someone who already
+        // knows the exact id.
+        //
+        // The facts are the ground truth and the index is a derived cache, so
+        // rebuild the cache from the facts instead. Only when the backend
+        // cannot enumerate at all does this fall back to the empty rebuild —
+        // documented on [`Self::rebuild_working_index`], and still the
+        // save-keeps-working outcome it always was.
         let mut index = match self.working_index(project) {
             Ok(index) => index.unwrap_or_default(),
-            Err(MemoryError::WorkingContextCodec { .. }) => WorkingContextIndex::default(),
+            Err(MemoryError::WorkingContextCodec { .. }) => WorkingContextIndex {
+                sessions: self.rebuild_working_index(project)?.unwrap_or_default(),
+            },
             Err(err) => return Err(err),
         };
         let now = now_unix_secs();
