@@ -38,13 +38,24 @@ fn now_nanos() -> u128 {
     }
 }
 
-/// Current Unix time in seconds — used only by
-/// [`MemoryService::should_upgrade_ttl`]'s extension-only comparison (the
-/// storage/expiry layer; the `compile` pipeline itself stays clock-free). On
-/// `wasm32-unknown-unknown` this is 0 (no clock, mirrors [`now_nanos`]); the
-/// wasm `MemoryStore` is in-memory only, so a stored durable expiry (a real
-/// epoch second count) never actually exists there for 0 to be compared
-/// against.
+/// Current Unix time in seconds. TWO call sites, not one — this comment used
+/// to name only the first, which is how the second went unexamined:
+///
+/// - [`MemoryService::should_upgrade_ttl`]'s extension-only comparison (the
+///   storage/expiry layer; the `compile` pipeline itself stays clock-free).
+///   On `wasm32-unknown-unknown` this is 0 (no clock, mirrors [`now_nanos`]);
+///   the wasm `MemoryStore` is in-memory only, so a stored durable expiry (a
+///   real epoch second count) never actually exists there for 0 to be
+///   compared against.
+/// - [`MemoryService::update_working_index`]'s `saved_at` stamp. The wasm 0
+///   is NOT harmless here: every entry gets the same stamp, so
+///   `list_working_contexts` falls through to its `session`-ascending
+///   tiebreak and orders alphabetically while five surfaces — this crate,
+///   the wasm binding, the TS SDK, `MCP_TOOLS.md`, and the MCP tool
+///   description the model itself reads — promise "most-recently-saved
+///   first". Recording the divergence, not excusing it: fixing it needs a
+///   real wasm clock or an optional `saved_at`, and that is a decision, not
+///   a patch.
 fn now_unix_secs() -> u64 {
     #[cfg(target_arch = "wasm32")]
     {
