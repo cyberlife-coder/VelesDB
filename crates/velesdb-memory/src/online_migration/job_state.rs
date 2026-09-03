@@ -185,6 +185,13 @@ impl JobStore {
         Ok(store)
     }
 
+    /// The record file's path, for tests that need to read it raw (a
+    /// byte-identical comparison across a refused save).
+    #[cfg(test)]
+    pub(crate) fn path_for_test(&self) -> &Path {
+        &self.path
+    }
+
     pub(crate) fn load(&self) -> Result<JobRecord, MemoryError> {
         let _access = self.access.lock();
         self.load_unlocked()

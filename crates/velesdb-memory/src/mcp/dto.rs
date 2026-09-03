@@ -681,6 +681,11 @@ pub(super) struct ExtractionStatus {
     /// Enrichments refused by a FULL queue since startup — the facts were
     /// stored, only their wiring was skipped (#1846's counted-drop rule).
     pub(super) autograph_dropped: u64,
+    /// Enrichments that RAN and failed part-way through wiring since startup
+    /// — the fact is stored, its graph structure is partial (the writes
+    /// before the failure are in), and re-remembering the fact completes it.
+    /// Distinct from `autograph_dropped`, which never ran at all.
+    pub(super) autograph_failed: u64,
 }
 
 /// The `memory` block of [`MemoryStatusResult`].

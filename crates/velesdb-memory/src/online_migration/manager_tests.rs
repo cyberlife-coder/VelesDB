@@ -248,3 +248,93 @@ fn config() -> MigrationStartConfig {
         },
     }
 }
+
+// ---------------------------------------------------------------------------
+// A worker failure is recorded when it can be, and never corrupts the record
+// when it cannot.
+// ---------------------------------------------------------------------------
+
+fn failed_job_record(root: &std::path::Path) -> super::job_state::JobRecord {
+    use super::job_state::JobSpec;
+    use crate::mutation::journal::EpochIdentity;
+    let identity = EpochIdentity::for_test(
+        root.join("source"),
+        "source-model",
+        "target-model",
+        3,
+        &format!("sha256:{}", "ab".repeat(32)),
+        root.join("destination"),
+        "0123456789abcdef0123456789abcdef",
+    );
+    super::job_state::JobRecord::new(JobSpec {
+        identity,
+        target_backend: "hash".to_owned(),
+        journal_max_bytes: 1_048_576,
+        catch_up: CatchUpConfig {
+            fact_batch: 64,
+            replay_batch: 64,
+            edge_cap: 64,
+        },
+        controller: ControllerConfig {
+            observation_window: 3,
+            pause_budget: Duration::from_secs(1),
+            verification_reserve: Duration::from_millis(50),
+        },
+        workspace: root.join("workspace"),
+    })
+    .expect("record")
+}
+
+#[test]
+fn a_worker_failure_is_recorded_on_the_job_for_migration_status() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    let record = failed_job_record(dir.path());
+    let store = super::job_state::JobStore::create(&workspace, &record).expect("create");
+
+    let error = super::manager::capture("the worker died");
+    super::manager::persist_worker_error(&store, &error);
+
+    let reloaded = store.load().expect("load");
+    assert_eq!(reloaded.last_error, Some(error.to_string()));
+}
+
+/// The degraded path: the job record cannot be reached at all. The function
+/// must return (it runs on a dying worker thread — a panic there is a lost
+/// thread, not a report), and the record must be exactly what it was. What
+/// it DOES do here is log — the one channel left — which a unit test cannot
+/// assert without a subscriber; the property pinned is that failing to
+/// record is itself survivable and non-destructive.
+///
+/// The workspace is parked and a plain FILE put in its place, so both the
+/// load and any staged write fail with "not a directory". (A read-only
+/// directory would not do: the suite runs as root in CI containers, and root
+/// ignores permission bits.)
+#[test]
+fn a_worker_failure_that_cannot_be_recorded_does_not_panic_or_corrupt_the_record() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    let record = failed_job_record(dir.path());
+    let store = super::job_state::JobStore::create(&workspace, &record).expect("create");
+    let before = std::fs::read(store.path_for_test()).expect("read record");
+
+    let parked = dir.path().join("parked");
+    std::fs::rename(&workspace, &parked).expect("park the workspace");
+    std::fs::write(&workspace, b"not a directory").expect("occupy the path");
+    super::manager::persist_worker_error(&store, &super::manager::capture("the worker died"));
+    std::fs::remove_file(&workspace).expect("free the path");
+    std::fs::rename(&parked, &workspace).expect("restore the workspace");
+
+    let after = std::fs::read(store.path_for_test()).expect("read record");
+    assert_eq!(
+        before, after,
+        "an unreachable record must come back byte-identical"
+    );
+    assert_eq!(
+        store.load().expect("load").last_error,
+        None,
+        "nothing was recorded — and nothing was corrupted"
+    );
+}

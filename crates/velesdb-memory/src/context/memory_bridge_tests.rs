@@ -1032,9 +1032,12 @@ fn test_load_working_context_does_not_mutate_the_index() {
         .iter()
         .map(|entry| entry.session.as_str())
         .collect();
+    // Most-recently-saved first is the index's STORED order (the writer
+    // moves each saved entry to the front), so two saves persist as
+    // [beta, alpha]. The read must leave exactly that in place.
     assert_eq!(
         persisted,
-        vec!["alpha", "beta"],
+        vec!["beta", "alpha"],
         "load_working_context must not rewrite the shared index"
     );
 
@@ -1299,5 +1302,229 @@ fn test_a_backend_that_cannot_enumerate_still_saves_through_a_corrupt_index() {
     assert!(
         saved.is_ok(),
         "a backend that cannot enumerate must still save: {saved:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Working-context key cap (MAX_WORKING_CONTEXT_KEY_BYTES).
+//
+// `project` and `session` are ids, and they were the one caller string that
+// reached storage past every other ceiling: into the fact's metadata (past
+// MAX_METADATA_BYTES, which only `remember`'s metadata path checks), into the
+// embedder (past MAX_EMBEDDABLE_TEXT_BYTES, likewise), and ×1000 into the
+// project index rewritten whole on every save. Measured before the cap: a
+// 600 KiB session id was accepted, stored 614 677 bytes of metadata, and the
+// SECOND such save was refused by the backend's 1 MiB payload cap AFTER its
+// fact was stored — durable, unlisted, and reported to the caller as failed.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_a_session_id_over_the_cap_is_refused_before_anything_is_written() {
+    let (_dir, svc) = open_service();
+    let over = "s".repeat(crate::limits::MAX_WORKING_CONTEXT_KEY_BYTES + 1);
+
+    let refused = svc.save_working_context("proj", &over, &minimal_working());
+
+    assert!(
+        matches!(
+            refused,
+            Err(MemoryError::WorkingContextKeyTooLong { key: "session", len, max })
+                if len == crate::limits::MAX_WORKING_CONTEXT_KEY_BYTES + 1
+                    && max == crate::limits::MAX_WORKING_CONTEXT_KEY_BYTES
+        ),
+        "an over-cap session id must be refused as WorkingContextKeyTooLong: {refused:?}"
+    );
+    // Nothing was written: no fact under that id, no index for the project.
+    assert!(svc
+        .store
+        .get_metadata(working_id("proj", &over))
+        .expect("read")
+        .is_none());
+    assert!(svc.list_working_contexts("proj").expect("list").is_empty());
+}
+
+#[test]
+fn test_a_project_id_over_the_cap_is_refused_and_names_the_key() {
+    let (_dir, svc) = open_service();
+    let over = "p".repeat(crate::limits::MAX_WORKING_CONTEXT_KEY_BYTES + 1);
+    let refused = svc.save_working_context(&over, "sess", &minimal_working());
+    assert!(
+        matches!(
+            refused,
+            Err(MemoryError::WorkingContextKeyTooLong { key: "project", .. })
+        ),
+        "{refused:?}"
+    );
+}
+
+#[test]
+fn test_an_id_exactly_at_the_cap_is_accepted() {
+    // The cap is inclusive: 256 bytes is an id, 257 is a payload.
+    let (_dir, svc) = open_service();
+    let at_cap = "s".repeat(crate::limits::MAX_WORKING_CONTEXT_KEY_BYTES);
+    svc.save_working_context("proj", &at_cap, &minimal_working())
+        .expect("an id exactly at the cap is accepted");
+    let listed = svc.list_working_contexts("proj").expect("list");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].session, at_cap);
+}
+
+#[test]
+fn test_the_empty_check_still_wins_over_the_length_check() {
+    // Whitespace-only and short: the EMPTY refusal is the right one. A
+    // whitespace-only id over the cap is also empty first — the emptiness is
+    // the more fundamental defect, and the error a caller can act on.
+    let (_dir, svc) = open_service();
+    let blank_and_long = " ".repeat(crate::limits::MAX_WORKING_CONTEXT_KEY_BYTES + 1);
+    let refused = svc.save_working_context("proj", &blank_and_long, &minimal_working());
+    assert!(
+        matches!(
+            refused,
+            Err(MemoryError::EmptyWorkingContextKey { key: "session" })
+        ),
+        "{refused:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// "Most-recently-saved first" must hold where `saved_at` cannot decide.
+//
+// `saved_at` is whole seconds, so two saves in one second tie; on wasm32 it
+// is always 0, so EVERY entry ties. The old tiebreak was `session`
+// ascending — alphabetical — so on wasm the whole listing was alphabetical
+// while five surfaces promised recency. Now the index's vector ORDER is
+// recency (the writer moves the saved entry to the front), the read path
+// and `bound_sessions` sort stably by `saved_at` alone, and ties keep it.
+// ---------------------------------------------------------------------------
+
+fn tied(sessions: &[&str]) -> Vec<WorkingContextSession> {
+    sessions
+        .iter()
+        .map(|s| WorkingContextSession {
+            session: (*s).to_owned(),
+            saved_at: 0,
+        })
+        .collect()
+}
+
+#[test]
+fn test_bound_sessions_evicts_by_recency_not_by_name_when_timestamps_tie() {
+    use crate::limits::MAX_WORKING_SESSIONS_PER_PROJECT as CAP;
+    // CAP + 1 entries, ALL at saved_at 0 (the wasm case), in recency order:
+    // index 0 is the most recent. Names are chosen so that alphabetical
+    // order is the REVERSE of recency: the most recent is named "1000", the
+    // oldest "0000". The pinned (just-saved) entry is in the middle so the
+    // pin cannot mask the tiebreak.
+    let names: Vec<String> = (0..=CAP).map(|i| format!("{:04}", CAP - i)).collect();
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let mut sessions = tied(&refs);
+    let pinned = names[CAP / 2].clone();
+
+    bound_sessions(&mut sessions, &pinned);
+
+    let kept: Vec<&str> = sessions.iter().map(|s| s.session.as_str()).collect();
+    assert_eq!(kept.len(), CAP);
+    assert!(
+        kept.contains(&"1000"),
+        "the most recent entry must survive eviction on a timestamp tie"
+    );
+    assert!(
+        !kept.contains(&"0000"),
+        "the OLDEST entry is the one to evict on a timestamp tie — the old \
+         alphabetical tiebreak evicted the most recent instead"
+    );
+    assert!(
+        kept.contains(&pinned.as_str()),
+        "the pinned entry always survives"
+    );
+}
+
+#[test]
+fn test_bound_sessions_keeps_the_just_saved_entry_at_the_front() {
+    use crate::limits::MAX_WORKING_SESSIONS_PER_PROJECT as CAP;
+    // In the real flow the writer has just put the saved entry at index 0.
+    // Past the cap it is removed to be pinned, and it must come BACK to
+    // index 0 — not to the end — because on wasm32 (every saved_at 0) the
+    // stored order is the only order there is.
+    let names: Vec<String> = (0..=CAP).map(|i| format!("s{i:04}")).collect();
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let mut sessions = tied(&refs);
+    let just_saved = names[0].clone();
+
+    bound_sessions(&mut sessions, &just_saved);
+
+    assert_eq!(sessions.len(), CAP);
+    assert_eq!(
+        sessions[0].session, just_saved,
+        "the just-saved session must stay first after eviction at the cap"
+    );
+    assert_eq!(
+        sessions[CAP - 1].session,
+        names[CAP - 1],
+        "the oldest survivor is last"
+    );
+    assert!(
+        !sessions.iter().any(|s| s.session == names[CAP]),
+        "the entry past the cap is the one evicted"
+    );
+}
+
+#[test]
+fn test_listing_keeps_recency_order_when_every_saved_at_ties() {
+    // Three real sessions so `live_sessions` keeps them, then the index is
+    // overwritten with all three at saved_at 0 in recency order [c, b, a]
+    // (c most recent), named so that alphabetical order is the opposite.
+    let (_dir, svc) = open_service();
+    for session in ["a", "b", "c"] {
+        svc.save_working_context("proj", session, &minimal_working())
+            .expect("save");
+    }
+    let index = WorkingContextIndex {
+        sessions: tied(&["c", "b", "a"]),
+    };
+    let content = serde_json::to_string(&index).expect("encode");
+    let embedding = svc
+        .embedder
+        .embed("working context index proj")
+        .expect("embed");
+    svc.write_working_index("proj", &content, &embedding)
+        .expect("write index");
+
+    let listed: Vec<String> = svc
+        .list_working_contexts("proj")
+        .expect("list")
+        .into_iter()
+        .map(|s| s.session)
+        .collect();
+
+    assert_eq!(
+        listed,
+        ["c", "b", "a"],
+        "with every saved_at tied, the listing must follow the index's recency \
+         order — alphabetical would be [a, b, c]"
+    );
+}
+
+#[test]
+fn test_a_resave_moves_the_session_to_the_front_of_the_index() {
+    // The writer's half of the contract: saving an EXISTING session moves it
+    // to index 0, so the stored order stays recency even when the clock
+    // cannot tell (wasm) or does not move (same second).
+    let (_dir, svc) = open_service();
+    for session in ["a", "b", "c"] {
+        svc.save_working_context("proj", session, &minimal_working())
+            .expect("save");
+    }
+    svc.save_working_context("proj", "a", &minimal_working())
+        .expect("resave a");
+    let index = svc
+        .working_index("proj")
+        .expect("read index")
+        .expect("index present");
+    let order: Vec<&str> = index.sessions.iter().map(|s| s.session.as_str()).collect();
+    assert_eq!(
+        order,
+        ["a", "c", "b"],
+        "stored order must be recency, most recent first"
     );
 }

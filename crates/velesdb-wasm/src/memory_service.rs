@@ -1045,9 +1045,9 @@ impl WasmMemoryService {
     }
 
     /// Every session ever saved under `project`'s working-context index,
-    /// most-recently-saved first: resolves to `{sessions: [{session,
-    /// saved_at}]}` — empty (never an error) when the project never saved
-    /// anything (#1517, option 2).
+    /// most-recently-saved first (by the index's write order: `saved_at` is
+    /// always `0` here, wasm has no clock): resolves to `{sessions: [{session,
+    /// saved_at}]}`, empty (never an error) when nothing was saved (#1517).
     ///
     /// **In-memory semantics**: see [`Self::save_working_context`]'s doc
     /// comment — reflects only what this session's [`WasmStore`] currently

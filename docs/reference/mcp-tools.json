@@ -2233,12 +2233,12 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
           "sessions": {
-            "description": "Every session saved under this project, most-recently-saved first.\nEmpty (not an error) when the project never saved anything.",
+            "description": "Every session saved under this project, most-recently-saved first\n(`saved_at` is `0` on WASM, which has no clock; the order still holds\nthere). Empty (not an error) when the project never saved anything.",
             "items": {
               "description": "One session recorded in a project's working-context index (V2a-1's\n`list_working_contexts` quick win).",
               "properties": {
                 "saved_at": {
-                  "description": "Unix seconds this session was last saved — updated on every\n`save_working_context` call under this project + session, not just\nthe first (a resave never duplicates the entry).",
+                  "description": "Unix seconds this session was last saved — updated on every\n`save_working_context` call under this project + session, not just\nthe first (a resave never duplicates the entry). `0` on\n`wasm32-unknown-unknown`, which has no clock; the listing's\nmost-recently-saved-first order does not depend on it (it is carried\nby the index's write order), so the ORDER holds there while the\nVALUE does not.",
                   "format": "uint64",
                   "minimum": 0,
                   "type": "integer"
@@ -2570,7 +2570,7 @@
       }
     },
     {
-      "description": "Report this memory server's health and configuration: which embedder is running and whether recall is SEMANTIC (`embedder.semantic: false` means the offline `hash` default — recall matches surface form, not meaning, and configuring a semantic embedder is an env-var switch, no rebuild), what embedder the store was filled by per its on-disk provenance record, whether a default extraction backend is configured (`remember_extracted` may omit `extractor` iff `extraction.configured`; explicit `outline` remains available), whether the background autograph worker is active and how many enrichments a full queue dropped, and the corpus size — `memory.facts` and `memory.edges`. Read `memory.edges` when `why` seems to add nothing over `recall`: `0` means no fact was ever linked (by `relate`, `remember`'s `links`, or extraction), so `why` HAS no graph to walk and degrades to plain search — that is a wiring gap, not a defect. Call this at session start, or whenever recall quality or `why`'s evidence trails surprise you, and tell the user when the server runs degraded. Takes no parameters.",
+      "description": "Report this memory server's health and configuration: which embedder is running and whether recall is SEMANTIC (`embedder.semantic: false` means the offline `hash` default — recall matches surface form, not meaning, and configuring a semantic embedder is an env-var switch, no rebuild), what embedder the store was filled by per its on-disk provenance record, whether a default extraction backend is configured (`remember_extracted` may omit `extractor` iff `extraction.configured`; explicit `outline` remains available), whether the background autograph worker is active, how many enrichments a full queue dropped (never ran) and how many ran but failed part-way through wiring (fact stored, graph structure partial — re-remember it to complete), and the corpus size — `memory.facts` and `memory.edges`. Read `memory.edges` when `why` seems to add nothing over `recall`: `0` means no fact was ever linked (by `relate`, `remember`'s `links`, or extraction), so `why` HAS no graph to walk and degrades to plain search — that is a wiring gap, not a defect. Call this at session start, or whenever recall quality or `why`'s evidence trails surprise you, and tell the user when the server runs degraded. Takes no parameters.",
       "inputSchema": {
         "properties": {},
         "type": "object"
@@ -2619,6 +2619,11 @@
                 "minimum": 0,
                 "type": "integer"
               },
+              "autograph_failed": {
+                "description": "Enrichments that RAN and failed part-way through wiring since startup\n— the fact is stored, its graph structure is partial (the writes\nbefore the failure are in), and re-remembering the fact completes it.\nDistinct from `autograph_dropped`, which never ran at all.",
+                "minimum": 0,
+                "type": "integer"
+              },
               "configured": {
                 "description": "Whether a default extraction backend is attached. When false, callers\ncan still request the always-available `outline` backend explicitly.",
                 "type": "boolean"
@@ -2627,7 +2632,8 @@
             "required": [
               "configured",
               "autograph_active",
-              "autograph_dropped"
+              "autograph_dropped",
+              "autograph_failed"
             ],
             "type": "object"
           },

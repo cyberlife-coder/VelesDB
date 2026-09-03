@@ -23,6 +23,45 @@ use super::{
 use super::AutographWorkerHandle;
 
 impl<E: Embedder, S: FactStore> MemoryService<E, S> {
+    // Autograph observability lives with autograph (this module), not in the
+    // service assembler: `service.rs` is over the file budget and only ever
+    // shrinks (scripts/check-file-budgets.py), so the counters' accessors
+    // moved here beside the worker that feeds them.
+
+    /// How many autograph enrichments a FULL queue refused since this
+    /// service was built (#1846). The facts themselves were stored; only
+    /// their graph wiring was skipped, and re-remembering a fact rebuilds it.
+    #[must_use]
+    pub fn autograph_dropped(&self) -> u64 {
+        self.autograph_queue
+            .dropped
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// How many autograph enrichments RAN and failed part-way through
+    /// wiring since this service was built. Distinct from
+    /// [`Self::autograph_dropped`], which counts the ones a full queue never
+    /// ran. A failure here leaves the fact stored and its graph structure
+    /// PARTIAL — the entities wired before the failing write are in, the
+    /// rest are not — and re-remembering the fact completes it. Until this
+    /// counter existed such failures were discarded with `let _`: not
+    /// counted, not logged, invisible to `memory_status`, while the doc
+    /// promised "never silent" — a promise that covered only the queue.
+    #[must_use]
+    pub fn autograph_failed(&self) -> u64 {
+        self.autograph_queue
+            .failed
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Whether the background autograph queue is OPEN — a worker is spawned
+    /// and `remember` enqueues instead of running the enrichment inline.
+    /// Turns false the moment a worker handle's drop closes the queue.
+    #[must_use]
+    pub fn autograph_queue_open(&self) -> bool {
+        self.autograph_queue.tx.lock().is_some()
+    }
+
     /// Remember a `fact`, optionally tagging it with structured `metadata`
     /// (`ColumnStore` facet) and linking it to existing memories (graph facet).
     /// Returns the stable id of the fact (idempotent on identical content).
@@ -279,7 +318,11 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
         // separates autograph from `remember_extracted`: one `remember` call
         // must still produce exactly one caller-visible memory.
         for extracted in &extraction.facts {
-            let _ = self.wire_entities(fact_id, &extracted.entities, &mut entity_ids, &mut edges);
+            if let Err(err) =
+                self.wire_entities(fact_id, &extracted.entities, &mut entity_ids, &mut edges)
+            {
+                self.note_autograph_failure(fact_id, "entities", &err);
+            }
         }
         // A concurrent `forget` can still race the wiring writes above between
         // the first check and here. Re-check once more before the hub↔hub and
@@ -290,8 +333,37 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
         if !self.fact_exists(fact_id) {
             return;
         }
-        let _ = self.wire_relations(&extraction.relations, &mut entity_ids, &mut edges);
-        let _ = self.wire_attributes(&extraction.attributes, &mut entity_ids);
+        if let Err(err) = self.wire_relations(&extraction.relations, &mut entity_ids, &mut edges) {
+            self.note_autograph_failure(fact_id, "relations", &err);
+        }
+        if let Err(err) = self.wire_attributes(&extraction.attributes, &mut entity_ids) {
+            self.note_autograph_failure(fact_id, "attributes", &err);
+        }
+    }
+
+    /// One enrichment ran and a wiring write failed part-way: count it and
+    /// say so. The wiring helpers propagate with `?`, so the first failing
+    /// write ends its stage; the fact is stored and its graph structure is
+    /// partial until it is re-remembered. Discarding the error here — as
+    /// `let _` did — left that invisible everywhere: no counter, no log, and
+    /// a `memory_status` that reported a healthy worker. One line per failed
+    /// stage, not per edge (#1834's rule): the concurrent-`forget` race the
+    /// comments above describe is the common cause, and it fails the whole
+    /// stage at once.
+    fn note_autograph_failure(&self, fact_id: u64, stage: &str, err: &MemoryError) {
+        self.autograph_queue
+            .failed
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        #[cfg(feature = "mcp")]
+        tracing::warn!(
+            fact_id,
+            stage,
+            error = %err,
+            "autograph enrichment failed part-way: the fact is stored, its graph \
+             structure is partial; re-remembering it completes the wiring"
+        );
+        #[cfg(not(feature = "mcp"))]
+        let _ = (fact_id, stage, err);
     }
 
     /// Create each outgoing link from `fact_id`.

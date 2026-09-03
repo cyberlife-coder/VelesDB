@@ -329,11 +329,40 @@ fn ensure_resumable(phase: JobPhase) -> Result<(), MemoryError> {
     }
 }
 
-fn persist_worker_error(store: &JobStore, error: &MemoryError) {
-    if let Ok(mut record) = store.load() {
-        record.fail(error.to_string());
-        let _ = store.save(&record);
+/// The worker thread died on `error`: record it on the job so
+/// `migration_status` reports it, and SAY so. Until this logged, a failed
+/// migration was discoverable only by polling status — and when the record
+/// could not be updated (a disk that just failed the migration is a disk
+/// likely to fail this write too) the error was gone from every channel: the
+/// job showed a non-terminal phase, no worker, and no `last_error`,
+/// indistinguishable from a pause. Each degraded step is logged on its own
+/// so the ORIGINAL error is never masked by the one that hid it.
+pub(super) fn persist_worker_error(store: &JobStore, error: &MemoryError) {
+    log_worker_failure("online migration worker failed", error);
+    match store.load() {
+        Ok(mut record) => {
+            record.fail(error.to_string());
+            if let Err(save_error) = store.save(&record) {
+                log_worker_failure(
+                    "online migration worker failed AND the failure could not be recorded on \
+                     the job; migration_status will show no last_error",
+                    &save_error,
+                );
+            }
+        }
+        Err(load_error) => log_worker_failure(
+            "online migration worker failed AND the job record could not be read to record \
+             it; migration_status will show no last_error",
+            &load_error,
+        ),
     }
+}
+
+fn log_worker_failure(what: &str, error: &MemoryError) {
+    #[cfg(feature = "mcp")]
+    tracing::error!(error = %error, "{what}");
+    #[cfg(not(feature = "mcp"))]
+    let _ = (what, error);
 }
 
 fn refuse_existing_destination(path: &Path) -> Result<(), MemoryError> {
@@ -368,6 +397,6 @@ fn sibling(source: &Path, suffix: &str) -> Result<PathBuf, MemoryError> {
     Ok(source.with_file_name(format!("{name}.{suffix}")))
 }
 
-fn capture(message: impl Into<String>) -> MemoryError {
+pub(super) fn capture(message: impl Into<String>) -> MemoryError {
     MemoryError::MigrationCapture(message.into())
 }

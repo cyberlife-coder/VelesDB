@@ -115,6 +115,28 @@ pub const MAX_AUTOGRAPH_QUEUE: usize = 64;
 /// will either commit or expose a persisted failure.
 pub const MAX_EXTRACTION_JOBS: usize = 64;
 
+/// Maximum size of a working-context `project` or `session` id, in bytes.
+///
+/// Both are ids, not payloads — the same reasoning as
+/// [`MAX_IDEMPOTENCY_KEY_BYTES`] below, and the same figure. Without a cap they
+/// were the one caller-controlled string that reached storage past every
+/// other ceiling: `save_working_context` writes them into the fact's
+/// metadata (bypassing [`MAX_METADATA_BYTES`], which only `remember`'s
+/// caller-supplied `metadata` path checks), feeds them to the embedder
+/// (bypassing [`MAX_EMBEDDABLE_TEXT_BYTES`], likewise checked only in
+/// `remember`), and copies the session id into the project's index — one fact
+/// rewritten whole on every save, up to [`MAX_WORKING_SESSIONS_PER_PROJECT`]
+/// ids wide. Measured: a 600 KiB session id was accepted, stored 614 677
+/// bytes of metadata, and the second such save was refused by the backend's
+/// 1 MiB payload cap AFTER its fact had been stored — durable but unlisted,
+/// with an error telling the caller the opposite.
+///
+/// At 256 bytes, a full index is at most ~300 KB
+/// (`1000 × (256 + JSON overhead)`), comfortably inside [`MAX_FACT_BYTES`] and
+/// the backend's own cap, so the index can no longer outgrow what one save
+/// may write.
+pub const MAX_WORKING_CONTEXT_KEY_BYTES: usize = 256;
+
 /// Maximum caller-supplied idempotency-key size for `remember_extracted`.
 /// Keys are hashed before they reach a filename, but bounding the input still
 /// prevents an otherwise tiny receipt call from carrying an arbitrary payload.

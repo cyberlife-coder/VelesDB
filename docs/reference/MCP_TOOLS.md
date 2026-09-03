@@ -440,11 +440,13 @@ Returns `{ embedder, provenance, extraction, memory }`:
 - `provenance` — `{ recorded, model, dimension }`: what the store was FILLED
   by, per its on-disk record (#1751). `recorded: false` on a store predating
   the record; the mismatch check then degrades to dimension alone.
-- `extraction` — `{ configured, autograph_active, autograph_dropped }`:
-  `configured` says whether `remember_extracted` may omit its per-call
-  `extractor`; explicit `outline` remains available when it is `false`. The
-  two autograph fields report the background enrichment worker and its
-  counted drops.
+- `extraction` — `{ configured, autograph_active, autograph_dropped,
+  autograph_failed }`: `configured` says whether `remember_extracted` may omit
+  its per-call `extractor`; explicit `outline` remains available when it is
+  `false`. The three autograph fields report the background enrichment worker,
+  its counted drops (a full queue: the enrichment never ran), and its counted
+  failures (it ran and a wiring write failed part-way: the fact is stored, its
+  graph structure is partial, and re-remembering the fact completes it).
 - `memory` — `{ facts, edges }`: corpus size. `edges: 0` is the meaningful
   reading — nothing ever wired the graph, so `why` has nothing to walk and
   degrades to plain search. `edges: null` means the backend cannot count
@@ -746,7 +748,8 @@ Discover what is resumable before guessing a session id.
 | `project` | string | yes | The facet to list. |
 
 Returns `{ sessions: [ { session, saved_at } ] }`, most-recently-saved first;
-`saved_at` is Unix seconds. Empty (not an error) when the project never saved
+`saved_at` is Unix seconds — `0` on WASM, which has no clock; the ordering
+still holds there, by write order. Empty (not an error) when the project never saved
 anything. The listing holds at most 1 000 sessions per project — past that,
 the oldest-saved drop out of the list; their saved state stays on disk and
 `load_working_context` still finds it by exact `project` + `session`.

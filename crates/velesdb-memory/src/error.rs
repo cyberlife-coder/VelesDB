@@ -272,6 +272,26 @@ pub enum MemoryError {
         key: &'static str,
     },
 
+    /// [`crate::service::MemoryService::save_working_context`] was given a
+    /// `project` or `session` over
+    /// [`crate::limits::MAX_WORKING_CONTEXT_KEY_BYTES`]. They are ids, and
+    /// they were the one caller string that reached storage past every other
+    /// ceiling — into the fact's metadata, the embedder, and the per-project
+    /// index rewritten whole on every save. Refused before anything is
+    /// written.
+    #[cfg(feature = "context")]
+    #[error(
+        "working-context {key} is {len} bytes, over the {max}-byte cap: it is an id, not a payload"
+    )]
+    WorkingContextKeyTooLong {
+        /// Which key was over the cap: `"project"` or `"session"`.
+        key: &'static str,
+        /// The offending length, in bytes.
+        len: usize,
+        /// The cap ([`crate::limits::MAX_WORKING_CONTEXT_KEY_BYTES`]).
+        max: usize,
+    },
+
     /// A persisted working context could not be (de)serialized — the stored
     /// payload predates or postdates this crate's schema.
     ///
@@ -367,9 +387,9 @@ impl MemoryError {
             | Self::MetadataTooLarge { .. } => ErrorCategory::InvalidInput,
             Self::Unsupported(_) => ErrorCategory::Unsupported,
             #[cfg(feature = "context")]
-            Self::EmptyWorkingContext | Self::EmptyWorkingContextKey { .. } => {
-                ErrorCategory::InvalidInput
-            }
+            Self::EmptyWorkingContext
+            | Self::EmptyWorkingContextKey { .. }
+            | Self::WorkingContextKeyTooLong { .. } => ErrorCategory::InvalidInput,
             #[cfg(feature = "context")]
             Self::ContextBudget { .. } | Self::ContextOverLimit(_) | Self::SegmentationError(_) => {
                 ErrorCategory::InvalidInput

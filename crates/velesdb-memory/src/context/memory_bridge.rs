@@ -186,24 +186,33 @@ static WORKING_INDEX_WRITE: parking_lot::Mutex<()> = parking_lot::Mutex::new(())
 /// dropping the oldest-saved first. `just_saved` is pinned: it is the entry
 /// this very call put there, and a same-second flood of other sessions must
 /// not be able to evict it on a timestamp tie. The order among the rest is
-/// the read path's (`saved_at` desc, then session asc), so what survives is
-/// exactly what `list_working_contexts` would have shown first.
+/// the read path's (`saved_at` desc, STABLE, ties keeping the stored recency
+/// order), so what survives is exactly what `list_working_contexts` would
+/// have shown first — on `wasm32`, where every `saved_at` is 0, that is the
+/// stored order alone, and eviction is by recency rather than by name.
 fn bound_sessions(sessions: &mut Vec<WorkingContextSession>, just_saved: &str) {
     use crate::limits::MAX_WORKING_SESSIONS_PER_PROJECT as CAP;
     if sessions.len() <= CAP {
         return;
     }
+    // `remove`, not `swap_remove`: the latter would move the LAST entry into
+    // the pinned one's slot and corrupt the recency order a stable sort is
+    // about to rely on.
     let pinned = sessions
         .iter()
         .position(|s| s.session == just_saved)
-        .map(|at| sessions.swap_remove(at));
-    sessions.sort_by(|a, b| {
-        b.saved_at
-            .cmp(&a.saved_at)
-            .then_with(|| a.session.cmp(&b.session))
-    });
+        .map(|at| sessions.remove(at));
+    sessions.sort_by(|a, b| b.saved_at.cmp(&a.saved_at));
     sessions.truncate(CAP - usize::from(pinned.is_some()));
-    sessions.extend(pinned);
+    // Back to the FRONT, where the writer put it: it is the most recent
+    // entry, and the stored order is recency. Appending it (as this once
+    // did) left the just-saved session LAST — harmless on native, where its
+    // fresh `saved_at` sorts it first again on read, but on wasm32, where
+    // every `saved_at` is 0 and the stored order is all there is, the
+    // session just saved would have listed last past the cap.
+    if let Some(entry) = pinned {
+        sessions.insert(0, entry);
+    }
 }
 
 /// The compilation half — `compile_context` and its helpers; see
@@ -229,7 +238,9 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     /// # Errors
     /// Returns [`MemoryError::EmptyWorkingContextKey`] if `project` or
     /// `session` is empty or whitespace-only — they are the id the state is
-    /// saved and listed under — [`MemoryError::EmptyWorkingContext`] if
+    /// saved and listed under — [`MemoryError::WorkingContextKeyTooLong`] if
+    /// either exceeds [`crate::limits::MAX_WORKING_CONTEXT_KEY_BYTES`],
+    /// [`MemoryError::EmptyWorkingContext`] if
     /// `working` records nothing, [`MemoryError::WorkingContextCodec`] if
     /// serialization fails,
     /// [`MemoryError::ContextOverLimit`] if the serialized `working` exceeds
@@ -244,6 +255,17 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
         for (key, value) in [("project", project), ("session", session)] {
             if value.trim().is_empty() {
                 return Err(MemoryError::EmptyWorkingContextKey { key });
+            }
+            // Ids, not payloads — and until this check they were the one
+            // caller string that reached storage past every other ceiling
+            // (metadata, embedder, index). See the constant's doc for the
+            // measured bypass.
+            if value.len() > crate::limits::MAX_WORKING_CONTEXT_KEY_BYTES {
+                return Err(MemoryError::WorkingContextKeyTooLong {
+                    key,
+                    len: value.len(),
+                    max: crate::limits::MAX_WORKING_CONTEXT_KEY_BYTES,
+                });
             }
         }
         if working.is_empty() {
@@ -567,11 +589,9 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
             return Ok(Vec::new());
         };
         let mut sessions = self.live_sessions(project, index.sessions)?;
-        sessions.sort_by(|a, b| {
-            b.saved_at
-                .cmp(&a.saved_at)
-                .then_with(|| a.session.cmp(&b.session))
-        });
+        // Stable, and by `saved_at` alone: ties keep the stored order, which
+        // `update_working_index` maintains as recency (see its comment).
+        sessions.sort_by(|a, b| b.saved_at.cmp(&a.saved_at));
         Ok(sessions)
     }
 
@@ -664,13 +684,29 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
             Err(err) => return Err(err),
         };
         let now = now_unix_secs();
-        if let Some(entry) = index.sessions.iter_mut().find(|s| s.session == session) {
+        // The vector's ORDER is recency, most recent first, maintained here on
+        // every save: the entry being saved moves (or is inserted) at the
+        // front. `saved_at` alone cannot carry that order — it is whole
+        // seconds, so two saves in one second tie, and on `wasm32` it is
+        // always 0 (no clock), so EVERY entry ties. The read path and
+        // `bound_sessions` sort by `saved_at` with a STABLE sort and no other
+        // tiebreak, so where `saved_at` cannot decide, this order does, and
+        // "most-recently-saved first" holds on every target. Before this, ties
+        // fell through to a `session`-ascending tiebreak — alphabetical — and
+        // on wasm the whole listing was alphabetical while five surfaces
+        // promised recency.
+        if let Some(at) = index.sessions.iter().position(|s| s.session == session) {
+            let mut entry = index.sessions.remove(at);
             entry.saved_at = now;
+            index.sessions.insert(0, entry);
         } else {
-            index.sessions.push(WorkingContextSession {
-                session: session.to_owned(),
-                saved_at: now,
-            });
+            index.sessions.insert(
+                0,
+                WorkingContextSession {
+                    session: session.to_owned(),
+                    saved_at: now,
+                },
+            );
         }
         // The entry just appended is alive by construction (its fact was
         // stored moments ago, before this call); this only sheds the ones a

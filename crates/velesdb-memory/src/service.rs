@@ -205,6 +205,9 @@ struct AutographJob {
 struct AutographQueue {
     tx: parking_lot::Mutex<Option<std::sync::mpsc::SyncSender<AutographJob>>>,
     dropped: std::sync::atomic::AtomicU64,
+    /// Enrichments that RAN and failed part-way through wiring — distinct
+    /// from `dropped` (never ran). See `MemoryService::autograph_failed`.
+    failed: std::sync::atomic::AtomicU64,
     closing: std::sync::atomic::AtomicBool,
 }
 
@@ -350,24 +353,6 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
             validate_relation(&link.relation)?;
         }
         self.ensure_link_targets_exist(links)
-    }
-
-    /// How many autograph enrichments a FULL queue refused since this
-    /// service was built (#1846). The facts themselves were stored; only
-    /// their graph wiring was skipped, and re-remembering a fact rebuilds it.
-    #[must_use]
-    pub fn autograph_dropped(&self) -> u64 {
-        self.autograph_queue
-            .dropped
-            .load(std::sync::atomic::Ordering::Relaxed)
-    }
-
-    /// Whether the background autograph queue is OPEN — a worker is spawned
-    /// and `remember` enqueues instead of running the enrichment inline.
-    /// Turns false the moment a worker handle's drop closes the queue.
-    #[must_use]
-    pub fn autograph_queue_open(&self) -> bool {
-        self.autograph_queue.tx.lock().is_some()
     }
 
     /// Whether an autograph extractor is configured at all.
