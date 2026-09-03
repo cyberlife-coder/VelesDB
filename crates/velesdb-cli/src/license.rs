@@ -101,12 +101,16 @@ where
 }
 
 impl LicenseInfo {
-    /// Checks if the license has expired
+    /// Checks if the license has expired.
+    ///
+    /// Fails closed: if the system clock cannot be read relative to the Unix
+    /// epoch, the license is treated as expired rather than valid, so a
+    /// broken clock can never silently bypass expiry.
     pub fn is_expired(&self) -> bool {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
-            .unwrap_or(0);
+            .unwrap_or(u64::MAX);
         now > self.expires_at
     }
 
