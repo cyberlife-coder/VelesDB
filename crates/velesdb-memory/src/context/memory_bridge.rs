@@ -195,24 +195,18 @@ fn bound_sessions(sessions: &mut Vec<WorkingContextSession>, just_saved: &str) {
     if sessions.len() <= CAP {
         return;
     }
-    // `remove`, not `swap_remove`: the latter would move the LAST entry into
-    // the pinned one's slot and corrupt the recency order a stable sort is
-    // about to rely on.
-    let pinned = sessions
-        .iter()
-        .position(|s| s.session == just_saved)
-        .map(|at| sessions.remove(at));
-    sessions.sort_by(|a, b| b.saved_at.cmp(&a.saved_at));
-    sessions.truncate(CAP - usize::from(pinned.is_some()));
-    // Back to the FRONT, where the writer put it: it is the most recent
-    // entry, and the stored order is recency. Appending it (as this once
-    // did) left the just-saved session LAST — harmless on native, where its
-    // fresh `saved_at` sorts it first again on read, but on wasm32, where
-    // every `saved_at` is 0 and the stored order is all there is, the
-    // session just saved would have listed last past the cap.
-    if let Some(entry) = pinned {
-        sessions.insert(0, entry);
+    // Pin by moving the just-saved entry to the front — where the writer put
+    // it, and where the recency order wants it — with one in-place rotation.
+    // Everything after it is then stably ordered by `saved_at` alone (ties
+    // keep the stored recency order) and the tail past the cap is cut. When
+    // the entry is absent the whole vector is ordered and cut the same way.
+    let pinned = sessions.iter().position(|s| s.session == just_saved);
+    if let Some(at) = pinned {
+        sessions[..=at].rotate_right(1);
     }
+    let unpinned_from = usize::from(pinned.is_some());
+    sessions[unpinned_from..].sort_by_key(|s| std::cmp::Reverse(s.saved_at));
+    sessions.truncate(CAP);
 }
 
 /// The compilation half — `compile_context` and its helpers; see
@@ -591,7 +585,7 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
         let mut sessions = self.live_sessions(project, index.sessions)?;
         // Stable, and by `saved_at` alone: ties keep the stored order, which
         // `update_working_index` maintains as recency (see its comment).
-        sessions.sort_by(|a, b| b.saved_at.cmp(&a.saved_at));
+        sessions.sort_by_key(|s| std::cmp::Reverse(s.saved_at));
         Ok(sessions)
     }
 
@@ -696,9 +690,10 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
         // on wasm the whole listing was alphabetical while five surfaces
         // promised recency.
         if let Some(at) = index.sessions.iter().position(|s| s.session == session) {
-            let mut entry = index.sessions.remove(at);
-            entry.saved_at = now;
-            index.sessions.insert(0, entry);
+            // One in-place rotation moves the entry to the front and shifts
+            // the ones before it by one: no allocation, one pass.
+            index.sessions[..=at].rotate_right(1);
+            index.sessions[0].saved_at = now;
         } else {
             index.sessions.insert(
                 0,

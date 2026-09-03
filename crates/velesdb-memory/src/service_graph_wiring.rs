@@ -22,6 +22,29 @@ use super::{
 #[cfg(not(target_arch = "wasm32"))]
 use super::AutographWorkerHandle;
 
+/// The three wiring stages of one autograph enrichment, in the order they
+/// run. Named for the failure log: which stage a partial enrichment stopped
+/// at is the one fact a reader needs to judge what is missing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AutographStage {
+    /// Fact → topic hubs (`about`/`mentions` pairs).
+    Entities,
+    /// Hub → hub typed edges.
+    Relations,
+    /// Hub attribute writes.
+    Attributes,
+}
+
+impl std::fmt::Display for AutographStage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Entities => "entities",
+            Self::Relations => "relations",
+            Self::Attributes => "attributes",
+        })
+    }
+}
+
 impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     // Autograph observability lives with autograph (this module), not in the
     // service assembler: `service.rs` is over the file budget and only ever
@@ -321,7 +344,7 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
             if let Err(err) =
                 self.wire_entities(fact_id, &extracted.entities, &mut entity_ids, &mut edges)
             {
-                self.note_autograph_failure(fact_id, "entities", &err);
+                self.note_autograph_failure(fact_id, AutographStage::Entities, &err);
             }
         }
         // A concurrent `forget` can still race the wiring writes above between
@@ -334,10 +357,10 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
             return;
         }
         if let Err(err) = self.wire_relations(&extraction.relations, &mut entity_ids, &mut edges) {
-            self.note_autograph_failure(fact_id, "relations", &err);
+            self.note_autograph_failure(fact_id, AutographStage::Relations, &err);
         }
         if let Err(err) = self.wire_attributes(&extraction.attributes, &mut entity_ids) {
-            self.note_autograph_failure(fact_id, "attributes", &err);
+            self.note_autograph_failure(fact_id, AutographStage::Attributes, &err);
         }
     }
 
@@ -350,14 +373,14 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     /// stage, not per edge (#1834's rule): the concurrent-`forget` race the
     /// comments above describe is the common cause, and it fails the whole
     /// stage at once.
-    fn note_autograph_failure(&self, fact_id: u64, stage: &str, err: &MemoryError) {
+    fn note_autograph_failure(&self, fact_id: u64, stage: AutographStage, err: &MemoryError) {
         self.autograph_queue
             .failed
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         #[cfg(feature = "mcp")]
         tracing::warn!(
             fact_id,
-            stage,
+            stage = %stage,
             error = %err,
             "autograph enrichment failed part-way: the fact is stored, its graph \
              structure is partial; re-remembering it completes the wiring"

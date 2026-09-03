@@ -13,6 +13,13 @@
 //! production — on a hub write — through a store that refuses to persist an
 //! entity hub (`_veles_hub` metadata) while accepting everything else.
 
+// `NativeStore` is the backing store this suite wraps, and it is
+// `persistence`-gated: the same crate-level guard `auto_date_bdd.rs` and
+// `column_filter_conformance_bdd.rs` carry, so the Lint job's per-feature
+// `--all-targets` loop (which compiles every integration test under
+// `--features context` alone) does not try to build this one without it.
+#![cfg(feature = "persistence")]
+
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -26,6 +33,10 @@ struct HubRefusingStore {
     inner: NativeStore,
 }
 
+/// The hub marker `MemoryService` stamps on every entity hub. The crate does
+/// not re-export the constant (it is a storage-layer detail, not API), and
+/// exporting it for one test would widen the public surface for no caller;
+/// the literal IS the on-disk contract this suite wraps, so it is spelled out.
 const HUB_FIELD: &str = "_veles_hub";
 
 fn is_hub(metadata: &Metadata) -> bool {
