@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag (for example v5.1.0 or v5.1.0-rc.1)'
+        description: 'Release tag (v5.1.0, v5.1.0-rc.1, or velesdb-memory-v0.14.2)'
         required: true
         type: string
       sha:
-        description: 'Full SHA of the CI-green commit on main'
+        description: 'Full SHA of the CI-green commit (on main for vX.Y.Z, on develop for velesdb-memory-vX.Y.Z)'
         required: true
         type: string
       message:
@@ -58,11 +58,33 @@ jobs:
           MESSAGE: ${{ inputs.message }}
         run: bash scripts/create-release-tag.sh "$TAG" "$SHA" "$MESSAGE"
 
-      - name: Dispatch release workflow on the new tag
+      # A tag pushed with GITHUB_TOKEN does not trigger a workflow listening on
+      # `push.tags`, so start each train's release explicitly, on the new tag.
+      - name: Dispatch release workflows on the new tag
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
         run: |
-          gh workflow run release.yml \
-            --ref "$TAG" \
-            --field version="${TAG#v}"
+          set -euo pipefail
+          case "$TAG" in
+            velesdb-memory-v*)
+              VERSION="${TAG#velesdb-memory-v}"
+              gh workflow run release-memory.yml \
+                --ref "$TAG" \
+                --field version="$VERSION"
+              # release-mcpb.yml has no prerelease trigger; mirror that here.
+              case "$VERSION" in
+                *-*) echo "Prerelease $VERSION: skipping release-mcpb.yml" ;;
+                *)
+                  gh workflow run release-mcpb.yml \
+                    --ref "$TAG" \
+                    --field version="$VERSION"
+                  ;;
+              esac
+              ;;
+            *)
+              gh workflow run release.yml \
+                --ref "$TAG" \
+                --field version="${TAG#v}"
+              ;;
+          esac
