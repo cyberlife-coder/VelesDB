@@ -143,6 +143,12 @@ HISTORICAL_VERSION_CONTEXT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Sentence and paragraph boundaries, used to scope the search above. A version
+# number is `1.2.3`, never `1. 2. 3`, so a sentence break cannot fall inside
+# one: the period must be followed by whitespace.
+SENTENCE_BREAK_RE = re.compile(r"(?<=[.!?])\s")
+PARAGRAPH_BREAK_RE = re.compile(r"\n[ \t]*\n")
+
 
 VERSION_CLAIMS: "tuple[VersionClaim, ...]" = (
     VersionClaim(
@@ -381,13 +387,33 @@ def line_of(text: str, offset: int) -> int:
     return text.count("\n", 0, offset) + 1
 
 
+def historical_context_window(text: str, match: "re.Match[str]") -> str:
+    """The prose a historical qualifier is allowed to live in, for one match.
+
+    Scoped to the sentence around the match, not to the physical line. Prose
+    wraps: `supported since velesdb-memory` can end one line and `0.14.1` open
+    the next, and a line-scoped window reads that second line alone, finds no
+    qualifier, and calls a correctly-framed reference stale. Bounded by the
+    enclosing paragraph so a qualifier in a neighbouring one never leaks in.
+    """
+    para_start = 0
+    for brk in PARAGRAPH_BREAK_RE.finditer(text, 0, match.start()):
+        para_start = brk.end()
+    para_break = PARAGRAPH_BREAK_RE.search(text, match.end())
+    para_end = para_break.start() if para_break else len(text)
+
+    start = para_start
+    for boundary in SENTENCE_BREAK_RE.finditer(text, para_start, match.start()):
+        start = boundary.end()
+    boundary = SENTENCE_BREAK_RE.search(text, match.end(), para_end)
+    end = boundary.start() if boundary else para_end
+    return text[start:end]
+
+
 def is_historical_version_reference(text: str, match: "re.Match[str]") -> bool:
     """Whether nearby prose explicitly frames a version as historical."""
-    line_start = text.rfind("\n", 0, match.start()) + 1
-    line_end = text.find("\n", match.end())
-    if line_end == -1:
-        line_end = len(text)
-    return HISTORICAL_VERSION_CONTEXT_RE.search(text[line_start:line_end]) is not None
+    window = historical_context_window(text, match)
+    return HISTORICAL_VERSION_CONTEXT_RE.search(window) is not None
 
 
 # --------------------------------------------------------------------------
