@@ -1232,7 +1232,7 @@
  "unwired": [
   {
    "script": "scripts/create-release-tag.sh",
-   "reason": "Release-time only, by design: tag-release.yml runs it to guard an operator-requested tag after main CI is green. A pull request has no release tag to assert; scripts.tests.test_create_release_tag proves both refusal guards and the positive control against a real bare remote.",
+   "reason": "Release-time only, by design: tag-release.yml runs it to guard an operator-requested tag on either release train (vX.Y.Z off main, velesdb-memory-vX.Y.Z off develop) after that branch's CI is green. A pull request has no release tag to assert; scripts.tests.test_create_release_tag proves every refusal guard and both positive controls against a real bare remote.",
    "issue": null
   },
   {

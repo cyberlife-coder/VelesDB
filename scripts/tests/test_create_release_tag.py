@@ -59,7 +59,12 @@ class ReleaseTagScriptTests(unittest.TestCase):
         git(self.repo, "remote", "add", "origin", str(self.remote))
         self.main_sha = commit_file(self.repo, "main.txt", "main\n", "seed main")
         git(self.repo, "push", "--set-upstream", "origin", "main")
-        git(self.repo, "switch", "--create", "side")
+        # velesdb-memory ships from develop, so the fixture carries a commit
+        # that is on develop and NOT on main, and one on neither branch.
+        git(self.repo, "switch", "--create", "develop")
+        self.develop_sha = commit_file(self.repo, "develop.txt", "develop\n", "seed develop")
+        git(self.repo, "push", "--set-upstream", "origin", "develop")
+        git(self.repo, "switch", "--create", "side", "main")
         self.side_sha = commit_file(self.repo, "side.txt", "side\n", "seed side")
         git(self.repo, "switch", "main")
 
@@ -132,6 +137,46 @@ class ReleaseTagScriptTests(unittest.TestCase):
         self.assertIn("must match vX.Y.Z", result.stderr)
         self.assert_remote_tag_absent("release/latest")
 
+    def test_creates_memory_tag_on_a_develop_only_commit(self) -> None:
+        tag = "velesdb-memory-v0.14.2"
+
+        result = self.invoke(tag, self.develop_sha, "velesdb-memory 0.14.2")
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(self.develop_sha, self.remote_tag(tag, peeled=True))
+        object_type = git(
+            self.repo,
+            "--git-dir",
+            str(self.remote),
+            "cat-file",
+            "-t",
+            self.remote_tag(tag),
+        ).stdout.strip()
+        self.assertEqual("tag", object_type)
+        self.assertIn("origin/develop", result.stdout)
+
+    def test_refuses_memory_tag_on_a_commit_outside_develop(self) -> None:
+        result = self.invoke("velesdb-memory-v0.14.2", self.side_sha)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("not an ancestor of origin/develop", result.stderr)
+        self.assert_remote_tag_absent("velesdb-memory-v0.14.2")
+
+    def test_refuses_workspace_tag_on_a_develop_only_commit(self) -> None:
+        """The train is read off the tag: a vX.Y.Z tag still has to be on main."""
+        result = self.invoke("v1.2.3", self.develop_sha)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("not an ancestor of origin/main", result.stderr)
+        self.assert_remote_tag_absent("v1.2.3")
+
+    def test_refuses_a_memory_tag_that_carries_no_version(self) -> None:
+        result = self.invoke("velesdb-memory-vlatest", self.develop_sha)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("must match vX.Y.Z", result.stderr)
+        self.assert_remote_tag_absent("velesdb-memory-vlatest")
+
 
 class ReleaseTagWorkflowContractTests(unittest.TestCase):
     """Pin the Actions wiring that a green shell-script test cannot prove."""
@@ -167,11 +212,36 @@ class ReleaseTagWorkflowContractTests(unittest.TestCase):
         self.assertIn('--ref "$TAG"', self.workflow)
         self.assertIn('version="${TAG#v}"', self.workflow)
 
+    def test_workflow_dispatches_the_memory_train_on_a_memory_tag(self) -> None:
+        """A GITHUB_TOKEN tag push fires no `push.tags` workflow, on either train."""
+        self.assertIn("velesdb-memory-v*)", self.workflow)
+        self.assertIn('VERSION="${TAG#velesdb-memory-v}"', self.workflow)
+        self.assertIn("gh workflow run release-memory.yml", self.workflow)
+        self.assertIn("gh workflow run release-mcpb.yml", self.workflow)
+        self.assertIn('version="$VERSION"', self.workflow)
+
+    def test_workflow_skips_mcpb_for_a_memory_prerelease(self) -> None:
+        """release-mcpb.yml has no prerelease tag trigger; the dispatch mirrors it."""
+        self.assertIn("skipping release-mcpb.yml", self.workflow)
+        memory_arm = self.workflow.find("velesdb-memory-v*)")
+        guard = self.workflow.find("*-*)", memory_arm)
+        mcpb = self.workflow.find("gh workflow run release-mcpb.yml", memory_arm)
+        self.assertNotEqual(-1, guard, "no prerelease guard in the memory arm")
+        self.assertNotEqual(-1, mcpb, "no release-mcpb.yml dispatch in the memory arm")
+        self.assertLess(guard, mcpb, "the mcpb dispatch is not behind the prerelease guard")
+
     def test_release_guide_keeps_direct_push_primary_and_documents_fallback(self) -> None:
         self.assertIn("git push origin vX.Y.Z", self.release_doc)
         self.assertIn("tag-release.yml", self.release_doc)
         self.assertIn("solution de repli", self.release_doc.lower())
         self.assertIn("--include-ignored", self.release_doc)
+
+    def test_release_guide_documents_the_memory_train_fallback(self) -> None:
+        """`develop` alone is already in the guide, so pin the branch the tag is checked against."""
+        self.assertIn("velesdb-memory-vX.Y.Z", self.release_doc)
+        self.assertIn("release-memory.yml", self.release_doc)
+        self.assertIn("release-mcpb.yml", self.release_doc)
+        self.assertIn("origin/develop", self.release_doc)
 
 
 if __name__ == "__main__":
