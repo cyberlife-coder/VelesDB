@@ -13,6 +13,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`project`/`session` ids reached storage past every declared cap.**
+  `save_working_context` wrote them into the fact's metadata (bypassing
+  `MAX_METADATA_BYTES`, checked only on `remember`'s own `metadata`), fed them
+  to the embedder (bypassing `MAX_EMBEDDABLE_TEXT_BYTES`, likewise), and copied
+  the session id into the project index — one fact rewritten whole on every
+  save, up to 1000 ids wide. Measured: a 600 KiB session id was accepted and
+  stored 614 677 bytes of metadata; the SECOND such save was refused by the
+  backend's 1 MiB payload cap AFTER its fact was stored — durable, unlisted,
+  and reported to the caller as failed. Both ids are now capped at
+  `MAX_WORKING_CONTEXT_KEY_BYTES` (256 bytes, the idempotency-key precedent)
+  and refused up front with `MemoryError::WorkingContextKeyTooLong` — additive
+  on the `#[non_exhaustive]` enum. Reads are not capped: a store written
+  before this release may hold longer ids, and they stay loadable.
+
+- **`list_working_contexts` was alphabetical wherever `saved_at` tied.**
+  `saved_at` is whole seconds, so two saves in one second tie; on WASM it is
+  always 0 (no clock), so every entry tied and the whole listing — promised
+  "most-recently-saved first" on five surfaces, including the MCP tool
+  description the model reads — came back in `session` order. An agent taking
+  `sessions[0]` as "where I left off" resumed the alphabetically-first
+  session. The index's stored order is now recency (the writer moves the saved
+  entry to the front), and the read path and the eviction at the cap sort
+  stably by `saved_at` alone, so the order holds on every target; the
+  `saved_at` VALUE stays 0 on WASM and every surface now says so.
+
+- **Autograph enrichments that failed part-way were invisible.** The wiring
+  helpers propagate with `?`, so the first failing write ended the stage —
+  and `autograph` discarded that error with `let _`: not counted, not logged,
+  and `memory_status` reported a healthy worker while the fact's graph
+  structure was partial. The doc's "never silent" covered the QUEUE (drops)
+  only. Such failures are now counted in `MemoryService::autograph_failed`,
+  logged once per failed stage, and reported by `memory_status` as
+  `extraction.autograph_failed`, distinct from `autograph_dropped` (never
+  ran): re-remembering the fact completes its wiring.
+
+- **A failed online-migration worker was silent, and could lose its error.**
+  The worker recorded its failure on the job record for `migration_status`
+  and nothing else; when that record could not be read or written — a disk
+  that just failed a migration is a disk likely to fail this write too — the
+  error was gone from every channel, and status showed a non-terminal phase
+  with no worker and no `last_error`, indistinguishable from a pause. The
+  failure is now logged, and each degraded step is logged on its own so the
+  original error is never masked by the one that hid it.
+
 - **A corrupt working-context index erased the whole project's listing.**
   `update_working_index` rebuilt an unreadable index from EMPTY and wrote that
   over it. Every other session under the project left `list_working_contexts`
