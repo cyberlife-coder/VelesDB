@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.2] - 2026-09-03
+
+### Fixed
+
+- **The working-context index grew without bound (#2193).** A project's index
+  is one fact rewritten whole on every `save_working_context`; it gained an
+  entry per distinct session and shed one only when that session's fact was
+  forgotten. A long-lived project therefore paid O(sessions) per save, and
+  nothing capped the fact's size. `MAX_WORKING_SESSIONS_PER_PROJECT = 1000`:
+  past it the oldest-saved entries leave the *listing* — their facts stay on
+  disk and stay loadable by exact `project` + `session` — and the session being
+  saved is pinned, so a same-second flood can never evict the write in
+  progress. Eviction runs under the lock already held: no new lock, map, or
+  per-project state.
+
+- **An empty `project` or `session` was accepted and then unrecoverable.**
+  Both are the id the state is filed under and listed by; an empty one hashed,
+  encoded and listed fine — as `""` — and nobody who had not thought to ask for
+  the empty string could reach it again. `save_working_context` now refuses an
+  empty or whitespace-only key up front with
+  `MemoryError::EmptyWorkingContextKey`. The variant is additive: `MemoryError`
+  is `#[non_exhaustive]`, so downstream already matches it with a wildcard arm.
+
 ### Deprecated
 
 - **The `MemoryStore` supertrait alias (#2018).** Since the 0.14 facet split
