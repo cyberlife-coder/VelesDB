@@ -180,6 +180,10 @@ jobs:
         run: |
           set -euo pipefail
           # Ensure a release exists for the tag, then upload (clobber) the bundles.
+          # The --notes below is a placeholder for the case where this job wins
+          # the create race against release-memory.yml; that workflow's
+          # publish-release-notes job then replaces the body with the crate's
+          # CHANGELOG section, so it is never what a reader ends up seeing.
           # --latest=false: the velesdb-memory release must never become the
           # repo's "Latest release" (that belongs to the VelesDB vX.Y.Z release,
           # which carries the binaries the README download link points at). Left
