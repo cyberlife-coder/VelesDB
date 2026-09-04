@@ -1227,6 +1227,52 @@
      ]
     }
    ]
+  },
+  {
+   "script": "scripts/npm-audit-gate.py",
+   "purpose": "No npm lockfile carries a high or critical advisory — and a registry that never answered is reported as infrastructure (exit 75), never as a finding.",
+   "workflow": ".github/workflows/gate-contracts.yml",
+   "job": "npm-audit",
+   "required": true,
+   "mode": "strict",
+   "self_test": "scripts.tests.test_npm_audit_gate",
+   "self_test_required": true,
+   "must_refuse": [
+    {
+     "vector": "a lockfile with a high advisory — against an npm that exits 1 in BOTH states, so the accepted control proves the gate reads the report and not the exit code that conflated the two",
+     "files": {
+      "package-lock.json": "{\n  \"lockfileVersion\": 3\n}\n",
+      "tools/fake-npm": "#!/usr/bin/env python3\nimport sys\nsys.stdout.write('{\"auditReportVersion\": 2, \"vulnerabilities\": {}, \"metadata\": {\"vulnerabilities\": {\"info\": 0, \"low\": 0, \"moderate\": 0, \"high\": 1, \"critical\": 0, \"total\": 1}}}')\nraise SystemExit(1)\n"
+     },
+     "accepts": {
+      "package-lock.json": "{\n  \"lockfileVersion\": 3\n}\n",
+      "tools/fake-npm": "#!/usr/bin/env python3\nimport sys\nsys.stdout.write('{\"auditReportVersion\": 2, \"vulnerabilities\": {}, \"metadata\": {\"vulnerabilities\": {\"info\": 0, \"low\": 0, \"moderate\": 0, \"high\": 0, \"critical\": 0, \"total\": 0}}}')\nraise SystemExit(1)\n"
+     },
+     "executable": {
+      "files": [
+       "tools/fake-npm"
+      ],
+      "accepts": [
+       "tools/fake-npm"
+      ]
+     },
+     "argv": [
+      "--root",
+      "{root}",
+      "--npm",
+      "{root}/tools/fake-npm",
+      "--attempts",
+      "1",
+      "--backoff-seconds",
+      "0"
+     ]
+    }
+   ],
+   "required_via": "gate-contracts",
+   "blind_spot": {
+    "issue": null,
+    "summary": "The vector injects an npm double, so it pins the classification and both exit codes but not npm's own report schema; an npm that renamed `metadata.vulnerabilities` would read as unreachable (exit 75, job red) rather than as silently clean — the safe direction. The unreachable branch exits 75 and so cannot be a refusal vector, which this harness defines as exit 1; scripts.tests.test_npm_audit_gate covers it end to end instead, including a hung npm cut off by --attempt-timeout."
+   }
   }
  ],
  "unwired": [
