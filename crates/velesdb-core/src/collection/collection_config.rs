@@ -158,13 +158,14 @@ pub struct CollectionConfig {
     /// indexes exist (EPIC-081 phase 3d).
     ///
     /// `create_index` adds a field here and `drop_secondary_index` removes it,
-    /// each persisted via [`save_config`](crate::collection::Collection). On
+    /// each persisted via `save_config`. On
     /// [`Collection::open`](crate::collection::VectorCollection) every listed
     /// field is rebuilt from the recovered payloads (backfill), so an index
     /// survives a process restart instead of silently vanishing — without
     /// which the ordered-index `ORDER BY` fast path, the bitmap pre-filter,
-    /// `EXPLAIN` `IndexLookup`, and the index advisor would all change behaviour
-    /// after a restart (results stay correct via the exhaustive fallback).
+    /// `EXPLAIN` `IndexLookup`, and the index advisor would all change
+    /// behaviour after a restart (results stay correct via the exhaustive
+    /// fallback).
     ///
     /// A `BTreeSet` so the on-disk ordering is deterministic. Backward
     /// compatible: configs written before this field deserialize to an empty

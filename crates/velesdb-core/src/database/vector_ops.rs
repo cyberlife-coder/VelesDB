@@ -135,9 +135,9 @@ impl Database {
     /// When `m` or `ef_construction` are `Some`, those values win over the
     /// configured `[hnsw]` section, which in turn wins over the
     /// dimension-based auto-tuned defaults from [`HnswParams::auto`] — see
-    /// [`Database::resolve_hnsw_params`] for the full chain. The two
-    /// arguments are resolved independently, so pinning one still takes the
-    /// other from config.
+    /// `Database::resolve_hnsw_params` for the full chain. The two arguments
+    /// are resolved independently, so pinning one still takes the other from
+    /// config.
     ///
     /// Shortcut for [`Database::create_vector_collection_with_params`] that
     /// only overrides `max_connections` and `ef_construction`.

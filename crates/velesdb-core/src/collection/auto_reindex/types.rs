@@ -95,7 +95,7 @@ pub enum ReindexEvent {
 /// serde default matching [`Default`] so a `config.json` written by an older
 /// VelesDB — or one that omits any field — deserializes without error. The
 /// [`cooldown`](Self::cooldown) `Duration` is stored as whole seconds via
-/// [`duration_secs`].
+/// `duration_secs`.
 ///
 /// `#[non_exhaustive]`: build from [`AutoReindexConfig::default`] and adjust
 /// fields so future additions stay backward compatible for downstream crates.

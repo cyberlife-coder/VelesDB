@@ -385,10 +385,10 @@ impl LogPayloadStorage {
     /// per id: calling it in a loop cost one fsync PER POINT on this store
     /// (finding C3). Here every CRC-protected tombstone (`Marker(0xC4) |
     /// ID(8) | CRC32(4)`) is built into one buffer, written with a single
-    /// `write_all`, and synced once via [`Self::sync_wal_or_resync`] — the
-    /// bytes are identical to N sequential `delete` calls, so WAL replay is
-    /// unchanged. Ids absent from the index are skipped (no tombstone),
-    /// mirroring the single-delete guard.
+    /// `write_all`, and synced once via `sync_wal_or_resync` — the bytes are
+    /// identical to N sequential `delete` calls, so WAL replay is unchanged.
+    /// Ids absent from the index are skipped (no tombstone), mirroring the
+    /// single-delete guard.
     ///
     /// # Crash contract
     ///

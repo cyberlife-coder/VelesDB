@@ -23,11 +23,11 @@ use serde::{Deserialize, Serialize};
 pub struct RaBitQCorrection {
     /// L2 norm of the centered vector before binarization.
     pub vector_norm: f32,
-    /// Inner product between the binary reconstruction (`±1/√D` scaled) and the
-    /// rotated normalized vector. Measures quantization quality; closer to 1.0
-    /// is better. NOT consumed by the current symmetric (query-binarized)
+    /// Inner product between the binary reconstruction (`±1/√D` scaled) and
+    /// the rotated normalized vector. Measures quantization quality; closer to
+    /// 1.0 is better. NOT consumed by the current symmetric (query-binarized)
     /// estimator, whose de-bias is the arcsine-law transform in
-    /// [`RaBitQIndex::distance_from_prepared_slice`]; it is the per-vector
+    /// `RaBitQIndex::distance_from_prepared_slice`; it is the per-vector
     /// rescale the paper's asymmetric estimator (real-valued query) divides
     /// by, kept in the persisted format for that upgrade path (#2104).
     pub quantization_ip: f32,

@@ -214,13 +214,12 @@ impl HnswIndex {
     ///
     /// # Why the write lock
     ///
-    /// The pass renumbers every node, and [`mappings`](Self::mappings) is
-    /// keyed by that numbering, so the two are only consistent together. A
-    /// read guard would let a search run between them and resolve external
-    /// ids against the old numbering — confident, wrong answers rather than
-    /// an error. `vacuum` takes the write lock to renumber for the same
-    /// reason. `ANALYZE` is the caller, so the exclusion lasts one
-    /// maintenance pass.
+    /// The pass renumbers every node, and `mappings` is keyed by that
+    /// numbering, so the two are only consistent together. A read guard would
+    /// let a search run between them and resolve external ids against the old
+    /// numbering — confident, wrong answers rather than an error. `vacuum`
+    /// takes the write lock to renumber for the same reason. `ANALYZE` is the
+    /// caller, so the exclusion lasts one maintenance pass.
     ///
     /// # Errors
     ///

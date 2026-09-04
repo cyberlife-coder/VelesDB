@@ -212,6 +212,19 @@ jobs:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc -p velesdb-memory --no-deps --all-features
 
+      # Same gate, same reason, for the other published crate: velesdb-core is
+      # the API every downstream binding documents against, and it had carried
+      # 30 broken links (6 unresolved, 24 pointing at `pub(crate)` items) that
+      # nothing in CI looked at. `--all-features` rather than the default
+      # `persistence` set is deliberate: docs.rs serves default features only,
+      # but a gate that skips the `gpu`, `openapi` and `loom` modules cannot
+      # fail on them — the same reasoning as the isolated-feature step above
+      # (#1765). It costs the wgpu dependency build in this job.
+      - name: Rustdoc intra-doc links (velesdb-core)
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc -p velesdb-core --no-deps --all-features
+
       # The extraction backend's unit tests are pure parsing and prompt
       # building: none opens a socket. Run them under the canonical role name
       # and its compatibility alias so neither path can silently stop enabling

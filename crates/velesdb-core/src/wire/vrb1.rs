@@ -158,7 +158,7 @@ fn decode_vectors(body: &[u8], count: usize, dim: usize) -> Vec<f32> {
 /// Decode a full VRB1 body into a [`RawBulk`].
 ///
 /// Validates the header and the exact total length before decoding, so all
-/// slice accesses in [`decode_ids`] / [`decode_vectors`] are in bounds.
+/// slice accesses in `decode_ids` / `decode_vectors` are in bounds.
 ///
 /// # Errors
 ///

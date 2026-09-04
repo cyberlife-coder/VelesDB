@@ -16,10 +16,10 @@
 //! # On-disk format
 //!
 //! This is an **additive read API** over the existing per-entry marker/CRC
-//! framing in [`super::wal_entry`] and [`super::log_payload`]. It introduces
-//! **no** on-disk format change: existing stored WALs remain readable, and no
-//! new header or field is written. Consumer watermarks are in-memory
-//! registration state, never a new on-disk artifact (Requirement 6.4).
+//! framing in `wal_entry` and `log_payload`. It introduces **no** on-disk
+//! format change: existing stored WALs remain readable, and no new header or
+//! field is written. Consumer watermarks are in-memory registration state,
+//! never a new on-disk artifact (Requirement 6.4).
 //!
 //! # Boundary
 //!
@@ -113,7 +113,7 @@ pub trait WalCursor {
     /// live tail (nothing durable beyond `from`). A torn tail record — one
     /// truncated by a crash mid-append — is skipped and never yielded,
     /// matching the existing sequential-replay torn-tail policy in
-    /// [`super::wal_entry`].
+    /// `wal_entry`.
     ///
     /// # Errors
     ///

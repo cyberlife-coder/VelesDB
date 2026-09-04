@@ -205,14 +205,12 @@ impl Database {
 
     /// Executes a search through the control-plane read gate.
     ///
-    /// Consults the registered observer via
-    /// [`read_gate_raw`](Self::read_gate_raw) for the
+    /// Consults the registered observer via `read_gate_raw` for the
     /// collection / operation / principal / tenant, then:
-    /// * [`Allow`](RawGateOutcome::Allow) — runs the search unmodified;
-    /// * [`Deny`](RawGateOutcome::Deny) — returns the supplied error and zero
-    ///   results;
-    /// * [`Scope`](RawGateOutcome::Scope) — AND-composes the scope filter with
-    ///   any caller filter before running the search.
+    /// * `RawGateOutcome::Allow` — runs the search unmodified;
+    /// * `RawGateOutcome::Deny` — returns the supplied error and zero results;
+    /// * `RawGateOutcome::Scope` — AND-composes the scope filter with any
+    ///   caller filter before running the search.
     ///
     /// With no observer registered this is a single `Option` check followed by
     /// the same leaf call the ungated path used (zero-overhead contract).

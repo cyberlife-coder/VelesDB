@@ -92,9 +92,13 @@ cargo check -p velesdb-memory --no-default-features --features mcp,persistence
 for feat in mcp http context persistence embedder-http extractor-http ollama extract; do
   cargo check -p velesdb-memory --no-default-features --features "$feat" --all-targets
 done
-# velesdb-memory's rustdoc is what docs.rs serves, so a broken intra-doc link is
-# a dead link on a public page. Blocking in the Lint job since #2205.
+# The published crates' rustdoc is what docs.rs serves, so a broken intra-doc
+# link is a dead link on a public page. Both crates now `#![deny]` the two link
+# lints at their crate root, so a plain `cargo doc` already fails on one; the
+# RUSTDOCFLAGS here and the matching Lint steps are what guarantee the docs are
+# BUILT — an attribute cannot fire if nobody builds them.
 RUSTDOCFLAGS="-D warnings" cargo doc -p velesdb-memory --no-deps --all-features
+RUSTDOCFLAGS="-D warnings" cargo doc -p velesdb-core --no-deps --all-features
 # Functional wasm gate — catches std APIs that abort on wasm32 (e.g. SystemTime::now):
 wasm-pack test --node crates/velesdb-wasm
 # Guards and contracts. Every one of these blocks a PR through `CI Success`, and

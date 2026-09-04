@@ -1,4 +1,11 @@
 #![warn(clippy::significant_drop_tightening)]
+// Broken and private intra-doc links are warn-by-default, which is why 30 of
+// them accumulated here unnoticed. Denying them at the crate root is what makes
+// a plain `cargo doc` fail — for a contributor locally and for docs.rs, not
+// only inside the one CI step that sets `RUSTDOCFLAGS`. The CI step stays: an
+// attribute cannot fire if nobody builds the docs, and it is the step that
+// guarantees they are built on every PR.
+#![deny(rustdoc::broken_intra_doc_links, rustdoc::private_intra_doc_links)]
 // The crate README is pulled into the crate documentation verbatim. This is not
 // cosmetic: it makes `cargo test --doc --package velesdb-core` (CI step "Check
 // doctests compile") type-check every ```rust block in `README.md`. A README

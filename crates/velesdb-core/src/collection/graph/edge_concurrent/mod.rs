@@ -357,7 +357,7 @@ impl ConcurrentEdgeStore {
     ///
     /// Returns `true` only if the edge was actually removed. A `false` here
     /// conflates "absent" with "index desynchronised" — use
-    /// [`Self::remove_edge_detailed`] when the difference matters.
+    /// `remove_edge_detailed` when the difference matters.
     ///
     /// # Concurrency Safety
     ///
