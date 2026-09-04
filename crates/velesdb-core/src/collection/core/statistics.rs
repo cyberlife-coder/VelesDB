@@ -41,9 +41,8 @@ impl Collection {
     ///
     /// Returns an error if statistics cannot be collected.
     ///
-    /// # Panics
-    ///
-    /// Panics if `point_count` exceeds `u64::MAX` (extremely unlikely on 64-bit systems).
+    /// Counts that would not fit `u64` saturate to `u64::MAX` rather than panic
+    /// (see [`saturating_u64`]); on 64-bit systems this is not reachable in practice.
     #[allow(clippy::unnecessary_wraps)] // Reason: Public API contract — callers expect Result
     pub fn analyze(&self) -> Result<CollectionStats, Error> {
         let mut collector = StatsCollector::new();

@@ -13,6 +13,20 @@
 
 use super::edge::EdgeStore;
 use super::label_table::LabelId;
+use std::collections::HashMap;
+use std::hash::Hash;
+
+/// Removes `edge_id` from `key`'s bucket in `map`, then drops the key itself
+/// once its bucket empties — not just the id inside it. See the module-level
+/// note on why a key must not outlive its last edge.
+fn purge_bucket<K: Eq + Hash>(map: &mut HashMap<K, Vec<u64>>, key: &K, edge_id: u64) {
+    if let Some(ids) = map.get_mut(key) {
+        ids.retain(|&id| id != edge_id);
+        if ids.is_empty() {
+            map.remove(key);
+        }
+    }
+}
 
 impl EdgeStore {
     /// Removes an edge by ID.
@@ -102,30 +116,19 @@ impl EdgeStore {
     /// not merely defensive.
     #[inline]
     fn purge_incoming_index(&mut self, edge_id: u64, target_node: u64, label_id: Option<LabelId>) {
-        if let Some(ids) = self.incoming.get_mut(&target_node) {
-            ids.retain(|&id| id != edge_id);
-            if ids.is_empty() {
-                self.incoming.remove(&target_node);
-            }
-        }
+        purge_bucket(&mut self.incoming, &target_node, edge_id);
         let Some(label_id) = label_id else { return };
-        if let Some(ids) = self.incoming_by_label.get_mut(&(target_node, label_id)) {
-            ids.retain(|&id| id != edge_id);
-            if ids.is_empty() {
-                self.incoming_by_label.remove(&(target_node, label_id));
-            }
-        }
+        purge_bucket(
+            &mut self.incoming_by_label,
+            &(target_node, label_id),
+            edge_id,
+        );
     }
 
     /// Removes `edge_id` from the outgoing index of `source_node`.
     #[inline]
     fn purge_outgoing_index(&mut self, edge_id: u64, source_node: u64) {
-        if let Some(ids) = self.outgoing.get_mut(&source_node) {
-            ids.retain(|&id| id != edge_id);
-            if ids.is_empty() {
-                self.outgoing.remove(&source_node);
-            }
-        }
+        purge_bucket(&mut self.outgoing, &source_node, edge_id);
     }
 
     /// Removes `edge_id` from the `by_label` and `outgoing_by_label` indices (US-003).
@@ -134,17 +137,11 @@ impl EdgeStore {
     #[inline]
     fn purge_label_indices(&mut self, edge_id: u64, source_node: u64, label_id: Option<LabelId>) {
         let Some(label_id) = label_id else { return };
-        if let Some(ids) = self.by_label.get_mut(&label_id) {
-            ids.retain(|&id| id != edge_id);
-            if ids.is_empty() {
-                self.by_label.remove(&label_id);
-            }
-        }
-        if let Some(ids) = self.outgoing_by_label.get_mut(&(source_node, label_id)) {
-            ids.retain(|&id| id != edge_id);
-            if ids.is_empty() {
-                self.outgoing_by_label.remove(&(source_node, label_id));
-            }
-        }
+        purge_bucket(&mut self.by_label, &label_id, edge_id);
+        purge_bucket(
+            &mut self.outgoing_by_label,
+            &(source_node, label_id),
+            edge_id,
+        );
     }
 }
