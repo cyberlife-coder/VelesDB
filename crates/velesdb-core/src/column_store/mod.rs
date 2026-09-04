@@ -160,7 +160,7 @@ impl ColumnStore {
     /// exist, so the new column would be shorter than `row_count` and
     /// desynchronized from every other column. It is only sound to call this
     /// while the store is empty (`row_count == 0`, i.e. schema-definition
-    /// time). Use [`ColumnStore::add_column_backfilled`] to add a column once
+    /// time). Use `ColumnStore::add_column_backfilled` to add a column once
     /// rows exist.
     ///
     /// Nested arrays are silently treated as scalar arrays; use

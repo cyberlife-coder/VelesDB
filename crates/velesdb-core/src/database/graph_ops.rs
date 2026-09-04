@@ -33,7 +33,7 @@ impl Database {
     ///
     /// The node-embedding index takes its parameters from the configured
     /// `[hnsw]` section on top of the auto-tuned defaults — see
-    /// [`Database::resolve_hnsw_params`].
+    /// `Database::resolve_hnsw_params`.
     ///
     /// # Errors
     ///

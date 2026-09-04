@@ -364,7 +364,7 @@ pub enum FilterDecisionMode {
 ///   ([`FilterStrategy::PreFilter`]). `stats` is not consulted: the
 ///   selectivity is already exact.
 /// - [`FilterDecisionMode::Estimated`] is the plan-time brain: a calibrated
-///   cost comparison guarded by [`PREFILTER_RECALL_GUARD`] when `stats` is
+///   cost comparison guarded by `PREFILTER_RECALL_GUARD` when `stats` is
 ///   available, the historical fallback threshold
 ///   ([`fallback_selectivity_threshold`]) otherwise. It never returns
 ///   [`FilterStrategy::PreFilterExact`] — without the bitmap the executor's

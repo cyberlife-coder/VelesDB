@@ -45,6 +45,11 @@
 //!
 //! The harness is persistence-free and `wasm32`-safe, so every binding crate
 //! can run it.
+//!
+//! [`check_stable_hash`]: crate::conformance::check_stable_hash
+//! [`check_rrf`]: crate::conformance::check_rrf
+//! [`check_executor`]: crate::conformance::check_executor
+//! [`Divergence`]: crate::conformance::Divergence
 
 mod executor;
 mod fusion;

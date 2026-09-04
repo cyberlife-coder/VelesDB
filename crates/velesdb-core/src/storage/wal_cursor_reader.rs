@@ -9,12 +9,11 @@
 //!
 //! # On-disk format
 //!
-//! This is a pure read API over the existing framing (see
-//! [`super::wal_entry`] and [`super::log_payload_io`]). It writes nothing and
-//! introduces no on-disk change; legacy (no-CRC) and current (CRC) frames are
-//! both read (Requirement 6.4). A torn tail — a final frame truncated by a
-//! crash mid-append — is skipped and never yielded, matching the sequential
-//! replay policy in [`super::wal_entry`].
+//! This is a pure read API over the existing framing (see `wal_entry` and
+//! `log_payload_io`). It writes nothing and introduces no on-disk change;
+//! legacy (no-CRC) and current (CRC) frames are both read (Requirement 6.4). A
+//! torn tail — a final frame truncated by a crash mid-append — is skipped and
+//! never yielded, matching the sequential replay policy in `wal_entry`.
 //!
 //! # Boundary
 //!

@@ -40,6 +40,8 @@
 //! `persistence`-only. Without it (WASM, `--no-default-features`) there is no
 //! filesystem to map and [`ContiguousVectors`] keeps its anonymous backing;
 //! this module is not compiled at all.
+//!
+//! [`ContiguousVectors`]: crate::perf_optimizations::ContiguousVectors
 
 use memmap2::{MmapMut, MmapOptions};
 use std::fs::{File, OpenOptions};

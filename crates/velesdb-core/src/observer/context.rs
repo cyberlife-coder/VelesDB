@@ -10,6 +10,8 @@
 //! implementers' `match` arms or struct literals (Requirement 3.3).
 //!
 //! Core references no premium crate, type, or symbol here (Requirement 3.4).
+//!
+//! [`DatabaseObserver`]: crate::observer::DatabaseObserver
 
 use crate::velesql::Condition;
 
