@@ -29,6 +29,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   them. `[workspace.lints.rustdoc]` remains future work: 17 such links survive
   in the crates that are not published to crates.io (`velesdb-wasm` 8,
   `tauri-plugin-velesdb` 4, `velesdb-server` 3, `velesdb-migrate` 2).
+- **`npm advisories` no longer reads a registry outage as a vulnerability.**
+  `npm audit` exits 1 both when it finds an advisory and when it cannot reach
+  the advisory endpoint, and the gate ran it directly, so the two were
+  indistinguishable. On 2026-09-03 the npmjs.org bulk endpoint returned 503s
+  and then hung until npm's own five-minute network timeout for roughly eight
+  hours; the job went red three times on `develop` reporting a vulnerability
+  that did not exist — the lockfiles had not changed, and the same content had
+  been green at merge time hours earlier. `scripts/npm-audit-gate.py` now reads
+  the report (`metadata.vulnerabilities`, absent from npm's error payload)
+  instead of the exit code, retries only the attempts that produced no report
+  (four attempts, backoff 5s/10s/20s, each bounded at 120s), and still fails
+  closed when none ever does — with exit 75 (`EX_TEMPFAIL`) and a message
+  saying it is infrastructure, not a finding. An unaudited lockfile is not an
+  audited one; what changes is that the job says which of the two happened.
+  Registered in `scripts/guards.json` with a refusal vector whose accepted
+  control is an npm double that exits 1 in both states.
 
 ## [6.0.0] - 2026-09-02
 
