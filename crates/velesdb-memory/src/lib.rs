@@ -143,7 +143,7 @@ pub mod http_client;
 mod openai;
 /// Is a configured remote inference backend actually reachable? (#1751 D2)
 ///
-/// Gated exactly like [`openai`], which it builds its URL with, and like the
+/// Gated exactly like `openai`, which it builds its URL with, and like the
 /// `ureq` agent it probes through: without either role's feature there is no
 /// remote backend to be unreachable, and no transport to ask with. Declaring
 /// it unconditionally compiled here and nowhere else — the default build has

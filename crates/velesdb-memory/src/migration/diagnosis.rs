@@ -51,7 +51,7 @@ impl Capability {
 /// # v6 — `edge_export` became `Proven` (#1762, PR C2a)
 ///
 /// The bump is not cosmetic and not optional. A capability's canonical verdict
-/// is part of the report's shape: [`DiagnosisReport::validate`] refuses a report
+/// is part of the report's shape: `DiagnosisReport::validate` refuses a report
 /// whose `edge_export` disagrees with what this build derives. A v5 report on
 /// disk carries the `Missing` verdict that was canonical when it was written,
 /// so a v6 build reading it would reject it as *inconsistent* — an accusation
@@ -183,7 +183,7 @@ pub struct DiagnosisReport {
     /// The store that was inspected.
     pub source_path: PathBuf,
     /// A digest of the store's files, so a resume can tell whether the source
-    /// changed under it. See [`fingerprint`].
+    /// changed under it. See `fingerprint`.
     pub source_fingerprint: String,
     /// The width the store's collections are at, `None` when they disagree or
     /// the store has none.
@@ -198,13 +198,13 @@ pub struct DiagnosisReport {
     pub requested_strategy: Strategy,
     /// What that request resolves to against this store, and why.
     ///
-    /// Derived, never independently observed: [`DiagnosisReport::validate`]
+    /// Derived, never independently observed: `DiagnosisReport::validate`
     /// recomputes it from the provenance and the target contract and refuses a
     /// report whose stated regime does not follow from its own fields. A
     /// diagnosis an operator reads a regime off is a diagnosis that can lie
     /// about one.
     pub resolution: Resolution,
-    /// One entry per collection in [`AGENT_COLLECTIONS`], absent ones included.
+    /// One entry per collection in `AGENT_COLLECTIONS`, absent ones included.
     pub collections: Vec<CollectionInventory>,
     /// Live facts across the store.
     pub facts: u64,

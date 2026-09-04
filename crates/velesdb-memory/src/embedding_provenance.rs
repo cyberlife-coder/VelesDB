@@ -29,7 +29,7 @@
 //! single open with the wrong model would carve a false provenance into the
 //! store, and every later check would trust it. A store that predates this
 //! record therefore stays unrecorded for good, and its check degrades to the
-//! dimension alone — with [`unrecorded_model_note`] saying so rather than
+//! dimension alone — with [`crate::embedding_provenance::unrecorded_model_note`] saying so rather than
 //! letting a successful open read as a verified match.
 
 use std::path::Path;

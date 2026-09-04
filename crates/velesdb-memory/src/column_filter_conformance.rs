@@ -8,7 +8,7 @@
 //! on an ABSENT field matched natively and never matched on WASM, for the
 //! whole life of the API, because nothing ever compared them (#1759).
 //!
-//! Both backends therefore import [`fixture`] and [`cases`] from here. A case
+//! Both backends therefore import [`crate::column_filter_conformance::fixture`] and [`crate::column_filter_conformance::cases`] from here. A case
 //! added once is enforced on both, or neither.
 //!
 //! # The contract for [`ColumnOp::Ne`]

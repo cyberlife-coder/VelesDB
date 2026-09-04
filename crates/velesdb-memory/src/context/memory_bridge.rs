@@ -294,7 +294,7 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     /// The working context previously saved under `project` + `session`,
     /// `None` when there is none.
     ///
-    /// Symmetric to [`Self::context_source_metadata`]'s squatter guard: the
+    /// Symmetric to `context_source_metadata`'s squatter guard: the
     /// slot is only ever served back when its metadata carries the reserved
     /// [`CTX_WORKING_FIELD`] marker (set exclusively by
     /// [`Self::save_working_context`]). A slot occupied by an unmarked caller
@@ -306,7 +306,7 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     ///
     /// A pure read: it never writes, never prunes, never heals. Index
     /// convergence happens on the WRITE path
-    /// ([`Self::update_working_index`]) — a lookup that rewrites shared state
+    /// (`update_working_index`) — a lookup that rewrites shared state
     /// turns every transient miss into permanent data loss and cannot safely
     /// be retried.
     ///
@@ -376,7 +376,7 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     ///    `other_sessions`, so returning the requested id would be a
     ///    contradiction the caller cannot act on.
     /// 3. An unreadable index is fatal on a MISS and survivable on a HIT —
-    ///    see [`Self::other_sessions_for`].
+    ///    see `other_sessions_for`.
     ///
     /// Every surface (the `load_working_context` MCP tool and the Node,
     /// Python and WASM bindings) calls this rather than recomposing the

@@ -1,10 +1,10 @@
 //! Adapter-side I/O pre-pass for `path`-referenced context fragments
 //! (V2b-1, see the crate's `PLAN.md`).
 //!
-//! [`resolve_fragments`] turns every [`ContextFragment::path`] into ordinary
+//! [`crate::context::ingest::resolve_fragments`] turns every [`ContextFragment::path`] into ordinary
 //! `content` — read from disk under a strict, short-circuiting security
-//! pipeline — BEFORE the request reaches [`super::ContextCompiler`], which
-//! never performs I/O itself (mirrors the [`super::media`] pre-pass: decode
+//! pipeline — BEFORE the request reaches [`crate::context::ContextCompiler`], which
+//! never performs I/O itself (mirrors the `media` pre-pass: decode
 //! once at the boundary, keep the pipeline core pure). Called from the MCP
 //! adapter (`crate::mcp::context_tools`) ahead of `compile_context` and
 //! `explain_compilation`; a `path` fragment that reaches the compiler
