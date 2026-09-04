@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **30 broken rustdoc intra-doc links in `velesdb-core`, and the two lints that
+  let them accumulate.** Six were unresolved — all in a module's `//!` header,
+  which rustdoc merges into the `mod` declaration that pulls it in, so once
+  that declaration also carries `///` docs the paths resolve in the *parent's*
+  scope (the same trap as the 49 links fixed in `velesdb-memory`). Twenty-four
+  pointed at `pub(crate)`, `pub(super)` or private items a reader of the
+  published docs cannot reach; those stop being links and become plain code
+  spans rather than promising a page that would 404. No claim changed — only
+  link syntax and the line wrapping that demoting a link disturbs, which
+  `rustfmt` cannot re-flow (`wrap_comments` is nightly-only).
+
+  `rustdoc::broken_intra_doc_links` and `rustdoc::private_intra_doc_links` are
+  warn-by-default, which is why 30 here and 49 there went unnoticed. Both
+  published crates now `#![deny]` them at the crate root, so a plain
+  `cargo doc` fails for a contributor and on docs.rs — not only in the CI step
+  that exports `RUSTDOCFLAGS`. A matching Lint step for `velesdb-core` keeps
+  the docs actually built, since an attribute cannot fire if nobody builds
+  them. `[workspace.lints.rustdoc]` remains future work: 17 such links survive
+  in the crates that are not published to crates.io (`velesdb-wasm` 8,
+  `tauri-plugin-velesdb` 4, `velesdb-server` 3, `velesdb-migrate` 2).
+
 ## [6.0.0] - 2026-09-02
 
 ### Security
