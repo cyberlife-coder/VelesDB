@@ -3,10 +3,10 @@
 //! decimal string, because JS `number` loses precision above 2^53.
 //!
 //! Node and WASM independently need the exact same tree walk over a
-//! serialized [`CompiledContext`](super::CompiledContext) — one to turn
+//! serialized [`CompiledContext`](crate::context::CompiledContext) — one to turn
 //! outgoing ids into strings, the other to turn incoming strings back into
 //! numbers before deserializing. Living here once (instead of copy-pasted
-//! per binding) means [`ID_KEYS`] has a single source of truth: a future id
+//! per binding) means [`crate::context::wire::ID_KEYS`] has a single source of truth: a future id
 //! field added to a `context` type only needs updating in one place, not
 //! silently missed in whichever binding a copy-paste forgot.
 //!

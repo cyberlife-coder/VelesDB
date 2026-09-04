@@ -763,11 +763,11 @@ impl NativeStore {
 }
 
 /// Reserved metadata key `remember`/`remember_with_ttl` auto-stamp with
-/// today's date (a `YYYYMMDD` integer, [`crate::clock::today_ymd`]) whenever
+/// today's date (a `YYYYMMDD` integer, `clock::today_ymd`) whenever
 /// the caller didn't already set it — see
 /// [`crate::service::MemoryService::remember_with_ttl`] for the full
 /// contract. A deliberate, documented **exception** to every other
-/// `_veles_`-namespaced key: [`is_reserved_key`] still names it (so it can
+/// `_veles_`-namespaced key: `is_reserved_key` still names it (so it can
 /// never be confused with an arbitrary caller field), but unlike a true
 /// system key —
 /// - a caller MAY set it explicitly (to date a fact retroactively; never

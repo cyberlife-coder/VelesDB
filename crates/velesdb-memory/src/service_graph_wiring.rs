@@ -145,7 +145,7 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     /// The stored metadata is **auto-stamped with today's date** under
     /// [`crate::storage::AUTO_DATE_FIELD`] (`_veles_date`, a `YYYYMMDD`
     /// integer read from the system clock at write time — see
-    /// [`crate::clock::today_ymd`]) whenever `metadata` doesn't already carry
+    /// `clock::today_ymd`) whenever `metadata` doesn't already carry
     /// that key; an explicit value in `metadata` (e.g. to date a fact
     /// retroactively) is never overwritten. No clock is available on
     /// `wasm32-unknown-unknown`, so that target stamps nothing and `metadata`
@@ -157,7 +157,7 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     ///
     /// Because [`Self::remember_extracted`] stores each extracted fact via
     /// [`Self::remember`] (which delegates here), it gets the same auto-stamp
-    /// for free — entity hubs it also creates go through [`Self::store_fact`]
+    /// for free — entity hubs it also creates go through `store_fact`
     /// directly and are never stamped, since they are internal graph
     /// scaffolding, not caller facts.
     ///

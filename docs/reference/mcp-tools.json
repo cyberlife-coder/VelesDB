@@ -16,7 +16,7 @@
                   "type": "string"
                 },
                 "id": {
-                  "description": "Caller-side identifier. When absent, the compiler derives a stable\ncontent-addressed id (see [`super::fragment_id`]). Accepts a JSON\nnumber or a decimal string on input (see\n[`super::wire::deserialize_optional_id`]) — a caller that got a\n`fragment_id` back as a string (e.g. under\n[`CompilePolicy::ids_as_strings`]) can resubmit it unchanged.",
+                  "description": "Caller-side identifier. When absent, the compiler derives a stable\ncontent-addressed id (see [`super::fragment_id`]). Accepts a JSON\nnumber or a decimal string on input (see\n`wire::deserialize_optional_id`) — a caller that got a\n`fragment_id` back as a string (e.g. under\n[`CompilePolicy::ids_as_strings`]) can resubmit it unchanged.",
                   "type": "string"
                 },
                 "kind": {
@@ -1332,12 +1332,12 @@
                         },
                         {
                           "const": "code",
-                          "description": "A triple-backtick-fenced block, cut out atomically by\n[`super::chunk::fence_segments`]. Tagged `kind = \"code\"` so\n[`super::classify::classify`]'s `preserve.code_fence` rule matches\neven for a fence whose content does not itself literally contain\n`` ``` `` (defense in depth; it usually does).",
+                          "description": "A triple-backtick-fenced block, cut out atomically by\n`chunk::fence_segments`. Tagged `kind = \"code\"` so\n`classify::classify`'s `preserve.code_fence` rule matches\neven for a fence whose content does not itself literally contain\n`` ``` `` (defense in depth; it usually does).",
                           "type": "string"
                         },
                         {
                           "const": "log",
-                          "description": "A run of at least [`MIN_LOG_RUN_LINES`] log-like lines. Tagged\n`kind = \"log\"` so `abstract.log_dedup` can consider it for\nrepeated-line collapsing exactly like a caller-declared `kind: \"log\"`\nfragment in `compile_context`.",
+                          "description": "A run of at least `MIN_LOG_RUN_LINES` log-like lines. Tagged\n`kind = \"log\"` so `abstract.log_dedup` can consider it for\nrepeated-line collapsing exactly like a caller-declared `kind: \"log\"`\nfragment in `compile_context`.",
                           "type": "string"
                         }
                       ]
@@ -1601,7 +1601,7 @@
                       "type": "string"
                     },
                     "id": {
-                      "description": "Caller-side identifier. When absent, the compiler derives a stable\ncontent-addressed id (see [`super::fragment_id`]). Accepts a JSON\nnumber or a decimal string on input (see\n[`super::wire::deserialize_optional_id`]) — a caller that got a\n`fragment_id` back as a string (e.g. under\n[`CompilePolicy::ids_as_strings`]) can resubmit it unchanged.",
+                      "description": "Caller-side identifier. When absent, the compiler derives a stable\ncontent-addressed id (see [`super::fragment_id`]). Accepts a JSON\nnumber or a decimal string on input (see\n`wire::deserialize_optional_id`) — a caller that got a\n`fragment_id` back as a string (e.g. under\n[`CompilePolicy::ids_as_strings`]) can resubmit it unchanged.",
                       "type": "string"
                     },
                     "kind": {
@@ -3802,7 +3802,7 @@
           "media": {
             "anyOf": [
               {
-                "description": "Inline media payload attached to a [`ContextFragment`] (US-009, PR1:\nscreenshots/images only). `ContextFragment::content` stays the\ntext/caption — often empty for a bare screenshot — while the pixels live\nhere, base64-encoded so the JSON wire never needs a binary frame.\n\nThe fragment packs atomically (see [`super::pieces`] in the compiler)\nand its token cost comes from [`super::estimator::ImageTokenEstimator`].\nA media fragment that cannot fit the budget is externalized behind a\n`ctx://source` handle exactly like text (US-009, PR2: the memory bridge\npersists the bytes behind it — see\n[`crate::MemoryService::retrieve_context_source`]); the memoryless core\ncompiler mints the same handle either way, since it never knows whether\na resolver is attached. See the crate README's \"media fragments\"\nsection.",
+                "description": "Inline media payload attached to a [`ContextFragment`] (US-009, PR1:\nscreenshots/images only). `ContextFragment::content` stays the\ntext/caption — often empty for a bare screenshot — while the pixels live\nhere, base64-encoded so the JSON wire never needs a binary frame.\n\nThe fragment packs atomically (see `pieces` in the compiler)\nand its token cost comes from [`super::estimator::ImageTokenEstimator`].\nA media fragment that cannot fit the budget is externalized behind a\n`ctx://source` handle exactly like text (US-009, PR2: the memory bridge\npersists the bytes behind it — see\n[`crate::MemoryService::retrieve_context_source`]); the memoryless core\ncompiler mints the same handle either way, since it never knows whether\na resolver is attached. See the crate README's \"media fragments\"\nsection.",
                 "properties": {
                   "bytes_b64": {
                     "description": "The raw media bytes, base64-encoded (standard alphabet, padded).\nCapped at [`crate::limits::MAX_MEDIA_BYTES`] and validated for\nwell-formedness at compile time — a request carrying an oversized or\nmalformed payload is rejected before any other work.",

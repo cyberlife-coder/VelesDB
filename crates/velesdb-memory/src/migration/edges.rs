@@ -178,7 +178,7 @@ fn live_ids(db: &Database, collection: &str, batch: usize) -> Result<Vec<u64>, c
 ///
 /// Walks the live fact ids with the same cursor the fact export uses, then
 /// takes each fact's outgoing edges. Each edge is checked against
-/// [`require_derived_id`] before it is collected.
+/// `require_derived_id` before it is collected.
 ///
 /// # Errors
 /// Returns [`crate::MemoryError`] if `collection` is not an agent subsystem, if

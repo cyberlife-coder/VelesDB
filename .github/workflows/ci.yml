@@ -200,6 +200,18 @@ jobs:
             echo "::endgroup::"
           done
 
+      # velesdb-memory is published to crates.io, so its rustdoc IS what docs.rs
+      # serves: a broken intra-doc link is a dead link on a public page. Nothing
+      # in CI built the docs, so 49 of them had accumulated unnoticed — every
+      # `super::` path in a module's `//!` header breaks once the `mod`
+      # declaration also carries `///` docs, because the merged doc resolves in
+      # the parent's scope. Fixed in this change; this step is what keeps them
+      # fixed.
+      - name: Rustdoc intra-doc links (velesdb-memory)
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc -p velesdb-memory --no-deps --all-features
+
       # The extraction backend's unit tests are pure parsing and prompt
       # building: none opens a socket. Run them under the canonical role name
       # and its compatibility alias so neither path can silently stop enabling

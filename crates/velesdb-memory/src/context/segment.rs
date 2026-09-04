@@ -3,21 +3,21 @@
 //!
 //! [`segment_transcript`] turns a raw agent-session transcript — plain text
 //! with role markers, or JSONL — into an ordered list of
-//! [`TranscriptSegment`]s, each wrapping an ordinary [`super::ContextFragment`]
+//! [`TranscriptSegment`]s, each wrapping an ordinary [`crate::context::ContextFragment`]
 //! plus the audit metadata (`turn`, `role`, `kind`, byte range) the
 //! `compile_transcript` tool reports alongside the compiled context. The
-//! resulting fragments feed the existing, unmodified [`super::ContextCompiler`]
+//! resulting fragments feed the existing, unmodified [`crate::context::ContextCompiler`]
 //! pipeline — this module only decides *how to cut the transcript up*, never
 //! what to keep or drop.
 //!
 //! **Zero regex, zero clock, single linear scan per stage** — same
-//! determinism contract as [`super::chunk`]: the same transcript + the same
+//! determinism contract as [`crate::context::chunk`]: the same transcript + the same
 //! [`SegmentationPolicy`] always segment byte-identically (see
 //! `segmentation_twice_is_byte_identical` in the test suite).
 //!
 //! # Pipeline
 //!
-//! 1. **Format detection** ([`detect_and_segment`]): `jsonl` when every
+//! 1. **Format detection** (`detect_and_segment`): `jsonl` when every
 //!    non-empty line parses as a `{role, content}` JSON object, `plain`
 //!    otherwise. A caller-forced format that does not parse is a hard error —
 //!    never a silent fallback to the other format — surfaced as
@@ -32,16 +32,16 @@
 //! 3. **Sub-segmentation** (`plain` turns only — a `jsonl` turn's `content` is
 //!    a JSON-decoded string, not a byte-aligned slice of the transcript, so
 //!    it is never re-scanned; the underlying `content.contains("```")` /
-//!    value-density rules in [`super::classify`] still see it, unaffected):
-//!    fenced code blocks ([`super::chunk::fence_segments`]) become atomic
+//!    value-density rules in `classify` still see it, unaffected):
+//!    fenced code blocks (`chunk::fence_segments`) become atomic
 //!    `code` segments; runs of at least 8 consecutive log-like lines (a
-//!    volatile timestamp/pid prefix — [`super::log_normalize::mask_volatile_prefix`]
+//!    volatile timestamp/pid prefix — `log_normalize::mask_volatile_prefix`
 //!    — or a raw-text repeat) become `log` segments; everything else is
 //!    `body`.
 //! 4. **Normalization**: an unsplittable fence over
 //!    [`crate::limits::MAX_FRAGMENT_BYTES`] is a hard error (never silently
 //!    truncated); an oversized `body` segment is re-split with
-//!    [`super::chunk_text`]; segments under
+//!    [`crate::context::chunk_text`]; segments under
 //!    [`SegmentationPolicy::min_segment_bytes`] merge into an adjacent
 //!    segment of the *same turn and kind*; more than
 //!    [`crate::limits::MAX_FRAGMENTS`] segments after merging is a hard,
@@ -59,7 +59,7 @@
 //! transcript can additionally fail with
 //! [`crate::error::MemoryError::IngestDisabled`]/[`crate::error::MemoryError::IngestOutsideRoots`]/
 //! [`crate::error::MemoryError::IngestPath`], via
-//! [`super::ingest::resolve_transcript_path`].
+//! [`crate::context::ingest::resolve_transcript_path`].
 
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -98,7 +98,7 @@ pub enum SegmentFormat {
 
 /// What kind of content a sub-segment carries — decides whether it was cut
 /// out as an atomic fence, a detected log run, or ordinary prose/dialogue
-/// left for [`super::classify`]'s rule table to judge.
+/// left for `classify`'s rule table to judge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive] // kinds grow; matching externally requires a wildcard arm
@@ -108,12 +108,12 @@ pub enum SegmentKind {
     /// value density, …) decide its fate exactly as for `compile_context`.
     Body,
     /// A triple-backtick-fenced block, cut out atomically by
-    /// [`super::chunk::fence_segments`]. Tagged `kind = "code"` so
-    /// [`super::classify::classify`]'s `preserve.code_fence` rule matches
+    /// `chunk::fence_segments`. Tagged `kind = "code"` so
+    /// `classify::classify`'s `preserve.code_fence` rule matches
     /// even for a fence whose content does not itself literally contain
     /// `` ``` `` (defense in depth; it usually does).
     Code,
-    /// A run of at least [`MIN_LOG_RUN_LINES`] log-like lines. Tagged
+    /// A run of at least `MIN_LOG_RUN_LINES` log-like lines. Tagged
     /// `kind = "log"` so `abstract.log_dedup` can consider it for
     /// repeated-line collapsing exactly like a caller-declared `kind: "log"`
     /// fragment in `compile_context`.
@@ -163,7 +163,7 @@ impl Default for SegmentationPolicy {
 }
 
 /// One segmented piece of the transcript: an ordinary [`ContextFragment`]
-/// (ready to feed [`super::ContextCompiler`]) plus the audit metadata the
+/// (ready to feed [`crate::context::ContextCompiler`]) plus the audit metadata the
 /// `compile_transcript` tool reports in its `segmentation.segments` list.
 #[derive(Debug, Clone)]
 pub struct TranscriptSegment {
@@ -293,7 +293,7 @@ fn detect_and_segment(
 
 /// One JSONL line's required shape. Both fields are mandatory: a line
 /// missing either — or not a JSON object at all — fails to parse, which
-/// [`detect_and_segment`] treats as "not jsonl" in [`SegmentFormat::Auto`]
+/// `detect_and_segment` treats as "not jsonl" in [`SegmentFormat::Auto`]
 /// and as a hard error under a forced [`SegmentFormat::Jsonl`].
 #[derive(Deserialize)]
 struct JsonlLine {
@@ -450,7 +450,7 @@ fn plain_pieces(text: &str) -> Vec<RawPiece> {
 }
 
 /// Split `range` of `text` into alternating `body`/`log` pieces: a maximal
-/// run of at least [`MIN_LOG_RUN_LINES`] consecutive "log-candidate" lines
+/// run of at least `MIN_LOG_RUN_LINES` consecutive "log-candidate" lines
 /// (a volatile timestamp/pid prefix, or a line that repeats elsewhere in
 /// `range`) becomes one `log` piece; every other line stays `body`,
 /// contiguous runs of it merged into one piece. Single linear scan.
@@ -527,7 +527,7 @@ fn log_split(text: &str, range: Range<usize>) -> Vec<(SegmentKind, Range<usize>)
 // --- Normalization -----------------------------------------------------------
 
 /// Reject an unsplittable fence over [`MAX_FRAGMENT_BYTES`] — a fence is
-/// always atomic (never cut, see [`super::chunk`]), so an oversized one
+/// always atomic (never cut, see [`crate::context::chunk`]), so an oversized one
 /// cannot be brought under the cap the way a `body` piece can.
 ///
 /// # Errors
@@ -548,7 +548,7 @@ fn reject_oversized_fences(pieces: &[RawPiece]) -> Result<(), MemoryError> {
 /// Re-split every `body` or `log` piece over [`MAX_FRAGMENT_BYTES`] — see
 /// [`resplit_body`] and [`resplit_log`] for the two (deliberately different)
 /// strategies. A `code` piece is never touched here: it is atomic by
-/// construction (a fence is never cut, see [`super::chunk`]) and already
+/// construction (a fence is never cut, see [`crate::context::chunk`]) and already
 /// rejected outright by [`reject_oversized_fences`] when oversized.
 fn resplit_oversized_bodies(text: &str, pieces: Vec<RawPiece>) -> Vec<RawPiece> {
     let chunk_policy = ChunkPolicy {

@@ -7,13 +7,13 @@
 //! has to install and keep running).
 //!
 //! The approach: a self-signed root CA is generated ONCE and cached on disk
-//! (see [`tls_dir_from_env`]); it signs short-lived `localhost`/`127.0.0.1`
+//! (see [`crate::tls::tls_dir_from_env`]); it signs short-lived `localhost`/`127.0.0.1`
 //! leaf certificates that are silently re-issued on every daemon start. A
 //! client (browser, `curl`, Claude Desktop) that has been told to trust the
 //! CA once — `scripts/install-memory-daemon.sh` adds it to the macOS login
 //! keychain — then trusts every future leaf cert it signs with no further
 //! action, even across daemon restarts and leaf renewals, because the CA's
-//! own key never changes. [`ensure_tls_material`] is what enforces that:
+//! own key never changes. [`crate::tls::ensure_tls_material`] is what enforces that:
 //! it reloads an existing CA from disk instead of regenerating one whenever
 //! both `ca-cert.pem` and `ca-key.pem` are already present.
 //!
@@ -32,7 +32,7 @@
 //! is only the certificate material.
 //!
 //! # An explicit `CryptoProvider`, not the process-wide default
-//! [`tls_acceptor_from_material`] builds its [`rustls::ServerConfig`] with
+//! [`crate::tls::tls_acceptor_from_material`] builds its [`rustls::ServerConfig`] with
 //! `ServerConfig::builder_with_provider(..)` and an explicit
 //! `rustls::crypto::ring::default_provider()`, rather than the ambient
 //! `ServerConfig::builder()` (which resolves the process-wide default
@@ -61,7 +61,7 @@ use time::{Duration as TimeDuration, OffsetDateTime};
 /// File names inside the TLS material directory (see [`tls_dir_from_env`]).
 /// `ca-cert.pem` is public (safe to hand to `security add-trusted-cert`,
 /// safe to be world-readable); the two `*-key.pem` files are private and are
-/// always written with `0600` permissions (see [`set_permissions`]).
+/// always written with `0600` permissions (see `set_permissions`).
 pub const CA_CERT_FILE: &str = "ca-cert.pem";
 const CA_KEY_FILE: &str = "ca-key.pem";
 const LEAF_CERT_FILE: &str = "leaf-cert.pem";

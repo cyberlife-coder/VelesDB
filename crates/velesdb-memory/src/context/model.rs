@@ -56,7 +56,7 @@ pub enum FidelityRisk {
 /// text/caption — often empty for a bare screenshot — while the pixels live
 /// here, base64-encoded so the JSON wire never needs a binary frame.
 ///
-/// The fragment packs atomically (see [`super::pieces`] in the compiler)
+/// The fragment packs atomically (see `pieces` in the compiler)
 /// and its token cost comes from [`super::estimator::ImageTokenEstimator`].
 /// A media fragment that cannot fit the budget is externalized behind a
 /// `ctx://source` handle exactly like text (US-009, PR2: the memory bridge
@@ -103,7 +103,7 @@ pub struct ContextFragment {
     /// Caller-side identifier. When absent, the compiler derives a stable
     /// content-addressed id (see [`super::fragment_id`]). Accepts a JSON
     /// number or a decimal string on input (see
-    /// [`super::wire::deserialize_optional_id`]) — a caller that got a
+    /// `wire::deserialize_optional_id`) — a caller that got a
     /// `fragment_id` back as a string (e.g. under
     /// [`CompilePolicy::ids_as_strings`]) can resubmit it unchanged.
     #[serde(

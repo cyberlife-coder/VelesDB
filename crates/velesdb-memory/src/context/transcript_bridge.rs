@@ -4,7 +4,7 @@
 //! `compile_transcript` is a one-call shortcut over `compile_context`: it
 //! segments a raw agent-session transcript into turns (and, within a turn,
 //! into code/log/body sub-segments) before compiling. The segmentation
-//! itself lives in [`super::segment`]; what lives here is the *glue* around
+//! itself lives in [`crate::context::segment`]; what lives here is the *glue* around
 //! it — the empty-transcript guard the MCP tool applies, the request
 //! assembly, and the per-segment audit trail a caller inspects to see how
 //! its transcript was cut before trusting the compiled result.

@@ -7,9 +7,9 @@
 //! every other client's session fails with `Storage(DatabaseLocked)`.
 //!
 //! This module is the fix: one process, reachable over HTTP, that several
-//! clients connect to concurrently. It only builds the [`Router`]; binding a
+//! clients connect to concurrently. It only builds the `Router`; binding a
 //! [`tokio::net::TcpListener`] and actually serving connections — plain via
-//! `axum::serve`, or TLS via this module's own [`serve_tls`] — is the
+//! `axum::serve`, or TLS via this module's own [`crate::http::serve_tls`] — is the
 //! binary's job (`src/main.rs`), so the router can also be mounted directly
 //! in tests (`tests/http_transport.rs`) with no subprocess involved.
 //!
@@ -17,7 +17,7 @@
 //! CA/leaf certificates this needs); plain HTTP remains available as an
 //! explicit opt-out (`--http-insecure` / `VELESDB_MEMORY_HTTP_INSECURE=1`,
 //! see `src/main.rs`) for local debugging or when a trusted TLS-terminating
-//! proxy already sits in front. This module's own [`Router`]/[`router`] are
+//! proxy already sits in front. This module's own `Router`/[`crate::http::router`] are
 //! identical either way — only the transport wrapped around them differs.
 //!
 //! Concurrent requests need no *application*-level locking beyond what
@@ -91,7 +91,7 @@ pub fn http_max_body_bytes_from_env() -> usize {
 /// public service, so this is generous headroom rather than a tight budget;
 /// its purpose is only to put a ceiling on `LocalSessionManager`'s session
 /// map, which [`rmcp`] otherwise grows without bound (see
-/// [`session_limit`] for the full rationale).
+/// `session_limit` for the full rationale).
 pub const DEFAULT_HTTP_MAX_SESSIONS: usize = 64;
 
 /// Resolve the max concurrent session count from
@@ -184,7 +184,7 @@ fn keep_alive_from_raw(raw: Option<&str>) -> std::time::Duration {
 /// obvious axum-level fix does not apply to a raw `nest_service`):
 /// - [`RequestBodyLimit`] bounds a single request body
 ///   ([`http_max_body_bytes_from_env`]).
-/// - [`BoundedSessionManager`] bounds concurrent sessions
+/// - `BoundedSessionManager` bounds concurrent sessions
 ///   ([`http_max_sessions_from_env`]).
 ///
 /// Sessions are retired after [`http_keep_alive_from_env`] of silence — 60

@@ -761,7 +761,7 @@ pub type DynExtractor = std::sync::Arc<dyn Extractor + Send + Sync>;
 /// offline behavior. It reads no natural language, so a caller holding only
 /// prose wants a generative backend. What it offers instead is the one thing a
 /// model cannot: the graph is exactly the one the caller wrote down — up to
-/// [`orient_kinship`], the repointing pass EVERY backend's relations go
+/// `orient_kinship`, the repointing pass EVERY backend's relations go
 /// through, which can flip a triple whose predicate is a kinship noun the
 /// passage also states possessively.
 ///
@@ -1121,7 +1121,7 @@ impl OpenAiExtractor {
     /// (origin and port, no path).
     ///
     /// Bounded on the same four axes as [`OllamaExtractor::new`], with the
-    /// same generous [`REQUEST_TIMEOUT_SECS`]: generation is slow wherever it
+    /// same generous `REQUEST_TIMEOUT_SECS`: generation is slow wherever it
     /// runs, and the ceiling belongs to the role, not to the transport.
     #[must_use]
     pub fn new(

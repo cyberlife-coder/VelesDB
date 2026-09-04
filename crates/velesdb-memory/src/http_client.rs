@@ -12,7 +12,7 @@
 //! Not which *vendor* is answering either. Once the path, the body and the
 //! auth scheme all come from the caller, nothing OpenAI-specific is left —
 //! which is the honest reason this is not called an "OpenAI client". The
-//! OpenAI protocol lives one layer up, in [`crate::openai`]; Azure, Gemini or
+//! OpenAI protocol lives one layer up, in `openai`; Azure, Gemini or
 //! Anthropic would each get their own protocol module over this same
 //! transport.
 //!

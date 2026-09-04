@@ -143,7 +143,7 @@ const ABOUT_RELATION: &str = "about";
 /// default and every caller names its own storage backend explicitly. The
 /// duplication stops at the type-parameter list: the field lists are
 /// identical by contract — what varies per feature is the *type* of
-/// [`GenerationGate`], never the shape of the service — and
+/// `GenerationGate`, never the shape of the service — and
 /// `tests/service_field_drift.rs` fails the build of any change that lets
 /// them diverge again (#2017).
 #[cfg(feature = "persistence")]
