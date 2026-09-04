@@ -57,6 +57,22 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      # Not `npm audit` directly: it exits 1 for an advisory AND for an
+      # advisory endpoint that never answered, so the two were
+      # indistinguishable. On 2026-09-03 the npmjs.org bulk endpoint 503'd
+      # then timed out for eight hours and this job went red three times on
+      # `develop` reporting a vulnerability that did not exist. The gate reads
+      # the report instead of the exit code, retries only the attempts that
+      # produced no report, and still fails closed when none ever does -- with
+      # exit 75 and a message that says it is infrastructure, not a finding.
       - name: Audit ${{ matrix.path }}
-        working-directory: ${{ matrix.path }}
-        run: npm audit --package-lock-only --audit-level=high
+        run: |
+          python3 scripts/npm-audit-gate.py \
+            --root "${{ matrix.path }}" \
+            --audit-level high \
+            --attempts 4 \
+            --backoff-seconds 5 \
+            --attempt-timeout 120
