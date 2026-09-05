@@ -146,14 +146,33 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     }
 
     /// Writes all vector values sequentially to the writer.
+    ///
+    /// On a little-endian target the arena's `&[f32]` already *is* the on-disk
+    /// representation, so each vector goes out as one `write_all` over its
+    /// bytes. The previous shape wrote one `write_all` per `f32` — 15.4 million
+    /// calls at 20 000 nodes by 768 dimensions — and `persistence_save_scale`
+    /// measured that difference at ~27 % of the whole `save()`.
+    ///
+    /// Big-endian keeps the per-value conversion. `.vectors` is explicitly
+    /// little-endian, and that portability is exactly the property the
+    /// native-endian arena beside it gives up on purpose; reinterpreting here
+    /// would quietly take it away too.
+    ///
+    /// `bytemuck::cast_slice` rather than a hand-written reinterpret: `f32` to
+    /// `u8` is sound but the soundness argument belongs in a crate that states
+    /// it once, not in an `unsafe` block on a serialization loop.
     fn write_vector_data(
         writer: &mut BufWriter<File>,
         vectors: &crate::perf_optimizations::ContiguousVectors,
     ) -> std::io::Result<()> {
         for i in 0..vectors.len() {
             if let Some(vec) = vectors.get(i) {
-                for &val in vec {
-                    writer.write_all(&val.to_le_bytes())?;
+                if cfg!(target_endian = "little") {
+                    writer.write_all(bytemuck::cast_slice(vec))?;
+                } else {
+                    for &val in vec {
+                        writer.write_all(&val.to_le_bytes())?;
+                    }
                 }
             }
         }
