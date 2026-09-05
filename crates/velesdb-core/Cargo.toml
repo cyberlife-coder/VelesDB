@@ -190,6 +190,10 @@ name = "hnsw_adjacency_scale"
 harness = false
 
 [[bench]]
+name = "persistence_save_scale"
+harness = false
+
+[[bench]]
 name = "scalability_benchmark"
 harness = false
 
