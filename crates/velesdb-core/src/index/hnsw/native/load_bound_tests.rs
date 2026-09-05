@@ -16,7 +16,7 @@ fn validate_vectors_file_len_accepts_large_file_backed_count() {
     let payload = count * dimension as u64 * 4;
     let file_len = payload + HEADER; // file genuinely holds the data
     assert!(
-        H::validate_vectors_file_len(count as usize, dimension, file_len).is_ok(),
+        H::validate_vectors_file_len(count as usize, dimension, file_len, HEADER).is_ok(),
         "a file-backed large count must load, regardless of the alloc backstop"
     );
 }
@@ -28,7 +28,7 @@ fn validate_vectors_file_len_rejects_short_file() {
     let dimension = 128usize;
     let count = 1_000_000usize;
     // File is only 100 bytes — cannot back the declared payload.
-    let err = H::validate_vectors_file_len(count, dimension, 100)
+    let err = H::validate_vectors_file_len(count, dimension, 100, 16)
         .expect_err("file shorter than declared payload must be rejected");
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
 }
@@ -37,7 +37,7 @@ fn validate_vectors_file_len_rejects_short_file() {
 /// rather than wrapping to a small accepted size.
 #[test]
 fn validate_vectors_file_len_rejects_overflow_header() {
-    let err = H::validate_vectors_file_len(usize::MAX, usize::MAX, u64::MAX)
+    let err = H::validate_vectors_file_len(usize::MAX, usize::MAX, u64::MAX, 16)
         .expect_err("overflow-class payload must be rejected");
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
 }

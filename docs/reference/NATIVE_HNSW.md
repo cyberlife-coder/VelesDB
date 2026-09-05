@@ -102,6 +102,35 @@ let loaded = NativeHnswIndex::load("./my_index", 768, DistanceMetric::Cosine)?;
 | `save(path)` | Save index to disk |
 | `load(path, dim, metric)` | Load index from disk |
 
+#### `.vectors` on-disk layout
+
+| bytes | field |
+|---|---|
+| 0..4 | format version, `u32` LE |
+| 4..12 | vector count, `u64` LE |
+| 12..16 | dimension, `u32` LE |
+| 16..*data_offset* | reserved, zero-filled (v2 only) |
+| *data_offset*.. | `count * dimension` values, `f32` LE |
+
+`data_offset` is **16 in v1** and **4096 in v2**. Both versions are read; only
+v2 is written.
+
+The v2 gap is not padding for its own sake. The graph's f32 arena hands out
+`&[f32]` built with `slice::from_raw_parts`, whose contract requires proper
+alignment, so a payload starting at byte 16 could never be mapped as one. v2
+moves it to a page boundary, which is the precondition for retiring the
+duplicate arena copy entirely (#2173). Until a later version claims part of the
+gap for header fields, it is zero-filled so that version can tell an unset field
+from a set one.
+
+The payload is explicitly little-endian on every target — `.vectors` is
+portable, unlike the native-endian arena file beside it, and anything that later
+maps it directly inherits that constraint and must gate on `target_endian`.
+
+**Compatibility runs one way.** A current binary reads v1 and v2; a binary from
+before v2 rejects a v2 file with `Unsupported version: 2`. Downgrading past this
+change therefore requires re-persisting the index.
+
 #### Load-time validation (untrusted file safety)
 
 A persisted index is treated as **untrusted input**. `load` validates the
