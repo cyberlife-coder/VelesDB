@@ -195,9 +195,6 @@ impl ColumnStore {
         {
             return Err(ColumnStoreError::PrimaryKeyUpdate);
         }
-        if let ColumnValue::GeoPoint(lat, lng) = value {
-            haversine::validate_coordinates(lat, lng)?;
-        }
 
         let row_idx = self.resolve_live_row(pk)?;
 
@@ -269,11 +266,14 @@ impl ColumnStore {
                 .get(*col_name)
                 .ok_or_else(|| ColumnStoreError::ColumnNotFound((*col_name).to_string()))?;
 
-            if let ColumnValue::GeoPoint(lat, lng) = value {
-                haversine::validate_coordinates(*lat, *lng)?;
-            }
             if !matches!(value, ColumnValue::Null) {
                 Self::validate_type_match(col, value)?;
+            }
+            // Range-checked here and not only at write time: `update_multi_by_pk`
+            // applies columns one by one, so a bad coordinate in the middle of
+            // the batch must be caught before the first column is written.
+            if let ColumnValue::GeoPoint(lat, lng) = value {
+                haversine::validate_coordinates(*lat, *lng)?;
             }
         }
         Ok(())

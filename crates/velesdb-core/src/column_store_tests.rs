@@ -1424,60 +1424,114 @@ mod tests {
         );
     }
 
-    /// Bug: update_by_pk skipped the GeoPoint range validation that insert_row
-    /// enforces, so an out-of-range coordinate could be written via update.
+    /// Fixture for the GeoPoint range tests: one row holding a valid point.
+    fn geo_store() -> ColumnStore {
+        let mut store = ColumnStore::with_primary_key(
+            &[
+                ("id", ColumnType::Int),
+                ("qty", ColumnType::Int),
+                ("loc", ColumnType::GeoPoint),
+            ],
+            "id",
+        )
+        .unwrap();
+
+        store
+            .insert_row(&[
+                ("id", ColumnValue::Int(1)),
+                ("qty", ColumnValue::Int(10)),
+                ("loc", ColumnValue::GeoPoint(48.85, 2.35)),
+            ])
+            .unwrap();
+
+        store
+    }
+
+    /// Bug: the update paths skipped the GeoPoint range validation `insert_row`
+    /// enforces, so an out-of-range coordinate could be written by an update.
     #[test]
     fn test_update_by_pk_rejects_out_of_range_geopoint() {
         // Arrange
-        let mut store = ColumnStore::with_primary_key(
-            &[("id", ColumnType::Int), ("loc", ColumnType::GeoPoint)],
-            "id",
-        )
-        .unwrap();
+        let mut store = geo_store();
 
-        store
-            .insert_row(&[
-                ("id", ColumnValue::Int(1)),
-                ("loc", ColumnValue::GeoPoint(45.0, 90.0)),
-            ])
-            .unwrap();
-
-        // Act: Try to update with an out-of-range latitude
+        // Act
         let result = store.update_by_pk(1, "loc", ColumnValue::GeoPoint(999.0, -500.0));
 
-        // Assert: Should fail, matching insert_row's validation
-        assert!(
-            result.is_err(),
-            "update_by_pk should reject out-of-range GeoPoint coordinates"
+        // Assert
+        match result {
+            Err(ColumnStoreError::TypeMismatch { expected, .. }) => {
+                assert_eq!(expected, "latitude in [-90, 90]");
+            }
+            other => panic!("Expected a latitude range error, got {other:?}"),
+        }
+        assert_eq!(
+            store.get_value_as_json("loc", 0),
+            Some(serde_json::json!({"lat": 48.85, "lng": 2.35})),
+            "the rejected update must leave the stored point untouched"
         );
     }
 
-    /// Bug: update_multi_by_pk skipped the GeoPoint range validation that
-    /// insert_row enforces, so an out-of-range coordinate could be written
-    /// via a multi-column update.
+    /// `update_multi_by_pk` writes its columns one by one, so the range check
+    /// has to reject the whole batch before the first column is applied.
     #[test]
     fn test_update_multi_by_pk_rejects_out_of_range_geopoint() {
         // Arrange
-        let mut store = ColumnStore::with_primary_key(
-            &[("id", ColumnType::Int), ("loc", ColumnType::GeoPoint)],
-            "id",
-        )
-        .unwrap();
+        let mut store = geo_store();
 
-        store
-            .insert_row(&[
-                ("id", ColumnValue::Int(1)),
-                ("loc", ColumnValue::GeoPoint(45.0, 90.0)),
-            ])
-            .unwrap();
+        // Act: a valid column paired with an out-of-range one
+        let result = store.update_multi_by_pk(
+            1,
+            &[
+                ("qty", ColumnValue::Int(20)),
+                ("loc", ColumnValue::GeoPoint(45.0, 500.0)),
+            ],
+        );
 
-        // Act: Try to update with an out-of-range longitude
-        let result = store.update_multi_by_pk(1, &[("loc", ColumnValue::GeoPoint(45.0, 500.0))]);
+        // Assert
+        match result {
+            Err(ColumnStoreError::TypeMismatch { expected, .. }) => {
+                assert_eq!(expected, "longitude in [-180, 180]");
+            }
+            other => panic!("Expected a longitude range error, got {other:?}"),
+        }
+        assert_eq!(
+            store.filter_eq_int("qty", 10),
+            vec![0],
+            "the valid column must not be applied when a later one is rejected"
+        );
+        assert_eq!(
+            store.get_value_as_json("loc", 0),
+            Some(serde_json::json!({"lat": 48.85, "lng": 2.35}))
+        );
+    }
 
-        // Assert: Should fail, matching insert_row's validation
-        assert!(
-            result.is_err(),
-            "update_multi_by_pk should reject out-of-range GeoPoint coordinates"
+    /// `batch_update` is the third update path, and it writes straight through
+    /// `set_column_value` — it is covered only because the invariant lives
+    /// there rather than at each caller.
+    #[test]
+    fn test_batch_update_rejects_out_of_range_geopoint() {
+        // Arrange
+        let mut store = geo_store();
+
+        // Act
+        let result = store.batch_update(&[BatchUpdate {
+            pk: 1,
+            column: "loc".to_string(),
+            value: ColumnValue::GeoPoint(0.0, 181.0),
+        }]);
+
+        // Assert
+        assert_eq!(result.successful, 0);
+        match result.failed.as_slice() {
+            [(pk, ColumnStoreError::TypeMismatch { expected, .. })] => {
+                assert_eq!(*pk, 1);
+                assert_eq!(expected, "longitude in [-180, 180]");
+            }
+            other => panic!("Expected one longitude range failure, got {other:?}"),
+        }
+        assert_eq!(
+            store.get_value_as_json("loc", 0),
+            Some(serde_json::json!({"lat": 48.85, "lng": 2.35}))
         );
     }
 
