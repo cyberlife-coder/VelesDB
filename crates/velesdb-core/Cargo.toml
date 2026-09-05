@@ -62,10 +62,11 @@ optional = true
 version = "1.0"
 optional = true
 
+# Non-optional: `cast_slice` is on the `.vectors` dump path, which every build
+# reaches. The `derive` feature stays behind `gpu` so a non-GPU build does not
+# pull in the proc-macro for `Pod`/`Zeroable` impls it never writes.
 [dependencies.bytemuck]
 version = "1.14"
-features = ["derive"]
-optional = true
 
 [dependencies.half]
 version = "2.4"
@@ -110,7 +111,7 @@ version = "2.7"
 ## - `loom`: Enables loom-based concurrency testing (nightly only).
 ##   Run with: `cargo +nightly test --features loom --test loom_tests`
 default = ["persistence"]
-gpu = ["wgpu", "pollster", "bytemuck"]
+gpu = ["wgpu", "pollster", "bytemuck/derive"]
 internal-bench = []
 ## Enables the standardized SIFT1M ANN benchmark
 ## (`cargo bench -p velesdb-core --bench sift1m_recall --features bench-sift1m`).

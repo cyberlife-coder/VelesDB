@@ -56,35 +56,34 @@
 //!
 //! # What has already been measured, so it is not re-derived
 //!
-//! `write_vector_data` (`native/graph_io.rs`) writing one `write_all` per
-//! `f32` looks like the obvious thing to fix. The obvious fix does not work.
-//! Measured on this instrument at 5 000 nodes x 3072d — 58.6 MiB of payload,
-//! two separate runs per variant:
+//! `write_vector_data` (`native/graph_io.rs`) used to write one `write_all`
+//! per `f32`. Measured on this instrument at 5 000 nodes by 3072d — 58.6 MiB
+//! of payload, two separate runs per variant:
 //!
 //! | variant | run 1 | run 2 |
 //! |---|---|---|
-//! | as shipped: one `write_all` per `f32` | 80.5 ms | 89.3 ms |
+//! | one `write_all` per `f32` (before) | 80.5 ms | 89.3 ms |
 //! | reusable row buffer, still `to_le_bytes` per value | 89.3 ms | 91.0 ms |
-//! | reinterpret `&[f32]` as `&[u8]`, one `write_all` per vector | 61.4 ms | 62.7 ms |
+//! | hand-written `from_raw_parts` reinterpret | 61.4 ms | 62.7 ms |
+//! | `bytemuck::cast_slice` per vector (shipped) | 56.0 ms | 55.5 ms |
 //!
-//! The middle row is the trap, and it is worth understanding before trying it
-//! again: it removes the per-value `write_all` but keeps the per-value
-//! `to_le_bytes`, and `extend_from_slice` pays the same capacity check and
-//! four-byte copy that `BufWriter` did. It then adds a full copy of each row
-//! into the writer. The cost was relocated and one copy was added, so the
-//! result is neutral at best.
+//! The second row is the trap, and it is worth understanding before anyone
+//! tries it again: grouping the writes *looks* like the fix and is
+//! neutral-to-worse. It removes the per-value `write_all` but keeps the
+//! per-value `to_le_bytes` — `extend_from_slice` pays the same capacity check
+//! and four-byte copy — and then adds a full row copy into the writer. The
+//! cost was relocated and one copy was added.
 //!
-//! The bottom row is real: ~27 % off the whole `save()`, and ~1.7x on the
-//! vector dump alone once the ~29 ms graph-and-sidecar constant is subtracted.
-//! It is not shipped, because it needs either an `unsafe` reinterpret or
-//! `bytemuck` promoted to a non-optional dependency, plus a `target_endian`
-//! fallback so `.vectors` stays portable — a trade to decide deliberately
-//! rather than fold into a benchmark.
+//! What actually pays is removing the per-value conversion, which on a
+//! little-endian target is a reinterpret. That is ~34 % off the whole call and
+//! ~2.1x on the dump alone once the ~29 ms graph-and-sidecar constant is
+//! subtracted: 1 046 MiB/s becomes 2 186 MiB/s.
 //!
-//! Read those figures against the noise floor: at 768d the *same binary*
-//! spread 20 % between two runs, because the vector dump is then a minority of
-//! `save()` and machine noise on the whole call swamps it. 3072d is where this
-//! instrument starts being able to arbitrate on a machine that is not idle.
+//! Read those figures against the noise floor. At 768d the *same binary*
+//! spread 20 % between two runs, because the vector dump is a minority of
+//! `save()` there and machine noise on the whole call swamps it. At 3072d the
+//! shipped variant reproduced to 0.9 %, which is what makes a 34 % claim
+//! decidable at all. Anything measured at 768d on a busy machine is not.
 //!
 //! # Sizing
 //!
