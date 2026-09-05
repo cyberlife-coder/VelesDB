@@ -128,6 +128,16 @@ impl fmt::Debug for ContiguousVectors {
 }
 
 impl ContiguousVectors {
+    /// Smallest capacity an arena is created with.
+    ///
+    /// A floor rather than an exact fit, so a fresh arena does not resize on
+    /// its first insert. Both the heap and the file-backed constructor apply
+    /// it, and it is `pub(crate)` because a caller adopting an *existing* file
+    /// has to know it too: below this many vectors, opening that file as an
+    /// arena would EXTEND it. A second copy of the number is exactly how such
+    /// a caller would silently stop matching this one.
+    pub(crate) const MIN_ARENA_CAPACITY: usize = 16;
+
     /// Creates a new `ContiguousVectors` with the given dimension and initial capacity.
     ///
     /// # Arguments
@@ -151,7 +161,7 @@ impl ContiguousVectors {
         // could drive `dimension * capacity` products toward overflow.
         validate_dimension(dimension)?;
 
-        let capacity = capacity.max(16); // Minimum 16 vectors
+        let capacity = capacity.max(Self::MIN_ARENA_CAPACITY);
 
         // Reject pathological/attacker-sized allocations before touching the
         // allocator (#899). Legitimate large indexes stay well under the ceiling.
@@ -251,7 +261,7 @@ impl ContiguousVectors {
         use crate::contiguous_file_arena::FileArena;
 
         validate_dimension(dimension)?;
-        let capacity = capacity.max(16);
+        let capacity = capacity.max(Self::MIN_ARENA_CAPACITY);
         let byte_len = Self::byte_size(dimension, capacity)?;
         crate::alloc_guard::check_alloc_bound(byte_len)?;
 
@@ -310,6 +320,23 @@ impl ContiguousVectors {
             arena.flush().map_err(crate::error::Error::Io)?;
         }
         Ok(())
+    }
+
+    /// The file this arena is mapped from, if it is mapped at all.
+    ///
+    /// Derived from the backing rather than remembered alongside it. A caller
+    /// that needs to know whether it is about to rewrite the very file it is
+    /// reading gets the answer from the one place that cannot fall out of step
+    /// with reality — there is no second copy of the fact to keep in sync.
+    /// `persistence`-only: without it the sole backing is the heap, so the
+    /// question has one answer and no caller.
+    #[cfg(feature = "persistence")]
+    #[must_use]
+    pub(crate) fn backing_path(&self) -> Option<&std::path::Path> {
+        match &self.backing {
+            ArenaBacking::FileMapped(arena) => Some(arena.path()),
+            ArenaBacking::Heap => None,
+        }
     }
 
     /// Drops a file-backed arena's resident pages, keeping its contents.

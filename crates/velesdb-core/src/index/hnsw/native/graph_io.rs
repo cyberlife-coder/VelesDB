@@ -8,7 +8,7 @@
 use super::distance::DistanceEngine;
 use super::graph::{NativeHnsw, DEFAULT_ALPHA, NO_ENTRY_POINT};
 use super::layer::Layer;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
@@ -163,7 +163,6 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     fn dump_vectors_file(&self, path: &Path, basename: &str) -> std::io::Result<u64> {
         let vectors_path = path.join(format!("{basename}.vectors"));
         let vectors_guard = self.vectors.read();
-        let mut writer = BufWriter::new(File::create(&vectors_path)?);
 
         // Reason: Vector dimensions are always < 65536 and vector count fits u64.
         #[allow(clippy::cast_possible_truncation)]
@@ -172,6 +171,37 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             None => (0, 0),
         };
 
+        // When the arena IS this file, the payload is already here, and
+        // `File::create` would truncate the very bytes the live mapping still
+        // points at — a SIGBUS on the next read, not a slow path. So flush the
+        // pages and rewrite the header in place; the payload never moves and is
+        // never copied onto itself through a second descriptor.
+        //
+        // Data before header is the order the crash-consistency argument
+        // requires: a header claiming more vectors than the file holds is the
+        // one state a reader cannot detect, because it validates the declared
+        // payload against the file length and a stale-but-smaller count simply
+        // reads fewer vectors. The generation stamp written after this call is
+        // still what commits the set.
+        #[cfg(feature = "persistence")]
+        if vectors_guard
+            .as_ref()
+            .and_then(crate::perf_optimizations::ContiguousVectors::backing_path)
+            .is_some_and(|mapped| mapped == vectors_path)
+        {
+            if let Some(vectors) = vectors_guard.as_ref() {
+                vectors.flush_backing().map_err(std::io::Error::other)?;
+            }
+            // `write(true)` without `truncate`: the header region is the first
+            // 4 096 bytes and the mapping starts after it, so these two never
+            // address the same bytes.
+            let mut file = OpenOptions::new().write(true).open(&vectors_path)?;
+            Self::write_vectors_header(&mut file, count, dimension)?;
+            file.flush()?;
+            return Ok(count);
+        }
+
+        let mut writer = BufWriter::new(File::create(&vectors_path)?);
         Self::write_vectors_header(&mut writer, count, dimension)?;
 
         if let Some(vectors) = vectors_guard.as_ref() {
@@ -190,7 +220,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     /// claims part of it for header fields, it is reserved and zero-filled, so
     /// that version can tell an unset field from a set one.
     fn write_vectors_header(
-        writer: &mut BufWriter<File>,
+        writer: &mut impl Write,
         count: u64,
         dimension: u32,
     ) -> std::io::Result<()> {
@@ -359,6 +389,21 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         let vectors_path = path.join(format!("{basename}.vectors"));
         let (mut vectors, count) = Self::load_vectors_file(&vectors_path, arena_home.as_ref())?;
 
+        // `ArenaHome` means exactly one thing: there is a disposable file to
+        // delete when this graph goes away. When the arena IS `.vectors` there
+        // is none, and carrying a home would leave `Drop` pointed at a file
+        // this graph never created. Derived from the storage rather than
+        // reported back by the loader — the arena already knows what it
+        // mapped, and asking it cannot disagree with what happened.
+        #[cfg(feature = "persistence")]
+        let arena_home = match vectors
+            .as_ref()
+            .and_then(crate::perf_optimizations::ContiguousVectors::backing_path)
+        {
+            Some(mapped) if mapped == vectors_path => None,
+            _ => arena_home,
+        };
+
         // Indexes written before the pre-normalized cosine engine store raw
         // vectors. Cosine is scale-invariant, so normalizing here never
         // changes any result, and it (re-)establishes the unit-norm invariant
@@ -445,6 +490,41 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         // header could otherwise request a multi-gigabyte allocation that the
         // file cannot possibly back.
         Self::validate_vectors_file_len(count, dimension, file_len, data_offset)?;
+
+        // The durable file can BE the arena when its payload is page-aligned
+        // (v2) and the target's byte order is the one the payload holds. That
+        // retires the duplicate copy this load would otherwise make (#2173).
+        //
+        // Failure falls through to the copy path deliberately: a mapped arena
+        // is an optimisation, never a requirement — the same rule `new_arena`
+        // states for the disposable arena, for the same reason. A filesystem
+        // that will not host a mapping must cost the optimisation and nothing
+        // else, never a collection that refuses to open.
+        //
+        // Adoption must be observation-only. `ContiguousVectors` floors an
+        // arena's capacity at `MIN_ARENA_CAPACITY` and sizes the file to match,
+        // so a store below that floor would be EXTENDED merely by being opened
+        // — and opening a collection must never write to it. That is not a
+        // tidiness point: `velesdb-memory`'s migration resume proves the source
+        // unchanged by hashing these files, so a store that grows on open makes
+        // a correct resume look like a corrupted one. Below the floor, take the
+        // copy path; what adoption would save there is negligible anyway.
+        #[cfg(feature = "persistence")]
+        if count >= crate::perf_optimizations::ContiguousVectors::MIN_ARENA_CAPACITY
+            && version == VECTORS_FORMAT_VERSION
+            && cfg!(target_endian = "little")
+        {
+            match crate::perf_optimizations::ContiguousVectors::open_file_backed(
+                path, dimension, count, count,
+            ) {
+                Ok(storage) => return Ok((Some(storage), count)),
+                Err(e) => tracing::warn!(
+                    "{path:?} could not be adopted as the vector arena ({e}); \
+                     reading it into a separate arena instead, which costs a copy, \
+                     not correctness"
+                ),
+            }
+        }
 
         // v1 leaves the reader exactly here; v2 has reserved padding to skip.
         // Seeking unconditionally keeps one path rather than two.
