@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 
+use super::haversine;
 use super::types::{
     BatchUpdate, BatchUpdateResult, BatchUpsertResult, ColumnStoreError, ColumnValue, ExpireResult,
     TypedColumn, UpsertResult,
@@ -79,18 +80,12 @@ impl ColumnStore {
         for (col_name, col_updates) in by_column {
             if let Some(col) = self.columns.get_mut(col_name) {
                 for (row_idx, value) in col_updates {
-                    let actual_type = Self::value_type_name(&value);
-                    if Self::set_column_value(col, row_idx, value).is_ok() {
-                        result.successful += 1;
-                    } else {
-                        let pk = row_to_pk.get(&row_idx).copied().unwrap_or(0);
-                        result.failed.push((
-                            pk,
-                            ColumnStoreError::TypeMismatch {
-                                expected: Self::column_type_name(col),
-                                actual: actual_type,
-                            },
-                        ));
+                    match Self::set_column_value(col, row_idx, value) {
+                        Ok(()) => result.successful += 1,
+                        Err(err) => {
+                            let pk = row_to_pk.get(&row_idx).copied().unwrap_or(0);
+                            result.failed.push((pk, err));
+                        }
                     }
                 }
             } else {
@@ -345,13 +340,18 @@ impl ColumnStore {
         Ok(())
     }
 
-    /// Sets a GeoPoint column cell at `row_idx` with bounds checking.
+    /// Sets a GeoPoint column cell at `row_idx`, range- and bounds-checked.
+    ///
+    /// Every validated write funnels through here, so this is where the
+    /// coordinate-range invariant lives: a GeoPoint cell cannot hold
+    /// coordinates outside `[-90, 90] x [-180, 180]`, whichever path wrote it.
     fn checked_set_geopoint(
         vec: &mut [Option<(f64, f64)>],
         row_idx: usize,
         lat: f64,
         lng: f64,
     ) -> Result<(), ColumnStoreError> {
+        haversine::validate_coordinates(lat, lng)?;
         if row_idx >= vec.len() {
             return Err(ColumnStoreError::IndexOutOfBounds(row_idx));
         }

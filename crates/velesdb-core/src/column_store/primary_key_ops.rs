@@ -180,8 +180,8 @@ impl ColumnStore {
     /// # Errors
     ///
     /// Returns an error if the row does not exist, the column does not exist,
-    /// the update targets the primary-key column, or the value type mismatches
-    /// the column type.
+    /// the update targets the primary-key column, the value type mismatches
+    /// the column type, or `GeoPoint` coordinates are out of range.
     pub fn update_by_pk(
         &mut self,
         pk: i64,
@@ -211,8 +211,9 @@ impl ColumnStore {
     /// # Errors
     ///
     /// Returns an error if the row does not exist, one of the columns does not
-    /// exist, one update attempts to modify the primary key, or a value type
-    /// mismatches its target column type.
+    /// exist, one update attempts to modify the primary key, a value type
+    /// mismatches its target column type, or `GeoPoint` coordinates are out
+    /// of range.
     pub fn update_multi_by_pk(
         &mut self,
         pk: i64,
@@ -267,6 +268,12 @@ impl ColumnStore {
 
             if !matches!(value, ColumnValue::Null) {
                 Self::validate_type_match(col, value)?;
+            }
+            // Range-checked here and not only at write time: `update_multi_by_pk`
+            // applies columns one by one, so a bad coordinate in the middle of
+            // the batch must be caught before the first column is written.
+            if let ColumnValue::GeoPoint(lat, lng) = value {
+                haversine::validate_coordinates(*lat, *lng)?;
             }
         }
         Ok(())
