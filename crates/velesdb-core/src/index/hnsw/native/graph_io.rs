@@ -9,7 +9,7 @@ use super::distance::DistanceEngine;
 use super::graph::{NativeHnsw, DEFAULT_ALPHA, NO_ENTRY_POINT};
 use super::layer::Layer;
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 /// Hard ceiling on layer counts read from an untrusted graph file,
@@ -29,6 +29,55 @@ const MAX_NEIGHBORS_PER_NODE: usize = 1 << 20;
 ///   a custom alpha survives the save/load round-trip instead of silently
 ///   resetting to the default.
 const GRAPH_FORMAT_VERSION: u32 = 2;
+
+/// Current `.vectors` file format version, written on every dump.
+///
+/// - v1: the payload starts immediately after the header, at byte 16.
+/// - v2: the payload starts at [`VECTORS_V2_DATA_OFFSET`], so the file can be
+///   mapped directly as the graph's f32 arena instead of being deserialized
+///   into a second copy of the same bytes (#2173).
+///
+/// Both are read; only v2 is written.
+const VECTORS_FORMAT_VERSION: u32 = 2;
+
+/// Bytes every `.vectors` version spends on its header fields:
+/// version(4) + count(8) + dimension(4).
+const VECTORS_HEADER_BYTES: u64 = 16;
+
+/// Byte offset at which a v2 payload begins.
+///
+/// Frozen here rather than derived from the arena's `DATA_OFFSET`. This is an
+/// **on-disk** offset: deriving it would silently relocate the payload of every
+/// file already written, the day that constant moves. The assertion below is
+/// the link instead — if the arena's alignment requirement ever outgrows this,
+/// the build fails and the format gets a deliberate v3 rather than drifting.
+const VECTORS_V2_DATA_OFFSET: u64 = 4096;
+
+/// Zero bytes written between the v2 header fields and the payload.
+const VECTORS_V2_PAD_BYTES: usize = (VECTORS_V2_DATA_OFFSET - VECTORS_HEADER_BYTES) as usize;
+
+// The arena hands out `&[f32]` built with `slice::from_raw_parts`, whose
+// contract requires proper alignment; `DATA_OFFSET` is where it starts its data
+// region to satisfy that by construction. A v2 payload beginning before it
+// could not be mapped as an arena, which is the entire point of the version.
+#[cfg(feature = "persistence")]
+const _: () = assert!(
+    VECTORS_V2_DATA_OFFSET >= crate::contiguous_file_arena::DATA_OFFSET as u64,
+    "a v2 .vectors payload must start at or past the arena data offset"
+);
+const _: () = assert!(VECTORS_V2_DATA_OFFSET > VECTORS_HEADER_BYTES);
+
+/// Byte offset of the payload for a given `.vectors` format version.
+///
+/// Only versions the reader accepts reach this; anything else is rejected by
+/// `read_vectors_header` before an offset is ever needed.
+const fn vectors_data_offset(version: u32) -> u64 {
+    if version == 1 {
+        VECTORS_HEADER_BYTES
+    } else {
+        VECTORS_V2_DATA_OFFSET
+    }
+}
 
 /// Builds an `InvalidData` I/O error with the given message.
 fn corrupt(msg: impl Into<String>) -> std::io::Error {
@@ -132,16 +181,23 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         Ok(count)
     }
 
-    /// Writes the vectors file header (version, count, dimension).
+    /// Writes the vectors file header — version, count, dimension — followed by
+    /// zero padding out to the v2 payload offset.
+    ///
+    /// The padding is not waste. It is what lets the payload start page-aligned,
+    /// which is the precondition for mapping this file as the graph's arena
+    /// (#2173) rather than reading it into a second copy. Until a later version
+    /// claims part of it for header fields, it is reserved and zero-filled, so
+    /// that version can tell an unset field from a set one.
     fn write_vectors_header(
         writer: &mut BufWriter<File>,
         count: u64,
         dimension: u32,
     ) -> std::io::Result<()> {
-        let version: u32 = 1;
-        writer.write_all(&version.to_le_bytes())?;
+        writer.write_all(&VECTORS_FORMAT_VERSION.to_le_bytes())?;
         writer.write_all(&count.to_le_bytes())?;
         writer.write_all(&dimension.to_le_bytes())?;
+        writer.write_all(&[0u8; VECTORS_V2_PAD_BYTES])?;
         Ok(())
     }
 
@@ -378,16 +434,21 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         let file_len = file.metadata()?.len();
         let mut reader = BufReader::new(file);
 
-        let (count, dimension) = Self::read_vectors_header(&mut reader)?;
+        let (version, count, dimension) = Self::read_vectors_header(&mut reader)?;
         if count == 0 || dimension == 0 {
             return Ok((None, 0));
         }
+        let data_offset = vectors_data_offset(version);
 
         // Validate the declared payload size against the actual file length
         // BEFORE allocating `count * dimension` floats. A corrupt/malicious
         // header could otherwise request a multi-gigabyte allocation that the
-        // file cannot possibly back. Header = version(4) + count(8) + dim(4).
-        Self::validate_vectors_file_len(count, dimension, file_len)?;
+        // file cannot possibly back.
+        Self::validate_vectors_file_len(count, dimension, file_len, data_offset)?;
+
+        // v1 leaves the reader exactly here; v2 has reserved padding to skip.
+        // Seeking unconditionally keeps one path rather than two.
+        reader.seek(SeekFrom::Start(data_offset))?;
 
         let storage = Self::read_vector_data(&mut reader, count, dimension, arena_home)?;
         Ok((Some(storage), count))
@@ -395,18 +456,23 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
 
     /// Rejects vector headers whose declared `count * dimension * 4` payload
     /// cannot fit in the actual file (guards untrusted allocations / OOB).
+    ///
+    /// `data_offset` comes from the file's own version — see
+    /// [`vectors_data_offset`]. Hard-coding it would make a v2 file look 4 080
+    /// bytes larger than it is, which is only slack here but becomes a real
+    /// under-read the day this bound is used to size a mapping.
     fn validate_vectors_file_len(
         count: usize,
         dimension: usize,
         file_len: u64,
+        data_offset: u64,
     ) -> std::io::Result<()> {
-        const HEADER_BYTES: u64 = 16; // version(4) + count(8) + dimension(4)
         let payload = (count as u64)
             .checked_mul(dimension as u64)
             .and_then(|n| n.checked_mul(4))
             .ok_or_else(|| corrupt("vector payload size overflows u64"))?;
         let expected = payload
-            .checked_add(HEADER_BYTES)
+            .checked_add(data_offset)
             .ok_or_else(|| corrupt("vector file size overflows u64"))?;
         if file_len < expected {
             return Err(corrupt(format!(
@@ -417,14 +483,20 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         Ok(())
     }
 
-    /// Reads and validates the vectors file header, returning `(count, dimension)`.
-    fn read_vectors_header(reader: &mut BufReader<File>) -> std::io::Result<(usize, usize)> {
+    /// Reads and validates the vectors file header, returning
+    /// `(version, count, dimension)`.
+    ///
+    /// v1 is still accepted: it is what every index written before #2173 holds,
+    /// and its only difference is where the payload starts. The version travels
+    /// back to the caller because that offset is not derivable from anything
+    /// else in the file.
+    fn read_vectors_header(reader: &mut BufReader<File>) -> std::io::Result<(u32, usize, usize)> {
         let mut buf4 = [0u8; 4];
         let mut buf8 = [0u8; 8];
 
         reader.read_exact(&mut buf4)?;
         let version = u32::from_le_bytes(buf4);
-        if version != 1 {
+        if version != 1 && version != VECTORS_FORMAT_VERSION {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("Unsupported version: {version}"),
@@ -436,7 +508,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         reader.read_exact(&mut buf4)?;
         let dimension = u32::from_le_bytes(buf4) as usize;
 
-        Ok((count, dimension))
+        Ok((version, count, dimension))
     }
 
     /// Reads `count` vectors of `dimension` from the reader into contiguous storage.
@@ -721,3 +793,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
 #[cfg(test)]
 #[path = "load_bound_tests.rs"]
 mod load_bound_tests;
+
+#[cfg(test)]
+#[path = "vectors_format_tests.rs"]
+mod vectors_format_tests;
