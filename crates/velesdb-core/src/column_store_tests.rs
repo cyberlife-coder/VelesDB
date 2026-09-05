@@ -1424,6 +1424,63 @@ mod tests {
         );
     }
 
+    /// Bug: update_by_pk skipped the GeoPoint range validation that insert_row
+    /// enforces, so an out-of-range coordinate could be written via update.
+    #[test]
+    fn test_update_by_pk_rejects_out_of_range_geopoint() {
+        // Arrange
+        let mut store = ColumnStore::with_primary_key(
+            &[("id", ColumnType::Int), ("loc", ColumnType::GeoPoint)],
+            "id",
+        )
+        .unwrap();
+
+        store
+            .insert_row(&[
+                ("id", ColumnValue::Int(1)),
+                ("loc", ColumnValue::GeoPoint(45.0, 90.0)),
+            ])
+            .unwrap();
+
+        // Act: Try to update with an out-of-range latitude
+        let result = store.update_by_pk(1, "loc", ColumnValue::GeoPoint(999.0, -500.0));
+
+        // Assert: Should fail, matching insert_row's validation
+        assert!(
+            result.is_err(),
+            "update_by_pk should reject out-of-range GeoPoint coordinates"
+        );
+    }
+
+    /// Bug: update_multi_by_pk skipped the GeoPoint range validation that
+    /// insert_row enforces, so an out-of-range coordinate could be written
+    /// via a multi-column update.
+    #[test]
+    fn test_update_multi_by_pk_rejects_out_of_range_geopoint() {
+        // Arrange
+        let mut store = ColumnStore::with_primary_key(
+            &[("id", ColumnType::Int), ("loc", ColumnType::GeoPoint)],
+            "id",
+        )
+        .unwrap();
+
+        store
+            .insert_row(&[
+                ("id", ColumnValue::Int(1)),
+                ("loc", ColumnValue::GeoPoint(45.0, 90.0)),
+            ])
+            .unwrap();
+
+        // Act: Try to update with an out-of-range longitude
+        let result = store.update_multi_by_pk(1, &[("loc", ColumnValue::GeoPoint(45.0, 500.0))]);
+
+        // Assert: Should fail, matching insert_row's validation
+        assert!(
+            result.is_err(),
+            "update_multi_by_pk should reject out-of-range GeoPoint coordinates"
+        );
+    }
+
     /// Regression test: expire_rows uses O(1) reverse index lookup
     /// Previously used O(n) iter().find() which was inefficient for large datasets
     #[test]
