@@ -354,6 +354,32 @@ class SingleSourceTests(unittest.TestCase):
         text = (self.ROOT / ".githooks/commit-msg").read_text(encoding="utf-8")
         self.assertIn("check-ai-attribution.py", text)
 
+    def test_the_issue_workflow_calls_the_guard(self) -> None:
+        # The surface the module docstring listed as the remaining gap: an
+        # issue body or a comment arrives on events no `pull_request` workflow
+        # sees, so `pr-governance.yml` cannot reach it however it is written.
+        text = (self.ROOT / ".github/workflows/issue-attribution.yml").read_text(encoding="utf-8")
+        self.assertIn("scripts/check-ai-attribution.py", text)
+
+    def test_the_issue_workflow_covers_both_surfaces_and_edits(self) -> None:
+        # A guard that only fired on `opened` would be walked past by posting
+        # clean text and editing the footer back in.
+        text = (self.ROOT / ".github/workflows/issue-attribution.yml").read_text(encoding="utf-8")
+        self.assertIn("types: [opened, edited]", text)
+        self.assertIn("types: [created, edited]", text)
+        self.assertIn("github.event.issue.body", text)
+        self.assertIn("github.event.comment.body", text)
+
+    def test_the_issue_workflow_never_interpolates_untrusted_text_into_the_shell(self) -> None:
+        # Same rule the pull request step documents: untrusted prose reaches
+        # the guard through env and then a file, never as `${{ }}` inside a
+        # `run:` block, which would be a script-injection vector.
+        text = (self.ROOT / ".github/workflows/issue-attribution.yml").read_text(encoding="utf-8")
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("python3") or stripped.startswith("printf"):
+                self.assertNotIn("${{", stripped, f"untrusted interpolation in: {stripped}")
+
     def test_neither_site_still_greps_the_old_pair_of_words_as_its_rule(self) -> None:
         # The workflow's own grep was the rule; it must be gone. The hook
         # keeps its two-word grep ONLY as a fallback for a machine without

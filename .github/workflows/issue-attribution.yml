@@ -1,0 +1,66 @@
+# Issues and comments are the surface CLAUDE.md #5 names and no guard reached.
+#
+# `pr-governance.yml` covers commits, the pull request title and body, and
+# tracked content. It cannot cover an issue body or a comment: those arrive on
+# events a `pull_request` workflow never sees, which is why the guard's own
+# module docstring listed them as the remaining gap rather than a solved case.
+#
+# This workflow cannot *prevent* the text — a comment is published the moment
+# it is posted, and no check runs before that. What it does is make a violation
+# visible instead of silent, which is the difference between a backlog that
+# drifts and one whose drift shows up in the Actions tab.
+#
+# `issue_comment` fires for pull request comments too, because GitHub models a
+# pull request as an issue. That is deliberate coverage, not an accident.
+name: Issue Attribution
+
+on:
+  issues:
+    types: [opened, edited]
+  issue_comment:
+    types: [created, edited]
+
+permissions:
+  contents: read
+
+# A burst of edits should leave one verdict, not a queue of them.
+concurrency:
+  group: issue-attribution-${{ github.event.issue.number }}-${{ github.event.comment.id || 'body' }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    name: Reject AI attribution in issues and comments
+    runs-on: ubuntu-latest
+    steps:
+      # No `ref:` — an issue event has no head to check out, so the default
+      # branch is both correct and the only sensible source for the guard.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Reject an AI-attributed issue title or body
+        if: ${{ github.event_name == 'issues' }}
+        env:
+          # Via env, never interpolated into the script below: an issue title
+          # and body are attacker-controlled text, and `${{ }}` inside a `run:`
+          # block is a script-injection vector. The guard then reads each as a
+          # FILE, so the text never becomes a shell argument either.
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: |
+          printf '%s' "$ISSUE_TITLE" > "$RUNNER_TEMP/issue-title.txt"
+          printf '%s' "$ISSUE_BODY" > "$RUNNER_TEMP/issue-body.md"
+          python3 scripts/check-ai-attribution.py \
+            --text "$RUNNER_TEMP/issue-title.txt" --surface "issue title"
+          python3 scripts/check-ai-attribution.py \
+            --text "$RUNNER_TEMP/issue-body.md" --surface "issue body"
+
+      - name: Reject an AI-attributed comment
+        if: ${{ github.event_name == 'issue_comment' }}
+        env:
+          # Same reasoning as above; a comment body is untrusted text.
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          printf '%s' "$COMMENT_BODY" > "$RUNNER_TEMP/comment-body.md"
+          python3 scripts/check-ai-attribution.py \
+            --text "$RUNNER_TEMP/comment-body.md" --surface "issue or pull request comment"
