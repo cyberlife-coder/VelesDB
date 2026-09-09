@@ -101,6 +101,11 @@ impl SearchMode {
     /// express because the engine special-cases the variant rather than the
     /// value. This is the conversion the `[search]` wiring of issue #2087 must
     /// use.
+    ///
+    /// Gated on `persistence`, like `SearchQuality`'s own export: without that
+    /// feature there is no HNSW index for a quality to describe. `SearchMode`
+    /// itself stays available, because a config file parses on every build.
+    #[cfg(feature = "persistence")]
     #[must_use]
     pub fn quality(&self) -> crate::SearchQuality {
         match self {
