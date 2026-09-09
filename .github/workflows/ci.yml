@@ -2034,12 +2034,73 @@ jobs:
     name: CI Success
     runs-on: ubuntu-latest
     needs: [lint, test, security, semver-checks, hygiene, wasm-check, memory-feature-matrix, internal-bench-check, drop-tightening-check, openapi-drift, mcp-doc-contract, velesql-conformance, perf-smoke, bench-sift1m-compile, perf-gate-e2e, python-sdk-tests, python-integrations, node-binding-tests, node-binding-tests-windows, gate-contracts, doc-contract, promise-contract, production-gates, propagation-guard, binary-size, pr-governance, sonarcloud]
-    if: (always()) && (github.event.action != 'edited' || github.event.changes.base != null)
+    # The ONE job that must not carry the title/body-edit guard, and #2232 is
+    # why. Guarded, it skipped on a body edit -- and branch protection accepts a
+    # `skipped` required check, so the PR read CLEAN with no gate having run on
+    # the head commit. Measured on #2231: `CI Success: skipping`,
+    # `mergeStateStatus: CLEAN`, mergeable.
+    #
+    # Unguarded and naive it would be worse: its needs skip on such a run, so
+    # the chain below would turn every description edit RED. Hence the mirror
+    # step -- on a no-op edit this job reports the verdict of the real run for
+    # the same commit, and reports nothing when there is none.
+    #
+    # The invariant, and the only one worth remembering: `CI Success` never
+    # reports a verdict no execution produced.
+    if: always()
+    permissions:
+      contents: read
+      # The mirror step reads sibling runs of this same workflow.
+      actions: read
     steps:
+      # A run triggered by a title or body edit skips all 27 gate jobs (each
+      # carries the guard this one dropped), so their results say nothing. Take
+      # the verdict from the run that did the work instead.
+      #
+      # If this `if` does not fire when expected, the chain below runs against
+      # skipped needs and fails: loud and closed, never green-on-nothing.
+      - name: Mirror the real verdict on a no-op edit
+        id: mirror
+        if: github.event.action == 'edited' && github.event.changes.base == null
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          WF: ${{ github.workflow }}
+          RUNID: ${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          deadline=$((SECONDS + 2400))
+          while :; do
+            runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$HEAD_SHA&per_page=100" \
+                     --jq '[.workflow_runs[] | select(.name == env.WF and (.id|tostring) != env.RUNID)]') || runs=""
+            if [ -z "$runs" ]; then
+              echo "::warning::could not list runs for $HEAD_SHA; retrying"
+            else
+              verdict=$(printf '%s' "$runs" | jq -r '[.[] | select(.status == "completed")] | sort_by(.updated_at) | last | .conclusion // ""')
+              active=$(printf '%s' "$runs" | jq -r '[.[] | select(.status != "completed")] | length')
+              if [ "$verdict" = "success" ]; then
+                echo "mirroring a completed successful run for $HEAD_SHA"
+                exit 0
+              fi
+              if [ "${active:-0}" -eq 0 ]; then
+                echo "::error::no successful CI run exists for $HEAD_SHA (last verdict: ${verdict:-none}). This run skipped every gate because it was triggered by a description edit, so it has nothing to report. Re-run CI on this commit."
+                exit 1
+              fi
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::still waiting on the real CI run for $HEAD_SHA after 40 minutes; refusing to report a verdict this run did not establish"
+              exit 1
+            fi
+            sleep 30
+          done
+
       # sonarcloud is intentionally absent from the gate below: it is an
       # external service (skipped on forks / token-less runs) and must not
       # block merges. It stays in `needs` so its status is visible here.
+      #
+      # Skipped when the mirror above ran: that step is the verdict then.
       - name: Check results
+        if: steps.mirror.conclusion == 'skipped'
         run: |
           [[ "${{ needs.lint.result }}" == "success" ]] && \
           [[ "${{ needs.test.result }}" == "success" ]] && \

@@ -123,9 +123,16 @@ def chain_failure_branch(text: str) -> str:
     # legitimately contain `||` — the retarget guard does. Scanning from the
     # shell block keeps this on the chain's own tail while still seeing a
     # branch neutered to something brace-less like `|| true`.
-    run_at = chain.find("run:")
+    # Anchored on the chain's own step. `ci-success` gained a second `run:`
+    # ahead of it (#2232's mirror), whose body legitimately contains `||` —
+    # taking the first `run:` in the job returned that instead, and this test
+    # then asserted `exit 1` against the wrong shell block.
+    step_at = chain.find("- name: Check results")
+    if step_at == -1:
+        raise AssertionError("the ci-success job has no `Check results` step")
+    run_at = chain.find("run:", step_at)
     if run_at == -1:
-        raise AssertionError("the ci-success job has no `run:` chain")
+        raise AssertionError("the ci-success `Check results` step has no `run:` chain")
     body = chain[run_at:]
     marker = body.find("||")
     if marker == -1:
@@ -1432,6 +1439,11 @@ JOB_ID_RE = re.compile(r"^  ([a-z][a-z0-9_-]*):$", re.MULTILINE)
 RETARGET_GUARD_EXEMPT = {
     "mcp-doc-contract": "runs the guard self-tests; must never be skippable",
     "pr-governance": "reads the title and body; skipping it on an edit is skipping its input",
+    "ci-success": (
+        "the required check itself: guarded, it reported `skipped` on a body edit and "
+        "branch protection accepted that as green (#2232). It runs always and mirrors "
+        "instead — see NoOpEditCannotProduceAGreenCheckTests"
+    ),
 }
 
 RETARGET_GUARD_RE = re.compile(
@@ -1517,14 +1529,165 @@ class RetargetRerunTests(unittest.TestCase):
                     "exemption, or the list is documenting a rule that no longer holds",
                 )
 
-    def test_ci_success_carries_the_guard_too(self) -> None:
-        block = self.ci[self.ci.index("\n  ci-success:") :]
-        self.assertRegex(
-            block.split("\n    steps:", 1)[0],
+    def test_ci_success_runs_on_a_no_op_edit_instead_of_skipping(self) -> None:
+        """The inversion of the rule this test used to assert, and why.
+
+        It used to require `ci-success` to carry the guard, reasoning that a
+        job asserting `result == 'success'` over needs that skip would turn
+        every description edit RED, and that skipping with them was safe
+        because "a skipped check-run is accepted by branch protection".
+
+        That acceptance is the hole. Measured on PR #2231: a body edit produced
+        a run where all 27 gates and `ci-success` skipped, the PR reported
+        `CI Success: skipping` and `mergeStateStatus: CLEAN`, and it was
+        mergeable with no gate having run on the head commit (#2232).
+
+        The premise stays true — an unguarded job asserting over skipped needs
+        would be red on every edit — so the job branches before the chain
+        rather than skipping. `NoOpEditCannotProduceAGreenCheckTests` pins that
+        branch; this test only pins that the job is reachable at all.
+        """
+        header = self.ci[self.ci.index("\n  ci-success:") :].split("\n    steps:", 1)[0]
+        self.assertNotRegex(
+            header,
             RETARGET_GUARD_RE,
-            "ci-success asserts `result == 'success'` for each of its needs, so leaving it "
-            "unguarded while its needs skip on a title edit turns every such edit RED. It "
-            "must skip with them — a skipped check-run is accepted by branch protection.",
+            "`ci-success` carries the title-edit guard again, so it skips on a body edit — "
+            "and branch protection reads a skipped required check as satisfied (#2232)",
+        )
+        self.assertRegex(
+            header,
+            r"(?m)^    if:\s*always\(\)\s*$",
+            "`ci-success` must run on every event; anything narrower reintroduces a state "
+            "where the required check is absent or skipped rather than earned",
+        )
+
+
+# ---------------------------------------------------------------------------
+# A no-op edit must not be able to produce a green required check
+# ---------------------------------------------------------------------------
+
+#: The condition identifying a run triggered by a title/body edit — the exact
+#: negation of `RETARGET_GUARD_RE`. Spelled once so the mirror step and the
+#: guard cannot drift into describing different sets of runs.
+NO_OP_EDIT_RE = re.compile(
+    r"github\.event\.action\s*==\s*'edited'\s*&&\s*github\.event\.changes\.base\s*==\s*null"
+)
+
+
+def ci_success_steps(text: str) -> "list[str]":
+    """The `- name:` step blocks of `ci-success`, in order."""
+    block = text[text.index("\n  ci-success:") :]
+    following = re.search(r"\n  (?=\S)", block[1:])
+    if following is not None:
+        block = block[: following.start() + 1]
+    steps = block.split("\n      - name:")
+    return [("- name:" + s) for s in steps[1:]]
+
+
+class NoOpEditCannotProduceAGreenCheckTests(unittest.TestCase):
+    """`CI Success` never reports a verdict no execution produced.
+
+    A run triggered by a description edit skips all 27 gate jobs, so their
+    `result`s say nothing. Before #2232 `ci-success` skipped with them and
+    branch protection accepted the skip: PR #2231 read `CI Success: skipping`,
+    `mergeStateStatus: CLEAN`, and was mergeable on a commit no gate had run
+    against.
+
+    It now runs always and takes one of two paths — mirror the real run's
+    verdict, or assert over needs that actually ran. Both can refuse; neither
+    can pass on nothing. These tests pin that shape.
+    """
+
+    def setUp(self) -> None:
+        self.ci = CI_WORKFLOW.read_text(encoding="utf-8")
+        self.steps = ci_success_steps(self.ci)
+
+    def test_the_job_has_a_step_scoped_to_a_no_op_edit(self) -> None:
+        matching = [s for s in self.steps if NO_OP_EDIT_RE.search(s)]
+        self.assertEqual(
+            len(matching),
+            1,
+            "exactly one `ci-success` step may carry the no-op-edit condition; "
+            f"found {len(matching)}",
+        )
+
+    def test_the_mirror_never_judges_from_skipped_needs(self) -> None:
+        """Reading `needs.*.result` on a no-op run is reading nothing."""
+        mirror = next(s for s in self.steps if NO_OP_EDIT_RE.search(s))
+        self.assertNotIn(
+            "needs.",
+            mirror,
+            "the no-op step reads a `needs` result, but on the run it exists for "
+            "every one of them is `skipped`",
+        )
+
+    def test_the_mirror_can_refuse(self) -> None:
+        mirror = next(s for s in self.steps if NO_OP_EDIT_RE.search(s))
+        self.assertIn(
+            "exit 1",
+            mirror,
+            "the no-op step has no failing path, so it can only ever report success",
+        )
+
+    def test_exactly_one_step_produces_the_verdict(self) -> None:
+        """The chain must stand down when the mirror ran, and only then."""
+        chain = next(s for s in self.steps if "Check results" in s)
+        self.assertRegex(
+            chain,
+            r"if:\s*steps\.\w+\.conclusion\s*==\s*'skipped'",
+            "the `Check results` step must be conditioned on the mirror having "
+            "skipped; unconditional, it asserts over skipped needs and turns every "
+            "description edit red",
+        )
+
+    def test_the_two_conditions_are_exact_negations(self) -> None:
+        """One spelling drifting from the other reopens the hole silently."""
+        mirror = next(s for s in self.steps if NO_OP_EDIT_RE.search(s))
+        self.assertIsNotNone(RETARGET_GUARD_RE.search(self.ci), "the guard vanished from ci.yml")
+        self.assertNotRegex(
+            mirror,
+            RETARGET_GUARD_RE,
+            "the no-op step carries the guard's own predicate as well as its negation",
+        )
+
+
+class NoOpEditParserTests(unittest.TestCase):
+    """RED-then-GREEN on synthetic text, per this module's parser contract."""
+
+    SYNTHETIC = """\
+jobs:
+  ci-success:
+    name: CI Success
+    if: always()
+    steps:
+      - name: Mirror
+        if: github.event.action == 'edited' && github.event.changes.base == null
+        run: exit 1
+      - name: Check results
+        if: steps.mirror.conclusion == 'skipped'
+        run: echo ok
+  next-job:
+    name: Something else
+"""
+
+    def test_step_parser_stops_at_the_next_job(self) -> None:
+        steps = ci_success_steps(self.SYNTHETIC)
+        self.assertEqual(len(steps), 2)
+        self.assertIn("Mirror", steps[0])
+        self.assertNotIn("Something else", steps[1])
+
+    def test_the_no_op_condition_is_recognised(self) -> None:
+        self.assertRegex(ci_success_steps(self.SYNTHETIC)[0], NO_OP_EDIT_RE)
+
+    def test_a_missing_condition_is_detected(self) -> None:
+        without = self.SYNTHETIC.replace(
+            "if: github.event.action == 'edited' && github.event.changes.base == null",
+            "if: always()",
+        )
+        self.assertEqual(
+            [s for s in ci_success_steps(without) if NO_OP_EDIT_RE.search(s)],
+            [],
+            "the parser reports a condition the text does not carry",
         )
 
 
@@ -1617,19 +1780,29 @@ class NoOpRunCannotCancelRealCiTests(unittest.TestCase):
             "cancel another only when it is not itself a no-op.",
         )
 
-    def test_the_predicate_is_spelled_the_same_as_the_job_guard(self) -> None:
-        """Two spellings of \"this run is a no-op\" is how the two drift apart."""
+    def test_the_predicate_is_spelled_the_same_as_every_job_guard(self) -> None:
+        """Two spellings of \"this run is a no-op\" is how the two drift apart.
+
+        Compared against every guarded job rather than against `ci-success`,
+        which stopped carrying the guard in #2232. Generalising it is the
+        stronger test anyway: the old one would have missed a single job
+        spelling the predicate differently from all the others.
+        """
         guard_in_cancel = RETARGET_GUARD_RE.search(cancel_in_progress(self.ci))
-        self.assertIsNotNone(guard_in_cancel)
-        block = self.ci[self.ci.index("\n  ci-success:") :].split("\n    steps:", 1)[0]
-        guard_in_job = RETARGET_GUARD_RE.search(block)
-        self.assertIsNotNone(guard_in_job)
-        self.assertEqual(
-            guard_in_cancel.group(0),
-            guard_in_job.group(0),
-            "the concurrency predicate and the job guard must be character-identical, so "
-            "editing one and not the other cannot silently reopen the hole",
-        )
+        self.assertIsNotNone(guard_in_cancel, "`cancel-in-progress` lost the no-op predicate")
+        guarded, _unguarded = jobs_with_guard(self.ci)
+        self.assertGreater(len(guarded), 20, "job discovery looks broken, not the guard")
+        for job in sorted(guarded):
+            with self.subTest(job=job):
+                found = RETARGET_GUARD_RE.search(job_block(self.ci, job))
+                self.assertIsNotNone(found, f"`{job}` reads as guarded but the regex finds nothing")
+                self.assertEqual(
+                    guard_in_cancel.group(0),
+                    found.group(0),
+                    "the concurrency predicate and every job guard must be "
+                    "character-identical, so editing one and not the others cannot "
+                    "silently reopen the hole",
+                )
 
 
 class CancelInProgressParserTests(unittest.TestCase):

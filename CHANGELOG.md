@@ -131,6 +131,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A description edit could make a pull request mergeable with no gate having
+  run.** `ci.yml` subscribes to `pull_request.edited` because a retarget emits
+  nothing else, and every job guards against title/body edits so a routine
+  description change does not cost a full CI run. `ci-success` carried that
+  guard too — so a body edit produced a run where all 27 gates *and the
+  required check* skipped, and branch protection accepts a skipped required
+  check. Measured on #2231: `CI Success: skipping`, `mergeStateStatus: CLEAN`,
+  mergeable on a commit nothing had verified.
+
+  `ci-success` now runs on every event and branches: on such a run it reports
+  the verdict of the real run for the same commit, waiting for one in flight
+  and refusing when none exists, rather than asserting over `needs` results
+  that are all `skipped`. Both paths can refuse; neither can pass on nothing.
+  Pinned by `NoOpEditCannotProduceAGreenCheckTests`, whose five assertions were
+  each seen failing against a deliberately broken workflow.
+
 - **`GeoPoint` coordinates were validated on insert but not on update.**
   `update_by_pk`, `update_multi_by_pk` and `batch_update` could each write a
   latitude or longitude outside `[-90, 90]` / `[-180, 180]`, which then fed
