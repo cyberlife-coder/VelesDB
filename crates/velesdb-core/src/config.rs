@@ -76,13 +76,38 @@ pub enum SearchMode {
 
 impl SearchMode {
     /// Returns the `ef_search` value for this mode.
+    ///
+    /// **Lossy for [`Self::Perfect`], which is why wiring must not use it.**
+    /// `usize::MAX` was written as a bruteforce sentinel and nothing reads it as
+    /// one: the only conversion available, `ef_to_quality`, turns it into
+    /// `SearchQuality::Custom(usize::MAX)` — an uncapped graph traversal that is
+    /// neither exhaustive nor covered by `limits.max_perfect_mode_vectors`.
+    /// A config asking for `perfect` would get a silently downgraded mode and a
+    /// bypassed guard rail. Use [`Self::quality`] instead (#2238).
     #[must_use]
     pub fn ef_search(&self) -> usize {
         match self {
             Self::Fast => 96,
             Self::Balanced => 160,
             Self::Accurate => 512,
-            Self::Perfect => usize::MAX, // Signals bruteforce
+            Self::Perfect => usize::MAX,
+        }
+    }
+
+    /// Returns the [`SearchQuality`](crate::SearchQuality) this mode means.
+    ///
+    /// The lossless counterpart to [`Self::ef_search`]: every mode maps onto a
+    /// named quality, including `Perfect`, which no `ef_search` number can
+    /// express because the engine special-cases the variant rather than the
+    /// value. This is the conversion the `[search]` wiring of issue #2087 must
+    /// use.
+    #[must_use]
+    pub fn quality(&self) -> crate::SearchQuality {
+        match self {
+            Self::Fast => crate::SearchQuality::Fast,
+            Self::Balanced => crate::SearchQuality::Balanced,
+            Self::Accurate => crate::SearchQuality::Accurate,
+            Self::Perfect => crate::SearchQuality::Perfect,
         }
     }
 }
