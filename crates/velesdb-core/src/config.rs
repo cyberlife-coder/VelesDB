@@ -119,14 +119,19 @@ impl SearchMode {
 
 /// Search configuration section.
 ///
-/// **Reserved — parsed and validated, not yet applied.** `[limits]` and
-/// `[hnsw]` reach the engine; this section does not.
-/// [`VelesConfig::validate`] warns when it deviates from its defaults so a
-/// config cannot silently promise behavior the engine does not deliver.
-/// Wiring is tracked in issue #2087 — `query_timeout_ms` in particular needs
-/// a query timeout the engine does not have, which is a feature of its own.
+/// **Half applied.** `default_mode` and `ef_search` reach the engine since
+/// #2087: an unqualified `search()` resolves through
+/// [`SearchConfig::resolved_quality`], with `ef_search` winning over
+/// `default_mode` when both are set.
+///
+/// `max_results` and `query_timeout_ms` are still inert and still warned about
+/// by [`VelesConfig::validate`], field by field. They are not oversights:
+/// clamping a caller's `LIMIT` silently is a footgun and erroring is a breaking
+/// change under a *default* config, while a query timeout is a feature the
+/// engine does not have. Both need a decision, not plumbing.
+///
 /// Per-query runtime overrides (`WITH (ef_search = N)`) are a separate,
-/// working mechanism.
+/// working mechanism and continue to win over anything here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SearchConfig {
@@ -138,6 +143,26 @@ pub struct SearchConfig {
     pub max_results: usize,
     /// Query timeout in milliseconds.
     pub query_timeout_ms: u64,
+}
+
+impl SearchConfig {
+    /// The [`SearchQuality`](crate::SearchQuality) an unqualified `search()`
+    /// resolves to under this section.
+    ///
+    /// `ef_search` wins over `default_mode` when set, which is what the field's
+    /// own doc has always promised ("if set, overrides mode") and what nothing
+    /// used to honour, the section being inert.
+    ///
+    /// Goes through [`SearchMode::quality`] rather than
+    /// [`SearchMode::ef_search`] on purpose: the latter cannot express
+    /// `Perfect`, and routing through it would hand a `perfect` config an
+    /// uncapped traversal with `max_perfect_mode_vectors` bypassed (#2238).
+    #[cfg(feature = "persistence")]
+    #[must_use]
+    pub fn resolved_quality(&self) -> crate::SearchQuality {
+        self.ef_search
+            .map_or_else(|| self.default_mode.quality(), crate::SearchQuality::Custom)
+    }
 }
 
 impl Default for SearchConfig {

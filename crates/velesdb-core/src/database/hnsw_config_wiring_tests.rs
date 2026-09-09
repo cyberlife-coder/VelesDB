@@ -323,16 +323,39 @@ fn test_max_layers_reported_alongside_a_configured_wired_knob() {
     assert_eq!(config.inert_engine_entries(), vec!["hnsw.max_layers"]);
 }
 
+/// `[search]` is reported field by field now that two of its knobs work.
+///
+/// This test asserted the opposite until #2087 wired `default_mode` and
+/// `ef_search` — "[search] has no wired knob and stays reported as a whole
+/// section". That premise is what the wiring removed, and the reason the
+/// section-wide form had to go with it: a warning naming `[search]` while
+/// `default_mode` is applied would train its reader to ignore the whole line,
+/// which is the failure `test_max_layers_reported_alongside_a_configured_wired_knob`
+/// guards against one section over.
 #[test]
-fn test_search_reported_wholesale_storage_mode_reported_by_field() {
+fn test_search_and_storage_are_both_reported_by_field() {
     let mut config = VelesConfig::default();
     config.search.max_results = 42;
     config.storage.storage_mode = "memory".to_string();
     assert_eq!(
         config.inert_engine_entries(),
-        vec!["[search]", "storage.storage_mode"],
-        "[search] has no wired knob and stays reported as a whole section; \
-         storage_mode is the one [storage] field still awaiting a decision"
+        vec!["search.max_results", "storage.storage_mode"],
+        "only the knobs that still do nothing may be named"
+    );
+}
+
+/// Setting a WIRED `[search]` knob must report nothing at all.
+///
+/// The complement of the test above: without it, an `inert_engine_entries`
+/// that had simply stopped looking at `[search]` would satisfy both.
+#[test]
+fn test_a_configured_wired_search_knob_is_not_reported() {
+    let mut config = VelesConfig::default();
+    config.search.default_mode = crate::config::SearchMode::Accurate;
+    config.search.ef_search = Some(321);
+    assert!(
+        config.inert_engine_entries().is_empty(),
+        "default_mode and ef_search reach the engine; naming them would be a false warning"
     );
 }
 

@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`[search]`'s `default_mode` and `ef_search` reach the engine (#2087).** The
+  section was parsed, validated and ignored; an unqualified `search()` now
+  resolves through `SearchConfig::resolved_quality()`, with `ef_search` winning
+  over `default_mode` as that field's doc has always promised. Resolution
+  belongs to `Database`, the only component holding a `VelesConfig`, and is
+  pushed to each collection on every open beside `[limits]` — never persisted.
+  Per-query overrides (`WITH (ef_search = N)`, `search_with_ef`,
+  `search_with_quality`) continue to win over it, and a default config leaves
+  `search()` on the built-in `Balanced` it already used.
+
+  `search.max_results` and `search.query_timeout_ms` stay inert and are now
+  warned about **field by field** rather than as a section, so the warning stops
+  naming knobs that work. Neither is an oversight: clamping a caller's `LIMIT`
+  silently is a footgun and erroring is a breaking change under a default
+  config, while a query timeout is a feature the engine does not have.
+
+  **`default_mode = "perfect"` is refused at config load**, with the reason.
+  `SearchQuality::Perfect` is an exhaustive scan capped by
+  `limits.max_perfect_mode_vectors`, and that cap lives in a check only the
+  per-query entry points can run — `search_with_optional_bitmap` returns
+  `Vec<ScoredResult>` and cannot refuse. Accepting it would have made one search
+  path scan a corpus of any size with the guard rail bypassed, which is the
+  shape #2238 removed from `SearchMode::ef_search`.
+
+  Hot-path cost measured against `develop` before merging, not after: six
+  alternating A/B passes, 84.4–88.0 µs vs 83.6–86.4 µs per `search()` on a
+  20 000-point fixture — overlapping ranges, no measurable regression. An
+  earlier draft closed over the index call and cost a reproducible +2.2 %; the
+  measurement is what caught it.
+
+### Added
+
 - **`SearchMode::quality()`** — the lossless `SearchMode` → `SearchQuality`
   conversion. `SearchMode::ef_search()` cannot express `Perfect`: it returns
   `usize::MAX` as a bruteforce sentinel that nothing reads, and the only

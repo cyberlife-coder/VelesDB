@@ -64,6 +64,10 @@ impl Database {
         coll.set_runtime_limits(crate::collection::RuntimeLimits::from_config(
             &self.config.limits,
         ));
+        // `[search]` alongside `[limits]`, same contract: resolved here because
+        // `Database` is the only component holding a `VelesConfig`, pushed on
+        // every open, never persisted (#2087).
+        coll.set_runtime_search_quality(self.config.search.resolved_quality());
     }
 
     /// Checks whether a collection name exists in any of the typed registries.
