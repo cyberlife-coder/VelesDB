@@ -208,6 +208,68 @@ fn seed(dir: &TempDir, ids: std::ops::Range<u64>, mode: StorageMode) {
     collection.flush_full().expect("test: flush");
 }
 
+/// One way of making a `.vectors` unusable, with the label a failure reports.
+type Mutilation = (&'static str, fn(&Path));
+
+/// An unusable `.vectors` must not prevent a collection from opening.
+///
+/// This is the property the v2 release note rests on. The note first claimed
+/// the opposite -- that an older build "will not open a database written by
+/// this one" -- read off the v1 reader, which does refuse a v2 header with
+/// `Unsupported version: 2`, without checking that anything reaches it.
+/// Measured against a real `v6.0.0` build: it opens a v2 database and returns
+/// the correct nearest neighbour. `.vectors` is a derived artifact, and the
+/// collection is rebuilt from `vectors.dat` / the WAL when it cannot be used.
+///
+/// The three mutilations are the ones that experiment ran, and each fails a
+/// different way: an unknown version is rejected by the header check, a
+/// header-only file passes the version check and then runs out of payload, and
+/// an absent file never opens at all. A test that only deleted the file would
+/// leave both read failures unexercised.
+///
+/// The control is the untouched arm: it asserts the same count from the same
+/// seed, so a harness that answered 0 everywhere could not pass.
+#[test]
+fn a_corrupt_vectors_file_does_not_prevent_opening() {
+    let mutilate: [Mutilation; 4] = [
+        ("intact (control)", |_| {}),
+        ("unknown version", |p| {
+            let mut bytes = std::fs::read(p).expect("test: read");
+            bytes[0..4].copy_from_slice(&99u32.to_le_bytes());
+            std::fs::write(p, bytes).expect("test: write");
+        }),
+        ("header only", |p| {
+            let bytes = std::fs::read(p).expect("test: read");
+            std::fs::write(p, &bytes[..16]).expect("test: truncate");
+        }),
+        ("absent", |p| std::fs::remove_file(p).expect("test: remove")),
+    ];
+
+    for (label, damage) in mutilate {
+        let dir = TempDir::new().expect("test: tempdir");
+        seed(&dir, 0..ADOPTED, StorageMode::Full);
+        damage(&vectors_file(dir.path()));
+
+        let db = Database::open(dir.path()).unwrap_or_else(|e| panic!("{label}: open failed: {e}"));
+        let collection = db
+            .get_vector_collection("docs")
+            .unwrap_or_else(|| panic!("{label}: collection missing"));
+        assert_eq!(
+            collection.len(),
+            usize::try_from(ADOPTED).expect("test: count fits a usize"),
+            "{label}: an unusable .vectors must not cost the collection its points"
+        );
+        let hit = collection
+            .search(&make_vector(7), 1)
+            .unwrap_or_else(|e| panic!("{label}: search failed: {e}"));
+        assert_eq!(
+            hit.first().map(|r| r.point.id),
+            Some(7),
+            "{label}: the rebuilt index must still answer correctly"
+        );
+    }
+}
+
 /// Opening a collection must never write to its `.vectors`, on either side of
 /// the arena capacity floor.
 ///

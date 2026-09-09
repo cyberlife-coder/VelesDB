@@ -18,11 +18,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alignment, so a payload starting at byte 16 could never be mapped as one.
   Moving it is what lets the file *be* the arena rather than be copied into one.
 
-  **Compatibility runs one way.** A current binary reads v1 and v2; a binary
-  from before this change rejects a v2 file with `Unsupported version: 2`.
-  Downgrading past this release therefore requires re-persisting the index —
-  a plain `git checkout` of an older build will not open a database written by
-  this one. `.vectors` had no version-compat mechanism at all before this, so
+  **Downgrading works, and that was measured rather than reasoned about.** An
+  earlier draft of this entry said a `git checkout` of an older build "will not
+  open a database written by this one". That was read off the v1 reader — which
+  does refuse a v2 header with `Unsupported version: 2` — without checking
+  whether anything reaches it. Nothing does: a `v6.0.0` binary opens a database
+  written by this release and answers `len = 64` with the correct nearest
+  neighbour. Setting the version byte to 99, truncating the file to its header,
+  and deleting it outright all behave identically, because `.vectors` is a
+  derived artifact and the collection is rebuilt from `vectors.dat` / the WAL
+  when it cannot be used. The reverse direction is equally clean: this build
+  reads a v1 file and leaves it v1 rather than silently rewriting it.
+  `a_corrupt_vectors_file_does_not_prevent_opening` pins that fallback so this
+  paragraph is not prose anybody has to trust. `.vectors` had no version-compat mechanism at all before this, so
   the v1 read path was written here rather than inherited.
 
 ### Added
