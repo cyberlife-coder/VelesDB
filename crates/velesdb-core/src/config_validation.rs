@@ -144,8 +144,15 @@ impl VelesConfig {
         }
 
         let mut inert: Vec<&'static str> = Vec::new();
-        if deviates(&self.search, &crate::config::SearchConfig::default()) {
-            inert.push("[search]");
+        // Field by field since #2087 wired `default_mode` and `ef_search`:
+        // reporting the whole section would fire on knobs that now work, which
+        // is how a warning trains its readers to ignore it.
+        let search_default = crate::config::SearchConfig::default();
+        if self.search.max_results != search_default.max_results {
+            inert.push("search.max_results");
+        }
+        if self.search.query_timeout_ms != search_default.query_timeout_ms {
+            inert.push("search.query_timeout_ms");
         }
         if self.hnsw.max_layers != crate::config::HnswConfig::default().max_layers {
             inert.push("hnsw.max_layers");
@@ -222,6 +229,28 @@ impl VelesConfig {
     }
 
     fn validate_search(&self) -> Result<(), ConfigError> {
+        // `perfect` as a GLOBAL default is refused, while
+        // `search_with_quality(Perfect)` per query stays available and guarded.
+        //
+        // The asymmetry is not squeamishness. `SearchQuality::Perfect` is an
+        // exhaustive scan capped by `limits.max_perfect_mode_vectors`, and that
+        // cap lives in `enforce_perfect_mode_limit`, which only the per-query
+        // entry points can call: `search_with_optional_bitmap` returns
+        // `Vec<ScoredResult>` with no way to refuse. Accepting the value here
+        // would make one of the three search paths scan a corpus of any size
+        // with the guard rail bypassed -- the exact shape #2238 removed from
+        // `SearchMode::ef_search`. Refusing beats degrading it in silence.
+        if matches!(self.search.default_mode, crate::config::SearchMode::Perfect) {
+            return Err(ConfigError::InvalidValue {
+                key: "search.default_mode".to_string(),
+                message: "`perfect` is an exhaustive scan and cannot be a global \
+                          default: one search path cannot enforce \
+                          `limits.max_perfect_mode_vectors`. Ask for it per query \
+                          instead, where the cap applies."
+                    .to_string(),
+            });
+        }
+
         if let Some(ef) = self.search.ef_search {
             if !(16..=4096).contains(&ef) {
                 return Err(ConfigError::InvalidValue {

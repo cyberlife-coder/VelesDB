@@ -541,6 +541,20 @@ pub(crate) struct RuntimeGuards {
     /// the setter can run after the registry has cloned the collection.
     /// **Not persisted** — re-pushed on every open.
     pub(crate) runtime_limits: Arc<RwLock<RuntimeLimits>>,
+
+    /// The [`SearchQuality`](crate::SearchQuality) an unqualified `search()`
+    /// uses, pushed from `VelesConfig::search` at registration time (#2087).
+    ///
+    /// Deliberately NOT a field of [`RuntimeLimits`]: a default is not a limit,
+    /// and that struct's contract is the three values `validate()` enforces.
+    /// Nothing reads both in one call either -- `search()` reads this,
+    /// `enforce_perfect_mode_limit` reads the other -- so the second lock costs
+    /// no acquisition on any path.
+    ///
+    /// Defaults to [`SearchQuality::Balanced`], which is what both index
+    /// implementations hard-code, so a direct `Collection::create`/`open`
+    /// caller sees no change. **Not persisted** -- re-pushed on every open.
+    pub(crate) runtime_search_quality: Arc<RwLock<crate::SearchQuality>>,
 }
 
 /// A collection of vectors with associated metadata.
@@ -601,6 +615,19 @@ impl Collection {
     /// Returns the current runtime limits snapshot (`Copy`, no lock retained).
     pub(crate) fn runtime_limits(&self) -> RuntimeLimits {
         *self.runtime.runtime_limits.read()
+    }
+
+    /// Overwrites the quality an unqualified `search()` resolves to (#2087).
+    ///
+    /// Same contract as [`Self::set_runtime_limits`]: pushed by the `Database`
+    /// registration paths from the live config, never persisted.
+    pub(crate) fn set_runtime_search_quality(&self, quality: crate::SearchQuality) {
+        *self.runtime.runtime_search_quality.write() = quality;
+    }
+
+    /// Returns the configured default quality (`Copy`, no lock retained).
+    pub(crate) fn runtime_search_quality(&self) -> crate::SearchQuality {
+        *self.runtime.runtime_search_quality.read()
     }
 
     /// Enforces the runtime ingest limits at the cold upsert boundary
