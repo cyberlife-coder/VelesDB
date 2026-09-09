@@ -8,7 +8,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-
 - **`[search]`'s `default_mode` and `ef_search` reach the engine (#2087).** The
   section was parsed, validated and ignored; an unqualified `search()` now
   resolves through `SearchConfig::resolved_quality()`, with `ef_search` winning
@@ -39,7 +38,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   earlier draft closed over the index call and cost a reproducible +2.2 %; the
   measurement is what caught it.
 
-### Added
 
 - **`SearchMode::quality()`** — the lossless `SearchMode` → `SearchQuality`
   conversion. `SearchMode::ef_search()` cannot express `Perfect`: it returns
@@ -51,47 +49,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `perfect` *and* bypassed its guard rail. `quality()` is the conversion that
   wiring must use.
 
-### Fixed
-
-- **`SearchQuality::Perfect` was documented as the opposite of what it does.**
-  Its rustdoc described a graph search at `ef_search = 4096` that "tunes the
-  HNSW graph's effort and is not exhaustive", with a ~0.9994 recall figure at
-  1M. It is exhaustive: `try_search_special_quality` routes the variant to
-  `search_brute_force` before `ef_search` is read, and a collection above
-  `limits.max_perfect_mode_vectors` (default 500 000) is refused with
-  `Error::GuardRail` rather than scanned — so the 1M figure describes a run
-  that cannot happen. The doc was written from `ef_search()` without checking
-  which arm runs. Corrected, and pinned by
-  `crates/velesdb-core/tests/perfect_mode_semantics.rs`, which sees the guard
-  rail refuse and sees `ef = 4096` accepted on the same collection.
-
-### Changed
-
-- **`.vectors` now has a v2 format: the payload starts page-aligned at byte
-  4096 instead of byte 16.** The header fields are unchanged and at the same
-  offsets; only the payload moved, into a zero-filled reserved gap.
-
-  The gap is not padding for its own sake. The graph's f32 arena hands out
-  `&[f32]` built with `slice::from_raw_parts`, whose contract requires proper
-  alignment, so a payload starting at byte 16 could never be mapped as one.
-  Moving it is what lets the file *be* the arena rather than be copied into one.
-
-  **Downgrading works, and that was measured rather than reasoned about.** An
-  earlier draft of this entry said a `git checkout` of an older build "will not
-  open a database written by this one". That was read off the v1 reader — which
-  does refuse a v2 header with `Unsupported version: 2` — without checking
-  whether anything reaches it. Nothing does: a `v6.0.0` binary opens a database
-  written by this release and answers `len = 64` with the correct nearest
-  neighbour. Setting the version byte to 99, truncating the file to its header,
-  and deleting it outright all behave identically, because `.vectors` is a
-  derived artifact and the collection is rebuilt from `vectors.dat` / the WAL
-  when it cannot be used. The reverse direction is equally clean: this build
-  reads a v1 file and leaves it v1 rather than silently rewriting it.
-  `a_corrupt_vectors_file_does_not_prevent_opening` pins that fallback so this
-  paragraph is not prose anybody has to trust. `.vectors` had no version-compat mechanism at all before this, so
-  the v1 read path was written here rather than inherited.
-
-### Added
 
 - **The durable `.vectors` file is now mapped as the graph's arena** instead of
   being deserialized into a second copy of the same bytes, on little-endian
@@ -130,38 +87,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   vectors — it maps them, and the pages fault in on first touch, so timing the
   load call alone reports the cost as gone when it has only moved.
 
-### Deprecated
-
-- **`[storage]` `data_dir`, `mmap_cache_mb` and `vector_alignment` — parsed
-  and validated, never applied.** Issue #2087's per-knob audit found these
-  three have no engine counterpart to wire them to at all (`data_dir` also
-  conflicts irreducibly with the path passed to `Database::open`), unlike
-  `storage_mode` and the rest of `[hnsw]`/`[search]`, which are still
-  pending a wiring decision. They now get the same warn-not-reject
-  deprecation cycle `[wal_batch]` (#2078) is already running — though
-  `[wal_batch]` has no validation at all, while `mmap_cache_mb` keeps its
-  pre-existing hard range check (left as is; loosening it is a separate
-  change). `VelesConfig::validate` logs a warning naming exactly which of
-  the three is set away from its default, and removal targets the next
-  major (tracked by `scripts/check-deferred-removals.py`). No behavior
-  changes — a config file setting them today keeps loading exactly as
-  before.
-
-### Performance
-
-- **The vectors dump writes each vector's bytes in one call rather than one per
-  `f32`** — 15.4 million calls at 20 000 nodes by 768 dimensions, each paying
-  `BufWriter` bookkeeping to move four bytes. Measured on
-  `persistence_save_scale` at 5 000 nodes by 3072d: **~34 % off the whole
-  `save()`**, and ~2.1x on the dump alone once the graph-and-sidecar constant
-  is subtracted.
-
-- **Loading no longer copies the vector payload** when the file is adopted as
-  the arena. The saving is real but its size depends on the query pattern, and
-  `persistence_load_scale`'s module docs carry the measurement with the two
-  caveats that bound it rather than a single flattering ratio.
-
 ### Fixed
+- **`SearchQuality::Perfect` was documented as the opposite of what it does.**
+  Its rustdoc described a graph search at `ef_search = 4096` that "tunes the
+  HNSW graph's effort and is not exhaustive", with a ~0.9994 recall figure at
+  1M. It is exhaustive: `try_search_special_quality` routes the variant to
+  `search_brute_force` before `ef_search` is read, and a collection above
+  `limits.max_perfect_mode_vectors` (default 500 000) is refused with
+  `Error::GuardRail` rather than scanned — so the 1M figure describes a run
+  that cannot happen. The doc was written from `ef_search()` without checking
+  which arm runs. Corrected, and pinned by
+  `crates/velesdb-core/tests/perfect_mode_semantics.rs`, which sees the guard
+  rail refuse and sees `ef = 4096` accepted on the same collection.
+
 
 - **A description edit could make a pull request mergeable with no gate having
   run.** `ci.yml` subscribes to `pull_request.edited` because a retarget emits
@@ -260,6 +198,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   counters on a point already invisible to `recall`, `list_all` and `relate`.
   It now shares `ensure_live` with the rest of the struct and returns
   `NotFound`, matching every sibling accessor.
+
+### Changed
+- **`.vectors` now has a v2 format: the payload starts page-aligned at byte
+  4096 instead of byte 16.** The header fields are unchanged and at the same
+  offsets; only the payload moved, into a zero-filled reserved gap.
+
+  The gap is not padding for its own sake. The graph's f32 arena hands out
+  `&[f32]` built with `slice::from_raw_parts`, whose contract requires proper
+  alignment, so a payload starting at byte 16 could never be mapped as one.
+  Moving it is what lets the file *be* the arena rather than be copied into one.
+
+  **Downgrading works, and that was measured rather than reasoned about.** An
+  earlier draft of this entry said a `git checkout` of an older build "will not
+  open a database written by this one". That was read off the v1 reader — which
+  does refuse a v2 header with `Unsupported version: 2` — without checking
+  whether anything reaches it. Nothing does: a `v6.0.0` binary opens a database
+  written by this release and answers `len = 64` with the correct nearest
+  neighbour. Setting the version byte to 99, truncating the file to its header,
+  and deleting it outright all behave identically, because `.vectors` is a
+  derived artifact and the collection is rebuilt from `vectors.dat` / the WAL
+  when it cannot be used. The reverse direction is equally clean: this build
+  reads a v1 file and leaves it v1 rather than silently rewriting it.
+  `a_corrupt_vectors_file_does_not_prevent_opening` pins that fallback so this
+  paragraph is not prose anybody has to trust. `.vectors` had no version-compat mechanism at all before this, so
+  the v1 read path was written here rather than inherited.
+
+### Deprecated
+- **`[storage]` `data_dir`, `mmap_cache_mb` and `vector_alignment` — parsed
+  and validated, never applied.** Issue #2087's per-knob audit found these
+  three have no engine counterpart to wire them to at all (`data_dir` also
+  conflicts irreducibly with the path passed to `Database::open`), unlike
+  `storage_mode` and the rest of `[hnsw]`/`[search]`, which are still
+  pending a wiring decision. They now get the same warn-not-reject
+  deprecation cycle `[wal_batch]` (#2078) is already running — though
+  `[wal_batch]` has no validation at all, while `mmap_cache_mb` keeps its
+  pre-existing hard range check (left as is; loosening it is a separate
+  change). `VelesConfig::validate` logs a warning naming exactly which of
+  the three is set away from its default, and removal targets the next
+  major (tracked by `scripts/check-deferred-removals.py`). No behavior
+  changes — a config file setting them today keeps loading exactly as
+  before.
+
+### Performance
+- **The vectors dump writes each vector's bytes in one call rather than one per
+  `f32`** — 15.4 million calls at 20 000 nodes by 768 dimensions, each paying
+  `BufWriter` bookkeeping to move four bytes. Measured on
+  `persistence_save_scale` at 5 000 nodes by 3072d: **~34 % off the whole
+  `save()`**, and ~2.1x on the dump alone once the graph-and-sidecar constant
+  is subtracted.
+
+- **Loading no longer copies the vector payload** when the file is adopted as
+  the arena. The saving is real but its size depends on the query pattern, and
+  `persistence_load_scale`'s module docs carry the measurement with the two
+  caveats that bound it rather than a single flattering ratio.
 
 ## [6.0.0] - 2026-09-02
 
