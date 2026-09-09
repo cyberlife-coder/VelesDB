@@ -367,17 +367,22 @@ pub enum SearchQuality {
     Balanced,
     /// Accurate search with `ef_search=512`. ~100% recall.
     Accurate,
-    /// Highest-recall mode: `ef_search=4096` base with a large candidate pool
-    /// and exact SIMD re-ranking. Reaches exactly 1.0 on the ≤100K contract
-    /// tests; on a real 1M corpus (SIFT1M) it measures ~0.9994 — re-ranking can
-    /// only reorder candidates the graph surfaced, so the rare true neighbour
-    /// outside the ef=8192 pool at 1M is not recovered. See docs/BENCHMARKS.md §11.
+    /// Exhaustive: every stored vector is scored, so recall is 1.0 by
+    /// construction. This variant leaves the graph — `try_search_special_quality`
+    /// routes it straight to `search_brute_force` before `ef_search` is ever
+    /// consulted, so [`Self::ef_search`]'s `4096.max(k * 100)` is not the number
+    /// this mode runs at. It is O(n / cores).
     ///
-    /// This tunes the **HNSW graph's effort** and is not exhaustive. For a hard
-    /// 100% guarantee use the separate `SearchMode::Perfect`
-    /// (`crate::config::SearchMode`), which switches the *engine* to a bruteforce
-    /// full scan (O(n)) rather than staying on the graph. Same name, different
-    /// axis: `SearchQuality` = graph effort, `SearchMode` = engine choice.
+    /// **Guarded, and the guard is the reason to read this.** A collection
+    /// larger than `limits.max_perfect_mode_vectors` (default 500 000) makes
+    /// the search fail with [`crate::error::Error::GuardRail`] rather than run
+    /// a linear scan over it. Verified in
+    /// `perfect_quality_is_refused_above_the_configured_cap`.
+    ///
+    /// This paragraph said the opposite until #2238 — "tunes the HNSW graph's
+    /// effort and is not exhaustive", with a ~0.9994 recall figure at 1M that
+    /// this path cannot produce and a corpus size the guard would refuse. It
+    /// was read off `ef_search()` without checking which arm runs.
     Perfect,
     /// Custom `ef_search` value.
     Custom(usize),

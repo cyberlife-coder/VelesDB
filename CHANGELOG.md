@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`SearchMode::quality()`** — the lossless `SearchMode` → `SearchQuality`
+  conversion. `SearchMode::ef_search()` cannot express `Perfect`: it returns
+  `usize::MAX` as a bruteforce sentinel that nothing reads, and the only
+  conversion available turns that into `SearchQuality::Custom(usize::MAX)` —
+  an uncapped graph traversal that is neither exhaustive nor covered by
+  `limits.max_perfect_mode_vectors`. Wiring `[search]` (#2087) through
+  `ef_search()` would therefore have silently downgraded a config asking for
+  `perfect` *and* bypassed its guard rail. `quality()` is the conversion that
+  wiring must use.
+
+### Fixed
+
+- **`SearchQuality::Perfect` was documented as the opposite of what it does.**
+  Its rustdoc described a graph search at `ef_search = 4096` that "tunes the
+  HNSW graph's effort and is not exhaustive", with a ~0.9994 recall figure at
+  1M. It is exhaustive: `try_search_special_quality` routes the variant to
+  `search_brute_force` before `ef_search` is read, and a collection above
+  `limits.max_perfect_mode_vectors` (default 500 000) is refused with
+  `Error::GuardRail` rather than scanned — so the 1M figure describes a run
+  that cannot happen. The doc was written from `ef_search()` without checking
+  which arm runs. Corrected, and pinned by
+  `crates/velesdb-core/tests/perfect_mode_semantics.rs`, which sees the guard
+  rail refuse and sees `ef = 4096` accepted on the same collection.
+
 ### Changed
 
 - **`.vectors` now has a v2 format: the payload starts page-aligned at byte
