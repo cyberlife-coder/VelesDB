@@ -13,6 +13,12 @@
 //! (bring your own LLM by implementing [`Extractor`]) while a batteries-included
 //! `OllamaExtractor` backend lives behind the `extractor-http` feature.
 
+#[cfg(feature = "extractor-http")]
+#[path = "extract_wire.rs"]
+mod wire;
+#[cfg(feature = "extractor-http")]
+use wire::{extraction_schema, fact_list_schema, generate_body};
+
 /// One extracted, graph-ready fact: a self-contained sentence plus the salient
 /// topics it concerns. The topics become shared graph hubs, so two facts about
 /// the same topic are reachable from one another even with no textual overlap.
@@ -1095,11 +1101,11 @@ fn extraction_from_reply(reply: &str) -> Result<Extraction, ExtractError> {
 #[cfg(feature = "extractor-http")]
 impl Extractor for OllamaExtractor {
     fn extract(&self, text: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
-        facts_from_reply(&self.generate(&build_prompt(text))?)
+        facts_from_reply(&self.generate(&build_prompt(text), &fact_list_schema())?)
     }
 
     fn extract_graph(&self, text: &str) -> Result<Extraction, ExtractError> {
-        extraction_from_reply(&self.generate(&build_graph_prompt(text))?)
+        extraction_from_reply(&self.generate(&build_graph_prompt(text), &extraction_schema())?)
     }
 }
 
@@ -1187,21 +1193,9 @@ impl OllamaExtractor {
     /// Ollama may have closed, and `ureq` will not replay a POST with a body.
     /// The whole attempt — POST and body read — is inside the closure so a
     /// truncated response is replayed rather than surfacing as a parse error.
-    fn generate(&self, prompt: &str) -> Result<String, ExtractError> {
+    fn generate(&self, prompt: &str, schema: &serde_json::Value) -> Result<String, ExtractError> {
         let url = format!("{}/api/generate", self.base_url);
-        let body = serde_json::json!({
-            "model": self.model,
-            "prompt": prompt,
-            "stream": false,
-            "think": false,
-            // Extraction models are large — the one this crate documents as an
-            // example is 21.9 GB — so an unload between calls is the dominant
-            // cost, not the generation. Shares the embedder's knob so one
-            // setting governs every Ollama call the daemon makes.
-            "keep_alive": crate::embedder::keep_alive(),
-            "options": { "temperature": 0, "num_predict": MAX_GENERATION_TOKENS },
-        })
-        .to_string();
+        let body = generate_body(&self.model, prompt, schema).to_string();
         let attempt = || {
             let response = self
                 .agent
