@@ -96,7 +96,12 @@ def test_velesdb_mode(data: np.ndarray, queries: np.ndarray, ground_truth: List[
             points = [{"id": i, "vector": data[i].tolist()} for i in range(batch_start, batch_end)]
             resp = session.post(f"{base_url}/collections/{collection_name}/points", json={"points": points})
             if resp.status_code not in [200, 201]:
-                print(f"    Insert error: {resp.text}")
+                # A refused batch leaves a partial collection; scoring it
+                # against the full dataset's ground truth would publish a
+                # recall the engine never had.
+                print(f"  [{mode_name}] insert refused ({resp.status_code}): {resp.text[:200]}")
+                session.delete(f"{base_url}/collections/{collection_name}")
+                return None
         insert_time = time.time() - start
         
         # Warmup

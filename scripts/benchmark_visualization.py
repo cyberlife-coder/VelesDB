@@ -224,15 +224,18 @@ def create_ef_scaling_chart(results: List[BenchmarkResult], filename: str):
                   fontsize=14, fontweight='bold', pad=15)
     ax1.grid(True, alpha=0.3)
     
-    # Computed from the points plotted, so the caption cannot outlive its data.
-    low, high = swept[0], swept[-1]
-    fig.text(0.5, 0.02,
-             f'💡 {high.ef_search // low.ef_search}x ef_search '
-             f'({low.ef_search}→{high.ef_search}) costs '
-             f'{high.latency_p50_ms / low.latency_p50_ms:.1f}x P50 latency '
-             f'for {high.recall - low.recall:+.1f} recall points',
-             fontsize=11, ha='center', style='italic', 
-             bbox=dict(boxstyle='round', facecolor='#f0f9ff', edgecolor='#2563eb'))
+    # Computed from the points plotted, so the caption cannot outlive its data;
+    # with fewer than two of them, or no latency to divide by, there is no
+    # ratio to state.
+    if len(swept) >= 2 and swept[0].latency_p50_ms > 0:
+        low, high = swept[0], swept[-1]
+        fig.text(0.5, 0.02,
+                 f'💡 {high.ef_search / low.ef_search:.1f}x ef_search '
+                 f'({low.ef_search}→{high.ef_search}) costs '
+                 f'{high.latency_p50_ms / low.latency_p50_ms:.1f}x P50 latency '
+                 f'for {high.recall - low.recall:+.1f} recall points',
+                 fontsize=11, ha='center', style='italic',
+                 bbox=dict(boxstyle='round', facecolor='#f0f9ff', edgecolor='#2563eb'))
     
     plt.tight_layout()
     plt.savefig(filename, dpi=150, bbox_inches='tight', facecolor='white')
