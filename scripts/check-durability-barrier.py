@@ -24,10 +24,11 @@ Every production ``.rs`` file under ``crates/*/src`` that contains
   (an audited exemption: a derived artifact rebuilt on load, a lock file with
   no durability semantics).
 
-Both matches run on code only: comments are removed first, string and char
-literals kept. Against raw text, a doc comment explaining why a path avoids
-``File::create`` made its file a creator, and a comment that merely mentions
-``sync_all`` passed for a barrier.
+Both matches run on code only: comments are removed and every literal's body
+blanked first. Against raw text, a doc comment explaining why a path avoids
+``File::create`` made its file a creator, a comment or string that merely
+mentions ``sync_all`` passed for a barrier, and a quoted ``#[cfg(test)] mod``
+ended the scan early.
 
 The baseline only shrinks: an entry whose file no longer needs the exemption
 (gained ``sync_all``, or dropped ``File::create``) fails asking for the
@@ -65,8 +66,10 @@ from pathlib import Path
 # of a file, so everything from this marker on is test code.
 INLINE_TEST_MOD = re.compile(r"#\[cfg\(test\)\]\s*(?:#\[[^\]]*\]\s*)*mod\s")
 
-# A raw string opener (`r"`, `r#"`, `br##"`…); group 1 is its hashes.
-RAW_STRING = re.compile(r'b?r(#*)"')
+# A raw string opener, found at its `r` — so `br"` and `cr#"` too, their
+# prefix left as code. Group 1 is its hashes. No guard for an identifier ending
+# in `r`: Rust 2021 reserves unknown literal prefixes, so none touches a quote.
+RAW_STRING = re.compile(r'r(#*)"')
 # A char literal, escapes included — `'"'` must not open a string. A lifetime
 # (`'a`) has no closing quote and does not match.
 CHAR_LITERAL = re.compile(r"'(?:\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F]{1,6}\}|.)|[^\\'\n])'")
@@ -96,12 +99,18 @@ def production_rust_files(root: Path) -> "list[Path]":
     return out
 
 
-def code_only(text: str) -> str:
-    """`text` with its comments removed; string and char literals kept whole.
+def _blank(body: str) -> str:
+    """`body` with every character but a newline turned into a space."""
+    return "".join(ch if ch == "\n" else " " for ch in body)
 
-    Line comments keep their newline, block comments nest as Rust's do. A
-    string is copied through as it stands, so a `//` inside one — a URL — is
-    not a comment, and neither is anything after a `'"'` char literal.
+
+def code_only(text: str) -> str:
+    """`text` with its comments removed and every literal's body blanked.
+
+    Line comments keep their newline, block comments nest as Rust's do. String,
+    raw-string and char literals keep their delimiters and newlines and lose the
+    rest, so a `//` in a URL is no comment, and a `File::create`, a `sync_all`
+    or a `#[cfg(test)] mod` quoted in a literal is no code.
     """
     out: "list[str]" = []
     i, n = 0, len(text)
@@ -121,23 +130,25 @@ def code_only(text: str) -> str:
                 else:
                     i += 1
             continue
-        raw = RAW_STRING.match(text, i) if c in "br" else None
-        if raw and not (i and (text[i - 1].isalnum() or text[i - 1] == "_")):
-            close = text.find('"' + raw.group(1), raw.end())
-            end = n if close == -1 else close + 1 + len(raw.group(1))
-            out.append(text[i:end])
+        raw = RAW_STRING.match(text, i) if c == "r" else None
+        if raw:
+            hashes = raw.group(1)
+            close = text.find('"' + hashes, raw.end())
+            body_end = n if close == -1 else close
+            end = n if close == -1 else close + 1 + len(hashes)
+            out.append(text[i : raw.end()] + _blank(text[raw.end() : body_end]) + text[body_end:end])
             i = end
             continue
         if c == '"':
             j = i + 1
             while j < n and text[j] != '"':
                 j += 2 if text[j] == "\\" else 1
-            out.append(text[i : j + 1])
+            out.append('"' + _blank(text[i + 1 : min(j, n)]) + text[j : j + 1])
             i = j + 1
             continue
         literal = CHAR_LITERAL.match(text, i) if c == "'" else None
         if literal:
-            out.append(literal.group(0))
+            out.append("'" + _blank(literal.group(0)[1:-1]) + "'")
             i = literal.end()
             continue
         out.append(c)

@@ -484,3 +484,66 @@ fn a_legacy_payload_is_normalized_in_a_copy_never_in_the_file() {
         );
     }
 }
+
+/// Writes a pre-flag cosine dump holding one vector off the unit sphere and
+/// returns its `.vectors` path and bytes: the payload a load must copy out of
+/// the adopted file before normalizing it.
+fn legacy_off_sphere_dump(dir: &std::path::Path) -> (std::path::PathBuf, Vec<u8>) {
+    use crate::perf_optimizations::ContiguousVectors;
+    const DIM: usize = 4;
+    let engine = CachedSimdDistance::new_prenormalized(DistanceMetric::Cosine, DIM);
+    let hnsw = NativeHnsw::new(engine, 16, 100, 100);
+    for i in 0..ContiguousVectors::MIN_ARENA_CAPACITY + 2 {
+        hnsw.insert(&[i as f32 + 1.0, 0.5, 0.25, 2.0])
+            .expect("test: insert");
+    }
+    hnsw.file_dump(dir, "legacy").expect("test: dump");
+    drop(hnsw);
+    let path = dir.join("legacy.vectors");
+    let mut bytes = std::fs::read(&path).expect("test: read back");
+    bytes[usize::try_from(super::VECTORS_HEADER_BYTES).expect("test: offset fits usize")] = 0;
+    let payload = usize::try_from(super::VECTORS_V2_DATA_OFFSET).expect("test: offset fits usize");
+    let width = std::mem::size_of::<f32>();
+    for j in 0..DIM {
+        let at = payload + j * width;
+        let value = f32::from_le_bytes(bytes[at..at + width].try_into().expect("test: f32"));
+        bytes[at..at + width].copy_from_slice(&(value * 3.0).to_le_bytes());
+    }
+    std::fs::write(&path, &bytes).expect("test: write back");
+    (path, bytes)
+}
+
+/// A store whose mode keeps a disposable arena (SQ8, `RaBitQ`) gets the copy
+/// there rather than on the heap, so its f32 payload stays evictable (#2246).
+#[test]
+fn a_legacy_payload_is_copied_into_the_arena_its_mode_keeps() {
+    let dir = tempdir().expect("test: tempdir");
+    let (path, bytes) = legacy_off_sphere_dump(dir.path());
+    let engine = CachedSimdDistance::new_prenormalized(DistanceMetric::Cosine, 4);
+    let loaded = H::file_load_with_arena(dir.path(), "legacy", engine, Some(dir.path()))
+        .expect("test: load");
+    assert_eq!(
+        std::fs::read(&path).expect("test: read after"),
+        bytes,
+        "opening wrote the durable file"
+    );
+    let backing = loaded
+        .vectors
+        .read()
+        .as_ref()
+        .and_then(|vectors| vectors.backing_path().map(std::path::Path::to_path_buf))
+        .expect("test: the copy must be file-backed, not on the heap");
+    assert_ne!(backing, path, "the copy must not be the durable file");
+    assert_eq!(
+        backing.extension().and_then(|ext| ext.to_str()),
+        Some("arena"),
+        "the copy must live in the mode's disposable arena: {backing:?}"
+    );
+    // The graph owns that arena: it lives exactly as long as the graph.
+    assert!(
+        backing.exists(),
+        "the arena must exist while the graph lives"
+    );
+    drop(loaded);
+    assert!(!backing.exists(), "the arena must go with the graph");
+}

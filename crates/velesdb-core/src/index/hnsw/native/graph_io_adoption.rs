@@ -43,26 +43,38 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         file.flush()
     }
 
-    /// A heap copy of `storage`, slot for slot.
+    /// A copy of `storage`, slot for slot, in the arena this graph would have
+    /// had without adoption: file-backed under `home` when the storage mode
+    /// keeps one (SQ8, `RaBitQ`), the heap otherwise.
     ///
     /// For the one case an adopted arena must stop being the file: a payload
     /// the load has to modify, which must never reach the durable `.vectors`.
+    /// Made under the raised allocation ceiling `read_vector_data` uses, for
+    /// the same reason: a legitimately persisted payload must reload whatever
+    /// the process-wide backstop, and copying it is no different.
     ///
     /// # Errors
     ///
-    /// Returns `io::Error` if the heap arena cannot be allocated.
-    pub(super) fn heap_copy(
+    /// Returns `io::Error` if the arena cannot be allocated or mapped.
+    pub(super) fn detached_copy(
         storage: &crate::perf_optimizations::ContiguousVectors,
+        home: Option<&crate::index::hnsw::native::arena_home::ArenaHome>,
     ) -> std::io::Result<crate::perf_optimizations::ContiguousVectors> {
-        let mut heap =
-            crate::perf_optimizations::ContiguousVectors::new(storage.dimension(), storage.len())
-                .map_err(std::io::Error::other)?;
-        for i in 0..storage.len() {
-            if let Some(v) = storage.get(i) {
-                heap.insert_at(i, v).map_err(std::io::Error::other)?;
+        let (dimension, len) = (storage.dimension(), storage.len());
+        let min_bytes = len
+            .checked_mul(dimension)
+            .and_then(|n| n.checked_mul(std::mem::size_of::<f32>()))
+            .ok_or_else(|| std::io::Error::other("vector payload size overflows usize"))?;
+        crate::alloc_guard::with_min_alloc_byte_limit(min_bytes, || {
+            let mut copy =
+                Self::new_arena(home, dimension, len.max(16)).map_err(std::io::Error::other)?;
+            for i in 0..len {
+                if let Some(vector) = storage.get(i) {
+                    copy.insert_at(i, vector).map_err(std::io::Error::other)?;
+                }
             }
-        }
-        Ok(heap)
+            Ok(copy)
+        })
     }
 
     /// Maps `path` as the graph's arena when the file can serve as one (#2173).

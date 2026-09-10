@@ -105,8 +105,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   store, which `velesdb-memory`'s migration resume, hashing these files, would
   reject as corruption. The #2246 guard test only held because today's engine
   writes vectors inside the tolerance. A payload that needs normalizing is now
-  copied to the heap first, so no open can write the file whatever the engine
-  or tolerance becomes (#2246, P5).
+  copied first — into the arena its storage mode keeps, the heap or SQ8's and
+  RaBitQ's disposable file, under the load's raised allocation ceiling — so no
+  open can write the file whatever the engine or tolerance becomes (#2246, P5).
 
 - **`reorder_for_locality` could leave a collection whose graph and vectors
   disagree.** Since `.vectors` became the graph's arena, the permutation lands

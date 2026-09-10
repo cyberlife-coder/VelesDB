@@ -12,9 +12,11 @@ Pins the guard's shape:
 * the baseline only shrinks: an exempted file that gained ``sync_all``, or
   that no longer calls ``File::create``, is refused until its line is
   deleted;
-* comments are not code: ``File::create`` named only in a comment is no
-  call, ``sync_all`` named only in a comment is no barrier, and neither a
-  ``//`` inside a string nor a ``'"'`` char literal hides a real call;
+* comments and literals are not code: ``File::create`` named only in a
+  comment is no call, ``sync_all`` named in a comment or a string is no
+  barrier, a quoted ``#[cfg(test)] mod`` does not end the scan, and no ``//``
+  inside a string, raw string or char literal, no escaped quote, raw C string
+  or lifetime hides a real call;
 * the excluded forms — ``*_tests.rs``, ``tests.rs``, anything under
   ``tests/`` or ``benches/``, and code after an inline ``#[cfg(test)] mod``
   marker — stay out of the scan.
@@ -153,6 +155,35 @@ class CommentsAreNotCode(FixtureMixin, unittest.TestCase):
             "let _ = std::fs::File::create(p); }\n",
         )
         self.assertEqual(len(self._check()), 1)
+
+
+class LiteralsAreNotCode(FixtureMixin, unittest.TestCase):
+    def _refused(self, content: str) -> None:
+        self._write("crates/a/src/writer.rs", content)
+        self.assertEqual(len(self._check()), 1)
+
+    def test_a_raw_string_holding_a_quote_does_not_hide_the_call(self) -> None:
+        self._refused('pub fn w(p: &std::path::Path) { let _s = r#"say "hi//"#; '
+                      "let _ = std::fs::File::create(p); }\n")
+
+    def test_an_escaped_quote_does_not_end_the_string(self) -> None:
+        self._refused('pub fn w(p: &std::path::Path) { let _s = "a\\"b//"; '
+                      "let _ = std::fs::File::create(p); }\n")
+
+    def test_a_raw_c_string_does_not_hide_the_call(self) -> None:
+        self._refused('pub fn w(p: &std::path::Path) { let _c = cr"\\"; let _u = "http://h"; '
+                      "let _ = std::fs::File::create(p); }\n")
+
+    def test_lifetimes_are_not_char_literals(self) -> None:
+        self._refused("pub fn w<'a>(p: &std::path::Path) -> std::fs::File "
+                      "{ std::fs::File::create(p).unwrap() }\n"
+                      "pub fn v(_: &'static str) {}\n")
+
+    def test_sync_all_named_in_a_string_is_not_a_barrier(self) -> None:
+        self._refused('pub const WHY: &str = "callers must sync_all";\n' + CREATE_NO_SYNC)
+
+    def test_a_test_module_marker_in_a_string_does_not_end_the_scan(self) -> None:
+        self._refused('pub const MARKER: &str = "#[cfg(test)] mod tests";\n' + CREATE_NO_SYNC)
 
 
 class Exclusions(FixtureMixin, unittest.TestCase):

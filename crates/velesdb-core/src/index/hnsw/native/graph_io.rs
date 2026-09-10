@@ -409,25 +409,10 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         distance: D,
         arena_dir: Option<&Path>,
     ) -> std::io::Result<Self> {
-        let arena_home = arena_dir.map(crate::index::hnsw::native::arena_home::ArenaHome::claim);
+        let claimed_home = arena_dir.map(crate::index::hnsw::native::arena_home::ArenaHome::claim);
         let vectors_path = path.join(format!("{basename}.vectors"));
         let (mut vectors, count, unit_norm) =
-            Self::load_vectors_file(&vectors_path, arena_home.as_ref())?;
-
-        // `ArenaHome` means exactly one thing: there is a disposable file to
-        // delete when this graph goes away. When the arena IS `.vectors` there
-        // is none, and carrying a home would leave `Drop` pointed at a file
-        // this graph never created. Derived from the storage rather than
-        // reported back by the loader — the arena already knows what it
-        // mapped, and asking it cannot disagree with what happened.
-        #[cfg(feature = "persistence")]
-        let arena_home = match vectors
-            .as_ref()
-            .and_then(crate::perf_optimizations::ContiguousVectors::backing_path)
-        {
-            Some(mapped) if mapped == vectors_path => None,
-            _ => arena_home,
-        };
+            Self::load_vectors_file(&vectors_path, claimed_home.as_ref())?;
 
         // A payload whose header carries the unit-norm flag is skipped: its
         // writer's engine normalized every vector on insert, and on an adopted
@@ -466,11 +451,12 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
                 // Once adopted, the arena IS `.vectors`, and normalizing it in
                 // place wrote the store on a mere open — which the migration
                 // resume, hashing these files, reads as corruption. A payload
-                // that needs it is copied to the heap first; the next save then
-                // writes a flagged file, and later opens skip this block.
+                // that needs it is copied first, into the arena the storage mode
+                // keeps; the next save then writes a flagged file, and later
+                // opens skip this block.
                 #[cfg(feature = "persistence")]
                 if storage.backing_path() == Some(vectors_path.as_path()) {
-                    *storage = Self::heap_copy(storage)?;
+                    *storage = Self::detached_copy(storage, claimed_home.as_ref())?;
                 }
                 for i in first..storage.len() {
                     if let Some(v) = storage.get_mut(i) {
@@ -481,6 +467,25 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
                 }
             }
         }
+
+        // `ArenaHome` means exactly one thing: there is a disposable file to
+        // delete when this graph goes away. When the arena IS `.vectors` there
+        // is none, and carrying a home would leave `Drop` pointed at a file
+        // this graph never created. Derived from the storage rather than
+        // reported back by the loader — the arena already knows what it
+        // mapped, and asking it cannot disagree with what happened. Asked only
+        // here, after the normalization above, which can move an adopted arena
+        // into this very home.
+        #[cfg(feature = "persistence")]
+        let arena_home = match vectors
+            .as_ref()
+            .and_then(crate::perf_optimizations::ContiguousVectors::backing_path)
+        {
+            Some(mapped) if mapped == vectors_path => None,
+            _ => claimed_home,
+        };
+        #[cfg(not(feature = "persistence"))]
+        let arena_home = claimed_home;
 
         let graph_path = path.join(format!("{basename}.graph"));
         let graph = Self::load_graph_file(&graph_path, count)?;
