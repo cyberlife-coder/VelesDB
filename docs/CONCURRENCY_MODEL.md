@@ -642,26 +642,35 @@ ensure no data is lost.
 ### Recovery Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
+┌────────────────────────────────────────────────────────────────────────┐
 │                        Collection::open()                              │
 │                                                                        │
 │  1. MmapStorage::new()                                                 │
 │     ├─ Load vectors.idx (ID → offset mapping)                          │
 │     ├─ Replay vectors.wal → restore writes since last flush_index()    │
-│     ├─ Record WAL-touched ids (drained by step 4, pass 3)              │
+│     ├─ Record WAL-touched ids (drained by step 7, pass 3)              │
 │     └─ Truncate WAL after successful replay                            │
 │                                                                        │
-│  2. load_or_create_hnsw()                                              │
+│  2. LogPayloadStorage::new()                                           │
+│     └─ Load payloads.snapshot, replay payloads.log past it             │
+│                                                                        │
+│  3. load_or_create_hnsw()                                              │
 │     ├─ Gate: native_meta.bin present? (commit point, written LAST)     │
-│     ├─ Load native_hnsw.graph/.vectors/.gen + native_mappings.bin —   │
+│     ├─ Load native_hnsw.graph/.vectors/.gen + native_mappings.bin —    │
 │     │  all generation-stamped (#617); a legacy native_vectors.bin      │
 │     │  is generation-checked then discarded (PERF1)                    │
 │     └─ Load failure or config mismatch → empty index (rebuild below)   │
 │                                                                        │
-│  3. reconcile_point_count()                                            │
+│  4. load_bm25_index()                                                  │
+│     └─ bm25.snapshot + bm25.wal replay; payload rebuild if no snapshot │
+│                                                                        │
+│  5. Property, range and edge indexes; named sparse indexes             │
+│     └─ each sparse snapshot, then its WAL replayed over it             │
+│                                                                        │
+│  6. reconcile_point_count()                                            │
 │     └─ Set config.point_count = storage.len() (authoritative source)   │
 │                                                                        │
-│  4. recover_index_state() — reconciliation passes                      │
+│  7. recover_index_state() — reconciliation passes                      │
 │     ├─ Pass 1 (gap): recover_hnsw_gap                                  │
 │     │  ├─ Early exit: if storage.len() == hnsw.len() → no gap          │
 │     │  ├─ find_gap_ids: storage.ids() \ index.mappings                 │
@@ -672,9 +681,13 @@ ensure no data is lost.
 │     │  the indexed vector ≠ storage (storage is the source of truth)   │
 │     ├─ Pass 4 (unlinked): mapped ids whose node has no layer-0 link    │
 │     │  (entry point exempt) — re-upsert onto a fresh, linked node      │
-│     └─ Any pass mutated the index → index.save() before open returns  │
+│     └─ Any pass mutated the index → index.save() before open returns   │
 │        (the WAL was truncated; the delta has no other witness)         │
-└─────────────────────────────────────────────────────────────────────────┘
+│                                                                        │
+│  8. restore_secondary_indexes_from_config()                            │
+│                                                                        │
+│  9. run_post_open_hooks() → replay edges.wal over edge_store.bin       │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Layer 1: Vector Storage WAL Replay
