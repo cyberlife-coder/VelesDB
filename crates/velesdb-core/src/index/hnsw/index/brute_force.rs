@@ -162,9 +162,6 @@ impl HnswIndex {
         k: usize,
     ) -> crate::error::Result<Option<Vec<ScoredResult>>> {
         self.validate_dimension(query)?;
-        if !self.enable_vector_storage {
-            return Ok(None);
-        }
 
         #[cfg(feature = "gpu")]
         {
@@ -197,6 +194,12 @@ impl HnswIndex {
     ) -> Option<Vec<ScoredResult>> {
         use crate::gpu::GpuAccelerator;
 
+        // Exact-distance features off: no GPU brute force either. Both GPU
+        // paths (`search_brute_force_gpu`, `brute_force_search_parallel` above
+        // its threshold) come through here.
+        if !self.enable_vector_storage {
+            return None;
+        }
         let gpu = GpuAccelerator::global()?;
 
         // Snapshot vectors under a brief read lock, then release before GPU dispatch

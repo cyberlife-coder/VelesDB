@@ -66,9 +66,10 @@ fn test_batch_search_matches_single_query_on_large_dataset_issue_694() {
     let query_refs: Vec<&[f32]> = queries.iter().map(Vec::as_slice).collect();
 
     let k = 10_usize;
-    // Fast quality (ef=64) magnifies the asymmetry: pre-fix batch gets ef=64,
-    // post-fix batch gets ef=128 (scaled). Higher base efs (Balanced=128,
-    // Accurate=512) already saturate the candidate space and hide the bug.
+    // Fast, the lowest base ef, magnifies the asymmetry: the pre-fix batch
+    // path ran at the base ef while the single-query path scaled it with the
+    // index size. Higher bases (Balanced, Accurate) already saturate the
+    // candidate space and hide the bug.
     let quality = SearchQuality::Fast;
 
     // Act: run both paths

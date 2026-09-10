@@ -89,10 +89,10 @@ let loaded = NativeHnswIndex::load("./my_index", 768, DistanceMetric::Cosine)?;
 | `insert_batch(&[(id, vec)])` | Batch insert |
 | `insert_batch_parallel(items)` | Parallel batch insert |
 | `search(query, k)` | Standard search (Balanced mode) |
-| `search_with_quality(query, k, quality)` | Search with quality preset (Fast/Balanced/Accurate/Perfect/Adaptive/AutoTune). On this type every preset walks the graph, `Perfect` at its large ef; `brute_force_search_parallel` is the exhaustive path |
+| `search_with_quality(query, k, quality)` | Search with quality preset (Fast/Balanced/Accurate/Perfect/Adaptive/AutoTune). On this type every preset walks the graph: `Perfect` at its large ef, `Adaptive` at its `min_ef` without escalating, `AutoTune` at Balanced's ef; `brute_force_search_parallel` is the exhaustive path |
 | `search_with_ef(query, k, ef_search)` | Search with explicit ef_search value |
 | `search_batch_parallel(queries, k, ef_search)` | Batch parallel search |
-| `brute_force_search_parallel(query, k)` | Exact search: the exact top-k under the index's distance |
+| `brute_force_search_parallel(query, k)` | Exact search: the exact top-k under the index's distance; nothing after `new_fast_insert` |
 | `remove(id)` | Remove vector |
 
 ### Persistence
@@ -492,7 +492,7 @@ POST /collections/documents/search
 | Fixed workload, known recall target | `Balanced` or `Accurate` with explicit `ef_search` |
 | Variable collection sizes, no tuning budget | **`AutoTune`** |
 | Latency-critical, recall > 90% acceptable | `Fast` |
-| Needs the exact top-k | `Perfect` on a collection or `HnswIndex` (an exhaustive scan); `brute_force_search_parallel` on `NativeHnswIndex` |
+| Needs the exact top-k | `Perfect` on a collection, or on an `HnswIndex` whose exact-distance features are on (an exhaustive scan); `brute_force_search_parallel` on a `NativeHnswIndex` built with `new` |
 
 ## Benchmarks
 

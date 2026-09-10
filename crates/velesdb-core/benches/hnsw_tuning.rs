@@ -8,7 +8,9 @@
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use std::collections::HashSet;
-use velesdb_core::{DistanceMetric, HnswIndex, ScoredResult, VectorIndex};
+use velesdb_core::{
+    DistanceMetric, HnswIndex, HnswParams, ScoredResult, SearchQuality, VectorIndex,
+};
 
 /// Simple LCG random number generator for reproducible benchmarks.
 struct SimpleRng {
@@ -83,7 +85,7 @@ fn bench_ef_search_sweep(c: &mut Criterion) {
     let k = 10;
     let num_queries = 50;
 
-    // Build index with current defaults (M=32, ef_construction=400)
+    // Build index with the current defaults, `HnswParams::auto(dim)`
     let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
     let mut vectors: Vec<(u64, Vec<f32>)> = Vec::with_capacity(num_vectors);
 
@@ -112,9 +114,15 @@ fn bench_ef_search_sweep(c: &mut Criterion) {
         .collect();
 
     // Test different ef_search values
-    // Default search uses SearchQuality::Balanced (ef_search=128)
+    // Default search uses SearchQuality::Balanced
     // Use search_with_quality() for custom ef_search values
-    println!("\n🔍 Current HnswIndex configuration (M=32, ef_construction=400, Balanced=ef_search=128):\n");
+    let defaults = HnswParams::auto(dim);
+    println!(
+        "\n🔍 Current configuration: M={}, ef_construction={}, Balanced ef_search={}\n",
+        defaults.max_connections,
+        defaults.ef_construction,
+        SearchQuality::Balanced.ef_search(k)
+    );
 
     // Measure recall with current settings
     let mut total_recall = 0.0;
@@ -127,7 +135,7 @@ fn bench_ef_search_sweep(c: &mut Criterion) {
     println!("   Recall@{k}: {:.2}%", avg_recall * 100.0);
 
     // Benchmark latency
-    group.bench_function(BenchmarkId::new("current_ef200", "latency"), |b| {
+    group.bench_function(BenchmarkId::new("current_balanced", "latency"), |b| {
         b.iter(|| {
             let results = index.search(&queries[0], k);
             criterion::black_box(results)
@@ -146,9 +154,18 @@ fn bench_ef_search_sweep(c: &mut Criterion) {
     println!("│ d > 768     │ 24-32   │ 300-600          │ 256-512    │");
     println!("└─────────────┴─────────┴──────────────────┴────────────┘");
     println!("\n💡 Quality Profiles:");
-    println!("   • fast:     ef_search=64  (lower recall, faster)");
-    println!("   • balanced: ef_search=128 (good tradeoff)");
-    println!("   • accurate: ef_search=512 (best recall, still <10ms)\n");
+    println!(
+        "   • fast:     ef_search={} (lower recall, faster)",
+        SearchQuality::Fast.ef_search(k)
+    );
+    println!(
+        "   • balanced: ef_search={} (good tradeoff)",
+        SearchQuality::Balanced.ef_search(k)
+    );
+    println!(
+        "   • accurate: ef_search={} (best recall)\n",
+        SearchQuality::Accurate.ef_search(k)
+    );
 }
 
 /// Test recall at different k values.

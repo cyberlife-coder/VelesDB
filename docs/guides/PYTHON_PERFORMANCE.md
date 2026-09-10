@@ -144,7 +144,7 @@ sufficient. Use `accurate` or `perfect` only for offline evaluation.
 |---------|-------------------|--------|-----------------|
 | `"fast"` | 96 | 97.4%* | Lowest |
 | `"balanced"` | 160 | 99.8%* | Default |
-| `"accurate"` | 512 | 100%*; 0.98 on SIFT1M's 1M | 4x slower than balanced |
+| `"accurate"` | 512 | 100%*; 0.98 on SIFT1M's 1M | ~2x slower than balanced (130 vs 57 µs p50 in BENCHMARKS.md) |
 | `"perfect"` | — (exhaustive scan) | exact top-k | Exhaustive — evaluation only; refused above `max_perfect_mode_vectors` |
 | `"autotune"` | Adaptive | ~95%+ | Scales with collection size |
 

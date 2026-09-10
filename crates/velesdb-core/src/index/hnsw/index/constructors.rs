@@ -77,7 +77,8 @@ impl HnswIndex {
     ///
     /// # Trade-offs
     ///
-    /// - **~3-5x faster inserts** than `new()` (M=12, ef=100 vs M=32, ef=400)
+    /// - **~3-5x faster inserts** than `new()` (M=12, ef=100 vs `auto()`'s
+    ///   M=24/300 up to 256 dims, M=32/400 above)
     /// - **Recall**: ~85% (vs ≥95% with standard params)
     /// - **Best for**: Bulk loading, development, benchmarking
     ///
@@ -484,9 +485,10 @@ impl HnswIndex {
         self.mappings.is_empty()
     }
 
-    /// Returns whether exact-distance features are on — `false` after
-    /// [`Self::new_fast_insert`] or `with_params_full(.., false)`. The graph
-    /// stores its vectors either way.
+    /// Returns whether exact-distance features are on — `false` for an index
+    /// built with [`Self::new_fast_insert`] or `with_params_full(.., false)`, and
+    /// for one loaded from such an index's files. The graph stores its vectors
+    /// either way.
     #[inline]
     #[must_use]
     pub fn has_vector_storage(&self) -> bool {
