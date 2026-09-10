@@ -171,7 +171,14 @@ looks "hard". No recorded run measures its latency or recall yet (#2266).
 3. If spread ≥ 2.0 (scattered results = hard query) → search once more at twice the ef, capped at `max_ef`, when that exceeds the first ef: resuming the first traversal on the Standard backend's CPU path, restarting on the GPU, RaBitQ and SQ8 paths
 4. Otherwise (dense cluster = easy query) → return the results immediately
 
-A filtered search runs only the first step, one pass at `max(min_ef, k)` scaled like the fixed presets, with no spread test (#2268).
+#### When the two phases run
+
+`search_with_quality` runs both phases, for Adaptive and for AutoTune, on an unfiltered search and on a filter the collection post-filters: one no secondary index resolves to a bitmap (a `NOT`, a non-indexed field), or one matching more than 80% of the collection. Other paths run a single pass instead:
+
+- a filter resolved to a bitmap and matching more than 1% and at most 80% of the collection: one pass at the preset's scaled ef, retried once at twice that ef when fewer than k results survive the filter (#2268);
+- a filter matching 1% or less: an exact scan of the matching vectors, off the graph;
+- a VelesQL query with `rerank = false`: one pass at the preset's scaled ef (#2268);
+- a REST search with a filter: the mode is not applied (#457).
 
 **Use cases:**
 - Mixed workloads where most queries are easy
@@ -203,7 +210,8 @@ The mode needs both bounds: a bare `'adaptive'` is not parsed, and today the que
 `SearchQuality::AutoTune` derives an ef range from the collection's size and
 vector dimension, then runs the same two-phase search as Adaptive. It saves
 picking an ef by hand; no recorded run measures its latency or recall yet
-(#2266), and a filtered search runs one pass at Balanced's ef instead (#2268).
+(#2266), and some search paths run it in one pass (see
+[When the two phases run](#when-the-two-phases-run)).
 The scaling tiers and the dimension factor are documented in the
 [Tuning Guide — AutoTune Mode](TUNING_GUIDE.md#autotune-mode-v172).
 

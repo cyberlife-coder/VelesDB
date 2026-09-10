@@ -425,9 +425,9 @@ pub enum SearchQuality {
     /// - 100K and more: `k * 12`
     /// - above 512 dimensions: times 1.5
     ///
-    /// `min_ef` is at least `k`, and `max_ef` is `4 * min_ef`. A filtered search
-    /// runs one pass at Balanced's ef instead. No recorded run measures its
-    /// latency or recall (#2266).
+    /// `min_ef` is at least `k`, and `max_ef` is `4 * min_ef`. A filter resolved
+    /// to a bitmap and `rerank = false` run one pass instead (#2268). No recorded
+    /// run measures its latency or recall (#2266).
     ///
     /// # Example
     ///

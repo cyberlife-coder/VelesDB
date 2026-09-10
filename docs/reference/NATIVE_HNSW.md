@@ -437,7 +437,7 @@ The pipelined path produces **identical results** to the non-pipelined path. Onl
 
 ## AutoTune Search
 
-On an `HnswIndex` and on a collection, `SearchQuality::AutoTune` computes an `ef_search` range from collection statistics, then delegates to the adaptive two-phase search algorithm; a filtered search runs one pass at Balanced's ef instead (#2268). `NativeHnswIndex::search_with_quality` does not: it walks the graph once at Balanced's ef (see Operations). No recorded run measures its latency or recall (#2266).
+On an `HnswIndex` and on a collection, `SearchQuality::AutoTune` computes an `ef_search` range from collection statistics, then delegates to the adaptive two-phase search algorithm; some search paths run it in one pass instead (see [Search Modes — When the two phases run](../guides/SEARCH_MODES.md#when-the-two-phases-run)). `NativeHnswIndex::search_with_quality` does not: it walks the graph once at Balanced's ef (see Operations). No recorded run measures its latency or recall (#2266).
 
 ### How It Works
 

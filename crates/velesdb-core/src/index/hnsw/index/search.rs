@@ -458,8 +458,9 @@ impl HnswIndex {
         // pass pays only the marginal exploration instead of ef1 + ef2 from
         // scratch. GPU, RaBitQ and SQ8 phase-1 searches return no state
         // and restart, exactly as before. See `ResumableSearch` for what a
-        // resumed pass does not reconsider (recall sits between single-pass
-        // ef1 and ef2; the `adaptive_resume_evals` harness pins the trade).
+        // resumed pass does not reconsider: `adaptive_resume_evals` holds its
+        // recall within 2% of a from-scratch pass at ef2, on one 3,000 x 256
+        // corpus.
         let escalated = match resume {
             Some(r) => inner.resume_search(r, query, k, escalated_ef),
             None => inner.search_auto(query, k, escalated_ef),

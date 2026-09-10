@@ -432,7 +432,7 @@ WITH (quantization = 'dual', oversampling = 4);
 
 | Option | Type | Description |
 |--------|------|-------------|
-| `mode` | string | `fast`, `balanced`, `accurate`, `perfect`, `autotune`, `custom:<ef>`, `adaptive:<min_ef>:<max_ef>` |
+| `mode` | string | `fast`, `balanced`, `accurate`, `perfect`, `autotune`, `custom:<ef>`, `adaptive:<min_ef>:<max_ef>` (min ≤ max) |
 | `ef_search` | integer | HNSW ef_search (16–4096) |
 | `timeout_ms` | integer | Query timeout in milliseconds |
 | `rerank` | boolean | Enable reranking after quantized search |
