@@ -223,7 +223,7 @@ parameter with dynamic scaling based on the requested result count `k`.
 | `Perfect` | — (exhaustive scan, no graph) | — | exact top-k, ties aside | Ground truth, evaluation; refused above `limits.max_perfect_mode_vectors` |
 | `AutoTune` | size-aware | `auto_ef_range(count, dim, k)`; falls back to max(160, k*5) without collection info | not measured | Hands-off default at any scale (see [AutoTune Mode](#autotune-mode-v172)) |
 | `Custom(n)` | n | n | Varies | Fine-grained control |
-| `Adaptive { min_ef, max_ef }` | max(min_ef, k) | a hard query once, to min(2 × base, max_ef) | not measured | Mixed workloads, latency-sensitive |
+| `Adaptive { min_ef, max_ef }` | max(min_ef, k) | a hard query once, to min(2 × base, max_ef) when larger | not measured | Mixed workloads, latency-sensitive |
 
 \* Recall@10 in `recall_benchmark` (10K random 128-D vectors, an index built with `HnswParams::max_recall`, 100 queries), measured 2026-09-10 on 6.0.0; see [BENCHMARKS.md](../BENCHMARKS.md#hnsw-recall-profiles-10k128d). No recorded run measures `AutoTune` or `Adaptive` yet (#2266).
 
@@ -238,11 +238,14 @@ yet, #2266):
 
 1. **Phase 1**: Search at `max(min_ef, k)` (32 for `min_ef: 32`, k = 10). Easy
    queries stop here.
-2. **Phase 2**: Compute the result spread: the first-to-last score gap over the
-   tail's distance from the metric's floor (`(max − min) / min` for a distance).
-   At 2.0 or more (a hard query, scattered results), the same search continues
-   once at twice its ef, capped at `max_ef`; the GPU and RaBitQ paths restart
-   instead.
+2. **Phase 2**: Compute the result spread: the first-to-last score gap over a
+   baseline, the lower score's distance from the metric's floor on Cosine and
+   Jaccard, the smaller absolute score on Euclidean, Hamming and DotProduct
+   (`(max − min) / min` for a distance). At 2.0 or more (a hard query,
+   scattered results), the search runs once more at twice its ef, capped at
+   `max_ef`, when that exceeds the first ef: it resumes the first traversal on
+   the Standard backend's CPU path, and restarts on the GPU, RaBitQ and SQ8
+   paths.
 
 ```rust
 use velesdb_core::SearchQuality;
@@ -318,7 +321,7 @@ as `Adaptive`).
 
 A dimension factor of **1.5x** is applied for dimensions > 512 (sparser
 neighborhoods require more candidates). The `max_ef` is always `4 * min_ef`,
-giving the second adaptive phase headroom for hard queries.
+a cap the second phase stays under: it doubles `min_ef` once.
 
 **REST API:**
 

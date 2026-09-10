@@ -406,9 +406,10 @@ impl HnswIndex {
     ///
     /// Phase 1: search with `min_ef`. If the result spread ([`should_escalate`])
     /// marks a hard query (scattered results), widen ef to `2 * min_ef`, capped
-    /// at `max_ef`, and **resume** the phase-1 traversal (visited set and
-    /// frontier carried over) rather than re-searching from scratch — restart
-    /// remains only for the GPU/RaBitQ paths, which keep no CPU-side state.
+    /// at `max_ef` (no second phase when that is no wider), and **resume** the
+    /// phase-1 traversal (visited set and frontier carried over) rather than
+    /// re-searching from scratch — restart remains only for the GPU, RaBitQ and
+    /// SQ8 paths, which keep no resumable state.
     /// Easy queries stop after phase 1; on escalated ones, resuming saves
     /// distance evaluations over a restart (`tests/adaptive_resume_evals.rs`
     /// asserts at least a tenth).

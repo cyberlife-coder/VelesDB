@@ -7,7 +7,7 @@
  * (`fast | balanced | accurate | perfect | autotune`) plus two
  * template-literal forms:
  * - `custom:<ef>`          — explicit HNSW `ef_search` override
- * - `adaptive:<min>:<max>` — recall-target adaptive loop
+ * - `adaptive:<min>:<max>` — two-phase adaptive search (one escalation on hard queries)
  *
  * The helper preserves the string verbatim and lets the server parse
  * it via `velesdb_core::api_types::mode_to_search_quality`. This

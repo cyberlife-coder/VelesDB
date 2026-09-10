@@ -50,9 +50,7 @@ Recall@10 = (Number of true top-10 neighbors found) / 10 × 100%
                     Latency
                         ↑
                         │
-          Fast ●────────┤  lowest latency, smallest candidate pool
-                        │
-      Adaptive ●╌╌╌╌╌╌╌┤  varies with query difficulty (auto-escalation)
+          Fast ●────────┤  lowest latency of the fixed presets
                         │
       Balanced ●────────┤  the production default
                         │
@@ -63,9 +61,8 @@ Recall@10 = (Number of true top-10 neighbors found) / 10 × 100%
         ────────────────┴────────────────→ Recall
 ```
 
-> The **Adaptive** mode is shown with a dashed line because its latency varies with query difficulty:
-> an easy query stops after its first phase, and a hard one continues once at twice its starting ef.
-> No recorded run measures either (#2266).
+> **Adaptive** is not on the chart: its cost varies with query difficulty (an easy query stops after
+> its first phase, a hard one searches once more at a wider ef), and no recorded run measures it (#2266).
 
 ---
 
@@ -79,7 +76,7 @@ formulas and expected recall per preset live in the
 ### 1. Fast — Minimal latency
 
 Prioritizes latency over the last few points of recall: the graph traversal
-keeps the smallest candidate pool of the named presets.
+keeps the smallest candidate pool of the fixed presets.
 
 **Use cases:**
 - Real-time autocomplete
@@ -162,7 +159,7 @@ collection.search_with_quality(&query, 10, SearchQuality::Perfect)?;
 
 ---
 
-### 5. Adaptive — Adaptive optimal latency
+### 5. Adaptive — escalates only hard queries
 
 Starts with a small candidate pool and escalates once, only when the result set
 looks "hard". No recorded run measures its latency or recall yet (#2266).
@@ -170,8 +167,8 @@ looks "hard". No recorded run measures its latency or recall yet (#2266).
 **Two-phase operation:**
 
 1. Search at `max(min_ef, k)` (e.g. 32)
-2. Analyze the **spread** of the results: the first-to-last score gap over the tail's distance from the metric's floor, `(max_distance - min_distance) / min_distance` for a distance
-3. If spread ≥ 2.0 (scattered results = hard query) → continue the same search once at twice the ef, capped at `max_ef`
+2. Analyze the **spread** of the results: the first-to-last score gap over a baseline, the lower score's distance from the metric's floor on Cosine and Jaccard, the smaller absolute score on Euclidean, Hamming and DotProduct (`(max_distance - min_distance) / min_distance` for a distance)
+3. If spread ≥ 2.0 (scattered results = hard query) → search once more at twice the ef, capped at `max_ef`, when that exceeds the first ef: resuming the first traversal on the Standard backend's CPU path, restarting on the GPU, RaBitQ and SQ8 paths
 4. Otherwise (dense cluster = easy query) → return the results immediately
 
 **Use cases:**
@@ -190,8 +187,10 @@ let results = index.search_with_quality(&query, 10, quality);
 ```sql
 -- In VelesQL
 SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
-WITH (mode = 'adaptive');
+WITH (mode = 'adaptive:32:512');
 ```
+
+The mode needs both bounds: a bare `'adaptive'` is not parsed, and today the query then runs at the collection's default mode without an error (#2267).
 
 **Impact**: easy queries stop after the first phase, so the median query costs less than with a fixed high `ef_search`; no recorded run measures the gain, or its recall, yet (#2266).
 
@@ -531,7 +530,7 @@ The preset `ef_search` values are listed in the
 ### 🤖 RAG / Chatbot
 
 ```rust
-// Recommended production configuration (optimal latency)
+// Mixed workloads: escalates only hard queries
 SearchQuality::Adaptive { min_ef: 32, max_ef: 512 }  // escalates only on hard queries
 
 // Fixed alternative for constant recall
@@ -548,7 +547,7 @@ SearchQuality::Accurate
 SearchQuality::Fast
 
 // Product pages (mixed easy/hard)
-SearchQuality::Adaptive { min_ef: 32, max_ef: 256 }  // fast on simple queries
+SearchQuality::Adaptive { min_ef: 32, max_ef: 256 }  // escalates only hard queries
 
 // Product page (precision matters)
 SearchQuality::Balanced
@@ -659,11 +658,11 @@ WHERE vector NEAR $query
 LIMIT 10
 WITH (mode = 'accurate');
 
--- Adaptive mode (optimal latency for mixed workloads)
+-- Adaptive mode (mixed workloads: escalates only hard queries)
 SELECT * FROM my_collection
 WHERE vector NEAR $query
 LIMIT 10
-WITH (mode = 'adaptive');
+WITH (mode = 'adaptive:32:512');
 
 -- Custom ef_search
 SELECT * FROM my_collection

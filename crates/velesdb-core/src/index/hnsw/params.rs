@@ -400,9 +400,10 @@ pub enum SearchQuality {
     ///
     /// Uses a two-phase approach:
     /// 1. Search at `max(min_ef, k)`
-    /// 2. If the result spread (the first-to-last score gap over the tail's
-    ///    distance from the metric's floor) reaches 2.0, continue that search
-    ///    at twice its ef, capped at `max_ef`
+    /// 2. If the result spread (the first-to-last score gap over the lower
+    ///    score's distance from the metric's floor, or over the smaller
+    ///    absolute score on an unbounded metric) reaches 2.0, search once more
+    ///    at twice its ef, capped at `max_ef`, when that exceeds the first ef
     ///
     /// Easy queries (dense cluster hits) stop after phase 1. No recorded run
     /// measures its latency or recall against a fixed ef yet (#2266).
