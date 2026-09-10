@@ -171,6 +171,8 @@ looks "hard". No recorded run measures its latency or recall yet (#2266).
 3. If spread ≥ 2.0 (scattered results = hard query) → search once more at twice the ef, capped at `max_ef`, when that exceeds the first ef: resuming the first traversal on the Standard backend's CPU path, restarting on the GPU, RaBitQ and SQ8 paths
 4. Otherwise (dense cluster = easy query) → return the results immediately
 
+A filtered search runs only the first step, one pass at `max(min_ef, k)` scaled like the fixed presets, with no spread test (#2268).
+
 **Use cases:**
 - Mixed workloads where most queries are easy
 - APIs with a latency SLA on the P50 (not only the P99)
@@ -199,10 +201,10 @@ The mode needs both bounds: a bare `'adaptive'` is not parsed, and today the que
 ### 6. AutoTune — Size-aware automatic tuning
 
 `SearchQuality::AutoTune` derives an ef range from the collection's size and
-vector dimension, then runs the same two-phase search as Adaptive. Recommended
-when you want good recall with no manual ef tuning — start with it and only
-switch to `Custom(ef)` or `Adaptive` if you need to squeeze out the last
-microseconds. The scaling tiers and the dimension factor are documented in the
+vector dimension, then runs the same two-phase search as Adaptive. It saves
+picking an ef by hand; no recorded run measures its latency or recall yet
+(#2266), and a filtered search runs one pass at Balanced's ef instead (#2268).
+The scaling tiers and the dimension factor are documented in the
 [Tuning Guide — AutoTune Mode](TUNING_GUIDE.md#autotune-mode-v172).
 
 ```rust

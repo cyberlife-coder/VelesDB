@@ -221,9 +221,9 @@ parameter with dynamic scaling based on the requested result count `k`.
 | `Balanced` (default) | 160 | max(160, k*5) | 99.8%* | General purpose, production |
 | `Accurate` | 512 | max(512, k*16) | 100%*; 0.98 on SIFT1M's 1M | Analytics, batch processing |
 | `Perfect` | — (exhaustive scan, no graph) | — | exact top-k, ties aside | Ground truth, evaluation; refused above `limits.max_perfect_mode_vectors` |
-| `AutoTune` | size-aware | `auto_ef_range(count, dim, k)`; falls back to max(160, k*5) without collection info | not measured | Hands-off default at any scale (see [AutoTune Mode](#autotune-mode-v172)) |
+| `AutoTune` | size-aware | `auto_ef_range(count, dim, k)`; one pass at max(160, k*5) without collection info, and on a filtered search (#2268) | not measured | No ef to pick by hand (see [AutoTune Mode](#autotune-mode-v172)) |
 | `Custom(n)` | n | n | Varies | Fine-grained control |
-| `Adaptive { min_ef, max_ef }` | max(min_ef, k) | a hard query once, to min(2 × base, max_ef) when larger | not measured | Mixed workloads, latency-sensitive |
+| `Adaptive { min_ef, max_ef }` | max(min_ef, k) | a hard query once, to min(2 × base, max_ef) when larger; never on a filtered search (#2268) | not measured | Mixed workloads, latency-sensitive |
 
 \* Recall@10 in `recall_benchmark` (10K random 128-D vectors, an index built with `HnswParams::max_recall`, 100 queries), measured 2026-09-10 on 6.0.0; see [BENCHMARKS.md](../BENCHMARKS.md#hnsw-recall-profiles-10k128d). No recorded run measures `AutoTune` or `Adaptive` yet (#2266).
 
@@ -303,8 +303,9 @@ configuration level.
 
 ### AutoTune Mode (v1.7.2)
 
-The `AutoTune` variant computes optimal `ef_search` automatically from the
-collection's size and vector dimension, removing the need for manual ef tuning.
+The `AutoTune` variant computes its `ef_search` range from the collection's
+size and vector dimension, so no ef is set by hand. No recorded run measures
+its latency or recall yet (#2266).
 
 Internally it calls `auto_ef_range(count, dimension, k)` which returns a
 `(min_ef, max_ef)` pair used in an adaptive two-phase search (same mechanism
@@ -347,10 +348,11 @@ use velesdb_core::SearchQuality;
 let results = index.search_with_quality(&query, 10, SearchQuality::AutoTune);
 ```
 
-**When to use:** Recommended for applications that want good recall without
-manual ef tuning. AutoTune provides a solid default that scales with your data
-— start with it and only switch to manual `Custom(ef)` or `Adaptive` if you
-need to squeeze out the last microseconds.
+**When to use:** when you would rather not pick an ef by hand. Its ef grows
+with the collection by the fixed tiers above, and nothing measures how that
+trades latency for recall yet (#2266): at 1M vectors and k = 10 it starts at
+ef 120, below the 192 Fast runs at that size, so check recall on your own data.
+A filtered search runs one pass at Balanced's ef instead (#2268).
 
 ### Choosing Between Them
 

@@ -194,7 +194,7 @@ Session settings control REPL search behaviour. Set with `\set`, view with
 
 | Setting | Range / values | Default | Description |
 |---------|---------------|---------|-------------|
-| `mode` | `fast`, `balanced`, `accurate`, `perfect`, `adaptive` | `balanced` | Search quality preset (sets `ef_search` automatically) |
+| `mode` | `fast`, `balanced`, `accurate`, `perfect`, `autotune`, `custom:<ef>`, `adaptive:<min>:<max>` | `balanced` | Search quality preset (sets `ef_search` automatically) |
 | `ef_search` | 16–4096 (or `auto` from mode) | auto | HNSW graph exploration factor |
 | `timeout_ms` | >= 100 | 30000 | Query timeout in milliseconds. Also accepts the alias `timeout`. |
 | `rerank` | `true`/`false`, `on`/`off`, `1`/`0`, `yes`/`no` | `true` | Reranking after quantized search |

@@ -437,7 +437,7 @@ The pipelined path produces **identical results** to the non-pipelined path. Onl
 
 ## AutoTune Search
 
-On an `HnswIndex` and on a collection, `SearchQuality::AutoTune` computes optimal `ef_search` range from collection statistics, then delegates to the adaptive two-phase search algorithm. `NativeHnswIndex::search_with_quality` does not: it walks the graph once at Balanced's ef (see Operations). This is the recommended quality setting for applications that want good recall without manual ef tuning.
+On an `HnswIndex` and on a collection, `SearchQuality::AutoTune` computes an `ef_search` range from collection statistics, then delegates to the adaptive two-phase search algorithm; a filtered search runs one pass at Balanced's ef instead (#2268). `NativeHnswIndex::search_with_quality` does not: it walks the graph once at Balanced's ef (see Operations). No recorded run measures its latency or recall (#2266).
 
 ### How It Works
 
@@ -451,7 +451,7 @@ On an `HnswIndex` and on a collection, `SearchQuality::AutoTune` computes optima
    - **`min_ef`** is clamped to at least `k` (never fewer candidates than requested results).
    - **`max_ef`** is set to `4 * min_ef`, a cap the second phase stays under: it doubles `min_ef` once.
 
-2. **Adaptive two-phase search**: searches at `min_ef` and, if the query is hard, continues once at `2 * min_ef`, capped at `max_ef` (same algorithm as `SearchQuality::Adaptive`).
+2. **Adaptive two-phase search**: searches at `min_ef` and, if the query is hard, searches once more at `2 * min_ef`, capped at `max_ef` (same algorithm as `SearchQuality::Adaptive`).
 
 ### Usage
 

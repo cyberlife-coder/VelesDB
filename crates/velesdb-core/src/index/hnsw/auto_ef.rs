@@ -1,9 +1,9 @@
 //! Auto-tuned `ef_search` range based on collection statistics.
 //!
-//! Computes optimal min/max `ef_search` values for adaptive search
+//! Computes the min/max `ef_search` values for adaptive search
 //! by considering the collection size, vector dimension, and desired k.
 
-/// Computes optimal `ef_search` range from collection statistics.
+/// Computes an `ef_search` range from collection statistics.
 ///
 /// Returns `(min_ef, max_ef)` for use with [`SearchQuality::Adaptive`].
 ///

@@ -415,17 +415,19 @@ pub enum SearchQuality {
     },
     /// Auto-tuned adaptive search based on collection statistics.
     ///
-    /// Computes optimal `min_ef` / `max_ef` from the collection's current size
-    /// and vector dimension, then delegates to the same two-phase adaptive
-    /// algorithm used by [`SearchQuality::Adaptive`].
+    /// Computes `min_ef` / `max_ef` from the collection's current size and
+    /// vector dimension, then delegates to the same two-phase adaptive
+    /// algorithm used by [`SearchQuality::Adaptive`]. `min_ef` grows by tiers:
     ///
-    /// This is the recommended quality setting for applications that want
-    /// good recall without manual ef tuning:
+    /// - up to 1K vectors: `k * 2`
+    /// - 1K–10K: `k * 4`
+    /// - 10K–100K: `k * 8`
+    /// - 100K and more: `k * 12`
+    /// - above 512 dimensions: times 1.5
     ///
-    /// - Small collections (≤1K): conservative ef (fast)
-    /// - Medium collections (1K–100K): moderate ef (balanced)
-    /// - Large collections (100K+): aggressive ef (high recall)
-    /// - High dimensions (>512): additional exploration factor
+    /// `min_ef` is at least `k`, and `max_ef` is `4 * min_ef`. A filtered search
+    /// runs one pass at Balanced's ef instead. No recorded run measures its
+    /// latency or recall (#2266).
     ///
     /// # Example
     ///

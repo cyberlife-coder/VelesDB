@@ -97,7 +97,7 @@ WITH (ef_search = 512, timeout_ms = 5000);
 
 | Option | Type | Description |
 |--------|------|-------------|
-| `mode` | string | `fast`, `balanced`, `accurate`, `perfect`, `adaptive` |
+| `mode` | string | `fast`, `balanced`, `accurate`, `perfect`, `autotune`, `custom:<ef>`, `adaptive:<min_ef>:<max_ef>` |
 | `ef_search` | integer | HNSW `ef_search` (higher = better recall, slower) |
 | `timeout_ms` | integer | Query timeout in milliseconds |
 | `rerank` | boolean | Enable result reranking |
