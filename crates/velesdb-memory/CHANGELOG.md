@@ -18,11 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/reference/mcp-tools.json`. The input and output schemas now render
   each link as rustdoc does: a code link as its code span, a labelled link as
   its text, a path such as `[a::B]` or `[fn@f]` as its path without the
-  disambiguator. Code spans are copied verbatim, and brackets rustdoc would
-  not resolve (`[0, 1]`, `map[key]`) stay. Only `description` strings are
-  rewritten, never instance data such as a `default`, so nothing else in a
-  schema changes. A test fails if a published description still holds a link
-  the rewrite recognizes, or a link target naming a Rust path. (#2261)
+  disambiguator. Code spans are copied verbatim. A bare `[name]` stays whether
+  or not rustdoc resolves it (`map[key]`, `[sic]`), as do `[0, 1]`, a
+  bracketed code span that is not one word, and reference-style links. Only
+  `description` strings are rewritten, never instance data such as a
+  `default`, so nothing else in a schema changes. A test fails if a published
+  description still holds a link the rewrite recognizes, or an inline link
+  whose target starts with `crate::`, `super::`, `self::` or `Self::`.
+  (#2261)
 
 ## [0.14.2] - 2026-09-03
 

@@ -323,7 +323,7 @@ fn admits_null(slot: &serde_json::Value) -> bool {
 /// The rustdoc-link rewrite applied to every published description (#2261).
 #[cfg(feature = "mcp")]
 mod unlink {
-    use super::super::{unlink_rustdoc, unlink_rustdoc_descriptions};
+    use super::super::walks::{unlink_rustdoc, unlink_rustdoc_descriptions};
     use serde_json::{json, Map, Value};
 
     #[test]
@@ -357,6 +357,11 @@ mod unlink {
             ("the [vec!] macro", "the vec! macro"),
             ("a [struct@Foo] value", "a Foo value"),
             ("see [`fn@build`]", "see `build`"),
+            ("see [m!()]", "see m!()"),
+            (
+                "the [`HashMap<K, V>`] it holds",
+                "the `HashMap<K, V>` it holds",
+            ),
         ] {
             assert_eq!(unlink_rustdoc(text).as_deref(), Some(shown), "{text}");
         }
@@ -393,6 +398,9 @@ mod unlink {
             "[NOTE]: something",
             "[user@example]",
             "[x](@foo)",
+            "range [`0, 1`] inclusive",
+            "either [`a | b`]",
+            "[`value@`]",
             "`decisions[fragment_index]` is unambiguous",
             "``a [`b`] c`` in a double-backtick span",
         ] {
@@ -466,21 +474,49 @@ mod unlink {
 
     /// Link targets only rustdoc resolves, flagged even in a link the rewrite
     /// leaves: ``[`a]b`](crate::x)`` is not one it recognizes.
-    const RUST_PATH_TARGETS: [&str; 4] = ["](crate::", "](super::", "](self::", "](Self::"];
+    const RUST_PATH_TARGETS: [&str; 8] = [
+        "](crate::",
+        "](super::",
+        "](self::",
+        "](Self::",
+        "](<crate::",
+        "](<super::",
+        "](<self::",
+        "](<Self::",
+    ];
 
     #[test]
     fn the_guard_flags_a_rust_path_target_the_rewrite_leaves() {
-        let text = "odd [`a]b`](crate::x) link";
-        assert_eq!(unlink_rustdoc(text), None);
+        for text in ["odd [`a]b`](crate::x) link", "see [text](<crate::x>)"] {
+            assert_eq!(unlink_rustdoc(text), None, "{text}");
+            let mut linked = Vec::new();
+            collect_linked(&json!({ "description": text }), "", &mut linked);
+            assert_eq!(linked, ["/description"], "{text}");
+        }
+    }
+
+    #[test]
+    fn the_guard_leaves_instance_data_as_the_rewrite_does() {
         let mut linked = Vec::new();
-        collect_linked(&json!({ "description": text }), "", &mut linked);
-        assert_eq!(linked, ["/description"]);
+        collect_linked(
+            &json!({
+                "default": { "description": "[`kept`]" },
+                "examples": [{ "description": "[`kept`]" }]
+            }),
+            "",
+            &mut linked,
+        );
+        assert!(linked.is_empty(), "{linked:?}");
     }
 
     fn collect_linked(value: &Value, path: &str, out: &mut Vec<String>) {
         match value {
             Value::Object(map) => {
-                for (key, child) in map {
+                // Instance data is a value, not a doc comment: the rewrite
+                // leaves it, and so does the guard.
+                for (key, child) in map.iter().filter(|(key, _)| {
+                    !super::super::walks::INSTANCE_KEYWORDS.contains(&key.as_str())
+                }) {
                     let here = format!("{path}/{key}");
                     match child {
                         Value::String(text) if key == "description" => {
