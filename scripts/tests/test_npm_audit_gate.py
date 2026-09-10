@@ -30,6 +30,7 @@ WORKFLOW = ROOT / ".github" / "workflows" / "gate-contracts.yml"
 EXIT_CLEAN = 0
 EXIT_ADVISORY = 1
 EXIT_UNREACHABLE = 75
+EXIT_USAGE = 2  # argparse's own usage-error exit
 
 
 def _load_module():
@@ -170,6 +171,16 @@ class ClassifyTests(unittest.TestCase):
             gate.classify(json.dumps({"auditReportVersion": 2, "vulnerabilities": {}}))
 
 
+    def test_a_non_numeric_count_is_not_a_verdict(self) -> None:
+        """A count npm did not write as a number makes a report nobody can read.
+        It takes the `Unreachable` path; before, `int()` raised ValueError or
+        TypeError out of `classify`, and `main` reported the one as an advisory
+        and died on the other with a traceback."""
+        for count in ("many", [1], {"n": 1}):
+            with self.subTest(count=count), self.assertRaises(gate.Unreachable):
+                gate.classify(json.dumps({"metadata": {"vulnerabilities": {"high": count}}}))
+
+
 class SeverityLadderTests(unittest.TestCase):
     def test_high_covers_high_and_critical_only(self) -> None:
         self.assertEqual(["high", "critical"], gate.severities_at_or_above("high"))
@@ -278,6 +289,40 @@ class ExitCodeTests(unittest.TestCase):
             npm = _fake_npm(root, stdout=_report(moderate=3))
             result = _run(npm, root, "--audit-level", "moderate")
         self.assertEqual(EXIT_ADVISORY, result.returncode, result.stderr)
+
+    def test_a_malformed_count_is_infrastructure_not_an_advisory(self) -> None:
+        """The exit-code half of the test above: an unreadable report is the
+        infrastructure exit, never the one that means "vulnerable"."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report = json.dumps({"metadata": {"vulnerabilities": {"high": "many"}}})
+            npm = _fake_npm(root, stdout=report)
+            result = _run(npm, root, "--attempts", "1")
+        self.assertEqual(EXIT_UNREACHABLE, result.returncode, result.stderr)
+
+    def test_a_zero_attempt_budget_is_a_usage_error_not_an_advisory(self) -> None:
+        """`--attempts 0` audits nothing. That is the caller's mistake, and
+        argparse's usage exit says so; the advisory exit claimed a vulnerability."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            npm = _fake_npm(root, stdout=_report(), exit_code=0)
+            result = _run(npm, root, "--attempts", "0")
+        self.assertEqual(EXIT_USAGE, result.returncode, result.stderr)
+
+    def test_a_negative_backoff_is_a_usage_error_not_an_advisory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            npm = _fake_npm(root, stdout=_report(), exit_code=0)
+            result = _run(npm, root, "--backoff-seconds", "-1")
+        self.assertEqual(EXIT_USAGE, result.returncode, result.stderr)
+
+    def test_an_npm_that_will_not_run_is_infrastructure_not_an_advisory(self) -> None:
+        """A missing binary raised FileNotFoundError out of `main`: exit 1,
+        the code that means "vulnerable"."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            result = _run(root / "no-such-npm", root, "--attempts", "1")
+        self.assertEqual(EXIT_UNREACHABLE, result.returncode, result.stderr)
 
     def test_an_unreachable_registry_is_not_reported_as_an_advisory(self) -> None:
         """The whole point. Same npm exit code as an advisory, different verdict,

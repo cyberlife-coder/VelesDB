@@ -26,10 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   **`default_mode = "perfect"` is applied as `accurate`, with a warning at
   load.** `SearchQuality::Perfect` is an exhaustive scan capped by
-  `limits.max_perfect_mode_vectors`, and that cap lives in a check only the
-  per-query entry points can run — `search_with_optional_bitmap` returns
-  `Vec<ScoredResult>` and cannot refuse — so the global default never resolves
-  to it. A first version refused the value outright, which made a file v6.0.0
+  `limits.max_perfect_mode_vectors`, and a filtered search's bitmap pre-filter
+  never reads the configured quality — it traverses the graph at its own ef —
+  so a global `perfect` would scan on some queries and not on others; the
+  default never resolves to it. A first version refused the value outright, which made a file v6.0.0
   loaded fail `Database::open`: a breaking change in a minor release, caught by
   the seven-lens review (#2246) before it shipped.
 
@@ -98,6 +98,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   load call alone reports the cost as gone when it has only moved.
 
 ### Fixed
+
+- **Three search paths turned an index error into an empty answer.**
+  `Collection::search`, `search_ids` and the post-filter fallback logged
+  `search_with_quality`'s error and returned `Vec::new()`, from functions that
+  all return `Result`: a failure read as "no match", the one failure a caller
+  cannot tell from a correct result. Nothing reaches it today — the entry
+  points check the dimension first — which is why nothing noticed. The error
+  is now returned (#2246, P5).
+
+- **`npm-audit-gate.py` reported non-findings with the advisory exit.**
+  `--attempts 0` and a report whose count is not a number both raised
+  `ValueError`, which `main` mapped to exit 1 — "this lockfile is
+  vulnerable"; a count of another type, a negative `--backoff-seconds` and an
+  `npm` that will not run all raised out of `main`, also exit 1. Bad flags are
+  now argparse's usage error (exit 2); an unreadable report or an npm that will
+  not run, the infrastructure exit (75) (#2246, P5).
+
+- **Six comments and docs asserted what the code does not.**
+  `scripts/local-ci.sh` said its default replays every gate job (it replays
+  `lint` and `hygiene`); `AGENTS.md` said `flush_backing` deliberately has no
+  caller (#2173 gave it one), credited `contiguous_file_arena.rs` with a
+  rationale it does not hold, and cited #2112 and #2106 as open design issues
+  when both are closed; `extract_wire.rs` said everything leaving the
+  process lives there (the prompts leave from `extract.rs`);
+  `GraphCollection::remove_edge` pointed users at `remove_edge_detailed`, which
+  is `pub(crate)`; `SearchConfig::resolved_quality` did not say it exists only
+  with `persistence`; and the `unused_self` allow in `native_inner.rs` named a
+  command that passes without it — the one it protects adds
+  `-D clippy::pedantic` (#2246, P5).
 
 - **`reorder_for_locality` could leave a collection whose graph and vectors
   disagree.** Since `.vectors` became the graph's arena, the permutation lands
@@ -253,6 +282,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the v1 read path was written here rather than inherited.
 
 ### Deprecated
+
+- **`StorageConfig::{data_dir, mmap_cache_mb, vector_alignment}` carry
+  `#[deprecated]`.** They were deprecated in prose only (#2220): a Rust caller
+  setting one got no compiler warning. The TOML keys load exactly as before
+  (#2246, P5).
+
 - **`[storage]` `data_dir`, `mmap_cache_mb` and `vector_alignment` — parsed
   and validated, never applied.** Issue #2087's per-knob audit found these
   three have no engine counterpart to wire them to at all (`data_dir` also

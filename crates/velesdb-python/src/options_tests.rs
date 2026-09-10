@@ -59,6 +59,10 @@ fn hnsw_config_options_to_core_propagates_non_defaults() {
 }
 
 #[test]
+#[allow(
+    deprecated,
+    reason = "compares the Python options with the deprecated core fields they map to"
+)]
 fn storage_options_to_core_propagates_non_defaults() {
     let opts = StorageOptions {
         data_dir: Some("./custom".to_string()),
@@ -131,6 +135,10 @@ fn quantization_options_pq_fields_without_pq_mode_fail() {
 // -- Whole-config assembly + validation ------------------------------
 
 #[test]
+#[allow(
+    deprecated,
+    reason = "reads the deprecated core field this option maps to"
+)]
 fn veles_config_options_to_core_applies_every_section() {
     let opts = VelesConfigOptions {
         limits: Some(LimitsOptions {

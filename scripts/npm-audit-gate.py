@@ -16,7 +16,9 @@ transient 503 costs seconds instead of a merge window:
 
   exit 0   the audit ran and found nothing at or above --audit-level
   exit 1   the audit ran and found an advisory  (a real refusal)
-  exit 75  the registry stayed unreachable      (EX_TEMPFAIL, infrastructure)
+  exit 75  no report: the registry stayed unreachable, or npm would not run
+           (EX_TEMPFAIL, infrastructure)
+  exit 2   the gate was called wrongly           (argparse's usage error)
 
 The discriminator is the report itself, not the exit code or a message match:
 a completed audit carries `metadata.vulnerabilities` (a per-severity count
@@ -61,7 +63,8 @@ def classify(stdout: str) -> dict[str, int]:
     """Return the per-severity counts of a completed audit.
 
     Raises `Unreachable` for anything that is not a completed audit report —
-    unparseable output, or npm's error payload, which has no `metadata`.
+    unparseable output, npm's error payload, which has no `metadata`, or a
+    count that is not a number.
     """
     try:
         report = json.loads(stdout)
@@ -74,7 +77,10 @@ def classify(stdout: str) -> dict[str, int]:
     if not isinstance(counts, dict):
         message = report.get("message") or "no metadata.vulnerabilities in the report"
         raise Unreachable(str(message))
-    return {name: int(counts.get(name, 0) or 0) for name in SEVERITIES}
+    try:
+        return {name: int(counts.get(name, 0) or 0) for name in SEVERITIES}
+    except (TypeError, ValueError) as exc:
+        raise Unreachable(f"npm's report carries a count that is not a number ({exc})") from exc
 
 
 def run_audit(npm: str, root: Path, timeout: float) -> str:
@@ -101,6 +107,8 @@ def run_audit(npm: str, root: Path, timeout: float) -> str:
         )
     except subprocess.TimeoutExpired as exc:
         raise Unreachable(f"npm audit produced no report within {timeout:.0f}s") from exc
+    except OSError as exc:
+        raise Unreachable(f"npm could not be run ({exc})") from exc
     if completed.stderr.strip():
         print(completed.stderr.rstrip(), file=sys.stderr)
     return completed.stdout
@@ -141,15 +149,40 @@ def audit_with_retries(
     raise last
 
 
+def _attempt_budget(text: str) -> int:
+    """argparse type for `--attempts`: a budget of zero audits nothing.
+
+    Refused here, as a usage error, rather than by `audit_with_retries`'s
+    ValueError: `main` mapped that one to the advisory exit, so a mistyped
+    flag read as "this lockfile is vulnerable".
+    """
+    value = int(text)
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, got {value}")
+    return value
+
+
+def _seconds(allow_zero: bool):
+    """argparse type for a duration: a negative one crashed `time.sleep` after
+    the first unreachable attempt, exiting 1 — the advisory code."""
+    def parse(text: str) -> float:
+        value = float(text)
+        if value < 0 or (value == 0 and not allow_zero):
+            bound = "at least 0" if allow_zero else "above 0"
+            raise argparse.ArgumentTypeError(f"must be {bound}, got {value}")
+        return value
+    return parse
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", required=True, help="directory holding package-lock.json")
     parser.add_argument("--audit-level", default="high", choices=SEVERITIES)
-    parser.add_argument("--attempts", type=int, default=4)
-    parser.add_argument("--backoff-seconds", type=float, default=5.0)
+    parser.add_argument("--attempts", type=_attempt_budget, default=4)
+    parser.add_argument("--backoff-seconds", type=_seconds(allow_zero=True), default=5.0)
     parser.add_argument(
         "--attempt-timeout",
-        type=float,
+        type=_seconds(allow_zero=False),
         default=180.0,
         help="seconds to let one npm audit run before treating it as unreachable",
     )
@@ -177,9 +210,6 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return EXIT_UNREACHABLE
-    except ValueError as exc:
-        print(f"::error::{exc}", file=sys.stderr)
-        return EXIT_ADVISORY
 
     found = {name: counts[name] for name in blocking if counts[name] > 0}
     if found:
