@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import subprocess
 import sys
 import time
@@ -79,7 +80,7 @@ def classify(stdout: str) -> dict[str, int]:
         raise Unreachable(str(message))
     try:
         return {name: int(counts.get(name, 0) or 0) for name in SEVERITIES}
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise Unreachable(f"npm's report carries a count that is not a number ({exc})") from exc
 
 
@@ -162,11 +163,22 @@ def _attempt_budget(text: str) -> int:
     return value
 
 
+# A day. Past a clock-dependent bound `time.sleep` and `subprocess.run` raise
+# OverflowError (1e10 already does); nothing here needs longer than this.
+MAX_SECONDS = 86_400.0
+
+
 def _seconds(allow_zero: bool):
     """argparse type for a duration: a negative one crashed `time.sleep` after
-    the first unreachable attempt, exiting 1 — the advisory code."""
+    the first unreachable attempt, exiting 1 — the advisory code. So did `nan`,
+    `inf` and a finite value too large for the clock, which `time.sleep` and
+    `subprocess.run` raise on."""
     def parse(text: str) -> float:
         value = float(text)
+        if not math.isfinite(value) or value > MAX_SECONDS:
+            raise argparse.ArgumentTypeError(
+                f"must be a finite number of seconds up to {MAX_SECONDS:.0f}, got {text}"
+            )
         if value < 0 or (value == 0 and not allow_zero):
             bound = "at least 0" if allow_zero else "above 0"
             raise argparse.ArgumentTypeError(f"must be {bound}, got {value}")

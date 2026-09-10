@@ -164,9 +164,10 @@ fn a_per_query_ef_is_independent_of_the_configured_default() {
 ///
 /// This refused at load until the seven-lens review (#2246): a TOML accepted by
 /// v6.0.0 then failed `Database::open`, a breaking change shipped under
-/// `### Added`. The concern behind the refusal is kept -- a global `Perfect`
-/// would reach `search_with_optional_bitmap`, which cannot enforce
-/// `max_perfect_mode_vectors` -- by never letting the default resolve to it.
+/// `### Added`. The concern behind the refusal is kept -- a filtered search's
+/// bitmap pre-filter never reads the configured quality, so a global `Perfect`
+/// would scan on some queries and traverse on others -- by never letting the
+/// default resolve to it.
 ///
 /// Asserted on the resolution because
 /// `a_configured_ef_search_reaches_an_unqualified_search` already proves the
@@ -184,7 +185,7 @@ fn perfect_as_a_global_default_still_opens_and_resolves_to_accurate() {
     assert_eq!(
         config.search.resolved_quality(),
         velesdb_core::SearchQuality::Accurate,
-        "a global `perfect` must never resolve to the exhaustive scan no path can cap"
+        "a global `perfect` must resolve to `accurate`: the bitmap pre-filter never reads it"
     );
 
     config.search.default_mode = SearchMode::Balanced;

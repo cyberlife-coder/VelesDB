@@ -180,6 +180,14 @@ class ClassifyTests(unittest.TestCase):
             with self.subTest(count=count), self.assertRaises(gate.Unreachable):
                 gate.classify(json.dumps({"metadata": {"vulnerabilities": {"high": count}}}))
 
+    def test_an_infinite_count_is_not_a_verdict(self) -> None:
+        """`1e999` and `Infinity` parse to a float `int()` cannot hold: the
+        OverflowError escaped `classify` as a traceback, exit 1."""
+        for count in ("1e999", "Infinity"):
+            report = '{"metadata": {"vulnerabilities": {"high": %s}}}' % count
+            with self.subTest(count=count), self.assertRaises(gate.Unreachable):
+                gate.classify(report)
+
 
 class SeverityLadderTests(unittest.TestCase):
     def test_high_covers_high_and_critical_only(self) -> None:
@@ -315,6 +323,19 @@ class ExitCodeTests(unittest.TestCase):
             npm = _fake_npm(root, stdout=_report(), exit_code=0)
             result = _run(npm, root, "--backoff-seconds", "-1")
         self.assertEqual(EXIT_USAGE, result.returncode, result.stderr)
+
+    def test_a_duration_the_clock_cannot_hold_is_a_usage_error_not_an_advisory(self) -> None:
+        """`nan`, `inf` and `1e10` passed the range check and could reach
+        `time.sleep` or `subprocess.run`, which raise on them: a traceback,
+        exit 1. argparse refuses them now, before any npm run."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            npm = _fake_npm(root, stdout=_report(), exit_code=0)
+            for flag in ("--backoff-seconds", "--attempt-timeout"):
+                for value in ("nan", "inf", "1e10"):
+                    with self.subTest(flag=flag, value=value):
+                        result = _run(npm, root, flag, value)
+                        self.assertEqual(EXIT_USAGE, result.returncode, result.stderr)
 
     def test_an_npm_that_will_not_run_is_infrastructure_not_an_advisory(self) -> None:
         """A missing binary raised FileNotFoundError out of `main`: exit 1,
