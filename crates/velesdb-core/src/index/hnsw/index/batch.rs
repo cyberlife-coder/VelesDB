@@ -165,7 +165,8 @@ impl HnswIndex {
 
     /// Performs batch search for multiple queries in parallel.
     ///
-    /// When quality requires two-stage reranking and vector storage is enabled,
+    /// When quality requires two-stage reranking and the index's exact-distance
+    /// features are on,
     /// the method first runs HNSW search for all queries (rayon), then reranks
     /// each query's candidates using GPU or SIMD as appropriate. Otherwise,
     /// falls back to HNSW-only search.
@@ -304,7 +305,8 @@ impl HnswIndex {
     ///
     /// # Performance
     ///
-    /// - **Recall**: 100% (exact)
+    /// - **Result**: the exact top-k under the index's own distance, ties aside;
+    ///   nothing when the index's exact-distance features are off
     /// - **Latency**: O(n/cores) on CPU, O(n/GPU-threads) on GPU
     /// - **GPU threshold**: 100K vectors (below this, rayon is faster)
     ///
@@ -318,6 +320,10 @@ impl HnswIndex {
         k: usize,
     ) -> crate::error::Result<Vec<ScoredResult>> {
         self.validate_dimension(query)?;
+        // Exact-distance features off: no brute force on any path, GPU included.
+        if !self.enable_vector_storage {
+            return Ok(Vec::new());
+        }
 
         // Try GPU path for large datasets where GPU upload overhead is amortized
         #[cfg(feature = "gpu")]

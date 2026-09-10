@@ -9,7 +9,8 @@
 //! Run with: `cargo bench --bench recall_benchmark`
 //!
 //! This benchmark measures the **quality** of search results, not just speed.
-//! For exact brute-force search, recall should be 100%.
+//! For the exhaustive scan (`Perfect`), results match the brute-force ground
+//! truth, distance ties aside.
 //! For HNSW approximate search, recall depends on the quality profile.
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};

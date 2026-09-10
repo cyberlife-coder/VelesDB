@@ -149,7 +149,8 @@ impl HnswIndex {
     /// buffer for GPU upload, avoiding per-vector heap allocations from the
     /// older `collect_for_parallel()` path.
     ///
-    /// Returns `None` if GPU feature is not enabled or GPU is not available.
+    /// Returns `None` if the GPU feature is not enabled, no GPU is available,
+    /// or the index's exact-distance features are off.
     ///
     /// # Errors
     ///
@@ -161,6 +162,9 @@ impl HnswIndex {
         k: usize,
     ) -> crate::error::Result<Option<Vec<ScoredResult>>> {
         self.validate_dimension(query)?;
+        if !self.enable_vector_storage {
+            return Ok(None);
+        }
 
         #[cfg(feature = "gpu")]
         {

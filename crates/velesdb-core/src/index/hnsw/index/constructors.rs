@@ -135,7 +135,8 @@ impl HnswIndex {
         Self::with_params_internal(dimension, metric, params, true)
     }
 
-    /// Internal constructor with vector storage toggle.
+    /// Internal constructor with the exact-distance-features toggle
+    /// (`enable_vector_storage`).
     ///
     /// Honours `params.storage_mode`: `RaBitQ` selects the binary-traversal
     /// backend; every other mode uses the Standard f32 backend (SQ8/Binary
@@ -483,7 +484,9 @@ impl HnswIndex {
         self.mappings.is_empty()
     }
 
-    /// Returns whether vector storage is enabled.
+    /// Returns whether exact-distance features are on — `false` after
+    /// [`Self::new_fast_insert`] or `with_params_full(.., false)`. The graph
+    /// stores its vectors either way.
     #[inline]
     #[must_use]
     pub fn has_vector_storage(&self) -> bool {

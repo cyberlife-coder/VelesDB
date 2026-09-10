@@ -307,7 +307,7 @@ fn test_hnsw_new_turbo_mode() {
 
 #[test]
 fn test_hnsw_new_fast_insert_mode() {
-    // Arrange & Act - fast insert mode disables vector storage
+    // Arrange & Act - fast insert mode turns exact-distance features off
     let index = HnswIndex::new_fast_insert(64, DistanceMetric::Cosine).unwrap();
 
     // Insert vectors
@@ -585,7 +585,7 @@ fn test_hnsw_snapshot_without_vectors_file_keeps_vector_features() {
     // Act: load the snapshot.
     let loaded_index = HnswIndex::load(dir.path(), 3, DistanceMetric::Cosine).unwrap();
 
-    // Assert: full functionality — vector storage stays enabled (vectors are
+    // Assert: full functionality — exact-distance features stay on (vectors are
     // in the graph) and vacuum works.
     assert_eq!(loaded_index.len(), 2);
     assert!(loaded_index.has_vector_storage());
@@ -2407,7 +2407,7 @@ fn test_adaptive_search_spread_works_for_similarity_metrics() {
 
 #[test]
 fn test_insert_same_id_updates_vector() {
-    // Arrange: create index with vector storage enabled (default)
+    // Arrange: create index with exact-distance features on (default)
     let index = HnswIndex::new(4, DistanceMetric::Cosine).unwrap();
 
     // Insert id=1 with vector A (pointing along x-axis)
@@ -3592,4 +3592,25 @@ fn adaptive_resume_is_deterministic_across_pool_reuse() {
             "adaptive resume drifted across pooled reuse"
         );
     }
+}
+
+/// Exact-distance features off turn brute force off on the GPU path too: it
+/// returns nothing rather than scan an index built with `new_fast_insert`.
+#[cfg(feature = "gpu")]
+#[test]
+fn gpu_brute_force_returns_nothing_with_exact_distance_features_off() {
+    let index = HnswIndex::new_fast_insert(128, DistanceMetric::Cosine).unwrap();
+    for i in 0u64..100 {
+        let v: Vec<f32> = (0..128)
+            .map(|j| ((i + j as u64) as f32 * 0.01).sin())
+            .collect();
+        index.insert(i, &v);
+    }
+    let query: Vec<f32> = (0..128).map(|j| (j as f32 * 0.02).cos()).collect();
+
+    assert!(index.search_brute_force_gpu(&query, 10).unwrap().is_none());
+    assert!(index
+        .brute_force_search_parallel(&query, 10)
+        .unwrap()
+        .is_empty());
 }

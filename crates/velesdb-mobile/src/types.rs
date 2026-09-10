@@ -143,13 +143,15 @@ impl From<StorageMode> for velesdb_core::StorageMode {
 /// at the cost of increased latency.
 #[derive(Debug, Clone, Default, uniffi::Enum)]
 pub enum SearchQuality {
-    /// Fast search (`ef_search=96`). ~95% recall, lowest latency.
+    /// Fast search (`ef_search=96`): 97.4% recall@10 in the core's
+    /// `recall_benchmark` (10K random 128-D points), lowest latency.
     Fast,
-    /// Balanced search (`ef_search=160`). ~99.5% recall, production default.
+    /// Balanced search (`ef_search=160`): 99.8% recall@10 in the core's
+    /// `recall_benchmark`, production default.
     #[default]
     Balanced,
-    /// Accurate search (`ef_search=512`): 100% recall@10 at 10K points, 0.98 at
-    /// 1M on SIFT1M.
+    /// Accurate search (`ef_search=512`): 100% recall@10 in the core's
+    /// `recall_benchmark`, 0.98 on SIFT1M's 1M.
     Accurate,
     /// Exhaustive scan: every vector scored — the exact top-k under the index's
     /// own distance, ties aside — at O(n).

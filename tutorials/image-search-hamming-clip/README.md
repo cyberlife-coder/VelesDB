@@ -532,10 +532,12 @@ tradeoff per query:
 
 | Quality | ef_search | Recall | Latency | Recommended For |
 |---------|-----------|--------|---------|-----------------|
-| `fast` | 64 | ~92% | < 1ms | Pass 1 (Bouncer) -- speed matters most |
-| `balanced` | 128 | ~99% | ~2ms | Default (single-pass CLIP search) |
-| `accurate` | 512 | ~99.5% | ~5ms | Pass 2 (Detective) on small shortlist |
-| `perfect` | exhaustive | 100% | ~15ms | Validation, ground truth generation |
+| `fast` | 96 | 97.4%* | < 1ms | Pass 1 (Bouncer) -- speed matters most |
+| `balanced` | 160 | 99.8%* | ~2ms | Default (single-pass CLIP search) |
+| `accurate` | 512 | 100%* | ~5ms | Pass 2 (Detective) on small shortlist |
+| `perfect` | exhaustive | exact top-k, ties aside | ~15ms | Validation, ground truth generation |
+
+\* Recall@10 in VelesDB's `recall_benchmark` (10K random 128-D float vectors), measured 2026-09-10 on 6.0.0, not on this tutorial's 256-bit codes, whose integer Hamming distances tie often: measure on your own data. See [BENCHMARKS.md](../../docs/BENCHMARKS.md#hnsw-recall-profiles-10k128d).
 
 For the two-pass pipeline, use `fast` for the Bouncer (where the shortlist
 is intentionally generous) and `accurate` for the Detective (where precision

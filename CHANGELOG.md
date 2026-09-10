@@ -156,8 +156,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and mobile doc comments said "100% recall" or "by construction"; an index
   built with its exact-distance features off falls back to a graph search, and
   its rustdoc says so. `Accurate`'s "~100% recall" label gives the measured
-  figures instead: 100% at 10K, 0.98 at 1M. Two benchmarks printed the
-  exhaustive scan as `ef=4096`; relabelled `exhaustive` (#2246, P3).
+  figures instead: 100% recall@10 in `recall_benchmark` and 0.98 on SIFT1M's
+  1M. The Fast and Balanced figures (~95 % and ~99.5 % in the docs; 92.2 %
+  and 98.8 % in the README, measured at the old ef 64 and 128) were
+  re-measured at today's presets, 97.4 % and 99.8 %, and every surface
+  cites that measurement. With the `gpu` feature, brute force on an index
+  whose exact-distance features are off took the GPU path anyway; it now
+  returns nothing there too. Two benchmarks printed the exhaustive scan as
+  `ef=4096`; relabelled `exhaustive` (#2246, P3).
 
 - **`SearchQuality::Perfect` was documented as the opposite of what it does.**
   Its rustdoc described a graph search at `ef_search = 4096` that "tunes the

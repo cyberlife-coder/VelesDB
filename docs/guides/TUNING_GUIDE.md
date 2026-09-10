@@ -143,7 +143,7 @@ VelesDB offers three index constructors with different speed/recall tradeoffs:
 
 | Constructor | HNSW Params | Recall | Insert Speed | Use Case |
 |-------------|-------------|--------|-------------|----------|
-| `HnswIndex::new(dim, metric)` | `auto()` (M=32, ef=400) | ≥95% | Baseline | Production workloads |
+| `HnswIndex::new(dim, metric)` | `auto()` (M=24, ef_construction=300 up to 256 dims; M=32, 400 above) | ≥95% | Baseline | Production workloads |
 | `HnswIndex::new_fast_insert(dim, metric)` | `fast_indexing()` (M/2, ef/2) | ~90% | ~2-3x faster | High-velocity streaming, memory-constrained |
 | `HnswIndex::new_turbo(dim, metric)` | `turbo()` (M=12, ef=100) | ~85% | ~3-5x faster | Bulk loading, development, benchmarks |
 
@@ -217,13 +217,15 @@ parameter with dynamic scaling based on the requested result count `k`.
 
 | Variant | Base ef_search | Scaling | Approx. Recall | Use Case |
 |---------|---------------|---------|----------------|----------|
-| `Fast` | 96 | max(96, k*3) | ~95% | Real-time serving, low latency |
-| `Balanced` (default) | 160 | max(160, k*5) | ~99.5% | General purpose, production |
-| `Accurate` | 512 | max(512, k*16) | 100% at 10K, 0.98 at 1M | Analytics, batch processing |
+| `Fast` | 96 | max(96, k*3) | 97.4%* | Real-time serving, low latency |
+| `Balanced` (default) | 160 | max(160, k*5) | 99.8%* | General purpose, production |
+| `Accurate` | 512 | max(512, k*16) | 100%*; 0.98 on SIFT1M's 1M | Analytics, batch processing |
 | `Perfect` | — (exhaustive scan, no graph) | — | exact top-k, ties aside | Ground truth, evaluation; refused above `limits.max_perfect_mode_vectors` |
 | `AutoTune` | size-aware | `auto_ef_range(count, dim, k)`; falls back to max(160, k*5) without collection info | ~99% | Hands-off default at any scale (see [AutoTune Mode](#autotune-mode-v172)) |
 | `Custom(n)` | n | n | Varies | Fine-grained control |
 | `Adaptive { min_ef, max_ef }` | min_ef | escalates to max_ef | 95%+ | Mixed workloads, latency-sensitive |
+
+\* Recall@10 in `recall_benchmark` (10K random 128-D vectors, an index built with `HnswParams::max_recall`, 100 queries), measured 2026-09-10 on 6.0.0; see [BENCHMARKS.md](../BENCHMARKS.md#hnsw-recall-profiles-10k128d).
 
 > Source of truth for these values:
 > `crates/velesdb-core/src/index/hnsw/params.rs` (`SearchQuality::ef_search`).

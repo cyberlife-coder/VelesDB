@@ -53,13 +53,15 @@ pub enum ConfigError {
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum SearchMode {
-    /// Fast search with `ef_search=96`, ~95% recall.
+    /// Fast search with `ef_search=96`: 97.4% recall@10 in `recall_benchmark`
+    /// (10K random 128-D points).
     Fast,
-    /// Balanced search with `ef_search=160`, ~99.5% recall (default).
+    /// Balanced search with `ef_search=160`: 99.8% recall@10 in
+    /// `recall_benchmark` (default).
     #[default]
     Balanced,
-    /// Accurate search with `ef_search=512`: 100% recall@10 at 10K points,
-    /// 0.98 at 1M on SIFT1M (`docs/BENCHMARKS.md`).
+    /// Accurate search with `ef_search=512`: 100% recall@10 in
+    /// `recall_benchmark`, 0.98 on SIFT1M's 1M (`docs/BENCHMARKS.md`).
     Accurate,
     /// The engine's highest-recall mode, and the one value of this enum that no
     /// `ef_search` number can express.

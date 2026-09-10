@@ -704,34 +704,22 @@ velesdb> SELECT * FROM products WHERE vector NEAR $v LIMIT 10;
 
 ## Benchmarks
 
-> Historical measurements. The `ef_search` column records what each preset
-> resolved to at measurement time; the current preset defaults live in the
-> [Tuning Guide — SearchQuality](TUNING_GUIDE.md#searchquality-hnsw-level).
+Recall@10 at the current presets, from `cargo bench -p velesdb-core --bench
+recall_benchmark`: 10K random 128-D vectors, Cosine, an index built with
+`HnswParams::max_recall`, 100 queries, k=10, measured 2026-09-10 on 6.0.0
+([BENCHMARKS.md](../BENCHMARKS.md#hnsw-recall-profiles-10k128d)).
 
-### Test conditions
+| Mode | ef_search | Recall@10 |
+|------|-----------|-----------|
+| Fast | 96 | 97.4% |
+| Balanced | 160 | 99.8% |
+| Accurate | 512 | 100.0% |
+| Perfect | exhaustive | 100.0% |
 
-- **CPU**: AMD Ryzen 9 5900X (12 cores)
-- **RAM**: 64 GB DDR4
-- **Dataset**: 100K vectors, 768 dimensions (OpenAI embeddings)
-- **Metric**: Cosine similarity
-
-### Results
-
-| Mode | ef_search | Recall@10 | p50 latency | p99 latency | QPS |
-|------|-----------|-----------|-------------|-------------|-----|
-| Fast | 96 | ~95% | 0.8 ms | 1.5 ms | 12,500 |
-| Balanced | 160 | ~99.5% | 1.9 ms | 3.2 ms | 5,200 |
-| Accurate | 512 | ~99.5% | 4.1 ms | 6.8 ms | 2,400 |
-| Perfect | exhaustive | 100.0% | 14.2 ms | 22.1 ms | 700 |
-
-### Scaling with dataset size
-
-| Dataset Size | Balanced Latency | Perfect Latency | Ratio |
-|--------------|------------------|-----------------|-------|
-| 10K | 0.4 ms | 5 ms | 12x |
-| 100K | 1.9 ms | 48 ms | 25x |
-| 500K | 3.2 ms | 240 ms | 75x |
-| 1M | 4.8 ms | 480 ms | 100x |
+At 1M points (SIFT1M), `Accurate` reads 0.98 and `Perfect`, the exhaustive
+scan, 0.9994 against the dataset's ground truth. Latency depends on the
+machine and the dimension; [BENCHMARKS.md](../BENCHMARKS.md) records each
+figure with the hardware it came from.
 
 > **Observation**: The Fast, Balanced, and Accurate modes scale in O(log n) thanks to HNSW. Perfect leaves the graph for an exhaustive scan, O(n): its latency grows with the collection, which is why it is refused above `limits.max_perfect_mode_vectors`. For very large datasets, Accurate offers an excellent recall/latency trade-off.
 

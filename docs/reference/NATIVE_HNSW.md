@@ -76,10 +76,10 @@ let loaded = NativeHnswIndex::load("./my_index", 768, DistanceMetric::Cosine)?;
 
 | Method | Params | Recall | Speed | Description |
 |--------|--------|--------|-------|-------------|
-| `new(dim, metric)` | M=32, ef=400 | ≥95% | Baseline | Production workloads |
+| `new(dim, metric)` | `auto(dim)`: M=24, ef_construction=300 up to 256 dims; M=32, 400 above | ≥95% | Baseline | Production workloads |
 | `with_params(dim, metric, params)` | Custom | Custom | Custom | Full control |
 | `new_turbo(dim, metric)` | M=12, ef=100 | ~85% | 3-5x faster | Bulk import, dev, benchmarks |
-| `new_fast_insert(dim, metric)` | M/2, ef/2 | ~90% | 2-3x faster | Streaming; exact-distance features off |
+| `new_fast_insert(dim, metric)` | as `new` | as `new` | as `new` | `new` with exact-distance features off: `brute_force_search_parallel` returns nothing |
 
 ### Operations
 
@@ -89,7 +89,7 @@ let loaded = NativeHnswIndex::load("./my_index", 768, DistanceMetric::Cosine)?;
 | `insert_batch(&[(id, vec)])` | Batch insert |
 | `insert_batch_parallel(items)` | Parallel batch insert |
 | `search(query, k)` | Standard search (Balanced mode) |
-| `search_with_quality(query, k, quality)` | Search with quality preset (Fast/Balanced/Accurate/Perfect/Adaptive/AutoTune) |
+| `search_with_quality(query, k, quality)` | Search with quality preset (Fast/Balanced/Accurate/Perfect/Adaptive/AutoTune). On this type every preset walks the graph, `Perfect` at its large ef; `brute_force_search_parallel` is the exhaustive path |
 | `search_with_ef(query, k, ef_search)` | Search with explicit ef_search value |
 | `search_batch_parallel(queries, k, ef_search)` | Batch parallel search |
 | `brute_force_search_parallel(query, k)` | Exact search: the exact top-k under the index's distance |
@@ -492,7 +492,7 @@ POST /collections/documents/search
 | Fixed workload, known recall target | `Balanced` or `Accurate` with explicit `ef_search` |
 | Variable collection sizes, no tuning budget | **`AutoTune`** |
 | Latency-critical, recall > 90% acceptable | `Fast` |
-| Needs the exact top-k | `Perfect` (an exhaustive scan) |
+| Needs the exact top-k | `Perfect` on a collection or `HnswIndex` (an exhaustive scan); `brute_force_search_parallel` on `NativeHnswIndex` |
 
 ## Benchmarks
 

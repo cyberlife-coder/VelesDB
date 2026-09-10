@@ -360,13 +360,15 @@ impl HnswParams {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum SearchQuality {
-    /// Fast search with `ef_search=96`. ~95% recall, lowest latency.
+    /// Fast search with `ef_search=96`: 97.4% recall@10 in `recall_benchmark`
+    /// (10K random 128-D points), lowest latency.
     Fast,
-    /// Balanced search with `ef_search=160`. ~99.5% recall, production default.
+    /// Balanced search with `ef_search=160`: 99.8% recall@10 in
+    /// `recall_benchmark`, production default.
     #[default]
     Balanced,
-    /// Accurate search with `ef_search=512`: 100% recall@10 at 10K points,
-    /// 0.98 at 1M on SIFT1M (`docs/BENCHMARKS.md`).
+    /// Accurate search with `ef_search=512`: 100% recall@10 in
+    /// `recall_benchmark`, 0.98 on SIFT1M's 1M (`docs/BENCHMARKS.md`).
     Accurate,
     /// Exhaustive unless the index's exact-distance features are off: every
     /// stored vector is scored, so it returns the exact top-k under the index's

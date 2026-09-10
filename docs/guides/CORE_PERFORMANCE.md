@@ -41,7 +41,7 @@ These are aligned with the canonical numbers in the repository root README.
 | HNSW search, index only | **55 µs** (k=10, Balanced mode) |
 | VelesQL cache hit | **1.08 µs** (~926K QPS) |
 | Sparse search, index only (top-10) | **57.6 µs** (v1.13.0, PR #621 — 16x faster than v1.12) |
-| Recall@10 (Accurate mode) | **100%** |
+| Recall@10 (Accurate mode) | **100%** (10K/128D, `recall_benchmark`) |
 
 ## Key performance characteristics
 
@@ -59,11 +59,15 @@ These are aligned with the canonical numbers in the repository root README.
 
 | Config | Mode | `ef_search` | Recall@10 | Latency p50 | Status |
 |--------|------|-------------|-----------|-------------|--------|
-| 10K/128D | Balanced | 128 | **98.8%** | 57 µs | ✅ |
-| 10K/128D | Accurate | 512 | **99.9%** | 130 µs | ✅ |
+| 10K/128D | Balanced | 160 | **99.8%** | 57 µs | ✅ |
+| 10K/128D | Accurate | 512 | **100.0%** | 130 µs | ✅ |
 | 10K/128D | Perfect | exhaustive | **100%** | 200 µs | ✅ |
 | 10K/128D | Adaptive | 32–512 | **95%+** | ~40 µs (easy queries) | ✅ |
 
+> Recall re-measured 2026-09-10 on 6.0.0 at the current presets
+> (`recall_benchmark`, an index built with `HnswParams::max_recall`); the
+> latencies date from March 2026, when Balanced ran at ef 128.
+>
 > Latency p50 = median over 100 queries. The 55 µs index-only micro-benchmark
 > is for 10K/768D in Balanced mode — higher dimensions use SIMD more
 > efficiently, so the 128D rows above are a worst case for recall measurement.

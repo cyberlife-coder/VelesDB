@@ -208,13 +208,15 @@ curl -X POST http://localhost:8080/v1/collections/demo/search \
 
 | Value | Description |
 |-------|-------------|
-| `fast` | Low latency (~92% recall) |
-| `balanced` | Default (~99% recall) |
-| `accurate` | High precision (~99.5% recall) |
+| `fast` | Low latency: 97.4% recall@10* |
+| `balanced` | Default: 99.8% recall@10* |
+| `accurate` | High precision: 100% recall@10*; 0.98 on SIFT1M's 1M |
 | `perfect` | Exhaustive scan — the exact top-k |
 | `autotune` (aliases `auto`, `auto_tune`) | ef computed from collection size |
 | `custom:<ef>` | Fixed `ef_search`, e.g. `custom:256` |
 | `adaptive:<min>:<max>` | Two-phase adaptive, e.g. `adaptive:32:512` |
+
+\* Recall@10 in `recall_benchmark` (10K random 128-D vectors, an index built with `HnswParams::max_recall`, 100 queries), measured 2026-09-10 on 6.0.0; see [BENCHMARKS.md](../BENCHMARKS.md#hnsw-recall-profiles-10k128d).
 
 Recall figures come from [SEARCH_MODES.md](SEARCH_MODES.md), which explains the
 latency/recall trade-off in detail. An unrecognized `mode` string is ignored

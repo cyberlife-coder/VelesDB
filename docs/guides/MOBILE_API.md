@@ -310,12 +310,14 @@ Guardrails are the other half of the control plane: `updateGuardrails(limits)` s
 
 | Preset | `ef_search` | Note |
 |---|---|---|
-| `Fast` | 96 | ~95% recall, lowest latency |
-| `Balanced` | 160 | ~99.5% recall, default |
-| `Accurate` | 512 | 100% recall at 10K, 0.98 at 1M |
+| `Fast` | 96 | 97.4% recall@10*, lowest latency |
+| `Balanced` | 160 | 99.8% recall@10*, default |
+| `Accurate` | 512 | 100% recall@10*; 0.98 on SIFT1M's 1M |
 | `Perfect` | — (exhaustive scan, no graph) | Exact top-k, ties aside; refused above `max_perfect_mode_vectors` |
 | `Custom { ef }` | caller-set | Fine-grained control |
 | `Adaptive { minEf, maxEf }` | two-phase | Starts low, doubles until the cap |
+
+\* Recall@10 in `recall_benchmark` (10K random 128-D vectors, an index built with `HnswParams::max_recall`, 100 queries), measured 2026-09-10 on 6.0.0; see [BENCHMARKS.md](../BENCHMARKS.md#hnsw-recall-profiles-10k128d).
 
 ### Storage modes
 

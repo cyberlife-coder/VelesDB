@@ -86,7 +86,7 @@ fn bench_hnsw_insert_fast(c: &mut Criterion) {
     let dim = 768;
     group.throughput(Throughput::Elements(count));
 
-    // Standard mode (with vector storage)
+    // Standard mode (`new`: exact-distance features on)
     group.bench_with_input(
         BenchmarkId::new("standard", format!("{count}x{dim}d")),
         &count,
