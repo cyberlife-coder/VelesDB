@@ -150,8 +150,8 @@ impl HnswIndex {
     /// buffer for GPU upload, avoiding per-vector heap allocations from the
     /// older `collect_for_parallel()` path.
     ///
-    /// Returns `None` if the GPU feature is not enabled, no GPU is available,
-    /// or the index's exact-distance features are off.
+    /// Returns `None` without the `gpu` feature, and otherwise in every case
+    /// `search_brute_force_gpu_inner` lists.
     ///
     /// # Errors
     ///
@@ -186,9 +186,11 @@ impl HnswIndex {
     /// minimal and the logic testable.
     ///
     /// Returns `None` when the index's exact-distance features are off (the one
-    /// guard every GPU brute-force path goes through), when no GPU adapter
-    /// exists, when the index is empty, or when the GPU result does not match
-    /// the snapshot.
+    /// guard every GPU brute-force path goes through), when no GPU is
+    /// available, when the index has no live vector, when a concurrent delete
+    /// desyncs the snapshot, when the metric has no GPU shader (Hamming,
+    /// Jaccard), or when the GPU dispatch fails or returns a score count that
+    /// does not match the snapshot.
     ///
     /// RF-DEDUP: `pub(crate)` so `batch.rs` reuses it for
     /// `brute_force_search_parallel` and the test-only

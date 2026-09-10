@@ -104,16 +104,18 @@ fn bench_comprehensive(c: &mut Criterion) {
             SearchQuality::Accurate,
             SearchQuality::Perfect,
         ] {
-            let (quality_name, ef) = match quality {
-                SearchQuality::Fast => ("Fast", 64),
-                SearchQuality::Balanced => ("Balanced", 128),
-                SearchQuality::Accurate => ("Accurate", 512),
-                // No ef: the Perfect arm brute-forces before `ef_search` is read (#2238).
-                SearchQuality::Perfect => ("Perfect", 0),
-                SearchQuality::Custom(e) => ("Custom", e),
-                SearchQuality::Adaptive { min_ef, .. } => ("Adaptive", min_ef),
-                SearchQuality::AutoTune => ("AutoTune", 128),
-                _ => ("Unknown", 128),
+            let quality_name = match quality {
+                SearchQuality::Fast => "Fast",
+                SearchQuality::Balanced => "Balanced",
+                SearchQuality::Accurate => "Accurate",
+                SearchQuality::Perfect => "Perfect",
+                _ => "Other",
+            };
+            // No ef for Perfect: it brute-forces before `ef_search` is read (#2238).
+            let ef = if matches!(quality, SearchQuality::Perfect) {
+                0
+            } else {
+                quality.ef_search_for_scale(10, index.len())
             };
 
             // Measure latencies

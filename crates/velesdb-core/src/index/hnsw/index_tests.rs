@@ -92,9 +92,9 @@ fn test_batch_search_matches_single_query_on_large_dataset_issue_694() {
     // Assert: result IDs must match per-query.
     //
     // Pre-fix (issue #694): batch used ef_search(k), single used
-    // ef_search_for_scale(k, len). In the #694 report (n=12_000) the scale
-    // factor was sqrt(1.2) ≈ 1.095, so single saw ef * 1.09 (rounded) and batch
-    // saw ef * 1, giving mismatched candidate sets and divergent top-k.
+    // ef_search_for_scale(k, len). At this test's n=40_000, single ran at
+    // twice the base ef and batch at the base ef, so their candidate sets
+    // differed and so did their top-k.
     //
     // Post-fix: both paths call ef_search_for_scale(k, self.len()), so the
     // candidate sets are identical and the result lists are identical.
@@ -3597,8 +3597,9 @@ fn adaptive_resume_is_deterministic_across_pool_reuse() {
 
 /// Exact-distance features off turn brute force off on the GPU path too: it
 /// returns nothing rather than scan an index built with `new_fast_insert`. A
-/// twin built with `new` is the positive control; without a GPU adapter both
-/// return nothing, and the test says it proved nothing rather than pass on it.
+/// twin built with `new` is the positive control: without a GPU both return
+/// nothing, and the test returns early, reported as passed, after printing
+/// that the guard went unexercised (shown with `--nocapture`).
 #[cfg(feature = "gpu")]
 #[test]
 fn gpu_brute_force_returns_nothing_with_exact_distance_features_off() {
@@ -3614,7 +3615,7 @@ fn gpu_brute_force_returns_nothing_with_exact_distance_features_off() {
     let query: Vec<f32> = (0..128).map(|j| (j as f32 * 0.02).cos()).collect();
 
     let Some(scanned) = twin.search_brute_force_gpu(&query, 10).unwrap() else {
-        eprintln!("no GPU adapter: the exact-distance guard is not exercised here");
+        eprintln!("GPU unavailable: the exact-distance guard is not exercised here");
         return;
     };
     assert_eq!(scanned.len(), 10);

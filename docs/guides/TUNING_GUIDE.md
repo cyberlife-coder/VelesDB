@@ -144,7 +144,7 @@ VelesDB offers three index constructors with different speed/recall tradeoffs:
 | Constructor | HNSW Params | Recall | Insert Speed | Use Case |
 |-------------|-------------|--------|-------------|----------|
 | `HnswIndex::new(dim, metric)` | `auto()` (M=24, ef_construction=300 up to 256 dims; M=32, 400 above) | ≥95% | Baseline | Production workloads |
-| `HnswIndex::new_fast_insert(dim, metric)` | `fast_indexing()` (M/2, ef/2) | ~90% | ~2-3x faster | High-velocity streaming, memory-constrained |
+| `HnswIndex::new_fast_insert(dim, metric)` | `fast_indexing()` (M/2, ef/2) | ~90% | ~2-3x faster | High-velocity streaming |
 | `HnswIndex::new_turbo(dim, metric)` | `turbo()` (M=12, ef=100) | ~85% | ~3-5x faster | Bulk loading, development, benchmarks |
 
 **Recommended pattern**: Use `new_turbo()` for initial bulk import, then rebuild with

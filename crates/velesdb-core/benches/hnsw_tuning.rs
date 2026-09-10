@@ -1,8 +1,9 @@
 #![warn(clippy::significant_drop_tightening)]
 //! HNSW Parameter Tuning Benchmarks
 //!
-//! Explores the recall/latency tradeoff for different parameter configurations.
-//! Use this to find optimal settings for your use case.
+//! Measures the default search (`HnswIndex::new`, Balanced): recall and
+//! latency at 10K vectors, recall across k, latency across index size; and
+//! prints the parameters `HnswParams::auto` derives.
 //!
 //! Run with: `cargo bench --bench hnsw_tuning`
 
@@ -112,7 +113,6 @@ fn bench_default_search(c: &mut Criterion) {
         .map(|q| brute_force_knn(&vectors, q, k))
         .collect();
 
-    // Test different ef_search values
     // Default search uses SearchQuality::Balanced
     let defaults = HnswParams::auto(dim);
     println!(

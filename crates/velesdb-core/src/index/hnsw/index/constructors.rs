@@ -45,11 +45,16 @@ impl HnswIndex {
     ///
     /// # Limitations
     ///
-    /// - `search_with_quality` skips its two-stage re-rank; an explicit
-    ///   `search_with_rerank` or `search_with_rerank_quality` call still
-    ///   re-ranks, from the graph's stored vectors
-    /// - No brute-force search (`search_brute_force` falls back to HNSW search)
-    /// - Cannot `vacuum()` the index (returns error)
+    /// Exact-distance features are off:
+    ///
+    /// - `search_with_quality` and `search_batch_parallel` skip their automatic
+    ///   two-stage re-rank; an explicit `search_with_rerank` or
+    ///   `search_with_rerank_quality` call still re-ranks, from the graph's
+    ///   stored vectors
+    /// - `search_brute_force` falls back to a graph search, and
+    ///   `brute_force_search_parallel` and the GPU scans return nothing;
+    ///   `full_scan_with_bitmap` scans regardless
+    /// - `vacuum()` is refused (returns an error)
     ///
     /// # Use Cases
     ///
@@ -66,7 +71,7 @@ impl HnswIndex {
     /// use velesdb_core::index::HnswIndex;
     /// use velesdb_core::DistanceMetric;
     ///
-    /// // Fast insert mode: lighter graph params, no exact-distance features
+    /// // Fast insert mode: lighter graph params, exact-distance features off
     /// let index = HnswIndex::new_fast_insert(768, DistanceMetric::Cosine)?;
     /// ```
     pub fn new_fast_insert(dimension: usize, metric: DistanceMetric) -> Result<Self> {
@@ -213,9 +218,10 @@ impl HnswIndex {
     /// * `dimension` - Vector dimension
     /// * `metric` - Distance metric
     /// * `params` - Custom HNSW parameters
-    /// * `enable_vector_storage` - Whether exact-distance features
-    ///   (`search_with_quality`'s re-rank, brute force, vacuum) are on; the graph
-    ///   keeps its vectors either way
+    /// * `enable_vector_storage` - Whether exact-distance features are on: the
+    ///   automatic two-stage re-rank, `search_brute_force`,
+    ///   `brute_force_search_parallel`, the GPU scans and `vacuum` (see
+    ///   [`Self::new_fast_insert`]); the graph keeps its vectors either way
     ///
     /// # Errors
     ///

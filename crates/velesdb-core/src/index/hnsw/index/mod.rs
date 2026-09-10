@@ -93,13 +93,15 @@ pub struct HnswIndex {
     pub(crate) inner: RwLock<ManuallyDrop<HnswInner>>,
     /// ID mappings (external ID <-> internal index) - lock-free via `DashMap` (EPIC-A.1)
     pub(crate) mappings: ShardedMappings,
-    /// Whether exact-distance features (`search_with_quality`'s SIMD re-rank,
-    /// brute-force search, vacuum) are enabled.
+    /// Whether exact-distance features are enabled: the automatic two-stage
+    /// re-rank (`search_with_quality`, `search_batch_parallel`),
+    /// `search_brute_force`, `brute_force_search_parallel`, the GPU scans and
+    /// vacuum. `search_with_rerank*` and `full_scan_with_bitmap` ignore it.
     ///
     /// Vectors always live once, in the graph's `ContiguousVectors` (the
     /// former `ShardedVectors` sidecar was removed — PERF1). This flag is
     /// kept as a feature gate so fast-insert indices preserve their
-    /// historical behavior (no brute-force / rerank / vacuum).
+    /// historical behavior (none of the features above).
     ///
     /// Default: `true` (full functionality)
     pub(crate) enable_vector_storage: bool,

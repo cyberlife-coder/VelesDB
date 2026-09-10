@@ -216,10 +216,25 @@ fn print_recall_stats(c: &mut Criterion) {
     }
 
     // Print stats once (before benchmark)
-    println!("\n=== Recall@{k} Statistics (n={n}, dim={dim}, M=32, ef_c=500) ===");
-    println!("Fast (ef=96):        {:.1}%", final_recalls[0] * 100.0);
-    println!("Balanced (ef=160):   {:.1}%", final_recalls[1] * 100.0);
-    println!("Accurate (ef=512):   {:.1}%", final_recalls[2] * 100.0);
+    let built = HnswParams::max_recall(dim);
+    println!(
+        "\n=== Recall@{k} Statistics (n={n}, dim={dim}, M={}, ef_c={}) ===",
+        built.max_connections, built.ef_construction
+    );
+    for (i, (name, quality)) in [
+        ("Fast", SearchQuality::Fast),
+        ("Balanced", SearchQuality::Balanced),
+        ("Accurate", SearchQuality::Accurate),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        println!(
+            "{name} (ef={}): {:.1}%",
+            quality.ef_search_for_scale(k, n),
+            final_recalls[i] * 100.0
+        );
+    }
     println!("Perfect (exhaustive): {:.1}%", final_recalls[3] * 100.0);
 
     // Benchmark the computation (no print inside)

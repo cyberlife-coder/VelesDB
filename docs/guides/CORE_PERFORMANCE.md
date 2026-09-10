@@ -62,11 +62,12 @@ These are aligned with the canonical numbers in the repository root README.
 | 10K/128D | Balanced | 160 | **99.8%** | 57 µs | ✅ |
 | 10K/128D | Accurate | 512 | **100.0%** | 130 µs | ✅ |
 | 10K/128D | Perfect | exhaustive | **100%** | 200 µs | ✅ |
-| 10K/128D | Adaptive | 32–512 | **95%+** | ~40 µs (easy queries) | ✅ |
+| 10K/128D | Adaptive | 32–512 | — | — | not measured |
 
 > Recall re-measured 2026-09-10 on 6.0.0 at the current presets
 > (`recall_benchmark`, an index built with `HnswParams::max_recall`); the
-> latencies date from March 2026, when Balanced ran at ef 128.
+> latencies date from March 2026, when Balanced ran at ef 128. No recorded run
+> measures the Adaptive row (#2266).
 >
 > Latency p50 = median over 100 queries. The 55 µs index-only micro-benchmark
 > is for 10K/768D in Balanced mode — higher dimensions use SIMD more
