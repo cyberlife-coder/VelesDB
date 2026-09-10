@@ -4,6 +4,7 @@
 //! Neither index allocates a slot here: the graph's arena hands out every
 //! slot, and the mappings follow it through `ShardedMappings::assign` (#2246).
 
+use super::native_inner::NativeHnswInner;
 use super::sharded_mappings::ShardedMappings;
 
 /// Where an upsert placed an id: the slot now holding its vector, and the
@@ -26,8 +27,14 @@ pub(crate) struct UpsertResult {
 /// Shared by `HnswIndex::remove` and `NativeHnswIndex::remove` (identical
 /// bodies, #448 Group F consolidation).
 ///
+/// `_graph` borrows the index's graph from the guard its caller holds, so the
+/// guard outlives both map writes. A renumber (`reorder_for_locality`, or
+/// `vacuum` while it re-maps) re-maps under the write guard: run between the
+/// two writes, it would map `id` again, or erase the reverse entry of the id
+/// that took its slot.
+///
 /// [`vacuum`]: crate::index::HnswIndex::vacuum
 #[inline]
-pub(crate) fn soft_delete(mappings: &ShardedMappings, id: u64) -> bool {
+pub(crate) fn soft_delete(mappings: &ShardedMappings, id: u64, _graph: &NativeHnswInner) -> bool {
     mappings.remove(id).is_some()
 }

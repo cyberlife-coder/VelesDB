@@ -936,11 +936,19 @@ names it; `vacuum` rebuilds the mappings before it releases that lock.
 and the token borrows the guard the placement ran under: releasing that
 guard before the slot is mapped does not compile (E0505). Placements mint
 the token; outside tests (`Placed::for_test`) the one exception is
-`Placed::installed`, which `vacuum` uses for
-its rebuilt graph: it makes a token from a bare slot under a write guard and
-trusts its caller that the slot is that graph's. The token ties a mapping to
-a guard's lifetime, not to a particular index; each call site keeps an
-index's guard and its mappings together.
+`Placed::installed`, which `vacuum` uses for its rebuilt graph: it makes a
+token from a bare slot under a write guard and trusts its caller that the
+slot is that graph's. The token ties a mapping to a guard's lifetime, not to
+a particular index; each call site keeps an index's guard and its mappings
+together.
+
+**Invariant**: `remove` holds the index read guard across its two map
+writes: `soft_delete` borrows the graph, so releasing the guard first does
+not compile. A renumber re-maps under the write guard by snapshotting the
+forward map, clearing both maps and reinserting; run between the two writes,
+it would map a deleted id again, or erase the reverse entry of the id that
+took its slot. A delete made while `vacuum` rebuilds, before it takes the
+write guard, is still lost when it re-maps (#2262).
 
 **Invariant**: a refused vector or batch maps nothing, so there is nothing
 to roll back. A batch the graph refuses part-way leaves the nodes it already

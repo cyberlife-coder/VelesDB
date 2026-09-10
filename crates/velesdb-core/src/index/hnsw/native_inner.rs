@@ -856,8 +856,7 @@ impl<'guard> Placed<'guard> {
     /// graph this way, once installed. Nothing renumbers slots while the write
     /// side is held. Outside tests (`Placed::for_test`) this is the one way to
     /// make a token from a bare slot, and it trusts its caller that the slot is
-    /// that graph's; debug builds check
-    /// that the graph has such a slot.
+    /// that graph's; debug builds check that the graph has such a slot.
     pub(crate) fn installed(
         guard: &'guard parking_lot::RwLockWriteGuard<'_, std::mem::ManuallyDrop<NativeHnswInner>>,
         slot: usize,
@@ -870,8 +869,8 @@ impl<'guard> Placed<'guard> {
         Self::new(slot)
     }
 
-    /// For unit tests of the mappings alone, where no graph exists to
-    /// renumber anything.
+    /// For tests that drive the mappings directly, with slots no placement
+    /// returned.
     #[cfg(test)]
     pub(crate) fn for_test(slot: usize) -> Placed<'static> {
         Placed::new(slot)

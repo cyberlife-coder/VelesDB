@@ -230,7 +230,7 @@ impl NativeHnswIndex {
     /// Delegates to `upsert::soft_delete` (private), shared with
     /// `HnswIndex::remove` (#448 Group F).
     pub fn remove(&self, id: u64) -> bool {
-        upsert::soft_delete(&self.mappings, id)
+        upsert::soft_delete(&self.mappings, id, &self.inner.read())
     }
 
     /// Sets searching mode (no-op for native implementation).

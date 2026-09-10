@@ -132,10 +132,12 @@ impl ShardedMappings {
 
         let slot = placed.into_slot();
         // Checked before either map changes. The writes then run under the
-        // id's entry lock, in order (forward entry, retire the old reverse
-        // entry, claim the new one), so assigns of one id serialize. `remove`
-        // drops its two entries one at a time and may interleave; once
-        // writers settle, each id is named by its own slot alone.
+        // shard lock over the id's entry, in order (forward entry, retire the
+        // old reverse entry, claim the new one), so assigns of one id
+        // serialize. `remove` drops its two entries one at a time and may
+        // interleave, but never with a renumber: its callers hold the graph's
+        // read guard. Once writers settle, each id is named by its own slot
+        // alone.
         self.refuse_foreign_slot(slot, id);
         self.note_id(id);
         self.next_idx
@@ -150,11 +152,12 @@ impl ShardedMappings {
                 (old != slot).then_some(old)
             }
             Entry::Vacant(entry) => {
-                // `insert` hands the shard lock to the reference it returns:
-                // keep it until the reverse entry is written, as the occupied
-                // arm does, or a concurrent assign of this id interleaves.
-                let _forward = entry.insert(slot);
-                self.idx_to_id.insert(slot, id);
+                // `insert` hands the shard lock to the reference it returns.
+                // The reverse write reads the slot through it, so the lock is
+                // held until that write is done, as in the occupied arm.
+                let forward = entry.insert(slot);
+                self.idx_to_id.insert(*forward, id);
+                drop(forward);
                 None
             }
         }
@@ -175,6 +178,9 @@ impl ShardedMappings {
     }
 
     /// Removes an ID and returns its internal index if it existed.
+    ///
+    /// The two writes are not atomic: callers hold the graph's read guard
+    /// (`soft_delete` borrows the graph), so no renumber runs between them.
     pub fn remove(&self, id: u64) -> Option<usize> {
         if let Some((_, idx)) = self.id_to_idx.remove(&id) {
             self.idx_to_id.remove(&idx);

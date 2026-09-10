@@ -3561,3 +3561,65 @@ fn adaptive_resume_is_deterministic_across_pool_reuse() {
         );
     }
 }
+
+/// A delete never lands inside a renumber. The renumber below re-maps as
+/// `reorder_for_locality` does, under the write guard; `remove` holds the
+/// read guard across its two map writes, so every deleted id stays deleted
+/// and every kept id keeps a slot that names it back.
+#[test]
+fn deletes_racing_a_renumber_stay_deleted() {
+    use super::native_inner::Placed;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Barrier;
+
+    const IDS: usize = 4_000;
+    let index = HnswIndex::new(4, DistanceMetric::Euclidean).unwrap();
+    for id in 0..IDS {
+        assert_eq!(index.mappings.assign(id as u64, Placed::for_test(id)), None);
+    }
+    // Swaps each even slot with the next: its own inverse, so an even number
+    // of rounds leaves every slot where it started.
+    let swap: Vec<usize> = (0..IDS).map(|slot| slot ^ 1).collect();
+    let deleting = AtomicBool::new(true);
+    let start = Barrier::new(2);
+    let mut unmapped = Vec::new();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            start.wait();
+            let mut rounds = 0u32;
+            while deleting.load(Ordering::Acquire) || rounds % 2 == 1 {
+                let graph = index.inner.write();
+                index.mappings.remap_indices(&swap);
+                drop(graph);
+                rounds += 1;
+                std::thread::yield_now();
+            }
+        });
+        start.wait();
+        // Recorded, not asserted: a panic here would leave the renumbering
+        // thread looping, and the scope waiting on it for ever.
+        for id in (0..IDS as u64).step_by(2) {
+            if !index.remove(id) {
+                unmapped.push(id);
+            }
+        }
+        deleting.store(false, Ordering::Release);
+    });
+    assert!(
+        unmapped.is_empty(),
+        "ids found unmapped when removed: {unmapped:?}"
+    );
+    for id in 0..IDS as u64 {
+        match index.mappings.get_idx(id) {
+            Some(slot) => {
+                assert_eq!(id % 2, 1, "deleted id {id} is mapped again, at slot {slot}");
+                assert_eq!(
+                    index.mappings.get_id(slot),
+                    Some(id),
+                    "slot {slot} names another id"
+                );
+            }
+            None => assert_eq!(id % 2, 0, "kept id {id} lost its slot"),
+        }
+    }
+}

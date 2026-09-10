@@ -162,8 +162,12 @@ impl HnswIndex {
     /// [`VectorIndex::remove`](crate::index::VectorIndex::remove) trait impl
     /// and delegates to `upsert::soft_delete` (private; also used by
     /// `NativeHnswIndex::remove`).
+    ///
+    /// Holds the graph's read guard across both map writes: a renumber
+    /// re-maps under the write guard and must not run between them.
     pub fn remove(&self, id: u64) -> bool {
-        upsert::soft_delete(&self.mappings, id)
+        let graph = self.inner.read();
+        upsert::soft_delete(&self.mappings, id, &graph)
     }
 
     /// Returns the number of vector slots in the graph's `ContiguousVectors`
