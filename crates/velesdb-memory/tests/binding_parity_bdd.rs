@@ -711,14 +711,14 @@ const RELAYED_WHOLE: &[RelayedWhole] = &[
 /// Pulled out of the live test so a synthetic region can prove it NAMES a gap
 /// (`the_nested_check_names_the_child_a_stripped_relay_lost`): the live test
 /// alone only shows that it ran. A `RELAYED_WHOLE` entry counts only when its
-/// code is there as code — a doc comment quoting it is not the relay.
+/// code is there as code — a comment quoting it, of any form, is not the relay.
 fn nested_gaps(
     binding: &str,
     tool: &str,
     nested: &BTreeSet<(String, String)>,
     declared: &str,
 ) -> (Vec<String>, usize) {
-    let code = without_doc_comments(declared);
+    let code = without_comments(declared);
     let mut gaps = Vec::new();
     let mut examined = 0;
     for (parent, child) in nested {
@@ -1300,6 +1300,58 @@ fn cut_parameter_list(region: &str, method: &str) -> String {
 /// (#1760: documenting `recall_where`'s contract as "Returns caller memories
 /// ONLY" made a still-true [`ShapeDivergence`] for the field `memories` look
 /// stale, because the sentence, not the return value, named it).
+/// `region` with every comment removed — line (`//`, `///`, `//!`) and block
+/// (`/* */`) — so a snippet matched against it is matched against code only.
+///
+/// String literals are kept whole: the `//` of an `"http://…"` inside code is
+/// not a comment. Not a lexer — a `'"'` char literal or a raw string holding
+/// `//` would confuse it — but the bindings this reads carry neither near a
+/// relay, and [`a_whole_relay_quoted_in_a_comment_is_not_a_relay`] pins the
+/// forms that matter.
+fn without_comments(region: &str) -> String {
+    let mut out = String::with_capacity(region.len());
+    let mut chars = region.chars().peekable();
+    let mut in_string = false;
+    let mut in_block = false;
+    while let Some(c) = chars.next() {
+        if in_block {
+            if c == '*' && chars.peek() == Some(&'/') {
+                chars.next();
+                in_block = false;
+            }
+            continue;
+        }
+        if in_string {
+            out.push(c);
+            if c == '\\' {
+                if let Some(escaped) = chars.next() {
+                    out.push(escaped);
+                }
+            } else if c == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        if c == '"' {
+            in_string = true;
+            out.push(c);
+        } else if c == '/' && chars.peek() == Some(&'/') {
+            for rest in chars.by_ref() {
+                if rest == '\n' {
+                    out.push('\n');
+                    break;
+                }
+            }
+        } else if c == '/' && chars.peek() == Some(&'*') {
+            chars.next();
+            in_block = true;
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 fn without_doc_comments(region: &str) -> String {
     region
         .lines()
@@ -2540,7 +2592,7 @@ async fn no_whole_relay_is_stale() {
         let regions = method_regions(binding);
         let structs = binding_structs(binding);
         let relayed = regions.get(whole.tool).is_some_and(|region| {
-            without_doc_comments(&region_with_named_structs(
+            without_comments(&region_with_named_structs(
                 &output_window(region, whole.tool),
                 &structs,
             ))
@@ -2590,24 +2642,48 @@ fn the_nested_check_names_the_child_a_stripped_relay_lost() {
     );
 }
 
-/// A `RELAYED_WHOLE` entry counts only when its code is present as code.
+/// A `RELAYED_WHOLE` entry counts only when its code is present as code — not
+/// when a comment of any form quotes it.
 #[test]
-fn a_whole_relay_quoted_in_a_doc_comment_is_not_a_relay() {
+fn a_whole_relay_quoted_in_a_comment_is_not_a_relay() {
     let nested: BTreeSet<(String, String)> = [("context".to_owned(), "warnings".to_owned())]
         .into_iter()
         .collect();
-    let quoted =
-        "/// relayed with serde_to_python!(py, &compiled, ..)\nout.set_item(\"context\", x);";
-    let real = "let context = serde_to_python!(py, &compiled, \"compiled context\");\n\
-                out.set_item(\"context\", context);";
-
-    let (gaps, _) = nested_gaps("velesdb-python", "compile_transcript", &nested, quoted);
-    assert_eq!(
-        gaps.len(),
-        1,
-        "a doc comment quoting the relay is not the relay"
+    let relay = "serde_to_python!(py, &compiled, \"compiled context\")";
+    for (form, region) in [
+        (
+            "doc comment",
+            format!("/// {relay}\nout.set_item(\"context\", x);"),
+        ),
+        (
+            "line comment",
+            format!("// let context = {relay};\nout.set_item(\"context\", x);"),
+        ),
+        (
+            "inner doc comment",
+            format!("//! {relay}\nout.set_item(\"context\", x);"),
+        ),
+        (
+            "block comment",
+            format!("/* let context = {relay}; */\nout.set_item(\"context\", x);"),
+        ),
+        (
+            "trailing comment",
+            format!("out.set_item(\"context\", x); // was {relay}"),
+        ),
+    ] {
+        let (gaps, _) = nested_gaps("velesdb-python", "compile_transcript", &nested, &region);
+        assert_eq!(
+            gaps.len(),
+            1,
+            "{form}: a comment quoting the relay is not the relay"
+        );
+    }
+    // CONTROL: the code itself counts — even after a string holding `//`.
+    let real = format!(
+        "let url = \"http://local\";\nlet context = {relay};\nout.set_item(\"context\", context);"
     );
-    let (gaps, _) = nested_gaps("velesdb-python", "compile_transcript", &nested, real);
+    let (gaps, _) = nested_gaps("velesdb-python", "compile_transcript", &nested, &real);
     assert!(gaps.is_empty(), "CONTROL: the code itself counts: {gaps:?}");
 }
 
