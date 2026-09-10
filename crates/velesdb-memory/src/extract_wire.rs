@@ -2,9 +2,12 @@
 //! and the JSON Schemas sent inside it.
 //!
 //! Split out of `extract.rs` when constraining decoding (#1944) pushed that
-//! file past its frozen budget. The seam is not arbitrary: everything here
-//! describes what LEAVES the process, while `extract.rs` keeps what comes back
-//! and how it is read.
+//! file past its frozen budget. The seam is how ONE backend is asked: Ollama's
+//! request envelope and the schemas that constrain its decoding. It is not
+//! everything that leaves the process — the prompts leave too, and stay in
+//! `extract.rs` beside the parser, because they are what this crate wants said
+//! to any backend: the OpenAI-compatible extractor sends the same prompts, in
+//! an envelope `crate::openai` builds, and no schema.
 //!
 //! Each schema still sits beside nothing else, which is the point — it is one
 //! contract stated twice, once for the sampler and once for the reader, and

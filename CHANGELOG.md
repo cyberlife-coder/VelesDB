@@ -26,10 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   **`default_mode = "perfect"` is applied as `accurate`, with a warning at
   load.** `SearchQuality::Perfect` is an exhaustive scan capped by
-  `limits.max_perfect_mode_vectors`, and that cap lives in a check only the
-  per-query entry points can run — `search_with_optional_bitmap` returns
-  `Vec<ScoredResult>` and cannot refuse — so the global default never resolves
-  to it. A first version refused the value outright, which made a file v6.0.0
+  `limits.max_perfect_mode_vectors`, and a filtered search's bitmap pre-filter
+  never reads the configured quality — it traverses the graph at its own ef —
+  so a global `perfect` would scan on some queries and not on others; the
+  default never resolves to it. A first version refused the value outright, which made a file v6.0.0
   loaded fail `Database::open`: a breaking change in a minor release, caught by
   the seven-lens review (#2246) before it shipped.
 
@@ -99,6 +99,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Three search paths turned an index error into an empty answer.**
+  `Collection::search`, `search_ids` and the post-filter fallback logged
+  `search_with_quality`'s error and returned `Vec::new()`, from functions that
+  all return `Result`: a failure read as "no match", the one failure a caller
+  cannot tell from a correct result. Nothing reaches it today — the entry
+  points check the dimension first — which is why nothing noticed. The error
+  is now returned (#2246, P5).
+
+- **`npm-audit-gate.py` reported non-findings with the advisory exit.**
+  `--attempts 0` and a report whose count is not a number both raised
+  `ValueError`, which `main` mapped to exit 1 — "this lockfile is
+  vulnerable"; a count of another type, a negative `--backoff-seconds` and an
+  `npm` that will not run all raised out of `main`, also exit 1. Bad flags are
+  now argparse's usage error (exit 2); an unreadable report or an npm that will
+  not run, the infrastructure exit (75) (#2246, P5).
+
+- **Six comments and docs asserted what the code does not.**
+  `scripts/local-ci.sh` said its default replays every gate job (it replays
+  `lint` and `hygiene`); `AGENTS.md` said `flush_backing` deliberately has no
+  caller (#2173 gave it one), credited `contiguous_file_arena.rs` with a
+  rationale it does not hold, and cited #2112 and #2106 as open design issues
+  when both are closed; `extract_wire.rs` said everything leaving the
+  process lives there (the prompts leave from `extract.rs`);
+  `GraphCollection::remove_edge` pointed users at `remove_edge_detailed`, which
+  is `pub(crate)`; `SearchConfig::resolved_quality` did not say it exists only
+  with `persistence`; and the `unused_self` allow in `native_inner.rs` named a
+  command that passes without it — the one it protects adds
+  `-D clippy::pedantic` (#2246, P5).
+- **`memory_status` dropped `autograph_failed` in the Node and Python bindings,
+  and the parity guard could not see it.** The field is required by the
+  published schema and documented in `MCP_TOOLS.md`, but both bindings built an
+  `extraction` object of three keys, and `binding_parity_bdd` compared only the
+  ROOT keys of each output schema. Both bindings now relay it (the Node
+  `ts_return_type` included), and the guard reads one level deeper, resolving
+  `$ref`s, with a control that fails if its nested reader sees nothing
+  (#2246, P4-b). Reading one level deeper found a second drop:
+  `compileTranscript`'s TypeScript return type hand-copied seven of `context`'s
+  eight fields and left out `warnings`, which the call does return; it is now
+  declared. Not as `CompiledContextJs`: that `napi(object)` type is
+  camelCased, while this call returns the wire's snake_case JSON.
+
+- **Two reference pages still described superseded behaviour.**
+  `NATIVE_HNSW.md` said downgrading past the `.vectors` v2 change requires
+  re-persisting the index — the CHANGELOG had been corrected, the reference
+  page had not, and the two contradicted each other. `MEMORY_EXTRACTOR_MODELS.md`
+  called its tier table "the settings the product sends today" when every row was
+  measured before the schema was sent as `format`; the table is now dated
+  (#2246, P4-c, P4-d).
+- **A compaction or a reorder with bulk inserts still pending could strand them
+  after a crash.** `upsert_bulk`'s V2 path registers each id and writes its
+  vector at once, and leaves the graph insert to the `AsyncIndexBuilder`.
+  `flush` drains the builder before saving; `compact_storage` and
+  `reorder_for_locality` (whose save #2247 added) did not, so a crash right
+  after either left points stored and mapped but never in the graph — and
+  recovery re-indexes only unmapped ids. Both now drain first. Reproduced with
+  a crash snapshot taken right after the save (#2246).
 - **Opening an adopted Cosine collection could write its `.vectors` file.**
   Once adopted (#2173) the arena is the durable file, and the load-time norm
   check normalized off-sphere vectors in it in place — an open that wrote the
@@ -126,6 +182,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   arrived with the adoption rather than a latent defect. The index is now saved
   before the call returns, and `reorder_durability.rs` pins it — seen failing
   with the save removed.
+
+- **Seven guards verified their result and never their premise.** The worst
+  reopened #2232 silently: `test_exactly_one_step_produces_the_verdict` matched
+  `steps\.\w+\.conclusion`, any identifier, so renaming the mirror step's `id:`
+  without its reference left all 106 tests green while `CI Success` went green
+  reading no `needs` result — GitHub evaluates an unknown step id to `''`. The id
+  is now read from the mirror itself. Alongside it: the lockfile set and
+  `DEFERRED_REMOVALS` gained non-vacuity checks, so an empty set can no longer
+  satisfy "nothing is missing"; the attribution guard's issue surface must now be
+  refused before the absence of its push remedy counts; the duplicate-heading
+  guard covers `crates/velesdb-memory/CHANGELOG.md`, which `release-memory.yml`
+  publishes and nothing guarded; `perfect_mode_semantics` compares Perfect with a
+  brute-force ground truth on a dispersed fixture instead of `top1 == 7` on a
+  collinear one every mode satisfies; and the `.vectors` no-write test runs under
+  Cosine, whose load path renormalises in place. Each was seen failing on the
+  mutation it names (#2246, P2).
+
 - **`SearchQuality::Perfect` was documented as the opposite of what it does.**
   Its rustdoc described a graph search at `ef_search = 4096` that "tunes the
   HNSW graph's effort and is not exhaustive", with a ~0.9994 recall figure at
@@ -263,6 +336,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the v1 read path was written here rather than inherited.
 
 ### Deprecated
+
+- **`StorageConfig::{data_dir, mmap_cache_mb, vector_alignment}` carry
+  `#[deprecated]`.** They were deprecated in prose only (#2220): a Rust caller
+  setting one got no compiler warning. The TOML keys load exactly as before
+  (#2246, P5).
+
 - **`[storage]` `data_dir`, `mmap_cache_mb` and `vector_alignment` — parsed
   and validated, never applied.** Issue #2087's per-knob audit found these
   three have no engine counterpart to wire them to at all (`data_dir` also

@@ -70,10 +70,12 @@ fn v1_vectors_file_still_loads() {
 #[test]
 fn dumped_vectors_file_is_v2_and_page_aligned() {
     // Arrange
-    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 4);
+    const NODES: usize = 3;
+    const DIM: usize = 4;
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, DIM);
     let hnsw = NativeHnsw::new(engine, 16, 100, 100);
-    for i in 0..3 {
-        hnsw.insert(&[i as f32; 4]).expect("test: insert");
+    for i in 0..NODES {
+        hnsw.insert(&[i as f32; DIM]).expect("test: insert");
     }
     let dir = tempdir().expect("test: tempdir");
     hnsw.file_dump(dir.path(), "aligned").expect("test: dump");
@@ -82,19 +84,24 @@ fn dumped_vectors_file_is_v2_and_page_aligned() {
     let bytes = std::fs::read(dir.path().join("aligned.vectors")).expect("test: read back");
 
     // Assert
+    // The layout is read from the writer's own constants, so this pins the file
+    // against them rather than restating them.
+    let header = usize::try_from(super::VECTORS_HEADER_BYTES).expect("test: header fits usize");
+    let payload = usize::try_from(super::VECTORS_V2_DATA_OFFSET).expect("test: offset fits usize");
     assert_eq!(
         u32::from_le_bytes(bytes[0..4].try_into().expect("test: version bytes")),
-        2,
-        "the dump must declare v2"
+        super::VECTORS_FORMAT_VERSION,
+        "the dump must declare the current version"
     );
+    assert_eq!(payload % 4096, 0, "the payload offset must be page-aligned");
     assert!(
-        bytes[16..4096].iter().all(|&b| b == 0),
+        bytes[header..payload].iter().all(|&b| b == 0),
         "the reserved gap between header and payload must be zero-filled"
     );
     assert_eq!(
         bytes.len(),
-        4096 + 3 * 4 * std::mem::size_of::<f32>(),
-        "the payload must start at 4096, with nothing between it and the header"
+        payload + NODES * DIM * std::mem::size_of::<f32>(),
+        "the payload must start at the page offset, with nothing between it and the header"
     );
 }
 

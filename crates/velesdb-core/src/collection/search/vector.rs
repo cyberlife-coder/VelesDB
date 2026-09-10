@@ -37,30 +37,12 @@ pub(super) fn tag_vector_component_scores(results: &mut [SearchResult]) {
 }
 
 impl Collection {
-    /// The index call the unqualified paths make, with the error handling the
-    /// `VectorIndex::search` impl used to do for them.
-    #[inline]
-    fn search_index(
-        &self,
-        query: &[f32],
-        k: usize,
-        quality: crate::SearchQuality,
-    ) -> Vec<ScoredResult> {
-        self.storage
-            .index
-            .search_with_quality(query, k, quality)
-            .unwrap_or_else(|e| {
-                tracing::error!("search_with_quality failed: {e}");
-                Vec::new()
-            })
-    }
-
     fn search_ids_with_adc_if_pq(
         &self,
         query: &[f32],
         k: usize,
         quality: crate::SearchQuality,
-    ) -> Vec<ScoredResult> {
+    ) -> Result<Vec<ScoredResult>> {
         let config = self.storage.config.read();
         let is_pq = matches!(config.storage_mode, StorageMode::ProductQuantization);
         let higher_is_better = config.metric.higher_is_better();
@@ -72,19 +54,22 @@ impl Collection {
 
         // `search_with_quality` rather than `search`: the latter hard-codes
         // `SearchQuality::Balanced`, which is exactly the built-in default this
-        // path now takes from the config instead. Its errors are swallowed the
-        // same way the `VectorIndex::search` impl swallows them, so behaviour is
-        // unchanged for a caller whose config is at its defaults.
+        // path now takes from the config instead. Its errors are returned: an
+        // error read as an empty answer is the one failure a caller cannot tell
+        // from a correct result, and every caller here returns a `Result`.
         if !is_pq || oversampling == 0 {
-            let results = self.search_index(query, k, quality);
-            return self.merge_delta(results, query, k, metric);
+            let results = self.storage.index.search_with_quality(query, k, quality)?;
+            return Ok(self.merge_delta(results, query, k, metric));
         }
 
         let candidates_k = k.saturating_mul(oversampling).max(k + 32);
-        let index_results = self.search_index(query, candidates_k, quality);
+        let index_results = self
+            .storage
+            .index
+            .search_with_quality(query, candidates_k, quality)?;
         let rescored =
             self.rescore_pq_candidates(query, k, metric, higher_is_better, index_results);
-        self.merge_delta(rescored, query, k, metric)
+        Ok(self.merge_delta(rescored, query, k, metric))
     }
 
     /// Rescores PQ candidates using the product quantizer cache.
@@ -354,7 +339,8 @@ impl Collection {
         crate::validation::validate_vector_is_finite(query)?;
 
         // Use HNSW index for fast ANN search
-        let index_results = self.search_ids_with_adc_if_pq(query, k, self.runtime_search_quality());
+        let index_results =
+            self.search_ids_with_adc_if_pq(query, k, self.runtime_search_quality())?;
 
         let vector_storage = self.storage.vector_storage.read();
         let payload_storage = self.storage.payload_storage.read();
@@ -546,8 +532,7 @@ impl Collection {
         let _metric = self.validate_query_and_read_metric(query)?;
 
         // Perf: Direct HNSW search without vector/payload retrieval
-        let results = self.search_ids_with_adc_if_pq(query, k, self.runtime_search_quality());
-        Ok(results)
+        self.search_ids_with_adc_if_pq(query, k, self.runtime_search_quality())
     }
 
     /// Searches for the k nearest neighbors with metadata filtering.
@@ -603,7 +588,7 @@ impl Collection {
 
         // Attempt bitmap pre-filter from secondary indexes.
         let index_results =
-            self.search_with_optional_bitmap(query, k, candidates_k, filter, metric, opts);
+            self.search_with_optional_bitmap(query, k, candidates_k, filter, metric, opts)?;
 
         Ok(self.filter_and_hydrate(index_results, filter, k, higher_is_better))
     }
@@ -617,7 +602,7 @@ impl Collection {
         filter: &crate::filter::Filter,
         metric: DistanceMetric,
         opts: Option<&crate::collection::search::query::QuerySearchOptions>,
-    ) -> Vec<ScoredResult> {
+    ) -> Result<Vec<ScoredResult>> {
         if let Some(bitmap) = self.build_prefilter_bitmap(filter) {
             if let Some(opts) = opts {
                 opts.record_executed_strategy(crate::velesql::FilterStrategy::PreFilter);
@@ -629,7 +614,7 @@ impl Collection {
                 ef_search,
                 &bitmap,
             );
-            return self.merge_delta(results, query, candidates_k, metric);
+            return Ok(self.merge_delta(results, query, candidates_k, metric));
         }
         if let Some(opts) = opts {
             opts.record_executed_strategy(crate::velesql::FilterStrategy::PostFilter);
