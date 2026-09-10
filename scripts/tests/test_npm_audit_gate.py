@@ -282,6 +282,22 @@ class RetryTests(unittest.TestCase):
             gate.run_audit = original
         self.assertEqual([half, gate.MAX_SECONDS, gate.MAX_SECONDS], delays)
 
+    def test_a_backoff_above_the_cap_sleeps_the_cap(self) -> None:
+        """The CLI refuses such a backoff, but a direct caller can pass one;
+        its first sleep is bounded like every later one."""
+        delays: list[float] = []
+
+        original = gate.run_audit
+        gate.run_audit = lambda npm, root, timeout: UNREACHABLE_PAYLOAD
+        try:
+            with self.assertRaises(gate.Unreachable):
+                gate.audit_with_retries(
+                    "npm", Path("."), 3, gate.MAX_SECONDS * 5, sleep=delays.append
+                )
+        finally:
+            gate.run_audit = original
+        self.assertEqual([gate.MAX_SECONDS, gate.MAX_SECONDS], delays)
+
 
 class ExitCodeTests(unittest.TestCase):
     def test_a_clean_lockfile_passes(self) -> None:

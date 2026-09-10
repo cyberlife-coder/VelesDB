@@ -127,11 +127,12 @@ def audit_with_retries(
 
     An advisory is a stable fact about the lockfile: it does not become false
     on a second try, so a verdict — clean or not — returns immediately. Only
-    `Unreachable` is retried, with the delay doubling each time.
+    `Unreachable` is retried, with the delay doubling each time up to
+    `MAX_SECONDS`, which also bounds the first.
     """
     if attempts < 1:
         raise ValueError("attempts must be at least 1")
-    delay = backoff_seconds
+    delay = min(backoff_seconds, MAX_SECONDS)
     last: Unreachable | None = None
     for attempt in range(1, attempts + 1):
         try:
