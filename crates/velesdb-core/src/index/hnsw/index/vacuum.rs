@@ -1,8 +1,8 @@
 //! Vacuum and maintenance operations for HnswIndex.
 
 use super::{HnswIndex, HnswInner};
+use crate::index::hnsw::native_inner::Placed;
 use crate::index::hnsw::params::HnswParams;
-use crate::index::hnsw::sharded_mappings::SlotsPinned;
 use std::mem::ManuallyDrop;
 
 /// Errors that can occur during vacuum operations.
@@ -10,7 +10,7 @@ use std::mem::ManuallyDrop;
 #[non_exhaustive]
 pub enum VacuumError {
     /// The index's exact-distance features are off
-    /// (`enable_vector_storage = false`), and vacuum needs them to rebuild it.
+    /// (`enable_vector_storage = false`); vacuum refuses such an index.
     #[error("Cannot vacuum: exact-distance features are off (build the index with new(), not new_fast_insert())")]
     VectorStorageDisabled,
     /// Index rebuild failed (allocation or insertion error).
@@ -133,6 +133,14 @@ impl HnswIndex {
         // 2-4. Rebuild a fresh inner index from the active vectors,
         // preserving the backend storage mode and trained quantizer.
         let (new_inner, slots) = self.build_vacuum_replacement(&active_vectors)?;
+        // Checked before the swap: once the new graph is installed, a short
+        // rebuild would leave ids with no slot and nothing to fall back to.
+        if slots.len() != count {
+            return Err(VacuumError::RebuildFailed(format!(
+                "the rebuild placed {} vectors for {count} ids",
+                slots.len()
+            )));
+        }
 
         // 5-6. Swap in the new graph and rebuild the mappings under one write
         // lock: until the rebuild they name the old graph's slots, and a
@@ -155,15 +163,10 @@ impl HnswIndex {
             // ShardedMappings uses interior mutability, so we clear and
             // repopulate in place.
             self.mappings.clear();
-            debug_assert_eq!(
-                active_vectors.len(),
-                slots.len(),
-                "the rebuild returns one slot per vector"
-            );
             for ((id, _vec), slot) in active_vectors.iter().zip(slots) {
                 let previous = self
                     .mappings
-                    .assign(*id, slot, SlotsPinned::by_write(&inner_guard));
+                    .assign(*id, Placed::installed(&inner_guard, slot));
                 debug_assert!(
                     previous.is_none(),
                     "Vacuum invariant violated: duplicate id {id} while rebuilding mappings"

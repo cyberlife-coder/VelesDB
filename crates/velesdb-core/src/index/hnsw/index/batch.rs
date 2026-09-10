@@ -2,7 +2,6 @@
 
 use super::HnswIndex;
 use crate::index::hnsw::params::SearchQuality;
-use crate::index::hnsw::sharded_mappings::SlotsPinned;
 use crate::scored_result::ScoredResult;
 use crate::validation::validate_dimension_match;
 use rayon::prelude::*;
@@ -75,10 +74,9 @@ impl HnswIndex {
         // renumber slots under the write lock, so each slot placed here is still
         // its vector's when the mapping names it.
         let inner = self.inner.read();
-        let placed = inner.parallel_insert(&vectors).map(|slots| {
-            for ((id, _), slot) in items.iter().zip(slots) {
-                self.mappings
-                    .assign(*id, slot, SlotsPinned::by_read(&inner));
+        let placed = inner.place_parallel(&vectors).map(|placed| {
+            for ((id, _), slot) in items.iter().zip(placed) {
+                self.mappings.assign(*id, slot);
             }
         });
         drop(inner);

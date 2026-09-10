@@ -136,3 +136,19 @@ fn test_storage_disabled_leaves_the_mapping_to_the_graph_insert() {
     assert!(results.is_empty());
     assert_eq!(index.mappings.get_idx(1), None);
 }
+
+/// A wrong dimension is refused even with exact-distance features off: the
+/// `# Errors` contract holds whatever the index's features.
+#[test]
+fn test_a_wrong_dimension_is_refused_with_exact_distance_features_off() {
+    let index = make_index_no_storage(3);
+    let writer = DirectVectorWriter::new(&index);
+    let wrong = [1.0_f32, 2.0, 3.0, 4.0];
+    let err = writer
+        .write_batch_direct(&[(1, &wrong[..])])
+        .expect_err("test: a 4-d vector in a 3-d index");
+    assert!(
+        matches!(err, crate::error::Error::DimensionMismatch { .. }),
+        "{err:?}"
+    );
+}

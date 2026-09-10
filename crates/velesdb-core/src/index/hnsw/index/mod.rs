@@ -33,7 +33,7 @@ mod vacuum;
 pub use vacuum::VacuumError;
 
 use super::native_inner::NativeHnswInner as HnswInner;
-use super::sharded_mappings::{ShardedMappings, SlotsPinned};
+use super::sharded_mappings::ShardedMappings;
 use super::upsert;
 use crate::distance::DistanceMetric;
 use parking_lot::RwLock;
@@ -136,8 +136,8 @@ impl HnswIndex {
         // its vector's when the mapping names it.
         let inner = self.inner.read();
         let placed = inner
-            .insert(vector)
-            .map(|slot| self.mappings.assign(id, slot, SlotsPinned::by_read(&inner)));
+            .place(vector)
+            .map(|placed| self.mappings.assign(id, placed));
         drop(inner);
         match placed {
             Ok(_) => true,

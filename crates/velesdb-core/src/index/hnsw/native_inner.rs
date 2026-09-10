@@ -810,6 +810,113 @@ impl NativeHnswInner {
 }
 
 // ============================================================================
+// Placed slots (#2246)
+// ============================================================================
+
+/// A slot the arena just gave a vector, borrowed from the graph guard the
+/// placement ran under.
+///
+/// `ShardedMappings::assign` takes one, never a bare slot, so an id can only
+/// be mapped while that guard lives: `reorder_for_locality` and `vacuum`
+/// renumber slots under the write side and cannot move this one in between.
+/// Only a placement mints one ([`NativeHnswInner::place`],
+/// [`NativeHnswInner::place_parallel`], [`NativeHnswInner::place_unlinked`]),
+/// or [`Placed::installed`] for a graph behind a write guard. Neither `Clone`
+/// nor `Copy`: each placement maps once.
+#[must_use = "a placed slot left unmapped stays a tombstone"]
+pub(crate) struct Placed<'guard> {
+    slot: usize,
+    _guard: std::marker::PhantomData<&'guard NativeHnswInner>,
+}
+
+impl<'guard> Placed<'guard> {
+    fn new(slot: usize) -> Self {
+        Self {
+            slot,
+            _guard: std::marker::PhantomData,
+        }
+    }
+
+    /// The slot, for a caller that also reports it.
+    #[must_use]
+    pub(crate) fn slot(&self) -> usize {
+        self.slot
+    }
+
+    /// The slot, consuming the token: `ShardedMappings::assign` maps each
+    /// placement once.
+    #[must_use]
+    pub(crate) fn into_slot(self) -> usize {
+        self.slot
+    }
+
+    /// A slot of the graph `guard` holds exclusively. Nothing renumbers slots
+    /// while the write side is held, so any slot of that graph may be mapped
+    /// under it: `vacuum` maps its rebuilt graph this way, once installed.
+    pub(crate) fn installed(
+        _guard: &'guard parking_lot::RwLockWriteGuard<'_, std::mem::ManuallyDrop<NativeHnswInner>>,
+        slot: usize,
+    ) -> Self {
+        Self::new(slot)
+    }
+
+    /// For unit tests of the mappings alone, where no graph exists to
+    /// renumber anything.
+    #[cfg(test)]
+    pub(crate) fn for_test(slot: usize) -> Placed<'static> {
+        Placed::new(slot)
+    }
+}
+
+impl NativeHnswInner {
+    /// [`Self::insert`], with the slot returned as a [`Placed`] tied to the
+    /// guard `self` is borrowed through.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::insert`].
+    pub(crate) fn place(&self, vector: &[f32]) -> crate::error::Result<Placed<'_>> {
+        self.insert(vector).map(Placed::new)
+    }
+
+    /// [`Self::parallel_insert`], with each slot returned as a [`Placed`], in
+    /// input order.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::parallel_insert`].
+    pub(crate) fn place_parallel(
+        &self,
+        vectors: &[&[f32]],
+    ) -> crate::error::Result<Vec<Placed<'_>>> {
+        Ok(self
+            .parallel_insert(vectors)?
+            .into_iter()
+            .map(Placed::new)
+            .collect())
+    }
+
+    /// Pushes `vectors` into the arena without linking them into the graph,
+    /// and returns their slots in input order: the bulk path's direct writer,
+    /// whose graph insert is deferred.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the arena is not initialized or cannot grow.
+    pub(crate) fn place_unlinked(
+        &self,
+        vectors: &[&[f32]],
+    ) -> crate::error::Result<Vec<Placed<'_>>> {
+        let first = self.with_contiguous_vectors_mut(|storage| {
+            let first = storage.len();
+            storage.push_batch(vectors)?;
+            Ok(first)
+        })?;
+        Ok((first..first + vectors.len()).map(Placed::new).collect())
+    }
+}
+
+// ============================================================================
 // Send + Sync for thread safety
 // ============================================================================
 

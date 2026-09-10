@@ -7,7 +7,6 @@
 //! its vector got.
 
 use super::index::HnswIndex;
-use super::sharded_mappings::SlotsPinned;
 use super::upsert::UpsertResult;
 use crate::validation::validate_dimension_match;
 
@@ -16,12 +15,12 @@ use crate::validation::validate_dimension_match;
 /// Used exclusively during `upsert_bulk` so vectors are immediately
 /// available for SIMD re-ranking and brute-force search while HNSW graph
 /// construction is deferred to `AsyncIndexBuilder`.
-#[allow(dead_code)] // Reason: only the persistence-gated bulk path (collection::core::crud_bulk) writes directly
+#[cfg_attr(not(feature = "persistence"), allow(dead_code))] // Reason: only the persistence-gated bulk path (collection::core::crud_bulk) writes directly
 pub(crate) struct DirectVectorWriter<'a> {
     hnsw_index: &'a HnswIndex,
 }
 
-#[allow(dead_code)] // Reason: only the persistence-gated bulk path (collection::core::crud_bulk) writes directly
+#[cfg_attr(not(feature = "persistence"), allow(dead_code))] // Reason: only the persistence-gated bulk path (collection::core::crud_bulk) writes directly
 impl<'a> DirectVectorWriter<'a> {
     /// Creates a new direct writer for the given `HnswIndex`.
     #[must_use]
@@ -55,13 +54,13 @@ impl<'a> DirectVectorWriter<'a> {
         &self,
         vectors: &[(u64, &[f32])],
     ) -> crate::error::Result<Vec<UpsertResult>> {
-        if vectors.is_empty() || !self.hnsw_index.enable_vector_storage {
-            return Ok(Vec::new());
-        }
-
-        // Validate ALL dimensions upfront before any mutation.
+        // Every dimension is checked before any mutation, whatever the
+        // index's features: `# Errors` promises it.
         for (_, vector) in vectors {
             validate_dimension_match(self.hnsw_index.dimension, vector.len())?;
+        }
+        if vectors.is_empty() || !self.hnsw_index.enable_vector_storage {
+            return Ok(Vec::new());
         }
 
         let refs: Vec<&[f32]> = vectors.iter().map(|&(_, vector)| vector).collect();
@@ -69,23 +68,13 @@ impl<'a> DirectVectorWriter<'a> {
         // renumber slots under the write lock, so each slot placed here is still
         // its vector's when the mapping names it.
         let inner = self.hnsw_index.inner.read();
-        let first = inner.with_contiguous_vectors_mut(|storage| {
-            let first = storage.len();
-            storage.push_batch(&refs)?;
-            Ok(first)
-        })?;
+        let placed = inner.place_unlinked(&refs)?;
         let results = vectors
             .iter()
-            .enumerate()
-            .map(|(offset, &(id, _))| {
-                let idx = first + offset;
-                UpsertResult {
-                    idx,
-                    old_idx: self
-                        .hnsw_index
-                        .mappings
-                        .assign(id, idx, SlotsPinned::by_read(&inner)),
-                }
+            .zip(placed)
+            .map(|(&(id, _), placed)| UpsertResult {
+                idx: placed.slot(),
+                old_idx: self.hnsw_index.mappings.assign(id, placed),
             })
             .collect();
         drop(inner);

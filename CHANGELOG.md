@@ -113,7 +113,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   search could previously resolve ids through the old graph's slots. With
   exact-distance features off (`new_fast_insert`), the direct writer no
   longer maps an id to a slot it never wrote; the graph insert places the
-  vector and maps it.
+  vector and maps it. A mappings file saved before this change could count
+  predicted slots that were never filled: loading holds its `next_idx` to the
+  vectors present, so `tombstone_count`, `tombstone_ratio` and `needs_vacuum`
+  stop reading high on such an index. `VacuumError::VectorStorageDisabled`
+  now says the index's exact-distance features are off.
 
 - **`reorder_for_locality` could leave a collection whose graph and vectors
   disagree.** Since `.vectors` became the graph's arena, the permutation lands

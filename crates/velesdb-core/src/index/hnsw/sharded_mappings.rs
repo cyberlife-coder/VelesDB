@@ -13,7 +13,8 @@
 //! # EPIC-A.1: Integrated into `HnswIndex`
 
 use dashmap::DashMap;
-use std::marker::PhantomData;
+
+use super::native_inner::Placed;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Lock-free sharded ID mappings for HNSW index.
@@ -27,40 +28,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// use velesdb_core::index::hnsw::ShardedMappings;
 ///
 /// let mappings = ShardedMappings::new();
-/// // `pinned` borrows the graph lock's guard: see `SlotsPinned`.
-/// mappings.assign(42, 0, pinned);
+/// // `placed` is the token a graph placement returns for slot 0: see `Placed`.
+/// mappings.assign(42, placed);
 /// assert_eq!(mappings.get_idx(42), Some(0));
 /// ```
-/// Proof that slot numbering cannot change while it lives (#2246).
-///
-/// It borrows a guard on the index's graph lock. `reorder_for_locality` and
-/// `vacuum` renumber slots only under that lock's write side, so a slot read
-/// under the guard names the same vector until the guard drops. `assign`
-/// takes one: mapping a slot after releasing the guard does not compile.
-#[derive(Clone, Copy)]
-pub(crate) struct SlotsPinned<'guard>(PhantomData<&'guard ()>);
-
-impl<'guard> SlotsPinned<'guard> {
-    /// Pins slots for as long as this read guard on the graph lock is borrowed.
-    pub(crate) fn by_read<T: ?Sized>(_guard: &'guard parking_lot::RwLockReadGuard<'_, T>) -> Self {
-        Self(PhantomData)
-    }
-
-    /// Pins slots for as long as this write guard on the graph lock is borrowed.
-    pub(crate) fn by_write<T: ?Sized>(
-        _guard: &'guard parking_lot::RwLockWriteGuard<'_, T>,
-    ) -> Self {
-        Self(PhantomData)
-    }
-
-    /// For unit tests of the mappings alone, where no graph exists to
-    /// renumber anything.
-    #[cfg(test)]
-    pub(crate) fn unchecked() -> SlotsPinned<'static> {
-        SlotsPinned(PhantomData)
-    }
-}
-
 #[derive(Debug)]
 pub struct ShardedMappings {
     /// Mapping from external IDs to internal indices (lock-free).
@@ -142,8 +113,9 @@ impl ShardedMappings {
         }
     }
 
-    /// Maps `id` to `slot` — the arena slot its vector already occupies — and
-    /// returns the slot it held before, when that was another.
+    /// Maps `id` to the slot `placed` names — the arena slot its vector
+    /// already occupies — and returns the slot it held before, when that was
+    /// another.
     ///
     /// The one way an insert registers an id: the vector is placed first, by
     /// whoever owns the arena's allocation, and the mapping follows the slot it
@@ -151,11 +123,17 @@ impl ShardedMappings {
     /// (#2246). The previous slot's reverse entry is retired, which is what
     /// turns the old graph node into a tombstone search filters out.
     ///
-    /// `next_idx` is raised to at least `slot + 1`, so it stays an upper bound
-    /// on every slot in use for its readers (vacuum, persistence).
-    pub fn assign(&self, id: u64, slot: usize, _pinned: SlotsPinned<'_>) -> Option<usize> {
+    /// `placed` borrows the graph guard its placement ran under, so the slot
+    /// cannot be renumbered before it is mapped (see `Placed`). `next_idx` is
+    /// raised to at least `slot + 1`, so it stays an upper bound on every slot
+    /// in use for its readers (vacuum, persistence).
+    pub(crate) fn assign(&self, id: u64, placed: Placed<'_>) -> Option<usize> {
         use dashmap::mapref::entry::Entry;
 
+        let slot = placed.into_slot();
+        // The reverse entry first: a slot another id holds is refused before
+        // either map changes.
+        self.claim_slot(slot, id);
         self.note_id(id);
         self.next_idx
             .fetch_max(slot.saturating_add(1), Ordering::Relaxed);
@@ -165,12 +143,10 @@ impl ShardedMappings {
                 if old != slot {
                     self.remove_reverse(old, id);
                 }
-                self.claim_slot(slot, id);
                 (old != slot).then_some(old)
             }
             Entry::Vacant(entry) => {
                 entry.insert(slot);
-                self.claim_slot(slot, id);
                 None
             }
         }
@@ -178,15 +154,17 @@ impl ShardedMappings {
 
     /// Writes `slot`'s reverse entry for `id`.
     ///
-    /// The arena hands every slot out once per arena — a vacuum rebuilds the
-    /// arena and clears the mappings under the same lock — so a slot another
-    /// id holds means
-    /// a broken caller, not a move: debug builds refuse it rather than let two
-    /// ids share one vector.
+    /// The arena hands every slot out once per arena (a vacuum rebuilds the
+    /// arena and clears the mappings under the same lock), so a slot another
+    /// id holds means a broken caller, not a move. Debug builds panic on it
+    /// before writing anything; release builds overwrite.
     fn claim_slot(&self, slot: usize, id: u64) {
-        if let Some(owner) = self.idx_to_id.insert(slot, id) {
-            debug_assert_eq!(owner, id, "slot {slot} already belongs to id {owner}");
+        if cfg!(debug_assertions) {
+            if let Some(owner) = self.idx_to_id.get(&slot).map(|owner| *owner) {
+                assert_eq!(owner, id, "slot {slot} already belongs to id {owner}");
+            }
         }
+        self.idx_to_id.insert(slot, id);
     }
 
     /// Removes an ID and returns its internal index if it existed.

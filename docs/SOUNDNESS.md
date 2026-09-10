@@ -904,7 +904,7 @@ self.entry_point.store(node_id, Ordering::Release);
 
 ### HNSW Slot Allocation
 
-**Module**: `crates/velesdb-core/src/index/hnsw/sharded_mappings.rs`, `crates/velesdb-core/src/index/hnsw/index/batch.rs`, `crates/velesdb-core/src/index/hnsw/direct_writer.rs`
+**Module**: `crates/velesdb-core/src/index/hnsw/sharded_mappings.rs`, `crates/velesdb-core/src/index/hnsw/native_inner.rs`, `crates/velesdb-core/src/index/hnsw/index/batch.rs`, `crates/velesdb-core/src/index/hnsw/direct_writer.rs`
 
 A slot is an index into the graph's `ContiguousVectors`, and the arena is
 its only allocator: a slot exists once a vector has been pushed into it, and
@@ -915,9 +915,9 @@ slot.
 
 1. **Validate dimensions** — every vector of a batch is checked before the
    graph sees any, so a mismatch leaves the index untouched.
-2. **Place** (`insert`, `parallel_insert`, the direct writer's
-   `push_batch`) — the arena appends under its own lock and returns the
-   slots, in input order.
+2. **Place** (`place`, `place_parallel`, and `place_unlinked` for the
+   direct writer) — the arena appends under its own lock and returns each
+   slot as a `Placed` token, in input order.
 3. **Assign** — each id is mapped to its slot. An id that was already
    mapped leaves its old slot behind as a tombstone; an id repeated within
    a batch ends on its last occurrence.
@@ -925,15 +925,18 @@ slot.
 **Invariant**: a mapping only ever names a slot that already holds that
 id's vector, so two writers — a bulk load's direct writer and a single
 upsert, say — cannot hand one slot to two ids. Debug builds check part of
-it in `assign`: a slot whose reverse entry names another id is never
-claimed.
+it in `assign`: a slot whose reverse entry names another id panics before
+either map changes.
 
 **Invariant**: the index read guard is held from placement to assignment.
 `reorder_for_locality` and `vacuum` renumber slots under the write lock, so
 no slot can move between the push that returned it and the mapping that
 names it; `vacuum` rebuilds the mappings before it releases that lock.
-`assign` takes a `SlotsPinned`, a token that borrows that guard, so mapping
-a slot after releasing it does not compile.
+`assign` takes the `Placed` token a placement returns, never a bare slot,
+and the token borrows the guard the placement ran under: releasing that
+guard before the slot is mapped does not compile (E0505). Only a placement
+mints a token; `vacuum` maps its rebuilt graph with `Placed::installed`,
+which takes the write guard.
 
 **Invariant**: a refused vector or batch maps nothing, so there is nothing
 to roll back. A batch the graph refuses part-way leaves the nodes it already

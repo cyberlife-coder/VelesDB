@@ -125,6 +125,23 @@ fn direct_written_slots_hold_their_own_vectors_before_the_builder_drains() {
     let dir = TempDir::new().expect("test: tempdir");
     let bulk_total = usize::try_from(ROUNDS * BATCH).expect("test: fits a usize");
     let collection = race(&dir, bulk_total + 1);
+    // Precondition: no bulk id is a graph node yet, so the slots read below
+    // are the direct writer's. A graph walk only ever returns nodes.
+    let linked: Vec<u64> = (BULK_BASE..BULK_BASE + ROUNDS * BATCH)
+        .filter(|&id| {
+            collection
+                .search_with_quality(&vector(id), 1, SearchQuality::Custom(64))
+                .expect("test: graph search")
+                .first()
+                .is_some_and(|hit| hit.point.id == id)
+        })
+        .collect();
+    assert!(
+        linked.is_empty(),
+        "the builder already linked {} bulk ids, e.g. {:?}",
+        linked.len(),
+        &linked[..linked.len().min(8)]
+    );
     let lost = lost(&collection);
     assert!(
         lost.is_empty(),
