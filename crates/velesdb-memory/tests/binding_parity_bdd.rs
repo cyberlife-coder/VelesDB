@@ -84,6 +84,21 @@
 //! field-by-field copy — more code, more places to diverge — to satisfy a
 //! test.
 //!
+//! **Depth: one level below the root, since #2246 (P4-b).** Root keys alone
+//! missed a dropped nested field: `memory_status.extraction.autograph_failed`
+//! was required by the published schema and relayed by neither the Node nor
+//! the Python binding, with this guard green. Object-typed output fields now
+//! carry their children through the same text search, whether an object is
+//! published inline, as a nullable `anyOf: [object, null]` or behind a `$ref`.
+//! Deeper nesting is still
+//! unchecked. A nested object a binding relays WHOLE, by serializing the
+//! server's own value, names none of its children: it is declared in
+//! `RELAYED_WHOLE` with the code that relays it — a relay the text search
+//! cannot see, not a loss, so not a `SHAPE_DIVERGENCES` entry. Like the root
+//! check, it is a text search: a child counts as relayed when its NAME appears
+//! anywhere in the window, so a binding that dropped `provenance.model` while
+//! relaying `embedder.model` would still pass.
+//!
 //! Consequence, stated plainly: **this guard proves DECLARATION, never
 //! MARSHALLING.** That a binding actually emits the field with the right
 //! value is proved by the bindings' own round-trip tests
@@ -615,6 +630,122 @@ fn shape_divergence_for(
     SHAPE_DIVERGENCES
         .iter()
         .find(|d| d.binding == binding && d.tool == tool && d.field == field)
+}
+
+/// One nested object a binding relays WHOLE — by serializing the server's own
+/// value — so its children reach the caller without the binding naming them.
+///
+/// The nested check reads names, and a whole relay names none: without this
+/// list each such object would read as every one of its fields dropped. Unlike
+/// a [`ShapeDivergence`], an entry here is not a loss. `by` is the code that
+/// performs the relay, and it must appear in the binding's method region or in
+/// a struct that region names: the moment the binding stops relaying the value
+/// whole, the entry stops matching, the children are checked again, and
+/// [`no_whole_relay_is_stale`] names the entry.
+struct RelayedWhole {
+    binding: &'static str,
+    tool: &'static str,
+    parent: &'static str,
+    by: &'static str,
+    reason: &'static str,
+}
+
+const RELAYED_WHOLE: &[RelayedWhole] = &[
+    RelayedWhole {
+        binding: "velesdb-python",
+        tool: "retrieve_context_source",
+        parent: "media",
+        by: "serde_to_python!(py, &source",
+        reason: "the server's own context source, serialized whole into the returned dict",
+    },
+    RelayedWhole {
+        binding: "velesdb-wasm",
+        tool: "retrieve_context_source",
+        parent: "media",
+        by: "serde_json::to_value(&source)",
+        reason: "the server's own context source, serialized whole before it crosses into JS",
+    },
+    RelayedWhole {
+        binding: "velesdb-node",
+        tool: "compile_context",
+        parent: "insights",
+        by: "pub insights: Value",
+        reason: "`CompiledContextJs.insights` is opaque JSON: `compiled_field` moves the \
+                 server's own serialized `insights` into it untouched",
+    },
+    RelayedWhole {
+        binding: "velesdb-python",
+        tool: "compile_transcript",
+        parent: "context",
+        by: "serde_to_python!(py, &compiled",
+        reason: "the server's `CompiledContext`, serialized whole into the returned dict",
+    },
+    RelayedWhole {
+        binding: "velesdb-python",
+        tool: "compile_transcript",
+        parent: "segmentation",
+        by: "serde_to_python!(py, &segmentation",
+        reason: "the shared `SegmentationReport`, serialized whole into the returned dict",
+    },
+    RelayedWhole {
+        binding: "velesdb-wasm",
+        tool: "compile_transcript",
+        parent: "context",
+        by: "serde_json::to_value(&compiled)",
+        reason: "the server's `CompiledContext`, serialized whole before its id fields are \
+                 stringified",
+    },
+    RelayedWhole {
+        binding: "velesdb-wasm",
+        tool: "compile_transcript",
+        parent: "segmentation",
+        by: "segmentation: SegmentationReport",
+        reason: "`CompileTranscriptOut` carries the shared `SegmentationReport` itself, \
+                 serialized by `to_js`",
+    },
+];
+
+/// The nested fields in `nested` that `declared` — a binding's output window
+/// plus the structs it names — does not relay, and how many it examined.
+///
+/// Pulled out of the live test so a synthetic region can prove it NAMES a gap
+/// (`the_nested_check_names_the_child_a_stripped_relay_lost`): the live test
+/// alone only shows that it ran. A `RELAYED_WHOLE` entry counts only when its
+/// code is there as code — a doc comment quoting it is not the relay.
+fn nested_gaps(
+    binding: &str,
+    tool: &str,
+    nested: &BTreeSet<(String, String)>,
+    declared: &str,
+) -> (Vec<String>, usize) {
+    let code = without_doc_comments(declared);
+    let mut gaps = Vec::new();
+    let mut examined = 0;
+    for (parent, child) in nested {
+        if !names_identifier(declared, parent) {
+            continue;
+        }
+        if relayed_whole_for(binding, tool, parent).is_some_and(|whole| code.contains(whole.by)) {
+            continue;
+        }
+        examined += 1;
+        let dotted = format!("{parent}.{child}");
+        if names_identifier(declared, child)
+            || shape_divergence_for(binding, tool, &dotted).is_some()
+            || shape_divergence_for(binding, tool, parent).is_some()
+        {
+            continue;
+        }
+        gaps.push(format!("  {tool}.{dotted} is not relayed by {binding}"));
+    }
+    (gaps, examined)
+}
+
+/// The whole relay covering `(binding, tool, parent)`, if one is declared.
+fn relayed_whole_for(binding: &str, tool: &str, parent: &str) -> Option<&'static RelayedWhole> {
+    RELAYED_WHOLE
+        .iter()
+        .find(|w| w.binding == binding && w.tool == tool && w.parent == parent)
 }
 
 /// Boot the real `McpServer` over an in-memory duplex pipe and complete the
@@ -1208,6 +1339,70 @@ fn output_root_fields(tool: &rmcp::model::Tool) -> BTreeSet<String> {
         .and_then(|schema| schema.get("properties"))
         .and_then(serde_json::Value::as_object)
         .map(|props| props.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// `(parent, child)` property names ONE level below the root of `tool`'s
+/// `output_schema`, for root fields that are objects.
+///
+/// What an object looks like once published: `harden()` inlines every `$ref`,
+/// so a plain object carries its `properties` directly, and a NULLABLE one —
+/// `load_working_context.working`, `retrieve_context_source.media`, every
+/// migration `job` — arrives as `anyOf: [{object}, {null}]`. Reading only the
+/// first shape skipped all of those without a word, so [`object_properties`]
+/// reads both, and a `$ref` should one survive.
+fn output_nested_fields(tool: &rmcp::model::Tool) -> BTreeSet<(String, String)> {
+    let Some(schema) = tool.output_schema.as_ref() else {
+        return BTreeSet::new();
+    };
+    let defs = schema
+        .get("$defs")
+        .or_else(|| schema.get("definitions"))
+        .and_then(serde_json::Value::as_object);
+    let Some(props) = schema
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return BTreeSet::new();
+    };
+    props
+        .iter()
+        .flat_map(|(parent, node)| {
+            object_properties(node, defs, 0)
+                .into_iter()
+                .map(move |child| (parent.clone(), child))
+        })
+        .collect()
+}
+
+/// The property names of an object-typed schema node: the node itself, a
+/// `$ref` into `defs`, or the object arm of an `anyOf`/`oneOf`/`allOf`. Empty
+/// for anything else. `depth` bounds a `$ref` that refers back to itself.
+fn object_properties(
+    node: &serde_json::Value,
+    defs: Option<&serde_json::Map<String, serde_json::Value>>,
+    depth: usize,
+) -> Vec<String> {
+    if depth > 4 {
+        return Vec::new();
+    }
+    let node = node
+        .get("$ref")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|reference| defs?.get(reference.rsplit('/').next()?))
+        .unwrap_or(node);
+    if let Some(props) = node
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+    {
+        return props.keys().cloned().collect();
+    }
+    ["anyOf", "oneOf", "allOf"]
+        .iter()
+        .filter_map(|key| node.get(*key).and_then(serde_json::Value::as_array))
+        .flatten()
+        .map(|arm| object_properties(arm, defs, depth + 1))
+        .find(|keys| !keys.is_empty())
         .unwrap_or_default()
 }
 
@@ -2227,4 +2422,217 @@ fn the_typescript_fragment_declares_every_field_the_wire_accepts() {
          say so where a reader will see it rather than leaving the absence to look like an \
          oversight.",
     );
+}
+
+/// One level below the root: an object-typed output field must carry its
+/// children through the binding too.
+///
+/// Same text search, same routes and same divergence table as the root check
+/// above. A child counts as relayed when the binding names the server's output
+/// type, names the child in its method region, or declares `parent.child` (or
+/// the whole `parent`) in `SHAPE_DIVERGENCES`. Only children of a parent the
+/// binding relays by NAME are checked: an unrelayed parent is the root check's
+/// finding, and counting its children too would report one gap many times.
+///
+/// Its CONTROL is the field that motivated it: if the nested reader cannot see
+/// `memory_status.extraction.autograph_failed`, the loop below reads nothing and
+/// would pass on nothing.
+#[tokio::test]
+async fn every_nested_output_field_is_relayed_or_divergence_is_declared_in_every_binding() {
+    let (_store, client) = connected().await;
+    let tools = client.list_all_tools().await.expect("list tools");
+    let server_types = server_output_types();
+
+    let status = tools
+        .iter()
+        .find(|t| t.name == "memory_status")
+        .expect("CONTROL: memory_status is listed");
+    assert!(
+        output_nested_fields(status)
+            .iter()
+            .any(|(parent, child)| parent == "extraction" && child == "autograph_failed"),
+        "CONTROL: the nested reader cannot see memory_status.extraction.autograph_failed, \
+         so the check below would read nothing and pass vacuously"
+    );
+
+    let source = tools
+        .iter()
+        .find(|t| t.name == "retrieve_context_source")
+        .expect("CONTROL: retrieve_context_source is listed");
+    assert!(
+        output_nested_fields(source)
+            .iter()
+            .any(|(parent, child)| parent == "media" && child == "mime"),
+        "CONTROL: the nested reader cannot see through a nullable object \
+         (`anyOf: [object, null]`): retrieve_context_source.media.mime is invisible to it"
+    );
+
+    let mut examined = 0usize;
+    let mut gaps: Vec<String> = Vec::new();
+    for binding in BINDINGS {
+        let regions = method_regions(binding);
+        let structs = binding_structs(binding);
+        for tool in &tools {
+            let name = tool.name.as_ref();
+            let Some(region) = regions.get(name) else {
+                continue;
+            };
+            if server_types
+                .get(name)
+                .is_some_and(|ty| names_identifier(region, ty))
+            {
+                continue;
+            }
+            let window = output_window(region, name);
+            let declared = region_with_named_structs(&window, &structs);
+            let (found, seen) =
+                nested_gaps(binding.name, name, &output_nested_fields(tool), &declared);
+            gaps.extend(found);
+            examined += seen;
+        }
+    }
+
+    assert!(
+        examined > 0,
+        "CONTROL: no binding had a nested field to check (every parent was relayed by type, \
+         or not at all), so the loop above passed on nothing"
+    );
+    assert!(
+        gaps.is_empty(),
+        "{} nested output field(s) the server publishes but a binding never names:\n{}\n\n\
+         Relay the child, name the server's output type, or declare `parent.child` in \
+         SHAPE_DIVERGENCES with its reason.",
+        gaps.len(),
+        gaps.join("\n"),
+    );
+    client.cancel().await.expect("close the MCP session");
+}
+
+/// A [`RELAYED_WHOLE`] entry that stopped being true must go: its parent must
+/// still be a nested object of that tool's output, and the binding must still
+/// contain the code that relays it whole. A stale entry would otherwise hide
+/// children the nested check has every reason to read.
+#[tokio::test]
+async fn no_whole_relay_is_stale() {
+    let (_store, client) = connected().await;
+    let tools = client.list_all_tools().await.expect("list tools");
+
+    let mut stale: Vec<String> = Vec::new();
+    for whole in RELAYED_WHOLE {
+        let Some(binding) = BINDINGS.iter().find(|b| b.name == whole.binding) else {
+            stale.push(format!("  unknown binding `{}`", whole.binding));
+            continue;
+        };
+        let Some(tool) = tools.iter().find(|t| t.name == whole.tool) else {
+            stale.push(format!("  `{}` is no longer an MCP tool", whole.tool));
+            continue;
+        };
+        if !output_nested_fields(tool)
+            .iter()
+            .any(|(parent, _)| parent == whole.parent)
+        {
+            stale.push(format!(
+                "  {}.{} is no longer a nested object",
+                whole.tool, whole.parent
+            ));
+            continue;
+        }
+        let regions = method_regions(binding);
+        let structs = binding_structs(binding);
+        let relayed = regions.get(whole.tool).is_some_and(|region| {
+            without_doc_comments(&region_with_named_structs(
+                &output_window(region, whole.tool),
+                &structs,
+            ))
+            .contains(whole.by)
+        });
+        if !relayed {
+            stale.push(format!(
+                "  {} `{}` no longer contains `{}`: the whole relay of `{}` is gone \
+                 (it claimed: {})",
+                whole.binding, whole.tool, whole.by, whole.parent, whole.reason
+            ));
+        }
+    }
+
+    assert!(
+        stale.is_empty(),
+        "{} stale entry(ies) in RELAYED_WHOLE:\n{}",
+        stale.len(),
+        stale.join("\n"),
+    );
+    client.cancel().await.expect("close the MCP session");
+}
+
+/// The nested check names a dropped child — shown on a synthetic region, so the
+/// proof does not wait for a binding to be wrong.
+#[test]
+fn the_nested_check_names_the_child_a_stripped_relay_lost() {
+    let nested: BTreeSet<(String, String)> = [
+        ("extraction".to_owned(), "configured".to_owned()),
+        ("extraction".to_owned(), "autograph_failed".to_owned()),
+    ]
+    .into_iter()
+    .collect();
+    let complete = r#""extraction": { "configured": a, "autograph_failed": b }"#;
+    let stripped = r#""extraction": { "configured": a }"#;
+
+    let (gaps, examined) = nested_gaps("synthetic", "memory_status", &nested, complete);
+    assert_eq!(
+        (gaps.len(), examined),
+        (0, 2),
+        "CONTROL: a complete relay has no gap"
+    );
+    let (gaps, _) = nested_gaps("synthetic", "memory_status", &nested, stripped);
+    assert_eq!(
+        gaps,
+        ["  memory_status.extraction.autograph_failed is not relayed by synthetic"]
+    );
+}
+
+/// A `RELAYED_WHOLE` entry counts only when its code is present as code.
+#[test]
+fn a_whole_relay_quoted_in_a_doc_comment_is_not_a_relay() {
+    let nested: BTreeSet<(String, String)> = [("context".to_owned(), "warnings".to_owned())]
+        .into_iter()
+        .collect();
+    let quoted =
+        "/// relayed with serde_to_python!(py, &compiled, ..)\nout.set_item(\"context\", x);";
+    let real = "let context = serde_to_python!(py, &compiled, \"compiled context\");\n\
+                out.set_item(\"context\", context);";
+
+    let (gaps, _) = nested_gaps("velesdb-python", "compile_transcript", &nested, quoted);
+    assert_eq!(
+        gaps.len(),
+        1,
+        "a doc comment quoting the relay is not the relay"
+    );
+    let (gaps, _) = nested_gaps("velesdb-python", "compile_transcript", &nested, real);
+    assert!(gaps.is_empty(), "CONTROL: the code itself counts: {gaps:?}");
+}
+
+/// The nested reader sees the three shapes an object is published in.
+#[test]
+fn the_nested_reader_sees_inline_nullable_and_referenced_objects() {
+    let schema = serde_json::json!({
+        "$defs": { "Job": { "type": "object", "properties": { "epoch_id": {} } } },
+        "properties": {
+            "inline": { "type": "object", "properties": { "a": {} } },
+            "nullable": { "anyOf": [
+                { "type": "object", "properties": { "b": {} } },
+                { "type": "null" }
+            ] },
+            "referenced": { "$ref": "#/$defs/Job" },
+            "scalar": { "type": "string" }
+        }
+    });
+    let defs = schema.get("$defs").and_then(serde_json::Value::as_object);
+    let props = schema["properties"].as_object().expect("properties");
+    assert_eq!(object_properties(&props["inline"], defs, 0), ["a"]);
+    assert_eq!(object_properties(&props["nullable"], defs, 0), ["b"]);
+    assert_eq!(
+        object_properties(&props["referenced"], defs, 0),
+        ["epoch_id"]
+    );
+    assert!(object_properties(&props["scalar"], defs, 0).is_empty());
 }

@@ -223,6 +223,20 @@ test('open defaults to the offline hash embedder when none is named', async () =
   }
 })
 
+test('memoryStatus relays every extraction counter the MCP schema requires', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'velesdb-node-'))
+  try {
+    // The parity guard reads names; this reads the value that comes back.
+    // `autograph_failed` was required by the schema and dropped here (#2246).
+    const store = MemoryService.open(dir, 'hash')
+    const status = await store.memoryStatus()
+    assert.equal(status.extraction.autograph_dropped, 0)
+    assert.equal(status.extraction.autograph_failed, 0)
+  } finally {
+    rmStoreDir(dir)
+  }
+})
+
 test('open with hash warns once and names the semantic argument', () => {
   const dir = mkdtempSync(join(tmpdir(), 'velesdb-node-'))
   const env = { ...process.env }
