@@ -1528,3 +1528,180 @@ fn test_a_resave_moves_the_session_to_the_front_of_the_index() {
         "stored order must be recency, most recent first"
     );
 }
+
+/// A rebuilt index carries each session's real `saved_at`, most recent first
+/// (#2246, P5).
+///
+/// It used to list sessions in the store's enumeration order with every
+/// `saved_at` at 0: a second writer of the index order, with the opposite
+/// meaning of the first, which the next save's cap then cut blindly — the
+/// session it evicted was whichever the store listed last, not the oldest.
+#[test]
+fn test_a_rebuilt_index_keeps_the_real_recency_order() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let svc = MemoryService::with_store(
+        NativeStore::open(dir.path(), DIM).expect("open native store"),
+        HashEmbedder::new(DIM),
+    );
+    let content = serde_json::to_string(&minimal_working()).expect("encode");
+    for (session, saved_at) in [("alpha", 100_u64), ("beta", 300), ("gamma", 200)] {
+        let meta = system_meta(&[
+            (CTX_WORKING_FIELD, serde_json::Value::Bool(true)),
+            (
+                CTX_PROJECT_FIELD,
+                serde_json::Value::String("veles".to_owned()),
+            ),
+            (
+                CTX_SESSION_FIELD,
+                serde_json::Value::String(session.to_owned()),
+            ),
+            (CTX_SAVED_AT_FIELD, serde_json::Value::from(saved_at)),
+        ]);
+        let embedding = svc.embedder.embed(session).expect("embed");
+        svc.store
+            .store_with_metadata(working_id("veles", session), &content, &embedding, &meta)
+            .expect("store a working context");
+    }
+
+    let rebuilt = svc
+        .rebuild_working_index("veles")
+        .expect("walk the store")
+        .expect("a native store can enumerate");
+
+    let order: Vec<(&str, u64)> = rebuilt
+        .iter()
+        .map(|s| (s.session.as_str(), s.saved_at))
+        .collect();
+    assert_eq!(order, [("beta", 300), ("gamma", 200), ("alpha", 100)]);
+}
+
+/// `save_working_context` stamps the session's own fact with the `saved_at`
+/// its index entry carries — what the rebuild above reads back.
+#[test]
+fn test_a_saved_working_context_carries_its_saved_at() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let svc = MemoryService::with_store(
+        NativeStore::open(dir.path(), DIM).expect("open native store"),
+        HashEmbedder::new(DIM),
+    );
+    svc.save_working_context("veles", "alpha", &minimal_working())
+        .expect("save");
+
+    let stamped = svc
+        .store
+        .get_metadata_batch(&[working_id("veles", "alpha")])
+        .expect("metadata")
+        .into_iter()
+        .next()
+        .flatten()
+        .and_then(|meta| {
+            meta.get(CTX_SAVED_AT_FIELD)
+                .and_then(serde_json::Value::as_u64)
+        });
+    let listed = svc.list_working_contexts("veles").expect("list");
+    assert_eq!(
+        stamped,
+        Some(listed[0].saved_at),
+        "the fact and its index entry agree on when it was saved"
+    );
+}
+
+/// A store whose index is torn while armed, and which records — from another
+/// thread — whether the process-wide index lock was free while the recovery
+/// walk ran.
+struct LockObservingStore {
+    inner: NativeStore,
+    torn: u64,
+    armed: std::sync::atomic::AtomicBool,
+    walks: parking_lot::Mutex<Vec<bool>>,
+}
+
+impl FactStore for LockObservingStore {
+    delegate_untouched_store_methods!();
+    fn get(&self, id: u64) -> Result<Option<(String, Vec<f32>)>, MemoryError> {
+        if id == self.torn && self.armed.load(std::sync::atomic::Ordering::SeqCst) {
+            return Ok(Some(("}{ not json".to_owned(), vec![0.0; DIM])));
+        }
+        self.inner.get(id)
+    }
+    fn get_metadata_batch(&self, ids: &[u64]) -> Result<Vec<Option<Metadata>>, MemoryError> {
+        self.inner.get_metadata_batch(ids)
+    }
+    fn list(
+        &self,
+        cursor: Option<u64>,
+        limit: usize,
+    ) -> Result<(Vec<crate::storage::RawListedFact>, Option<u64>), MemoryError> {
+        if self.armed.load(std::sync::atomic::Ordering::SeqCst) {
+            // From another thread: the lock is not re-entrant, so a `try_lock`
+            // here would fail on this thread's own guard and nothing else. The
+            // wait is bounded, not a sleep — other tests hold it for
+            // milliseconds, while a walk under it would hold it for this whole
+            // observation.
+            let free = std::thread::scope(|scope| {
+                scope
+                    .spawn(|| {
+                        WORKING_INDEX_WRITE
+                            .try_lock_for(std::time::Duration::from_secs(5))
+                            .is_some()
+                    })
+                    .join()
+                    .expect("observer thread")
+            });
+            self.walks.lock().push(free);
+        }
+        self.inner.list(cursor, limit)
+    }
+}
+
+/// The recovery walk runs with the process-wide index lock released (#2246).
+///
+/// The walk visits the whole store, and `WORKING_INDEX_WRITE` serializes the
+/// index writes of every project in the process: held across the walk, one
+/// project's recovery stalled everyone's saves for the length of a full scan.
+#[test]
+fn test_the_recovery_walk_does_not_hold_the_process_wide_index_lock() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let svc = MemoryService::with_store(
+        LockObservingStore {
+            inner: NativeStore::open(dir.path(), DIM).expect("open native store"),
+            torn: working_index_id("veles"),
+            armed: std::sync::atomic::AtomicBool::new(false),
+            walks: parking_lot::Mutex::new(Vec::new()),
+        },
+        HashEmbedder::new(DIM),
+    );
+    svc.save_working_context("veles", "alpha", &minimal_working())
+        .expect("save");
+
+    svc.store
+        .armed
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    svc.save_working_context("veles", "beta", &minimal_working())
+        .expect("a torn index must never brick saving");
+    svc.store
+        .armed
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+
+    let walks = svc.store.walks.lock().clone();
+    assert!(
+        !walks.is_empty(),
+        "CONTROL: the save over a torn index must have walked the store"
+    );
+    assert!(
+        walks.iter().all(|&free| free),
+        "the recovery walk ran under WORKING_INDEX_WRITE: {walks:?}"
+    );
+    let mut listed: Vec<String> = svc
+        .list_working_contexts("veles")
+        .expect("list")
+        .into_iter()
+        .map(|s| s.session)
+        .collect();
+    listed.sort();
+    assert_eq!(
+        listed,
+        ["alpha", "beta"],
+        "and the listing survived the recovery"
+    );
+}
