@@ -944,14 +944,16 @@ together.
 
 **Invariant**: `remove` holds the index read guard across its two map
 writes: `soft_delete` borrows the graph, so releasing the guard first does
-not compile. A renumber re-maps under the write guard by snapshotting the
-forward map, clearing both maps and reinserting: one overlapping a delete
-could map the deleted id again, and one between its two writes could erase
-the reverse entry of the id that took its slot. A delete made while `vacuum` rebuilds, before it takes the
-write guard, is still lost when it re-maps (#2262). As with `Placed`, the
-borrow proves a borrow of some graph (through its guard, for an index's own),
-not that it is this index's graph: each call site keeps an index's guard and
-its mappings together.
+not compile. `reorder_for_locality` re-maps under the write guard by
+snapshotting the forward map, clearing both maps and reinserting: one
+overlapping a delete could map the deleted id again, and one between its
+two writes could erase the reverse entry of the id that took its slot.
+`vacuum` snapshots under a read guard it releases before rebuilding, then
+re-maps under the write guard, so a delete, insert or upsert made during the
+rebuild is still lost (#2262). As with `Placed`, the borrow proves a borrow
+of some graph (through its guard, for an index's own), not that it is this
+index's graph: each call site keeps an index's guard and its mappings
+together.
 
 **Invariant**: a refused vector or batch maps nothing, so there is nothing
 to roll back. A batch the graph refuses part-way leaves the nodes it already

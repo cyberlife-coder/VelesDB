@@ -29,9 +29,9 @@ pub(crate) struct UpsertResult {
 ///
 /// `_graph` borrows the index's graph from the guard its caller holds, so the
 /// guard outlives both map writes. A renumber (`reorder_for_locality`, or
-/// `vacuum` while it re-maps) re-maps under the write guard: one overlapping
-/// this delete could map `id` again, and one between its two writes could
-/// erase the reverse entry of the id that took its slot. As with `Placed`, the
+/// `vacuum` while it re-maps) re-maps under the write guard; one that runs
+/// during this delete could map `id` again, or erase the reverse entry of the
+/// id that took its slot. As with `Placed`, the
 /// borrow proves a borrow of some graph (through its guard, for an index's
 /// own), not that it is this index's graph: each caller keeps an index's guard
 /// and its mappings together.

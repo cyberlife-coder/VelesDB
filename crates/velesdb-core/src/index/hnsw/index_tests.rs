@@ -3599,8 +3599,8 @@ fn deletes_racing_a_renumber_stay_deleted() {
         start.wait();
         // Recorded, not asserted: a panic here would leave the renumbering
         // thread looping, and the scope waiting on it for ever. Every 200
-        // deletes wait for a renumber to finish, so the two interleave by
-        // construction rather than by scheduling luck.
+        // deletes wait for a renumber to finish, so the renumbering thread is
+        // running at every checkpoint, not by scheduling luck.
         for (n, id) in (0..IDS as u64).step_by(2).enumerate() {
             if n % 200 == 0 && !a_round_passes(&rounds) {
                 stalled = true;
@@ -3643,8 +3643,9 @@ fn deletes_racing_a_renumber_stay_deleted() {
 }
 
 /// Spins, yielding, until `rounds` moves past the value it holds now; `false`
-/// when it never does within the bound, so a stalled peer fails the test
-/// instead of hanging it.
+/// when it never does within the bound, so the remover stops waiting on a
+/// peer that stopped making rounds. A peer blocked for ever still hangs the
+/// scope that joins it.
 fn a_round_passes(rounds: &std::sync::atomic::AtomicU32) -> bool {
     use std::sync::atomic::Ordering;
     let seen = rounds.load(Ordering::Acquire);

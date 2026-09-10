@@ -118,16 +118,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   vectors present, so `tombstone_count`, `tombstone_ratio` and `needs_vacuum`
   stop reading high on such an index. `VacuumError::VectorStorageDisabled`
   now says the index's exact-distance features are off. The standard
-  `upsert_bulk` path runs about 3.6% slower for now (#2269); the V2 path
-  shows no measurable difference.
+  `upsert_bulk` path runs about 3.6% slower for now (#2269); on the V2 path
+  no difference shows above its run-to-run noise, about ±5%.
 
 - **A delete could come back when it ran beside `reorder_for_locality` or a
   `vacuum` re-map (#2246, #2262).** `remove` dropped an id's two map entries
-  holding no graph guard: a renumber overlapping the delete could map the
-  deleted id again, and one between its two writes could erase the reverse
-  entry of the id that had taken its slot. `remove` now holds the index's read guard across both writes. A delete
-  made while `vacuum` rebuilds, before it takes its write guard, is still
-  lost (#2262).
+  holding no graph guard, so a renumber running at the same time could map
+  the deleted id again, or erase the reverse entry of the id that had taken
+  its slot. `remove` now holds the index's read guard across both writes. A
+  delete made while `vacuum` rebuilds, before it takes its write guard, is
+  still lost (#2262).
 
 - **`reorder_for_locality` could leave a collection whose graph and vectors
   disagree.** Since `.vectors` became the graph's arena, the permutation lands
