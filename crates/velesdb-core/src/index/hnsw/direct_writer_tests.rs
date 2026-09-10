@@ -4,7 +4,8 @@ use super::direct_writer::DirectVectorWriter;
 use super::HnswIndex;
 use crate::distance::DistanceMetric;
 
-/// Creates a test `HnswIndex` with the given dimension and vector storage enabled.
+/// Creates a test `HnswIndex` with the given dimension and its exact-distance
+/// features on.
 ///
 /// Euclidean on purpose: its arena stores vectors as given, so the placement
 /// tests below can compare them exactly. A cosine arena normalizes them — see
@@ -13,7 +14,8 @@ fn make_index(dim: usize) -> HnswIndex {
     HnswIndex::new(dim, DistanceMetric::Euclidean).expect("test index creation")
 }
 
-/// Creates a test `HnswIndex` with vector storage disabled.
+/// Creates a test `HnswIndex` with its exact-distance features off
+/// (`new_fast_insert`); the graph still stores every vector.
 fn make_index_no_storage(dim: usize) -> HnswIndex {
     HnswIndex::new_fast_insert(dim, DistanceMetric::Cosine).expect("test index creation")
 }
