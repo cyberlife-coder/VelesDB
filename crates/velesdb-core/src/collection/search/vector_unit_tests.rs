@@ -37,3 +37,40 @@ fn invalid_pq_code_in_search_path_skips_candidate_without_panic() {
         scored[0].score
     );
 }
+
+/// An index search that fails must reach the caller as an error — never as an
+/// empty answer, the one failure a caller cannot tell from a correct result
+/// (#2246, P5).
+///
+/// A dimension mismatch is the error every index path can raise. The public
+/// entry points check the dimension before they get here, which is why the old
+/// swallow went unnoticed: nothing upstream could trigger it, so nothing saw it
+/// would have read as "no match".
+#[test]
+fn an_index_search_error_is_returned_not_read_as_no_match() {
+    let dir = tempfile::tempdir().expect("test: temp dir");
+    let collection = crate::collection::types::Collection::create(
+        dir.path().to_path_buf(),
+        4,
+        crate::DistanceMetric::Cosine,
+    )
+    .expect("test: create collection");
+    collection
+        .upsert(vec![crate::Point::without_payload(
+            1,
+            vec![1.0, 0.0, 0.0, 0.0],
+        )])
+        .expect("test: upsert");
+
+    let control = collection
+        .search_ids_with_adc_if_pq(&[1.0, 0.0, 0.0, 0.0], 1, crate::SearchQuality::Balanced)
+        .expect("CONTROL: a well-formed query succeeds");
+    assert_eq!(control.len(), 1, "CONTROL: the fixture's point is found");
+
+    let outcome =
+        collection.search_ids_with_adc_if_pq(&[1.0, 0.0], 1, crate::SearchQuality::Balanced);
+    assert!(
+        outcome.is_err(),
+        "a query the index refuses must be an error, got {outcome:?}"
+    );
+}
