@@ -1294,9 +1294,9 @@ fn cut_parameter_list(region: &str, method: &str) -> String {
 /// (`/* */`) — so a snippet matched against it is matched against code only.
 ///
 /// String literals are kept whole: the `//` of an `"http://…"` inside code is
-/// not a comment. Not a lexer — a `'"'` char literal or a raw string holding
-/// `//` would confuse it — but the bindings this reads carry neither near a
-/// relay, and [`a_whole_relay_quoted_in_a_comment_is_not_a_relay`] pins the
+/// not a comment. Not a lexer — a `'"'` char literal, a raw string holding
+/// `//`, or a nested block comment (`/* a /* b */ … */`) would confuse it — but
+/// the bindings this reads carry none of them near a relay, and [`a_whole_relay_quoted_in_a_comment_is_not_a_relay`] pins the
 /// forms that matter.
 fn without_comments(region: &str) -> String {
     let mut out = String::with_capacity(region.len());
@@ -1927,7 +1927,7 @@ fn stale_shape_reason(tools: &[rmcp::model::Tool], divergence: &ShapeDivergence)
     }
     // Route 2's window, minus doc comments (#1760) — the parameter-list cut
     // is still shared with route 2 for the #1704 reason (a divergence must
-    // not go stale because a PARAMETER names the field), but doc comments
+    // not go stale because a PARAMETER names the field), but `///` doc lines
     // are stripped ON TOP of that here, not in route 2: see
     // `without_doc_comments`.
     let window = without_doc_comments(&output_window(region, divergence.tool));
@@ -2679,8 +2679,9 @@ fn a_whole_relay_quoted_in_a_comment_is_not_a_relay() {
             "{form}: a comment quoting the relay is not the relay"
         );
     }
-    // CONTROL: the code itself counts — even behind a string holding `//` on
-    // its own line, where a stripper blind to strings would cut it off.
+    // CONTROL: the code itself counts — even behind a string holding `//`
+    // earlier on the relay's line, where a stripper blind to strings would cut
+    // the relay off.
     let real = format!(
         "let url = \"http://local\"; let context = {relay};\nout.set_item(\"context\", context);"
     );
