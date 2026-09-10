@@ -491,6 +491,9 @@ def test_memory_status_reports_the_hash_default_as_not_semantic(mem):
     assert before["embedder"]["semantic"] is False
     assert before["provenance"]["recorded"] is False
     assert before["extraction"]["configured"] is False
+    # Every counter the MCP schema requires, relayed by the binding (#2246).
+    assert before["extraction"]["autograph_dropped"] == 0
+    assert before["extraction"]["autograph_failed"] == 0
     assert before["memory"]["facts"] == 0
     assert before["memory"]["edges"] == 0
 

@@ -992,14 +992,11 @@ impl PyMemoryService {
                 .flatten();
             (recorded, self.svc.fact_count(), self.svc.edge_count())
         });
-        let provenance = match recorded {
-            Some(record) => serde_json::json!({
-                "recorded": true, "model": record.model, "dimension": record.dimension
-            }),
-            None => serde_json::json!({
-                "recorded": false, "model": null, "dimension": null
-            }),
-        };
+        let provenance = serde_json::json!({
+            "recorded": recorded.is_some(),
+            "model": recorded.as_ref().map(|record| &record.model),
+            "dimension": recorded.as_ref().map(|record| record.dimension),
+        });
         let status = serde_json::json!({
             "embedder": {
                 "model": self.embedder_model,
@@ -1011,6 +1008,7 @@ impl PyMemoryService {
                 "configured": self.svc.has_autograph(),
                 "autograph_active": self.svc.autograph_queue_open(),
                 "autograph_dropped": self.svc.autograph_dropped(),
+                "autograph_failed": self.svc.autograph_failed(),
             },
             "memory": { "facts": facts, "edges": edges },
         });

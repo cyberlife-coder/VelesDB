@@ -173,6 +173,11 @@ class RealTreeTests(unittest.TestCase):
     def test_every_listed_site_exists_today(self) -> None:
         # A site that never matches is a guard watching nothing: the removal
         # would "pass" the day the major arrives while the code is untouched.
+        self.assertTrue(
+            guard.DEFERRED_REMOVALS,
+            "DEFERRED_REMOVALS is empty: the loop below checks nothing and passes "
+            "(#2246, P2-c)",
+        )
         for entry in guard.DEFERRED_REMOVALS:
             with self.subTest(what=entry["what"]):
                 self.assertEqual(

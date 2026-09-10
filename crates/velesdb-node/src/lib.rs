@@ -701,7 +701,7 @@ impl NodeMemoryService {
     /// before trusting the compiled result.
     #[napi(
         js_name = "compileTranscript",
-        ts_return_type = "Promise<{ context: { content: string; sections: object; decisions: object; sources: object; retrieval_handles: object; insights: object; risk: string }; segmentation: { format_detected: string; segments: Array<{ index: number; turn: number; role?: string; kind: string; byte_start: number; byte_end: number; fragment_id: string }>; merged_segments: number } }>"
+        ts_return_type = "Promise<{ context: { content: string; sections: object; decisions: object; sources: object; retrieval_handles: object; insights: object; risk: string; warnings: object }; segmentation: { format_detected: string; segments: Array<{ index: number; turn: number; role?: string; kind: string; byte_start: number; byte_end: number; fragment_id: string }>; merged_segments: number } }>"
     )]
     pub fn compile_transcript(&self, request: Value) -> AsyncTask<Job<JsonOut>> {
         let svc = Arc::clone(&self.inner);
@@ -767,7 +767,7 @@ impl NodeMemoryService {
     /// walk" state.
     #[napi(
         js_name = "memoryStatus",
-        ts_return_type = "Promise<{ embedder: { model: string | null; dimension: number | null; semantic: boolean | null }; provenance: { recorded: boolean; model: string | null; dimension: number | null }; extraction: { configured: boolean; autograph_active: boolean; autograph_dropped: number }; memory: { facts: number; edges: number | null } }>"
+        ts_return_type = "Promise<{ embedder: { model: string | null; dimension: number | null; semantic: boolean | null }; provenance: { recorded: boolean; model: string | null; dimension: number | null }; extraction: { configured: boolean; autograph_active: boolean; autograph_dropped: number; autograph_failed: number }; memory: { facts: number; edges: number | null } }>"
     )]
     pub fn memory_status(&self) -> AsyncTask<Job<JsonOut>> {
         let svc = Arc::clone(&self.inner);
@@ -798,6 +798,7 @@ impl NodeMemoryService {
                     "configured": svc.has_autograph(),
                     "autograph_active": svc.autograph_queue_open(),
                     "autograph_dropped": svc.autograph_dropped(),
+                    "autograph_failed": svc.autograph_failed(),
                 },
                 "memory": {
                     "facts": svc.fact_count(),

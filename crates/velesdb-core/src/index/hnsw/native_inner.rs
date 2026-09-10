@@ -432,8 +432,11 @@ impl NativeHnswInner {
     // `#[cfg(feature = "gpu")]`, so with the feature off nothing in the
     // signature is read -- neither the parameters nor the receiver. The
     // receiver's allow was missing, which made
-    // `cargo clippy -p velesdb-core --lib --features persistence` fail on a
-    // clean tree: CI lints one feature set, and it always includes `gpu`.
+    // `cargo clippy -p velesdb-core --lib --features persistence -- -D warnings
+    // -D clippy::pedantic` fail on a clean tree. The workspace allows
+    // `unused_self`, but a `-D clippy::pedantic` on the command line overrides
+    // it, so the attribute is what that strict form needs; CI never sees the
+    // gap because it lints one feature set, and that set always has `gpu`.
     #[allow(unused_variables)] // Reason: parameters unused when `gpu` is off
     #[allow(clippy::unused_self)] // Reason: receiver unused when `gpu` is off
     fn try_gpu_route(

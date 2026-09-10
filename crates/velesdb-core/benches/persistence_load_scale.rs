@@ -117,7 +117,10 @@
 //! Build time is sequential insertion and dominates the run: budget roughly a
 //! minute per 200K nodes before any measurement starts.
 
-#![allow(clippy::cast_precision_loss)]
+#![allow(
+    clippy::cast_precision_loss,
+    reason = "synthetic vector values and MiB figures for display: exactness past 2^24 matters to neither"
+)]
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode};
 use std::time::Duration;
