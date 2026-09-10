@@ -127,6 +127,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with `persistence`; and the `unused_self` allow in `native_inner.rs` named a
   command that passes without it — the one it protects adds
   `-D clippy::pedantic` (#2246, P5).
+- **`memory_status` dropped `autograph_failed` in the Node and Python bindings,
+  and the parity guard could not see it.** The field is required by the
+  published schema and documented in `MCP_TOOLS.md`, but both bindings built an
+  `extraction` object of three keys, and `binding_parity_bdd` compared only the
+  ROOT keys of each output schema. Both bindings now relay it (the Node
+  `ts_return_type` included), and the guard reads one level deeper, resolving
+  `$ref`s, with a control that fails if its nested reader sees nothing
+  (#2246, P4-b). Reading one level deeper found a second drop:
+  `compileTranscript`'s TypeScript return type hand-copied seven of `context`'s
+  eight fields and left out `warnings`, which the call does return; it is now
+  declared. Not as `CompiledContextJs`: that `napi(object)` type is
+  camelCased, while this call returns the wire's snake_case JSON.
+
+- **Two reference pages still described superseded behaviour.**
+  `NATIVE_HNSW.md` said downgrading past the `.vectors` v2 change requires
+  re-persisting the index — the CHANGELOG had been corrected, the reference
+  page had not, and the two contradicted each other. `MEMORY_EXTRACTOR_MODELS.md`
+  called its tier table "the settings the product sends today" when every row was
+  measured before the schema was sent as `format`; the table is now dated
+  (#2246, P4-c, P4-d).
 
 - **`reorder_for_locality` could leave a collection whose graph and vectors
   disagree.** Since `.vectors` became the graph's arena, the permutation lands

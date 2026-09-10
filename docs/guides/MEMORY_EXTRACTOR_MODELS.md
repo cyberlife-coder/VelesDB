@@ -44,11 +44,17 @@ Ranked by how often they eliminate a candidate, not by how interesting they are.
 Verdicts only; the report carries the counts. "Eligible" means zero fatal
 errors, every reply parsed, and a French/English gap within tolerance.
 
+**Measured on 2026-08-16, before the extractor sent its schema as Ollama's
+`format`** (#2241). Every row below describes unconstrained decoding. The
+product now constrains it, which the bench measured as moving the 8 GB tier from
+no eligible model to two — but this table is left as measured until a campaign
+is replayed against what the crate now sends.
+
 | Tier | Usable | Weight budget | Runtime | What we found |
 |---|---|---|---|---|
 | 8 GB | 8 GB | ≤ ~6.5 GB | Ollama | **No eligible model with default settings.** Every candidate produced at least one unparseable or schema-broken reply. Constrained decoding changes this completely — see below. |
 | 12 GB | 12 GB | ≤ ~10 GB | Ollama | **No eligible model.** The failures are rarer than at 8 GB but not absent. |
-| 16 GB | 16 GB | ≤ ~14 GB | Ollama | `qwen3:14b` — the only model eligible with the settings the product sends today: every reply parsed, no schema break, no language asymmetry. |
+| 16 GB | 16 GB | ≤ ~14 GB | Ollama | `qwen3:14b` — the only model eligible under the settings measured then: every reply parsed, no schema break, no language asymmetry. |
 | 24 GB / Mac 32 GB | ~24 GB | ≤ ~21 GB | MLX | Not settled. Our one measured candidate failed on schema and on language symmetry. |
 | Mac 48–64 GB | ~36–48 GB | ≤ ~46 GB | MLX | A 35B instruct model is eligible, and *loses* to `qwen3:14b` on error count while weighing more than three times as much. Size is not the axis. |
 | any | — | — | none | The built-in `outline` extractor needs no model at all. It recognises named entities but extracts neither relations nor attributes: entities without edges. That is the floor, and it is honest about being one. |
