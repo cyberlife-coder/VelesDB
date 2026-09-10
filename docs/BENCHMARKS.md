@@ -396,12 +396,12 @@ First reproducible run, **VelesDB v3.3.0** (M=16, ef_construction=200, L2), full
 | Mode | ef_search (at 1M) | Recall@10 |
 |------|-------------------|-----------|
 | Accurate | ~1024 | 0.9803 |
-| Perfect | ~8192 | 0.9994 |
+| ef ≈ 8192 (graph) ¹ | ~8192 | 0.9994 |
 
 Notes:
 - The two paths answer different questions: the plain path is for cross-implementation comparison; the production path is what an application actually calls. Don't compare the plain numbers against the 10K production-path figures elsewhere in this doc.
 - Recall climbs monotonically with `ef_search`; ef=128 (0.9435) clears the ≥ 0.90 regression floor (§11.5) with margin.
-- **`Perfect` reaches 0.9994 — not literally 1.0 — at 1M scale.** The exact-1.0 guarantee is validated by the contract test at ≤ 100K (synthetic data, `scale_recall_100k.rs`). On real SIFT1M at 1M, ~0.06% of true neighbours fall outside even the ef=8192 candidate pool, and exact reranking can only reorder the candidates the graph surfaced — it cannot recover a neighbour the traversal never visited. So "100%" is a ≤100K guarantee, not a 1M one.
+- ¹ **This row is a graph traversal at ef ≈ 8192, not today's `Perfect`.** It was recorded under the `Perfect` label, which then meant exactly that. `SearchQuality::Perfect` now leaves the graph for an exhaustive scan (#2238): at 1M it is refused under the default `limits.max_perfect_mode_vectors` (500 000), and with the cap raised its recall is 1.0 by construction, at O(n) cost. The figure stays because it is the best graph recall measured at 1M: ~0.06% of true neighbours fall outside even this candidate pool, and exact reranking cannot recover a neighbour the traversal never visited.
 
 Literature reference points (published by the respective libraries on similar hardware — **not VelesDB numbers**, orientation only):
 

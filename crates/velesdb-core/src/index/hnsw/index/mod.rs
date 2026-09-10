@@ -9,7 +9,8 @@
 //! - `Fast`: `ef_search=96`, ~95% recall, lowest latency
 //! - `Balanced`: `ef_search=160`, ~99.5% recall, good tradeoff (default)
 //! - `Accurate`: `ef_search=512`, ~100% recall, high precision
-//! - `Perfect`: `ef_search=4096`, 100% recall, maximum accuracy
+//! - `Perfect`: an exhaustive scan that leaves the graph, recall 1.0 by
+//!   construction, refused above `limits.max_perfect_mode_vectors`
 //!
 //! # Recommended Parameters by Vector Dimension
 //!

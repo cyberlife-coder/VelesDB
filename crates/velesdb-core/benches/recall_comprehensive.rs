@@ -108,7 +108,8 @@ fn bench_comprehensive(c: &mut Criterion) {
                 SearchQuality::Fast => ("Fast", 64),
                 SearchQuality::Balanced => ("Balanced", 128),
                 SearchQuality::Accurate => ("Accurate", 512),
-                SearchQuality::Perfect => ("Perfect", 4096),
+                // No ef: the Perfect arm brute-forces before `ef_search` is read (#2238).
+                SearchQuality::Perfect => ("Perfect", 0),
                 SearchQuality::Custom(e) => ("Custom", e),
                 SearchQuality::Adaptive { min_ef, .. } => ("Adaptive", min_ef),
                 SearchQuality::AutoTune => ("AutoTune", 128),
@@ -139,8 +140,13 @@ fn bench_comprehensive(c: &mut Criterion) {
 
             let status = if avg_recall >= 95.0 { "✅" } else { "⚠️" };
 
+            let ef_label = if matches!(quality, SearchQuality::Perfect) {
+                "exhaustive".to_string()
+            } else {
+                ef.to_string()
+            };
             println!(
-                "  {quality_name:12} {ef:10} {avg_recall:>10.1}% {p50_latency:>10.2}ms {status}"
+                "  {quality_name:12} {ef_label:>10} {avg_recall:>10.1}% {p50_latency:>10.2}ms {status}"
             );
         }
 

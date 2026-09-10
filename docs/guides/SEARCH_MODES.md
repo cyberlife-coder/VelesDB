@@ -132,8 +132,10 @@ collection.search_with_ef(&query, 10, 512)?;
 
 ### 4. Perfect — Guaranteed 100% recall
 
-Runs the HNSW graph with a candidate pool sized far beyond `k` — exhaustive in
-practice — so that all true neighbors are found.
+Scores every stored vector — no graph traversal — so every true neighbour is
+found, by construction, at O(n) cost. A collection larger than
+`limits.max_perfect_mode_vectors` (default 500 000) refuses it with
+`Error::GuardRail` instead of scanning.
 
 **Use cases:**
 - Validating/benchmarking HNSW recall
@@ -141,14 +143,19 @@ practice — so that all true neighbors are found.
 - Small critical datasets (< 50K vectors)
 
 ```rust
-// Explicit ef_search override for an exhaustive candidate pool
-collection.search_with_ef(&query, 10, 4096)?;
+use velesdb_core::SearchQuality;
+
+collection.search_with_quality(&query, 10, SearchQuality::Perfect)?;
 ```
 
-> **Note**: `SearchQuality::Perfect` still uses the HNSW graph, but with a
-> candidate pool large enough to guarantee 100% recall in practice. The
-> collection-level `SearchMode::Perfect` is a different axis: it switches the
-> **engine** to an exhaustive bruteforce scan instead of the graph. See
+> **Note**: `SearchQuality::Perfect` does **not** use the HNSW graph: it scores
+> every stored vector, so recall is 1.0 by construction, at O(n) cost. A
+> collection larger than `limits.max_perfect_mode_vectors` (default 500 000)
+> refuses it with `Error::GuardRail` rather than scanning. Set as the global
+> `[search]` default, `perfect` is applied as `accurate`, with a warning — one
+> search path cannot enforce the cap. For a very wide candidate pool that stays
+> on the graph, pass an explicit `ef_search` instead —
+> `collection.search_with_ef(&query, 10, 4096)?`. See
 > [Tuning Guide — SearchMode](TUNING_GUIDE.md#searchmode-collection-level).
 
 ---

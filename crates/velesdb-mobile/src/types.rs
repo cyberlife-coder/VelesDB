@@ -150,7 +150,9 @@ pub enum SearchQuality {
     Balanced,
     /// Accurate search (`ef_search=512`). ~100% recall.
     Accurate,
-    /// Perfect recall mode (`ef_search=4096`). Guaranteed 100% recall.
+    /// Exhaustive scan: every vector scored, recall 1.0 by construction, O(n).
+    /// It does not run at `ef_search=4096`; a collection larger than
+    /// `limits.max_perfect_mode_vectors` refuses it with a guard-rail error.
     Perfect,
     /// Custom `ef_search` value for fine-grained control.
     Custom {

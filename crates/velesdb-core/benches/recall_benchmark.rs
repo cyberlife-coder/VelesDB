@@ -219,7 +219,7 @@ fn print_recall_stats(c: &mut Criterion) {
     println!("Fast (ef=96):        {:.1}%", final_recalls[0] * 100.0);
     println!("Balanced (ef=160):   {:.1}%", final_recalls[1] * 100.0);
     println!("Accurate (ef=512):   {:.1}%", final_recalls[2] * 100.0);
-    println!("Perfect (ef=4096):   {:.1}%", final_recalls[3] * 100.0);
+    println!("Perfect (exhaustive): {:.1}%", final_recalls[3] * 100.0);
 
     // Benchmark the computation (no print inside)
     group.bench_function("compute_recall_stats", |b| {
