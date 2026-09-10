@@ -160,11 +160,25 @@ impl SearchConfig {
     /// [`SearchMode::ef_search`] on purpose: the latter cannot express
     /// `Perfect`, and routing through it would hand a `perfect` config an
     /// uncapped traversal with `max_perfect_mode_vectors` bypassed (#2238).
+    ///
+    /// `Perfect` itself is applied as `Accurate` here. A per-query `Perfect` is
+    /// capped by `enforce_perfect_mode_limit`; a global one would not be, since
+    /// one of the three search paths cannot refuse. `VelesConfig::validate`
+    /// warns when this downgrade happens rather than failing the load.
     #[cfg(feature = "persistence")]
     #[must_use]
     pub fn resolved_quality(&self) -> crate::SearchQuality {
-        self.ef_search
-            .map_or_else(|| self.default_mode.quality(), crate::SearchQuality::Custom)
+        self.ef_search.map_or_else(
+            || match self.default_mode {
+                // Applied as `Accurate`, and warned about at load by
+                // `validate()`: as a GLOBAL default an exhaustive scan would
+                // reach `search_with_optional_bitmap`, which cannot enforce
+                // `limits.max_perfect_mode_vectors`.
+                SearchMode::Perfect => crate::SearchQuality::Accurate,
+                mode => mode.quality(),
+            },
+            crate::SearchQuality::Custom,
+        )
     }
 }
 

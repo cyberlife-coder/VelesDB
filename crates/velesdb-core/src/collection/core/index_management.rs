@@ -702,10 +702,27 @@ impl Collection {
     /// locality benefit; re-call after the next compaction if latency regresses.
     /// No-op for collections with fewer than 1 000 vectors.
     ///
+    /// # Durability
+    ///
+    /// The permutation is persisted before this returns, and that is not
+    /// optional. Since `.vectors` became the graph's arena, the permutation
+    /// lands in the **durable** store the moment it runs, while the adjacency
+    /// it must stay consistent with lives in `.graph`. Leaving the save to a
+    /// later `flush_full` opened a window in which a crash left every node id
+    /// resolving to the wrong vector -- silently, since both files parse.
+    /// Measured before the fix: `.vectors` modified, `.graph` untouched.
+    ///
+    /// Before the arena adoption the permutation touched a disposable
+    /// `hnsw-{token}.arena`, so no such window existed and no save was needed
+    /// here.
+    ///
     /// # Errors
     ///
-    /// Returns an error if vector storage reordering fails.
+    /// Returns an error if vector storage reordering fails, or if the
+    /// reordered index cannot be persisted.
     pub fn reorder_for_locality(&self) -> Result<()> {
-        self.storage.index.reorder_for_locality()
+        self.storage.index.reorder_for_locality()?;
+        self.storage.index.save(&self.storage.path)?;
+        Ok(())
     }
 }

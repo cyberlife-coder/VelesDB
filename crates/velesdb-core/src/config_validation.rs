@@ -87,14 +87,16 @@ impl VelesConfig {
         self.warn_inert_wal_batch();
         self.warn_deprecated_storage_fields();
         self.warn_inert_engine_sections();
+        self.warn_perfect_global_default();
         Ok(())
     }
 
-    /// The `[search]` section and `storage.storage_mode` are parsed and
-    /// validated but not yet applied (issue #2087). Warn — rather than
-    /// reject — when a config sets either away from its defaults, so
-    /// existing files keep loading while no deployment silently believes
-    /// those knobs work.
+    /// `storage.storage_mode` and `[search]`'s `max_results` /
+    /// `query_timeout_ms` are parsed and validated but not applied (issue
+    /// #2087); `[search]`'s `default_mode` and `ef_search` are applied since.
+    /// Warn — rather than reject — when a config sets an inert entry away from
+    /// its default, so existing files keep loading while no deployment
+    /// silently believes those knobs work.
     ///
     /// `[hnsw]` is no longer listed wholesale: `m` and `ef_construction` are
     /// applied at collection creation. Only `max_layers` remains inert — the
@@ -123,6 +125,28 @@ impl VelesConfig {
                  applied by the engine; see issue #2087. [limits] and \
                  [hnsw]'s m / ef_construction are applied. Query-time \
                  WITH (...) overrides are unaffected."
+            );
+        }
+    }
+
+    /// `search.default_mode = "perfect"` is accepted, applied as `accurate` by
+    /// `SearchConfig::resolved_quality`, and said so here.
+    ///
+    /// It was refused outright until the seven-lens review (#2246): a file
+    /// v6.0.0 loaded then failed `Database::open` -- a breaking change in a
+    /// minor release, against this module's own rule that existing files keep
+    /// loading. The reason for refusing still holds and is still honoured. As a
+    /// GLOBAL default `Perfect` would reach `search_with_optional_bitmap`, which
+    /// returns `Vec<ScoredResult>` and cannot enforce
+    /// `limits.max_perfect_mode_vectors`, so the default never resolves to it.
+    /// Per query, `search_with_quality(Perfect)` stays available and capped.
+    fn warn_perfect_global_default(&self) {
+        if matches!(self.search.default_mode, crate::config::SearchMode::Perfect) {
+            tracing::warn!(
+                "search.default_mode = \"perfect\" is applied as \"accurate\": an \
+                 exhaustive scan cannot be a global default, because one search \
+                 path cannot enforce limits.max_perfect_mode_vectors. Request \
+                 Perfect per query, where the cap applies."
             );
         }
     }
@@ -229,28 +253,6 @@ impl VelesConfig {
     }
 
     fn validate_search(&self) -> Result<(), ConfigError> {
-        // `perfect` as a GLOBAL default is refused, while
-        // `search_with_quality(Perfect)` per query stays available and guarded.
-        //
-        // The asymmetry is not squeamishness. `SearchQuality::Perfect` is an
-        // exhaustive scan capped by `limits.max_perfect_mode_vectors`, and that
-        // cap lives in `enforce_perfect_mode_limit`, which only the per-query
-        // entry points can call: `search_with_optional_bitmap` returns
-        // `Vec<ScoredResult>` with no way to refuse. Accepting the value here
-        // would make one of the three search paths scan a corpus of any size
-        // with the guard rail bypassed -- the exact shape #2238 removed from
-        // `SearchMode::ef_search`. Refusing beats degrading it in silence.
-        if matches!(self.search.default_mode, crate::config::SearchMode::Perfect) {
-            return Err(ConfigError::InvalidValue {
-                key: "search.default_mode".to_string(),
-                message: "`perfect` is an exhaustive scan and cannot be a global \
-                          default: one search path cannot enforce \
-                          `limits.max_perfect_mode_vectors`. Ask for it per query \
-                          instead, where the cap applies."
-                    .to_string(),
-            });
-        }
-
         if let Some(ef) = self.search.ef_search {
             if !(16..=4096).contains(&ef) {
                 return Err(ConfigError::InvalidValue {

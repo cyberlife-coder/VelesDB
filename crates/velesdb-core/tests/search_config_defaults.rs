@@ -104,49 +104,93 @@ fn a_default_config_leaves_search_on_the_built_in_quality() {
     );
 }
 
-/// A per-query override still wins over the section.
+fn reopened(
+    dir: &tempfile::TempDir,
+    config: VelesConfig,
+) -> (Database, velesdb_core::VectorCollection) {
+    let db = Database::open_with_config(dir.path(), config).expect("test: reopen");
+    let collection = db.get_vector_collection("docs").expect("test: collection");
+    (db, collection)
+}
+
+/// A per-query `ef` does not depend on the configured default.
+///
+/// One persisted index, reopened under two DIFFERENT configured defaults, must
+/// give the same answer to the same explicit call -- if the default leaked into
+/// explicit searches the two would disagree. Same index on purpose: two indexes
+/// built separately can differ by construction and would make the equality
+/// flap for reasons unrelated to configuration.
+///
+/// The first draft compared an explicit call to ITSELF and labelled it a
+/// control, which could not fail, and asserted only that explicit and default
+/// answers differ, which a clamped `ef` satisfies (#2246, P2-b and P2-e). That
+/// an explicit `ef` is honoured at all is proven by the control of
+/// `a_configured_ef_search_reaches_an_unqualified_search`, which fails if
+/// `search_with_ef` ignores its argument.
 #[test]
-fn a_per_query_ef_still_overrides_the_configured_default() {
+fn a_per_query_ef_is_independent_of_the_configured_default() {
     let dir = tempfile::TempDir::new().expect("test: tempdir");
-    let collection = seeded(&dir, config_with_ef(LOW_EF));
+    seeded(&dir, VelesConfig::default())
+        .flush_full()
+        .expect("test: persist the index both opens will read");
     let query = vector(POINTS as u64 + 1);
-    assert_eq!(
-        ids(&collection
-            .search_with_ef(&query, K, HIGH_EF)
-            .expect("test: override")),
-        ids(&collection
-            .search_with_ef(&query, K, HIGH_EF)
-            .expect("test: override again")),
-        "CONTROL: the explicit path must be deterministic before it is compared"
-    );
+
+    let (db_low, low) = reopened(&dir, config_with_ef(LOW_EF));
+    let low_default = ids(&low.search(&query, K).expect("test: low default"));
+    let low_explicit = ids(&low
+        .search_with_ef(&query, K, HIGH_EF)
+        .expect("test: explicit"));
+    drop(low);
+    drop(db_low);
+
+    let (_db_high, high) = reopened(&dir, config_with_ef(HIGH_EF));
+    let high_default = ids(&high.search(&query, K).expect("test: high default"));
+    let high_explicit = ids(&high
+        .search_with_ef(&query, K, HIGH_EF)
+        .expect("test: explicit"));
+
     assert_ne!(
-        ids(&collection
-            .search_with_ef(&query, K, HIGH_EF)
-            .expect("test: override")),
-        ids(&collection
-            .search(&query, K)
-            .expect("test: configured default")),
-        "the per-query ef must not be flattened onto the configured one"
+        low_default, high_default,
+        "CONTROL: the two configured defaults must answer differently, or the \
+         equality below could not tell a leak from a default with no effect"
+    );
+    assert_eq!(
+        low_explicit, high_explicit,
+        "an explicit ef must give the same answer whatever default the collection was opened with"
     );
 }
 
-/// `perfect` is refused as a global default, with the reason.
+/// `perfect` as a global default still loads, and is applied as `accurate`.
+///
+/// This refused at load until the seven-lens review (#2246): a TOML accepted by
+/// v6.0.0 then failed `Database::open`, a breaking change shipped under
+/// `### Added`. The concern behind the refusal is kept -- a global `Perfect`
+/// would reach `search_with_optional_bitmap`, which cannot enforce
+/// `max_perfect_mode_vectors` -- by never letting the default resolve to it.
+///
+/// Asserted on the resolution because
+/// `a_configured_ef_search_reaches_an_unqualified_search` already proves the
+/// resolved quality is what `search()` runs; together they cover the path.
 #[test]
-fn perfect_is_refused_as_a_global_default() {
+fn perfect_as_a_global_default_still_opens_and_resolves_to_accurate() {
+    let dir = tempfile::TempDir::new().expect("test: tempdir");
+    let mut opening = VelesConfig::default();
+    opening.search.default_mode = SearchMode::Perfect;
+    Database::open_with_config(dir.path(), opening)
+        .expect("a config v6.0.0 accepted must keep opening a database");
+
     let mut config = VelesConfig::default();
     config.search.default_mode = SearchMode::Perfect;
-    let message = config
-        .validate()
-        .expect_err("an exhaustive scan cannot be the default for every query")
-        .to_string();
-    assert!(
-        message.contains("max_perfect_mode_vectors"),
-        "the refusal must name the guard that cannot be enforced, got: {message}"
+    assert_eq!(
+        config.search.resolved_quality(),
+        velesdb_core::SearchQuality::Accurate,
+        "a global `perfect` must never resolve to the exhaustive scan no path can cap"
     );
 
-    config.search.default_mode = SearchMode::Accurate;
-    assert!(
-        config.validate().is_ok(),
-        "CONTROL: only `perfect` is refused; the other modes must load"
+    config.search.default_mode = SearchMode::Balanced;
+    assert_eq!(
+        config.search.resolved_quality(),
+        velesdb_core::SearchQuality::Balanced,
+        "CONTROL: only `perfect` is downgraded; every other mode resolves to itself"
     );
 }
