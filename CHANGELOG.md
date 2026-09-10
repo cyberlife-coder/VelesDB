@@ -101,12 +101,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Two MCP tool descriptions no longer hide a placeholder (#2258).**
   `relate`'s `relation` field read ``read as `from` <relation> `to` ``, and
-  `retrieve_context_source` read ``behind a ctx://source/<hash> handle``: a
-  Markdown renderer — rustdoc, or an MCP client displaying the tool schema —
-  takes a bare `<relation>` or `<hash>` for an HTML tag and drops it. Both are
-  code spans now, ``read as `from <relation> to` `` and
-  `` `ctx://source/<hash>` ``. The descriptions ship in the tool schema
-  clients receive; they are the sweep's only wire-visible changes.
+  `retrieve_context_source` read ``behind a ctx://source/<hash> handle``. A
+  Markdown renderer takes a bare placeholder for an HTML tag and drops it:
+  rustdoc did so with the field doc's `<relation>`, and an MCP client
+  displaying the tool schema would with both. Both are code spans now,
+  ``read as `from <relation> to` `` and `` `ctx://source/<hash>` ``. The
+  descriptions ship in the tool schema clients receive; they are the sweep's
+  only wire-visible changes.
 
 - **`reorder_for_locality` could leave a collection whose graph and vectors
   disagree.** Since `.vectors` became the graph's arena, the permutation lands
