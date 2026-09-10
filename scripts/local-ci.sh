@@ -13,10 +13,13 @@
 # skipped without saying so is worth less than a gate that is absent, because
 # the operator believes it ran.
 #
-# JOBS defaults to every gate job, not just `lint`. The first version replayed
+# JOBS defaults to `lint,hygiene`, not just `lint`. The first version replayed
 # `lint` alone and reported all-green on a tree that CI then failed on
 # `hygiene` and `gate-contracts` — the very narrowness this tool exists to
-# remove, reproduced inside it.
+# remove, reproduced inside it. The default is still not every gate job, and
+# says so here rather than by omission: `gate-contracts` and the other
+# `uses:` jobs are reusable workflows with no steps in ci.yml for this script
+# to read, and the rest need the runner's services, a matrix, or hours.
 set -uo pipefail
 
 # Overridable so the suite can point at a synthetic workflow and prove the
