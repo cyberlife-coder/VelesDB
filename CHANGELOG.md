@@ -147,6 +147,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   called its tier table "the settings the product sends today" when every row was
   measured before the schema was sent as `format`; the table is now dated
   (#2246, P4-c, P4-d).
+- **A compaction or a reorder with bulk inserts still pending could strand them
+  after a crash.** `upsert_bulk`'s V2 path registers each id and writes its
+  vector at once, and leaves the graph insert to the `AsyncIndexBuilder`.
+  `flush` drains the builder before saving; `compact_storage` and
+  `reorder_for_locality` (whose save #2247 added) did not, so a crash right
+  after either left points stored and mapped but never in the graph — and
+  recovery re-indexes only unmapped ids. Both now drain first. Reproduced with
+  a crash snapshot taken right after the save (#2246).
 
 - **`reorder_for_locality` could leave a collection whose graph and vectors
   disagree.** Since `.vectors` became the graph's arena, the permutation lands
