@@ -116,6 +116,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   arrived with the adoption rather than a latent defect. The index is now saved
   before the call returns, and `reorder_durability.rs` pins it — seen failing
   with the save removed.
+
+- **Seven guards verified their result and never their premise.** The worst
+  reopened #2232 silently: `test_exactly_one_step_produces_the_verdict` matched
+  `steps\.\w+\.conclusion`, any identifier, so renaming the mirror step's `id:`
+  without its reference left all 106 tests green while `CI Success` went green
+  reading no `needs` result — GitHub evaluates an unknown step id to `''`. The id
+  is now read from the mirror itself. Alongside it: the lockfile set and
+  `DEFERRED_REMOVALS` gained non-vacuity checks, so an empty set can no longer
+  satisfy "nothing is missing"; the attribution guard's issue surface must now be
+  refused before the absence of its push remedy counts; the duplicate-heading
+  guard covers `crates/velesdb-memory/CHANGELOG.md`, which `release-memory.yml`
+  publishes and nothing guarded; `perfect_mode_semantics` compares Perfect with a
+  brute-force ground truth on a dispersed fixture instead of `top1 == 7` on a
+  collinear one every mode satisfies; and the `.vectors` no-write test runs under
+  Cosine, whose load path renormalises in place. Each was seen failing on the
+  mutation it names (#2246, P2).
+
 - **`SearchQuality::Perfect` was documented as the opposite of what it does.**
   Its rustdoc described a graph search at `ef_search = 4096` that "tunes the
   HNSW graph's effort and is not exhaustive", with a ~0.9994 recall figure at
