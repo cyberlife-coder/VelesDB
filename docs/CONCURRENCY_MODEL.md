@@ -657,6 +657,7 @@ ensure no data is lost.
 │     └─ Load payloads.snapshot, replay payloads.log past it             │
 │                                                                        │
 │  3. load_or_create_hnsw()                                              │
+│     ├─ sweep_stale_arenas(): drop orphan arena files, before any load  │
 │     ├─ Gate: native_meta.bin present? (commit point, written LAST)     │
 │     ├─ Load native_hnsw.graph/.vectors/.gen + native_mappings.bin —    │
 │     │  all generation-stamped (#617); a legacy native_vectors.bin      │
@@ -690,7 +691,7 @@ ensure no data is lost.
 │  8. restore_auto_reindex_from_config(),                                │
 │     restore_secondary_indexes_from_config()                            │
 │                                                                        │
-│  9. run_post_open_hooks() (persistence builds)                         │
+│  9. run_post_open_hooks()                                              │
 │     ├─ reindex edge properties from edge_store.bin                     │
 │     ├─ replay edges.wal over edge_store.bin                            │
 │     └─ restore_persisted_quantizers(): trained quantizer artifacts     │
