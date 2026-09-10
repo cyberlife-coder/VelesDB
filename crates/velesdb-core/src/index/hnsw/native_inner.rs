@@ -819,10 +819,12 @@ impl NativeHnswInner {
 /// `ShardedMappings::assign` takes one, never a bare slot, so an id can only
 /// be mapped while that guard lives: `reorder_for_locality` and `vacuum`
 /// renumber slots under the write side and cannot move this one in between.
-/// Only a placement mints one ([`NativeHnswInner::place`],
-/// [`NativeHnswInner::place_parallel`], [`NativeHnswInner::place_unlinked`]),
-/// or [`Placed::installed`] for a graph behind a write guard. Neither `Clone`
-/// nor `Copy`: each placement maps once.
+/// Placements mint it ([`NativeHnswInner::place`],
+/// [`NativeHnswInner::place_parallel`], [`NativeHnswInner::place_unlinked`]);
+/// the one exception is [`Placed::installed`], for a graph behind a write
+/// guard. The token ties a mapping to a guard's lifetime, not to a particular
+/// index: each call site keeps an index's guard and its mappings together.
+/// Neither `Clone` nor `Copy`: each placement maps once.
 #[must_use = "a placed slot left unmapped stays a tombstone"]
 pub(crate) struct Placed<'guard> {
     slot: usize,
@@ -850,13 +852,20 @@ impl<'guard> Placed<'guard> {
         self.slot
     }
 
-    /// A slot of the graph `guard` holds exclusively. Nothing renumbers slots
-    /// while the write side is held, so any slot of that graph may be mapped
-    /// under it: `vacuum` maps its rebuilt graph this way, once installed.
+    /// A slot of the graph `guard` holds exclusively: `vacuum` maps its rebuilt
+    /// graph this way, once installed. Nothing renumbers slots while the write
+    /// side is held. This is the one way to make a token from a bare slot, and
+    /// it trusts its caller that the slot is that graph's; debug builds check
+    /// that the graph has such a slot.
     pub(crate) fn installed(
-        _guard: &'guard parking_lot::RwLockWriteGuard<'_, std::mem::ManuallyDrop<NativeHnswInner>>,
+        guard: &'guard parking_lot::RwLockWriteGuard<'_, std::mem::ManuallyDrop<NativeHnswInner>>,
         slot: usize,
     ) -> Self {
+        debug_assert!(
+            slot < guard.len(),
+            "slot {slot} is not in the installed graph ({} vectors)",
+            guard.len()
+        );
         Self::new(slot)
     }
 

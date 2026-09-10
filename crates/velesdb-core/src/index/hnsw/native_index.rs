@@ -214,9 +214,9 @@ impl NativeHnswIndex {
         let vectors: Vec<&[f32]> = items.iter().map(|(_, vector)| vector.as_slice()).collect();
         // Held until every id is mapped, as in `HnswIndex`.
         let inner = self.inner.read();
-        let placed = inner.place_parallel(&vectors)?;
-        for ((id, _), slot) in items.iter().zip(placed) {
-            self.mappings.assign(*id, slot);
+        let placements = inner.place_parallel(&vectors)?;
+        for ((id, _), placed) in items.iter().zip(placements) {
+            self.mappings.assign(*id, placed);
         }
         drop(inner);
         Ok(())

@@ -46,6 +46,8 @@ impl<'a> DirectVectorWriter<'a> {
     ///
     /// Returns [`crate::error::Error::DimensionMismatch`] if any vector has wrong dimension.
     /// Returns [`Error::AllocationFailed`] if `ContiguousVectors` cannot grow.
+    /// Returns [`crate::error::Error::Internal`] if the graph's arena is not
+    /// initialized.
     /// On error, state is unchanged (all-or-nothing validation).
     ///
     /// [`crate::error::Error::DimensionMismatch`]: crate::error::Error::DimensionMismatch

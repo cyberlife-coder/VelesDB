@@ -12,10 +12,11 @@
 //!
 //! # EPIC-A.1: Integrated into `HnswIndex`
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use dashmap::DashMap;
 
 use super::native_inner::Placed;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Lock-free sharded ID mappings for HNSW index.
 ///
@@ -25,8 +26,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// # Example
 ///
 /// ```rust,ignore
-/// use velesdb_core::index::hnsw::ShardedMappings;
-///
+/// // Crate-internal: `ShardedMappings` is not exported.
 /// let mappings = ShardedMappings::new();
 /// // `placed` is the token a graph placement returns for slot 0: see `Placed`.
 /// mappings.assign(42, placed);
@@ -131,9 +131,10 @@ impl ShardedMappings {
         use dashmap::mapref::entry::Entry;
 
         let slot = placed.into_slot();
-        // The reverse entry first: a slot another id holds is refused before
-        // either map changes.
-        self.claim_slot(slot, id);
+        // Checked before either map changes. The writes then keep their order
+        // (forward entry, retire the old reverse entry, claim the new one), so
+        // no id is ever named by two reverse entries at once.
+        self.refuse_foreign_slot(slot, id);
         self.note_id(id);
         self.next_idx
             .fetch_max(slot.saturating_add(1), Ordering::Relaxed);
@@ -143,28 +144,29 @@ impl ShardedMappings {
                 if old != slot {
                     self.remove_reverse(old, id);
                 }
+                self.idx_to_id.insert(slot, id);
                 (old != slot).then_some(old)
             }
             Entry::Vacant(entry) => {
                 entry.insert(slot);
+                self.idx_to_id.insert(slot, id);
                 None
             }
         }
     }
 
-    /// Writes `slot`'s reverse entry for `id`.
+    /// Refuses, in a debug build, a slot whose reverse entry names another id.
     ///
     /// The arena hands every slot out once per arena (a vacuum rebuilds the
-    /// arena and clears the mappings under the same lock), so a slot another
-    /// id holds means a broken caller, not a move. Debug builds panic on it
-    /// before writing anything; release builds overwrite.
-    fn claim_slot(&self, slot: usize, id: u64) {
+    /// arena and clears the mappings under the same lock), so such a slot
+    /// means a broken caller, not a move. The check only reads, and runs
+    /// before either map changes; release builds skip it.
+    fn refuse_foreign_slot(&self, slot: usize, id: u64) {
         if cfg!(debug_assertions) {
             if let Some(owner) = self.idx_to_id.get(&slot).map(|owner| *owner) {
                 assert_eq!(owner, id, "slot {slot} already belongs to id {owner}");
             }
         }
-        self.idx_to_id.insert(slot, id);
     }
 
     /// Removes an ID and returns its internal index if it existed.

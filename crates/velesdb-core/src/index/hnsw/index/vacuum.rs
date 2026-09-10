@@ -13,7 +13,8 @@ pub enum VacuumError {
     /// (`enable_vector_storage = false`); vacuum refuses such an index.
     #[error("Cannot vacuum: exact-distance features are off (build the index with new(), not new_fast_insert())")]
     VectorStorageDisabled,
-    /// Index rebuild failed (allocation or insertion error).
+    /// Index rebuild failed: an allocation or insertion error, or a rebuild
+    /// that placed fewer vectors than it had ids.
     #[error("Vacuum rebuild failed: {0}")]
     RebuildFailed(String),
 }
