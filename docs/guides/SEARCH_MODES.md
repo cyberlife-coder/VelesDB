@@ -133,9 +133,9 @@ collection.search_with_ef(&query, 10, 512)?;
 ### 4. Perfect — Exhaustive scan
 
 Scores every stored vector — no graph traversal — so it returns the exact
-top-k under the index's own distance, ties aside, at O(n) cost. A collection larger than
-`limits.max_perfect_mode_vectors` (default 500 000) refuses it with
-`Error::GuardRail` instead of scanning.
+top-k under the index's own distance, ties aside, at O(n) cost. A collection
+larger than `limits.max_perfect_mode_vectors` (default 500 000) refuses it
+with `Error::GuardRail` instead of scanning.
 
 **Use cases:**
 - Validating/benchmarking HNSW recall
@@ -148,15 +148,15 @@ use velesdb_core::SearchQuality;
 collection.search_with_quality(&query, 10, SearchQuality::Perfect)?;
 ```
 
-> **Note**: `SearchQuality::Perfect` does **not** use the HNSW graph: it scores
-> every stored vector, so it returns the exact top-k under the index's
-> distance, ties aside — not necessarily 1.0 against an external ground truth
-> — at O(n) cost. A
-> collection larger than `limits.max_perfect_mode_vectors` (default 500 000)
-> refuses it with `Error::GuardRail` rather than scanning. Set as the global
-> `[search]` default, `perfect` is applied as `accurate`, with a warning — one
-> search path cannot enforce the cap. For a very wide candidate pool that stays
-> on the graph, pass an explicit `ef_search` instead —
+> **Note**: `SearchQuality::Perfect` does **not** use the HNSW graph: it
+> scores every stored vector, so it returns the exact top-k under the
+> index's own distance, ties aside — not necessarily 1.0 against an external
+> ground truth — at O(n) cost. A collection larger than
+> `limits.max_perfect_mode_vectors` (default 500 000) refuses it with
+> `Error::GuardRail` rather than scanning. Set as the global `[search]`
+> default, `perfect` is applied as `accurate`, with a warning — one search
+> path cannot enforce the cap. For a very wide candidate pool that stays on
+> the graph, pass an explicit `ef_search` instead —
 > `collection.search_with_ef(&query, 10, 4096)?`. See
 > [Tuning Guide — SearchMode](TUNING_GUIDE.md#searchmode-collection-level).
 
@@ -452,7 +452,7 @@ USING FUSION(strategy = 'rsf', dense_weight = 0.7, sparse_weight = 0.3)
 | Aspect | VelesDB | Milvus |
 |--------|---------|--------|
 | **Presets** | 4 named modes (Fast→Perfect) + Custom | No presets, manual `search_params` |
-| **100% recall** | `SearchQuality::Perfect` (exhaustive scan) | Separate `FLAT` index |
+| **Exact search** | `SearchQuality::Perfect` (exhaustive scan) | Separate `FLAT` index |
 | **Main parameter** | `SearchQuality` enum | `params={"ef": N}` |
 | **Auto-tuning** | ✅ Dimension-based | ❌ Manual |
 
@@ -470,7 +470,7 @@ SearchQuality::Balanced
 | Aspect | VelesDB | OpenSearch k-NN |
 |--------|---------|-----------------|
 | **Presets** | 4 modes + Custom | No presets |
-| **100% recall** | Perfect mode (exhaustive scan) | `"method": "exact"` in mapping |
+| **Exact search** | Perfect mode (exhaustive scan) | `"method": "exact"` in mapping |
 | **Parameter** | `SearchQuality` | `ef_search` in query |
 | **Approach** | Query-time | Query-time or index-time |
 
@@ -498,7 +498,7 @@ SearchQuality::Accurate
 | Aspect | VelesDB | Qdrant |
 |--------|---------|--------|
 | **Presets** | 4 modes + Custom | No official presets |
-| **100% recall** | Perfect mode (exhaustive scan) | `exact: true` in search |
+| **Exact search** | Perfect mode (exhaustive scan) | `exact: true` in search |
 | **Parameter** | `SearchQuality` | `hnsw_ef` in search params |
 | **Quantization** | SQ8, Binary | Scalar, Product |
 
@@ -761,7 +761,7 @@ velesdb> SELECT * FROM products WHERE vector NEAR $v LIMIT 10;
 ```rust
 // Benchmark recall
 let ann_results = collection.search(&query, 10)?;           // default mode (Balanced)
-let exact_results = collection.search_with_ef(&query, 10, 4096)?; // exhaustive pool (100% recall)
+let exact_results = collection.search_with_quality(&query, 10, SearchQuality::Perfect)?; // exhaustive scan
 
 let recall = calculate_recall(&ann_results, &exact_results);
 println!("Recall@10: {:.1}%", recall * 100.0);
@@ -769,7 +769,7 @@ println!("Recall@10: {:.1}%", recall * 100.0);
 
 ### Q: Can ef_search exceed the number of vectors?
 
-**A:** Yes, but beyond a certain threshold, the recall gain is negligible while latency increases significantly. Perfect mode is already calibrated to guarantee 100% recall.
+**A:** Yes, but beyond a certain threshold, the recall gain is negligible while latency increases significantly. Perfect is not an ef value: it leaves the graph for an exhaustive scan.
 
 ### Q: Milvus uses `ef` and VelesDB uses `ef_search` — are they the same thing?
 

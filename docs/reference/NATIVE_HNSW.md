@@ -79,7 +79,7 @@ let loaded = NativeHnswIndex::load("./my_index", 768, DistanceMetric::Cosine)?;
 | `new(dim, metric)` | M=32, ef=400 | ≥95% | Baseline | Production workloads |
 | `with_params(dim, metric, params)` | Custom | Custom | Custom | Full control |
 | `new_turbo(dim, metric)` | M=12, ef=100 | ~85% | 3-5x faster | Bulk import, dev, benchmarks |
-| `new_fast_insert(dim, metric)` | M/2, ef/2 | ~90% | 2-3x faster | Streaming, no vector storage |
+| `new_fast_insert(dim, metric)` | M/2, ef/2 | ~90% | 2-3x faster | Streaming; exact-distance features off |
 
 ### Operations
 
@@ -92,7 +92,7 @@ let loaded = NativeHnswIndex::load("./my_index", 768, DistanceMetric::Cosine)?;
 | `search_with_quality(query, k, quality)` | Search with quality preset (Fast/Balanced/Accurate/Perfect/Adaptive/AutoTune) |
 | `search_with_ef(query, k, ef_search)` | Search with explicit ef_search value |
 | `search_batch_parallel(queries, k, ef_search)` | Batch parallel search |
-| `brute_force_search_parallel(query, k)` | Exact search (100% recall) |
+| `brute_force_search_parallel(query, k)` | Exact search: the exact top-k under the index's distance |
 | `remove(id)` | Remove vector |
 
 ### Persistence
@@ -492,7 +492,7 @@ POST /collections/documents/search
 | Fixed workload, known recall target | `Balanced` or `Accurate` with explicit `ef_search` |
 | Variable collection sizes, no tuning budget | **`AutoTune`** |
 | Latency-critical, recall > 90% acceptable | `Fast` |
-| Must guarantee 100% recall | `Perfect` |
+| Needs the exact top-k | `Perfect` (an exhaustive scan) |
 
 ## Benchmarks
 

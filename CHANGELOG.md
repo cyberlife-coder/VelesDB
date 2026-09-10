@@ -149,9 +149,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   says so. `BENCHMARKS.md`'s 0.9994-at-1M row is `Perfect` — an exhaustive
   scan, from `sift1m_recall.rs` (#1225) — and loses the `~8192` it showed, a
   computed effort that never ran; why a scan reads 0.9994 rather than 1.0
-  against SIFT1M's ground truth is not established. Two benchmarks
-  printed the exhaustive scan as `ef=4096`; relabelled `exhaustive` (#2246,
-  P3).
+  against SIFT1M's ground truth is not established. What the scan returns is
+  stated as it runs — the exact top-k under the index's own distance, ties
+  aside — where `SEARCH_MODES.md` (FAQ included), `TUNING_GUIDE.md`,
+  `PYTHON_PERFORMANCE.md`, `SERVER_REST_TOUR.md`, `NATIVE_HNSW.md` and the core
+  and mobile doc comments said "100% recall" or "by construction"; an index
+  built with its exact-distance features off falls back to a graph search, and
+  its rustdoc says so. `Accurate`'s "~100% recall" label gives the measured
+  figures instead: 100% at 10K, 0.98 at 1M. Two benchmarks printed the
+  exhaustive scan as `ef=4096`; relabelled `exhaustive` (#2246, P3).
 
 - **`SearchQuality::Perfect` was documented as the opposite of what it does.**
   Its rustdoc described a graph search at `ef_search = 4096` that "tunes the

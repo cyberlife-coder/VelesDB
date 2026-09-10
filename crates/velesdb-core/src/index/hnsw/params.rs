@@ -365,15 +365,18 @@ pub enum SearchQuality {
     /// Balanced search with `ef_search=160`. ~99.5% recall, production default.
     #[default]
     Balanced,
-    /// Accurate search with `ef_search=512`. ~100% recall.
+    /// Accurate search with `ef_search=512`: 100% recall@10 at 10K points,
+    /// 0.98 at 1M on SIFT1M (`docs/BENCHMARKS.md`).
     Accurate,
-    /// Exhaustive when the index stores vectors: every stored vector is scored,
-    /// so it returns the exact top-k under the index's own distance, ties
-    /// aside. This variant leaves the graph — `try_search_special_quality`
-    /// routes it straight to `search_brute_force` before `ef_search` is ever
-    /// consulted, so [`Self::ef_search`]'s `4096.max(k * 100)` is not the
-    /// number this mode runs at. The scan is O(n / cores). A fast-insert index,
-    /// which keeps no vectors, falls back to a graph search at `Accurate`'s
+    /// Exhaustive unless the index's exact-distance features are off: every
+    /// stored vector is scored, so it returns the exact top-k under the index's
+    /// own distance, ties aside. This variant leaves the graph —
+    /// `try_search_special_quality` routes it straight to `search_brute_force`
+    /// before `ef_search` is ever consulted, so [`Self::ef_search`]'s
+    /// `4096.max(k * 100)` is not the number this mode runs at. The scan is
+    /// O(n / cores). An index built with those features off (`new_fast_insert`,
+    /// `with_params_full(.., false)`) still keeps its vectors in the graph, but
+    /// there `search_brute_force` falls back to a graph search at `Accurate`'s
     /// scaled ef.
     ///
     /// **Guarded, and the guard is the reason to read this.** A collection
@@ -435,8 +438,9 @@ impl SearchQuality {
     ///
     /// - **Accurate**: 512 base (was 256), scales with k×16 for ≥95% recall at 100K+
     /// - **Perfect**: 4096 base, scaled with k×100 — the ef a graph traversal
-    ///   would use. `HnswIndex` does not traverse for `Perfect`: it scans
-    ///   exhaustively (#2238), so this is not what `Perfect` costs there.
+    ///   would use. With its exact-distance features on, `HnswIndex` does not
+    ///   traverse for `Perfect`: it scans exhaustively (#2238), so this is not
+    ///   what `Perfect` costs there.
     /// - **Adaptive**: returns `min_ef` (first phase); caller handles second phase
     #[must_use]
     pub fn ef_search(&self, k: usize) -> usize {
@@ -448,7 +452,8 @@ impl SearchQuality {
             // Increased from 256 to 512 for better recall at 100K+ scale
             Self::Accurate => 512.max(k * 16),
             // The traversal ef for Perfect-class recall, for a caller that walks the
-            // graph; `HnswIndex` scans exhaustively instead (#2238).
+            // graph; `HnswIndex` scans exhaustively instead (#2238) unless its
+            // exact-distance features are off.
             Self::Perfect => 4096.max(k * 100),
             Self::Custom(ef) => (*ef).max(k),
             // Adaptive: start with min_ef (first phase)

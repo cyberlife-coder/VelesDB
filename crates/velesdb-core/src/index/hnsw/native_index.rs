@@ -92,7 +92,9 @@ impl NativeHnswIndex {
         Self::with_params(dimension, metric, HnswParams::turbo())
     }
 
-    /// Creates an index optimized for fast inserts (no vector storage).
+    /// Creates an index optimized for fast inserts, with its exact-distance
+    /// features off: [`Self::brute_force_search_parallel`] returns nothing. The
+    /// graph still stores every vector.
     ///
     /// # Errors
     ///
@@ -134,7 +136,8 @@ impl NativeHnswIndex {
         self.mappings.is_empty()
     }
 
-    /// Returns whether vector storage is enabled.
+    /// Returns whether exact-distance features are on — `false` after
+    /// [`Self::new_fast_insert`]. The graph stores its vectors either way.
     #[inline]
     #[must_use]
     pub fn has_vector_storage(&self) -> bool {

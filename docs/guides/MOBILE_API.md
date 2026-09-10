@@ -312,7 +312,7 @@ Guardrails are the other half of the control plane: `updateGuardrails(limits)` s
 |---|---|---|
 | `Fast` | 96 | ~95% recall, lowest latency |
 | `Balanced` | 160 | ~99.5% recall, default |
-| `Accurate` | 512 | ~100% recall |
+| `Accurate` | 512 | 100% recall at 10K, 0.98 at 1M |
 | `Perfect` | — (exhaustive scan, no graph) | Exact top-k, ties aside; refused above `max_perfect_mode_vectors` |
 | `Custom { ef }` | caller-set | Fine-grained control |
 | `Adaptive { minEf, maxEf }` | two-phase | Starts low, doubles until the cap |

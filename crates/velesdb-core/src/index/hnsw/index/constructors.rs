@@ -210,7 +210,8 @@ impl HnswIndex {
     /// * `dimension` - Vector dimension
     /// * `metric` - Distance metric
     /// * `params` - Custom HNSW parameters
-    /// * `enable_vector_storage` - Whether to store vectors for re-ranking
+    /// * `enable_vector_storage` - Whether exact-distance features (re-ranking,
+    ///   brute force, vacuum) are on; the graph keeps its vectors either way
     ///
     /// # Errors
     ///

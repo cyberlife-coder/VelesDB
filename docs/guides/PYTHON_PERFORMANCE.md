@@ -143,8 +143,8 @@ sufficient. Use `accurate` or `perfect` only for offline evaluation.
 |---------|-------------------|--------|-----------------|
 | `"fast"` | 96 | ~95% | Lowest |
 | `"balanced"` | 160 | ~99.5% | Default |
-| `"accurate"` | 512 | ~100% | 4x slower than balanced |
-| `"perfect"` | 4 096 | 100% | Exhaustive — evaluation only |
+| `"accurate"` | 512 | 100% at 10K, 0.98 at 1M | 4x slower than balanced |
+| `"perfect"` | — (exhaustive scan) | exact top-k | Exhaustive — evaluation only; refused above `max_perfect_mode_vectors` |
 | `"autotune"` | Adaptive | ~95%+ | Scales with collection size |
 
 ```python

@@ -110,12 +110,13 @@ impl HnswIndex {
     /// distance, ties aside.
     ///
     /// Uses rayon-parallelized distance computation across all stored vectors.
-    /// Falls back to HNSW graph search when vector storage is disabled.
+    /// Falls back to HNSW graph search when the index's exact-distance
+    /// features are off (`enable_vector_storage = false`).
     ///
     /// # Performance
     ///
     /// O(n / cores) where n = number of vectors. Best for small indices
-    /// (<10k vectors) or when perfect recall is required.
+    /// (<10k vectors) or when the exact top-k is required.
     ///
     /// # Errors
     ///
@@ -128,7 +129,7 @@ impl HnswIndex {
     ) -> crate::error::Result<Vec<ScoredResult>> {
         self.validate_dimension(query)?;
 
-        // If vector storage is disabled, fall back to HNSW graph search.
+        // With exact-distance features off, fall back to HNSW graph search.
         // RF-DEDUP: reuse search_hnsw_only instead of duplicating neighbour mapping.
         // Issue #699 follow-up: ef_search_for_scale aligns this fallback with
         // HnswIndex::search_with_quality on >10K datasets. The Accurate intent
@@ -261,7 +262,7 @@ impl HnswIndex {
     /// # Performance
     ///
     /// O(n) where n = number of vectors. Best for small indices (<10k vectors)
-    /// or when perfect recall is required.
+    /// or when the exact top-k is required.
     ///
     /// # Errors
     ///

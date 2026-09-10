@@ -211,7 +211,7 @@ curl -X POST http://localhost:8080/v1/collections/demo/search \
 | `fast` | Low latency (~92% recall) |
 | `balanced` | Default (~99% recall) |
 | `accurate` | High precision (~99.5% recall) |
-| `perfect` | Exhaustive (100% recall) |
+| `perfect` | Exhaustive scan — the exact top-k |
 | `autotune` (aliases `auto`, `auto_tune`) | ef computed from collection size |
 | `custom:<ef>` | Fixed `ef_search`, e.g. `custom:256` |
 | `adaptive:<min>:<max>` | Two-phase adaptive, e.g. `adaptive:32:512` |

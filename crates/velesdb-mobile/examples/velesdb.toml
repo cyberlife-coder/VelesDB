@@ -32,7 +32,7 @@
 # fast | balanced | accurate | perfect
 #   fast      ef_search 96,   ~95% recall
 #   balanced  ef_search 160,  ~99.5% recall — the default
-#   accurate  ef_search 512,  ~100% recall
+#   accurate  ef_search 512,  100% recall at 10K, 0.98 at 1M
 #   perfect   per query only: as a global default it is applied as
 #             accurate, with a warning at load -- an exhaustive scan
 #             cannot be capped on every search path

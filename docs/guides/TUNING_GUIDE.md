@@ -219,8 +219,8 @@ parameter with dynamic scaling based on the requested result count `k`.
 |---------|---------------|---------|----------------|----------|
 | `Fast` | 96 | max(96, k*3) | ~95% | Real-time serving, low latency |
 | `Balanced` (default) | 160 | max(160, k*5) | ~99.5% | General purpose, production |
-| `Accurate` | 512 | max(512, k*16) | ~100% | Analytics, batch processing |
-| `Perfect` | — (exhaustive scan, no graph) | — | 100% by construction | Ground truth, evaluation; refused above `limits.max_perfect_mode_vectors` |
+| `Accurate` | 512 | max(512, k*16) | 100% at 10K, 0.98 at 1M | Analytics, batch processing |
+| `Perfect` | — (exhaustive scan, no graph) | — | exact top-k, ties aside | Ground truth, evaluation; refused above `limits.max_perfect_mode_vectors` |
 | `AutoTune` | size-aware | `auto_ef_range(count, dim, k)`; falls back to max(160, k*5) without collection info | ~99% | Hands-off default at any scale (see [AutoTune Mode](#autotune-mode-v172)) |
 | `Custom(n)` | n | n | Varies | Fine-grained control |
 | `Adaptive { min_ef, max_ef }` | min_ef | escalates to max_ef | 95%+ | Mixed workloads, latency-sensitive |

@@ -257,7 +257,7 @@ impl HnswIndex {
         ef_search: usize,
     ) -> Option<usize> {
         // Skip reranking for Adaptive or AutoTune quality (these handle
-        // their own exploration strategy) or if vector storage is disabled.
+        // their own exploration strategy) or with exact-distance features off.
         if matches!(
             quality,
             SearchQuality::Adaptive { .. } | SearchQuality::AutoTune

@@ -8,9 +8,10 @@
 //! The index supports different quality profiles for search:
 //! - `Fast`: `ef_search=96`, ~95% recall, lowest latency
 //! - `Balanced`: `ef_search=160`, ~99.5% recall, good tradeoff (default)
-//! - `Accurate`: `ef_search=512`, ~100% recall, high precision
-//! - `Perfect`: an exhaustive scan that leaves the graph, recall 1.0 by
-//!   construction and O(n). This type does not cap it; a collection refuses
+//! - `Accurate`: `ef_search=512`, 100% recall@10 at 10K points and 0.98 at 1M
+//!   on SIFT1M (`docs/BENCHMARKS.md`), high precision
+//! - `Perfect`: an exhaustive scan that leaves the graph, returning the
+//!   exact top-k under the index's own distance, ties aside, at O(n). This type does not cap it; a collection refuses
 //!   it above `limits.max_perfect_mode_vectors`
 //!
 //! # Recommended Parameters by Vector Dimension

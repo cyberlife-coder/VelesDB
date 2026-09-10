@@ -58,14 +58,15 @@ pub enum SearchMode {
     /// Balanced search with `ef_search=160`, ~99.5% recall (default).
     #[default]
     Balanced,
-    /// Accurate search with `ef_search=512`, ~100% recall.
+    /// Accurate search with `ef_search=512`: 100% recall@10 at 10K points,
+    /// 0.98 at 1M on SIFT1M (`docs/BENCHMARKS.md`).
     Accurate,
     /// The engine's highest-recall mode, and the one value of this enum that no
     /// `ef_search` number can express.
     ///
     /// Per query it maps, through `SearchMode::quality()`, to
     /// `SearchQuality::Perfect`: an exhaustive scan that leaves the graph,
-    /// recall 1.0 by construction at O(n) cost, refused on a collection larger
+    /// the exact top-k, ties aside, at O(n) cost, refused on a collection larger
     /// than `limits.max_perfect_mode_vectors`. As a GLOBAL default in `[search]`
     /// it is applied as `accurate`, with a warning at load, because one search
     /// path cannot enforce that cap.
