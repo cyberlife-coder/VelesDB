@@ -135,18 +135,21 @@ impl VelesConfig {
     /// It was refused outright until the seven-lens review (#2246): a file
     /// v6.0.0 loaded then failed `Database::open` -- a breaking change in a
     /// minor release, against this module's own rule that existing files keep
-    /// loading. The reason for refusing still holds and is still honoured. As a
-    /// GLOBAL default `Perfect` would reach `search_with_optional_bitmap`, which
-    /// returns `Vec<ScoredResult>` and cannot enforce
-    /// `limits.max_perfect_mode_vectors`, so the default never resolves to it.
-    /// Per query, `search_with_quality(Perfect)` stays available and capped.
+    /// loading. The default still never resolves to `Perfect`: a filtered
+    /// search's bitmap pre-filter never reads the configured quality — it
+    /// traverses the graph at its own ef — so a `perfect` default would be an
+    /// exhaustive scan on some queries and a graph search on others, with
+    /// nothing saying which. (It used to be argued that one path could not
+    /// refuse; since #2246 every path returns its error, and this is what
+    /// remains.) Per query, `search_with_quality(Perfect)` stays available and
+    /// capped.
     fn warn_perfect_global_default(&self) {
         if matches!(self.search.default_mode, crate::config::SearchMode::Perfect) {
             tracing::warn!(
-                "search.default_mode = \"perfect\" is applied as \"accurate\": an \
-                 exhaustive scan cannot be a global default, because one search \
-                 path cannot enforce limits.max_perfect_mode_vectors. Request \
-                 Perfect per query, where the cap applies."
+                "search.default_mode = \"perfect\" is applied as \"accurate\": a \
+                 filtered search's pre-filter never reads the configured quality, \
+                 so a global exhaustive scan would apply to some queries and not \
+                 others. Request Perfect per query, where it is exact and capped."
             );
         }
     }
@@ -237,6 +240,10 @@ impl VelesConfig {
     /// named in a TOML file. Split out of
     /// [`Self::warn_deprecated_storage_fields`] so the set is assertable —
     /// mirrors [`Self::inert_engine_entries`].
+    #[allow(
+        deprecated,
+        reason = "validation still reads the deprecated fields: range check and deprecation warning"
+    )]
     pub(crate) fn deprecated_storage_entries(&self) -> Vec<&'static str> {
         let default = crate::config::server::StorageConfig::default();
         let mut deprecated = Vec::new();
@@ -343,6 +350,10 @@ impl VelesConfig {
         range_check_upper("server.workers", self.server.workers, WORKERS_CAP)
     }
 
+    #[allow(
+        deprecated,
+        reason = "validation still reads the deprecated fields: range check and deprecation warning"
+    )]
     fn validate_storage(&self) -> Result<(), ConfigError> {
         let valid_modes = ["mmap", "memory"];
         if !valid_modes.contains(&self.storage.storage_mode.as_str()) {
