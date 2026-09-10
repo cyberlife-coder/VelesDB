@@ -21,14 +21,15 @@
 //!
 //! Everything outside those three conditions gets a copy of its own instead —
 //! a disposable arena file where the storage mode keeps one (SQ8, RaBitQ) and
-//! the filesystem can map it, the heap otherwise: v1 files written before #2213, big-endian targets,
-//! stores below the capacity floor, and any mapping the filesystem refuses. So
-//! does a store that meets all three but must be normalized — a cosine payload
-//! written before the engine normalized on insert: normalizing an adopted arena
-//! would rewrite `.vectors` on a mere open, so the payload is copied off it
-//! first (#2246). A disposable arena is a cache of something already
-//! persisted, which is what makes throwing it away free — `.vectors` remains
-//! the durable copy, and a reopened collection builds a fresh arena from it.
+//! the filesystem can map it, the heap otherwise: v1 files written before
+//! #2213, big-endian targets, stores below the capacity floor, and any mapping
+//! the filesystem refuses. So does a store that meets all three but must be
+//! normalized — a cosine payload written before the engine normalized on
+//! insert: normalizing an adopted arena would rewrite `.vectors` on a mere
+//! open, so the payload is copied off it first (#2246). A disposable arena is a
+//! cache of something already persisted, which is what makes throwing it away
+//! free — `.vectors` remains the durable copy, and a reopened collection builds
+//! a fresh arena from it.
 //!
 //! [`sweep_stale`](ArenaHome::sweep_stale) and
 //! [`is_arena_file`](ArenaHome::is_arena_file) therefore keep their subject.
