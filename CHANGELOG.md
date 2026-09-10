@@ -104,7 +104,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `retrieve_context_source` read ``behind a ctx://source/<hash> handle``. A
   Markdown renderer takes a bare placeholder for an HTML tag and drops it:
   rustdoc did so with the field doc's `<relation>`, and an MCP client
-  displaying the tool schema would with both. Both are code spans now,
+  displaying the tool schema would drop both. Both are code spans now,
   ``read as `from <relation> to` `` and `` `ctx://source/<hash>` ``. The
   descriptions ship in the tool schema clients receive; they are the sweep's
   only wire-visible changes.
