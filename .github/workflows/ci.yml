@@ -2083,12 +2083,20 @@ jobs:
                 exit 0
               fi
               if [ "${active:-0}" -eq 0 ]; then
-                echo "::error::no successful CI run exists for $HEAD_SHA (last verdict: ${verdict:-none}). This run skipped every gate because it was triggered by a description edit, so it has nothing to report. Re-run CI on this commit."
+                # "Re-run CI" was this message's advice and it does not work.
+                # Branch protection evaluates EVERY check-run carrying the
+                # required name on a commit, not the most recent one, so the
+                # failure this step is about to record keeps the pull request
+                # BLOCKED even after a green re-run lands beside it. Measured on
+                # #2243: two `CI Success` check-runs on one SHA, 23:18 failure
+                # and 23:54 success, `mergeStateStatus: BLOCKED` with no red
+                # check visible to `gh pr checks`. A new commit is the way out.
+                echo "::error::no successful CI run exists for $HEAD_SHA (last verdict: ${verdict:-none}). This run skipped every gate because it was triggered by a description edit, so it has nothing to report. Push a new commit -- re-running is not enough, because this failed check-run stays on $HEAD_SHA and branch protection reads all of them."
                 exit 1
               fi
             fi
             if [ "$SECONDS" -ge "$deadline" ]; then
-              echo "::error::still waiting on the real CI run for $HEAD_SHA after 40 minutes; refusing to report a verdict this run did not establish"
+              echo "::error::still waiting on the real CI run for $HEAD_SHA after 40 minutes; refusing to report a verdict this run did not establish. Push a new commit: this failed check-run stays on the commit and branch protection reads all of them, so a re-run alone will not unblock it."
               exit 1
             fi
             sleep 30
