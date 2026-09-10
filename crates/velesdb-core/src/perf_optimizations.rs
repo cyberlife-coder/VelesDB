@@ -182,7 +182,8 @@ impl ContiguousVectors {
         let layout = Self::layout(dimension, capacity)?;
 
         // SAFETY: `alloc_zeroed` requires a valid non-zero layout.
-        // - Condition 1: `dimension > 0` and `capacity >= 16` guarantee non-zero size.
+        // - Condition 1: `dimension > 0` and `capacity >= MIN_ARENA_CAPACITY` (floored
+        //   above) guarantee non-zero size.
         // - Condition 2: `layout` is built via `Layout::from_size_align` and therefore valid.
         // SAFETY: Zero-initialized allocation guarantees all f32 slots are 0.0,
         // preventing UB when `insert_at` creates sparse gaps (indices 0..N not all written).

@@ -20,8 +20,8 @@
 //! meet even by mistake.
 //!
 //! Everything outside those three conditions gets a copy of its own instead —
-//! a disposable arena file in the storage modes that keep one (SQ8, RaBitQ),
-//! the heap otherwise: v1 files written before #2213, big-endian targets,
+//! a disposable arena file where the storage mode keeps one (SQ8, RaBitQ) and
+//! the filesystem can map it, the heap otherwise: v1 files written before #2213, big-endian targets,
 //! stores below the capacity floor, and any mapping the filesystem refuses. So
 //! does a store that meets all three but must be normalized — a cosine payload
 //! written before the engine normalized on insert: normalizing an adopted arena
