@@ -17,7 +17,7 @@ fn make_index(dim: usize) -> HnswIndex {
 /// Creates a test `HnswIndex` with its exact-distance features off
 /// (`new_fast_insert`): graph inserts still store every vector, the direct
 /// writer places none.
-fn make_index_no_storage(dim: usize) -> HnswIndex {
+fn make_fast_insert_index(dim: usize) -> HnswIndex {
     HnswIndex::new_fast_insert(dim, DistanceMetric::Cosine).expect("test index creation")
 }
 
@@ -129,8 +129,8 @@ fn test_dimension_mismatch_returns_error() {
 }
 
 #[test]
-fn test_storage_bypass_when_disabled() {
-    let index = make_index_no_storage(3);
+fn test_direct_write_skipped_with_exact_distance_features_off() {
+    let index = make_fast_insert_index(3);
     let writer = DirectVectorWriter::new(&index);
     let v = [1.0_f32, 2.0, 3.0];
 
@@ -140,8 +140,8 @@ fn test_storage_bypass_when_disabled() {
     // Mapping exists
     assert!(index.mappings.get_idx(1).is_some());
 
-    // Direct contiguous write is skipped when exact-distance features are off — the
-    // deferred HNSW insert path populates the graph store instead.
+    // Direct contiguous write is skipped when exact-distance features are
+    // off — the deferred HNSW insert path populates the graph store instead.
     assert_eq!(contiguous_get(&index, results[0].idx), None);
 }
 
