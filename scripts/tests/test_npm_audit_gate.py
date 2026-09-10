@@ -391,7 +391,14 @@ class WiringTests(unittest.TestCase):
         day someone adds a ninth lockfile and forgets the matrix. The set is
         compared to what git tracks.
         """
-        unaudited = sorted(_tracked_lockfile_roots() - set(_matrix_paths()))
+        tracked = _tracked_lockfile_roots()
+        self.assertTrue(
+            tracked,
+            "git tracks no package-lock.json at all: the pathspec stopped matching, "
+            "and an empty set would make the difference below empty and this test "
+            "green while nothing is audited (#2246, P2-c)",
+        )
+        unaudited = sorted(tracked - set(_matrix_paths()))
         self.assertEqual(
             unaudited,
             [],

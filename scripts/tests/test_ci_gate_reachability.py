@@ -1584,6 +1584,27 @@ def ci_success_steps(text: str) -> "list[str]":
     return [("- name:" + s) for s in steps[1:]]
 
 
+def mirror_binding(text: str) -> "tuple[str | None, bool]":
+    """(the id the mirror step declares, whether `Check results` reads THAT id).
+
+    GitHub evaluates `steps.<unknown>.conclusion` to '' rather than failing, so
+    a reference that no longer matches the declared id silences the chain
+    instead of breaking it. Only reading the id from the mirror itself catches
+    the drift.
+    """
+    steps = ci_success_steps(text)
+    mirror = next((s for s in steps if NO_OP_EDIT_RE.search(s)), "")
+    declared = re.search(r"^\s*id:\s*([\w-]+)\s*$", mirror, re.M)
+    if declared is None:
+        return None, False
+    chain = next((s for s in steps if "Check results" in s), "")
+    bound = re.search(
+        rf"if:\s*steps\.{re.escape(declared.group(1))}\.conclusion\s*==\s*'skipped'",
+        chain,
+    )
+    return declared.group(1), bound is not None
+
+
 class NoOpEditCannotProduceAGreenCheckTests(unittest.TestCase):
     """`CI Success` never reports a verdict no execution produced.
 
@@ -1660,14 +1681,23 @@ class NoOpEditCannotProduceAGreenCheckTests(unittest.TestCase):
                 )
 
     def test_exactly_one_step_produces_the_verdict(self) -> None:
-        """The chain must stand down when the mirror ran, and only then."""
-        chain = next(s for s in self.steps if "Check results" in s)
-        self.assertRegex(
-            chain,
-            r"if:\s*steps\.\w+\.conclusion\s*==\s*'skipped'",
-            "the `Check results` step must be conditioned on the mirror having "
-            "skipped; unconditional, it asserts over skipped needs and turns every "
-            "description edit red",
+        """The chain stands down exactly when the MIRROR ran — bound by its id.
+
+        The first version matched `steps\.\w+\.conclusion`, any identifier.
+        Renaming the mirror's `id:` without its reference then made the
+        reference evaluate to '', so `Check results` never ran and `CI Success`
+        went green having read no `needs` result — #2232 reopened, with every
+        test in this class green (#2246, P2-a, shown by mutation). The id is now
+        read from the mirror step itself.
+        """
+        ident, bound = mirror_binding(self.ci)
+        self.assertIsNotNone(
+            ident, "the mirror step declares no `id:`, so nothing can reference its conclusion"
+        )
+        self.assertTrue(
+            bound,
+            f"`Check results` must be conditioned on `steps.{ident}.conclusion`, the id "
+            "the mirror declares; any other identifier evaluates to '' and silences the chain",
         )
 
     def test_the_two_conditions_are_exact_negations(self) -> None:
@@ -1691,6 +1721,7 @@ jobs:
     if: always()
     steps:
       - name: Mirror
+        id: mirror
         if: github.event.action == 'edited' && github.event.changes.base == null
         run: exit 1
       - name: Check results
@@ -1708,6 +1739,13 @@ jobs:
 
     def test_the_no_op_condition_is_recognised(self) -> None:
         self.assertRegex(ci_success_steps(self.SYNTHETIC)[0], NO_OP_EDIT_RE)
+
+    def test_the_binding_holds_when_the_ids_match(self) -> None:
+        self.assertEqual(mirror_binding(self.SYNTHETIC), ("mirror", True))
+
+    def test_a_renamed_mirror_id_breaks_the_binding(self) -> None:
+        renamed = self.SYNTHETIC.replace("id: mirror", "id: mirror_verdict")
+        self.assertEqual(mirror_binding(renamed), ("mirror_verdict", False))
 
     def test_a_missing_condition_is_detected(self) -> None:
         without = self.SYNTHETIC.replace(

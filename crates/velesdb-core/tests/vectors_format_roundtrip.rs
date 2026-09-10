@@ -198,8 +198,13 @@ fn digest(path: &Path) -> u64 {
 
 /// Creates a collection holding `ids`, then closes the database.
 fn seed(dir: &TempDir, ids: std::ops::Range<u64>, mode: StorageMode) {
+    seed_with(dir, ids, mode, DistanceMetric::Euclidean);
+}
+
+/// [`seed`], with the metric chosen by the caller.
+fn seed_with(dir: &TempDir, ids: std::ops::Range<u64>, mode: StorageMode, metric: DistanceMetric) {
     let db = Database::open(dir.path()).expect("test: open database");
-    db.create_vector_collection_with_options("docs", DIM, DistanceMetric::Euclidean, mode)
+    db.create_vector_collection_with_options("docs", DIM, metric, mode)
         .expect("test: create collection");
     let collection = db
         .get_vector_collection("docs")
@@ -279,11 +284,22 @@ fn a_corrupt_vectors_file_does_not_prevent_opening() {
 /// shipped: its migration resume proves a source store unchanged by hashing
 /// these very files, so a store that grew on open made a correct resume look
 /// like a corrupted one.
+///
+/// Run under Cosine as well as Euclidean since #2246 (P2-f). The load path
+/// renormalises a cosine collection's vectors in place, on an arena that IS the
+/// durable file once adopted. It writes nothing today only because the vectors
+/// were already normalised at insert; the cosine arms are what would notice if
+/// that stopped being true.
 #[test]
 fn opening_a_collection_never_writes_to_its_vectors_file() {
-    for count in [SMALL, ADOPTED] {
+    for (metric, count) in [
+        (DistanceMetric::Euclidean, SMALL),
+        (DistanceMetric::Euclidean, ADOPTED),
+        (DistanceMetric::Cosine, SMALL),
+        (DistanceMetric::Cosine, ADOPTED),
+    ] {
         let dir = TempDir::new().expect("test: tempdir");
-        seed(&dir, 0..count, StorageMode::Full);
+        seed_with(&dir, 0..count, StorageMode::Full, metric);
         let file = vectors_file(dir.path());
         let before = digest(&file);
 
@@ -295,14 +311,14 @@ fn opening_a_collection_never_writes_to_its_vectors_file() {
             assert_eq!(
                 collection.len(),
                 usize::try_from(count).expect("test: count fits a usize"),
-                "test: the fixture did not load at {count} points"
+                "test: the fixture did not load at {count} points under {metric:?}"
             );
         }
 
         assert_eq!(
             digest(&file),
             before,
-            "test: opening a collection wrote to its .vectors at {count} points"
+            "test: opening a collection wrote to its .vectors at {count} points under {metric:?}"
         );
     }
 }
