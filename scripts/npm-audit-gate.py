@@ -132,6 +132,8 @@ def audit_with_retries(
     """
     if attempts < 1:
         raise ValueError("attempts must be at least 1")
+    if not math.isfinite(backoff_seconds) or backoff_seconds < 0:
+        raise ValueError(f"backoff_seconds must be finite and at least 0, got {backoff_seconds}")
     delay = min(backoff_seconds, MAX_SECONDS)
     last: Unreachable | None = None
     for attempt in range(1, attempts + 1):
