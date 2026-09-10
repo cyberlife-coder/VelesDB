@@ -11,6 +11,8 @@
 //! A crash is simulated by copying the directory right after the save and
 //! opening the copy: what a process that died there leaves on disk.
 
+#![cfg(feature = "persistence")]
+
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use velesdb_core::collection::streaming::AsyncIndexBuilderConfig;
