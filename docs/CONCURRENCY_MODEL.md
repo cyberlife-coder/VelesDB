@@ -661,7 +661,7 @@ ensure no data is lost.
 │  3. reconcile_point_count()                                            │
 │     └─ Set config.point_count = storage.len() (authoritative source)   │
 │                                                                        │
-│  4. recover_index_state() — 3-pass reconciliation                      │
+│  4. recover_index_state() — reconciliation passes                      │
 │     ├─ Pass 1 (gap): recover_hnsw_gap                                  │
 │     │  ├─ Early exit: if storage.len() == hnsw.len() → no gap          │
 │     │  ├─ find_gap_ids: storage.ids() \ index.mappings                 │
@@ -670,6 +670,8 @@ ensure no data is lost.
 │     ├─ Pass 2 (orphans): ids in index.mappings \ storage → remove      │
 │     ├─ Pass 3 (stale): WAL-touched ids on both sides — re-upsert when  │
 │     │  the indexed vector ≠ storage (storage is the source of truth)   │
+│     ├─ Pass 4 (unlinked): mapped ids whose node has no layer-0 link    │
+│     │  (entry point exempt) — re-upsert onto a fresh, linked node      │
 │     └─ Any pass mutated the index → index.save() before open returns  │
 │        (the WAL was truncated; the delta has no other witness)         │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -705,14 +707,14 @@ This layer recovers vectors that were written to the WAL but not yet
 persisted to `vectors.idx` (the index file is only written by
 `flush_index()` or `flush_full()`, not by the fast `flush()` path).
 
-### Layer 2: HNSW 3-Pass Reconciliation
+### Layer 2: HNSW Reconciliation Passes
 
 **Module**: `crates/velesdb-core/src/collection/core/recovery.rs`
 
 After storage is fully reconstructed (Layer 1) and the persisted HNSW
 index is loaded (or an empty one built when the load fails),
-`Collection::open()` calls `run_crash_recovery()`, which runs three
-passes against the storage state:
+`Collection::open()` calls `run_crash_recovery()`, which runs the passes
+below against the storage state, in order:
 
 **Pass 1 — gap** (`recover_hnsw_gap`):
 
@@ -747,6 +749,15 @@ last HNSW save). An index loaded without sidecar vector storage cannot
 be compared — when WAL-touched ids overlap its mappings it is replaced
 by an empty index and fully rebuilt by pass 1
 (`rebuild_if_unverifiable`).
+
+**Pass 4 — unlinked** (`relink_unlinked_ids`): a mapping is not proof of
+graph membership. `upsert_bulk`'s V2 path maps each id and writes its
+vector at once, and leaves the graph insert to the `AsyncIndexBuilder`, so
+a save that races it persists mappings for nodes nothing links to (#2246).
+Every mapped id whose node has an empty layer-0 list — the entry point
+excepted, since a graph's first node has nothing to link to — is
+re-upserted onto a fresh, linked node, and its old slot is left behind as
+a tombstone.
 
 When any pass mutated the index, `Collection::open()` re-saves it
 before returning: the vector WAL was truncated during replay, so
@@ -853,7 +864,7 @@ never read or wrote it.
 **Why it was not wired, and was removed instead of activated:**
 
 - **Dead-in-core infrastructure.** Core recovery correctness is already
-  fully provided by the 3-pass reconciliation
+  fully provided by the reconciliation passes
   (`collection/core/recovery.rs`) against **storage as the single source of
   truth**. The delta WAL added nothing to correctness; the persisted graph
   load plus reconciliation is sufficient.

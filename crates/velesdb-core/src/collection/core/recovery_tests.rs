@@ -272,6 +272,11 @@ fn a_mapped_id_the_graph_never_linked_is_relinked_on_open() {
         usize::try_from(POINTS - 1).expect("test: fits a usize"),
         "the save must leave every mapped id but the entry point unlinked"
     );
+    let first_slot = saved.mappings.get_idx(0).expect("id 0 is mapped");
+    assert!(
+        !unlinked_before.contains(&first_slot),
+        "the one exempt node must be id 0's slot, the entry point"
+    );
     drop(saved);
 
     let reopened = Collection::open(snapshot).expect("open the snapshot");
@@ -286,8 +291,13 @@ fn a_mapped_id_the_graph_never_linked_is_relinked_on_open() {
         "{} mapped ids are still unlinked after open",
         unlinked.len()
     );
+    // A wide ef keeps the walk from stopping on a full result set, so a miss
+    // here points at linkage rather than a narrow beam; the check above is
+    // the structural guarantee, this one the end-to-end confirmation.
     for id in [0, POINTS / 2, POINTS - 1] {
-        let hits = reopened.search(&dispersed(id), 1).expect("search");
+        let hits = reopened
+            .search_with_ef(&dispersed(id), 1, 4 * POINTS as usize)
+            .expect("search");
         assert_eq!(
             hits.first().map(|hit| hit.point.id),
             Some(id),

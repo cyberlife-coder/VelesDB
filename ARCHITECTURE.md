@@ -150,7 +150,7 @@ A VelesDB database is **a directory**. Inside that directory:
   - `vectors.mmap` — the raw vector data, memory-mapped
   - `payload.db` — point payloads (JSON)
   - `wal.log` — append-only Write-Ahead Log for durability
-  - `index.hnsw` — serialized HNSW graph, reloaded at open (3-pass reconciliation against the vector store and WAL)
+  - `index.hnsw` — serialized HNSW graph, reloaded at open (reconciliation passes against the vector store and WAL)
   - `bm25/` — full-text inverted index (if enabled)
   - `secondary/` — typed column indexes
   - `snapshot.<gen>` — periodic snapshots for fast cold-start
