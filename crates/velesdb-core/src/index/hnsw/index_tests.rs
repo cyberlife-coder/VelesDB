@@ -3569,7 +3569,7 @@ fn adaptive_resume_is_deterministic_across_pool_reuse() {
 #[test]
 fn deletes_racing_a_renumber_stay_deleted() {
     use super::native_inner::Placed;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     use std::sync::Barrier;
 
     const IDS: usize = 4_000;
@@ -3582,29 +3582,37 @@ fn deletes_racing_a_renumber_stay_deleted() {
     let swap: Vec<usize> = (0..IDS).map(|slot| slot ^ 1).collect();
     let deleting = AtomicBool::new(true);
     let start = Barrier::new(2);
+    let rounds = AtomicU32::new(0);
     let mut unmapped = Vec::new();
+    let mut stalled = false;
     std::thread::scope(|scope| {
         scope.spawn(|| {
             start.wait();
-            let mut rounds = 0u32;
-            while deleting.load(Ordering::Acquire) || rounds % 2 == 1 {
+            while deleting.load(Ordering::Acquire) || rounds.load(Ordering::Acquire) % 2 == 1 {
                 let graph = index.inner.write();
                 index.mappings.remap_indices(&swap);
                 drop(graph);
-                rounds += 1;
+                rounds.fetch_add(1, Ordering::AcqRel);
                 std::thread::yield_now();
             }
         });
         start.wait();
         // Recorded, not asserted: a panic here would leave the renumbering
-        // thread looping, and the scope waiting on it for ever.
-        for id in (0..IDS as u64).step_by(2) {
+        // thread looping, and the scope waiting on it for ever. Every 200
+        // deletes wait for a renumber to finish, so the two interleave by
+        // construction rather than by scheduling luck.
+        for (n, id) in (0..IDS as u64).step_by(2).enumerate() {
+            if n % 200 == 0 && !a_round_passes(&rounds) {
+                stalled = true;
+                break;
+            }
             if !index.remove(id) {
                 unmapped.push(id);
             }
         }
         deleting.store(false, Ordering::Release);
     });
+    assert!(!stalled, "the renumbering thread stopped making rounds");
     assert!(
         unmapped.is_empty(),
         "ids found unmapped when removed: {unmapped:?}"
@@ -3632,4 +3640,16 @@ fn deletes_racing_a_renumber_stay_deleted() {
             .all(|(&slot, &id)| id % 2 == 1 && slot == id as usize),
         "a slot names a deleted id, or a kept id sits outside its own slot"
     );
+}
+
+/// Spins, yielding, until `rounds` moves past the value it holds now; `false`
+/// when it never does within the bound, so a stalled peer fails the test
+/// instead of hanging it.
+fn a_round_passes(rounds: &std::sync::atomic::AtomicU32) -> bool {
+    use std::sync::atomic::Ordering;
+    let seen = rounds.load(Ordering::Acquire);
+    (0..10_000_000).any(|_| {
+        std::thread::yield_now();
+        rounds.load(Ordering::Acquire) != seen
+    })
 }

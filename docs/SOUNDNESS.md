@@ -904,7 +904,7 @@ self.entry_point.store(node_id, Ordering::Release);
 
 ### HNSW Slot Allocation
 
-**Module**: `crates/velesdb-core/src/index/hnsw/sharded_mappings.rs`, `crates/velesdb-core/src/index/hnsw/native_inner.rs`, `crates/velesdb-core/src/index/hnsw/index/batch.rs`, `crates/velesdb-core/src/index/hnsw/direct_writer.rs`, `crates/velesdb-core/src/index/hnsw/upsert.rs`, `crates/velesdb-core/src/index/hnsw/index/mod.rs`
+**Module**: `crates/velesdb-core/src/index/hnsw/sharded_mappings.rs`, `crates/velesdb-core/src/index/hnsw/native_inner.rs`, `crates/velesdb-core/src/index/hnsw/index/batch.rs`, `crates/velesdb-core/src/index/hnsw/direct_writer.rs`, `crates/velesdb-core/src/index/hnsw/upsert.rs`, `crates/velesdb-core/src/index/hnsw/index/mod.rs`, `crates/velesdb-core/src/index/hnsw/native_index.rs`, `crates/velesdb-core/src/index/hnsw/index/vacuum.rs`
 
 A slot is an index into the graph's `ContiguousVectors`, and the arena is
 its only allocator: a slot exists once a vector has been pushed into it, and
@@ -945,12 +945,13 @@ together.
 **Invariant**: `remove` holds the index read guard across its two map
 writes: `soft_delete` borrows the graph, so releasing the guard first does
 not compile. A renumber re-maps under the write guard by snapshotting the
-forward map, clearing both maps and reinserting; run between the two writes,
-it would map a deleted id again, or erase the reverse entry of the id that
-took its slot. A delete made while `vacuum` rebuilds, before it takes the
+forward map, clearing both maps and reinserting: one overlapping a delete
+could map the deleted id again, and one between its two writes could erase
+the reverse entry of the id that took its slot. A delete made while `vacuum` rebuilds, before it takes the
 write guard, is still lost when it re-maps (#2262). As with `Placed`, the
-borrow ties the call to some graph's guard, not to this index's: each call
-site keeps an index's guard and its mappings together.
+borrow proves a borrow of some graph (through its guard, for an index's own),
+not that it is this index's graph: each call site keeps an index's guard and
+its mappings together.
 
 **Invariant**: a refused vector or batch maps nothing, so there is nothing
 to roll back. A batch the graph refuses part-way leaves the nodes it already
