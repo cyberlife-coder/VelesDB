@@ -24,7 +24,9 @@
 #   fast      ef_search 96,   ~95% recall
 #   balanced  ef_search 160,  ~99.5% recall — the default
 #   accurate  ef_search 512,  ~100% recall
-#   perfect   exhaustive brute force, 100% by construction, O(n)
+#   perfect   per query only: as a global default it is applied as
+#             accurate, with a warning at load -- an exhaustive scan
+#             cannot be capped on every search path
 default_mode = "balanced"
 
 # Hard cap on results per query. Allowed range: 1..=10000.
