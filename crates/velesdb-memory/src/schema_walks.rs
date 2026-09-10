@@ -197,14 +197,15 @@ fn rustdoc_link(after: &str) -> Option<(Cow<'_, str>, &str)> {
 
 /// An inline link, `inline` being the text after its `(`: shown as its label
 /// when the target is a Rust path. The target may be padded with spaces, and
-/// wrapped in `<…>` with spaces inside, as Markdown allows.
+/// wrapped in `<…>` with spaces inside but no line ending, as Markdown allows.
 fn inline_link<'a>(label: &'a str, inline: &'a str) -> Option<(Cow<'a, str>, &'a str)> {
     let end = closing_paren(inline)?;
     let target = inline[..end].trim();
-    let target = target
-        .strip_prefix('<')
-        .and_then(|t| t.strip_suffix('>'))
-        .map_or(target, str::trim);
+    let target = match target.strip_prefix('<').and_then(|t| t.strip_suffix('>')) {
+        Some(inner) if inner.contains(['\n', '\r']) => return None,
+        Some(inner) => inner.trim(),
+        None => target,
+    };
     is_rust_path(target).then(|| (Cow::Borrowed(label), &inline[end + 1..]))
 }
 

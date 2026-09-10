@@ -413,6 +413,7 @@ mod unlink {
             "[`value@`]",
             "an [`a<b c`] unbalanced",
             "a [`Vec<T>>`] stray",
+            "see [x](<\ncrate::y>) broken",
             "`decisions[fragment_index]` is unambiguous",
             "``a [`b`] c`` in a double-backtick span",
         ] {
@@ -445,7 +446,29 @@ mod unlink {
         .as_object()
         .cloned()
         .expect("test: an object");
+        // The guard's own walk over the same tree: it reads every description
+        // the rewrite reads, and none of the instance data it leaves.
+        let mut before = Vec::new();
+        collect_linked(&Value::Object(schema.clone()), "", &mut before);
+        before.sort();
+        assert_eq!(
+            before,
+            [
+                "/$defs/D/description",
+                "/additionalProperties/description",
+                "/anyOf/0/description",
+                "/description",
+                "/oneOf/0/description",
+                "/patternProperties/^x-/description",
+                "/properties/default/description",
+                "/properties/description/description",
+                "/properties/tags/items/description",
+            ]
+        );
         unlink_rustdoc_descriptions(&mut schema);
+        let mut after = Vec::new();
+        collect_linked(&Value::Object(schema.clone()), "", &mut after);
+        assert!(after.is_empty(), "the rewrite left {after:?}");
         assert_eq!(
             Value::Object(schema),
             json!({
