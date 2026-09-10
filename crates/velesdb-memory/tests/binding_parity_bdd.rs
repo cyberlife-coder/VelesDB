@@ -1294,8 +1294,9 @@ fn cut_parameter_list(region: &str, method: &str) -> String {
 /// (`/* */`) — so a snippet matched against it is matched against code only.
 ///
 /// String literals are kept whole: the `//` of an `"http://…"` inside code is
-/// not a comment. Not a lexer — a `'"'` char literal, a raw string holding
-/// `"` or ending in `\`, or a nested block comment (`/* a /* b */ … */`) would confuse it — but
+/// not a comment. Not a lexer — a quote char literal (`'"'`, `'\"'`, `b'"'`), a
+/// raw string holding `"` or with an odd run of `\` before its closing quote,
+/// or a nested block comment (`/* a /* b */ … */`) would confuse it — but
 /// the bindings this reads carry none of them near a relay, and [`a_whole_relay_quoted_in_a_comment_is_not_a_relay`] pins the
 /// forms that matter.
 fn without_comments(region: &str) -> String {
