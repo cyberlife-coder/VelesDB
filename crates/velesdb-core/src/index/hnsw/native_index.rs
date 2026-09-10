@@ -136,8 +136,9 @@ impl NativeHnswIndex {
         self.mappings.is_empty()
     }
 
-    /// Returns whether exact-distance features are on — `false` after
-    /// [`Self::new_fast_insert`]. The graph stores its vectors either way.
+    /// Returns whether exact-distance features are on — `false` for an index
+    /// built with [`Self::new_fast_insert`], or loaded from one. The graph stores
+    /// its vectors either way.
     #[inline]
     #[must_use]
     pub fn has_vector_storage(&self) -> bool {

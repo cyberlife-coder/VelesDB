@@ -45,7 +45,9 @@ impl HnswIndex {
     ///
     /// # Limitations
     ///
-    /// - No SIMD re-ranking support (`search_with_rerank` falls back to standard search)
+    /// - `search_with_quality` skips its two-stage re-rank; an explicit
+    ///   `search_with_rerank` or `search_with_rerank_quality` call still
+    ///   re-ranks, from the graph's stored vectors
     /// - No brute-force search (`search_brute_force` falls back to HNSW search)
     /// - Cannot `vacuum()` the index (returns error)
     ///
@@ -53,7 +55,6 @@ impl HnswIndex {
     ///
     /// - High-velocity streaming data
     /// - Large-scale indexing where recall is more important than perfect precision
-    /// - Memory-constrained environments
     ///
     /// # Errors
     ///
@@ -212,8 +213,9 @@ impl HnswIndex {
     /// * `dimension` - Vector dimension
     /// * `metric` - Distance metric
     /// * `params` - Custom HNSW parameters
-    /// * `enable_vector_storage` - Whether exact-distance features (re-ranking,
-    ///   brute force, vacuum) are on; the graph keeps its vectors either way
+    /// * `enable_vector_storage` - Whether exact-distance features
+    ///   (`search_with_quality`'s re-rank, brute force, vacuum) are on; the graph
+    ///   keeps its vectors either way
     ///
     /// # Errors
     ///

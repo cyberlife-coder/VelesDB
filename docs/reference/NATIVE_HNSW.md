@@ -89,10 +89,9 @@ let loaded = NativeHnswIndex::load("./my_index", 768, DistanceMetric::Cosine)?;
 | `insert_batch(&[(id, vec)])` | Batch insert |
 | `insert_batch_parallel(items)` | Parallel batch insert |
 | `search(query, k)` | Standard search (Balanced mode) |
-| `search_with_quality(query, k, quality)` | Search with quality preset (Fast/Balanced/Accurate/Perfect/Adaptive/AutoTune). On this type every preset walks the graph: `Perfect` at its large ef, `Adaptive` at its `min_ef` without escalating, `AutoTune` at Balanced's ef; `brute_force_search_parallel` is the exhaustive path |
-| `search_with_ef(query, k, ef_search)` | Search with explicit ef_search value |
-| `search_batch_parallel(queries, k, ef_search)` | Batch parallel search |
-| `brute_force_search_parallel(query, k)` | Exact search: the exact top-k under the index's distance; nothing after `new_fast_insert` |
+| `search_with_quality(query, k, quality)` | Search with quality preset (Fast/Balanced/Accurate/Perfect/Adaptive/AutoTune). On this type every preset walks the graph: `Perfect` at its large ef, `Adaptive` at `max(min_ef, k)` without escalating, `AutoTune` at Balanced's ef — each scaled up to 2x above 10K vectors by `ef_search_for_scale`; `brute_force_search_parallel` is the exhaustive path |
+| `search_batch_parallel(queries, k, quality)` | Batch parallel search, each query as `search_with_quality` |
+| `brute_force_search_parallel(query, k)` | Exact search: the exact top-k under the index's distance; nothing on an index built with `new_fast_insert` or loaded from one |
 | `remove(id)` | Remove vector |
 
 ### Persistence
@@ -438,7 +437,7 @@ The pipelined path produces **identical results** to the non-pipelined path. Onl
 
 ## AutoTune Search
 
-`SearchQuality::AutoTune` computes optimal `ef_search` range from collection statistics, then delegates to the adaptive two-phase search algorithm. This is the recommended quality setting for applications that want good recall without manual ef tuning.
+On an `HnswIndex` and on a collection, `SearchQuality::AutoTune` computes optimal `ef_search` range from collection statistics, then delegates to the adaptive two-phase search algorithm. `NativeHnswIndex::search_with_quality` does not: it walks the graph once at Balanced's ef (see Operations). This is the recommended quality setting for applications that want good recall without manual ef tuning.
 
 ### How It Works
 
@@ -461,6 +460,7 @@ The pipelined path produces **identical results** to the non-pipelined path. Onl
 ```rust
 use velesdb_core::SearchQuality;
 
+// `index` is an `HnswIndex`.
 let results = index.search_with_quality(&query, 10, SearchQuality::AutoTune);
 ```
 
@@ -492,7 +492,7 @@ POST /collections/documents/search
 | Fixed workload, known recall target | `Balanced` or `Accurate` with explicit `ef_search` |
 | Variable collection sizes, no tuning budget | **`AutoTune`** |
 | Latency-critical, recall > 90% acceptable | `Fast` |
-| Needs the exact top-k | `Perfect` on a collection, or on an `HnswIndex` whose exact-distance features are on (an exhaustive scan); `brute_force_search_parallel` on a `NativeHnswIndex` built with `new` |
+| Needs the exact top-k | `Perfect` on a collection, or on an `HnswIndex` whose exact-distance features are on (an exhaustive scan); `brute_force_search_parallel` on a `NativeHnswIndex` not built with `new_fast_insert` (nor loaded from one) |
 
 ## Benchmarks
 

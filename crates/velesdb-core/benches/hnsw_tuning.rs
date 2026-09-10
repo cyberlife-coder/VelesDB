@@ -73,11 +73,10 @@ fn calculate_recall(hnsw_results: &[ScoredResult], ground_truth: &[u64]) -> f64 
     }
 }
 
-/// Benchmark `ef_search` parameter sweep.
-/// Tests recall and latency at different `ef_search` values.
+/// Measures recall and latency of the default Balanced search.
 #[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
-fn bench_ef_search_sweep(c: &mut Criterion) {
-    let mut group = c.benchmark_group("ef_search_sweep");
+fn bench_default_search(c: &mut Criterion) {
+    let mut group = c.benchmark_group("default_search");
     group.sample_size(20);
 
     let dim = 128;
@@ -115,13 +114,12 @@ fn bench_ef_search_sweep(c: &mut Criterion) {
 
     // Test different ef_search values
     // Default search uses SearchQuality::Balanced
-    // Use search_with_quality() for custom ef_search values
     let defaults = HnswParams::auto(dim);
     println!(
         "\n🔍 Current configuration: M={}, ef_construction={}, Balanced ef_search={}\n",
         defaults.max_connections,
         defaults.ef_construction,
-        SearchQuality::Balanced.ef_search(k)
+        SearchQuality::Balanced.ef_search_for_scale(k, index.len())
     );
 
     // Measure recall with current settings
@@ -144,16 +142,16 @@ fn bench_ef_search_sweep(c: &mut Criterion) {
 
     group.finish();
 
-    // Print recommendation table
-    println!("\n📋 HNSW Tuning Recommendations by Vector Dimension:\n");
-    println!("┌─────────────┬─────────┬──────────────────┬────────────┐");
-    println!("│ Dimension   │ M       │ ef_construction  │ ef_search  │");
-    println!("├─────────────┼─────────┼──────────────────┼────────────┤");
-    println!("│ d ≤ 256     │ 12-16   │ 100-200          │ 64-128     │");
-    println!("│ 256 < d ≤768│ 16-24   │ 200-400          │ 128-256    │");
-    println!("│ d > 768     │ 24-32   │ 300-600          │ 256-512    │");
-    println!("└─────────────┴─────────┴──────────────────┴────────────┘");
-    println!("\n💡 Quality Profiles:");
+    // Defaults this crate derives, by dimension
+    println!("\n📋 `HnswParams::auto` by vector dimension:\n");
+    for d in [128, 768, 1536] {
+        let p = HnswParams::auto(d);
+        println!(
+            "   d = {d:>4}: M = {}, ef_construction = {}",
+            p.max_connections, p.ef_construction
+        );
+    }
+    println!("\n💡 Quality profiles (base ef_search at k = {k}):");
     println!(
         "   • fast:     ef_search={} (lower recall, faster)",
         SearchQuality::Fast.ef_search(k)
@@ -265,7 +263,7 @@ fn bench_scalability(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    bench_ef_search_sweep,
+    bench_default_search,
     bench_recall_at_k,
     bench_scalability
 );

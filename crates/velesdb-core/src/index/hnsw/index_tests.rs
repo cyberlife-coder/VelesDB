@@ -39,7 +39,7 @@ fn test_batch_search_matches_single_query_on_large_dataset_issue_694() {
     // asymmetry only manifests above the threshold.
     //
     // Why 40K + Fast quality: at 40K the scale factor is sqrt(4)=2 (capped),
-    // so Fast (base ef=64) becomes 128 with scaling — a 2x change. That gives
+    // so Fast's base ef doubles with scaling — a 2x change. That gives
     // the candidate set enough wiggle room for the unscaled batch path
     // (pre-fix) to return a different top-k from the scaled single-query path.
     // Below 10K or at smaller scale factors the effect is too small to
@@ -66,10 +66,10 @@ fn test_batch_search_matches_single_query_on_large_dataset_issue_694() {
     let query_refs: Vec<&[f32]> = queries.iter().map(Vec::as_slice).collect();
 
     let k = 10_usize;
-    // Fast, the lowest base ef, magnifies the asymmetry: the pre-fix batch
-    // path ran at the base ef while the single-query path scaled it with the
-    // index size. Higher bases (Balanced, Accurate) already saturate the
-    // candidate space and hide the bug.
+    // Fast, the lowest named preset on this path, magnifies the asymmetry:
+    // the pre-fix batch path ran at the base ef while the single-query path
+    // scaled it with the index size. Higher bases (Balanced, Accurate) already
+    // saturate the candidate space and hide the bug.
     let quality = SearchQuality::Fast;
 
     // Act: run both paths
@@ -92,9 +92,9 @@ fn test_batch_search_matches_single_query_on_large_dataset_issue_694() {
     // Assert: result IDs must match per-query.
     //
     // Pre-fix (issue #694): batch used ef_search(k), single used
-    // ef_search_for_scale(k, len). At n=12_000 the scale factor was sqrt(1.2)
-    // ≈ 1.095, so single saw ef * 1.09 (rounded) and batch saw ef * 1, giving
-    // mismatched candidate sets and divergent top-k.
+    // ef_search_for_scale(k, len). In the #694 report (n=12_000) the scale
+    // factor was sqrt(1.2) ≈ 1.095, so single saw ef * 1.09 (rounded) and batch
+    // saw ef * 1, giving mismatched candidate sets and divergent top-k.
     //
     // Post-fix: both paths call ef_search_for_scale(k, self.len()), so the
     // candidate sets are identical and the result lists are identical.
@@ -595,7 +595,7 @@ fn test_hnsw_snapshot_without_vectors_file_keeps_vector_features() {
 }
 
 #[test]
-fn test_hnsw_fast_insert_save_does_not_persist_vectors_file() {
+fn test_hnsw_fast_insert_flag_survives_save_load() {
     use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
@@ -3596,20 +3596,30 @@ fn adaptive_resume_is_deterministic_across_pool_reuse() {
 }
 
 /// Exact-distance features off turn brute force off on the GPU path too: it
-/// returns nothing rather than scan an index built with `new_fast_insert`.
+/// returns nothing rather than scan an index built with `new_fast_insert`. A
+/// twin built with `new` is the positive control; without a GPU adapter both
+/// return nothing, and the test says it proved nothing rather than pass on it.
 #[cfg(feature = "gpu")]
 #[test]
 fn gpu_brute_force_returns_nothing_with_exact_distance_features_off() {
     let index = HnswIndex::new_fast_insert(128, DistanceMetric::Cosine).unwrap();
+    let twin = HnswIndex::new(128, DistanceMetric::Cosine).unwrap();
     for i in 0u64..100 {
         let v: Vec<f32> = (0..128)
             .map(|j| ((i + j as u64) as f32 * 0.01).sin())
             .collect();
         index.insert(i, &v);
+        twin.insert(i, &v);
     }
     let query: Vec<f32> = (0..128).map(|j| (j as f32 * 0.02).cos()).collect();
 
+    let Some(scanned) = twin.search_brute_force_gpu(&query, 10).unwrap() else {
+        eprintln!("no GPU adapter: the exact-distance guard is not exercised here");
+        return;
+    };
+    assert_eq!(scanned.len(), 10);
     assert!(index.search_brute_force_gpu(&query, 10).unwrap().is_none());
+    // Below the GPU threshold the CPU scan answers, and returns nothing too.
     assert!(index
         .brute_force_search_parallel(&query, 10)
         .unwrap()

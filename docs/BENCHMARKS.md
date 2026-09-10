@@ -1,6 +1,6 @@
 # VelesDB Performance Benchmarks
 
-*Last updated: 2026-08-08 · Applies to: velesdb-core 6.0.0. Figures are re-validated at each release only when re-measured — each section carries its own measurement date and machine; this stamp tracks the document revision, not a fresh measurement.*
+*Last updated: 2026-09-10 · Applies to: velesdb-core 6.0.0. Figures are re-validated at each release only when re-measured — each section carries its own measurement date and machine; this stamp tracks the document revision, not a fresh measurement.*
 
 ---
 
@@ -173,11 +173,11 @@ The RRF fusion step is a simple score merge with no distance computation, so hyb
 | Balanced | 160 | 99.8% | 57 us |
 | Accurate | 512 | 100.0% | 130 us |
 | Perfect | exhaustive | 100.0% | 200 us |
-| Adaptive | 32–512 | 95%+ | ~15-40 us (easy queries) |
+| Adaptive | 32–512 | — | ~15-40 us (easy queries) |
 
-*Recall values from `recall_benchmark`'s recall report (10K random 128-D vectors, Cosine, an index built with `HnswParams::max_recall`: M=32, ef_construction=500; 100 queries, k=10), re-measured 2026-09-10 on 6.0.0 (Apple M5 Pro) at the current presets; two runs gave the same figures. Latencies were measured March 19, 2026, on the reference machine with the ef defaults of that time (Fast=64, Balanced=128), so the Fast and Balanced latencies are slightly optimistic until re-measured there. ef_search values are base values (scaled with k).*
+*Recall values from `recall_benchmark`'s recall report (10K random 128-D vectors, Cosine, an index built with `HnswParams::max_recall`: M=32, ef_construction=500; 100 queries, k=10), re-measured 2026-09-10 on 6.0.0 (Apple M5 Pro) at the current presets; two runs gave the same figures. That report has no Adaptive line, so the Adaptive row carries no recall. Latencies were measured March 19, 2026, on the reference machine with the ef defaults of that time (Fast=64, Balanced=128), so the Fast and Balanced latencies are slightly optimistic until re-measured there. ef_search values are base values (scaled with k).*
 
-Recall@10 >= 95% is the design target for Balanced mode and above, and is what we measure on the benchmark sets below — it is a measured target, not a hard guarantee, since HNSW is an approximate index. The new **Adaptive** mode starts with a low ef and escalates only for hard queries, achieving 2-4x faster median latency. Use `HnswParams::for_dataset_size()` for automatic parameter tuning.
+Recall@10 >= 95% is the design target for Balanced mode and above: the 10K table above measures Balanced at 99.8%, and at 1M §11.3 measures Accurate at 0.98 — a measured target, not a hard guarantee, since HNSW is an approximate index. The **Adaptive** mode starts with a low ef and escalates only for hard queries; its median-latency gain has no recorded measurement here. Use `HnswParams::for_dataset_size()` for automatic parameter tuning.
 
 ### Search Optimization Notes (v1.7.2)
 

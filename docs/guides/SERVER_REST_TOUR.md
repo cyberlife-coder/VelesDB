@@ -581,4 +581,4 @@ Numbers match the canonical contract in
 
 ---
 
-Last updated: 2026-08-08 · Applies to: velesdb-core 6.0.0
+Last updated: 2026-09-10 · Applies to: velesdb-core 6.0.0

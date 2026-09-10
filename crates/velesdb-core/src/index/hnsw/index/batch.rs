@@ -165,8 +165,8 @@ impl HnswIndex {
 
     /// Performs batch search for multiple queries in parallel.
     ///
-    /// `Perfect`, `Adaptive`, `AutoTune`, and an index of at most 100 vectors
-    /// whose exact-distance features are on, run [`Self::search_with_quality`]
+    /// `Perfect`, `Adaptive`, `AutoTune`, and a non-empty index of at most 100
+    /// vectors whose exact-distance features are on, run [`Self::search_with_quality`]
     /// per query. Otherwise, when the quality calls for two-stage reranking and
     /// the index's exact-distance features are on, the method runs HNSW search
     /// for all queries (rayon), then reranks each query's candidates on GPU or
@@ -338,7 +338,8 @@ impl HnswIndex {
     /// Delegates to `search_brute_force_gpu_inner` without the 100K threshold
     /// gate, so tests can exercise the GPU path with smaller datasets.
     ///
-    /// Returns `None` if GPU is unavailable.
+    /// Returns `None` if GPU is unavailable, or the index's exact-distance
+    /// features are off.
     #[cfg(all(test, feature = "gpu"))]
     #[must_use]
     pub(crate) fn brute_force_search_gpu_dispatch(

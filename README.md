@@ -203,6 +203,8 @@ No figure here is an estimate from a slide; each links to the log or script in t
 | Balanced (default) | 160 | 99.8% | Production search, RAG pipelines |
 | Accurate | 512 | 100% | Evaluation, ground truth comparison |
 
+*`ef_search` is each preset's base value, used as-is for k ≤ 32 on up to 10K vectors; `ef_search_for_scale` raises it beyond. Recall@10: `recall_benchmark`, 10K/128D, 2026-09-10 on Apple M5 Pro.*
+
 **Distance metrics** — 5 with SIMD acceleration (AVX-512, AVX2, NEON), at 768D/AVX2 on hot cache: Cosine 33 ns · Euclidean 20 ns · Dot Product 22 ns · Hamming 36 ns · Jaccard 35 ns.
 
 **ColumnStore** — typed columnar filtering, **130x faster** than JSON scanning at 100K rows on the i9-14900KF reference (`JSON scan 3.84 ms → ColumnStore 29.5 us`). The ratio is hardware-dependent: on Apple Silicon (M5 Pro, 2026-07-20) the JSON scan itself runs ~2.8× faster, so the same bench measures ~50–105x while the ColumnStore's absolute time holds (~27 µs).

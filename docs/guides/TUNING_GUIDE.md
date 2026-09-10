@@ -634,4 +634,4 @@ against your own baseline.
 
 ---
 
-*VelesDB Documentation -- Last updated: 2026-08-08 · Applies to: velesdb-core 6.0.0*
+*VelesDB Documentation -- Last updated: 2026-09-10 · Applies to: velesdb-core 6.0.0*

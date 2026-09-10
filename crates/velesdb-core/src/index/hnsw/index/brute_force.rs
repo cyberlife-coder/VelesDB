@@ -1,7 +1,8 @@
 //! Brute-force and GPU-accelerated search methods for HNSW index.
 //!
 //! Extracted from `search.rs` for single-responsibility:
-//! - `search_brute_force`: SIMD-optimized exact search for small indices
+//! - `search_brute_force`: SIMD-optimized exact search for small indices, or a
+//!   graph search when exact-distance features are off
 //! - `search_brute_force_gpu`: GPU-accelerated search via wgpu
 //! - `search_brute_force_buffered`: Buffer-reuse variant
 
@@ -184,7 +185,13 @@ impl HnswIndex {
     /// Separated from `search_brute_force_gpu` to keep the `#[cfg]` blocks
     /// minimal and the logic testable.
     ///
-    /// RF-DEDUP: `pub(crate)` so `batch.rs` can reuse this for
+    /// Returns `None` when the index's exact-distance features are off (the one
+    /// guard every GPU brute-force path goes through), when no GPU adapter
+    /// exists, when the index is empty, or when the GPU result does not match
+    /// the snapshot.
+    ///
+    /// RF-DEDUP: `pub(crate)` so `batch.rs` reuses it for
+    /// `brute_force_search_parallel` and the test-only
     /// `brute_force_search_gpu_dispatch` instead of duplicating the logic.
     #[cfg(feature = "gpu")]
     pub(crate) fn search_brute_force_gpu_inner(

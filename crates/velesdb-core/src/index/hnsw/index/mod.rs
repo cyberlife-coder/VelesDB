@@ -93,8 +93,8 @@ pub struct HnswIndex {
     pub(crate) inner: RwLock<ManuallyDrop<HnswInner>>,
     /// ID mappings (external ID <-> internal index) - lock-free via `DashMap` (EPIC-A.1)
     pub(crate) mappings: ShardedMappings,
-    /// Whether exact-distance features (SIMD re-ranking, brute-force search,
-    /// vacuum) are enabled.
+    /// Whether exact-distance features (`search_with_quality`'s SIMD re-rank,
+    /// brute-force search, vacuum) are enabled.
     ///
     /// Vectors always live once, in the graph's `ContiguousVectors` (the
     /// former `ShardedVectors` sidecar was removed — PERF1). This flag is

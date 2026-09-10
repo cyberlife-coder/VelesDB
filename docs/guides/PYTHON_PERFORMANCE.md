@@ -144,9 +144,9 @@ sufficient. Use `accurate` or `perfect` only for offline evaluation.
 |---------|-------------------|--------|-----------------|
 | `"fast"` | 96 | 97.4%* | Lowest |
 | `"balanced"` | 160 | 99.8%* | Default |
-| `"accurate"` | 512 | 100%*; 0.98 on SIFT1M's 1M | ~2x slower than balanced (130 vs 57 µs p50 in BENCHMARKS.md) |
+| `"accurate"` | 512 | 100%*; 0.98 on SIFT1M's 1M | ~2x slower than balanced in BENCHMARKS.md's native index-level p50s (130 vs 57 µs, March 2026, Balanced then at ef 128) |
 | `"perfect"` | — (exhaustive scan) | exact top-k | Exhaustive — evaluation only; refused above `max_perfect_mode_vectors` |
-| `"autotune"` | Adaptive | ~95%+ | Scales with collection size |
+| `"autotune"` | Adaptive | — | Scales with collection size |
 
 \* Recall@10 in `recall_benchmark` (10K random 128-D vectors, an index built with `HnswParams::max_recall`, 100 queries), measured 2026-09-10 on 6.0.0; see [BENCHMARKS.md](../BENCHMARKS.md#hnsw-recall-profiles-10k128d).
 
@@ -460,4 +460,4 @@ See also: [TUNING_GUIDE.md](TUNING_GUIDE.md) for HNSW parameter tuning and
 
 ---
 
-Last updated: 2026-08-08 · Applies to: velesdb-core 6.0.0
+Last updated: 2026-09-10 · Applies to: velesdb-core 6.0.0
