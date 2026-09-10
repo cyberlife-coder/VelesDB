@@ -46,13 +46,17 @@ To point at a file anywhere else, pass it explicitly:
 | `velesdb` (CLI) | `--config <path>` (global — REPL and every one-shot command) | `VELESDB_CONFIG` |
 
 > **What the engine actually applies.** `[limits]` is enforced at the
-> collection and ingest boundaries, and `[hnsw]`'s `m` / `ef_construction`
+> collection and ingest boundaries, `[hnsw]`'s `m` / `ef_construction`
 > are applied when a collection's index is created (see the precedence chain
-> under [Section \[hnsw\]](#section-hnsw)). Everything else below is parsed
-> and validated but **not** wired: `[search]`, `[quantization]`,
-> `hnsw.max_layers` and `storage.storage_mode` — each still pending its own
-> wiring decision (issue #2087). Setting any of these away from its default
-> logs a warning at load, naming exactly what is inert. Three more
+> under [Section \[hnsw\]](#section-hnsw)), and `[search]`'s `default_mode` /
+> `ef_search` set the quality of every search that does not name its own
+> (issue #2087 — `default_mode = "perfect"` is applied as `accurate`, with a
+> warning: an exhaustive scan cannot be a global default). Everything else
+> below is parsed and validated but **not** wired: `search.max_results`,
+> `search.query_timeout_ms`, `[quantization]`, `hnsw.max_layers` and
+> `storage.storage_mode` — each still pending its own decision. Setting any of
+> these away from its default logs a warning at load, naming exactly what is
+> inert. Three more
 > `[storage]` fields — `data_dir`, `mmap_cache_mb`, `vector_alignment` — are
 > not pending anything: no engine counterpart exists to wire them to, so
 > they are **deprecated** instead (their own warning, same treatment as
@@ -141,6 +145,8 @@ data_dir = "./data"
 [search]
 # Mode de recherche par défaut
 # Valeurs: "fast" | "balanced" | "accurate" | "perfect"
+# Note: "perfect" as a GLOBAL default is applied as "accurate", with a
+# warning at load -- request Perfect per query, where the cap applies.
 # Default: "balanced"
 default_mode = "balanced"
 
