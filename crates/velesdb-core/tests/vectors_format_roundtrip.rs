@@ -38,9 +38,9 @@
 //! 3. **The grown arena was adopted, not copied.** Without this the file above
 //!    could be exercising the copy path on both sides and prove nothing about
 //!    mapping. The witness is public even though `backing_path` is not: an
-//!    adopted arena doubles its capacity when it grows, so the file ends up
-//!    larger than the payload it declares, while the copy path writes an exact
-//!    fit.
+//!    adopted arena grows its capacity by an eighth, past a batch smaller than
+//!    that, so the file ends up larger than the payload it declares, while the
+//!    copy path writes an exact fit.
 //! 4. **A disposable arena's owner never deletes the durable store.** Run under
 //!    `StorageMode::SQ8`, because `Full` never constructs an `ArenaHome` at all
 //!    and the assertion would pass without ever reaching the hazard.
@@ -60,6 +60,11 @@ use velesdb_core::{Database, DistanceMetric, Point, StorageMode};
 /// assertion below refuses any version but 2, so a format that moves this
 /// offset makes these tests fail loudly rather than read the wrong bytes.
 const DATA_OFFSET: u64 = 4096;
+/// Header length of every `.vectors` version — version `u32`, count `u64`,
+/// dimension `u32` — mirrored from `graph_io.rs` for the same reason.
+const HEADER_BYTES: usize = 16;
+/// Width of one stored value: the payload is little-endian `f32`.
+const VALUE_BYTES: usize = std::mem::size_of::<f32>();
 const DIM: usize = 8;
 
 /// Comfortably above the arena capacity floor, so adoption applies.
@@ -67,18 +72,21 @@ const ADOPTED: u64 = 64;
 /// Comfortably below it, so the copy path applies.
 const SMALL: u64 = 5;
 /// Enough new points to force the mapping to grow past its persisted capacity.
-const EXTRA: u64 = 32;
+const EXTRA: u64 = 4;
 
 // The size witness below reads "the file is larger than the payload it
-// declares". Capacity doubles on growth, so that holds only while the doubled
-// capacity OVERSHOOTS the final count: at EXTRA == ADOPTED the arena lands on
-// exactly 2x, and the witness would report "copied" on an arena that was in
-// fact adopted - a false negative carrying a confident message. The constraint
-// lives here, where changing a constant trips it, rather than in a sentence
-// nobody re-reads.
+// declares". A file-backed arena grows to `max(needed, capacity + capacity / 8)`
+// (#2246). Below that first eighth, the grown capacity OVERSHOOTS the final
+// count whether the upsert reserves its batch at once or grows push by push, as
+// this test's does. From the eighth on it can land exactly on the count —
+// always under a batch reservation, and push by push whenever the count is a
+// growth step (72 here, at EXTRA == ADOPTED / 8) — and the witness would then
+// report "copied" on an arena that was in fact adopted: a false negative with a
+// confident message. The constraint lives here, where changing a constant trips
+// it, rather than in a sentence nobody re-reads.
 const _: () = assert!(
-    EXTRA < ADOPTED,
-    "the adoption witness needs the doubled capacity to overshoot the final count"
+    EXTRA < ADOPTED / 8,
+    "the adoption witness needs the grown capacity to overshoot the final count"
 );
 
 fn make_vector(id: u64) -> Vec<f32> {
@@ -134,7 +142,7 @@ fn header(path: &Path) -> (u64, u32) {
     let version = u32::from_le_bytes(bytes[0..4].try_into().expect("test: 4 bytes"));
     assert_eq!(version, 2, "test: these assertions decode v2 only");
     let count = u64::from_le_bytes(bytes[4..12].try_into().expect("test: 8 bytes"));
-    let dimension = u32::from_le_bytes(bytes[12..16].try_into().expect("test: 4 bytes"));
+    let dimension = u32::from_le_bytes(bytes[12..HEADER_BYTES].try_into().expect("test: 4 bytes"));
     (count, dimension)
 }
 
@@ -149,7 +157,7 @@ fn payload(path: &Path) -> Vec<Vec<f32>> {
     let dim = dimension as usize;
     let base = usize::try_from(DATA_OFFSET).expect("test: offset fits a usize");
     let stored = usize::try_from(count).expect("test: count fits a usize");
-    let needed = base + stored * dim * 4;
+    let needed = base + stored * dim * VALUE_BYTES;
     assert!(
         bytes.len() >= needed,
         "test: file holds {} bytes but its header declares {needed}",
@@ -159,8 +167,12 @@ fn payload(path: &Path) -> Vec<Vec<f32>> {
         .map(|v| {
             (0..dim)
                 .map(|k| {
-                    let at = base + (v * dim + k) * 4;
-                    f32::from_le_bytes(bytes[at..at + 4].try_into().expect("test: 4 bytes"))
+                    let at = base + (v * dim + k) * VALUE_BYTES;
+                    f32::from_le_bytes(
+                        bytes[at..at + VALUE_BYTES]
+                            .try_into()
+                            .expect("test: 4 bytes"),
+                    )
                 })
                 .collect()
         })
@@ -240,7 +252,7 @@ fn a_corrupt_vectors_file_does_not_prevent_opening() {
         }),
         ("header only", |p| {
             let bytes = std::fs::read(p).expect("test: read");
-            std::fs::write(p, &bytes[..16]).expect("test: truncate");
+            std::fs::write(p, &bytes[..HEADER_BYTES]).expect("test: truncate");
         }),
         ("absent", |p| std::fs::remove_file(p).expect("test: remove")),
     ];
@@ -355,9 +367,10 @@ fn growing_an_adopted_arena_persists_every_vector_to_the_file() {
 ///
 /// Without this, the test above could be exercising the copy path on both sides
 /// and would prove nothing about mapping. `backing_path` is `pub(crate)` and
-/// out of reach here, but the consequence is public: an adopted arena doubles
-/// its capacity when it grows, so the file ends up **larger** than the payload
-/// it declares. The copy path writes an exact fit.
+/// out of reach here, but the consequence is public: an adopted arena grows its
+/// capacity by an eighth — past `EXTRA`, which is kept below that eighth — so
+/// the file ends up **larger** than the payload it declares. The copy path
+/// writes an exact fit.
 #[test]
 fn a_grown_arena_was_adopted_rather_than_copied() {
     let dir = TempDir::new().expect("test: tempdir");
@@ -376,7 +389,8 @@ fn a_grown_arena_was_adopted_rather_than_copied() {
     }
 
     let (count, dimension) = header(&file);
-    let exact_fit = DATA_OFFSET + count * u64::from(dimension) * 4;
+    let value_bytes = u64::try_from(VALUE_BYTES).expect("test: a value width fits u64");
+    let exact_fit = DATA_OFFSET + count * u64::from(dimension) * value_bytes;
     let actual = std::fs::metadata(&file).expect("test: stat").len();
     assert!(
         actual > exact_fit,

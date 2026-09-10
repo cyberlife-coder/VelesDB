@@ -815,6 +815,17 @@ impl NativeHnswInner {
             HnswBackend::Sq8(sq8) => sq8.inner.with_vectors_write(f),
         }
     }
+
+    /// Whether the arena holds cosine vectors unit-norm — see
+    /// `NativeHnsw::stores_unit_norm`. A writer filling the arena outside the
+    /// graph's insert path must normalize when this is true.
+    pub(crate) fn stores_unit_norm(&self) -> bool {
+        match &self.backend {
+            HnswBackend::Standard(hnsw) => hnsw.stores_unit_norm(),
+            HnswBackend::RaBitQ(rabitq) => rabitq.inner.stores_unit_norm(),
+            HnswBackend::Sq8(sq8) => sq8.inner.stores_unit_norm(),
+        }
+    }
 }
 
 // ============================================================================

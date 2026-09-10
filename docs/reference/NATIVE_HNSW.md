@@ -109,7 +109,8 @@ let loaded = NativeHnswIndex::load("./my_index", 768, DistanceMetric::Cosine)?;
 | 0..4 | format version, `u32` LE |
 | 4..12 | vector count, `u64` LE |
 | 12..16 | dimension, `u32` LE |
-| 16..*data_offset* | reserved, zero-filled (v2 only) |
+| 16 | flags (v2 only): bit 0 set = every vector is unit-norm cosine, written by a pre-normalized engine, so a load skips the norm check; 0 in files written before the flag (#2246) |
+| 17..*data_offset* | reserved, zero-filled (v2 only) |
 | *data_offset*.. | `count * dimension` values, `f32` LE |
 
 `data_offset` is **16 in v1** and **4096 in v2**. Both versions are read; only

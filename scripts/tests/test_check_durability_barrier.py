@@ -12,6 +12,9 @@ Pins the guard's shape:
 * the baseline only shrinks: an exempted file that gained ``sync_all``, or
   that no longer calls ``File::create``, is refused until its line is
   deleted;
+* comments are not code: ``File::create`` named only in a comment is no
+  call, ``sync_all`` named only in a comment is no barrier, and neither a
+  ``//`` inside a string nor a ``'"'`` char literal hides a real call;
 * the excluded forms — ``*_tests.rs``, ``tests.rs``, anything under
   ``tests/`` or ``benches/``, and code after an inline ``#[cfg(test)] mod``
   marker — stay out of the scan.
@@ -117,6 +120,39 @@ class ShrinkOnlyBaseline(FixtureMixin, unittest.TestCase):
         problems = self._check()
         self.assertEqual(len(problems), 1)
         self.assertIn("no longer calls", problems[0])
+
+
+class CommentsAreNotCode(FixtureMixin, unittest.TestCase):
+    def test_file_create_named_only_in_comments_is_not_a_call(self) -> None:
+        self._write(
+            "crates/a/src/adopt.rs",
+            "/// `File::create` would truncate the mapped bytes.\n"
+            "/* nor /* nested */ File::create */\n"
+            "pub fn rewrite() {} // unlike File::create\n",
+        )
+        self.assertEqual(self._check(), [])
+
+    def test_sync_all_named_only_in_a_comment_is_not_a_barrier(self) -> None:
+        self._write("crates/a/src/writer.rs", CREATE_NO_SYNC + "// then sync_all, one day\n")
+        problems = self._check()
+        self.assertEqual(len(problems), 1)
+        self.assertIn("contains no sync_all", problems[0])
+
+    def test_slashes_inside_a_string_do_not_hide_the_call(self) -> None:
+        self._write(
+            "crates/a/src/writer.rs",
+            'pub fn w(p: &std::path::Path) { let _u = "http://x"; '
+            "let _ = std::fs::File::create(p); }\n",
+        )
+        self.assertEqual(len(self._check()), 1)
+
+    def test_a_quote_char_literal_does_not_hide_the_call(self) -> None:
+        self._write(
+            "crates/a/src/writer.rs",
+            "pub fn w(p: &std::path::Path) { let _q = '\"'; let _s = \"//\"; "
+            "let _ = std::fs::File::create(p); }\n",
+        )
+        self.assertEqual(len(self._check()), 1)
 
 
 class Exclusions(FixtureMixin, unittest.TestCase):

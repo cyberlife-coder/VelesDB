@@ -81,6 +81,10 @@ impl<'a> DirectVectorWriter<'a> {
         results: &[UpsertResult],
     ) -> crate::error::Result<()> {
         let inner = self.hnsw_index.inner.read();
+        // A pre-normalized engine keeps its arena's cosine vectors unit-norm,
+        // and `.vectors` declares it; a raw slot written here would make that
+        // declaration false (#2246). The graph insert path normalizes the same way.
+        let unit_norm = inner.stores_unit_norm();
         inner.with_contiguous_vectors_mut(|storage| {
             // Ensure capacity for all new vectors.
             let max_idx = results.iter().map(|r| r.idx).max().unwrap_or(0);
@@ -94,8 +98,16 @@ impl<'a> DirectVectorWriter<'a> {
             })?;
             storage.ensure_capacity(required)?;
 
+            let mut unit = Vec::new();
             for ((_, vector), result) in vectors.iter().zip(results.iter()) {
-                storage.insert_at(result.idx, vector)?;
+                if unit_norm {
+                    unit.clear();
+                    unit.extend_from_slice(vector);
+                    crate::simd_native::normalize_inplace_native(&mut unit);
+                    storage.insert_at(result.idx, &unit)?;
+                } else {
+                    storage.insert_at(result.idx, vector)?;
+                }
             }
             Ok(())
         })

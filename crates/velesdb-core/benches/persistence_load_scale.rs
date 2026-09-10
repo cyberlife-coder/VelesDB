@@ -142,16 +142,18 @@ fn query_seed(nodes: usize, i: usize) -> u64 {
     (nodes + i) as u64
 }
 
-/// Metric used throughout. Euclidean rather than cosine on purpose: the cosine
-/// load path re-normalizes vectors outside its epsilon gate, which is work this
-/// benchmark is not trying to time.
-const METRIC: DistanceMetric = DistanceMetric::Euclidean;
+/// Both metrics, because they did not load alike. Cosine is the embeddings case,
+/// and until #2246 its load checked every vector's norm — reading every page of
+/// an adopted mapping inside `load`, the very cost a mapped load exists to
+/// defer. Timing Euclidean alone hid that. A payload whose header declares it
+/// unit-norm is now skipped, and comparing the two arms is how that is seen.
+const METRICS: [DistanceMetric; 2] = [DistanceMetric::Euclidean, DistanceMetric::Cosine];
 
 /// Generates a random-ish vector, matching `hnsw_benchmark`'s generator.
 ///
 /// The *inputs* match across this repository's benchmarks; the persisted bytes
 /// do not match `persistence_save_scale`'s, which builds in `Cosine` and so
-/// stores normalized vectors where this file stores raw ones. Same kind of
+/// stores normalized vectors where this file's Euclidean arm stores raw ones. Same kind of
 /// data, different arena contents — do not read a byte count from one file
 /// into the other's numbers.
 fn generate_vector(dim: usize, seed: u64) -> Vec<f32> {
@@ -180,8 +182,8 @@ fn dimensions() -> Vec<usize> {
 /// The directory outlives the returned value's use by being handed back: a
 /// `TempDir` deletes its contents on drop, and a load benchmark whose fixture
 /// vanished measures an error path.
-fn persisted_index(nodes: usize, dimension: usize) -> TempDir {
-    let index = HnswIndex::new(dimension, METRIC).expect("bench: index");
+fn persisted_index(nodes: usize, dimension: usize, metric: DistanceMetric) -> TempDir {
+    let index = HnswIndex::new(dimension, metric).expect("bench: index");
     for i in 0..nodes as u64 {
         index.insert(i, &generate_vector(dimension, i));
     }
@@ -203,24 +205,30 @@ fn bench_load(c: &mut Criterion) {
     group.sample_size(10);
 
     for dim in dimensions() {
-        let fixture = persisted_index(nodes, dim);
-        println!(
-            "  [{nodes} nodes x {dim}d] vector payload {:.1} MiB — load only; on a mapped \
+        for metric in METRICS {
+            let fixture = persisted_index(nodes, dim, metric);
+            println!(
+            "  [{nodes} nodes x {dim}d, {metric:?}] vector payload {:.1} MiB — load only; on a mapped \
              load the pages have NOT been read yet, so read this next to hnsw_load_then_query \
              and never on its own",
             payload_mib(nodes, dim)
         );
-        group.bench_with_input(BenchmarkId::new("load", dim), &dim, |b, _| {
-            b.iter(|| {
-                let index = HnswIndex::load(fixture.path(), dim, METRIC).expect("bench: load");
-                // Asserted, not merely read: a fixture that loaded zero vectors
-                // would otherwise time as a very fast load.
-                assert_eq!(index.len(), nodes, "bench: fixture did not load");
-                black_box(index.len())
-            });
-        });
+            group.bench_with_input(
+                BenchmarkId::new(format!("load/{metric:?}"), dim),
+                &dim,
+                |b, _| {
+                    b.iter(|| {
+                        let index =
+                            HnswIndex::load(fixture.path(), dim, metric).expect("bench: load");
+                        // Asserted, not merely read: a fixture that loaded zero vectors
+                        // would otherwise time as a very fast load.
+                        assert_eq!(index.len(), nodes, "bench: fixture did not load");
+                        black_box(index.len())
+                    });
+                },
+            );
+        }
     }
-
     group.finish();
 }
 
@@ -232,33 +240,39 @@ fn bench_load_then_query(c: &mut Criterion) {
     group.sample_size(10);
 
     for dim in dimensions() {
-        let fixture = persisted_index(nodes, dim);
-        let queries: Vec<Vec<f32>> = (0..QUERIES)
-            .map(|i| generate_vector(dim, query_seed(nodes, i)))
-            .collect();
-        println!(
-            "  [{nodes} nodes x {dim}d] vector payload {:.1} MiB — load plus {QUERIES} searches; \
+        for metric in METRICS {
+            let fixture = persisted_index(nodes, dim, metric);
+            let queries: Vec<Vec<f32>> = (0..QUERIES)
+                .map(|i| generate_vector(dim, query_seed(nodes, i)))
+                .collect();
+            println!(
+            "  [{nodes} nodes x {dim}d, {metric:?}] vector payload {:.1} MiB — load plus {QUERIES} searches; \
              a mapped load's deferred page faults land inside this window",
             payload_mib(nodes, dim)
         );
-        group.bench_with_input(BenchmarkId::new("load_then_query", dim), &dim, |b, _| {
-            b.iter(|| {
-                let index = HnswIndex::load(fixture.path(), dim, METRIC).expect("bench: load");
-                assert_eq!(index.len(), nodes, "bench: fixture did not load");
-                for query in &queries {
-                    // `VectorIndex::search` swallows its errors and returns an
-                    // empty vector, so without this assertion the whole group
-                    // could be timing 32 instant failures and reporting them as
-                    // a fast load. The deferred page faults this group exists to
-                    // capture only happen if the searches actually run.
-                    let hits = index.search(query, 10);
-                    assert!(!hits.is_empty(), "bench: search returned nothing");
-                    black_box(hits);
-                }
-            });
-        });
+            group.bench_with_input(
+                BenchmarkId::new(format!("load_then_query/{metric:?}"), dim),
+                &dim,
+                |b, _| {
+                    b.iter(|| {
+                        let index =
+                            HnswIndex::load(fixture.path(), dim, metric).expect("bench: load");
+                        assert_eq!(index.len(), nodes, "bench: fixture did not load");
+                        for query in &queries {
+                            // `VectorIndex::search` swallows its errors and returns an
+                            // empty vector, so without this assertion the whole group
+                            // could be timing 32 instant failures and reporting them as
+                            // a fast load. The deferred page faults this group exists to
+                            // capture only happen if the searches actually run.
+                            let hits = index.search(query, 10);
+                            assert!(!hits.is_empty(), "bench: search returned nothing");
+                            black_box(hits);
+                        }
+                    });
+                },
+            );
+        }
     }
-
     group.finish();
 }
 
@@ -278,30 +292,35 @@ fn bench_query_only(c: &mut Criterion) {
     group.sample_size(10);
 
     for dim in dimensions() {
-        let fixture = persisted_index(nodes, dim);
-        let queries: Vec<Vec<f32>> = (0..QUERIES)
-            .map(|i| generate_vector(dim, query_seed(nodes, i)))
-            .collect();
-        // Loaded once, outside the closure, and warmed by a full query pass so
-        // the pages are resident before anything is timed.
-        let index = HnswIndex::load(fixture.path(), dim, METRIC).expect("bench: load");
-        assert_eq!(index.len(), nodes, "bench: fixture did not load");
-        for query in &queries {
-            assert!(
-                !index.search(query, 10).is_empty(),
-                "bench: search returned nothing"
+        for metric in METRICS {
+            let fixture = persisted_index(nodes, dim, metric);
+            let queries: Vec<Vec<f32>> = (0..QUERIES)
+                .map(|i| generate_vector(dim, query_seed(nodes, i)))
+                .collect();
+            // Loaded once, outside the closure, and warmed by a full query pass so
+            // the pages are resident before anything is timed.
+            let index = HnswIndex::load(fixture.path(), dim, metric).expect("bench: load");
+            assert_eq!(index.len(), nodes, "bench: fixture did not load");
+            for query in &queries {
+                assert!(
+                    !index.search(query, 10).is_empty(),
+                    "bench: search returned nothing"
+                );
+            }
+
+            group.bench_with_input(
+                BenchmarkId::new(format!("query_only/{metric:?}"), dim),
+                &dim,
+                |b, _| {
+                    b.iter(|| {
+                        for query in &queries {
+                            black_box(index.search(query, 10));
+                        }
+                    });
+                },
             );
         }
-
-        group.bench_with_input(BenchmarkId::new("query_only", dim), &dim, |b, _| {
-            b.iter(|| {
-                for query in &queries {
-                    black_box(index.search(query, 10));
-                }
-            });
-        });
     }
-
     group.finish();
 }
 

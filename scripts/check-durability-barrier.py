@@ -24,6 +24,11 @@ Every production ``.rs`` file under ``crates/*/src`` that contains
   (an audited exemption: a derived artifact rebuilt on load, a lock file with
   no durability semantics).
 
+Both matches run on code only: comments are removed first, string and char
+literals kept. Against raw text, a doc comment explaining why a path avoids
+``File::create`` made its file a creator, and a comment that merely mentions
+``sync_all`` passed for a barrier.
+
 The baseline only shrinks: an entry whose file no longer needs the exemption
 (gained ``sync_all``, or dropped ``File::create``) fails asking for the
 baseline line to be deleted, so stale exemptions cannot accumulate.
@@ -40,6 +45,8 @@ Blind spots (declared)
 * Same-file granularity: an unrelated ``sync_all`` elsewhere in a large file
   satisfies the check. The guard proves a barrier exists in the file, not that
   it guards this particular write — that remains review territory.
+* The comment stripper lexes comments, strings, raw strings and char
+  literals, nothing else: a call a macro generates is not seen.
 * Inline test modules are skipped by truncating at the first
   ``#[cfg(test)] mod`` marker; a production ``File::create`` placed *after* an
   inline test module would be missed. Convention (and the inline-tests guard's
@@ -57,6 +64,12 @@ from pathlib import Path
 # check-inline-tests.py's frozen baseline) inline test modules sit at the end
 # of a file, so everything from this marker on is test code.
 INLINE_TEST_MOD = re.compile(r"#\[cfg\(test\)\]\s*(?:#\[[^\]]*\]\s*)*mod\s")
+
+# A raw string opener (`r"`, `r#"`, `br##"`…); group 1 is its hashes.
+RAW_STRING = re.compile(r'b?r(#*)"')
+# A char literal, escapes included — `'"'` must not open a string. A lifetime
+# (`'a`) has no closing quote and does not match.
+CHAR_LITERAL = re.compile(r"'(?:\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F]{1,6}\}|.)|[^\\'\n])'")
 
 BASELINE_NAME = "durability-barrier-baseline.txt"
 HELP = (
@@ -83,6 +96,55 @@ def production_rust_files(root: Path) -> "list[Path]":
     return out
 
 
+def code_only(text: str) -> str:
+    """`text` with its comments removed; string and char literals kept whole.
+
+    Line comments keep their newline, block comments nest as Rust's do. A
+    string is copied through as it stands, so a `//` inside one — a URL — is
+    not a comment, and neither is anything after a `'"'` char literal.
+    """
+    out: "list[str]" = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if text.startswith("//", i):
+            newline = text.find("\n", i)
+            i = n if newline == -1 else newline
+            continue
+        if text.startswith("/*", i):
+            depth, i = 1, i + 2
+            while i < n and depth:
+                if text.startswith("/*", i):
+                    depth, i = depth + 1, i + 2
+                elif text.startswith("*/", i):
+                    depth, i = depth - 1, i + 2
+                else:
+                    i += 1
+            continue
+        raw = RAW_STRING.match(text, i) if c in "br" else None
+        if raw and not (i and (text[i - 1].isalnum() or text[i - 1] == "_")):
+            close = text.find('"' + raw.group(1), raw.end())
+            end = n if close == -1 else close + 1 + len(raw.group(1))
+            out.append(text[i:end])
+            i = end
+            continue
+        if c == '"':
+            j = i + 1
+            while j < n and text[j] != '"':
+                j += 2 if text[j] == "\\" else 1
+            out.append(text[i : j + 1])
+            i = j + 1
+            continue
+        literal = CHAR_LITERAL.match(text, i) if c == "'" else None
+        if literal:
+            out.append(literal.group(0))
+            i = literal.end()
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def read_baseline(baseline_path: Path) -> "dict[str, str]":
     """Maps repo-relative path -> reason. Lines: `<path>\\t<reason>`."""
     entries: "dict[str, str]" = {}
@@ -103,7 +165,7 @@ def check(root: Path, baseline_path: Path) -> "list[str]":
     seen_creators: "set[str]" = set()
 
     for path in production_rust_files(root):
-        text = path.read_text(encoding="utf-8", errors="replace")
+        text = code_only(path.read_text(encoding="utf-8", errors="replace"))
         # Ignore inline test modules: convention (and the inline-tests guard's
         # shrink-only baseline) keeps them at the end of the file, so truncate
         # at the first `#[cfg(test)] mod` marker before scanning.

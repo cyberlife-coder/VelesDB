@@ -46,7 +46,7 @@ fn v1_vectors_file_still_loads() {
     write_v1_vectors_file(&path, &vectors);
 
     // Act
-    let (storage, count) = H::load_vectors_file(&path, None).expect("test: load v1");
+    let (storage, count, _) = H::load_vectors_file(&path, None).expect("test: load v1");
 
     // Assert
     assert_eq!(count, 2);
@@ -111,7 +111,7 @@ fn v2_dump_reloads_its_own_vectors() {
     hnsw.file_dump(dir.path(), "roundtrip").expect("test: dump");
 
     // Act
-    let (storage, count) =
+    let (storage, count, _) =
         H::load_vectors_file(&dir.path().join("roundtrip.vectors"), None).expect("test: load v2");
 
     // Assert: the values, not just the count — a reader that skipped to the
@@ -139,7 +139,7 @@ fn v1_vectors_file_is_not_adopted_as_the_arena() {
     write_v1_vectors_file(&path, &[vec![1.0f32, 2.0, 3.0, 4.0]]);
 
     // Act
-    let (storage, _) = H::load_vectors_file(&path, None).expect("test: load v1");
+    let (storage, _, _) = H::load_vectors_file(&path, None).expect("test: load v1");
 
     // Assert
     let storage = storage.expect("test: v1 file must yield storage");
@@ -319,6 +319,168 @@ fn opening_a_collection_never_writes_to_its_vectors() {
              ({} bytes before, {} after)",
             before.len(),
             after.len()
+        );
+    }
+}
+
+/// Only a pre-normalized cosine engine declares its payload unit-norm (#2246).
+#[test]
+fn only_a_prenormalized_cosine_dump_declares_its_payload_unit_norm() {
+    let flag_at = usize::try_from(super::VECTORS_HEADER_BYTES).expect("test: offset fits usize");
+    for (engine, expected) in [
+        (
+            CachedSimdDistance::new_prenormalized(DistanceMetric::Cosine, 4),
+            super::VECTORS_FLAG_UNIT_NORM,
+        ),
+        (CachedSimdDistance::new(DistanceMetric::Cosine, 4), 0),
+        (
+            CachedSimdDistance::new_prenormalized(DistanceMetric::Euclidean, 4),
+            0,
+        ),
+    ] {
+        let hnsw = NativeHnsw::new(engine, 16, 100, 100);
+        for i in 0..3 {
+            hnsw.insert(&[i as f32 + 1.0, 0.5, 0.25, 2.0])
+                .expect("test: insert");
+        }
+        let dir = tempdir().expect("test: tempdir");
+        hnsw.file_dump(dir.path(), "flag").expect("test: dump");
+        let bytes = std::fs::read(dir.path().join("flag.vectors")).expect("test: read back");
+        assert_eq!(bytes[flag_at], expected);
+        let payload =
+            usize::try_from(super::VECTORS_V2_DATA_OFFSET).expect("test: offset fits usize");
+        assert!(
+            bytes[flag_at + 1..payload].iter().all(|&b| b == 0),
+            "the rest of the padding stays reserved and zero-filled"
+        );
+    }
+}
+
+/// A payload declared unit-norm is left as stored on load; one without the
+/// flag is still normalized (#2246).
+///
+/// Both halves are needed. The first is the point: on an adopted arena that
+/// check read every page of the mapping inside `load`. The second is the
+/// control — a file written before the flag existed keeps the legacy
+/// normalization, or a raw vector would reach the dot-product kernel.
+#[test]
+fn the_unit_norm_flag_is_what_skips_the_load_time_normalization() {
+    const DIM: usize = 4;
+    let flag_at = usize::try_from(super::VECTORS_HEADER_BYTES).expect("test: offset fits usize");
+    let payload = usize::try_from(super::VECTORS_V2_DATA_OFFSET).expect("test: offset fits usize");
+    for (flagged, expected_norm) in [(true, 3.0_f32), (false, 1.0_f32)] {
+        let engine = CachedSimdDistance::new_prenormalized(DistanceMetric::Cosine, DIM);
+        let hnsw = NativeHnsw::new(engine, 16, 100, 100);
+        for i in 0..3 {
+            hnsw.insert(&[i as f32 + 1.0, 0.5, 0.25, 2.0])
+                .expect("test: insert");
+        }
+        let dir = tempdir().expect("test: tempdir");
+        hnsw.file_dump(dir.path(), "norm").expect("test: dump");
+        drop(hnsw);
+
+        // Scale the first stored (unit) vector by 3, and clear the flag on
+        // the control arm, as a file written before the flag would hold it.
+        let path = dir.path().join("norm.vectors");
+        let mut bytes = std::fs::read(&path).expect("test: read back");
+        let width = std::mem::size_of::<f32>();
+        for j in 0..DIM {
+            let at = payload + j * width;
+            let value = f32::from_le_bytes(bytes[at..at + width].try_into().expect("test: f32"));
+            bytes[at..at + width].copy_from_slice(&(value * 3.0).to_le_bytes());
+        }
+        if !flagged {
+            bytes[flag_at] = 0;
+        }
+        std::fs::write(&path, &bytes).expect("test: write back");
+
+        let engine = CachedSimdDistance::new_prenormalized(DistanceMetric::Cosine, DIM);
+        let loaded = H::file_load(dir.path(), "norm", engine).expect("test: load");
+        let norm = crate::simd_native::norm_native(
+            loaded
+                .vectors
+                .read()
+                .as_ref()
+                .and_then(|vectors| vectors.get(0))
+                .expect("test: first vector"),
+        );
+        assert!(
+            (norm - expected_norm).abs() < 1e-4,
+            "flagged={flagged}: expected norm {expected_norm}, got {norm}"
+        );
+    }
+}
+
+/// Opening never writes the durable file — not even for a payload that needs
+/// the legacy normalization (#2246).
+///
+/// Once adopted, the arena IS `.vectors`, and the load-time normalization ran
+/// on it in place: an open that wrote the store, which `velesdb-memory`'s
+/// migration resume would read as corruption. An unflagged payload with a
+/// vector off the unit sphere is now copied to the heap first. The second arm
+/// is the control: an unflagged payload already on the sphere stays adopted,
+/// so the copy is not simply taken every time.
+#[cfg(feature = "persistence")]
+#[test]
+fn a_legacy_payload_is_normalized_in_a_copy_never_in_the_file() {
+    use crate::perf_optimizations::ContiguousVectors;
+    const DIM: usize = 4;
+    let nodes = ContiguousVectors::MIN_ARENA_CAPACITY + 2;
+    let flag_at = usize::try_from(super::VECTORS_HEADER_BYTES).expect("test: offset fits usize");
+    let payload = usize::try_from(super::VECTORS_V2_DATA_OFFSET).expect("test: offset fits usize");
+    for (off_sphere, expect_adopted) in [(true, false), (false, true)] {
+        let engine = CachedSimdDistance::new_prenormalized(DistanceMetric::Cosine, DIM);
+        let hnsw = NativeHnsw::new(engine, 16, 100, 100);
+        for i in 0..nodes {
+            hnsw.insert(&[i as f32 + 1.0, 0.5, 0.25, 2.0])
+                .expect("test: insert");
+        }
+        let dir = tempdir().expect("test: tempdir");
+        hnsw.file_dump(dir.path(), "legacy").expect("test: dump");
+        drop(hnsw);
+
+        // A file written before the flag existed: flag clear and, on the
+        // first arm, one vector off the unit sphere.
+        let path = dir.path().join("legacy.vectors");
+        let mut bytes = std::fs::read(&path).expect("test: read back");
+        bytes[flag_at] = 0;
+        if off_sphere {
+            let width = std::mem::size_of::<f32>();
+            for j in 0..DIM {
+                let at = payload + j * width;
+                let value =
+                    f32::from_le_bytes(bytes[at..at + width].try_into().expect("test: f32"));
+                bytes[at..at + width].copy_from_slice(&(value * 3.0).to_le_bytes());
+            }
+        }
+        std::fs::write(&path, &bytes).expect("test: write back");
+
+        let engine = CachedSimdDistance::new_prenormalized(DistanceMetric::Cosine, DIM);
+        let loaded = H::file_load(dir.path(), "legacy", engine).expect("test: load");
+
+        assert_eq!(
+            std::fs::read(&path).expect("test: read after"),
+            bytes,
+            "off_sphere={off_sphere}: opening wrote the durable file"
+        );
+        let (norm, adopted) = loaded
+            .vectors
+            .read()
+            .as_ref()
+            .map(|vectors| {
+                (
+                    crate::simd_native::norm_native(vectors.get(0).expect("test: first vector")),
+                    vectors.backing_path() == Some(path.as_path()),
+                )
+            })
+            .expect("test: vectors loaded");
+        assert!(
+            (norm - 1.0).abs() < 1e-4,
+            "off_sphere={off_sphere}: the loaded vector must be unit-norm, got {norm}"
+        );
+        assert_eq!(
+            adopted, expect_adopted,
+            "off_sphere={off_sphere}: whether the arena is still the file"
         );
     }
 }
