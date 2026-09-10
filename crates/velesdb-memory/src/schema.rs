@@ -37,9 +37,7 @@ fn strip_in_value(value: &mut Value) {
     }
 }
 
-/// The tree walks `harden` applies to a published schema (rustdoc links
-/// rewritten, id properties widened), in a child module that keeps private
-/// access so this file stays within its budget.
+/// The rustdoc-link rewrite and the id widening (see the module doc).
 #[cfg(feature = "mcp")]
 #[path = "schema_walks.rs"]
 mod walks;
@@ -64,7 +62,7 @@ const INERT_NUMERIC_KEYWORDS: [&str; 6] = [
 #[cfg(feature = "mcp")]
 const UNION_KEYWORDS: [&str; 4] = ["anyOf", "oneOf", "allOf", "$ref"];
 
-/// Le pendant ENTREE de [`widen_id_properties`] : chaque propriete nommee
+/// Le pendant ENTREE de [`walks::widen_id_properties`] : chaque propriete nommee
 /// dans `keys` est annoncee `type: "string"`, tout court.
 ///
 /// `widen_id_properties` reste — il sert la SORTIE, ou un id traverse en
@@ -181,7 +179,7 @@ type InlineChain = Vec<String>;
 /// "#/$defs/ContextDecisionRef"}`, so a `$defs`-blind harness saw "array of
 /// anything" and never learned that `rule_id` (or `SourceReference`'s
 /// `handle`) is required. Hence the same tree walk as
-/// [`widen_id_properties`] — `properties`, `items`, then a generic descent —
+/// [`walks::widen_id_properties`] — `properties`, `items`, then a generic descent —
 /// bounded by [`MAX_INLINE_DEPTH`] and an [`InlineChain`] cycle guard.
 ///
 /// Sibling keywords on the slot (e.g. `description`) override the inlined

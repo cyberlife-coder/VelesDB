@@ -1326,7 +1326,7 @@ fn walk_named_children(map: &Map<String, Value>, path: &str, found: &mut Vec<Nam
     }
 }
 
-/// The shape `crate::schema::widen_id_properties` writes on the way OUT:
+/// The shape `widen_id_properties` (`schema_walks.rs`) writes on the way OUT:
 /// `["integer", "string"]`, directly or on the `items` of an id array
 /// (`fragment_ids`). It is the server saying, in its own published bytes,
 /// "a value under this name may legally be a decimal string".

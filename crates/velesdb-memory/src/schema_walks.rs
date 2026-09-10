@@ -1,10 +1,11 @@
-//! The tree walks `WireInputSchema::harden` and `WireOutputSchema::harden`
-//! apply to a published schema before inlining: rustdoc link syntax
-//! rewritten in every `description` (#2261), and id properties widened to
-//! accept a decimal string. A `#[path]` child of `schema`, so `schema.rs`
-//! stays within its file budget and these walks keep private access.
+//! Tree walks the wire schemas run before inlining: the rustdoc-link rewrite
+//! of every `description` (#2261), which both `harden`s apply, and the id
+//! widening, which only `WireOutputSchema::harden` applies. Items are
+//! `pub(super)`, private to `schema`; the split keeps `schema.rs` within its
+//! file budget.
 
 use serde_json::{Map, Value};
+use std::borrow::Cow;
 
 /// Rewrites rustdoc link syntax in every `description` of a published schema
 /// into the text rustdoc shows for it (#2261).
@@ -46,7 +47,7 @@ fn unlink_in_value(value: &mut Value) {
 pub(super) const INSTANCE_KEYWORDS: [&str; 5] = ["default", "examples", "example", "const", "enum"];
 
 /// Schema keywords whose values map names to schemas.
-const NAMED_SCHEMA_MAPS: [&str; 6] = [
+pub(super) const NAMED_SCHEMA_MAPS: [&str; 6] = [
     "properties",
     "patternProperties",
     "$defs",
@@ -134,19 +135,24 @@ fn unlink_once(text: &str) -> Option<String> {
             rest = after;
             continue;
         };
-        // Two code spans must not touch: `a``b` reads as one span.
-        if out.ends_with('`') && shown.starts_with('`') {
-            out.push(' ');
-        }
-        out.push_str(&shown);
-        if shown.ends_with('`') && remaining.starts_with('`') {
-            out.push(' ');
-        }
+        push_apart(&mut out, &shown, remaining);
         rest = remaining;
         changed = true;
     }
     out.push_str(rest);
     changed.then_some(out)
+}
+
+/// Appends `shown` to `out`, a space apart from a code span on either side:
+/// two touching spans (`a``b`) read as one.
+fn push_apart(out: &mut String, shown: &str, remaining: &str) {
+    if out.ends_with('`') && shown.starts_with('`') {
+        out.push(' ');
+    }
+    out.push_str(shown);
+    if shown.ends_with('`') && remaining.starts_with('`') {
+        out.push(' ');
+    }
 }
 
 /// Length of the code span `text` starts with: its opening run of backticks
@@ -169,25 +175,17 @@ fn code_span_len(text: &str) -> usize {
 /// When `after` (the text following a `[`) starts a rustdoc link, what
 /// rustdoc shows for it and the text after the link. A reference-style link
 /// (`[text][label]`) is left as written.
-fn rustdoc_link(after: &str) -> Option<(std::borrow::Cow<'_, str>, &str)> {
-    use std::borrow::Cow;
+fn rustdoc_link(after: &str) -> Option<(Cow<'_, str>, &str)> {
     let close = after.find(']')?;
     let (label, tail) = (&after[..close], &after[close + 1..]);
     if let Some(inline) = tail.strip_prefix('(') {
-        let end = inline.find(')')?;
-        return is_rust_path(&inline[..end]).then(|| (Cow::Borrowed(label), &inline[end + 1..]));
+        return inline_link(label, inline);
     }
     if tail.starts_with('[') {
         return None;
     }
     if is_code_span(label) {
-        let code = &label[1..label.len() - 1];
-        let path = without_disambiguator(code);
-        if !is_one_word(path.unwrap_or(code)) {
-            return None;
-        }
-        let shown = path.map_or(Cow::Borrowed(label), |path| Cow::Owned(format!("`{path}`")));
-        return Some((shown, tail));
+        return code_link(label, tail);
     }
     is_path_like(label).then(|| {
         (
@@ -195,6 +193,36 @@ fn rustdoc_link(after: &str) -> Option<(std::borrow::Cow<'_, str>, &str)> {
             tail,
         )
     })
+}
+
+/// An inline link, `inline` being the text after its `(`: shown as its label
+/// when the target is a Rust path. The target may be padded with spaces or
+/// wrapped in `<…>`, as Markdown allows.
+fn inline_link<'a>(label: &'a str, inline: &'a str) -> Option<(Cow<'a, str>, &'a str)> {
+    let end = closing_paren(inline)?;
+    let target = inline[..end].trim();
+    let target = target
+        .strip_prefix('<')
+        .and_then(|t| t.strip_suffix('>'))
+        .unwrap_or(target);
+    is_rust_path(target).then(|| (Cow::Borrowed(label), &inline[end + 1..]))
+}
+
+/// A code link, ``[`code`]``: shown as its code span when the code is one
+/// word, without its disambiguator.
+fn code_link<'a>(label: &'a str, tail: &'a str) -> Option<(Cow<'a, str>, &'a str)> {
+    // rustdoc trims the link text, then the path after a disambiguator.
+    let code = label[1..label.len() - 1].trim();
+    let word = without_disambiguator(code).map_or(code, str::trim);
+    if !is_one_word(word) {
+        return None;
+    }
+    let shown = if word.len() + 2 == label.len() {
+        Cow::Borrowed(label)
+    } else {
+        Cow::Owned(format!("`{word}`"))
+    };
+    Some((shown, tail))
 }
 
 /// A single inline code span — the label of a rustdoc code link.
@@ -206,7 +234,7 @@ fn is_code_span(label: &str) -> bool {
 }
 
 /// A shortcut label rustdoc reads as a path rather than prose: one with a
-/// `::`, a `()` or `!` suffix, or a disambiguator. A bare `[Name]` may be
+/// `::`, a [`CALL_SUFFIXES`] suffix, or a disambiguator. A bare `[Name]` may be
 /// either (`map[key]`, `[sic]`) and stays as written.
 fn is_path_like(label: &str) -> bool {
     is_rust_path(label)
@@ -219,9 +247,10 @@ fn is_path_like(label: &str) -> bool {
 /// `m!{}`. (`m![]` cannot reach here: its `]` ends the label.)
 const CALL_SUFFIXES: [&str; 4] = ["!()", "!{}", "()", "!"];
 
-/// A code span rustdoc can read as a link: non-empty, and one word once
-/// generic arguments are dropped. `Vec<T>` and `HashMap<K, V>` are, `0, 1`
-/// and `a | b` are not.
+/// Whether a code span reads as a link to the rewrite: non-empty and, with
+/// balanced generic arguments dropped, one word. `Vec<T>` and `HashMap<K, V>`
+/// are; `0, 1`, `a | b` and an unbalanced `a<b c` are not. A heuristic:
+/// rustdoc also needs the name to resolve, which a schema cannot check.
 fn is_one_word(code: &str) -> bool {
     let mut depth = 0usize;
     let mut seen = false;
@@ -234,7 +263,22 @@ fn is_one_word(code: &str) -> bool {
             _ => {}
         }
     }
-    seen
+    seen && depth == 0
+}
+
+/// Where an inline link's destination ends: its first `)` outside balanced
+/// parentheses, as Markdown reads it, so `f()` and `m!()` stay inside.
+fn closing_paren(destination: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    for (i, c) in destination.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' if depth == 0 => return Some(i),
+            ')' => depth -= 1,
+            _ => {}
+        }
+    }
+    None
 }
 
 /// `target` without its `kind@` prefix, when rustdoc accepts that kind.

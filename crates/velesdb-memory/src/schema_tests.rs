@@ -336,6 +336,13 @@ mod unlink {
 
     #[test]
     fn an_inline_link_shows_its_label() {
+        for (text, shown) in [
+            ("a [call](f()) here", "a call here"),
+            ("see [x]( crate::y)", "see x"),
+            ("see [x](<crate::y>)", "see x"),
+        ] {
+            assert_eq!(unlink_rustdoc(text).as_deref(), Some(shown), "{text}");
+        }
         assert_eq!(
             unlink_rustdoc("the [`stable id`](super::fragment_id) of a fragment").as_deref(),
             Some("the `stable id` of a fragment")
@@ -357,6 +364,8 @@ mod unlink {
             ("the [vec!] macro", "the vec! macro"),
             ("a [struct@Foo] value", "a Foo value"),
             ("see [`fn@build`]", "see `build`"),
+            ("see [`fn@ build`]", "see `build`"),
+            ("a [` Foo `] padded", "a `Foo` padded"),
             ("see [m!()]", "see m!()"),
             (
                 "the [`HashMap<K, V>`] it holds",
@@ -401,6 +410,7 @@ mod unlink {
             "range [`0, 1`] inclusive",
             "either [`a | b`]",
             "[`value@`]",
+            "an [`a<b c`] unbalanced",
             "`decisions[fragment_index]` is unambiguous",
             "``a [`b`] c`` in a double-backtick span",
         ] {
@@ -472,27 +482,42 @@ mod unlink {
         );
     }
 
-    /// Link targets only rustdoc resolves, flagged even in a link the rewrite
-    /// leaves: ``[`a]b`](crate::x)`` is not one it recognizes.
-    const RUST_PATH_TARGETS: [&str; 8] = [
-        "](crate::",
-        "](super::",
-        "](self::",
-        "](Self::",
-        "](<crate::",
-        "](<super::",
-        "](<self::",
-        "](<Self::",
-    ];
+    /// Whether `text` holds an inline link whose target, past any whitespace
+    /// or `<`, names a Rust path: flagged even in a link the rewrite leaves,
+    /// such as ``[`a]b`](crate::x)``.
+    fn names_rust_path_target(text: &str) -> bool {
+        text.match_indices("](").any(|(at, _)| {
+            let target = text[at + 2..].trim_start();
+            let target = target.strip_prefix('<').unwrap_or(target);
+            ["crate::", "super::", "self::", "Self::"]
+                .iter()
+                .any(|root| target.starts_with(root))
+        })
+    }
 
     #[test]
     fn the_guard_flags_a_rust_path_target_the_rewrite_leaves() {
-        for text in ["odd [`a]b`](crate::x) link", "see [text](<crate::x>)"] {
+        for text in [
+            "odd [`a]b`](crate::x) link",
+            "odd [`a]b`]( crate::x) link",
+            "odd [`a]b`](<crate::x>) link",
+        ] {
             assert_eq!(unlink_rustdoc(text), None, "{text}");
             let mut linked = Vec::new();
             collect_linked(&json!({ "description": text }), "", &mut linked);
             assert_eq!(linked, ["/description"], "{text}");
         }
+    }
+
+    #[test]
+    fn the_guard_reads_a_property_named_like_a_keyword() {
+        let mut linked = Vec::new();
+        collect_linked(
+            &json!({ "properties": { "default": { "description": "[`x`]" } } }),
+            "",
+            &mut linked,
+        );
+        assert_eq!(linked, ["/properties/default/description"]);
     }
 
     #[test]
@@ -512,22 +537,8 @@ mod unlink {
     fn collect_linked(value: &Value, path: &str, out: &mut Vec<String>) {
         match value {
             Value::Object(map) => {
-                // Instance data is a value, not a doc comment: the rewrite
-                // leaves it, and so does the guard.
-                for (key, child) in map.iter().filter(|(key, _)| {
-                    !super::super::walks::INSTANCE_KEYWORDS.contains(&key.as_str())
-                }) {
-                    let here = format!("{path}/{key}");
-                    match child {
-                        Value::String(text) if key == "description" => {
-                            if unlink_rustdoc(text).is_some()
-                                || RUST_PATH_TARGETS.iter().any(|t| text.contains(t))
-                            {
-                                out.push(here);
-                            }
-                        }
-                        _ => collect_linked(child, &here, out),
-                    }
+                for (key, child) in map {
+                    collect_under_key(key, child, &format!("{path}/{key}"), out);
                 }
             }
             Value::Array(items) => {
@@ -536,6 +547,28 @@ mod unlink {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// One key's value, read as the rewrite reads it.
+    fn collect_under_key(key: &str, child: &Value, here: &str, out: &mut Vec<String>) {
+        use super::super::walks::{INSTANCE_KEYWORDS, NAMED_SCHEMA_MAPS};
+        match child {
+            Value::String(text) if key == "description" => {
+                if unlink_rustdoc(text).is_some() || names_rust_path_target(text) {
+                    out.push(here.to_owned());
+                }
+            }
+            // Instance data is a value, not a doc comment: the rewrite
+            // leaves it, and so does the guard.
+            _ if INSTANCE_KEYWORDS.contains(&key) => {}
+            // Keys here are names, not keywords, as in the rewrite.
+            Value::Object(named) if NAMED_SCHEMA_MAPS.contains(&key) => {
+                for (name, schema) in named {
+                    collect_linked(schema, &format!("{here}/{name}"), out);
+                }
+            }
+            _ => collect_linked(child, here, out),
         }
     }
 }
