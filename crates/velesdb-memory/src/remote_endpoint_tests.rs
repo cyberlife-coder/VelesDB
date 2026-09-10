@@ -4,12 +4,12 @@
 
 use super::*;
 
-/// Every test here writes the process environment, which all test threads
-/// share. Run in parallel, one test's `clear_embedder_vars` erased another's
-/// variables mid-assertion — `embedder_env_endpoint_prefers_the_role_named_variables`
-/// failed a pre-commit run with `left: None`. One lock held for each test's
-/// whole body serializes them; a poisoned lock is taken anyway, since every
-/// test sets the variables it reads before reading them.
+/// The tests here set, clear and read process environment variables, which all
+/// test threads share. Run in parallel, one test's `clear_embedder_vars` erased
+/// another's variables mid-assertion — `embedder_env_endpoint_prefers_the_role_named_variables`
+/// failed a pre-commit run with `left: None`. Every test that touches the
+/// environment holds this lock for its whole body; a poisoned lock is taken
+/// anyway, since each of them sets what it reads before reading it.
 static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn env_guard() -> std::sync::MutexGuard<'static, ()> {
@@ -18,8 +18,8 @@ fn env_guard() -> std::sync::MutexGuard<'static, ()> {
 }
 
 /// Every variable [`embedder_env_endpoint`] reads, cleared so one test's
-/// setup cannot leak into the next (tests run `--test-threads=1`, so the
-/// risk is ordering, not races).
+/// setup cannot leak into the next. Callers hold [`env_guard`]: the tests run
+/// in parallel, and without it the hazard was a race, not just ordering.
 fn clear_embedder_vars() {
     for key in [
         "VELESDB_MEMORY_EMBEDDER_URL",
@@ -117,7 +117,6 @@ fn embedder_env_endpoint_propagates_a_blank_token() {
 
 #[test]
 fn require_reports_which_variable_is_missing() {
-    let _env = env_guard();
     let endpoint = RemoteEndpoint {
         url: None,
         model: Some("m".to_owned()),
