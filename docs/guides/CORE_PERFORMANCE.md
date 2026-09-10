@@ -62,7 +62,7 @@ These are aligned with the canonical numbers in the repository root README.
 | 10K/128D | Balanced | 160 | **99.8%** | 57 µs | ✅ |
 | 10K/128D | Accurate | 512 | **100.0%** | 130 µs | ✅ |
 | 10K/128D | Perfect | exhaustive | **100%** | 200 µs | ✅ |
-| 10K/128D | Adaptive | 32–512 | — | — | not measured |
+| 10K/128D | Adaptive | 32, then 64 if hard | — | — | not measured |
 
 > Recall re-measured 2026-09-10 on 6.0.0 at the current presets
 > (`recall_benchmark`, an index built with `HnswParams::max_recall`); the

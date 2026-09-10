@@ -395,16 +395,17 @@ pub enum SearchQuality {
     Perfect,
     /// Custom `ef_search` value.
     Custom(usize),
-    /// Adaptive `ef_search` that starts low and doubles if the query is "hard".
+    /// Adaptive `ef_search` that starts low and doubles once if the query is
+    /// "hard".
     ///
     /// Uses a two-phase approach:
-    /// 1. Search with `min_ef`
-    /// 2. If result spread (`max_dist / min_dist`) exceeds a threshold, re-search
-    ///    with doubled ef (up to `max_ef`)
+    /// 1. Search at `max(min_ef, k)`
+    /// 2. If the result spread (the first-to-last score gap over the tail's
+    ///    distance from the metric's floor) reaches 2.0, continue that search
+    ///    at twice its ef, capped at `max_ef`
     ///
-    /// Easy queries (dense cluster hits) stop at `min_ef`; hard ones escalate,
-    /// up to `max_ef`. No recorded run measures its latency or recall against a
-    /// fixed ef yet (#2266).
+    /// Easy queries (dense cluster hits) stop after phase 1. No recorded run
+    /// measures its latency or recall against a fixed ef yet (#2266).
     Adaptive {
         /// Minimum `ef_search` (starting point). Default: 32.
         min_ef: usize,

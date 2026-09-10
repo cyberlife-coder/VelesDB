@@ -223,7 +223,7 @@ parameter with dynamic scaling based on the requested result count `k`.
 | `Perfect` | — (exhaustive scan, no graph) | — | exact top-k, ties aside | Ground truth, evaluation; refused above `limits.max_perfect_mode_vectors` |
 | `AutoTune` | size-aware | `auto_ef_range(count, dim, k)`; falls back to max(160, k*5) without collection info | not measured | Hands-off default at any scale (see [AutoTune Mode](#autotune-mode-v172)) |
 | `Custom(n)` | n | n | Varies | Fine-grained control |
-| `Adaptive { min_ef, max_ef }` | min_ef | escalates to max_ef | not measured | Mixed workloads, latency-sensitive |
+| `Adaptive { min_ef, max_ef }` | max(min_ef, k) | a hard query once, to min(2 × base, max_ef) | not measured | Mixed workloads, latency-sensitive |
 
 \* Recall@10 in `recall_benchmark` (10K random 128-D vectors, an index built with `HnswParams::max_recall`, 100 queries), measured 2026-09-10 on 6.0.0; see [BENCHMARKS.md](../BENCHMARKS.md#hnsw-recall-profiles-10k128d). No recorded run measures `AutoTune` or `Adaptive` yet (#2266).
 
@@ -236,21 +236,25 @@ The `Adaptive` variant searches in two phases, so easy queries stop at a low
 `ef_search` and only hard ones pay for a wider one (the gain is not measured
 yet, #2266):
 
-1. **Phase 1**: Search with `min_ef` (e.g., 32). Fast result for easy queries.
-2. **Phase 2**: Compute result spread (`max_dist / min_dist`). If spread > 2.0
-   (hard query with scattered results), re-search with doubled ef (up to `max_ef`).
+1. **Phase 1**: Search at `max(min_ef, k)` (32 for `min_ef: 32`, k = 10). Easy
+   queries stop here.
+2. **Phase 2**: Compute the result spread: the first-to-last score gap over the
+   tail's distance from the metric's floor (`(max − min) / min` for a distance).
+   At 2.0 or more (a hard query, scattered results), the same search continues
+   once at twice its ef, capped at `max_ef`; the GPU and RaBitQ paths restart
+   instead.
 
 ```rust
 use velesdb_core::SearchQuality;
 
-// Typical configuration: start at ef=32, cap at ef=512
+// Starts at ef 32; a hard query continues at 64 (twice 32, under the 512 cap)
 let quality = SearchQuality::Adaptive { min_ef: 32, max_ef: 512 };
 let results = index.search_with_quality(&query, 10, quality);
 ```
 
 **When to use**: Production workloads where most queries are "easy" (hit a dense
-cluster) but some are "hard" (scattered results). Adaptive keeps easy
-queries at `min_ef` and escalates only for hard ones.
+cluster) but some are "hard" (scattered results). Adaptive stops easy
+queries after phase 1 and escalates only hard ones.
 
 ### Custom and Adaptive via REST API (v1.9.2)
 

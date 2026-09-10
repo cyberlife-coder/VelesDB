@@ -449,9 +449,9 @@ On an `HnswIndex` and on a collection, `SearchQuality::AutoTune` computes optima
      - 100K+ vectors: `k * 12`
    - **Dimension factor**: high-dimensional spaces (>512) apply a 1.5x multiplier for sparser neighborhoods.
    - **`min_ef`** is clamped to at least `k` (never fewer candidates than requested results).
-   - **`max_ef`** is set to `4 * min_ef`, giving the adaptive second phase ample headroom for hard queries.
+   - **`max_ef`** is set to `4 * min_ef`, a cap the second phase stays under: it doubles `min_ef` once.
 
-2. **Adaptive two-phase search**: starts with `min_ef`, escalates to `max_ef` if the query is hard (same algorithm as `SearchQuality::Adaptive`).
+2. **Adaptive two-phase search**: searches at `min_ef` and, if the query is hard, continues once at `2 * min_ef`, capped at `max_ef` (same algorithm as `SearchQuality::Adaptive`).
 
 ### Usage
 

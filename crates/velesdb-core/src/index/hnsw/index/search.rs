@@ -404,13 +404,14 @@ impl HnswIndex {
 
     /// Two-phase adaptive search that starts with a low ef and escalates if needed.
     ///
-    /// Phase 1: search with `min_ef`. If the result spread (max_dist / min_dist)
-    /// indicates a hard query (scattered results), widen ef to `2 * min_ef` and
-    /// **resume** the phase-1 traversal (visited set and frontier carried over)
-    /// rather than re-searching from scratch — restart remains only for the
-    /// GPU/RaBitQ paths, which keep no CPU-side state. Easy queries stop at
-    /// `min_ef`; on escalated ones, resuming saves distance evaluations over a
-    /// restart (`tests/adaptive_resume_evals.rs` asserts at least a tenth).
+    /// Phase 1: search with `min_ef`. If the result spread ([`should_escalate`])
+    /// marks a hard query (scattered results), widen ef to `2 * min_ef`, capped
+    /// at `max_ef`, and **resume** the phase-1 traversal (visited set and
+    /// frontier carried over) rather than re-searching from scratch — restart
+    /// remains only for the GPU/RaBitQ paths, which keep no CPU-side state.
+    /// Easy queries stop after phase 1; on escalated ones, resuming saves
+    /// distance evaluations over a restart (`tests/adaptive_resume_evals.rs`
+    /// asserts at least a tenth).
     // One read guard spans both phases on purpose, as the comment below
     // records: re-locking through search_hnsw_only would be a recursive
     // read() on a parking_lot RwLock, which can deadlock behind a queued

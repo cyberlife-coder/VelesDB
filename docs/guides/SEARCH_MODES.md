@@ -63,9 +63,9 @@ Recall@10 = (Number of true top-10 neighbors found) / 10 × 100%
         ────────────────┴────────────────→ Recall
 ```
 
-> The **Adaptive** mode is shown with a dashed line because its latency varies with query difficulty.
-> For easy queries (~80% of typical traffic), it is close to Fast.
-> For hard queries, it automatically escalates toward Balanced/Accurate.
+> The **Adaptive** mode is shown with a dashed line because its latency varies with query difficulty:
+> an easy query stops after its first phase, and a hard one continues once at twice its starting ef.
+> No recorded run measures either (#2266).
 
 ---
 
@@ -164,16 +164,15 @@ collection.search_with_quality(&query, 10, SearchQuality::Perfect)?;
 
 ### 5. Adaptive — Adaptive optimal latency
 
-Starts with a small candidate pool and escalates only when the result set looks
-"hard", so easy queries pay Fast-class latency while hard queries keep
-Balanced/Accurate-class recall.
+Starts with a small candidate pool and escalates once, only when the result set
+looks "hard". No recorded run measures its latency or recall yet (#2266).
 
 **Two-phase operation:**
 
-1. Fast search with `min_ef` (e.g. 32)
-2. Analyze the **spread** of the results: `(max_distance - min_distance) / min_distance`
-3. If spread > 2.0 (scattered results = hard query) → re-search with doubled ef
-4. If spread ≤ 2.0 (dense cluster = easy query) → return the results immediately
+1. Search at `max(min_ef, k)` (e.g. 32)
+2. Analyze the **spread** of the results: the first-to-last score gap over the tail's distance from the metric's floor, `(max_distance - min_distance) / min_distance` for a distance
+3. If spread ≥ 2.0 (scattered results = hard query) → continue the same search once at twice the ef, capped at `max_ef`
+4. Otherwise (dense cluster = easy query) → return the results immediately
 
 **Use cases:**
 - Mixed workloads where most queries are easy
@@ -183,7 +182,7 @@ Balanced/Accurate-class recall.
 ```rust
 use velesdb_core::SearchQuality;
 
-// Adaptive ef between 32 (easy queries) and 512 (hard queries)
+// Starts at ef 32; a hard query continues at 64 (twice 32, under the 512 cap)
 let quality = SearchQuality::Adaptive { min_ef: 32, max_ef: 512 };
 let results = index.search_with_quality(&query, 10, quality);
 ```
@@ -194,7 +193,7 @@ SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
 WITH (mode = 'adaptive');
 ```
 
-**Impact**: easy queries stop at `min_ef`, so the median query costs less than with a fixed high `ef_search`; no recorded run measures the gain, or its recall, yet (#2266).
+**Impact**: easy queries stop after the first phase, so the median query costs less than with a fixed high `ef_search`; no recorded run measures the gain, or its recall, yet (#2266).
 
 ---
 

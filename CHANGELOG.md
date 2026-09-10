@@ -166,7 +166,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ef=4096`; relabelled `exhaustive`. The Adaptive and AutoTune figures no
   run backs (a 2–4x median-latency gain, ~99% and 95%+ recall) leave the
   guides and the `SearchQuality::Adaptive` rustdoc, which say instead that
-  nothing measures them yet (#2266) (#2246, P3).
+  nothing measures them yet (#2266); they also said Adaptive escalates to
+  `max_ef`, where it continues a hard query once, at twice its starting ef
+  capped at `max_ef` (#2246, P3).
 
 - **`SearchQuality::Perfect` was documented as the opposite of what it does.**
   Its rustdoc described a graph search at `ef_search = 4096` that "tunes the

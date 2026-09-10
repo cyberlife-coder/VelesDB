@@ -173,7 +173,7 @@ The RRF fusion step is a simple score merge with no distance computation, so hyb
 | Balanced | 160 | 99.8% | 57 us |
 | Accurate | 512 | 100.0% | 130 us |
 | Perfect | exhaustive | 100.0% | 200 us |
-| Adaptive | 32–512 | — | — |
+| Adaptive | 32, then 64 if hard | — | — |
 
 *Recall values from `recall_benchmark`'s recall report (10K random 128-D vectors, Cosine, an index built with `HnswParams::max_recall`: M=32, ef_construction=500; 100 queries, k=10), re-measured 2026-09-10 on 6.0.0 (Apple M5 Pro) at the current presets; two runs gave the same figures. Neither that report nor the March run records the Adaptive row, so it carries no figure (#2266). Latencies were measured March 19, 2026, on the reference machine with the ef defaults of that time (Fast=64, Balanced=128), so the Fast and Balanced latencies are slightly optimistic until re-measured there. ef_search values are base values (scaled with k).*
 

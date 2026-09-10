@@ -189,9 +189,9 @@ impl HnswIndex {
     /// Separated from `search_brute_force_gpu` to keep the `#[cfg]` blocks
     /// minimal and the logic testable.
     ///
-    /// Returns `None` in the cases [`Self::search_brute_force_gpu`] lists; its
-    /// exact-distance check is the one guard every GPU brute-force path goes
-    /// through.
+    /// Returns `None` in the cases [`Self::search_brute_force_gpu`] lists.
+    /// This function's `enable_vector_storage` check is the one guard every GPU
+    /// brute-force path goes through.
     ///
     /// RF-DEDUP: `pub(crate)` so `batch.rs` reuses it for
     /// `brute_force_search_parallel` and the test-only
