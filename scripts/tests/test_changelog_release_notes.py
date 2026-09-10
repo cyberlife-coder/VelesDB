@@ -7,6 +7,7 @@ the tag with their own blurb, and neither ever wrote the CHANGELOG section.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import tempfile
 import unittest
@@ -126,6 +127,66 @@ class ExtractorTests(unittest.TestCase):
 
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("### Fixed", result.stdout)
+
+
+def unreleased_headings(text: str) -> "list[str]":
+    """The `### …` headings inside `## [Unreleased]`, in order.
+
+    Stops at the next `## ` so a released section's own headings never leak in.
+    """
+    start = text.index("## [Unreleased]")
+    end = text.index("\n## [", start + 10)
+    return re.findall(r"^### (.+)$", text[start:end], re.M)
+
+
+class UnreleasedSectionTests(unittest.TestCase):
+    """`[Unreleased]` carries at most one heading per type.
+
+    Entries land section by section as work merges, and nothing stopped two
+    `### Added` blocks from accumulating under one version. It is not cosmetic:
+    the release notes are generated from this block, so a duplicated heading
+    ships a table of contents reading as if two unrelated things happened under
+    the same name.
+
+    A one-off tidy-up cannot hold this. The tidy-up that motivated this test was
+    itself made stale by the very next merge, which appended a third `### Added`
+    while the cleanup PR was still in review. Hence a guard rather than a sweep.
+    """
+
+    def setUp(self) -> None:
+        self.text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+
+    def test_no_type_appears_twice(self) -> None:
+        headings = unreleased_headings(self.text)
+        duplicated = sorted({h for h in headings if headings.count(h) > 1})
+        self.assertEqual(
+            duplicated,
+            [],
+            f"`## [Unreleased]` repeats {duplicated}. Merge each type into one "
+            "section; the release notes are generated from this block.",
+        )
+
+    def test_the_block_has_headings_at_all(self) -> None:
+        """Otherwise an empty parse would satisfy the test above forever."""
+        self.assertTrue(
+            unreleased_headings(self.text),
+            "no `### …` heading found under `[Unreleased]` — the parser or the "
+            "file changed shape, and the duplicate check is now vacuous",
+        )
+
+    def test_the_parser_sees_a_duplicate_when_there_is_one(self) -> None:
+        synthetic = (
+            "# Changelog\n\n## [Unreleased]\n\n### Added\n- a\n\n"
+            "### Fixed\n- b\n\n### Added\n- c\n\n## [6.0.0] - 2026-09-02\n\n### Added\n- d\n"
+        )
+        self.assertEqual(unreleased_headings(synthetic), ["Added", "Fixed", "Added"])
+
+    def test_the_parser_stops_at_the_released_section(self) -> None:
+        synthetic = (
+            "# Changelog\n\n## [Unreleased]\n\n### Added\n- a\n\n"
+            "## [6.0.0] - 2026-09-02\n\n### Fixed\n- b\n"
+        )
+        self.assertEqual(unreleased_headings(synthetic), ["Added"])
 
 
 class WorkflowContractTests(unittest.TestCase):
