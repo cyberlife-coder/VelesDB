@@ -3773,7 +3773,7 @@
       }
     },
     {
-      "description": "Fetch back the exact original content behind a ctx://source/<hash> handle from a compiled context — what compile_context externalized or partially packed is recoverable, not lost.",
+      "description": "Fetch back the exact original content behind a `ctx://source/<hash>` handle from a compiled context — what compile_context externalized or partially packed is recoverable, not lost.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
