@@ -221,19 +221,20 @@ parameter with dynamic scaling based on the requested result count `k`.
 | `Balanced` (default) | 160 | max(160, k*5) | 99.8%* | General purpose, production |
 | `Accurate` | 512 | max(512, k*16) | 100%*; 0.98 on SIFT1M's 1M | Analytics, batch processing |
 | `Perfect` | — (exhaustive scan, no graph) | — | exact top-k, ties aside | Ground truth, evaluation; refused above `limits.max_perfect_mode_vectors` |
-| `AutoTune` | size-aware | `auto_ef_range(count, dim, k)`; falls back to max(160, k*5) without collection info | ~99% | Hands-off default at any scale (see [AutoTune Mode](#autotune-mode-v172)) |
+| `AutoTune` | size-aware | `auto_ef_range(count, dim, k)`; falls back to max(160, k*5) without collection info | not measured | Hands-off default at any scale (see [AutoTune Mode](#autotune-mode-v172)) |
 | `Custom(n)` | n | n | Varies | Fine-grained control |
-| `Adaptive { min_ef, max_ef }` | min_ef | escalates to max_ef | 95%+ | Mixed workloads, latency-sensitive |
+| `Adaptive { min_ef, max_ef }` | min_ef | escalates to max_ef | not measured | Mixed workloads, latency-sensitive |
 
-\* Recall@10 in `recall_benchmark` (10K random 128-D vectors, an index built with `HnswParams::max_recall`, 100 queries), measured 2026-09-10 on 6.0.0; see [BENCHMARKS.md](../BENCHMARKS.md#hnsw-recall-profiles-10k128d).
+\* Recall@10 in `recall_benchmark` (10K random 128-D vectors, an index built with `HnswParams::max_recall`, 100 queries), measured 2026-09-10 on 6.0.0; see [BENCHMARKS.md](../BENCHMARKS.md#hnsw-recall-profiles-10k128d). No recorded run measures `AutoTune` or `Adaptive` yet (#2266).
 
 > Source of truth for these values:
 > `crates/velesdb-core/src/index/hnsw/params.rs` (`SearchQuality::ef_search`).
 
 ### Adaptive Search
 
-The `Adaptive` variant uses a two-phase approach to reduce median latency by 2-4x
-while maintaining recall on hard queries:
+The `Adaptive` variant searches in two phases, so easy queries stop at a low
+`ef_search` and only hard ones pay for a wider one (the gain is not measured
+yet, #2266):
 
 1. **Phase 1**: Search with `min_ef` (e.g., 32). Fast result for easy queries.
 2. **Phase 2**: Compute result spread (`max_dist / min_dist`). If spread > 2.0
@@ -248,8 +249,8 @@ let results = index.search_with_quality(&query, 10, quality);
 ```
 
 **When to use**: Production workloads where most queries are "easy" (hit a dense
-cluster) but some are "hard" (scattered results). Adaptive saves 2-4x latency on
-easy queries while gracefully escalating for hard ones.
+cluster) but some are "hard" (scattered results). Adaptive keeps easy
+queries at `min_ef` and escalates only for hard ones.
 
 ### Custom and Adaptive via REST API (v1.9.2)
 
@@ -577,7 +578,8 @@ built-in search handles alignment internally.
 6. **Use Adaptive for mixed workloads**: If your query distribution has both easy
    (cluster-adjacent) and hard (scattered) queries, `SearchQuality::Adaptive`
    automatically detects query difficulty and only escalates ef for hard queries.
-   This can cut median latency by 2-4x compared to a fixed `Balanced` mode.
+   This can cut median latency compared to a fixed `Balanced` mode; no recorded
+   run measures by how much yet (#2266).
 
 7. **Filter-then-hydrate**: When using `search_with_filter`, VelesDB tests metadata
    filters before retrieving vectors. For selective filters (<25% pass rate), this

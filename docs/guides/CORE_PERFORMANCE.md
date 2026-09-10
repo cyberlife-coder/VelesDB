@@ -79,9 +79,9 @@ These are aligned with the canonical numbers in the repository root README.
 - **Native HNSW with explicit SIMD**: AVX-512 and AVX2 on x86_64 (runtime
   feature detection in `simd_dispatch.rs`), NEON on aarch64, scalar fallback
   everywhere else.
-- **Adaptive search**: a two-phase `ef_search` that auto-escalates only for
-  hard queries, ~2–4x faster on the median query than a fixed high
-  `ef_search`.
+- **Adaptive search**: a two-phase `ef_search` that escalates only for hard
+  queries, so easy ones stop at a low `ef_search` (the gain is not measured
+  yet, #2266).
 - **Bulk insert**: turbo/fast batch modes, parallel HNSW indexing, graduated
   `ef_construction` (VAMANA 3-phase) and lock-free CAS entry-point promotion.
 - **Graph traversal**: a CSR snapshot for zero-copy BFS/DFS, `FxHashSet`

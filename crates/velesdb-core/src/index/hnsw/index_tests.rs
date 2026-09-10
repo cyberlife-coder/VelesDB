@@ -3597,9 +3597,9 @@ fn adaptive_resume_is_deterministic_across_pool_reuse() {
 
 /// Exact-distance features off turn brute force off on the GPU path too: it
 /// returns nothing rather than scan an index built with `new_fast_insert`. A
-/// twin built with `new` is the positive control: without a GPU both return
-/// nothing, and the test returns early, reported as passed, after printing
-/// that the guard went unexercised (shown with `--nocapture`).
+/// twin built with `new` is the positive control, and must answer whenever a
+/// GPU is present; without one the test returns early, reported as passed,
+/// after printing that the guard went unexercised (shown with `--nocapture`).
 #[cfg(feature = "gpu")]
 #[test]
 fn gpu_brute_force_returns_nothing_with_exact_distance_features_off() {
@@ -3614,10 +3614,12 @@ fn gpu_brute_force_returns_nothing_with_exact_distance_features_off() {
     }
     let query: Vec<f32> = (0..128).map(|j| (j as f32 * 0.02).cos()).collect();
 
-    let Some(scanned) = twin.search_brute_force_gpu(&query, 10).unwrap() else {
+    if !crate::gpu::GpuAccelerator::is_available() {
         eprintln!("GPU unavailable: the exact-distance guard is not exercised here");
         return;
-    };
+    }
+    let scanned = twin.search_brute_force_gpu(&query, 10).unwrap();
+    let scanned = scanned.expect("test: with a GPU, the twin built with new() scans");
     assert_eq!(scanned.len(), 10);
     assert!(index.search_brute_force_gpu(&query, 10).unwrap().is_none());
     // Below the GPU threshold the CPU scan answers, and returns nothing too.

@@ -50,7 +50,10 @@ impl HnswIndex {
     /// - `search_with_quality` and `search_batch_parallel` skip their automatic
     ///   two-stage re-rank; an explicit `search_with_rerank` or
     ///   `search_with_rerank_quality` call still re-ranks, from the graph's
-    ///   stored vectors
+    ///   stored vectors (`search_with_rerank` from the caller's `rerank_k`
+    ///   candidates, not the pool the index would size)
+    /// - the same two answer `SearchQuality::Perfect`, and any quality on an
+    ///   index of at most 100 vectors, from the graph instead of an exact scan
     /// - `search_brute_force` falls back to a graph search, and
     ///   `brute_force_search_parallel` and the GPU scans return nothing;
     ///   `full_scan_with_bitmap` scans regardless
@@ -219,7 +222,8 @@ impl HnswIndex {
     /// * `metric` - Distance metric
     /// * `params` - Custom HNSW parameters
     /// * `enable_vector_storage` - Whether exact-distance features are on: the
-    ///   automatic two-stage re-rank, `search_brute_force`,
+    ///   automatic two-stage re-rank, the exact scan for `Perfect` and for an
+    ///   index of at most 100 vectors, `search_brute_force`,
     ///   `brute_force_search_parallel`, the GPU scans and `vacuum` (see
     ///   [`Self::new_fast_insert`]); the graph keeps its vectors either way
     ///

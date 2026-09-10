@@ -194,7 +194,7 @@ SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
 WITH (mode = 'adaptive');
 ```
 
-**Measured impact**: 2-4x reduction in median latency compared to Balanced mode, with no regression on P99 recall.
+**Impact**: easy queries stop at `min_ef`, so the median query costs less than with a fixed high `ef_search`; no recorded run measures the gain, or its recall, yet (#2266).
 
 ---
 

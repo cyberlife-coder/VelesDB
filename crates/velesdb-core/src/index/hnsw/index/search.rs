@@ -408,9 +408,9 @@ impl HnswIndex {
     /// indicates a hard query (scattered results), widen ef to `2 * min_ef` and
     /// **resume** the phase-1 traversal (visited set and frontier carried over)
     /// rather than re-searching from scratch — restart remains only for the
-    /// GPU/RaBitQ paths, which keep no CPU-side state. This saves 2-4x latency
-    /// on easy queries and roughly a third of the distance evaluations on
-    /// escalated ones.
+    /// GPU/RaBitQ paths, which keep no CPU-side state. Easy queries stop at
+    /// `min_ef`; on escalated ones, resuming saves distance evaluations over a
+    /// restart (`tests/adaptive_resume_evals.rs` asserts at least a tenth).
     // One read guard spans both phases on purpose, as the comment below
     // records: re-locking through search_hnsw_only would be a recursive
     // read() on a parking_lot RwLock, which can deadlock behind a queued

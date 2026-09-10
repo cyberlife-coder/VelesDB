@@ -43,6 +43,7 @@ fn brute_force_knn(query: &[f32], dataset: &[Vec<f32>], k: usize) -> Vec<u64> {
 /// Comprehensive benchmark with stats output
 #[allow(clippy::too_many_lines)] // Reason: benchmark harness iterating over multiple configurations; splitting would harm readability.
 fn bench_comprehensive(c: &mut Criterion) {
+    const K: usize = 10;
     let configs = [(10_000, 128, "10K/128D"), (100_000, 768, "100K/768D")];
 
     for (n_vectors, dim, label) in configs {
@@ -85,7 +86,7 @@ fn bench_comprehensive(c: &mut Criterion) {
         let start = Instant::now();
         let ground_truths: Vec<Vec<u64>> = queries
             .iter()
-            .map(|q| brute_force_knn(q, &dataset, 10))
+            .map(|q| brute_force_knn(q, &dataset, K))
             .collect();
         println!("  Ground truth computed in {:.2?}", start.elapsed());
 
@@ -94,7 +95,10 @@ fn bench_comprehensive(c: &mut Criterion) {
         println!("  {}", "-".repeat(55));
         println!(
             "  {:12} {:10} {:12} {:12}",
-            "Mode", "ef_search", "Recall@10", "Latency P50"
+            "Mode",
+            "ef_search",
+            format!("Recall@{K}"),
+            "Latency P50"
         );
         println!("  {}", "-".repeat(55));
 
@@ -111,20 +115,13 @@ fn bench_comprehensive(c: &mut Criterion) {
                 SearchQuality::Perfect => "Perfect",
                 _ => "Other",
             };
-            // No ef for Perfect: it brute-forces before `ef_search` is read (#2238).
-            let ef = if matches!(quality, SearchQuality::Perfect) {
-                0
-            } else {
-                quality.ef_search_for_scale(10, index.len())
-            };
-
             // Measure latencies
             let mut latencies: Vec<f64> = Vec::with_capacity(num_queries);
             let mut total_recall = 0.0;
 
             for (query, ground_truth) in queries.iter().zip(&ground_truths) {
                 let start = Instant::now();
-                let results = index.search_with_quality(query, 10, quality).unwrap();
+                let results = index.search_with_quality(query, K, quality).unwrap();
                 let elapsed = start.elapsed().as_secs_f64() * 1000.0; // ms
                 latencies.push(elapsed);
 
@@ -142,14 +139,14 @@ fn bench_comprehensive(c: &mut Criterion) {
 
             let status = if avg_recall >= 95.0 { "✅" } else { "⚠️" };
 
+            // Perfect brute-forces before `ef_search` is read (#2238).
             let ef_label = if matches!(quality, SearchQuality::Perfect) {
                 "exhaustive".to_string()
             } else {
-                ef.to_string()
+                quality.ef_search_for_scale(K, index.len()).to_string()
             };
-            println!(
-                "  {quality_name:12} {ef_label:>10} {avg_recall:>10.1}% {p50_latency:>10.2}ms {status}"
-            );
+            print!("  {quality_name:12} {ef_label:>10} {avg_recall:>10.1}% ");
+            println!("{p50_latency:>10.2}ms {status}");
         }
 
         println!("  {}", "-".repeat(55));
@@ -162,7 +159,7 @@ fn bench_comprehensive(c: &mut Criterion) {
             b.iter(|| {
                 for query in &queries {
                     let results = index
-                        .search_with_quality(query, 10, SearchQuality::Accurate)
+                        .search_with_quality(query, K, SearchQuality::Accurate)
                         .unwrap();
                     black_box(results);
                 }

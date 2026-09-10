@@ -402,8 +402,9 @@ pub enum SearchQuality {
     /// 2. If result spread (`max_dist / min_dist`) exceeds a threshold, re-search
     ///    with doubled ef (up to `max_ef`)
     ///
-    /// For easy queries (dense cluster hits), this is 2-4x faster than fixed ef.
-    /// For hard queries, it gracefully degrades to `max_ef` with no recall loss.
+    /// Easy queries (dense cluster hits) stop at `min_ef`; hard ones escalate,
+    /// up to `max_ef`. No recorded run measures its latency or recall against a
+    /// fixed ef yet (#2266).
     Adaptive {
         /// Minimum `ef_search` (starting point). Default: 32.
         min_ef: usize,

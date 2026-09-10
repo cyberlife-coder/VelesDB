@@ -94,9 +94,13 @@ pub struct HnswIndex {
     /// ID mappings (external ID <-> internal index) - lock-free via `DashMap` (EPIC-A.1)
     pub(crate) mappings: ShardedMappings,
     /// Whether exact-distance features are enabled: the automatic two-stage
-    /// re-rank (`search_with_quality`, `search_batch_parallel`),
-    /// `search_brute_force`, `brute_force_search_parallel`, the GPU scans and
-    /// vacuum. `search_with_rerank*` and `full_scan_with_bitmap` ignore it.
+    /// re-rank (`search_with_quality`, `search_batch_parallel`), the exact
+    /// scan those two run for `Perfect` and on an index of at most 100
+    /// vectors, `search_brute_force`, `brute_force_search_parallel`, the GPU
+    /// scans and vacuum. With it off, `search_with_rerank*` still re-rank
+    /// (`search_with_rerank` then takes the caller's `rerank_k` candidates
+    /// rather than the pool the index sizes), and `full_scan_with_bitmap`
+    /// scans regardless.
     ///
     /// Vectors always live once, in the graph's `ContiguousVectors` (the
     /// former `ShardedVectors` sidecar was removed — PERF1). This flag is

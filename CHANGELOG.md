@@ -163,7 +163,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cites that measurement. With the `gpu` feature, brute force on an index
   whose exact-distance features are off took the GPU path anyway; it now
   returns nothing there too. Two benchmarks printed the exhaustive scan as
-  `ef=4096`; relabelled `exhaustive` (#2246, P3).
+  `ef=4096`; relabelled `exhaustive`. The Adaptive and AutoTune figures no
+  run backs (a 2–4x median-latency gain, ~99% and 95%+ recall) leave the
+  guides and the `SearchQuality::Adaptive` rustdoc, which say instead that
+  nothing measures them yet (#2266) (#2246, P3).
 
 - **`SearchQuality::Perfect` was documented as the opposite of what it does.**
   Its rustdoc described a graph search at `ef_search = 4096` that "tunes the
