@@ -1629,6 +1629,36 @@ class NoOpEditCannotProduceAGreenCheckTests(unittest.TestCase):
             "the no-op step has no failing path, so it can only ever report success",
         )
 
+    def test_every_refusal_says_a_new_commit_is_needed(self) -> None:
+        """Re-running is not enough, and the first version of these messages said it was.
+
+        Branch protection evaluates EVERY check-run carrying the required name
+        on a commit, not the most recent. So the failure this step records keeps
+        the pull request BLOCKED even once a green re-run lands beside it —
+        measured on #2243: two `CI Success` check-runs on one SHA, 23:18
+        failure and 23:54 success, `mergeStateStatus: BLOCKED` with no red check
+        visible to `gh pr checks`.
+
+        An error message that sends the reader down a path that cannot work
+        costs more than no message: they follow it, watch it fail, and stop
+        trusting the next one.
+        """
+        mirror = next(s for s in self.steps if NO_OP_EDIT_RE.search(s))
+        refusals = [line for line in mirror.splitlines() if "::error::" in line]
+        self.assertEqual(
+            len(refusals),
+            2,
+            f"expected the two refusal paths (no run, and timeout), found {len(refusals)}",
+        )
+        for line in refusals:
+            with self.subTest(refusal=line[:60]):
+                self.assertIn(
+                    "new commit",
+                    line,
+                    "a refusal must say that a new commit is required; re-running "
+                    "leaves the failed check-run on the same SHA",
+                )
+
     def test_exactly_one_step_produces_the_verdict(self) -> None:
         """The chain must stand down when the mirror ran, and only then."""
         chain = next(s for s in self.steps if "Check results" in s)
