@@ -291,12 +291,17 @@ fn a_mapped_id_the_graph_never_linked_is_relinked_on_open() {
         "{} mapped ids are still unlinked after open",
         unlinked.len()
     );
-    // A wide ef keeps the walk from stopping on a full result set, so a miss
-    // here points at linkage rather than a narrow beam; the check above is
-    // the structural guarantee, this one the end-to-end confirmation.
+    // A wide ef keeps the walk from stopping on a full result set (the
+    // stagnation cutoff still applies), so a miss here points at linkage
+    // rather than a narrow beam; the check above is the structural
+    // guarantee, this one the end-to-end confirmation.
     for id in [0, POINTS / 2, POINTS - 1] {
         let hits = reopened
-            .search_with_ef(&dispersed(id), 1, 4 * POINTS as usize)
+            .search_with_ef(
+                &dispersed(id),
+                1,
+                usize::try_from(4 * POINTS).expect("test: fits a usize"),
+            )
             .expect("search");
         assert_eq!(
             hits.first().map(|hit| hit.point.id),
