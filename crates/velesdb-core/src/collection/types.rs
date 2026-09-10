@@ -509,6 +509,8 @@ pub(crate) struct StreamingState {
     ///
     /// Lock order position: **11** (same tier as `deferred_indexer` /
     /// `async_index_builder`).
+    ///
+    /// [`VectorCollection::attach_auto_reindex`]: crate::VectorCollection::attach_auto_reindex
     pub(crate) auto_reindex:
         Arc<RwLock<Option<Arc<crate::collection::auto_reindex::AutoReindexManager>>>>,
 }
@@ -554,6 +556,8 @@ pub(crate) struct RuntimeGuards {
     /// Defaults to [`SearchQuality::Balanced`], which is what both index
     /// implementations hard-code, so a direct `Collection::create`/`open`
     /// caller sees no change. **Not persisted** -- re-pushed on every open.
+    ///
+    /// [`SearchQuality::Balanced`]: crate::SearchQuality::Balanced
     pub(crate) runtime_search_quality: Arc<RwLock<crate::SearchQuality>>,
 }
 

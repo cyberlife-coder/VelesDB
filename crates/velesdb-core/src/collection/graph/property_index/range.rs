@@ -305,7 +305,7 @@ impl IndexIntersection {
         result
     }
 
-    /// Intersects multiple Vec<u64> sets, converting to bitmaps.
+    /// Intersects multiple `Vec<u64>` sets, converting to bitmaps.
     ///
     /// # Warning
     ///

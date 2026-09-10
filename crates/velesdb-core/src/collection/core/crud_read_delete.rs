@@ -38,7 +38,7 @@ impl Collection {
     /// # Lock order (Issue: ABBA deadlock, see `.investigation/http-deadlock-2026-07-22/`)
     ///
     /// Acquires `vector_storage` (rank 2) before `payload_storage` (rank 3),
-    /// matching [`Collection::search`](super::super::search::vector). This
+    /// matching [`Collection::search`]. This
     /// used to be reversed (payload then vector), which formed a classic
     /// ABBA deadlock with `search`'s vector-then-payload order: under
     /// `parking_lot`'s writer-preferring `RwLock`, two readers acquiring the

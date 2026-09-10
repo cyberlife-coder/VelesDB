@@ -24,7 +24,7 @@ pub const FREEZE_THRESHOLD: usize = 10_000;
 /// Every posting list in `postings` is sorted ascending by `doc_id`. This
 /// is required by [`SparseInvertedIndex::get_all_postings`] (which feeds
 /// a k-way merge over the per-segment runs) and by
-/// [`super::search::strategy::linear_scan_search`] and
+/// `linear_scan_search` and
 /// `maxscore_search` (which assume sorted cursors). [`MutableSegment`]
 /// enforces the invariant via binary-search insert in `insert` and the
 /// merge-join in `merge_batch_postings`; `freeze_inner` moves the

@@ -878,6 +878,8 @@ impl Database {
     /// groups still inside the window. Otherwise downstream stages may reorder or
     /// drop rows, so we fall back to the conservative server-side ceiling
     /// [`JOIN_ROW_CEILING`] — still bounding OOM without affecting correctness.
+    ///
+    /// [`JOIN_ROW_CEILING`]: crate::collection::search::query::JOIN_ROW_CEILING
     pub(super) fn join_row_budget(
         select: &crate::velesql::SelectStatement,
         analysis: &crate::collection::search::query::pushdown::PushdownAnalysis,

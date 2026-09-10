@@ -63,7 +63,7 @@ impl Collection {
     /// Public ordered-MATCH entry point: runs the full cost-based planner
     /// pipeline (guard-rail pre-check, strategy selection, metrics, RETURN
     /// `ORDER BY` with deterministic tie-break, and post-sort LIMIT) and
-    /// returns ordered [`MatchResult`]s.
+    /// returns ordered [`MatchResult`](super::match_exec::MatchResult)s.
     ///
     /// This is the SINGLE method non-SQL surfaces (REST `/match`, the Python /
     /// TypeScript SDKs) should call so they rank identically to the SQL `/query`
@@ -108,6 +108,8 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if traversal, ordering, or a guard-rail check fails.
+    ///
+    /// [`MatchResult`]: super::match_exec::MatchResult
     pub(in crate::collection::search::query) fn dispatch_match_ordered(
         &self,
         match_clause: &crate::velesql::MatchClause,
@@ -122,6 +124,8 @@ impl Collection {
     /// unconverted) [`MatchResult`]s plus recording metrics and the advisor
     /// query pattern. Shared by the SQL `SearchResult` path and the ordered
     /// `MatchResult` path so strategy dispatch lives in exactly one place.
+    ///
+    /// [`MatchResult`]: super::match_exec::MatchResult
     fn dispatch_match_strategy(
         &self,
         match_clause: &crate::velesql::MatchClause,
@@ -207,6 +211,8 @@ impl Collection {
     /// concurrent `fetch_add` is commutative, so the "Parallel = sum of both
     /// legs" contract asserted by `parallel_counters_sum_both_legs` is
     /// preserved regardless of interleaving.
+    ///
+    /// [`QueryContext`]: crate::guardrails::QueryContext
     fn execute_match_parallel(
         &self,
         match_clause: &crate::velesql::MatchClause,

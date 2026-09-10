@@ -28,9 +28,9 @@ use std::cmp::Reverse;
 /// the Codacy complexity limit.
 ///
 /// `cached_furthest` mirrors `results.peek().0` and is updated by
-/// [`push_candidate`] and [`evict_furthest`] so that the hot-path
-/// termination check in [`should_terminate`] and the admission test
-/// in [`process_batch_results`] avoid repeated heap peeks.
+/// [`Self::push_candidate`] and [`process_batch_results`] so that the
+/// hot-path termination check in [`Self::should_terminate`] and the
+/// admission test in [`process_batch_results`] avoid repeated heap peeks.
 pub(super) struct SearchState {
     pub(super) candidates: CandidateHeap,
     pub(super) results: ResultHeap,

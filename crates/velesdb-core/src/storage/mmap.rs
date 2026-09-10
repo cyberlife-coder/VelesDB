@@ -605,7 +605,7 @@ impl MmapStorage {
     /// if the WAL/mmap lock cannot be acquired immediately, the flush step is
     /// skipped and shutdown continues.
     ///
-    /// Use explicit [`VectorStorage::flush`](crate::storage::traits::VectorStorage::flush)
+    /// Use explicit [`VectorStorage::flush`]
     /// to obtain a deterministic durability barrier.
     pub(crate) fn flush_on_shutdown_best_effort(&self) {
         // 1. Flush WAL first (operation log)

@@ -256,7 +256,7 @@ pub(super) struct RelateParams {
     /// `remember`/`recall`). Same string-or-number contract as `from`.
     #[serde(deserialize_with = "deserialize_id")]
     pub(super) to: u64,
-    /// Directional relationship label, read as `from` <relation> `to`.
+    /// Directional relationship label, read as `from <relation> to`.
     /// Examples: `caused_by`, `depends_on`, `authored_by`, `supersedes`.
     pub(super) relation: String,
 }

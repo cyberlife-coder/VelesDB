@@ -613,7 +613,7 @@ fn metric_from_u8(value: u8) -> std::io::Result<DistanceMetric> {
     }
 }
 
-/// Encodes [`StorageMode`] as a `u8` for on-disk persistence.
+/// Encodes [`StorageMode`](crate::StorageMode) as a `u8` for on-disk persistence.
 const fn storage_mode_to_u8(mode: crate::StorageMode) -> u8 {
     match mode {
         crate::StorageMode::Full => 0,
@@ -625,6 +625,8 @@ const fn storage_mode_to_u8(mode: crate::StorageMode) -> u8 {
 }
 
 /// Decodes a `u8` from disk to [`StorageMode`], defaulting to `Full` for unknown values.
+///
+/// [`StorageMode`]: crate::StorageMode
 const fn storage_mode_from_u8(value: u8) -> crate::StorageMode {
     match value {
         1 => crate::StorageMode::SQ8,

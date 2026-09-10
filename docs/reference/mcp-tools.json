@@ -3609,7 +3609,7 @@
             "type": "string"
           },
           "relation": {
-            "description": "Directional relationship label, read as `from` <relation> `to`.\nExamples: `caused_by`, `depends_on`, `authored_by`, `supersedes`.",
+            "description": "Directional relationship label, read as `from <relation> to`.\nExamples: `caused_by`, `depends_on`, `authored_by`, `supersedes`.",
             "type": "string"
           },
           "to": {

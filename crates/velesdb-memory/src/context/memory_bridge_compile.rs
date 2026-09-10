@@ -296,6 +296,8 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     /// fill up to 1 MiB — so [`Self::source_vector`] caps what it EMBEDS
     /// (the stored content stays whole). The lesson stands: "another layer
     /// already checked" must name which cap, over which field.
+    ///
+    /// [`media::MediaAnalysis::raw_hash`]: crate::context::media::MediaAnalysis::raw_hash
     fn store_context_sources(
         &self,
         augmented: &CompileRequest,
@@ -396,7 +398,7 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     ///
     /// A TEXT fragment is embedded over at most
     /// [`crate::limits::MAX_EMBEDDABLE_TEXT_BYTES`] of its content
-    /// ([`super::embeddable_prefix`]) — a `path`-ingested file can be 1 MiB,
+    /// ([`super::super::embeddable_prefix`]) — a `path`-ingested file can be 1 MiB,
     /// far past what the embedding backend accepts, and handing it over
     /// whole surfaced the backend's raw failure (issue #1654's residue,
     /// found on this very path). Truncating the *embedded* text, not the

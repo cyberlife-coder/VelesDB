@@ -32,7 +32,7 @@ pub(crate) fn compare_op_from_str(op: &str) -> Result<CompareOp, ParseError> {
 /// Parses a raw string literal into a [`Value`].
 ///
 /// Handles integer, float, boolean, null, and single-quoted string literals.
-/// This is the string-based counterpart to the pest rule-based [`parse_value_from_pair`].
+/// This is the string-based counterpart to the pest rule-based [`parse_scalar_from_rule`].
 ///
 /// # Errors
 ///

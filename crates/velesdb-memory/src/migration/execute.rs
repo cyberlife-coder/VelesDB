@@ -1,6 +1,6 @@
 //! The operator's path into the rebuild (#1762, PR C2b).
 //!
-//! [`super::rebuild`] takes staged handles and a journal and drives the pass;
+//! [`super::rebuild()`] takes staged handles and a journal and drives the pass;
 //! this module is everything an operator's `migrate-embeddings` invocation
 //! needs BEFORE that call can be made honestly: the diagnosis, the regime
 //! resolution, a destination that provably is not somebody else's data, a
@@ -21,8 +21,9 @@
 //! # What execute stops short of
 //!
 //! The pass ends with the journal at [`Phase::Prepared`] and every collection
-//! `Complete`. Validation of the destination and the switch itself are the
-//! next PR's work; see [`NOT_YET_SWITCHABLE`](super::not_yet_switchable).
+//! `Complete`. Validating the destination and switching over come after it,
+//! in [`super::validate_destination`] and [`super::switch_over`];
+//! [`super::migrate`] runs all three.
 
 use super::query_error;
 use std::path::{Path, PathBuf};

@@ -155,6 +155,8 @@ impl Collection {
     ///
     /// Returns an error if the directory cannot be created or the config
     /// cannot be saved.
+    ///
+    /// [`HnswParams`]: crate::index::hnsw::HnswParams
     pub fn create_with_full_config(
         path: PathBuf,
         dimension: usize,

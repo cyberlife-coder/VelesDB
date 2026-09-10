@@ -2,7 +2,7 @@
 //!
 //! A scalar subquery `(SELECT AVG(amount) FROM t)` in a `WHERE`/`HAVING`
 //! predicate — or an `INSERT`/`UPDATE` value — is *parsed* as a
-//! [`Value::Subquery`](crate::velesql::Value::Subquery) leaf. Before the outer
+//! [`Value::Subquery`] leaf. Before the outer
 //! query is validated and executed, this module walks the AST, executes each
 //! inner `SELECT`, reduces it to a single row / single column scalar, and
 //! substitutes the resulting literal in place. The downstream filter,

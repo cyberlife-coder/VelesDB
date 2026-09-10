@@ -43,7 +43,7 @@ pub struct QueryContext {
 /// Shared cell the executor records the ran filter strategy into.
 ///
 /// The atomic encoding (0 = unset) is a private detail of this type: callers
-/// only ever [`record`](Self::record) a [`FilterStrategy`] and
+/// only ever [`record`](Self::record) a [`FilterStrategy`](crate::velesql::FilterStrategy) and
 /// [`get`](Self::get) an `Option` back. Relaxed ordering is sufficient — the
 /// only cross-thread hand-off (a rayon `join` leg recording before the join
 /// point returns) is ordered by the join itself.

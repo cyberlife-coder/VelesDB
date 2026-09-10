@@ -76,6 +76,8 @@ pub(crate) fn dot_product_neon(a: &[f32], b: &[f32]) -> f32 {
 /// `fmadd(a, b, acc)` = a*b + acc. This wrapper reorders the arguments.
 ///
 /// SAFETY: `vfmaq_f32` is a non-faulting register operation on aarch64.
+///
+/// [`simd_4acc_dot_loop!`]: crate::simd_4acc_dot_loop!
 #[cfg(target_arch = "aarch64")]
 #[inline]
 unsafe fn neon_fma_compat(
@@ -450,6 +452,8 @@ unsafe fn squared_l2_neon_1acc(a: &[f32], b: &[f32]) -> f32 {
 ///
 /// Apple M1-M4 use 128-byte cache lines; NEON processes 16 floats (64 bytes)
 /// per iteration, so two iterations fully consume one cache line.
+///
+/// [`simd_4acc_l2_loop!`]: crate::simd_4acc_l2_loop!
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
 fn squared_l2_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
