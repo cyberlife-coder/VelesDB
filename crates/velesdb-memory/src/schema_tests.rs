@@ -342,6 +342,9 @@ mod unlink {
             ("see [x](<crate::y>)", "see x"),
             ("see [x](< crate::y >)", "see x"),
             ("see [x](\ncrate::y)", "see x"),
+            ("see [x](\r\ncrate::y)", "see x"),
+            ("see [x](crate::y\n)", "see x"),
+            ("a [b\nc](crate::y) d", "a b\nc d"),
         ] {
             assert_eq!(unlink_rustdoc(text).as_deref(), Some(shown), "{text}");
         }
@@ -417,6 +420,8 @@ mod unlink {
             "see [x](<\ncrate::y>) broken",
             "see [x](<\rcrate::y>) broken",
             "see [x](\n\ncrate::y) broken",
+            "see [x](crate::y\n\n) broken",
+            "see [a\n\nb](crate::y) broken",
             "`decisions[fragment_index]` is unambiguous",
             "``a [`b`] c`` in a double-backtick span",
         ] {

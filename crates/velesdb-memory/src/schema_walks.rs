@@ -178,6 +178,10 @@ fn code_span_len(text: &str) -> usize {
 fn rustdoc_link(after: &str) -> Option<(Cow<'_, str>, &str)> {
     let close = after.find(']')?;
     let (label, tail) = (&after[..close], &after[close + 1..]);
+    // A blank line ends the paragraph, so Markdown reads no link across one.
+    if has_blank_line(label) {
+        return None;
+    }
     if let Some(inline) = tail.strip_prefix('(') {
         return inline_link(label, inline);
     }
@@ -202,7 +206,7 @@ fn rustdoc_link(after: &str) -> Option<(Cow<'_, str>, &str)> {
 fn inline_link<'a>(label: &'a str, inline: &'a str) -> Option<(Cow<'a, str>, &'a str)> {
     let end = closing_paren(inline)?;
     let raw = &inline[..end];
-    if blank_line_around(raw) {
+    if has_blank_line(raw) {
         return None;
     }
     let target = raw.trim();
@@ -214,15 +218,16 @@ fn inline_link<'a>(label: &'a str, inline: &'a str) -> Option<(Cow<'a, str>, &'a
     is_rust_path(target).then(|| (Cow::Borrowed(label), &inline[end + 1..]))
 }
 
-/// Whether the whitespace before or after an inline link's target holds more
-/// than one line ending: a blank line, which ends the paragraph, so Markdown
-/// reads no link.
-fn blank_line_around(raw: &str) -> bool {
-    let lead = &raw[..raw.len() - raw.trim_start().len()];
-    let trail = &raw[raw.trim_end().len()..];
-    [lead, trail]
-        .iter()
-        .any(|ws| ws.replace("\r\n", "\n").matches(['\n', '\r']).count() > 1)
+/// Whether `text` holds a blank line: a whitespace run with more than one
+/// line ending, which ends the paragraph, so Markdown reads no link across it.
+fn has_blank_line(text: &str) -> bool {
+    let mut runs = text.split(|c: char| !c.is_whitespace());
+    runs.any(|run| line_endings(run) > 1)
+}
+
+/// How many line endings `ws` holds, a `\r\n` counting once.
+fn line_endings(ws: &str) -> usize {
+    ws.matches(['\n', '\r']).count() - ws.matches("\r\n").count()
 }
 
 /// A code link, ``[`code`]``: shown as its code span when the code is one
