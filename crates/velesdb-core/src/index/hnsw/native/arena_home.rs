@@ -21,10 +21,15 @@
 //!
 //! Everything outside those three conditions still gets its own disposable
 //! arena, deleted on drop: v1 files written before #2213, big-endian targets,
-//! stores below the capacity floor, and any mapping the filesystem refuses. The
-//! arena is then a cache of something already persisted, which is what makes
-//! throwing it away free — `.vectors` remains the durable copy, and a reopened
-//! collection builds a fresh arena from it.
+//! stores below the capacity floor, and any mapping the filesystem refuses. So
+//! does a store that meets all three but must be normalized — a cosine payload
+//! written before the engine normalized on insert: normalizing an adopted arena
+//! would rewrite `.vectors` on a mere open, so the payload is first copied off
+//! it, into a disposable arena where the storage mode keeps one and onto the
+//! heap where it does not (#2246). The arena is then a cache of something
+//! already persisted, which is what makes throwing it away free — `.vectors`
+//! remains the durable copy, and a reopened collection builds a fresh arena
+//! from it.
 //!
 //! [`sweep_stale`](ArenaHome::sweep_stale) and
 //! [`is_arena_file`](ArenaHome::is_arena_file) therefore keep their subject.

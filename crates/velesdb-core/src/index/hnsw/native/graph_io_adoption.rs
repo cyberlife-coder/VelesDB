@@ -66,8 +66,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             .and_then(|n| n.checked_mul(std::mem::size_of::<f32>()))
             .ok_or_else(|| std::io::Error::other("vector payload size overflows usize"))?;
         crate::alloc_guard::with_min_alloc_byte_limit(min_bytes, || {
-            let mut copy =
-                Self::new_arena(home, dimension, len.max(16)).map_err(std::io::Error::other)?;
+            let mut copy = Self::new_arena(home, dimension, len).map_err(std::io::Error::other)?;
             for i in 0..len {
                 if let Some(vector) = storage.get(i) {
                     copy.insert_at(i, vector).map_err(std::io::Error::other)?;
