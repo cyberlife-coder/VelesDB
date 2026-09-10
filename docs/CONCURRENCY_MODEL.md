@@ -664,7 +664,8 @@ ensure no data is lost.
 │  4. load_bm25_index()                                                  │
 │     └─ bm25.snapshot + bm25.wal replay; payload rebuild if no snapshot │
 │                                                                        │
-│  5. Property, range and edge indexes; named sparse indexes             │
+│  5. Property and range indexes, label index (rebuilt from payloads),   │
+│     edge_store.bin, named sparse indexes                               │
 │     └─ each sparse snapshot, then its WAL replayed over it             │
 │                                                                        │
 │  6. reconcile_point_count()                                            │
@@ -684,9 +685,13 @@ ensure no data is lost.
 │     └─ Any pass mutated the index → index.save() before open returns   │
 │        (the WAL was truncated; the delta has no other witness)         │
 │                                                                        │
-│  8. restore_secondary_indexes_from_config()                            │
+│  8. restore_auto_reindex_from_config(),                                │
+│     restore_secondary_indexes_from_config()                            │
 │                                                                        │
-│  9. run_post_open_hooks() → replay edges.wal over edge_store.bin       │
+│  9. run_post_open_hooks()                                              │
+│     ├─ reindex edge properties from edge_store.bin                     │
+│     ├─ replay edges.wal over edge_store.bin                            │
+│     └─ restore_persisted_quantizers(): trained quantizer artifacts     │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
