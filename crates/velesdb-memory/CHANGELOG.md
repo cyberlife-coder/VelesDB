@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its text, a path such as `[a::B]` or `[fn@f]` as its path without the
   disambiguator. Code spans are copied verbatim. A bare `[name]` stays whether
   or not rustdoc resolves it (`map[key]`, `[sic]`), as do `[0, 1]`, a
-  bracketed code span that is not one word, and reference-style links. Only
+  bracketed code span that is not one word, reference-style links, and a link that spans a line. Only
   `description` strings are rewritten, never instance data such as a
   `default`, so nothing else in a schema changes. A test fails if a published
   description still holds a link the rewrite recognizes, or an inline link

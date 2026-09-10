@@ -178,8 +178,12 @@ fn code_span_len(text: &str) -> usize {
 fn rustdoc_link(after: &str) -> Option<(Cow<'_, str>, &str)> {
     let close = after.find(']')?;
     let (label, tail) = (&after[..close], &after[close + 1..]);
-    // A blank line ends the paragraph, so Markdown reads no link across one.
-    if has_blank_line(label) {
+    // A `[` left open earlier is not this link's: the scan moves on to the one
+    // just before the `]`.
+    if label.contains('[') {
+        return None;
+    }
+    if spans_a_line(label) {
         return None;
     }
     if let Some(inline) = tail.strip_prefix('(') {
@@ -201,33 +205,29 @@ fn rustdoc_link(after: &str) -> Option<(Cow<'_, str>, &str)> {
 
 /// An inline link, `inline` being the text after its `(`: shown as its label
 /// when the target is a Rust path. The target may be padded with spaces and
-/// at most one line ending on either side, and wrapped in `<…>` with spaces
-/// inside but no line ending, as Markdown allows.
+/// wrapped in `<…>` with spaces inside, as Markdown allows; a target that
+/// spans a line is left as written (see [`spans_a_line`]).
 fn inline_link<'a>(label: &'a str, inline: &'a str) -> Option<(Cow<'a, str>, &'a str)> {
     let end = closing_paren(inline)?;
     let raw = &inline[..end];
-    if has_blank_line(raw) {
+    if spans_a_line(raw) {
         return None;
     }
     let target = raw.trim();
-    let target = match target.strip_prefix('<').and_then(|t| t.strip_suffix('>')) {
-        Some(inner) if inner.contains(['\n', '\r']) => return None,
-        Some(inner) => inner.trim(),
-        None => target,
-    };
+    let target = target
+        .strip_prefix('<')
+        .and_then(|t| t.strip_suffix('>'))
+        .map_or(target, str::trim);
     is_rust_path(target).then(|| (Cow::Borrowed(label), &inline[end + 1..]))
 }
 
-/// Whether `text` holds a blank line: a whitespace run with more than one
-/// line ending, which ends the paragraph, so Markdown reads no link across it.
-fn has_blank_line(text: &str) -> bool {
-    let mut runs = text.split(|c: char| !c.is_whitespace());
-    runs.any(|run| line_endings(run) > 1)
-}
-
-/// How many line endings `ws` holds, a `\r\n` counting once.
-fn line_endings(ws: &str) -> usize {
-    ws.matches(['\n', '\r']).count() - ws.matches("\r\n").count()
+/// Whether `text` holds a line ending. Markdown lets a link span lines, but
+/// what a line ending allows there depends on the next line: a blank line, a
+/// heading or a list item ends the paragraph. No published doc comment writes
+/// one, so the rewrite leaves such a link as written, and the guard flags one
+/// whose target is a Rust path.
+fn spans_a_line(text: &str) -> bool {
+    text.contains(['\n', '\r'])
 }
 
 /// A code link, ``[`code`]``: shown as its code span when the code is one

@@ -341,10 +341,7 @@ mod unlink {
             ("see [x]( crate::y)", "see x"),
             ("see [x](<crate::y>)", "see x"),
             ("see [x](< crate::y >)", "see x"),
-            ("see [x](\ncrate::y)", "see x"),
-            ("see [x](\r\ncrate::y)", "see x"),
-            ("see [x](crate::y\n)", "see x"),
-            ("a [b\nc](crate::y) d", "a b\nc d"),
+            ("in [0, 1) see [x](crate::y)", "in [0, 1) see x"),
         ] {
             assert_eq!(unlink_rustdoc(text).as_deref(), Some(shown), "{text}");
         }
@@ -417,11 +414,6 @@ mod unlink {
             "[`value@`]",
             "an [`a<b c`] unbalanced",
             "a [`Vec<T>>`] stray",
-            "see [x](<\ncrate::y>) broken",
-            "see [x](<\rcrate::y>) broken",
-            "see [x](\n\ncrate::y) broken",
-            "see [x](crate::y\n\n) broken",
-            "see [a\n\nb](crate::y) broken",
             "`decisions[fragment_index]` is unambiguous",
             "``a [`b`] c`` in a double-backtick span",
         ] {
@@ -518,6 +510,27 @@ mod unlink {
             linked.len(),
             &linked[..linked.len().min(5)]
         );
+    }
+
+    /// Markdown lets a link span lines, but what a line ending allows there
+    /// depends on the next line, and no published doc comment writes one: the
+    /// rewrite leaves every such link as written, and the guard flags one that
+    /// names a Rust path.
+    #[test]
+    fn a_link_that_spans_a_line_stays_as_written() {
+        for text in [
+            "see [x](\ncrate::y)",
+            "see [x](\r\ncrate::y)",
+            "see [x](\rcrate::y)",
+            "see [x](crate::y\n)",
+            "see [x](<\ncrate::y>)",
+            "see [x](\n\ncrate::y)",
+            "a [b\nc](crate::y) d",
+            "see [a\n\nb](crate::y)",
+        ] {
+            assert_eq!(unlink_rustdoc(text), None, "{text:?}");
+            assert!(names_rust_path_target(text), "the guard misses {text:?}");
+        }
     }
 
     /// Whether `text` holds an inline link whose target, past any whitespace
