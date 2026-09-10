@@ -367,8 +367,8 @@ pub enum SearchQuality {
     Balanced,
     /// Accurate search with `ef_search=512`. ~100% recall.
     Accurate,
-    /// Exhaustive: every stored vector is scored, so recall is 1.0 by
-    /// construction. This variant leaves the graph — `try_search_special_quality`
+    /// Exhaustive: every stored vector is scored, so it returns the exact top-k
+    /// under the index's own distance, ties aside. This variant leaves the graph — `try_search_special_quality`
     /// routes it straight to `search_brute_force` before `ef_search` is ever
     /// consulted, so [`Self::ef_search`]'s `4096.max(k * 100)` is not the number
     /// this mode runs at. It is O(n / cores).
@@ -380,9 +380,10 @@ pub enum SearchQuality {
     /// `perfect_quality_is_refused_above_the_configured_cap`.
     ///
     /// This paragraph said the opposite until #2238 — "tunes the HNSW graph's
-    /// effort and is not exhaustive", with a ~0.9994 recall figure at 1M that
-    /// this path cannot produce and a corpus size the guard would refuse. It
-    /// was read off `ef_search()` without checking which arm runs.
+    /// effort and is not exhaustive". Its ~0.9994 figure at 1M was measured
+    /// through this very scan, on `HnswIndex` directly, which has no cap
+    /// (#1225); a collection that size is refused. The paragraph was read off
+    /// `ef_search()` without checking which arm runs.
     Perfect,
     /// Custom `ef_search` value.
     Custom(usize),

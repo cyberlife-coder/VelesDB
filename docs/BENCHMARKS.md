@@ -391,7 +391,7 @@ First reproducible run, **VelesDB v3.3.0** (M=16, ef_construction=200, L2), full
 | 256 | 0.9659 | 235.8 µs |
 | 512 | 0.9759 | 433.3 µs |
 
-**Production path** (`search_with_quality` — quality-aware ef scaling + exact-SIMD reranking; the recall a real application query gets):
+**Production path** (`search_with_quality` — quality-aware ef scaling + exact-SIMD reranking in the graph modes; `Perfect` is a plain exhaustive scan, which a collection refuses at this size):
 
 | Mode | ef_search (at 1M) | Recall@10 |
 |------|-------------------|-----------|

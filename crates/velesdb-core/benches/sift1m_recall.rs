@@ -13,7 +13,8 @@
 //! apples-to-apples plain-HNSW path, directly comparable to `HNSWlib` /
 //! `Faiss` / `ScaNN` published SIFT1M numbers. `VelesDB`'s production search
 //! path ([`HnswIndex::search_with_quality`]) wraps this with ef scaling +
-//! exact-SIMD reranking and is measured separately by
+//! exact-SIMD reranking in its graph modes — its `Perfect` mode scans
+//! exhaustively instead — and is measured separately by
 //! `benches/recall_comprehensive.rs`.
 //!
 //! Build with the gating feature, otherwise the bench is not discovered:
@@ -198,12 +199,14 @@ fn measure_recall_at_10(
     }
 }
 
-/// Reports recall@10 for the PRODUCTION search path (`search_with_quality`),
-/// which adds quality-aware ef scaling + exact re-ranking on top of the raw
-/// graph traversal measured by [`report_recall`]. This is the recall a real
-/// query gets at the `Accurate` / `Perfect` quality levels — distinct from the
-/// apples-to-apples plain-HNSW numbers above (different question, see module
-/// docs). Printed as `RECALL_REPORT_QUALITY\tmode=<M>\trecall@10=<R>`.
+/// Reports recall@10 for the PRODUCTION search path (`search_with_quality`).
+/// For `Accurate` that is quality-aware ef scaling + exact re-ranking on top
+/// of the raw graph traversal measured by [`report_recall`]; for `Perfect` it
+/// is an exhaustive scan, which a collection refuses at 1M under its default
+/// `limits.max_perfect_mode_vectors`, so that row is `HnswIndex`'s, not a
+/// collection's. Distinct from the apples-to-apples plain-HNSW numbers above
+/// (different question, see module docs). Printed as
+/// `RECALL_REPORT_QUALITY\tmode=<M>\trecall@10=<R>`.
 fn report_recall_quality(index: &HnswIndex, data: &Sift1M) {
     for (label, quality) in [
         ("Accurate", SearchQuality::Accurate),

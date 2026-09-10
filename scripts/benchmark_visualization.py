@@ -21,16 +21,9 @@ class BenchmarkResult:
 RESULTS_10K_128D = [
     BenchmarkResult("Fast", 64, 92.2, 0.036),
     BenchmarkResult("Balanced", 128, 98.8, 0.057),
-    BenchmarkResult("Accurate", 256, 100.0, 0.130),
+    # 512, not 256: Accurate's effort since 9c222258 (2026-01-09) (#2250).
+    BenchmarkResult("Accurate", 512, 100.0, 0.130),
     BenchmarkResult("Perfect", None, 100.0, 0.200),
-]
-
-# 100K/768D extrapolated from 10K scaling (actual benchmarks pending)
-RESULTS_100K_768D = [
-    BenchmarkResult("Fast", 64, 88.0, 0.6),
-    BenchmarkResult("Balanced", 128, 97.0, 0.9),
-    BenchmarkResult("Accurate", 256, 99.5, 1.5),
-    BenchmarkResult("Perfect", None, 100.0, 2.5),
 ]
 
 @dataclass
@@ -95,41 +88,6 @@ def create_recall_latency_chart(results: List[BenchmarkResult], title: str, file
     plt.savefig(filename, dpi=150, bbox_inches='tight', facecolor='white')
     plt.close()
     print(f"✅ Chart saved: {filename}")
-
-def create_comparison_chart(results_10k: List[BenchmarkResult], 
-                           results_100k: List[BenchmarkResult],
-                           filename: str):
-    """Create a side-by-side comparison chart."""
-    
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
-    
-    for ax, results, title, color in [
-        (ax1, results_10k, "10K vectors / 128D", '#2563eb'),
-        (ax2, results_100k, "100K vectors / 768D", '#dc2626')
-    ]:
-        recalls = [r.recall for r in results]
-        latencies = [r.latency_p50_ms for r in results]
-        modes = [r.mode for r in results]
-        
-        ax.plot(latencies, recalls, 'o-', linewidth=2.5, markersize=10, 
-                color=color, markerfacecolor='white', markeredgewidth=2)
-        
-        for lat, rec, mode in zip(latencies, recalls, modes):
-            ax.annotate(f'{mode}', (lat, rec), textcoords="offset points",
-                       xytext=(5, 5), fontsize=9)
-        
-        ax.axhline(y=95, color='green', linestyle='--', alpha=0.5)
-        ax.set_xlabel('Latency P50 (ms)', fontsize=12, fontweight='bold')
-        ax.set_ylabel('Recall@10 (%)', fontsize=12, fontweight='bold')
-        ax.set_title(title, fontsize=14, fontweight='bold')
-        ax.set_ylim(80, 101)
-        ax.grid(True, alpha=0.3)
-    
-    fig.suptitle('VelesDB Core - Recall vs Latency Scaling', fontsize=16, fontweight='bold')
-    plt.tight_layout()
-    plt.savefig(filename, dpi=150, bbox_inches='tight', facecolor='white')
-    plt.close()
-    print(f"✅ Comparison chart saved: {filename}")
 
 def create_native_hnsw_comparison(results: List[NativeVsHnswRsResult], filename: str):
     """Create a bar chart comparing Native HNSW vs hnsw_rs."""
@@ -261,12 +219,6 @@ if __name__ == "__main__":
     create_ef_scaling_chart(
         RESULTS_10K_128D,
         os.path.join(charts_dir, "ef_scaling_10k_128d.png")
-    )
-    
-    create_comparison_chart(
-        RESULTS_10K_128D,
-        RESULTS_100K_768D,
-        os.path.join(charts_dir, "recall_comparison.png")
     )
     
     create_native_hnsw_comparison(
