@@ -1290,16 +1290,6 @@ fn cut_parameter_list(region: &str, method: &str) -> String {
     window
 }
 
-/// `region` with every `///` doc-comment line removed.
-///
-/// Route 2's window keeps doc comments — deliberately, per the module
-/// header's "What this guard does NOT prove": a field named only in prose is
-/// an accepted weak pass for "is the field DECLARED". The stale check (below)
-/// asks a different question, "did the RENDERED form change", which prose
-/// cannot answer either way — so it reads this stricter window instead
-/// (#1760: documenting `recall_where`'s contract as "Returns caller memories
-/// ONLY" made a still-true [`ShapeDivergence`] for the field `memories` look
-/// stale, because the sentence, not the return value, named it).
 /// `region` with every comment removed — line (`//`, `///`, `//!`) and block
 /// (`/* */`) — so a snippet matched against it is matched against code only.
 ///
@@ -1352,6 +1342,16 @@ fn without_comments(region: &str) -> String {
     out
 }
 
+/// `region` with every `///` doc-comment line removed.
+///
+/// Route 2's window keeps doc comments — deliberately, per the module
+/// header's "What this guard does NOT prove": a field named only in prose is
+/// an accepted weak pass for "is the field DECLARED". The stale check (below)
+/// asks a different question, "did the RENDERED form change", which prose
+/// cannot answer either way — so it reads this stricter window instead
+/// (#1760: documenting `recall_where`'s contract as "Returns caller memories
+/// ONLY" made a still-true [`ShapeDivergence`] for the field `memories` look
+/// stale, because the sentence, not the return value, named it).
 fn without_doc_comments(region: &str) -> String {
     region
         .lines()
@@ -2679,9 +2679,10 @@ fn a_whole_relay_quoted_in_a_comment_is_not_a_relay() {
             "{form}: a comment quoting the relay is not the relay"
         );
     }
-    // CONTROL: the code itself counts — even after a string holding `//`.
+    // CONTROL: the code itself counts — even behind a string holding `//` on
+    // its own line, where a stripper blind to strings would cut it off.
     let real = format!(
-        "let url = \"http://local\";\nlet context = {relay};\nout.set_item(\"context\", context);"
+        "let url = \"http://local\"; let context = {relay};\nout.set_item(\"context\", context);"
     );
     let (gaps, _) = nested_gaps("velesdb-python", "compile_transcript", &nested, &real);
     assert!(gaps.is_empty(), "CONTROL: the code itself counts: {gaps:?}");
