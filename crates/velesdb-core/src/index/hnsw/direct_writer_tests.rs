@@ -15,7 +15,8 @@ fn make_index(dim: usize) -> HnswIndex {
 }
 
 /// Creates a test `HnswIndex` with its exact-distance features off
-/// (`new_fast_insert`); the graph still stores every vector.
+/// (`new_fast_insert`): graph inserts still store every vector, the direct
+/// writer places none.
 fn make_index_no_storage(dim: usize) -> HnswIndex {
     HnswIndex::new_fast_insert(dim, DistanceMetric::Cosine).expect("test index creation")
 }
