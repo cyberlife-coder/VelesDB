@@ -146,10 +146,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   enforced. Two neighbouring `LimitsOptions` fields claimed "not yet enforced"
   for caps `RuntimeLimits` enforces; corrected with them. The cap is the
   collection's — `HnswIndex` itself scans without one, and its module doc now
-  says so. `BENCHMARKS.md`'s 0.9994-at-1M row is kept, relabelled a graph
-  traversal at ef ≈ 8192: an exhaustive scan reads 1.0, and batch `Perfect`
-  has been one only since #358 — before it, batch search traversed the graph,
-  so the figure may be that; no committed bench emits it. Two benchmarks
+  says so. `BENCHMARKS.md`'s 0.9994-at-1M row is `Perfect` — an exhaustive
+  scan, from `sift1m_recall.rs` (#1225) — and loses the `~8192` it showed, a
+  computed effort that never ran; why a scan reads 0.9994 rather than 1.0
+  against SIFT1M's ground truth is not established. Two benchmarks
   printed the exhaustive scan as `ef=4096`; relabelled `exhaustive` (#2246,
   P3).
 
@@ -159,8 +159,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   1M. It is exhaustive: `try_search_special_quality` routes the variant to
   `search_brute_force` before `ef_search` is read, and a collection above
   `limits.max_perfect_mode_vectors` (default 500 000) is refused with
-  `Error::GuardRail` rather than scanned — so the 1M figure describes a run
-  that cannot happen. The doc was written from `ef_search()` without checking
+  `Error::GuardRail` rather than scanned — so a collection at the default
+  cap cannot produce the 1M figure; it came from an exhaustive scan run on
+  `HnswIndex` directly (#1225). The doc was written from `ef_search()` without checking
   which arm runs. Corrected, and pinned by
   `crates/velesdb-core/tests/perfect_mode_semantics.rs`, which sees the guard
   rail refuse and sees `ef = 4096` accepted on the same collection.

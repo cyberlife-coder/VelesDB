@@ -396,12 +396,12 @@ First reproducible run, **VelesDB v3.3.0** (M=16, ef_construction=200, L2), full
 | Mode | ef_search (at 1M) | Recall@10 |
 |------|-------------------|-----------|
 | Accurate | ~1024 | 0.9803 |
-| ef ≈ 8192 (graph) ¹ | ~8192 | 0.9994 |
+| Perfect (exhaustive scan) ¹ | — | 0.9994 |
 
 Notes:
 - The two paths answer different questions: the plain path is for cross-implementation comparison; the production path is what an application actually calls. Don't compare the plain numbers against the 10K production-path figures elsewhere in this doc.
 - Recall climbs monotonically with `ef_search`; ef=128 (0.9435) clears the ≥ 0.90 regression floor (§11.5) with margin.
-- ¹ **This row is a graph traversal at ef ≈ 8192, not an exhaustive scan.** It sat under the `Perfect` label, but an exhaustive scan reads 1.0: 0.9994 is a graph traversal's figure. Single-query `Perfect` has scanned exhaustively since the repository's first commit; batch search ran `Perfect` on the graph until #358 (2026-03-22), so this row may be batch `Perfect` from before then. No committed bench emits it, so its provenance is unrecorded. At 1M a collection refuses `Perfect` under the default `limits.max_perfect_mode_vectors` (500 000); with the cap raised, its recall is 1.0 by construction, at O(n) cost. The figure stays because it is the best graph recall measured at 1M: ~0.06% of true neighbours fall outside even this candidate pool, and exact reranking cannot recover a neighbour the traversal never visited.
+- ¹ **This row is `Perfect`, an exhaustive scan.** It comes from `sift1m_recall.rs` (#1225), whose quality report calls `HnswIndex::search_with_quality(…, Perfect)`: that returns `search_brute_force` over every stored vector before any ef is computed. The `~8192` the row used to show was `Perfect.ef_search_for_scale(10, 1M)`, a computed label, not an effort that ran. Why an exhaustive scan scores 0.9994 rather than 1.0 against SIFT1M's ground truth is not established: distance ties among SIFT's integer-valued vectors, broken differently from the ground truth, and f32 rounding are candidates, not measured causes. A collection refuses `Perfect` at 1M under the default `limits.max_perfect_mode_vectors` (500 000); this bench calls `HnswIndex` directly, which has no cap.
 
 Literature reference points (published by the respective libraries on similar hardware — **not VelesDB numbers**, orientation only):
 
