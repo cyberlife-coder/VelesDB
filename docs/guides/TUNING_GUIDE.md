@@ -221,9 +221,9 @@ parameter with dynamic scaling based on the requested result count `k`.
 | `Balanced` (default) | 160 | max(160, k*5) | 99.8%* | General purpose, production |
 | `Accurate` | 512 | max(512, k*16) | 100%*; 0.98 on SIFT1M's 1M | Analytics, batch processing |
 | `Perfect` | — (exhaustive scan, no graph) | — | exact top-k, ties aside | Ground truth, evaluation; refused above `limits.max_perfect_mode_vectors` |
-| `AutoTune` | size-aware | `auto_ef_range(count, dim, k)`; falls back to max(160, k*5) without collection info; other search paths in [When the two phases run](SEARCH_MODES.md#when-the-two-phases-run) | not measured | No ef to pick by hand (see [AutoTune Mode](#autotune-mode-v172)) |
+| `AutoTune` | size-aware | `auto_ef_range(count, dim, k)` where both phases run; elsewhere Balanced's max(160, k*5), scaled by size ([When the two phases run](SEARCH_MODES.md#when-the-two-phases-run)) | not measured | No ef to pick by hand (see [AutoTune Mode](#autotune-mode-v172)) |
 | `Custom(n)` | n | n | Varies | Fine-grained control |
-| `Adaptive { min_ef, max_ef }` | max(min_ef, k) | a hard query once, to min(2 × base, max_ef) when larger; one pass on the paths in [When the two phases run](SEARCH_MODES.md#when-the-two-phases-run) | not measured | Mixed workloads, latency-sensitive |
+| `Adaptive { min_ef, max_ef }` | max(min_ef, k) | a hard query once, to min(2 × base, max_ef) when larger; not on every search path ([When the two phases run](SEARCH_MODES.md#when-the-two-phases-run)) | not measured | Mixed workloads, latency-sensitive |
 
 \* Recall@10 in `recall_benchmark` (10K random 128-D vectors, an index built with `HnswParams::max_recall`, 100 queries), measured 2026-09-10 on 6.0.0; see [BENCHMARKS.md](../BENCHMARKS.md#hnsw-recall-profiles-10k128d). No recorded run measures `AutoTune` or `Adaptive` yet (#2266).
 

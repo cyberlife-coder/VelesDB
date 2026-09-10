@@ -425,10 +425,10 @@ pub enum SearchQuality {
     /// - 100K and more: `k * 12`
     /// - above 512 dimensions: times 1.5
     ///
-    /// `min_ef` is at least `k`, and `max_ef` is `4 * min_ef`. A bitmap filter
-    /// matching over 1% and at most 80% of the collection, and an unfiltered
-    /// query with `rerank = false`, run one pass instead (#2268). No recorded
-    /// run measures its latency or recall (#2266).
+    /// `min_ef` is at least `k`, and `max_ef` is `4 * min_ef`. Some search paths
+    /// run one pass, or no graph search, instead: the Search Modes guide lists
+    /// them ("When the two phases run"; #2268). No recorded run measures its
+    /// latency or recall (#2266).
     ///
     /// # Example
     ///

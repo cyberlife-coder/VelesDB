@@ -173,13 +173,20 @@ looks "hard". No recorded run measures its latency or recall yet (#2266).
 
 #### When the two phases run
 
-`search_with_quality` runs both phases, for Adaptive and for AutoTune, on an unfiltered search of an index holding more than 100 vectors, and on a filter the collection post-filters: one no secondary index resolves to a bitmap (a `NOT`, a non-indexed field), or a bitmap matching more than 80% of the collection. The other paths run something else:
+`HnswIndex::search_with_quality` is where Adaptive and AutoTune run their phases. Whether a search reaches it depends on its path:
 
-- an index of 100 vectors or fewer, with exact-distance features on: an exact scan, before any graph search;
-- a filter resolved to a bitmap matching 1% of the collection or less: an exact scan of the matching vectors, off the graph;
-- a filter resolved to a bitmap matching more than 1% and at most 80%: one graph pass at the preset's ef, scaled to the oversampled candidate count (at least k + 10) and the index size. It retries once, at twice that ef capped at 10,000, when fewer results than that count survive the filter and its candidate pool is below 10,000 (#2268);
-- an unfiltered VelesQL query with `rerank = false`: one pass at the preset's scaled ef (#2268);
-- a REST search with a filter: the mode is not applied (#457).
+| Search | What runs |
+|---|---|
+| Unfiltered | both phases |
+| A filter the collection post-filters: no secondary index resolves it to a bitmap (a `NOT`, a non-indexed field), or its bitmap matches more than 80% of the collection | both phases, for an oversampled k |
+| A filter resolved to a bitmap matching more than 1% and at most 80% | one graph pass at the preset's ef, scaled to the oversampled count (at least k + 10, at most 10,000) and the index size; retried once at twice that ef, capped at 10,000, when fewer results than that count survive and the candidate pool is below 10,000 (#2268) |
+| A filter resolved to a bitmap matching 1% or less | an exact scan of the matching vectors |
+| VelesQL `NEAR` with a metadata filter, planned `GraphFirst` | an exact scan of the matching rows, scored by similarity; no mode applies |
+| VelesQL `NEAR` with a metadata filter, planned `Parallel` | that scan and the filtered search above, merged |
+| An unfiltered VelesQL query with `rerank = false` | one pass at the preset's scaled ef (#2268) |
+| A REST search with a filter | the mode is not applied (#457) |
+
+On the first two rows, an index of 100 vectors or fewer with exact-distance features on is scanned exactly instead. Where a single pass runs, Adaptive uses `max(min_ef, k)` and AutoTune Balanced's `max(160, k*5)`, each scaled by the index size.
 
 **Use cases:**
 - Mixed workloads where most queries are easy
