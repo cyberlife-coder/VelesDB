@@ -20,6 +20,8 @@ const DIM: usize = 32;
 const POINTS: usize = 3_000;
 const K: usize = 10;
 const LOW_EF: usize = 16;
+/// Queries the CONTROL is taken over: one could come out exact by chance.
+const QUERIES: usize = 50;
 const CAP: usize = 10;
 
 const _: () = assert!(
@@ -113,32 +115,40 @@ fn perfect_quality_is_refused_above_the_configured_cap() {
 /// The first version asserted `top1 == 7` on a collinear fixture, which every
 /// mode satisfies: routing `Perfect` to a low-ef graph search would have left it
 /// green (#2246, P2-e). The answer is now compared with a ground truth computed
-/// here, after a CONTROL shows a low-ef graph search misses on this fixture.
+/// here, after a CONTROL shows a low-ef graph search misses on this fixture —
+/// on at least one of `QUERIES` queries, not on one: `search_with_ef` reranks
+/// `4 × k` candidates exactly and the graph is built by a parallel insert, so a
+/// single query can come out exact by chance and turn the control red.
 #[test]
 fn perfect_quality_runs_once_the_cap_allows_it_and_is_exact() {
     let dir = tempfile::TempDir::new().expect("test: tempdir");
     let collection = collection_with_cap(&dir, POINTS + 1);
-    let query = vector(POINTS as u64 + 1);
-    let truth = exact_top_k(&query, K);
     let ids = |hits: Vec<velesdb_core::SearchResult>| {
         hits.into_iter().map(|r| r.point.id).collect::<Vec<_>>()
     };
 
-    let graph = ids(collection
-        .search_with_ef(&query, K, LOW_EF)
-        .expect("test: low-ef graph search"));
-    assert_ne!(
-        graph, truth,
-        "CONTROL: a low-ef graph search must miss on this fixture, or the \
-         exactness asserted below would prove nothing about Perfect"
-    );
-
-    let perfect = ids(collection
-        .search_with_quality(&query, K, SearchQuality::Perfect)
-        .expect("test: Perfect under the cap must run"));
-    assert_eq!(
-        perfect, truth,
-        "Perfect must return the exact top-k, in order"
+    let mut graph_misses = 0;
+    for i in 0..QUERIES {
+        let query = vector((POINTS + 1 + i) as u64);
+        let truth = exact_top_k(&query, K);
+        let graph = ids(collection
+            .search_with_ef(&query, K, LOW_EF)
+            .expect("test: low-ef graph search"));
+        if graph != truth {
+            graph_misses += 1;
+        }
+        let perfect = ids(collection
+            .search_with_quality(&query, K, SearchQuality::Perfect)
+            .expect("test: Perfect under the cap must run"));
+        assert_eq!(
+            perfect, truth,
+            "Perfect must return the exact top-k, in order"
+        );
+    }
+    assert!(
+        graph_misses > 0,
+        "CONTROL: a low-ef graph search must miss on this fixture — on at least one of \
+         {QUERIES} queries — or the exactness asserted above would prove nothing about Perfect"
     );
 }
 

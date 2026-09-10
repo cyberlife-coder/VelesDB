@@ -116,6 +116,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   arrived with the adoption rather than a latent defect. The index is now saved
   before the call returns, and `reorder_durability.rs` pins it — seen failing
   with the save removed.
+
 - **Seven guards verified their result and never their premise.** The worst
   reopened #2232 silently: `test_exactly_one_step_produces_the_verdict` matched
   `steps\.\w+\.conclusion`, any identifier, so renaming the mirror step's `id:`
