@@ -14,7 +14,7 @@
 
 use super::native_inner::NativeHnswInner;
 use super::params::{HnswParams, SearchQuality};
-use super::sharded_mappings::ShardedMappings;
+use super::sharded_mappings::{ShardedMappings, SlotsPinned};
 use super::upsert;
 use crate::distance::DistanceMetric;
 use crate::index::VectorIndex;
@@ -193,7 +193,7 @@ impl NativeHnswIndex {
         // renumbered between the push that returned it and the mapping.
         let inner = self.inner.read();
         let slot = inner.insert(vector)?;
-        self.mappings.assign(id, slot);
+        self.mappings.assign(id, slot, SlotsPinned::by_read(&inner));
         drop(inner);
         Ok(())
     }
@@ -216,7 +216,8 @@ impl NativeHnswIndex {
         let inner = self.inner.read();
         let slots = inner.parallel_insert(&vectors)?;
         for ((id, _), slot) in items.iter().zip(slots) {
-            self.mappings.assign(*id, slot);
+            self.mappings
+                .assign(*id, slot, SlotsPinned::by_read(&inner));
         }
         drop(inner);
         Ok(())

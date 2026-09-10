@@ -22,7 +22,7 @@ fn test_sharded_mappings_new_is_empty() {
 #[test]
 fn test_sharded_mappings_get_idx() {
     let mappings = ShardedMappings::new();
-    mappings.assign(42, 0);
+    mappings.assign(42, 0, SlotsPinned::unchecked());
     assert_eq!(mappings.get_idx(42), Some(0));
     assert_eq!(mappings.get_idx(999), None);
 }
@@ -30,7 +30,7 @@ fn test_sharded_mappings_get_idx() {
 #[test]
 fn test_sharded_mappings_get_id() {
     let mappings = ShardedMappings::new();
-    mappings.assign(42, 0);
+    mappings.assign(42, 0, SlotsPinned::unchecked());
     assert_eq!(mappings.get_id(0), Some(42));
     assert_eq!(mappings.get_id(999), None);
 }
@@ -38,7 +38,7 @@ fn test_sharded_mappings_get_id() {
 #[test]
 fn test_sharded_mappings_remove() {
     let mappings = ShardedMappings::new();
-    mappings.assign(42, 0);
+    mappings.assign(42, 0, SlotsPinned::unchecked());
     let result = mappings.remove(42);
     assert_eq!(result, Some(0));
     assert!(mappings.is_empty());
@@ -55,7 +55,7 @@ fn test_sharded_mappings_remove_nonexistent() {
 #[test]
 fn test_sharded_mappings_contains() {
     let mappings = ShardedMappings::new();
-    mappings.assign(42, 0);
+    mappings.assign(42, 0, SlotsPinned::unchecked());
     assert!(mappings.contains(42));
     assert!(!mappings.contains(999));
 }
@@ -64,16 +64,16 @@ fn test_sharded_mappings_contains() {
 fn test_sharded_mappings_with_capacity() {
     let mappings = ShardedMappings::with_capacity(1000);
     assert!(mappings.is_empty());
-    assert_eq!(mappings.assign(1, 0), None);
+    assert_eq!(mappings.assign(1, 0, SlotsPinned::unchecked()), None);
     assert_eq!(mappings.get_idx(1), Some(0));
 }
 
 #[test]
 fn test_sharded_mappings_iter() {
     let mappings = ShardedMappings::new();
-    mappings.assign(10, 0);
-    mappings.assign(20, 1);
-    mappings.assign(30, 2);
+    mappings.assign(10, 0, SlotsPinned::unchecked());
+    mappings.assign(20, 1, SlotsPinned::unchecked());
+    mappings.assign(30, 2, SlotsPinned::unchecked());
     let mut items: Vec<(u64, usize)> = mappings.iter().collect();
     assert_eq!(items.len(), 3);
     // DashMap iteration order is non-deterministic; sort before exact compare.
@@ -90,7 +90,7 @@ fn test_sharded_mappings_concurrent_read_write() {
     let mappings = Arc::new(ShardedMappings::new());
 
     for id in 0..1000u64 {
-        mappings.assign(id, slot(id));
+        mappings.assign(id, slot(id), SlotsPinned::unchecked());
     }
 
     let num_readers = 4;
@@ -113,7 +113,7 @@ fn test_sharded_mappings_concurrent_read_write() {
         handles.push(thread::spawn(move || {
             let start = 1000 + t * 100;
             for id in start..(start + 100) {
-                m.assign(id, slot(id));
+                m.assign(id, slot(id), SlotsPinned::unchecked());
             }
         }));
     }
@@ -137,7 +137,7 @@ fn test_sharded_mappings_no_data_race() {
             thread::spawn(move || {
                 for i in 0..ops_per_thread {
                     let id = t * ops_per_thread + i;
-                    m.assign(id, slot(id));
+                    m.assign(id, slot(id), SlotsPinned::unchecked());
                     assert_eq!(m.get_idx(id), Some(slot(id)));
                     assert_eq!(m.get_id(slot(id)), Some(id));
                 }
@@ -165,7 +165,7 @@ fn concurrent_assigns_of_disjoint_slots_stay_consistent() {
             thread::spawn(move || {
                 for i in 0..500u64 {
                     let id = t * 1_000 + i;
-                    mappings.assign(id, slot(id));
+                    mappings.assign(id, slot(id), SlotsPinned::unchecked());
                 }
             })
         })
@@ -195,7 +195,7 @@ fn concurrent_assigns_of_one_id_leave_exactly_one_slot_mapped() {
             let m = Arc::clone(&mappings);
             thread::spawn(move || {
                 for id in 0..ids {
-                    m.assign(id, slot(t * ids + id));
+                    m.assign(id, slot(t * ids + id), SlotsPinned::unchecked());
                 }
             })
         })
@@ -228,7 +228,7 @@ fn concurrent_assigns_of_one_id_leave_exactly_one_slot_mapped() {
 #[test]
 fn test_remove_reverse_cleans_stale_idx_to_id() {
     let mappings = ShardedMappings::new();
-    mappings.assign(42, 0);
+    mappings.assign(42, 0, SlotsPinned::unchecked());
 
     // remove_reverse only removes the reverse mapping (idx -> id)
     mappings.remove_reverse(0, 42);
@@ -244,7 +244,7 @@ fn test_remove_reverse_cleans_stale_idx_to_id() {
 #[test]
 fn test_remove_reverse_nonexistent_idx_is_noop() {
     let mappings = ShardedMappings::new();
-    mappings.assign(42, 0);
+    mappings.assign(42, 0, SlotsPinned::unchecked());
 
     // Removing a reverse mapping for an idx that doesn't exist is a no-op
     mappings.remove_reverse(999, 42);
@@ -257,7 +257,7 @@ fn test_remove_reverse_nonexistent_idx_is_noop() {
 #[test]
 fn test_remove_reverse_leaves_another_owners_entry() {
     let mappings = ShardedMappings::new();
-    mappings.assign(84, 5);
+    mappings.assign(84, 5, SlotsPinned::unchecked());
 
     mappings.remove_reverse(5, 42);
 
@@ -280,9 +280,9 @@ fn test_sharded_mappings_as_parts_empty() {
 #[test]
 fn test_sharded_mappings_as_parts_with_data() {
     let mappings = ShardedMappings::new();
-    mappings.assign(100, 0);
-    mappings.assign(200, 1);
-    mappings.assign(300, 2);
+    mappings.assign(100, 0, SlotsPinned::unchecked());
+    mappings.assign(200, 1, SlotsPinned::unchecked());
+    mappings.assign(300, 2, SlotsPinned::unchecked());
 
     let (id_to_idx, idx_to_id, next_idx) = mappings.as_parts();
     assert_eq!(id_to_idx.len(), 3);
@@ -296,9 +296,9 @@ fn test_sharded_mappings_as_parts_with_data() {
 #[test]
 fn test_sharded_mappings_from_parts_roundtrip() {
     let original = ShardedMappings::new();
-    original.assign(42, 0);
-    original.assign(100, 1);
-    original.assign(999, 2);
+    original.assign(42, 0, SlotsPinned::unchecked());
+    original.assign(100, 1, SlotsPinned::unchecked());
+    original.assign(999, 2, SlotsPinned::unchecked());
 
     let (id_to_idx, idx_to_id, next_idx) = original.as_parts();
     let restored = ShardedMappings::from_parts(id_to_idx, idx_to_id, next_idx);
@@ -315,8 +315,8 @@ fn test_sharded_mappings_from_parts_roundtrip() {
 #[test]
 fn test_sharded_mappings_from_parts_preserves_next_idx() {
     let original = ShardedMappings::new();
-    original.assign(1, 0);
-    original.assign(2, 1);
+    original.assign(1, 0, SlotsPinned::unchecked());
+    original.assign(2, 1, SlotsPinned::unchecked());
 
     let (id_to_idx, idx_to_id, next_idx) = original.as_parts();
     let restored = ShardedMappings::from_parts(id_to_idx, idx_to_id, next_idx);
@@ -327,9 +327,9 @@ fn test_sharded_mappings_from_parts_preserves_next_idx() {
 #[test]
 fn test_clear_resets_mappings_and_next_idx() {
     let mappings = ShardedMappings::new();
-    mappings.assign(10, 0);
-    mappings.assign(20, 1);
-    mappings.assign(30, 2);
+    mappings.assign(10, 0, SlotsPinned::unchecked());
+    mappings.assign(20, 1, SlotsPinned::unchecked());
+    mappings.assign(30, 2, SlotsPinned::unchecked());
     assert_eq!(mappings.next_idx(), 3, "next_idx advanced before clear");
 
     mappings.clear();
@@ -347,7 +347,7 @@ fn test_clear_resets_mappings_and_next_idx() {
 #[test]
 fn assign_maps_both_directions() {
     let mappings = ShardedMappings::new();
-    assert_eq!(mappings.assign(42, 7), None);
+    assert_eq!(mappings.assign(42, 7, SlotsPinned::unchecked()), None);
     assert_eq!(mappings.get_idx(42), Some(7));
     assert_eq!(mappings.get_id(7), Some(42));
 }
@@ -355,8 +355,8 @@ fn assign_maps_both_directions() {
 #[test]
 fn assign_to_a_new_slot_retires_the_old_reverse_entry() {
     let mappings = ShardedMappings::new();
-    mappings.assign(42, 3);
-    assert_eq!(mappings.assign(42, 9), Some(3));
+    mappings.assign(42, 3, SlotsPinned::unchecked());
+    assert_eq!(mappings.assign(42, 9, SlotsPinned::unchecked()), Some(3));
     assert_eq!(mappings.get_idx(42), Some(9));
     assert_eq!(mappings.get_id(9), Some(42));
     assert_eq!(
@@ -370,8 +370,8 @@ fn assign_to_a_new_slot_retires_the_old_reverse_entry() {
 #[test]
 fn assign_to_the_same_slot_changes_nothing() {
     let mappings = ShardedMappings::new();
-    mappings.assign(42, 5);
-    assert_eq!(mappings.assign(42, 5), None);
+    mappings.assign(42, 5, SlotsPinned::unchecked());
+    assert_eq!(mappings.assign(42, 5, SlotsPinned::unchecked()), None);
     assert_eq!(mappings.get_idx(42), Some(5));
     assert_eq!(mappings.get_id(5), Some(42));
 }
@@ -379,9 +379,9 @@ fn assign_to_the_same_slot_changes_nothing() {
 #[test]
 fn assign_keeps_next_idx_above_every_slot_in_use() {
     let mappings = ShardedMappings::new();
-    mappings.assign(1, 10);
+    mappings.assign(1, 10, SlotsPinned::unchecked());
     assert_eq!(mappings.next_idx(), 11);
-    mappings.assign(2, 4);
+    mappings.assign(2, 4, SlotsPinned::unchecked());
     assert_eq!(mappings.next_idx(), 11, "next_idx never goes down");
 }
 
@@ -393,6 +393,6 @@ fn assign_keeps_next_idx_above_every_slot_in_use() {
 #[should_panic(expected = "already belongs to id")]
 fn assign_refuses_a_slot_another_id_holds() {
     let mappings = ShardedMappings::new();
-    mappings.assign(1, 7);
-    mappings.assign(2, 7);
+    mappings.assign(1, 7, SlotsPinned::unchecked());
+    mappings.assign(2, 7, SlotsPinned::unchecked());
 }

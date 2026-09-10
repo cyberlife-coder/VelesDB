@@ -121,10 +121,10 @@ fn test_dimension_mismatch_returns_error() {
     assert!(index.mappings.is_empty());
 }
 
-/// With vector storage disabled there is no slot to write into, so the
-/// direct writer maps nothing: mapping `id` to a slot it never filled would
-/// leave that slot for another writer's vector to land in (#2246). The
-/// deferred graph insert maps it instead.
+/// With exact-distance features off the direct writer places no vector, so
+/// it maps nothing: mapping `id` to a slot it never filled would leave that
+/// slot for another writer's vector to land in (#2246). The deferred graph
+/// insert places the vector and maps it instead.
 #[test]
 fn test_storage_disabled_leaves_the_mapping_to_the_graph_insert() {
     let index = make_index_no_storage(3);

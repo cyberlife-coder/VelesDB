@@ -13,8 +13,8 @@ impl VectorIndex for HnswIndex {
     /// The dimension is checked before the graph sees the vector, and the id
     /// is mapped only to the slot the graph then gives it (#2246).
     ///
-    /// Callers that need error propagation should use
-    /// [`HnswIndex::insert_batch_parallel`] which returns `Result`.
+    /// [`HnswIndex::insert_batch_parallel`] does not propagate an error either:
+    /// it returns how many vectors it inserted and logs why it refused a batch.
     #[inline]
     fn insert(&self, id: u64, vector: &[f32]) {
         if let Err(e) = validate_dimension_match(self.dimension, vector.len()) {

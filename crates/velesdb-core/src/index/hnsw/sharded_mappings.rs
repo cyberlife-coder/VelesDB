@@ -13,6 +13,7 @@
 //! # EPIC-A.1: Integrated into `HnswIndex`
 
 use dashmap::DashMap;
+use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Lock-free sharded ID mappings for HNSW index.
@@ -26,9 +27,40 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// use velesdb_core::index::hnsw::ShardedMappings;
 ///
 /// let mappings = ShardedMappings::new();
-/// mappings.assign(42, 0);
+/// // `pinned` borrows the graph lock's guard: see `SlotsPinned`.
+/// mappings.assign(42, 0, pinned);
 /// assert_eq!(mappings.get_idx(42), Some(0));
 /// ```
+/// Proof that slot numbering cannot change while it lives (#2246).
+///
+/// It borrows a guard on the index's graph lock. `reorder_for_locality` and
+/// `vacuum` renumber slots only under that lock's write side, so a slot read
+/// under the guard names the same vector until the guard drops. `assign`
+/// takes one: mapping a slot after releasing the guard does not compile.
+#[derive(Clone, Copy)]
+pub(crate) struct SlotsPinned<'guard>(PhantomData<&'guard ()>);
+
+impl<'guard> SlotsPinned<'guard> {
+    /// Pins slots for as long as this read guard on the graph lock is borrowed.
+    pub(crate) fn by_read<T: ?Sized>(_guard: &'guard parking_lot::RwLockReadGuard<'_, T>) -> Self {
+        Self(PhantomData)
+    }
+
+    /// Pins slots for as long as this write guard on the graph lock is borrowed.
+    pub(crate) fn by_write<T: ?Sized>(
+        _guard: &'guard parking_lot::RwLockWriteGuard<'_, T>,
+    ) -> Self {
+        Self(PhantomData)
+    }
+
+    /// For unit tests of the mappings alone, where no graph exists to
+    /// renumber anything.
+    #[cfg(test)]
+    pub(crate) fn unchecked() -> SlotsPinned<'static> {
+        SlotsPinned(PhantomData)
+    }
+}
+
 #[derive(Debug)]
 pub struct ShardedMappings {
     /// Mapping from external IDs to internal indices (lock-free).
@@ -99,7 +131,7 @@ impl ShardedMappings {
     ///
     /// Removal is conditional: the entry goes only while it still names
     /// `expected_id`, so retiring a slot can never erase another id's mapping.
-    pub fn remove_reverse(&self, idx: usize, expected_id: u64) {
+    pub(super) fn remove_reverse(&self, idx: usize, expected_id: u64) {
         use dashmap::mapref::entry::Entry;
 
         let Entry::Occupied(entry) = self.idx_to_id.entry(idx) else {
@@ -121,7 +153,7 @@ impl ShardedMappings {
     ///
     /// `next_idx` is raised to at least `slot + 1`, so it stays an upper bound
     /// on every slot in use for its readers (vacuum, persistence).
-    pub fn assign(&self, id: u64, slot: usize) -> Option<usize> {
+    pub fn assign(&self, id: u64, slot: usize, _pinned: SlotsPinned<'_>) -> Option<usize> {
         use dashmap::mapref::entry::Entry;
 
         self.note_id(id);
@@ -146,15 +178,15 @@ impl ShardedMappings {
 
     /// Writes `slot`'s reverse entry for `id`.
     ///
-    /// The arena hands every slot out once, so a slot another id holds means
+    /// The arena hands every slot out once per arena — a vacuum rebuilds the
+    /// arena and clears the mappings under the same lock — so a slot another
+    /// id holds means
     /// a broken caller, not a move: debug builds refuse it rather than let two
     /// ids share one vector.
     fn claim_slot(&self, slot: usize, id: u64) {
-        let previous = self.idx_to_id.insert(slot, id);
-        debug_assert!(
-            previous.is_none_or(|owner| owner == id),
-            "slot {slot} already belongs to id {previous:?}"
-        );
+        if let Some(owner) = self.idx_to_id.insert(slot, id) {
+            debug_assert_eq!(owner, id, "slot {slot} already belongs to id {owner}");
+        }
     }
 
     /// Removes an ID and returns its internal index if it existed.
@@ -233,10 +265,8 @@ impl ShardedMappings {
     /// still resolves, to a different vector than the one asked for, so a
     /// query returns confident, wrong answers (#2112).
     ///
-    /// `old_to_new[i]` is the new index of the node that was `i`. Entries
-    /// beyond its length are left alone, exactly as the graph leaves the
-    /// vectors and neighbour ids there, and since every remapped value is
-    /// `< old_to_new.len()` they cannot collide with one.
+    /// `old_to_new[i]` is the new index of the node that was `i`; a reorder
+    /// that succeeds covers every slot of the arena.
     ///
     /// Tombstoned nodes need no special case — deletion removes the mapping
     /// and leaves the node, so they simply have no entry to move.

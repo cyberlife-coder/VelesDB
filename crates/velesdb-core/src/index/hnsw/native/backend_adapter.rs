@@ -134,8 +134,8 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     /// # Note
     ///
     /// Graph structure may differ from sequential insertion due to concurrent
-    /// neighbor selection; #2259 tracks the nodes that can leave no search
-    /// able to reach.
+    /// neighbor selection; #2259 tracks the nodes such a batch can leave
+    /// unreachable.
     pub fn parallel_insert(&self, data: &[(&[f32], usize)]) -> crate::error::Result<Vec<usize>> {
         let vectors: Vec<&[f32]> = data.iter().map(|&(vector, _)| vector).collect();
         self.place_batch(&vectors)

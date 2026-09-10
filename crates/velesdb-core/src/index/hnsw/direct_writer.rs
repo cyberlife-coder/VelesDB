@@ -7,6 +7,7 @@
 //! its vector got.
 
 use super::index::HnswIndex;
+use super::sharded_mappings::SlotsPinned;
 use super::upsert::UpsertResult;
 use crate::validation::validate_dimension_match;
 
@@ -15,12 +16,12 @@ use crate::validation::validate_dimension_match;
 /// Used exclusively during `upsert_bulk` so vectors are immediately
 /// available for SIMD re-ranking and brute-force search while HNSW graph
 /// construction is deferred to `AsyncIndexBuilder`.
-#[allow(dead_code)] // Wired into Collection pipeline in Task 4
+#[allow(dead_code)] // Reason: only the persistence-gated bulk path (collection::core::crud_bulk) writes directly
 pub(crate) struct DirectVectorWriter<'a> {
     hnsw_index: &'a HnswIndex,
 }
 
-#[allow(dead_code)] // Wired into Collection pipeline in Task 4
+#[allow(dead_code)] // Reason: only the persistence-gated bulk path (collection::core::crud_bulk) writes directly
 impl<'a> DirectVectorWriter<'a> {
     /// Creates a new direct writer for the given `HnswIndex`.
     #[must_use]
@@ -37,9 +38,10 @@ impl<'a> DirectVectorWriter<'a> {
     /// slot, so a concurrent graph insert can no longer take the slot this
     /// batch writes, nor this batch overwrite a vector the graph placed.
     ///
-    /// When `enable_vector_storage` is `false` there is no arena slot to map
-    /// anything to: nothing is written or registered here, and the deferred
-    /// HNSW insert maps each id when it places the vector.
+    /// When `enable_vector_storage` is `false` (the index's exact-distance
+    /// features are off) this writer places no vector, so it has no slot to
+    /// map: nothing is written or registered here, and the deferred HNSW
+    /// insert places each vector and maps its id.
     ///
     /// # Errors
     ///
@@ -79,7 +81,10 @@ impl<'a> DirectVectorWriter<'a> {
                 let idx = first + offset;
                 UpsertResult {
                     idx,
-                    old_idx: self.hnsw_index.mappings.assign(id, idx),
+                    old_idx: self
+                        .hnsw_index
+                        .mappings
+                        .assign(id, idx, SlotsPinned::by_read(&inner)),
                 }
             })
             .collect();

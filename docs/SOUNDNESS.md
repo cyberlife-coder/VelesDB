@@ -924,13 +924,16 @@ slot.
 
 **Invariant**: a mapping only ever names a slot that already holds that
 id's vector, so two writers — a bulk load's direct writer and a single
-upsert, say — cannot hand one slot to two ids. Debug builds assert it in
-`assign`.
+upsert, say — cannot hand one slot to two ids. Debug builds check part of
+it in `assign`: a slot whose reverse entry names another id is never
+claimed.
 
 **Invariant**: the index read guard is held from placement to assignment.
 `reorder_for_locality` and `vacuum` renumber slots under the write lock, so
 no slot can move between the push that returned it and the mapping that
 names it; `vacuum` rebuilds the mappings before it releases that lock.
+`assign` takes a `SlotsPinned`, a token that borrows that guard, so mapping
+a slot after releasing it does not compile.
 
 **Invariant**: a refused vector or batch maps nothing, so there is nothing
 to roll back. A batch the graph refuses part-way leaves the nodes it already

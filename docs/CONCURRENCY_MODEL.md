@@ -566,7 +566,7 @@ for neighbor in neighbors {
 
 5. **Enlarged crash recovery window during batch upsert**:
    - The 3-phase upsert pipeline (`batch_store_all` -> `per_point_updates` -> `bulk_index_or_defer`) writes vectors and payloads to storage before inserting into the HNSW graph. A crash between Phase 1 and Phase 3 leaves vectors in storage but missing from the HNSW index.
-   - Mitigation: On `Collection::open()`, gap detection compares `storage.ids()` against `index.mappings` and re-indexes any missing vectors. See [HNSW Crash Recovery](#hnsw-crash-recovery) for the full recovery architecture and [SOUNDNESS.md](SOUNDNESS.md#hnsw-batch-insertion-ordering) for batch insertion ordering invariants.
+   - Mitigation: On `Collection::open()`, gap detection compares `storage.ids()` against `index.mappings` and re-indexes any missing vectors. See [HNSW Crash Recovery](#hnsw-crash-recovery) for the full recovery architecture and [SOUNDNESS.md](SOUNDNESS.md#hnsw-slot-allocation) for batch insertion ordering invariants.
 
 ## Best Practices
 

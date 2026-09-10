@@ -1,13 +1,15 @@
 //! Concurrent `upsert_bulk` and `upsert` must never give one arena slot to
 //! two ids (#2246).
 //!
-//! The bulk path's direct writer writes each vector at the slot the mapping
-//! counter hands out, while a graph insert appends at the arena's length and
-//! then remaps its ids to the slots it actually got. The two allocators agree
-//! only while nothing interleaves; when a graph insert lands between a direct
-//! write's registration and its write, both ids point at one slot and the
-//! later write overwrites the earlier vector. Checked through the exhaustive
-//! search, which reads the arena: every id must find its own vector.
+//! Before #2246 the bulk path's direct writer wrote each vector at a slot the
+//! mapping counter predicted, while a graph insert appended at the arena's
+//! length and then remapped its ids to the slots it actually got; when a graph
+//! insert landed between a direct write's registration and its write, both
+//! ids pointed at one slot and the later write overwrote the earlier vector.
+//! Checked through the exhaustive search, which reads the arena: every id must
+//! find its own vector — once with the builder draining as it goes, and once
+//! with it holding every bulk id, so the direct writer's own slots are the
+//! ones read.
 
 #![cfg(feature = "persistence")]
 
@@ -49,11 +51,11 @@ fn batch(base: u64, round: u64) -> Vec<Point> {
         .collect()
 }
 
-#[test]
-fn concurrent_bulk_and_plain_upserts_keep_every_vector_in_its_own_slot() {
-    let dir = TempDir::new().expect("test: tempdir");
+/// Runs the two writers against a collection whose builder merges every
+/// `merge_threshold` pending points.
+fn race(dir: &TempDir, merge_threshold: usize) -> Arc<VectorCollection> {
     let config = AsyncIndexBuilderConfig {
-        merge_threshold: 64,
+        merge_threshold,
         segment_count: Some(2),
     };
     let collection = Arc::new(
@@ -86,20 +88,47 @@ fn concurrent_bulk_and_plain_upserts_keep_every_vector_in_its_own_slot() {
     };
     bulk.join().expect("test: bulk writer");
     plain.join().expect("test: plain writer");
-    collection.flush().expect("test: flush drains the builder");
+    collection
+}
 
-    let ids = (0..ROUNDS * BATCH).chain(BULK_BASE..BULK_BASE + ROUNDS * BATCH);
-    let lost: Vec<u64> = ids
+/// The ids whose exhaustive self-query does not return them first.
+fn lost(collection: &VectorCollection) -> Vec<u64> {
+    (0..ROUNDS * BATCH)
+        .chain(BULK_BASE..BULK_BASE + ROUNDS * BATCH)
         .filter(|&id| {
             let hits = collection
                 .search_with_quality(&vector(id), 1, SearchQuality::Perfect)
                 .expect("test: exhaustive search");
             hits.first().map(|hit| hit.point.id) != Some(id)
         })
-        .collect();
+        .collect()
+}
+
+#[test]
+fn concurrent_bulk_and_plain_upserts_keep_every_vector_in_its_own_slot() {
+    let dir = TempDir::new().expect("test: tempdir");
+    let collection = race(&dir, 64);
+    collection.flush().expect("test: flush drains the builder");
+    let lost = lost(&collection);
     assert!(
         lost.is_empty(),
         "{} ids no longer find their own vector, e.g. {:?}",
+        lost.len(),
+        &lost[..lost.len().min(8)]
+    );
+}
+
+/// With the builder holding every bulk id, each one is still mapped to the
+/// slot the direct writer gave it: those slots are the ones read here.
+#[test]
+fn direct_written_slots_hold_their_own_vectors_before_the_builder_drains() {
+    let dir = TempDir::new().expect("test: tempdir");
+    let bulk_total = usize::try_from(ROUNDS * BATCH).expect("test: fits a usize");
+    let collection = race(&dir, bulk_total + 1);
+    let lost = lost(&collection);
+    assert!(
+        lost.is_empty(),
+        "{} ids no longer find their own vector before the drain, e.g. {:?}",
         lost.len(),
         &lost[..lost.len().min(8)]
     );

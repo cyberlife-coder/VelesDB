@@ -111,8 +111,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `reorder_for_locality` and `vacuum` from renumbering the slot in between.
   `vacuum` also rebuilds the mappings before releasing its write lock, where a
   search could previously resolve ids through the old graph's slots. With
-  vector storage disabled, the direct writer no longer maps an id to a slot
-  it never wrote; the graph insert maps it.
+  exact-distance features off (`new_fast_insert`), the direct writer no
+  longer maps an id to a slot it never wrote; the graph insert places the
+  vector and maps it.
 
 - **`reorder_for_locality` could leave a collection whose graph and vectors
   disagree.** Since `.vectors` became the graph's arena, the permutation lands

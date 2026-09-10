@@ -2744,7 +2744,7 @@ fn test_upsert_entry_point_vector() {
 }
 
 // -------------------------------------------------------------------------
-// Upsert Rollback + Edge Case Tests (Issue #371)
+// Upsert Edge Case Tests (Issue #371)
 // -------------------------------------------------------------------------
 
 /// Verifies that batch insert with within-batch duplicate IDs correctly
@@ -2991,9 +2991,8 @@ fn test_batch_after_single_insert_mapping_consistency() {
 
 /// Regression test: graph vectors readable at graph-assigned IDs.
 ///
-/// After reconciliation, the vector each mapping resolves to (in the
-/// graph's `ContiguousVectors`) must be the one inserted for that external
-/// ID (not one stored at a stale pre-registered mapping index).
+/// The vector each mapping resolves to (in the graph's `ContiguousVectors`)
+/// must be the one inserted for that external ID.
 #[test]
 fn test_batch_insert_vector_storage_uses_assigned_ids() {
     let index = HnswIndex::new(4, DistanceMetric::Euclidean).unwrap();
