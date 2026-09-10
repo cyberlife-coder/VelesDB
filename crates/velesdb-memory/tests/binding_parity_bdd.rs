@@ -1297,8 +1297,9 @@ fn cut_parameter_list(region: &str, method: &str) -> String {
 /// not a comment. Not a lexer — a quote char literal (`'"'`, `'\"'`, `b'"'`), a
 /// raw string holding `"` or with an odd run of `\` before its closing quote,
 /// or a nested block comment (`/* a /* b */ … */`) would confuse it — but
-/// the bindings this reads carry none of them near a relay, and [`a_whole_relay_quoted_in_a_comment_is_not_a_relay`] pins the
-/// forms that matter.
+/// the bindings this reads carry none of them near a relay, and
+/// [`a_whole_relay_quoted_in_a_comment_is_not_a_relay`] pins the forms that
+/// matter.
 fn without_comments(region: &str) -> String {
     let mut out = String::with_capacity(region.len());
     let mut chars = region.chars().peekable();
