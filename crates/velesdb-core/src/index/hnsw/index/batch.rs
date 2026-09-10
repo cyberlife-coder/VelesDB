@@ -2,78 +2,11 @@
 
 use super::HnswIndex;
 use crate::index::hnsw::params::SearchQuality;
-use crate::index::hnsw::upsert::{self, UpsertResult};
 use crate::scored_result::ScoredResult;
 use crate::validation::validate_dimension_match;
 use rayon::prelude::*;
 
-/// Prepared batch of vectors ready for HNSW graph insertion.
-///
-/// Contains both the data needed for `parallel_insert` and the rollback
-/// information needed to restore mappings on failure.
-pub(crate) struct PreparedBatch<'a> {
-    /// `(internal_idx, vector_slice)` pairs for HNSW insertion.
-    pub to_insert: Vec<(usize, &'a [f32])>,
-    /// `(external_id, upsert_result)` pairs for rollback on failure.
-    pub rollback_info: Vec<(u64, UpsertResult)>,
-}
-
 impl HnswIndex {
-    /// Prepares vectors for batch insertion: validates dimensions and registers IDs.
-    ///
-    /// Returns a [`PreparedBatch`] containing insertion data and rollback
-    /// information. Existing IDs are replaced (upsert semantics): the old
-    /// mapping is updated and stale vector data is removed.
-    ///
-    /// # Phase Ordering Invariant
-    ///
-    /// Dimension validation runs to completion **before** any call to
-    /// `upsert_mapping_batch`. This prevents orphaned mappings when a
-    /// dimension mismatch would otherwise leave partially-mutated
-    /// state. See `docs/SOUNDNESS.md` "HNSW Batch Insertion Ordering".
-    ///
-    /// # Errors
-    ///
-    /// Returns [`crate::error::Error::DimensionMismatch`] if any vector has a dimension
-    /// different from the index dimension.
-    ///
-    /// # Performance
-    ///
-    /// - Single pass over input (no intermediate collection)
-    /// - Pre-allocated output vectors
-    /// - Inline dimension validation
-    /// - Zero-copy: stores borrowed slices, no cloning
-    #[inline]
-    pub(crate) fn prepare_batch_insert<'a, I>(
-        &self,
-        vectors: I,
-    ) -> crate::error::Result<PreparedBatch<'a>>
-    where
-        I: IntoIterator<Item = (u64, &'a [f32])>,
-    {
-        let items: Vec<(u64, &'a [f32])> = vectors.into_iter().collect();
-
-        // RF-DEDUP #448 Group D — shared validate + upsert_mapping_batch
-        // pipeline (see `NativeHnswIndex::insert_batch`). Runs dimension
-        // validation to completion BEFORE any mapping registration so
-        // failures cannot leave orphaned mappings.
-        let upsert_results =
-            upsert::validate_and_register_batch(&self.mappings, self.dimension, &items)?;
-
-        let mut to_insert = Vec::with_capacity(items.len());
-        let mut rollback_info = Vec::with_capacity(items.len());
-
-        for ((id, vector), result) in items.into_iter().zip(upsert_results) {
-            to_insert.push((result.idx, vector));
-            rollback_info.push((id, result));
-        }
-
-        Ok(PreparedBatch {
-            to_insert,
-            rollback_info,
-        })
-    }
-
     /// Inserts multiple vectors in parallel using rayon.
     ///
     /// This method is optimized for bulk insertions and can significantly
@@ -81,11 +14,13 @@ impl HnswIndex {
     ///
     /// # Ordering
     ///
-    /// The pipeline executes: validate dims -> register mappings -> graph
-    /// insert -> mapping reconciliation. On graph failure, rollback undoes
-    /// mappings in reverse order. Because `parallel_insert` uses rayon, the
-    /// HNSW graph construction order is non-deterministic across runs (see
-    /// v1.7.2 CHANGELOG note).
+    /// Every dimension is checked before the graph sees any vector. The graph
+    /// then places the batch and returns each vector's slot in input order,
+    /// and only then is each id mapped to its slot (#2246) — see
+    /// `docs/SOUNDNESS.md` "HNSW Slot Allocation". An id repeated within the
+    /// batch ends on its last occurrence. Because `parallel_insert` uses
+    /// rayon, the HNSW graph construction order is non-deterministic across
+    /// runs (see v1.7.2 CHANGELOG note).
     ///
     /// # Arguments
     ///
@@ -93,11 +28,10 @@ impl HnswIndex {
     ///
     /// # Returns
     ///
-    /// Number of vectors successfully inserted or updated (upsert semantics).
-    ///
-    /// # Panics
-    ///
-    /// Panics if any vector has a dimension different from the index dimension.
+    /// Number of vectors inserted or updated (upsert semantics). A batch
+    /// holding a vector of the wrong dimension, or one the graph refuses,
+    /// maps nothing and returns 0, with the cause logged; nodes the graph had
+    /// already placed stay unmapped, as tombstones.
     ///
     /// # Performance (v0.8.5+)
     ///
@@ -123,44 +57,36 @@ impl HnswIndex {
     where
         I: IntoIterator<Item = (u64, &'a [f32])>,
     {
-        let batch = match self.prepare_batch_insert(vectors) {
-            Ok(b) => b,
-            Err(e) => {
-                tracing::error!("insert_batch_parallel: dimension validation failed: {e}");
-                return 0;
-            }
-        };
-        let count = batch.to_insert.len();
-
-        if count == 0 {
+        let items: Vec<(u64, &'a [f32])> = vectors.into_iter().collect();
+        if let Some(e) = items
+            .iter()
+            .find_map(|(_, vector)| validate_dimension_match(self.dimension, vector.len()).err())
+        {
+            tracing::error!("insert_batch_parallel: dimension validation failed: {e}");
+            return 0;
+        }
+        if items.is_empty() {
             return 0;
         }
 
-        let refs_for_hnsw: Vec<(&[f32], usize)> = batch
-            .to_insert
-            .iter()
-            .map(|(idx, vec)| (*vec, *idx))
-            .collect();
-
-        // Bound so the graph read guard is released before `rollback_batch`
-        // touches `mappings`.
-        let inserted = self.inner.read().parallel_insert(&refs_for_hnsw);
-        let assigned_ids = match inserted {
-            Ok(ids) => ids,
+        let vectors: Vec<&[f32]> = items.iter().map(|(_, vector)| *vector).collect();
+        // Held until every id is mapped: `reorder_for_locality` and `vacuum`
+        // renumber slots under the write lock, so each slot placed here is still
+        // its vector's when the mapping names it.
+        let inner = self.inner.read();
+        let placed = inner.parallel_insert(&vectors).map(|slots| {
+            for ((id, _), slot) in items.iter().zip(slots) {
+                self.mappings.assign(*id, slot);
+            }
+        });
+        drop(inner);
+        match placed {
+            Ok(()) => items.len(),
             Err(e) => {
                 tracing::error!("insert_batch_parallel: parallel_insert failed: {e}");
-                // RF-DEDUP #448 Group D — reverse-order rollback shared with
-                // NativeHnswIndex::insert_batch.
-                upsert::rollback_batch(&self.mappings, &batch.rollback_info);
-                return 0;
+                0
             }
-        };
-
-        // RF-DEDUP #448 Group D — mapping reconciliation shared with
-        // NativeHnswIndex::insert_batch.
-        upsert::reconcile_batch_mappings(&self.mappings, &batch.rollback_info, &assigned_ids);
-
-        count
+        }
     }
 
     /// Performs batch search for multiple queries in parallel.

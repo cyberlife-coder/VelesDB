@@ -552,28 +552,20 @@ impl NativeHnswInner {
 // ============================================================================
 
 impl NativeHnswInner {
-    /// Inserts a single vector into the HNSW graph.
-    ///
-    /// The caller supplies `(vector, expected_idx)` where `expected_idx` is the
-    /// internal index pre-registered in `ShardedMappings`.
+    /// Inserts a single vector into the HNSW graph and returns the slot it was
+    /// given. The caller maps its id to that slot (`ShardedMappings::assign`);
+    /// no slot is predicted beforehand, so none can be handed to two ids
+    /// (#2246).
     ///
     /// # Errors
     ///
-    /// Returns an error if allocation, insertion, or ID-mapping consistency fails.
-    pub fn insert(&self, data: (&[f32], usize)) -> crate::error::Result<usize> {
-        let (vector, expected_idx) = data;
-        let assigned_id = match &self.backend {
-            HnswBackend::Standard(hnsw) => hnsw.insert(vector)?,
-            HnswBackend::RaBitQ(rabitq) => rabitq.insert(vector)?,
-            HnswBackend::Sq8(sq8) => sq8.insert(vector)?,
-        };
-        if assigned_id != expected_idx {
-            tracing::warn!(
-                "NativeHnsw node_id mismatch: expected {expected_idx}, got {assigned_id} \
-                 — mapping may be desynchronised under concurrent inserts"
-            );
+    /// Returns an error if allocation or insertion fails.
+    pub fn insert(&self, vector: &[f32]) -> crate::error::Result<usize> {
+        match &self.backend {
+            HnswBackend::Standard(hnsw) => hnsw.insert(vector),
+            HnswBackend::RaBitQ(rabitq) => rabitq.insert(vector),
+            HnswBackend::Sq8(sq8) => sq8.insert(vector),
         }
-        Ok(assigned_id)
     }
 
     /// Parallel batch insert into the HNSW graph.
@@ -581,15 +573,15 @@ impl NativeHnswInner {
     /// # Errors
     ///
     /// Returns an error if any insertion fails.
-    pub fn parallel_insert(&self, data: &[(&[f32], usize)]) -> crate::error::Result<Vec<usize>> {
+    pub fn parallel_insert(&self, vectors: &[&[f32]]) -> crate::error::Result<Vec<usize>> {
         match &self.backend {
-            HnswBackend::Standard(hnsw) => hnsw.parallel_insert(data),
+            HnswBackend::Standard(hnsw) => hnsw.place_batch(vectors),
             // Quantized backends: insert sequentially so the positional code
             // store stays consistent with NodeId assignment order.
             HnswBackend::RaBitQ(_) | HnswBackend::Sq8(_) => {
-                let mut ids = Vec::with_capacity(data.len());
-                for &(vector, expected_idx) in data {
-                    ids.push(self.insert((vector, expected_idx))?);
+                let mut ids = Vec::with_capacity(vectors.len());
+                for vector in vectors {
+                    ids.push(self.insert(vector)?);
                 }
                 Ok(ids)
             }

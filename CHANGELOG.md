@@ -99,6 +99,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A bulk load running beside single upserts could hand one vector slot to
+  two ids (#2246).** The id mappings predicted each insert's slot while the
+  graph's arena allocated its own, and `upsert_bulk`'s direct writer wrote at
+  the prediction without reconciling. Under concurrent `upsert_bulk` and
+  `upsert` the two diverged: each of three runs of
+  `tests/concurrent_bulk_slots.rs` lost 611 to 645 of 6 400 ids — unfindable
+  even by an exhaustive scan, or answering with another id's vector. The
+  arena is now the only allocator: every path places the vector, then maps
+  the id to the slot it got, under the read guard that keeps
+  `reorder_for_locality` and `vacuum` from renumbering the slot in between.
+  `vacuum` also rebuilds the mappings before releasing its write lock, where a
+  search could previously resolve ids through the old graph's slots. With
+  vector storage disabled, the direct writer no longer maps an id to a slot
+  it never wrote; the graph insert maps it.
+
 - **`reorder_for_locality` could leave a collection whose graph and vectors
   disagree.** Since `.vectors` became the graph's arena, the permutation lands
   in the **durable** store the moment it runs, while the adjacency it must stay

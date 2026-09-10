@@ -34,7 +34,7 @@ pub use vacuum::VacuumError;
 
 use super::native_inner::NativeHnswInner as HnswInner;
 use super::sharded_mappings::ShardedMappings;
-use super::upsert::{self, UpsertResult};
+use super::upsert;
 use crate::distance::DistanceMetric;
 use parking_lot::RwLock;
 use std::mem::ManuallyDrop;
@@ -123,55 +123,29 @@ pub struct HnswIndex {
 }
 
 impl HnswIndex {
-    /// Registers an ID with upsert semantics.
+    /// Inserts a vector into the HNSW graph, then maps `id` to the slot the
+    /// graph gave it (#2246).
     ///
-    /// Returns an [`UpsertResult`] with the new internal index and optional
-    /// old index for rollback. If the ID already existed, the old mapping is
-    /// replaced (the old graph node becomes an unreachable tombstone).
-    #[must_use]
-    pub(crate) fn upsert_mapping(&self, id: u64) -> UpsertResult {
-        upsert::upsert_mapping(&self.mappings, id)
-    }
-
-    /// Inserts a vector into the HNSW graph and corrects the mapping if the
-    /// assigned node_id differs from the expected index (concurrent race).
-    ///
-    /// Returns `true` on success, `false` on failure (mapping rolled back).
-    pub(crate) fn insert_and_correct_mapping(
-        &self,
-        id: u64,
-        vector: &[f32],
-        result: &UpsertResult,
-    ) -> bool {
-        // Bound so the graph read guard is released before the rollback path
-        // touches `mappings`.
-        let inserted = self.inner.read().insert((vector, result.idx));
-        let assigned_id = match inserted {
-            Ok(id) => id,
+    /// The graph owns the arena's allocation; the mapping only ever follows a
+    /// slot already holding this vector, so no slot is predicted and none can
+    /// be handed to two ids. Returns `false` when the graph refused the vector:
+    /// no mapping was touched, so there is nothing to roll back.
+    pub(crate) fn insert_and_assign(&self, id: u64, vector: &[f32]) -> bool {
+        // Held until the id is mapped: `reorder_for_locality` and `vacuum`
+        // renumber slots under the write lock, so the slot placed here is still
+        // its vector's when the mapping names it.
+        let inner = self.inner.read();
+        let placed = inner
+            .insert(vector)
+            .map(|slot| self.mappings.assign(id, slot));
+        drop(inner);
+        match placed {
+            Ok(_) => true,
             Err(e) => {
-                self.rollback_upsert(id, result);
                 tracing::error!("HnswIndex::insert failed for id={id}: {e}");
-                return false;
+                false
             }
-        };
-
-        if assigned_id != result.idx {
-            // Remove stale reverse mapping before restoring the correct one.
-            // upsert_mapping created idx_to_id[result.idx] = id, but the graph
-            // assigned a different node_id, so result.idx is now stale unless
-            // another concurrent correction already owns it.
-            self.mappings.remove_reverse(result.idx, id);
-            self.mappings.restore(id, assigned_id);
         }
-        true
-    }
-
-    /// Rolls back a mapping upsert after a failed graph insertion.
-    ///
-    /// Delegates to [`upsert::rollback_upsert`] to restore the previous
-    /// mapping state so the point remains searchable.
-    pub(crate) fn rollback_upsert(&self, id: u64, result: &UpsertResult) {
-        upsert::rollback_upsert(&self.mappings, id, result);
     }
 
     /// Removes a vector by ID (soft delete).

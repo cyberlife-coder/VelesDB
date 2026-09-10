@@ -902,40 +902,54 @@ self.entry_point.store(node_id, Ordering::Release);
 - Entry-point promotion occurs O(log_M(N)) times per index lifetime,
   so the CAS loop almost never retries.
 
-### HNSW Batch Insertion Ordering
+### HNSW Slot Allocation
 
-**Module**: `crates/velesdb-core/src/index/hnsw/index/batch.rs`, `crates/velesdb-core/src/index/hnsw/upsert.rs`
+**Module**: `crates/velesdb-core/src/index/hnsw/sharded_mappings.rs`, `crates/velesdb-core/src/index/hnsw/index/batch.rs`, `crates/velesdb-core/src/index/hnsw/direct_writer.rs`
 
-The batch insertion pipeline enforces a strict phase ordering to prevent
-partial state corruption:
+A slot is an index into the graph's `ContiguousVectors`, and the arena is
+its only allocator: a slot exists once a vector has been pushed into it, and
+the push returns it. Every insert path — single, batch, the vacuum rebuild
+and the bulk path's direct writer — places the vector first and then maps
+the id to the slot it got (`ShardedMappings::assign`). Nothing predicts a
+slot.
 
-1. **Validate dimensions** — All vectors are checked before any state mutation.
-   A dimension mismatch panics before `upsert_mapping_batch` runs, so no
-   orphaned mappings are created.
-2. **Register mappings** (`upsert_mapping_batch`) — Allocates internal
-   indices; a replaced ID's old graph node becomes an unreachable tombstone.
-   This is a point of no return: if the subsequent graph insert fails,
-   rollback must undo mappings in reverse order.
-3. **Graph insert** (`parallel_insert`) — Inserts nodes (and their vectors,
-   into the graph's `ContiguousVectors` — the single vector store since
-   PERF1) using rayon. On failure, rollback iterates `rollback_info` in
-   reverse to correctly restore duplicate-ID chains.
-4. **Mapping reconciliation** (`reconcile_batch_mappings`) — Re-points any
-   mapping whose graph-assigned node ID differs from the pre-registered
-   index, so search/rerank/brute-force resolve to the correct graph slot.
+1. **Validate dimensions** — every vector of a batch is checked before the
+   graph sees any, so a mismatch leaves the index untouched.
+2. **Place** (`insert`, `parallel_insert`, the direct writer's
+   `push_batch`) — the arena appends under its own lock and returns the
+   slots, in input order.
+3. **Assign** — each id is mapped to its slot. An id that was already
+   mapped leaves its old slot behind as a tombstone; an id repeated within
+   a batch ends on its last occurrence.
 
-**Invariant**: Dimension validation (step 1) always precedes destructive
-mapping mutations (step 2). This is enforced by the structure of
-`prepare_batch_insert()`.
+**Invariant**: a mapping only ever names a slot that already holds that
+id's vector, so two writers — a bulk load's direct writer and a single
+upsert, say — cannot hand one slot to two ids. Debug builds assert it in
+`assign`.
 
-**Invariant**: Rollback iterates in reverse order so that within-batch
-duplicate IDs restore correctly (each rollback depends on the state left
-by the previous entry).
+**Invariant**: the index read guard is held from placement to assignment.
+`reorder_for_locality` and `vacuum` renumber slots under the write lock, so
+no slot can move between the push that returned it and the mapping that
+names it; `vacuum` rebuilds the mappings before it releases that lock.
 
-**Cross-reference**: The `Collection`-level 3-phase pipeline (`crud.rs`:
-`batch_store_all` -> `per_point_updates` -> `bulk_index_or_defer`) calls
-`insert_batch_parallel` in Phase 3. The crash recovery implications are
-documented in [CONCURRENCY_MODEL.md](CONCURRENCY_MODEL.md#known-limitations).
+**Invariant**: a refused vector or batch maps nothing, so there is nothing
+to roll back. A batch the graph refuses part-way leaves the nodes it already
+placed unmapped, as tombstones `vacuum` reclaims.
+
+**Why it used to be otherwise (#2246)**: the mappings kept a counter of
+their own. They predicted a slot at registration, the graph pushed wherever
+the arena was, and a reconcile step corrected the mapping afterwards; the
+direct writer wrote at the predicted slot and never reconciled. With a bulk
+load and single upserts running together the two counters diverged, and
+each of three runs of `tests/concurrent_bulk_slots.rs` lost 611 to 645 of
+6 400 ids — unfindable even by an exhaustive scan, or answering with
+another id's vector.
+
+**Cross-reference**: The `Collection`-level pipeline (`crud.rs`:
+`batch_store_all` -> `per_point_updates`, then `crud_indexing.rs`:
+`bulk_index_or_defer`) calls `insert_batch_parallel` in its last phase. The
+crash recovery implications are documented in
+[CONCURRENCY_MODEL.md](CONCURRENCY_MODEL.md#known-limitations).
 
 ### Interior Mutability Invariants: `RaBitQPrecisionHnsw`
 

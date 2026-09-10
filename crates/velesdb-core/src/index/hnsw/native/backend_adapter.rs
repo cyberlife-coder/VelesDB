@@ -43,7 +43,9 @@ pub trait NativeHnswBackend: Send + Sync {
     ///
     /// # Arguments
     ///
-    /// * `data` - Tuple of (vector slice, internal index)
+    /// * `data` - Tuple of (vector slice, internal index). The index is not
+    ///   used: the graph allocates the slot itself (#2246). A caller that needs
+    ///   the slot calls `NativeHnsw::insert`, which returns it.
     ///
     /// # Errors
     ///
@@ -52,9 +54,10 @@ pub trait NativeHnswBackend: Send + Sync {
 
     /// Batch parallel insert into the HNSW graph.
     ///
-    /// Returns a vector of graph-assigned node IDs, one per input vector,
-    /// in the same order as `data`. Callers must reconcile these against
-    /// their pre-registered mapping indices.
+    /// Returns the slot the graph gave each vector, one per input vector, in
+    /// the same order as `data`. The index in each tuple is not used: the
+    /// graph allocates the slots itself, and the returned ones are those to map
+    /// ids to (#2246).
     ///
     /// # Errors
     ///
@@ -116,11 +119,13 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     /// Parallel batch insert using rayon.
     ///
     /// Inserts multiple vectors in parallel for better throughput on multi-core systems.
-    /// Returns a vector of graph-assigned node IDs, one per input vector in order.
+    /// Returns the slot the graph gave each vector, one per input vector in order.
     ///
     /// # Arguments
     ///
-    /// * `data` - Slice of (vector reference, internal index) pairs
+    /// * `data` - Slice of (vector reference, internal index) pairs. The index
+    ///   is not used: the graph allocates each slot itself, and the returned
+    ///   slots are the ones to map ids to (#2246).
     ///
     /// # Errors
     ///
@@ -129,20 +134,34 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     /// # Note
     ///
     /// Graph structure may differ from sequential insertion due to concurrent
-    /// neighbor selection. This does not affect search correctness.
+    /// neighbor selection; #2259 tracks the nodes that can leave no search
+    /// able to reach.
     pub fn parallel_insert(&self, data: &[(&[f32], usize)]) -> crate::error::Result<Vec<usize>> {
+        let vectors: Vec<&[f32]> = data.iter().map(|&(vector, _)| vector).collect();
+        self.place_batch(&vectors)
+    }
+
+    /// Places a batch of vectors in the graph and returns the slot each one
+    /// got, in input order (#2246).
+    ///
+    /// Batches under 100 vectors go one by one; larger ones are pushed into the
+    /// arena in one allocation and connected in parallel.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any insertion fails.
+    pub(crate) fn place_batch(&self, vectors: &[&[f32]]) -> crate::error::Result<Vec<usize>> {
         // For small batches, sequential is faster due to parallelization overhead
-        if data.len() < 100 {
-            let mut assigned_ids = Vec::with_capacity(data.len());
-            for (vec, _idx) in data {
+        if vectors.len() < 100 {
+            let mut assigned_ids = Vec::with_capacity(vectors.len());
+            for vec in vectors {
                 assigned_ids.push(self.insert(vec)?);
             }
             return Ok(assigned_ids);
         }
 
         // Phase A: Batch allocate — stores vectors, assigns layers (single lock scopes)
-        let vectors: Vec<&[f32]> = data.iter().map(|(v, _)| *v).collect();
-        let assignments = self.allocate_batch(&vectors)?;
+        let assignments = self.allocate_batch(vectors)?;
         if assignments.is_empty() {
             return Ok(Vec::new());
         }
@@ -150,7 +169,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         let first_node = assignments[0].0;
         let connect_start = self.bootstrap_entry_point(&assignments);
 
-        self.connect_batch_chunked(&assignments[connect_start..], &vectors, first_node)?;
+        self.connect_batch_chunked(&assignments[connect_start..], vectors, first_node)?;
         self.finalize_batch(&assignments, connect_start);
 
         // Invalidate GPU caches — topology and vectors both changed.
@@ -407,13 +426,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnswBackend for NativeHnsw<D> {
     }
 
     fn insert(&self, data: (&[f32], usize)) -> crate::error::Result<()> {
-        let (vector, expected_idx) = data;
-        let assigned_id = self.insert(vector)?;
-        if assigned_id != expected_idx {
-            tracing::warn!(
-                "NativeHnsw node_id mismatch: expected {expected_idx}, got {assigned_id}"
-            );
-        }
+        NativeHnsw::insert(self, data.0)?;
         Ok(())
     }
 

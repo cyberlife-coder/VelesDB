@@ -10,8 +10,8 @@ use crate::validation::validate_dimension_match;
 impl VectorIndex for HnswIndex {
     /// Inserts a vector, logging and silently dropping dimension mismatches.
     ///
-    /// Invariant: validate dimension BEFORE `upsert_mapping` to prevent
-    /// orphaned mappings on error. See `batch.rs` Phase Ordering comment.
+    /// The dimension is checked before the graph sees the vector, and the id
+    /// is mapped only to the slot the graph then gives it (#2246).
     ///
     /// Callers that need error propagation should use
     /// [`HnswIndex::insert_batch_parallel`] which returns `Result`.
@@ -22,8 +22,7 @@ impl VectorIndex for HnswIndex {
             return;
         }
 
-        let result = self.upsert_mapping(id);
-        self.insert_and_correct_mapping(id, vector, &result);
+        self.insert_and_assign(id, vector);
     }
 
     fn search(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {

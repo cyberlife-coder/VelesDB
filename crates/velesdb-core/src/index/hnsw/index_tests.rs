@@ -2863,120 +2863,91 @@ fn test_repeated_upsert_accumulates_tombstones() {
 }
 
 // -------------------------------------------------------------------------
-// BUG-0002: insert_and_correct_mapping divergence correction
+// #2246: an id is mapped to the slot the graph gave its vector
 // -------------------------------------------------------------------------
 
-/// Forces the HNSW graph node counter ahead of `ShardedMappings::next_idx`
-/// to simulate the concurrent insert divergence that BUG-0002 describes.
+/// A slot the graph filled with no id mapped to it — what another writer's
+/// node looks like from here — never captures the next id.
 ///
-/// When `self.inner.read()` allows concurrent inserts, two threads can
-/// allocate mapping indices in one order but graph node IDs in another.
-/// `insert_and_correct_mapping` detects this and calls `remove_reverse` +
-/// `restore` to fix the bidirectional mapping.
+/// Before #2246 the mappings predicted slot 1 for id 200 while the graph
+/// handed out slot 2, and a correction step had to repair the mapping
+/// afterwards. The mapping now names the slot the graph returned.
 #[test]
-fn test_insert_and_correct_mapping_fixes_diverged_idx() {
+fn test_an_id_is_mapped_to_the_slot_the_graph_gave() {
     let dim = 4;
     let index = HnswIndex::new(dim, DistanceMetric::Euclidean).unwrap();
 
-    // Phase 1: normal insert so both counters advance to 1
     index.insert(100, &[1.0, 0.0, 0.0, 0.0]);
-    assert_eq!(index.len(), 1);
     assert_eq!(index.mappings.get_idx(100), Some(0));
+    assert_eq!(index.mappings.get_id(0), Some(100));
 
-    // Phase 2: advance graph counter WITHOUT advancing mapping counter.
-    // This simulates a concurrent thread that got into the graph first.
-    let ghost_vec = [0.0, 1.0, 0.0, 0.0];
-    let ghost_node_id = index.inner.read().insert((&ghost_vec, 999)).unwrap();
-    assert_eq!(ghost_node_id, 1, "Graph should assign node_id=1");
+    let unmapped = index.inner.read().insert(&[0.0, 1.0, 0.0, 0.0]).unwrap();
+    assert_eq!(unmapped, 1, "the graph hands out the next slot");
 
-    // Phase 3: upsert_mapping for id=200 — mappings allocates idx=1
-    let result = index.upsert_mapping(200);
-    assert_eq!(result.idx, 1, "Mapping should allocate idx=1");
-    assert_eq!(result.old_idx, None, "New ID has no old mapping");
+    assert!(index.insert_and_assign(200, &[0.0, 0.0, 1.0, 0.0]));
 
-    // Phase 4: insert_and_correct_mapping — graph assigns node_id=2 (not 1)
-    let vector = [0.0, 0.0, 1.0, 0.0];
-    let success = index.insert_and_correct_mapping(200, &vector, &result);
-    assert!(success, "insert_and_correct_mapping should succeed");
-
-    // Phase 5: verify mapping correction
-    // The graph assigned node_id=2, so mapping must point to 2, not 1
-    let corrected_idx = index.mappings.get_idx(200).unwrap();
     assert_eq!(
-        corrected_idx, 2,
-        "Mapping must be corrected to actual graph node_id"
+        index.mappings.get_idx(200),
+        Some(2),
+        "id 200 must name the slot holding its vector"
     );
-    assert_eq!(
-        index.mappings.get_id(2),
-        Some(200),
-        "Reverse mapping must point to id=200"
-    );
-    // Stale reverse mapping for idx=1 must be gone
+    assert_eq!(index.mappings.get_id(2), Some(200));
     assert_eq!(
         index.mappings.get_id(1),
         None,
-        "Stale reverse mapping for original idx must be removed"
+        "the unmapped slot stays unmapped"
     );
+    assert_eq!(index.len(), 2);
 }
 
-/// Verifies that search still returns correct results after the
-/// divergence correction path has been exercised.
+/// Search resolves an id placed after an unmapped slot to that id.
 #[test]
-fn test_search_works_after_mapping_correction() {
+fn test_search_finds_an_id_placed_after_an_unmapped_slot() {
     let dim = 4;
     let index = HnswIndex::new(dim, DistanceMetric::Euclidean).unwrap();
 
-    // Insert a baseline vector normally
     index.insert(100, &[1.0, 0.0, 0.0, 0.0]);
+    index.inner.read().insert(&[0.5, 0.5, 0.0, 0.0]).unwrap();
+    index.insert(200, &[0.0, 0.0, 0.0, 1.0]);
 
-    // Advance graph counter with a ghost insert
-    let ghost_vec = [0.5, 0.5, 0.0, 0.0];
-    index.inner.read().insert((&ghost_vec, 999)).unwrap();
-
-    // Force divergence path for id=200
-    let result = index.upsert_mapping(200);
-    let target = [0.0, 0.0, 0.0, 1.0];
-    index.insert_and_correct_mapping(200, &target, &result);
-
-    // Search for id=200's vector — should find it despite correction
     let results = index.search(&[0.0, 0.0, 0.0, 1.0], 1);
     assert_eq!(results.len(), 1);
-    assert_eq!(
-        results[0].id, 200,
-        "Search must find the vector after mapping correction"
-    );
+    assert_eq!(results[0].id, 200, "search must resolve the slot to id 200");
 }
 
-/// When `assigned_id == result.idx` (no divergence), the happy path
-/// should leave mappings unchanged.
+/// An id repeated within one batch ends on its last occurrence, and the slot
+/// of its first is retired rather than left answering for it.
 #[test]
-fn test_insert_and_correct_mapping_no_divergence_happy_path() {
-    let dim = 4;
-    let index = HnswIndex::new(dim, DistanceMetric::Euclidean).unwrap();
+fn test_a_batch_repeating_an_id_keeps_its_last_vector() {
+    let index = HnswIndex::new(4, DistanceMetric::Euclidean).unwrap();
+    let batch: Vec<(u64, &[f32])> = vec![
+        (7, &[1.0, 0.0, 0.0, 0.0]),
+        (8, &[0.0, 1.0, 0.0, 0.0]),
+        (7, &[0.0, 0.0, 1.0, 0.0]),
+    ];
+    assert_eq!(index.insert_batch_parallel(batch), 3);
 
-    // Normal insert: no divergence expected
-    let result = index.upsert_mapping(42);
-    assert_eq!(result.idx, 0);
-
-    let vector = [1.0, 0.0, 0.0, 0.0];
-    let success = index.insert_and_correct_mapping(42, &vector, &result);
-    assert!(success, "Happy path should succeed");
-
-    // Mapping should be exactly as allocated — no correction needed
-    assert_eq!(index.mappings.get_idx(42), Some(0));
-    assert_eq!(index.mappings.get_id(0), Some(42));
-    assert_eq!(index.len(), 1);
+    assert_eq!(index.len(), 2);
+    assert_eq!(
+        index.mappings.get_idx(7),
+        Some(2),
+        "id 7 follows its last occurrence"
+    );
+    assert_eq!(
+        index.mappings.get_id(0),
+        None,
+        "id 7's first slot must be retired"
+    );
+    let results = index.search(&[0.0, 0.0, 1.0, 0.0], 1);
+    assert_eq!(results[0].id, 7);
 }
 
 // =========================================================================
-// Issue #396: parallel_insert ignores expected idx — mapping reconciliation
+// Issue #396: a batch after single inserts — each id follows its slot
 // =========================================================================
 
-/// Regression test: batch insert after single inserts must reconcile mappings.
-///
-/// Single inserts consume graph node IDs, so when a subsequent batch
-/// pre-registers mapping indices, the graph may assign different node IDs.
-/// The reconciliation logic must correct the mappings to match.
+/// Regression test (#396): a batch after single inserts maps each id to the
+/// slot the graph gave its vector.
 #[test]
 fn test_batch_after_single_insert_mapping_consistency() {
     let index = HnswIndex::new(4, DistanceMetric::Euclidean).unwrap();
@@ -2985,9 +2956,7 @@ fn test_batch_after_single_insert_mapping_consistency() {
     index.insert(100, &[1.0, 0.0, 0.0, 0.0]);
     assert_eq!(index.len(), 1);
 
-    // Batch-insert 5 vectors. The mapping layer will pre-register indices
-    // starting from next_idx (1..=5), but the graph may assign node IDs
-    // starting from 1 as well — or they may diverge under races.
+    // Batch-insert 5 vectors; the graph places them after node 0.
     let batch: Vec<(u64, &[f32])> = vec![
         (200, &[0.0, 1.0, 0.0, 0.0]),
         (201, &[0.0, 0.0, 1.0, 0.0]),

@@ -55,8 +55,6 @@ mod persistence_atomicity_tests;
 mod sharded_mappings_tests;
 #[cfg(test)]
 mod sidecar_removal_tests;
-#[cfg(test)]
-mod upsert_tests;
 
 // ============================================================================
 // Public API

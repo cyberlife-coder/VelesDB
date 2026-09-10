@@ -982,10 +982,11 @@ LOOM_MAX_PREEMPTIONS=2 cargo test -p velesdb-core --features loom,persistence --
 cargo test --test stress_concurrency_tests -- --test-threads=1
 ```
 
-### HNSW Batch Insertion Ordering
+### HNSW Slot Allocation
 
-For soundness analysis of the batch insertion pipeline and its ordering
-invariants, see [SOUNDNESS.md: HNSW Batch Insertion Ordering](SOUNDNESS.md#hnsw-batch-insertion-ordering).
+For how an insert gets its slot — one allocator, the arena, with the mapping
+following it under the index read guard — see
+[SOUNDNESS.md: HNSW Slot Allocation](SOUNDNESS.md#hnsw-slot-allocation).
 
 ## References
 
