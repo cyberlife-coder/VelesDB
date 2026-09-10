@@ -1,8 +1,8 @@
 //! Tree walks the wire schemas run before inlining: the rustdoc-link rewrite
 //! of every `description` (#2261), which both `harden`s apply, and the id
-//! widening, which only `WireOutputSchema::harden` applies. Items are
-//! `pub(super)`, private to `schema`; the split keeps `schema.rs` within its
-//! file budget.
+//! widening, which only `WireOutputSchema::harden` applies. Its entry points
+//! are `pub(super)`, private to `schema`; the split keeps `schema.rs` within
+//! its file budget.
 
 use serde_json::{Map, Value};
 use std::borrow::Cow;
@@ -196,15 +196,15 @@ fn rustdoc_link(after: &str) -> Option<(Cow<'_, str>, &str)> {
 }
 
 /// An inline link, `inline` being the text after its `(`: shown as its label
-/// when the target is a Rust path. The target may be padded with spaces or
-/// wrapped in `<…>`, as Markdown allows.
+/// when the target is a Rust path. The target may be padded with spaces, and
+/// wrapped in `<…>` with spaces inside, as Markdown allows.
 fn inline_link<'a>(label: &'a str, inline: &'a str) -> Option<(Cow<'a, str>, &'a str)> {
     let end = closing_paren(inline)?;
     let target = inline[..end].trim();
     let target = target
         .strip_prefix('<')
         .and_then(|t| t.strip_suffix('>'))
-        .unwrap_or(target);
+        .map_or(target, str::trim);
     is_rust_path(target).then(|| (Cow::Borrowed(label), &inline[end + 1..]))
 }
 
@@ -249,15 +249,17 @@ const CALL_SUFFIXES: [&str; 4] = ["!()", "!{}", "()", "!"];
 
 /// Whether a code span reads as a link to the rewrite: non-empty and, with
 /// balanced generic arguments dropped, one word. `Vec<T>` and `HashMap<K, V>`
-/// are; `0, 1`, `a | b` and an unbalanced `a<b c` are not. A heuristic:
-/// rustdoc also needs the name to resolve, which a schema cannot check.
+/// are; `0, 1`, `a | b` and the unbalanced `a<b c` and `Vec<T>>` are not. A
+/// heuristic: rustdoc also needs the name to resolve, which a schema cannot
+/// check.
 fn is_one_word(code: &str) -> bool {
     let mut depth = 0usize;
     let mut seen = false;
     for c in code.chars() {
         match c {
             '<' => depth += 1,
-            '>' => depth = depth.saturating_sub(1),
+            '>' if depth == 0 => return false,
+            '>' => depth -= 1,
             c if depth == 0 && c.is_whitespace() => return false,
             _ if depth == 0 => seen = true,
             _ => {}

@@ -340,6 +340,7 @@ mod unlink {
             ("a [call](f()) here", "a call here"),
             ("see [x]( crate::y)", "see x"),
             ("see [x](<crate::y>)", "see x"),
+            ("see [x](< crate::y >)", "see x"),
         ] {
             assert_eq!(unlink_rustdoc(text).as_deref(), Some(shown), "{text}");
         }
@@ -411,6 +412,7 @@ mod unlink {
             "either [`a | b`]",
             "[`value@`]",
             "an [`a<b c`] unbalanced",
+            "a [`Vec<T>>`] stray",
             "`decisions[fragment_index]` is unambiguous",
             "``a [`b`] c`` in a double-backtick span",
         ] {
@@ -434,7 +436,11 @@ mod unlink {
                     "default": ["[`not a description`]"]
                 }
             },
-            "$defs": { "D": { "description": "def [`D`]" } }
+            "$defs": { "D": { "description": "def [`D`]" } },
+            "anyOf": [{ "description": "any [`A`]" }],
+            "oneOf": [{ "description": "one [`O`]" }],
+            "additionalProperties": { "description": "extra [`E`]" },
+            "patternProperties": { "^x-": { "description": "pattern [`P`]" } }
         })
         .as_object()
         .cloned()
@@ -456,7 +462,11 @@ mod unlink {
                         "default": ["[`not a description`]"]
                     }
                 },
-                "$defs": { "D": { "description": "def `D`" } }
+                "$defs": { "D": { "description": "def `D`" } },
+                "anyOf": [{ "description": "any `A`" }],
+                "oneOf": [{ "description": "one `O`" }],
+                "additionalProperties": { "description": "extra `E`" },
+                "patternProperties": { "^x-": { "description": "pattern `P`" } }
             })
         );
     }
@@ -488,7 +498,7 @@ mod unlink {
     fn names_rust_path_target(text: &str) -> bool {
         text.match_indices("](").any(|(at, _)| {
             let target = text[at + 2..].trim_start();
-            let target = target.strip_prefix('<').unwrap_or(target);
+            let target = target.strip_prefix('<').map_or(target, str::trim_start);
             ["crate::", "super::", "self::", "Self::"]
                 .iter()
                 .any(|root| target.starts_with(root))
@@ -501,6 +511,7 @@ mod unlink {
             "odd [`a]b`](crate::x) link",
             "odd [`a]b`]( crate::x) link",
             "odd [`a]b`](<crate::x>) link",
+            "odd [`a]b`](< crate::x>) link",
         ] {
             assert_eq!(unlink_rustdoc(text), None, "{text}");
             let mut linked = Vec::new();
