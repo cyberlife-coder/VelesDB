@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Tool schemas published rustdoc link syntax as text.** schemars copies
+  each field's doc comment into its JSON Schema `description`, so the schemas
+  every MCP client reads carried intra-doc links only rustdoc resolves —
+  ``[`Name`]``, `[text](crate::path)` — 137 of them across 102 descriptions of
+  `docs/reference/mcp-tools.json`. The input and output schemas now render
+  each link as rustdoc would: a code link as its code span, a labelled link
+  as its text, a path-like shortcut reference as its name. Code spans are
+  copied verbatim and brackets that are not links stay, so only descriptions
+  change; a test fails if a published description still holds a link.
+  (#2261)
+
 ## [0.14.2] - 2026-09-03
 
 ### Fixed

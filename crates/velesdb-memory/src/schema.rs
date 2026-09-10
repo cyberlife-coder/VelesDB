@@ -51,6 +51,137 @@ fn strip_in_value(value: &mut Value) {
 /// [`strip_int_formats`], but keyed: only the named properties widen.
 ///
 /// `mcp`-gated: the advertised tool schemas are its only consumer.
+/// Rewrites rustdoc link syntax in every `description` of a published schema
+/// into the text rustdoc shows for it (#2261).
+///
+/// schemars copies doc comments verbatim, so an intra-doc link reached the
+/// wire as Markdown no client can resolve: ``[`X`](crate::path)`` renders as a
+/// broken link, ``[`X`]`` as bracketed text. The doc comments stay
+/// rustdoc-correct; only what the schema publishes changes.
+#[cfg(feature = "mcp")]
+fn unlink_rustdoc_descriptions(map: &mut Map<String, Value>) {
+    for (key, value) in map.iter_mut() {
+        match value {
+            Value::String(text) if key == "description" => {
+                if let Some(unlinked) = unlink_rustdoc(text) {
+                    *text = unlinked;
+                }
+            }
+            _ => unlink_in_value(value),
+        }
+    }
+}
+
+#[cfg(feature = "mcp")]
+fn unlink_in_value(value: &mut Value) {
+    match value {
+        Value::Object(map) => unlink_rustdoc_descriptions(map),
+        Value::Array(items) => items.iter_mut().for_each(unlink_in_value),
+        _ => {}
+    }
+}
+
+/// `text` with each rustdoc link replaced by what rustdoc shows for it, or
+/// `None` when it holds none: ``[`X`](path)`` and ``[`X`]`` become `` `X` ``,
+/// `[Name](path)` and a path-like `[Name]` become `Name`. Brackets that are
+/// not a rustdoc link — `[0, 1]`, a web link, a reference-style link — stay.
+#[cfg(feature = "mcp")]
+fn unlink_rustdoc(text: &str) -> Option<String> {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    let mut changed = false;
+    while let Some(pos) = rest.find(['[', '`']) {
+        out.push_str(&rest[..pos]);
+        let marker = &rest[pos..];
+        if marker.starts_with('`') {
+            // A code span is copied as it stands: brackets inside it are
+            // code (`decisions[fragment_index]`), not links.
+            let span = code_span_len(marker);
+            out.push_str(&marker[..span]);
+            rest = &marker[span..];
+            continue;
+        }
+        let after = &marker[1..];
+        // `[a][b]`: a bracket right after `]` is a reference label, not a link.
+        let reference_label = out.ends_with(']');
+        if let Some((shown, remaining)) = rustdoc_link(after).filter(|_| !reference_label) {
+            out.push_str(shown);
+            rest = remaining;
+            changed = true;
+        } else {
+            out.push('[');
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    changed.then_some(out)
+}
+
+/// Length of the code span `text` starts with: its opening run of backticks
+/// through the next run of exactly as many, or the whole text when it never
+/// closes.
+#[cfg(feature = "mcp")]
+fn code_span_len(text: &str) -> usize {
+    let fence = text.bytes().take_while(|&b| b == b'`').count();
+    let mut search = fence;
+    while let Some(found) = text[search..].find('`') {
+        let at = search + found;
+        let run = text[at..].bytes().take_while(|&b| b == b'`').count();
+        if run == fence {
+            return at + run;
+        }
+        search = at + run;
+    }
+    text.len()
+}
+
+/// When `after` — the text following a `[` — starts a rustdoc link, what
+/// rustdoc shows for it and the text after the link.
+#[cfg(feature = "mcp")]
+fn rustdoc_link(after: &str) -> Option<(&str, &str)> {
+    let close = after.find(']')?;
+    let (label, tail) = (&after[..close], &after[close + 1..]);
+    if let Some(inline) = tail.strip_prefix('(') {
+        let end = inline.find(')')?;
+        return is_rust_path(&inline[..end]).then(|| (label, &inline[end + 1..]));
+    }
+    let shortcut = !tail.starts_with('[') && (is_code_span(label) || is_rust_path(label));
+    shortcut.then_some((label, tail))
+}
+
+/// A single inline code span — the label of a rustdoc code link.
+#[cfg(feature = "mcp")]
+fn is_code_span(label: &str) -> bool {
+    label.len() > 2
+        && label.starts_with('`')
+        && label.ends_with('`')
+        && !label[1..label.len() - 1].contains('`')
+}
+
+/// A path rustdoc resolves — `crate::a::B`, `super::f`, `Self::g`, `Name`,
+/// `fn@name`, `f()`, `m!` — as opposed to a URL or prose.
+#[cfg(feature = "mcp")]
+fn is_rust_path(target: &str) -> bool {
+    let path = target.split_once('@').map_or(target, |(kind, path)| {
+        if kind.chars().all(|c| c.is_ascii_lowercase()) {
+            path
+        } else {
+            ""
+        }
+    });
+    let path = path
+        .strip_suffix("()")
+        .or_else(|| path.strip_suffix('!'))
+        .unwrap_or(path);
+    !path.is_empty()
+        && path.split("::").all(|segment| {
+            segment.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                && segment
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        })
+}
+
 #[cfg(feature = "mcp")]
 pub(crate) fn widen_id_properties(map: &mut Map<String, Value>, keys: &[&str]) {
     if let Some(Value::Object(properties)) = map.get_mut("properties") {
@@ -1038,6 +1169,7 @@ impl WireInputSchema {
     /// pour que chaque branche porte un `type` direct ; la scalarisation en
     /// dernier, parce qu'elle ne promeut qu'une branche deja typee.
     fn harden(mut self, id_keys: &[&str]) -> Self {
+        unlink_rustdoc_descriptions(&mut self.0);
         stringify_id_properties(&mut self.0, id_keys);
         inline_ref_only_properties(&mut self.0);
         scalarize_slot_types(&mut self);
@@ -1059,6 +1191,7 @@ impl WireOutputSchema {
     /// Elargissement des ids puis inlining. Pas de scalarisation : voir le
     /// commentaire de section.
     fn harden(mut self) -> Self {
+        unlink_rustdoc_descriptions(&mut self.0);
         widen_id_properties(&mut self.0, WIRE_ID_KEYS);
         inline_ref_only_properties(&mut self.0);
         self

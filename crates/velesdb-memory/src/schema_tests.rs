@@ -319,3 +319,131 @@ fn admits_null(slot: &serde_json::Value) -> bool {
         }),
     }
 }
+
+/// The rustdoc-link rewrite applied to every published description (#2261).
+#[cfg(feature = "mcp")]
+mod unlink {
+    use super::super::{unlink_rustdoc, unlink_rustdoc_descriptions};
+    use serde_json::{json, Map, Value};
+
+    #[test]
+    fn a_code_link_keeps_its_code_span() {
+        assert_eq!(
+            unlink_rustdoc("see [`A::b`] and [`c`](crate::d::c).").as_deref(),
+            Some("see `A::b` and `c`.")
+        );
+    }
+
+    #[test]
+    fn an_inline_link_shows_its_label() {
+        assert_eq!(
+            unlink_rustdoc("the [`stable id`](super::fragment_id) of a fragment").as_deref(),
+            Some("the `stable id` of a fragment")
+        );
+        assert_eq!(
+            unlink_rustdoc("a [builder](fn@crate::build) call").as_deref(),
+            Some("a builder call")
+        );
+    }
+
+    #[test]
+    fn a_path_like_shortcut_reference_shows_its_name() {
+        assert_eq!(
+            unlink_rustdoc("the [Recollection] it returns").as_deref(),
+            Some("the Recollection it returns")
+        );
+    }
+
+    #[test]
+    fn brackets_that_are_not_rustdoc_links_stay() {
+        for text in [
+            "in [0, 1]",
+            "[docs](https://example.com/a)",
+            "[`a`][reference]",
+            "a [ lone bracket",
+            "`decisions[fragment_index]` is unambiguous",
+            "``a [`b`] c`` in a double-backtick span",
+        ] {
+            assert_eq!(unlink_rustdoc(text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn every_description_is_rewritten_and_nothing_else() {
+        let mut schema: Map<String, Value> = json!({
+            "description": "a [`Top`]",
+            "properties": {
+                "description": { "type": "string", "description": "field [`F`](crate::F)" },
+                "tags": {
+                    "type": "array",
+                    "items": { "description": "item [`I`]" },
+                    "default": ["[`not a description`]"]
+                }
+            },
+            "$defs": { "D": { "description": "def [`D`]" } }
+        })
+        .as_object()
+        .cloned()
+        .expect("test: an object");
+        unlink_rustdoc_descriptions(&mut schema);
+        assert_eq!(
+            Value::Object(schema),
+            json!({
+                "description": "a `Top`",
+                "properties": {
+                    "description": { "type": "string", "description": "field `F`" },
+                    "tags": {
+                        "type": "array",
+                        "items": { "description": "item `I`" },
+                        "default": ["[`not a description`]"]
+                    }
+                },
+                "$defs": { "D": { "description": "def `D`" } }
+            })
+        );
+    }
+
+    /// The committed capture of what the server publishes — kept equal to the
+    /// live schema by `mcp_tools_drift` — has nothing left for the rewrite.
+    #[test]
+    fn the_published_tool_schema_carries_no_rustdoc_link() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/reference/mcp-tools.json"
+        );
+        let text = std::fs::read_to_string(path).expect("test: read the snapshot");
+        let snapshot: Value = serde_json::from_str(&text).expect("test: snapshot is JSON");
+        let mut linked = Vec::new();
+        collect_linked(&snapshot, "", &mut linked);
+        assert!(
+            linked.is_empty(),
+            "{} published descriptions still carry rustdoc link syntax, e.g. {:?}",
+            linked.len(),
+            &linked[..linked.len().min(5)]
+        );
+    }
+
+    fn collect_linked(value: &Value, path: &str, out: &mut Vec<String>) {
+        match value {
+            Value::Object(map) => {
+                for (key, child) in map {
+                    let here = format!("{path}/{key}");
+                    match child {
+                        Value::String(text) if key == "description" => {
+                            if unlink_rustdoc(text).is_some() {
+                                out.push(here);
+                            }
+                        }
+                        _ => collect_linked(child, &here, out),
+                    }
+                }
+            }
+            Value::Array(items) => {
+                for (i, item) in items.iter().enumerate() {
+                    collect_linked(item, &format!("{path}/{i}"), out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
