@@ -337,8 +337,22 @@ class RemedyTests(unittest.TestCase):
                 self.assertIn("CI Success", message)
 
     def test_a_non_pull_request_surface_is_not(self) -> None:
-        """The push half is specific to the required-chain gap, not general."""
-        self.assertNotIn("PUSH", self._stderr("issue"))
+        """The push half is specific to the required-chain gap, not general.
+
+        Asserting only that "PUSH" is absent passed on an EMPTY stderr, so a
+        change that stopped auditing the issue surface altogether would have
+        left this green (#2246, P2-c). The refusal itself is required first.
+        """
+        message = self._stderr("issue")
+        # The violation line goes to STDOUT and the remedy to stderr, so the
+        # remedy is what proves the surface was refused on this stream.
+        self.assertIn(
+            "Edit the issue",
+            message,
+            "the issue surface must still be refused -- and told how to fix it -- "
+            "before the absence of the push step means anything",
+        )
+        self.assertNotIn("PUSH", message)
 
 
 class SingleSourceTests(unittest.TestCase):

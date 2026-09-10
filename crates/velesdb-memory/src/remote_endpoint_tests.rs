@@ -4,9 +4,22 @@
 
 use super::*;
 
+/// The tests here set, clear and read process environment variables, which all
+/// test threads share. Run in parallel, one test's `clear_embedder_vars` erased
+/// another's variables mid-assertion — `embedder_env_endpoint_prefers_the_role_named_variables`
+/// failed a pre-commit run with `left: None`. Every test that touches the
+/// environment holds this lock for its whole body; a poisoned lock is taken
+/// anyway, since each of them sets what it reads before reading it.
+static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn env_guard() -> std::sync::MutexGuard<'static, ()> {
+    ENV.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// Every variable [`embedder_env_endpoint`] reads, cleared so one test's
-/// setup cannot leak into the next (tests run `--test-threads=1`, so the
-/// risk is ordering, not races).
+/// setup cannot leak into the next. Callers hold [`env_guard`]: the tests run
+/// in parallel, and without it the hazard was a race, not just ordering.
 fn clear_embedder_vars() {
     for key in [
         "VELESDB_MEMORY_EMBEDDER_URL",
@@ -21,6 +34,7 @@ fn clear_embedder_vars() {
 
 #[test]
 fn role_auth_reads_no_credential_when_unset() {
+    let _env = env_guard();
     let key = "VELESDB_MEMORY_TEST_TOKEN_UNSET";
     std::env::remove_var(key);
     let auth = role_auth(key).expect("an unset token is not an error");
@@ -29,6 +43,7 @@ fn role_auth_reads_no_credential_when_unset() {
 
 #[test]
 fn role_auth_refuses_a_blank_value() {
+    let _env = env_guard();
     let key = "VELESDB_MEMORY_TEST_TOKEN_BLANK";
     std::env::set_var(key, "   ");
     let err = role_auth(key).expect_err("a blank token must be refused, not sent as-is");
@@ -41,6 +56,7 @@ fn role_auth_refuses_a_blank_value() {
 
 #[test]
 fn role_auth_carries_a_set_token_as_bearer() {
+    let _env = env_guard();
     let key = "VELESDB_MEMORY_TEST_TOKEN_SET";
     std::env::set_var(key, "sk-secret");
     let auth = role_auth(key).expect("a real token is accepted");
@@ -53,6 +69,7 @@ fn role_auth_carries_a_set_token_as_bearer() {
 
 #[test]
 fn embedder_env_endpoint_prefers_the_role_named_variables() {
+    let _env = env_guard();
     clear_embedder_vars();
     std::env::set_var("VELESDB_MEMORY_EMBEDDER_URL", "http://role");
     std::env::set_var("VELESDB_MEMORY_OLLAMA_URL", "http://legacy");
@@ -71,6 +88,7 @@ fn embedder_env_endpoint_prefers_the_role_named_variables() {
 
 #[test]
 fn embedder_env_endpoint_falls_back_to_the_legacy_ollama_alias() {
+    let _env = env_guard();
     clear_embedder_vars();
     std::env::set_var("VELESDB_MEMORY_OLLAMA_URL", "http://legacy-only");
     std::env::set_var("VELESDB_MEMORY_OLLAMA_MODEL", "legacy-model");
@@ -85,6 +103,7 @@ fn embedder_env_endpoint_falls_back_to_the_legacy_ollama_alias() {
 
 #[test]
 fn embedder_env_endpoint_propagates_a_blank_token() {
+    let _env = env_guard();
     clear_embedder_vars();
     std::env::set_var("VELESDB_MEMORY_EMBEDDER_API_TOKEN", " ");
 
