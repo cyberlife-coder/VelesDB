@@ -143,7 +143,7 @@ Reads take a read-lock and never block each other. Read-mostly workloads scale l
 
 ## Storage on disk
 
-A VelesDB database is **a directory**, with one subdirectory per collection; a subdirectory without a `config.json` is not a collection. A collection's directory holds:
+A VelesDB database is **a directory**: `velesdb.lock`, the exclusive process lock, and one subdirectory per collection — a subdirectory without a `config.json` is not a collection. A collection's directory holds:
 
 - `config.json` — the collection's configuration
 - `vectors.dat`, `vectors.idx`, `vectors.wal` — the memory-mapped vector store, its id → offset index, and the write-ahead log replayed into it at open
@@ -151,13 +151,14 @@ A VelesDB database is **a directory**, with one subdirectory per collection; a s
 - `native_hnsw.graph`, `native_hnsw.vectors`, `native_hnsw.gen`, `native_mappings.bin`, `native_meta.bin` — the persisted HNSW graph, reloaded at open; `native_meta.bin` is written last, as the commit point
 - `hnsw-<token>.arena` — a disposable f32 arena, in SQ8 and RaBitQ collections whose `.vectors` was not adopted; removed when the graph drops
 - `sparse.wal`, `sparse.snapshot` and generation files (`.idx`, `.terms`, `.meta`) — sparse-vector indexes, prefixed `sparse-<name>` for a named one
-- `codebook.pq`, `rotation.opq`, `rabitq.idx` — trained quantizers, when the collection has one
-- `edge_store.bin`, `property_index.bin`, `range_index.bin` — graph edges and property indexes, when the collection has them
+- `bm25.snapshot`, `bm25.wal` — the BM25 full-text index and the log of changes since its last snapshot
+- `codebook.pq`, `rotation.opq`, `rabitq.idx`, `sq8.idx` — trained quantizers, when the collection has one
+- `edge_store.bin`, `edges.wal`, `property_index.bin`, `range_index.bin` — graph edges, the log of edge changes since their last flush, and property indexes, when the collection has them
 - `collection.stats.json` — the statistics `ANALYZE` records, histograms included
 
-The BM25 full-text index is rebuilt from the payloads at open, and secondary indexes live in memory: neither has a file of its own.
+Secondary indexes have no file of their own: they live in memory and are rebuilt at open from the definitions in `config.json`.
 
-Recovery on restart: `vectors.wal` replays into the vector store, the payload index loads from `payloads.snapshot` and replays `payloads.log` past it, and the HNSW graph is reconciled against the store — see [CONCURRENCY_MODEL.md](docs/CONCURRENCY_MODEL.md#recovery-architecture).
+Recovery on restart replays each log over its snapshot — `vectors.wal` into the vector store, `payloads.log` past `payloads.snapshot`, `bm25.wal` over `bm25.snapshot` (BM25 is rebuilt from the payloads only when no snapshot exists), `edges.wal` over `edge_store.bin`, and the sparse WALs over their snapshots — then reconciles the HNSW graph against the store: see [CONCURRENCY_MODEL.md](docs/CONCURRENCY_MODEL.md#recovery-architecture).
 
 For the byte-level layout and serialization format, see [`docs/STORAGE_FORMAT.md`](docs/STORAGE_FORMAT.md).
 
