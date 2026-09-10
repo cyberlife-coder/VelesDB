@@ -11,10 +11,10 @@ use std::mem::ManuallyDrop;
 pub enum VacuumError {
     /// The index's exact-distance features are off
     /// (`enable_vector_storage = false`); vacuum refuses such an index.
-    #[error("Cannot vacuum: exact-distance features are off (build the index with new(), not new_fast_insert())")]
+    #[error("Cannot vacuum: exact-distance features are off (use new(), not new_fast_insert())")]
     VectorStorageDisabled,
     /// Index rebuild failed: an allocation or insertion error, or a rebuild
-    /// that placed fewer vectors than it had ids.
+    /// whose slot count differs from its id count.
     #[error("Vacuum rebuild failed: {0}")]
     RebuildFailed(String),
 }

@@ -184,6 +184,45 @@ fn concurrent_assigns_of_disjoint_slots_stay_consistent() {
     assert_eq!(mappings.len(), 4_000);
 }
 
+/// Assigns and removes of one id racing each other leave the two maps in
+/// agreement once they settle: the id maps to one slot that names it back, or
+/// to none, and no other slot still names it.
+#[test]
+fn racing_assigns_and_removes_of_one_id_keep_both_maps_consistent() {
+    let mappings = Arc::new(ShardedMappings::new());
+    let (threads, rounds) = (8u64, 400u64);
+    let handles: Vec<_> = (0..threads)
+        .map(|t| {
+            let m = Arc::clone(&mappings);
+            thread::spawn(move || {
+                for r in 0..rounds {
+                    if (t + r) % 3 == 0 {
+                        m.remove(7);
+                    } else {
+                        m.assign(7, Placed::for_test(slot(t * rounds + r)));
+                    }
+                }
+            })
+        })
+        .collect();
+    for handle in handles {
+        handle.join().expect("test: thread");
+    }
+    let (_, reverse, _) = mappings.as_parts();
+    let naming: Vec<usize> = reverse
+        .iter()
+        .filter(|&(_, &id)| id == 7)
+        .map(|(&idx, _)| idx)
+        .collect();
+    match mappings.get_idx(7) {
+        Some(held) => assert_eq!(naming, [held], "only id 7's own slot may name it"),
+        None => assert!(
+            naming.is_empty(),
+            "a removed id is still named by {naming:?}"
+        ),
+    }
+}
+
 /// Sixteen writers move the same hundred ids, each onto slots of its own.
 /// Whatever order they land in, every id must end on one slot that points
 /// back to it, and every slot an id moved off must be retired.

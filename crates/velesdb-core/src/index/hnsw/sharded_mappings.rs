@@ -131,9 +131,11 @@ impl ShardedMappings {
         use dashmap::mapref::entry::Entry;
 
         let slot = placed.into_slot();
-        // Checked before either map changes. The writes then keep their order
-        // (forward entry, retire the old reverse entry, claim the new one), so
-        // no id is ever named by two reverse entries at once.
+        // Checked before either map changes. The writes then run under the
+        // id's entry lock, in order (forward entry, retire the old reverse
+        // entry, claim the new one), so assigns of one id serialize. `remove`
+        // drops its two entries one at a time and may interleave; once
+        // writers settle, each id is named by its own slot alone.
         self.refuse_foreign_slot(slot, id);
         self.note_id(id);
         self.next_idx
@@ -148,7 +150,10 @@ impl ShardedMappings {
                 (old != slot).then_some(old)
             }
             Entry::Vacant(entry) => {
-                entry.insert(slot);
+                // `insert` hands the shard lock to the reference it returns:
+                // keep it until the reverse entry is written, as the occupied
+                // arm does, or a concurrent assign of this id interleaves.
+                let _forward = entry.insert(slot);
                 self.idx_to_id.insert(slot, id);
                 None
             }

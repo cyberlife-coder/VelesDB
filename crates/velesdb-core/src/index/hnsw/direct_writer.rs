@@ -15,12 +15,16 @@ use crate::validation::validate_dimension_match;
 /// Used exclusively during `upsert_bulk` so vectors are immediately
 /// available for SIMD re-ranking and brute-force search while HNSW graph
 /// construction is deferred to `AsyncIndexBuilder`.
-#[cfg_attr(not(feature = "persistence"), allow(dead_code))] // Reason: only the persistence-gated bulk path (collection::core::crud_bulk) writes directly
+// Reason: only the persistence-gated bulk path (collection::core::crud_bulk)
+// writes directly.
+#[cfg_attr(not(feature = "persistence"), allow(dead_code))]
 pub(crate) struct DirectVectorWriter<'a> {
     hnsw_index: &'a HnswIndex,
 }
 
-#[cfg_attr(not(feature = "persistence"), allow(dead_code))] // Reason: only the persistence-gated bulk path (collection::core::crud_bulk) writes directly
+// Reason: only the persistence-gated bulk path (collection::core::crud_bulk)
+// writes directly.
+#[cfg_attr(not(feature = "persistence"), allow(dead_code))]
 impl<'a> DirectVectorWriter<'a> {
     /// Creates a new direct writer for the given `HnswIndex`.
     #[must_use]

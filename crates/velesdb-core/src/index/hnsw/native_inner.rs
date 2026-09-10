@@ -716,7 +716,6 @@ impl NativeHnswInner {
     }
 
     /// Returns the number of elements in the index.
-    #[allow(dead_code)] // Reason: API surface — introspection accessor for callers
     #[inline]
     #[must_use]
     pub fn len(&self) -> usize {
@@ -821,9 +820,10 @@ impl NativeHnswInner {
 /// renumber slots under the write side and cannot move this one in between.
 /// Placements mint it ([`NativeHnswInner::place`],
 /// [`NativeHnswInner::place_parallel`], [`NativeHnswInner::place_unlinked`]);
-/// the one exception is [`Placed::installed`], for a graph behind a write
-/// guard. The token ties a mapping to a guard's lifetime, not to a particular
-/// index: each call site keeps an index's guard and its mappings together.
+/// the exceptions are [`Placed::installed`], for a graph behind a write
+/// guard, and the test-only `Placed::for_test`. The token ties a mapping to
+/// a guard's lifetime, not to a particular index: each call site keeps an
+/// index's guard and its mappings together.
 /// Neither `Clone` nor `Copy`: each placement maps once.
 #[must_use = "a placed slot left unmapped stays a tombstone"]
 pub(crate) struct Placed<'guard> {
@@ -854,8 +854,9 @@ impl<'guard> Placed<'guard> {
 
     /// A slot of the graph `guard` holds exclusively: `vacuum` maps its rebuilt
     /// graph this way, once installed. Nothing renumbers slots while the write
-    /// side is held. This is the one way to make a token from a bare slot, and
-    /// it trusts its caller that the slot is that graph's; debug builds check
+    /// side is held. Outside tests (`Placed::for_test`) this is the one way to
+    /// make a token from a bare slot, and it trusts its caller that the slot is
+    /// that graph's; debug builds check
     /// that the graph has such a slot.
     pub(crate) fn installed(
         guard: &'guard parking_lot::RwLockWriteGuard<'_, std::mem::ManuallyDrop<NativeHnswInner>>,

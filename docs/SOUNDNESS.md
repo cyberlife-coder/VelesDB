@@ -935,7 +935,8 @@ names it; `vacuum` rebuilds the mappings before it releases that lock.
 `assign` takes the `Placed` token a placement returns, never a bare slot,
 and the token borrows the guard the placement ran under: releasing that
 guard before the slot is mapped does not compile (E0505). Placements mint
-the token; the one exception is `Placed::installed`, which `vacuum` uses for
+the token; outside tests (`Placed::for_test`) the one exception is
+`Placed::installed`, which `vacuum` uses for
 its rebuilt graph: it makes a token from a bare slot under a write guard and
 trusts its caller that the slot is that graph's. The token ties a mapping to
 a guard's lifetime, not to a particular index; each call site keeps an

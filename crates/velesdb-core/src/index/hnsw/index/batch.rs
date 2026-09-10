@@ -74,13 +74,13 @@ impl HnswIndex {
         // renumber slots under the write lock, so each slot placed here is still
         // its vector's when the mapping names it.
         let inner = self.inner.read();
-        let placed = inner.place_parallel(&vectors).map(|placements| {
+        let outcome = inner.place_parallel(&vectors).map(|placements| {
             for ((id, _), placed) in items.iter().zip(placements) {
                 self.mappings.assign(*id, placed);
             }
         });
         drop(inner);
-        match placed {
+        match outcome {
             Ok(()) => items.len(),
             Err(e) => {
                 tracing::error!("insert_batch_parallel: parallel_insert failed: {e}");
