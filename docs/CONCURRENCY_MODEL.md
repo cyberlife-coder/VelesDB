@@ -645,6 +645,8 @@ ensure no data is lost.
 ┌────────────────────────────────────────────────────────────────────────┐
 │                        Collection::open()                              │
 │                                                                        │
+│  0. load_config() — config.json                                        │
+│                                                                        │
 │  1. MmapStorage::new()                                                 │
 │     ├─ Load vectors.idx (ID → offset mapping)                          │
 │     ├─ Replay vectors.wal → restore writes since last flush_index()    │
@@ -664,7 +666,7 @@ ensure no data is lost.
 │  4. load_bm25_index()                                                  │
 │     └─ bm25.snapshot + bm25.wal replay; payload rebuild if no snapshot │
 │                                                                        │
-│  5. Property and range indexes, label index (rebuilt from payloads),   │
+│  5. Property index, label index (rebuilt from payloads), range index,  │
 │     edge_store.bin, named sparse indexes                               │
 │     └─ each sparse snapshot, then its WAL replayed over it             │
 │                                                                        │
@@ -688,7 +690,7 @@ ensure no data is lost.
 │  8. restore_auto_reindex_from_config(),                                │
 │     restore_secondary_indexes_from_config()                            │
 │                                                                        │
-│  9. run_post_open_hooks()                                              │
+│  9. run_post_open_hooks() (persistence builds)                         │
 │     ├─ reindex edge properties from edge_store.bin                     │
 │     ├─ replay edges.wal over edge_store.bin                            │
 │     └─ restore_persisted_quantizers(): trained quantizer artifacts     │
