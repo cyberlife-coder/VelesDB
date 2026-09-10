@@ -153,18 +153,30 @@ class UnreleasedSectionTests(unittest.TestCase):
     while the cleanup PR was still in review. Hence a guard rather than a sweep.
     """
 
+    #: Each changelog a release workflow publishes a section of, and the workflow
+    #: that does it. The first version guarded only the root file; the one
+    #: `release-memory.yml` publishes was guarded by nothing (#2246, P2-d).
+    PUBLISHED = {
+        ROOT / "CHANGELOG.md": "release.yml",
+        MEMORY_CHANGELOG: "release-memory.yml",
+    }
+
     def setUp(self) -> None:
         self.text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
 
     def test_no_type_appears_twice(self) -> None:
-        headings = unreleased_headings(self.text)
-        duplicated = sorted({h for h in headings if headings.count(h) > 1})
-        self.assertEqual(
-            duplicated,
-            [],
-            f"`## [Unreleased]` repeats {duplicated}. Merge each type into one "
-            "section; the release notes are generated from this block.",
-        )
+        for path, workflow in self.PUBLISHED.items():
+            rel = path.relative_to(ROOT)
+            with self.subTest(changelog=str(rel)):
+                headings = unreleased_headings(path.read_text(encoding="utf-8"))
+                duplicated = sorted({h for h in headings if headings.count(h) > 1})
+                self.assertEqual(
+                    duplicated,
+                    [],
+                    f"`## [Unreleased]` of {rel} repeats {duplicated}; at release this "
+                    f"block becomes the version section {workflow} turns into release "
+                    "notes. Merge each type into one section.",
+                )
 
     def test_the_block_has_headings_at_all(self) -> None:
         """Otherwise an empty parse would satisfy the test above forever."""
