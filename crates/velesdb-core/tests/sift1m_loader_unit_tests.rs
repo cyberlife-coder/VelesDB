@@ -10,7 +10,7 @@
 //! `#[cfg(test)]` modules. Keeping these tests in `tests/` makes them
 //! runnable via the standard `cargo test` flow.
 
-#![cfg(feature = "bench-sift1m")]
+#![cfg(all(feature = "bench-sift1m", feature = "persistence"))]
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_truncation)]
 
