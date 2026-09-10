@@ -140,7 +140,7 @@ fn test_storage_bypass_when_disabled() {
     // Mapping exists
     assert!(index.mappings.get_idx(1).is_some());
 
-    // Direct contiguous write is skipped when storage is disabled — the
+    // Direct contiguous write is skipped when exact-distance features are off — the
     // deferred HNSW insert path populates the graph store instead.
     assert_eq!(contiguous_get(&index, results[0].idx), None);
 }
