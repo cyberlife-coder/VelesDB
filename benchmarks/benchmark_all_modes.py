@@ -120,13 +120,16 @@ def test_velesdb_mode(data: np.ndarray, queries: np.ndarray, ground_truth: List[
             })
             latencies.append(time.time() - start)
             
-            if resp.status_code == 200:
-                results = resp.json()
-                pred_ids = [r["id"] for r in results.get("results", results)]
-                recall = compute_recall(ground_truth[i], pred_ids)
-                recalls.append(recall)
-            else:
-                recalls.append(0)
+            if resp.status_code != 200:
+                # A refused search never ran. Perfect past the collection's
+                # max_perfect_mode_vectors is refused, and counting that as
+                # recall 0 would publish a refusal as a Perfect result.
+                print(f"  [{mode_name}] search refused ({resp.status_code}): {resp.text[:200]}")
+                session.delete(f"{base_url}/collections/{collection_name}")
+                return None
+            results = resp.json()
+            pred_ids = [r["id"] for r in results.get("results", results)]
+            recalls.append(compute_recall(ground_truth[i], pred_ids))
         
         # Cleanup
         session.delete(f"{base_url}/collections/{collection_name}")
@@ -276,12 +279,12 @@ def main():
     print("\n" + "=" * 70)
     print("RESULTS SUMMARY")
     print("=" * 70)
-    print(f"{'Mode':<12} {'ef_search':<10} {'Recall@10':<12} {'P50 (ms)':<12} {'P99 (ms)':<12}")
+    print(f"{'Mode':<12} {'Search':<16} {'Recall@10':<12} {'P50 (ms)':<12} {'P99 (ms)':<12}")
     print("-" * 70)
     
     for r in results:
-        ef = str(r.get('search', 'N/A'))
-        print(f"{r['mode']:<12} {str(ef):<10} {r['recall']:>8.1f}%    {r['latency_p50_ms']:>8.1f}     {r['latency_p99_ms']:>8.1f}")
+        search = ", ".join(f"{k}={v}" for k, v in r.get('search', {}).items()) or 'N/A'
+        print(f"{r['mode']:<12} {search:<16} {r['recall']:>8.1f}%    {r['latency_p50_ms']:>8.1f}     {r['latency_p99_ms']:>8.1f}")
     
     print("-" * 70)
     

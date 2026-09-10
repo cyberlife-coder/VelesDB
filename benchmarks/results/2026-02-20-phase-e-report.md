@@ -22,6 +22,10 @@ From `recall_benchmark` summary:
 - Accurate (`ef=256`): `100.0%`
 - Perfect (`ef=2048`): `100.0%`
 
+> Erratum (#2250): `Perfect` never ran with `ef=2048`. It has been an
+> exhaustive scan since the repository's first commit, so that label was
+> wrong when it was written; the recall figure is what a full scan returns.
+
 Status: recall objectives are met for the reference quality profile.
 
 ### Latency observations (current host run)

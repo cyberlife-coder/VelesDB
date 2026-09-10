@@ -189,9 +189,13 @@ def create_ef_scaling_chart(results: List[BenchmarkResult], filename: str):
     
     fig, ax1 = plt.subplots(figsize=(12, 7))
     
-    ef_values = [r.ef_search for r in results]
-    recalls = [r.recall for r in results]
-    latencies = [r.latency_p50_ms for r in results]
+    # Perfect sets no ef_search -- it is an exhaustive scan -- so it has no
+    # place on an ef axis. Plot only the modes that set one.
+    swept = sorted((r for r in results if r.ef_search is not None),
+                   key=lambda r: r.ef_search)
+    ef_values = [r.ef_search for r in swept]
+    recalls = [r.recall for r in swept]
+    latencies = [r.latency_p50_ms for r in swept]
     
     # Recall curve (left y-axis)
     color1 = '#2563eb'
@@ -220,9 +224,13 @@ def create_ef_scaling_chart(results: List[BenchmarkResult], filename: str):
                   fontsize=14, fontweight='bold', pad=15)
     ax1.grid(True, alpha=0.3)
     
-    # Highlight: latency doesn't explode
-    fig.text(0.5, 0.02, 
-             '💡 Key insight: 32x ef_search increase (64→2048) = only ~3x latency increase',
+    # Computed from the points plotted, so the caption cannot outlive its data.
+    low, high = swept[0], swept[-1]
+    fig.text(0.5, 0.02,
+             f'💡 {high.ef_search // low.ef_search}x ef_search '
+             f'({low.ef_search}→{high.ef_search}) costs '
+             f'{high.latency_p50_ms / low.latency_p50_ms:.1f}x P50 latency '
+             f'for {high.recall - low.recall:+.1f} recall points',
              fontsize=11, ha='center', style='italic', 
              bbox=dict(boxstyle='round', facecolor='#f0f9ff', edgecolor='#2563eb'))
     
