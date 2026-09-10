@@ -23,7 +23,11 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             // Through `new_arena`, not `ContiguousVectors::new`: a graph whose
             // arena belongs on disk must get a mapped one here too, or the
             // lazy path would silently hand back a heap arena (#2112).
-            *guard = Some(Self::new_arena(self.arena_home.as_ref(), vector.len(), 16)?);
+            *guard = Some(Self::new_arena(
+                self.arena_home.as_ref(),
+                vector.len(),
+                ContiguousVectors::MIN_ARENA_CAPACITY,
+            )?);
         }
         let storage = guard.as_mut().ok_or_else(|| {
             crate::error::Error::Internal("Vector storage missing after init".to_string())
@@ -252,7 +256,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             *guard = Some(Self::new_arena(
                 self.arena_home.as_ref(),
                 dimension,
-                batch_size.max(16),
+                batch_size,
             )?);
         }
         let storage = guard.as_mut().ok_or_else(|| {

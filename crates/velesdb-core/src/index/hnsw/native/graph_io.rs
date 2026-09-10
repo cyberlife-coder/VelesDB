@@ -656,7 +656,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             .ok_or_else(|| corrupt("vector payload size overflows usize"))?;
 
         crate::alloc_guard::with_min_alloc_byte_limit(min_bytes, || {
-            let mut storage = Self::new_arena(arena_home, dimension, count.max(16))
+            let mut storage = Self::new_arena(arena_home, dimension, count)
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
             let mut buf4 = [0u8; 4];
             let mut buf_vec = vec![0f32; dimension];
