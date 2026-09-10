@@ -99,6 +99,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`relate`'s `relation` description no longer hides its placeholder
+  (#2258).** It read ``read as `from` <relation> `to` ``, and a Markdown
+  renderer — rustdoc, or an MCP client displaying the tool schema — takes the
+  bare `<relation>` for an HTML tag and drops it. It is now one code span,
+  ``read as `from <relation> to` ``. The description ships in the tool schema
+  clients receive, so this is the intra-doc sweep's one wire-visible change.
+
 - **`reorder_for_locality` could leave a collection whose graph and vectors
   disagree.** Since `.vectors` became the graph's arena, the permutation lands
   in the **durable** store the moment it runs, while the adjacency it must stay
