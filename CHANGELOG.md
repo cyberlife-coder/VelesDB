@@ -117,11 +117,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   predicted slots that were never filled: loading holds its `next_idx` to the
   vectors present, so `tombstone_count`, `tombstone_ratio` and `needs_vacuum`
   stop reading high on such an index. `VacuumError::VectorStorageDisabled`
-  now says the index's exact-distance features are off. A delete running
-  beside `reorder_for_locality`, or beside `vacuum` while it re-maps, could
-  come back mapped, or erase the mapping of the id that had taken its slot:
-  `remove` now holds the index's read guard across its two map writes. A
-  delete made while `vacuum` rebuilds is still lost (#2262).
+  now says the index's exact-distance features are off.
+
+- **A delete could come back when it ran beside `reorder_for_locality` or a
+  `vacuum` re-map (#2246, #2262).** `remove` dropped an id's two map entries
+  holding no graph guard, and a renumber that ran between them mapped the
+  deleted id again, or erased the reverse entry of the id that had taken its
+  slot. `remove` now holds the index's read guard across both writes. A delete
+  made while `vacuum` rebuilds, before it takes its write guard, is still
+  lost (#2262).
 
 - **`reorder_for_locality` could leave a collection whose graph and vectors
   disagree.** Since `.vectors` became the graph's arena, the permutation lands

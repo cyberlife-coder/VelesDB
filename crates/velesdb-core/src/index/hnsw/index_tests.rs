@@ -3622,4 +3622,14 @@ fn deletes_racing_a_renumber_stay_deleted() {
             None => assert_eq!(id % 2, 0, "kept id {id} lost its slot"),
         }
     }
+    // Searches resolve slots through the reverse map: no slot may still name a
+    // deleted id, and an even number of swaps leaves each kept id in its own.
+    let (_, reverse, _) = index.mappings.as_parts();
+    assert_eq!(reverse.len(), IDS / 2, "reverse entries");
+    assert!(
+        reverse
+            .iter()
+            .all(|(&slot, &id)| id % 2 == 1 && slot == id as usize),
+        "a slot names a deleted id, or a kept id sits outside its own slot"
+    );
 }
