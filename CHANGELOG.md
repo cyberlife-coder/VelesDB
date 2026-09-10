@@ -130,8 +130,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for caps `RuntimeLimits` enforces; corrected with them. The cap is the
   collection's — `HnswIndex` itself scans without one, and its module doc now
   says so. `BENCHMARKS.md`'s 0.9994-at-1M row is kept, relabelled a graph
-  traversal at ef ≈ 8192: `Perfect` had brute-forced since March 2026 and would
-  read 1.0, so the figure was never `Perfect`'s, and no committed bench emits
+  traversal at ef ≈ 8192: `Perfect` has scanned exhaustively since the first
+  commit and would read 1.0, so the figure was never `Perfect`'s, and no committed bench emits
   it. Two benchmarks printed the exhaustive scan as `ef=4096`; relabelled
   `exhaustive` (#2246, P3).
 - **`SearchQuality::Perfect` was documented as the opposite of what it does.**

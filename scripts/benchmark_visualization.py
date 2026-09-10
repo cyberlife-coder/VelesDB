@@ -7,12 +7,12 @@ Generates publication-quality charts for benchmark results.
 import matplotlib.pyplot as plt
 import numpy as np
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 @dataclass
 class BenchmarkResult:
     mode: str
-    ef_search: int
+    ef_search: Optional[int]  # None: Perfect is an exhaustive scan, with no ef
     recall: float  # percentage
     latency_p50_ms: float
 
@@ -22,7 +22,7 @@ RESULTS_10K_128D = [
     BenchmarkResult("Fast", 64, 92.2, 0.036),
     BenchmarkResult("Balanced", 128, 98.8, 0.057),
     BenchmarkResult("Accurate", 256, 100.0, 0.130),
-    BenchmarkResult("Perfect", 2048, 100.0, 0.200),
+    BenchmarkResult("Perfect", None, 100.0, 0.200),
 ]
 
 # 100K/768D extrapolated from 10K scaling (actual benchmarks pending)
@@ -30,7 +30,7 @@ RESULTS_100K_768D = [
     BenchmarkResult("Fast", 64, 88.0, 0.6),
     BenchmarkResult("Balanced", 128, 97.0, 0.9),
     BenchmarkResult("Accurate", 256, 99.5, 1.5),
-    BenchmarkResult("Perfect", 2048, 100.0, 2.5),
+    BenchmarkResult("Perfect", None, 100.0, 2.5),
 ]
 
 @dataclass
@@ -63,7 +63,8 @@ def create_recall_latency_chart(results: List[BenchmarkResult], title: str, file
     # Annotations for each point
     for i, (lat, rec, mode, ef) in enumerate(zip(latencies, recalls, modes, ef_values)):
         offset = (10, 10) if i % 2 == 0 else (10, -15)
-        ax.annotate(f'{mode}\nef={ef}\n{rec:.1f}%', 
+        ef_label = 'exhaustive' if ef is None else f'ef={ef}'
+        ax.annotate(f'{mode}\n{ef_label}\n{rec:.1f}%', 
                    (lat, rec), 
                    textcoords="offset points",
                    xytext=offset,
