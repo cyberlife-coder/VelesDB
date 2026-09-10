@@ -13,7 +13,8 @@
 //! apples-to-apples plain-HNSW path, directly comparable to `HNSWlib` /
 //! `Faiss` / `ScaNN` published SIFT1M numbers. `VelesDB`'s production search
 //! path ([`HnswIndex::search_with_quality`]) wraps this with ef scaling +
-//! exact-SIMD reranking in its graph modes — its `Perfect` mode scans
+//! exact-SIMD reranking in its fixed-ef modes (Fast, Balanced, Accurate,
+//! Custom) — its `Perfect` mode scans
 //! exhaustively instead — and is measured separately by
 //! `benches/recall_comprehensive.rs`.
 //!

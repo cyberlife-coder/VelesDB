@@ -200,7 +200,7 @@ impl HnswIndex {
 
         // Perfect, Adaptive, AutoTune, or very small collections: delegate to
         // search_with_quality per-query to match single-query behavior.
-        // - Perfect: uses brute-force for 100% recall
+        // - Perfect: brute force, the exact top-k
         // - Adaptive: uses spread-based two-phase escalation (not batch-compatible)
         // - AutoTune: computes auto-ef range per dataset/dim/k (issue #699 follow-up)
         // - Small (<=100): uses brute-force for fully-connected graph safety

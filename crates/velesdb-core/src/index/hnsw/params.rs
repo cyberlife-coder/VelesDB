@@ -367,11 +367,14 @@ pub enum SearchQuality {
     Balanced,
     /// Accurate search with `ef_search=512`. ~100% recall.
     Accurate,
-    /// Exhaustive: every stored vector is scored, so it returns the exact top-k
-    /// under the index's own distance, ties aside. This variant leaves the graph — `try_search_special_quality`
+    /// Exhaustive when the index stores vectors: every stored vector is scored,
+    /// so it returns the exact top-k under the index's own distance, ties
+    /// aside. This variant leaves the graph — `try_search_special_quality`
     /// routes it straight to `search_brute_force` before `ef_search` is ever
-    /// consulted, so [`Self::ef_search`]'s `4096.max(k * 100)` is not the number
-    /// this mode runs at. It is O(n / cores).
+    /// consulted, so [`Self::ef_search`]'s `4096.max(k * 100)` is not the
+    /// number this mode runs at. The scan is O(n / cores). A fast-insert index,
+    /// which keeps no vectors, falls back to a graph search at `Accurate`'s
+    /// scaled ef.
     ///
     /// **Guarded, and the guard is the reason to read this.** A collection
     /// larger than `limits.max_perfect_mode_vectors` (default 500 000) makes

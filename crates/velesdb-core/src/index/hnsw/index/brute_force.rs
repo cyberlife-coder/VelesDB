@@ -106,7 +106,8 @@ impl HnswIndex {
         }
     }
 
-    /// Performs brute-force search for guaranteed 100% recall.
+    /// Performs brute-force search: the exact top-k under the index's own
+    /// distance, ties aside.
     ///
     /// Uses rayon-parallelized distance computation across all stored vectors.
     /// Falls back to HNSW graph search when vector storage is disabled.

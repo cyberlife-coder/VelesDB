@@ -130,10 +130,10 @@ collection.search_with_ef(&query, 10, 512)?;
 
 ---
 
-### 4. Perfect — Guaranteed 100% recall
+### 4. Perfect — Exhaustive scan
 
-Scores every stored vector — no graph traversal — so every true neighbour is
-found, by construction, at O(n) cost. A collection larger than
+Scores every stored vector — no graph traversal — so it returns the exact
+top-k under the index's own distance, ties aside, at O(n) cost. A collection larger than
 `limits.max_perfect_mode_vectors` (default 500 000) refuses it with
 `Error::GuardRail` instead of scanning.
 
@@ -149,7 +149,9 @@ collection.search_with_quality(&query, 10, SearchQuality::Perfect)?;
 ```
 
 > **Note**: `SearchQuality::Perfect` does **not** use the HNSW graph: it scores
-> every stored vector, so recall is 1.0 by construction, at O(n) cost. A
+> every stored vector, so it returns the exact top-k under the index's
+> distance, ties aside — not necessarily 1.0 against an external ground truth
+> — at O(n) cost. A
 > collection larger than `limits.max_perfect_mode_vectors` (default 500 000)
 > refuses it with `Error::GuardRail` rather than scanning. Set as the global
 > `[search]` default, `perfect` is applied as `accurate`, with a warning — one
@@ -570,7 +572,7 @@ SearchQuality::Accurate  // or Perfect for small corpora
 SearchQuality::Accurate
 
 // Final validation
-SearchQuality::Perfect  // guaranteed 100% recall
+SearchQuality::Perfect  // exact top-k: an exhaustive scan
 ```
 
 ### 📱 Mobile / Edge / IoT
@@ -741,9 +743,9 @@ velesdb> SELECT * FROM products WHERE vector NEAR $v LIMIT 10;
 
 **A:** `Balanced` (default) fits 95% of RAG cases. If you have legal/medical requirements, use `Accurate`.
 
-### Q: Is Perfect mode really 100% recall?
+### Q: Does Perfect mode return every true neighbour?
 
-**A:** Yes, by construction. `SearchQuality::Perfect` does not use the graph: it scores every vector, so recall is 1.0 — at O(n) cost, which is why a collection refuses it above `limits.max_perfect_mode_vectors` (500 000 by default). As the global `[search] default_mode`, `perfect` is applied as `accurate`, with a warning.
+**A:** It returns the exact top-k under the index's own distance, ties aside. `SearchQuality::Perfect` does not use the graph: it scores every vector — at O(n) cost, which is why a collection refuses it above `limits.max_perfect_mode_vectors` (500 000 by default). As the global `[search] default_mode`, `perfect` is applied as `accurate`, with a warning. Against an external ground truth it can still read below 1.0 — SIFT1M's 0.9994 in `BENCHMARKS.md` is this scan's.
 
 ### Q: Can I use Perfect in production?
 
