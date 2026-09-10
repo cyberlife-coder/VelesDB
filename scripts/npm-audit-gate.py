@@ -172,10 +172,11 @@ MAX_SECONDS = 86_400.0
 
 
 def _seconds(allow_zero: bool):
-    """argparse type for a duration: a negative one crashed `time.sleep` after
-    the first unreachable attempt, exiting 1 — the advisory code. So did `nan`,
-    `inf` and a finite value too large for the clock, which `time.sleep` and
-    `subprocess.run` raise on."""
+    """argparse type for a duration: a negative one made `time.sleep` raise
+    ValueError after the first unreachable attempt, exiting 1 — the advisory
+    code. So did `nan` (ValueError too), `inf` and a finite value too large for
+    the clock (OverflowError), which `time.sleep` and `subprocess.run` raise
+    on."""
     def parse(text: str) -> float:
         value = float(text)
         if not math.isfinite(value) or value > MAX_SECONDS:
