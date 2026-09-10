@@ -37,37 +37,31 @@ fn strip_in_value(value: &mut Value) {
     }
 }
 
-/// Recursively widen every property named in `keys` (resolving the `items`
-/// of array-typed ones) from `integer` to `["integer", "string"]`, across
-/// the whole schema tree — `$defs` included.
-///
-/// The advertised-schema counterpart of the `context::wire` id contract:
-/// under `CompilePolicy::ids_as_strings` a response id field crosses as a
-/// decimal string, and `fragments[].id` accepts one on input — and the
-/// official MCP SDKs validate `structuredContent` against the advertised
-/// `outputSchema` (spec 2025-06-18), so a schema typing those fields
-/// `integer` only would make every opted-in response fail validation for
-/// exactly the clients the option exists for. Same shape of tree walk as
-/// [`strip_int_formats`], but keyed: only the named properties widen.
-///
-/// `mcp`-gated: the advertised tool schemas are its only consumer.
 /// Rewrites rustdoc link syntax in every `description` of a published schema
 /// into the text rustdoc shows for it (#2261).
 ///
 /// schemars copies doc comments verbatim, so an intra-doc link reached the
 /// wire as Markdown no client can resolve: ``[`X`](crate::path)`` renders as a
 /// broken link, ``[`X`]`` as bracketed text. The doc comments stay
-/// rustdoc-correct; only what the schema publishes changes.
+/// rustdoc-correct; only what the schema publishes changes. A `description`
+/// inside instance data ([`INSTANCE_KEYWORDS`]) is a value, not a doc
+/// comment, and stays.
 #[cfg(feature = "mcp")]
 fn unlink_rustdoc_descriptions(map: &mut Map<String, Value>) {
     for (key, value) in map.iter_mut() {
-        match value {
-            Value::String(text) if key == "description" => {
+        match (key.as_str(), value) {
+            ("description", Value::String(text)) => {
                 if let Some(unlinked) = unlink_rustdoc(text) {
                     *text = unlinked;
                 }
             }
-            _ => unlink_in_value(value),
+            (keyword, _) if INSTANCE_KEYWORDS.contains(&keyword) => {}
+            // Keys here are names, not keywords: a property may be called
+            // `default` or `description`.
+            (keyword, Value::Object(named)) if NAMED_SCHEMA_MAPS.contains(&keyword) => {
+                named.values_mut().for_each(unlink_in_value);
+            }
+            (_, value) => unlink_in_value(value),
         }
     }
 }
@@ -81,12 +75,70 @@ fn unlink_in_value(value: &mut Value) {
     }
 }
 
+/// Schema keywords whose values are instance data, not schemas.
+#[cfg(feature = "mcp")]
+const INSTANCE_KEYWORDS: [&str; 5] = ["default", "examples", "example", "const", "enum"];
+
+/// Schema keywords whose values map names to schemas.
+#[cfg(feature = "mcp")]
+const NAMED_SCHEMA_MAPS: [&str; 4] = ["properties", "patternProperties", "$defs", "definitions"];
+
+/// The kinds rustdoc accepts before `@` in an intra-doc link (`fn@build`),
+/// and drops from the text it shows.
+#[cfg(feature = "mcp")]
+const DISAMBIGUATORS: [&str; 22] = [
+    "struct",
+    "enum",
+    "trait",
+    "union",
+    "mod",
+    "module",
+    "const",
+    "constant",
+    "static",
+    "fn",
+    "function",
+    "method",
+    "derive",
+    "field",
+    "variant",
+    "type",
+    "value",
+    "macro",
+    "prim",
+    "primitive",
+    "tyalias",
+    "typealias",
+];
+
 /// `text` with each rustdoc link replaced by what rustdoc shows for it, or
 /// `None` when it holds none: ``[`X`](path)`` and ``[`X`]`` become `` `X` ``,
-/// `[Name](path)` and a path-like `[Name]` become `Name`. Brackets that are
-/// not a rustdoc link — `[0, 1]`, a web link, a reference-style link — stay.
+/// `[Name](path)` becomes `Name`, and a path-like shortcut (`[a::B]`, `[f()]`,
+/// `[m!]`, `[fn@f]`) shows its path without the disambiguator. Brackets
+/// rustdoc would not resolve stay (`[0, 1]`, `map[key]`, a web link, a bare
+/// `[Name]` that may be prose), and so do reference-style links
+/// (`[text][label]`).
+///
+/// Repeated to a fixpoint, so a second pass changes nothing: an input schema
+/// can be hardened twice (at its tool attribute, then in
+/// `reharden_tool_input`) and must publish what an output schema, hardened
+/// once, publishes for the same doc comment. A pass that changes the text
+/// removes a `[`, so the loop ends.
 #[cfg(feature = "mcp")]
 fn unlink_rustdoc(text: &str) -> Option<String> {
+    let mut current = unlink_once(text)?;
+    while let Some(next) = unlink_once(&current) {
+        current = next;
+    }
+    Some(current)
+}
+
+/// One left-to-right pass of [`unlink_rustdoc`].
+#[cfg(feature = "mcp")]
+fn unlink_once(text: &str) -> Option<String> {
+    if !text.contains('[') {
+        return None;
+    }
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     let mut changed = false;
@@ -103,15 +155,26 @@ fn unlink_rustdoc(text: &str) -> Option<String> {
         }
         let after = &marker[1..];
         // `[a][b]`: a bracket right after `]` is a reference label, not a link.
-        let reference_label = out.ends_with(']');
-        if let Some((shown, remaining)) = rustdoc_link(after).filter(|_| !reference_label) {
-            out.push_str(shown);
-            rest = remaining;
-            changed = true;
+        let link = if out.ends_with(']') {
+            None
         } else {
+            rustdoc_link(after)
+        };
+        let Some((shown, remaining)) = link else {
             out.push('[');
             rest = after;
+            continue;
+        };
+        // Two code spans must not touch: `a``b` reads as one span.
+        if out.ends_with('`') && shown.starts_with('`') {
+            out.push(' ');
         }
+        out.push_str(&shown);
+        if shown.ends_with('`') && remaining.starts_with('`') {
+            out.push(' ');
+        }
+        rest = remaining;
+        changed = true;
     }
     out.push_str(rest);
     changed.then_some(out)
@@ -135,18 +198,33 @@ fn code_span_len(text: &str) -> usize {
     text.len()
 }
 
-/// When `after` — the text following a `[` — starts a rustdoc link, what
-/// rustdoc shows for it and the text after the link.
+/// When `after` (the text following a `[`) starts a rustdoc link, what
+/// rustdoc shows for it and the text after the link. A reference-style link
+/// (`[text][label]`) is left as written.
 #[cfg(feature = "mcp")]
-fn rustdoc_link(after: &str) -> Option<(&str, &str)> {
+fn rustdoc_link(after: &str) -> Option<(std::borrow::Cow<'_, str>, &str)> {
+    use std::borrow::Cow;
     let close = after.find(']')?;
     let (label, tail) = (&after[..close], &after[close + 1..]);
     if let Some(inline) = tail.strip_prefix('(') {
         let end = inline.find(')')?;
-        return is_rust_path(&inline[..end]).then(|| (label, &inline[end + 1..]));
+        return is_rust_path(&inline[..end]).then(|| (Cow::Borrowed(label), &inline[end + 1..]));
     }
-    let shortcut = !tail.starts_with('[') && (is_code_span(label) || is_rust_path(label));
-    shortcut.then_some((label, tail))
+    if tail.starts_with('[') {
+        return None;
+    }
+    if is_code_span(label) {
+        let code = &label[1..label.len() - 1];
+        let shown = without_disambiguator(code)
+            .map_or(Cow::Borrowed(label), |path| Cow::Owned(format!("`{path}`")));
+        return Some((shown, tail));
+    }
+    is_path_like(label).then(|| {
+        (
+            Cow::Borrowed(without_disambiguator(label).unwrap_or(label)),
+            tail,
+        )
+    })
 }
 
 /// A single inline code span — the label of a rustdoc code link.
@@ -158,17 +236,36 @@ fn is_code_span(label: &str) -> bool {
         && !label[1..label.len() - 1].contains('`')
 }
 
+/// A shortcut label rustdoc reads as a path rather than prose: one with a
+/// `::`, a `()` or `!` suffix, or a disambiguator. A bare `[Name]` may be
+/// either (`map[key]`, `[sic]`) and stays as written.
+#[cfg(feature = "mcp")]
+fn is_path_like(label: &str) -> bool {
+    is_rust_path(label)
+        && (label.contains("::")
+            || label.ends_with("()")
+            || label.ends_with('!')
+            || without_disambiguator(label).is_some())
+}
+
+/// `target` without its `kind@` prefix, when rustdoc accepts that kind.
+#[cfg(feature = "mcp")]
+fn without_disambiguator(target: &str) -> Option<&str> {
+    target
+        .split_once('@')
+        .filter(|(kind, _)| DISAMBIGUATORS.contains(kind))
+        .map(|(_, path)| path)
+}
+
 /// A path rustdoc resolves — `crate::a::B`, `super::f`, `Self::g`, `Name`,
 /// `fn@name`, `f()`, `m!` — as opposed to a URL or prose.
 #[cfg(feature = "mcp")]
 fn is_rust_path(target: &str) -> bool {
-    let path = target.split_once('@').map_or(target, |(kind, path)| {
-        if kind.chars().all(|c| c.is_ascii_lowercase()) {
-            path
-        } else {
-            ""
-        }
-    });
+    let path = match without_disambiguator(target) {
+        Some(path) => path,
+        None if target.contains('@') => return false,
+        None => target,
+    };
     let path = path
         .strip_suffix("()")
         .or_else(|| path.strip_suffix('!'))
@@ -182,6 +279,20 @@ fn is_rust_path(target: &str) -> bool {
         })
 }
 
+/// Recursively widen every property named in `keys` (resolving the `items`
+/// of array-typed ones) from `integer` to `["integer", "string"]`, across
+/// the whole schema tree — `$defs` included.
+///
+/// The advertised-schema counterpart of the `context::wire` id contract:
+/// under `CompilePolicy::ids_as_strings` a response id field crosses as a
+/// decimal string, and `fragments[].id` accepts one on input — and the
+/// official MCP SDKs validate `structuredContent` against the advertised
+/// `outputSchema` (spec 2025-06-18), so a schema typing those fields
+/// `integer` only would make every opted-in response fail validation for
+/// exactly the clients the option exists for. Same shape of tree walk as
+/// [`strip_int_formats`], but keyed: only the named properties widen.
+///
+/// `mcp`-gated: the advertised tool schemas are its only consumer.
 #[cfg(feature = "mcp")]
 pub(crate) fn widen_id_properties(map: &mut Map<String, Value>, keys: &[&str]) {
     if let Some(Value::Object(properties)) = map.get_mut("properties") {
@@ -1164,7 +1275,9 @@ impl WireInputSchema {
         Self(map)
     }
 
-    /// L'ordre compte. `stringify_id_properties` d'abord, pour que les copies
+    /// La reecriture des liens rustdoc passe avant tout : elle ne touche que
+    /// les `description`, donc rien de ce qui suit n'en depend. Ensuite,
+    /// l'ordre compte. `stringify_id_properties` d'abord, pour que les copies
     /// faites par l'inliner heritent du type deja pose ; l'inliner ensuite,
     /// pour que chaque branche porte un `type` direct ; la scalarisation en
     /// dernier, parce qu'elle ne promeut qu'une branche deja typee.
@@ -1188,8 +1301,8 @@ impl WireOutputSchema {
         Self((*schema).clone())
     }
 
-    /// Elargissement des ids puis inlining. Pas de scalarisation : voir le
-    /// commentaire de section.
+    /// Liens rustdoc reecrits, puis elargissement des ids, puis inlining. Pas
+    /// de scalarisation : voir le commentaire de section.
     fn harden(mut self) -> Self {
         unlink_rustdoc_descriptions(&mut self.0);
         widen_id_properties(&mut self.0, WIRE_ID_KEYS);
@@ -1239,8 +1352,8 @@ pub(crate) fn reharden_tool_input(tool: &mut rmcp::model::Tool) {
         .publish();
 }
 
-/// Le schema de sortie ANNONCE d'un outil : ids elargis, puis `$ref` inlines
-/// et `$defs` inatteignables elagues.
+/// Le schema de sortie ANNONCE d'un outil : liens rustdoc reecrits, ids
+/// elargis, puis `$ref` inlines et `$defs` inatteignables elagues.
 ///
 /// Vit ici plutot que dans `mcp/context_tools.rs` parce que les outils de
 /// `mcp.rs` l'appellent aussi : le laisser dans un module gate sur `context`

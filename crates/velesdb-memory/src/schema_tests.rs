@@ -347,10 +347,35 @@ mod unlink {
     }
 
     #[test]
-    fn a_path_like_shortcut_reference_shows_its_name() {
+    fn a_path_like_shortcut_shows_its_path_without_the_disambiguator() {
+        for (text, shown) in [
+            (
+                "the [crate::Recollection] it returns",
+                "the crate::Recollection it returns",
+            ),
+            ("call [build()] first", "call build() first"),
+            ("the [vec!] macro", "the vec! macro"),
+            ("a [struct@Foo] value", "a Foo value"),
+            ("see [`fn@build`]", "see `build`"),
+        ] {
+            assert_eq!(unlink_rustdoc(text).as_deref(), Some(shown), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_second_pass_changes_nothing() {
+        for text in ["[[`X`]]", "[`a`](crate::a) and [[`b`]]", "see [`A`]"] {
+            let once = unlink_rustdoc(text).expect("test: a link to rewrite");
+            assert_eq!(unlink_rustdoc(&once), None, "{text} -> {once}");
+        }
+    }
+
+    #[test]
+    fn rewritten_code_spans_never_touch() {
+        assert_eq!(unlink_rustdoc("[`a`]`b`").as_deref(), Some("`a` `b`"));
         assert_eq!(
-            unlink_rustdoc("the [Recollection] it returns").as_deref(),
-            Some("the Recollection it returns")
+            unlink_rustdoc("see [`a`](crate::a)[`b`](crate::b)").as_deref(),
+            Some("see `a` `b`")
         );
     }
 
@@ -361,6 +386,13 @@ mod unlink {
             "[docs](https://example.com/a)",
             "[`a`][reference]",
             "a [ lone bracket",
+            "the [Recollection] it returns",
+            "fragments[i] and map[key] lookup",
+            "v[idx] = x",
+            "[sic] later",
+            "[NOTE]: something",
+            "[user@example]",
+            "[x](@foo)",
             "`decisions[fragment_index]` is unambiguous",
             "``a [`b`] c`` in a double-backtick span",
         ] {
@@ -372,7 +404,11 @@ mod unlink {
     fn every_description_is_rewritten_and_nothing_else() {
         let mut schema: Map<String, Value> = json!({
             "description": "a [`Top`]",
+            "default": { "description": "[`kept`]" },
+            "examples": [{ "description": "[`kept`]" }],
+            "const": { "description": "[`kept`]" },
             "properties": {
+                "default": { "description": "named [`N`]" },
                 "description": { "type": "string", "description": "field [`F`](crate::F)" },
                 "tags": {
                     "type": "array",
@@ -390,7 +426,11 @@ mod unlink {
             Value::Object(schema),
             json!({
                 "description": "a `Top`",
+                "default": { "description": "[`kept`]" },
+                "examples": [{ "description": "[`kept`]" }],
+                "const": { "description": "[`kept`]" },
                 "properties": {
+                    "default": { "description": "named `N`" },
                     "description": { "type": "string", "description": "field `F`" },
                     "tags": {
                         "type": "array",
@@ -404,7 +444,8 @@ mod unlink {
     }
 
     /// The committed capture of what the server publishes — kept equal to the
-    /// live schema by `mcp_tools_drift` — has nothing left for the rewrite.
+    /// live schema by `mcp_tools_drift` — holds no link the rewrite
+    /// recognizes, and no link target naming a Rust path.
     #[test]
     fn the_published_tool_schema_carries_no_rustdoc_link() {
         let path = concat!(
@@ -423,6 +464,19 @@ mod unlink {
         );
     }
 
+    /// Link targets only rustdoc resolves, flagged even in a link the rewrite
+    /// leaves: ``[`a]b`](crate::x)`` is not one it recognizes.
+    const RUST_PATH_TARGETS: [&str; 4] = ["](crate::", "](super::", "](self::", "](Self::"];
+
+    #[test]
+    fn the_guard_flags_a_rust_path_target_the_rewrite_leaves() {
+        let text = "odd [`a]b`](crate::x) link";
+        assert_eq!(unlink_rustdoc(text), None);
+        let mut linked = Vec::new();
+        collect_linked(&json!({ "description": text }), "", &mut linked);
+        assert_eq!(linked, ["/description"]);
+    }
+
     fn collect_linked(value: &Value, path: &str, out: &mut Vec<String>) {
         match value {
             Value::Object(map) => {
@@ -430,7 +484,9 @@ mod unlink {
                     let here = format!("{path}/{key}");
                     match child {
                         Value::String(text) if key == "description" => {
-                            if unlink_rustdoc(text).is_some() {
+                            if unlink_rustdoc(text).is_some()
+                                || RUST_PATH_TARGETS.iter().any(|t| text.contains(t))
+                            {
                                 out.push(here);
                             }
                         }

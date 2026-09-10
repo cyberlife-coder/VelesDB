@@ -16,11 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every MCP client reads carried intra-doc links only rustdoc resolves —
   ``[`Name`]``, `[text](crate::path)` — 137 of them across 102 descriptions of
   `docs/reference/mcp-tools.json`. The input and output schemas now render
-  each link as rustdoc would: a code link as its code span, a labelled link
-  as its text, a path-like shortcut reference as its name. Code spans are
-  copied verbatim and brackets that are not links stay, so only descriptions
-  change; a test fails if a published description still holds a link.
-  (#2261)
+  each link as rustdoc does: a code link as its code span, a labelled link as
+  its text, a path such as `[a::B]` or `[fn@f]` as its path without the
+  disambiguator. Code spans are copied verbatim, and brackets rustdoc would
+  not resolve (`[0, 1]`, `map[key]`) stay. Only `description` strings are
+  rewritten, never instance data such as a `default`, so nothing else in a
+  schema changes. A test fails if a published description still holds a link
+  the rewrite recognizes, or a link target naming a Rust path. (#2261)
 
 ## [0.14.2] - 2026-09-03
 
