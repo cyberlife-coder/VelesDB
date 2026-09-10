@@ -145,7 +145,7 @@ def audit_with_retries(
                     file=sys.stderr,
                 )
                 sleep(delay)
-                delay *= 2
+                delay = min(delay * 2, MAX_SECONDS)
     assert last is not None  # noqa: S101 - the loop cannot exit without setting it
     raise last
 

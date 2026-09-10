@@ -267,6 +267,21 @@ class RetryTests(unittest.TestCase):
             gate.run_audit = original
         self.assertEqual([5, 10, 20], delays)
 
+    def test_the_backoff_never_sleeps_past_the_duration_cap(self) -> None:
+        """The cap `--backoff-seconds` enforces bounds every sleep, not only
+        the first: doubling a legal backoff must stay a legal duration."""
+        delays: list[float] = []
+        half = gate.MAX_SECONDS / 2
+
+        original = gate.run_audit
+        gate.run_audit = lambda npm, root, timeout: UNREACHABLE_PAYLOAD
+        try:
+            with self.assertRaises(gate.Unreachable):
+                gate.audit_with_retries("npm", Path("."), 4, half, sleep=delays.append)
+        finally:
+            gate.run_audit = original
+        self.assertEqual([half, gate.MAX_SECONDS, gate.MAX_SECONDS], delays)
+
 
 class ExitCodeTests(unittest.TestCase):
     def test_a_clean_lockfile_passes(self) -> None:

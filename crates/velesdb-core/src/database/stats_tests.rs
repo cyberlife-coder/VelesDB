@@ -300,11 +300,11 @@ fn assert_analyze_preserves_results(n: u64) {
     coll.upsert(points).expect("upsert");
 
     let before = top_ids(&coll, &query);
-    // The fixture is checked against the exhaustive scan, not the graph: HNSW
-    // is approximate and does not promise a self-query its own point first (a
-    // pre-commit run returned 501, #2246). What ANALYZE must preserve is the
-    // graph's answer, compared below; whether that answer is exact is not this
-    // test's subject.
+    // The fixture is checked against the exhaustive scan, not the graph: on
+    // this curve the graph loses point 500 itself in about one build in 400,
+    // even at an ef wider than the collection, so not for want of beam
+    // (#2259). What ANALYZE must preserve is the graph's answer, compared
+    // below; whether that answer is exact is not this test's subject.
     let exact = coll
         .search_with_quality(&query, 1, crate::SearchQuality::Perfect)
         .expect("exhaustive search");
