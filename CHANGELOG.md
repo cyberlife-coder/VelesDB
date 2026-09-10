@@ -131,6 +131,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   collinear one every mode satisfies; and the `.vectors` no-write test runs under
   Cosine, whose load path renormalises in place. Each was seen failing on the
   mutation it names (#2246, P2).
+
 - **`SearchQuality::Perfect` was documented as the opposite of what it does.**
   Its rustdoc described a graph search at `ef_search = 4096` that "tunes the
   HNSW graph's effort and is not exhaustive", with a ~0.9994 recall figure at

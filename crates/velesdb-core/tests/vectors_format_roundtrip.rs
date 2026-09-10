@@ -288,8 +288,9 @@ fn a_corrupt_vectors_file_does_not_prevent_opening() {
 /// Run under Cosine as well as Euclidean since #2246 (P2-f). The load path
 /// renormalises a cosine collection's vectors in place, on an arena that IS the
 /// durable file once adopted. It writes nothing today only because the vectors
-/// were already normalised at insert; the cosine arms are what would notice if
-/// that stopped being true.
+/// were normalised at insert, inside the load's 1e-5 tolerance. Only the
+/// (Cosine, ADOPTED) arm can notice if that stops being true: below the
+/// capacity floor the copy path normalises a heap copy, never the file.
 #[test]
 fn opening_a_collection_never_writes_to_its_vectors_file() {
     for (metric, count) in [

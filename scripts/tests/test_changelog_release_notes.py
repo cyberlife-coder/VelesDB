@@ -157,23 +157,25 @@ class UnreleasedSectionTests(unittest.TestCase):
     #: that does it. The first version guarded only the root file; the one
     #: `release-memory.yml` publishes was guarded by nothing (#2246, P2-d).
     PUBLISHED = {
-        "CHANGELOG.md": "release.yml",
-        "crates/velesdb-memory/CHANGELOG.md": "release-memory.yml",
+        ROOT / "CHANGELOG.md": "release.yml",
+        MEMORY_CHANGELOG: "release-memory.yml",
     }
 
     def setUp(self) -> None:
         self.text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
 
     def test_no_type_appears_twice(self) -> None:
-        for rel, workflow in self.PUBLISHED.items():
-            with self.subTest(changelog=rel):
-                headings = unreleased_headings((ROOT / rel).read_text(encoding="utf-8"))
+        for path, workflow in self.PUBLISHED.items():
+            rel = path.relative_to(ROOT)
+            with self.subTest(changelog=str(rel)):
+                headings = unreleased_headings(path.read_text(encoding="utf-8"))
                 duplicated = sorted({h for h in headings if headings.count(h) > 1})
                 self.assertEqual(
                     duplicated,
                     [],
-                    f"`## [Unreleased]` of {rel} repeats {duplicated}, and {workflow} "
-                    "publishes that block as release notes. Merge each type into one section.",
+                    f"`## [Unreleased]` of {rel} repeats {duplicated}; at release this "
+                    f"block becomes the version section {workflow} turns into release "
+                    "notes. Merge each type into one section.",
                 )
 
     def test_the_block_has_headings_at_all(self) -> None:

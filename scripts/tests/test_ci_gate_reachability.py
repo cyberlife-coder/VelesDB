@@ -1599,8 +1599,9 @@ def mirror_binding(text: str) -> "tuple[str | None, bool]":
         return None, False
     chain = next((s for s in steps if "Check results" in s), "")
     bound = re.search(
-        rf"if:\s*steps\.{re.escape(declared.group(1))}\.conclusion\s*==\s*'skipped'",
+        rf"^\s*if:\s*steps\.{re.escape(declared.group(1))}\.conclusion\s*==\s*'skipped'\s*$",
         chain,
+        re.M,
     )
     return declared.group(1), bound is not None
 
@@ -1742,6 +1743,16 @@ jobs:
 
     def test_the_binding_holds_when_the_ids_match(self) -> None:
         self.assertEqual(mirror_binding(self.SYNTHETIC), ("mirror", True))
+
+    def test_a_condition_widened_past_the_mirror_breaks_the_binding(self) -> None:
+        """`|| always()` after the skip test runs the chain on every edit too:
+        two steps would then produce a verdict, which is what this binding
+        exists to rule out. An unanchored match read it as bound."""
+        widened = self.SYNTHETIC.replace(
+            "conclusion == 'skipped'", "conclusion == 'skipped' || always()"
+        )
+        self.assertNotEqual(widened, self.SYNTHETIC, "CONTROL: the fixture carries the condition")
+        self.assertEqual(mirror_binding(widened), ("mirror", False))
 
     def test_a_renamed_mirror_id_breaks_the_binding(self) -> None:
         renamed = self.SYNTHETIC.replace("id: mirror", "id: mirror_verdict")
