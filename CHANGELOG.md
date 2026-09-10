@@ -99,6 +99,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Opening a collection re-indexes a mapped vector the graph never linked
+  (#2246).** A save that raced `upsert_bulk`'s async build — the builder's
+  drain returning while another build held it, or an upsert landing between
+  the drain and the save — persisted mappings for vectors the graph had not
+  linked yet. Recovery skipped every mapped id, so after a crash those points
+  stayed stored, mapped and unreachable by graph search. Recovery now checks
+  that each mapped id's node has a layer-0 neighbour, and re-indexes those
+  that do not — the entry point aside, since every search starts there.
+
 - **`reorder_for_locality` could leave a collection whose graph and vectors
   disagree.** Since `.vectors` became the graph's arena, the permutation lands
   in the **durable** store the moment it runs, while the adjacency it must stay
