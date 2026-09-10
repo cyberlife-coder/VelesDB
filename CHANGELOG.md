@@ -88,6 +88,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   load call alone reports the cost as gone when it has only moved.
 
 ### Fixed
+
+- **`reorder_for_locality` could leave a collection whose graph and vectors
+  disagree.** Since `.vectors` became the graph's arena, the permutation lands
+  in the **durable** store the moment it runs, while the adjacency it must stay
+  consistent with is only written by a later `save()` — and
+  `Collection::reorder_for_locality` returned without persisting. Measured on a
+  3 000-point collection reopened (so adopted): `reorder_for_locality()` → `Ok`,
+  `.vectors` modified, `.graph` untouched. A crash, `SIGKILL`, OOM or power loss
+  in that window left every node id resolving to the wrong vector, silently,
+  because both files still parse — the failure `graph/reorder.rs` already
+  measures as "recall@10 1.000 before, 0.000 after". Reachable through
+  `POST /collections/{name}/locality/reorder`.
+
+  Before the arena adoption the permutation touched a disposable
+  `hnsw-{token}.arena` and no such window existed, so this is a regression that
+  arrived with the adoption rather than a latent defect. The index is now saved
+  before the call returns, and `reorder_durability.rs` pins it — seen failing
+  with the save removed.
 - **`SearchQuality::Perfect` was documented as the opposite of what it does.**
   Its rustdoc described a graph search at `ef_search = 4096` that "tunes the
   HNSW graph's effort and is not exhaustive", with a ~0.9994 recall figure at
