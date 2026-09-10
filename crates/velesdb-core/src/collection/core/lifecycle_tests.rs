@@ -742,3 +742,91 @@ fn test_runtime_limits_default_permissive_and_setter_overwrites() {
     assert_eq!(updated.max_payload_size, 64);
     assert_eq!(updated.max_perfect_mode_vectors, 5);
 }
+
+// ── Issue #2237: an unusable `.vectors` must warn, not stay silent ──────
+
+/// Reopening a collection whose `native_hnsw.vectors` cannot be read must
+/// emit a `warn` naming the fallback — not rebuild silently. A healthy
+/// reopen must NOT warn: without the control arm, a version of the guard
+/// that warned unconditionally would pass every damaged case and prove
+/// nothing.
+///
+/// `.vectors` staying a derived, rebuildable artifact is correct and must be
+/// kept (#2236, `a_corrupt_vectors_file_does_not_prevent_opening` in
+/// `tests/vectors_format_roundtrip.rs`); what was missing was the
+/// diagnostic. Without it, a disk error on this file is indistinguishable
+/// from a healthy reopen, and a future regression that corrupts `.vectors`
+/// on write would go unnoticed by every existing test. `try_load_hnsw`
+/// already carries the `tracing::warn!` this asserts on — this test is the
+/// live guard that keeps it firing (#1780/#2129-style: a comment or a code
+/// path is only as good as what checks it still holds).
+#[test]
+fn reopening_with_unusable_vectors_file_warns() {
+    use crate::point::Point;
+    use crate::test_fixtures::fixtures::capture_warns;
+
+    /// `(label, damage, expects the fallback warning)`.
+    type Mutilation = (&'static str, fn(&std::path::Path), bool);
+    let mutilations: [Mutilation; 4] = [
+        ("intact (control)", |_| {}, false),
+        (
+            "unknown version",
+            |p| {
+                let mut bytes = std::fs::read(p).expect("test: read .vectors");
+                bytes[0..4].copy_from_slice(&99u32.to_le_bytes());
+                std::fs::write(p, bytes).expect("test: write .vectors");
+            },
+            true,
+        ),
+        (
+            "header only",
+            |p| {
+                let bytes = std::fs::read(p).expect("test: read .vectors");
+                std::fs::write(p, &bytes[..16]).expect("test: truncate .vectors");
+            },
+            true,
+        ),
+        (
+            "absent",
+            |p| {
+                std::fs::remove_file(p).expect("test: remove .vectors");
+            },
+            true,
+        ),
+    ];
+
+    for (label, damage, expect_warning) in mutilations {
+        let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+        let collection =
+            Collection::create(PathBuf::from(temp_dir.path()), 4, DistanceMetric::Cosine)
+                .expect("collection should be created");
+        collection
+            .upsert(vec![Point::without_payload(1, vec![1.0, 0.0, 0.0, 0.0])])
+            .expect("upsert should succeed");
+        collection.flush_full().expect("flush_full should succeed");
+        drop(collection);
+
+        let vectors_path = temp_dir.path().join("native_hnsw.vectors");
+        assert!(
+            vectors_path.exists(),
+            "{label}: precondition — native_hnsw.vectors must exist before damaging it"
+        );
+        damage(&vectors_path);
+
+        let (reopened, warns) = capture_warns(|| Collection::open(PathBuf::from(temp_dir.path())));
+        let reopened = reopened.unwrap_or_else(|e| panic!("{label}: open must still succeed: {e}"));
+
+        assert_eq!(
+            reopened.len(),
+            1,
+            "{label}: an unusable .vectors must not cost the collection its point"
+        );
+        let warned = warns
+            .iter()
+            .any(|w| w.contains("falling back to full rebuild from vector storage"));
+        assert_eq!(
+            warned, expect_warning,
+            "{label}: fallback-warning presence must match expectation, got: {warns:?}"
+        );
+    }
+}

@@ -24,19 +24,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   silently is a footgun and erroring is a breaking change under a default
   config, while a query timeout is a feature the engine does not have.
 
-  **`default_mode = "perfect"` is refused at config load**, with the reason.
-  `SearchQuality::Perfect` is an exhaustive scan capped by
+  **`default_mode = "perfect"` is applied as `accurate`, with a warning at
+  load.** `SearchQuality::Perfect` is an exhaustive scan capped by
   `limits.max_perfect_mode_vectors`, and that cap lives in a check only the
   per-query entry points can run — `search_with_optional_bitmap` returns
-  `Vec<ScoredResult>` and cannot refuse. Accepting it would have made one search
-  path scan a corpus of any size with the guard rail bypassed, which is the
-  shape #2238 removed from `SearchMode::ef_search`.
+  `Vec<ScoredResult>` and cannot refuse — so the global default never resolves
+  to it. A first version refused the value outright, which made a file v6.0.0
+  loaded fail `Database::open`: a breaking change in a minor release, caught by
+  the seven-lens review (#2246) before it shipped.
 
-  Hot-path cost measured against `develop` before merging, not after: six
-  alternating A/B passes, 84.4–88.0 µs vs 83.6–86.4 µs per `search()` on a
-  20 000-point fixture — overlapping ranges, no measurable regression. An
+  Hot-path cost measured against `develop` before merging, under a DEFAULT
+  config: six alternating A/B passes, 84.4–88.0 µs vs 83.6–86.4 µs per
+  `search()` on a 20 000-point fixture — overlapping ranges, no measurable
+  regression. That measures the plumbing and nothing else: under defaults the
+  resolved quality is `Balanced`, exactly what was hard-coded before, so the A/B
+  could not see the wiring's real effect and was not meant to (#2246). An
   earlier draft closed over the index call and cost a reproducible +2.2 %; the
   measurement is what caught it.
+
+  **Upgrade note.** A config that already set `default_mode` or `ef_search`
+  starts applying them — until now they were inert. `default_mode = "accurate"`,
+  which the "Production - High Precision" profile in `CONFIGURATION.md` ships,
+  moves an unqualified search from `160.max(k*5)` to `512.max(k*16)`
+  candidates.
 
 
 - **`SearchMode::quality()`** — the lossless `SearchMode` → `SearchQuality`
@@ -89,6 +99,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`reorder_for_locality` could leave a collection whose graph and vectors
+  disagree.** Since `.vectors` became the graph's arena, the permutation lands
+  in the **durable** store the moment it runs, while the adjacency it must stay
+  consistent with is only written by a later `save()` — and
+  `Collection::reorder_for_locality` returned without persisting. Measured on a
+  3 000-point collection reopened (so adopted): `reorder_for_locality()` → `Ok`,
+  `.vectors` modified, `.graph` untouched. A crash, `SIGKILL`, OOM or power loss
+  in that window left every node id resolving to the wrong vector, silently,
+  because both files still parse — the failure `graph/reorder.rs` already
+  measures as "recall@10 1.000 before, 0.000 after". Reachable through
+  `POST /collections/{name}/locality/reorder`.
+
+  Before the arena adoption the permutation touched a disposable
+  `hnsw-{token}.arena` and no such window existed, so this is a regression that
+  arrived with the adoption rather than a latent defect. The index is now saved
+  before the call returns, and `reorder_durability.rs` pins it — seen failing
+  with the save removed.
 - **Seven guards verified their result and never their premise.** The worst
   reopened #2232 silently: `test_exactly_one_step_produces_the_verdict` matched
   `steps\.\w+\.conclusion`, any identifier, so renaming the mirror step's `id:`
