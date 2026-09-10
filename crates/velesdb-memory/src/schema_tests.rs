@@ -324,7 +324,7 @@ fn admits_null(slot: &serde_json::Value) -> bool {
 #[cfg(feature = "mcp")]
 mod unlink {
     use super::super::walks::{unlink_rustdoc, unlink_rustdoc_descriptions};
-    use serde_json::{json, Map, Value};
+    use serde_json::{json, Value};
 
     #[test]
     fn a_code_link_keeps_its_code_span() {
@@ -341,6 +341,7 @@ mod unlink {
             ("see [x]( crate::y)", "see x"),
             ("see [x](<crate::y>)", "see x"),
             ("see [x](< crate::y >)", "see x"),
+            ("see [x](\ncrate::y)", "see x"),
         ] {
             assert_eq!(unlink_rustdoc(text).as_deref(), Some(shown), "{text}");
         }
@@ -414,6 +415,8 @@ mod unlink {
             "an [`a<b c`] unbalanced",
             "a [`Vec<T>>`] stray",
             "see [x](<\ncrate::y>) broken",
+            "see [x](<\rcrate::y>) broken",
+            "see [x](\n\ncrate::y) broken",
             "`decisions[fragment_index]` is unambiguous",
             "``a [`b`] c`` in a double-backtick span",
         ] {
@@ -423,7 +426,7 @@ mod unlink {
 
     #[test]
     fn every_description_is_rewritten_and_nothing_else() {
-        let mut schema: Map<String, Value> = json!({
+        let mut schema = json!({
             "description": "a [`Top`]",
             "default": { "description": "[`kept`]" },
             "examples": [{ "description": "[`kept`]" }],
@@ -442,14 +445,11 @@ mod unlink {
             "oneOf": [{ "description": "one [`O`]" }],
             "additionalProperties": { "description": "extra [`E`]" },
             "patternProperties": { "^x-": { "description": "pattern [`P`]" } }
-        })
-        .as_object()
-        .cloned()
-        .expect("test: an object");
+        });
         // The guard's own walk over the same tree: it reads every description
         // the rewrite reads, and none of the instance data it leaves.
         let mut before = Vec::new();
-        collect_linked(&Value::Object(schema.clone()), "", &mut before);
+        collect_linked(&schema, "", &mut before);
         before.sort();
         assert_eq!(
             before,
@@ -465,12 +465,12 @@ mod unlink {
                 "/properties/tags/items/description",
             ]
         );
-        unlink_rustdoc_descriptions(&mut schema);
+        unlink_rustdoc_descriptions(schema.as_object_mut().expect("test: an object"));
         let mut after = Vec::new();
-        collect_linked(&Value::Object(schema.clone()), "", &mut after);
+        collect_linked(&schema, "", &mut after);
         assert!(after.is_empty(), "the rewrite left {after:?}");
         assert_eq!(
-            Value::Object(schema),
+            schema,
             json!({
                 "description": "a `Top`",
                 "default": { "description": "[`kept`]" },

@@ -24,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `description` strings are rewritten, never instance data such as a
   `default`, so nothing else in a schema changes. A test fails if a published
   description still holds a link the rewrite recognizes, or an inline link
-  whose target, past any space or `<`, starts with `crate::`, `super::`,
+  whose target, past any whitespace or `<`, starts with `crate::`, `super::`,
   `self::` or `Self::`. (#2261)
 
 ## [0.14.2] - 2026-09-03

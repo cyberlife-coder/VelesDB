@@ -196,17 +196,33 @@ fn rustdoc_link(after: &str) -> Option<(Cow<'_, str>, &str)> {
 }
 
 /// An inline link, `inline` being the text after its `(`: shown as its label
-/// when the target is a Rust path. The target may be padded with spaces, and
-/// wrapped in `<…>` with spaces inside but no line ending, as Markdown allows.
+/// when the target is a Rust path. The target may be padded with spaces and
+/// at most one line ending on either side, and wrapped in `<…>` with spaces
+/// inside but no line ending, as Markdown allows.
 fn inline_link<'a>(label: &'a str, inline: &'a str) -> Option<(Cow<'a, str>, &'a str)> {
     let end = closing_paren(inline)?;
-    let target = inline[..end].trim();
+    let raw = &inline[..end];
+    if blank_line_around(raw) {
+        return None;
+    }
+    let target = raw.trim();
     let target = match target.strip_prefix('<').and_then(|t| t.strip_suffix('>')) {
         Some(inner) if inner.contains(['\n', '\r']) => return None,
         Some(inner) => inner.trim(),
         None => target,
     };
     is_rust_path(target).then(|| (Cow::Borrowed(label), &inline[end + 1..]))
+}
+
+/// Whether the whitespace before or after an inline link's target holds more
+/// than one line ending: a blank line, which ends the paragraph, so Markdown
+/// reads no link.
+fn blank_line_around(raw: &str) -> bool {
+    let lead = &raw[..raw.len() - raw.trim_start().len()];
+    let trail = &raw[raw.trim_end().len()..];
+    [lead, trail]
+        .iter()
+        .any(|ws| ws.replace("\r\n", "\n").matches(['\n', '\r']).count() > 1)
 }
 
 /// A code link, ``[`code`]``: shown as its code span when the code is one
