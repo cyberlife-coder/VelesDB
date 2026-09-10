@@ -298,9 +298,10 @@ class RetryTests(unittest.TestCase):
             gate.run_audit = original
         self.assertEqual([gate.MAX_SECONDS, gate.MAX_SECONDS], delays)
 
-    def test_a_non_finite_backoff_is_refused_before_any_attempt(self) -> None:
-        """`min` keeps a NaN, so a cap alone would still sleep NaN; the
-        function refuses it the way the CLI does, before running npm."""
+    def test_a_non_finite_or_negative_backoff_is_refused_before_any_attempt(self) -> None:
+        """`min` keeps a NaN, so a cap alone would still sleep NaN, and a
+        negative delay crashes `time.sleep`; the function refuses both the way
+        the CLI does, before running npm."""
         calls: list[str] = []
         original = gate.run_audit
         gate.run_audit = lambda npm, root, timeout: calls.append(npm) or UNREACHABLE_PAYLOAD
