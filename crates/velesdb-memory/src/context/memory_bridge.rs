@@ -654,11 +654,11 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     /// paid for. Reads never mutate it.
     ///
     /// `saved_at` is the stamp the caller wrote on the session's own fact. The
-    /// two agree unless two saves of the same session race: the stamp is taken
-    /// before this lock, so the last fact stored and the last index write can
-    /// come from different saves, and the entry keeps the other save's stamp
-    /// until the session is saved again — recency off by the race, the entry
-    /// never lost.
+    /// two agree unless two saves of the same session race — the stamp is taken
+    /// before this lock, so the entry can keep the other save's stamp, though
+    /// it is never lost — or this call fails after the fact was stored, which
+    /// leaves the old stamp, or no entry for a new session, until the session
+    /// is saved again.
     fn update_working_index(
         &self,
         project: &str,
