@@ -172,7 +172,7 @@ The RRF fusion step is a simple score merge with no distance computation, so hyb
 | Fast | 96 | 92.2% | 36 us |
 | Balanced | 160 | 98.8% | 57 us |
 | Accurate | 512 | 100.0% | 130 us |
-| Perfect | 4096 | 100% | 200 us |
+| Perfect | exhaustive | 100% | 200 us |
 | Adaptive | 32–512 | 95%+ | ~15-40 us (easy queries) |
 
 *Recall values from recall_benchmark. Latencies measured March 19, 2026, with the ef defaults current at that time (Fast=64, Balanced=128); the Fast/Balanced profiles have since been raised to ef 96/160, so their measured recall figures are lower bounds and their latencies slightly optimistic until re-measured. ef_search values are base values (scaled with k).*
@@ -401,7 +401,7 @@ First reproducible run, **VelesDB v3.3.0** (M=16, ef_construction=200, L2), full
 Notes:
 - The two paths answer different questions: the plain path is for cross-implementation comparison; the production path is what an application actually calls. Don't compare the plain numbers against the 10K production-path figures elsewhere in this doc.
 - Recall climbs monotonically with `ef_search`; ef=128 (0.9435) clears the ≥ 0.90 regression floor (§11.5) with margin.
-- ¹ **This row is a graph traversal at ef ≈ 8192, not today's `Perfect`.** It was recorded under the `Perfect` label, which then meant exactly that. `SearchQuality::Perfect` now leaves the graph for an exhaustive scan (#2238): at 1M it is refused under the default `limits.max_perfect_mode_vectors` (500 000), and with the cap raised its recall is 1.0 by construction, at O(n) cost. The figure stays because it is the best graph recall measured at 1M: ~0.06% of true neighbours fall outside even this candidate pool, and exact reranking cannot recover a neighbour the traversal never visited.
+- ¹ **This row is a graph traversal at ef ≈ 8192, not today's `Perfect`.** It sat under the `Perfect` label, but `Perfect` had already brute-forced since March 2026 and would read 1.0: 0.9994 is a graph traversal's figure, and no committed bench emits this row, so its exact provenance is unrecorded. `SearchQuality::Perfect` now leaves the graph for an exhaustive scan (#2238): at 1M it is refused under the default `limits.max_perfect_mode_vectors` (500 000), and with the cap raised its recall is 1.0 by construction, at O(n) cost. The figure stays because it is the best graph recall measured at 1M: ~0.06% of true neighbours fall outside even this candidate pool, and exact reranking cannot recover a neighbour the traversal never visited.
 
 Literature reference points (published by the respective libraries on similar hardware — **not VelesDB numbers**, orientation only):
 

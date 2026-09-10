@@ -10,7 +10,8 @@
 //! - `Balanced`: `ef_search=160`, ~99.5% recall, good tradeoff (default)
 //! - `Accurate`: `ef_search=512`, ~100% recall, high precision
 //! - `Perfect`: an exhaustive scan that leaves the graph, recall 1.0 by
-//!   construction, refused above `limits.max_perfect_mode_vectors`
+//!   construction and O(n). This type does not cap it; a collection refuses
+//!   it above `limits.max_perfect_mode_vectors`
 //!
 //! # Recommended Parameters by Vector Dimension
 //!

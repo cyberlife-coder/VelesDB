@@ -1575,7 +1575,7 @@ WITH (mode = 'accurate', ef_search = 512, timeout_ms = 5000)
 
 | Option | Type | Values | Description |
 |--------|------|--------|-------------|
-| `mode` | string | `fast`, `balanced`, `accurate`, `perfect`, `autotune` | Search quality preset (maps to ef_search: 96/160/512/4096/auto) |
+| `mode` | string | `fast`, `balanced`, `accurate`, `perfect`, `autotune` | Search quality preset: `fast`/`balanced`/`accurate` map to ef_search 96/160/512, `perfect` is an exhaustive scan capped by `limits.max_perfect_mode_vectors`, `autotune` picks ef per query |
 | `quality` | string | same as `mode` | Alias for `mode` (v3.5+). If both are set, `mode` takes precedence. |
 | `ef_search` | integer | 16--4096 | HNSW ef_search parameter (overrides `mode`) |
 | `timeout_ms` | integer | >= 100 | Per-query timeout in milliseconds |
@@ -3035,7 +3035,7 @@ SELECT id AS `select` FROM docs
 | WITH mode | balanced | |
 | USING FUSION strategy | rrf | |
 | USING FUSION k | 60 | |
-| ef_search | Depends on mode | fast=96, balanced=160, accurate=512, perfect=4096 |
+| ef_search | Depends on mode | fast=96, balanced=160, accurate=512; perfect has none (exhaustive scan) |
 
 ---
 

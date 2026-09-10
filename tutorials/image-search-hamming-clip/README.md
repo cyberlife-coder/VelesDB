@@ -535,7 +535,7 @@ tradeoff per query:
 | `fast` | 64 | ~92% | < 1ms | Pass 1 (Bouncer) -- speed matters most |
 | `balanced` | 128 | ~99% | ~2ms | Default (single-pass CLIP search) |
 | `accurate` | 512 | ~99.5% | ~5ms | Pass 2 (Detective) on small shortlist |
-| `perfect` | 4096 | 100% | ~15ms | Validation, ground truth generation |
+| `perfect` | exhaustive | 100% | ~15ms | Validation, ground truth generation |
 
 For the two-pass pipeline, use `fast` for the Bouncer (where the shortlist
 is intentionally generous) and `accurate` for the Detective (where precision

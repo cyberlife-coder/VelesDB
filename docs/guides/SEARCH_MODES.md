@@ -58,7 +58,7 @@ Recall@10 = (Number of true top-10 neighbors found) / 10 × 100%
                         │
       Accurate ●────────┤  near-exhaustive recall
                         │
-       Perfect ●────────┤  exhaustive candidate pool
+       Perfect ●────────┤  exhaustive scan, off the graph
                         │
         ────────────────┴────────────────→ Recall
 ```
@@ -450,7 +450,7 @@ USING FUSION(strategy = 'rsf', dense_weight = 0.7, sparse_weight = 0.3)
 | Aspect | VelesDB | Milvus |
 |--------|---------|--------|
 | **Presets** | 4 named modes (Fast→Perfect) + Custom | No presets, manual `search_params` |
-| **100% recall** | `SearchQuality::Perfect` (exhaustive HNSW) | Separate `FLAT` index |
+| **100% recall** | `SearchQuality::Perfect` (exhaustive scan) | Separate `FLAT` index |
 | **Main parameter** | `SearchQuality` enum | `params={"ef": N}` |
 | **Auto-tuning** | ✅ Dimension-based | ❌ Manual |
 
@@ -468,7 +468,7 @@ SearchQuality::Balanced
 | Aspect | VelesDB | OpenSearch k-NN |
 |--------|---------|-----------------|
 | **Presets** | 4 modes + Custom | No presets |
-| **100% recall** | Perfect mode (exhaustive HNSW) | `"method": "exact"` in mapping |
+| **100% recall** | Perfect mode (exhaustive scan) | `"method": "exact"` in mapping |
 | **Parameter** | `SearchQuality` | `ef_search` in query |
 | **Approach** | Query-time | Query-time or index-time |
 
@@ -496,7 +496,7 @@ SearchQuality::Accurate
 | Aspect | VelesDB | Qdrant |
 |--------|---------|--------|
 | **Presets** | 4 modes + Custom | No official presets |
-| **100% recall** | Perfect mode (exhaustive HNSW) | `exact: true` in search |
+| **100% recall** | Perfect mode (exhaustive scan) | `exact: true` in search |
 | **Parameter** | `SearchQuality` | `hnsw_ef` in search params |
 | **Quantization** | SQ8, Binary | Scalar, Product |
 
@@ -611,7 +611,7 @@ let results = collection.search_with_ef(&query_vector, 10, 1024)?;
 // Method 3: Low-latency ef_search override
 let results = collection.search_with_ef(&query_vector, 10, 96)?;
 
-// Method 4: Exhaustive candidate pool (Perfect-class recall)
+// Method 4: A very wide candidate pool — near-exhaustive recall, still on the graph
 let results = collection.search_with_ef(&query_vector, 10, 4096)?;
 ```
 
@@ -720,7 +720,7 @@ velesdb> SELECT * FROM products WHERE vector NEAR $v LIMIT 10;
 | Fast | 96 | ~95% | 0.8 ms | 1.5 ms | 12,500 |
 | Balanced | 160 | ~99.5% | 1.9 ms | 3.2 ms | 5,200 |
 | Accurate | 512 | ~99.5% | 4.1 ms | 6.8 ms | 2,400 |
-| Perfect | 4096 | 100.0% | 14.2 ms | 22.1 ms | 700 |
+| Perfect | exhaustive | 100.0% | 14.2 ms | 22.1 ms | 700 |
 
 ### Scaling with dataset size
 
@@ -731,7 +731,7 @@ velesdb> SELECT * FROM products WHERE vector NEAR $v LIMIT 10;
 | 500K | 3.2 ms | 240 ms | 75x |
 | 1M | 4.8 ms | 480 ms | 100x |
 
-> **Observation**: The Fast, Balanced, and Accurate modes scale in O(log n) thanks to HNSW. Perfect mode also uses HNSW but with a very large candidate pool, which increases latency. For very large datasets, Accurate offers an excellent recall/latency trade-off.
+> **Observation**: The Fast, Balanced, and Accurate modes scale in O(log n) thanks to HNSW. Perfect leaves the graph for an exhaustive scan, O(n): its latency grows with the collection, which is why it is refused above `limits.max_perfect_mode_vectors`. For very large datasets, Accurate offers an excellent recall/latency trade-off.
 
 ---
 
@@ -743,7 +743,7 @@ velesdb> SELECT * FROM products WHERE vector NEAR $v LIMIT 10;
 
 ### Q: Is Perfect mode really 100% recall?
 
-**A:** Yes, guaranteed in practice. `SearchQuality::Perfect` uses HNSW with an exhaustive candidate pool sized far beyond `k` (the formula is in the [Tuning Guide](TUNING_GUIDE.md#searchquality-hnsw-level)), which forces the graph to explore enough nodes to find all true neighbors. The collection-level `SearchMode::Perfect` goes further and switches to a bruteforce scan.
+**A:** Yes, by construction. `SearchQuality::Perfect` does not use the graph: it scores every vector, so recall is 1.0 — at O(n) cost, which is why a collection refuses it above `limits.max_perfect_mode_vectors` (500 000 by default). As the global `[search] default_mode`, `perfect` is applied as `accurate`, with a warning.
 
 ### Q: Can I use Perfect in production?
 

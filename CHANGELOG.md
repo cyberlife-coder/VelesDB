@@ -116,22 +116,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   arrived with the adoption rather than a latent defect. The index is now saved
   before the call returns, and `reorder_durability.rs` pins it — seen failing
   with the save removed.
-- **`Perfect` was still described by its old contract in eleven places.**
+- **`Perfect` was still described by its old contract across the docs.**
   `SearchQuality::Perfect` is an exhaustive scan capped by
   `limits.max_perfect_mode_vectors` (#2238), but the `SearchMode::Perfect`
-  rustdoc — the copy #2239 missed while correcting `params.rs` — the
-  `effective_ef_search` deprecation note, the `index::hnsw::index` module doc,
-  `SEARCH_MODES.md` (its Perfect section and its note), `MOBILE_API.md`,
-  `TUNING_GUIDE.md`, `ECOSYSTEM_PARITY.md`, the uniffi doc
-  that generates the Swift and Kotlin bindings, and the Python `LimitsOptions`
-  still said it stayed on the graph at `ef_search = 4096`, or that its cap was
-  not enforced. `BENCHMARKS.md`'s 0.9994-at-1M row is kept and relabelled: it is
-  a graph traversal at ef ≈ 8192, recorded under a name that then meant exactly
-  that. Two neighbouring `LimitsOptions` fields claimed "not yet enforced" for
-  caps `RuntimeLimits` enforces; corrected with them. Eight sites came from the
-  seven-lens review (#2246, P3); three more — the module doc, `SEARCH_MODES.md`'s
-  own Perfect section and `MOBILE_API.md` — from the sweeps run to check them. Two
-  benchmarks printed the exhaustive scan as `ef=4096`; relabelled `exhaustive`.
+  rustdoc — the copy #2239 missed — the `effective_ef_search` deprecation
+  note, the `index::hnsw::index` module doc, `SEARCH_MODES.md` (its Perfect
+  section, note, diagram, comparison rows and results table), `TUNING_GUIDE.md`,
+  `MOBILE_API.md`, `ECOSYSTEM_PARITY.md`, `CORE_PERFORMANCE.md`,
+  `VELESQL_SPEC.md`'s `mode` mapping, a tutorial table, the uniffi doc that
+  generates the Swift and Kotlin bindings and the Python `LimitsOptions` still
+  said it stayed on the graph at `ef_search = 4096`, or that its cap was not
+  enforced. Two neighbouring `LimitsOptions` fields claimed "not yet enforced"
+  for caps `RuntimeLimits` enforces; corrected with them. The cap is the
+  collection's — `HnswIndex` itself scans without one, and its module doc now
+  says so. `BENCHMARKS.md`'s 0.9994-at-1M row is kept, relabelled a graph
+  traversal at ef ≈ 8192: `Perfect` had brute-forced since March 2026 and would
+  read 1.0, so the figure was never `Perfect`'s, and no committed bench emits
+  it. Two benchmarks printed the exhaustive scan as `ef=4096`; relabelled
+  `exhaustive` (#2246, P3).
 - **`SearchQuality::Perfect` was documented as the opposite of what it does.**
   Its rustdoc described a graph search at `ef_search = 4096` that "tunes the
   HNSW graph's effort and is not exhaustive", with a ~0.9994 recall figure at

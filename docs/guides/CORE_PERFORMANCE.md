@@ -61,7 +61,7 @@ These are aligned with the canonical numbers in the repository root README.
 |--------|------|-------------|-----------|-------------|--------|
 | 10K/128D | Balanced | 128 | **98.8%** | 57 µs | ✅ |
 | 10K/128D | Accurate | 512 | **99.9%** | 130 µs | ✅ |
-| 10K/128D | Perfect | 4096 | **100%** | 200 µs | ✅ |
+| 10K/128D | Perfect | exhaustive | **100%** | 200 µs | ✅ |
 | 10K/128D | Adaptive | 32–512 | **95%+** | ~40 µs (easy queries) | ✅ |
 
 > Latency p50 = median over 100 queries. The 55 µs index-only micro-benchmark

@@ -430,8 +430,9 @@ impl SearchQuality {
     /// # Large-scale optimization (v0.9+)
     ///
     /// - **Accurate**: 512 base (was 256), scales with k×16 for ≥95% recall at 100K+
-    /// - **Perfect**: 4096 base (was 2048), scales with k×100 for ~100% recall
-    ///   (exactly 1.0 on the ≤100K contract tests; ~0.9994 on 1M SIFT1M)
+    /// - **Perfect**: 4096 base, scaled with k×100 — the ef a graph traversal
+    ///   would use. `HnswIndex` does not traverse for `Perfect`: it scans
+    ///   exhaustively (#2238), so this is not what `Perfect` costs there.
     /// - **Adaptive**: returns `min_ef` (first phase); caller handles second phase
     #[must_use]
     pub fn ef_search(&self, k: usize) -> usize {
@@ -442,7 +443,8 @@ impl SearchQuality {
             Self::Balanced | Self::AutoTune => 160.max(k * 5),
             // Increased from 256 to 512 for better recall at 100K+ scale
             Self::Accurate => 512.max(k * 16),
-            // Increased from 2048 to 4096 for ~100% recall (1.0 ≤100K; ~0.9994 at 1M)
+            // The traversal ef for Perfect-class recall, for a caller that walks the
+            // graph; `HnswIndex` scans exhaustively instead (#2238).
             Self::Perfect => 4096.max(k * 100),
             Self::Custom(ef) => (*ef).max(k),
             // Adaptive: start with min_ef (first phase)

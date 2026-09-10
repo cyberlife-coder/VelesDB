@@ -284,9 +284,12 @@ configuration level.
 > Source of truth for these values:
 > `crates/velesdb-core/src/config.rs` (`SearchMode::ef_search`).
 >
-> `SearchMode::Perfect` switches the **engine** to an exhaustive bruteforce scan
-> (`ef_search = usize::MAX` sentinel), unlike `SearchQuality::Perfect`, which
-> stays on the HNSW graph with an exhaustive candidate pool.
+> `SearchQuality::Perfect`, the per-query quality, is an exhaustive scan that
+> leaves the graph, and a collection refuses it above
+> `limits.max_perfect_mode_vectors`. As the global `[search] default_mode`,
+> `perfect` is applied as `accurate`, with a warning: an exhaustive scan as
+> every query's default is a latency trap. `SearchMode::ef_search()` still
+> returns a `usize::MAX` sentinel for it, which nothing reads.
 
 ### AutoTune Mode (v1.7.2)
 
