@@ -143,19 +143,22 @@ Reads take a read-lock and never block each other. Read-mostly workloads scale l
 
 ## Storage on disk
 
-A VelesDB database is **a directory**. Inside that directory:
+A VelesDB database is **a directory**: `velesdb.lock`, the exclusive process lock, and one subdirectory per collection — a subdirectory without a `config.json` is not a collection. A collection's directory holds:
 
-- A small `manifest.json` with version + collection list.
-- One subdirectory per collection. Each contains:
-  - `vectors.mmap` — the raw vector data, memory-mapped
-  - `payload.db` — point payloads (JSON)
-  - `wal.log` — append-only Write-Ahead Log for durability
-  - `index.hnsw` — serialized HNSW graph, reloaded at open (3-pass reconciliation against the vector store and WAL)
-  - `bm25/` — full-text inverted index (if enabled)
-  - `secondary/` — typed column indexes
-  - `snapshot.<gen>` — periodic snapshots for fast cold-start
+- `config.json` — the collection's configuration
+- `vectors.dat`, `vectors.idx`, `vectors.wal` — the memory-mapped vector store, its id → offset index, and the write-ahead log replayed into it at open
+- `payloads.log`, `payloads.snapshot` — point payloads, append-only, and a snapshot of their id → offset index
+- `native_hnsw.graph`, `native_hnsw.vectors`, `native_hnsw.gen`, `native_mappings.bin`, `native_meta.bin` — the persisted HNSW graph, reloaded at open; `native_meta.bin` is written last, as the commit point
+- `hnsw-<token>.arena` — a disposable f32 arena, in SQ8 and RaBitQ collections whose `.vectors` was not adopted; removed when the graph drops
+- `sparse.wal`, `sparse.snapshot` and generation files (`.idx`, `.terms`, `.meta`) — sparse-vector indexes, prefixed `sparse-<name>` for a named one
+- `bm25.snapshot`, `bm25.wal` — the BM25 full-text index and the log of changes since its last snapshot
+- `codebook.pq`, `rotation.opq`, `rabitq.idx`, `sq8.idx` — trained quantizers, when the collection has one
+- `edge_store.bin`, `edges.wal`, `property_index.bin`, `range_index.bin` — graph edges, the log of edge changes since their last flush, and property indexes, when the collection has them
+- `collection.stats.json` — the statistics `ANALYZE` records, histograms included
 
-Recovery on restart: replay the WAL from the latest snapshot.
+Secondary indexes have no file of their own: they live in memory and are rebuilt at open from the definitions in `config.json`.
+
+Recovery on restart replays `vectors.wal` into the vector store, `payloads.log` past `payloads.snapshot`, `bm25.wal` over `bm25.snapshot` (BM25 is rebuilt from the payloads only when no snapshot exists) and the sparse WALs over their snapshots, reconciles the HNSW graph against the store, and last replays `edges.wal` over `edge_store.bin`: see [CONCURRENCY_MODEL.md](docs/CONCURRENCY_MODEL.md#recovery-architecture).
 
 For the byte-level layout and serialization format, see [`docs/STORAGE_FORMAT.md`](docs/STORAGE_FORMAT.md).
 

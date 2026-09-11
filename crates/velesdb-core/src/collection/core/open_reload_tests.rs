@@ -1,5 +1,5 @@
 #![cfg(all(test, feature = "persistence"))]
-//! Tests for the open-time HNSW reload + 3-pass reconciliation (ENG-01).
+//! Tests for the open-time HNSW reload + reconciliation (ENG-01).
 //!
 //! `Collection::open` loads the persisted HNSW index (gated on
 //! `native_meta.bin`) and reconciles it against the WAL-replayed vector

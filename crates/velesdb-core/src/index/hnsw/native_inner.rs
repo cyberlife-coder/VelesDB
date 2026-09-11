@@ -784,6 +784,18 @@ impl NativeHnswInner {
         }
     }
 
+    /// The nodes among `nodes` the graph never linked into layer 0: mapped,
+    /// stored, and out of reach of every search. Crash recovery re-indexes
+    /// them (#2246).
+    #[cfg(feature = "persistence")]
+    pub(crate) fn unlinked_nodes(&self, nodes: impl IntoIterator<Item = usize>) -> Vec<usize> {
+        match &self.backend {
+            HnswBackend::Standard(hnsw) => hnsw.unlinked_nodes(nodes),
+            HnswBackend::RaBitQ(rabitq) => rabitq.inner.unlinked_nodes(nodes),
+            HnswBackend::Sq8(sq8) => sq8.inner.unlinked_nodes(nodes),
+        }
+    }
+
     /// Executes a closure with read access to the contiguous vector storage.
     ///
     /// Alias for [`with_contiguous_vectors`](Self::with_contiguous_vectors)

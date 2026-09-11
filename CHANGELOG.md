@@ -164,6 +164,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   copied first — into the arena its storage mode keeps, the heap or SQ8's and
   RaBitQ's disposable file, under the load's raised allocation ceiling — so no
   open can write the file whatever the engine or tolerance becomes (#2246, P5).
+- **Opening a collection re-indexes a mapped vector the graph never linked
+  (#2246).** A save that raced `upsert_bulk`'s async build — the builder's
+  drain returning while another build held it, or an upsert landing between
+  the drain and the save — persisted mappings for vectors the graph had not
+  linked yet. Recovery skipped every mapped id, so after a crash those points
+  stayed stored, mapped and unreachable by graph search. Recovery now checks
+  that each mapped id's node has a layer-0 neighbour, and re-indexes those
+  that do not — the entry point aside, since every search starts there.
 
 - **`reorder_for_locality` could leave a collection whose graph and vectors
   disagree.** Since `.vectors` became the graph's arena, the permutation lands

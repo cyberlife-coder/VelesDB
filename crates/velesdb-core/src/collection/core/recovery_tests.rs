@@ -174,3 +174,139 @@ fn test_no_gap_after_flush_and_reopen() {
         "all vectors present in HNSW"
     );
 }
+
+// =========================================================================
+// A save that raced the async builder — mapped, stored, never linked
+// =========================================================================
+
+/// Dispersed values (xorshift), so every point is its own nearest neighbour.
+#[cfg(feature = "persistence")]
+fn dispersed(id: u64) -> Vec<f32> {
+    let mut state = id.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+    (0..8)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            #[allow(
+                clippy::cast_precision_loss,
+                reason = "the top 24 bits of the state are exact in an f32"
+            )]
+            let unit = (state >> 40) as f32 / (1u64 << 24) as f32;
+            unit
+        })
+        .collect()
+}
+
+#[cfg(feature = "persistence")]
+fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
+    std::fs::create_dir_all(to).expect("test: create snapshot dir");
+    for entry in std::fs::read_dir(from).expect("test: read dir") {
+        let entry = entry.expect("test: dir entry");
+        let target = to.join(entry.file_name());
+        if entry.file_type().expect("test: file type").is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), &target).expect("test: copy file");
+        }
+    }
+}
+
+/// Opening a collection re-links every mapped id the graph never linked
+/// (#2246).
+///
+/// `upsert_bulk`'s V2 path registers each mapping and writes each vector at
+/// once, and leaves the graph insert to the `AsyncIndexBuilder`. The index
+/// saved here while the builder still holds every point is what a save that
+/// races the bulk path persists: all mapped, none linked. Recovery skipped
+/// mapped ids, so graph search could never find them again.
+#[test]
+#[cfg(feature = "persistence")]
+fn a_mapped_id_the_graph_never_linked_is_relinked_on_open() {
+    // Above the 100-point brute-force shortcut, so search walks the graph.
+    const POINTS: u64 = 300;
+    let temp = tempfile::tempdir().expect("temp dir");
+    let live = temp.path().join("live");
+    let coll = Collection::create_with_async_builder(
+        live.clone(),
+        8,
+        DistanceMetric::Euclidean,
+        crate::collection::streaming::AsyncIndexBuilderConfig {
+            // Well above POINTS: the builder holds every insert.
+            merge_threshold: 10_000,
+            segment_count: Some(2),
+        },
+    )
+    .expect("create");
+    let points: Vec<Point> = (0..POINTS)
+        .map(|id| Point::without_payload(id, dispersed(id)))
+        .collect();
+    assert_eq!(
+        coll.upsert_bulk(&points).expect("upsert_bulk"),
+        points.len()
+    );
+    coll.storage
+        .index
+        .save(&coll.storage.path)
+        .expect("save with the builder still holding every point");
+
+    // What a crash right after that save leaves on disk, twice: one copy to
+    // read the saved index as it stands, one to open.
+    let premise = temp.path().join("premise");
+    copy_dir(&live, &premise);
+    let snapshot = temp.path().join("snapshot");
+    copy_dir(&live, &snapshot);
+
+    // The premise, read without recovery. A saved empty entry point reads
+    // back as slot 0 once the arena holds points, so slot 0 is exempt as the
+    // entry point and every other mapped id is unlinked: 299 for pass 4 to
+    // relink. Slot 0 is then reached through their links back to it.
+    let saved = crate::index::HnswIndex::load(&premise, 8, DistanceMetric::Euclidean)
+        .expect("load the saved index");
+    let unlinked_before = saved
+        .inner
+        .read()
+        .unlinked_nodes(saved.mappings.iter().map(|(_, idx)| idx));
+    assert_eq!(
+        unlinked_before.len(),
+        usize::try_from(POINTS - 1).expect("test: fits a usize"),
+        "the save must leave every mapped id but the entry point unlinked"
+    );
+    let first_slot = saved.mappings.get_idx(0).expect("id 0 is mapped");
+    assert!(
+        !unlinked_before.contains(&first_slot),
+        "the one exempt node must be id 0's slot, the entry point"
+    );
+    drop(saved);
+
+    let reopened = Collection::open(snapshot).expect("open the snapshot");
+
+    let index = &reopened.storage.index;
+    let unlinked = index
+        .inner
+        .read()
+        .unlinked_nodes(index.mappings.iter().map(|(_, idx)| idx));
+    assert!(
+        unlinked.is_empty(),
+        "{} mapped ids are still unlinked after open",
+        unlinked.len()
+    );
+    // A wide ef keeps the walk from stopping on a full result set (the
+    // stagnation cutoff still applies), so a miss here points at linkage
+    // rather than a narrow beam; the check above is the structural
+    // guarantee, this one the end-to-end confirmation.
+    for id in [0, POINTS / 2, POINTS - 1] {
+        let hits = reopened
+            .search_with_ef(
+                &dispersed(id),
+                1,
+                usize::try_from(4 * POINTS).expect("test: fits a usize"),
+            )
+            .expect("search");
+        assert_eq!(
+            hits.first().map(|hit| hit.point.id),
+            Some(id),
+            "id {id} is mapped but graph search cannot reach it"
+        );
+    }
+}
