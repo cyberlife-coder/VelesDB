@@ -275,16 +275,18 @@ class PwshLaunchBudgetTests(InstallerHarness):
                 self.run_pwsh("exit 0", self.environment())
 
     def test_the_cold_start_is_kept_out_of_the_budget(self) -> None:
-        """The cold sample never enters the budget, and the slowest warm one,
-        neither the first nor the last, sets it."""
-        starts = [45.0, 0.2, 0.3, 0.25]  # cold, then three warm, slowest in the middle
-        printed = io.StringIO()
-        with mock.patch(f"{__name__}._time_pwsh_start", side_effect=starts) as start:
-            with contextlib.redirect_stderr(printed):
-                budget = pwsh_launch_budget.__wrapped__("pwsh")
-        self.assertEqual(start.call_count, 4)
-        self.assertEqual(budget, PWSH_BUDGET_IN_STARTUPS * 0.3)
-        self.assertIn(f"pwsh launch budget: {budget:.1f} s", printed.getvalue())
+        """The cold sample never enters the budget, and the slowest warm one sets
+        it, wherever it falls among the three."""
+        for warm in ([0.3, 0.2, 0.25], [0.2, 0.3, 0.25], [0.2, 0.25, 0.3]):
+            printed = io.StringIO()
+            with mock.patch(
+                f"{__name__}._time_pwsh_start", side_effect=[45.0, *warm]
+            ) as start:
+                with contextlib.redirect_stderr(printed):
+                    budget = pwsh_launch_budget.__wrapped__("pwsh")
+            self.assertEqual(start.call_count, 4, warm)
+            self.assertEqual(budget, PWSH_BUDGET_IN_STARTUPS * 0.3, warm)
+            self.assertIn(f"pwsh launch budget: {budget:.1f} s", printed.getvalue())
 
     def test_the_budget_stays_within_its_floor_and_ceiling(self) -> None:
         for warm, expected in [(0.01, PWSH_BUDGET_FLOOR), (2.0, PWSH_BUDGET_CEILING)]:
@@ -319,10 +321,12 @@ class PwshLaunchBudgetTests(InstallerHarness):
         self.assertEqual(start.call_count, 1)
         self.assertEqual(again, first)
 
-    def test_each_start_up_runs_in_a_fresh_home_under_its_deadline(self) -> None:
+    def test_each_start_up_is_timed_in_a_fresh_home_under_its_deadline(self) -> None:
         homes = []
+        clock = [100.0]
 
         def record(argv, **kwargs):
+            clock[0] += 1.5  # the start-up takes 1.5 s on the fake clock
             home = kwargs["env"]["HOME"]
             homes.append(home)
             self.assertTrue(Path(home).is_dir())
@@ -333,8 +337,9 @@ class PwshLaunchBudgetTests(InstallerHarness):
             return subprocess.CompletedProcess(argv, 0)
 
         with mock.patch(f"{__name__}.subprocess.run", side_effect=record):
-            _time_pwsh_start("pwsh")
-            _time_pwsh_start("pwsh")
+            with mock.patch.object(time, "monotonic", side_effect=lambda: clock[0]):
+                took = [_time_pwsh_start("pwsh"), _time_pwsh_start("pwsh")]
+        self.assertEqual(took, [1.5, 1.5])
         self.assertEqual(len(set(homes)), 2)
         self.assertNotIn(os.environ.get("HOME"), homes)
 
