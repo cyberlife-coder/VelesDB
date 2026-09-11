@@ -179,14 +179,18 @@ looks "hard". No recorded run measures its latency or recall yet (#2266).
 |---|---|
 | Unfiltered | both phases |
 | A filter the collection post-filters: no secondary index resolves it to a bitmap (a `NOT`, a non-indexed field), or its bitmap matches more than 80% of the collection | both phases, for an oversampled k |
-| A filter resolved to a bitmap matching more than 1% and at most 80% | one graph pass at the preset's ef, scaled to the oversampled count (at least k + 10, at most 10,000) and the index size; retried once at twice that ef, capped at 10,000, when fewer results than that count survive and the candidate pool is below 10,000 (#2268) |
+| A filter resolved to a bitmap matching more than 1% and at most 80% | one graph pass at the preset's ef, with the oversampled count as k (between min(k + 10, 10,000) and 10,000), scaled by the index size; retried once at twice that ef, capped at 10,000, when fewer results than that count survive and four times that count, or the ef if larger, is below 10,000 (#2268) |
 | A filter resolved to a bitmap matching 1% or less | an exact scan of the matching vectors |
-| VelesQL `NEAR` with a metadata filter, planned `GraphFirst` | an exact scan of the matching rows, scored by similarity; no mode applies |
+| VelesQL `NEAR` with a metadata filter, planned `GraphFirst` | an exact scan of up to 100,000 matching rows, scored by the collection's metric; no mode applies |
 | VelesQL `NEAR` with a metadata filter, planned `Parallel` | that scan and the filtered search above, merged |
+| VelesQL `similarity()` threshold, with or without a metadata filter | both phases (one pass with `rerank = false`) at a widened k, ten times the limit per `similarity()` condition, capped; the threshold and the filter apply afterwards |
+| VelesQL `NEAR` whose filter ORs a graph `MATCH` | both phases (one pass with `rerank = false`); the filter applies afterwards |
+| VelesQL `NEAR` with a required graph `MATCH` | the mode is not applied: up to 10,000 matched anchors are scored exactly, more take one bitmap pass at `Balanced` |
+| VelesQL `NEAR` with a text `MATCH` | the mode is not applied: the vector leg searches at `Balanced` |
 | An unfiltered VelesQL query with `rerank = false` | one pass at the preset's scaled ef (#2268) |
 | A REST search with a filter | the mode is not applied (#457) |
 
-On the first two rows, an index of 100 vectors or fewer with exact-distance features on is scanned exactly instead. Where a single pass runs, Adaptive uses `max(min_ef, k)` and AutoTune Balanced's `max(160, k*5)`, each scaled by the index size.
+Wherever both phases would run, an index of 100 vectors or fewer with exact-distance features on is scanned exactly instead. Where a single graph pass runs, Adaptive uses `max(min_ef, k)` and AutoTune Balanced's `max(160, k*5)`, k being the count the index receives (the oversampled count on the bitmap row), each scaled by the index size.
 
 **Use cases:**
 - Mixed workloads where most queries are easy
@@ -218,8 +222,8 @@ The mode needs both bounds: a bare `'adaptive'` is not parsed, and today the que
 `SearchQuality::AutoTune` derives an ef range from the collection's size and
 vector dimension, then runs the same two-phase search as Adaptive. It saves
 picking an ef by hand; no recorded run measures its latency or recall yet
-(#2266), and some search paths run it in one pass (see
-[When the two phases run](#when-the-two-phases-run)).
+(#2266), and some search paths run it in one pass, scan exactly or ignore
+the mode (see [When the two phases run](#when-the-two-phases-run)).
 The scaling tiers and the dimension factor are documented in the
 [Tuning Guide — AutoTune Mode](TUNING_GUIDE.md#autotune-mode-v172).
 

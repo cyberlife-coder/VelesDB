@@ -422,13 +422,13 @@ pub enum SearchQuality {
     /// - up to 1K vectors: `k * 2`
     /// - 1K–10K: `k * 4`
     /// - 10K–100K: `k * 8`
-    /// - 100K and more: `k * 12`
+    /// - more than 100K: `k * 12`
     /// - above 512 dimensions: times 1.5
     ///
     /// `min_ef` is at least `k`, and `max_ef` is `4 * min_ef`. Some search paths
-    /// run one pass, or no graph search, instead: the Search Modes guide lists
-    /// them ("When the two phases run"; #2268). No recorded run measures its
-    /// latency or recall (#2266).
+    /// run one pass, scan exactly or ignore the mode instead: the Search Modes
+    /// guide lists them ("When the two phases run"; #2268). No recorded run
+    /// measures its latency or recall (#2266).
     ///
     /// # Example
     ///

@@ -437,7 +437,7 @@ The pipelined path produces **identical results** to the non-pipelined path. Onl
 
 ## AutoTune Search
 
-On an `HnswIndex` and on a collection, `SearchQuality::AutoTune` computes an `ef_search` range from collection statistics, then delegates to the adaptive two-phase search algorithm; some search paths run it in one pass instead (see [Search Modes — When the two phases run](../guides/SEARCH_MODES.md#when-the-two-phases-run)). `NativeHnswIndex::search_with_quality` does not: it walks the graph once at Balanced's ef (see Operations). No recorded run measures its latency or recall (#2266).
+On an `HnswIndex` and on a collection, `SearchQuality::AutoTune` computes an `ef_search` range from collection statistics, then delegates to the adaptive two-phase search algorithm; some search paths run it in one pass, scan exactly or ignore the mode instead (see [Search Modes — When the two phases run](../guides/SEARCH_MODES.md#when-the-two-phases-run)). `NativeHnswIndex::search_with_quality` does not: it walks the graph once at Balanced's ef (see Operations). No recorded run measures its latency or recall (#2266).
 
 ### How It Works
 
@@ -446,7 +446,7 @@ On an `HnswIndex` and on a collection, `SearchQuality::AutoTune` computes an `ef
      - 0--1K vectors: `k * 2`
      - 1K--10K vectors: `k * 4`
      - 10K--100K vectors: `k * 8`
-     - 100K+ vectors: `k * 12`
+     - more than 100K vectors: `k * 12`
    - **Dimension factor**: high-dimensional spaces (>512) apply a 1.5x multiplier for sparser neighborhoods.
    - **`min_ef`** is clamped to at least `k` (never fewer candidates than requested results).
    - **`max_ef`** is set to `4 * min_ef`, a cap the second phase stays under: it doubles `min_ef` once.
