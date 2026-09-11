@@ -154,9 +154,15 @@ impl<D: DistanceEngine> NativeHnsw<D> {
 
         let old_to_new = Self::build_reverse_mapping(new_order, count);
 
-        self.reorder_vectors(new_order)?;
-        self.remap_neighbor_ids(&old_to_new);
-        self.update_entry_point(&old_to_new, count);
+        // The entry point, and the anchor tree's root with it, moves only under
+        // the promotion lock (#2259); rank 8, before the vectors and layers
+        // write locks the permutation takes.
+        self.with_promotion_lock(|| {
+            self.reorder_vectors(new_order)?;
+            self.remap_neighbor_ids(&old_to_new);
+            self.update_entry_point(&old_to_new, count);
+            Ok::<(), crate::error::Error>(())
+        })?;
 
         Ok(old_to_new)
     }
@@ -192,9 +198,9 @@ impl<D: DistanceEngine> NativeHnsw<D> {
 
     /// Updates the entry point to its new ID after permutation.
     ///
-    /// Called during `reorder_for_locality()` which runs single-threaded
-    /// after all inserts complete. No concurrent promotions are possible,
-    /// so a direct atomic store with `Release` ordering is sufficient.
+    /// Runs under the promotion lock ([`Self::apply_permutation`]), like every
+    /// other move of the entry point; the anchor tree's root moves with it,
+    /// renamed by `remap_neighbor_ids`.
     fn update_entry_point(&self, old_to_new: &[usize], count: usize) {
         let old_ep = self.entry_point.load(Ordering::Acquire);
         if old_ep != NO_ENTRY_POINT && old_ep < count {

@@ -65,8 +65,8 @@ let loaded = NativeHnswIndex::load("./my_index", 768, DistanceMetric::Cosine)?;
 │  distance: SimdDistance      (AVX2/SSE/NEON optimized)          │
 │  vectors: RwLock<ContiguousVectors>  (64-byte aligned storage)  │
 │  layers: RwLock<Vec<Layer>>  (hierarchical graph)               │
-│  entry_point: AtomicUsize    (lock-free CAS promotion)          │
-│  max_layer: AtomicUsize      (lock-free CAS promotion)          │
+│  entry_point: AtomicUsize    (lock-free reads, locked moves)    │
+│  max_layer: AtomicUsize      (lock-free reads, locked moves)    │
 └─────────────────────────────────────────────────────────────────┘
 ```
 

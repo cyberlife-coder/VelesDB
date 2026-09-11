@@ -55,6 +55,7 @@ fn test_premium_rejects_zero() {
 fn test_core_ranks_are_strictly_ascending() {
     let order = [
         LockRank::GPU_VECTORS_SNAPSHOT,
+        LockRank::ENTRY_POINT_PROMOTION,
         LockRank::VECTORS,
         LockRank::LAYERS,
         LockRank::NEIGHBORS,

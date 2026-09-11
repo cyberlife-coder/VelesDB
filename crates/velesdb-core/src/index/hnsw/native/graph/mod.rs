@@ -8,7 +8,9 @@
 //! - `insert`: Vector insertion and layer growth
 //! - `search`: k-NN search, multi-entry search, and layer-level search
 //! - `neighbors`: Neighbor selection (VAMANA diversification) and bidirectional connections
+//! - `anchors`: Reachability anchors, one protected base-layer in-edge per node (#2259)
 
+mod anchors;
 mod insert;
 pub(crate) mod locking;
 mod neighbors;
@@ -37,7 +39,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 ///
 /// Using `usize::MAX` instead of `Option<NodeId>` behind an `RwLock` allows
 /// lock-free reads on the search hot path (`Ordering::Acquire` load) while
-/// writes use CAS loops for lock-free promotion (Issue #422, I3).
+/// writes, rare, take the promotion lock (#2259).
 pub const NO_ENTRY_POINT: usize = usize::MAX;
 
 /// Default VAMANA alpha for neighbor diversification.
@@ -66,15 +68,21 @@ pub struct NativeHnsw<D: DistanceEngine> {
     /// Entry point for search (highest layer node).
     ///
     /// Stores `NO_ENTRY_POINT` (`usize::MAX`) when the index is empty.
-    /// Read with `Ordering::Acquire`, written via CAS in `promote_entry_point`
-    /// with `Ordering::Release` (Issue #422, I3 lock-free CAS).
+    /// Read with `Ordering::Acquire` and no lock; written only under
+    /// `promotion`: by `claim_first_entry_point`, `promote_entry_point` and
+    /// the renumbering of `reorder_for_locality`.
     pub(in crate::index::hnsw::native) entry_point: AtomicUsize,
     /// Maximum layer for entry point.
     ///
-    /// Updated via CAS in `promote_entry_point`. The CAS on `max_layer`
-    /// serves as the linearization point: only the CAS winner updates
-    /// `entry_point`, ensuring consistency without a mutex.
+    /// Read without a lock; written with `entry_point`, under `promotion`.
     pub(in crate::index::hnsw::native) max_layer: AtomicUsize,
+    /// Serializes every move of the entry point: the first claim, each
+    /// promotion with the anchor reparenting that follows it, and the
+    /// renumbering of `reorder_for_locality` (#2259). Two
+    /// promotions that overlapped could otherwise reparent in the wrong order
+    /// and strand the tree below one of them. Rank `EntryPointPromotion`,
+    /// taken before `vectors`.
+    pub(in crate::index::hnsw::native) promotion: parking_lot::Mutex<()>,
     /// Number of elements in the index
     pub(in crate::index::hnsw::native) count: AtomicUsize,
     /// Simple PRNG state for layer selection during insertion.
@@ -409,9 +417,10 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         Self {
             distance,
             vectors: RwLock::new(vectors),
-            layers: RwLock::new(vec![Layer::new(max_elements)]),
+            layers: RwLock::new(vec![Layer::new_base(max_elements)]),
             entry_point: AtomicUsize::new(NO_ENTRY_POINT),
             max_layer: AtomicUsize::new(0),
+            promotion: parking_lot::Mutex::new(()),
             count: AtomicUsize::new(0),
             rng_state: AtomicU64::new(0x5DEE_CE66_D1A4_B5B5),
             max_connections,
@@ -517,6 +526,20 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         };
         drop(guard);
         record_lock_release(LockRank::Vectors);
+        result
+    }
+
+    /// Runs `f` holding the promotion lock: every move of the entry point, with
+    /// the anchor reparenting that follows it, happens there (#2259).
+    pub(in crate::index::hnsw::native) fn with_promotion_lock<R>(
+        &self,
+        f: impl FnOnce() -> R,
+    ) -> R {
+        record_lock_acquire(LockRank::EntryPointPromotion);
+        let guard = self.promotion.lock();
+        let result = f();
+        drop(guard);
+        record_lock_release(LockRank::EntryPointPromotion);
         result
     }
 

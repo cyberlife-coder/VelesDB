@@ -59,7 +59,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
 
         let mut layers = self.layers.write();
         while layers.len() <= max_layer {
-            layers.push(Layer::new(total_nodes));
+            let level = layers.len();
+            layers.push(Layer::at_level(level, total_nodes));
         }
         for layer in layers.iter_mut() {
             layer.ensure_capacity(total_nodes.saturating_sub(1));
@@ -81,7 +82,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         // Slow path: acquire write lock (rare after pre-allocation)
         let mut layers = self.layers.write();
         while layers.len() <= node_layer {
-            layers.push(Layer::new(node_id + 1));
+            let level = layers.len();
+            layers.push(Layer::at_level(level, node_id + 1));
         }
         for layer in layers.iter_mut() {
             layer.ensure_capacity(node_id);
@@ -103,13 +105,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         let node_id = self.allocate_and_store_vector(&query)?;
         let node_layer = self.random_layer();
         self.expand_layers(node_id, node_layer);
-
-        let ep = self.entry_point.load(Ordering::Acquire);
-        if ep != NO_ENTRY_POINT {
-            self.insert_with_entry_point(node_id, &query, node_layer, ep);
-        }
-
-        self.promote_entry_point(node_id, node_layer);
+        let entry_point = self.entry_point.load(Ordering::Acquire);
+        self.link_new_node(node_id, &query, node_layer, entry_point);
         self.count.fetch_add(1, Ordering::Relaxed);
 
         // Invalidate GPU caches — topology and vectors both changed.
@@ -125,57 +122,113 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         Ok(node_id)
     }
 
-    /// Atomically updates the entry point if the index is empty or the node
-    /// reaches a higher layer than the current maximum.
+    /// Links a node just placed into the graph, given the entry point it saw.
     ///
-    /// Uses lock-free CAS loops instead of a mutex. Entry-point promotion is
-    /// extremely rare (O(log_M(N)) times per index lifetime), so the CAS loop
-    /// almost never retries. Two separate CAS operations handle the two cases:
+    /// A node that saw none claims the empty graph's entry point. Losing that
+    /// claim means another node won it in between: this one then connects
+    /// through the winner like any other insert, instead of staying with no
+    /// edge at all (#2259).
+    fn link_new_node(&self, node_id: NodeId, query: &[f32], node_layer: usize, seen: NodeId) {
+        let entry_point = if seen == NO_ENTRY_POINT {
+            match self.claim_first_entry_point(node_id, node_layer) {
+                None => return,
+                Some(winner) => winner,
+            }
+        } else {
+            seen
+        };
+        self.insert_with_entry_point(node_id, query, node_layer, entry_point);
+        self.anchor_one(node_id);
+        self.promote_entry_point(node_id, node_layer);
+    }
+
+    /// Claims an empty graph's entry point for `node_id`.
     ///
-    /// 1. **Empty index**: CAS on `entry_point` from `NO_ENTRY_POINT` to `node_id`.
-    /// 2. **Layer promotion**: CAS on `max_layer` from `current_max` to `node_layer`.
-    ///    Only the CAS winner updates `entry_point`, ensuring consistency.
+    /// Returns `None` when `node_id` is now the entry point, or the node
+    /// that claimed it first. The claim and `max_layer` move together under
+    /// the promotion lock, so no promotion lands between them; a graph that
+    /// already has an entry point returns before taking the lock.
+    pub(in crate::index::hnsw::native) fn claim_first_entry_point(
+        &self,
+        node_id: NodeId,
+        node_layer: usize,
+    ) -> Option<NodeId> {
+        let seen = self.entry_point.load(Ordering::Acquire);
+        if seen != NO_ENTRY_POINT {
+            return Some(seen);
+        }
+        self.with_promotion_lock(|| {
+            match self.entry_point.compare_exchange(
+                NO_ENTRY_POINT,
+                node_id,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    // An empty graph's `max_layer` is 0, and only this lock
+                    // writes it.
+                    self.max_layer.store(node_layer, Ordering::Release);
+                    None
+                }
+                Err(winner) => Some(winner),
+            }
+        })
+    }
+
+    /// `insert` for a node that saw an empty graph although another node has
+    /// claimed its entry point since: the losing side of the first-insert
+    /// race, which no schedule reproduces on demand.
+    #[cfg(test)]
+    pub(in crate::index::hnsw::native) fn insert_seeing_no_entry_point(
+        &self,
+        vector: &[f32],
+    ) -> crate::error::Result<NodeId> {
+        let query = self.prepare_query(vector);
+        let node_id = self.allocate_and_store_vector(&query)?;
+        let node_layer = self.random_layer();
+        self.expand_layers(node_id, node_layer);
+        self.link_new_node(node_id, &query, node_layer, NO_ENTRY_POINT);
+        self.count.fetch_add(1, Ordering::Relaxed);
+        Ok(node_id)
+    }
+
+    /// Makes `node_id` the entry point when the index is empty, or when the
+    /// node reaches a higher layer than the current maximum.
     ///
-    /// Between `max_layer` CAS success and `entry_point` store, a concurrent
-    /// reader may see the new `max_layer` with the old `entry_point`. This is
-    /// safe: `search_layer_single` returns `None` (via `with_neighbors`) for
-    /// layers where the old EP has no edges, causing a no-op greedy descent.
+    /// Readers load `entry_point` and `max_layer` without a lock. Writers take
+    /// the promotion lock, and the check, the two stores and
+    /// [`Self::reparent_entry_point`] run in it as one step: two promotions
+    /// that overlapped could reparent in the wrong order, the later one's
+    /// clearing the anchor the earlier one had just given its node, and strand
+    /// the tree below it (#2259). Promotion is rare (O(log_M(N)) times per
+    /// index lifetime), and a node at or below the maximum layer, the common
+    /// case, returns before taking the lock.
+    ///
+    /// Between the `max_layer` store and the swap, a concurrent reader may see
+    /// the new `max_layer` with the old `entry_point`. This is safe:
+    /// `search_layer_single` finds no neighbour of the old EP at a layer where
+    /// it has no edges, and returns it unchanged: a no-op greedy descent.
     pub(in crate::index::hnsw::native) fn promote_entry_point(
         &self,
         node_id: NodeId,
         node_layer: usize,
     ) {
-        // Case 1: First insert — race to set entry_point from NO_ENTRY_POINT.
-        if self.entry_point.load(Ordering::Acquire) == NO_ENTRY_POINT {
-            // CAS: only one thread wins the first-insert race.
-            if self
-                .entry_point
-                .compare_exchange(NO_ENTRY_POINT, node_id, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-            {
-                self.max_layer.store(node_layer, Ordering::Release);
+        if self.entry_point.load(Ordering::Acquire) == NO_ENTRY_POINT
+            && self.claim_first_entry_point(node_id, node_layer).is_none()
+        {
+            return;
+        }
+        if node_layer <= self.max_layer.load(Ordering::Acquire) {
+            return;
+        }
+        self.with_promotion_lock(|| {
+            if node_layer <= self.max_layer.load(Ordering::Acquire) {
                 return;
             }
-            // Another thread won — fall through to layer promotion check.
-        }
-
-        // Case 2: Layer promotion — CAS loop on max_layer.
-        loop {
-            let current_max = self.max_layer.load(Ordering::Acquire);
-            if node_layer <= current_max {
-                break; // No promotion needed — most common case.
-            }
-            // Try to atomically claim the new max_layer. Only the CAS
-            // winner updates entry_point; losers retry the loop.
-            if self
-                .max_layer
-                .compare_exchange(current_max, node_layer, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-            {
-                self.entry_point.store(node_id, Ordering::Release);
-                break;
-            }
-        }
+            self.max_layer.store(node_layer, Ordering::Release);
+            let previous = self.entry_point.swap(node_id, Ordering::AcqRel);
+            self.reparent_entry_point(previous, node_id);
+        });
     }
 
     /// Batch-allocates vectors and assigns random layers.

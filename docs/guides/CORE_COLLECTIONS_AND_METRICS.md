@@ -163,8 +163,8 @@ collection.flush()?;
 ```
 
 `upsert_bulk` is not just a loop over `upsert`: it runs turbo/fast batch modes,
-parallel HNSW indexing, graduated `ef_construction` (VAMANA 3-phase) and
-lock-free CAS entry-point promotion.
+parallel HNSW indexing, graduated `ef_construction` (VAMANA 3-phase), and
+lock-free entry-point reads (a small lock serializes its rare promotions).
 
 ## Durability semantics
 

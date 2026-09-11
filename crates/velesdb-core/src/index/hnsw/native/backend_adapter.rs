@@ -134,8 +134,8 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     /// # Note
     ///
     /// Graph structure may differ from sequential insertion due to concurrent
-    /// neighbor selection; #2259 tracks the nodes such a batch can leave
-    /// unreachable.
+    /// neighbor selection; every node stays reachable from the entry point
+    /// either way (#2259).
     pub fn parallel_insert(&self, data: &[(&[f32], usize)]) -> crate::error::Result<Vec<usize>> {
         let vectors: Vec<&[f32]> = data.iter().map(|&(vector, _)| vector).collect();
         self.place_batch(&vectors)
@@ -169,7 +169,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         let first_node = assignments[0].0;
         let connect_start = self.bootstrap_entry_point(&assignments);
 
-        self.connect_batch_chunked(&assignments[connect_start..], vectors, first_node)?;
+        self.connect_batch_chunked(&assignments[connect_start..], vectors, first_node);
         self.finalize_batch(&assignments, connect_start);
 
         // Invalidate GPU caches — topology and vectors both changed.
@@ -192,14 +192,17 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     /// Returns the number of nodes consumed by bootstrapping (0 or 1).
     /// Consumed nodes are excluded from the parallel connect phase because
     /// they have no valid entry point to search from.
-    fn bootstrap_entry_point(&self, assignments: &[(NodeId, usize)]) -> usize {
-        if self.entry_point.load(std::sync::atomic::Ordering::Acquire) == NO_ENTRY_POINT {
-            let (node_id, layer) = assignments[0];
-            self.promote_entry_point(node_id, layer);
-            1
-        } else {
-            0
-        }
+    ///
+    /// One CAS decides: the first node is consumed only when it claimed an
+    /// empty graph's entry point. A batch that loses that claim to a
+    /// concurrent insert connects its first node like the others, where it
+    /// used to leave it out of the connect phase with no edge (#2259).
+    pub(in crate::index::hnsw::native) fn bootstrap_entry_point(
+        &self,
+        assignments: &[(NodeId, usize)],
+    ) -> usize {
+        let (node_id, layer) = assignments[0];
+        usize::from(self.claim_first_entry_point(node_id, layer).is_none())
     }
 
     /// Final promotion of the highest-layer node and bootstrap count update.
@@ -311,7 +314,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         assignments: &[(NodeId, usize)],
         vectors: &[&[f32]],
         first_node: NodeId,
-    ) -> crate::error::Result<()> {
+    ) {
         let chunk_size = Self::compute_chunk_size(assignments.len());
         let schedule = compute_batch_ef_schedule(
             self.ef_construction,
@@ -330,20 +333,29 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
 
             let chunk_offset = nodes_connected;
 
-            chunk.par_iter().enumerate().try_for_each(
-                |(i, (node_id, layer))| -> crate::error::Result<()> {
+            // Each node is anchored as soon as one of its neighbours is; batch
+            // mates still connecting are anchored by the pass after the chunk
+            // (#2259).
+            let pending: Vec<NodeId> = chunk
+                .par_iter()
+                .enumerate()
+                .filter_map(|(i, (node_id, layer))| {
                     let batch_idx = node_id - first_node;
-                    self.with_prepared_query(vectors[batch_idx], |query| {
+                    let anchored = self.with_prepared_query(vectors[batch_idx], |query| {
                         let current_ep = self.greedy_descent_upper_layers(query, *layer, ep_id);
                         let ef = schedule.ef_for_position(chunk_offset + i);
                         let stagnation = ef / 2;
                         self.connect_node_with_ef(
                             *node_id, query, *layer, current_ep, ef, stagnation,
                         );
+                        self.with_vectors_and_layers_read(|arena, layers| {
+                            self.anchor_node(*node_id, arena, layers)
+                        })
                     });
-                    Ok(())
-                },
-            )?;
+                    (!anchored).then_some(*node_id)
+                })
+                .collect();
+            self.anchor_pending(pending);
 
             if let Some(best) = chunk.iter().max_by_key(|(_, layer)| *layer) {
                 self.promote_entry_point(best.0, best.1);
@@ -352,7 +364,6 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
                 .fetch_add(chunk.len(), std::sync::atomic::Ordering::Relaxed);
             nodes_connected += chunk.len();
         }
-        Ok(())
     }
 
     /// Sets the index to searching mode after bulk insertions.
