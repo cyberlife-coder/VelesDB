@@ -673,6 +673,12 @@ mod unlink {
             "see [docs](https://x.dev \"[crate::X]\")",
             "[[crate::X]](https://x.dev)",
             "[see [`Top`]](https://x.dev)",
+            "see [the [x] spec](https://x.dev \"`t\") and `[crate::X]` here",
+            "see [the [x] spec](https://x.dev/a[crate::X]b)",
+            "see [the\nspec](https://x.dev/a[crate::X]b)",
+            "![a [b] c](https://x.dev/a[crate::X]b)",
+            "[a [b] c](https://x.dev \"[crate::X]\")",
+            "[a [`X`] b [c]](https://x.dev)",
         ] {
             assert_eq!(unlink_rustdoc(text), None, "{text:?}");
             assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
@@ -718,6 +724,8 @@ mod unlink {
             "jump to [the top](#top)",
             "in [0, 1] and map[key]",
             "a bare [Recollection] reads like [sic]",
+            "a [Q&A] and [R&D] section, a [*note*] in emphasis",
+            "`MATCH (a)-[*1..5]->(b)` and `$.items[*]`",
         ] {
             assert_eq!(unlink_rustdoc(text), None, "{text}");
             assert!(!holds_rustdoc_link(text), "the guard flags {text:?}");
@@ -760,7 +768,7 @@ mod unlink {
 
     /// Whether `text` holds rustdoc link syntax: a `[` that opens on a code
     /// span (`` [`Point`] ``), a bracketed path (`[crate::Point]`, `[fn@f]`,
-    /// `[a#b]`, `[Vec<T>]`, `[f()]`, `[m!{}]`, `[m![]]`, `[m!]`), a
+    /// `[a#b]`, `[Vec<T>]`, `[&str]`, `[*const]`, `[f()]`, `[m!{}]`, `[m!]`), a
     /// reference-style link (`[x][y]`, `[x][]`), a reference definition (any
     /// `]:`), or an inline link to anything but a URL or a fragment. Every link
     /// the rewrite recognizes is one of these.
@@ -768,8 +776,9 @@ mod unlink {
     /// It reads the raw text, so no Markdown construct (a code span, a quote, a
     /// list item) can hide one of these forms from it. What that costs: a
     /// description cannot show one even as code (`` `[x](y)` ``,
-    /// ``[`asc`, `desc`]``, `&[Vec<f32>]`), give a web link code or a path as
-    /// its text, or write a reference-style link or definition, even to a URL;
+    /// ``[`asc`, `desc`]``, `&[Vec<f32>]`), give a web link text holding code
+    /// or a path's mark (`[issue #2261](…)`, `[Try it!](…)`), or write a
+    /// reference-style link or definition, even to a URL;
     /// and prose that looks like one fails too (`[0, 1]: …`, `m[i][j]`,
     /// `[#2261]`, `[ops@x.dev]`). A bare `[Point]` passes: it reads the same as
     /// `[sic]`. velesdb-server's guard over its OpenAPI document applies the
@@ -790,9 +799,10 @@ mod unlink {
     }
 
     /// Whether the label `after` starts, up to its `]`, names a path: it holds
-    /// `::`, `@`, `#` or `<`, or ends in `()`, `!{}`, `![` (as in `[m![]]`) or
-    /// `!` once its backticks are dropped and it is trimmed, as rustdoc reads
-    /// it. It does so even as a web link's text: an inline link whose target
+    /// `::`, `@`, `#` or `<`, is one of the primitives rustdoc links from a
+    /// sigil (`&`, `&mut`, `&str`, `*const`, `*mut`), or ends in `()`, `!{}` or
+    /// `!`, once its backticks are dropped and it is trimmed, as rustdoc reads
+    /// it. Any other `&` or `*` (`[Q&A]`, `-[*1..5]->`) is text to rustdoc. It does so even as a web link's text: an inline link whose target
     /// Markdown rejects falls back to the shortcut link rustdoc resolves.
     fn brackets_a_path(after: &str) -> bool {
         after.split_once(']').is_some_and(|(label, _)| {
@@ -800,9 +810,9 @@ mod unlink {
             let label = label.trim();
             label.contains("::")
                 || label.contains(['@', '#', '<'])
+                || matches!(label, "&" | "&mut" | "&str" | "*const" | "*mut")
                 || label.ends_with("()")
                 || label.ends_with("!{}")
-                || label.ends_with("![")
                 || label.ends_with('!')
         })
     }
@@ -840,7 +850,11 @@ mod unlink {
             "see [vec! ].",
             "see [stream`()`].",
             "see [vec`!`].",
-            "see [vec![]].",
+            "see [&str].",
+            "see [*const].",
+            "see [&].",
+            "see [&mut].",
+            "see [*mut].",
             "see [crate::Point](https://docs.rs/x).",
             "see [crate::Point](https://docs.rs/x y).",
             "> see [\n> `Point`] here",
@@ -869,6 +883,9 @@ mod unlink {
             "m[i][j] indexes",
             "see [#2261]",
             "write to [ops@x.dev]",
+            "see [issue #2261](https://x.dev)",
+            "see [Try it!](https://x.dev)",
+            "write to [ops@x.dev](mailto:ops@x.dev)",
             "one of [`asc`, `desc`]",
             "a `&[Vec<f32>]` slice",
         ] {

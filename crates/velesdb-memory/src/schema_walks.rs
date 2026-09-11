@@ -177,7 +177,7 @@ fn unlink_once(text: &str) -> Pass {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     let mut changed = false;
-    while let Some(pos) = rest.find(['[', '`']) {
+    while let Some(pos) = rest.find(['[', ']', '`']) {
         out.push_str(&rest[..pos]);
         let marker = &rest[pos..];
         if marker.starts_with('`') {
@@ -188,11 +188,19 @@ fn unlink_once(text: &str) -> Pass {
             rest = &marker[span..];
             continue;
         }
-        let after = &marker[1..];
-        let Some((shown, remaining)) = link_at(&out, after) else {
-            if opens_an_inline_link(after) {
+        if let Some(after_bracket) = marker.strip_prefix(']') {
+            // A `](` read as prose closes an inline link the rewrite did not
+            // render, a web link or an image: its target and title are not
+            // prose, so the whole text stays as written.
+            if after_bracket.starts_with('(') {
                 return Pass::Leave;
             }
+            out.push(']');
+            rest = after_bracket;
+            continue;
+        }
+        let after = &marker[1..];
+        let Some((shown, remaining)) = link_at(&out, after) else {
             out.push('[');
             rest = after;
             continue;
@@ -207,14 +215,6 @@ fn unlink_once(text: &str) -> Pass {
     } else {
         Pass::Unchanged
     }
-}
-
-/// Whether the `[` that `after` follows opens an inline link: its label can
-/// be a link's text ([`can_be_link_text`]) and a `(` follows it.
-fn opens_an_inline_link(after: &str) -> bool {
-    label_end(after).is_some_and(|close| {
-        can_be_link_text(&after[..close]) && after[close + 1..].starts_with('(')
-    })
 }
 
 /// What rustdoc shows for the link the `[` between `before` and `after` opens,
@@ -409,8 +409,8 @@ fn is_path_like(label: &str) -> bool {
 }
 
 /// What rustdoc accepts after a function or macro name: `f()`, `m!`, `m!()`,
-/// `m!{}`. A form not listed, such as `m![]`, stays as written, and the guard
-/// fails on it.
+/// `m!{}`. A form not listed, such as `m![]`, stays as written, as rustdoc
+/// leaves it.
 const CALL_SUFFIXES: [&str; 4] = ["!()", "!{}", "()", "!"];
 
 /// Whether a code span reads as a link to the rewrite: non-empty and, with
