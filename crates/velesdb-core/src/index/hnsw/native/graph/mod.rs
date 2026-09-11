@@ -522,8 +522,9 @@ impl<D: DistanceEngine> NativeHnsw<D> {
 
     /// Executes a closure with mutable access to the contiguous vector storage.
     ///
-    /// Acquires a write lock on `vectors`. Used by `DirectVectorWriter` to
-    /// write vectors directly during bulk insert (deferred HNSW indexing).
+    /// Acquires a write lock on `vectors`. Used by [`Self::push_unlinked`],
+    /// the direct writer's placement during bulk insert (deferred HNSW
+    /// indexing).
     ///
     /// # Errors
     ///

@@ -28,6 +28,9 @@ use velesdb_memory::{
     HashEmbedder, MemoryEdge, MemoryError, MemoryService, Metadata, NativeStore, DEFAULT_DIMENSION,
 };
 
+/// What [`HubRefusingStore`] answers every entity-hub write with.
+const HUB_REFUSAL: &str = "simulated: the store refused to persist an entity hub";
+
 /// Refuses to store an entity hub; delegates everything else.
 struct HubRefusingStore {
     inner: NativeStore,
@@ -56,7 +59,7 @@ impl FactStore for HubRefusingStore {
     ) -> Result<(), MemoryError> {
         if is_hub(metadata) {
             return Err(MemoryError::Extract(ExtractError::Backend(
-                "simulated: the store refused to persist an entity hub".to_owned(),
+                HUB_REFUSAL.to_owned(),
             )));
         }
         self.inner
@@ -82,7 +85,7 @@ impl FactStore for HubRefusingStore {
     ) -> Result<(), MemoryError> {
         if is_hub(metadata) {
             return Err(MemoryError::Extract(ExtractError::Backend(
-                "simulated: the store refused to persist an entity hub".to_owned(),
+                HUB_REFUSAL.to_owned(),
             )));
         }
         self.inner
@@ -206,4 +209,78 @@ fn every_failed_enrichment_is_counted_not_just_the_first() {
         3,
         "every fact stored, every enrichment counted as failed"
     );
+}
+
+/// Two topics, so one enrichment writes two entity hubs — and, against
+/// [`HubRefusingStore`], fails twice at the entity stage.
+struct TwoTopicExtractor;
+
+impl Extractor for TwoTopicExtractor {
+    fn extract(&self, text: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
+        Ok(vec![
+            ExtractedFact {
+                text: text.to_owned(),
+                entities: vec!["paris".to_owned()],
+            },
+            ExtractedFact {
+                text: text.to_owned(),
+                entities: vec!["berlin".to_owned()],
+            },
+        ])
+    }
+    fn extract_graph(&self, text: &str) -> Result<Extraction, ExtractError> {
+        Ok(Extraction {
+            facts: self.extract(text)?,
+            relations: Vec::new(),
+            attributes: Vec::new(),
+        })
+    }
+}
+
+#[test]
+fn an_enrichment_that_fails_in_several_places_is_counted_once() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let inner = NativeStore::open(dir.path(), DEFAULT_DIMENSION).expect("open native store");
+    let svc = MemoryService::with_store(
+        HubRefusingStore { inner },
+        HashEmbedder::new(DEFAULT_DIMENSION),
+    )
+    .with_autograph(Arc::new(TwoTopicExtractor));
+
+    svc.remember("Alice moved from Paris to Berlin.", &[], None)
+        .expect("the fact is stored even though both hub writes fail");
+
+    assert_eq!(
+        svc.autograph_failed(),
+        1,
+        "one enrichment failed at two hub writes: `autograph_failed` counts \
+         enrichments, so it moves by one"
+    );
+}
+
+/// CONTROL for every count asserted above: the same enrichment against a
+/// store that accepts. Without it, a counter bumped on every `remember` — or a
+/// wiring that fails in every case — would pass the refusing tests unnoticed.
+#[test]
+fn a_successful_enrichment_is_not_counted_as_failed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = NativeStore::open(dir.path(), DEFAULT_DIMENSION).expect("open native store");
+    let svc = MemoryService::with_store(store, HashEmbedder::new(DEFAULT_DIMENSION))
+        .with_autograph(Arc::new(OneTopicExtractor));
+
+    svc.remember("Alice moved to Paris in 2024.", &[], None)
+        .expect("remember");
+
+    assert!(
+        svc.entity_profile("paris")
+            .expect("entity lookup")
+            .is_some(),
+        "CONTROL: the enrichment ran and wired its hub"
+    );
+    assert_eq!(
+        svc.autograph_failed(),
+        0,
+        "a clean enrichment is not a failure"
+    );
+    assert_eq!(svc.autograph_dropped(), 0, "and it was not dropped either");
 }

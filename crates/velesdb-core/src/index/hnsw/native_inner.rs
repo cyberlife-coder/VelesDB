@@ -432,8 +432,11 @@ impl NativeHnswInner {
     // `#[cfg(feature = "gpu")]`, so with the feature off nothing in the
     // signature is read -- neither the parameters nor the receiver. The
     // receiver's allow was missing, which made
-    // `cargo clippy -p velesdb-core --lib --features persistence` fail on a
-    // clean tree: CI lints one feature set, and it always includes `gpu`.
+    // `cargo clippy -p velesdb-core --lib --features persistence -- -D warnings
+    // -D clippy::pedantic` fail on a clean tree. The workspace allows
+    // `unused_self`, but a `-D clippy::pedantic` on the command line overrides
+    // it, so the attribute is what that strict form needs; CI never sees the
+    // gap because it lints one feature set, and that set always has `gpu`.
     #[allow(unused_variables)] // Reason: parameters unused when `gpu` is off
     #[allow(clippy::unused_self)] // Reason: receiver unused when `gpu` is off
     fn try_gpu_route(
@@ -776,35 +779,13 @@ impl NativeHnswInner {
     ///
     /// Alias for [`with_contiguous_vectors`](Self::with_contiguous_vectors)
     /// with explicit read semantics for clarity at call sites.
-    #[allow(dead_code)] // Reason: test-only callers (direct_writer_tests) — kept for API symmetry with _mut
+    #[cfg(test)]
     #[inline]
     pub fn with_contiguous_vectors_read<R: Default>(
         &self,
         f: impl FnOnce(&crate::perf_optimizations::ContiguousVectors) -> R,
     ) -> R {
         self.with_contiguous_vectors(f)
-    }
-
-    /// Executes a closure with mutable access to the contiguous vector storage.
-    ///
-    /// Acquires a write lock on the underlying `NativeHnsw.vectors` `RwLock`.
-    /// Used by `DirectVectorWriter` to write vectors directly during bulk insert.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`crate::error::Error::Internal`] if vector storage is not initialized.
-    /// Propagates any error returned by the closure.
-    ///
-    /// [`crate::error::Error::Internal`]: crate::error::Error::Internal
-    pub fn with_contiguous_vectors_mut<R>(
-        &self,
-        f: impl FnOnce(&mut crate::perf_optimizations::ContiguousVectors) -> crate::error::Result<R>,
-    ) -> crate::error::Result<R> {
-        match &self.backend {
-            HnswBackend::Standard(hnsw) => hnsw.with_vectors_write(f),
-            HnswBackend::RaBitQ(rabitq) => rabitq.inner.with_vectors_write(f),
-            HnswBackend::Sq8(sq8) => sq8.inner.with_vectors_write(f),
-        }
     }
 }
 
@@ -907,7 +888,8 @@ impl NativeHnswInner {
 
     /// Pushes `vectors` into the arena without linking them into the graph,
     /// and returns their slots in input order: the bulk path's direct writer,
-    /// whose graph insert is deferred.
+    /// whose graph insert is deferred. Each vector is stored as the graph
+    /// insert stores it: unit-norm in a pre-normalized cosine arena.
     ///
     /// # Errors
     ///
@@ -916,11 +898,11 @@ impl NativeHnswInner {
         &self,
         vectors: &[&[f32]],
     ) -> crate::error::Result<Vec<Placed<'_>>> {
-        let first = self.with_contiguous_vectors_mut(|storage| {
-            let first = storage.len();
-            storage.push_batch(vectors)?;
-            Ok(first)
-        })?;
+        let first = match &self.backend {
+            HnswBackend::Standard(hnsw) => hnsw.push_unlinked(vectors),
+            HnswBackend::RaBitQ(rabitq) => rabitq.inner.push_unlinked(vectors),
+            HnswBackend::Sq8(sq8) => sq8.inner.push_unlinked(vectors),
+        }?;
         Ok((first..first + vectors.len()).map(Placed::new).collect())
     }
 }
