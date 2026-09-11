@@ -360,6 +360,10 @@ fn test_a_configured_wired_search_knob_is_not_reported() {
 }
 
 #[test]
+#[allow(
+    deprecated,
+    reason = "pins the load-time warning of the deprecated storage fields until they are removed"
+)]
 fn test_deprecated_storage_fields_emit_a_warning() {
     // The list built by deprecated_storage_entries() is assertable; the
     // tracing::warn! call in warn_deprecated_storage_fields() that actually
@@ -396,6 +400,10 @@ fn test_default_config_emits_no_deprecation_warning() {
 }
 
 #[test]
+#[allow(
+    deprecated,
+    reason = "pins the load-time warning of the deprecated storage fields until they are removed"
+)]
 fn test_deprecated_storage_fields_are_not_reported_inert() {
     // data_dir/mmap_cache_mb/vector_alignment have no engine counterpart at
     // all (issue #2087's verdict) and get their own deprecation warning

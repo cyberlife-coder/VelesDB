@@ -8,7 +8,7 @@
 use super::distance::DistanceEngine;
 use super::graph::{NativeHnsw, DEFAULT_ALPHA, NO_ENTRY_POINT};
 use super::layer::Layer;
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
@@ -55,6 +55,26 @@ const VECTORS_V2_DATA_OFFSET: u64 = 4096;
 
 /// Zero bytes written between the v2 header fields and the payload.
 const VECTORS_V2_PAD_BYTES: usize = (VECTORS_V2_DATA_OFFSET - VECTORS_HEADER_BYTES) as usize;
+
+/// Flag bit in the first byte of a v2 header's padding: every vector in the
+/// payload was stored by an engine that keeps cosine vectors unit-norm, so a
+/// load need not check them (#2246).
+///
+/// A file written before the flag existed holds 0 there — the padding was
+/// always zero-filled so that a later field could tell unset from set — and
+/// reads as "nothing promised". A reader that predates it seeks past the
+/// padding and never sees it.
+const VECTORS_FLAG_UNIT_NORM: u8 = 0b0000_0001;
+
+/// What a `.vectors` header declares.
+struct VectorsHeader {
+    version: u32,
+    count: usize,
+    dimension: usize,
+    /// [`VECTORS_FLAG_UNIT_NORM`] is set. Always `false` for v1, which has no
+    /// padding to carry it.
+    unit_norm: bool,
+}
 
 // The arena hands out `&[f32]` built with `slice::from_raw_parts`, whose
 // contract requires proper alignment; `DATA_OFFSET` is where it starts its data
@@ -162,6 +182,14 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         Ok(())
     }
 
+    /// Whether this graph's arena holds its cosine vectors unit-norm: the
+    /// engine normalizes them on insert. What `.vectors` declares with
+    /// [`VECTORS_FLAG_UNIT_NORM`], and what any other writer into the arena
+    /// (`DirectVectorWriter`) has to honour for that declaration to stay true.
+    pub(in crate::index::hnsw) fn stores_unit_norm(&self) -> bool {
+        self.distance.is_pre_normalized() && self.distance.metric() == crate::DistanceMetric::Cosine
+    }
+
     /// Writes vector data to `{basename}.vectors`.
     // The read guard spans the whole dump on purpose: it is what makes the
     // written file a consistent snapshot. Releasing it earlier would mean
@@ -178,18 +206,25 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             Some(v) => (v.len() as u64, v.dimension() as u32),
             None => (0, 0),
         };
+        let unit_norm = self.stores_unit_norm();
 
         #[cfg(feature = "persistence")]
         if let Some(adopted) = vectors_guard
             .as_ref()
             .filter(|v| v.backing_path() == Some(vectors_path.as_path()))
         {
-            Self::rewrite_adopted_vectors_header(adopted, &vectors_path, count, dimension)?;
+            Self::rewrite_adopted_vectors_header(
+                adopted,
+                &vectors_path,
+                count,
+                dimension,
+                unit_norm,
+            )?;
             return Ok(count);
         }
 
         let mut writer = BufWriter::new(File::create(&vectors_path)?);
-        Self::write_vectors_header(&mut writer, count, dimension)?;
+        Self::write_vectors_header(&mut writer, count, dimension, unit_norm)?;
 
         if let Some(vectors) = vectors_guard.as_ref() {
             Self::write_vector_data(&mut writer, vectors)?;
@@ -198,54 +233,25 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         Ok(count)
     }
 
-    /// Rewrites the header of a `.vectors` file the arena is mapped from.
-    ///
-    /// The payload is already in the file — it *is* the arena — so nothing but
-    /// the header needs writing. `File::create` would truncate the very bytes
-    /// the live mapping still points at, a SIGBUS on the next read rather than
-    /// a slow path, so the file is opened for writing without truncation. The
-    /// header region is the first [`VECTORS_V2_DATA_OFFSET`] bytes and the
-    /// mapping starts after it, so the two never address the same bytes.
-    ///
-    /// Pages before header, deliberately. A header claiming more vectors than
-    /// the file holds is the one state a reader cannot detect: it validates the
-    /// declared payload against the file length, and a stale-but-smaller count
-    /// simply reads fewer vectors. The generation stamp written after this call
-    /// is still what commits the set.
-    ///
-    /// # Errors
-    ///
-    /// Returns `io::Error` if the flush, the open or the header write fails.
-    #[cfg(feature = "persistence")]
-    fn rewrite_adopted_vectors_header(
-        vectors: &crate::perf_optimizations::ContiguousVectors,
-        vectors_path: &Path,
-        count: u64,
-        dimension: u32,
-    ) -> std::io::Result<()> {
-        vectors.flush_backing().map_err(std::io::Error::other)?;
-        let mut file = OpenOptions::new().write(true).open(vectors_path)?;
-        Self::write_vectors_header(&mut file, count, dimension)?;
-        file.flush()
-    }
-
-    /// Writes the vectors file header — version, count, dimension — followed by
-    /// zero padding out to the v2 payload offset.
+    /// Writes the vectors file header — version, count, dimension — then the
+    /// flags byte and zero padding out to the v2 payload offset.
     ///
     /// The padding is not waste. It is what lets the payload start page-aligned,
     /// which is the precondition for mapping this file as the graph's arena
-    /// (#2173) rather than reading it into a second copy. Until a later version
-    /// claims part of it for header fields, it is reserved and zero-filled, so
-    /// that version can tell an unset field from a set one.
+    /// (#2173) rather than reading it into a second copy. Its first byte carries
+    /// the flags ([`VECTORS_FLAG_UNIT_NORM`]); the rest stays reserved and
+    /// zero-filled, so a later field can still tell unset from set.
     fn write_vectors_header(
         writer: &mut impl Write,
         count: u64,
         dimension: u32,
+        unit_norm: bool,
     ) -> std::io::Result<()> {
         writer.write_all(&VECTORS_FORMAT_VERSION.to_le_bytes())?;
         writer.write_all(&count.to_le_bytes())?;
         writer.write_all(&dimension.to_le_bytes())?;
-        writer.write_all(&[0u8; VECTORS_V2_PAD_BYTES])?;
+        writer.write_all(&[if unit_norm { VECTORS_FLAG_UNIT_NORM } else { 0 }])?;
+        writer.write_all(&[0u8; VECTORS_V2_PAD_BYTES - 1])?;
         Ok(())
     }
 
@@ -403,25 +409,16 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         distance: D,
         arena_dir: Option<&Path>,
     ) -> std::io::Result<Self> {
-        let arena_home = arena_dir.map(crate::index::hnsw::native::arena_home::ArenaHome::claim);
+        let claimed_home = arena_dir.map(crate::index::hnsw::native::arena_home::ArenaHome::claim);
         let vectors_path = path.join(format!("{basename}.vectors"));
-        let (mut vectors, count) = Self::load_vectors_file(&vectors_path, arena_home.as_ref())?;
+        let (mut vectors, count, unit_norm) =
+            Self::load_vectors_file(&vectors_path, claimed_home.as_ref())?;
 
-        // `ArenaHome` means exactly one thing: there is a disposable file to
-        // delete when this graph goes away. When the arena IS `.vectors` there
-        // is none, and carrying a home would leave `Drop` pointed at a file
-        // this graph never created. Derived from the storage rather than
-        // reported back by the loader — the arena already knows what it
-        // mapped, and asking it cannot disagree with what happened.
-        #[cfg(feature = "persistence")]
-        let arena_home = match vectors
-            .as_ref()
-            .and_then(crate::perf_optimizations::ContiguousVectors::backing_path)
-        {
-            Some(mapped) if mapped == vectors_path => None,
-            _ => arena_home,
-        };
-
+        // A payload whose header carries the unit-norm flag is skipped: its
+        // writer's engine normalized every vector on insert, and on an adopted
+        // arena this loop read every page of the mapping inside `load` — the
+        // cost the mapping exists to defer (#2246).
+        //
         // Indexes written before the pre-normalized cosine engine store raw
         // vectors. Cosine is scale-invariant, so normalizing here never
         // changes any result, and it (re-)establishes the unit-norm invariant
@@ -435,19 +432,60 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         // one-time normalization; a legacy vector the user already stored
         // unit-norm within 1e-5 is left as-is, bounding its dot-vs-cosine
         // error at the same 1e-5 — below f32 ranking noise.
-        if distance.is_pre_normalized() && distance.metric() == crate::DistanceMetric::Cosine {
+        if !unit_norm
+            && distance.is_pre_normalized()
+            && distance.metric() == crate::DistanceMetric::Cosine
+        {
             const UNIT_NORM_EPS: f32 = 1e-5;
-            if let Some(storage) = vectors.as_mut() {
-                for i in 0..storage.len() {
+            let off_sphere = |v: &[f32]| {
+                let n = crate::simd_native::norm_native(v);
+                n > 0.0 && (n - 1.0).abs() > UNIT_NORM_EPS
+            };
+            // Everything before the first off-sphere vector is already unit-norm,
+            // so one read finds it and the pass resumes there: a store already on
+            // the sphere — the usual unflagged file — is read once, not twice.
+            let first = vectors.as_ref().and_then(|storage| {
+                (0..storage.len()).position(|i| storage.get(i).is_some_and(off_sphere))
+            });
+            if let (Some(storage), Some(first)) = (vectors.as_mut(), first) {
+                // Once adopted, the arena IS `.vectors`, and normalizing it in
+                // place wrote the store on a mere open — which the migration
+                // resume, hashing these files, reads as corruption. A payload
+                // that needs it is copied first, into the arena the storage mode
+                // keeps; the next save then writes a flagged file, and later
+                // opens skip this block.
+                #[cfg(feature = "persistence")]
+                if storage.backing_path() == Some(vectors_path.as_path()) {
+                    *storage = Self::detached_copy(storage, claimed_home.as_ref())?;
+                }
+                for i in first..storage.len() {
                     if let Some(v) = storage.get_mut(i) {
-                        let n = crate::simd_native::norm_native(v);
-                        if n > 0.0 && (n - 1.0).abs() > UNIT_NORM_EPS {
+                        if off_sphere(v) {
                             crate::simd_native::normalize_inplace_native(v);
                         }
                     }
                 }
             }
         }
+
+        // `ArenaHome` means exactly one thing: there is a disposable file to
+        // delete when this graph goes away. When the arena IS `.vectors` there
+        // is none, and carrying a home would leave `Drop` pointed at a file
+        // this graph never created. Derived from the storage rather than
+        // reported back by the loader — the arena already knows what it
+        // mapped, and asking it cannot disagree with what happened. Asked only
+        // here, after the normalization above, which can move an adopted arena
+        // into this very home.
+        #[cfg(feature = "persistence")]
+        let arena_home = match vectors
+            .as_ref()
+            .and_then(crate::perf_optimizations::ContiguousVectors::backing_path)
+        {
+            Some(mapped) if mapped == vectors_path => None,
+            _ => claimed_home,
+        };
+        #[cfg(not(feature = "persistence"))]
+        let arena_home = claimed_home;
 
         let graph_path = path.join(format!("{basename}.graph"));
         let graph = Self::load_graph_file(&graph_path, count)?;
@@ -492,14 +530,23 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     fn load_vectors_file(
         path: &Path,
         arena_home: Option<&crate::index::hnsw::native::arena_home::ArenaHome>,
-    ) -> std::io::Result<(Option<crate::perf_optimizations::ContiguousVectors>, usize)> {
+    ) -> std::io::Result<(
+        Option<crate::perf_optimizations::ContiguousVectors>,
+        usize,
+        bool,
+    )> {
         let file = File::open(path)?;
         let file_len = file.metadata()?.len();
         let mut reader = BufReader::new(file);
 
-        let (version, count, dimension) = Self::read_vectors_header(&mut reader)?;
+        let VectorsHeader {
+            version,
+            count,
+            dimension,
+            unit_norm,
+        } = Self::read_vectors_header(&mut reader)?;
         if count == 0 || dimension == 0 {
-            return Ok((None, 0));
+            return Ok((None, 0, false));
         }
         let data_offset = vectors_data_offset(version);
 
@@ -511,7 +558,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
 
         #[cfg(feature = "persistence")]
         if let Some(storage) = Self::adopt_durable_file(path, version, count, dimension) {
-            return Ok((Some(storage), count));
+            return Ok((Some(storage), count, unit_norm));
         }
 
         // v1 leaves the reader exactly here; v2 has reserved padding to skip.
@@ -519,62 +566,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         reader.seek(SeekFrom::Start(data_offset))?;
 
         let storage = Self::read_vector_data(&mut reader, count, dimension, arena_home)?;
-        Ok((Some(storage), count))
-    }
-
-    /// Maps `path` as the graph's arena when the file can serve as one (#2173).
-    ///
-    /// `None` means the caller must fall back to reading the payload into a
-    /// separate arena. Three conditions have to hold, each for its own reason:
-    ///
-    /// - **The payload must be page-aligned**, which only v2 guarantees. A v1
-    ///   payload starts at byte 16, where `FileArena`'s data region cannot.
-    /// - **The target's byte order must be the payload's.** `.vectors` is
-    ///   explicitly little-endian; mapping it on a big-endian target would
-    ///   reinterpret every float rather than convert it.
-    /// - **The store must reach [`ContiguousVectors::MIN_ARENA_CAPACITY`].**
-    ///   Below that floor an arena is sized up to it and the file grows to
-    ///   match, so adoption would *write*. Opening a collection must never
-    ///   write to it — `velesdb-memory`'s migration resume proves the source
-    ///   store unchanged by hashing these files, so a store that grew on open
-    ///   would make a correct resume look like a corrupted one. What adoption
-    ///   saves below the floor is negligible anyway.
-    ///
-    /// A refused mapping is a warning, never an error: a mapped arena is an
-    /// optimisation, not a requirement. That is the rule `new_arena` states for
-    /// the disposable arena, for the same reason — this must never stop a
-    /// collection from opening that opened fine before the feature existed.
-    ///
-    /// [`ContiguousVectors::MIN_ARENA_CAPACITY`]: crate::perf_optimizations::ContiguousVectors::MIN_ARENA_CAPACITY
-    #[cfg(feature = "persistence")]
-    fn adopt_durable_file(
-        path: &Path,
-        version: u32,
-        count: usize,
-        dimension: usize,
-    ) -> Option<crate::perf_optimizations::ContiguousVectors> {
-        use crate::perf_optimizations::ContiguousVectors;
-
-        if version != VECTORS_FORMAT_VERSION
-            || !cfg!(target_endian = "little")
-            || count < ContiguousVectors::MIN_ARENA_CAPACITY
-        {
-            return None;
-        }
-
-        // Capacity is the count: the file holds exactly the payload its header
-        // declares, and asking for a larger arena is what would extend it.
-        match ContiguousVectors::open_file_backed(path, dimension, count, count) {
-            Ok(storage) => Some(storage),
-            Err(e) => {
-                tracing::warn!(
-                    "{path:?} could not be adopted as the vector arena ({e}); \
-                     reading it into a separate arena instead, which costs a copy, \
-                     not correctness"
-                );
-                None
-            }
-        }
+        Ok((Some(storage), count, unit_norm))
     }
 
     /// Rejects vector headers whose declared `count * dimension * 4` payload
@@ -606,14 +598,13 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         Ok(())
     }
 
-    /// Reads and validates the vectors file header, returning
-    /// `(version, count, dimension)`.
+    /// Reads and validates the vectors file header into a [`VectorsHeader`].
     ///
     /// v1 is still accepted: it is what every index written before #2173 holds,
     /// and its only difference is where the payload starts. The version travels
     /// back to the caller because that offset is not derivable from anything
     /// else in the file.
-    fn read_vectors_header(reader: &mut BufReader<File>) -> std::io::Result<(u32, usize, usize)> {
+    fn read_vectors_header(reader: &mut BufReader<File>) -> std::io::Result<VectorsHeader> {
         let mut buf4 = [0u8; 4];
         let mut buf8 = [0u8; 8];
 
@@ -630,8 +621,17 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         let count = u64::from_le_bytes(buf8) as usize;
         reader.read_exact(&mut buf4)?;
         let dimension = u32::from_le_bytes(buf4) as usize;
-
-        Ok((version, count, dimension))
+        // v1 has no padding, so no flags: its payload starts right here.
+        let mut flags = [0u8; 1];
+        if version == VECTORS_FORMAT_VERSION {
+            reader.read_exact(&mut flags)?;
+        }
+        Ok(VectorsHeader {
+            version,
+            count,
+            dimension,
+            unit_norm: flags[0] & VECTORS_FLAG_UNIT_NORM != 0,
+        })
     }
 
     /// Reads `count` vectors of `dimension` from the reader into contiguous storage.
@@ -656,7 +656,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             .ok_or_else(|| corrupt("vector payload size overflows usize"))?;
 
         crate::alloc_guard::with_min_alloc_byte_limit(min_bytes, || {
-            let mut storage = Self::new_arena(arena_home, dimension, count.max(16))
+            let mut storage = Self::new_arena(arena_home, dimension, count)
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
             let mut buf4 = [0u8; 4];
             let mut buf_vec = vec![0f32; dimension];
@@ -920,3 +920,7 @@ mod load_bound_tests;
 #[cfg(test)]
 #[path = "vectors_format_tests.rs"]
 mod vectors_format_tests;
+
+#[cfg(feature = "persistence")]
+#[path = "graph_io_adoption.rs"]
+mod adoption;

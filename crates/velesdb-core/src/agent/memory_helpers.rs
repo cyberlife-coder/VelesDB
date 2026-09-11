@@ -680,7 +680,7 @@ fn filter_live_far_end(
     edges: Vec<crate::collection::graph::GraphEdge>,
     ttl: &super::ttl::MemoryTtl,
     kind: super::ttl::MemoryKind,
-    far_end: fn(&crate::collection::graph::GraphEdge) -> u64,
+    far_end: impl Fn(&crate::collection::graph::GraphEdge) -> u64,
 ) -> Vec<crate::collection::graph::GraphEdge> {
     edges
         .into_iter()

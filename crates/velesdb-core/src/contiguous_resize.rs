@@ -25,8 +25,19 @@ impl ContiguousVectors {
             // value, defeating the `.max(required_capacity)` guard. Saturate the
             // doubling so growth always satisfies `required_capacity` and the
             // final layout-size check (in `resize`) still rejects true overflow.
-            let doubled = self.capacity.saturating_mul(2);
-            let new_capacity = required_capacity.max(doubled);
+            let grown = if self.backing.is_heap() {
+                self.capacity.saturating_mul(2)
+            } else {
+                // A file-backed arena IS the durable `.vectors` file (#2173):
+                // its slack is disk space `allocate` really reserves, and no
+                // dump gives it back. Doubling left a reopened collection's
+                // file at up to twice its payload after one insert. An eighth
+                // bounds the slack to 12.5% while growth stays geometric, so
+                // a push is still amortised O(1) — and no step copies: the
+                // mapping just covers more of the same file.
+                self.capacity.saturating_add(self.capacity / 8)
+            };
+            let new_capacity = required_capacity.max(grown);
             self.resize(new_capacity)?;
         }
         Ok(())

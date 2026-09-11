@@ -721,6 +721,11 @@ impl Collection {
     /// Returns an error if vector storage reordering fails, or if the
     /// reordered index cannot be persisted.
     pub fn reorder_for_locality(&self) -> Result<()> {
+        // The save below would otherwise persist mappings the async builder
+        // registered for ids not yet in the graph (see
+        // `compact_vector_storage`); draining first also lets the renumbering
+        // cover them.
+        self.drain_async_index_builder()?;
         self.storage.index.reorder_for_locality()?;
         self.storage.index.save(&self.storage.path)?;
         Ok(())

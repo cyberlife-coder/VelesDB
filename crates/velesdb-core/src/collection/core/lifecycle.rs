@@ -436,7 +436,7 @@ impl Collection {
         }
     }
 
-    /// Pre-assemble index recovery: quantizer preinstall + 3-pass
+    /// Pre-assemble index recovery: quantizer preinstall + the open-time
     /// reconciliation of the (possibly stale) loaded HNSW index against the
     /// WAL-replayed vector storage.
     ///

@@ -263,7 +263,7 @@ impl Collection {
     ///   point deleted in one store but not the next. That window is not
     ///   new — pre-fix it existed per point, between its three fsyncs — and
     ///   reopen converges: `get()`/search require the (deleted) vector, HNSW
-    ///   orphans are removed by the 3-pass reconciliation in
+    ///   orphans are removed by the open-time reconciliation in
     ///   `collection/core/recovery.rs`, and the leftover payload/BM25
     ///   entries are exactly what a re-issued delete of the same ids cleans
     ///   up.

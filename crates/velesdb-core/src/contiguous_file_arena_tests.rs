@@ -503,3 +503,31 @@ fn evicting_a_heap_arena_is_a_no_op() {
         assert_eq!(arena.get(i).expect("slot present"), expected.as_slice());
     }
 }
+
+/// A file-backed arena grows by an eighth; a heap arena still doubles (#2246).
+///
+/// A file-backed arena's capacity is the durable file's length, reserved for
+/// real, and nothing shrinks it back. Doubling there turned one insert into a
+/// second payload's worth of disk. The heap arena is the control: its slack is
+/// memory, returned on drop, and it keeps the policy it had.
+#[test]
+fn a_file_backed_arena_grows_by_an_eighth_and_a_heap_arena_doubles() {
+    let dir = tempdir().expect("tempdir");
+    let dimension = 4;
+    let mut mapped = ContiguousVectors::new_file_backed(&dir.path().join("e.arena"), dimension, 64)
+        .expect("file arena");
+    fill(&mut mapped, 65, dimension);
+    assert_eq!(
+        mapped.capacity(),
+        64 + 64 / 8,
+        "one past a full mapped arena grows it by an eighth"
+    );
+
+    let mut heap = ContiguousVectors::new(dimension, 64).expect("heap arena");
+    fill(&mut heap, 65, dimension);
+    assert_eq!(
+        heap.capacity(),
+        128,
+        "CONTROL: the heap arena still doubles"
+    );
+}
