@@ -620,6 +620,7 @@ mod unlink {
             "<div>\n[crate::X]\n</div>",
             "see \\[crate::X] here",
             "- use ` carefully\n- see [`R`](crate::R) and `x`",
+            "- use ` carefully\n- see `[crate::X]` here",
             "Uses a ` here.\n# Errors\nSee [`R`](crate::R) and `x`.",
             "Use a trailing ` here.\r\n\r\nSee [`R`](crate::R) and `x`.",
             "a\r~~~\r[crate::X]\r~~~",
@@ -660,6 +661,8 @@ mod unlink {
             "see [docs](<https://x.dev>)",
             "see [docs](< https://x.dev>)",
             "see [crate::Point](https://docs.rs/x)",
+            "see [the spec](http://x.dev/spec)",
+            "write to [the team](mailto:team@x.dev)",
             "jump to [the top](#top)",
             "in [0, 1] and map[key]",
             "a bare [Recollection] reads like [sic]",
@@ -705,21 +708,21 @@ mod unlink {
 
     /// Whether `text` holds rustdoc link syntax: a `[` that opens on a code
     /// span (`` [`Point`] ``), a bracketed path (`[crate::Point]`, `[fn@f]`,
-    /// `[a#b]`, `[Vec<T>]`, `[f()]`, `[m!]`, `[m!{}]`), a reference-style link
-    /// (`[x][y]`, `[x][]`), a reference definition, or an inline link to
-    /// anything but a URL or a fragment. Every link the rewrite recognizes is
-    /// one of these.
+    /// `[a#b]`, `[Vec<T>]`, `[f()]`, `[m!{}]`, `[m!]`), a reference-style link
+    /// (`[x][y]`, `[x][]`), a reference definition (any `]:`), or an inline link
+    /// to anything but a URL or a fragment. Every link the rewrite recognizes
+    /// is one of these.
     ///
-    /// It reads the raw text, code spans included, so no Markdown construct can
-    /// hide a link from it, and a published description cannot show link
-    /// syntax even as code. A bare `[Point]` passes: it reads the same as
-    /// `[sic]`. velesdb-server's guard over its OpenAPI document applies the
-    /// same rules (#2263).
+    /// It reads the raw text, so no Markdown construct (a code span, a quote, a
+    /// list item) can hide one of these forms from it. What that costs: a
+    /// description cannot show one even as code (`` `[x](y)` ``,
+    /// ``[`asc`, `desc`]``, `&[Vec<f32>]`), give a web link code text, or write
+    /// a reference-style link or definition, even to a URL. A bare `[Point]`
+    /// passes: it reads the same as `[sic]`. velesdb-server's guard over its
+    /// OpenAPI document applies the same rules (#2263).
     fn holds_rustdoc_link(text: &str) -> bool {
         text.contains("][")
-            || text
-                .lines()
-                .any(|line| line.trim_start().starts_with('[') && line.contains("]:"))
+            || text.contains("]:")
             || text
                 .match_indices("](")
                 .any(|(at, _)| !is_url(target_start(&text[at + 2..])))
@@ -774,7 +777,9 @@ mod unlink {
             "see [the point][Point].",
             "see [Point][].",
             "[p]: crate::Point",
-            "  [p]: crate::Point",
+            "> [p]: crate::Point",
+            "- [p]: crate::Point",
+            "[the\npoint]: crate::Point",
             "see [the point](crate::Point).",
             "see [the point](< crate::Point >).",
         ] {
