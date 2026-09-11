@@ -138,6 +138,19 @@ impl ContiguousVectors {
     /// a caller would silently stop matching this one.
     pub(crate) const MIN_ARENA_CAPACITY: usize = 16;
 
+    /// Whether an arena opened for exactly `count` vectors keeps that capacity.
+    ///
+    /// The one question a caller that must not write — adopting a durable file
+    /// on open — has to ask, answered here beside the floor it depends on: below
+    /// [`Self::MIN_ARENA_CAPACITY`] an arena is sized up, and a file-backed one
+    /// extends its file with it. The floor stays a performance knob: whatever it
+    /// is set to, this answers for it, and `opening_a_collection_never_writes_to_its_vectors`
+    /// derives its fixture from the same constant.
+    #[cfg(feature = "persistence")]
+    pub(crate) const fn keeps_exact_capacity(count: usize) -> bool {
+        count >= Self::MIN_ARENA_CAPACITY
+    }
+
     /// Creates a new `ContiguousVectors` with the given dimension and initial capacity.
     ///
     /// # Arguments
@@ -169,7 +182,8 @@ impl ContiguousVectors {
         let layout = Self::layout(dimension, capacity)?;
 
         // SAFETY: `alloc_zeroed` requires a valid non-zero layout.
-        // - Condition 1: `dimension > 0` and `capacity >= 16` guarantee non-zero size.
+        // - Condition 1: `dimension > 0` and `capacity >= MIN_ARENA_CAPACITY` (floored
+        //   above) guarantee non-zero size.
         // - Condition 2: `layout` is built via `Layout::from_size_align` and therefore valid.
         // SAFETY: Zero-initialized allocation guarantees all f32 slots are 0.0,
         // preventing UB when `insert_at` creates sparse gaps (indices 0..N not all written).

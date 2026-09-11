@@ -4,13 +4,20 @@ use super::direct_writer::DirectVectorWriter;
 use super::HnswIndex;
 use crate::distance::DistanceMetric;
 
-/// Creates a test `HnswIndex` with the given dimension and vector storage enabled.
+/// Creates a test `HnswIndex` with the given dimension and its exact-distance
+/// features on.
+///
+/// Euclidean on purpose: its arena stores vectors as given, so the placement
+/// tests below can compare them exactly. A cosine arena normalizes them — see
+/// `a_direct_write_into_a_cosine_arena_is_unit_norm`.
 fn make_index(dim: usize) -> HnswIndex {
-    HnswIndex::new(dim, DistanceMetric::Cosine).expect("test index creation")
+    HnswIndex::new(dim, DistanceMetric::Euclidean).expect("test index creation")
 }
 
-/// Creates a test `HnswIndex` with vector storage disabled.
-fn make_index_no_storage(dim: usize) -> HnswIndex {
+/// Creates a test `HnswIndex` with its exact-distance features off
+/// (`new_fast_insert`): graph inserts still store every vector, the direct
+/// writer places none.
+fn make_fast_insert_index(dim: usize) -> HnswIndex {
     HnswIndex::new_fast_insert(dim, DistanceMetric::Cosine).expect("test index creation")
 }
 
@@ -122,8 +129,8 @@ fn test_dimension_mismatch_returns_error() {
 }
 
 #[test]
-fn test_storage_bypass_when_disabled() {
-    let index = make_index_no_storage(3);
+fn test_direct_write_skipped_with_exact_distance_features_off() {
+    let index = make_fast_insert_index(3);
     let writer = DirectVectorWriter::new(&index);
     let v = [1.0_f32, 2.0, 3.0];
 
@@ -133,7 +140,26 @@ fn test_storage_bypass_when_disabled() {
     // Mapping exists
     assert!(index.mappings.get_idx(1).is_some());
 
-    // Direct contiguous write is skipped when storage is disabled — the
-    // deferred HNSW insert path populates the graph store instead.
+    // Direct contiguous write is skipped when exact-distance features are
+    // off — the deferred HNSW insert path populates the graph store instead.
     assert_eq!(contiguous_get(&index, results[0].idx), None);
+}
+
+/// A pre-normalized engine keeps its cosine arena unit-norm, and `.vectors`
+/// declares it; a direct write must keep it so, or that declaration is false
+/// for every slot written here (#2246).
+#[test]
+fn a_direct_write_into_a_cosine_arena_is_unit_norm() {
+    let index = HnswIndex::new(4, DistanceMetric::Cosine).expect("test index creation");
+    let writer = DirectVectorWriter::new(&index);
+    let raw = [3.0_f32, 0.0, 0.0, 4.0];
+    let results = writer.write_batch_direct(&[(1, &raw)]).unwrap();
+
+    let stored = contiguous_get(&index, results[0].idx).expect("stored");
+    for (got, want) in stored.iter().zip([0.6_f32, 0.0, 0.0, 0.8]) {
+        assert!(
+            (got - want).abs() < 1e-6,
+            "stored {stored:?}, want the unit vector"
+        );
+    }
 }

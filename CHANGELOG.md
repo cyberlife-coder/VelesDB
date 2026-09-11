@@ -155,6 +155,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after either left points stored and mapped but never in the graph — and
   recovery re-indexes only unmapped ids. Both now drain first. Reproduced with
   a crash snapshot taken right after the save (#2246).
+- **Opening an adopted Cosine collection could write its `.vectors` file.**
+  Once adopted (#2173) the arena is the durable file, and the load-time norm
+  check normalized off-sphere vectors in it in place — an open that wrote the
+  store, which `velesdb-memory`'s migration resume, hashing these files, would
+  reject as corruption. The #2246 guard test only held because today's engine
+  writes vectors inside the tolerance. A payload that needs normalizing is now
+  copied first — into the arena its storage mode keeps, the heap or SQ8's and
+  RaBitQ's disposable file, under the load's raised allocation ceiling — so no
+  open can write the file whatever the engine or tolerance becomes (#2246, P5).
 
 - **`reorder_for_locality` could leave a collection whose graph and vectors
   disagree.** Since `.vectors` became the graph's arena, the permutation lands
@@ -349,6 +358,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before.
 
 ### Performance
+
+- **Opening a Cosine collection no longer reads every vector.** Right after
+  adopting `.vectors` as its arena (#2173), a Cosine load checked every
+  vector's norm, faulting the whole mapped payload in inside `load` — the cost
+  a mapped load exists to defer — for exactly the embeddings case. A
+  pre-normalized engine's dump now sets a flag in the first byte of the v2
+  header's reserved padding, and a flagged payload is not re-checked. Files
+  written before the flag keep the check; readers that predate it seek past
+  the padding and never see it. `persistence_load_scale` timed Euclidean only,
+  which is what hid this; it now has a Cosine arm. The flag is only as true as
+  every writer into the arena: `upsert_bulk`'s direct writer stored raw
+  vectors into a cosine arena, and now normalizes them as the graph's own
+  insert path does (#2246, P5).
+
+- **A file-backed arena grows by an eighth, not by doubling.** Its capacity is
+  the durable `.vectors` file's length, reserved on disk for real, and no dump
+  shrinks it: the first insert after reopening an adopted collection reserved
+  a second payload's worth of disk and kept it. Slack is now bounded to 12.5 %
+  while growth stays geometric, and no growth step copies, so a push stays
+  amortised O(1). The heap arena, whose slack is memory, still doubles
+  (#2246, P5).
+
 - **The vectors dump writes each vector's bytes in one call rather than one per
   `f32`** — 15.4 million calls at 20 000 nodes by 768 dimensions, each paying
   `BufWriter` bookkeeping to move four bytes. Measured on
