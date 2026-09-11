@@ -56,9 +56,10 @@ pub(super) const NAMED_SCHEMA_MAPS: [&str; 6] = [
     "dependencies",
 ];
 
-/// The kinds rustdoc accepts before `@` in an intra-doc link (`fn@build`),
-/// and drops from the text it shows.
-const DISAMBIGUATORS: [&str; 22] = [
+/// The kinds rustdoc 1.90 accepts before `@` in an intra-doc link
+/// (`fn@build`), and drops from the text it shows. It knows no `tyalias@` or
+/// `typealias@`: a link with one stays as written, as rustdoc leaves it.
+const DISAMBIGUATORS: [&str; 20] = [
     "struct",
     "enum",
     "trait",
@@ -79,8 +80,6 @@ const DISAMBIGUATORS: [&str; 22] = [
     "macro",
     "prim",
     "primitive",
-    "tyalias",
-    "typealias",
 ];
 
 /// `text` with each rustdoc code link replaced by the code span rustdoc shows
@@ -90,19 +89,20 @@ const DISAMBIGUATORS: [&str; 22] = [
 /// alike (`[Name](path)`, `[a::B]`, `[f()]`): its neighbours could read
 /// differently once its brackets go ([`rustdoc_link`]). A bare `[name]` stays
 /// whether or not rustdoc resolves it (`map[key]`, `[sic]`), and so do
-/// `[0, 1]`, a bracketed code span that is not one word or that rustdoc does
-/// not resolve (``[`a.b`]``), a web link and reference-style links
-/// (`[text][label]`).
+/// `[0, 1]`, a code link whose code is not one word or does not read as a
+/// path (``[`a.b`]``), a padded shortcut code link ([`code_link`]), a web link
+/// and reference-style links (`[text][label]`). Whether a name resolves, a
+/// schema cannot check: rustdoc warns on one that does not, and CI builds each
+/// crate's docs with `-D warnings`.
 ///
 /// It also leaves as written every link in a text it cannot read exactly
 /// ([`scan_is_exact`]) or that holds an inline link it does not render (a web
-/// link, an image, one whose text is no code span), whose target and title
-/// it cannot read as prose; a
-/// `[label]` a colon follows; and a text a second pass would change further,
-/// such as nested brackets (``[[`X`]]``, whose outer pair Markdown shows as
-/// written). The guard then
-/// fails on the rustdoc link syntax left, except a bare `[Name]`, which it
-/// cannot tell from prose.
+/// link, an image, one whose text is no code span), whose target and title it
+/// cannot read as prose; a `[label]` a colon follows; a code link a bracket
+/// pair would enclose once its own brackets go ([`would_pair_around`]); and a
+/// text a second pass would change further. The guard then fails on the
+/// rustdoc link syntax left, except a bare `[Name]`, which it cannot tell from
+/// prose.
 ///
 /// One pass is final: an input schema can be hardened twice (at its tool
 /// attribute, then in `reharden_tool_input`) and must publish what an output
@@ -228,13 +228,33 @@ fn unlink_once(text: &str) -> Pass {
 /// elsewhere: rather than tell the two apart, the rewrite leaves all three.
 /// It also leaves a link a backtick touches, before or after it: the code
 /// span it shows would merge with that backtick's run (`a``b` reads as one
-/// span), and a space between them would show what rustdoc does not.
+/// span), and a space between them would show what rustdoc does not. And it
+/// leaves a link a bracket pair would enclose once its own brackets go
+/// ([`would_pair_around`]).
 fn link_at<'a>(before: &str, after: &'a str) -> Option<(Cow<'a, str>, &'a str)> {
     let defines = label_end(after).is_some_and(|close| after[close + 1..].starts_with(':'));
     if defines || before.ends_with([']', '!', '`']) {
         return None;
     }
-    rustdoc_link(after).filter(|(_, remaining)| !remaining.starts_with('`'))
+    rustdoc_link(after).filter(|(_, remaining)| {
+        !remaining.starts_with('`') && !would_pair_around(before, remaining)
+    })
+}
+
+/// Whether a `[` left open in `before` and a `]` in `remaining` would pair
+/// around a link once its own brackets go. The link kept them apart:
+/// ``[a [`X`] b]: c`` reads as a paragraph holding a link, and without the
+/// link's brackets as a reference definition. Brackets inside code spans are
+/// code, and a `]` with no `[` open before it closes nothing.
+fn would_pair_around(before: &str, remaining: &str) -> bool {
+    let open = outside_code_spans(before)
+        .flat_map(str::chars)
+        .fold(0usize, |depth, c| match c {
+            '[' => depth + 1,
+            ']' => depth.saturating_sub(1),
+            _ => depth,
+        });
+    open > 0 && outside_code_spans(remaining).any(|part| part.contains(']'))
 }
 
 /// Length of the code span `text` starts with: its opening run of backticks
@@ -340,10 +360,16 @@ fn spans_a_line(text: &str) -> bool {
 const LINE_ENDINGS: [char; 2] = ['\n', '\r'];
 
 /// A code link, ``[`code`]``: shown as its code span when the code is one
-/// word rustdoc resolves ([`reads_as_a_path`]), without its disambiguator.
+/// word that reads as a path ([`reads_as_a_path`]), without its
+/// disambiguator. A code span padded inside its backticks, on either side
+/// (``[` fn@f `]``, ``[`fn@f `]``), stays as written: rustdoc does not always
+/// drop its disambiguator there, and the rewrite does not model when.
 fn code_link<'a>(label: &'a str, tail: &'a str) -> Option<(Cow<'a, str>, &'a str)> {
-    // rustdoc trims the link text, then the path after a disambiguator.
-    let code = label[1..label.len() - 1].trim();
+    let code = &label[1..label.len() - 1];
+    if code != code.trim() {
+        return None;
+    }
+    // rustdoc trims the path after a disambiguator.
     let word = without_disambiguator(code).map_or(code, str::trim);
     if !is_one_word(word) || !reads_as_a_path(word) {
         return None;

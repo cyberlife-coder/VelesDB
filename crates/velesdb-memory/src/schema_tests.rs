@@ -364,7 +364,6 @@ mod unlink {
             ("a [`struct@Foo`] value", "a `Foo` value"),
             ("see [`fn@build`]", "see `build`"),
             ("see [`fn@ build`]", "see `build`"),
-            ("a [` Foo `] padded", "a `Foo` padded"),
             ("see [`m!()`] and [`m!{}`]", "see `m!()` and `m!{}`"),
             (
                 "the [`HashMap<K, V>`] it holds",
@@ -412,20 +411,86 @@ mod unlink {
         }
     }
 
-    /// One pass is final. A text a second pass would change further, such as
-    /// nested brackets whose outer pair Markdown shows as written, is left as
-    /// written, and the guard fails on it.
+    /// One pass is final. A text a second pass would change further stays as
+    /// written, and the guard fails on it. In ``[a [`X`] [`Y`](crate::y)``, the
+    /// inline link's `]` could pair with the `[` before ``[`X`]``, so ``[`X`]``
+    /// stays; once the inline link is rewritten, that `]` is gone, and a second
+    /// pass would rewrite ``[`X`]``.
     #[test]
     fn a_text_a_second_pass_would_change_stays_as_written() {
         let once = unlink_rustdoc("see [`A`]").expect("test: a link to rewrite");
         assert_eq!(unlink_rustdoc(&once), None, "{once}");
+        let text = "[a [`X`] [`Y`](crate::y)";
+        assert_eq!(unlink_rustdoc(text), None, "{text}");
+        assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
+    }
+
+    /// A code link a bracket pair would enclose once its own brackets go stays
+    /// as written: the link kept a `[` before it from pairing with a `]` after
+    /// it, and ``[a [`X`] b]: c`` would turn from a paragraph into a reference
+    /// definition. The guard fails on it. Only that link stays: the rest of the
+    /// text is rewritten. A `[` left open with no `]` after the link, or a pair
+    /// closed before it, changes nothing.
+    #[test]
+    fn a_code_link_a_bracket_pair_would_enclose_stays_as_written() {
         for text in [
+            "[a [`X`] b]: dest",
+            "[see [`X`]] end",
+            "[a [`X`](crate::y) b]",
+            "x [a [`X`] b] y",
             "[[`X`]]",
-            "[`a`](crate::a) and [[`b`]]",
-            "the [[crate::X]] field",
         ] {
-            assert_eq!(unlink_rustdoc(text), None, "{text}");
+            assert_eq!(unlink_rustdoc(text), None, "{text:?}");
             assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
+        }
+        let partly = "`a` and [[`b`]]";
+        assert_eq!(
+            unlink_rustdoc("[`a`](crate::a) and [[`b`]]").as_deref(),
+            Some(partly)
+        );
+        assert!(holds_rustdoc_link(partly), "the guard misses {partly:?}");
+        for (text, shown) in [
+            ("[a] then [`X`] and b]", "[a] then `X` and b]"),
+            ("in [0, 1) see [`X`]", "in [0, 1) see `X`"),
+        ] {
+            assert_eq!(unlink_rustdoc(text).as_deref(), Some(shown), "{text:?}");
+        }
+    }
+
+    /// rustdoc 1.90 drops each of these kinds from the text it shows for a code
+    /// link, and so does the rewrite. It knows no `tyalias@` or `typealias@`: a
+    /// link with one stays as written, brackets and all, and so it does here.
+    #[test]
+    fn every_disambiguator_rustdoc_accepts_is_dropped() {
+        for kind in [
+            "struct",
+            "enum",
+            "trait",
+            "union",
+            "mod",
+            "module",
+            "const",
+            "constant",
+            "static",
+            "fn",
+            "function",
+            "method",
+            "derive",
+            "field",
+            "variant",
+            "type",
+            "value",
+            "macro",
+            "prim",
+            "primitive",
+        ] {
+            let text = format!("see [`{kind}@X`]");
+            assert_eq!(unlink_rustdoc(&text).as_deref(), Some("see `X`"), "{text}");
+        }
+        for kind in ["tyalias", "typealias"] {
+            let text = format!("see [`{kind}@X`]");
+            assert_eq!(unlink_rustdoc(&text), None, "{text}");
+            assert!(holds_rustdoc_link(&text), "the guard misses {text:?}");
         }
     }
 
@@ -495,7 +560,10 @@ mod unlink {
             "anyOf": [{ "description": "any [`A`]" }],
             "oneOf": [{ "description": "one [`O`]" }],
             "additionalProperties": { "description": "extra [`E`]" },
-            "patternProperties": { "^x-": { "description": "pattern [`P`]" } }
+            "patternProperties": { "^x-": { "description": "pattern [`P`]" } },
+            "definitions": { "default": { "description": "old [`G`]" } },
+            "dependentSchemas": { "const": { "description": "dep [`S`]" } },
+            "dependencies": { "enum": { "description": "deps [`Y`]" } }
         });
         // The guard's own walk over the same tree: it reads every description
         // the rewrite reads, and none of the instance data it leaves.
@@ -508,6 +576,9 @@ mod unlink {
                 "/$defs/D/description",
                 "/additionalProperties/description",
                 "/anyOf/0/description",
+                "/definitions/default/description",
+                "/dependencies/enum/description",
+                "/dependentSchemas/const/description",
                 "/description",
                 "/oneOf/0/description",
                 "/patternProperties/^x-/description",
@@ -540,7 +611,10 @@ mod unlink {
                 "anyOf": [{ "description": "any `A`" }],
                 "oneOf": [{ "description": "one `O`" }],
                 "additionalProperties": { "description": "extra `E`" },
-                "patternProperties": { "^x-": { "description": "pattern `P`" } }
+                "patternProperties": { "^x-": { "description": "pattern `P`" } },
+                "definitions": { "default": { "description": "old `G`" } },
+                "dependentSchemas": { "const": { "description": "dep `S`" } },
+                "dependencies": { "enum": { "description": "deps `Y`" } }
             })
         );
     }
@@ -635,14 +709,20 @@ mod unlink {
         }
     }
 
-    /// A shortcut code link padded inside its brackets, or split across a
-    /// line: the rewrite leaves it, and the guard fails on it.
+    /// A shortcut code link padded inside its brackets or its backticks, or
+    /// split across a line: the rewrite leaves it, and the guard fails on it.
+    /// rustdoc does not always drop a padded code span's disambiguator, and
+    /// the rewrite does not model when.
     #[test]
     fn the_guard_flags_a_padded_shortcut_code_link() {
         for text in [
             "see [`crate::Foo` ] here",
             "see [ `fn@f` ] here",
             "see [`crate::Foo`\n] here",
+            "see [` fn@build `] here",
+            "see [`fn@build `] here",
+            "a [` Foo `] padded",
+            "see [`  X  `] here",
         ] {
             assert_eq!(unlink_rustdoc(text), None, "{text:?}");
             assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
@@ -966,16 +1046,19 @@ mod unlink {
 
     #[test]
     fn the_guard_leaves_instance_data_as_the_rewrite_does() {
+        let data = json!({
+            "default": { "description": "[`kept`]" },
+            "examples": [{ "description": "[`kept`]" }],
+            "example": { "description": "[`kept`]" },
+            "const": { "description": "[`kept`]" },
+            "enum": [{ "description": "[`kept`]" }]
+        });
         let mut linked = Vec::new();
-        collect_linked(
-            &json!({
-                "default": { "description": "[`kept`]" },
-                "examples": [{ "description": "[`kept`]" }]
-            }),
-            "",
-            &mut linked,
-        );
+        collect_linked(&data, "", &mut linked);
         assert!(linked.is_empty(), "{linked:?}");
+        let mut rewritten = data.clone();
+        unlink_rustdoc_descriptions(rewritten.as_object_mut().expect("test: an object"));
+        assert_eq!(rewritten, data);
     }
 
     fn collect_linked(value: &Value, path: &str, out: &mut Vec<String>) {

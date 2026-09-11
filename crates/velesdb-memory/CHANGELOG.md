@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   process for a full scan, while its doc called the walk bounded. It now runs
   with the lock released, and the index is read again once the lock is retaken,
   so a concurrent repair wins over the walk (#2246, P5).
+
 - **Tool schemas published rustdoc link syntax as text.** schemars copies
   each field's doc comment into its JSON Schema `description`, so the schemas
   every MCP client reads carried intra-doc links only rustdoc resolves —
@@ -54,16 +55,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   holding a backslash, a tab or four spaces, a code fence, a `<` outside
   code, a table, a code span across a line, or an inline link it does not
   render (a web link, an image, one whose text is not a code span). It
-  leaves a reference-style link, a `[label]` a colon follows, nested
-  brackets, a `#` fragment, a link that spans a line, and a code link a
-  backtick touches, whose code span would merge with it.
-  A test then fails if a published
-  description holds link syntax, code spans included: a `[` that opens on a
-  code span, a bracketed path even as a web link's text (one holding `::`,
-  `@`, `#` or `<`, naming a primitive rustdoc links from a sigil such as
-  `&str` or `*const`, or ending in `()`, `!{}` or `!`), a reference-style
-  link or definition, or an inline link to anything but a URL or a
-  fragment. (#2261)
+  leaves a reference-style link, a `[label]` a colon follows, a `#`
+  fragment, a link that spans a line, a padded shortcut code link, a code
+  link a backtick touches (its code span would merge with it), and a code
+  link a bracket pair would enclose once its own brackets go. A test then
+  fails if a published description holds link syntax, code spans included:
+  a `[` that opens on a code span, a bracketed path even as a web link's
+  text (one holding `::`, `@`, `#` or `<`, naming a primitive rustdoc links
+  from a sigil such as `&str` or `*const`, or ending in `()`, `!{}` or `!`),
+  a reference-style link or definition, or an inline link to anything but a
+  URL or a fragment. (#2261)
 
 ## [0.14.2] - 2026-09-03
 
