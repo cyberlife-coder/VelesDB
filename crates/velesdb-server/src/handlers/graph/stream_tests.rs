@@ -46,3 +46,21 @@ fn test_elapsed_ms_returns_reasonable_value() {
     let ms = elapsed_ms(start);
     assert!(ms >= 5, "elapsed should be at least 5ms, got {ms}");
 }
+
+/// A client cannot read `STATS_INTERVAL`, so the endpoint's published
+/// description states its value: the two must agree.
+#[test]
+fn test_published_description_states_the_stats_interval() {
+    let doc = crate::ApiDoc::openapi();
+    let description = doc
+        .paths
+        .paths
+        .get("/collections/{name}/graph/traverse/stream")
+        .and_then(|item| item.get.as_ref())
+        .and_then(|operation| operation.description.as_deref())
+        .expect("test: the stream endpoint is documented");
+    assert!(
+        description.contains(&format!("after every {STATS_INTERVAL}th `node` event")),
+        "the published description no longer states STATS_INTERVAL: {description}"
+    );
+}

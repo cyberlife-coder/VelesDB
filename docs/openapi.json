@@ -1325,7 +1325,7 @@
           "graph"
         ],
         "summary": "Stream graph traversal results via SSE.",
-        "description": "Yields events:\n- `node`: Each node reached during traversal\n- `stats`: Periodic statistics while the traversal runs\n- `done`: Traversal completed\n- `error`: If an error occurs",
+        "description": "The traversal runs to completion first, then its events are sent:\n- `node`: each node reached\n- `stats`: `nodes_visited` and `elapsed_ms`, after every 100th `node` event\n- `done`: `total_nodes`, `max_depth_reached` and `elapsed_ms`, last\n- `error`: sent alone instead, when the collection is missing or is not a\n  graph collection, or the traversal worker fails",
         "operationId": "stream_traverse",
         "parameters": [
           {
@@ -1676,7 +1676,7 @@
           "graph"
         ],
         "summary": "Execute a MATCH query on a collection.",
-        "description": "# Endpoint\n\n`POST /collections/{name}/match`\n\n# Example Request\n\n```json\n{\n  \"query\": \"MATCH (a:Person)-[:KNOWS]->(b) WHERE similarity(a.vec, $v) > 0.8 RETURN a.name\",\n  \"params\": {\n    \"v\": [0.1, 0.2, 0.3]\n  }\n}\n```\n\n# Errors\n\nAll failures are mapped through the canonical `auto_core_error_response`,\nso the JSON body carries the `VELES-XXX` code and the HTTP status is\nderived from the core error variant:\n- `404 NOT_FOUND` (`VELES-002`) — collection not found\n- `400 BAD_REQUEST` (`VELES-010`) — parse error, not a MATCH query,\n  invalid threshold, or an unbound query parameter\n- any other core variant maps to the status every endpoint returns for it",
+        "description": "# Endpoint\n\n`POST /collections/{name}/match`\n\n# Example Request\n\n```json\n{\n  \"query\": \"MATCH (a:Person)-[:KNOWS]->(b) WHERE similarity(a.vec, $v) > 0.8 RETURN a.name\",\n  \"params\": {\n    \"v\": [0.1, 0.2, 0.3]\n  }\n}\n```\n\n# Errors\n\nAll failures are mapped through the canonical `auto_core_error_response`,\nso the JSON body carries the `VELES-XXX` code and the HTTP status is\nderived from the core error variant:\n- `404 NOT_FOUND` (`VELES-002`) — collection not found\n- `400 BAD_REQUEST` (`VELES-010`) — parse error, not a MATCH query,\n  invalid threshold, or an unbound query parameter\n- any other core variant: `404 NOT_FOUND` for a missing point, edge or node,\n  `409 CONFLICT` for one that already exists, `400 BAD_REQUEST` for other\n  invalid input, `503 SERVICE_UNAVAILABLE` for a locked database or a guard\n  rail, `500 INTERNAL_SERVER_ERROR` for anything else",
         "operationId": "match_query",
         "parameters": [
           {
@@ -2010,7 +2010,7 @@
           "points"
         ],
         "summary": "Stream upsert points using NDJSON.",
-        "description": "Accepts a `application/x-ndjson` body. Each line is one JSON-encoded point.\nPoints are accumulated into micro-batches and flushed via `upsert_bulk`.\n\nThe response body includes a `network_errors` field: a non-zero value means\nthe HTTP body stream was truncated (e.g., client disconnect or proxy error),\nand the server may have received fewer points than the client sent (M-7).",
+        "description": "Accepts a `application/x-ndjson` body. Each line is one JSON-encoded point,\nwhose `id` is an unsigned 64-bit integer: a line that does not parse as one,\na string `id` included, is counted in the response's `malformed` field.\nPoints are accumulated into micro-batches and flushed via `upsert_bulk`.\n\nThe response body includes a `network_errors` field: a non-zero value means\nthe HTTP body stream was truncated (e.g., client disconnect or proxy error),\nand the server may have received fewer points than the client sent (M-7).",
         "operationId": "stream_upsert_points",
         "parameters": [
           {

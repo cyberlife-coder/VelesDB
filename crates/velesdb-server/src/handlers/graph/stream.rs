@@ -46,11 +46,12 @@ const STATS_INTERVAL: usize = 100;
 
 /// Stream graph traversal results via SSE.
 ///
-/// Yields events:
-/// - `node`: Each node reached during traversal
-/// - `stats`: Periodic statistics while the traversal runs
-/// - `done`: Traversal completed
-/// - `error`: If an error occurs
+/// The traversal runs to completion first, then its events are sent:
+/// - `node`: each node reached
+/// - `stats`: `nodes_visited` and `elapsed_ms`, after every 100th `node` event
+/// - `done`: `total_nodes`, `max_depth_reached` and `elapsed_ms`, last
+/// - `error`: sent alone instead, when the collection is missing or is not a
+///   graph collection, or the traversal worker fails
 #[utoipa::path(
     get,
     path = "/collections/{name}/graph/traverse/stream",

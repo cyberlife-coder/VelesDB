@@ -236,18 +236,19 @@ fn collect_rustdoc_links(value: &Value, pointer: &str, linked: &mut Vec<String>)
 
 /// Whether `text` holds rustdoc link syntax: a `[` that opens on a code span
 /// (`` [`Point`] ``), a bracketed path (`[crate::Point]`, `[fn@f]`, `[a#b]`,
-/// `[Vec<T>]`, `[f()]`, `[m!]`), a reference-style link (`[x][y]`, `[x][]`),
-/// a reference definition, or an inline link to anything but a URL.
+/// `[Vec<T>]`, `[f()]`, `[m!{}]`, `[m!]`), a reference-style link (`[x][y]`,
+/// `[x][]`), a reference definition (any `]:`), or an inline link to anything
+/// but a URL or a fragment.
 ///
-/// It reads the raw text, code spans and code blocks included, so no Markdown
-/// construct can hide a link from it. The price is that a description cannot
-/// show link syntax even as code, nor give a web link code text. A bare
-/// `[Point]` passes: it reads the same as `[sic]`.
+/// It reads the raw text, so no Markdown construct (a code span, a quote, a
+/// list item) can hide one of these forms from it. What that costs: a
+/// description cannot show one even as code (`` `[x](y)` ``,
+/// ``[`asc`, `desc`]``, `&[Vec<f32>]`), give a web link code text, or write a
+/// reference-style link or definition, even to a URL. A bare `[Point]` passes:
+/// it reads the same as `[sic]`.
 fn holds_rustdoc_link(text: &str) -> bool {
     text.contains("][")
-        || text
-            .lines()
-            .any(|line| line.trim_start().starts_with('[') && line.contains("]:"))
+        || text.contains("]:")
         || text
             .match_indices("](")
             .any(|(at, _)| !is_url(target_start(&text[at + 2..])))
@@ -258,15 +259,16 @@ fn holds_rustdoc_link(text: &str) -> bool {
 }
 
 /// Whether the label `after` starts, up to its `]`, names a path: it holds
-/// `::`, `@`, `#` or `<`, or ends in `()` or `!`. A `(` after the `]` makes it
-/// the text of an inline link instead, which [`holds_rustdoc_link`] reads by
-/// its target.
+/// `::`, `@`, `#` or `<`, or ends in `()`, `!{}` or `!`. A `(` after the `]`
+/// makes it the text of an inline link instead, which [`holds_rustdoc_link`]
+/// reads by its target.
 fn brackets_a_path(after: &str) -> bool {
     after.split_once(']').is_some_and(|(label, rest)| {
         !rest.starts_with('(')
             && (label.contains("::")
                 || label.contains(['@', '#', '<'])
                 || label.ends_with("()")
+                || label.ends_with("!{}")
                 || label.ends_with('!'))
     })
 }
@@ -285,7 +287,7 @@ fn is_url(target: &str) -> bool {
 }
 
 #[test]
-fn the_rustdoc_link_guard_flags_each_link_form() {
+fn test_rustdoc_link_guard_flags_each_link_form() {
     for text in [
         "a JSON-encoded [`Point`].",
         "a JSON-encoded [ `Point` ].",
@@ -295,12 +297,15 @@ fn the_rustdoc_link_guard_flags_each_link_form() {
         "see [Vec<u8>].",
         "see [stream_traverse()].",
         "see [vec!].",
+        "see [vec!{}].",
         "see [fn@stream_traverse].",
         "see [Point#fields].",
         "see [the point][Point].",
         "see [Point][].",
         "[p]: crate::Point",
-        "  [p]: crate::Point",
+        "> [p]: crate::Point",
+        "- [p]: crate::Point",
+        "[the\npoint]: crate::Point",
         "see [the point](crate::Point).",
         "see [the point](< crate::Point >).",
         "the syntax `[x](crate::y)` is code.",
@@ -310,9 +315,11 @@ fn the_rustdoc_link_guard_flags_each_link_form() {
 }
 
 #[test]
-fn the_rustdoc_link_guard_leaves_web_links_and_brackets() {
+fn test_rustdoc_link_guard_leaves_web_links_and_brackets() {
     for text in [
         "see [the guide](https://velesdb.com/docs).",
+        "see [the spec](http://example.com/spec).",
+        "write to [the team](mailto:team@velesdb.com).",
         "see [crate::Point](https://docs.rs/velesdb-core).",
         "see [the guide](<https://velesdb.com/docs>).",
         "see [the guide](< https://velesdb.com/docs >).",
@@ -327,11 +334,11 @@ fn the_rustdoc_link_guard_leaves_web_links_and_brackets() {
 }
 
 #[test]
-fn the_rustdoc_link_guard_reads_every_description_and_summary() {
+fn test_rustdoc_link_guard_reads_every_description_and_summary() {
     let doc = serde_json::json!({
         "info": { "title": "[`Title`]", "description": "plain" },
         "tags": [{ "name": "t", "description": "[`Tag`]" }],
-        "paths": { "/x": { "get": {
+        "paths": { "/x~y": { "get": {
             "summary": "[`Summary`]",
             "responses": { "200": { "description": "[`Response`]" } }
         } } },
@@ -346,8 +353,8 @@ fn the_rustdoc_link_guard_reads_every_description_and_summary() {
         linked,
         [
             "/components/schemas/S/properties/description/description",
-            "/paths/~1x/get/responses/200/description",
-            "/paths/~1x/get/summary",
+            "/paths/~1x~0y/get/responses/200/description",
+            "/paths/~1x~0y/get/summary",
             "/tags/0/description",
         ]
     );
