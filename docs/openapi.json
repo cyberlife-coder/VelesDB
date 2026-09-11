@@ -1325,7 +1325,7 @@
           "graph"
         ],
         "summary": "Stream graph traversal results via SSE.",
-        "description": "The traversal runs to completion first, then its events are sent:\n- `node`: each node reached\n- `stats`: `nodes_visited` and `elapsed_ms`, after every 100th `node` event\n- `done`: `total_nodes`, `max_depth_reached` and `elapsed_ms`, last\n- `error`: sent alone instead, when the collection is missing or is not a\n  graph collection",
+        "description": "The traversal runs to completion first, then its events are sent:\n- `node`: each node reached\n- `stats`: `nodes_visited` and `elapsed_ms`, after every 100th `node` event\n- `done`: `total_nodes`, `max_depth_reached` and `elapsed_ms`, last\n- `error`: sent alone instead, when the traversal cannot run",
         "operationId": "stream_traverse",
         "parameters": [
           {

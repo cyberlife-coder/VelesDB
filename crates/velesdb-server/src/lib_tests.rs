@@ -261,11 +261,13 @@ fn holds_rustdoc_link(text: &str) -> bool {
 }
 
 /// Whether the label `after` starts, up to its `]`, names a path: it holds
-/// `::`, `@`, `#` or `<`, or ends in `()`, `!{}` or `!` once trimmed, as
-/// rustdoc trims it. A `(` after the `]` makes it the text of an inline link
-/// instead, which [`holds_rustdoc_link`] reads by its target.
+/// `::`, `@`, `#` or `<`, or ends in `()`, `!{}` or `!` once its backticks are
+/// dropped and it is trimmed, as rustdoc reads it. A `(` after the `]` makes
+/// it the text of an inline link instead, which [`holds_rustdoc_link`] reads
+/// by its target.
 fn brackets_a_path(after: &str) -> bool {
     after.split_once(']').is_some_and(|(label, rest)| {
+        let label = label.replace('`', "");
         let label = label.trim();
         !rest.starts_with('(')
             && (label.contains("::")
@@ -307,6 +309,8 @@ fn test_rustdoc_link_guard_flags_each_link_form() {
         "see [vec!{}].",
         "see [stream_traverse() ].",
         "see [vec! ].",
+        "see [stream_traverse`()`].",
+        "see [vec`!`].",
         "see [fn@stream_traverse].",
         "see [Point#fields].",
         "see [the point][Point].",
