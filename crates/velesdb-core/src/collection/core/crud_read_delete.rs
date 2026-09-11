@@ -38,7 +38,7 @@ impl Collection {
     /// # Lock order (Issue: ABBA deadlock, see `.investigation/http-deadlock-2026-07-22/`)
     ///
     /// Acquires `vector_storage` (rank 2) before `payload_storage` (rank 3),
-    /// matching [`Collection::search`](super::super::search::vector). This
+    /// matching [`Collection::search`]. This
     /// used to be reversed (payload then vector), which formed a classic
     /// ABBA deadlock with `search`'s vector-then-payload order: under
     /// `parking_lot`'s writer-preferring `RwLock`, two readers acquiring the
@@ -263,7 +263,7 @@ impl Collection {
     ///   point deleted in one store but not the next. That window is not
     ///   new — pre-fix it existed per point, between its three fsyncs — and
     ///   reopen converges: `get()`/search require the (deleted) vector, HNSW
-    ///   orphans are removed by the 3-pass reconciliation in
+    ///   orphans are removed by the open-time reconciliation in
     ///   `collection/core/recovery.rs`, and the leftover payload/BM25
     ///   entries are exactly what a re-issued delete of the same ids cleans
     ///   up.

@@ -1,6 +1,7 @@
 //! Vacuum and maintenance operations for HnswIndex.
 
 use super::{HnswIndex, HnswInner};
+use crate::index::hnsw::native_inner::Placed;
 use crate::index::hnsw::params::HnswParams;
 use std::mem::ManuallyDrop;
 
@@ -8,10 +9,12 @@ use std::mem::ManuallyDrop;
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum VacuumError {
-    /// Vector storage is disabled, cannot rebuild index.
-    #[error("Cannot vacuum: vector storage is disabled (use new() instead of new_fast_insert())")]
+    /// The index's exact-distance features are off
+    /// (`enable_vector_storage = false`); vacuum refuses such an index.
+    #[error("Cannot vacuum: exact-distance features are off (use new(), not new_fast_insert())")]
     VectorStorageDisabled,
-    /// Index rebuild failed (allocation or insertion error).
+    /// Index rebuild failed: an allocation or insertion error, or a rebuild
+    /// whose slot count differs from its id count.
     #[error("Vacuum rebuild failed: {0}")]
     RebuildFailed(String),
 }
@@ -34,9 +37,8 @@ impl HnswIndex {
     /// ```
     #[must_use]
     pub fn tombstone_count(&self) -> usize {
-        // Total inserted = next_idx in mappings (monotonic counter)
-        // Active = mappings.len()
-        // Tombstones = Total - Active
+        // Every slot below next_idx that no id names is dead: deleted,
+        // replaced, or a direct write its graph insert superseded.
         let total_inserted = self.mappings.next_idx();
         let active = self.mappings.len();
         total_inserted.saturating_sub(active)
@@ -74,20 +76,24 @@ impl HnswIndex {
     /// # Important
     ///
     /// - This operation is **blocking** and may take significant time for large indices
-    /// - **Consistency**: between the graph swap and mappings rebuild, concurrent
-    ///   searches may return incomplete results. Callers should avoid concurrent
-    ///   queries during vacuum or accept transient result gaps.
-    /// - Requires `enable_vector_storage = true` (vectors must be stored)
+    /// - **Writes during a vacuum are lost to the index** (#2262): an insert or
+    ///   delete that lands after step 1's snapshot reaches the old graph, which
+    ///   the swap drops, and the mapping rebuild re-creates the snapshot — so a
+    ///   new id stays out of search and a deleted one comes back until the next
+    ///   open's recovery. Searches themselves are safe: the swap and the mapping
+    ///   rebuild happen under one write lock.
+    /// - Requires exact-distance features (`enable_vector_storage = true`); the
+    ///   graph stores vectors either way
     ///
     /// # Returns
     ///
     /// - `Ok(count)` - Number of vectors in the rebuilt index
-    /// - `Err` - If vector storage is disabled or rebuild fails
+    /// - `Err` - If exact-distance features are off or the rebuild fails
     ///
     /// # Errors
     ///
     /// Returns `VacuumError::VectorStorageDisabled` if the index was created
-    /// with `new_fast_insert()` mode, which disables vector storage.
+    /// with `new_fast_insert()`, which turns its exact-distance features off.
     ///
     /// # Example
     ///
@@ -127,9 +133,20 @@ impl HnswIndex {
 
         // 2-4. Rebuild a fresh inner index from the active vectors,
         // preserving the backend storage mode and trained quantizer.
-        let new_inner = self.build_vacuum_replacement(&active_vectors)?;
+        let (new_inner, slots) = self.build_vacuum_replacement(&active_vectors)?;
+        // Checked before the swap: once the new graph is installed, a short
+        // rebuild would leave ids with no slot and nothing to fall back to.
+        if slots.len() != count {
+            return Err(VacuumError::RebuildFailed(format!(
+                "the rebuild placed {} vectors for {count} ids",
+                slots.len()
+            )));
+        }
 
-        // 5. Atomic swap (replace old with new)
+        // 5-6. Swap in the new graph and rebuild the mappings under one write
+        // lock: until the rebuild they name the old graph's slots, and a
+        // search in between would resolve ids against the wrong vectors
+        // (#2246).
         {
             let mut inner_guard = self.inner.write();
             // SAFETY: ManuallyDrop::drop is safe when exclusive ownership is guaranteed.
@@ -142,27 +159,29 @@ impl HnswIndex {
             }
             // Replace with new
             *inner_guard = ManuallyDrop::new(new_inner);
-        }
 
-        // 6. Rebuild mappings to match the compacted graph (sequential
-        // indices 0..count, same order as `refs_for_hnsw` above).
-        // Note: ShardedMappings uses interior mutability, so we clear and
-        // repopulate in place.
-        self.mappings.clear();
-
-        for (id, _vec) in active_vectors {
-            if self.mappings.register(id).is_none() {
+            // Each id follows the slot its vector was given in the new graph.
+            // ShardedMappings uses interior mutability, so we clear and
+            // repopulate in place.
+            self.mappings.clear();
+            for ((id, _vec), slot) in active_vectors.iter().zip(slots) {
+                let previous = self
+                    .mappings
+                    .assign(*id, Placed::installed(&inner_guard, slot));
                 debug_assert!(
-                    false,
-                    "Vacuum invariant violated: duplicate id encountered while rebuilding mappings"
+                    previous.is_none(),
+                    "Vacuum invariant violated: duplicate id {id} while rebuilding mappings"
                 );
             }
+            drop(inner_guard);
         }
 
         Ok(count)
     }
 
     /// Builds the replacement inner index for [`Self::vacuum`].
+    ///
+    /// Returns it with the slot each of `active_vectors` was given, in order.
     ///
     /// Creates a new graph with auto-tuned parameters, **preserving the
     /// current backend storage mode** (a RaBitQ index must not silently
@@ -189,7 +208,7 @@ impl HnswIndex {
     fn build_vacuum_replacement(
         &self,
         active_vectors: &[(u64, Vec<f32>)],
-    ) -> Result<HnswInner, VacuumError> {
+    ) -> Result<(HnswInner, Vec<usize>), VacuumError> {
         let params = HnswParams::auto(self.dimension);
         let target_mode = self.inner.read().storage_mode();
         // Always rebuild through a Standard backend: inserting via a RaBitQ
@@ -217,18 +236,15 @@ impl HnswIndex {
         })
         .map_err(|e| VacuumError::RebuildFailed(e.to_string()))?;
 
-        // Insertion references: idx = sequential, matches graph allocation.
-        let refs_for_hnsw: Vec<(&[f32], usize)> = active_vectors
+        let vectors: Vec<&[f32]> = active_vectors
             .iter()
-            .enumerate()
-            .map(|(idx, (_id, vec))| (vec.as_slice(), idx))
+            .map(|(_id, vec)| vec.as_slice())
             .collect();
-
-        new_inner
-            .parallel_insert(&refs_for_hnsw)
+        let slots = new_inner
+            .parallel_insert(&vectors)
             .map_err(|e| VacuumError::RebuildFailed(e.to_string()))?;
 
-        self.promote_replacement(new_inner, target_mode)
+        Ok((self.promote_replacement(new_inner, target_mode)?, slots))
     }
 
     /// Promotes a freshly rebuilt `Full` graph to `target_mode` and carries

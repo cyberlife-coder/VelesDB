@@ -370,7 +370,7 @@ pub struct RawListedFact {
 #[cfg(feature = "persistence")]
 impl RawListedFact {
     /// The one place a stored payload is split into content + the rest —
-    /// shared by [`MemoryStore::list`] and the JSONL export so the two
+    /// shared by [`FactStore::list`] and the JSONL export so the two
     /// reading surfaces can never disagree on what a fact's content IS.
     pub(crate) fn from_raw(fact: &crate::migration::RawFact) -> Self {
         let mut payload: Metadata = serde_json::from_str(&fact.payload).unwrap_or_default();
@@ -394,7 +394,7 @@ impl RawListedFact {
 pub struct NativeStore {
     memory: AgentMemory,
     /// Kept beside `memory` (which owns its own clone) for the read paths
-    /// that speak to the engine directly — [`MemoryStore::list`] walks the
+    /// that speak to the engine directly — [`FactStore::list`] walks the
     /// collection cursor, which `AgentMemory` does not re-expose.
     db: Arc<Database>,
     capture: MutationCapture,

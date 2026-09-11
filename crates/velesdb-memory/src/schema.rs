@@ -82,7 +82,7 @@ const UNION_KEYWORDS: [&str; 4] = ["anyOf", "oneOf", "allOf", "$ref"];
 /// entree doit etre LISIBLE exactement quelque part en sortie, sinon un
 /// client a nombres flottants n'a plus aucune forme utilisable des deux
 /// cotes. C'est le role du jumeau `<nom>_str`
-/// (cf. [`crate::mcp::dto`]) et, pour le couple
+/// (cf. `crate::mcp::dto`) et, pour le couple
 /// `save_working_context`/`load_working_context`, de la reponse emise
 /// directement en chaines. Le test
 /// `every_lossy_id_in_a_result_offers_its_exact_string_twin`
@@ -955,7 +955,7 @@ impl WireInputSchema {
     /// Reprend un schema d'entree DEJA publie par une route, pour lui
     /// repasser le durcissement universel. Volontairement prive au module :
     /// c'est le seul constructeur qui accepte une carte venue de l'exterieur,
-    /// et son unique appelant est [`rehardened_input_schema`], dont le nom
+    /// et son unique appelant est [`reharden_tool_input`], dont le nom
     /// dit la surface.
     fn adopt(map: Map<String, Value>) -> Self {
         Self(map)

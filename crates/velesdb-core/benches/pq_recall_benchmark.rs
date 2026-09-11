@@ -9,8 +9,9 @@
 //! + `VelesQL` instead of auto-training, ensuring controlled m/k parameters.
 //!
 //! Uniform random data in high dimensions produces well-separated nearest
-//! neighbors, enabling HNSW (M=24, `ef_construction=300`, `ef_search=128`) to
-//! achieve recall@10 above 0.92, satisfying PQ-07.
+//! neighbors, enabling HNSW (`HnswParams::auto` at 128 dimensions: M=24,
+//! `ef_construction=300`; searched at the default Balanced preset) to achieve
+//! recall@10 above 0.92, satisfying PQ-07.
 
 #![allow(clippy::cast_precision_loss, clippy::doc_markdown)]
 

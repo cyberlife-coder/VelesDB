@@ -135,17 +135,20 @@ for start in range(0, len(all_vectors), CHUNK):
 
 ### Choose the right `SearchQuality` profile
 
-`search_with_quality()` selects the HNSW `ef_search` parameter. The default
+`search_with_quality()` selects the HNSW `ef_search` parameter, except for
+`perfect`, which scores every vector instead. The default
 (`balanced`) is conservative. For latency-sensitive serving, `fast` is often
 sufficient. Use `accurate` or `perfect` only for offline evaluation.
 
 | Profile | ef_search (top-10) | Recall | Typical latency |
 |---------|-------------------|--------|-----------------|
-| `"fast"` | 96 | ~95% | Lowest |
-| `"balanced"` | 160 | ~99.5% | Default |
-| `"accurate"` | 512 | ~100% | 4x slower than balanced |
-| `"perfect"` | 4 096 | 100% | Exhaustive — evaluation only |
-| `"autotune"` | Adaptive | ~95%+ | Scales with collection size |
+| `"fast"` | 96 | 97.4%* | Lowest |
+| `"balanced"` | 160 | 99.8%* | Default |
+| `"accurate"` | 512 | 100%*; 0.98 on SIFT1M's 1M | ~2x slower than balanced in BENCHMARKS.md's native index-level p50s (130 vs 57 µs, March 2026, Balanced then at ef 128) |
+| `"perfect"` | — (exhaustive scan) | exact top-k | Exhaustive — evaluation only; refused above `max_perfect_mode_vectors` |
+| `"autotune"` | Adaptive | — (no run measures it) | Scales with collection size |
+
+\* Recall@10 in `recall_benchmark` (10K random 128-D vectors, an index built with `HnswParams::max_recall`, 100 queries), measured 2026-09-10 on 6.0.0; see [BENCHMARKS.md](../BENCHMARKS.md#hnsw-recall-profiles-10k128d).
 
 ```python
 # For production serving where sub-millisecond latency matters
@@ -448,7 +451,7 @@ for _ in range(100):  # measure
 | `dtype=np.float32` on all vectors | 1 line | 5–15% on search latency |
 | `upsert_bulk_numpy()` instead of dict loop | 3 lines | 1.5–3x insert throughput |
 | Batch size 1 000–5 000 | 1 constant | Eliminates per-call overhead |
-| `search_with_quality("fast")` vs default | 1 argument | 2x lower latency at ~95% recall |
+| `search_with_quality("fast")` vs default | 1 argument | Lower latency at 97.4% recall@10 in `recall_benchmark` |
 | `batch_search()` for multiple queries | Refactor | Eliminates N-1 GIL cycles per batch |
 | `ThreadPoolExecutor` for parallel search | ~10 lines | Near-linear scaling up to core count |
 
@@ -457,4 +460,4 @@ See also: [TUNING_GUIDE.md](TUNING_GUIDE.md) for HNSW parameter tuning and
 
 ---
 
-Last updated: 2026-08-08 · Applies to: velesdb-core 6.0.0
+Last updated: 2026-09-10 · Applies to: velesdb-core 6.0.0

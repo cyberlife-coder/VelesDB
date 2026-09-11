@@ -77,7 +77,8 @@ fn bench_hnsw_insert_parallel(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark HNSW fast insert mode (no vector storage overhead).
+/// Benchmark HNSW fast insert mode (lighter graph params, exact-distance
+/// features off).
 fn bench_hnsw_insert_fast(c: &mut Criterion) {
     let mut group = c.benchmark_group("hnsw_insert_fast");
 
@@ -85,7 +86,7 @@ fn bench_hnsw_insert_fast(c: &mut Criterion) {
     let dim = 768;
     group.throughput(Throughput::Elements(count));
 
-    // Standard mode (with vector storage)
+    // Standard mode (`new`: exact-distance features on)
     group.bench_with_input(
         BenchmarkId::new("standard", format!("{count}x{dim}d")),
         &count,
@@ -101,7 +102,7 @@ fn bench_hnsw_insert_fast(c: &mut Criterion) {
         },
     );
 
-    // Fast mode (no vector storage)
+    // Fast mode (`new_fast_insert`)
     group.bench_with_input(
         BenchmarkId::new("fast_insert", format!("{count}x{dim}d")),
         &count,

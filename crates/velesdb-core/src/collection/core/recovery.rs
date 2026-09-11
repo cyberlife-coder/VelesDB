@@ -1,7 +1,8 @@
-//! Crash recovery: 3-pass reconciliation between vector storage and HNSW.
+//! Crash recovery: reconciliation between vector storage and HNSW, in four
+//! passes.
 //!
 //! On [`Collection::open()`](super::super::Collection::open), the persisted
-//! HNSW index may disagree with the WAL-replayed vector storage in three
+//! HNSW index may disagree with the WAL-replayed vector storage in four
 //! ways, each handled by a dedicated pass in [`run_crash_recovery`]:
 //!
 //! 1. **Gap**: vectors in storage but not in HNSW (crash between the storage
@@ -11,6 +12,8 @@
 //!    WAL but not the next index save).
 //! 3. **Stale**: WAL-touched ids present on both sides whose indexed vector
 //!    no longer matches storage (upsert after the last index save).
+//! 4. **Unlinked**: ids mapped in HNSW whose node the graph never linked (a
+//!    save that raced a bulk upsert's async build).
 //!
 //! ## Known limitation
 //!
@@ -178,7 +181,7 @@ pub(super) fn reconcile_point_count(
     }
 }
 
-/// Runs the 3-pass crash reconciliation between vector storage and HNSW:
+/// Runs the 4-pass crash reconciliation between vector storage and HNSW:
 ///
 /// 1. **Gap** ([`recover_hnsw_gap`]): vectors in storage but not in HNSW
 ///    (crash during deferred merge, delta drain, or normal insert).
@@ -188,6 +191,8 @@ pub(super) fn reconcile_point_count(
 /// 3. **Stale** ([`reindex_stale_wal_ids`]): WAL-touched ids present on both
 ///    sides whose indexed vector no longer matches storage (upsert after the
 ///    last index save).
+/// 4. **Unlinked** ([`relink_unlinked_ids`]): ids mapped in HNSW whose node
+///    the graph never linked (a save that raced a bulk upsert's async build).
 ///
 /// Returns `Ok(true)` when any pass mutated the index — the caller must then
 /// re-save it, because the vector WAL (the only other witness of the delta)
@@ -205,16 +210,18 @@ pub(super) fn run_crash_recovery(
     let recovered = recover_hnsw_gap(vector_storage, index, config.dimension)?;
     let orphans = remove_orphan_ids(vector_storage, index);
     let stale = reindex_stale_wal_ids(vector_storage, index, wal_touched_ids, config.dimension)?;
-    if recovered + orphans + stale > 0 {
+    let relinked = relink_unlinked_ids(vector_storage, index, config.dimension)?;
+    if recovered + orphans + stale + relinked > 0 {
         tracing::info!(
             collection = %config.name,
             recovered,
             orphans,
             stale,
+            relinked,
             "Collection index reconciliation completed on open"
         );
     }
-    Ok(recovered + orphans + stale > 0)
+    Ok(recovered + orphans + stale + relinked > 0)
 }
 
 /// No-op stub when persistence is disabled.
@@ -323,4 +330,48 @@ fn reindex_stale_wal_ids(
         );
     }
     Ok(reindexed)
+}
+
+/// Pass 4: re-indexes the mapped ids whose node the graph never linked.
+///
+/// A mapping is not proof of graph membership. `upsert_bulk`'s V2 path
+/// places each vector in the arena, maps its id to the slot it got, and leaves
+/// the graph insert to the `AsyncIndexBuilder`. A save that races it — the drain
+/// returns while another build holds the builder, or an upsert lands between
+/// the drain and the save — persists mappings for nodes nothing links to
+/// (#2246). Pass 1 skips mapped ids, and pass 3 compares arena slots the
+/// direct writer already filled, so without this pass such points stay
+/// stored, mapped and unreachable by graph search after a crash.
+///
+/// Re-indexing goes through the same upsert as pass 3: each id moves to a
+/// fresh, linked node, and the unlinked slot is left behind as a tombstone.
+#[cfg(feature = "persistence")]
+fn relink_unlinked_ids(
+    vector_storage: &Arc<RwLock<MmapStorage>>,
+    index: &Arc<HnswIndex>,
+    dimension: usize,
+) -> Result<usize> {
+    let mapped: Vec<(u64, usize)> = index.mappings.iter().collect();
+    let unlinked: std::collections::HashSet<usize> = index
+        .inner
+        .read()
+        .unlinked_nodes(mapped.iter().map(|&(_, idx)| idx))
+        .into_iter()
+        .collect();
+    if unlinked.is_empty() {
+        return Ok(0);
+    }
+    let ids: Vec<u64> = mapped
+        .into_iter()
+        .filter(|(_, idx)| unlinked.contains(idx))
+        .map(|(id, _)| id)
+        .collect();
+    let vectors = retrieve_valid_vectors(&vector_storage.read(), &ids, dimension)?;
+    let relinked = reindex_vectors(index, &vectors);
+    tracing::warn!(
+        relinked,
+        unlinked = ids.len(),
+        "Crash recovery: re-indexed mapped vectors the graph never linked"
+    );
+    Ok(relinked)
 }

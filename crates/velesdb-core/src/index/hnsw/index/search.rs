@@ -78,6 +78,9 @@ impl HnswIndex {
     /// Falls through to the CPU SIMD path transparently otherwise — the caller
     /// sees the same `(node_id, raw_dist)` pairs and must still apply
     /// [`NativeHnswInner::transform_score`] exactly as before.
+    ///
+    /// [`NativeHnswInner::search_auto`]: crate::index::hnsw::native_inner::NativeHnswInner::search_auto
+    /// [`NativeHnswInner::transform_score`]: crate::index::hnsw::native_inner::NativeHnswInner::transform_score
     pub(crate) fn search_hnsw_only(
         &self,
         query: &[f32],
@@ -257,7 +260,7 @@ impl HnswIndex {
         ef_search: usize,
     ) -> Option<usize> {
         // Skip reranking for Adaptive or AutoTune quality (these handle
-        // their own exploration strategy) or if vector storage is disabled.
+        // their own exploration strategy) or with exact-distance features off.
         if matches!(
             quality,
             SearchQuality::Adaptive { .. } | SearchQuality::AutoTune
@@ -404,13 +407,15 @@ impl HnswIndex {
 
     /// Two-phase adaptive search that starts with a low ef and escalates if needed.
     ///
-    /// Phase 1: search with `min_ef`. If the result spread (max_dist / min_dist)
-    /// indicates a hard query (scattered results), widen ef to `2 * min_ef` and
-    /// **resume** the phase-1 traversal (visited set and frontier carried over)
-    /// rather than re-searching from scratch — restart remains only for the
-    /// GPU/RaBitQ paths, which keep no CPU-side state. This saves 2-4x latency
-    /// on easy queries and roughly a third of the distance evaluations on
-    /// escalated ones.
+    /// Phase 1: search with `min_ef`. If the result spread ([`should_escalate`])
+    /// marks a hard query (scattered results), widen ef to `2 * min_ef`, capped
+    /// at `max_ef` (no second phase when that is no wider), and **resume** the
+    /// phase-1 traversal (visited set and frontier carried over) rather than
+    /// re-searching from scratch — restart remains only for the GPU, RaBitQ and
+    /// SQ8 paths, which keep no resumable state.
+    /// Easy queries stop after phase 1; on escalated ones, resuming saves
+    /// distance evaluations over a restart (`tests/adaptive_resume_evals.rs`
+    /// asserts at least a tenth).
     // One read guard spans both phases on purpose, as the comment below
     // records: re-locking through search_hnsw_only would be a recursive
     // read() on a parking_lot RwLock, which can deadlock behind a queued
@@ -454,10 +459,11 @@ impl HnswIndex {
         // Resume the phase-1 traversal when it kept state (Standard backend,
         // CPU path): the visited set and frontier carry over, so the widened
         // pass pays only the marginal exploration instead of ef1 + ef2 from
-        // scratch. GPU and RaBitQ phase-1 searches return no state and
-        // restart, exactly as before. See `ResumableSearch` for what a
-        // resumed pass does not reconsider (recall sits between single-pass
-        // ef1 and ef2; the `adaptive_resume_evals` harness pins the trade).
+        // scratch. GPU, RaBitQ and SQ8 phase-1 searches return no state
+        // and restart, exactly as before. See `ResumableSearch` for what a
+        // resumed pass does not reconsider: `adaptive_resume_evals` holds its
+        // recall within 2% of a from-scratch pass at ef2, on one 3,000 x 256
+        // corpus.
         let escalated = match resume {
             Some(r) => inner.resume_search(r, query, k, escalated_ef),
             None => inner.search_auto(query, k, escalated_ef),
@@ -476,20 +482,20 @@ impl HnswIndex {
     }
 }
 
-/// Spread above which `search_adaptive` widens `ef` and runs a second pass.
-///
-/// Empirically tuned: easy queries sit below 1.0, hard ones above 3.0.
+/// Spread at or above which `search_adaptive` widens `ef` and runs a second
+/// pass. No recorded run measures the spreads queries produce (#2266).
 const ESCALATION_SPREAD_THRESHOLD: f32 = 2.0;
 
 /// Whether the phase-1 result spread marks this as a hard query.
 ///
-/// The spread is the first/last score gap relative to a baseline, and the
-/// baseline is the tail's distance from **the metric's floor**, not from zero.
-/// Zero is the floor only for an unbounded distance. On a bounded similarity
-/// it sits in the middle of the range, so `|score|` collapses toward zero for
-/// a merely mediocre tail and the ratio explodes on a query that is not hard
-/// at all — a cosine tail of `-0.01` against a `0.9` top would read as a
-/// spread of 91.
+/// The spread is the first/last score gap relative to a baseline. On a bounded
+/// similarity (Cosine, Jaccard) the baseline is the lower score's distance from
+/// **the metric's floor**, not from zero: zero sits in the middle of such a
+/// range, so `|score|` collapses toward zero for a merely mediocre tail and the
+/// ratio explodes on a query that is not hard at all — a cosine tail of
+/// `-0.01` against a `0.9` top would read as a spread of 91. On an unbounded
+/// metric (Euclidean, Hamming, DotProduct) the baseline is the smaller
+/// absolute score.
 ///
 /// Cosine never reached that trap before, for the wrong reason: the graph
 /// path clamped every non-positive score to exactly `0.0`, so `baseline` was

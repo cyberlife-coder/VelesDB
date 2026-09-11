@@ -11,6 +11,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`autograph_failed` counted failing steps, not failed enrichments.** Its doc
+  and `memory_status` promise enrichments, but one extraction failing at two
+  hub writes counted two, and the entity stage counted once per extracted
+  fact. It now moves by one per enrichment, however many of its stages
+  failed — proven by a new case beside the file's first control whose store
+  accepts, without which a counter bumped on every `remember` passed every
+  test (#2246, P5).
+
+- **A recovered working-context index forgot which sessions were recent.**
+  Rebuilding an unreadable index from the facts gave every session
+  `saved_at: 0`, in the store's enumeration order, and stopped at the cap: the
+  next save's cap then evicted whichever session the store listed last, not
+  the oldest, and the listing silently lost a real session.
+  `save_working_context` now stamps `saved_at` on the session's own fact as
+  well as in the index; the rebuild reads it back, orders by it, then caps.
+  Sessions saved before this version carry no stamp and read as the oldest
+  (#2246, P5).
+
+- **That recovery walked the whole store under a process-wide lock.**
+  `WORKING_INDEX_WRITE` serializes every project's index writes, and the
+  rebuild ran under it — one project's recovery stalled every save in the
+  process for a full scan, while its doc called the walk bounded. It now runs
+  with the lock released, and the index is read again once the lock is retaken,
+  so a concurrent repair wins over the walk (#2246, P5).
 - **Tool schemas published rustdoc link syntax as text.** schemars copies
   each field's doc comment into its JSON Schema `description`, so the schemas
   every MCP client reads carried intra-doc links only rustdoc resolves —

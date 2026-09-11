@@ -39,7 +39,7 @@ fn test_batch_search_matches_single_query_on_large_dataset_issue_694() {
     // asymmetry only manifests above the threshold.
     //
     // Why 40K + Fast quality: at 40K the scale factor is sqrt(4)=2 (capped),
-    // so Fast (base ef=64) becomes 128 with scaling — a 2x change. That gives
+    // so Fast's base ef doubles with scaling — a 2x change. That gives
     // the candidate set enough wiggle room for the unscaled batch path
     // (pre-fix) to return a different top-k from the scaled single-query path.
     // Below 10K or at smaller scale factors the effect is too small to
@@ -66,9 +66,10 @@ fn test_batch_search_matches_single_query_on_large_dataset_issue_694() {
     let query_refs: Vec<&[f32]> = queries.iter().map(Vec::as_slice).collect();
 
     let k = 10_usize;
-    // Fast quality (ef=64) magnifies the asymmetry: pre-fix batch gets ef=64,
-    // post-fix batch gets ef=128 (scaled). Higher base efs (Balanced=128,
-    // Accurate=512) already saturate the candidate space and hide the bug.
+    // Fast, the lowest named preset on this path, magnifies the asymmetry:
+    // the pre-fix batch path ran at the base ef while the single-query path
+    // scaled it with the index size. Higher bases (Balanced, Accurate) already
+    // saturate the candidate space and hide the bug.
     let quality = SearchQuality::Fast;
 
     // Act: run both paths
@@ -91,9 +92,9 @@ fn test_batch_search_matches_single_query_on_large_dataset_issue_694() {
     // Assert: result IDs must match per-query.
     //
     // Pre-fix (issue #694): batch used ef_search(k), single used
-    // ef_search_for_scale(k, len). At n=12_000 the scale factor was sqrt(1.2)
-    // ≈ 1.095, so single saw ef * 1.09 (rounded) and batch saw ef * 1, giving
-    // mismatched candidate sets and divergent top-k.
+    // ef_search_for_scale(k, len). At this test's n=40_000, single ran at
+    // twice the base ef and batch at the base ef, so their candidate sets
+    // differed and so did their top-k.
     //
     // Post-fix: both paths call ef_search_for_scale(k, self.len()), so the
     // candidate sets are identical and the result lists are identical.
@@ -307,7 +308,7 @@ fn test_hnsw_new_turbo_mode() {
 
 #[test]
 fn test_hnsw_new_fast_insert_mode() {
-    // Arrange & Act - fast insert mode disables vector storage
+    // Arrange & Act - fast insert mode turns exact-distance features off
     let index = HnswIndex::new_fast_insert(64, DistanceMetric::Cosine).unwrap();
 
     // Insert vectors
@@ -585,7 +586,7 @@ fn test_hnsw_snapshot_without_vectors_file_keeps_vector_features() {
     // Act: load the snapshot.
     let loaded_index = HnswIndex::load(dir.path(), 3, DistanceMetric::Cosine).unwrap();
 
-    // Assert: full functionality — vector storage stays enabled (vectors are
+    // Assert: full functionality — exact-distance features stay on (vectors are
     // in the graph) and vacuum works.
     assert_eq!(loaded_index.len(), 2);
     assert!(loaded_index.has_vector_storage());
@@ -594,7 +595,7 @@ fn test_hnsw_snapshot_without_vectors_file_keeps_vector_features() {
 }
 
 #[test]
-fn test_hnsw_fast_insert_save_does_not_persist_vectors_file() {
+fn test_hnsw_fast_insert_flag_survives_save_load() {
     use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
@@ -2407,7 +2408,7 @@ fn test_adaptive_search_spread_works_for_similarity_metrics() {
 
 #[test]
 fn test_insert_same_id_updates_vector() {
-    // Arrange: create index with vector storage enabled (default)
+    // Arrange: create index with exact-distance features on (default)
     let index = HnswIndex::new(4, DistanceMetric::Cosine).unwrap();
 
     // Insert id=1 with vector A (pointing along x-axis)
@@ -2744,7 +2745,7 @@ fn test_upsert_entry_point_vector() {
 }
 
 // -------------------------------------------------------------------------
-// Upsert Rollback + Edge Case Tests (Issue #371)
+// Upsert Edge Case Tests (Issue #371)
 // -------------------------------------------------------------------------
 
 /// Verifies that batch insert with within-batch duplicate IDs correctly
@@ -2863,120 +2864,91 @@ fn test_repeated_upsert_accumulates_tombstones() {
 }
 
 // -------------------------------------------------------------------------
-// BUG-0002: insert_and_correct_mapping divergence correction
+// #2246: an id is mapped to the slot the graph gave its vector
 // -------------------------------------------------------------------------
 
-/// Forces the HNSW graph node counter ahead of `ShardedMappings::next_idx`
-/// to simulate the concurrent insert divergence that BUG-0002 describes.
+/// A slot the graph filled with no id mapped to it — what another writer's
+/// node looks like from here — never captures the next id.
 ///
-/// When `self.inner.read()` allows concurrent inserts, two threads can
-/// allocate mapping indices in one order but graph node IDs in another.
-/// `insert_and_correct_mapping` detects this and calls `remove_reverse` +
-/// `restore` to fix the bidirectional mapping.
+/// Before #2246 the mappings predicted slot 1 for id 200 while the graph
+/// handed out slot 2, and a correction step had to repair the mapping
+/// afterwards. The mapping now names the slot the graph returned.
 #[test]
-fn test_insert_and_correct_mapping_fixes_diverged_idx() {
+fn test_an_id_is_mapped_to_the_slot_the_graph_gave() {
     let dim = 4;
     let index = HnswIndex::new(dim, DistanceMetric::Euclidean).unwrap();
 
-    // Phase 1: normal insert so both counters advance to 1
     index.insert(100, &[1.0, 0.0, 0.0, 0.0]);
-    assert_eq!(index.len(), 1);
     assert_eq!(index.mappings.get_idx(100), Some(0));
+    assert_eq!(index.mappings.get_id(0), Some(100));
 
-    // Phase 2: advance graph counter WITHOUT advancing mapping counter.
-    // This simulates a concurrent thread that got into the graph first.
-    let ghost_vec = [0.0, 1.0, 0.0, 0.0];
-    let ghost_node_id = index.inner.read().insert((&ghost_vec, 999)).unwrap();
-    assert_eq!(ghost_node_id, 1, "Graph should assign node_id=1");
+    let unmapped = index.inner.read().insert(&[0.0, 1.0, 0.0, 0.0]).unwrap();
+    assert_eq!(unmapped, 1, "the graph hands out the next slot");
 
-    // Phase 3: upsert_mapping for id=200 — mappings allocates idx=1
-    let result = index.upsert_mapping(200);
-    assert_eq!(result.idx, 1, "Mapping should allocate idx=1");
-    assert_eq!(result.old_idx, None, "New ID has no old mapping");
+    assert!(index.insert_and_assign(200, &[0.0, 0.0, 1.0, 0.0]));
 
-    // Phase 4: insert_and_correct_mapping — graph assigns node_id=2 (not 1)
-    let vector = [0.0, 0.0, 1.0, 0.0];
-    let success = index.insert_and_correct_mapping(200, &vector, &result);
-    assert!(success, "insert_and_correct_mapping should succeed");
-
-    // Phase 5: verify mapping correction
-    // The graph assigned node_id=2, so mapping must point to 2, not 1
-    let corrected_idx = index.mappings.get_idx(200).unwrap();
     assert_eq!(
-        corrected_idx, 2,
-        "Mapping must be corrected to actual graph node_id"
+        index.mappings.get_idx(200),
+        Some(2),
+        "id 200 must name the slot holding its vector"
     );
-    assert_eq!(
-        index.mappings.get_id(2),
-        Some(200),
-        "Reverse mapping must point to id=200"
-    );
-    // Stale reverse mapping for idx=1 must be gone
+    assert_eq!(index.mappings.get_id(2), Some(200));
     assert_eq!(
         index.mappings.get_id(1),
         None,
-        "Stale reverse mapping for original idx must be removed"
+        "the unmapped slot stays unmapped"
     );
+    assert_eq!(index.len(), 2);
 }
 
-/// Verifies that search still returns correct results after the
-/// divergence correction path has been exercised.
+/// Search resolves an id placed after an unmapped slot to that id.
 #[test]
-fn test_search_works_after_mapping_correction() {
+fn test_search_finds_an_id_placed_after_an_unmapped_slot() {
     let dim = 4;
     let index = HnswIndex::new(dim, DistanceMetric::Euclidean).unwrap();
 
-    // Insert a baseline vector normally
     index.insert(100, &[1.0, 0.0, 0.0, 0.0]);
+    index.inner.read().insert(&[0.5, 0.5, 0.0, 0.0]).unwrap();
+    index.insert(200, &[0.0, 0.0, 0.0, 1.0]);
 
-    // Advance graph counter with a ghost insert
-    let ghost_vec = [0.5, 0.5, 0.0, 0.0];
-    index.inner.read().insert((&ghost_vec, 999)).unwrap();
-
-    // Force divergence path for id=200
-    let result = index.upsert_mapping(200);
-    let target = [0.0, 0.0, 0.0, 1.0];
-    index.insert_and_correct_mapping(200, &target, &result);
-
-    // Search for id=200's vector — should find it despite correction
     let results = index.search(&[0.0, 0.0, 0.0, 1.0], 1);
     assert_eq!(results.len(), 1);
-    assert_eq!(
-        results[0].id, 200,
-        "Search must find the vector after mapping correction"
-    );
+    assert_eq!(results[0].id, 200, "search must resolve the slot to id 200");
 }
 
-/// When `assigned_id == result.idx` (no divergence), the happy path
-/// should leave mappings unchanged.
+/// An id repeated within one batch ends on its last occurrence, and the slot
+/// of its first is retired rather than left answering for it.
 #[test]
-fn test_insert_and_correct_mapping_no_divergence_happy_path() {
-    let dim = 4;
-    let index = HnswIndex::new(dim, DistanceMetric::Euclidean).unwrap();
+fn test_a_batch_repeating_an_id_keeps_its_last_vector() {
+    let index = HnswIndex::new(4, DistanceMetric::Euclidean).unwrap();
+    let batch: Vec<(u64, &[f32])> = vec![
+        (7, &[1.0, 0.0, 0.0, 0.0]),
+        (8, &[0.0, 1.0, 0.0, 0.0]),
+        (7, &[0.0, 0.0, 1.0, 0.0]),
+    ];
+    assert_eq!(index.insert_batch_parallel(batch), 3);
 
-    // Normal insert: no divergence expected
-    let result = index.upsert_mapping(42);
-    assert_eq!(result.idx, 0);
-
-    let vector = [1.0, 0.0, 0.0, 0.0];
-    let success = index.insert_and_correct_mapping(42, &vector, &result);
-    assert!(success, "Happy path should succeed");
-
-    // Mapping should be exactly as allocated — no correction needed
-    assert_eq!(index.mappings.get_idx(42), Some(0));
-    assert_eq!(index.mappings.get_id(0), Some(42));
-    assert_eq!(index.len(), 1);
+    assert_eq!(index.len(), 2);
+    assert_eq!(
+        index.mappings.get_idx(7),
+        Some(2),
+        "id 7 follows its last occurrence"
+    );
+    assert_eq!(
+        index.mappings.get_id(0),
+        None,
+        "id 7's first slot must be retired"
+    );
+    let results = index.search(&[0.0, 0.0, 1.0, 0.0], 1);
+    assert_eq!(results[0].id, 7);
 }
 
 // =========================================================================
-// Issue #396: parallel_insert ignores expected idx — mapping reconciliation
+// Issue #396: a batch after single inserts — each id follows its slot
 // =========================================================================
 
-/// Regression test: batch insert after single inserts must reconcile mappings.
-///
-/// Single inserts consume graph node IDs, so when a subsequent batch
-/// pre-registers mapping indices, the graph may assign different node IDs.
-/// The reconciliation logic must correct the mappings to match.
+/// Regression test (#396): a batch after single inserts maps each id to the
+/// slot the graph gave its vector.
 #[test]
 fn test_batch_after_single_insert_mapping_consistency() {
     let index = HnswIndex::new(4, DistanceMetric::Euclidean).unwrap();
@@ -2985,9 +2957,7 @@ fn test_batch_after_single_insert_mapping_consistency() {
     index.insert(100, &[1.0, 0.0, 0.0, 0.0]);
     assert_eq!(index.len(), 1);
 
-    // Batch-insert 5 vectors. The mapping layer will pre-register indices
-    // starting from next_idx (1..=5), but the graph may assign node IDs
-    // starting from 1 as well — or they may diverge under races.
+    // Batch-insert 5 vectors; the graph places them after node 0.
     let batch: Vec<(u64, &[f32])> = vec![
         (200, &[0.0, 1.0, 0.0, 0.0]),
         (201, &[0.0, 0.0, 1.0, 0.0]),
@@ -3022,9 +2992,8 @@ fn test_batch_after_single_insert_mapping_consistency() {
 
 /// Regression test: graph vectors readable at graph-assigned IDs.
 ///
-/// After reconciliation, the vector each mapping resolves to (in the
-/// graph's `ContiguousVectors`) must be the one inserted for that external
-/// ID (not one stored at a stale pre-registered mapping index).
+/// The vector each mapping resolves to (in the graph's `ContiguousVectors`)
+/// must be the one inserted for that external ID.
 #[test]
 fn test_batch_insert_vector_storage_uses_assigned_ids() {
     let index = HnswIndex::new(4, DistanceMetric::Euclidean).unwrap();
@@ -3592,4 +3561,148 @@ fn adaptive_resume_is_deterministic_across_pool_reuse() {
             "adaptive resume drifted across pooled reuse"
         );
     }
+}
+
+/// An index built with `new_fast_insert`, a twin built with `new`, both
+/// holding the same 100 vectors, and a query.
+fn fast_insert_and_twin() -> (HnswIndex, HnswIndex, Vec<f32>) {
+    let index = HnswIndex::new_fast_insert(128, DistanceMetric::Cosine).unwrap();
+    let twin = HnswIndex::new(128, DistanceMetric::Cosine).unwrap();
+    for i in 0u64..100 {
+        let v: Vec<f32> = (0..128)
+            .map(|j| ((i + j as u64) as f32 * 0.01).sin())
+            .collect();
+        index.insert(i, &v);
+        twin.insert(i, &v);
+    }
+    let query = (0..128).map(|j| (j as f32 * 0.02).cos()).collect();
+    (index, twin, query)
+}
+
+/// Exact-distance features off turn the CPU brute-force scan off: it returns
+/// nothing for an index built with `new_fast_insert`, while the twin built
+/// with `new` answers.
+#[test]
+fn cpu_brute_force_returns_nothing_with_exact_distance_features_off() {
+    let (index, twin, query) = fast_insert_and_twin();
+    assert_eq!(
+        twin.brute_force_search_parallel(&query, 10).unwrap().len(),
+        10
+    );
+    assert!(index
+        .brute_force_search_parallel(&query, 10)
+        .unwrap()
+        .is_empty());
+}
+
+/// Exact-distance features off turn brute force off on the GPU path too: it
+/// returns nothing rather than scan an index built with `new_fast_insert`. A
+/// twin built with `new` is the positive control, and must answer whenever a
+/// GPU is present; without one the test returns early, reported as passed,
+/// after printing that the guard went unexercised (shown with `--nocapture`).
+#[cfg(feature = "gpu")]
+#[test]
+fn gpu_brute_force_returns_nothing_with_exact_distance_features_off() {
+    let (index, twin, query) = fast_insert_and_twin();
+    if !crate::gpu::GpuAccelerator::is_available() {
+        eprintln!("GPU unavailable: the exact-distance guard is not exercised here");
+        return;
+    }
+    let scanned = twin.search_brute_force_gpu(&query, 10).unwrap();
+    let scanned = scanned.expect("test: with a GPU, the twin built with new() scans");
+    assert_eq!(scanned.len(), 10);
+    assert!(index.search_brute_force_gpu(&query, 10).unwrap().is_none());
+}
+
+/// A delete never lands inside a renumber. The renumber below re-maps as
+/// `reorder_for_locality` does, under the write guard; `remove` holds the
+/// read guard across its two map writes, so every deleted id stays deleted
+/// and every kept id keeps a slot that names it back.
+#[test]
+fn deletes_racing_a_renumber_stay_deleted() {
+    use super::native_inner::Placed;
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    use std::sync::Barrier;
+
+    const IDS: usize = 4_000;
+    let index = HnswIndex::new(4, DistanceMetric::Euclidean).unwrap();
+    for id in 0..IDS {
+        assert_eq!(index.mappings.assign(id as u64, Placed::for_test(id)), None);
+    }
+    // Swaps each even slot with the next: its own inverse, so an even number
+    // of rounds leaves every slot where it started.
+    let swap: Vec<usize> = (0..IDS).map(|slot| slot ^ 1).collect();
+    let deleting = AtomicBool::new(true);
+    let start = Barrier::new(2);
+    let rounds = AtomicU32::new(0);
+    let mut unmapped = Vec::new();
+    let mut stalled = false;
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            start.wait();
+            while deleting.load(Ordering::Acquire) || rounds.load(Ordering::Acquire) % 2 == 1 {
+                let graph = index.inner.write();
+                index.mappings.remap_indices(&swap);
+                drop(graph);
+                rounds.fetch_add(1, Ordering::AcqRel);
+                std::thread::yield_now();
+            }
+        });
+        start.wait();
+        // Recorded, not asserted: a panic here would leave the renumbering
+        // thread looping, and the scope waiting on it for ever. Every 200
+        // deletes wait for a renumber to finish, so the renumbering thread is
+        // running at every checkpoint, not by scheduling luck.
+        for (n, id) in (0..IDS as u64).step_by(2).enumerate() {
+            if n % 200 == 0 && !a_round_passes(&rounds) {
+                stalled = true;
+                break;
+            }
+            if !index.remove(id) {
+                unmapped.push(id);
+            }
+        }
+        deleting.store(false, Ordering::Release);
+    });
+    assert!(!stalled, "the renumbering thread stopped making rounds");
+    assert!(
+        unmapped.is_empty(),
+        "ids found unmapped when removed: {unmapped:?}"
+    );
+    for id in 0..IDS as u64 {
+        match index.mappings.get_idx(id) {
+            Some(slot) => {
+                assert_eq!(id % 2, 1, "deleted id {id} is mapped again, at slot {slot}");
+                assert_eq!(
+                    index.mappings.get_id(slot),
+                    Some(id),
+                    "slot {slot} names another id"
+                );
+            }
+            None => assert_eq!(id % 2, 0, "kept id {id} lost its slot"),
+        }
+    }
+    // Searches resolve slots through the reverse map: no slot may still name a
+    // deleted id, and an even number of swaps leaves each kept id in its own.
+    let (_, reverse, _) = index.mappings.as_parts();
+    assert_eq!(reverse.len(), IDS / 2, "reverse entries");
+    assert!(
+        reverse
+            .iter()
+            .all(|(&slot, &id)| id % 2 == 1 && slot == id as usize),
+        "a slot names a deleted id, or a kept id sits outside its own slot"
+    );
+}
+
+/// Spins, yielding, until `rounds` moves past the value it holds now; `false`
+/// when it never does within the bound, so the remover stops waiting on a
+/// peer that stopped making rounds. A peer blocked for ever still hangs the
+/// scope that joins it.
+fn a_round_passes(rounds: &std::sync::atomic::AtomicU32) -> bool {
+    use std::sync::atomic::Ordering;
+    let seen = rounds.load(Ordering::Acquire);
+    (0..10_000_000).any(|_| {
+        std::thread::yield_now();
+        rounds.load(Ordering::Acquire) != seen
+    })
 }

@@ -330,8 +330,9 @@ impl GraphCollection {
     /// Removes an edge from the graph by ID.
     ///
     /// Returns `true` if the edge existed and was removed, `false` otherwise —
-    /// including on the genuine failure paths. Use `remove_edge_detailed` when
-    /// a failure must not pass for "already gone".
+    /// including on the genuine failure paths: a refused WAL append (logged at
+    /// `error`, the store left unmutated) and an index desynchronisation inside
+    /// the store. This signature cannot tell those from "already gone".
     #[must_use]
     pub fn remove_edge(&self, edge_id: u64) -> bool {
         self.inner.remove_edge(edge_id)

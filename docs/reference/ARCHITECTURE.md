@@ -238,7 +238,7 @@ VelesDB core architecture is explicitly **hybrid by design**:
   - `ef_search`: Query-time search width (default: 160, Balanced mode). An explicit `WITH (ef_search = N)` is passed through as the requested budget (clamped to at least `k`, and still subject to the standard dataset-size scaling), instead of being snapped to a coarse named profile. (Updated 2026-06-14.)
 
 - **Features**:
-  - Thread-safe parallel insertions with lock-free CAS entry-point promotion
+  - Thread-safe parallel insertions, with lock-free entry-point reads and a small lock for its rare promotions
   - Graduated ef_construction (3-phase VAMANA/DiskANN schedule for batches >= 1000)
   - Pre-allocated vector storage (reserve + bulk push to minimize lock contention)
   - Automatic level assignment
@@ -446,6 +446,7 @@ LIMIT 20 USING FUSION(strategy='rrf', k=60)
 | Vector Data (f16) | 1,536 bytes |
 | Vector Data (SQ8) | 768 bytes |
 | HNSW Links | ~256 bytes |
+| HNSW reachability anchor | 4 bytes |
 | Payload (avg) | ~200 bytes |
 
 ### Throughput

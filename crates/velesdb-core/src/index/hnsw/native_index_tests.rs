@@ -216,7 +216,7 @@ fn test_native_index_brute_force_k_larger_than_size() {
 
 #[test]
 fn test_native_insert_same_id_updates_vector() {
-    // Arrange: create index with vector storage enabled (default)
+    // Arrange: create index with exact-distance features on (default)
     let index = NativeHnswIndex::new(4, DistanceMetric::Cosine).expect("test");
 
     // Insert id=1 with vector A (pointing along x-axis)
@@ -301,10 +301,11 @@ fn test_native_remove_cleans_up_vector_storage() {
 }
 
 // =========================================================================
-// Issue #396: parallel_insert ignores expected idx — mapping reconciliation
+// Issue #396: a batch after single inserts — each id follows its slot
 // =========================================================================
 
-/// Regression test: batch insert after single inserts must reconcile mappings.
+/// Regression test (#396): a batch after single inserts maps each id to the
+/// slot the graph gave its vector.
 #[test]
 fn test_native_batch_after_single_insert_mapping_consistency() {
     let index = NativeHnswIndex::new(4, DistanceMetric::Euclidean).expect("test");

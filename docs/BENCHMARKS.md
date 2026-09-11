@@ -1,6 +1,6 @@
 # VelesDB Performance Benchmarks
 
-*Last updated: 2026-08-08 · Applies to: velesdb-core 6.0.0. Figures are re-validated at each release only when re-measured — each section carries its own measurement date and machine; this stamp tracks the document revision, not a fresh measurement.*
+*Last updated: 2026-09-10 · Applies to: velesdb-core 6.0.0. Figures are re-validated at each release only when re-measured — each section carries its own measurement date and machine; this stamp tracks the document revision, not a fresh measurement.*
 
 ---
 
@@ -169,15 +169,15 @@ The RRF fusion step is a simple score merge with no distance computation, so hyb
 
 | Profile | ef_search | Recall@10 | Latency P50 |
 |---------|-----------|-----------|-------------|
-| Fast | 96 | 92.2% | 36 us |
-| Balanced | 160 | 98.8% | 57 us |
+| Fast | 96 | 97.4% | 36 us |
+| Balanced | 160 | 99.8% | 57 us |
 | Accurate | 512 | 100.0% | 130 us |
-| Perfect | 4096 | 100% | 200 us |
-| Adaptive | 32–512 | 95%+ | ~15-40 us (easy queries) |
+| Perfect | exhaustive | 100.0% | 200 us |
+| Adaptive | 32, then 64 if hard | — | — |
 
-*Recall values from recall_benchmark. Latencies measured March 19, 2026, with the ef defaults current at that time (Fast=64, Balanced=128); the Fast/Balanced profiles have since been raised to ef 96/160, so their measured recall figures are lower bounds and their latencies slightly optimistic until re-measured. ef_search values are base values (scaled with k).*
+*Recall values from `recall_benchmark`'s recall report (10K random 128-D vectors, Cosine, an index built with `HnswParams::max_recall`: M=32, ef_construction=500; 100 queries, k=10), re-measured 2026-09-10 on 6.0.0 (Apple M5 Pro) at the current presets; two runs gave the same figures. Neither that report nor the March run records the Adaptive row, so it carries no figure (#2266). Latencies were measured March 19, 2026, on the reference machine with the ef defaults of that time (Fast=64, Balanced=128), so the Fast and Balanced latencies are slightly optimistic until re-measured there. ef_search values are base values (scaled with k).*
 
-Recall@10 >= 95% is the design target for Balanced mode and above, and is what we measure on the benchmark sets below — it is a measured target, not a hard guarantee, since HNSW is an approximate index. The new **Adaptive** mode starts with a low ef and escalates only for hard queries, achieving 2-4x faster median latency. Use `HnswParams::for_dataset_size()` for automatic parameter tuning.
+Recall@10 >= 95% is the design target for Balanced mode and above: the 10K table above measures Balanced at 99.8%, and at 1M §11.3 measures Accurate at 0.98 — a measured target, not a hard guarantee, since HNSW is an approximate index. The **Adaptive** mode starts with a low ef and escalates only for hard queries; its median-latency gain has no recorded measurement here. Use `HnswParams::for_dataset_size()` for automatic parameter tuning.
 
 ### Search Optimization Notes (v1.7.2)
 
@@ -374,7 +374,7 @@ Section 9 explains why VelesDB does not currently publish head-to-head competito
 - Index: native HNSW (`max_connections = 16`, `ef_construction = 200`) — matches the canonical HNSWlib SIFT1M reference methodology.
 - Metric: `DistanceMetric::Euclidean` (L2) — SIFT descriptors are L2.
 - `ef_search` sweep: 64, 128, 256, 512. Values in the `RECALL_REPORT` output lines are **exact** — passed to the graph traversal verbatim.
-- **Search path**: [`HnswIndex::search_raw`] — the raw HNSW graph search, bypassing `SearchQuality` ef scaling and two-stage reranking. This produces numbers directly comparable with HNSWlib / Faiss / ScaNN plain HNSW. VelesDB's production search path (`search_with_quality`) wraps this with quality-aware ef scaling and exact-SIMD reranking and is measured separately by `benches/recall_comprehensive.rs`; the two numbers are intentionally different and cover different questions (apples-to-apples cross-implementation vs. end-to-end product path).
+- **Search path**: [`HnswIndex::search_raw`] — the raw HNSW graph search, bypassing `SearchQuality` ef scaling and two-stage reranking. This produces numbers directly comparable with HNSWlib / Faiss / ScaNN plain HNSW. VelesDB's production search path (`search_with_quality`) wraps this with quality-aware ef scaling and exact-SIMD reranking in the fixed-ef modes (Fast, Balanced, Accurate, Custom), while `Perfect` scans exhaustively. This harness's `report_recall_quality` measures that path for `Accurate` and `Perfect` (§11.3), and `benches/recall_comprehensive.rs` covers the modes; the two sets of numbers are intentionally different and cover different questions (apples-to-apples cross-implementation vs. end-to-end product path).
 - **Recall@10** = mean over 10,000 queries of `|retrieved_top10 ∩ groundtruth_top10| / 10`.
 - **Latency** measured by Criterion (20 samples / ef value, mean + 95% CI). Recall measured in a separate pass after the timing pass so the timing loop is not polluted by intersection bookkeeping.
 
@@ -391,17 +391,17 @@ First reproducible run, **VelesDB v3.3.0** (M=16, ef_construction=200, L2), full
 | 256 | 0.9659 | 235.8 µs |
 | 512 | 0.9759 | 433.3 µs |
 
-**Production path** (`search_with_quality` — quality-aware ef scaling + exact-SIMD reranking; the recall a real application query gets):
+**Production path** (`search_with_quality` — quality-aware ef scaling + exact-SIMD reranking in the fixed-ef modes (Fast, Balanced, Accurate, Custom); `Perfect` is a plain exhaustive scan, which a collection refuses at this size):
 
 | Mode | ef_search (at 1M) | Recall@10 |
 |------|-------------------|-----------|
 | Accurate | ~1024 | 0.9803 |
-| Perfect | ~8192 | 0.9994 |
+| Perfect (exhaustive scan) ¹ | — | 0.9994 |
 
 Notes:
 - The two paths answer different questions: the plain path is for cross-implementation comparison; the production path is what an application actually calls. Don't compare the plain numbers against the 10K production-path figures elsewhere in this doc.
 - Recall climbs monotonically with `ef_search`; ef=128 (0.9435) clears the ≥ 0.90 regression floor (§11.5) with margin.
-- **`Perfect` reaches 0.9994 — not literally 1.0 — at 1M scale.** The exact-1.0 guarantee is validated by the contract test at ≤ 100K (synthetic data, `scale_recall_100k.rs`). On real SIFT1M at 1M, ~0.06% of true neighbours fall outside even the ef=8192 candidate pool, and exact reranking can only reorder the candidates the graph surfaced — it cannot recover a neighbour the traversal never visited. So "100%" is a ≤100K guarantee, not a 1M one.
+- ¹ **This row is `Perfect`, an exhaustive scan.** It comes from `sift1m_recall.rs` (#1225), whose quality report calls `HnswIndex::search_with_quality(…, Perfect)`: that returns `search_brute_force` over every stored vector before any ef is computed. The `~8192` the row used to show was `Perfect.ef_search_for_scale(10, 1M)`, a computed label, not an effort that ran. Why an exhaustive scan scores 0.9994 rather than 1.0 against SIFT1M's ground truth is not established: distance ties among SIFT's integer-valued vectors, broken differently from the ground truth, and f32 rounding are candidates, not measured causes. A collection refuses `Perfect` at 1M under the default `limits.max_perfect_mode_vectors` (500 000); this bench calls `HnswIndex` directly, which has no cap.
 
 Literature reference points (published by the respective libraries on similar hardware — **not VelesDB numbers**, orientation only):
 

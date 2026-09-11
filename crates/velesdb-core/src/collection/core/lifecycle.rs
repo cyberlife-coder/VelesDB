@@ -436,7 +436,7 @@ impl Collection {
         }
     }
 
-    /// Pre-assemble index recovery: quantizer preinstall + 3-pass
+    /// Pre-assemble index recovery: quantizer preinstall + the open-time
     /// reconciliation of the (possibly stale) loaded HNSW index against the
     /// WAL-replayed vector storage.
     ///
@@ -490,8 +490,8 @@ impl Collection {
             return Ok((index, false));
         }
         tracing::warn!(
-            "loaded HNSW index has no vector storage but {} WAL-touched ids overlap it; \
-             rebuilding from vector storage",
+            "loaded HNSW index cannot verify its vectors (exact-distance features off) \
+             and {} WAL-touched ids overlap it; rebuilding it from storage",
             wal_ids.len()
         );
         // Inherit the home from the index being replaced: this path has no

@@ -47,15 +47,11 @@ fn now_nanos() -> u128 {
 ///   the wasm `MemoryStore` is in-memory only, so a stored durable expiry (a
 ///   real epoch second count) never actually exists there for 0 to be
 ///   compared against.
-/// - [`MemoryService::update_working_index`]'s `saved_at` stamp. The wasm 0
-///   is NOT harmless here: every entry gets the same stamp, so
-///   `list_working_contexts` falls through to its `session`-ascending
-///   tiebreak and orders alphabetically while five surfaces — this crate,
-///   the wasm binding, the TS SDK, `MCP_TOOLS.md`, and the MCP tool
-///   description the model itself reads — promise "most-recently-saved
-///   first". Recording the divergence, not excusing it: fixing it needs a
-///   real wasm clock or an optional `saved_at`, and that is a decision, not
-///   a patch.
+/// - [`MemoryService::save_working_context`]'s `saved_at` stamp, written on
+///   the session's own fact and handed to `update_working_index` for the
+///   index entry. On `wasm32` every stamp is 0, so every entry ties; the
+///   listing's sort is stable, and the index's stored order — maintained as
+///   recency by `update_working_index` — decides instead of the clock.
 fn now_unix_secs() -> u64 {
     #[cfg(target_arch = "wasm32")]
     {
@@ -142,6 +138,9 @@ const CTX_TOKENS_SAVED_FIELD: &str = "_veles_ctx_tokens_saved";
 const CTX_COST_FIELD: &str = "_veles_ctx_cost_micros";
 const CTX_CURRENCY_FIELD: &str = "_veles_ctx_currency";
 const CTX_AT_FIELD: &str = "_veles_ctx_at";
+/// Unix seconds a working context was saved, stamped on its own fact so a
+/// rebuilt index recovers the recency order the index alone used to carry.
+const CTX_SAVED_AT_FIELD: &str = "_veles_ctx_saved_at";
 
 /// Per-process sequence folded into event ids so two compilations landing on
 /// the same clock tick (coarse timers, concurrent calls) never collide.
@@ -195,18 +194,28 @@ fn bound_sessions(sessions: &mut Vec<WorkingContextSession>, just_saved: &str) {
     if sessions.len() <= CAP {
         return;
     }
-    // Pin by moving the just-saved entry to the front — where the writer put
-    // it, and where the recency order wants it — with one in-place rotation.
+    // Pin by moving the just-saved entry to the front, where the recency order
+    // wants it. From `update_working_index` it is already there and this does
+    // nothing; it stays so the pin does not depend on who calls.
     // Everything after it is then stably ordered by `saved_at` alone (ties
     // keep the stored recency order) and the tail past the cap is cut. When
     // the entry is absent the whole vector is ordered and cut the same way.
-    let pinned = sessions.iter().position(|s| s.session == just_saved);
-    if let Some(at) = pinned {
-        sessions[..=at].rotate_right(1);
-    }
-    let unpinned_from = usize::from(pinned.is_some());
+    let unpinned_from = usize::from(move_to_front(sessions, just_saved));
     sessions[unpinned_from..].sort_by_key(|s| std::cmp::Reverse(s.saved_at));
     sessions.truncate(CAP);
+}
+
+/// Moves `session`'s entry to the front with one in-place rotation, shifting
+/// the entries it passes by one and keeping their order. `false` when absent.
+///
+/// The one implementation of the pin: `update_working_index` puts the saved
+/// entry first with it, and `bound_sessions` keeps it first with it.
+fn move_to_front(sessions: &mut [WorkingContextSession], session: &str) -> bool {
+    let Some(at) = sessions.iter().position(|s| s.session == session) else {
+        return false;
+    };
+    sessions[..=at].rotate_right(1);
+    true
 }
 
 /// The compilation half — `compile_context` and its helpers; see
@@ -281,13 +290,15 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
         let embedding = self
             .embedder
             .embed(&format!("working context {project} {session}"))?;
+        let saved_at = now_unix_secs();
         let meta = system_meta(&[
             (CTX_WORKING_FIELD, Value::Bool(true)),
             (CTX_PROJECT_FIELD, Value::String(project.to_owned())),
             (CTX_SESSION_FIELD, Value::String(session.to_owned())),
+            (CTX_SAVED_AT_FIELD, Value::from(saved_at)),
         ]);
         self.store_fact(id, &content, &embedding, Some(&meta), None)?;
-        self.update_working_index(project, session)?;
+        self.update_working_index(project, session, saved_at)?;
         Ok(id)
     }
 
@@ -498,21 +509,21 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     /// [`CTX_WORKING_FIELD`], [`CTX_PROJECT_FIELD`] and [`CTX_SESSION_FIELD`],
     /// so the listing can be rebuilt from the facts themselves.
     ///
-    /// `saved_at` is NOT recoverable: it lives in the index alone, never on
-    /// the fact. Recovered entries carry 0, which sorts them after anything
-    /// stamped since — an honest "unknown", and a far smaller harm than
-    /// dropping them. The session being saved right now is stamped with the
-    /// real clock by the caller, which finds it already present here.
+    /// `saved_at` comes from the fact: [`Self::save_working_context`] stamps
+    /// it there as well as in the index. A session saved before that stamp
+    /// existed reads 0, which sorts it after anything stamped — an honest
+    /// "unknown", and a far smaller harm than dropping it.
     ///
     /// Returns `Ok(None)` when the backend cannot enumerate.
     /// [`FactStore::list`] is defaulted to [`MemoryError::Unsupported`] on
     /// purpose, so an out-of-crate backend that cannot walk keeps saving
     /// rather than failing — it just cannot recover the listing.
     ///
-    /// Walks at most [`crate::limits::MAX_WORKING_SESSIONS_PER_PROJECT`]
-    /// matches: the rebuilt index is bounded by the same cap every other
-    /// write honors, so a huge store cannot turn this rare path into an
-    /// unbounded walk.
+    /// Walks the WHOLE store: matches are not contiguous, and stopping at the
+    /// cap kept whichever sessions the store lists first rather than the most
+    /// recent — the listing is ordered, then capped, by the recovered stamps.
+    /// That walk is why its caller releases the process-wide index lock
+    /// around it.
     fn rebuild_working_index(
         &self,
         project: &str,
@@ -536,19 +547,23 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
                 let Some(Value::String(session)) = fact.payload.get(CTX_SESSION_FIELD) else {
                     continue;
                 };
+                let saved_at = fact.payload.get(CTX_SAVED_AT_FIELD).and_then(Value::as_u64);
                 sessions.push(WorkingContextSession {
                     session: session.clone(),
-                    saved_at: 0,
+                    saved_at: saved_at.unwrap_or(0),
                 });
-                if sessions.len() >= crate::limits::MAX_WORKING_SESSIONS_PER_PROJECT {
-                    return Ok(Some(sessions));
-                }
             }
             match next {
                 Some(at) => cursor = Some(at),
-                None => return Ok(Some(sessions)),
+                None => break,
             }
         }
+        // Most recent first, as the index keeps them. Stable, so sessions saved
+        // before the stamp existed keep the store's order behind every stamped
+        // one. Then the cap every other write honours.
+        sessions.sort_by_key(|s| std::cmp::Reverse(s.saved_at));
+        sessions.truncate(crate::limits::MAX_WORKING_SESSIONS_PER_PROJECT);
+        Ok(Some(sessions))
     }
 
     /// Every session still resumable under `project`'s working-context index
@@ -637,7 +652,19 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     /// fact was forgotten since are dropped here, on the write path, under
     /// the same lock and in the same read-modify-write that was already
     /// paid for. Reads never mutate it.
-    fn update_working_index(&self, project: &str, session: &str) -> Result<(), MemoryError> {
+    ///
+    /// `saved_at` is the stamp the caller wrote on the session's own fact. The
+    /// two agree unless two saves of the same session race — the stamp is taken
+    /// before this lock, so the entry can keep the other save's stamp, though
+    /// it is never lost — or this call fails after the fact was stored, which
+    /// leaves the old stamp, or no entry for a new session, until the session
+    /// is saved again.
+    fn update_working_index(
+        &self,
+        project: &str,
+        session: &str,
+        saved_at: u64,
+    ) -> Result<(), MemoryError> {
         // The index slot's embedding derives from the PROJECT NAME alone,
         // never from the index content, so it is computed here, BEFORE the
         // lock: an embedder can be a network round-trip (or a hung one), and
@@ -651,7 +678,7 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
             .embed(&format!("working context index {project}"))?;
         // Read-modify-write of a single shared fact: held for the whole
         // sequence, otherwise a concurrent save silently erases this entry.
-        let _guard = WORKING_INDEX_WRITE.lock();
+        //
         // A corrupt index must not brick saving for the whole project:
         // propagating the error here would make every future save of every
         // session under it fail forever, with no way back, since the only
@@ -670,14 +697,27 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
         // cannot enumerate at all does this fall back to the empty rebuild —
         // documented on [`Self::rebuild_working_index`], and still the
         // save-keeps-working outcome it always was.
-        let mut index = match self.working_index(project) {
-            Ok(index) => index.unwrap_or_default(),
-            Err(MemoryError::WorkingContextCodec { .. }) => WorkingContextIndex {
-                sessions: self.rebuild_working_index(project)?.unwrap_or_default(),
-            },
-            Err(err) => return Err(err),
+        //
+        // The rebuild walks the store, not the index, and this lock is
+        // process-wide: held across the walk, one project's recovery stalled
+        // every project's saves. So the walk runs with the lock released, and
+        // the index is read again once it is retaken — a writer that repaired
+        // it meanwhile wins over the walk. The loop turns at most twice.
+        let mut walked: Option<Vec<WorkingContextSession>> = None;
+        let (_guard, mut index) = loop {
+            let guard = WORKING_INDEX_WRITE.lock();
+            match self.working_index(project) {
+                Ok(index) => break (guard, index.unwrap_or_default()),
+                Err(MemoryError::WorkingContextCodec { .. }) => {
+                    if let Some(sessions) = walked.take() {
+                        break (guard, WorkingContextIndex { sessions });
+                    }
+                    drop(guard);
+                    walked = Some(self.rebuild_working_index(project)?.unwrap_or_default());
+                }
+                Err(err) => return Err(err),
+            }
         };
-        let now = now_unix_secs();
         // The vector's ORDER is recency, most recent first, maintained here on
         // every save: the entry being saved moves (or is inserted) at the
         // front. `saved_at` alone cannot carry that order — it is whole
@@ -689,17 +729,14 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
         // fell through to a `session`-ascending tiebreak — alphabetical — and
         // on wasm the whole listing was alphabetical while five surfaces
         // promised recency.
-        if let Some(at) = index.sessions.iter().position(|s| s.session == session) {
-            // One in-place rotation moves the entry to the front and shifts
-            // the ones before it by one: no allocation, one pass.
-            index.sessions[..=at].rotate_right(1);
-            index.sessions[0].saved_at = now;
+        if move_to_front(&mut index.sessions, session) {
+            index.sessions[0].saved_at = saved_at;
         } else {
             index.sessions.insert(
                 0,
                 WorkingContextSession {
                     session: session.to_owned(),
-                    saved_at: now,
+                    saved_at,
                 },
             );
         }

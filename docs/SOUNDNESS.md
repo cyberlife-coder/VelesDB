@@ -875,67 +875,158 @@ assert!(current == self.epoch_at_creation, "Mmap was remapped");
 - Guard panics if epoch mismatches (fail-safe)
 - No data race: old pointers are never dereferenced after epoch change
 
-**Pattern 2**: CAS entry-point promotion (HNSW)
+**Pattern 2**: entry-point moves under the promotion lock (HNSW)
 
-`NativeHnsw` stores `entry_point` and `max_layer` as `AtomicUsize`. During
-batch insert, `promote_entry_point()` uses `compare_exchange(AcqRel/Acquire)`
-to atomically update the entry point without a mutex.
+`NativeHnsw` stores `entry_point` and `max_layer` as `AtomicUsize`, which
+searches load without a lock. Every write takes `promotion: Mutex<()>`
+(rank 8, before `vectors`): the first claim of an empty graph, each
+promotion together with the anchor reparenting that follows it, and the
+renumbering `reorder_for_locality` applies (#2259).
 
 ```rust
-// First insert: CAS from NO_ENTRY_POINT to node_id
+// First insert: under the lock, CAS from NO_ENTRY_POINT, then set max_layer
 self.entry_point.compare_exchange(
     NO_ENTRY_POINT, node_id, Ordering::AcqRel, Ordering::Acquire
 );
-// Layer promotion: CAS on max_layer, then store entry_point
-self.max_layer.compare_exchange(
-    current_max, node_layer, Ordering::AcqRel, Ordering::Acquire
-);
-self.entry_point.store(node_id, Ordering::Release);
+// Layer promotion: under the lock, check again, store max_layer, swap the
+// entry point, then reparent the anchor tree
+self.max_layer.store(node_layer, Ordering::Release);
+let previous = self.entry_point.swap(node_id, Ordering::AcqRel);
+self.reparent_entry_point(previous, node_id);
 ```
 
 **Why It's Sound**:
-- AcqRel on the CAS ensures that the winner's store is visible to all
-  subsequent Acquire loads.
-- The transient window between `max_layer` CAS and `entry_point` store is
-  safe: readers seeing the old entry point at the new max layer encounter
-  empty neighbor lists and perform a no-op descent.
-- Entry-point promotion occurs O(log_M(N)) times per index lifetime,
-  so the CAS loop almost never retries.
+- Writers are serialized, so two promotions never interleave: the later one
+  cannot clear the anchor the earlier one has just given its node, which
+  would strand the tree below it.
+- AcqRel on the CAS and the swap makes the new entry point visible to every
+  later Acquire load.
+- The transient window between the `max_layer` store and the swap is safe:
+  readers seeing the old entry point at the new max layer encounter empty
+  neighbor lists and perform a no-op descent.
+- A node at or below the maximum layer, the common case, returns before
+  taking the lock; promotion occurs O(log_M(N)) times per index lifetime.
 
-### HNSW Batch Insertion Ordering
+### HNSW Slot Allocation
 
-**Module**: `crates/velesdb-core/src/index/hnsw/index/batch.rs`, `crates/velesdb-core/src/index/hnsw/upsert.rs`
+**Module**: `crates/velesdb-core/src/index/hnsw/sharded_mappings.rs`, `crates/velesdb-core/src/index/hnsw/native_inner.rs`, `crates/velesdb-core/src/index/hnsw/index/batch.rs`, `crates/velesdb-core/src/index/hnsw/direct_writer.rs`, `crates/velesdb-core/src/index/hnsw/upsert.rs`, `crates/velesdb-core/src/index/hnsw/index/mod.rs`, `crates/velesdb-core/src/index/hnsw/native_index.rs`, `crates/velesdb-core/src/index/hnsw/index/vacuum.rs`
 
-The batch insertion pipeline enforces a strict phase ordering to prevent
-partial state corruption:
+A slot is an index into the graph's `ContiguousVectors`, and the arena is
+its only allocator: a slot exists once a vector has been pushed into it, and
+the push returns it. Every insert path — single, batch, the vacuum rebuild
+and the bulk path's direct writer — places the vector first and then maps
+the id to the slot it got (`ShardedMappings::assign`). Nothing predicts a
+slot.
 
-1. **Validate dimensions** — All vectors are checked before any state mutation.
-   A dimension mismatch panics before `upsert_mapping_batch` runs, so no
-   orphaned mappings are created.
-2. **Register mappings** (`upsert_mapping_batch`) — Allocates internal
-   indices; a replaced ID's old graph node becomes an unreachable tombstone.
-   This is a point of no return: if the subsequent graph insert fails,
-   rollback must undo mappings in reverse order.
-3. **Graph insert** (`parallel_insert`) — Inserts nodes (and their vectors,
-   into the graph's `ContiguousVectors` — the single vector store since
-   PERF1) using rayon. On failure, rollback iterates `rollback_info` in
-   reverse to correctly restore duplicate-ID chains.
-4. **Mapping reconciliation** (`reconcile_batch_mappings`) — Re-points any
-   mapping whose graph-assigned node ID differs from the pre-registered
-   index, so search/rerank/brute-force resolve to the correct graph slot.
+1. **Validate dimensions** — every vector of a batch is checked before the
+   graph sees any, so a mismatch leaves the index untouched.
+2. **Place** (`place`, `place_parallel`, and `place_unlinked` for the
+   direct writer) — the arena appends under its own lock and returns each
+   slot as a `Placed` token, in input order.
+3. **Assign** — each id is mapped to its slot. An id that was already
+   mapped leaves its old slot behind as a tombstone; an id repeated within
+   a batch ends on its last occurrence.
 
-**Invariant**: Dimension validation (step 1) always precedes destructive
-mapping mutations (step 2). This is enforced by the structure of
-`prepare_batch_insert()`.
+**Invariant**: a mapping only ever names a slot that already holds that
+id's vector, so two writers — a bulk load's direct writer and a single
+upsert, say — cannot hand one slot to two ids. Debug builds check part of
+it in `assign`: a slot whose reverse entry names another id panics before
+either map changes.
 
-**Invariant**: Rollback iterates in reverse order so that within-batch
-duplicate IDs restore correctly (each rollback depends on the state left
-by the previous entry).
+**Invariant**: the index read guard is held from placement to assignment.
+`reorder_for_locality` and `vacuum` renumber slots under the write lock, so
+no slot can move between the push that returned it and the mapping that
+names it; `vacuum` rebuilds the mappings before it releases that lock.
+`assign` takes the `Placed` token a placement returns, never a bare slot,
+and the token borrows the guard the placement ran under: releasing that
+guard before the slot is mapped does not compile (E0505). Placements mint
+the token; outside tests (`Placed::for_test`) the one exception is
+`Placed::installed`, which `vacuum` uses for its rebuilt graph: it makes a
+token from a bare slot under a write guard and trusts its caller that the
+slot is that graph's. The token ties a mapping to a guard's lifetime, not to
+a particular index; each call site keeps an index's guard and its mappings
+together.
 
-**Cross-reference**: The `Collection`-level 3-phase pipeline (`crud.rs`:
-`batch_store_all` -> `per_point_updates` -> `bulk_index_or_defer`) calls
-`insert_batch_parallel` in Phase 3. The crash recovery implications are
-documented in [CONCURRENCY_MODEL.md](CONCURRENCY_MODEL.md#known-limitations).
+**Invariant**: `remove` holds the index read guard across its two map
+writes: `soft_delete` borrows the graph, so releasing the guard first does
+not compile. `reorder_for_locality` re-maps under the write guard by
+snapshotting the forward map, clearing both maps and reinserting: one
+overlapping a delete could map the deleted id again, and one between its
+two writes could erase the reverse entry of the id that took its slot.
+`vacuum` snapshots under a read guard it releases before rebuilding, then
+re-maps under the write guard, so a delete, insert or upsert made during the
+rebuild is still lost (#2262). As with `Placed`, the borrow proves a borrow
+of some graph (through its guard, for an index's own), not that it is this
+index's graph: each call site keeps an index's guard and its mappings
+together.
+
+**Invariant**: a refused vector or batch maps nothing, so there is nothing
+to roll back. A batch the graph refuses part-way leaves the nodes it already
+placed unmapped, as tombstones `vacuum` reclaims.
+
+**Why it used to be otherwise (#2246)**: the mappings kept a counter of
+their own. They predicted a slot at registration, the graph pushed wherever
+the arena was, and a reconcile step corrected the mapping afterwards; the
+direct writer wrote at the predicted slot and never reconciled. With a bulk
+load and single upserts running together the two counters diverged, and
+each of three runs of `tests/concurrent_bulk_slots.rs` lost 611 to 645 of
+6 400 ids — unfindable even by an exhaustive scan, or answering with
+another id's vector.
+
+**Cross-reference**: The `Collection`-level pipeline (`crud.rs`:
+`batch_store_all` -> `per_point_updates`, then `crud_indexing.rs`:
+`bulk_index_or_defer`) calls `insert_batch_parallel` in its last phase. The
+crash recovery implications are documented in
+[CONCURRENCY_MODEL.md](CONCURRENCY_MODEL.md#known-limitations).
+
+### HNSW Reachability Anchors
+
+**Module**: `crates/velesdb-core/src/index/hnsw/native/graph/anchors.rs`, `crates/velesdb-core/src/index/hnsw/native/layer.rs`, `crates/velesdb-core/src/index/hnsw/native/graph/neighbors.rs`, `crates/velesdb-core/src/index/hnsw/native/graph/insert.rs`
+
+Every base-layer node other than the entry point records an *anchor*: the
+node whose list holds one edge to it that eviction never removes (#2259).
+Anchors take four bytes a slot (`AtomicU32`, the width node ids have on
+disk), allocated with the base layer.
+
+**Invariant**, outside a promotion: `anchor_of(x) == a` implies `x` is in
+`a`'s base-layer list, and `a` is itself anchored or is the entry point,
+which has no anchor. The
+anchors therefore form a tree rooted at the entry point, and every anchored
+node is reachable from it over the base layer. Reachable is the guarantee: a
+search starts from where its greedy descent lands and stops on stagnation,
+so it still walks that graph approximately.
+
+- **Set and checked under the parent's list lock.** `link_protected` makes
+  sure `x` is in `a`'s list and records the anchor inside the same
+  `with_neighbors_mut` closure; `evict_most_redundant` scans a list under that
+  lock and skips every entry anchored to its owner. An evictor can never see
+  the anchor without the edge, nor remove the edge after the anchor.
+- **Eviction never removes an anchor edge**: both eviction sites skip every
+  entry anchored to the list's owner, so an evictee's anchor, once it has
+  one, is another list's edge; a batch mate still connecting gets its own
+  from the pass after its chunk. When every entry of a full list is
+  protected, `link_protected` places the edge one level down the tree
+  instead, in a protected child picked by `spread_protected_child`, so no
+  list grows past its cap;
+  only after 32 levels would one grow by one. `connect_back_with_pruning`
+  skips adding the newcomer to such a list.
+- **Every node gets one.** A single insert anchors its node from the first
+  anchored node of its own list; a parallel batch anchors each node as soon as
+  one of its neighbours is, then retries the rest until a pass adds nothing,
+  and links what remains from the entry point. The first insert into an empty
+  graph claims the entry point under the promotion lock
+  (`claim_first_entry_point`): a
+  node that loses that claim, a single insert or a batch's first node,
+  connects through the winner.
+- **The root moves with the entry point.** A promoted entry point drops its
+  own anchor and takes the previous one into its subtree (`reparent_entry_point`),
+  under the promotion lock and in the same step as the swap: two promotions
+  never interleave their reparenting.
+- **Renumbering and loading.** `Layer::remap_ids` moves and renames anchors
+  with the lists they describe. A loaded graph rebuilds them as a
+  breadth-first tree from the entry point, since they are not persisted, then
+  anchors each node that walk missed from its own list: a graph saved before
+  #2259 is repaired when it is loaded.
 
 ### Interior Mutability Invariants: `RaBitQPrecisionHnsw`
 

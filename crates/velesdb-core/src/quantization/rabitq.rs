@@ -207,7 +207,7 @@ impl RaBitQIndex {
     ///
     /// Avoids the `Vec<u64>` allocation that `distance_from_prepared` would
     /// require when the caller only has a borrowed slice (e.g. from
-    /// [`RaBitQVectorStore::get_bits_slice`]).
+    /// [`RaBitQVectorStore::get_bits_slice`](super::RaBitQVectorStore::get_bits_slice)).
     ///
     /// `pub(crate)` for Phase 3 integration (`RaBitQ` HNSW search path).
     pub(crate) fn distance_from_prepared_slice(

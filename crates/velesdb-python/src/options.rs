@@ -267,14 +267,14 @@ pub struct LimitsOptions {
     /// Maximum vector dimension. Default: 4096.
     #[pyo3(get, set)]
     pub max_dimensions: Option<usize>,
-    /// Maximum vectors per collection (soft cap, not yet enforced).
+    /// Maximum vectors per collection, enforced at ingest (GuardRail VELES-027).
     #[pyo3(get, set)]
     pub max_vectors_per_collection: Option<usize>,
-    /// Maximum payload size in bytes (not yet enforced).
+    /// Maximum payload size in bytes, enforced at ingest (GuardRail VELES-027).
     #[pyo3(get, set)]
     pub max_payload_size: Option<usize>,
-    /// Maximum vector count before "perfect" mode disengages (not yet
-    /// enforced).
+    /// Collection size above which a Perfect search is refused with a
+    /// guard-rail error rather than scanned (GuardRail VELES-027).
     #[pyo3(get, set)]
     pub max_perfect_mode_vectors: Option<usize>,
 }
@@ -725,15 +725,15 @@ impl StorageOptions {
     }
 }
 
+#[allow(
+    deprecated,
+    reason = "maps the deprecated storage fields both ways until removal"
+)]
 impl StorageOptions {
     pub(crate) fn to_core(&self) -> CoreStorageConfig {
         let mut cfg = CoreStorageConfig::default();
-        if let Some(ref data_dir) = self.data_dir {
-            cfg.data_dir.clone_from(data_dir);
-        }
-        if let Some(ref storage_mode) = self.storage_mode {
-            cfg.storage_mode.clone_from(storage_mode);
-        }
+        cfg.data_dir = self.data_dir.clone().unwrap_or(cfg.data_dir);
+        cfg.storage_mode = self.storage_mode.clone().unwrap_or(cfg.storage_mode);
         cfg.mmap_cache_mb = self.mmap_cache_mb.unwrap_or(cfg.mmap_cache_mb);
         cfg.vector_alignment = self.vector_alignment.unwrap_or(cfg.vector_alignment);
         cfg

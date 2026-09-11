@@ -33,6 +33,7 @@ const ITERATIONS: usize = 500;
 /// under the locks.
 struct CoreLocks {
     gpu: Mutex<u64>,
+    promotion: Mutex<u64>,
     vectors: Mutex<u64>,
     layers: Mutex<u64>,
     neighbors: Mutex<u64>,
@@ -42,6 +43,7 @@ impl CoreLocks {
     fn new() -> Self {
         Self {
             gpu: Mutex::new(0),
+            promotion: Mutex::new(0),
             vectors: Mutex::new(0),
             layers: Mutex::new(0),
             neighbors: Mutex::new(0),
@@ -60,6 +62,11 @@ impl CoreLocks {
         let mut prev = LockRank::GPU_VECTORS_SNAPSHOT;
         let mut gpu = self.gpu.lock();
         *gpu += 1;
+
+        assert_lock_order(prev, LockRank::ENTRY_POINT_PROMOTION);
+        prev = LockRank::ENTRY_POINT_PROMOTION;
+        let mut promotion = self.promotion.lock();
+        *promotion += 1;
 
         assert_lock_order(prev, LockRank::VECTORS);
         prev = LockRank::VECTORS;
@@ -80,13 +87,15 @@ impl CoreLocks {
         drop(neighbors);
         drop(layers);
         drop(vectors);
+        drop(promotion);
         drop(gpu);
     }
 
     /// Returns the per-class counters once all workers have joined.
-    fn totals(&self) -> [u64; 4] {
+    fn totals(&self) -> [u64; 5] {
         [
             *self.gpu.lock(),
+            *self.promotion.lock(),
             *self.vectors.lock(),
             *self.layers.lock(),
             *self.neighbors.lock(),
@@ -121,7 +130,7 @@ fn test_concurrent_ascending_lock_order_holds() {
     let expected = (NUM_THREADS * ITERATIONS) as u64;
     assert_eq!(
         locks.totals(),
-        [expected; 4],
+        [expected; 5],
         "every ordered lock class must have been acquired exactly once per iteration per thread"
     );
 }
@@ -133,6 +142,7 @@ fn test_concurrent_ascending_lock_order_holds() {
 fn test_core_acquisition_path_is_strictly_ascending() {
     let path = [
         LockRank::GPU_VECTORS_SNAPSHOT,
+        LockRank::ENTRY_POINT_PROMOTION,
         LockRank::VECTORS,
         LockRank::LAYERS,
         LockRank::NEIGHBORS,

@@ -206,11 +206,12 @@ jobs:
       # `super::` path in a module's `//!` header breaks once the `mod`
       # declaration also carries `///` docs, because the merged doc resolves in
       # the parent's scope. Fixed in this change; this step is what keeps them
-      # fixed.
+      # fixed. `--document-private-items` makes it resolve the links private
+      # items carry too: without it nothing did, and 15 more had broken.
       - name: Rustdoc intra-doc links (velesdb-memory)
         env:
           RUSTDOCFLAGS: -D warnings
-        run: cargo doc -p velesdb-memory --no-deps --all-features
+        run: cargo doc -p velesdb-memory --no-deps --all-features --document-private-items
 
       # Same gate, same reason, for the other published crate: velesdb-core is
       # the API every downstream binding documents against, and it had carried
@@ -220,10 +221,15 @@ jobs:
       # but a gate that skips the `gpu`, `openapi` and `loom` modules cannot
       # fail on them — the same reasoning as the isolated-feature step above
       # (#1765). It costs the wgpu dependency build in this job.
+      # `--document-private-items` for the same reason once more: without it
+      # the docs of private items are never rendered, so their links are never
+      # resolved, and 75 rustdoc errors had rotted there unseen. It does not
+      # weaken the public-docs check: `private_intra_doc_links` still fires
+      # when a public doc links a private item; only its note changes.
       - name: Rustdoc intra-doc links (velesdb-core)
         env:
           RUSTDOCFLAGS: -D warnings
-        run: cargo doc -p velesdb-core --no-deps --all-features
+        run: cargo doc -p velesdb-core --no-deps --all-features --document-private-items
 
       # The extraction backend's unit tests are pure parsing and prompt
       # building: none opens a socket. Run them under the canonical role name

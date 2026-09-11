@@ -4,8 +4,8 @@
 //! checking to prevent deadlocks. The rank system encodes the rule:
 //!
 //! ```text
-//! gpu_vectors_snapshot (rank 5) → vectors (rank 10)
-//!     → layers (rank 20) → neighbors (rank 30)
+//! gpu_vectors_snapshot (rank 5) → entry_point_promotion (rank 8)
+//!     → vectors (rank 10) → layers (rank 20) → neighbors (rank 30)
 //! ```
 //!
 //! The `gpu_vectors_snapshot` mutex is acquired before `vectors` in the
@@ -26,8 +26,8 @@
 //! incremented **only** inside the `#[cfg(debug_assertions)]` block. In debug
 //! builds, full stack-based tracking is enabled, but it only *warns* via
 //! `tracing::warn!` — it never panics — and only for the ranks that actually
-//! have a `record_lock_acquire` call site (`GpuVectorsSnapshot`, `Vectors`,
-//! `Layers`; `Neighbors` is `#[allow(dead_code)]` and never
+//! have a `record_lock_acquire` call site (`GpuVectorsSnapshot`,
+//! `EntryPointPromotion`, `Vectors`, `Layers`; `Neighbors` is `#[allow(dead_code)]` and never
 //! recorded).
 //!
 //! # Higher-level synchronization layered on top of these ranks
@@ -58,7 +58,7 @@ use super::safety_counters::HNSW_COUNTERS;
 /// Lock rank values — monotonically increasing acquisition order.
 ///
 /// The global lock order is:
-/// `gpu_vectors_snapshot → vectors → layers → neighbors`.
+/// `gpu_vectors_snapshot → entry_point_promotion → vectors → layers → neighbors`.
 /// Any code path that acquires multiple locks must acquire them
 /// in strictly increasing rank order.
 /// Discriminants are defined FROM the public ordinal registry
@@ -79,6 +79,11 @@ pub(crate) enum LockRank {
     // lock-ordering logic is the same across feature configurations.
     #[cfg_attr(not(feature = "gpu"), allow(dead_code))]
     GpuVectorsSnapshot = crate::lock_rank::LockRank::GPU_VECTORS_SNAPSHOT.ordinal(),
+    /// `promotion` Mutex — rank 8 (acquired before `Vectors`).
+    ///
+    /// Serializes the entry point's moves; the anchor reparenting done under
+    /// it takes `Vectors`, `Layers` and neighbour lists, one at a time.
+    EntryPointPromotion = crate::lock_rank::LockRank::ENTRY_POINT_PROMOTION.ordinal(),
     /// `vectors` RwLock — rank 10 (acquired first among the core HNSW locks)
     Vectors = crate::lock_rank::LockRank::VECTORS.ordinal(),
     /// `layers` RwLock — rank 20 (acquired after vectors)

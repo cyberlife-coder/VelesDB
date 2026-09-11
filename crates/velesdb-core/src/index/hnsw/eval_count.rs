@@ -5,7 +5,7 @@
 //! atomic incremented at the two single-pair distance entry points the query
 //! paths funnel through:
 //!
-//! - [`DistanceEngine::distance`](super::native::distance) impls
+//! - [`DistanceEngine::distance`](super::native::DistanceEngine::distance) impls
 //!   (`CachedSimdDistance`, `CpuDistance`) — HNSW graph traversal and the
 //!   batch/prefetch helper built on it;
 //! - `HnswIndex::compute_distance` — the brute-force bitmap scan and SIMD

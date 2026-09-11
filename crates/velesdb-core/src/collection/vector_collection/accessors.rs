@@ -98,8 +98,8 @@ impl VectorCollection {
     ///
     /// # Errors
     ///
-    /// Returns an error if the vacuum fails (for instance, when
-    /// vector storage is disabled on the HNSW index).
+    /// Returns an error if the vacuum fails (for instance, when the HNSW
+    /// index's exact-distance features are off).
     pub fn rebuild_index(&self) -> crate::error::Result<usize> {
         self.inner.vacuum_hnsw_index()
     }
