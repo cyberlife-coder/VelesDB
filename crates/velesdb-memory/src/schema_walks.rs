@@ -92,17 +92,66 @@ const DISAMBIGUATORS: [&str; 22] = [
 /// rustdoc does not resolve (``[`a.b`]``), a web link and reference-style
 /// links (`[text][label]`).
 ///
+/// It also leaves every link in a text it cannot read exactly
+/// ([`scan_is_exact`]), an image (`![a](b)`), and a `[label]:` that starts a
+/// line, which reads as a reference definition. The guard fails on any link
+/// syntax a published description still holds.
+///
 /// Repeated to a fixpoint, so a second pass changes nothing: an input schema
 /// can be hardened twice (at its tool attribute, then in
 /// `reharden_tool_input`) and must publish what an output schema, hardened
 /// once, publishes for the same doc comment. A pass that changes the text
 /// removes a `[`, so the loop ends.
 pub(super) fn unlink_rustdoc(text: &str) -> Option<String> {
+    if !scan_is_exact(text) {
+        return None;
+    }
     let mut current = unlink_once(text)?;
     while let Some(next) = unlink_once(&current) {
         current = next;
     }
     Some(current)
+}
+
+/// Whether the scan reads `text` as Markdown does. It models paragraphs,
+/// headings, quotes and list items whose code spans each close on their own
+/// line, and reads nothing else:
+///
+/// - a line that opens a code block (a fence, or indentation of a tab or four
+///   spaces) or an HTML block, where brackets are not links;
+/// - a backslash, which can escape a bracket or a backtick;
+/// - a code span that crosses a line, whose extent depends on the blocks
+///   around it.
+fn scan_is_exact(text: &str) -> bool {
+    !text.contains('\\')
+        && !text.split(LINE_ENDINGS).any(opens_a_block_the_scan_skips)
+        && !has_a_code_span_across_lines(text)
+}
+
+/// Whether `line` opens a block whose brackets are not links: a code fence
+/// (```` ``` ```` or `~~~`), an indented code block (a tab, or four spaces,
+/// before its text), or an HTML block (`<`).
+fn opens_a_block_the_scan_skips(line: &str) -> bool {
+    let text = line.trim_start_matches([' ', '\t']);
+    let indent = &line[..line.len() - text.len()];
+    indent.contains('\t')
+        || indent.len() >= 4
+        || text.starts_with("```")
+        || text.starts_with("~~~")
+        || text.starts_with('<')
+}
+
+/// Whether a code span of `text` crosses a line.
+fn has_a_code_span_across_lines(text: &str) -> bool {
+    let mut rest = text;
+    while let Some(at) = rest.find('`') {
+        let span = &rest[at..at + code_span_len(&rest[at..])];
+        if spans_a_line(span) {
+            return true;
+        }
+        rest = &rest[at + span.len()..];
+    }
+    false
 }
 
 /// One left-to-right pass of [`unlink_rustdoc`].
@@ -125,13 +174,7 @@ fn unlink_once(text: &str) -> Option<String> {
             continue;
         }
         let after = &marker[1..];
-        // `[a][b]`: a bracket right after `]` is a reference label, not a link.
-        let link = if out.ends_with(']') {
-            None
-        } else {
-            rustdoc_link(after)
-        };
-        let Some((shown, remaining)) = link else {
+        let Some((shown, remaining)) = link_at(&out, after) else {
             out.push('[');
             rest = after;
             continue;
@@ -142,6 +185,21 @@ fn unlink_once(text: &str) -> Option<String> {
     }
     out.push_str(rest);
     changed.then_some(out)
+}
+
+/// What rustdoc shows for the link the `[` between `before` and `after` opens,
+/// and the text after it, when the rewrite reads one there. A `[` right after
+/// `]` is a reference label (`[a][b]`), one right after `!` opens an image
+/// (`![a](b)`), and a `[label]:` that starts a line reads as a reference
+/// definition: the rewrite leaves all three.
+fn link_at<'a>(before: &str, after: &'a str) -> Option<(Cow<'a, str>, &'a str)> {
+    if before.ends_with([']', '!']) {
+        return None;
+    }
+    let (shown, tail) = rustdoc_link(after)?;
+    let line_so_far = before.trim_end_matches(' ');
+    let starts_a_line = line_so_far.is_empty() || line_so_far.ends_with(LINE_ENDINGS);
+    (!(starts_a_line && tail.starts_with(':'))).then_some((shown, tail))
 }
 
 /// Appends `shown` to `out`, a space apart from a code span on either side:
@@ -159,43 +217,25 @@ fn push_apart(out: &mut String, shown: &str, remaining: &str) {
 /// Length of the code span `text` starts with: its opening run of backticks
 /// through the next run of exactly as many, or just that opening run when
 /// none closes it: in Markdown, an unclosed run of backticks is literal
-/// text.
-pub(super) fn code_span_len(text: &str) -> usize {
-    let fence = text.bytes().take_while(|&b| b == b'`').count();
-    let end = paragraph_end(text).max(fence);
-    let mut search = fence;
-    while let Some(found) = text[search..end].find('`') {
+/// text. A span that crosses a line is not modelled ([`scan_is_exact`]).
+fn code_span_len(text: &str) -> usize {
+    let opening = text.bytes().take_while(|&b| b == b'`').count();
+    let mut search = opening;
+    while let Some(found) = text[search..].find('`') {
         let at = search + found;
         let run = text[at..].bytes().take_while(|&b| b == b'`').count();
-        if run == fence {
+        if run == opening {
             return at + run;
         }
         search = at + run;
     }
-    fence
-}
-
-/// Where the paragraph `text` starts in ends: before its first blank line, or
-/// at its end. A code span cannot cross a blank line.
-fn paragraph_end(text: &str) -> usize {
-    let mut from = 0;
-    while let Some(found) = text[from..].find('\n') {
-        let at = from + found;
-        if text[at + 1..]
-            .trim_start_matches([' ', '\t'])
-            .starts_with('\n')
-        {
-            return at;
-        }
-        from = at + 1;
-    }
-    text.len()
+    opening
 }
 
 /// The parts of `text` outside its code spans, in order, which the rewrite
-/// and the guard read for link syntax. A run of backticks nothing closes is
+/// reads for link syntax. A run of backticks nothing closes is
 /// literal text that holds none, and is left out.
-pub(super) fn outside_code_spans(text: &str) -> impl Iterator<Item = &str> {
+fn outside_code_spans(text: &str) -> impl Iterator<Item = &str> {
     let mut rest = text;
     std::iter::from_fn(move || {
         if rest.is_empty() {
@@ -287,12 +327,12 @@ fn spans_a_line(text: &str) -> bool {
 const LINE_ENDINGS: [char; 2] = ['\n', '\r'];
 
 /// A code link, ``[`code`]``: shown as its code span when the code is one
-/// word rustdoc resolves ([`rustdoc_resolves`]), without its disambiguator.
+/// word rustdoc resolves ([`reads_as_a_path`]), without its disambiguator.
 fn code_link<'a>(label: &'a str, tail: &'a str) -> Option<(Cow<'a, str>, &'a str)> {
     // rustdoc trims the link text, then the path after a disambiguator.
     let code = label[1..label.len() - 1].trim();
     let word = without_disambiguator(code).map_or(code, str::trim);
-    if !is_one_word(word) || !rustdoc_resolves(word) {
+    if !is_one_word(word) || !reads_as_a_path(word) {
         return None;
     }
     let shown = if word.len() + 2 == label.len() {
@@ -319,7 +359,7 @@ fn rustdoc_path(word: &str) -> &str {
 /// written, brackets and all (``[`a[`]``, ``[`a.b`]``, ``[`()`]``). A `#`
 /// fragment fails it too, though rustdoc resolves the part before it: the
 /// rewrite leaves ``[`a#b`]`` as written, and the guard fails on it.
-fn rustdoc_resolves(word: &str) -> bool {
+fn reads_as_a_path(word: &str) -> bool {
     rustdoc_path(word)
         .chars()
         .all(|c| c.is_alphanumeric() || ":_<>, !*&;".contains(c))
@@ -344,8 +384,7 @@ fn is_path_like(label: &str) -> bool {
 }
 
 /// What rustdoc accepts after a function or macro name: `f()`, `m!`, `m!()`,
-/// `m!{}`. A form not listed, such as `m![]`, stays as written, and the guard
-/// fails on it.
+/// `m!{}`. A form not listed, such as `m![]`, stays as written.
 const CALL_SUFFIXES: [&str; 4] = ["!()", "!{}", "()", "!"];
 
 /// Whether a code span reads as a link to the rewrite: non-empty and, with

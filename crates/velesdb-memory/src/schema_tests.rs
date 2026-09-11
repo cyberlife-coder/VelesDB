@@ -323,9 +323,7 @@ fn admits_null(slot: &serde_json::Value) -> bool {
 /// The rustdoc-link rewrite applied to every published description (#2261).
 #[cfg(feature = "mcp")]
 mod unlink {
-    use super::super::walks::{
-        code_span_len, outside_code_spans, unlink_rustdoc, unlink_rustdoc_descriptions,
-    };
+    use super::super::walks::{unlink_rustdoc, unlink_rustdoc_descriptions};
     use serde_json::{json, Value};
 
     #[test]
@@ -418,6 +416,7 @@ mod unlink {
             "an [`a<b c`] unbalanced",
             "a [`Vec<T>>`] stray",
             "`decisions[fragment_index]` is unambiguous",
+            "[text][crate::X]",
             "``a [`b`] c`` in a double-backtick span",
         ] {
             assert_eq!(unlink_rustdoc(text), None, "{text}");
@@ -495,8 +494,8 @@ mod unlink {
     }
 
     /// The committed capture of what the server publishes — kept equal to the
-    /// live schema by `mcp_tools_drift` — holds no link the rewrite
-    /// recognizes, and no link target naming a Rust path.
+    /// live schema by `mcp_tools_drift` — holds no rustdoc link syntax
+    /// ([`holds_rustdoc_link`]).
     #[test]
     fn the_published_tool_schema_carries_no_rustdoc_link() {
         let path = concat!(
@@ -535,7 +534,7 @@ mod unlink {
             "see [`HashMap<K,\nV>`] here",
         ] {
             assert_eq!(unlink_rustdoc(text), None, "{text:?}");
-            assert!(guard_flags(text), "the guard misses {text:?}");
+            assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
         }
     }
 
@@ -571,7 +570,7 @@ mod unlink {
             "see [fn@ f] here",
         ] {
             assert_eq!(unlink_rustdoc(text), None, "{text}");
-            assert!(guard_flags(text), "the guard misses {text:?}");
+            assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
         }
     }
 
@@ -587,7 +586,7 @@ mod unlink {
             "see [the recollection][rec].\n\n[rec]: crate::Recollection",
         ] {
             assert_eq!(unlink_rustdoc(text), None, "{text:?}");
-            assert!(guard_flags(text), "the guard misses {text:?}");
+            assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
         }
     }
 
@@ -601,32 +600,72 @@ mod unlink {
             "see [`crate::Foo`\n] here",
         ] {
             assert_eq!(unlink_rustdoc(text), None, "{text:?}");
-            assert!(guard_flags(text), "the guard misses {text:?}");
+            assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
         }
     }
 
-    /// A code span cannot cross a blank line, so a backtick nothing closes in
-    /// its paragraph is literal, and a link after the break is rewritten.
+    /// The scan reads paragraphs, headings, quotes and list items whose code
+    /// spans each close on their own line. It leaves as written a text holding
+    /// anything else (a code block, an HTML block, a backslash, a code span
+    /// across a line), and the guard fails on the link syntax left in it.
     #[test]
-    fn a_code_span_does_not_cross_a_blank_line() {
+    fn a_text_the_scan_cannot_read_exactly_stays_as_written() {
+        for text in [
+            "~~~\nlet w = [crate::X];\n~~~",
+            "```rust\nlet w = [crate::X];",
+            "Example:\n```rust\nlet v = vec![build()];\n\nlet w = [crate::X];\n```",
+            "    let w = [crate::X];",
+            "\tlet w = [crate::X];",
+            "  \tlet w = [crate::X];",
+            "<div>\n[crate::X]\n</div>",
+            "see \\[crate::X] here",
+            "- use ` carefully\n- see [`R`](crate::R) and `x`",
+            "Uses a ` here.\n# Errors\nSee [`R`](crate::R) and `x`.",
+            "Use a trailing ` here.\r\n\r\nSee [`R`](crate::R) and `x`.",
+            "a\r~~~\r[crate::X]\r~~~",
+        ] {
+            assert_eq!(unlink_rustdoc(text), None, "{text:?}");
+            assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
+        }
+    }
+
+    /// A `[` right after `!` opens an image, and a `[label]:` that starts a
+    /// line reads as a reference definition: the rewrite leaves both, and the
+    /// guard fails on them. A use of the definition elsewhere is rewritten.
+    #[test]
+    fn an_image_and_a_definition_stay_as_written() {
+        for text in [
+            "an image ![x](crate::y) here",
+            "[`Foo`]: crate::Foo",
+            "  [crate::X]: https://docs.rs/x",
+        ] {
+            assert_eq!(unlink_rustdoc(text), None, "{text:?}");
+            assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
+        }
+        let defined = "see `Foo`.\n\n[`Foo`]: crate::Foo";
         assert_eq!(
-            unlink_rustdoc("Use a trailing ` here.\n\nSee [`R`](crate::R) and `x`.").as_deref(),
-            Some("Use a trailing ` here.\n\nSee `R` and `x`.")
+            unlink_rustdoc("see [`Foo`].\n\n[`Foo`]: crate::Foo").as_deref(),
+            Some(defined)
         );
+        assert!(holds_rustdoc_link(defined), "the guard misses {defined:?}");
     }
 
     /// A web link stays as written and passes the guard, padded or wrapped in
-    /// `<…>` as Markdown allows.
+    /// `<…>` as Markdown allows, and so do brackets that are not link syntax.
     #[test]
-    fn the_guard_leaves_a_web_link() {
+    fn the_guard_leaves_web_links_and_plain_brackets() {
         for text in [
             "see [docs](https://x.dev)",
             "see [docs]( https://x.dev)",
             "see [docs](<https://x.dev>)",
             "see [docs](< https://x.dev>)",
+            "see [crate::Point](https://docs.rs/x)",
+            "jump to [the top](#top)",
+            "in [0, 1] and map[key]",
+            "a bare [Recollection] reads like [sic]",
         ] {
             assert_eq!(unlink_rustdoc(text), None, "{text}");
-            assert!(!guard_flags(text), "the guard flags {text:?}");
+            assert!(!holds_rustdoc_link(text), "the guard flags {text:?}");
         }
     }
 
@@ -651,56 +690,58 @@ mod unlink {
         assert_eq!(unlink_rustdoc(text).as_deref(), Some("a stray ` then x"));
         let left = "a stray ` then [x](crate::y \"t\")";
         assert_eq!(unlink_rustdoc(left), None);
-        assert!(guard_flags(left), "the guard misses {left:?}");
+        assert!(holds_rustdoc_link(left), "the guard misses {left:?}");
     }
 
-    /// The rewrite copies a code span verbatim, link syntax and all, and the
-    /// guard reads past it too: `` `[x](crate::y)` `` shows the syntax; it is
-    /// not a link.
+    /// The rewrite copies a code span verbatim, link syntax and all. The guard
+    /// reads the raw text, so it fails on link syntax even inside a code span:
+    /// a published description never shows it.
     #[test]
-    fn the_guard_leaves_a_link_written_inside_a_code_span() {
+    fn the_guard_flags_link_syntax_even_inside_a_code_span() {
         let text = "the syntax `[x](crate::y)` is code";
         assert_eq!(unlink_rustdoc(text), None);
-        assert!(!guard_flags(text), "{text}");
+        assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
     }
 
-    /// Whether `text`, outside its code spans, holds an inline link or a
-    /// reference definition to anything but a URL, or a code link or bracketed
-    /// path (`[a::B]`, `[fn@f]`, `[a#b]`) not followed by `(`, shortcut or
-    /// reference-style: link syntax the rewrite leaves, which a published
-    /// description must not carry.
-    fn holds_link_syntax(text: &str) -> bool {
-        let prose = outside_code_spans(text).collect::<Vec<_>>().join(" ");
-        links_to_a_non_url(&prose)
-            || holds_a_bracketed_path(&prose)
-            || holds_a_shortcut_code_link(text)
-            || defines_a_non_url_reference(&prose)
+    /// Whether `text` holds rustdoc link syntax: a `[` that opens on a code
+    /// span (`` [`Point`] ``), a bracketed path (`[crate::Point]`, `[fn@f]`,
+    /// `[a#b]`, `[Vec<T>]`, `[f()]`, `[m!]`, `[m!{}]`), a reference-style link
+    /// (`[x][y]`, `[x][]`), a reference definition, or an inline link to
+    /// anything but a URL or a fragment. Every link the rewrite recognizes is
+    /// one of these.
+    ///
+    /// It reads the raw text, code spans included, so no Markdown construct can
+    /// hide a link from it, and a published description cannot show link
+    /// syntax even as code. A bare `[Point]` passes: it reads the same as
+    /// `[sic]`. velesdb-server's guard over its OpenAPI document applies the
+    /// same rules (#2263).
+    fn holds_rustdoc_link(text: &str) -> bool {
+        text.contains("][")
+            || text
+                .lines()
+                .any(|line| line.trim_start().starts_with('[') && line.contains("]:"))
+            || text
+                .match_indices("](")
+                .any(|(at, _)| !is_url(target_start(&text[at + 2..])))
+            || text.match_indices('[').any(|(at, _)| {
+                let after = &text[at + 1..];
+                after.trim_start().starts_with('`') || brackets_a_path(after)
+            })
     }
 
-    /// Whether a link target is a URL.
-    fn is_url(target: &str) -> bool {
-        ["http://", "https://", "mailto:", "#"]
-            .iter()
-            .any(|url| target.starts_with(url))
-    }
-
-    /// A reference definition, `[label]: target`, whose target is not a URL.
-    fn defines_a_non_url_reference(prose: &str) -> bool {
-        prose.lines().any(|line| {
-            let line = line.trim_start();
-            line.starts_with('[')
-                && line.split_once("]:").is_some_and(|(_, target)| {
-                    let target = target_start(target);
-                    !target.is_empty() && !is_url(target)
-                })
+    /// Whether the label `after` starts, up to its `]`, names a path: it holds
+    /// `::`, `@`, `#` or `<`, or ends in `()`, `!{}` or `!`. A `(` after the
+    /// `]` makes it the text of an inline link instead, which
+    /// [`holds_rustdoc_link`] reads by its target.
+    fn brackets_a_path(after: &str) -> bool {
+        after.split_once(']').is_some_and(|(label, rest)| {
+            !rest.starts_with('(')
+                && (label.contains("::")
+                    || label.contains(['@', '#', '<'])
+                    || label.ends_with("()")
+                    || label.ends_with("!{}")
+                    || label.ends_with('!'))
         })
-    }
-
-    /// An inline link whose target, past any whitespace or `<`, is not a URL.
-    fn links_to_a_non_url(prose: &str) -> bool {
-        prose
-            .match_indices("](")
-            .any(|(at, _)| !is_url(target_start(&prose[at + 2..])))
     }
 
     /// `raw` past any whitespace or `<`, where a link target starts.
@@ -709,45 +750,36 @@ mod unlink {
         target.strip_prefix('<').map_or(target, str::trim_start)
     }
 
-    /// A bracket pair no `(` or `[` follows, whose text names a path: `::`, `@`
-    /// or `#`.
-    fn holds_a_bracketed_path(prose: &str) -> bool {
-        prose.match_indices('[').any(|(at, _)| {
-            prose[at + 1..]
-                .split_once(']')
-                .is_some_and(|(label, after)| {
-                    !after.starts_with('(') && (label.contains("::") || label.contains(['@', '#']))
-                })
-        })
+    /// Whether a link target is a URL or a fragment of the page.
+    fn is_url(target: &str) -> bool {
+        ["http://", "https://", "mailto:", "#"]
+            .iter()
+            .any(|prefix| target.starts_with(prefix))
     }
 
-    /// A shortcut code link outside the code spans of `text`: a `[`, a code
-    /// span, a `]`, and no `(` or `[` after it.
-    fn holds_a_shortcut_code_link(text: &str) -> bool {
-        let mut rest = text;
-        while let Some(at) = rest.find(['[', '`']) {
-            let from = &rest[at..];
-            if from.starts_with('`') {
-                rest = &from[code_span_len(from)..];
-                continue;
-            }
-            let span = from[1..].trim_start();
-            if span.starts_with('`') {
-                let after = span[code_span_len(span)..].trim_start();
-                if after.starts_with(']') && !after[1..].starts_with('(') {
-                    return true;
-                }
-            }
-            rest = &from[1..];
+    #[test]
+    fn the_guard_flags_each_link_form() {
+        for text in [
+            "a JSON-encoded [`Point`].",
+            "a JSON-encoded [ `Point` ].",
+            "see [`Point`](https://docs.rs/velesdb-core).",
+            "see [crate::Point].",
+            "see [Vec<u8, A>::new].",
+            "see [Vec<u8>].",
+            "see [stream()].",
+            "see [vec!].",
+            "see [vec!{}].",
+            "see [fn@stream].",
+            "see [Point#fields].",
+            "see [the point][Point].",
+            "see [Point][].",
+            "[p]: crate::Point",
+            "  [p]: crate::Point",
+            "see [the point](crate::Point).",
+            "see [the point](< crate::Point >).",
+        ] {
+            assert!(holds_rustdoc_link(text), "{text}");
         }
-        false
-    }
-
-    /// What the guard flags in a published description: a link the rewrite
-    /// recognizes, or any other link syntax outside a code span
-    /// ([`holds_link_syntax`]), a link that spans a line included.
-    fn guard_flags(text: &str) -> bool {
-        unlink_rustdoc(text).is_some() || holds_link_syntax(text)
     }
 
     #[test]
@@ -810,7 +842,7 @@ mod unlink {
         use super::super::walks::{INSTANCE_KEYWORDS, NAMED_SCHEMA_MAPS};
         match child {
             Value::String(text) if key == "description" => {
-                if guard_flags(text) {
+                if holds_rustdoc_link(text) {
                     out.push(here.to_owned());
                 }
             }
