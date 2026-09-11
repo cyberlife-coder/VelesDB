@@ -244,8 +244,10 @@ fn collect_rustdoc_links(value: &Value, pointer: &str, linked: &mut Vec<String>)
 /// list item) can hide one of these forms from it. What that costs: a
 /// description cannot show one even as code (`` `[x](y)` ``,
 /// ``[`asc`, `desc`]``, `&[Vec<f32>]`), give a web link code text, or write a
-/// reference-style link or definition, even to a URL. A bare `[Point]` passes:
-/// it reads the same as `[sic]`.
+/// reference-style link or definition, even to a URL; and prose that looks
+/// like one fails too (`[0, 1]: …`, `m[i][j]`, `[#2261]`, `[ops@x.dev]`). A
+/// bare `[Point]` passes: it reads the same as `[sic]`. velesdb-memory's
+/// schema guard applies the same rules (#2261).
 fn holds_rustdoc_link(text: &str) -> bool {
     text.contains("][")
         || text.contains("]:")
@@ -279,11 +281,15 @@ fn target_start(raw: &str) -> &str {
     target.strip_prefix('<').map_or(target, str::trim_start)
 }
 
-/// Whether a link target is a URL or a fragment of the page.
+/// Whether a link target is a URL or a fragment of the page. A `mailto:`
+/// followed by a second `:` is a path (`mailto::X`), not an address.
 fn is_url(target: &str) -> bool {
-    ["http://", "https://", "mailto:", "#"]
+    ["http://", "https://", "#"]
         .iter()
         .any(|prefix| target.starts_with(prefix))
+        || target
+            .strip_prefix("mailto:")
+            .is_some_and(|address| !address.starts_with(':'))
 }
 
 #[test]
@@ -308,7 +314,24 @@ fn test_rustdoc_link_guard_flags_each_link_form() {
         "[the\npoint]: crate::Point",
         "see [the point](crate::Point).",
         "see [the point](< crate::Point >).",
+        "see [x](mailto::X).",
         "the syntax `[x](crate::y)` is code.",
+    ] {
+        assert!(holds_rustdoc_link(text), "{text}");
+    }
+}
+
+/// Prose that looks like link syntax fails the guard too: the documented cost
+/// of reading the raw text.
+#[test]
+fn test_rustdoc_link_guard_flags_the_prose_it_documents_as_a_cost() {
+    for text in [
+        "weights in [0, 1]: higher wins",
+        "m[i][j] indexes",
+        "see [#2261]",
+        "write to [ops@x.dev]",
+        "one of [`asc`, `desc`]",
+        "a `&[Vec<f32>]` slice",
     ] {
         assert!(holds_rustdoc_link(text), "{text}");
     }
