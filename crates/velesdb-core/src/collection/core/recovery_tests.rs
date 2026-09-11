@@ -215,8 +215,8 @@ fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
 /// Opening a collection re-links every mapped id the graph never linked
 /// (#2246).
 ///
-/// `upsert_bulk`'s V2 path registers each mapping and writes each vector at
-/// once, and leaves the graph insert to the `AsyncIndexBuilder`. The index
+/// `upsert_bulk`'s V2 path places each vector in the arena, maps its id to the
+/// slot it got, and leaves the graph insert to the `AsyncIndexBuilder`. The index
 /// saved here while the builder still holds every point is what a save that
 /// races the bulk path persists: all mapped, none linked. Recovery skipped
 /// mapped ids, so graph search could never find them again.

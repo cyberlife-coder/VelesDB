@@ -566,7 +566,7 @@ for neighbor in neighbors {
 
 5. **Enlarged crash recovery window during batch upsert**:
    - The 3-phase upsert pipeline (`batch_store_all` -> `per_point_updates` -> `bulk_index_or_defer`) writes vectors and payloads to storage before inserting into the HNSW graph. A crash between Phase 1 and Phase 3 leaves vectors in storage but missing from the HNSW index.
-   - Mitigation: On `Collection::open()`, gap detection compares `storage.ids()` against `index.mappings` and re-indexes any missing vectors. See [HNSW Crash Recovery](#hnsw-crash-recovery) for the full recovery architecture and [SOUNDNESS.md](SOUNDNESS.md#hnsw-batch-insertion-ordering) for batch insertion ordering invariants.
+   - Mitigation: On `Collection::open()`, gap detection compares `storage.ids()` against `index.mappings` and re-indexes any missing vectors. See [HNSW Crash Recovery](#hnsw-crash-recovery) for the full recovery architecture and [SOUNDNESS.md](SOUNDNESS.md#hnsw-slot-allocation) for the slot allocation invariants.
 
 ## Best Practices
 
@@ -772,8 +772,8 @@ by an empty index and fully rebuilt by pass 1
 (`rebuild_if_unverifiable`).
 
 **Pass 4 — unlinked** (`relink_unlinked_ids`): a mapping is not proof of
-graph membership. `upsert_bulk`'s V2 path maps each id and writes its
-vector at once, and leaves the graph insert to the `AsyncIndexBuilder`, so
+graph membership. `upsert_bulk`'s V2 path places each vector, maps its id
+to the slot it got, and leaves the graph insert to the `AsyncIndexBuilder`, so
 a save that races it persists mappings for nodes nothing links to (#2246).
 Every mapped id whose node has an empty layer-0 list — the entry point
 excepted, since a graph's first node has nothing to link to — is
@@ -1014,10 +1014,11 @@ LOOM_MAX_PREEMPTIONS=2 cargo test -p velesdb-core --features loom,persistence --
 cargo test --test stress_concurrency_tests -- --test-threads=1
 ```
 
-### HNSW Batch Insertion Ordering
+### HNSW Slot Allocation
 
-For soundness analysis of the batch insertion pipeline and its ordering
-invariants, see [SOUNDNESS.md: HNSW Batch Insertion Ordering](SOUNDNESS.md#hnsw-batch-insertion-ordering).
+For how an insert gets its slot — one allocator, the arena, with the mapping
+following it under the index read guard — see
+[SOUNDNESS.md: HNSW Slot Allocation](SOUNDNESS.md#hnsw-slot-allocation).
 
 ## References
 

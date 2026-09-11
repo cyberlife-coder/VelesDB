@@ -184,8 +184,9 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
 
     /// Whether this graph's arena holds its cosine vectors unit-norm: the
     /// engine normalizes them on insert. What `.vectors` declares with
-    /// [`VECTORS_FLAG_UNIT_NORM`], and what any other writer into the arena
-    /// (`DirectVectorWriter`) has to honour for that declaration to stay true.
+    /// [`VECTORS_FLAG_UNIT_NORM`], and what every batch push honours
+    /// (`push_stored_form`), the direct writer's included, for that
+    /// declaration to stay true.
     pub(in crate::index::hnsw) fn stores_unit_norm(&self) -> bool {
         self.distance.is_pre_normalized() && self.distance.metric() == crate::DistanceMetric::Cosine
     }

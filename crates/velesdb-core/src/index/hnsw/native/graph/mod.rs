@@ -522,8 +522,9 @@ impl<D: DistanceEngine> NativeHnsw<D> {
 
     /// Executes a closure with mutable access to the contiguous vector storage.
     ///
-    /// Acquires a write lock on `vectors`. Used by `DirectVectorWriter` to
-    /// write vectors directly during bulk insert (deferred HNSW indexing).
+    /// Acquires a write lock on `vectors`. Used by [`Self::push_unlinked`],
+    /// the direct writer's placement during bulk insert (deferred HNSW
+    /// indexing).
     ///
     /// # Errors
     ///
@@ -566,8 +567,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// The nodes among `nodes` that no search can reach: allocated, never
     /// linked into layer 0.
     ///
-    /// A mapped id can outlive its link: `upsert_bulk`'s V2 path registers the
-    /// mapping and writes the vector at once and leaves the graph insert to
+    /// A mapped id can outlive its link: `upsert_bulk`'s V2 path places each
+    /// vector, maps its id to the slot it got and leaves the graph insert to
     /// the async builder, so a save in that window persists a node with no
     /// neighbours (#2246). Every node an insert linked has at least one
     /// layer-0 neighbour once the graph holds two nodes. The entry point is

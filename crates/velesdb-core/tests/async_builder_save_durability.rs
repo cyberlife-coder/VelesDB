@@ -1,12 +1,12 @@
 //! A save that runs while the async index builder still holds vectors must
 //! leave a store whose graph has them (#2246).
 //!
-//! `upsert_bulk`'s V2 path registers each id's mapping and writes its vector at
-//! once, and leaves the graph insert to the `AsyncIndexBuilder`. A save in that
-//! window persists mappings for ids the graph has never seen. Recovery
-//! re-indexes only ids with NO mapping, so after a crash those points would be
-//! stored, mapped — and unreachable by graph search. `flush` drains the builder
-//! before it saves; these tests hold the other two saves to the same rule.
+//! `upsert_bulk`'s V2 path places each vector, maps its id to the slot it got,
+//! and leaves the graph insert to the `AsyncIndexBuilder`. A save in that
+//! window persists mappings for ids the graph has never seen. Recovery's pass 4
+//! re-links such ids when the store opens (#2257), but a save does not leave
+//! them to it: `flush` drains the builder before it saves, and these tests hold
+//! the other two saves to the same rule.
 //!
 //! A crash is simulated by copying the directory right after the save and
 //! opening the copy: what a process that died there leaves on disk.

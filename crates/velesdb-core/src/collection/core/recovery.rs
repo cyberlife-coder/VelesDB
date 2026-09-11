@@ -335,8 +335,8 @@ fn reindex_stale_wal_ids(
 /// Pass 4: re-indexes the mapped ids whose node the graph never linked.
 ///
 /// A mapping is not proof of graph membership. `upsert_bulk`'s V2 path
-/// registers each id's mapping and writes its vector at once, and leaves the
-/// graph insert to the `AsyncIndexBuilder`. A save that races it — the drain
+/// places each vector in the arena, maps its id to the slot it got, and leaves
+/// the graph insert to the `AsyncIndexBuilder`. A save that races it — the drain
 /// returns while another build holds the builder, or an upsert lands between
 /// the drain and the save — persists mappings for nodes nothing links to
 /// (#2246). Pass 1 skips mapped ids, and pass 3 compares arena slots the

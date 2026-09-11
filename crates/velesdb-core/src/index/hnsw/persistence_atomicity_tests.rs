@@ -706,3 +706,29 @@ fn test_load_sidecars_rejects_garbage_legacy_vectors_file() {
         .expect_err("test: garbage legacy vectors must be rejected");
     assert_ne!(err.kind(), std::io::ErrorKind::NotFound);
 }
+
+#[test]
+fn test_load_sidecars_holds_next_idx_to_the_loaded_vector_store() {
+    // A file written before #2246 counted slots it predicted but never
+    // filled: its `next_idx` can exceed the store it describes. Loading holds
+    // it to that store, or the tombstone count reads high until a vacuum.
+    let dir = TempDir::new().expect("test: temp dir");
+    let path = dir.path();
+    seed_consistent_gen4(path, &build_mappings());
+
+    let mut id_to_idx = HashMap::new();
+    id_to_idx.insert(1_u64, 0_usize);
+    let mut idx_to_id = HashMap::new();
+    idx_to_id.insert(0_usize, 1_u64);
+    let inflated = HnswMappingsData {
+        id_to_idx,
+        idx_to_id,
+        next_idx: 1_000,
+        generation: 4,
+    };
+    persistence::save_mappings(path, &inflated).expect("test: overwrite mappings");
+
+    let meta = persistence::load_meta(path).expect("test: reload meta");
+    let mappings = load_sidecars(path, &meta, GRAPH_COUNT).expect("test: consistent mapping loads");
+    assert_eq!(mappings.next_idx(), GRAPH_COUNT);
+}
