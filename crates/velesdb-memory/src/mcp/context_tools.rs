@@ -199,8 +199,8 @@ pub(super) struct SaveWorkingContextParams {
 pub(super) struct SaveWorkingContextResult {
     /// Id of the stored system fact backing this working context.
     pub id: u64,
-    /// Decimal-string twin of `id`,
-    /// same contract as [`crate::mcp::dto::RememberResult::id_str`]: the id is content-addressed
+    /// Decimal-string twin of `id`, with the same contract as
+    /// [`crate::mcp::dto::RememberResult::id_str`]. The id is content-addressed
     /// (FNV-1a 64), so it is past 2^53 and a float-lossy JSON client rounds
     /// `id` on arrival. This was the ONE tool handing back an id without its
     /// twin while `forget`/`feedback` accept only the decimal string — the

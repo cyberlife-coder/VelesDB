@@ -339,9 +339,6 @@ mod unlink {
         for (text, shown) in [
             ("a [call](f()) here", "a call here"),
             ("see [x]( crate::y)", "see x"),
-            ("see [x](<crate::y>)", "see x"),
-            ("see [x](< crate::y >)", "see x"),
-            ("see [x](< fn@f >)", "see x"),
             ("in [0, 1) see [x](crate::y)", "in [0, 1) see x"),
         ] {
             assert_eq!(unlink_rustdoc(text).as_deref(), Some(shown), "{text}");
@@ -379,11 +376,20 @@ mod unlink {
         }
     }
 
+    /// One pass is final. A text a second pass would change further, such as
+    /// nested brackets whose outer pair Markdown shows as written, is left as
+    /// written, and the guard fails on it.
     #[test]
-    fn a_second_pass_changes_nothing() {
-        for text in ["[[`X`]]", "[`a`](crate::a) and [[`b`]]", "see [`A`]"] {
-            let once = unlink_rustdoc(text).expect("test: a link to rewrite");
-            assert_eq!(unlink_rustdoc(&once), None, "{text} -> {once}");
+    fn a_text_a_second_pass_would_change_stays_as_written() {
+        let once = unlink_rustdoc("see [`A`]").expect("test: a link to rewrite");
+        assert_eq!(unlink_rustdoc(&once), None, "{once}");
+        for text in [
+            "[[`X`]]",
+            "[`a`](crate::a) and [[`b`]]",
+            "the [[crate::X]] field",
+        ] {
+            assert_eq!(unlink_rustdoc(text), None, "{text}");
+            assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
         }
     }
 
@@ -604,10 +610,11 @@ mod unlink {
         }
     }
 
-    /// The scan reads paragraphs, headings, quotes and list items whose code
-    /// spans each close on their own line. It leaves as written a text holding
-    /// anything else (a code block, an HTML block, a backslash, a code span
-    /// across a line), and the guard fails on the link syntax left in it.
+    /// The scan reads inline code spans that close on their own line and the
+    /// links around them. It leaves as written a text holding anything else (a
+    /// backslash, a tab or four spaces, a fence, a `<` outside code, a table, a
+    /// code span across a line), in or out of a quote or a list item, and the
+    /// guard fails on the link syntax left in it.
     #[test]
     fn a_text_the_scan_cannot_read_exactly_stays_as_written() {
         for text in [
@@ -624,21 +631,47 @@ mod unlink {
             "Uses a ` here.\n# Errors\nSee [`R`](crate::R) and `x`.",
             "Use a trailing ` here.\r\n\r\nSee [`R`](crate::R) and `x`.",
             "a\r~~~\r[crate::X]\r~~~",
+            "> ~~~\n> let last = items[usize::MAX];\n> ~~~",
+            ">     let last = items[usize::MAX];",
+            "1. ```\n   let last = items[usize::MAX];",
+            "> <div>\n> [crate::X]\n> </div>",
+            "see <a title=\"[crate::X]\">x</a>",
+            "see <https://x.dev/a[crate::X]b>",
+            "| `x | y` [crate::X] `z |\n|---|---|",
+            "| `x | y` [crate::X] `z |\r|---|---|",
+            "see [x](<crate::y>)",
+            "see [x](< fn@f >)",
         ] {
             assert_eq!(unlink_rustdoc(text), None, "{text:?}");
             assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
         }
     }
 
-    /// A `[` right after `!` opens an image, and a `[label]:` that starts a
-    /// line reads as a reference definition: the rewrite leaves both, and the
-    /// guard fails on them. A use of the definition elsewhere is rewritten.
+    /// A line of dashes under a heading, or a pipe in prose, is no table: the
+    /// scan reads the text and rewrites its links.
+    #[test]
+    fn a_heading_underline_or_a_pipe_is_not_a_table() {
+        for (text, shown) in [
+            ("Title\n---\nsee [`A`]", "Title\n---\nsee `A`"),
+            ("a | b and [`A`]", "a | b and `A`"),
+        ] {
+            assert_eq!(unlink_rustdoc(text).as_deref(), Some(shown), "{text:?}");
+        }
+    }
+
+    /// A `[` right after `!` opens an image, and a `[label]` a colon follows
+    /// may be a reference definition, in a quote or a list item too: the
+    /// rewrite leaves both, and the guard fails on them. A use of the
+    /// definition elsewhere is rewritten.
     #[test]
     fn an_image_and_a_definition_stay_as_written() {
         for text in [
             "an image ![x](crate::y) here",
             "[`Foo`]: crate::Foo",
             "  [crate::X]: https://docs.rs/x",
+            "> [`Foo`]: crate::Foo",
+            "- [crate::X]: https://docs.rs/x",
+            "see [`Foo`]: the id",
         ] {
             assert_eq!(unlink_rustdoc(text), None, "{text:?}");
             assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
@@ -717,9 +750,11 @@ mod unlink {
     /// list item) can hide one of these forms from it. What that costs: a
     /// description cannot show one even as code (`` `[x](y)` ``,
     /// ``[`asc`, `desc`]``, `&[Vec<f32>]`), give a web link code text, or write
-    /// a reference-style link or definition, even to a URL. A bare `[Point]`
-    /// passes: it reads the same as `[sic]`. velesdb-server's guard over its
-    /// OpenAPI document applies the same rules (#2263).
+    /// a reference-style link or definition, even to a URL; and prose that
+    /// looks like one fails too (`[0, 1]: …`, `m[i][j]`, `[#2261]`,
+    /// `[ops@x.dev]`). A bare `[Point]` passes: it reads the same as `[sic]`.
+    /// velesdb-server's guard over its OpenAPI document applies the same rules
+    /// (#2263).
     fn holds_rustdoc_link(text: &str) -> bool {
         text.contains("][")
             || text.contains("]:")
@@ -753,11 +788,15 @@ mod unlink {
         target.strip_prefix('<').map_or(target, str::trim_start)
     }
 
-    /// Whether a link target is a URL or a fragment of the page.
+    /// Whether a link target is a URL or a fragment of the page. A `mailto:`
+    /// followed by a second `:` is a path (`mailto::X`), not an address.
     fn is_url(target: &str) -> bool {
-        ["http://", "https://", "mailto:", "#"]
+        ["http://", "https://", "#"]
             .iter()
             .any(|prefix| target.starts_with(prefix))
+            || target
+                .strip_prefix("mailto:")
+                .is_some_and(|address| !address.starts_with(':'))
     }
 
     #[test]
@@ -782,6 +821,23 @@ mod unlink {
             "[the\npoint]: crate::Point",
             "see [the point](crate::Point).",
             "see [the point](< crate::Point >).",
+            "see [x](mailto::X).",
+        ] {
+            assert!(holds_rustdoc_link(text), "{text}");
+        }
+    }
+
+    /// Prose that looks like link syntax fails the guard too: the documented
+    /// cost of reading the raw text.
+    #[test]
+    fn the_guard_flags_the_prose_it_documents_as_a_cost() {
+        for text in [
+            "weights in [0, 1]: higher wins",
+            "m[i][j] indexes",
+            "see [#2261]",
+            "write to [ops@x.dev]",
+            "one of [`asc`, `desc`]",
+            "a `&[Vec<f32>]` slice",
         ] {
             assert!(holds_rustdoc_link(text), "{text}");
         }

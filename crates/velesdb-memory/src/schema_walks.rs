@@ -92,53 +92,53 @@ const DISAMBIGUATORS: [&str; 22] = [
 /// rustdoc does not resolve (``[`a.b`]``), a web link and reference-style
 /// links (`[text][label]`).
 ///
-/// It also leaves every link in a text it cannot read exactly
-/// ([`scan_is_exact`]), an image (`![a](b)`), and a `[label]:` that starts a
-/// line, which reads as a reference definition. The guard fails on any link
-/// syntax a published description still holds.
+/// It also leaves as written every link in a text it cannot read exactly
+/// ([`scan_is_exact`]), an image (`![a](b)`), a `[label]` a colon follows,
+/// and a text a second pass would change further, such as nested brackets
+/// (``[[`X`]]``, whose outer pair Markdown shows as written). The guard then
+/// fails on the rustdoc link syntax left, except a bare `[Name]`, which it
+/// cannot tell from prose.
 ///
-/// Repeated to a fixpoint, so a second pass changes nothing: an input schema
-/// can be hardened twice (at its tool attribute, then in
-/// `reharden_tool_input`) and must publish what an output schema, hardened
-/// once, publishes for the same doc comment. A pass that changes the text
-/// removes a `[`, so the loop ends.
+/// One pass is final: an input schema can be hardened twice (at its tool
+/// attribute, then in `reharden_tool_input`) and must publish what an output
+/// schema, hardened once, publishes for the same doc comment.
 pub(super) fn unlink_rustdoc(text: &str) -> Option<String> {
     if !scan_is_exact(text) {
         return None;
     }
-    let mut current = unlink_once(text)?;
-    while let Some(next) = unlink_once(&current) {
-        current = next;
-    }
-    Some(current)
+    let once = unlink_once(text)?;
+    unlink_once(&once).is_none().then_some(once)
 }
 
-/// Whether the scan reads `text` as Markdown does. It models paragraphs,
-/// headings, quotes and list items whose code spans each close on their own
-/// line, and reads nothing else:
+/// Whether the scan reads `text` as Markdown does. It models inline code
+/// spans that close on their own line and the links around them, in any
+/// paragraph, heading, quote or list item, and leaves a text holding
+/// anything else:
 ///
-/// - a line that opens a code block (a fence, or indentation of a tab or four
-///   spaces) or an HTML block, where brackets are not links;
 /// - a backslash, which can escape a bracket or a backtick;
+/// - a tab or four spaces, which can open an indented code block, in or out
+///   of a quote or a list item;
+/// - a code fence (```` ``` ```` or `~~~`), wherever it stands;
+/// - a `<` outside a code span, which can open HTML or an autolink;
+/// - a table, which splits its cells before it reads code spans;
 /// - a code span that crosses a line, whose extent depends on the blocks
 ///   around it.
 fn scan_is_exact(text: &str) -> bool {
-    !text.contains('\\')
-        && !text.split(LINE_ENDINGS).any(opens_a_block_the_scan_skips)
+    !text.contains(['\\', '\t'])
+        && !text.contains("    ")
+        && !text.contains("```")
+        && !text.contains("~~~")
+        && !outside_code_spans(text).any(|part| part.contains('<'))
+        && !text.split(LINE_ENDINGS).any(is_a_table_delimiter_row)
         && !has_a_code_span_across_lines(text)
 }
 
-/// Whether `line` opens a block whose brackets are not links: a code fence
-/// (```` ``` ```` or `~~~`), an indented code block (a tab, or four spaces,
-/// before its text), or an HTML block (`<`).
-fn opens_a_block_the_scan_skips(line: &str) -> bool {
-    let text = line.trim_start_matches([' ', '\t']);
-    let indent = &line[..line.len() - text.len()];
-    indent.contains('\t')
-        || indent.len() >= 4
-        || text.starts_with("```")
-        || text.starts_with("~~~")
-        || text.starts_with('<')
+/// Whether `line` can be the delimiter row that makes the lines above it a
+/// table (`|---|:--:|`): nothing but pipes, colons, dashes and spaces, with a
+/// pipe among them.
+fn is_a_table_delimiter_row(line: &str) -> bool {
+    let row = line.trim();
+    row.contains('|') && row.chars().all(|c| "|:- ".contains(c))
 }
 
 /// Whether a code span of `text` crosses a line.
@@ -189,17 +189,15 @@ fn unlink_once(text: &str) -> Option<String> {
 
 /// What rustdoc shows for the link the `[` between `before` and `after` opens,
 /// and the text after it, when the rewrite reads one there. A `[` right after
-/// `]` is a reference label (`[a][b]`), one right after `!` opens an image
-/// (`![a](b)`), and a `[label]:` that starts a line reads as a reference
-/// definition: the rewrite leaves all three.
+/// `]` is a reference label (`[a][b]`), and one right after `!` opens an
+/// image (`![a](b)`). A `[label]` a colon follows is a reference definition
+/// wherever a block starts, in a quote or a list item too, and a link
+/// elsewhere: rather than tell the two apart, the rewrite leaves all three.
 fn link_at<'a>(before: &str, after: &'a str) -> Option<(Cow<'a, str>, &'a str)> {
     if before.ends_with([']', '!']) {
         return None;
     }
-    let (shown, tail) = rustdoc_link(after)?;
-    let line_so_far = before.trim_end_matches(' ');
-    let starts_a_line = line_so_far.is_empty() || line_so_far.ends_with(LINE_ENDINGS);
-    (!(starts_a_line && tail.starts_with(':'))).then_some((shown, tail))
+    rustdoc_link(after).filter(|(_, tail)| !tail.starts_with(':'))
 }
 
 /// Appends `shown` to `out`, a space apart from a code span on either side:
@@ -297,8 +295,9 @@ fn can_be_link_text(label: &str) -> bool {
 }
 
 /// An inline link, `inline` being the text after its `(`: shown as its label
-/// when the target is a Rust path. The target may be padded with spaces and
-/// wrapped in `<…>` with spaces inside, as Markdown allows; a target that
+/// when the target is a Rust path. The target may be padded with spaces, as
+/// Markdown allows; one wrapped in `<…>` never gets here, since a `<` outside
+/// code leaves the whole text as written ([`scan_is_exact`]). A target that
 /// spans a line is left as written (see [`spans_a_line`]).
 fn inline_link<'a>(label: &'a str, inline: &'a str) -> Option<(Cow<'a, str>, &'a str)> {
     let end = closing_paren(inline)?;
@@ -306,12 +305,7 @@ fn inline_link<'a>(label: &'a str, inline: &'a str) -> Option<(Cow<'a, str>, &'a
     if spans_a_line(raw) {
         return None;
     }
-    let target = raw.trim();
-    let target = target
-        .strip_prefix('<')
-        .and_then(|t| t.strip_suffix('>'))
-        .map_or(target, str::trim);
-    is_rust_path(target).then(|| (Cow::Borrowed(label), &inline[end + 1..]))
+    is_rust_path(raw.trim()).then(|| (Cow::Borrowed(label), &inline[end + 1..]))
 }
 
 /// Whether `text` holds a line ending. Markdown lets a link span lines, but

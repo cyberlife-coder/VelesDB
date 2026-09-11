@@ -23,13 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `[0, 1]` and a web link. Only `description` strings are rewritten, never
   instance data such as a `default`, so nothing else in a schema changes.
   The rewrite leaves every link in a description it cannot read exactly (one
-  holding a code block, an HTML block, a backslash or a code span across a
-  line), and leaves a reference-style link, a reference definition, an image,
-  a `#` fragment and a link that spans a line. A test then fails if a
-  published description holds link syntax, code spans included: a `[` that
-  opens on a code span, a bracketed path (one holding `::`, `@`, `#` or `<`,
-  or ending in `()` or `!`), a reference-style link or definition, or an
-  inline link to anything but a URL or a fragment. (#2261)
+  holding a backslash, a tab or four spaces, a code fence, a `<` outside
+  code, a table or a code span across a line), and leaves a reference-style
+  link, a `[label]` a colon follows, an image, nested brackets, a `#`
+  fragment and a link that spans a line. A test then fails if a published
+  description holds link syntax, code spans included: a `[` that opens on a
+  code span, a bracketed path (one holding `::`, `@`, `#` or `<`, or ending
+  in `()`, `!{}` or `!`), a reference-style link or definition, or an inline
+  link to anything but a URL or a fragment. (#2261)
 
 ## [0.14.2] - 2026-09-03
 
