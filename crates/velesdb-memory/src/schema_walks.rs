@@ -98,23 +98,25 @@ const DISAMBIGUATORS: [&str; 20] = [
 /// It also leaves as written every link in a text it cannot read exactly
 /// ([`scan_is_exact`]) or that holds an inline link it does not render (a web
 /// link, an image, one whose text is no code span), whose target and title it
-/// cannot read as prose; a `[label]` a colon follows; a code link a bracket
-/// pair would enclose once its own brackets go ([`would_pair_around`]); and a
-/// text a second pass would change further. The guard then fails on the
+/// cannot read as prose; and a code link a bracket pair would enclose once its
+/// own brackets go ([`would_pair_around`]). The guard then fails on the
 /// rustdoc link syntax left, except a bare `[Name]`, which it cannot tell from
 /// prose.
 ///
 /// One pass is final: an input schema can be hardened twice (at its tool
 /// attribute, then in `reharden_tool_input`) and must publish what an output
-/// schema, hardened once, publishes for the same doc comment.
+/// schema, hardened once, publishes for the same doc comment. Each rule that
+/// leaves a link reads only the text around it, and a rewrite changes that text
+/// only inside the links it rewrites, so a second pass leaves what the first
+/// left.
 pub(super) fn unlink_rustdoc(text: &str) -> Option<String> {
     if !scan_is_exact(text) {
         return None;
     }
-    let Pass::Changed(once) = unlink_once(text) else {
-        return None;
-    };
-    matches!(unlink_once(&once), Pass::Unchanged).then_some(once)
+    match unlink_once(text) {
+        Pass::Changed(once) => Some(once),
+        Pass::Unchanged | Pass::Leave => None,
+    }
 }
 
 /// What one pass of the rewrite makes of a text.
@@ -140,6 +142,8 @@ enum Pass {
 /// - a `<` outside a code span, which can open HTML or an autolink;
 /// - a table, in or out of a quote, which splits its cells before it reads
 ///   code spans;
+/// - a reference definition, or any `]` a colon follows outside a code span:
+///   a definition's destination and title are not prose;
 /// - a code span that crosses a line, whose extent depends on the blocks
 ///   around it.
 fn scan_is_exact(text: &str) -> bool {
@@ -148,6 +152,7 @@ fn scan_is_exact(text: &str) -> bool {
         && !text.contains("```")
         && !text.contains("~~~")
         && !outside_code_spans(text).any(|part| part.contains('<'))
+        && !outside_code_spans(text).any(|part| part.contains("]:"))
         && !text.split(LINE_ENDINGS).any(is_a_table_delimiter_row)
         && !has_a_code_span_across_lines(text)
 }
@@ -223,17 +228,15 @@ fn unlink_once(text: &str) -> Pass {
 /// What rustdoc shows for the link the `[` between `before` and `after` opens,
 /// and the text after it, when the rewrite reads one there. A `[` right after
 /// `]` is a reference label (`[a][b]`), and one right after `!` opens an
-/// image (`![a](b)`). A `[label]` a colon follows is a reference definition
-/// wherever a block starts, in a quote or a list item too, and a link
-/// elsewhere: rather than tell the two apart, the rewrite leaves all three.
-/// It also leaves a link a backtick touches, before or after it: the code
+/// image (`![a](b)`): the rewrite leaves both, as the scan leaves a text
+/// holding a reference definition ([`scan_is_exact`]). It also leaves a link
+/// a backtick touches, before or after it: the code
 /// span it shows would merge with that backtick's run (`a``b` reads as one
 /// span), and a space between them would show what rustdoc does not. And it
 /// leaves a link a bracket pair would enclose once its own brackets go
 /// ([`would_pair_around`]).
 fn link_at<'a>(before: &str, after: &'a str) -> Option<(Cow<'a, str>, &'a str)> {
-    let defines = label_end(after).is_some_and(|close| after[close + 1..].starts_with(':'));
-    if defines || before.ends_with([']', '!', '`']) {
+    if before.ends_with([']', '!', '`']) {
         return None;
     }
     rustdoc_link(after).filter(|(_, remaining)| {
@@ -243,9 +246,9 @@ fn link_at<'a>(before: &str, after: &'a str) -> Option<(Cow<'a, str>, &'a str)> 
 
 /// Whether a `[` left open in `before` and a `]` in `remaining` would pair
 /// around a link once its own brackets go. The link kept them apart:
-/// ``[a [`X`] b]: c`` reads as a paragraph holding a link, and without the
-/// link's brackets as a reference definition. Brackets inside code spans are
-/// code, and a `]` with no `[` open before it closes nothing.
+/// ``[see [`X`]]`` reads as `[see` and a link, and without the link's
+/// brackets as one bracketed label. Brackets inside code spans are code, and
+/// a `]` with no `[` open before it closes nothing ([`closes_an_earlier_bracket`]).
 fn would_pair_around(before: &str, remaining: &str) -> bool {
     let open = outside_code_spans(before)
         .flat_map(str::chars)
@@ -254,7 +257,23 @@ fn would_pair_around(before: &str, remaining: &str) -> bool {
             ']' => depth.saturating_sub(1),
             _ => depth,
         });
-    open > 0 && outside_code_spans(remaining).any(|part| part.contains(']'))
+    open > 0 && closes_an_earlier_bracket(remaining)
+}
+
+/// Whether `remaining` holds a `]` that no `[` of its own opens first. A `]`
+/// closes the nearest `[` still open, so a later code link's brackets pair
+/// with each other, not with a `[` before `remaining`.
+fn closes_an_earlier_bracket(remaining: &str) -> bool {
+    let mut depth = 0usize;
+    for c in outside_code_spans(remaining).flat_map(str::chars) {
+        match c {
+            '[' => depth += 1,
+            ']' if depth == 0 => return true,
+            ']' => depth -= 1,
+            _ => {}
+        }
+    }
+    false
 }
 
 /// Length of the code span `text` starts with: its opening run of backticks
@@ -465,12 +484,7 @@ fn without_disambiguator(target: &str) -> Option<&str> {
 /// A path rustdoc resolves — `crate::a::B`, `super::f`, `Self::g`, `Name`,
 /// `fn@name`, `f()`, `m!` — as opposed to a URL or prose.
 fn is_rust_path(target: &str) -> bool {
-    let path = match without_disambiguator(target) {
-        Some(path) => path,
-        None if target.contains('@') => return false,
-        None => target,
-    };
-    let path = rustdoc_path(path);
+    let path = rustdoc_path(without_disambiguator(target).unwrap_or(target));
     !path.is_empty()
         && path.split("::").all(|segment| {
             segment.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')

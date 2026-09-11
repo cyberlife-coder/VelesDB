@@ -411,30 +411,66 @@ mod unlink {
         }
     }
 
-    /// One pass is final. A text a second pass would change further stays as
-    /// written, and the guard fails on it. In ``[a [`X`] [`Y`](crate::y)``, the
-    /// inline link's `]` could pair with the `[` before ``[`X`]``, so ``[`X`]``
-    /// stays; once the inline link is rewritten, that `]` is gone, and a second
-    /// pass would rewrite ``[`X`]``.
+    /// One pass is final: a rewritten text holds no link a second pass would
+    /// rewrite, checked on the rewrite of every text of a pseudo-random mix of
+    /// brackets, backticks, colons and links.
     #[test]
-    fn a_text_a_second_pass_would_change_stays_as_written() {
-        let once = unlink_rustdoc("see [`A`]").expect("test: a link to rewrite");
-        assert_eq!(unlink_rustdoc(&once), None, "{once}");
-        let text = "[a [`X`] [`Y`](crate::y)";
-        assert_eq!(unlink_rustdoc(text), None, "{text}");
-        assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
+    fn one_pass_is_final() {
+        let tokens = [
+            "[",
+            "]",
+            "`",
+            "``",
+            "(",
+            ")",
+            "crate::x",
+            "a",
+            " ",
+            ":",
+            "\n",
+            "[`X`]",
+            "[`Y`](crate::y)",
+            "*",
+            "!",
+            "0, 1",
+            "[a",
+            "b]",
+            "]]",
+            "[[",
+            "[`Z`]]",
+            "[see ",
+            "](",
+            "`b`",
+            "_",
+        ];
+        let mut seed: usize = 0x2265_2025;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let mut rewritten = 0;
+        for _ in 0..20_000 {
+            let len = 1 + next() % 14;
+            let text: String = (0..len).map(|_| tokens[next() % tokens.len()]).collect();
+            if let Some(out) = unlink_rustdoc(&text) {
+                rewritten += 1;
+                assert_eq!(unlink_rustdoc(&out), None, "{text:?} -> {out:?}");
+            }
+        }
+        assert!(rewritten > 1_000, "only {rewritten} texts were rewritten");
     }
 
     /// A code link a bracket pair would enclose once its own brackets go stays
     /// as written: the link kept a `[` before it from pairing with a `]` after
-    /// it, and ``[a [`X`] b]: c`` would turn from a paragraph into a reference
-    /// definition. The guard fails on it. Only that link stays: the rest of the
-    /// text is rewritten. A `[` left open with no `]` after the link, or a pair
-    /// closed before it, changes nothing.
+    /// it (``[see [`X`]]``). The guard fails on it. Only that link stays: the
+    /// rest of the text is rewritten. A `[` left open with no `]` to close it
+    /// after the link, a pair closed before it, or a `]` that closes a later
+    /// `[`, a later code link's included, changes nothing.
     #[test]
     fn a_code_link_a_bracket_pair_would_enclose_stays_as_written() {
         for text in [
-            "[a [`X`] b]: dest",
             "[see [`X`]] end",
             "[a [`X`](crate::y) b]",
             "x [a [`X`] b] y",
@@ -452,6 +488,9 @@ mod unlink {
         for (text, shown) in [
             ("[a] then [`X`] and b]", "[a] then `X` and b]"),
             ("in [0, 1) see [`X`]", "in [0, 1) see `X`"),
+            ("in [0, 1) see [`X`] and [`Y`]", "in [0, 1) see `X` and `Y`"),
+            ("[a [`X`] [`Y`](crate::y)", "[a `X` `Y`"),
+            ("in [0, 1) see [`X`] or [b] c", "in [0, 1) see `X` or [b] c"),
         ] {
             assert_eq!(unlink_rustdoc(text).as_deref(), Some(shown), "{text:?}");
         }
@@ -804,12 +843,13 @@ mod unlink {
         }
     }
 
-    /// A `[` right after `!` opens an image, and a `[label]` a colon follows
-    /// may be a reference definition, in a quote or a list item too: the
-    /// rewrite leaves both, and the guard fails on them. A use of the
-    /// definition elsewhere is rewritten.
+    /// A `[` right after `!` opens an image: the rewrite leaves it. A `]` a
+    /// colon follows may end a reference definition's label, in a quote or a
+    /// list item too, and a definition's destination and title are not prose:
+    /// the rewrite leaves every link of a text holding one. The guard fails on
+    /// each.
     #[test]
-    fn an_image_and_a_definition_stay_as_written() {
+    fn an_image_and_a_text_holding_a_definition_stay_as_written() {
         for text in [
             "an image ![`x`](crate::y) here",
             "[`Foo`]: crate::Foo",
@@ -817,16 +857,14 @@ mod unlink {
             "> [`Foo`]: crate::Foo",
             "- [crate::X]: https://docs.rs/x",
             "see [`Foo`]: the id",
+            "see [`Foo`].\n\n[`Foo`]: crate::Foo",
+            "![logo]\n\n[logo]: https://x.dev/a.png \"[`X`]\"",
+            "![logo]\n\n[logo]: [`X`]",
+            "[a [`X`] b]: dest",
         ] {
             assert_eq!(unlink_rustdoc(text), None, "{text:?}");
             assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
         }
-        let defined = "see `Foo`.\n\n[`Foo`]: crate::Foo";
-        assert_eq!(
-            unlink_rustdoc("see [`Foo`].\n\n[`Foo`]: crate::Foo").as_deref(),
-            Some(defined)
-        );
-        assert!(holds_rustdoc_link(defined), "the guard misses {defined:?}");
     }
 
     /// A web link stays as written and passes the guard, padded or wrapped in
