@@ -53,11 +53,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   strings are rewritten, never instance data such as a `default`, so nothing
   else in a schema changes.
   The rewrite leaves every link in a description it cannot read exactly: one
-  holding a backslash, a tab or four spaces, a code fence, a `<` outside
-  code, a table, an image, a reference or footnote definition (any `]:`,
-  even inside backticks), a code span across a line, or an inline link it
-  does not render (a web link, one whose text is not a code span). It
-  leaves a reference-style link, a `#` fragment, a link that spans a line, a
+  holding a backslash, a tab or four spaces, a code fence, a `<` or an image
+  outside code, a table, a reference-style link or a reference or footnote
+  definition (any `][` or `]:`, even inside backticks), a code span across a
+  line, or an inline link it does not render (a web link, one whose text is
+  not a code span). It leaves a `#` fragment, a link that spans a line, a
   shortcut code link padded or holding a run of spaces, a code link a
   backtick touches (its code span would merge with it) or a `'` follows
   (smart punctuation may read the quote differently), and a code link a

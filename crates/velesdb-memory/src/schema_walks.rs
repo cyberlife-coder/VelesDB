@@ -1,8 +1,8 @@
 //! Tree walks the wire schemas run before inlining: the rustdoc-link rewrite
 //! of every `description` (#2261), which both `harden`s apply, and the id
 //! widening, which only `WireOutputSchema::harden` applies. Its entry points
-//! are `pub(super)`, private to `schema`; the split keeps `schema.rs` within
-//! its file budget.
+//! are `pub(super)`, private to `schema`. `schema.rs` is over its file
+//! budget, so these walks live here rather than grow it.
 
 use serde_json::{Map, Value};
 use std::borrow::Cow;
@@ -90,16 +90,16 @@ const DISAMBIGUATORS: [&str; 20] = [
 /// differently once its brackets go ([`rustdoc_link`]). A bare `[name]` stays
 /// whether or not rustdoc resolves it (`map[key]`, `[sic]`), and so do
 /// `[0, 1]`, a shortcut code link whose code is not one word or does not read
-/// as a path (``[`a.b`]``) or that is padded ([`code_link`]), a web link
-/// and reference-style links (`[text][label]`). Whether a name resolves, a
-/// schema cannot check: rustdoc warns on one that does not, and CI builds each
-/// crate's docs with `-D warnings`.
+/// as a path (``[`a.b`]``) or that is padded ([`code_link`]), and a web link.
+/// Whether a name resolves, a schema cannot check: rustdoc warns on one that
+/// does not, and CI builds each crate's docs with `-D warnings`.
 ///
 /// It also leaves as written every link in a text it cannot read exactly
-/// ([`scan_is_exact`]) or that holds an inline link it does not render (a web
-/// link, an image, one whose text is no code span), whose target and title it
-/// cannot read as prose; and a code link a bracket pair would enclose once its
-/// own brackets go ([`would_pair_around`]). The guard then fails on the
+/// ([`scan_is_exact`]), such as one holding a reference-style link
+/// (`[text][label]`) or an image, or that holds an inline link it does not
+/// render (a web link, one whose text is no code span), whose target and title
+/// it cannot read as prose; and a code link a bracket pair would enclose once
+/// its own brackets go ([`would_pair_around`]). The guard then fails on the
 /// rustdoc link syntax left, except a bare `[Name]`, which it cannot tell from
 /// prose.
 ///
@@ -135,27 +135,30 @@ pub(super) fn unlink_rustdoc(text: &str) -> Option<String> {
 /// - any `]` a colon follows, even inside what reads as a code span: a
 ///   reference or footnote definition's label ends at its first `]` before
 ///   code spans are read, and its destination and title are not prose;
-/// - an image (`![`), which rustdoc resolves through the links around it, so
-///   dropping one of those links could change it;
+/// - any `]` a `[` follows, even inside what reads as a code span: the label
+///   of a reference-style link (`[a][b]`, `[a][]`) is raw text, where a
+///   backtick opens no code span, and the guard fails on every `][` anyway;
+/// - an image (`![` outside a code span), which rustdoc resolves through the
+///   links around it, so dropping one of those links could change it;
 /// - a code span that crosses a line, whose extent depends on the blocks
 ///   around it.
 fn scan_is_exact(text: &str) -> bool {
     !holds_an_unmodelled_marker(text)
-        && !outside_code_spans(text).any(|part| part.contains('<'))
+        && !outside_code_spans(text).any(|part| part.contains('<') || part.contains("!["))
         && !text.split(LINE_ENDINGS).any(is_a_table_delimiter_row)
         && !has_a_code_span_across_lines(text)
 }
 
 /// Whether `text` holds one of the markers [`scan_is_exact`] lists that a
 /// plain search finds, code spans included: a backslash, a tab or four
-/// spaces, a code fence, a `]:` or an image.
+/// spaces, a code fence, a `]:` or a `][`.
 fn holds_an_unmodelled_marker(text: &str) -> bool {
     text.contains(['\\', '\t'])
         || text.contains("    ")
         || text.contains("```")
         || text.contains("~~~")
         || text.contains("]:")
-        || text.contains("![")
+        || text.contains("][")
 }
 
 /// Whether `line` can be the delimiter row that makes the lines above it a
@@ -201,8 +204,8 @@ fn unlink_once(text: &str) -> Option<String> {
         }
         if let Some(after_bracket) = marker.strip_prefix(']') {
             // A `](` read as prose closes an inline link the rewrite did not
-            // render, a web link or an image: its target and title are not
-            // prose, so the whole text stays as written.
+            // render, such as a web link: its target and title are not prose,
+            // so the whole text stays as written.
             if after_bracket.starts_with('(') {
                 return None;
             }
@@ -225,20 +228,17 @@ fn unlink_once(text: &str) -> Option<String> {
 }
 
 /// What rustdoc shows for the link the `[` between `before` and `after` opens,
-/// and the text after it, when the rewrite reads one there. A `[` right after
-/// `]` is a reference label (`[a][b]`): the rewrite leaves it, as the scan
-/// leaves a text holding an image or a reference definition
-/// ([`scan_is_exact`]). It also leaves a link a backtick touches, before or
-/// after it: the code
-/// span it shows would merge with that backtick's run (`a``b` reads as one
-/// span), and a space between them would show what rustdoc does not. It
-/// leaves a link a `'` follows: rustdoc's smart punctuation reads a `'` right
-/// after `]` or `)` as an apostrophe, and one right after a backtick as a
-/// quote that may open, so ``[`X`]'a'`` and `` `X`'a' `` show different
-/// quotes. And it leaves a link a bracket pair would enclose once its own
-/// brackets go ([`would_pair_around`]).
+/// and the text after it, when the rewrite reads one there. It leaves a link a
+/// backtick touches, before or after it: the code span it shows would merge
+/// with that backtick's run (`a``b` reads as one span), and a space between
+/// them would show what rustdoc does not. It leaves a link a `'` follows:
+/// rustdoc's smart punctuation reads a `'` right after `]` or `)` as an
+/// apostrophe, and one right after a backtick as a quote that may open, so
+/// ``[`X`]'a'`` and `` `X`'a' `` show different quotes; a `'` before the link
+/// reads the same either way. And it leaves a link a bracket pair would
+/// enclose once its own brackets go ([`would_pair_around`]).
 fn link_at<'a>(before: &str, after: &'a str) -> Option<(Cow<'a, str>, &'a str)> {
-    if before.ends_with([']', '`']) {
+    if before.ends_with('`') {
         return None;
     }
     rustdoc_link(after).filter(|(_, remaining)| {
@@ -250,7 +250,8 @@ fn link_at<'a>(before: &str, after: &'a str) -> Option<(Cow<'a, str>, &'a str)> 
 /// around a link once its own brackets go. The link kept them apart:
 /// ``[see [`X`]]`` reads as `[see` and a link, and without the link's
 /// brackets as one bracketed label. Brackets inside code spans are code, and
-/// a `]` with no `[` open before it closes nothing ([`closes_an_earlier_bracket`]).
+/// a `]` with no `[` open before it closes nothing
+/// ([`closes_an_earlier_bracket`]).
 fn would_pair_around(before: &str, remaining: &str) -> bool {
     let open = outside_code_spans(before)
         .flat_map(str::chars)
@@ -328,17 +329,18 @@ fn label_end(after: &str) -> Option<usize> {
 
 /// When `after` (the text following a `[`) starts a rustdoc link whose text is
 /// one code span, what rustdoc shows for it and the text after the link. A
-/// reference-style link (`[text][label]`) is left as written.
+/// reference-style link (`[text][label]`) never gets here: the scan leaves any
+/// text holding one ([`scan_is_exact`]).
 ///
 /// Only a code span is shown. The backticks at its edges are punctuation, as
 /// the brackets they replace are, so the emphasis, entities and line starts
 /// around the link read the same without them (a `'` after the link is the
-/// exception [`link_at`] leaves). Other link text (prose, a bare
-/// path, blanks, or code mixed with prose) could change them once its
-/// brackets go: `**[a](b)**s` would turn bold, and `[-](b) x` a list item.
-/// Such a link stays as written, and the guard fails on it. A `[` left open
-/// earlier, as in `[0, 1)`, has no code span for its label either: it stays,
-/// and the scan moves on to the next `[`.
+/// exception [`link_at`] leaves). Other link text (prose, a bare path, blanks,
+/// or code mixed with prose) could change them once its brackets go:
+/// `**[a](b)**s` would turn bold, and `[-](b) x` a list item. Such a link
+/// stays as written, and the guard fails on it. A `[` left open earlier, as in
+/// `[0, 1)`, has no code span for its label either: it stays, and the scan
+/// moves on to the next `[`.
 fn rustdoc_link(after: &str) -> Option<(Cow<'_, str>, &str)> {
     let close = label_end(after)?;
     let (label, tail) = (&after[..close], &after[close + 1..]);
@@ -347,9 +349,6 @@ fn rustdoc_link(after: &str) -> Option<(Cow<'_, str>, &str)> {
     }
     if let Some(inline) = tail.strip_prefix('(') {
         return inline_link(label, inline);
-    }
-    if tail.starts_with('[') {
-        return None;
     }
     code_link(label, tail)
 }
@@ -419,10 +418,10 @@ fn rustdoc_path(word: &str) -> &str {
 /// [`rustdoc_path`] holds only letters, digits and ``:_<>, !*&``, the test
 /// rustdoc 1.90 applies less `;`, which only an array type such as `[u8; 4]`
 /// holds, and whose brackets fail this test anyway. rustdoc leaves a shortcut
-/// link that fails it as
-/// written, brackets and all (``[`a[`]``, ``[`a.b`]``, ``[`()`]``). A `#`
-/// fragment fails it too, though rustdoc resolves the part before it: the
-/// rewrite leaves ``[`a#b`]`` as written, and the guard fails on it.
+/// link that fails it as written, brackets and all (``[`a[`]``, ``[`a.b`]``,
+/// ``[`()`]``). A `#` fragment fails it too, though rustdoc resolves the part
+/// before it: the rewrite leaves ``[`a#b`]`` as written, and the guard fails
+/// on it.
 fn reads_as_a_path(word: &str) -> bool {
     rustdoc_path(word)
         .chars()
@@ -510,7 +509,8 @@ fn is_rust_path(target: &str) -> bool {
 /// `outputSchema` (spec 2025-06-18), so a schema typing those fields
 /// `integer` only would make every opted-in response fail validation for
 /// exactly the clients the option exists for. Same shape of tree walk as
-/// [`strip_int_formats`](super::strip_int_formats), but keyed: only the named properties widen.
+/// [`strip_int_formats`](super::strip_int_formats), but keyed: only the
+/// named properties widen.
 ///
 /// `mcp`-gated: the advertised tool schemas are its only consumer.
 pub(super) fn widen_id_properties(map: &mut Map<String, Value>, keys: &[&str]) {

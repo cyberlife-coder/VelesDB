@@ -549,9 +549,10 @@ mod unlink {
     /// span), and a space between them would show what rustdoc does not. So
     /// does one a `'` follows: rustdoc's smart punctuation reads that `'` as an
     /// apostrophe after `]` or `)`, and as a quote that may open after a
-    /// backtick. The guard fails on each.
+    /// backtick. The guard fails on each. A `'` before the link reads the same
+    /// either way, and the link is rewritten.
     #[test]
-    fn a_code_link_a_backtick_or_a_quote_touches_stays_as_written() {
+    fn a_code_link_a_backtick_touches_or_a_quote_follows_stays_as_written() {
         for text in [
             "[`a`]`b`",
             "`a`[`b`]",
@@ -565,14 +566,18 @@ mod unlink {
             assert_eq!(unlink_rustdoc(text), None, "{text:?}");
             assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
         }
+        assert_eq!(unlink_rustdoc("'[`X`] b").as_deref(), Some("'`X` b"));
     }
 
+    /// Brackets that hold no code link rustdoc resolves stay as written, such
+    /// as prose brackets, a bare name whether or not rustdoc resolves it
+    /// (`[sic]` may), a web link, code, and a code link rustdoc 1.90 leaves
+    /// as text because its code is no path (``[`0, 1`]``, ``[`a;b`]``).
     #[test]
-    fn brackets_that_are_not_rustdoc_links_stay() {
+    fn brackets_that_hold_no_code_link_rustdoc_resolves_stay() {
         for text in [
             "in [0, 1]",
             "[docs](https://example.com/a)",
-            "[`a`][reference]",
             "a [ lone bracket",
             "the [Recollection] it returns",
             "fragments[i] and map[key] lookup",
@@ -587,13 +592,32 @@ mod unlink {
             "an [`a<b c`] unbalanced",
             "a [`Vec<T>>`] stray",
             "`decisions[fragment_index]` is unambiguous",
-            "[text][crate::X]",
-            "[text][`crate::X`]",
             "``a [`b`] c`` in a double-backtick span",
             "see [`a;b`] here",
         ] {
             assert_eq!(unlink_rustdoc(text), None, "{text}");
         }
+    }
+
+    /// A text holding a reference-style link stays as written: Markdown reads
+    /// the label of `[a][b]` or `[a][]` as raw text, where a backtick opens no
+    /// code span, so a link the scan reads after it may sit inside one. The
+    /// guard fails on each. A space or a line between the brackets ends the
+    /// first: `[a] [`X`]` holds no label, and its code link is rewritten.
+    #[test]
+    fn a_text_holding_a_reference_label_stays_as_written() {
+        for text in [
+            "[a][B`C] `x [`X`] y`",
+            "[`a`][reference]",
+            "[text][crate::X] and [`Y`]",
+            "[text][`crate::X`]",
+            "[`X`][] and [`Y`]",
+        ] {
+            assert_eq!(unlink_rustdoc(text), None, "{text:?}");
+            assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
+        }
+        assert_eq!(unlink_rustdoc("[a] [`X`]").as_deref(), Some("[a] `X`"));
+        assert_eq!(unlink_rustdoc("[a]\n[`X`]").as_deref(), Some("[a]\n`X`"));
     }
 
     #[test]
@@ -863,12 +887,13 @@ mod unlink {
         }
     }
 
-    /// A `[` right after `!` opens an image: the rewrite leaves it. A `]` a
-    /// colon follows may end a reference or footnote definition's label, in a
-    /// quote or a list item too, and even inside what reads as a code span,
-    /// since a label ends at its first `]` before code spans are read. A
-    /// definition's destination and title are not prose: the rewrite leaves
-    /// every link of a text holding `]:`. The guard fails on each.
+    /// A `![` outside a code span opens an image: the rewrite leaves every
+    /// link of its text. A `]` a colon follows may end a reference or footnote
+    /// definition's label, in a quote or a list item too, and even inside what
+    /// reads as a code span, since a label ends at its first `]` before code
+    /// spans are read. A definition's destination and title are not prose: the
+    /// rewrite leaves every link of a text holding `]:`. The guard fails on
+    /// each.
     #[test]
     fn an_image_and_a_text_holding_a_definition_stay_as_written() {
         for text in [
@@ -893,6 +918,16 @@ mod unlink {
             assert_eq!(unlink_rustdoc(text), None, "{text:?}");
             assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
         }
+    }
+
+    /// `![` inside a code span is code, not an image (`` `vec![]` ``): the
+    /// links around it are rewritten.
+    #[test]
+    fn an_image_mark_inside_a_code_span_is_code() {
+        assert_eq!(
+            unlink_rustdoc("`vec![]` and [`X`]").as_deref(),
+            Some("`vec![]` and `X`")
+        );
     }
 
     /// A web link stays as written and passes the guard, padded or wrapped in
