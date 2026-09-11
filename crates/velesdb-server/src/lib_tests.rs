@@ -248,7 +248,6 @@ fn collect_rustdoc_links(value: &Value, pointer: &str, linked: &mut Vec<String>)
 /// reference-style link or definition, even to a URL; and prose that looks
 /// like one fails too (`[0, 1]: …`, `m[i][j]`, `[#2261]`, `[ops@x.dev]`). A
 /// bare `[Point]` passes: it reads the same as `[sic]`.
-/// velesdb-memory's schema guard applies the same rules (#2261).
 fn holds_rustdoc_link(text: &str) -> bool {
     text.contains("][")
         || text.contains("]:")
