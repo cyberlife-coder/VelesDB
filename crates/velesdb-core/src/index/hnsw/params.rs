@@ -427,8 +427,8 @@ pub enum SearchQuality {
     ///
     /// `min_ef` is at least `k`, and `max_ef` is `4 * min_ef`. Some search paths
     /// run one pass, scan exactly or ignore the mode instead: the Search Modes
-    /// guide names the main ones ("When the two phases run"), and #2268 lists
-    /// every path. No recorded run measures its latency or recall (#2266).
+    /// guide names the main ones ("When the two phases run"), and #2268
+    /// tracks the rest. No recorded run measures its latency or recall (#2266).
     ///
     /// # Example
     ///

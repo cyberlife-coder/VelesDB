@@ -173,11 +173,11 @@ looks "hard". No recorded run measures its latency or recall yet (#2266).
 
 #### When the two phases run
 
-Adaptive and AutoTune run their two phases only inside `HnswIndex::search_with_quality`, for a search that reaches it with one of those qualities; there, an index of 100 vectors or fewer with exact-distance features on is scanned exactly instead. A search that does not reach it runs one pass (a bitmap pass can retry once at twice the ef), scans exactly, or does not apply the mode.
+Adaptive and AutoTune run their two phases only inside `HnswIndex::search_with_quality`, for a search that reaches it with one of those qualities; there, an index of 100 vectors or fewer with exact-distance features on is scanned exactly instead. A search that does not reach it runs one pass (a bitmap pass can retry once at twice the ef, capped at 10,000), scans exactly, or does not apply the mode.
 
 - The Rust API reaches it through `Collection::search_with_quality`.
 - REST reaches it for a dense-only, non-batch search given a `mode` and neither a filter nor `ef_search`. With a filter the mode is not applied (#457), and `ef_search` wins over it.
-- VelesQL reaches it for a `NEAR` with no other `WHERE` condition, given a mode with `WITH (mode = ...)`, unless the query also sets `rerank = false`, which runs one pass. With other conditions it depends on their shape: text, sparse, fused and graph-anchored searches do not apply the mode, and a filter resolved to a bitmap matching at most 80% of the collection skips the second phase or scans exactly (#2268).
+- VelesQL reaches it for a `NEAR` with no other `WHERE` condition, given a mode with `WITH (mode = ...)`, unless the query also sets `rerank = false`, which runs one pass. With other conditions it depends on their shape: text, sparse, fused and graph-anchored searches do not apply the mode, and a filter resolved to a bitmap matching at most 80% of the indexed vectors skips the second phase or scans exactly (#2268).
 
 Where a single graph pass runs, Adaptive uses `max(min_ef, k)` and AutoTune Balanced's `max(160, k*5)`, k being the count the index receives, each scaled by the index size.
 
