@@ -158,7 +158,7 @@ fn push_apart(out: &mut String, shown: &str, remaining: &str) {
 /// Length of the code span `text` starts with: its opening run of backticks
 /// through the next run of exactly as many, or the whole text when it never
 /// closes.
-fn code_span_len(text: &str) -> usize {
+pub(super) fn code_span_len(text: &str) -> usize {
     let fence = text.bytes().take_while(|&b| b == b'`').count();
     let mut search = fence;
     while let Some(found) = text[search..].find('`') {
@@ -178,12 +178,7 @@ fn code_span_len(text: &str) -> usize {
 fn rustdoc_link(after: &str) -> Option<(Cow<'_, str>, &str)> {
     let close = after.find(']')?;
     let (label, tail) = (&after[..close], &after[close + 1..]);
-    // A `[` left open earlier is not this link's: the scan moves on to the one
-    // just before the `]`.
-    if label.contains('[') {
-        return None;
-    }
-    if spans_a_line(label) {
+    if !can_be_link_text(label) {
         return None;
     }
     if let Some(inline) = tail.strip_prefix('(') {
@@ -201,6 +196,14 @@ fn rustdoc_link(after: &str) -> Option<(Cow<'_, str>, &str)> {
             tail,
         )
     })
+}
+
+/// Whether `label` can be a link's text. A `[` left open earlier is not this
+/// link's: the scan moves on to the one just before the `]`. Inside a code
+/// span a `[` is code (``[`a[`]``). A label that spans a line is left as
+/// written (see [`spans_a_line`]).
+fn can_be_link_text(label: &str) -> bool {
+    (!label.contains('[') || is_code_span(label)) && !spans_a_line(label)
 }
 
 /// An inline link, `inline` being the text after its `(`: shown as its label
@@ -224,8 +227,9 @@ fn inline_link<'a>(label: &'a str, inline: &'a str) -> Option<(Cow<'a, str>, &'a
 /// Whether `text` holds a line ending. Markdown lets a link span lines, but
 /// what a line ending allows there depends on the next line: a blank line, a
 /// heading or a list item ends the paragraph. No published doc comment writes
-/// one, so the rewrite leaves such a link as written, and the guard flags one
-/// whose target is a Rust path.
+/// one, so the rewrite leaves such a link as written; the guard reads each
+/// description with its line endings as spaces, and flags any link the
+/// rewrite would then change.
 fn spans_a_line(text: &str) -> bool {
     text.contains(['\n', '\r'])
 }

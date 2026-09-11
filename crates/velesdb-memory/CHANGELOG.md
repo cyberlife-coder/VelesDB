@@ -16,16 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every MCP client reads carried intra-doc links only rustdoc resolves —
   ``[`Name`]``, `[text](crate::path)` — 137 of them across 102 descriptions of
   `docs/reference/mcp-tools.json`. The input and output schemas now render
-  each link as rustdoc does: a code link as its code span, a labelled link as
-  its text, a path such as `[a::B]` or `[fn@f]` as its path without the
-  disambiguator. Code spans are copied verbatim. A bare `[name]` stays whether
-  or not rustdoc resolves it (`map[key]`, `[sic]`), as do `[0, 1]`, a
-  bracketed code span that is not one word, reference-style links, and a link that spans a line. Only
-  `description` strings are rewritten, never instance data such as a
-  `default`, so nothing else in a schema changes. A test fails if a published
-  description still holds a link the rewrite recognizes, or an inline link
-  whose target, past any whitespace or `<`, starts with `crate::`, `super::`,
-  `self::` or `Self::`. (#2261)
+  each link as rustdoc does: a code link as its code span, a labelled link to
+  a Rust path as its text, a path such as `[a::B]` or `[fn@f]` as its path
+  without the disambiguator. Code spans are copied verbatim. A bare `[name]`
+  stays whether or not rustdoc resolves it (`map[key]`, `[sic]`), as do
+  `[0, 1]`, a bracketed code span that is not one word, a web link,
+  reference-style links, and a link that spans a line. Only `description`
+  strings are rewritten, never instance data such as a `default`, so nothing
+  else in a schema changes. A test fails if a published description still
+  holds a link the rewrite recognizes, even across a line ending, or an
+  inline link outside a code span whose target, past any whitespace or `<`,
+  starts with `crate::`, `super::`, `self::` or `Self::`. (#2261)
 
 ## [0.14.2] - 2026-09-03
 

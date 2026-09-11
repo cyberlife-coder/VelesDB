@@ -323,7 +323,7 @@ fn admits_null(slot: &serde_json::Value) -> bool {
 /// The rustdoc-link rewrite applied to every published description (#2261).
 #[cfg(feature = "mcp")]
 mod unlink {
-    use super::super::walks::{unlink_rustdoc, unlink_rustdoc_descriptions};
+    use super::super::walks::{code_span_len, unlink_rustdoc, unlink_rustdoc_descriptions};
     use serde_json::{json, Value};
 
     #[test]
@@ -514,8 +514,8 @@ mod unlink {
 
     /// Markdown lets a link span lines, but what a line ending allows there
     /// depends on the next line, and no published doc comment writes one: the
-    /// rewrite leaves every such link as written, and the guard flags one that
-    /// names a Rust path.
+    /// rewrite leaves every such link as written, and the guard flags each,
+    /// whatever its target or form.
     #[test]
     fn a_link_that_spans_a_line_stays_as_written() {
         for text in [
@@ -527,16 +527,44 @@ mod unlink {
             "see [x](\n\ncrate::y)",
             "a [b\nc](crate::y) d",
             "see [a\n\nb](crate::y)",
+            "see [a\nb](Foo)",
+            "see [x](\nfn@f)",
+            "see [`HashMap<K,\nV>`] here",
         ] {
             assert_eq!(unlink_rustdoc(text), None, "{text:?}");
-            assert!(names_rust_path_target(text), "the guard misses {text:?}");
+            assert!(guard_flags(text), "the guard misses {text:?}");
         }
+    }
+
+    /// Inside a code span a `[` is code, so a code link's label may hold one.
+    #[test]
+    fn a_code_link_may_hold_a_bracket() {
+        assert_eq!(
+            unlink_rustdoc("see [`a[`](crate::y) here").as_deref(),
+            Some("see `a[` here")
+        );
+        assert_eq!(
+            unlink_rustdoc("see [`a[`] here").as_deref(),
+            Some("see `a[` here")
+        );
+    }
+
+    /// The rewrite copies a code span verbatim, link syntax and all, and the
+    /// guard reads past it too: `` `[x](crate::y)` `` shows the syntax; it is
+    /// not a link.
+    #[test]
+    fn the_guard_leaves_a_link_written_inside_a_code_span() {
+        let text = "the syntax `[x](crate::y)` is code";
+        assert_eq!(unlink_rustdoc(text), None);
+        assert!(!guard_flags(text), "{text}");
     }
 
     /// Whether `text` holds an inline link whose target, past any whitespace
     /// or `<`, names a Rust path: flagged even in a link the rewrite leaves,
-    /// such as ``[`a]b`](crate::x)``.
+    /// such as ``[`a]b`](crate::x)``. Code spans are read past, as the rewrite
+    /// copies them.
     fn names_rust_path_target(text: &str) -> bool {
+        let text = &outside_code_spans(text);
         text.match_indices("](").any(|(at, _)| {
             let target = text[at + 2..].trim_start();
             let target = target.strip_prefix('<').map_or(target, str::trim_start);
@@ -544,6 +572,34 @@ mod unlink {
                 .iter()
                 .any(|root| target.starts_with(root))
         })
+    }
+
+    /// What the guard flags in a published description: a link the rewrite
+    /// recognizes, one it leaves only because it spans a line, or an inline
+    /// link whose target names a Rust path.
+    fn guard_flags(text: &str) -> bool {
+        unlink_rustdoc(text).is_some()
+            || leaves_a_spanning_link(text)
+            || names_rust_path_target(text)
+    }
+
+    /// Whether the rewrite would change `text` if its line endings were
+    /// spaces: a link it leaves because the link spans a line.
+    fn leaves_a_spanning_link(text: &str) -> bool {
+        text.contains(['\n', '\r']) && unlink_rustdoc(&text.replace(['\r', '\n'], " ")).is_some()
+    }
+
+    /// `text` with each code span replaced by a space.
+    fn outside_code_spans(text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut rest = text;
+        while let Some(pos) = rest.find('`') {
+            out.push_str(&rest[..pos]);
+            out.push(' ');
+            rest = &rest[pos + code_span_len(&rest[pos..])..];
+        }
+        out.push_str(rest);
+        out
     }
 
     #[test]
@@ -607,7 +663,7 @@ mod unlink {
         use super::super::walks::{INSTANCE_KEYWORDS, NAMED_SCHEMA_MAPS};
         match child {
             Value::String(text) if key == "description" => {
-                if unlink_rustdoc(text).is_some() || names_rust_path_target(text) {
+                if guard_flags(text) {
                     out.push(here.to_owned());
                 }
             }
