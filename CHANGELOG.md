@@ -102,6 +102,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   load call alone reports the cost as gone when it has only moved.
 
 ### Fixed
+- **The REST OpenAPI document shows no rustdoc link syntax (#2263).** utoipa
+  copies doc comments into the OpenAPI document (`docs/openapi.{json,yaml}`,
+  served at `GET /api-docs/openapi.json` by a server built with
+  `swagger-ui`) as they are written, and only rustdoc resolves an intra-doc
+  link: four descriptions showed clients literal brackets, one of them around
+  the path of a private helper. The four are rewritten in plain prose that
+  states what a client can rely on instead: the status a failing match query
+  answers, when `stats` events arrive, and the integer `id` a streamed point
+  needs; the `503` a guard rail causes on the match endpoint is now declared.
+  A test fails when a published description holds link syntax: a code link,
+  a bracketed path, a reference-style link or definition, or an inline link
+  to anything but a URL or a fragment.
 
 - **A node could end up out of reach of every graph search, whatever its
   `ef` (#2259).** HNSW links each new node to its neighbours and each
