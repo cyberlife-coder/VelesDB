@@ -567,8 +567,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// The nodes among `nodes` that no search can reach: allocated, never
     /// linked into layer 0.
     ///
-    /// A mapped id can outlive its link: `upsert_bulk`'s V2 path registers the
-    /// mapping and writes the vector at once and leaves the graph insert to
+    /// A mapped id can outlive its link: `upsert_bulk`'s V2 path places each
+    /// vector, maps its id to the slot it got and leaves the graph insert to
     /// the async builder, so a save in that window persists a node with no
     /// neighbours (#2246). Every node an insert linked has at least one
     /// layer-0 neighbour once the graph holds two nodes. The entry point is

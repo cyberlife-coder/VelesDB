@@ -772,8 +772,8 @@ by an empty index and fully rebuilt by pass 1
 (`rebuild_if_unverifiable`).
 
 **Pass 4 — unlinked** (`relink_unlinked_ids`): a mapping is not proof of
-graph membership. `upsert_bulk`'s V2 path maps each id and writes its
-vector at once, and leaves the graph insert to the `AsyncIndexBuilder`, so
+graph membership. `upsert_bulk`'s V2 path places each vector, maps its id
+to the slot it got, and leaves the graph insert to the `AsyncIndexBuilder`, so
 a save that races it persists mappings for nodes nothing links to (#2246).
 Every mapped id whose node has an empty layer-0 list — the entry point
 excepted, since a graph's first node has nothing to link to — is
