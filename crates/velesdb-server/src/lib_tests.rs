@@ -267,14 +267,15 @@ fn holds_rustdoc_link(text: &str) -> bool {
 /// Whether the label `after` starts, up to its `]`, names a path: it holds
 /// `::`, `@`, `#` or `<`, is one of the primitives rustdoc links from a sigil
 /// (`&`, `&mut`, `&str`, `*const`, `*mut`), or ends in `()`, `!{}` or `!`,
-/// once its backticks are dropped and it is trimmed, as rustdoc reads it.
-/// Any other `&` or `*` (`[Q&A]`, `-[*1..5]->`) is text to rustdoc. It
-/// does so even as a web link's text: an inline link whose target Markdown
-/// rejects falls back to the shortcut link rustdoc resolves.
+/// once its backticks are dropped and it is trimmed of whitespace and a
+/// quote's `>`, as rustdoc reads it. The label is read even as a web link's
+/// text: an inline link whose target Markdown rejects falls back to the
+/// shortcut link rustdoc resolves. Any other `&` or `*` (`[Q&A]`,
+/// `-[*1..5]->`) is text to rustdoc.
 fn brackets_a_path(after: &str) -> bool {
     after.split_once(']').is_some_and(|(label, _)| {
         let label = label.replace('`', "");
-        let label = label.trim();
+        let label = label.trim_matches(|c: char| c.is_whitespace() || c == '>');
         label.contains("::")
             || label.contains(['@', '#', '<'])
             || matches!(label, "&" | "&mut" | "&str" | "*const" | "*mut")
@@ -322,6 +323,7 @@ fn test_rustdoc_link_guard_flags_each_link_form() {
         "see [&].",
         "see [&mut].",
         "see [*mut].",
+        "> see [\n> &str] here",
         "see [crate::Point](https://docs.rs/velesdb-core).",
         "see [crate::Point](https://docs.rs/velesdb-core x).",
         "> see [\n> `Point`] here",

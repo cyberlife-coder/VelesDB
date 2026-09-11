@@ -1088,8 +1088,8 @@ paths:
 
         # Errors
 
-        When the query itself fails, the JSON body carries the error's `VELES-XXX`
-        code, and the status follows its core error variant:
+        When the query fails with a core error, the JSON body carries its
+        `VELES-XXX` code, and the status follows its variant:
         - `404 NOT_FOUND` (`VELES-002`) — collection not found
         - `400 BAD_REQUEST` (`VELES-010`) — parse error, not a MATCH query,
           invalid threshold, or an unbound query parameter
