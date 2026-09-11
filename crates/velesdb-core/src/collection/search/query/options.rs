@@ -118,6 +118,8 @@ pub(in crate::collection::search::query) struct ExtractedComponents {
 
 /// Bundles the parameters for [`Collection::finalize_query_results`] to stay
 /// within the 8-parameter limit.
+///
+/// [`Collection::finalize_query_results`]: crate::collection::Collection::finalize_query_results
 pub(in crate::collection::search::query) struct QueryFinalizationContext<'a> {
     pub(in crate::collection::search::query) stmt: &'a crate::velesql::SelectStatement,
     pub(in crate::collection::search::query) params:

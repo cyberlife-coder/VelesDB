@@ -97,8 +97,8 @@ done
 # lints at their crate root, so a plain `cargo doc` already fails on one; the
 # RUSTDOCFLAGS here and the matching Lint steps are what guarantee the docs are
 # BUILT — an attribute cannot fire if nobody builds them.
-RUSTDOCFLAGS="-D warnings" cargo doc -p velesdb-memory --no-deps --all-features
-RUSTDOCFLAGS="-D warnings" cargo doc -p velesdb-core --no-deps --all-features
+RUSTDOCFLAGS="-D warnings" cargo doc -p velesdb-memory --no-deps --all-features --document-private-items
+RUSTDOCFLAGS="-D warnings" cargo doc -p velesdb-core --no-deps --all-features --document-private-items
 # Functional wasm gate — catches std APIs that abort on wasm32 (e.g. SystemTime::now):
 wasm-pack test --node crates/velesdb-wasm
 # Guards and contracts. Every one of these blocks a PR through `CI Success`, and

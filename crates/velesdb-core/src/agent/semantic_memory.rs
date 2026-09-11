@@ -209,7 +209,7 @@ impl SemanticMemory {
     ///
     /// # The durable TTL is deliberately NOT carried forward
     ///
-    /// [`EXPIRES_AT_KEY`] is excluded, and that exclusion is the whole point
+    /// [`memory_helpers::EXPIRES_AT_KEY`] is excluded, and that exclusion is the whole point
     /// of the distinction this function draws. An RL confidence and an entity
     /// tag are state the SYSTEM learned; an expiry is an intent the CALLER
     /// expressed. Only the properties the current call supplies are applied,

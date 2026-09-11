@@ -712,7 +712,7 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     /// Create the edge `from -> to` labelled `label`, unless `edges` already
     /// records that triple for this call (in-call dedup only). `relate`
     /// derives the edge id from `(from, relation, to)`
-    /// ([`crate::wire::hash_edge_id`] upstream in core) and is itself an O(1)
+    /// ([`velesdb_core::wire::hash_edge_id`] upstream in core) and is itself an O(1)
     /// idempotent no-op against an already-persisted edge, so there is
     /// nothing left to preload from the store — a prior preload here made
     /// every write to a hub with `k` existing edges cost O(k), turning `n`

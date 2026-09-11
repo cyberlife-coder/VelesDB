@@ -47,7 +47,7 @@ const WAL_STORE_ENTRY_OVERHEAD: usize = 17;
 /// writes them to the WAL in a single `write_all` call.
 ///
 /// Each entry retains the standard per-entry CRC32 frame for backward
-/// compatibility with [`wal_replay`]. The only difference from calling
+/// compatibility with [`wal_replay`](super::wal_replay). The only difference from calling
 /// [`write_wal_store_entry`] in a loop is that the I/O is coalesced:
 /// one syscall instead of 2N.
 ///

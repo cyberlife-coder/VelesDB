@@ -29,6 +29,9 @@ impl Collection {
     ///   [`QueryPlanner::choose_strategy_with_cbo_and_overfetch`] path, which
     ///   derives I/O / CPU weights from `OperationCostFactors` (or defaults
     ///   when the collection was never analyzed).
+    ///
+    /// [`QueryPlanner::choose_hybrid_strategy`]: crate::velesql::QueryPlanner::choose_hybrid_strategy
+    /// [`QueryPlanner::choose_strategy_with_cbo_and_overfetch`]: crate::velesql::QueryPlanner::choose_strategy_with_cbo_and_overfetch
     pub(super) fn compute_cbo_strategy(
         &self,
         stmt: &crate::velesql::SelectStatement,
@@ -103,7 +106,7 @@ impl Collection {
             .is_some_and(|first| !Self::order_by_item_reduces_to_similarity(&first.expr))
     }
 
-    /// Helper for [`has_order_by_similarity`]. Kept as an associated function
+    /// Helper for [`Self::has_order_by_similarity`]. Kept as an associated function
     /// so the match arm can delegate to the arithmetic-expression walker
     /// without inflating the outer method's cyclomatic complexity.
     fn order_by_item_reduces_to_similarity(expr: &crate::velesql::OrderByExpr) -> bool {
@@ -148,6 +151,8 @@ impl Collection {
     /// projection. Delegates to [`QueryPlanner::choose_hybrid_strategy`] so
     /// the returned `HybridExecutionPlan.strategy` is always `VectorFirst`
     /// and the over-fetch factor reflects the calibrated selectivity.
+    ///
+    /// [`QueryPlanner::choose_hybrid_strategy`]: crate::velesql::QueryPlanner::choose_hybrid_strategy
     fn cbo_strategy_for_order_by_similarity(
         &self,
         filter_condition: Option<&crate::velesql::Condition>,

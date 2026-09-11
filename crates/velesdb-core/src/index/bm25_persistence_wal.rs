@@ -84,7 +84,7 @@ pub(crate) fn wal_append_add_document(wal_path: &Path, id: u64, text: &str) -> R
 
 /// Validates that `text_bytes.len()` fits in a `u32` and returns the cast.
 ///
-/// Extracted from [`wal_append_add_document`] to keep its CC under the
+/// Extracted from `wal_append_add_document` to keep its CC under the
 /// Codacy limit (#389).
 #[inline]
 fn encode_text_len(text_bytes: &[u8]) -> Result<u32> {
@@ -146,8 +146,8 @@ pub(crate) enum WalOp<'a> {
 
 /// Appends a whole batch of mutations to the BM25 WAL under ONE fsync.
 ///
-/// This is the batched counterpart of [`wal_append_add_document`] /
-/// [`wal_append_remove_document`], and it exists because calling those in a
+/// This is the batched counterpart of `wal_append_add_document` /
+/// `wal_append_remove_document`, and it exists because calling those in a
 /// loop is what made bulk insertion cost one `open` + one `fsync` PER DOCUMENT
 /// (#1797): a batch of N text-bearing points paid N durability barriers where
 /// one is enough.

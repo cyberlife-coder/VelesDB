@@ -331,7 +331,7 @@ impl Collection {
         ids
     }
 
-    /// Builds a pre-filter bitmap from a [`Filter`] using secondary indexes.
+    /// Builds a pre-filter bitmap from a [`Filter`](crate::filter::Filter) using secondary indexes.
     ///
     /// Supports `Eq`, `Neq` (universe subtraction), `Gt`/`Gte`/`Lt`/`Lte`
     /// (range scan), `And` (intersection), and `Or` (union, only when all

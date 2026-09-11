@@ -13,7 +13,7 @@
 //! Parsing, the dry-run entry point, rendering, and the operator-facing
 //! texts. `--dry-run` reads, decides a regime, and prints what it found and
 //! what would happen — it writes nothing, takes no lock, and may run while
-//! the daemon holds the store: [`diagnose`](crate::migration::diagnose) never
+//! the daemon holds the store: [`diagnose`] never
 //! opens the live source, it inspects a verified copy. A non-dry-run runs the
 //! whole migration ([`migrate`](crate::migration::migrate) — rebuild,
 //! validation, switch) and requires the operator to name the destination.

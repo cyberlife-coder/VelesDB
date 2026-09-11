@@ -78,6 +78,9 @@ impl HnswIndex {
     /// Falls through to the CPU SIMD path transparently otherwise — the caller
     /// sees the same `(node_id, raw_dist)` pairs and must still apply
     /// [`NativeHnswInner::transform_score`] exactly as before.
+    ///
+    /// [`NativeHnswInner::search_auto`]: crate::index::hnsw::native_inner::NativeHnswInner::search_auto
+    /// [`NativeHnswInner::transform_score`]: crate::index::hnsw::native_inner::NativeHnswInner::transform_score
     pub(crate) fn search_hnsw_only(
         &self,
         query: &[f32],

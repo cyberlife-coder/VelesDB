@@ -11,6 +11,8 @@
 //!
 //! [`feedback`]: MemoryService::feedback
 //! [`recall`]: MemoryService::recall
+//!
+//! [`ReinforcementStrategy`]: velesdb_core::agent::ReinforcementStrategy
 
 use serde_json::{json, Value};
 use velesdb_core::agent::{FixedRate, ReinforcementContext, ReinforcementStrategy};

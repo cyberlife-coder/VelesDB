@@ -87,8 +87,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
 
     /// Executes the search on an already-prepared (normalized) query vector.
     ///
-    /// Factored out of [`search`] so the `Cow` borrow ends before
-    /// [`recycle_cow`] reclaims the buffer.
+    /// Factored out of [`Self::search`] so the `Cow` borrow ends before
+    /// [`Self::recycle_cow`] reclaims the buffer.
     #[inline]
     fn search_prepared(&self, query: &[f32], k: usize, ef_search: usize) -> Vec<(NodeId, f32)> {
         let ep = self.entry_point.load(Ordering::Acquire);

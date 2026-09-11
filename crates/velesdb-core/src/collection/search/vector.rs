@@ -409,12 +409,15 @@ impl Collection {
 
     /// Performs vector similarity search with a specific [`SearchQuality`] profile.
     ///
-    /// Use this instead of [`search_with_ef`] for named quality modes like
+    /// Use this instead of [`Self::search_with_ef`] for named quality modes like
     /// [`SearchQuality::AutoTune`] that compute ef dynamically.
     ///
     /// # Errors
     ///
     /// Returns an error if the query vector dimension doesn't match the collection.
+    ///
+    /// [`SearchQuality`]: crate::SearchQuality
+    /// [`SearchQuality::AutoTune`]: crate::SearchQuality::AutoTune
     pub fn search_with_quality(
         &self,
         query: &[f32],

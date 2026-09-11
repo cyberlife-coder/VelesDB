@@ -3,7 +3,7 @@
 //! Search entry points that do not build a `VelesQL` `Query` — REST vector /
 //! text / hybrid search, and memory recall — historically bypassed the
 //! control-plane read gate because [`Database::get_vector_collection`] hands
-//! back a detached [`VectorCollection`](crate::VectorCollection) with no
+//! back a detached [`VectorCollection`] with no
 //! observer reference. These methods restore governance for those paths: they
 //! consult the observer via [`Database::read_gate_raw`] (the same resolver the
 //! `VelesQL` gate uses), then delegate to the collection search leaf, applying any
@@ -23,7 +23,7 @@ use super::Database;
 
 /// A non-VelesQL read routed through the control-plane gate.
 ///
-/// Each variant maps to a [`VectorCollection`](crate::VectorCollection) search
+/// Each variant maps to a [`VectorCollection`] search
 /// leaf and to a [`QueryOperationKind`] the observer sees. Observer-supplied
 /// scope filters are AND-composed with any caller filter before execution, so
 /// narrowing can only shrink the result set, never widen it.

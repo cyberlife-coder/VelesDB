@@ -467,7 +467,7 @@ impl Collection {
     /// compacted.
     ///
     /// This is the collection-level wrapper around
-    /// [`HnswIndex::vacuum`] used by the server admin endpoint
+    /// [`HnswIndex::vacuum`](crate::index::HnswIndex::vacuum) used by the server admin endpoint
     /// `POST /collections/{name}/index/rebuild` (finding F-21).
     ///
     /// # Errors
