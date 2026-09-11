@@ -236,18 +236,18 @@ fn collect_rustdoc_links(value: &Value, pointer: &str, linked: &mut Vec<String>)
 
 /// Whether `text` holds rustdoc link syntax: a `[` that opens on a code span
 /// (`` [`Point`] ``), a bracketed path (`[crate::Point]`, `[fn@f]`, `[a#b]`,
-/// `[Vec<T>]`, `[f()]`, `[m!{}]`, `[m!]`), a reference-style link (`[x][y]`,
-/// `[x][]`), a reference definition (any `]:`), or an inline link to anything
-/// but a URL or a fragment.
+/// `[Vec<T>]`, `[f()]`, `[m!{}]`, `[m![]]`, `[m!]`), a reference-style link
+/// (`[x][y]`, `[x][]`), a reference definition (any `]:`), or an inline link
+/// to anything but a URL or a fragment.
 ///
 /// It reads the raw text, so no Markdown construct (a code span, a quote, a
 /// list item) can hide one of these forms from it. What that costs: a
 /// description cannot show one even as code (`` `[x](y)` ``,
-/// ``[`asc`, `desc`]``, `&[Vec<f32>]`), give a web link code text, or write a
-/// reference-style link or definition, even to a URL; and prose that looks
-/// like one fails too (`[0, 1]: …`, `m[i][j]`, `[#2261]`, `[ops@x.dev]`). A
-/// bare `[Point]` passes: it reads the same as `[sic]`. velesdb-memory's
-/// schema guard applies the same rules (#2261).
+/// ``[`asc`, `desc`]``, `&[Vec<f32>]`), give a web link code or a path as its
+/// text, or write a reference-style link or definition, even to a URL; and
+/// prose that looks like one fails too (`[0, 1]: …`, `m[i][j]`, `[#2261]`,
+/// `[ops@x.dev]`). A bare `[Point]` passes: it reads the same as `[sic]`.
+/// velesdb-memory's schema guard applies the same rules (#2261).
 fn holds_rustdoc_link(text: &str) -> bool {
     text.contains("][")
         || text.contains("]:")
@@ -256,25 +256,28 @@ fn holds_rustdoc_link(text: &str) -> bool {
             .any(|(at, _)| !is_url(target_start(&text[at + 2..])))
         || text.match_indices('[').any(|(at, _)| {
             let after = &text[at + 1..];
-            after.trim_start().starts_with('`') || brackets_a_path(after)
+            after
+                .trim_start_matches(|c: char| c.is_whitespace() || c == '>')
+                .starts_with('`')
+                || brackets_a_path(after)
         })
 }
 
 /// Whether the label `after` starts, up to its `]`, names a path: it holds
-/// `::`, `@`, `#` or `<`, or ends in `()`, `!{}` or `!` once its backticks are
-/// dropped and it is trimmed, as rustdoc reads it. A `(` after the `]` makes
-/// it the text of an inline link instead, which [`holds_rustdoc_link`] reads
-/// by its target.
+/// `::`, `@`, `#` or `<`, or ends in `()`, `!{}`, `![` (as in `[m![]]`) or `!`
+/// once its backticks are dropped and it is trimmed, as rustdoc reads it. It
+/// does so even as a web link's text: an inline link whose target Markdown
+/// rejects falls back to the shortcut link rustdoc resolves.
 fn brackets_a_path(after: &str) -> bool {
-    after.split_once(']').is_some_and(|(label, rest)| {
+    after.split_once(']').is_some_and(|(label, _)| {
         let label = label.replace('`', "");
         let label = label.trim();
-        !rest.starts_with('(')
-            && (label.contains("::")
-                || label.contains(['@', '#', '<'])
-                || label.ends_with("()")
-                || label.ends_with("!{}")
-                || label.ends_with('!'))
+        label.contains("::")
+            || label.contains(['@', '#', '<'])
+            || label.ends_with("()")
+            || label.ends_with("!{}")
+            || label.ends_with("![")
+            || label.ends_with('!')
     })
 }
 
@@ -311,6 +314,10 @@ fn test_rustdoc_link_guard_flags_each_link_form() {
         "see [vec! ].",
         "see [stream_traverse`()`].",
         "see [vec`!`].",
+        "see [vec![]].",
+        "see [crate::Point](https://docs.rs/velesdb-core).",
+        "see [crate::Point](https://docs.rs/velesdb-core x).",
+        "> see [\n> `Point`] here",
         "see [fn@stream_traverse].",
         "see [Point#fields].",
         "see [the point][Point].",
@@ -350,7 +357,6 @@ fn test_rustdoc_link_guard_leaves_web_links_and_brackets() {
         "see [the guide](https://velesdb.com/docs).",
         "see [the spec](http://example.com/spec).",
         "write to [the team](mailto:team@velesdb.com).",
-        "see [crate::Point](https://docs.rs/velesdb-core).",
         "see [the guide](<https://velesdb.com/docs>).",
         "see [the guide](< https://velesdb.com/docs >).",
         "jump to [the top](#top).",
