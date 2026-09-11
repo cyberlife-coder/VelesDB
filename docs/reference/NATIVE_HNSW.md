@@ -109,7 +109,8 @@ let loaded = NativeHnswIndex::load("./my_index", 768, DistanceMetric::Cosine)?;
 | 0..4 | format version, `u32` LE |
 | 4..12 | vector count, `u64` LE |
 | 12..16 | dimension, `u32` LE |
-| 16..*data_offset* | reserved, zero-filled (v2 only) |
+| 16 | flags (v2 only): bit 0 set = every vector is unit-norm cosine, written by a pre-normalized engine, so a load skips the norm check; 0 in files written before the flag (#2246) |
+| 17..*data_offset* | reserved, zero-filled (v2 only) |
 | *data_offset*.. | `count * dimension` values, `f32` LE |
 
 `data_offset` is **16 in v1** and **4096 in v2**. Both versions are read; only
@@ -127,9 +128,15 @@ The payload is explicitly little-endian on every target — `.vectors` is
 portable, unlike the native-endian arena file beside it, and anything that later
 maps it directly inherits that constraint and must gate on `target_endian`.
 
-**Compatibility runs one way.** A current binary reads v1 and v2; a binary from
-before v2 rejects a v2 file with `Unsupported version: 2`. Downgrading past this
-change therefore requires re-persisting the index.
+**Downgrading works, and that was measured rather than reasoned about.** A
+current binary reads v1 and v2, and a binary from before v2 opens a v2 database
+too. Its reader refuses a v2 header with `Unsupported version: 2`, and the open
+path treats that like any unreadable `.vectors`: a warning, then the index is
+rebuilt from `vectors.dat` / the WAL, because `.vectors` is a derived artifact.
+Checked against a real `v6.0.0` build; the rebuild is pinned by
+`a_corrupt_vectors_file_does_not_prevent_opening`, the warning by
+`reopening_with_unusable_vectors_file_warns` (#2245).
+This page said the opposite until #2246; the CHANGELOG had been corrected first.
 
 #### The file may be the arena
 

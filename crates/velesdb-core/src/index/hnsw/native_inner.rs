@@ -432,8 +432,11 @@ impl NativeHnswInner {
     // `#[cfg(feature = "gpu")]`, so with the feature off nothing in the
     // signature is read -- neither the parameters nor the receiver. The
     // receiver's allow was missing, which made
-    // `cargo clippy -p velesdb-core --lib --features persistence` fail on a
-    // clean tree: CI lints one feature set, and it always includes `gpu`.
+    // `cargo clippy -p velesdb-core --lib --features persistence -- -D warnings
+    // -D clippy::pedantic` fail on a clean tree. The workspace allows
+    // `unused_self`, but a `-D clippy::pedantic` on the command line overrides
+    // it, so the attribute is what that strict form needs; CI never sees the
+    // gap because it lints one feature set, and that set always has `gpu`.
     #[allow(unused_variables)] // Reason: parameters unused when `gpu` is off
     #[allow(clippy::unused_self)] // Reason: receiver unused when `gpu` is off
     fn try_gpu_route(
@@ -825,6 +828,17 @@ impl NativeHnswInner {
             HnswBackend::Standard(hnsw) => hnsw.with_vectors_write(f),
             HnswBackend::RaBitQ(rabitq) => rabitq.inner.with_vectors_write(f),
             HnswBackend::Sq8(sq8) => sq8.inner.with_vectors_write(f),
+        }
+    }
+
+    /// Whether the arena holds cosine vectors unit-norm — see
+    /// `NativeHnsw::stores_unit_norm`. A writer filling the arena outside the
+    /// graph's insert path must normalize when this is true.
+    pub(crate) fn stores_unit_norm(&self) -> bool {
+        match &self.backend {
+            HnswBackend::Standard(hnsw) => hnsw.stores_unit_norm(),
+            HnswBackend::RaBitQ(rabitq) => rabitq.inner.stores_unit_norm(),
+            HnswBackend::Sq8(sq8) => sq8.inner.stores_unit_norm(),
         }
     }
 }

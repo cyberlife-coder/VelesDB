@@ -108,6 +108,10 @@ default_mode = "fast"
     }
 
     #[test]
+    #[allow(
+        deprecated,
+        reason = "these tests pin the deprecated fields' parsing and range check until removal"
+    )]
     fn test_config_from_toml_full() {
         // Arrange
         let toml = r#"
@@ -345,6 +349,10 @@ max_collections = 0
     }
 
     #[test]
+    #[allow(
+        deprecated,
+        reason = "these tests pin the deprecated fields' parsing and range check until removal"
+    )]
     fn test_config_validate_mmap_cache_zero_rejected() {
         // A zero-byte mmap cache is meaningless and must be rejected.
         let mut config = VelesConfig::default();
@@ -359,6 +367,10 @@ max_collections = 0
     }
 
     #[test]
+    #[allow(
+        deprecated,
+        reason = "these tests pin the deprecated fields' parsing and range check until removal"
+    )]
     fn test_config_validate_mmap_cache_too_large_rejected() {
         let mut config = VelesConfig::default();
         config.storage.mmap_cache_mb = usize::MAX;
@@ -657,6 +669,10 @@ max_batch_size = 64
     // ========================================================================
 
     #[test]
+    #[allow(
+        deprecated,
+        reason = "these tests pin the deprecated fields' parsing and range check until removal"
+    )]
     fn test_veles_config_toml_with_deprecated_storage_fields_still_loads() {
         let toml = r#"
 [storage]
