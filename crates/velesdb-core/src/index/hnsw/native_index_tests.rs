@@ -216,7 +216,7 @@ fn test_native_index_brute_force_k_larger_than_size() {
 
 #[test]
 fn test_native_insert_same_id_updates_vector() {
-    // Arrange: create index with vector storage enabled (default)
+    // Arrange: create index with exact-distance features on (default)
     let index = NativeHnswIndex::new(4, DistanceMetric::Cosine).expect("test");
 
     // Insert id=1 with vector A (pointing along x-axis)

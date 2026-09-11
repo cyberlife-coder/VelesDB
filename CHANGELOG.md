@@ -246,14 +246,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Cosine, whose load path renormalises in place. Each was seen failing on the
   mutation it names (#2246, P2).
 
+- **`Perfect` was still described by its old contract across the docs.**
+  `SearchQuality::Perfect` is an exhaustive scan capped by
+  `limits.max_perfect_mode_vectors` (#2238), but the `SearchMode::Perfect`
+  rustdoc — the copy #2239 missed — the `effective_ef_search` deprecation
+  note, the `index::hnsw::index` module doc, `SEARCH_MODES.md` (its Perfect
+  section, note, diagram, comparison rows and results table), `TUNING_GUIDE.md`,
+  `MOBILE_API.md`, `ECOSYSTEM_PARITY.md`, `CORE_PERFORMANCE.md`,
+  `VELESQL_SPEC.md`'s `mode` mapping, a tutorial table, the uniffi doc that
+  generates the Swift and Kotlin bindings and the Python `LimitsOptions` still
+  said it stayed on the graph at `ef_search = 4096`, or that its cap was not
+  enforced. Two neighbouring `LimitsOptions` fields claimed "not yet enforced"
+  for caps `RuntimeLimits` enforces; corrected with them. The cap is the
+  collection's — `HnswIndex` itself scans without one, and its module doc now
+  says so. `BENCHMARKS.md`'s 0.9994-at-1M row is `Perfect` — an exhaustive
+  scan, from `sift1m_recall.rs` (#1225) — and loses the `~8192` it showed, a
+  computed effort that never ran; why a scan reads 0.9994 rather than 1.0
+  against SIFT1M's ground truth is not established. What the scan returns is
+  stated as it runs — the exact top-k under the index's own distance, ties
+  aside — where `SEARCH_MODES.md` (FAQ included), `TUNING_GUIDE.md`,
+  `PYTHON_PERFORMANCE.md`, `SERVER_REST_TOUR.md`, `NATIVE_HNSW.md` and the core
+  and mobile doc comments said "100% recall" or "by construction"; an index
+  built with its exact-distance features off falls back to a graph search, and
+  its rustdoc says so. `Accurate`'s "~100% recall" label gives the measured
+  figures instead: 100% recall@10 in `recall_benchmark` and 0.98 on SIFT1M's
+  1M. The Fast and Balanced figures (~95% and ~99.5% in the docs; 92.2%
+  and 98.8% in the README, measured at the old ef 64 and 128) were
+  re-measured at today's presets, 97.4% and 99.8%, and every surface
+  cites that measurement. With the `gpu` feature, brute force on an index
+  whose exact-distance features are off took the GPU path anyway; it now
+  returns nothing there too. Two benchmarks printed the exhaustive scan as
+  `ef=4096`; relabelled `exhaustive`. The Adaptive and AutoTune figures no
+  run backs (a 2–4x median-latency gain, ~99% and 95%+ recall) leave the
+  guides and the `SearchQuality::Adaptive` rustdoc, which say instead that
+  nothing measures them yet (#2266); they also said Adaptive escalates to
+  `max_ef`, where it searches a hard query once more, at twice its starting ef
+  capped at `max_ef` (#2246, P3).
+
 - **`SearchQuality::Perfect` was documented as the opposite of what it does.**
   Its rustdoc described a graph search at `ef_search = 4096` that "tunes the
   HNSW graph's effort and is not exhaustive", with a ~0.9994 recall figure at
   1M. It is exhaustive: `try_search_special_quality` routes the variant to
   `search_brute_force` before `ef_search` is read, and a collection above
   `limits.max_perfect_mode_vectors` (default 500 000) is refused with
-  `Error::GuardRail` rather than scanned — so the 1M figure describes a run
-  that cannot happen. The doc was written from `ef_search()` without checking
+  `Error::GuardRail` rather than scanned — so a collection at the default
+  cap cannot produce the 1M figure; it came from an exhaustive scan run on
+  `HnswIndex` directly (#1225). The doc was written from `ef_search()` without checking
   which arm runs. Corrected, and pinned by
   `crates/velesdb-core/tests/perfect_mode_semantics.rs`, which sees the guard
   rail refuse and sees `ef = 4096` accepted on the same collection.

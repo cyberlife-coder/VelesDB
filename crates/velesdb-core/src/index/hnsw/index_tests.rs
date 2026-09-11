@@ -39,7 +39,7 @@ fn test_batch_search_matches_single_query_on_large_dataset_issue_694() {
     // asymmetry only manifests above the threshold.
     //
     // Why 40K + Fast quality: at 40K the scale factor is sqrt(4)=2 (capped),
-    // so Fast (base ef=64) becomes 128 with scaling — a 2x change. That gives
+    // so Fast's base ef doubles with scaling — a 2x change. That gives
     // the candidate set enough wiggle room for the unscaled batch path
     // (pre-fix) to return a different top-k from the scaled single-query path.
     // Below 10K or at smaller scale factors the effect is too small to
@@ -66,9 +66,10 @@ fn test_batch_search_matches_single_query_on_large_dataset_issue_694() {
     let query_refs: Vec<&[f32]> = queries.iter().map(Vec::as_slice).collect();
 
     let k = 10_usize;
-    // Fast quality (ef=64) magnifies the asymmetry: pre-fix batch gets ef=64,
-    // post-fix batch gets ef=128 (scaled). Higher base efs (Balanced=128,
-    // Accurate=512) already saturate the candidate space and hide the bug.
+    // Fast, the lowest named preset on this path, magnifies the asymmetry:
+    // the pre-fix batch path ran at the base ef while the single-query path
+    // scaled it with the index size. Higher bases (Balanced, Accurate) already
+    // saturate the candidate space and hide the bug.
     let quality = SearchQuality::Fast;
 
     // Act: run both paths
@@ -91,9 +92,9 @@ fn test_batch_search_matches_single_query_on_large_dataset_issue_694() {
     // Assert: result IDs must match per-query.
     //
     // Pre-fix (issue #694): batch used ef_search(k), single used
-    // ef_search_for_scale(k, len). At n=12_000 the scale factor was sqrt(1.2)
-    // ≈ 1.095, so single saw ef * 1.09 (rounded) and batch saw ef * 1, giving
-    // mismatched candidate sets and divergent top-k.
+    // ef_search_for_scale(k, len). At this test's n=40_000, single ran at
+    // twice the base ef and batch at the base ef, so their candidate sets
+    // differed and so did their top-k.
     //
     // Post-fix: both paths call ef_search_for_scale(k, self.len()), so the
     // candidate sets are identical and the result lists are identical.
@@ -307,7 +308,7 @@ fn test_hnsw_new_turbo_mode() {
 
 #[test]
 fn test_hnsw_new_fast_insert_mode() {
-    // Arrange & Act - fast insert mode disables vector storage
+    // Arrange & Act - fast insert mode turns exact-distance features off
     let index = HnswIndex::new_fast_insert(64, DistanceMetric::Cosine).unwrap();
 
     // Insert vectors
@@ -585,7 +586,7 @@ fn test_hnsw_snapshot_without_vectors_file_keeps_vector_features() {
     // Act: load the snapshot.
     let loaded_index = HnswIndex::load(dir.path(), 3, DistanceMetric::Cosine).unwrap();
 
-    // Assert: full functionality — vector storage stays enabled (vectors are
+    // Assert: full functionality — exact-distance features stay on (vectors are
     // in the graph) and vacuum works.
     assert_eq!(loaded_index.len(), 2);
     assert!(loaded_index.has_vector_storage());
@@ -594,7 +595,7 @@ fn test_hnsw_snapshot_without_vectors_file_keeps_vector_features() {
 }
 
 #[test]
-fn test_hnsw_fast_insert_save_does_not_persist_vectors_file() {
+fn test_hnsw_fast_insert_flag_survives_save_load() {
     use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
@@ -2407,7 +2408,7 @@ fn test_adaptive_search_spread_works_for_similarity_metrics() {
 
 #[test]
 fn test_insert_same_id_updates_vector() {
-    // Arrange: create index with vector storage enabled (default)
+    // Arrange: create index with exact-distance features on (default)
     let index = HnswIndex::new(4, DistanceMetric::Cosine).unwrap();
 
     // Insert id=1 with vector A (pointing along x-axis)
@@ -3560,6 +3561,57 @@ fn adaptive_resume_is_deterministic_across_pool_reuse() {
             "adaptive resume drifted across pooled reuse"
         );
     }
+}
+
+/// An index built with `new_fast_insert`, a twin built with `new`, both
+/// holding the same 100 vectors, and a query.
+fn fast_insert_and_twin() -> (HnswIndex, HnswIndex, Vec<f32>) {
+    let index = HnswIndex::new_fast_insert(128, DistanceMetric::Cosine).unwrap();
+    let twin = HnswIndex::new(128, DistanceMetric::Cosine).unwrap();
+    for i in 0u64..100 {
+        let v: Vec<f32> = (0..128)
+            .map(|j| ((i + j as u64) as f32 * 0.01).sin())
+            .collect();
+        index.insert(i, &v);
+        twin.insert(i, &v);
+    }
+    let query = (0..128).map(|j| (j as f32 * 0.02).cos()).collect();
+    (index, twin, query)
+}
+
+/// Exact-distance features off turn the CPU brute-force scan off: it returns
+/// nothing for an index built with `new_fast_insert`, while the twin built
+/// with `new` answers.
+#[test]
+fn cpu_brute_force_returns_nothing_with_exact_distance_features_off() {
+    let (index, twin, query) = fast_insert_and_twin();
+    assert_eq!(
+        twin.brute_force_search_parallel(&query, 10).unwrap().len(),
+        10
+    );
+    assert!(index
+        .brute_force_search_parallel(&query, 10)
+        .unwrap()
+        .is_empty());
+}
+
+/// Exact-distance features off turn brute force off on the GPU path too: it
+/// returns nothing rather than scan an index built with `new_fast_insert`. A
+/// twin built with `new` is the positive control, and must answer whenever a
+/// GPU is present; without one the test returns early, reported as passed,
+/// after printing that the guard went unexercised (shown with `--nocapture`).
+#[cfg(feature = "gpu")]
+#[test]
+fn gpu_brute_force_returns_nothing_with_exact_distance_features_off() {
+    let (index, twin, query) = fast_insert_and_twin();
+    if !crate::gpu::GpuAccelerator::is_available() {
+        eprintln!("GPU unavailable: the exact-distance guard is not exercised here");
+        return;
+    }
+    let scanned = twin.search_brute_force_gpu(&query, 10).unwrap();
+    let scanned = scanned.expect("test: with a GPU, the twin built with new() scans");
+    assert_eq!(scanned.len(), 10);
+    assert!(index.search_brute_force_gpu(&query, 10).unwrap().is_none());
 }
 
 /// A delete never lands inside a renumber. The renumber below re-maps as
