@@ -142,8 +142,9 @@ enum Pass {
 /// - a `<` outside a code span, which can open HTML or an autolink;
 /// - a table, in or out of a quote, which splits its cells before it reads
 ///   code spans;
-/// - a reference definition, or any `]` a colon follows outside a code span:
-///   a definition's destination and title are not prose;
+/// - any `]` a colon follows, even inside what reads as a code span: a
+///   reference or footnote definition's label ends at its first `]` before
+///   code spans are read, and its destination and title are not prose;
 /// - a code span that crosses a line, whose extent depends on the blocks
 ///   around it.
 fn scan_is_exact(text: &str) -> bool {
@@ -152,7 +153,7 @@ fn scan_is_exact(text: &str) -> bool {
         && !text.contains("```")
         && !text.contains("~~~")
         && !outside_code_spans(text).any(|part| part.contains('<'))
-        && !outside_code_spans(text).any(|part| part.contains("]:"))
+        && !text.contains("]:")
         && !text.split(LINE_ENDINGS).any(is_a_table_delimiter_row)
         && !has_a_code_span_across_lines(text)
 }
@@ -485,13 +486,12 @@ fn without_disambiguator(target: &str) -> Option<&str> {
 /// `fn@name`, `f()`, `m!` — as opposed to a URL or prose.
 fn is_rust_path(target: &str) -> bool {
     let path = rustdoc_path(without_disambiguator(target).unwrap_or(target));
-    !path.is_empty()
-        && path.split("::").all(|segment| {
-            segment.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
-                && segment
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '_')
-        })
+    path.split("::").all(|segment| {
+        segment.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+            && segment
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
 }
 
 /// Recursively widen every property named in `keys` (resolving the `items`

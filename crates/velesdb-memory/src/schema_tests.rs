@@ -339,6 +339,8 @@ mod unlink {
         for (text, shown) in [
             ("a [`call`](f()) here", "a `call` here"),
             ("see [`x`](m!()) here", "see `x` here"),
+            ("see [`x`](m!) here", "see `x` here"),
+            ("see [`x`](crate::_hidden) here", "see `x` here"),
             ("see [`x`]( crate::y)", "see `x`"),
             ("in [0, 1) see [`x`](crate::y)", "in [0, 1) see `x`"),
             ("see [`x`](crate::y): the id", "see `x`: the id"),
@@ -475,6 +477,8 @@ mod unlink {
             "[a [`X`](crate::y) b]",
             "x [a [`X`] b] y",
             "[[`X`]]",
+            "[a `]` [`X`] b]",
+            "in [0, 1) see [`X`] `[` b]",
         ] {
             assert_eq!(unlink_rustdoc(text), None, "{text:?}");
             assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
@@ -844,10 +848,11 @@ mod unlink {
     }
 
     /// A `[` right after `!` opens an image: the rewrite leaves it. A `]` a
-    /// colon follows may end a reference definition's label, in a quote or a
-    /// list item too, and a definition's destination and title are not prose:
-    /// the rewrite leaves every link of a text holding one. The guard fails on
-    /// each.
+    /// colon follows may end a reference or footnote definition's label, in a
+    /// quote or a list item too, and even inside what reads as a code span,
+    /// since a label ends at its first `]` before code spans are read. A
+    /// definition's destination and title are not prose: the rewrite leaves
+    /// every link of a text holding `]:`. The guard fails on each.
     #[test]
     fn an_image_and_a_text_holding_a_definition_stay_as_written() {
         for text in [
@@ -861,6 +866,12 @@ mod unlink {
             "![logo]\n\n[logo]: https://x.dev/a.png \"[`X`]\"",
             "![logo]\n\n[logo]: [`X`]",
             "[a [`X`] b]: dest",
+            "[a``]:``.[`X`]( crate::X)",
+            "[a``]: ``.[`X`](crate::X)",
+            "[a``]: `` \"[`X`]\"",
+            "[^a``]: x ``.[`X`].`` end ``",
+            "[^a``]: x ``.[`X`].`` end ``\n\nsee [^a``]",
+            "see [^n].\n\n[^n``]: x ``.[`X`].`` end ``",
         ] {
             assert_eq!(unlink_rustdoc(text), None, "{text:?}");
             assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
