@@ -160,7 +160,7 @@ fn push_apart(out: &mut String, shown: &str, remaining: &str) {
 /// through the next run of exactly as many, or just that opening run when
 /// none closes it: in Markdown, an unclosed run of backticks is literal
 /// text.
-fn code_span_len(text: &str) -> usize {
+pub(super) fn code_span_len(text: &str) -> usize {
     let fence = text.bytes().take_while(|&b| b == b'`').count();
     let mut search = fence;
     while let Some(found) = text[search..].find('`') {
@@ -252,22 +252,21 @@ fn inline_link<'a>(label: &'a str, inline: &'a str) -> Option<(Cow<'a, str>, &'a
     let target = target
         .strip_prefix('<')
         .and_then(|t| t.strip_suffix('>'))
-        .unwrap_or(target);
+        .map_or(target, str::trim);
     is_rust_path(target).then(|| (Cow::Borrowed(label), &inline[end + 1..]))
 }
 
 /// Whether `text` holds a line ending. Markdown lets a link span lines, but
 /// what a line ending allows there depends on the next line: a blank line, a
 /// heading or a list item ends the paragraph. No published doc comment writes
-/// one, so the rewrite leaves such a link as written; the guard reads each
-/// description with its line endings as spaces, and flags any link the
-/// rewrite would then change.
-pub(super) fn spans_a_line(text: &str) -> bool {
+/// one, so the rewrite leaves such a link as written, and the guard fails on
+/// it as on any link syntax the rewrite leaves.
+fn spans_a_line(text: &str) -> bool {
     text.contains(LINE_ENDINGS)
 }
 
 /// What ends a line in Markdown: a line feed or a carriage return.
-pub(super) const LINE_ENDINGS: [char; 2] = ['\n', '\r'];
+const LINE_ENDINGS: [char; 2] = ['\n', '\r'];
 
 /// A code link, ``[`code`]``: shown as its code span when the code is one
 /// word rustdoc resolves ([`rustdoc_resolves`]), without its disambiguator.
@@ -286,20 +285,20 @@ fn code_link<'a>(label: &'a str, tail: &'a str) -> Option<(Cow<'a, str>, &'a str
     Some((shown, tail))
 }
 
-/// The path rustdoc 1.90 resolves for the link text `word`: the part before
-/// any `#` fragment, past a call suffix such as `()` when something is left.
+/// The path rustdoc 1.90 resolves for the link text `word`: `word` past a call
+/// suffix such as `()`, when something is left. A `#` fragment is not modelled:
+/// a link with one stays as written, and the guard fails on it.
 fn rustdoc_path(word: &str) -> &str {
-    let path = word.split('#').next().unwrap_or(word).trim();
     CALL_SUFFIXES
         .iter()
-        .find_map(|suffix| path.strip_suffix(suffix).filter(|rest| !rest.is_empty()))
-        .unwrap_or(path)
+        .find_map(|suffix| word.strip_suffix(suffix).filter(|rest| !rest.is_empty()))
+        .unwrap_or(word)
 }
 
 /// Whether rustdoc 1.90 tries to resolve the link text `word`: its
 /// [`rustdoc_path`] holds only letters, digits and ``:_<>, !*&;``. rustdoc
 /// leaves any other link as written, brackets and all (``[`a[`]``,
-/// ``[`a.b`]``, ``[`()`]``).
+/// ``[`a.b`]``, ``[`()`]``); so does this rewrite with ``[`a#b`]``.
 fn rustdoc_resolves(word: &str) -> bool {
     rustdoc_path(word)
         .chars()
@@ -325,7 +324,8 @@ fn is_path_like(label: &str) -> bool {
 }
 
 /// What rustdoc accepts after a function or macro name: `f()`, `m!`, `m!()`,
-/// `m!{}`. (`m![]` cannot reach here: its `]` ends the label.)
+/// `m!{}`. A form not listed, such as `m![]`, stays as written, and the guard
+/// fails on it.
 const CALL_SUFFIXES: [&str; 4] = ["!()", "!{}", "()", "!"];
 
 /// Whether a code span reads as a link to the rewrite: non-empty and, with

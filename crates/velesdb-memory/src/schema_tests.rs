@@ -324,7 +324,7 @@ fn admits_null(slot: &serde_json::Value) -> bool {
 #[cfg(feature = "mcp")]
 mod unlink {
     use super::super::walks::{
-        outside_code_spans, spans_a_line, unlink_rustdoc, unlink_rustdoc_descriptions, LINE_ENDINGS,
+        code_span_len, outside_code_spans, unlink_rustdoc, unlink_rustdoc_descriptions,
     };
     use serde_json::{json, Value};
 
@@ -343,6 +343,7 @@ mod unlink {
             ("see [x]( crate::y)", "see x"),
             ("see [x](<crate::y>)", "see x"),
             ("see [x](< crate::y >)", "see x"),
+            ("see [x](< fn@f >)", "see x"),
             ("in [0, 1) see [x](crate::y)", "in [0, 1) see x"),
         ] {
             assert_eq!(unlink_rustdoc(text).as_deref(), Some(shown), "{text}");
@@ -556,18 +557,34 @@ mod unlink {
         assert_eq!(unlink_rustdoc("see [`()`] here"), None);
     }
 
-    /// rustdoc resolves a link by the path before its `#` fragment, so
-    /// ``[`Vec#method.push`]`` shows its code span and `[a::B#x]` its path.
+    /// rustdoc shows only the part of a link before its `#` fragment. The
+    /// rewrite does not model that: it leaves such a link as written, and the
+    /// guard fails on it before it can reach a client.
     #[test]
-    fn a_link_to_a_fragment_shows_its_text() {
-        assert_eq!(
-            unlink_rustdoc("see [`Vec#method.push`] here").as_deref(),
-            Some("see `Vec#method.push` here")
-        );
-        assert_eq!(
-            unlink_rustdoc("see [a::B#x] here").as_deref(),
-            Some("see a::B#x here")
-        );
+    fn a_link_with_a_fragment_stays_and_the_guard_flags_it() {
+        for text in [
+            "see [`Vec#method.push`] here",
+            "see [a::B#x] here",
+            "see [x](Vec#method.push) here",
+        ] {
+            assert_eq!(unlink_rustdoc(text), None, "{text}");
+            assert!(guard_flags(text), "the guard misses {text:?}");
+        }
+    }
+
+    /// A web link stays as written and passes the guard, padded or wrapped in
+    /// `<…>` as Markdown allows.
+    #[test]
+    fn the_guard_leaves_a_web_link() {
+        for text in [
+            "see [docs](https://x.dev)",
+            "see [docs]( https://x.dev)",
+            "see [docs](<https://x.dev>)",
+            "see [docs](< https://x.dev>)",
+        ] {
+            assert_eq!(unlink_rustdoc(text), None, "{text}");
+            assert!(!guard_flags(text), "the guard flags {text:?}");
+        }
     }
 
     /// A label ends at its first `]` outside a code span, as Markdown reads
@@ -589,7 +606,7 @@ mod unlink {
     fn a_stray_backtick_is_literal() {
         let text = "a stray ` then [x](crate::y)";
         assert_eq!(unlink_rustdoc(text).as_deref(), Some("a stray ` then x"));
-        let left = "a stray ` then [x](crate::y z)";
+        let left = "a stray ` then [x](crate::y \"t\")";
         assert_eq!(unlink_rustdoc(left), None);
         assert!(guard_flags(left), "the guard misses {left:?}");
     }
@@ -604,44 +621,76 @@ mod unlink {
         assert!(!guard_flags(text), "{text}");
     }
 
-    /// Whether `text` holds an inline link whose target, past any whitespace
-    /// or `<`, names a Rust path: flagged even in a link the rewrite leaves,
-    /// such as `[x](crate::y z)`. Code spans are read past, as the rewrite
-    /// copies them.
-    fn names_rust_path_target(text: &str) -> bool {
-        let text = &outside_code_spans(text).collect::<Vec<_>>().join(" ");
-        text.match_indices("](").any(|(at, _)| {
-            let target = text[at + 2..].trim_start();
+    /// Whether `text`, outside its code spans, holds an inline link to anything
+    /// but a URL, a shortcut code link (``[`X`]``) or a bracketed path
+    /// (`[a::B]`, `[fn@f]`, `[a#b]`): link syntax the rewrite leaves, which a
+    /// published description must not carry.
+    fn holds_link_syntax(text: &str) -> bool {
+        let prose = outside_code_spans(text).collect::<Vec<_>>().join(" ");
+        links_to_a_non_url(&prose)
+            || holds_a_bracketed_path(&prose)
+            || holds_a_shortcut_code_link(text)
+    }
+
+    /// An inline link whose target, past any whitespace or `<`, is not a URL.
+    fn links_to_a_non_url(prose: &str) -> bool {
+        prose.match_indices("](").any(|(at, _)| {
+            let target = prose[at + 2..].trim_start();
             let target = target.strip_prefix('<').map_or(target, str::trim_start);
-            ["crate::", "super::", "self::", "Self::"]
+            !["http://", "https://", "mailto:", "#"]
                 .iter()
-                .any(|root| target.starts_with(root))
+                .any(|url| target.starts_with(url))
         })
     }
 
-    /// What the guard flags in a published description: a link the rewrite
-    /// recognizes, one it leaves only because it spans a line, or an inline
-    /// link whose target starts with `crate::`, `super::`, `self::` or
-    /// `Self::`.
-    fn guard_flags(text: &str) -> bool {
-        unlink_rustdoc(text).is_some()
-            || leaves_a_spanning_link(text)
-            || names_rust_path_target(text)
+    /// A bracket pair no `(` or `[` follows, whose text names a path: `::`, `@`
+    /// or `#`.
+    fn holds_a_bracketed_path(prose: &str) -> bool {
+        prose.match_indices('[').any(|(at, _)| {
+            prose[at + 1..]
+                .split_once(']')
+                .is_some_and(|(label, after)| {
+                    !after.starts_with(['(', '['])
+                        && (label.contains("::") || label.contains(['@', '#']))
+                })
+        })
     }
 
-    /// Whether the rewrite would change `text` if its line endings were
-    /// spaces: a link it leaves because the link spans a line.
-    fn leaves_a_spanning_link(text: &str) -> bool {
-        spans_a_line(text) && unlink_rustdoc(&text.replace(LINE_ENDINGS, " ")).is_some()
+    /// A shortcut code link outside the code spans of `text`: a `[`, a code
+    /// span, a `]`, and no `(` or `[` after it.
+    fn holds_a_shortcut_code_link(text: &str) -> bool {
+        let mut rest = text;
+        while let Some(at) = rest.find(['[', '`']) {
+            let from = &rest[at..];
+            if from.starts_with('`') {
+                rest = &from[code_span_len(from)..];
+                continue;
+            }
+            let span = &from[1..];
+            if span.starts_with('`') {
+                let after = &span[code_span_len(span)..];
+                if after.starts_with(']') && !after[1..].starts_with(['(', '[']) {
+                    return true;
+                }
+            }
+            rest = span;
+        }
+        false
+    }
+
+    /// What the guard flags in a published description: a link the rewrite
+    /// recognizes, or any other link syntax outside a code span
+    /// ([`holds_link_syntax`]), a link that spans a line included.
+    fn guard_flags(text: &str) -> bool {
+        unlink_rustdoc(text).is_some() || holds_link_syntax(text)
     }
 
     #[test]
-    fn the_guard_flags_a_rust_path_target_the_rewrite_leaves() {
+    fn the_guard_flags_an_inline_link_the_rewrite_leaves() {
         for text in [
-            "odd [x](crate::y z) link",
-            "odd [x]( crate::y z) link",
-            "odd [x](<crate::y z>) link",
-            "odd [x](< crate::y z>) link",
+            "odd [x](crate::y \"t\") link",
+            "odd [x](Foo \"t\") link",
+            "odd [x](< crate::y > \"t\") link",
         ] {
             assert_eq!(unlink_rustdoc(text), None, "{text}");
             let mut linked = Vec::new();

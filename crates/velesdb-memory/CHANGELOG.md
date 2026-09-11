@@ -25,9 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reference-style links, and a link that spans a line. Only `description`
   strings are rewritten, never instance data such as a `default`, so nothing
   else in a schema changes. A test fails if a published description still
-  holds a link the rewrite recognizes, even across a line ending, or an
-  inline link outside a code span whose target, past any whitespace or `<`,
-  starts with `crate::`, `super::`, `self::` or `Self::`. (#2261)
+  holds a link the rewrite recognizes or, outside a code span, an inline
+  link to anything but a URL, a shortcut code link or a bracketed path:
+  link syntax the rewrite leaves, such as a `#` fragment or a link that
+  spans a line, cannot reach a client. (#2261)
 
 ## [0.14.2] - 2026-09-03
 
