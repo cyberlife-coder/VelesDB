@@ -189,6 +189,20 @@ fn test_openapi_pretty_json() {
     );
 }
 
+/// Regression guard for #2263: the published document must never carry
+/// rustdoc's shortcut link syntax in a description, whatever doc comment a
+/// future change adds to an OpenAPI-exposed type.
+#[test]
+fn test_openapi_descriptions_carry_no_rustdoc_link() {
+    let openapi = ApiDoc::openapi();
+    let json = openapi.to_json().expect("Failed to serialize OpenAPI spec");
+    assert!(
+        !json.contains("[`"),
+        "a description still carries rustdoc's shortcut link syntax \
+         ([`Item`]) instead of what openapi_rustdoc_links::unlink rewrote it to"
+    );
+}
+
 #[test]
 fn test_openapi_has_all_metrics_documented() {
     let openapi = ApiDoc::openapi();
