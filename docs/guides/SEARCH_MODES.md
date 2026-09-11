@@ -173,34 +173,13 @@ looks "hard". No recorded run measures its latency or recall yet (#2266).
 
 #### When the two phases run
 
-Adaptive and AutoTune run their two phases only inside `HnswIndex::search_with_quality`, and only for a search that reaches it with an Adaptive or AutoTune quality; there, an index of 100 vectors or fewer with exact-distance features on is scanned exactly instead. A search that does not reach it runs one pass, scans exactly, or does not apply the mode.
+Adaptive and AutoTune run their two phases only inside `HnswIndex::search_with_quality`, for a search that reaches it with one of those qualities; there, an index of 100 vectors or fewer with exact-distance features on is scanned exactly instead. A search that does not reach it runs one pass, scans exactly, or does not apply the mode.
 
-A collection search, through the Rust API or REST:
+- The Rust API reaches it through `Collection::search_with_quality`.
+- REST reaches it for a search given a `mode` and neither a filter nor `ef_search`. With a filter the mode is not applied (#457), and `ef_search` wins over it.
+- VelesQL reaches it for a `NEAR` with no other `WHERE` condition, given a mode with `WITH (mode = ...)`, unless the query also sets `rerank = false`, which runs one pass. With other conditions it depends on their shape: text, sparse, fused and graph-anchored searches do not apply the mode, and a filter resolved to a bitmap skips the second phase or scans exactly (#2268).
 
-| Search | What runs |
-|---|---|
-| Unfiltered | both phases |
-| A filter the collection post-filters: no secondary index resolves it to a bitmap (a `NOT`, a non-indexed field), or its bitmap matches more than 80% of the collection | both phases, for an oversampled k |
-| A filter resolved to a bitmap matching more than 1% and at most 80% | one graph pass at the preset's ef, with the oversampled count as k (between min(k + 10, 10,000) and 10,000), scaled by the index size; retried once at twice that ef, capped at 10,000, when fewer results than that count survive and four times that count, or the ef if larger, is below 10,000 (#2268) |
-| A filter resolved to a bitmap matching 1% or less | an exact scan of the matching vectors |
-| A REST search with a filter | the mode is not applied (#457) |
-| A REST search given both `mode` and `ef_search`, unfiltered | `ef_search` wins; the mode is not applied |
-| A REST hybrid dense + sparse search, or a REST batch search | the mode is not applied |
-
-A VelesQL query is dispatched by its shape, checked in this order; the first rule that matches decides. Below, w is the fetch window: LIMIT + OFFSET, or 100,000 under a `GROUP BY` or an `ORDER BY` other than similarity.
-
-1. `NOT similarity()`: an exact scan of every vector, or of a required graph `MATCH`'s anchors, stopping once w rows match; no mode applies.
-2. `similarity()` ORed with a metadata condition: one search at the global `[search]` default quality (Balanced unless configured); the mode is not applied.
-3. `SPARSE_NEAR`, alone or with `NEAR`: the mode is not applied.
-4. `NEAR_FUSED`: the mode is not applied.
-5. A graph `MATCH` the query requires (no `OR` anywhere in the `WHERE`), without `similarity()`: an anchored search, which scores up to 10,000 matched anchors exactly and gives more to the bitmap search at `Balanced`, retried as on the bitmap row above; with a text `MATCH` as well, that anchored search is the hybrid's vector leg. The mode is not applied.
-6. `similarity()` ANDed with the rest: both phases (one pass with `rerank = false`) at k = 10 × w per `similarity()` condition, with w widened as in rule 8 when the query has a graph `MATCH`, capped at 100,000; the threshold and any metadata filter apply afterwards.
-7. `NEAR` with a text `MATCH`: the hybrid's vector leg searches at `Balanced`; the mode is not applied.
-8. `NEAR` with a graph `MATCH` under `OR`, or under `NOT` with no metadata condition ANDed: both phases (one pass with `rerank = false`), unfiltered, at k = max(w, min(10 × w, 10,000)); the filter applies afterwards.
-9. `NEAR` with a metadata filter: the planner picks `GraphFirst`, an exact scan of up to 100,000 matching rows scored by the collection's metric, where no mode applies; `Parallel`, that scan and the filtered search merged; or the filtered search, as in the collection rows above.
-10. `NEAR` alone: both phases, or one pass with `rerank = false` (#2268).
-
-Where a single graph pass runs, Adaptive uses `max(min_ef, k)` and AutoTune Balanced's `max(160, k*5)`, k being the count the index receives (the oversampled count on the bitmap row), each scaled by the index size.
+Where a single graph pass runs, Adaptive uses `max(min_ef, k)` and AutoTune Balanced's `max(160, k*5)`, k being the count the index receives, each scaled by the index size.
 
 **Use cases:**
 - Mixed workloads where most queries are easy
