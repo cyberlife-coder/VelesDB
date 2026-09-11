@@ -371,7 +371,7 @@ impl TraversalBuffers {
     ///
     /// 5 bindings: query, vectors, candidate_ids, results, params.
     /// The candidate_ids buffer provides indirection from the expand pass —
-    /// each thread uses candidate_ids[idx] to look up the actual vector.
+    /// each thread uses `candidate_ids[idx]` to look up the actual vector.
     pub(super) fn create_distance_bind_group(
         &self,
         device: &wgpu::Device,

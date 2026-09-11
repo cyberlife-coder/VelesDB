@@ -108,7 +108,7 @@ impl Collection {
 
     /// Attempts early-return paths or validates LET-binding compatibility.
     ///
-    /// When `let_bindings` is empty, delegates to [`try_early_return_path`] for
+    /// When `let_bindings` is empty, delegates to [`Self::try_early_return_path`] for
     /// NOT-similarity, union, and sparse fast paths. When LET bindings are present,
     /// checks that the query shape is compatible -- unsupported shapes get an explicit
     /// error instead of silent fallthrough.
@@ -134,7 +134,7 @@ impl Collection {
 
     /// Validates that LET bindings are compatible with the extracted query shape.
     ///
-    /// LET bindings require [`finalize_query_results`] which early-return paths
+    /// LET bindings require [`Self::finalize_query_results`] which early-return paths
     /// bypass. Returns an explicit error for unsupported combinations.
     fn validate_let_binding_support(extracted: &ExtractedComponents) -> Result<()> {
         let unsupported = if extracted.sparse_vector_search.is_some() {

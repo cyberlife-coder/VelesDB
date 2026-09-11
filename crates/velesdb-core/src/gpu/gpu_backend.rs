@@ -110,7 +110,7 @@ impl GpuAccelerator {
     }
 
     /// Synchronous device initialization -- must NOT be called from inside an
-    /// async context (use [`init_device`] instead).
+    /// async context (use [`Self::init_device`] instead).
     fn init_device_sync() -> Option<(wgpu::Device, wgpu::Queue)> {
         // Avoid probing GLES/EGL on headless Linux where some drivers may abort.
         let backends = Self::preferred_backends();

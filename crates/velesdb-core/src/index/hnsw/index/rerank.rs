@@ -39,7 +39,7 @@ impl HnswIndex {
 
     /// Searches with SIMD-based re-ranking using an explicit `ef_search` value.
     ///
-    /// Lower-level variant of [`search_with_rerank`] that accepts a pre-computed
+    /// Lower-level variant of [`Self::search_with_rerank`] that accepts a pre-computed
     /// `ef_search` and `rerank_k` directly.
     pub(crate) fn search_with_rerank_with_ef(
         &self,
@@ -168,6 +168,8 @@ impl HnswIndex {
     /// depending on which engine ranked it. The wildcard arm the local table
     /// needed is gone with it: `score_range` matches every variant, so adding
     /// a metric fails to compile there instead of silently landing in `_`.
+    ///
+    /// [`DistanceMetric::score_range`]: crate::distance::DistanceMetric::score_range
     #[cfg(feature = "gpu")]
     #[inline]
     pub(crate) fn clamp_score_for_metric(&self, score: f32) -> f32 {

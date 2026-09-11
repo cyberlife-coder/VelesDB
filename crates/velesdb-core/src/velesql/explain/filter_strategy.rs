@@ -1,8 +1,10 @@
 //! Filter-strategy decision logic for `VelesQL` EXPLAIN.
 //!
 //! Extracted from `plan_builder.rs` to keep the file under the 500 NLOC limit
-//! (Devin Finding G on PR #606). Public surface is `pub(super)` only — these
-//! helpers are consumed exclusively by `plan_builder::QueryPlan`.
+//! (Devin Finding G on PR #606). [`decide_filter_strategy`] is public and
+//! re-exported from `velesql`: EXPLAIN's plan builder calls it with
+//! [`FilterDecisionMode::Estimated`], the executor's filtered vector search with
+//! [`FilterDecisionMode::Exact`].
 //!
 //! # Pre-filter vs. post-filter trade-off
 //!
@@ -15,7 +17,7 @@
 //! - **PostFilter**: run HNSW on the full set, then evaluate the predicate on
 //!   the top-k results. Cheap when the predicate is loose or cheap per-row.
 //!
-//! [`resolve_filter_strategy`] compares both costs using the calibrated
+//! [`estimated_strategy`] compares both costs using the calibrated
 //! [`CostEstimator`] and picks the cheaper one, with a recall guardrail that
 //! forces PostFilter when selectivity >= [`PREFILTER_RECALL_GUARD`].
 //!

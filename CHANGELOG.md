@@ -164,6 +164,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   copied first — into the arena its storage mode keeps, the heap or SQ8's and
   RaBitQ's disposable file, under the load's raised allocation ceiling — so no
   open can write the file whatever the engine or tolerance becomes (#2246, P5).
+- **Opening a collection re-indexes a mapped vector the graph never linked
+  (#2246).** A save that raced `upsert_bulk`'s async build — the builder's
+  drain returning while another build held it, or an upsert landing between
+  the drain and the save — persisted mappings for vectors the graph had not
+  linked yet. Recovery skipped every mapped id, so after a crash those points
+  stayed stored, mapped and unreachable by graph search. Recovery now checks
+  that each mapped id's node has a layer-0 neighbour, and re-indexes those
+  that do not — the entry point aside, since every search starts there.
+- **Two MCP tool descriptions no longer hide a placeholder (#2258).**
+  `relate`'s `relation` field read ``read as `from` <relation> `to` ``, and
+  `retrieve_context_source` read ``behind a ctx://source/<hash> handle``. A
+  Markdown renderer takes a bare placeholder for an HTML tag and drops it:
+  rustdoc did so with the field doc's `<relation>`, and an MCP client
+  displaying the tool schema would drop both. Both are code spans now,
+  ``read as `from <relation> to` `` and `` `ctx://source/<hash>` ``. The
+  descriptions ship in the tool schema clients receive; they are the sweep's
+  only wire-visible changes.
 - **A bulk load running beside single upserts could hand one vector slot to
   two ids (#2246).** The id mappings predicted each insert's slot while the
   graph's arena allocated its own, and `upsert_bulk`'s direct writer wrote at

@@ -4,7 +4,7 @@
 //! file limit (Devin Finding F on PR #606). Implements
 //! [`CostEstimator::estimate_plan_cost`] and the per-node cost helpers that
 //! walk a [`PlanNode`] tree and aggregate its execution cost using the
-//! calibrated [`OperationCostFactors`].
+//! calibrated [`OperationCostFactors`](crate::collection::query_cost::OperationCostFactors).
 
 use super::{default_factors, Cost, CostEstimator};
 use crate::velesql::explain::{IndexLookupPlan, MatchTraversalPlan, PlanNode, VectorSearchPlan};

@@ -178,7 +178,7 @@ fn batch_dot(@builtin(global_invocation_id) id: vec3<u32>) {
 /// - binding 2: `storage(read)` — frontier input (current frontier node IDs)
 /// - binding 3: `storage(read_write)` — candidates output (new candidate node IDs)
 /// - binding 4: `storage(read_write)` — visited bitset (atomic u32 words)
-/// - binding 5: `storage(read_write)` — counters (atomic: [0]=candidate_count)
+/// - binding 5: `storage(read_write)` — counters (atomic: `[0]=candidate_count`)
 /// - binding 6: `uniform` — params
 #[cfg(feature = "persistence")]
 pub(crate) const EXPAND_FRONTIER_SHADER: &str = r"

@@ -189,6 +189,8 @@ impl SecondaryIndex {
     /// therefore cannot be represented in the bitmap — signalling an
     /// **incomplete** result so callers fall back to a full scan rather than
     /// silently dropping the high ID (correctness over the optimization).
+    ///
+    /// [`RoaringBitmap`]: roaring::RoaringBitmap
     #[must_use]
     pub fn to_bitmap(&self, value: &JsonValue) -> Option<roaring::RoaringBitmap> {
         match self {
@@ -203,7 +205,7 @@ impl SecondaryIndex {
         }
     }
 
-    /// Returns a [`RoaringBitmap`] of all point IDs whose key falls within
+    /// Returns a [`RoaringBitmap`](roaring::RoaringBitmap) of all point IDs whose key falls within
     /// the given range bounds.
     ///
     /// Uses `BTreeMap::range()` for efficient ordered iteration. This powers

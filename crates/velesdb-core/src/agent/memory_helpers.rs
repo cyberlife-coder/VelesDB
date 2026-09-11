@@ -410,7 +410,7 @@ fn resolve_existing_edge(
 ///
 /// Returns `NotFound` when an endpoint was deleted concurrently, and
 /// `CollectionError` when the derived id is already held by a DIFFERENT
-/// triple — see [`edge_id_collision`].
+/// triple — see [`resolve_existing_edge`].
 pub(super) fn add_relation_edge(
     collection: &Collection,
     endpoints: (u64, u64),

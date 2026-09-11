@@ -62,7 +62,7 @@ pub(crate) struct ScoredCandidate {
 /// Re-rank `pool ∪ reached` by `vector_score/max_score + graph_boost·graph_weight`,
 /// take the top `k`. A fact both vector-ranked and graph-reached keeps its pool
 /// copy (its real vector score, plus the reached weight folded in by
-/// [`fused_score`]); a fact the graph reaches but the pool never ranked
+/// [`fuse_scored`]); a fact the graph reaches but the pool never ranked
 /// carries `vector_score = 0.0` and rides on its `graph_weight` alone.
 ///
 /// Equal-budget promotion, not blind eviction: a strong vector fact keeps its

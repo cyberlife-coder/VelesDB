@@ -7,6 +7,8 @@
 //!
 //! Never apply it to genuinely string-typed parameters: a real string must
 //! not be reinterpreted as JSON.
+//!
+//! [`lenient`]: crate::wire::lenient
 
 use serde::de::{DeserializeOwned, Error as DeError};
 use serde::{Deserialize, Deserializer};

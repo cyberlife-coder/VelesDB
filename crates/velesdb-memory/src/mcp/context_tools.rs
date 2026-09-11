@@ -601,7 +601,7 @@ impl McpServer {
         // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
         // or les SDK MCP valident structuredContent contre ce schema.
         output_schema = wire_safe_output_schema::<RetrieveContextSourceResult>(),
-        description = "Fetch back the exact original content behind a ctx://source/<hash> handle from a compiled context — what compile_context externalized or partially packed is recoverable, not lost."
+        description = "Fetch back the exact original content behind a `ctx://source/<hash>` handle from a compiled context — what compile_context externalized or partially packed is recoverable, not lost."
     )]
     async fn retrieve_context_source(
         &self,
