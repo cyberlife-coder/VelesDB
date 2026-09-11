@@ -173,7 +173,7 @@ looks "hard". No recorded run measures its latency or recall yet (#2266).
 
 #### When the two phases run
 
-`HnswIndex::search_with_quality` is where Adaptive and AutoTune run their phases. Whether a search reaches it depends on its path:
+Adaptive and AutoTune run their two phases only inside `HnswIndex::search_with_quality`. A search that reaches it runs both; one that does not runs one pass, scans exactly, or does not apply the mode at all. Which of these happens depends on the search's shape, as the table gives for the shapes below:
 
 | Search | What runs |
 |---|---|
@@ -183,12 +183,16 @@ looks "hard". No recorded run measures its latency or recall yet (#2266).
 | A filter resolved to a bitmap matching 1% or less | an exact scan of the matching vectors |
 | VelesQL `NEAR` with a metadata filter, planned `GraphFirst` | an exact scan of up to 100,000 matching rows, scored by the collection's metric; no mode applies |
 | VelesQL `NEAR` with a metadata filter, planned `Parallel` | that scan and the filtered search above, merged |
-| VelesQL `similarity()` threshold, with or without a metadata filter | both phases (one pass with `rerank = false`) at a widened k, ten times the limit per `similarity()` condition, capped; the threshold and the filter apply afterwards |
-| VelesQL `NEAR` whose filter ORs a graph `MATCH` | both phases (one pass with `rerank = false`); the filter applies afterwards |
-| VelesQL `NEAR` with a required graph `MATCH` | the mode is not applied: up to 10,000 matched anchors are scored exactly, more take one bitmap pass at `Balanced` |
-| VelesQL `NEAR` with a text `MATCH` | the mode is not applied: the vector leg searches at `Balanced` |
+| VelesQL `similarity()` threshold ANDed with the rest of the query | both phases (one pass with `rerank = false`) at a widened k, ten times the fetch window per `similarity()` condition, capped at 100,000; the threshold and any metadata filter apply afterwards. The fetch window is LIMIT + OFFSET, or the wider one a graph `MATCH` or an `ORDER BY` needs |
+| VelesQL `NEAR` whose graph `MATCH` is not required (under `OR` or `NOT`) | both phases (one pass with `rerank = false`) at k = max(w, min(10 × w, 10,000)), w being the fetch window; the filter applies afterwards |
+| VelesQL `NEAR` with a required graph `MATCH` | the mode is not applied: up to 10,000 matched anchors are scored exactly; more take the bitmap search at `Balanced`, retried as on the bitmap row |
+| VelesQL `NEAR` with a text `MATCH` | the mode is not applied: the vector leg searches at `Balanced`, or, with a required graph `MATCH` too, runs the anchored search of the row above |
+| VelesQL `similarity()` ORed with a metadata condition | the mode is not applied: one search at the collection's default quality |
+| VelesQL `NOT similarity()` | a full scan; no mode applies |
+| VelesQL `NEAR … AND SPARSE_NEAR` or `NEAR_FUSED`; a REST hybrid dense + sparse search; a REST batch search | the mode is not applied |
 | An unfiltered VelesQL query with `rerank = false` | one pass at the preset's scaled ef (#2268) |
 | A REST search with a filter | the mode is not applied (#457) |
+| A REST search given both `mode` and `ef_search`, unfiltered | `ef_search` wins; the mode is not applied |
 
 Wherever both phases would run, an index of 100 vectors or fewer with exact-distance features on is scanned exactly instead. Where a single graph pass runs, Adaptive uses `max(min_ef, k)` and AutoTune Balanced's `max(160, k*5)`, k being the count the index receives (the oversampled count on the bitmap row), each scaled by the index size.
 
