@@ -173,7 +173,9 @@ looks "hard". No recorded run measures its latency or recall yet (#2266).
 
 #### When the two phases run
 
-Adaptive and AutoTune run their two phases only inside `HnswIndex::search_with_quality`. A search that reaches it runs both; one that does not runs one pass, scans exactly, or does not apply the mode at all. Which of these happens depends on the search's shape, as the table gives for the shapes below:
+Adaptive and AutoTune run their two phases only inside `HnswIndex::search_with_quality`, and only for a search that reaches it with an Adaptive or AutoTune quality; there, an index of 100 vectors or fewer with exact-distance features on is scanned exactly instead. A search that does not reach it runs one pass, scans exactly, or does not apply the mode.
+
+A collection search, through the Rust API or REST:
 
 | Search | What runs |
 |---|---|
@@ -181,20 +183,24 @@ Adaptive and AutoTune run their two phases only inside `HnswIndex::search_with_q
 | A filter the collection post-filters: no secondary index resolves it to a bitmap (a `NOT`, a non-indexed field), or its bitmap matches more than 80% of the collection | both phases, for an oversampled k |
 | A filter resolved to a bitmap matching more than 1% and at most 80% | one graph pass at the preset's ef, with the oversampled count as k (between min(k + 10, 10,000) and 10,000), scaled by the index size; retried once at twice that ef, capped at 10,000, when fewer results than that count survive and four times that count, or the ef if larger, is below 10,000 (#2268) |
 | A filter resolved to a bitmap matching 1% or less | an exact scan of the matching vectors |
-| VelesQL `NEAR` with a metadata filter, planned `GraphFirst` | an exact scan of up to 100,000 matching rows, scored by the collection's metric; no mode applies |
-| VelesQL `NEAR` with a metadata filter, planned `Parallel` | that scan and the filtered search above, merged |
-| VelesQL `similarity()` threshold ANDed with the rest of the query | both phases (one pass with `rerank = false`) at a widened k, ten times the fetch window per `similarity()` condition, capped at 100,000; the threshold and any metadata filter apply afterwards. The fetch window is LIMIT + OFFSET, or the wider one a graph `MATCH` or an `ORDER BY` needs |
-| VelesQL `NEAR` whose graph `MATCH` is not required (under `OR` or `NOT`) | both phases (one pass with `rerank = false`) at k = max(w, min(10 × w, 10,000)), w being the fetch window; the filter applies afterwards |
-| VelesQL `NEAR` with a required graph `MATCH` | the mode is not applied: up to 10,000 matched anchors are scored exactly; more take the bitmap search at `Balanced`, retried as on the bitmap row |
-| VelesQL `NEAR` with a text `MATCH` | the mode is not applied: the vector leg searches at `Balanced`, or, with a required graph `MATCH` too, runs the anchored search of the row above |
-| VelesQL `similarity()` ORed with a metadata condition | the mode is not applied: one search at the collection's default quality |
-| VelesQL `NOT similarity()` | a full scan; no mode applies |
-| VelesQL `NEAR … AND SPARSE_NEAR` or `NEAR_FUSED`; a REST hybrid dense + sparse search; a REST batch search | the mode is not applied |
-| An unfiltered VelesQL query with `rerank = false` | one pass at the preset's scaled ef (#2268) |
 | A REST search with a filter | the mode is not applied (#457) |
 | A REST search given both `mode` and `ef_search`, unfiltered | `ef_search` wins; the mode is not applied |
+| A REST hybrid dense + sparse search, or a REST batch search | the mode is not applied |
 
-Wherever both phases would run, an index of 100 vectors or fewer with exact-distance features on is scanned exactly instead. Where a single graph pass runs, Adaptive uses `max(min_ef, k)` and AutoTune Balanced's `max(160, k*5)`, k being the count the index receives (the oversampled count on the bitmap row), each scaled by the index size.
+A VelesQL query is dispatched by its shape, checked in this order; the first rule that matches decides. Below, w is the fetch window: LIMIT + OFFSET, or 100,000 under a `GROUP BY` or an `ORDER BY` other than similarity.
+
+1. `NOT similarity()`: an exact scan of every vector, or of a required graph `MATCH`'s anchors, stopping once w rows match; no mode applies.
+2. `similarity()` ORed with a metadata condition: one search at the global `[search]` default quality (Balanced unless configured); the mode is not applied.
+3. `SPARSE_NEAR`, alone or with `NEAR`: the mode is not applied.
+4. `NEAR_FUSED`: the mode is not applied.
+5. A graph `MATCH` the query requires (no `OR` anywhere in the `WHERE`), without `similarity()`: an anchored search, which scores up to 10,000 matched anchors exactly and gives more to the bitmap search at `Balanced`, retried as on the bitmap row above; with a text `MATCH` as well, that anchored search is the hybrid's vector leg. The mode is not applied.
+6. `similarity()` ANDed with the rest: both phases (one pass with `rerank = false`) at k = 10 × w per `similarity()` condition, with w widened as in rule 8 when the query has a graph `MATCH`, capped at 100,000; the threshold and any metadata filter apply afterwards.
+7. `NEAR` with a text `MATCH`: the hybrid's vector leg searches at `Balanced`; the mode is not applied.
+8. `NEAR` with a graph `MATCH` under `OR`, or under `NOT` with no metadata condition ANDed: both phases (one pass with `rerank = false`), unfiltered, at k = max(w, min(10 × w, 10,000)); the filter applies afterwards.
+9. `NEAR` with a metadata filter: the planner picks `GraphFirst`, an exact scan of up to 100,000 matching rows scored by the collection's metric, where no mode applies; `Parallel`, that scan and the filtered search merged; or the filtered search, as in the collection rows above.
+10. `NEAR` alone: both phases, or one pass with `rerank = false` (#2268).
+
+Where a single graph pass runs, Adaptive uses `max(min_ef, k)` and AutoTune Balanced's `max(160, k*5)`, k being the count the index receives (the oversampled count on the bitmap row), each scaled by the index size.
 
 **Use cases:**
 - Mixed workloads where most queries are easy
