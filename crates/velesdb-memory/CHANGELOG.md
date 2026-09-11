@@ -38,19 +38,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Tool schemas published rustdoc link syntax as text.** schemars copies
   each field's doc comment into its JSON Schema `description`, so the schemas
   every MCP client reads carried intra-doc links only rustdoc resolves —
-  ``[`Name`]``, `[text](crate::path)` — 137 of them across 102 descriptions of
-  `docs/reference/mcp-tools.json`. The input and output schemas now render
-  each link as rustdoc does: a code link as its code span, a labelled link to
-  a Rust path as its text, a path such as `[a::B]` or `[fn@f]` as its path
-  without the disambiguator. Code spans are copied verbatim. A bare `[name]`
+  ``[`Name`]``, ``[`Name`](crate::path)`` — 137 of them across 102
+  descriptions of `docs/reference/mcp-tools.json`. The input and output
+  schemas now show each code link as the code span rustdoc shows for it,
+  without a disambiguator: ``[`Name`]`` becomes `` `Name` ``, and
+  ``[`fn@f`]`` becomes `` `f` ``. Only a link whose text is one code span is
+  rewritten: its backticks leave the Markdown around it reading the same,
+  where prose or a bare path (`[text](crate::path)`, `[a::B]`) could turn a
+  neighbour bold or into a list item once its brackets go, so such a link
+  stays as written. Code spans are copied verbatim. A bare `[name]`
   stays whether or not rustdoc resolves it (`map[key]`, `[sic]`), as do
   `[0, 1]` and a web link. Only `description` strings are rewritten, never
   instance data such as a `default`, so nothing else in a schema changes.
   The rewrite leaves every link in a description it cannot read exactly: one
   holding a backslash, a tab or four spaces, a code fence, a `<` outside
-  code, a table, a code span across a line, or an inline web link or image it
-  does not render. It leaves a reference-style link, a `[label]` a colon
-  follows, nested brackets, a `#` fragment and a link that spans a line.
+  code, a table, a code span across a line, or an inline link it does not
+  render (a web link, an image, one whose text is not a code span). It
+  leaves a reference-style link, a `[label]` a colon follows, nested
+  brackets, a `#` fragment, a link that spans a line, and a code link a
+  backtick touches, whose code span would merge with it.
   A test then fails if a published
   description holds link syntax, code spans included: a `[` that opens on a
   code span, a bracketed path even as a web link's text (one holding `::`,

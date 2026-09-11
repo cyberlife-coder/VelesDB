@@ -335,45 +335,80 @@ mod unlink {
     }
 
     #[test]
-    fn an_inline_link_shows_its_label() {
+    fn an_inline_code_link_shows_its_code_span() {
         for (text, shown) in [
-            ("a [call](f()) here", "a call here"),
-            ("see [x]( crate::y)", "see x"),
-            ("in [0, 1) see [x](crate::y)", "in [0, 1) see x"),
-            ("see [x](crate::y): the id", "see x: the id"),
+            ("a [`call`](f()) here", "a `call` here"),
+            ("see [`x`](m!()) here", "see `x` here"),
+            ("see [`x`]( crate::y)", "see `x`"),
+            ("in [0, 1) see [`x`](crate::y)", "in [0, 1) see `x`"),
+            ("see [`x`](crate::y): the id", "see `x`: the id"),
+            (
+                "the [`stable id`](super::fragment_id) of a fragment",
+                "the `stable id` of a fragment",
+            ),
+            ("a [`builder`](fn@crate::build) call", "a `builder` call"),
         ] {
             assert_eq!(unlink_rustdoc(text).as_deref(), Some(shown), "{text}");
         }
-        assert_eq!(
-            unlink_rustdoc("the [`stable id`](super::fragment_id) of a fragment").as_deref(),
-            Some("the `stable id` of a fragment")
-        );
-        assert_eq!(
-            unlink_rustdoc("a [builder](fn@crate::build) call").as_deref(),
-            Some("a builder call")
-        );
     }
 
     #[test]
-    fn a_path_like_shortcut_shows_its_path_without_the_disambiguator() {
+    fn a_code_link_shows_its_path_without_the_disambiguator() {
         for (text, shown) in [
             (
-                "the [crate::Recollection] it returns",
-                "the crate::Recollection it returns",
+                "the [`crate::Recollection`] it returns",
+                "the `crate::Recollection` it returns",
             ),
-            ("call [build()] first", "call build() first"),
-            ("the [vec!] macro", "the vec! macro"),
-            ("a [struct@Foo] value", "a Foo value"),
+            ("call [`build()`] first", "call `build()` first"),
+            ("the [`vec!`] macro", "the `vec!` macro"),
+            ("a [`struct@Foo`] value", "a `Foo` value"),
             ("see [`fn@build`]", "see `build`"),
             ("see [`fn@ build`]", "see `build`"),
             ("a [` Foo `] padded", "a `Foo` padded"),
-            ("see [m!()]", "see m!()"),
+            ("see [`m!()`] and [`m!{}`]", "see `m!()` and `m!{}`"),
             (
                 "the [`HashMap<K, V>`] it holds",
                 "the `HashMap<K, V>` it holds",
             ),
         ] {
             assert_eq!(unlink_rustdoc(text).as_deref(), Some(shown), "{text}");
+        }
+    }
+
+    /// Only a link whose text is one code span is rewritten: its backticks
+    /// are punctuation, as the brackets they replace are, so the Markdown
+    /// around it reads the same without them. Prose, a bare path, blanks, an
+    /// empty text or code mixed with prose could change their neighbours once
+    /// the brackets go: bold, emphasis, an entity, a list item, a heading, a
+    /// task, a fence, an indented block, a hard break, or merged code spans.
+    /// Each stays as written, and the guard fails on it.
+    #[test]
+    fn a_link_whose_text_is_not_one_code_span_stays_as_written() {
+        for text in [
+            "returns **[Recollection](crate::Recollection)**s",
+            "a*[crate::X]*b",
+            "*a)*[x](crate::y) tail",
+            "use &[amp](crate::amp); here",
+            "[-](crate::X) item",
+            "[#](crate::X) Title",
+            "- [[x](crate::y)] item",
+            "~[~](crate::X)~\nsee [`A`] b",
+            " [   ](crate::X)foo",
+            "a [  ](crate::X)\nb",
+            "`a`[](crate::X)`b`",
+            "`[](X)``",
+            "a [``](crate::X) b",
+            "[ab`](crate::y)",
+            "[`ab](crate::y)",
+            "[`a` *x `b`](crate::y)* c",
+            "see [a `[` b](Foo) here",
+            "a [call](f()) here",
+            "the [crate::Recollection] it returns",
+            "a [struct@Foo] value",
+            "see [m!()]",
+        ] {
+            assert_eq!(unlink_rustdoc(text), None, "{text:?}");
+            assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
         }
     }
 
@@ -394,13 +429,22 @@ mod unlink {
         }
     }
 
+    /// A code link a backtick touches, on either side, stays as written: its
+    /// code span would merge with that backtick's run (`a``b` reads as one
+    /// span), and a space between them would show what rustdoc does not.
+    /// The guard fails on it.
     #[test]
-    fn rewritten_code_spans_never_touch() {
-        assert_eq!(unlink_rustdoc("[`a`]`b`").as_deref(), Some("`a` `b`"));
-        assert_eq!(
-            unlink_rustdoc("see [`a`](crate::a)[`b`](crate::b)").as_deref(),
-            Some("see `a` `b`")
-        );
+    fn a_code_link_a_backtick_touches_stays_as_written() {
+        for text in [
+            "[`a`]`b`",
+            "`a`[`b`]",
+            "see [`a`](crate::a)[`b`](crate::b)",
+            "a stray ``[`x`](crate::y)",
+            "[`x`](crate::y)`` stray",
+        ] {
+            assert_eq!(unlink_rustdoc(text), None, "{text:?}");
+            assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
+        }
     }
 
     #[test]
@@ -424,6 +468,7 @@ mod unlink {
             "a [`Vec<T>>`] stray",
             "`decisions[fragment_index]` is unambiguous",
             "[text][crate::X]",
+            "[text][`crate::X`]",
             "``a [`b`] c`` in a double-backtick span",
         ] {
             assert_eq!(unlink_rustdoc(text), None, "{text}");
@@ -528,16 +573,13 @@ mod unlink {
     #[test]
     fn a_link_that_spans_a_line_stays_as_written() {
         for text in [
-            "see [x](\ncrate::y)",
-            "see [x](\r\ncrate::y)",
-            "see [x](\rcrate::y)",
-            "see [x](crate::y\n)",
-            "see [x](<\ncrate::y>)",
-            "see [x](\n\ncrate::y)",
-            "a [b\nc](crate::y) d",
-            "see [a\n\nb](crate::y)",
-            "see [a\nb](Foo)",
-            "see [x](\nfn@f)",
+            "see [`x`](\ncrate::y)",
+            "see [`x`](\r\ncrate::y)",
+            "see [`x`](\rcrate::y)",
+            "see [`x`](crate::y\n)",
+            "see [`x`](\n\ncrate::y)",
+            "see [`x`](\nfn@f)",
+            "a [`b\nc`](crate::y) d",
             "see [`HashMap<K,\nV>`] here",
         ] {
             assert_eq!(unlink_rustdoc(text), None, "{text:?}");
@@ -553,10 +595,6 @@ mod unlink {
         assert_eq!(
             unlink_rustdoc("see [`a[`](crate::y) here").as_deref(),
             Some("see `a[` here")
-        );
-        assert_eq!(
-            unlink_rustdoc("see [a `[` b](Foo) here").as_deref(),
-            Some("see a `[` b here")
         );
         assert_eq!(unlink_rustdoc("see [`a[`] here"), None);
         assert_eq!(unlink_rustdoc("see [`a.b`] here"), None);
@@ -619,29 +657,29 @@ mod unlink {
     #[test]
     fn a_text_the_scan_cannot_read_exactly_stays_as_written() {
         for text in [
-            "~~~\nlet w = [crate::X];\n~~~",
-            "```rust\nlet w = [crate::X];",
+            "~~~\nlet w = [`crate::X`];\n~~~",
+            "```rust\nlet w = [`crate::X`];",
             "Example:\n```rust\nlet v = vec![build()];\n\nlet w = [crate::X];\n```",
-            "    let w = [crate::X];",
-            "\tlet w = [crate::X];",
-            "  \tlet w = [crate::X];",
-            "<div>\n[crate::X]\n</div>",
-            "see \\[crate::X] here",
+            "    let w = [`crate::X`];",
+            "\tlet w = [`crate::X`];",
+            "  \tlet w = [`crate::X`];",
+            "<div>\n[`crate::X`]\n</div>",
+            "see \\[`crate::X`] here",
             "- use ` carefully\n- see [`R`](crate::R) and `x`",
             "- use ` carefully\n- see `[crate::X]` here",
             "Uses a ` here.\n# Errors\nSee [`R`](crate::R) and `x`.",
             "Use a trailing ` here.\r\n\r\nSee [`R`](crate::R) and `x`.",
-            "a\r~~~\r[crate::X]\r~~~",
+            "a\r~~~\r[`crate::X`]\r~~~",
             "> ~~~\n> let last = items[usize::MAX];\n> ~~~",
             ">     let last = items[usize::MAX];",
             "1. ```\n   let last = items[usize::MAX];",
             "> <div>\n> [crate::X]\n> </div>",
             "see <a title=\"[crate::X]\">x</a>",
             "see <https://x.dev/a[crate::X]b>",
-            "| `x | y` [crate::X] `z |\n|---|---|",
-            "| `x | y` [crate::X] `z |\r|---|---|",
-            "> | `x | y` [crate::X] `z |\n> |---|---|",
-            ">| `x | y` [crate::X] `z |\n>|---|---|",
+            "| `x | y` [`crate::X`] `z |\n|---|---|",
+            "| `x | y` [`crate::X`] `z |\r|---|---|",
+            "> | `x | y` [`crate::X`] `z |\n> |---|---|",
+            ">| `x | y` [`crate::X`] `z |\n>|---|---|",
             "see [x](<crate::y>)",
             "see [x](< fn@f >)",
         ] {
@@ -679,18 +717,8 @@ mod unlink {
             "![a [b] c](https://x.dev/a[crate::X]b)",
             "[a [b] c](https://x.dev \"[crate::X]\")",
             "[a [`X`] b [c]](https://x.dev)",
+            "see [docs](https://x.dev) then [`X`]",
         ] {
-            assert_eq!(unlink_rustdoc(text), None, "{text:?}");
-            assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
-        }
-    }
-
-    /// An empty link text shows nothing, and the code spans around it could
-    /// merge (`` `a`[](crate::X)`b` `` would read as one span): the rewrite
-    /// leaves it, and the guard fails on it.
-    #[test]
-    fn an_empty_link_text_stays_as_written() {
-        for text in ["`a`[](crate::X)`b`", "`[](X)``"] {
             assert_eq!(unlink_rustdoc(text), None, "{text:?}");
             assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
         }
@@ -703,7 +731,7 @@ mod unlink {
     #[test]
     fn an_image_and_a_definition_stay_as_written() {
         for text in [
-            "an image ![x](crate::y) here",
+            "an image ![`x`](crate::y) here",
             "[`Foo`]: crate::Foo",
             "  [crate::X]: https://docs.rs/x",
             "> [`Foo`]: crate::Foo",
@@ -756,15 +784,20 @@ mod unlink {
         assert_eq!(unlink_rustdoc("see [a `[` `b](Foo) c` d"), None);
     }
 
-    /// A backtick nothing closes is literal text in Markdown: the link
-    /// after it is rewritten, and the guard reads it.
+    /// A run of backticks nothing closes is literal text in Markdown: the link
+    /// after it is rewritten, and the guard reads it. A single stray backtick
+    /// pairs with a code link's own, so no link forms after it.
     #[test]
     fn a_stray_backtick_is_literal() {
-        let text = "a stray ` then [x](crate::y)";
-        assert_eq!(unlink_rustdoc(text).as_deref(), Some("a stray ` then x"));
-        let left = "a stray ` then [x](crate::y \"t\")";
-        assert_eq!(unlink_rustdoc(left), None);
-        assert!(holds_rustdoc_link(left), "the guard misses {left:?}");
+        let text = "a stray `` then [`x`](crate::y)";
+        assert_eq!(unlink_rustdoc(text).as_deref(), Some("a stray `` then `x`"));
+        for left in [
+            "a stray `` then [`x`](crate::y \"t\")",
+            "a stray ` then [`x`](crate::y)",
+        ] {
+            assert_eq!(unlink_rustdoc(left), None, "{left:?}");
+            assert!(holds_rustdoc_link(left), "the guard misses {left:?}");
+        }
     }
 
     /// The rewrite copies a code span verbatim, link syntax and all. The guard
@@ -792,8 +825,7 @@ mod unlink {
     /// reference-style link or definition, even to a URL;
     /// and prose that looks like one fails too (`[0, 1]: …`, `m[i][j]`,
     /// `[#2261]`, `[ops@x.dev]`). A bare `[Point]` passes: it reads the same as
-    /// `[sic]`. velesdb-server's guard over its OpenAPI document applies the
-    /// same rules (#2263).
+    /// `[sic]`.
     fn holds_rustdoc_link(text: &str) -> bool {
         text.contains("][")
             || text.contains("]:")

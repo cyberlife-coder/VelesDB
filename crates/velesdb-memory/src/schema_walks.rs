@@ -7,8 +7,8 @@
 use serde_json::{Map, Value};
 use std::borrow::Cow;
 
-/// Rewrites rustdoc link syntax in every `description` of a published schema
-/// into the text rustdoc shows for it (#2261).
+/// Rewrites the rustdoc code links in every `description` of a published
+/// schema into the code span rustdoc shows for each (#2261).
 ///
 /// schemars copies doc comments verbatim, so an intra-doc link reached the
 /// wire as Markdown no client can resolve: ``[`X`](crate::path)`` renders as a
@@ -83,18 +83,21 @@ const DISAMBIGUATORS: [&str; 22] = [
     "typealias",
 ];
 
-/// `text` with each rustdoc link replaced by what rustdoc shows for it, or
-/// `None` when it holds none: ``[`X`](path)`` and ``[`X`]`` become `` `X` ``,
-/// `[Name](path)` becomes `Name`, and a path-like shortcut (`[a::B]`, `[f()]`,
-/// `[m!]`, `[fn@f]`) shows its path without the disambiguator. A bare
-/// `[name]` stays whether or not rustdoc resolves it (`map[key]`, `[sic]`),
-/// and so do `[0, 1]`, a bracketed code span that is not one word or that
-/// rustdoc does not resolve (``[`a.b`]``), a web link and reference-style
-/// links (`[text][label]`).
+/// `text` with each rustdoc code link replaced by the code span rustdoc shows
+/// for it, or `None` when it holds none: ``[`X`](path)`` and ``[`X`]`` become
+/// `` `X` ``, and ``[`fn@f`]`` becomes `` `f` ``, without its disambiguator. A
+/// link whose text is not one code span stays as written, prose and bare path
+/// alike (`[Name](path)`, `[a::B]`, `[f()]`): its neighbours could read
+/// differently once its brackets go ([`rustdoc_link`]). A bare `[name]` stays
+/// whether or not rustdoc resolves it (`map[key]`, `[sic]`), and so do
+/// `[0, 1]`, a bracketed code span that is not one word or that rustdoc does
+/// not resolve (``[`a.b`]``), a web link and reference-style links
+/// (`[text][label]`).
 ///
 /// It also leaves as written every link in a text it cannot read exactly
 /// ([`scan_is_exact`]) or that holds an inline link it does not render (a web
-/// link, an image), whose target and title it cannot read as prose; a
+/// link, an image, one whose text is no code span), whose target and title
+/// it cannot read as prose; a
 /// `[label]` a colon follows; and a text a second pass would change further,
 /// such as nested brackets (``[[`X`]]``, whose outer pair Markdown shows as
 /// written). The guard then
@@ -205,7 +208,7 @@ fn unlink_once(text: &str) -> Pass {
             rest = after;
             continue;
         };
-        push_apart(&mut out, &shown, remaining);
+        out.push_str(&shown);
         rest = remaining;
         changed = true;
     }
@@ -223,24 +226,15 @@ fn unlink_once(text: &str) -> Pass {
 /// image (`![a](b)`). A `[label]` a colon follows is a reference definition
 /// wherever a block starts, in a quote or a list item too, and a link
 /// elsewhere: rather than tell the two apart, the rewrite leaves all three.
+/// It also leaves a link a backtick touches, before or after it: the code
+/// span it shows would merge with that backtick's run (`a``b` reads as one
+/// span), and a space between them would show what rustdoc does not.
 fn link_at<'a>(before: &str, after: &'a str) -> Option<(Cow<'a, str>, &'a str)> {
     let defines = label_end(after).is_some_and(|close| after[close + 1..].starts_with(':'));
-    if defines || before.ends_with([']', '!']) {
+    if defines || before.ends_with([']', '!', '`']) {
         return None;
     }
-    rustdoc_link(after)
-}
-
-/// Appends `shown` to `out`, a space apart from a code span on either side:
-/// two touching spans (`a``b`) read as one.
-fn push_apart(out: &mut String, shown: &str, remaining: &str) {
-    if out.ends_with('`') && shown.starts_with('`') {
-        out.push(' ');
-    }
-    out.push_str(shown);
-    if shown.ends_with('`') && remaining.starts_with('`') {
-        out.push(' ');
-    }
+    rustdoc_link(after).filter(|(_, remaining)| !remaining.starts_with('`'))
 }
 
 /// Length of the code span `text` starts with: its opening run of backticks
@@ -291,15 +285,22 @@ fn label_end(after: &str) -> Option<usize> {
     None
 }
 
-/// When `after` (the text following a `[`) starts a rustdoc link, what
-/// rustdoc shows for it and the text after the link. A reference-style link
-/// (`[text][label]`) is left as written.
+/// When `after` (the text following a `[`) starts a rustdoc link whose text is
+/// one code span, what rustdoc shows for it and the text after the link. A
+/// reference-style link (`[text][label]`) is left as written.
+///
+/// Only a code span is shown. The backticks at its edges are punctuation, as
+/// the brackets they replace are, so the emphasis, entities and line starts
+/// around the link read the same without them. Other link text (prose, a bare
+/// path, blanks, or code mixed with prose) could change them once its
+/// brackets go: `**[a](b)**s` would turn bold, and `[-](b) x` a list item.
+/// Such a link stays as written, and the guard fails on it. A `[` left open
+/// earlier, as in `[0, 1)`, has no code span for its label either: it stays,
+/// and the scan moves on to the next `[`.
 fn rustdoc_link(after: &str) -> Option<(Cow<'_, str>, &str)> {
-    // An empty link text shows nothing, and the code spans around it could
-    // merge (`` `a`[](X)`b` ``): it stays as written, and the guard fails on it.
-    let close = label_end(after).filter(|&close| close > 0)?;
+    let close = label_end(after)?;
     let (label, tail) = (&after[..close], &after[close + 1..]);
-    if !can_be_link_text(label) {
+    if !is_code_span(label) {
         return None;
     }
     if let Some(inline) = tail.strip_prefix('(') {
@@ -308,30 +309,15 @@ fn rustdoc_link(after: &str) -> Option<(Cow<'_, str>, &str)> {
     if tail.starts_with('[') {
         return None;
     }
-    if is_code_span(label) {
-        return code_link(label, tail);
-    }
-    is_path_like(label).then(|| {
-        (
-            Cow::Borrowed(without_disambiguator(label).unwrap_or(label)),
-            tail,
-        )
-    })
+    code_link(label, tail)
 }
 
-/// Whether `label` can be a link's text. A `[` outside the label's code spans
-/// is one left open earlier, not this link's: the scan moves on to the one
-/// just before the `]`. Inside a code span a `[` is code (``[a `[` b](c)``).
-/// A label that spans a line is left as written (see [`spans_a_line`]).
-fn can_be_link_text(label: &str) -> bool {
-    !outside_code_spans(label).any(|part| part.contains('[')) && !spans_a_line(label)
-}
-
-/// An inline link, `inline` being the text after its `(`: shown as its label
-/// when the target is a Rust path. The target may be padded with spaces, as
-/// Markdown allows; one wrapped in `<…>` never gets here, since a `<` outside
-/// code leaves the whole text as written ([`scan_is_exact`]). A target that
-/// spans a line is left as written (see [`spans_a_line`]).
+/// An inline code link, `inline` being the text after its `(`: shown as its
+/// label, a code span, when the target is a Rust path. The target may be
+/// padded with spaces, as Markdown allows; one wrapped in `<…>` never gets
+/// here, since a `<` outside code leaves the whole text as written
+/// ([`scan_is_exact`]). A target that spans a line is left as written (see
+/// [`spans_a_line`]).
 fn inline_link<'a>(label: &'a str, inline: &'a str) -> Option<(Cow<'a, str>, &'a str)> {
     let end = closing_paren(inline)?;
     let raw = &inline[..end];
@@ -392,22 +378,13 @@ fn reads_as_a_path(word: &str) -> bool {
         .all(|c| c.is_alphanumeric() || ":_<>, !*&;".contains(c))
 }
 
-/// A single inline code span — the label of a rustdoc code link.
+/// Whether `label` is one code span opened and closed by a single backtick:
+/// the only link text the rewrite shows ([`rustdoc_link`]).
 fn is_code_span(label: &str) -> bool {
     label.len() > 2
         && label.starts_with('`')
         && label.ends_with('`')
         && !label[1..label.len() - 1].contains('`')
-}
-
-/// A shortcut label rustdoc reads as a path rather than prose: one with a
-/// `::`, a [`CALL_SUFFIXES`] suffix, or a disambiguator. A bare `[Name]` may be
-/// either (`map[key]`, `[sic]`) and stays as written.
-fn is_path_like(label: &str) -> bool {
-    is_rust_path(label)
-        && (label.contains("::")
-            || CALL_SUFFIXES.iter().any(|suffix| label.ends_with(suffix))
-            || without_disambiguator(label).is_some())
 }
 
 /// What rustdoc accepts after a function or macro name: `f()`, `m!`, `m!()`,
