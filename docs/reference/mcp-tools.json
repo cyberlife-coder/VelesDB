@@ -4052,7 +4052,7 @@
             "type": "integer"
           },
           "id_str": {
-            "description": "Decimal-string twin of `id`,\nsame contract as `crate::mcp::dto::RememberResult::id_str`: the id is content-addressed\n(FNV-1a 64), so it is past 2^53 and a float-lossy JSON client rounds\n`id` on arrival. This was the ONE tool handing back an id without its\ntwin while `forget`/`feedback` accept only the decimal string — the\ncaller had no way to build the form the schema demands.",
+            "description": "Decimal-string twin of `id`, with the same contract as\n`crate::mcp::dto::RememberResult::id_str`. The id is content-addressed\n(FNV-1a 64), so it is past 2^53 and a float-lossy JSON client rounds\n`id` on arrival. This was the ONE tool handing back an id without its\ntwin while `forget`/`feedback` accept only the decimal string — the\ncaller had no way to build the form the schema demands.",
             "type": "string"
           }
         },

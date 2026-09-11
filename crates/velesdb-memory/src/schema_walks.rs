@@ -93,9 +93,11 @@ const DISAMBIGUATORS: [&str; 22] = [
 /// links (`[text][label]`).
 ///
 /// It also leaves as written every link in a text it cannot read exactly
-/// ([`scan_is_exact`]), an image (`![a](b)`), a `[label]` a colon follows,
-/// and a text a second pass would change further, such as nested brackets
-/// (``[[`X`]]``, whose outer pair Markdown shows as written). The guard then
+/// ([`scan_is_exact`]) or that holds an inline link it does not render (a web
+/// link, an image), whose target and title it cannot read as prose; a
+/// `[label]` a colon follows; and a text a second pass would change further,
+/// such as nested brackets (``[[`X`]]``, whose outer pair Markdown shows as
+/// written). The guard then
 /// fails on the rustdoc link syntax left, except a bare `[Name]`, which it
 /// cannot tell from prose.
 ///
@@ -106,8 +108,21 @@ pub(super) fn unlink_rustdoc(text: &str) -> Option<String> {
     if !scan_is_exact(text) {
         return None;
     }
-    let once = unlink_once(text)?;
-    unlink_once(&once).is_none().then_some(once)
+    let Pass::Changed(once) = unlink_once(text) else {
+        return None;
+    };
+    matches!(unlink_once(&once), Pass::Unchanged).then_some(once)
+}
+
+/// What one pass of the rewrite makes of a text.
+enum Pass {
+    /// It holds no link to rewrite.
+    Unchanged,
+    /// The text with its links rewritten.
+    Changed(String),
+    /// It holds an inline link the rewrite does not render: the text stays as
+    /// written.
+    Leave,
 }
 
 /// Whether the scan reads `text` as Markdown does. It models inline code
@@ -120,7 +135,8 @@ pub(super) fn unlink_rustdoc(text: &str) -> Option<String> {
 ///   of a quote or a list item;
 /// - a code fence (```` ``` ```` or `~~~`), wherever it stands;
 /// - a `<` outside a code span, which can open HTML or an autolink;
-/// - a table, which splits its cells before it reads code spans;
+/// - a table, in or out of a quote, which splits its cells before it reads
+///   code spans;
 /// - a code span that crosses a line, whose extent depends on the blocks
 ///   around it.
 fn scan_is_exact(text: &str) -> bool {
@@ -134,11 +150,10 @@ fn scan_is_exact(text: &str) -> bool {
 }
 
 /// Whether `line` can be the delimiter row that makes the lines above it a
-/// table (`|---|:--:|`): nothing but pipes, colons, dashes and spaces, with a
-/// pipe among them.
+/// table (`|---|:--:|`): nothing but pipes, colons, dashes, spaces and the
+/// `>` of a quote, with a pipe among them.
 fn is_a_table_delimiter_row(line: &str) -> bool {
-    let row = line.trim();
-    row.contains('|') && row.chars().all(|c| "|:- ".contains(c))
+    line.contains('|') && line.chars().all(|c| "|:- >".contains(c))
 }
 
 /// Whether a code span of `text` crosses a line.
@@ -155,9 +170,9 @@ fn has_a_code_span_across_lines(text: &str) -> bool {
 }
 
 /// One left-to-right pass of [`unlink_rustdoc`].
-fn unlink_once(text: &str) -> Option<String> {
+fn unlink_once(text: &str) -> Pass {
     if !text.contains('[') {
-        return None;
+        return Pass::Unchanged;
     }
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
@@ -175,6 +190,9 @@ fn unlink_once(text: &str) -> Option<String> {
         }
         let after = &marker[1..];
         let Some((shown, remaining)) = link_at(&out, after) else {
+            if opens_an_inline_link(after) {
+                return Pass::Leave;
+            }
             out.push('[');
             rest = after;
             continue;
@@ -184,7 +202,19 @@ fn unlink_once(text: &str) -> Option<String> {
         changed = true;
     }
     out.push_str(rest);
-    changed.then_some(out)
+    if changed {
+        Pass::Changed(out)
+    } else {
+        Pass::Unchanged
+    }
+}
+
+/// Whether the `[` that `after` follows opens an inline link: its label can
+/// be a link's text ([`can_be_link_text`]) and a `(` follows it.
+fn opens_an_inline_link(after: &str) -> bool {
+    label_end(after).is_some_and(|close| {
+        can_be_link_text(&after[..close]) && after[close + 1..].starts_with('(')
+    })
 }
 
 /// What rustdoc shows for the link the `[` between `before` and `after` opens,
@@ -194,10 +224,11 @@ fn unlink_once(text: &str) -> Option<String> {
 /// wherever a block starts, in a quote or a list item too, and a link
 /// elsewhere: rather than tell the two apart, the rewrite leaves all three.
 fn link_at<'a>(before: &str, after: &'a str) -> Option<(Cow<'a, str>, &'a str)> {
-    if before.ends_with([']', '!']) {
+    let defines = label_end(after).is_some_and(|close| after[close + 1..].starts_with(':'));
+    if defines || before.ends_with([']', '!']) {
         return None;
     }
-    rustdoc_link(after).filter(|(_, tail)| !tail.starts_with(':'))
+    rustdoc_link(after)
 }
 
 /// Appends `shown` to `out`, a space apart from a code span on either side:
@@ -378,7 +409,8 @@ fn is_path_like(label: &str) -> bool {
 }
 
 /// What rustdoc accepts after a function or macro name: `f()`, `m!`, `m!()`,
-/// `m!{}`. A form not listed, such as `m![]`, stays as written.
+/// `m!{}`. A form not listed, such as `m![]`, stays as written, and the guard
+/// fails on it.
 const CALL_SUFFIXES: [&str; 4] = ["!()", "!{}", "()", "!"];
 
 /// Whether a code span reads as a link to the rewrite: non-empty and, with

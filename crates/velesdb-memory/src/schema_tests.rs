@@ -340,6 +340,7 @@ mod unlink {
             ("a [call](f()) here", "a call here"),
             ("see [x]( crate::y)", "see x"),
             ("in [0, 1) see [x](crate::y)", "in [0, 1) see x"),
+            ("see [x](crate::y): the id", "see x: the id"),
         ] {
             assert_eq!(unlink_rustdoc(text).as_deref(), Some(shown), "{text}");
         }
@@ -639,6 +640,8 @@ mod unlink {
             "see <https://x.dev/a[crate::X]b>",
             "| `x | y` [crate::X] `z |\n|---|---|",
             "| `x | y` [crate::X] `z |\r|---|---|",
+            "> | `x | y` [crate::X] `z |\n> |---|---|",
+            ">| `x | y` [crate::X] `z |\n>|---|---|",
             "see [x](<crate::y>)",
             "see [x](< fn@f >)",
         ] {
@@ -656,6 +659,23 @@ mod unlink {
             ("a | b and [`A`]", "a | b and `A`"),
         ] {
             assert_eq!(unlink_rustdoc(text).as_deref(), Some(shown), "{text:?}");
+        }
+    }
+
+    /// A web link or an image is an inline link the rewrite does not render,
+    /// and its target and title cannot be read as prose: a text holding one
+    /// stays as written, and so does one the rewrite would turn into one.
+    #[test]
+    fn a_text_holding_an_inline_link_the_rewrite_leaves_stays_as_written() {
+        for text in [
+            "see [docs](https://x.dev \"`a\") and `[crate::X]` here",
+            "see [docs](https://x.dev/a[crate::X]b)",
+            "see [docs](https://x.dev \"[crate::X]\")",
+            "[[crate::X]](https://x.dev)",
+            "[see [`Top`]](https://x.dev)",
+        ] {
+            assert_eq!(unlink_rustdoc(text), None, "{text:?}");
+            assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
         }
     }
 
@@ -693,7 +713,6 @@ mod unlink {
             "see [docs]( https://x.dev)",
             "see [docs](<https://x.dev>)",
             "see [docs](< https://x.dev>)",
-            "see [crate::Point](https://docs.rs/x)",
             "see [the spec](http://x.dev/spec)",
             "write to [the team](mailto:team@x.dev)",
             "jump to [the top](#top)",
@@ -741,20 +760,20 @@ mod unlink {
 
     /// Whether `text` holds rustdoc link syntax: a `[` that opens on a code
     /// span (`` [`Point`] ``), a bracketed path (`[crate::Point]`, `[fn@f]`,
-    /// `[a#b]`, `[Vec<T>]`, `[f()]`, `[m!{}]`, `[m!]`), a reference-style link
-    /// (`[x][y]`, `[x][]`), a reference definition (any `]:`), or an inline link
-    /// to anything but a URL or a fragment. Every link the rewrite recognizes
-    /// is one of these.
+    /// `[a#b]`, `[Vec<T>]`, `[f()]`, `[m!{}]`, `[m![]]`, `[m!]`), a
+    /// reference-style link (`[x][y]`, `[x][]`), a reference definition (any
+    /// `]:`), or an inline link to anything but a URL or a fragment. Every link
+    /// the rewrite recognizes is one of these.
     ///
     /// It reads the raw text, so no Markdown construct (a code span, a quote, a
     /// list item) can hide one of these forms from it. What that costs: a
     /// description cannot show one even as code (`` `[x](y)` ``,
-    /// ``[`asc`, `desc`]``, `&[Vec<f32>]`), give a web link code text, or write
-    /// a reference-style link or definition, even to a URL; and prose that
-    /// looks like one fails too (`[0, 1]: …`, `m[i][j]`, `[#2261]`,
-    /// `[ops@x.dev]`). A bare `[Point]` passes: it reads the same as `[sic]`.
-    /// velesdb-server's guard over its OpenAPI document applies the same rules
-    /// (#2263).
+    /// ``[`asc`, `desc`]``, `&[Vec<f32>]`), give a web link code or a path as
+    /// its text, or write a reference-style link or definition, even to a URL;
+    /// and prose that looks like one fails too (`[0, 1]: …`, `m[i][j]`,
+    /// `[#2261]`, `[ops@x.dev]`). A bare `[Point]` passes: it reads the same as
+    /// `[sic]`. velesdb-server's guard over its OpenAPI document applies the
+    /// same rules (#2263).
     fn holds_rustdoc_link(text: &str) -> bool {
         text.contains("][")
             || text.contains("]:")
@@ -763,23 +782,28 @@ mod unlink {
                 .any(|(at, _)| !is_url(target_start(&text[at + 2..])))
             || text.match_indices('[').any(|(at, _)| {
                 let after = &text[at + 1..];
-                after.trim_start().starts_with('`') || brackets_a_path(after)
+                after
+                    .trim_start_matches(|c: char| c.is_whitespace() || c == '>')
+                    .starts_with('`')
+                    || brackets_a_path(after)
             })
     }
 
     /// Whether the label `after` starts, up to its `]`, names a path: it holds
-    /// `::`, `@`, `#` or `<`, or ends in `()`, `!{}` or `!` once trimmed, as
-    /// rustdoc trims it. A `(` after the `]` makes it the text of an inline
-    /// link instead, which [`holds_rustdoc_link`] reads by its target.
+    /// `::`, `@`, `#` or `<`, or ends in `()`, `!{}`, `![` (as in `[m![]]`) or
+    /// `!` once its backticks are dropped and it is trimmed, as rustdoc reads
+    /// it. It does so even as a web link's text: an inline link whose target
+    /// Markdown rejects falls back to the shortcut link rustdoc resolves.
     fn brackets_a_path(after: &str) -> bool {
-        after.split_once(']').is_some_and(|(label, rest)| {
+        after.split_once(']').is_some_and(|(label, _)| {
+            let label = label.replace('`', "");
             let label = label.trim();
-            !rest.starts_with('(')
-                && (label.contains("::")
-                    || label.contains(['@', '#', '<'])
-                    || label.ends_with("()")
-                    || label.ends_with("!{}")
-                    || label.ends_with('!'))
+            label.contains("::")
+                || label.contains(['@', '#', '<'])
+                || label.ends_with("()")
+                || label.ends_with("!{}")
+                || label.ends_with("![")
+                || label.ends_with('!')
         })
     }
 
@@ -814,6 +838,12 @@ mod unlink {
             "see [vec!{}].",
             "see [stream() ].",
             "see [vec! ].",
+            "see [stream`()`].",
+            "see [vec`!`].",
+            "see [vec![]].",
+            "see [crate::Point](https://docs.rs/x).",
+            "see [crate::Point](https://docs.rs/x y).",
+            "> see [\n> `Point`] here",
             "see [fn@stream].",
             "see [Point#fields].",
             "see [the point][Point].",
