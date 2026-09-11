@@ -557,19 +557,62 @@ mod unlink {
         assert_eq!(unlink_rustdoc("see [`()`] here"), None);
     }
 
-    /// rustdoc shows only the part of a link before its `#` fragment. The
-    /// rewrite does not model that: it leaves such a link as written, and the
-    /// guard fails on it before it can reach a client.
+    /// rustdoc resolves a link by the path before its `#` fragment, and a
+    /// shortcut link shows only that part. The rewrite does not model it: it
+    /// leaves such a link as written, and the guard fails on it before it can
+    /// reach a client. So it does on a bracketed `@` or `#` it leaves.
     #[test]
     fn a_link_with_a_fragment_stays_and_the_guard_flags_it() {
         for text in [
             "see [`Vec#method.push`] here",
             "see [a::B#x] here",
             "see [x](Vec#method.push) here",
+            "see [a#b] here",
+            "see [fn@ f] here",
         ] {
             assert_eq!(unlink_rustdoc(text), None, "{text}");
             assert!(guard_flags(text), "the guard misses {text:?}");
         }
+    }
+
+    /// A reference-style or collapsed link, and a reference definition, whose
+    /// target is not a URL: the rewrite leaves them, and the guard fails on
+    /// each.
+    #[test]
+    fn the_guard_flags_reference_style_links() {
+        for text in [
+            "see [crate::Recollection][] here",
+            "see [`crate::Recollection`][] here",
+            "see [`Recollection`][rec].\n\n[rec]: crate::Recollection",
+            "see [the recollection][rec].\n\n[rec]: crate::Recollection",
+        ] {
+            assert_eq!(unlink_rustdoc(text), None, "{text:?}");
+            assert!(guard_flags(text), "the guard misses {text:?}");
+        }
+    }
+
+    /// A shortcut code link padded inside its brackets, or split across a
+    /// line: the rewrite leaves it, and the guard fails on it.
+    #[test]
+    fn the_guard_flags_a_padded_shortcut_code_link() {
+        for text in [
+            "see [`crate::Foo` ] here",
+            "see [ `fn@f` ] here",
+            "see [`crate::Foo`\n] here",
+        ] {
+            assert_eq!(unlink_rustdoc(text), None, "{text:?}");
+            assert!(guard_flags(text), "the guard misses {text:?}");
+        }
+    }
+
+    /// A code span cannot cross a blank line, so a backtick nothing closes in
+    /// its paragraph is literal, and a link after the break is rewritten.
+    #[test]
+    fn a_code_span_does_not_cross_a_blank_line() {
+        assert_eq!(
+            unlink_rustdoc("Use a trailing ` here.\n\nSee [`R`](crate::R) and `x`.").as_deref(),
+            Some("Use a trailing ` here.\n\nSee `R` and `x`.")
+        );
     }
 
     /// A web link stays as written and passes the guard, padded or wrapped in
@@ -621,26 +664,49 @@ mod unlink {
         assert!(!guard_flags(text), "{text}");
     }
 
-    /// Whether `text`, outside its code spans, holds an inline link to anything
-    /// but a URL, a shortcut code link (``[`X`]``) or a bracketed path
-    /// (`[a::B]`, `[fn@f]`, `[a#b]`): link syntax the rewrite leaves, which a
-    /// published description must not carry.
+    /// Whether `text`, outside its code spans, holds an inline link or a
+    /// reference definition to anything but a URL, or a code link or bracketed
+    /// path (`[a::B]`, `[fn@f]`, `[a#b]`) not followed by `(`, shortcut or
+    /// reference-style: link syntax the rewrite leaves, which a published
+    /// description must not carry.
     fn holds_link_syntax(text: &str) -> bool {
         let prose = outside_code_spans(text).collect::<Vec<_>>().join(" ");
         links_to_a_non_url(&prose)
             || holds_a_bracketed_path(&prose)
             || holds_a_shortcut_code_link(text)
+            || defines_a_non_url_reference(&prose)
+    }
+
+    /// Whether a link target is a URL.
+    fn is_url(target: &str) -> bool {
+        ["http://", "https://", "mailto:", "#"]
+            .iter()
+            .any(|url| target.starts_with(url))
+    }
+
+    /// A reference definition, `[label]: target`, whose target is not a URL.
+    fn defines_a_non_url_reference(prose: &str) -> bool {
+        prose.lines().any(|line| {
+            let line = line.trim_start();
+            line.starts_with('[')
+                && line.split_once("]:").is_some_and(|(_, target)| {
+                    let target = target_start(target);
+                    !target.is_empty() && !is_url(target)
+                })
+        })
     }
 
     /// An inline link whose target, past any whitespace or `<`, is not a URL.
     fn links_to_a_non_url(prose: &str) -> bool {
-        prose.match_indices("](").any(|(at, _)| {
-            let target = prose[at + 2..].trim_start();
-            let target = target.strip_prefix('<').map_or(target, str::trim_start);
-            !["http://", "https://", "mailto:", "#"]
-                .iter()
-                .any(|url| target.starts_with(url))
-        })
+        prose
+            .match_indices("](")
+            .any(|(at, _)| !is_url(target_start(&prose[at + 2..])))
+    }
+
+    /// `raw` past any whitespace or `<`, where a link target starts.
+    fn target_start(raw: &str) -> &str {
+        let target = raw.trim_start();
+        target.strip_prefix('<').map_or(target, str::trim_start)
     }
 
     /// A bracket pair no `(` or `[` follows, whose text names a path: `::`, `@`
@@ -650,8 +716,7 @@ mod unlink {
             prose[at + 1..]
                 .split_once(']')
                 .is_some_and(|(label, after)| {
-                    !after.starts_with(['(', '['])
-                        && (label.contains("::") || label.contains(['@', '#']))
+                    !after.starts_with('(') && (label.contains("::") || label.contains(['@', '#']))
                 })
         })
     }
@@ -666,14 +731,14 @@ mod unlink {
                 rest = &from[code_span_len(from)..];
                 continue;
             }
-            let span = &from[1..];
+            let span = from[1..].trim_start();
             if span.starts_with('`') {
-                let after = &span[code_span_len(span)..];
-                if after.starts_with(']') && !after[1..].starts_with(['(', '[']) {
+                let after = span[code_span_len(span)..].trim_start();
+                if after.starts_with(']') && !after[1..].starts_with('(') {
                     return true;
                 }
             }
-            rest = span;
+            rest = &from[1..];
         }
         false
     }

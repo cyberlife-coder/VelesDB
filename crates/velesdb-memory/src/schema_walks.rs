@@ -162,8 +162,9 @@ fn push_apart(out: &mut String, shown: &str, remaining: &str) {
 /// text.
 pub(super) fn code_span_len(text: &str) -> usize {
     let fence = text.bytes().take_while(|&b| b == b'`').count();
+    let end = paragraph_end(text).max(fence);
     let mut search = fence;
-    while let Some(found) = text[search..].find('`') {
+    while let Some(found) = text[search..end].find('`') {
         let at = search + found;
         let run = text[at..].bytes().take_while(|&b| b == b'`').count();
         if run == fence {
@@ -172,6 +173,23 @@ pub(super) fn code_span_len(text: &str) -> usize {
         search = at + run;
     }
     fence
+}
+
+/// Where the paragraph `text` starts in ends: before its first blank line, or
+/// at its end. A code span cannot cross a blank line.
+fn paragraph_end(text: &str) -> usize {
+    let mut from = 0;
+    while let Some(found) = text[from..].find('\n') {
+        let at = from + found;
+        if text[at + 1..]
+            .trim_start_matches([' ', '\t'])
+            .starts_with('\n')
+        {
+            return at;
+        }
+        from = at + 1;
+    }
+    text.len()
 }
 
 /// The parts of `text` outside its code spans, in order, which the rewrite
@@ -295,10 +313,12 @@ fn rustdoc_path(word: &str) -> &str {
         .unwrap_or(word)
 }
 
-/// Whether rustdoc 1.90 tries to resolve the link text `word`: its
-/// [`rustdoc_path`] holds only letters, digits and ``:_<>, !*&;``. rustdoc
-/// leaves any other link as written, brackets and all (``[`a[`]``,
-/// ``[`a.b`]``, ``[`()`]``); so does this rewrite with ``[`a#b`]``.
+/// Whether the rewrite reads the link text `word` as a path: its
+/// [`rustdoc_path`] holds only letters, digits and ``:_<>, !*&;``, the test
+/// rustdoc 1.90 applies. rustdoc leaves a shortcut link that fails it as
+/// written, brackets and all (``[`a[`]``, ``[`a.b`]``, ``[`()`]``). A `#`
+/// fragment fails it too, though rustdoc resolves the part before it: the
+/// rewrite leaves ``[`a#b`]`` as written, and the guard fails on it.
 fn rustdoc_resolves(word: &str) -> bool {
     rustdoc_path(word)
         .chars()

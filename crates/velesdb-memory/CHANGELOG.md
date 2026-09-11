@@ -18,17 +18,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/reference/mcp-tools.json`. The input and output schemas now render
   each link as rustdoc does: a code link as its code span, a labelled link to
   a Rust path as its text, a path such as `[a::B]` or `[fn@f]` as its path
-  without the disambiguator. Code spans are copied verbatim, and an unclosed
-  backtick is literal. A bare `[name]` stays whether or not rustdoc resolves
-  it (`map[key]`, `[sic]`), as do `[0, 1]`, a bracketed code span that is
-  not one word or that rustdoc does not resolve (``[`a.b`]``), a web link,
-  reference-style links, and a link that spans a line. Only `description`
-  strings are rewritten, never instance data such as a `default`, so nothing
-  else in a schema changes. A test fails if a published description still
-  holds a link the rewrite recognizes or, outside a code span, an inline
-  link to anything but a URL, a shortcut code link or a bracketed path:
-  link syntax the rewrite leaves, such as a `#` fragment or a link that
-  spans a line, cannot reach a client. (#2261)
+  without the disambiguator. Code spans are copied verbatim; a backtick
+  nothing closes in its paragraph is literal. A bare `[name]` stays whether
+  or not rustdoc resolves it (`map[key]`, `[sic]`), as do `[0, 1]` and a web
+  link. Only `description` strings are rewritten, never instance data such
+  as a `default`, so nothing else in a schema changes. Any other link syntax
+  the rewrite leaves -- a `#` fragment, a reference-style link, a link that
+  spans a line, a code link rustdoc may not resolve -- fails a test if a
+  published description carries it: outside a code span, the test fails on
+  an inline link or a reference definition to anything but a URL, and on a
+  code link or bracketed path not followed by `(`. (#2261)
 
 ## [0.14.2] - 2026-09-03
 
