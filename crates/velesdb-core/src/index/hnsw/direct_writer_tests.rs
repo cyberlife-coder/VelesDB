@@ -142,6 +142,11 @@ fn test_direct_write_skipped_with_exact_distance_features_off() {
 
     assert!(results.is_empty());
     assert_eq!(index.mappings.get_idx(1), None);
+    assert_eq!(
+        contiguous_get(&index, 0),
+        None,
+        "the writer placed a vector it does not map"
+    );
 }
 
 /// A wrong dimension is refused even with exact-distance features off: the
