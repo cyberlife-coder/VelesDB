@@ -304,7 +304,7 @@ pub(super) struct SegmentInfo {
     /// [`crate::limits::MAX_FRAGMENT_BYTES`]) each child's range is a
     /// proportional, non-overlapping share of the line's raw range rather
     /// than a byte-precise one. Every segment's range is still distinct and
-    /// non-overlapping (see [`SegmentationReport::segments`]'s struct docs).
+    /// non-overlapping (see the struct docs of [`SegmentationReport::segments`]).
     pub byte_start: usize,
     /// End byte offset (exclusive) in the original transcript. Same caveat
     /// as `byte_start`.

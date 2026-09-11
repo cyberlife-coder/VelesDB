@@ -41,16 +41,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every MCP client reads carried intra-doc links only rustdoc resolves —
   ``[`Name`]``, ``[`Name`](crate::path)`` — 137 of them across 102
   descriptions of `docs/reference/mcp-tools.json`. The input and output
-  schemas now show each code link as the code span rustdoc shows for it,
-  without a disambiguator: ``[`Name`]`` becomes `` `Name` ``, and
-  ``[`fn@f`]`` becomes `` `f` ``. Only a link whose text is one code span is
-  rewritten: its backticks leave the Markdown around it reading the same,
-  where prose or a bare path (`[text](crate::path)`, `[a::B]`) could turn a
-  neighbour bold or into a list item once its brackets go, so such a link
-  stays as written. Code spans are copied verbatim. A bare `[name]`
-  stays whether or not rustdoc resolves it (`map[key]`, `[sic]`), as do
-  `[0, 1]` and a web link. Only `description` strings are rewritten, never
-  instance data such as a `default`, so nothing else in a schema changes.
+  schemas now show each code link as the code span rustdoc shows for it:
+  ``[`Name`]`` becomes `` `Name` ``, and a shortcut code link drops its
+  disambiguator, so ``[`fn@f`]`` becomes `` `f` ``. Only a link whose text
+  is one code span is rewritten: its backticks leave the Markdown around it
+  reading the same, where prose or a bare path (`[text](crate::path)`,
+  `[a::B]`) could turn a neighbour bold or into a list item once its
+  brackets go, so such a link stays as written. Code spans are copied
+  verbatim. A bare `[name]` stays whether or not rustdoc resolves it
+  (`map[key]`, `[sic]`), as do `[0, 1]` and a web link. Only `description`
+  strings are rewritten, never instance data such as a `default`, so nothing
+  else in a schema changes.
   The rewrite leaves every link in a description it cannot read exactly: one
   holding a backslash, a tab or four spaces, a code fence, a `<` outside
   code, a table, a reference or footnote definition (any `]:`, even inside
@@ -58,9 +59,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   render (a web link, an image, one whose text is not a code span). It
   leaves a reference-style link, a `#` fragment, a link that spans a line, a
   padded shortcut code link, a code link a backtick touches (its code span
-  would merge with it), and a code link a bracket pair would enclose once
-  its own brackets go. A test then fails if a published description holds
-  link syntax, code spans included:
+  would merge with it) or a `'` follows (smart punctuation would read the
+  quote differently), and a code link a bracket pair would enclose once its
+  own brackets go. A test then fails if a published description holds link
+  syntax, code spans included:
   a `[` that opens on a code span, a bracketed path even as a web link's
   text (one holding `::`, `@`, `#` or `<`, naming a primitive rustdoc links
   from a sigil such as `&str` or `*const`, or ending in `()`, `!{}` or `!`),

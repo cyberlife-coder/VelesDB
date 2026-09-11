@@ -233,15 +233,18 @@ fn unlink_once(text: &str) -> Pass {
 /// holding a reference definition ([`scan_is_exact`]). It also leaves a link
 /// a backtick touches, before or after it: the code
 /// span it shows would merge with that backtick's run (`a``b` reads as one
-/// span), and a space between them would show what rustdoc does not. And it
-/// leaves a link a bracket pair would enclose once its own brackets go
-/// ([`would_pair_around`]).
+/// span), and a space between them would show what rustdoc does not. It
+/// leaves a link a `'` follows: rustdoc's smart punctuation reads a `'` right
+/// after `]` or `)` as an apostrophe, and one right after a backtick as a
+/// quote that may open, so ``[`X`]'a'`` and `` `X`'a' `` show different
+/// quotes. And it leaves a link a bracket pair would enclose once its own
+/// brackets go ([`would_pair_around`]).
 fn link_at<'a>(before: &str, after: &'a str) -> Option<(Cow<'a, str>, &'a str)> {
     if before.ends_with([']', '!', '`']) {
         return None;
     }
     rustdoc_link(after).filter(|(_, remaining)| {
-        !remaining.starts_with('`') && !would_pair_around(before, remaining)
+        !remaining.starts_with(['`', '\'']) && !would_pair_around(before, remaining)
     })
 }
 
@@ -331,7 +334,8 @@ fn label_end(after: &str) -> Option<usize> {
 ///
 /// Only a code span is shown. The backticks at its edges are punctuation, as
 /// the brackets they replace are, so the emphasis, entities and line starts
-/// around the link read the same without them. Other link text (prose, a bare
+/// around the link read the same without them (a `'` after the link is the
+/// exception [`link_at`] leaves). Other link text (prose, a bare
 /// path, blanks, or code mixed with prose) could change them once its
 /// brackets go: `**[a](b)**s` would turn bold, and `[-](b) x` a list item.
 /// Such a link stays as written, and the guard fails on it. A `[` left open
@@ -413,15 +417,17 @@ fn rustdoc_path(word: &str) -> &str {
 }
 
 /// Whether the rewrite reads the link text `word` as a path: its
-/// [`rustdoc_path`] holds only letters, digits and ``:_<>, !*&;``, the test
-/// rustdoc 1.90 applies. rustdoc leaves a shortcut link that fails it as
+/// [`rustdoc_path`] holds only letters, digits and ``:_<>, !*&``, the test
+/// rustdoc 1.90 applies less `;`, which only an array type such as `[u8; 4]`
+/// holds, and whose brackets fail this test anyway. rustdoc leaves a shortcut
+/// link that fails it as
 /// written, brackets and all (``[`a[`]``, ``[`a.b`]``, ``[`()`]``). A `#`
 /// fragment fails it too, though rustdoc resolves the part before it: the
 /// rewrite leaves ``[`a#b`]`` as written, and the guard fails on it.
 fn reads_as_a_path(word: &str) -> bool {
     rustdoc_path(word)
         .chars()
-        .all(|c| c.is_alphanumeric() || ":_<>, !*&;".contains(c))
+        .all(|c| c.is_alphanumeric() || ":_<>, !*&".contains(c))
 }
 
 /// Whether `label` is one code span opened and closed by a single backtick:

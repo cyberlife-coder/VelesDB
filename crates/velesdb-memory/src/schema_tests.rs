@@ -371,6 +371,7 @@ mod unlink {
                 "the [`HashMap<K, V>`] it holds",
                 "the `HashMap<K, V>` it holds",
             ),
+            ("see [`&str`] and [`*const`]", "see `&str` and `*const`"),
         ] {
             assert_eq!(unlink_rustdoc(text).as_deref(), Some(shown), "{text}");
         }
@@ -539,16 +540,21 @@ mod unlink {
 
     /// A code link a backtick touches, on either side, stays as written: its
     /// code span would merge with that backtick's run (`a``b` reads as one
-    /// span), and a space between them would show what rustdoc does not.
-    /// The guard fails on it.
+    /// span), and a space between them would show what rustdoc does not. So
+    /// does one a `'` follows: rustdoc's smart punctuation reads that `'` as an
+    /// apostrophe after `]` or `)`, and as a quote that may open after a
+    /// backtick. The guard fails on each.
     #[test]
-    fn a_code_link_a_backtick_touches_stays_as_written() {
+    fn a_code_link_a_backtick_or_a_quote_touches_stays_as_written() {
         for text in [
             "[`a`]`b`",
             "`a`[`b`]",
             "see [`a`](crate::a)[`b`](crate::b)",
             "a stray ``[`x`](crate::y)",
             "[`x`](crate::y)`` stray",
+            "[`X`]'a' end",
+            "see [`X`](crate::X)'a' here",
+            "the [`X`]'s id",
         ] {
             assert_eq!(unlink_rustdoc(text), None, "{text:?}");
             assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
@@ -599,11 +605,11 @@ mod unlink {
                     "default": ["[`not a description`]"]
                 }
             },
-            "$defs": { "D": { "description": "def [`D`]" } },
+            "$defs": { "enum": { "description": "def [`D`]" } },
             "anyOf": [{ "description": "any [`A`]" }],
             "oneOf": [{ "description": "one [`O`]" }],
             "additionalProperties": { "description": "extra [`E`]" },
-            "patternProperties": { "^x-": { "description": "pattern [`P`]" } },
+            "patternProperties": { "example": { "description": "pattern [`P`]" } },
             "definitions": { "default": { "description": "old [`G`]" } },
             "dependentSchemas": { "const": { "description": "dep [`S`]" } },
             "dependencies": { "enum": { "description": "deps [`Y`]" } }
@@ -616,7 +622,7 @@ mod unlink {
         assert_eq!(
             before,
             [
-                "/$defs/D/description",
+                "/$defs/enum/description",
                 "/additionalProperties/description",
                 "/anyOf/0/description",
                 "/definitions/default/description",
@@ -624,7 +630,7 @@ mod unlink {
                 "/dependentSchemas/const/description",
                 "/description",
                 "/oneOf/0/description",
-                "/patternProperties/^x-/description",
+                "/patternProperties/example/description",
                 "/properties/default/description",
                 "/properties/description/description",
                 "/properties/tags/items/description",
@@ -650,11 +656,11 @@ mod unlink {
                         "default": ["[`not a description`]"]
                     }
                 },
-                "$defs": { "D": { "description": "def `D`" } },
+                "$defs": { "enum": { "description": "def `D`" } },
                 "anyOf": [{ "description": "any `A`" }],
                 "oneOf": [{ "description": "one `O`" }],
                 "additionalProperties": { "description": "extra `E`" },
-                "patternProperties": { "^x-": { "description": "pattern `P`" } },
+                "patternProperties": { "example": { "description": "pattern `P`" } },
                 "definitions": { "default": { "description": "old `G`" } },
                 "dependentSchemas": { "const": { "description": "dep `S`" } },
                 "dependencies": { "enum": { "description": "deps `Y`" } }
@@ -803,6 +809,7 @@ mod unlink {
             "| `x | y` [`crate::X`] `z |\r|---|---|",
             "> | `x | y` [`crate::X`] `z |\n> |---|---|",
             ">| `x | y` [`crate::X`] `z |\n>|---|---|",
+            "| a | [`crate::X`] |\n|:--|---|",
             "see [x](<crate::y>)",
             "see [x](< fn@f >)",
         ] {

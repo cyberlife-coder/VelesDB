@@ -1305,7 +1305,7 @@
                       "type": "integer"
                     },
                     "byte_start": {
-                      "description": "Start byte offset (inclusive) in the original transcript. For a\n`jsonl` transcript this is a slice of the raw JSON line's span, not\nan offset into the decoded `content` — a JSONL line's decoded text\nhas no byte-exact mapping back into the raw (JSON-escaped) source\nbytes, so when a single line's decoded content is re-split (over\n`crate::limits::MAX_FRAGMENT_BYTES`) each child's range is a\nproportional, non-overlapping share of the line's raw range rather\nthan a byte-precise one. Every segment's range is still distinct and\nnon-overlapping (see `SegmentationReport::segments`'s struct docs).",
+                      "description": "Start byte offset (inclusive) in the original transcript. For a\n`jsonl` transcript this is a slice of the raw JSON line's span, not\nan offset into the decoded `content` — a JSONL line's decoded text\nhas no byte-exact mapping back into the raw (JSON-escaped) source\nbytes, so when a single line's decoded content is re-split (over\n`crate::limits::MAX_FRAGMENT_BYTES`) each child's range is a\nproportional, non-overlapping share of the line's raw range rather\nthan a byte-precise one. Every segment's range is still distinct and\nnon-overlapping (see the struct docs of `SegmentationReport::segments`).",
                       "minimum": 0,
                       "type": "integer"
                     },
