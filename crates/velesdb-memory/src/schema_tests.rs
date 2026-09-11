@@ -323,7 +323,9 @@ fn admits_null(slot: &serde_json::Value) -> bool {
 /// The rustdoc-link rewrite applied to every published description (#2261).
 #[cfg(feature = "mcp")]
 mod unlink {
-    use super::super::walks::{code_span_len, unlink_rustdoc, unlink_rustdoc_descriptions};
+    use super::super::walks::{
+        outside_code_spans, spans_a_line, unlink_rustdoc, unlink_rustdoc_descriptions, LINE_ENDINGS,
+    };
     use serde_json::{json, Value};
 
     #[test]
@@ -536,7 +538,9 @@ mod unlink {
         }
     }
 
-    /// Inside a code span a `[` is code, so a code link's label may hold one.
+    /// Inside a code span a `[` is code, so an inline link's label may hold one
+    /// there. A shortcut code link rustdoc does not resolve, such as
+    /// ``[`a[`]`` or ``[`a.b`]``, stays as written, as rustdoc shows it.
     #[test]
     fn a_code_link_may_hold_a_bracket() {
         assert_eq!(
@@ -544,9 +548,20 @@ mod unlink {
             Some("see `a[` here")
         );
         assert_eq!(
-            unlink_rustdoc("see [`a[`] here").as_deref(),
-            Some("see `a[` here")
+            unlink_rustdoc("see [a `[` b](Foo) here").as_deref(),
+            Some("see a `[` b here")
         );
+        assert_eq!(unlink_rustdoc("see [`a[`] here"), None);
+        assert_eq!(unlink_rustdoc("see [`a.b`] here"), None);
+    }
+
+    /// A backtick nothing closes is literal text in Markdown: the link
+    /// after it is rewritten, and the guard reads it.
+    #[test]
+    fn a_stray_backtick_is_literal() {
+        let text = "a stray ` then [x](crate::y)";
+        assert_eq!(unlink_rustdoc(text).as_deref(), Some("a stray ` then x"));
+        assert!(guard_flags(text), "the guard misses {text:?}");
     }
 
     /// The rewrite copies a code span verbatim, link syntax and all, and the
@@ -564,7 +579,7 @@ mod unlink {
     /// such as ``[`a]b`](crate::x)``. Code spans are read past, as the rewrite
     /// copies them.
     fn names_rust_path_target(text: &str) -> bool {
-        let text = &outside_code_spans(text);
+        let text = &outside_code_spans(text).collect::<Vec<_>>().join(" ");
         text.match_indices("](").any(|(at, _)| {
             let target = text[at + 2..].trim_start();
             let target = target.strip_prefix('<').map_or(target, str::trim_start);
@@ -576,7 +591,8 @@ mod unlink {
 
     /// What the guard flags in a published description: a link the rewrite
     /// recognizes, one it leaves only because it spans a line, or an inline
-    /// link whose target names a Rust path.
+    /// link whose target starts with `crate::`, `super::`, `self::` or
+    /// `Self::`.
     fn guard_flags(text: &str) -> bool {
         unlink_rustdoc(text).is_some()
             || leaves_a_spanning_link(text)
@@ -586,20 +602,7 @@ mod unlink {
     /// Whether the rewrite would change `text` if its line endings were
     /// spaces: a link it leaves because the link spans a line.
     fn leaves_a_spanning_link(text: &str) -> bool {
-        text.contains(['\n', '\r']) && unlink_rustdoc(&text.replace(['\r', '\n'], " ")).is_some()
-    }
-
-    /// `text` with each code span replaced by a space.
-    fn outside_code_spans(text: &str) -> String {
-        let mut out = String::with_capacity(text.len());
-        let mut rest = text;
-        while let Some(pos) = rest.find('`') {
-            out.push_str(&rest[..pos]);
-            out.push(' ');
-            rest = &rest[pos + code_span_len(&rest[pos..])..];
-        }
-        out.push_str(rest);
-        out
+        spans_a_line(text) && unlink_rustdoc(&text.replace(LINE_ENDINGS, " ")).is_some()
     }
 
     #[test]

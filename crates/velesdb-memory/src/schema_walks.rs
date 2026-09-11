@@ -156,8 +156,9 @@ fn push_apart(out: &mut String, shown: &str, remaining: &str) {
 }
 
 /// Length of the code span `text` starts with: its opening run of backticks
-/// through the next run of exactly as many, or the whole text when it never
-/// closes.
+/// through the next run of exactly as many, or just that opening run when
+/// none closes it: in Markdown, an unclosed run of backticks is literal
+/// text.
 pub(super) fn code_span_len(text: &str) -> usize {
     let fence = text.bytes().take_while(|&b| b == b'`').count();
     let mut search = fence;
@@ -169,7 +170,22 @@ pub(super) fn code_span_len(text: &str) -> usize {
         }
         search = at + run;
     }
-    text.len()
+    fence
+}
+
+/// The parts of `text` outside its code spans, in order: what the rewrite
+/// reads as Markdown, and what the guard reads for link syntax.
+pub(super) fn outside_code_spans(text: &str) -> impl Iterator<Item = &str> {
+    let mut rest = text;
+    std::iter::from_fn(move || {
+        if rest.is_empty() {
+            return None;
+        }
+        let at = rest.find('`').unwrap_or(rest.len());
+        let (part, span) = rest.split_at(at);
+        rest = &span[code_span_len(span)..];
+        Some(part)
+    })
 }
 
 /// When `after` (the text following a `[`) starts a rustdoc link, what
@@ -198,12 +214,12 @@ fn rustdoc_link(after: &str) -> Option<(Cow<'_, str>, &str)> {
     })
 }
 
-/// Whether `label` can be a link's text. A `[` left open earlier is not this
-/// link's: the scan moves on to the one just before the `]`. Inside a code
-/// span a `[` is code (``[`a[`]``). A label that spans a line is left as
-/// written (see [`spans_a_line`]).
+/// Whether `label` can be a link's text. A `[` outside the label's code spans
+/// is one left open earlier, not this link's: the scan moves on to the one
+/// just before the `]`. Inside a code span a `[` is code (``[a `[` b](c)``).
+/// A label that spans a line is left as written (see [`spans_a_line`]).
 fn can_be_link_text(label: &str) -> bool {
-    (!label.contains('[') || is_code_span(label)) && !spans_a_line(label)
+    !outside_code_spans(label).any(|part| part.contains('[')) && !spans_a_line(label)
 }
 
 /// An inline link, `inline` being the text after its `(`: shown as its label
@@ -230,9 +246,12 @@ fn inline_link<'a>(label: &'a str, inline: &'a str) -> Option<(Cow<'a, str>, &'a
 /// one, so the rewrite leaves such a link as written; the guard reads each
 /// description with its line endings as spaces, and flags any link the
 /// rewrite would then change.
-fn spans_a_line(text: &str) -> bool {
-    text.contains(['\n', '\r'])
+pub(super) fn spans_a_line(text: &str) -> bool {
+    text.contains(LINE_ENDINGS)
 }
+
+/// What ends a line in Markdown: a line feed or a carriage return.
+pub(super) const LINE_ENDINGS: [char; 2] = ['\n', '\r'];
 
 /// A code link, ``[`code`]``: shown as its code span when the code is one
 /// word, without its disambiguator.
@@ -240,7 +259,7 @@ fn code_link<'a>(label: &'a str, tail: &'a str) -> Option<(Cow<'a, str>, &'a str
     // rustdoc trims the link text, then the path after a disambiguator.
     let code = label[1..label.len() - 1].trim();
     let word = without_disambiguator(code).map_or(code, str::trim);
-    if !is_one_word(word) {
+    if !is_one_word(word) || !rustdoc_resolves(word) {
         return None;
     }
     let shown = if word.len() + 2 == label.len() {
@@ -249,6 +268,18 @@ fn code_link<'a>(label: &'a str, tail: &'a str) -> Option<(Cow<'a, str>, &'a str
         Cow::Owned(format!("`{word}`"))
     };
     Some((shown, tail))
+}
+
+/// Whether rustdoc tries to resolve `word` as a path: past a call suffix such
+/// as `()`, only letters, digits and ``:_<>, !*&;``. rustdoc leaves any other
+/// link as written, brackets and all (``[`a[`]``, ``[`a.b`]``).
+fn rustdoc_resolves(word: &str) -> bool {
+    let path = CALL_SUFFIXES
+        .iter()
+        .find_map(|suffix| word.strip_suffix(suffix))
+        .unwrap_or(word);
+    path.chars()
+        .all(|c| c.is_alphanumeric() || ":_<>, !*&;".contains(c))
 }
 
 /// A single inline code span — the label of a rustdoc code link.
