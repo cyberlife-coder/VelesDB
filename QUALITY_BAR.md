@@ -4,7 +4,7 @@ This document specifies the **explicit, enforceable thresholds** below which Vel
 
 These gates are not aspirational. They are enforced via CI workflows, scripts, and explicit pre-merge protocols. Each gate listed here links to its enforcement mechanism so that the gate can be inspected, contested, or extended publicly.
 
-> **Last updated:** 2026-08-08 — applies to v4.x (workspace 4.3.0).
+> **Last updated:** 2026-09-10 — applies to v6.x (workspace 6.0.0).
 
 ---
 
@@ -53,14 +53,14 @@ A pull request that breaks any of these gates **cannot be merged**. There are no
 
   | Mode | ef_search (base, current code) | Recall@10 (measured) |
   |------|-------------------------------|---------------------|
-  | Fast | 96 (`max(96, k×3)`) | 92.2%* |
-  | Balanced (default) | 160 (`max(160, k×5)`) | 98.8%* |
+  | Fast | 96 (`max(96, k×3)`) | 97.4% |
+  | Balanced (default) | 160 (`max(160, k×5)`) | 99.8% |
   | Accurate | 512 (`max(512, k×16)`) | 100.0% |
 
-  Source: `benchmarks/results/2026-02-20-phase-e-report.md`; base values from
-  `SearchQuality::ef_search` (`crates/velesdb-core/src/index/hnsw/params.rs`).
-  \* measured at the former Fast=64 / Balanced=128 settings — the current
-  higher bases can only match or improve those figures.
+  Source: `recall_benchmark`'s recall report (10K random 128-D vectors, an
+  index built with `HnswParams::max_recall`), re-measured 2026-09-10 on 6.0.0
+  at the current bases, which come from `SearchQuality::ef_search`
+  (`crates/velesdb-core/src/index/hnsw/params.rs`).
 
 **When this triggers:** any change to `index/hnsw/`, `simd_native/`, `quantization/`, `fusion/`, or result-conversion code in Python bindings.
 

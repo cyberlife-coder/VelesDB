@@ -1,6 +1,6 @@
 # VelesQL Ecosystem Parity Matrix
 
-Last updated: 2026-09-03 (v6.0.0; velesdb-memory 0.14.2)
+Last updated: 2026-09-10 (v6.0.0; velesdb-memory 0.14.2)
 
 This matrix tracks runtime contract and feature parity across the VelesDB ecosystem.
 
@@ -196,7 +196,7 @@ All 4 strategies (`RRF`, `Weighted`, `Maximum`, `RSF`) plus `Average` are suppor
 
 ### SearchQuality — 9/10
 
-4 HNSW presets (`Fast`, `Balanced`, `Accurate`, `Perfect`) plus `Custom(usize)` and `Adaptive`. WASM uses brute-force search (no HNSW), so `SearchQuality` is not applicable there; Mobile and Tauri are HNSW-backed via core defaults and expose the presets (`crates/velesdb-mobile/src/types.rs` `SearchQuality`, `crates/tauri-plugin-velesdb/src/helpers.rs` `parse_search_quality`).
+3 HNSW presets (`Fast`, `Balanced`, `Accurate`); `Perfect`, an exhaustive scan that leaves the graph and is capped by `limits.max_perfect_mode_vectors`; plus `Custom(usize)`, `Adaptive` and `AutoTune`. WASM uses brute-force search (no HNSW), so `SearchQuality` is not applicable there; Mobile and Tauri are HNSW-backed via core defaults and expose the presets (`crates/velesdb-mobile/src/types.rs` `SearchQuality`, `crates/tauri-plugin-velesdb/src/helpers.rs` `parse_search_quality`).
 
 | Component | Status | Notes |
 |-----------|--------|-------|

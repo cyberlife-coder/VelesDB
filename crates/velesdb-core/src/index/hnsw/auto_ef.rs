@@ -1,9 +1,9 @@
 //! Auto-tuned `ef_search` range based on collection statistics.
 //!
-//! Computes optimal min/max `ef_search` values for adaptive search
+//! Computes the min/max `ef_search` values for adaptive search
 //! by considering the collection size, vector dimension, and desired k.
 
-/// Computes optimal `ef_search` range from collection statistics.
+/// Computes an `ef_search` range from collection statistics.
 ///
 /// Returns `(min_ef, max_ef)` for use with [`SearchQuality::Adaptive`].
 ///
@@ -15,8 +15,8 @@
 ///   neighborhoods, requiring more candidates for the same recall.
 /// - **`min_ef`** is clamped to at least `k` (never fewer candidates than
 ///   requested results).
-/// - **`max_ef`** is set to `4 * min_ef`, giving the adaptive second phase
-///   ample headroom for hard queries.
+/// - **`max_ef`** is set to `4 * min_ef`, a cap the second phase stays
+///   under: it doubles `min_ef` once.
 ///
 /// [`SearchQuality::Adaptive`]: super::params::SearchQuality::Adaptive
 #[must_use]

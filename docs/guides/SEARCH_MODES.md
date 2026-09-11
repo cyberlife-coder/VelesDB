@@ -1,6 +1,6 @@
 # 🎯 Search Modes - Recall Configuration Guide
 
-*Version 6.0.0 -- Last updated: 2026-08-08*
+*Version 6.0.0 -- Last updated: 2026-09-10*
 
 Complete guide to the **recall vs latency** trade-off in VelesDB: what the search modes mean and when to pick which. Covers dense search (HNSW), sparse search (SPLADE/BM42), and hybrid search (dense+sparse with fusion). Includes a comparison with Milvus, OpenSearch, and Qdrant practices.
 
@@ -50,22 +50,19 @@ Recall@10 = (Number of true top-10 neighbors found) / 10 × 100%
                     Latency
                         ↑
                         │
-          Fast ●────────┤  lowest latency, smallest candidate pool
-                        │
-      Adaptive ●╌╌╌╌╌╌╌┤  varies with query difficulty (auto-escalation)
+          Fast ●────────┤  lowest latency of the fixed presets
                         │
       Balanced ●────────┤  the production default
                         │
       Accurate ●────────┤  near-exhaustive recall
                         │
-       Perfect ●────────┤  exhaustive candidate pool
+       Perfect ●────────┤  exhaustive scan, off the graph
                         │
         ────────────────┴────────────────→ Recall
 ```
 
-> The **Adaptive** mode is shown with a dashed line because its latency varies with query difficulty.
-> For easy queries (~80% of typical traffic), it is close to Fast.
-> For hard queries, it automatically escalates toward Balanced/Accurate.
+> **Adaptive** is not on the chart: its cost varies with query difficulty (an easy query stops after
+> its first phase, a hard one searches once more at a wider ef), and no recorded run measures it (#2266).
 
 ---
 
@@ -79,7 +76,7 @@ formulas and expected recall per preset live in the
 ### 1. Fast — Minimal latency
 
 Prioritizes latency over the last few points of recall: the graph traversal
-keeps the smallest candidate pool of the named presets.
+keeps the smallest candidate pool of the fixed presets.
 
 **Use cases:**
 - Real-time autocomplete
@@ -130,10 +127,12 @@ collection.search_with_ef(&query, 10, 512)?;
 
 ---
 
-### 4. Perfect — Guaranteed 100% recall
+### 4. Perfect — Exhaustive scan
 
-Runs the HNSW graph with a candidate pool sized far beyond `k` — exhaustive in
-practice — so that all true neighbors are found.
+Scores every stored vector — no graph traversal — so it returns the exact
+top-k under the index's own distance, ties aside, at O(n) cost. A collection
+larger than `limits.max_perfect_mode_vectors` (default 500 000) refuses it
+with `Error::GuardRail` instead of scanning.
 
 **Use cases:**
 - Validating/benchmarking HNSW recall
@@ -141,30 +140,46 @@ practice — so that all true neighbors are found.
 - Small critical datasets (< 50K vectors)
 
 ```rust
-// Explicit ef_search override for an exhaustive candidate pool
-collection.search_with_ef(&query, 10, 4096)?;
+use velesdb_core::SearchQuality;
+
+collection.search_with_quality(&query, 10, SearchQuality::Perfect)?;
 ```
 
-> **Note**: `SearchQuality::Perfect` still uses the HNSW graph, but with a
-> candidate pool large enough to guarantee 100% recall in practice. The
-> collection-level `SearchMode::Perfect` is a different axis: it switches the
-> **engine** to an exhaustive bruteforce scan instead of the graph. See
+> **Note**: `SearchQuality::Perfect` does **not** use the HNSW graph: it
+> scores every stored vector, so it returns the exact top-k under the
+> index's own distance, ties aside — not necessarily 1.0 against an external
+> ground truth — at O(n) cost. A collection larger than
+> `limits.max_perfect_mode_vectors` (default 500 000) refuses it with
+> `Error::GuardRail` rather than scanning. Set as the global `[search]`
+> default, `perfect` is applied as `accurate`, with a warning — one search
+> path cannot enforce the cap. For a very wide candidate pool that stays on
+> the graph, pass an explicit `ef_search` instead —
+> `collection.search_with_ef(&query, 10, 4096)?`. See
 > [Tuning Guide — SearchMode](TUNING_GUIDE.md#searchmode-collection-level).
 
 ---
 
-### 5. Adaptive — Adaptive optimal latency
+### 5. Adaptive — escalates only hard queries
 
-Starts with a small candidate pool and escalates only when the result set looks
-"hard", so easy queries pay Fast-class latency while hard queries keep
-Balanced/Accurate-class recall.
+Starts with a small candidate pool and escalates once, only when the result set
+looks "hard". No recorded run measures its latency or recall yet (#2266).
 
 **Two-phase operation:**
 
-1. Fast search with `min_ef` (e.g. 32)
-2. Analyze the **spread** of the results: `(max_distance - min_distance) / min_distance`
-3. If spread > 2.0 (scattered results = hard query) → re-search with doubled ef
-4. If spread ≤ 2.0 (dense cluster = easy query) → return the results immediately
+1. Search at `max(min_ef, k)` (e.g. 32)
+2. Analyze the **spread** of the results: the first-to-last score gap over a baseline, the lower score's distance from the metric's floor on Cosine and Jaccard, the smaller absolute score on Euclidean, Hamming and DotProduct (`(max_distance - min_distance) / min_distance` for a distance)
+3. If spread ≥ 2.0 (scattered results = hard query) → search once more at twice the ef, capped at `max_ef`, when that exceeds the first ef: resuming the first traversal on the Standard backend's CPU path, restarting on the GPU, RaBitQ and SQ8 paths
+4. Otherwise (dense cluster = easy query) → return the results immediately
+
+#### When the two phases run
+
+Adaptive and AutoTune run their two phases only inside `HnswIndex::search_with_quality`, for a search that reaches it with one of those qualities; there, an index of 100 vectors or fewer with exact-distance features on is scanned exactly instead. A search that does not reach it runs one pass (a bitmap pass can retry once at twice the ef, capped at 10,000), scans exactly, or does not apply the mode.
+
+- The Rust API reaches it through `Collection::search_with_quality`.
+- REST reaches it for a dense-only, non-batch search given a `mode` and neither a filter nor `ef_search`. With a filter the mode is not applied (#457), and `ef_search` wins over it.
+- VelesQL reaches it for a `NEAR` with no other `WHERE` condition, given a mode with `WITH (mode = ...)`, unless the query also sets `rerank = false`, which runs one pass. With other conditions it depends on their shape: text, sparse, fused and graph-anchored searches do not apply the mode, and a filter whose bitmap is at most 80% the size of the HNSW index (the bitmap also counts points not yet indexed) skips the second phase or scans exactly (#2268).
+
+Where a single graph pass runs, Adaptive uses `max(min_ef, k)` and AutoTune Balanced's `max(160, k*5)`, k being the count the index receives, each scaled by the index size.
 
 **Use cases:**
 - Mixed workloads where most queries are easy
@@ -174,7 +189,7 @@ Balanced/Accurate-class recall.
 ```rust
 use velesdb_core::SearchQuality;
 
-// Adaptive ef between 32 (easy queries) and 512 (hard queries)
+// Starts at ef 32; a hard query continues at 64 (twice 32, under the 512 cap)
 let quality = SearchQuality::Adaptive { min_ef: 32, max_ef: 512 };
 let results = index.search_with_quality(&query, 10, quality);
 ```
@@ -182,20 +197,23 @@ let results = index.search_with_quality(&query, 10, quality);
 ```sql
 -- In VelesQL
 SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
-WITH (mode = 'adaptive');
+WITH (mode = 'adaptive:32:512');
 ```
 
-**Measured impact**: 2-4x reduction in median latency compared to Balanced mode, with no regression on P99 recall.
+The mode needs both bounds: a bare `'adaptive'` is not parsed, and today the query then runs at the collection's default mode without an error (#2267).
+
+**Impact**: easy queries stop after the first phase, so the median query costs less than with a fixed high `ef_search`; no recorded run measures the gain, or its recall, yet (#2266).
 
 ---
 
 ### 6. AutoTune — Size-aware automatic tuning
 
 `SearchQuality::AutoTune` derives an ef range from the collection's size and
-vector dimension, then runs the same two-phase search as Adaptive. Recommended
-when you want good recall with no manual ef tuning — start with it and only
-switch to `Custom(ef)` or `Adaptive` if you need to squeeze out the last
-microseconds. The scaling tiers and the dimension factor are documented in the
+vector dimension, then runs the same two-phase search as Adaptive. It saves
+picking an ef by hand; no recorded run measures its latency or recall yet
+(#2266), and some search paths run it in one pass, scan exactly or ignore
+the mode (see [When the two phases run](#when-the-two-phases-run)).
+The scaling tiers and the dimension factor are documented in the
 [Tuning Guide — AutoTune Mode](TUNING_GUIDE.md#autotune-mode-v172).
 
 ```rust
@@ -443,7 +461,7 @@ USING FUSION(strategy = 'rsf', dense_weight = 0.7, sparse_weight = 0.3)
 | Aspect | VelesDB | Milvus |
 |--------|---------|--------|
 | **Presets** | 4 named modes (Fast→Perfect) + Custom | No presets, manual `search_params` |
-| **100% recall** | `SearchQuality::Perfect` (exhaustive HNSW) | Separate `FLAT` index |
+| **Exact search** | `SearchQuality::Perfect` (exhaustive scan) | Separate `FLAT` index |
 | **Main parameter** | `SearchQuality` enum | `params={"ef": N}` |
 | **Auto-tuning** | ✅ Dimension-based | ❌ Manual |
 
@@ -461,7 +479,7 @@ SearchQuality::Balanced
 | Aspect | VelesDB | OpenSearch k-NN |
 |--------|---------|-----------------|
 | **Presets** | 4 modes + Custom | No presets |
-| **100% recall** | Perfect mode (exhaustive HNSW) | `"method": "exact"` in mapping |
+| **Exact search** | Perfect mode (exhaustive scan) | `"method": "exact"` in mapping |
 | **Parameter** | `SearchQuality` | `ef_search` in query |
 | **Approach** | Query-time | Query-time or index-time |
 
@@ -489,7 +507,7 @@ SearchQuality::Accurate
 | Aspect | VelesDB | Qdrant |
 |--------|---------|--------|
 | **Presets** | 4 modes + Custom | No official presets |
-| **100% recall** | Perfect mode (exhaustive HNSW) | `exact: true` in search |
+| **Exact search** | Perfect mode (exhaustive scan) | `exact: true` in search |
 | **Parameter** | `SearchQuality` | `hnsw_ef` in search params |
 | **Quantization** | SQ8, Binary | Scalar, Product |
 
@@ -523,7 +541,7 @@ The preset `ef_search` values are listed in the
 ### 🤖 RAG / Chatbot
 
 ```rust
-// Recommended production configuration (optimal latency)
+// Mixed workloads: escalates only hard queries
 SearchQuality::Adaptive { min_ef: 32, max_ef: 512 }  // escalates only on hard queries
 
 // Fixed alternative for constant recall
@@ -540,7 +558,7 @@ SearchQuality::Accurate
 SearchQuality::Fast
 
 // Product pages (mixed easy/hard)
-SearchQuality::Adaptive { min_ef: 32, max_ef: 256 }  // fast on simple queries
+SearchQuality::Adaptive { min_ef: 32, max_ef: 256 }  // escalates only hard queries
 
 // Product page (precision matters)
 SearchQuality::Balanced
@@ -563,7 +581,7 @@ SearchQuality::Accurate  // or Perfect for small corpora
 SearchQuality::Accurate
 
 // Final validation
-SearchQuality::Perfect  // guaranteed 100% recall
+SearchQuality::Perfect  // exact top-k: an exhaustive scan
 ```
 
 ### 📱 Mobile / Edge / IoT
@@ -604,7 +622,7 @@ let results = collection.search_with_ef(&query_vector, 10, 1024)?;
 // Method 3: Low-latency ef_search override
 let results = collection.search_with_ef(&query_vector, 10, 96)?;
 
-// Method 4: Exhaustive candidate pool (Perfect-class recall)
+// Method 4: A very wide candidate pool — near-exhaustive recall, still on the graph
 let results = collection.search_with_ef(&query_vector, 10, 4096)?;
 ```
 
@@ -651,11 +669,11 @@ WHERE vector NEAR $query
 LIMIT 10
 WITH (mode = 'accurate');
 
--- Adaptive mode (optimal latency for mixed workloads)
+-- Adaptive mode (mixed workloads: escalates only hard queries)
 SELECT * FROM my_collection
 WHERE vector NEAR $query
 LIMIT 10
-WITH (mode = 'adaptive');
+WITH (mode = 'adaptive:32:512');
 
 -- Custom ef_search
 SELECT * FROM my_collection
@@ -695,36 +713,24 @@ velesdb> SELECT * FROM products WHERE vector NEAR $v LIMIT 10;
 
 ## Benchmarks
 
-> Historical measurements. The `ef_search` column records what each preset
-> resolved to at measurement time; the current preset defaults live in the
-> [Tuning Guide — SearchQuality](TUNING_GUIDE.md#searchquality-hnsw-level).
+Recall@10 at the current presets, from `cargo bench -p velesdb-core --bench
+recall_benchmark`: 10K random 128-D vectors, Cosine, an index built with
+`HnswParams::max_recall`, 100 queries, k=10, measured 2026-09-10 on 6.0.0
+([BENCHMARKS.md](../BENCHMARKS.md#hnsw-recall-profiles-10k128d)).
 
-### Test conditions
+| Mode | ef_search | Recall@10 |
+|------|-----------|-----------|
+| Fast | 96 | 97.4% |
+| Balanced | 160 | 99.8% |
+| Accurate | 512 | 100.0% |
+| Perfect | exhaustive | 100.0% |
 
-- **CPU**: AMD Ryzen 9 5900X (12 cores)
-- **RAM**: 64 GB DDR4
-- **Dataset**: 100K vectors, 768 dimensions (OpenAI embeddings)
-- **Metric**: Cosine similarity
+At 1M points (SIFT1M), `Accurate` reads 0.98 and `Perfect`, the exhaustive
+scan, 0.9994 against the dataset's ground truth. Latency depends on the
+machine and the dimension; [BENCHMARKS.md](../BENCHMARKS.md) records each
+figure with the hardware it came from.
 
-### Results
-
-| Mode | ef_search | Recall@10 | p50 latency | p99 latency | QPS |
-|------|-----------|-----------|-------------|-------------|-----|
-| Fast | 96 | ~95% | 0.8 ms | 1.5 ms | 12,500 |
-| Balanced | 160 | ~99.5% | 1.9 ms | 3.2 ms | 5,200 |
-| Accurate | 512 | ~99.5% | 4.1 ms | 6.8 ms | 2,400 |
-| Perfect | 4096 | 100.0% | 14.2 ms | 22.1 ms | 700 |
-
-### Scaling with dataset size
-
-| Dataset Size | Balanced Latency | Perfect Latency | Ratio |
-|--------------|------------------|-----------------|-------|
-| 10K | 0.4 ms | 5 ms | 12x |
-| 100K | 1.9 ms | 48 ms | 25x |
-| 500K | 3.2 ms | 240 ms | 75x |
-| 1M | 4.8 ms | 480 ms | 100x |
-
-> **Observation**: The Fast, Balanced, and Accurate modes scale in O(log n) thanks to HNSW. Perfect mode also uses HNSW but with a very large candidate pool, which increases latency. For very large datasets, Accurate offers an excellent recall/latency trade-off.
+> **Observation**: The Fast, Balanced, and Accurate modes scale in O(log n) thanks to HNSW. Perfect leaves the graph for an exhaustive scan, O(n): its latency grows with the collection, which is why it is refused above `limits.max_perfect_mode_vectors`. For very large datasets, Accurate offers an excellent recall/latency trade-off.
 
 ---
 
@@ -734,9 +740,9 @@ velesdb> SELECT * FROM products WHERE vector NEAR $v LIMIT 10;
 
 **A:** `Balanced` (default) fits 95% of RAG cases. If you have legal/medical requirements, use `Accurate`.
 
-### Q: Is Perfect mode really 100% recall?
+### Q: Does Perfect mode return every true neighbour?
 
-**A:** Yes, guaranteed in practice. `SearchQuality::Perfect` uses HNSW with an exhaustive candidate pool sized far beyond `k` (the formula is in the [Tuning Guide](TUNING_GUIDE.md#searchquality-hnsw-level)), which forces the graph to explore enough nodes to find all true neighbors. The collection-level `SearchMode::Perfect` goes further and switches to a bruteforce scan.
+**A:** It returns the exact top-k under the index's own distance, ties aside. `SearchQuality::Perfect` does not use the graph: it scores every vector — at O(n) cost, which is why a collection refuses it above `limits.max_perfect_mode_vectors` (500 000 by default). As the global `[search] default_mode`, `perfect` is applied as `accurate`, with a warning. Against an external ground truth it can still read below 1.0 — SIFT1M's 0.9994 in `BENCHMARKS.md` is this scan's.
 
 ### Q: Can I use Perfect in production?
 
@@ -752,7 +758,7 @@ velesdb> SELECT * FROM products WHERE vector NEAR $v LIMIT 10;
 ```rust
 // Benchmark recall
 let ann_results = collection.search(&query, 10)?;           // default mode (Balanced)
-let exact_results = collection.search_with_ef(&query, 10, 4096)?; // exhaustive pool (100% recall)
+let exact_results = collection.search_with_quality(&query, 10, SearchQuality::Perfect)?; // exhaustive scan
 
 let recall = calculate_recall(&ann_results, &exact_results);
 println!("Recall@10: {:.1}%", recall * 100.0);
@@ -760,7 +766,7 @@ println!("Recall@10: {:.1}%", recall * 100.0);
 
 ### Q: Can ef_search exceed the number of vectors?
 
-**A:** Yes, but beyond a certain threshold, the recall gain is negligible while latency increases significantly. Perfect mode is already calibrated to guarantee 100% recall.
+**A:** Yes, but beyond a certain threshold, the recall gain is negligible while latency increases significantly. Perfect is not an ef value: it leaves the graph for an exhaustive scan.
 
 ### Q: Milvus uses `ef` and VelesDB uses `ef_search` — are they the same thing?
 

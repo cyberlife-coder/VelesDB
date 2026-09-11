@@ -473,7 +473,7 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if the underlying HNSW vacuum fails (for
-    /// instance, when vector storage is disabled on the index).
+    /// instance, when the index's exact-distance features are off).
     pub(crate) fn vacuum_hnsw_index(&self) -> Result<usize> {
         self.storage
             .index

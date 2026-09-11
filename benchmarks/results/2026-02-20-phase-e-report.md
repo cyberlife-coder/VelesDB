@@ -22,6 +22,14 @@ From `recall_benchmark` summary:
 - Accurate (`ef=256`): `100.0%`
 - Perfect (`ef=2048`): `100.0%`
 
+> Erratum (#2250): the `ef=` labels above are hard-coded in
+> `recall_benchmark`'s output, not read from the engine. At k=10, `Fast` and
+> `Balanced` ran at the efforts shown; `Accurate` ran at `ef=512`, raised from
+> 256 on 2026-01-09 (9c222258); and `Perfect` ran through
+> `search_with_quality`, which scans exhaustively, so its figure is a full
+> scan's. No path ran `Perfect` at `ef=2048` on this report's date: the batch
+> path, which searched the graph until #358 (2026-03-22), used 4096 by then.
+
 Status: recall objectives are met for the reference quality profile.
 
 ### Latency observations (current host run)

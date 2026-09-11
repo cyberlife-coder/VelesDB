@@ -13,13 +13,16 @@ import requests
 from typing import List, Optional, Dict
 import psycopg2
 
-# VelesDB Quality Modes (ef_search values matching SearchQuality enum)
+# VelesDB quality modes, requested by NAME through the REST `mode` field so the
+# values cannot drift from the engine's presets: a hard-coded ef table here had
+# gone stale (64/128/256 against today's 96/160/512). Perfect is an exhaustive
+# scan with no ef at all; HighRecall has no preset, so it keeps an explicit ef.
 QUALITY_MODES = {
-    "Fast": 64,
-    "Balanced": 128,
-    "Accurate": 256,
-    "HighRecall": 1024,   # Increased from 512 for ≥95% recall
-    "Perfect": 2048,      # Brute-force SIMD for 100% recall
+    "Fast": {"mode": "fast"},
+    "Balanced": {"mode": "balanced"},
+    "Accurate": {"mode": "accurate"},
+    "HighRecall": {"ef_search": 1024},
+    "Perfect": {"mode": "perfect"},
 }
 
 
@@ -61,8 +64,8 @@ def compute_recall(truth: List[int], predicted: List[int]) -> float:
 
 
 def test_velesdb_mode(data: np.ndarray, queries: np.ndarray, ground_truth: List[List[int]],
-                      dim: int, top_k: int, ef_search: int, mode_name: str) -> Optional[Dict]:
-    """Test VelesDB with specific ef_search value."""
+                      dim: int, top_k: int, search_params: Dict, mode_name: str) -> Optional[Dict]:
+    """Test VelesDB with one mode's search parameters."""
     base_url = "http://localhost:8080"
     collection_name = f"bench_mode_{mode_name.lower()}"
     
@@ -93,7 +96,12 @@ def test_velesdb_mode(data: np.ndarray, queries: np.ndarray, ground_truth: List[
             points = [{"id": i, "vector": data[i].tolist()} for i in range(batch_start, batch_end)]
             resp = session.post(f"{base_url}/collections/{collection_name}/points", json={"points": points})
             if resp.status_code not in [200, 201]:
-                print(f"    Insert error: {resp.text}")
+                # A refused batch leaves a partial collection; scoring it
+                # against the full dataset's ground truth would publish a
+                # recall the engine never had.
+                print(f"  [{mode_name}] insert refused ({resp.status_code}): {resp.text[:200]}")
+                session.delete(f"{base_url}/collections/{collection_name}")
+                return None
         insert_time = time.time() - start
         
         # Warmup
@@ -101,7 +109,7 @@ def test_velesdb_mode(data: np.ndarray, queries: np.ndarray, ground_truth: List[
             session.post(f"{base_url}/collections/{collection_name}/search", json={
                 "vector": queries[0].tolist(),
                 "top_k": top_k,
-                "ef_search": ef_search
+                **search_params
             })
         
         # Search
@@ -113,24 +121,27 @@ def test_velesdb_mode(data: np.ndarray, queries: np.ndarray, ground_truth: List[
             resp = session.post(f"{base_url}/collections/{collection_name}/search", json={
                 "vector": q.tolist(),
                 "top_k": top_k,
-                "ef_search": ef_search
+                **search_params
             })
             latencies.append(time.time() - start)
             
-            if resp.status_code == 200:
-                results = resp.json()
-                pred_ids = [r["id"] for r in results.get("results", results)]
-                recall = compute_recall(ground_truth[i], pred_ids)
-                recalls.append(recall)
-            else:
-                recalls.append(0)
+            if resp.status_code != 200:
+                # A refused search never ran. Perfect past the collection's
+                # max_perfect_mode_vectors is refused, and counting that as
+                # recall 0 would publish a refusal as a Perfect result.
+                print(f"  [{mode_name}] search refused ({resp.status_code}): {resp.text[:200]}")
+                session.delete(f"{base_url}/collections/{collection_name}")
+                return None
+            results = resp.json()
+            pred_ids = [r["id"] for r in results.get("results", results)]
+            recalls.append(compute_recall(ground_truth[i], pred_ids))
         
         # Cleanup
         session.delete(f"{base_url}/collections/{collection_name}")
         
         return {
             "mode": mode_name,
-            "ef_search": ef_search,
+            "search": search_params,
             "recall": np.mean(recalls) * 100,
             "latency_p50_ms": np.percentile(latencies, 50) * 1000,
             "latency_p99_ms": np.percentile(latencies, 99) * 1000,
@@ -255,9 +266,9 @@ def main():
     
     # Test all VelesDB modes
     print("Testing VelesDB modes...")
-    for mode_name, ef_search in QUALITY_MODES.items():
-        print(f"  Testing {mode_name} (ef_search={ef_search})...")
-        result = test_velesdb_mode(data, queries, ground_truth, args.dim, 10, ef_search, mode_name)
+    for mode_name, search_params in QUALITY_MODES.items():
+        print(f"  Testing {mode_name} ({search_params})...")
+        result = test_velesdb_mode(data, queries, ground_truth, args.dim, 10, search_params, mode_name)
         if result:
             results.append(result)
             print(f"    Recall: {result['recall']:.1f}%, Latency P50: {result['latency_p50_ms']:.1f}ms")
@@ -273,12 +284,12 @@ def main():
     print("\n" + "=" * 70)
     print("RESULTS SUMMARY")
     print("=" * 70)
-    print(f"{'Mode':<12} {'ef_search':<10} {'Recall@10':<12} {'P50 (ms)':<12} {'P99 (ms)':<12}")
+    print(f"{'Mode':<12} {'Search':<16} {'Recall@10':<12} {'P50 (ms)':<12} {'P99 (ms)':<12}")
     print("-" * 70)
     
     for r in results:
-        ef = r.get('ef_search', 'N/A')
-        print(f"{r['mode']:<12} {str(ef):<10} {r['recall']:>8.1f}%    {r['latency_p50_ms']:>8.1f}     {r['latency_p99_ms']:>8.1f}")
+        search = ", ".join(f"{k}={v}" for k, v in r.get('search', {}).items()) or 'N/A'
+        print(f"{r['mode']:<12} {search:<16} {r['recall']:>8.1f}%    {r['latency_p50_ms']:>8.1f}     {r['latency_p99_ms']:>8.1f}")
     
     print("-" * 70)
     

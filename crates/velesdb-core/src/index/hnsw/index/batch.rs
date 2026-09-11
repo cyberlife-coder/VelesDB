@@ -91,10 +91,11 @@ impl HnswIndex {
 
     /// Performs batch search for multiple queries in parallel.
     ///
-    /// When quality requires two-stage reranking and vector storage is enabled,
-    /// the method first runs HNSW search for all queries (rayon), then reranks
-    /// each query's candidates using GPU or SIMD as appropriate. Otherwise,
-    /// falls back to HNSW-only search.
+    /// `Perfect`, `Adaptive`, `AutoTune`, and an index of at most 100 vectors whose graph holds at
+    /// least one slot and whose exact-distance features are on, run [`Self::search_with_quality`]
+    /// per query. Otherwise, when the quality calls for two-stage reranking and the index's
+    /// exact-distance features are on, the method runs HNSW search for all queries (rayon), then
+    /// reranks each query's candidates on GPU or SIMD; failing that, it runs HNSW-only search.
     ///
     /// # Arguments
     ///
@@ -126,7 +127,8 @@ impl HnswIndex {
 
         // Perfect, Adaptive, AutoTune, or very small collections: delegate to
         // search_with_quality per-query to match single-query behavior.
-        // - Perfect: uses brute-force for 100% recall
+        // - Perfect: brute force (the exact top-k) unless exact-distance
+        //   features are off
         // - Adaptive: uses spread-based two-phase escalation (not batch-compatible)
         // - AutoTune: computes auto-ef range per dataset/dim/k (issue #699 follow-up)
         // - Small (<=100): uses brute-force for fully-connected graph safety
@@ -229,7 +231,8 @@ impl HnswIndex {
     ///
     /// # Performance
     ///
-    /// - **Recall**: 100% (exact)
+    /// - **Result**: the exact top-k under the index's own distance, ties aside;
+    ///   nothing when the index's exact-distance features are off
     /// - **Latency**: O(n/cores) on CPU, O(n/GPU-threads) on GPU
     /// - **GPU threshold**: 100K vectors (below this, rayon is faster)
     ///
@@ -260,7 +263,7 @@ impl HnswIndex {
     /// Delegates to `search_brute_force_gpu_inner` without the 100K threshold
     /// gate, so tests can exercise the GPU path with smaller datasets.
     ///
-    /// Returns `None` if GPU is unavailable.
+    /// Returns `None` in every case `search_brute_force_gpu_inner` lists.
     #[cfg(all(test, feature = "gpu"))]
     #[must_use]
     pub(crate) fn brute_force_search_gpu_dispatch(
