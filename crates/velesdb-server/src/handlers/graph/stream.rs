@@ -51,7 +51,7 @@ const STATS_INTERVAL: usize = 100;
 /// - `stats`: `nodes_visited` and `elapsed_ms`, after every 100th `node` event
 /// - `done`: `total_nodes`, `max_depth_reached` and `elapsed_ms`, last
 /// - `error`: sent alone instead, when the collection is missing or is not a
-///   graph collection, or the traversal worker fails
+///   graph collection
 #[utoipa::path(
     get,
     path = "/collections/{name}/graph/traverse/stream",
