@@ -53,24 +53,30 @@ pub enum ConfigError {
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum SearchMode {
-    /// Fast search with `ef_search=96`, ~95% recall.
+    /// Fast search with `ef_search=96`: 97.4% recall@10 in `recall_benchmark`
+    /// (10K random 128-D points).
     Fast,
-    /// Balanced search with `ef_search=160`, ~99.5% recall (default).
+    /// Balanced search with `ef_search=160`: 99.8% recall@10 in
+    /// `recall_benchmark` (default).
     #[default]
     Balanced,
-    /// Accurate search with `ef_search=512`, ~100% recall.
+    /// Accurate search with `ef_search=512`: 100% recall@10 in
+    /// `recall_benchmark`, 0.98 on SIFT1M's 1M (`docs/BENCHMARKS.md`).
     Accurate,
-    /// Perfect recall via **exhaustive bruteforce** (`ef_search = usize::MAX`
-    /// signals a full scan): every vector is scored, no HNSW graph traversal, so
-    /// recall is 100% by construction at O(n) cost.
+    /// The engine's highest-recall mode, and the one value of this enum that no
+    /// `ef_search` number can express.
     ///
-    /// Distinct from `SearchQuality::Perfect`
-    /// (`crate::index::hnsw::SearchQuality`) despite the shared name:
-    /// `SearchMode` picks the **engine** (bruteforce here vs. the HNSW graph),
-    /// whereas `SearchQuality::Perfect` stays *on* the graph with a very high
-    /// `ef_search` (`4096.max(k*100)`) — ~1.0 recall up to ~100K, ~0.9994 at 1M,
-    /// at graph cost rather than a full scan. Pick `SearchMode::Perfect` only
-    /// when an exact guarantee is worth the linear scan.
+    /// Per query it maps, through `SearchMode::quality()`, to
+    /// `SearchQuality::Perfect`: an exhaustive scan that leaves the graph,
+    /// the exact top-k, ties aside, at O(n) cost, refused on a collection larger
+    /// than `limits.max_perfect_mode_vectors`. As a GLOBAL default in `[search]`
+    /// it is applied as `accurate`, with a warning at load, because one search
+    /// path cannot enforce that cap.
+    ///
+    /// This doc said the opposite until #2246 — that `SearchQuality::Perfect`
+    /// "stays on the graph" at `ef_search = 4096`. `try_search_special_quality`
+    /// routes it to `search_brute_force`. #2239 corrected that claim in
+    /// `params.rs` and missed this copy of it.
     Perfect,
 }
 
@@ -684,8 +690,9 @@ impl VelesConfig {
     /// Returns the effective `ef_search` value.
     #[deprecated(
         since = "5.2.0",
-        note = "never read by the engine — [search] is not applied (issue #2087); \
-                query-time WITH (ef_search = N) is the working override"
+        note = "the engine resolves [search] through SearchConfig::resolved_quality \
+                since #2087, not through this; it returns usize::MAX for Perfect, \
+                a value nothing reads as a signal (#2238)"
     )]
     #[must_use]
     pub fn effective_ef_search(&self) -> usize {

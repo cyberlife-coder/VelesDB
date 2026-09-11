@@ -161,7 +161,9 @@ fn test_search_quality_ef_search() {
 
 #[test]
 fn test_search_quality_perfect_ef_search() {
-    // Perfect mode uses 4096 base (was 2048), scales with k * 100 for 100K+ scale
+    // `ef_search()` still returns this for Perfect, but it is not what Perfect
+    // runs at: `try_search_special_quality` brute-forces the variant before
+    // `ef_search` is read (#2238). Pinned because `ef_search()` is public API.
     assert_eq!(SearchQuality::Perfect.ef_search(10), 4096); // max(4096, 10*100=1000)
     assert_eq!(SearchQuality::Perfect.ef_search(50), 5000); // max(4096, 50*100=5000)
     assert_eq!(SearchQuality::Perfect.ef_search(100), 10000); // max(4096, 100*100=10000)

@@ -6,10 +6,16 @@
 //! # Quality Profiles
 //!
 //! The index supports different quality profiles for search:
-//! - `Fast`: `ef_search=96`, ~95% recall, lowest latency
-//! - `Balanced`: `ef_search=160`, ~99.5% recall, good tradeoff (default)
-//! - `Accurate`: `ef_search=512`, ~100% recall, high precision
-//! - `Perfect`: `ef_search=4096`, 100% recall, maximum accuracy
+//! - `Fast`: `ef_search=96`, 97.4% recall@10 in `recall_benchmark` (10K
+//!   random 128-D points), lowest latency
+//! - `Balanced`: `ef_search=160`, 99.8% recall@10 there, good tradeoff
+//!   (default)
+//! - `Accurate`: `ef_search=512`, 100% recall@10 there and 0.98 on SIFT1M's
+//!   1M (`docs/BENCHMARKS.md`), high precision
+//! - `Perfect`: an exhaustive scan that leaves the graph, returning the
+//!   exact top-k under the index's own distance, ties aside, at O(n). This
+//!   type does not cap it; a collection refuses it above
+//!   `limits.max_perfect_mode_vectors`
 //!
 //! # Recommended Parameters by Vector Dimension
 //!
@@ -87,13 +93,19 @@ pub struct HnswIndex {
     pub(crate) inner: RwLock<ManuallyDrop<HnswInner>>,
     /// ID mappings (external ID <-> internal index) - lock-free via `DashMap` (EPIC-A.1)
     pub(crate) mappings: ShardedMappings,
-    /// Whether exact-distance features (SIMD re-ranking, brute-force search,
-    /// vacuum) are enabled.
+    /// Whether exact-distance features are enabled: the automatic two-stage
+    /// re-rank (`search_with_quality`, `search_batch_parallel`), the exact
+    /// scan those two run for `Perfect` and on an index of at most 100
+    /// vectors, `search_brute_force`, `brute_force_search_parallel`, the GPU
+    /// scans and vacuum. With it off, `search_with_rerank*` still re-rank
+    /// (`search_with_rerank` then takes the caller's `rerank_k` candidates
+    /// rather than the pool the index sizes), and `full_scan_with_bitmap`
+    /// scans regardless.
     ///
     /// Vectors always live once, in the graph's `ContiguousVectors` (the
     /// former `ShardedVectors` sidecar was removed — PERF1). This flag is
     /// kept as a feature gate so fast-insert indices preserve their
-    /// historical behavior (no brute-force / rerank / vacuum).
+    /// historical behavior (none of the features above).
     ///
     /// Default: `true` (full functionality)
     pub(crate) enable_vector_storage: bool,

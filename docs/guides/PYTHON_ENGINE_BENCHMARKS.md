@@ -22,7 +22,7 @@ VelesDB is built in Rust with explicit SIMD optimizations:
 |-----------|--------|
 | **HNSW Search index-only (10K/768D)** | **~55 µs** (k=10, Balanced mode) |
 | **End-to-end p50 (10K/384D, WAL ON)** | **~450 µs** (canonical, recall ≥ 96%) |
-| **Recall@10 (Accurate)** | **100%** |
+| **Recall@10 (Accurate)** | **100%** (10K/128D, `recall_benchmark`) |
 | **Insert throughput vs pgvector** | **3.8-7x faster** (10K-100K vectors, internal benchmarks on i9-14900KF, not independently verified) |
 
 > Numbers match `docs/reference/promise-contract.json` (the single source
@@ -33,4 +33,4 @@ VelesDB is built in Rust with explicit SIMD optimizations:
 
 ---
 
-Last updated: 2026-07-25 · Applies to: velesdb-core 6.0.0
+Last updated: 2026-09-10 · Applies to: velesdb-core 6.0.0

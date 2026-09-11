@@ -41,7 +41,7 @@ These are aligned with the canonical numbers in the repository root README.
 | HNSW search, index only | **55 µs** (k=10, Balanced mode) |
 | VelesQL cache hit | **1.08 µs** (~926K QPS) |
 | Sparse search, index only (top-10) | **57.6 µs** (v1.13.0, PR #621 — 16x faster than v1.12) |
-| Recall@10 (Accurate mode) | **100%** |
+| Recall@10 (Accurate mode) | **100%** (10K/128D, `recall_benchmark`) |
 
 ## Key performance characteristics
 
@@ -59,11 +59,16 @@ These are aligned with the canonical numbers in the repository root README.
 
 | Config | Mode | `ef_search` | Recall@10 | Latency p50 | Status |
 |--------|------|-------------|-----------|-------------|--------|
-| 10K/128D | Balanced | 128 | **98.8%** | 57 µs | ✅ |
-| 10K/128D | Accurate | 512 | **99.9%** | 130 µs | ✅ |
-| 10K/128D | Perfect | 4096 | **100%** | 200 µs | ✅ |
-| 10K/128D | Adaptive | 32–512 | **95%+** | ~40 µs (easy queries) | ✅ |
+| 10K/128D | Balanced | 160 | **99.8%** | 57 µs | ✅ |
+| 10K/128D | Accurate | 512 | **100.0%** | 130 µs | ✅ |
+| 10K/128D | Perfect | exhaustive | **100%** | 200 µs | ✅ |
+| 10K/128D | Adaptive | 32, then 64 if hard | — | — | not measured |
 
+> Recall re-measured 2026-09-10 on 6.0.0 at the current presets
+> (`recall_benchmark`, an index built with `HnswParams::max_recall`); the
+> latencies date from March 2026, when Balanced ran at ef 128. No recorded run
+> measures the Adaptive row (#2266).
+>
 > Latency p50 = median over 100 queries. The 55 µs index-only micro-benchmark
 > is for 10K/768D in Balanced mode — higher dimensions use SIMD more
 > efficiently, so the 128D rows above are a worst case for recall measurement.
@@ -74,9 +79,9 @@ These are aligned with the canonical numbers in the repository root README.
 - **Native HNSW with explicit SIMD**: AVX-512 and AVX2 on x86_64 (runtime
   feature detection in `simd_dispatch.rs`), NEON on aarch64, scalar fallback
   everywhere else.
-- **Adaptive search**: a two-phase `ef_search` that auto-escalates only for
-  hard queries, ~2–4x faster on the median query than a fixed high
-  `ef_search`.
+- **Adaptive search**: a two-phase `ef_search` that escalates only for hard
+  queries, so easy ones stop at a low `ef_search` (the gain is not measured
+  yet, #2266).
 - **Bulk insert**: turbo/fast batch modes, parallel HNSW indexing, graduated
   `ef_construction` (VAMANA 3-phase), and lock-free entry-point reads (a
   small lock serializes its rare promotions).
@@ -116,4 +121,4 @@ It also downloads a ~168 MB tarball on first run.
 
 ---
 
-Last updated: 2026-07-25 · Applies to: velesdb-core 6.0.0
+Last updated: 2026-09-10 · Applies to: velesdb-core 6.0.0

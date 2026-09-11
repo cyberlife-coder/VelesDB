@@ -467,7 +467,7 @@ impl NativeHnswInner {
     /// Paths with no CPU-side state to resume return `None` and keep their
     /// pre-change escalation behavior (restart):
     /// - GPU layer-0 traversal (state lives on the device);
-    /// - the `RaBitQ` backend (its binary-quantized search loop owns no
+    /// - the `RaBitQ` and `Sq8` backends (their quantized search loops own no
     ///   [`ResumableSearch`]).
     #[must_use]
     pub fn search_resumable(

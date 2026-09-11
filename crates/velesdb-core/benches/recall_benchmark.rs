@@ -9,7 +9,8 @@
 //! Run with: `cargo bench --bench recall_benchmark`
 //!
 //! This benchmark measures the **quality** of search results, not just speed.
-//! For exact brute-force search, recall should be 100%.
+//! For the exhaustive scan (`Perfect`), results match the brute-force ground
+//! truth, distance ties aside.
 //! For HNSW approximate search, recall depends on the quality profile.
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
@@ -195,14 +196,16 @@ fn print_recall_stats(c: &mut Criterion) {
         .map(|q| brute_force_knn(q, &dataset, k, DistanceMetric::Cosine))
         .collect();
 
+    let qualities = [
+        ("Fast", SearchQuality::Fast),
+        ("Balanced", SearchQuality::Balanced),
+        ("Accurate", SearchQuality::Accurate),
+        ("Perfect", SearchQuality::Perfect),
+    ];
+
     // Compute stats once before benchmark for display
     let mut final_recalls = Vec::new();
-    for quality in [
-        SearchQuality::Fast,
-        SearchQuality::Balanced,
-        SearchQuality::Accurate,
-        SearchQuality::Perfect,
-    ] {
+    for (_, quality) in qualities {
         let mut total_recall = 0.0;
         for (query, ground_truth) in queries.iter().zip(&ground_truths) {
             let results = index.search_with_quality(query, k, quality).unwrap();
@@ -215,23 +218,25 @@ fn print_recall_stats(c: &mut Criterion) {
     }
 
     // Print stats once (before benchmark)
-    println!("\n=== Recall@{k} Statistics (n={n}, dim={dim}, M=32, ef_c=500) ===");
-    println!("Fast (ef=96):        {:.1}%", final_recalls[0] * 100.0);
-    println!("Balanced (ef=160):   {:.1}%", final_recalls[1] * 100.0);
-    println!("Accurate (ef=512):   {:.1}%", final_recalls[2] * 100.0);
-    println!("Perfect (ef=4096):   {:.1}%", final_recalls[3] * 100.0);
+    println!(
+        "\n=== Recall@{k} Statistics (n={n}, dim={dim}, M={}, ef_c={}) ===",
+        params.max_connections, params.ef_construction
+    );
+    for ((name, quality), recall) in qualities.into_iter().zip(&final_recalls) {
+        let ef = if matches!(quality, SearchQuality::Perfect) {
+            "exhaustive".to_string()
+        } else {
+            format!("ef={}", quality.ef_search_for_scale(k, n))
+        };
+        println!("{name} ({ef}): {:.1}%", recall * 100.0);
+    }
 
     // Benchmark the computation (no print inside)
     group.bench_function("compute_recall_stats", |b| {
         b.iter(|| {
-            let mut recalls = Vec::with_capacity(4);
+            let mut recalls = Vec::with_capacity(qualities.len());
 
-            for quality in [
-                SearchQuality::Fast,
-                SearchQuality::Balanced,
-                SearchQuality::Accurate,
-                SearchQuality::Perfect,
-            ] {
+            for (_, quality) in qualities {
                 let mut total_recall = 0.0;
 
                 for (query, ground_truth) in queries.iter().zip(&ground_truths) {
