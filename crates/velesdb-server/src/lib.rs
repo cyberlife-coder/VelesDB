@@ -51,7 +51,6 @@ pub mod auth;
 pub mod config;
 mod handlers;
 pub mod onboarding;
-mod openapi_rustdoc_links;
 pub mod rate_limit;
 pub mod routes;
 mod security_addon;
@@ -297,7 +296,7 @@ impl ApiDoc {
         {
             doc = doc.merge_from(MetricsApiDoc::openapi());
         }
-        openapi_rustdoc_links::unlink(doc)
+        doc
     }
 }
 

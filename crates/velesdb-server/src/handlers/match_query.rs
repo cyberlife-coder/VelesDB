@@ -98,7 +98,7 @@ pub struct MatchQueryMeta {
 /// - `404 NOT_FOUND` (`VELES-002`) — collection not found
 /// - `400 BAD_REQUEST` (`VELES-010`) — parse error, not a MATCH query,
 ///   invalid threshold, or an unbound query parameter
-/// - other core variants map per [`super::helpers::http_status_for_error`]
+/// - any other core variant maps to the status every endpoint returns for it
 #[utoipa::path(
     post,
     path = "/collections/{name}/match",

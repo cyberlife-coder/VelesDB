@@ -48,7 +48,7 @@ const STATS_INTERVAL: usize = 100;
 ///
 /// Yields events:
 /// - `node`: Each node reached during traversal
-/// - `stats`: Periodic statistics (every [`STATS_INTERVAL`] nodes)
+/// - `stats`: Periodic statistics while the traversal runs
 /// - `done`: Traversal completed
 /// - `error`: If an error occurs
 #[utoipa::path(

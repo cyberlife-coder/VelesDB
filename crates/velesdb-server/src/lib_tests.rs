@@ -1,4 +1,5 @@
 use super::*;
+use serde_json::Value;
 
 #[test]
 fn test_openapi_spec_generation() {
@@ -189,17 +190,166 @@ fn test_openapi_pretty_json() {
     );
 }
 
-/// Regression guard for #2263: the published document must never carry
-/// rustdoc's shortcut link syntax in a description, whatever doc comment a
-/// future change adds to an OpenAPI-exposed type.
+/// Regression guard for #2263. utoipa copies doc comments into the document
+/// as they are written, and only rustdoc resolves an intra-doc link: a
+/// client, or an SDK generated from the document, shows `` [`Point`] `` as
+/// literal brackets. The doc comment of an item the document exposes names it
+/// with a code span instead, and this test fails on any link syntax left in a
+/// published description.
 #[test]
 fn test_openapi_descriptions_carry_no_rustdoc_link() {
-    let openapi = ApiDoc::openapi();
-    let json = openapi.to_json().expect("Failed to serialize OpenAPI spec");
+    let doc = serde_json::to_value(ApiDoc::openapi()).expect("test: the document serializes");
+    let mut linked = Vec::new();
+    collect_rustdoc_links(&doc, "", &mut linked);
     assert!(
-        !json.contains("[`"),
-        "a description still carries rustdoc's shortcut link syntax \
-         ([`Item`]) instead of what openapi_rustdoc_links::unlink rewrote it to"
+        linked.is_empty(),
+        "rustdoc link syntax published at {linked:?}: name the item with a code span in its \
+         doc comment instead"
+    );
+}
+
+/// Collects the JSON pointer of every `description` or `summary` string in
+/// `value` that holds rustdoc link syntax ([`holds_rustdoc_link`]).
+fn collect_rustdoc_links(value: &Value, pointer: &str, linked: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map {
+                let at = format!("{pointer}/{}", key.replace('~', "~0").replace('/', "~1"));
+                match child {
+                    Value::String(text) if matches!(key.as_str(), "description" | "summary") => {
+                        if holds_rustdoc_link(text) {
+                            linked.push(at);
+                        }
+                    }
+                    _ => collect_rustdoc_links(child, &at, linked),
+                }
+            }
+        }
+        Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                collect_rustdoc_links(item, &format!("{pointer}/{index}"), linked);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Whether `text` holds rustdoc link syntax: a `[` that opens on a code span
+/// (`` [`Point`] ``), a bracketed path (`[crate::Point]`, `[fn@f]`, `[a#b]`,
+/// `[Vec<T>]`, `[f()]`, `[m!]`), a reference-style link (`[x][y]`, `[x][]`),
+/// a reference definition, or an inline link to anything but a URL.
+///
+/// It reads the raw text, code spans and code blocks included, so no Markdown
+/// construct can hide a link from it. The price is that a description cannot
+/// show link syntax even as code, nor give a web link code text. A bare
+/// `[Point]` passes: it reads the same as `[sic]`.
+fn holds_rustdoc_link(text: &str) -> bool {
+    text.contains("][")
+        || text
+            .lines()
+            .any(|line| line.trim_start().starts_with('[') && line.contains("]:"))
+        || text
+            .match_indices("](")
+            .any(|(at, _)| !is_url(target_start(&text[at + 2..])))
+        || text.match_indices('[').any(|(at, _)| {
+            let after = &text[at + 1..];
+            after.trim_start().starts_with('`') || brackets_a_path(after)
+        })
+}
+
+/// Whether the label `after` starts, up to its `]`, names a path: it holds
+/// `::`, `@`, `#` or `<`, or ends in `()` or `!`. A `(` after the `]` makes it
+/// the text of an inline link instead, which [`holds_rustdoc_link`] reads by
+/// its target.
+fn brackets_a_path(after: &str) -> bool {
+    after.split_once(']').is_some_and(|(label, rest)| {
+        !rest.starts_with('(')
+            && (label.contains("::")
+                || label.contains(['@', '#', '<'])
+                || label.ends_with("()")
+                || label.ends_with('!'))
+    })
+}
+
+/// `raw` past any whitespace or `<`, where a link target starts.
+fn target_start(raw: &str) -> &str {
+    let target = raw.trim_start();
+    target.strip_prefix('<').map_or(target, str::trim_start)
+}
+
+/// Whether a link target is a URL or a fragment of the page.
+fn is_url(target: &str) -> bool {
+    ["http://", "https://", "mailto:", "#"]
+        .iter()
+        .any(|prefix| target.starts_with(prefix))
+}
+
+#[test]
+fn the_rustdoc_link_guard_flags_each_link_form() {
+    for text in [
+        "a JSON-encoded [`Point`].",
+        "a JSON-encoded [ `Point` ].",
+        "see [`Point`](https://docs.rs/velesdb-core).",
+        "see [crate::Point].",
+        "see [Vec<u8, A>::new].",
+        "see [Vec<u8>].",
+        "see [stream_traverse()].",
+        "see [vec!].",
+        "see [fn@stream_traverse].",
+        "see [Point#fields].",
+        "see [the point][Point].",
+        "see [Point][].",
+        "[p]: crate::Point",
+        "  [p]: crate::Point",
+        "see [the point](crate::Point).",
+        "see [the point](< crate::Point >).",
+        "the syntax `[x](crate::y)` is code.",
+    ] {
+        assert!(holds_rustdoc_link(text), "{text}");
+    }
+}
+
+#[test]
+fn the_rustdoc_link_guard_leaves_web_links_and_brackets() {
+    for text in [
+        "see [the guide](https://velesdb.com/docs).",
+        "see [crate::Point](https://docs.rs/velesdb-core).",
+        "see [the guide](<https://velesdb.com/docs>).",
+        "see [the guide](< https://velesdb.com/docs >).",
+        "jump to [the top](#top).",
+        "a bare [Point] reads like [sic].",
+        "`Collection::delete(&[u64])` in one call.",
+        "```json\n{\"v\": [0.1, 0.2, 0.3]}\n```",
+        "MATCH (a:Person)-[:KNOWS]->(b)",
+    ] {
+        assert!(!holds_rustdoc_link(text), "{text}");
+    }
+}
+
+#[test]
+fn the_rustdoc_link_guard_reads_every_description_and_summary() {
+    let doc = serde_json::json!({
+        "info": { "title": "[`Title`]", "description": "plain" },
+        "tags": [{ "name": "t", "description": "[`Tag`]" }],
+        "paths": { "/x": { "get": {
+            "summary": "[`Summary`]",
+            "responses": { "200": { "description": "[`Response`]" } }
+        } } },
+        "components": { "schemas": { "S": { "properties": {
+            "description": { "type": "string", "description": "[`Property`]" }
+        } } } }
+    });
+    let mut linked = Vec::new();
+    collect_rustdoc_links(&doc, "", &mut linked);
+    linked.sort();
+    assert_eq!(
+        linked,
+        [
+            "/components/schemas/S/properties/description/description",
+            "/paths/~1x/get/responses/200/description",
+            "/paths/~1x/get/summary",
+            "/tags/0/description",
+        ]
     );
 }
 

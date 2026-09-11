@@ -831,7 +831,7 @@ paths:
       description: |-
         Yields events:
         - `node`: Each node reached during traversal
-        - `stats`: Periodic statistics (every `STATS_INTERVAL` nodes)
+        - `stats`: Periodic statistics while the traversal runs
         - `done`: Traversal completed
         - `error`: If an error occurs
       operationId: stream_traverse
@@ -1094,7 +1094,7 @@ paths:
         - `404 NOT_FOUND` (`VELES-002`) — collection not found
         - `400 BAD_REQUEST` (`VELES-010`) — parse error, not a MATCH query,
           invalid threshold, or an unbound query parameter
-        - other core variants map per `super::helpers::http_status_for_error`
+        - any other core variant maps to the status every endpoint returns for it
       operationId: match_query
       parameters:
       - name: name
@@ -1324,7 +1324,7 @@ paths:
       - points
       summary: Stream upsert points using NDJSON.
       description: |-
-        Accepts a `application/x-ndjson` body. Each line is a JSON-encoded `Point`.
+        Accepts a `application/x-ndjson` body. Each line is one JSON-encoded point.
         Points are accumulated into micro-batches and flushed via `upsert_bulk`.
 
         The response body includes a `network_errors` field: a non-zero value means
@@ -2234,7 +2234,8 @@ components:
         `VectorFirst` undercounts via its `limit(1)` existence-BFS frontier and
         `Parallel` double-counts a node touched by both legs. The
         `traversal_counters_approximate` flag exposes this honesty contract in a
-        machine-readable form (backlog #26), mirroring `NodeStatsResponse::estimated`.
+        machine-readable form (backlog #26), mirroring the `estimated` flag of
+        `NodeStatsResponse`.
       required:
       - actual_rows
       - actual_time_ms

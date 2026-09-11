@@ -118,7 +118,7 @@ async fn flush_point_batch_with_delta(
 
 /// Stream upsert points using NDJSON.
 ///
-/// Accepts a `application/x-ndjson` body. Each line is a JSON-encoded [`Point`].
+/// Accepts a `application/x-ndjson` body. Each line is one JSON-encoded point.
 /// Points are accumulated into micro-batches and flushed via `upsert_bulk`.
 ///
 /// The response body includes a `network_errors` field: a non-zero value means
