@@ -725,15 +725,15 @@ impl StorageOptions {
     }
 }
 
+#[allow(
+    deprecated,
+    reason = "maps the deprecated storage fields both ways until removal"
+)]
 impl StorageOptions {
     pub(crate) fn to_core(&self) -> CoreStorageConfig {
         let mut cfg = CoreStorageConfig::default();
-        if let Some(ref data_dir) = self.data_dir {
-            cfg.data_dir.clone_from(data_dir);
-        }
-        if let Some(ref storage_mode) = self.storage_mode {
-            cfg.storage_mode.clone_from(storage_mode);
-        }
+        cfg.data_dir = self.data_dir.clone().unwrap_or(cfg.data_dir);
+        cfg.storage_mode = self.storage_mode.clone().unwrap_or(cfg.storage_mode);
         cfg.mmap_cache_mb = self.mmap_cache_mb.unwrap_or(cfg.mmap_cache_mb);
         cfg.vector_alignment = self.vector_alignment.unwrap_or(cfg.vector_alignment);
         cfg

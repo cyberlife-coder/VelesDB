@@ -566,7 +566,7 @@ for neighbor in neighbors {
 
 5. **Enlarged crash recovery window during batch upsert**:
    - The 3-phase upsert pipeline (`batch_store_all` -> `per_point_updates` -> `bulk_index_or_defer`) writes vectors and payloads to storage before inserting into the HNSW graph. A crash between Phase 1 and Phase 3 leaves vectors in storage but missing from the HNSW index.
-   - Mitigation: On `Collection::open()`, gap detection compares `storage.ids()` against `index.mappings` and re-indexes any missing vectors. See [HNSW Crash Recovery](#hnsw-crash-recovery) for the full recovery architecture and [SOUNDNESS.md](SOUNDNESS.md#hnsw-batch-insertion-ordering) for batch insertion ordering invariants.
+   - Mitigation: On `Collection::open()`, gap detection compares `storage.ids()` against `index.mappings` and re-indexes any missing vectors. See [HNSW Crash Recovery](#hnsw-crash-recovery) for the full recovery architecture and [SOUNDNESS.md](SOUNDNESS.md#hnsw-slot-allocation) for the slot allocation invariants.
 
 ## Best Practices
 
@@ -642,26 +642,39 @@ ensure no data is lost.
 ### Recovery Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
+┌────────────────────────────────────────────────────────────────────────┐
 │                        Collection::open()                              │
+│                                                                        │
+│  0. load_config() — config.json                                        │
 │                                                                        │
 │  1. MmapStorage::new()                                                 │
 │     ├─ Load vectors.idx (ID → offset mapping)                          │
 │     ├─ Replay vectors.wal → restore writes since last flush_index()    │
-│     ├─ Record WAL-touched ids (drained by step 4, pass 3)              │
+│     ├─ Record WAL-touched ids (drained by step 7, pass 3)              │
 │     └─ Truncate WAL after successful replay                            │
 │                                                                        │
-│  2. load_or_create_hnsw()                                              │
+│  2. LogPayloadStorage::new()                                           │
+│     └─ Load payloads.snapshot, replay payloads.log past it             │
+│                                                                        │
+│  3. load_or_create_hnsw()                                              │
+│     ├─ sweep_stale_arenas(): drop orphan arena files, before any load  │
 │     ├─ Gate: native_meta.bin present? (commit point, written LAST)     │
-│     ├─ Load native_hnsw.graph/.vectors/.gen + native_mappings.bin —   │
+│     ├─ Load native_hnsw.graph/.vectors/.gen + native_mappings.bin —    │
 │     │  all generation-stamped (#617); a legacy native_vectors.bin      │
 │     │  is generation-checked then discarded (PERF1)                    │
 │     └─ Load failure or config mismatch → empty index (rebuild below)   │
 │                                                                        │
-│  3. reconcile_point_count()                                            │
+│  4. load_bm25_index()                                                  │
+│     └─ bm25.snapshot + bm25.wal replay; payload rebuild if no snapshot │
+│                                                                        │
+│  5. Property index, label index (rebuilt from payloads), range index,  │
+│     edge_store.bin, named sparse indexes                               │
+│     └─ each sparse snapshot, then its WAL replayed over it             │
+│                                                                        │
+│  6. reconcile_point_count()                                            │
 │     └─ Set config.point_count = storage.len() (authoritative source)   │
 │                                                                        │
-│  4. recover_index_state() — 3-pass reconciliation                      │
+│  7. recover_index_state() — reconciliation passes                      │
 │     ├─ Pass 1 (gap): recover_hnsw_gap                                  │
 │     │  ├─ Early exit: if storage.len() == hnsw.len() → no gap          │
 │     │  ├─ find_gap_ids: storage.ids() \ index.mappings                 │
@@ -670,9 +683,19 @@ ensure no data is lost.
 │     ├─ Pass 2 (orphans): ids in index.mappings \ storage → remove      │
 │     ├─ Pass 3 (stale): WAL-touched ids on both sides — re-upsert when  │
 │     │  the indexed vector ≠ storage (storage is the source of truth)   │
-│     └─ Any pass mutated the index → index.save() before open returns  │
+│     ├─ Pass 4 (unlinked): mapped ids whose node has no layer-0 link    │
+│     │  (entry point exempt) — re-upsert onto a fresh, linked node      │
+│     └─ Any pass mutated the index → index.save() before open returns   │
 │        (the WAL was truncated; the delta has no other witness)         │
-└─────────────────────────────────────────────────────────────────────────┘
+│                                                                        │
+│  8. restore_auto_reindex_from_config(),                                │
+│     restore_secondary_indexes_from_config()                            │
+│                                                                        │
+│  9. run_post_open_hooks()                                              │
+│     ├─ reindex edge properties from edge_store.bin                     │
+│     ├─ replay edges.wal over edge_store.bin                            │
+│     └─ restore_persisted_quantizers(): trained quantizer artifacts     │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Layer 1: Vector Storage WAL Replay
@@ -705,14 +728,14 @@ This layer recovers vectors that were written to the WAL but not yet
 persisted to `vectors.idx` (the index file is only written by
 `flush_index()` or `flush_full()`, not by the fast `flush()` path).
 
-### Layer 2: HNSW 3-Pass Reconciliation
+### Layer 2: HNSW Reconciliation Passes
 
 **Module**: `crates/velesdb-core/src/collection/core/recovery.rs`
 
 After storage is fully reconstructed (Layer 1) and the persisted HNSW
 index is loaded (or an empty one built when the load fails),
-`Collection::open()` calls `run_crash_recovery()`, which runs three
-passes against the storage state:
+`Collection::open()` calls `run_crash_recovery()`, which runs the passes
+below against the storage state, in order:
 
 **Pass 1 — gap** (`recover_hnsw_gap`):
 
@@ -747,6 +770,15 @@ last HNSW save). An index loaded without sidecar vector storage cannot
 be compared — when WAL-touched ids overlap its mappings it is replaced
 by an empty index and fully rebuilt by pass 1
 (`rebuild_if_unverifiable`).
+
+**Pass 4 — unlinked** (`relink_unlinked_ids`): a mapping is not proof of
+graph membership. `upsert_bulk`'s V2 path places each vector, maps its id
+to the slot it got, and leaves the graph insert to the `AsyncIndexBuilder`, so
+a save that races it persists mappings for nodes nothing links to (#2246).
+Every mapped id whose node has an empty layer-0 list — the entry point
+excepted, since a graph's first node has nothing to link to — is
+re-upserted onto a fresh, linked node, and its old slot is left behind as
+a tombstone.
 
 When any pass mutated the index, `Collection::open()` re-saves it
 before returning: the vector WAL was truncated during replay, so
@@ -853,7 +885,7 @@ never read or wrote it.
 **Why it was not wired, and was removed instead of activated:**
 
 - **Dead-in-core infrastructure.** Core recovery correctness is already
-  fully provided by the 3-pass reconciliation
+  fully provided by the reconciliation passes
   (`collection/core/recovery.rs`) against **storage as the single source of
   truth**. The delta WAL added nothing to correctness; the persisted graph
   load plus reconciliation is sufficient.
@@ -982,10 +1014,11 @@ LOOM_MAX_PREEMPTIONS=2 cargo test -p velesdb-core --features loom,persistence --
 cargo test --test stress_concurrency_tests -- --test-threads=1
 ```
 
-### HNSW Batch Insertion Ordering
+### HNSW Slot Allocation
 
-For soundness analysis of the batch insertion pipeline and its ordering
-invariants, see [SOUNDNESS.md: HNSW Batch Insertion Ordering](SOUNDNESS.md#hnsw-batch-insertion-ordering).
+For how an insert gets its slot — one allocator, the arena, with the mapping
+following it under the index read guard — see
+[SOUNDNESS.md: HNSW Slot Allocation](SOUNDNESS.md#hnsw-slot-allocation).
 
 ## References
 

@@ -23,7 +23,11 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             // Through `new_arena`, not `ContiguousVectors::new`: a graph whose
             // arena belongs on disk must get a mapped one here too, or the
             // lazy path would silently hand back a heap arena (#2112).
-            *guard = Some(Self::new_arena(self.arena_home.as_ref(), vector.len(), 16)?);
+            *guard = Some(Self::new_arena(
+                self.arena_home.as_ref(),
+                vector.len(),
+                ContiguousVectors::MIN_ARENA_CAPACITY,
+            )?);
         }
         let storage = guard.as_mut().ok_or_else(|| {
             crate::error::Error::Internal("Vector storage missing after init".to_string())
@@ -109,9 +113,9 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         self.count.fetch_add(1, Ordering::Relaxed);
 
         // Invalidate GPU caches — topology and vectors both changed.
-        // `vectors.write()` is already released at this point (the caller
-        // chain `allocate_and_store_vector → with_vectors_write` drops it
-        // before returning), so the `gpu_vectors_snapshot` acquisition
+        // `vectors.write()` is already released at this point
+        // (`allocate_and_store_vector` drops its own write guard before
+        // returning), so the `gpu_vectors_snapshot` acquisition
         // inside the helper does not nest inside the vectors lock and
         // respects the declared order
         // (`GpuVectorsSnapshot` rank 5 → `Vectors` rank 10).
@@ -252,7 +256,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             *guard = Some(Self::new_arena(
                 self.arena_home.as_ref(),
                 dimension,
-                batch_size.max(16),
+                batch_size,
             )?);
         }
         let storage = guard.as_mut().ok_or_else(|| {
@@ -285,11 +289,38 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         let storage = guard.as_mut().ok_or_else(|| {
             crate::error::Error::Internal("Vector storage missing after reserve".to_string())
         })?;
+        self.push_stored_form(storage, vectors)
+    }
+
+    /// Pushes `vectors` into the arena without linking them into the graph,
+    /// and returns the first slot: the direct writer's placement, whose graph
+    /// insert is deferred. Each vector is stored as [`Self::allocate_batch`]
+    /// stores it, under one write lock.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the arena is not initialized or cannot grow.
+    pub(in crate::index::hnsw) fn push_unlinked(
+        &self,
+        vectors: &[&[f32]],
+    ) -> crate::error::Result<NodeId> {
+        self.with_vectors_write(|storage| self.push_stored_form(storage, vectors))
+    }
+
+    /// Appends `vectors` to `storage` in the form this arena stores, and
+    /// returns the first slot: unit-norm when [`Self::stores_unit_norm`], as
+    /// given otherwise. The graph's batch insert and the direct writer both
+    /// push through here, so neither leaves a raw slot in an arena whose
+    /// `.vectors` declares unit-norm (#2246). The caller holds the vectors
+    /// write lock across the call.
+    fn push_stored_form(
+        &self,
+        storage: &mut ContiguousVectors,
+        vectors: &[&[f32]],
+    ) -> crate::error::Result<NodeId> {
         let first = storage.len();
         storage.push_batch(vectors)?;
-        if self.distance.is_pre_normalized()
-            && self.distance.metric() == crate::DistanceMetric::Cosine
-        {
+        if self.stores_unit_norm() {
             for i in first..storage.len() {
                 // `i` is in `first..storage.len()`, i.e. a slot we just pushed,
                 // so `get_mut` is always `Some`. Assert it: a `None` here would

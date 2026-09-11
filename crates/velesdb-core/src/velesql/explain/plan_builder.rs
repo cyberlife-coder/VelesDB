@@ -473,7 +473,7 @@ impl QueryPlan {
 
     /// Renders a non-composite condition as a short human-readable string for
     /// the EXPLAIN plan filter list. Returns `None` for vector/composite
-    /// variants — those are handled in [`analyze_condition`] itself.
+    /// variants — those are handled in [`Self::analyze_condition`] itself.
     fn describe_leaf_condition(condition: &Condition) -> Option<String> {
         let desc = match condition {
             Condition::Comparison(cmp) => {

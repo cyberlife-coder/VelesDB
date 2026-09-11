@@ -31,7 +31,7 @@ pub(crate) struct MediaAnalysis {
 
 /// Decode and analyze one fragment's media payload.
 ///
-/// Called only after [`validate_media`] has already confirmed `bytes_b64` is
+/// Called only after [`validate_media`](super::validate_media) has already confirmed `bytes_b64` is
 /// well-formed and within [`crate::limits::MAX_MEDIA_BYTES`] for every
 /// fragment in the request (so each payload is decoded twice — once to
 /// validate, once here; bounded by

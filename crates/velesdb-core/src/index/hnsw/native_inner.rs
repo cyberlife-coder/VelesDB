@@ -432,8 +432,11 @@ impl NativeHnswInner {
     // `#[cfg(feature = "gpu")]`, so with the feature off nothing in the
     // signature is read -- neither the parameters nor the receiver. The
     // receiver's allow was missing, which made
-    // `cargo clippy -p velesdb-core --lib --features persistence` fail on a
-    // clean tree: CI lints one feature set, and it always includes `gpu`.
+    // `cargo clippy -p velesdb-core --lib --features persistence -- -D warnings
+    // -D clippy::pedantic` fail on a clean tree. The workspace allows
+    // `unused_self`, but a `-D clippy::pedantic` on the command line overrides
+    // it, so the attribute is what that strict form needs; CI never sees the
+    // gap because it lints one feature set, and that set always has `gpu`.
     #[allow(unused_variables)] // Reason: parameters unused when `gpu` is off
     #[allow(clippy::unused_self)] // Reason: receiver unused when `gpu` is off
     fn try_gpu_route(
@@ -552,28 +555,20 @@ impl NativeHnswInner {
 // ============================================================================
 
 impl NativeHnswInner {
-    /// Inserts a single vector into the HNSW graph.
-    ///
-    /// The caller supplies `(vector, expected_idx)` where `expected_idx` is the
-    /// internal index pre-registered in `ShardedMappings`.
+    /// Inserts a single vector into the HNSW graph and returns the slot it was
+    /// given. The caller maps its id to that slot (`ShardedMappings::assign`);
+    /// no slot is predicted beforehand, so none can be handed to two ids
+    /// (#2246).
     ///
     /// # Errors
     ///
-    /// Returns an error if allocation, insertion, or ID-mapping consistency fails.
-    pub fn insert(&self, data: (&[f32], usize)) -> crate::error::Result<usize> {
-        let (vector, expected_idx) = data;
-        let assigned_id = match &self.backend {
-            HnswBackend::Standard(hnsw) => hnsw.insert(vector)?,
-            HnswBackend::RaBitQ(rabitq) => rabitq.insert(vector)?,
-            HnswBackend::Sq8(sq8) => sq8.insert(vector)?,
-        };
-        if assigned_id != expected_idx {
-            tracing::warn!(
-                "NativeHnsw node_id mismatch: expected {expected_idx}, got {assigned_id} \
-                 — mapping may be desynchronised under concurrent inserts"
-            );
+    /// Returns an error if allocation or insertion fails.
+    pub fn insert(&self, vector: &[f32]) -> crate::error::Result<usize> {
+        match &self.backend {
+            HnswBackend::Standard(hnsw) => hnsw.insert(vector),
+            HnswBackend::RaBitQ(rabitq) => rabitq.insert(vector),
+            HnswBackend::Sq8(sq8) => sq8.insert(vector),
         }
-        Ok(assigned_id)
     }
 
     /// Parallel batch insert into the HNSW graph.
@@ -581,15 +576,15 @@ impl NativeHnswInner {
     /// # Errors
     ///
     /// Returns an error if any insertion fails.
-    pub fn parallel_insert(&self, data: &[(&[f32], usize)]) -> crate::error::Result<Vec<usize>> {
+    pub fn parallel_insert(&self, vectors: &[&[f32]]) -> crate::error::Result<Vec<usize>> {
         match &self.backend {
-            HnswBackend::Standard(hnsw) => hnsw.parallel_insert(data),
+            HnswBackend::Standard(hnsw) => hnsw.place_batch(vectors),
             // Quantized backends: insert sequentially so the positional code
             // store stays consistent with NodeId assignment order.
             HnswBackend::RaBitQ(_) | HnswBackend::Sq8(_) => {
-                let mut ids = Vec::with_capacity(data.len());
-                for &(vector, expected_idx) in data {
-                    ids.push(self.insert((vector, expected_idx))?);
+                let mut ids = Vec::with_capacity(vectors.len());
+                for vector in vectors {
+                    ids.push(self.insert(vector)?);
                 }
                 Ok(ids)
             }
@@ -724,7 +719,6 @@ impl NativeHnswInner {
     }
 
     /// Returns the number of elements in the index.
-    #[allow(dead_code)] // Reason: API surface — introspection accessor for callers
     #[inline]
     #[must_use]
     pub fn len(&self) -> usize {
@@ -781,11 +775,23 @@ impl NativeHnswInner {
         }
     }
 
+    /// The nodes among `nodes` the graph never linked into layer 0: mapped,
+    /// stored, and out of reach of every search. Crash recovery re-indexes
+    /// them (#2246).
+    #[cfg(feature = "persistence")]
+    pub(crate) fn unlinked_nodes(&self, nodes: impl IntoIterator<Item = usize>) -> Vec<usize> {
+        match &self.backend {
+            HnswBackend::Standard(hnsw) => hnsw.unlinked_nodes(nodes),
+            HnswBackend::RaBitQ(rabitq) => rabitq.inner.unlinked_nodes(nodes),
+            HnswBackend::Sq8(sq8) => sq8.inner.unlinked_nodes(nodes),
+        }
+    }
+
     /// Executes a closure with read access to the contiguous vector storage.
     ///
     /// Alias for [`with_contiguous_vectors`](Self::with_contiguous_vectors)
     /// with explicit read semantics for clarity at call sites.
-    #[allow(dead_code)] // Reason: test-only callers (direct_writer_tests) — kept for API symmetry with _mut
+    #[cfg(test)]
     #[inline]
     pub fn with_contiguous_vectors_read<R: Default>(
         &self,
@@ -793,27 +799,123 @@ impl NativeHnswInner {
     ) -> R {
         self.with_contiguous_vectors(f)
     }
+}
 
-    /// Executes a closure with mutable access to the contiguous vector storage.
-    ///
-    /// Acquires a write lock on the underlying `NativeHnsw.vectors` `RwLock`.
-    /// Used by `DirectVectorWriter` to write vectors directly during bulk insert.
+// ============================================================================
+// Placed slots (#2246)
+// ============================================================================
+
+/// A slot the arena just gave a vector, borrowed from the graph guard the
+/// placement ran under.
+///
+/// `ShardedMappings::assign` takes one, never a bare slot, so an id can only
+/// be mapped while that guard lives: `reorder_for_locality` and `vacuum`
+/// renumber slots under the write side and cannot move this one in between.
+/// Placements mint it ([`NativeHnswInner::place`],
+/// [`NativeHnswInner::place_parallel`], [`NativeHnswInner::place_unlinked`]);
+/// the exceptions are [`Placed::installed`], for a graph behind a write
+/// guard, and the test-only `Placed::for_test`. The token ties a mapping to
+/// a guard's lifetime, not to a particular index: each call site keeps an
+/// index's guard and its mappings together.
+/// Neither `Clone` nor `Copy`: each placement maps once.
+#[must_use = "a placed slot left unmapped stays a tombstone"]
+pub(crate) struct Placed<'guard> {
+    slot: usize,
+    _guard: std::marker::PhantomData<&'guard NativeHnswInner>,
+}
+
+impl<'guard> Placed<'guard> {
+    fn new(slot: usize) -> Self {
+        Self {
+            slot,
+            _guard: std::marker::PhantomData,
+        }
+    }
+
+    /// The slot, for a caller that also reports it.
+    #[must_use]
+    pub(crate) fn slot(&self) -> usize {
+        self.slot
+    }
+
+    /// The slot, consuming the token: `ShardedMappings::assign` maps each
+    /// placement once.
+    #[must_use]
+    pub(crate) fn into_slot(self) -> usize {
+        self.slot
+    }
+
+    /// A slot of the graph `guard` holds exclusively: `vacuum` maps its rebuilt
+    /// graph this way, once installed. Nothing renumbers slots while the write
+    /// side is held. Outside tests (`Placed::for_test`) this is the one way to
+    /// make a token from a bare slot, and it trusts its caller that the slot is
+    /// that graph's; debug builds check that the graph has such a slot.
+    pub(crate) fn installed(
+        guard: &'guard parking_lot::RwLockWriteGuard<'_, std::mem::ManuallyDrop<NativeHnswInner>>,
+        slot: usize,
+    ) -> Self {
+        debug_assert!(
+            slot < guard.len(),
+            "slot {slot} is not in the installed graph ({} vectors)",
+            guard.len()
+        );
+        Self::new(slot)
+    }
+
+    /// For tests that drive the mappings directly, with slots no placement
+    /// returned.
+    #[cfg(test)]
+    pub(crate) fn for_test(slot: usize) -> Placed<'static> {
+        Placed::new(slot)
+    }
+}
+
+impl NativeHnswInner {
+    /// [`Self::insert`], with the slot returned as a [`Placed`] tied to the
+    /// guard `self` is borrowed through.
     ///
     /// # Errors
     ///
-    /// Returns [`crate::error::Error::Internal`] if vector storage is not initialized.
-    /// Propagates any error returned by the closure.
+    /// As [`Self::insert`].
+    pub(crate) fn place(&self, vector: &[f32]) -> crate::error::Result<Placed<'_>> {
+        self.insert(vector).map(Placed::new)
+    }
+
+    /// [`Self::parallel_insert`], with each slot returned as a [`Placed`], in
+    /// input order.
     ///
-    /// [`crate::error::Error::Internal`]: crate::error::Error::Internal
-    pub fn with_contiguous_vectors_mut<R>(
+    /// # Errors
+    ///
+    /// As [`Self::parallel_insert`].
+    pub(crate) fn place_parallel(
         &self,
-        f: impl FnOnce(&mut crate::perf_optimizations::ContiguousVectors) -> crate::error::Result<R>,
-    ) -> crate::error::Result<R> {
-        match &self.backend {
-            HnswBackend::Standard(hnsw) => hnsw.with_vectors_write(f),
-            HnswBackend::RaBitQ(rabitq) => rabitq.inner.with_vectors_write(f),
-            HnswBackend::Sq8(sq8) => sq8.inner.with_vectors_write(f),
-        }
+        vectors: &[&[f32]],
+    ) -> crate::error::Result<Vec<Placed<'_>>> {
+        Ok(self
+            .parallel_insert(vectors)?
+            .into_iter()
+            .map(Placed::new)
+            .collect())
+    }
+
+    /// Pushes `vectors` into the arena without linking them into the graph,
+    /// and returns their slots in input order: the bulk path's direct writer,
+    /// whose graph insert is deferred. Each vector is stored as the graph
+    /// insert stores it: unit-norm in a pre-normalized cosine arena.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the arena is not initialized or cannot grow.
+    pub(crate) fn place_unlinked(
+        &self,
+        vectors: &[&[f32]],
+    ) -> crate::error::Result<Vec<Placed<'_>>> {
+        let first = match &self.backend {
+            HnswBackend::Standard(hnsw) => hnsw.push_unlinked(vectors),
+            HnswBackend::RaBitQ(rabitq) => rabitq.inner.push_unlinked(vectors),
+            HnswBackend::Sq8(sq8) => sq8.inner.push_unlinked(vectors),
+        }?;
+        Ok((first..first + vectors.len()).map(Placed::new).collect())
     }
 }
 

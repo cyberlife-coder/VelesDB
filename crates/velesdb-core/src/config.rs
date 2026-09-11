@@ -165,18 +165,24 @@ impl SearchConfig {
     /// uncapped traversal with `max_perfect_mode_vectors` bypassed (#2238).
     ///
     /// `Perfect` itself is applied as `Accurate` here. A per-query `Perfect` is
-    /// capped by `enforce_perfect_mode_limit`; a global one would not be, since
-    /// one of the three search paths cannot refuse. `VelesConfig::validate`
-    /// warns when this downgrade happens rather than failing the load.
+    /// an exhaustive scan capped by `enforce_perfect_mode_limit`; as a global
+    /// default it could not be applied at all: a filtered search's bitmap
+    /// pre-filter never reads the configured quality — it traverses the graph at
+    /// its own ef — so a `perfect` default would scan on some queries and
+    /// traverse on others. `VelesConfig::validate` warns when this downgrade
+    /// happens rather than failing the load.
+    ///
+    /// Available only with the `persistence` feature, the only build that
+    /// exports [`SearchQuality`](crate::SearchQuality).
     #[cfg(feature = "persistence")]
     #[must_use]
     pub fn resolved_quality(&self) -> crate::SearchQuality {
         self.ef_search.map_or_else(
             || match self.default_mode {
                 // Applied as `Accurate`, and warned about at load by
-                // `validate()`: as a GLOBAL default an exhaustive scan would
-                // reach `search_with_optional_bitmap`, which cannot enforce
-                // `limits.max_perfect_mode_vectors`.
+                // `validate()`: a filtered search's bitmap pre-filter never
+                // reads this quality, so a global `Perfect` would scan on some
+                // queries and traverse on others (see the doc above).
                 SearchMode::Perfect => crate::SearchQuality::Accurate,
                 mode => mode.quality(),
             },
@@ -269,15 +275,28 @@ pub mod server {
     #[serde(default)]
     pub struct StorageConfig {
         /// Data directory path.
+        #[deprecated(
+            since = "6.1.0",
+            note = "no engine counterpart: parsed only so existing TOML files keep loading; removal targets the next major (#2087)"
+        )]
         pub data_dir: String,
         /// Storage mode: `"mmap"` or `"memory"`.
         pub storage_mode: String,
         /// Mmap cache size in megabytes.
+        #[deprecated(
+            since = "6.1.0",
+            note = "no engine counterpart: parsed only so existing TOML files keep loading; removal targets the next major (#2087)"
+        )]
         pub mmap_cache_mb: usize,
         /// Vector alignment in bytes.
+        #[deprecated(
+            since = "6.1.0",
+            note = "no engine counterpart: parsed only so existing TOML files keep loading; removal targets the next major (#2087)"
+        )]
         pub vector_alignment: usize,
     }
 
+    #[allow(deprecated, reason = "the deprecated fields still need their defaults")]
     impl Default for StorageConfig {
         fn default() -> Self {
             Self {

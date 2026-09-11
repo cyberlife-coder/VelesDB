@@ -616,6 +616,8 @@ impl Bm25Index {
     /// mismatch would indicate a corrupt snapshot and is logged
     /// rather than raised, matching the existing BM25
     /// `remove_document_internal` tolerance for unknown ids.
+    ///
+    /// [`Error::IndexCorrupted`]: crate::Error::IndexCorrupted
     pub(crate) fn from_snapshot(mut snapshot: Bm25Snapshot) -> crate::Result<Self> {
         Self::validate_snapshot(&mut snapshot)?;
         let index = Self::with_params(snapshot.params);

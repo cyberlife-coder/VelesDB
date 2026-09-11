@@ -317,7 +317,7 @@ impl Collection {
     /// Runs the main dispatch, optional vector GROUP BY, and finalization
     /// (DISTINCT / window / ORDER BY / OFFSET / LIMIT / LET injection).
     ///
-    /// Split out of [`execute_select_pipeline`] so each stays within the
+    /// Split out of [`Self::execute_select_pipeline`] so each stays within the
     /// cyclomatic-complexity budget.
     fn dispatch_and_finalize(
         &self,

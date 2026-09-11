@@ -70,7 +70,7 @@ impl Collection {
     /// Uses the pre-acquired `payload_guard` instead of locking per-call.
     /// When `score` is `Some`, `RETURN similarity()` injects it into the
     /// projected map. All other variants work identically to
-    /// [`project_properties`].
+    /// [`Self::project_properties`].
     pub(in crate::collection::search::query) fn project_properties_with_score(
         &self,
         bindings: &HashMap<String, u64>,

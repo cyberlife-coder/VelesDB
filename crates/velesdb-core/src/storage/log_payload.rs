@@ -335,7 +335,7 @@ impl LogPayloadStorage {
         self.store_batch_inner(entries, false)
     }
 
-    /// Shared implementation for [`store_batch`] and [`store_batch_deferred`].
+    /// Shared implementation for [`Self::store_batch`] and [`Self::store_batch_deferred`].
     ///
     /// When `fsync` is `true`, the configured durability mode is applied.
     /// When `false`, only a buffer flush is performed (no `sync_all`).
@@ -580,6 +580,8 @@ impl PayloadStorage for LogPayloadStorage {
 /// overlapped `ReadFile` on Windows via [`std::os::windows::fs::FileExt`]), so
 /// the same `&File` can be read concurrently from many threads under a shared
 /// lock — the offset is passed to the syscall rather than seeked on the handle.
+///
+/// [`std::os::windows::fs::FileExt`]: https://doc.rust-lang.org/std/os/windows/fs/trait.FileExt.html
 #[cfg(unix)]
 fn read_exact_at(file: &File, buf: &mut [u8], offset: u64) -> io::Result<()> {
     use std::os::unix::fs::FileExt;

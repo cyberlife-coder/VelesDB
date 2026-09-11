@@ -3,7 +3,7 @@
 //! Provides `CONTAINS`, `CONTAINS_ANY`, and `CONTAINS_ALL` filters
 //! with both `Vec<usize>` and `RoaringBitmap` return variants.
 //!
-//! All six variants share a single iteration template — [`Self::filter_array_indices`]
+//! All six variants share a single iteration template — [`ColumnStore::filter_array_indices`]
 //! — parameterized by an array predicate closure and an index mapper. This keeps the
 //! three predicate semantics (any/all/single) and the two output shapes (Vec / Bitmap)
 //! orthogonal.

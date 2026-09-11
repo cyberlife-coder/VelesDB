@@ -497,10 +497,14 @@ pub(crate) fn load_sidecars(
     // blob and cannot vouch for itself.
     validate_loaded_mappings(&mappings_data, graph_vector_count)?;
 
+    // `next_idx` is one past the highest slot ever assigned. A file written
+    // before #2246 counted slots it predicted and never filled, so it is held
+    // to the arena it describes; otherwise the tombstone count reads high
+    // until the next vacuum.
     Ok(super::sharded_mappings::ShardedMappings::from_parts(
         mappings_data.id_to_idx,
         mappings_data.idx_to_id,
-        mappings_data.next_idx,
+        mappings_data.next_idx.min(graph_vector_count),
     ))
 }
 
@@ -613,7 +617,7 @@ fn metric_from_u8(value: u8) -> std::io::Result<DistanceMetric> {
     }
 }
 
-/// Encodes [`StorageMode`] as a `u8` for on-disk persistence.
+/// Encodes [`StorageMode`](crate::StorageMode) as a `u8` for on-disk persistence.
 const fn storage_mode_to_u8(mode: crate::StorageMode) -> u8 {
     match mode {
         crate::StorageMode::Full => 0,
@@ -625,6 +629,8 @@ const fn storage_mode_to_u8(mode: crate::StorageMode) -> u8 {
 }
 
 /// Decodes a `u8` from disk to [`StorageMode`], defaulting to `Full` for unknown values.
+///
+/// [`StorageMode`]: crate::StorageMode
 const fn storage_mode_from_u8(value: u8) -> crate::StorageMode {
     match value {
         1 => crate::StorageMode::SQ8,

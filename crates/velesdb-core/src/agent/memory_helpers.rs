@@ -410,7 +410,7 @@ fn resolve_existing_edge(
 ///
 /// Returns `NotFound` when an endpoint was deleted concurrently, and
 /// `CollectionError` when the derived id is already held by a DIFFERENT
-/// triple — see [`edge_id_collision`].
+/// triple — see [`resolve_existing_edge`].
 pub(super) fn add_relation_edge(
     collection: &Collection,
     endpoints: (u64, u64),
@@ -680,7 +680,7 @@ fn filter_live_far_end(
     edges: Vec<crate::collection::graph::GraphEdge>,
     ttl: &super::ttl::MemoryTtl,
     kind: super::ttl::MemoryKind,
-    far_end: fn(&crate::collection::graph::GraphEdge) -> u64,
+    far_end: impl Fn(&crate::collection::graph::GraphEdge) -> u64,
 ) -> Vec<crate::collection::graph::GraphEdge> {
     edges
         .into_iter()

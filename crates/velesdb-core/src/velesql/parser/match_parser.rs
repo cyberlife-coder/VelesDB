@@ -198,7 +198,7 @@ impl Parser {
 
     /// Parse a property value (EPIC-045 US-001).
     ///
-    /// Delegates scalar literal parsing to the shared [`helpers::parse_scalar_from_rule`].
+    /// Delegates scalar literal parsing to the shared [`super::helpers::parse_scalar_from_rule`].
     fn parse_property_value(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<crate::velesql::Value, ParseError> {

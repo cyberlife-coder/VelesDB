@@ -256,6 +256,8 @@ fn estimate_filter_selectivity(filter: &crate::filter::Filter) -> f64 {
 /// (raw search paths). Constants come from the shared
 /// [`selectivity_defaults`](crate::collection::stats::selectivity_defaults)
 /// table so this path cannot drift from the stats-backed one.
+///
+/// [`CollectionStats`]: crate::collection::stats::CollectionStats
 fn estimate_condition_selectivity(cond: &crate::filter::Condition) -> f64 {
     use crate::collection::stats::selectivity_defaults as d;
     use crate::filter::Condition;

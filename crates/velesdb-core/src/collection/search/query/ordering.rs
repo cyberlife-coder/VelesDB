@@ -110,7 +110,7 @@ impl Collection {
     ///
     /// `let_bindings` contains per-result pre-evaluated `(name, value)` pairs
     /// stored as `[result_idx][(name, value)]`. If empty, behaves identically
-    /// to [`apply_order_by`].
+    /// to [`Self::apply_order_by`].
     pub(crate) fn apply_order_by_with_let(
         &self,
         results: &mut [SearchResult],

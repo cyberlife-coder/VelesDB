@@ -1,7 +1,7 @@
 //! Term dictionary for the BM25 index (#2090), plus the legacy snapshot
 //! format it replaced and the migration from it.
 //!
-//! Before #2090 every [`Document`](super::bm25::Document) owned a `String`
+//! Before #2090 every [`Document`] owned a `String`
 //! per distinct term and the inverted index owned the same term again — the
 //! corpus vocabulary materialized once per document. The dictionary stores
 //! each term once as an `Arc<str>` shared between the id map's key and the

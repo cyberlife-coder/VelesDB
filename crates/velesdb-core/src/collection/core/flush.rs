@@ -278,7 +278,7 @@ impl Collection {
     /// contention or internal batch-insert error). The error is logged at
     /// `warn` level before propagation so that operational dashboards can
     /// alert on repeated failures.
-    fn drain_async_index_builder(&self) -> Result<()> {
+    pub(super) fn drain_async_index_builder(&self) -> Result<()> {
         if let Some(ref aib) = self.streaming.async_index_builder {
             match aib.flush_sync(&self.storage.index) {
                 Ok(count) if count > 0 => {
@@ -467,7 +467,7 @@ impl Collection {
     /// compacted.
     ///
     /// This is the collection-level wrapper around
-    /// [`HnswIndex::vacuum`] used by the server admin endpoint
+    /// [`HnswIndex::vacuum`](crate::index::HnswIndex::vacuum) used by the server admin endpoint
     /// `POST /collections/{name}/index/rebuild` (finding F-21).
     ///
     /// # Errors
@@ -500,6 +500,13 @@ impl Collection {
         // the delta since the last HNSW save. Re-save the index to restore
         // the invariant "WAL ⊇ writes since last index save" that open-time
         // reconciliation relies on.
+        //
+        // Drained first, as `flush` does: the async builder may still hold
+        // vectors whose mappings are already registered, and a save now would
+        // persist those mappings for ids the graph has never seen. Recovery
+        // re-indexes only unmapped ids, so after a crash they would stay
+        // stored and unreachable by graph search (#2246).
+        self.drain_async_index_builder()?;
         self.storage.index.save(&self.storage.path)?;
         self.generations
             .inserts_since_last_hnsw_save

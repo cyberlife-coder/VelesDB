@@ -522,8 +522,9 @@ impl<D: DistanceEngine> NativeHnsw<D> {
 
     /// Executes a closure with mutable access to the contiguous vector storage.
     ///
-    /// Acquires a write lock on `vectors`. Used by `DirectVectorWriter` to
-    /// write vectors directly during bulk insert (deferred HNSW indexing).
+    /// Acquires a write lock on `vectors`. Used by [`Self::push_unlinked`],
+    /// the direct writer's placement during bulk insert (deferred HNSW
+    /// indexing).
     ///
     /// # Errors
     ///
@@ -547,7 +548,9 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     }
 
     /// Executes a closure with a layers read snapshot and tracked lock rank.
-    #[allow(dead_code)] // Reason: API surface — layers-only access for callers not needing vectors
+    // Its callers are crash recovery's `unlinked_nodes` (`persistence`) and the
+    // GPU search (`gpu`); a build with neither has none.
+    #[cfg_attr(not(any(feature = "persistence", feature = "gpu")), allow(dead_code))]
     #[inline]
     pub(in crate::index::hnsw::native) fn with_layers_read<R>(
         &self,
@@ -559,6 +562,37 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         drop(layers);
         record_lock_release(LockRank::Layers);
         result
+    }
+
+    /// The nodes among `nodes` that no search can reach: allocated, never
+    /// linked into layer 0.
+    ///
+    /// A mapped id can outlive its link: `upsert_bulk`'s V2 path places each
+    /// vector, maps its id to the slot it got and leaves the graph insert to
+    /// the async builder, so a save in that window persists a node with no
+    /// neighbours (#2246). Every node an insert linked has at least one
+    /// layer-0 neighbour once the graph holds two nodes. The entry point is
+    /// exempt whatever its list holds: every search starts there, so it is
+    /// reachable by construction — and a save that raced the builder reloads
+    /// with slot 0 as an entry point nothing ever linked.
+    #[cfg(feature = "persistence")]
+    pub(in crate::index::hnsw) fn unlinked_nodes(
+        &self,
+        nodes: impl IntoIterator<Item = usize>,
+    ) -> Vec<usize> {
+        let entry_point = self.entry_point.load(Ordering::Acquire);
+        self.with_layers_read(|layers| {
+            let base = layers.first();
+            nodes
+                .into_iter()
+                .filter(|&node| {
+                    node != entry_point
+                        && base
+                            .and_then(|layer| layer.with_neighbors(node, <[usize]>::is_empty))
+                            .unwrap_or(true)
+                })
+                .collect()
+        })
     }
 
     /// Executes a closure with both vectors AND layers read locks held simultaneously.

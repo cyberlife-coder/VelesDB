@@ -1,9 +1,9 @@
 //! Collection CRUD dispatcher: create, delete, list, get, and diagnostics.
 //!
 //! Type-specific operations are in sibling modules:
-//! - [`vector_ops`] — vector collection create/get
-//! - [`graph_ops`] — graph collection create/get
-//! - [`metadata_ops`] — metadata-only collection create/get
+//! - [`vector_ops`](super::vector_ops) — vector collection create/get
+//! - [`graph_ops`](super::graph_ops) — graph collection create/get
+//! - [`metadata_ops`](super::metadata_ops) — metadata-only collection create/get
 
 use crate::collection::AnyCollection;
 use crate::{CollectionType, DistanceMetric, Error, Result, StorageMode};

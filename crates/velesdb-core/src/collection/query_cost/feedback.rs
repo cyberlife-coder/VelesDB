@@ -27,7 +27,7 @@
 //!
 //! All state is held in `AtomicU64` fields.  The EMA is updated with a
 //! compare-and-swap loop identical to the one in
-//! [`crate::velesql::query_stats`].
+//! [`crate::velesql::QueryStats`].
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -50,7 +50,7 @@ const SCALE: f64 = 1_000_000.0;
 
 /// Lock-free EMA-based feedback loop for CBO cost-unit calibration.
 ///
-/// Crate-internal: instantiated by [`crate::velesql::planner::QueryPlanner`] and
+/// Crate-internal: instantiated by [`crate::velesql::QueryPlanner`] and
 /// fed by the query pipeline. Not part of the public crate API.
 #[derive(Debug, Default)]
 pub(crate) struct CboFeedbackLoop {
