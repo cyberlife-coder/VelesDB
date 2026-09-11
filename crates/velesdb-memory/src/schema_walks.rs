@@ -88,8 +88,9 @@ const DISAMBIGUATORS: [&str; 22] = [
 /// `[Name](path)` becomes `Name`, and a path-like shortcut (`[a::B]`, `[f()]`,
 /// `[m!]`, `[fn@f]`) shows its path without the disambiguator. A bare
 /// `[name]` stays whether or not rustdoc resolves it (`map[key]`, `[sic]`),
-/// and so do `[0, 1]`, a bracketed code span that is not one word, a web
-/// link and reference-style links (`[text][label]`).
+/// and so do `[0, 1]`, a bracketed code span that is not one word or that
+/// rustdoc does not resolve (``[`a.b`]``), a web link and reference-style
+/// links (`[text][label]`).
 ///
 /// Repeated to a fixpoint, so a second pass changes nothing: an input schema
 /// can be hardened twice (at its tool attribute, then in
@@ -159,7 +160,7 @@ fn push_apart(out: &mut String, shown: &str, remaining: &str) {
 /// through the next run of exactly as many, or just that opening run when
 /// none closes it: in Markdown, an unclosed run of backticks is literal
 /// text.
-pub(super) fn code_span_len(text: &str) -> usize {
+fn code_span_len(text: &str) -> usize {
     let fence = text.bytes().take_while(|&b| b == b'`').count();
     let mut search = fence;
     while let Some(found) = text[search..].find('`') {
@@ -173,8 +174,9 @@ pub(super) fn code_span_len(text: &str) -> usize {
     fence
 }
 
-/// The parts of `text` outside its code spans, in order: what the rewrite
-/// reads as Markdown, and what the guard reads for link syntax.
+/// The parts of `text` outside its code spans, in order, which the rewrite
+/// and the guard read for link syntax. A run of backticks nothing closes is
+/// literal text that holds none, and is left out.
 pub(super) fn outside_code_spans(text: &str) -> impl Iterator<Item = &str> {
     let mut rest = text;
     std::iter::from_fn(move || {
@@ -188,11 +190,25 @@ pub(super) fn outside_code_spans(text: &str) -> impl Iterator<Item = &str> {
     })
 }
 
+/// Where the label `after` starts ends: its first `]` outside a code span, as
+/// Markdown reads it, so the `]` in ``[`a]b`](c)`` is code.
+fn label_end(after: &str) -> Option<usize> {
+    let mut at = 0;
+    while let Some(found) = after[at..].find(['`', ']']) {
+        let i = at + found;
+        if after[i..].starts_with(']') {
+            return Some(i);
+        }
+        at = i + code_span_len(&after[i..]);
+    }
+    None
+}
+
 /// When `after` (the text following a `[`) starts a rustdoc link, what
 /// rustdoc shows for it and the text after the link. A reference-style link
 /// (`[text][label]`) is left as written.
 fn rustdoc_link(after: &str) -> Option<(Cow<'_, str>, &str)> {
-    let close = after.find(']')?;
+    let close = label_end(after)?;
     let (label, tail) = (&after[..close], &after[close + 1..]);
     if !can_be_link_text(label) {
         return None;
@@ -236,7 +252,7 @@ fn inline_link<'a>(label: &'a str, inline: &'a str) -> Option<(Cow<'a, str>, &'a
     let target = target
         .strip_prefix('<')
         .and_then(|t| t.strip_suffix('>'))
-        .map_or(target, str::trim);
+        .unwrap_or(target);
     is_rust_path(target).then(|| (Cow::Borrowed(label), &inline[end + 1..]))
 }
 
@@ -254,7 +270,7 @@ pub(super) fn spans_a_line(text: &str) -> bool {
 pub(super) const LINE_ENDINGS: [char; 2] = ['\n', '\r'];
 
 /// A code link, ``[`code`]``: shown as its code span when the code is one
-/// word, without its disambiguator.
+/// word rustdoc resolves ([`rustdoc_resolves`]), without its disambiguator.
 fn code_link<'a>(label: &'a str, tail: &'a str) -> Option<(Cow<'a, str>, &'a str)> {
     // rustdoc trims the link text, then the path after a disambiguator.
     let code = label[1..label.len() - 1].trim();
@@ -270,15 +286,23 @@ fn code_link<'a>(label: &'a str, tail: &'a str) -> Option<(Cow<'a, str>, &'a str
     Some((shown, tail))
 }
 
-/// Whether rustdoc tries to resolve `word` as a path: past a call suffix such
-/// as `()`, only letters, digits and ``:_<>, !*&;``. rustdoc leaves any other
-/// link as written, brackets and all (``[`a[`]``, ``[`a.b`]``).
-fn rustdoc_resolves(word: &str) -> bool {
-    let path = CALL_SUFFIXES
+/// The path rustdoc 1.90 resolves for the link text `word`: the part before
+/// any `#` fragment, past a call suffix such as `()` when something is left.
+fn rustdoc_path(word: &str) -> &str {
+    let path = word.split('#').next().unwrap_or(word).trim();
+    CALL_SUFFIXES
         .iter()
-        .find_map(|suffix| word.strip_suffix(suffix))
-        .unwrap_or(word);
-    path.chars()
+        .find_map(|suffix| path.strip_suffix(suffix).filter(|rest| !rest.is_empty()))
+        .unwrap_or(path)
+}
+
+/// Whether rustdoc 1.90 tries to resolve the link text `word`: its
+/// [`rustdoc_path`] holds only letters, digits and ``:_<>, !*&;``. rustdoc
+/// leaves any other link as written, brackets and all (``[`a[`]``,
+/// ``[`a.b`]``, ``[`()`]``).
+fn rustdoc_resolves(word: &str) -> bool {
+    rustdoc_path(word)
+        .chars()
         .all(|c| c.is_alphanumeric() || ":_<>, !*&;".contains(c))
 }
 
@@ -356,10 +380,7 @@ fn is_rust_path(target: &str) -> bool {
         None if target.contains('@') => return false,
         None => target,
     };
-    let path = CALL_SUFFIXES
-        .iter()
-        .find_map(|suffix| path.strip_suffix(suffix))
-        .unwrap_or(path);
+    let path = rustdoc_path(path);
     !path.is_empty()
         && path.split("::").all(|segment| {
             segment.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')

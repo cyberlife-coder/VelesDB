@@ -553,6 +553,34 @@ mod unlink {
         );
         assert_eq!(unlink_rustdoc("see [`a[`] here"), None);
         assert_eq!(unlink_rustdoc("see [`a.b`] here"), None);
+        assert_eq!(unlink_rustdoc("see [`()`] here"), None);
+    }
+
+    /// rustdoc resolves a link by the path before its `#` fragment, so
+    /// ``[`Vec#method.push`]`` shows its code span and `[a::B#x]` its path.
+    #[test]
+    fn a_link_to_a_fragment_shows_its_text() {
+        assert_eq!(
+            unlink_rustdoc("see [`Vec#method.push`] here").as_deref(),
+            Some("see `Vec#method.push` here")
+        );
+        assert_eq!(
+            unlink_rustdoc("see [a::B#x] here").as_deref(),
+            Some("see a::B#x here")
+        );
+    }
+
+    /// A label ends at its first `]` outside a code span, as Markdown reads
+    /// it: the `]` in ``[`a]b`](crate::x)`` is code, and in
+    /// ``[a `[` `b](Foo) c` `` the backticks pair past the `]`, so no link
+    /// forms.
+    #[test]
+    fn a_label_ends_at_its_first_bracket_outside_code() {
+        assert_eq!(
+            unlink_rustdoc("odd [`a]b`](crate::x) link").as_deref(),
+            Some("odd `a]b` link")
+        );
+        assert_eq!(unlink_rustdoc("see [a `[` `b](Foo) c` d"), None);
     }
 
     /// A backtick nothing closes is literal text in Markdown: the link
@@ -561,7 +589,9 @@ mod unlink {
     fn a_stray_backtick_is_literal() {
         let text = "a stray ` then [x](crate::y)";
         assert_eq!(unlink_rustdoc(text).as_deref(), Some("a stray ` then x"));
-        assert!(guard_flags(text), "the guard misses {text:?}");
+        let left = "a stray ` then [x](crate::y z)";
+        assert_eq!(unlink_rustdoc(left), None);
+        assert!(guard_flags(left), "the guard misses {left:?}");
     }
 
     /// The rewrite copies a code span verbatim, link syntax and all, and the
@@ -576,7 +606,7 @@ mod unlink {
 
     /// Whether `text` holds an inline link whose target, past any whitespace
     /// or `<`, names a Rust path: flagged even in a link the rewrite leaves,
-    /// such as ``[`a]b`](crate::x)``. Code spans are read past, as the rewrite
+    /// such as `[x](crate::y z)`. Code spans are read past, as the rewrite
     /// copies them.
     fn names_rust_path_target(text: &str) -> bool {
         let text = &outside_code_spans(text).collect::<Vec<_>>().join(" ");
@@ -608,10 +638,10 @@ mod unlink {
     #[test]
     fn the_guard_flags_a_rust_path_target_the_rewrite_leaves() {
         for text in [
-            "odd [`a]b`](crate::x) link",
-            "odd [`a]b`]( crate::x) link",
-            "odd [`a]b`](<crate::x>) link",
-            "odd [`a]b`](< crate::x>) link",
+            "odd [x](crate::y z) link",
+            "odd [x]( crate::y z) link",
+            "odd [x](<crate::y z>) link",
+            "odd [x](< crate::y z>) link",
         ] {
             assert_eq!(unlink_rustdoc(text), None, "{text}");
             let mut linked = Vec::new();
