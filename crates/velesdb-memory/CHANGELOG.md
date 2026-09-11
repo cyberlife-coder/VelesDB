@@ -24,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instance data such as a `default`, so nothing else in a schema changes.
   The rewrite leaves every link in a description it cannot read exactly: one
   holding a backslash, a tab or four spaces, a code fence, a `<` outside
-  code, a table, a code span across a line, or a web link or an image it
+  code, a table, a code span across a line, or an inline web link or image it
   does not render. It leaves a reference-style link, a `[label]` a colon
   follows, nested brackets, a `#` fragment and a link that spans a line.
   A test then fails if a published

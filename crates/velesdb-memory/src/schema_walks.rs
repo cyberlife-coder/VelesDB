@@ -295,7 +295,9 @@ fn label_end(after: &str) -> Option<usize> {
 /// rustdoc shows for it and the text after the link. A reference-style link
 /// (`[text][label]`) is left as written.
 fn rustdoc_link(after: &str) -> Option<(Cow<'_, str>, &str)> {
-    let close = label_end(after)?;
+    // An empty link text shows nothing, and the code spans around it could
+    // merge (`` `a`[](X)`b` ``): it stays as written, and the guard fails on it.
+    let close = label_end(after).filter(|&close| close > 0)?;
     let (label, tail) = (&after[..close], &after[close + 1..]);
     if !can_be_link_text(label) {
         return None;
