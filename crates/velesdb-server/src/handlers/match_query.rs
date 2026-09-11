@@ -92,12 +92,8 @@ pub struct MatchQueryMeta {
 ///
 /// # Errors
 ///
-/// A body the JSON extractor rejects gets a plain-text answer: `400` for
-/// malformed JSON, `415` without a `Content-Type: application/json` header,
-/// `422` for JSON that does not match the request shape. A panic in the query
-/// worker answers `500` with a JSON body that has no `code`. Any other failure
-/// answers with its `VELES-XXX` code in a JSON body, and a status that follows
-/// its core error variant:
+/// When the query itself fails, the JSON body carries the error's `VELES-XXX`
+/// code, and the status follows its core error variant:
 /// - `404 NOT_FOUND` (`VELES-002`) — collection not found
 /// - `400 BAD_REQUEST` (`VELES-010`) — parse error, not a MATCH query,
 ///   invalid threshold, or an unbound query parameter

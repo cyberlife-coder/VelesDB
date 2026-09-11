@@ -119,8 +119,8 @@ async fn flush_point_batch_with_delta(
 /// Stream upsert points using NDJSON.
 ///
 /// Accepts a `application/x-ndjson` body. Each line is one JSON-encoded point,
-/// whose `id` is an unsigned 64-bit integer: a non-empty line that does not
-/// parse as one, a string `id` included, is counted in the response's
+/// whose `id` is an unsigned 64-bit integer: a line that is not blank and does
+/// not parse as one, a string `id` included, is counted in the response's
 /// `malformed` field.
 /// Points are accumulated into micro-batches and flushed via `upsert_bulk`.
 ///
