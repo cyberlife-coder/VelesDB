@@ -768,11 +768,12 @@ mod unlink {
     }
 
     /// Whether the label `after` starts, up to its `]`, names a path: it holds
-    /// `::`, `@`, `#` or `<`, or ends in `()`, `!{}` or `!`. A `(` after the
-    /// `]` makes it the text of an inline link instead, which
-    /// [`holds_rustdoc_link`] reads by its target.
+    /// `::`, `@`, `#` or `<`, or ends in `()`, `!{}` or `!` once trimmed, as
+    /// rustdoc trims it. A `(` after the `]` makes it the text of an inline
+    /// link instead, which [`holds_rustdoc_link`] reads by its target.
     fn brackets_a_path(after: &str) -> bool {
         after.split_once(']').is_some_and(|(label, rest)| {
+            let label = label.trim();
             !rest.starts_with('(')
                 && (label.contains("::")
                     || label.contains(['@', '#', '<'])
@@ -811,6 +812,8 @@ mod unlink {
             "see [stream()].",
             "see [vec!].",
             "see [vec!{}].",
+            "see [stream() ].",
+            "see [vec! ].",
             "see [fn@stream].",
             "see [Point#fields].",
             "see [the point][Point].",
