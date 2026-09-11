@@ -89,8 +89,8 @@ const DISAMBIGUATORS: [&str; 20] = [
 /// alike (`[Name](path)`, `[a::B]`, `[f()]`): its neighbours could read
 /// differently once its brackets go ([`rustdoc_link`]). A bare `[name]` stays
 /// whether or not rustdoc resolves it (`map[key]`, `[sic]`), and so do
-/// `[0, 1]`, a code link whose code is not one word or does not read as a
-/// path (``[`a.b`]``), a padded shortcut code link ([`code_link`]), a web link
+/// `[0, 1]`, a shortcut code link whose code is not one word or does not read
+/// as a path (``[`a.b`]``) or that is padded ([`code_link`]), a web link
 /// and reference-style links (`[text][label]`). Whether a name resolves, a
 /// schema cannot check: rustdoc warns on one that does not, and CI builds each
 /// crate's docs with `-D warnings`.
@@ -135,17 +135,27 @@ pub(super) fn unlink_rustdoc(text: &str) -> Option<String> {
 /// - any `]` a colon follows, even inside what reads as a code span: a
 ///   reference or footnote definition's label ends at its first `]` before
 ///   code spans are read, and its destination and title are not prose;
+/// - an image (`![`), which rustdoc resolves through the links around it, so
+///   dropping one of those links could change it;
 /// - a code span that crosses a line, whose extent depends on the blocks
 ///   around it.
 fn scan_is_exact(text: &str) -> bool {
-    !text.contains(['\\', '\t'])
-        && !text.contains("    ")
-        && !text.contains("```")
-        && !text.contains("~~~")
+    !holds_an_unmodelled_marker(text)
         && !outside_code_spans(text).any(|part| part.contains('<'))
-        && !text.contains("]:")
         && !text.split(LINE_ENDINGS).any(is_a_table_delimiter_row)
         && !has_a_code_span_across_lines(text)
+}
+
+/// Whether `text` holds one of the markers [`scan_is_exact`] lists that a
+/// plain search finds, code spans included: a backslash, a tab or four
+/// spaces, a code fence, a `]:` or an image.
+fn holds_an_unmodelled_marker(text: &str) -> bool {
+    text.contains(['\\', '\t'])
+        || text.contains("    ")
+        || text.contains("```")
+        || text.contains("~~~")
+        || text.contains("]:")
+        || text.contains("![")
 }
 
 /// Whether `line` can be the delimiter row that makes the lines above it a
@@ -216,10 +226,10 @@ fn unlink_once(text: &str) -> Option<String> {
 
 /// What rustdoc shows for the link the `[` between `before` and `after` opens,
 /// and the text after it, when the rewrite reads one there. A `[` right after
-/// `]` is a reference label (`[a][b]`), and one right after `!` opens an
-/// image (`![a](b)`): the rewrite leaves both, as the scan leaves a text
-/// holding a reference definition ([`scan_is_exact`]). It also leaves a link
-/// a backtick touches, before or after it: the code
+/// `]` is a reference label (`[a][b]`): the rewrite leaves it, as the scan
+/// leaves a text holding an image or a reference definition
+/// ([`scan_is_exact`]). It also leaves a link a backtick touches, before or
+/// after it: the code
 /// span it shows would merge with that backtick's run (`a``b` reads as one
 /// span), and a space between them would show what rustdoc does not. It
 /// leaves a link a `'` follows: rustdoc's smart punctuation reads a `'` right
@@ -228,7 +238,7 @@ fn unlink_once(text: &str) -> Option<String> {
 /// quotes. And it leaves a link a bracket pair would enclose once its own
 /// brackets go ([`would_pair_around`]).
 fn link_at<'a>(before: &str, after: &'a str) -> Option<(Cow<'a, str>, &'a str)> {
-    if before.ends_with([']', '!', '`']) {
+    if before.ends_with([']', '`']) {
         return None;
     }
     rustdoc_link(after).filter(|(_, remaining)| {
@@ -374,11 +384,12 @@ const LINE_ENDINGS: [char; 2] = ['\n', '\r'];
 /// A code link, ``[`code`]``: shown as its code span when the code is one
 /// word that reads as a path ([`reads_as_a_path`]), without its
 /// disambiguator. A code span padded inside its backticks, on either side
-/// (``[` fn@f `]``, ``[`fn@f `]``), stays as written: rustdoc does not always
-/// drop its disambiguator there, and the rewrite does not model when.
+/// (``[` fn@f `]``, ``[`fn@f `]``), or holding a run of spaces (``[`fn@  f`]``)
+/// stays as written: rustdoc does not always drop its disambiguator there, and
+/// the rewrite does not model when.
 fn code_link<'a>(label: &'a str, tail: &'a str) -> Option<(Cow<'a, str>, &'a str)> {
     let code = &label[1..label.len() - 1];
-    if code != code.trim() {
+    if code != code.trim() || code.contains("  ") {
         return None;
     }
     // rustdoc trims the path after a disambiguator.

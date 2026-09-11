@@ -54,15 +54,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   else in a schema changes.
   The rewrite leaves every link in a description it cannot read exactly: one
   holding a backslash, a tab or four spaces, a code fence, a `<` outside
-  code, a table, a reference or footnote definition (any `]:`, even inside
-  backticks), a code span across a line, or an inline link it does not
-  render (a web link, an image, one whose text is not a code span). It
+  code, a table, an image, a reference or footnote definition (any `]:`,
+  even inside backticks), a code span across a line, or an inline link it
+  does not render (a web link, one whose text is not a code span). It
   leaves a reference-style link, a `#` fragment, a link that spans a line, a
-  padded shortcut code link, a code link a backtick touches (its code span
-  would merge with it) or a `'` follows (smart punctuation may read the
-  quote differently), and a code link a bracket pair would enclose once its
-  own brackets go. A test then fails if a published description holds link
-  syntax, code spans included:
+  shortcut code link padded or holding a run of spaces, a code link a
+  backtick touches (its code span would merge with it) or a `'` follows
+  (smart punctuation may read the quote differently), and a code link a
+  bracket pair would enclose once its own brackets go. A test then fails if
+  a published description holds link syntax, code spans included:
   a `[` that opens on a code span, a bracketed path even as a web link's
   text (one holding `::`, `@`, `#` or `<`, naming a primitive rustdoc links
   from a sigil such as `&str` or `*const`, or ending in `()`, `!{}` or `!`),

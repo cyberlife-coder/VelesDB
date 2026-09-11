@@ -779,6 +779,8 @@ mod unlink {
             "see [`fn@build `] here",
             "a [` Foo `] padded",
             "see [`  X  `] here",
+            "see [`fn@  f`] here",
+            "a [`struct@W<K,  V>`] map",
         ] {
             assert_eq!(unlink_rustdoc(text), None, "{text:?}");
             assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
@@ -880,6 +882,7 @@ mod unlink {
             "![logo]\n\n[logo]: https://x.dev/a.png \"[`X`]\"",
             "![logo]\n\n[logo]: [`X`]",
             "[a [`X`] b]: dest",
+            "see [`Y`](X) and ![X]",
             "[a``]:``.[`X`]( crate::X)",
             "[a``]: ``.[`X`](crate::X)",
             "[a``]: `` \"[`X`]\"",
