@@ -875,32 +875,37 @@ assert!(current == self.epoch_at_creation, "Mmap was remapped");
 - Guard panics if epoch mismatches (fail-safe)
 - No data race: old pointers are never dereferenced after epoch change
 
-**Pattern 2**: CAS entry-point promotion (HNSW)
+**Pattern 2**: entry-point moves under the promotion lock (HNSW)
 
-`NativeHnsw` stores `entry_point` and `max_layer` as `AtomicUsize`. During
-batch insert, `promote_entry_point()` uses `compare_exchange(AcqRel/Acquire)`
-to atomically update the entry point without a mutex.
+`NativeHnsw` stores `entry_point` and `max_layer` as `AtomicUsize`, which
+searches load without a lock. Every write takes `promotion: Mutex<()>`
+(rank 8, before `vectors`): the first claim of an empty graph, each
+promotion together with the anchor reparenting that follows it, and the
+renumbering `reorder_for_locality` applies (#2259).
 
 ```rust
-// First insert: CAS from NO_ENTRY_POINT to node_id
+// First insert: under the lock, CAS from NO_ENTRY_POINT, then set max_layer
 self.entry_point.compare_exchange(
     NO_ENTRY_POINT, node_id, Ordering::AcqRel, Ordering::Acquire
 );
-// Layer promotion: CAS on max_layer, then store entry_point
-self.max_layer.compare_exchange(
-    current_max, node_layer, Ordering::AcqRel, Ordering::Acquire
-);
-self.entry_point.store(node_id, Ordering::Release);
+// Layer promotion: under the lock, check again, store max_layer, swap the
+// entry point, then reparent the anchor tree
+self.max_layer.store(node_layer, Ordering::Release);
+let previous = self.entry_point.swap(node_id, Ordering::AcqRel);
+self.reparent_entry_point(previous, node_id);
 ```
 
 **Why It's Sound**:
-- AcqRel on the CAS ensures that the winner's store is visible to all
-  subsequent Acquire loads.
-- The transient window between `max_layer` CAS and `entry_point` store is
-  safe: readers seeing the old entry point at the new max layer encounter
-  empty neighbor lists and perform a no-op descent.
-- Entry-point promotion occurs O(log_M(N)) times per index lifetime,
-  so the CAS loop almost never retries.
+- Writers are serialized, so two promotions never interleave: the later one
+  cannot clear the anchor the earlier one has just given its node, which
+  would strand the tree below it.
+- AcqRel on the CAS and the swap makes the new entry point visible to every
+  later Acquire load.
+- The transient window between the `max_layer` store and the swap is safe:
+  readers seeing the old entry point at the new max layer encounter empty
+  neighbor lists and perform a no-op descent.
+- A node at or below the maximum layer, the common case, returns before
+  taking the lock; promotion occurs O(log_M(N)) times per index lifetime.
 
 ### HNSW Slot Allocation
 
@@ -973,6 +978,55 @@ another id's vector.
 `bulk_index_or_defer`) calls `insert_batch_parallel` in its last phase. The
 crash recovery implications are documented in
 [CONCURRENCY_MODEL.md](CONCURRENCY_MODEL.md#known-limitations).
+
+### HNSW Reachability Anchors
+
+**Module**: `crates/velesdb-core/src/index/hnsw/native/graph/anchors.rs`, `crates/velesdb-core/src/index/hnsw/native/layer.rs`, `crates/velesdb-core/src/index/hnsw/native/graph/neighbors.rs`, `crates/velesdb-core/src/index/hnsw/native/graph/insert.rs`
+
+Every base-layer node other than the entry point records an *anchor*: the
+node whose list holds one edge to it that eviction never removes (#2259).
+Anchors take four bytes a slot (`AtomicU32`, the width node ids have on
+disk), allocated with the base layer.
+
+**Invariant**, outside a promotion: `anchor_of(x) == a` implies `x` is in
+`a`'s base-layer list, and `a` is itself anchored or is the entry point,
+which has no anchor. The
+anchors therefore form a tree rooted at the entry point, and every anchored
+node is reachable from it over the base layer. Reachable is the guarantee: a
+search starts from where its greedy descent lands and stops on stagnation,
+so it still walks that graph approximately.
+
+- **Set and checked under the parent's list lock.** `link_protected` makes
+  sure `x` is in `a`'s list and records the anchor inside the same
+  `with_neighbors_mut` closure; `evict_most_redundant` scans a list under that
+  lock and skips every entry anchored to its owner. An evictor can never see
+  the anchor without the edge, nor remove the edge after the anchor.
+- **Eviction never removes an anchor edge**: both eviction sites skip every
+  entry anchored to the list's owner, so an evictee's anchor, once it has
+  one, is another list's edge; a batch mate still connecting gets its own
+  from the pass after its chunk. When every entry of a full list is
+  protected, `link_protected` places the edge one level down the tree
+  instead, in a protected child picked by `spread_protected_child`, so no
+  list grows past its cap;
+  only after 32 levels would one grow by one. `connect_back_with_pruning`
+  skips adding the newcomer to such a list.
+- **Every node gets one.** A single insert anchors its node from the first
+  anchored node of its own list; a parallel batch anchors each node as soon as
+  one of its neighbours is, then retries the rest until a pass adds nothing,
+  and links what remains from the entry point. The first insert into an empty
+  graph claims the entry point under the promotion lock
+  (`claim_first_entry_point`): a
+  node that loses that claim, a single insert or a batch's first node,
+  connects through the winner.
+- **The root moves with the entry point.** A promoted entry point drops its
+  own anchor and takes the previous one into its subtree (`reparent_entry_point`),
+  under the promotion lock and in the same step as the swap: two promotions
+  never interleave their reparenting.
+- **Renumbering and loading.** `Layer::remap_ids` moves and renames anchors
+  with the lists they describe. A loaded graph rebuilds them as a
+  breadth-first tree from the entry point, since they are not persisted, then
+  anchors each node that walk missed from its own list: a graph saved before
+  #2259 is repaired when it is loaded.
 
 ### Interior Mutability Invariants: `RaBitQPrecisionHnsw`
 

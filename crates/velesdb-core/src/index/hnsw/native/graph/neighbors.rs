@@ -193,13 +193,27 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             let new_node_vec = unsafe { vectors.get_unchecked(new_node) };
             let new_dist = self.distance.distance(neighbor_vec, new_node_vec);
 
-            self.evict_most_redundant(neighbors, neighbor_vec, new_node, new_dist, vectors);
+            // A node's anchor edge is never evicted: it may be its last in-edge.
+            let base = (layer == 0).then(|| &layers[0]);
+            let is_protected = |n: NodeId| base.is_some_and(|b| b.anchor_of(n) == Some(neighbor));
+            self.evict_most_redundant(
+                neighbors,
+                neighbor_vec,
+                new_node,
+                new_dist,
+                vectors,
+                is_protected,
+            );
         });
     }
 
     /// Evicts the existing neighbor most redundant with `new_node` (closest
-    /// to `new_node`), but only if `new_node` is closer to the anchor than
+    /// to `new_node`), but only if `new_node` is closer to the list's owner than
     /// the farthest existing neighbor. This is an O(M) scan.
+    ///
+    /// Entries `is_protected` names are never candidates: each is some node's
+    /// anchor edge, possibly its last in-edge (#2259). When every entry is
+    /// protected, `new_node` is not added here.
     ///
     /// Rationale: replacing the neighbor most similar to `new_node` preserves
     /// directional coverage. The alpha condition (`alpha * new_dist`) ensures
@@ -208,10 +222,11 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     fn evict_most_redundant(
         &self,
         neighbors: &mut Vec<NodeId>,
-        anchor_vec: &[f32],
+        owner_vec: &[f32],
         new_node: NodeId,
         new_dist: f32,
         vectors: &crate::perf_optimizations::ContiguousVectors,
+        is_protected: impl Fn(NodeId) -> bool,
     ) {
         debug_assert!(
             new_node < vectors.len(),
@@ -220,15 +235,16 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         );
         // SAFETY: new_node < vectors.len() — verified by debug_assert above.
         // - new_node was just inserted into the vectors store by the caller.
-        // Reason: anchor distance for redundancy eviction.
+        // Reason: owner distance for redundancy eviction.
         let new_vec = unsafe { vectors.get_unchecked(new_node) };
 
-        let mut worst_idx = 0;
-        let mut worst_dist: f32 = 0.0;
-        let mut closest_to_new_idx = 0;
-        let mut closest_to_new_dist = f32::MAX;
+        let mut worst: Option<(usize, f32)> = None;
+        let mut closest_to_new: Option<(usize, f32)> = None;
 
         for (i, &n) in neighbors.iter().enumerate() {
+            if is_protected(n) {
+                continue;
+            }
             debug_assert!(
                 n < vectors.len(),
                 "n {n} out of bounds (len {})",
@@ -238,20 +254,23 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             // - n iterates over an existing neighbor list whose entries were inserted previously.
             // Reason: O(M) eviction scan inner loop.
             let n_vec = unsafe { vectors.get_unchecked(n) };
-            let d_to_anchor = self.distance.distance(anchor_vec, n_vec);
+            let d_to_owner = self.distance.distance(owner_vec, n_vec);
             let d_to_new = self.distance.distance(new_vec, n_vec);
 
-            if d_to_anchor > worst_dist {
-                worst_dist = d_to_anchor;
-                worst_idx = i;
+            if worst.is_none_or(|(_, d)| d_to_owner > d) {
+                worst = Some((i, d_to_owner));
             }
-            if d_to_new < closest_to_new_dist {
-                closest_to_new_dist = d_to_new;
-                closest_to_new_idx = i;
+            if closest_to_new.is_none_or(|(_, d)| d_to_new < d) {
+                closest_to_new = Some((i, d_to_new));
             }
         }
+        let (Some((worst_idx, worst_dist)), Some((closest_to_new_idx, closest_to_new_dist))) =
+            (worst, closest_to_new)
+        else {
+            return;
+        };
 
-        // Strategy: if new_node is closer to anchor than the farthest neighbor,
+        // Strategy: if new_node is closer to the owner than the farthest neighbor,
         // evict the neighbor most redundant with new_node (closest to it).
         // Otherwise fall back to standard farthest-eviction.
         if new_dist < worst_dist {
@@ -265,3 +284,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "neighbors_tests.rs"]
+mod neighbors_tests;

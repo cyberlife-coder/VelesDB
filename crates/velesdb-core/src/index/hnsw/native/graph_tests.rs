@@ -393,11 +393,11 @@ fn test_concurrent_insert_and_search() {
 }
 
 // =========================================================================
-// Lock-free CAS entry-point promotion (I3)
+// Entry-point promotion (I3; under the promotion lock since #2259)
 // =========================================================================
 
-/// Verifies that concurrent promote_entry_point calls using CAS produce a
-/// valid final state: entry_point references a node at max_layer.
+/// Verifies that concurrent promote_entry_point calls produce a valid final
+/// state: entry_point references a node at max_layer.
 #[test]
 fn test_cas_promote_entry_point_concurrent() {
     use std::sync::atomic::Ordering;
@@ -456,7 +456,7 @@ fn test_cas_promote_entry_point_concurrent() {
     );
 }
 
-/// Verifies CAS promotion from NO_ENTRY_POINT (first insert race).
+/// Verifies the first insert's claim of an empty graph's entry point.
 #[test]
 fn test_cas_promote_from_empty() {
     use std::sync::atomic::Ordering;

@@ -500,12 +500,13 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             NO_ENTRY_POINT
         };
 
-        Ok(Self {
+        let loaded = Self {
             distance,
             vectors: parking_lot::RwLock::new(vectors),
             layers: parking_lot::RwLock::new(graph.layers),
             entry_point: std::sync::atomic::AtomicUsize::new(entry_point),
             max_layer: std::sync::atomic::AtomicUsize::new(graph.max_layer),
+            promotion: parking_lot::Mutex::new(()),
             count: std::sync::atomic::AtomicUsize::new(count),
             arena_home,
             rng_state: std::sync::atomic::AtomicU64::new(0x5DEE_CE66_D1A4_B5B5),
@@ -525,7 +526,11 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             // which is fine because no snapshot exists yet after load.
             #[cfg(feature = "gpu")]
             gpu_snapshot_version: std::sync::atomic::AtomicU64::new(0),
-        })
+        };
+        // Anchors are not persisted: recover them from the loaded base layer
+        // (#2259).
+        loaded.rebuild_anchors();
+        Ok(loaded)
     }
 
     fn load_vectors_file(
@@ -864,7 +869,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         // than the file could possibly contain.
         let max_nodes = (file_len / 4) as usize;
 
-        for _ in 0..num_layers {
+        for layer_idx in 0..num_layers {
             reader.read_exact(&mut buf8)?;
             let num_nodes = u64::from_le_bytes(buf8) as usize;
             if num_nodes > max_nodes {
@@ -872,7 +877,11 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
                     "layer num_nodes {num_nodes} exceeds file capacity {max_nodes}"
                 )));
             }
-            let layer = Layer::new(num_nodes);
+            let layer = if layer_idx == 0 {
+                Layer::new_base(num_nodes)
+            } else {
+                Layer::new(num_nodes)
+            };
             for node_id in 0..num_nodes {
                 let neighbors = Self::read_node_neighbors(reader, count)?;
                 layer.set_neighbors(node_id, neighbors);
