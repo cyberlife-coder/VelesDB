@@ -59,8 +59,10 @@ fn test_published_description_states_the_stats_interval() {
         .and_then(|item| item.get.as_ref())
         .and_then(|operation| operation.description.as_deref())
         .expect("test: the stream endpoint is documented");
-    assert!(
-        description.contains(&format!("after every {STATS_INTERVAL}th `node` event")),
-        "the published description no longer states STATS_INTERVAL: {description}"
-    );
+    let stated: usize = description
+        .split_once("after every ")
+        .and_then(|(_, rest)| rest.split(|c: char| !c.is_ascii_digit()).next())
+        .and_then(|digits| digits.parse().ok())
+        .expect("test: the description states the stats interval");
+    assert_eq!(stated, STATS_INTERVAL, "{description}");
 }

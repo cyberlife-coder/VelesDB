@@ -92,16 +92,20 @@ pub struct MatchQueryMeta {
 ///
 /// # Errors
 ///
-/// All failures are mapped through the canonical `auto_core_error_response`,
-/// so the JSON body carries the `VELES-XXX` code and the HTTP status is
-/// derived from the core error variant:
+/// A body the JSON extractor rejects gets a plain-text answer: `400` for
+/// malformed JSON, `415` without a `Content-Type: application/json` header,
+/// `422` for JSON that does not match the request shape. A panic in the query
+/// worker answers `500` with a JSON body that has no `code`. Any other failure
+/// answers with its `VELES-XXX` code in a JSON body, and a status that follows
+/// its core error variant:
 /// - `404 NOT_FOUND` (`VELES-002`) — collection not found
 /// - `400 BAD_REQUEST` (`VELES-010`) — parse error, not a MATCH query,
 ///   invalid threshold, or an unbound query parameter
-/// - any other core variant: `404 NOT_FOUND` for a missing point, edge or node,
-///   `409 CONFLICT` for one that already exists, `400 BAD_REQUEST` for other
-///   invalid input, `503 SERVICE_UNAVAILABLE` for a locked database or a guard
-///   rail, `500 INTERNAL_SERVER_ERROR` for anything else
+/// - otherwise: `404 NOT_FOUND` for a missing point, edge or node;
+///   `409 CONFLICT` for a collection or edge that already exists;
+///   `400 BAD_REQUEST` for other invalid input; `503 SERVICE_UNAVAILABLE`
+///   for a locked database or a guard rail; `500 INTERNAL_SERVER_ERROR` for
+///   anything else
 #[utoipa::path(
     post,
     path = "/collections/{name}/match",
@@ -112,7 +116,8 @@ pub struct MatchQueryMeta {
         (status = 200, description = "Match query results", body = MatchQueryResponse),
         (status = 400, description = "Parse error or invalid query", body = ErrorResponse),
         (status = 404, description = "Collection not found", body = ErrorResponse),
-        (status = 500, description = "Internal server error", body = ErrorResponse)
+        (status = 500, description = "Internal server error", body = ErrorResponse),
+        (status = 503, description = "A guard rail stopped the query", body = ErrorResponse)
     )
 )]
 pub async fn match_query(

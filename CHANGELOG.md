@@ -103,11 +103,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/openapi.{json,yaml}` as they are written, and only rustdoc resolves an
   intra-doc link: four descriptions showed clients literal brackets, one of
   them around the path of a private helper. The four are rewritten in plain
-  prose that states what a client can rely on instead: the status each core
-  error maps to, when `stats` events arrive, and the integer `id` a streamed
-  point needs. A test fails when a published description holds link syntax:
-  a code link, a bracketed path, a reference-style link or definition, or an
-  inline link to anything but a URL or a fragment.
+  prose that states what a client can rely on instead: the status each
+  failure of the match endpoint answers, when `stats` events arrive, and the
+  integer `id` a streamed point needs. A test fails when a published
+  description holds link syntax: a code link, a bracketed path, a
+  reference-style link or definition, or an inline link to anything but a URL
+  or a fragment.
+
 - **Three search paths turned an index error into an empty answer.**
   `Collection::search`, `search_ids` and the post-filter fallback logged
   `search_with_quality`'s error and returned `Vec::new()`, from functions that

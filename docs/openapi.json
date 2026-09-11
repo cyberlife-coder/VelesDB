@@ -1676,7 +1676,7 @@
           "graph"
         ],
         "summary": "Execute a MATCH query on a collection.",
-        "description": "# Endpoint\n\n`POST /collections/{name}/match`\n\n# Example Request\n\n```json\n{\n  \"query\": \"MATCH (a:Person)-[:KNOWS]->(b) WHERE similarity(a.vec, $v) > 0.8 RETURN a.name\",\n  \"params\": {\n    \"v\": [0.1, 0.2, 0.3]\n  }\n}\n```\n\n# Errors\n\nAll failures are mapped through the canonical `auto_core_error_response`,\nso the JSON body carries the `VELES-XXX` code and the HTTP status is\nderived from the core error variant:\n- `404 NOT_FOUND` (`VELES-002`) — collection not found\n- `400 BAD_REQUEST` (`VELES-010`) — parse error, not a MATCH query,\n  invalid threshold, or an unbound query parameter\n- any other core variant: `404 NOT_FOUND` for a missing point, edge or node,\n  `409 CONFLICT` for one that already exists, `400 BAD_REQUEST` for other\n  invalid input, `503 SERVICE_UNAVAILABLE` for a locked database or a guard\n  rail, `500 INTERNAL_SERVER_ERROR` for anything else",
+        "description": "# Endpoint\n\n`POST /collections/{name}/match`\n\n# Example Request\n\n```json\n{\n  \"query\": \"MATCH (a:Person)-[:KNOWS]->(b) WHERE similarity(a.vec, $v) > 0.8 RETURN a.name\",\n  \"params\": {\n    \"v\": [0.1, 0.2, 0.3]\n  }\n}\n```\n\n# Errors\n\nA body the JSON extractor rejects gets a plain-text answer: `400` for\nmalformed JSON, `415` without a `Content-Type: application/json` header,\n`422` for JSON that does not match the request shape. A panic in the query\nworker answers `500` with a JSON body that has no `code`. Any other failure\nanswers with its `VELES-XXX` code in a JSON body, and a status that follows\nits core error variant:\n- `404 NOT_FOUND` (`VELES-002`) — collection not found\n- `400 BAD_REQUEST` (`VELES-010`) — parse error, not a MATCH query,\n  invalid threshold, or an unbound query parameter\n- otherwise: `404 NOT_FOUND` for a missing point, edge or node;\n  `409 CONFLICT` for a collection or edge that already exists;\n  `400 BAD_REQUEST` for other invalid input; `503 SERVICE_UNAVAILABLE`\n  for a locked database or a guard rail; `500 INTERNAL_SERVER_ERROR` for\n  anything else",
         "operationId": "match_query",
         "parameters": [
           {
@@ -1732,6 +1732,16 @@
           },
           "500": {
             "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A guard rail stopped the query",
             "content": {
               "application/json": {
                 "schema": {
@@ -2010,7 +2020,7 @@
           "points"
         ],
         "summary": "Stream upsert points using NDJSON.",
-        "description": "Accepts a `application/x-ndjson` body. Each line is one JSON-encoded point,\nwhose `id` is an unsigned 64-bit integer: a line that does not parse as one,\na string `id` included, is counted in the response's `malformed` field.\nPoints are accumulated into micro-batches and flushed via `upsert_bulk`.\n\nThe response body includes a `network_errors` field: a non-zero value means\nthe HTTP body stream was truncated (e.g., client disconnect or proxy error),\nand the server may have received fewer points than the client sent (M-7).",
+        "description": "Accepts a `application/x-ndjson` body. Each line is one JSON-encoded point,\nwhose `id` is an unsigned 64-bit integer: a non-empty line that does not\nparse as one, a string `id` included, is counted in the response's\n`malformed` field.\nPoints are accumulated into micro-batches and flushed via `upsert_bulk`.\n\nThe response body includes a `network_errors` field: a non-zero value means\nthe HTTP body stream was truncated (e.g., client disconnect or proxy error),\nand the server may have received fewer points than the client sent (M-7).",
         "operationId": "stream_upsert_points",
         "parameters": [
           {
