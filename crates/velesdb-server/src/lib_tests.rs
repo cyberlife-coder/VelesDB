@@ -236,7 +236,7 @@ fn collect_rustdoc_links(value: &Value, pointer: &str, linked: &mut Vec<String>)
 
 /// Whether `text` holds rustdoc link syntax: a `[` that opens on a code span
 /// (`` [`Point`] ``), a bracketed path (`[crate::Point]`, `[fn@f]`, `[a#b]`,
-/// `[Vec<T>]`, `[f()]`, `[m!{}]`, `[m![]]`, `[m!]`), a reference-style link
+/// `[Vec<T>]`, `[&str]`, `[*const]`, `[f()]`, `[m!{}]`, `[m!]`), a reference-style link
 /// (`[x][y]`, `[x][]`), a reference definition (any `]:`), or an inline link
 /// to anything but a URL or a fragment.
 ///
@@ -246,7 +246,8 @@ fn collect_rustdoc_links(value: &Value, pointer: &str, linked: &mut Vec<String>)
 /// ``[`asc`, `desc`]``, `&[Vec<f32>]`), give a web link code or a path as its
 /// text, or write a reference-style link or definition, even to a URL; and
 /// prose that looks like one fails too (`[0, 1]: …`, `m[i][j]`, `[#2261]`,
-/// `[ops@x.dev]`). A bare `[Point]` passes: it reads the same as `[sic]`.
+/// `[ops@x.dev]`, `[*note*]`). A bare `[Point]` passes: it reads the same as
+/// `[sic]`.
 /// velesdb-memory's schema guard applies the same rules (#2261).
 fn holds_rustdoc_link(text: &str) -> bool {
     text.contains("][")
@@ -264,8 +265,9 @@ fn holds_rustdoc_link(text: &str) -> bool {
 }
 
 /// Whether the label `after` starts, up to its `]`, names a path: it holds
-/// `::`, `@`, `#` or `<`, or ends in `()`, `!{}`, `![` (as in `[m![]]`) or `!`
-/// once its backticks are dropped and it is trimmed, as rustdoc reads it. It
+/// `::`, `@`, `#`, `<`, `&` or `*` (the reference and pointer primitives), or
+/// ends in `()`, `!{}` or `!`, once its backticks are dropped and it is
+/// trimmed, as rustdoc reads it. It
 /// does so even as a web link's text: an inline link whose target Markdown
 /// rejects falls back to the shortcut link rustdoc resolves.
 fn brackets_a_path(after: &str) -> bool {
@@ -273,10 +275,9 @@ fn brackets_a_path(after: &str) -> bool {
         let label = label.replace('`', "");
         let label = label.trim();
         label.contains("::")
-            || label.contains(['@', '#', '<'])
+            || label.contains(['@', '#', '<', '&', '*'])
             || label.ends_with("()")
             || label.ends_with("!{}")
-            || label.ends_with("![")
             || label.ends_with('!')
     })
 }
@@ -314,7 +315,8 @@ fn test_rustdoc_link_guard_flags_each_link_form() {
         "see [vec! ].",
         "see [stream_traverse`()`].",
         "see [vec`!`].",
-        "see [vec![]].",
+        "see [&str].",
+        "see [*const].",
         "see [crate::Point](https://docs.rs/velesdb-core).",
         "see [crate::Point](https://docs.rs/velesdb-core x).",
         "> see [\n> `Point`] here",
@@ -344,6 +346,7 @@ fn test_rustdoc_link_guard_flags_the_prose_it_documents_as_a_cost() {
         "m[i][j] indexes",
         "see [#2261]",
         "write to [ops@x.dev]",
+        "a [*note*] in emphasis",
         "one of [`asc`, `desc`]",
         "a `&[Vec<f32>]` slice",
     ] {
