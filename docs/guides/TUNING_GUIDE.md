@@ -418,7 +418,9 @@ Use these tables to estimate memory requirements for your workload.
 ### HNSW Index Overhead
 
 The HNSW graph adds approximately `M * 2 * 8` bytes per vector (each link stores a
-`u64` neighbor ID, with up to `2*M` links per node across all layers).
+`u64` neighbor ID, with up to `2*M` links per node across all layers), plus 4
+bytes per base-layer slot for its reachability anchor, allocated up to the
+index's `max_elements`.
 
 | M (max_connections) | Overhead per Vector |
 |--------------------|---------------------|
@@ -441,7 +443,7 @@ For 1 million vectors at 768 dimensions:
 ### Formula
 
 ```
-total_bytes = num_vectors * (dim * bytes_per_element + M * 2 * 8)
+total_bytes = num_vectors * (dim * bytes_per_element + M * 2 * 8) + max_elements * 4
 ```
 
 Where `bytes_per_element` is:

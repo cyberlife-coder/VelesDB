@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`LockRank::ENTRY_POINT_PROMOTION` (rank 8) in the public lock-rank
+  registry (#2259).** The HNSW entry point now moves under a lock, taken
+  after the GPU snapshot's and before the vector store's; an implementation
+  that orders its own locks against core's ranks sees it.
 - **`[search]`'s `default_mode` and `ef_search` reach the engine (#2087).** The
   section was parsed, validated and ignored; an unqualified `search()` now
   resolves through `SearchConfig::resolved_quality()`, with `ef_search` winning
@@ -110,6 +114,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A test fails when a published description holds link syntax: a code link,
   a bracketed path, a reference-style link or definition, or an inline link
   to anything but a URL or a fragment.
+
+- **A node could end up out of reach of every graph search, whatever its
+  `ef` (#2259).** HNSW links each new node to its neighbours and each
+  neighbour back, evicting from a full list to make room, and nothing checked
+  whether an eviction took a node's last in-edge. A breadth-first census from
+  the entry point found parallel batches leaving 5.63 % of a 4-D curve's nodes
+  unreachable on average (20.8 % at worst), 0.65 % of 10 000 random 128-D
+  vectors and 1.73 % of 100 000, and sequential inserts 0.31 % at 10 000.
+  Such a point stays stored and mapped; no search from the entry point
+  reaches it, only an exhaustive `Perfect` search or a multi-entry search
+  whose random probe lands on it. Every node now has an anchor — one base-layer edge from an
+  already-anchored node, or the entry point, that eviction skips — so the
+  anchors form a tree rooted at the entry point and the same census reads 0 in
+  every case. A promoted entry point takes the previous one into its subtree, and
+  `reorder_for_locality` renumbers anchors with their nodes. A loaded graph
+  rebuilds them from its base layer and anchors any node that walk missed, so
+  an index saved before this release is repaired when it is opened; anchors
+  are not persisted, and the file format is unchanged. A full list whose
+  every entry already protects a node sends the new edge one level down the
+  tree rather than grow, so exact duplicates no longer pile up on one node.
+  Two inserts racing for an empty graph's entry point could leave the loser
+  with no edge; the claim is now serialized with every promotion of the entry
+  point, and the loser connects through the winner. Anchors cost four bytes
+  per base-layer slot.
+
+- **A DotProduct neighbour list took in a farther node (#2259).** Choosing
+  which entry of a full list to evict started from a farthest distance of
+  `0.0`, above every DotProduct distance (`-dot`) between positively
+  correlated vectors, so a node farther than every entry still displaced
+  one. A full list now evicts only for a node closer than its farthest
+  entry.
 
 - **Three search paths turned an index error into an empty answer.**
   `Collection::search`, `search_ids` and the post-filter fallback logged

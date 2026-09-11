@@ -413,9 +413,9 @@ correctness itself holds today via review + regression tests).
   invokes it.
 - The HNSW `record_lock_acquire` tracker is **debug-only and warn-only**: on a
   violation it increments an atomic counter and emits `tracing::warn!`, never
-  panics. It is also **partial** — only `GpuVectorsSnapshot`, `Vectors`, and
-  `Layers` are recorded; `Columnar` and `Neighbors` are `#[allow(dead_code)]`
-  and never recorded (2 of 5 core ranks dead).
+  panics. It is also **partial** — only `GpuVectorsSnapshot`, `EntryPointPromotion`,
+  `Vectors` and `Layers` are recorded; `Neighbors` is `#[allow(dead_code)]`
+  and never recorded (1 of 5 core ranks; `Columnar`'s rank 15 is retired).
 - The **collection tier** (the one that deadlocked in 2026-07) is
   **comment-enforced only** — no typed rank, no assertion of any kind guards it.
 

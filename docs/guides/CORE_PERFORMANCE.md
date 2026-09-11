@@ -83,7 +83,8 @@ These are aligned with the canonical numbers in the repository root README.
   queries, so easy ones stop at a low `ef_search` (the gain is not measured
   yet, #2266).
 - **Bulk insert**: turbo/fast batch modes, parallel HNSW indexing, graduated
-  `ef_construction` (VAMANA 3-phase) and lock-free CAS entry-point promotion.
+  `ef_construction` (VAMANA 3-phase), and lock-free entry-point reads (a
+  small lock serializes its rare promotions).
 - **Graph traversal**: a CSR snapshot for zero-copy BFS/DFS, `FxHashSet`
   visited sets, and parent-pointer path reconstruction.
 - **ColumnStore**: typed columnar metadata instead of JSON scanning.

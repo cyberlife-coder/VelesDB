@@ -26,7 +26,8 @@
 //! a public type it would then freeze.
 //!
 //! Locks MUST be acquired in strictly ascending rank:
-//! `gpu < vectors < columnar < layers < neighbors`, then premium `[40, 59]`.
+//! `gpu < entry-point promotion < vectors < layers < neighbors`, then
+//! premium `[40, 59]`.
 
 #[cfg(test)]
 #[path = "lock_rank_tests.rs"]
@@ -43,6 +44,8 @@ pub struct LockRank(u8);
 impl LockRank {
     /// GPU vector snapshot lock — lowest core rank.
     pub const GPU_VECTORS_SNAPSHOT: LockRank = LockRank(5);
+    /// HNSW entry-point promotion lock, taken before the vector store's.
+    pub const ENTRY_POINT_PROMOTION: LockRank = LockRank(8);
     /// Dense-vector storage lock.
     pub const VECTORS: LockRank = LockRank(10);
     /// HNSW layer-structure lock.
