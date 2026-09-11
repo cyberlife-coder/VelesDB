@@ -59,7 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   render (a web link, an image, one whose text is not a code span). It
   leaves a reference-style link, a `#` fragment, a link that spans a line, a
   padded shortcut code link, a code link a backtick touches (its code span
-  would merge with it) or a `'` follows (smart punctuation would read the
+  would merge with it) or a `'` follows (smart punctuation may read the
   quote differently), and a code link a bracket pair would enclose once its
   own brackets go. A test then fails if a published description holds link
   syntax, code spans included:

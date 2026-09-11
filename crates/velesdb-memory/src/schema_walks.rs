@@ -109,25 +109,15 @@ const DISAMBIGUATORS: [&str; 20] = [
 /// leaves a link reads only the text around it, and a rewrite changes that text
 /// only inside the links it rewrites, so a second pass leaves what the first
 /// left.
+///
+/// What the rewrite keeps is the text rustdoc shows. A heading's anchor id is
+/// the renderer's own: rustdoc derives it from the source, a disambiguator
+/// included, and a client derives its own from the text published here.
 pub(super) fn unlink_rustdoc(text: &str) -> Option<String> {
     if !scan_is_exact(text) {
         return None;
     }
-    match unlink_once(text) {
-        Pass::Changed(once) => Some(once),
-        Pass::Unchanged | Pass::Leave => None,
-    }
-}
-
-/// What one pass of the rewrite makes of a text.
-enum Pass {
-    /// It holds no link to rewrite.
-    Unchanged,
-    /// The text with its links rewritten.
-    Changed(String),
-    /// It holds an inline link the rewrite does not render: the text stays as
-    /// written.
-    Leave,
+    unlink_once(text)
 }
 
 /// Whether the scan reads `text` as Markdown does. It models inline code
@@ -178,10 +168,12 @@ fn has_a_code_span_across_lines(text: &str) -> bool {
     false
 }
 
-/// One left-to-right pass of [`unlink_rustdoc`].
-fn unlink_once(text: &str) -> Pass {
+/// One left-to-right pass of [`unlink_rustdoc`]: the text with its links
+/// rewritten, or `None` when it holds none to rewrite, or an inline link the
+/// rewrite does not render.
+fn unlink_once(text: &str) -> Option<String> {
     if !text.contains('[') {
-        return Pass::Unchanged;
+        return None;
     }
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
@@ -202,7 +194,7 @@ fn unlink_once(text: &str) -> Pass {
             // render, a web link or an image: its target and title are not
             // prose, so the whole text stays as written.
             if after_bracket.starts_with('(') {
-                return Pass::Leave;
+                return None;
             }
             out.push(']');
             rest = after_bracket;
@@ -219,11 +211,7 @@ fn unlink_once(text: &str) -> Pass {
         changed = true;
     }
     out.push_str(rest);
-    if changed {
-        Pass::Changed(out)
-    } else {
-        Pass::Unchanged
-    }
+    changed.then_some(out)
 }
 
 /// What rustdoc shows for the link the `[` between `before` and `after` opens,

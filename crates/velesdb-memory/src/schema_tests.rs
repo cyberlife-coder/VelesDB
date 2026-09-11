@@ -445,6 +445,12 @@ mod unlink {
             "](",
             "`b`",
             "_",
+            "'",
+            "'a'",
+            "]:",
+            "\"",
+            "# ",
+            "fn@f",
         ];
         let mut seed: usize = 0x2265_2025;
         let mut next = || {
@@ -584,6 +590,7 @@ mod unlink {
             "[text][crate::X]",
             "[text][`crate::X`]",
             "``a [`b`] c`` in a double-backtick span",
+            "see [`a;b`] here",
         ] {
             assert_eq!(unlink_rustdoc(text), None, "{text}");
         }
