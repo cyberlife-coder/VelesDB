@@ -7,12 +7,12 @@ Generates publication-quality charts for benchmark results.
 import matplotlib.pyplot as plt
 import numpy as np
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 @dataclass
 class BenchmarkResult:
     mode: str
-    ef_search: int
+    ef_search: Optional[int]  # None: Perfect is an exhaustive scan, with no ef
     recall: float  # percentage
     latency_p50_ms: float
 
@@ -21,16 +21,9 @@ class BenchmarkResult:
 RESULTS_10K_128D = [
     BenchmarkResult("Fast", 64, 92.2, 0.036),
     BenchmarkResult("Balanced", 128, 98.8, 0.057),
-    BenchmarkResult("Accurate", 256, 100.0, 0.130),
-    BenchmarkResult("Perfect", 2048, 100.0, 0.200),
-]
-
-# 100K/768D extrapolated from 10K scaling (actual benchmarks pending)
-RESULTS_100K_768D = [
-    BenchmarkResult("Fast", 64, 88.0, 0.6),
-    BenchmarkResult("Balanced", 128, 97.0, 0.9),
-    BenchmarkResult("Accurate", 256, 99.5, 1.5),
-    BenchmarkResult("Perfect", 2048, 100.0, 2.5),
+    # 512, not 256: Accurate's effort since 9c222258 (2026-01-09) (#2250).
+    BenchmarkResult("Accurate", 512, 100.0, 0.130),
+    BenchmarkResult("Perfect", None, 100.0, 0.200),
 ]
 
 @dataclass
@@ -63,7 +56,8 @@ def create_recall_latency_chart(results: List[BenchmarkResult], title: str, file
     # Annotations for each point
     for i, (lat, rec, mode, ef) in enumerate(zip(latencies, recalls, modes, ef_values)):
         offset = (10, 10) if i % 2 == 0 else (10, -15)
-        ax.annotate(f'{mode}\nef={ef}\n{rec:.1f}%', 
+        ef_label = 'exhaustive' if ef is None else f'ef={ef}'
+        ax.annotate(f'{mode}\n{ef_label}\n{rec:.1f}%', 
                    (lat, rec), 
                    textcoords="offset points",
                    xytext=offset,
@@ -94,41 +88,6 @@ def create_recall_latency_chart(results: List[BenchmarkResult], title: str, file
     plt.savefig(filename, dpi=150, bbox_inches='tight', facecolor='white')
     plt.close()
     print(f"✅ Chart saved: {filename}")
-
-def create_comparison_chart(results_10k: List[BenchmarkResult], 
-                           results_100k: List[BenchmarkResult],
-                           filename: str):
-    """Create a side-by-side comparison chart."""
-    
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
-    
-    for ax, results, title, color in [
-        (ax1, results_10k, "10K vectors / 128D", '#2563eb'),
-        (ax2, results_100k, "100K vectors / 768D", '#dc2626')
-    ]:
-        recalls = [r.recall for r in results]
-        latencies = [r.latency_p50_ms for r in results]
-        modes = [r.mode for r in results]
-        
-        ax.plot(latencies, recalls, 'o-', linewidth=2.5, markersize=10, 
-                color=color, markerfacecolor='white', markeredgewidth=2)
-        
-        for lat, rec, mode in zip(latencies, recalls, modes):
-            ax.annotate(f'{mode}', (lat, rec), textcoords="offset points",
-                       xytext=(5, 5), fontsize=9)
-        
-        ax.axhline(y=95, color='green', linestyle='--', alpha=0.5)
-        ax.set_xlabel('Latency P50 (ms)', fontsize=12, fontweight='bold')
-        ax.set_ylabel('Recall@10 (%)', fontsize=12, fontweight='bold')
-        ax.set_title(title, fontsize=14, fontweight='bold')
-        ax.set_ylim(80, 101)
-        ax.grid(True, alpha=0.3)
-    
-    fig.suptitle('VelesDB Core - Recall vs Latency Scaling', fontsize=16, fontweight='bold')
-    plt.tight_layout()
-    plt.savefig(filename, dpi=150, bbox_inches='tight', facecolor='white')
-    plt.close()
-    print(f"✅ Comparison chart saved: {filename}")
 
 def create_native_hnsw_comparison(results: List[NativeVsHnswRsResult], filename: str):
     """Create a bar chart comparing Native HNSW vs hnsw_rs."""
@@ -188,9 +147,13 @@ def create_ef_scaling_chart(results: List[BenchmarkResult], filename: str):
     
     fig, ax1 = plt.subplots(figsize=(12, 7))
     
-    ef_values = [r.ef_search for r in results]
-    recalls = [r.recall for r in results]
-    latencies = [r.latency_p50_ms for r in results]
+    # Perfect sets no ef_search -- it is an exhaustive scan -- so it has no
+    # place on an ef axis. Plot only the modes that set one.
+    swept = sorted((r for r in results if r.ef_search is not None),
+                   key=lambda r: r.ef_search)
+    ef_values = [r.ef_search for r in swept]
+    recalls = [r.recall for r in swept]
+    latencies = [r.latency_p50_ms for r in swept]
     
     # Recall curve (left y-axis)
     color1 = '#2563eb'
@@ -219,11 +182,18 @@ def create_ef_scaling_chart(results: List[BenchmarkResult], filename: str):
                   fontsize=14, fontweight='bold', pad=15)
     ax1.grid(True, alpha=0.3)
     
-    # Highlight: latency doesn't explode
-    fig.text(0.5, 0.02, 
-             '💡 Key insight: 32x ef_search increase (64→2048) = only ~3x latency increase',
-             fontsize=11, ha='center', style='italic', 
-             bbox=dict(boxstyle='round', facecolor='#f0f9ff', edgecolor='#2563eb'))
+    # Computed from the points plotted, so the caption cannot outlive its data;
+    # with fewer than two of them, or no latency to divide by, there is no
+    # ratio to state.
+    if len(swept) >= 2 and swept[0].latency_p50_ms > 0:
+        low, high = swept[0], swept[-1]
+        fig.text(0.5, 0.02,
+                 f'💡 {high.ef_search / low.ef_search:.1f}x ef_search '
+                 f'({low.ef_search}→{high.ef_search}) costs '
+                 f'{high.latency_p50_ms / low.latency_p50_ms:.1f}x P50 latency '
+                 f'for {high.recall - low.recall:+.1f} recall points',
+                 fontsize=11, ha='center', style='italic',
+                 bbox=dict(boxstyle='round', facecolor='#f0f9ff', edgecolor='#2563eb'))
     
     plt.tight_layout()
     plt.savefig(filename, dpi=150, bbox_inches='tight', facecolor='white')
@@ -249,12 +219,6 @@ if __name__ == "__main__":
     create_ef_scaling_chart(
         RESULTS_10K_128D,
         os.path.join(charts_dir, "ef_scaling_10k_128d.png")
-    )
-    
-    create_comparison_chart(
-        RESULTS_10K_128D,
-        RESULTS_100K_768D,
-        os.path.join(charts_dir, "recall_comparison.png")
     )
     
     create_native_hnsw_comparison(

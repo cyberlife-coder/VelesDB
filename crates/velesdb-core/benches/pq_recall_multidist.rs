@@ -202,7 +202,7 @@ fn build_trained_collection(
     (coll, db, dir)
 }
 
-/// Measure average recall@k using default `ef_search` (128).
+/// Measure average recall@k at the default Balanced preset.
 fn measure_recall(
     collection: &VectorCollection,
     queries: &[Vec<f32>],
@@ -445,7 +445,7 @@ fn clustered_recall_benchmarks(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
-// Benchmark Group 2: Binary {0,1} (2 variants, default ef_search=128)
+// Benchmark Group 2: Binary {0,1} (2 variants, default Balanced preset)
 // ---------------------------------------------------------------------------
 
 #[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose

@@ -1,7 +1,8 @@
 //! Brute-force and GPU-accelerated search methods for HNSW index.
 //!
 //! Extracted from `search.rs` for single-responsibility:
-//! - `search_brute_force`: SIMD-optimized exact search for small indices
+//! - `search_brute_force`: SIMD-optimized exact search for small indices, or a
+//!   graph search when exact-distance features are off
 //! - `search_brute_force_gpu`: GPU-accelerated search via wgpu
 //! - `search_brute_force_buffered`: Buffer-reuse variant
 
@@ -106,15 +107,17 @@ impl HnswIndex {
         }
     }
 
-    /// Performs brute-force search for guaranteed 100% recall.
+    /// Performs brute-force search: the exact top-k under the index's own
+    /// distance, ties aside.
     ///
     /// Uses rayon-parallelized distance computation across all stored vectors.
-    /// Falls back to HNSW graph search when vector storage is disabled.
+    /// Falls back to HNSW graph search when the index's exact-distance
+    /// features are off (`enable_vector_storage = false`).
     ///
     /// # Performance
     ///
     /// O(n / cores) where n = number of vectors. Best for small indices
-    /// (<10k vectors) or when perfect recall is required.
+    /// (<10k vectors) or when the exact top-k is required.
     ///
     /// # Errors
     ///
@@ -127,7 +130,7 @@ impl HnswIndex {
     ) -> crate::error::Result<Vec<ScoredResult>> {
         self.validate_dimension(query)?;
 
-        // If vector storage is disabled, fall back to HNSW graph search.
+        // With exact-distance features off, fall back to HNSW graph search.
         // RF-DEDUP: reuse search_hnsw_only instead of duplicating neighbour mapping.
         // Issue #699 follow-up: ef_search_for_scale aligns this fallback with
         // HnswIndex::search_with_quality on >10K datasets. The Accurate intent
@@ -147,7 +150,12 @@ impl HnswIndex {
     /// buffer for GPU upload, avoiding per-vector heap allocations from the
     /// older `collect_for_parallel()` path.
     ///
-    /// Returns `None` if GPU feature is not enabled or GPU is not available.
+    /// Returns `None` without the `gpu` feature, when the index's
+    /// exact-distance features are off, when no GPU is available, when the
+    /// index has no live vector, when a concurrent delete desyncs the
+    /// snapshot, when the metric has no GPU shader (Hamming, Jaccard), or when
+    /// the GPU dispatch fails or returns a score count that does not match the
+    /// snapshot.
     ///
     /// # Errors
     ///
@@ -181,7 +189,12 @@ impl HnswIndex {
     /// Separated from `search_brute_force_gpu` to keep the `#[cfg]` blocks
     /// minimal and the logic testable.
     ///
-    /// RF-DEDUP: `pub(crate)` so `batch.rs` can reuse this for
+    /// Returns `None` in the cases [`Self::search_brute_force_gpu`] lists.
+    /// This function's `enable_vector_storage` check is the one guard every GPU
+    /// brute-force path goes through.
+    ///
+    /// RF-DEDUP: `pub(crate)` so `batch.rs` reuses it for
+    /// `brute_force_search_parallel` and the test-only
     /// `brute_force_search_gpu_dispatch` instead of duplicating the logic.
     #[cfg(feature = "gpu")]
     pub(crate) fn search_brute_force_gpu_inner(
@@ -191,6 +204,12 @@ impl HnswIndex {
     ) -> Option<Vec<ScoredResult>> {
         use crate::gpu::GpuAccelerator;
 
+        // Exact-distance features off: no GPU brute force either. Both GPU
+        // paths (`search_brute_force_gpu`, `brute_force_search_parallel` above
+        // its threshold) come through here.
+        if !self.enable_vector_storage {
+            return None;
+        }
         let gpu = GpuAccelerator::global()?;
 
         // Snapshot vectors under a brief read lock, then release before GPU dispatch
@@ -260,7 +279,7 @@ impl HnswIndex {
     /// # Performance
     ///
     /// O(n) where n = number of vectors. Best for small indices (<10k vectors)
-    /// or when perfect recall is required.
+    /// or when the exact top-k is required.
     ///
     /// # Errors
     ///

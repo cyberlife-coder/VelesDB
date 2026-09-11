@@ -76,10 +76,10 @@ let loaded = NativeHnswIndex::load("./my_index", 768, DistanceMetric::Cosine)?;
 
 | Method | Params | Recall | Speed | Description |
 |--------|--------|--------|-------|-------------|
-| `new(dim, metric)` | M=32, ef=400 | ≥95% | Baseline | Production workloads |
+| `new(dim, metric)` | `auto(dim)`: M=24, ef_construction=300 up to 256 dims; M=32, 400 above | ≥95% | Baseline | Production workloads |
 | `with_params(dim, metric, params)` | Custom | Custom | Custom | Full control |
 | `new_turbo(dim, metric)` | M=12, ef=100 | ~85% | 3-5x faster | Bulk import, dev, benchmarks |
-| `new_fast_insert(dim, metric)` | M/2, ef/2 | ~90% | 2-3x faster | Streaming, no vector storage |
+| `new_fast_insert(dim, metric)` | as `new` | as `new` | as `new` | `new` with exact-distance features off: `brute_force_search_parallel` returns nothing |
 
 ### Operations
 
@@ -89,10 +89,9 @@ let loaded = NativeHnswIndex::load("./my_index", 768, DistanceMetric::Cosine)?;
 | `insert_batch(&[(id, vec)])` | Batch insert |
 | `insert_batch_parallel(items)` | Parallel batch insert |
 | `search(query, k)` | Standard search (Balanced mode) |
-| `search_with_quality(query, k, quality)` | Search with quality preset (Fast/Balanced/Accurate/Perfect/Adaptive/AutoTune) |
-| `search_with_ef(query, k, ef_search)` | Search with explicit ef_search value |
-| `search_batch_parallel(queries, k, ef_search)` | Batch parallel search |
-| `brute_force_search_parallel(query, k)` | Exact search (100% recall) |
+| `search_with_quality(query, k, quality)` | Search with quality preset (Fast/Balanced/Accurate/Perfect/Adaptive/AutoTune). On this type every preset walks the graph: `Perfect` at its large ef, `Adaptive` at `max(min_ef, k)` without escalating, `AutoTune` at Balanced's ef — each scaled up to 2x above 10K vectors by `ef_search_for_scale`; `brute_force_search_parallel` is the exhaustive path |
+| `search_batch_parallel(queries, k, quality)` | Batch parallel search, each query as `search_with_quality` |
+| `brute_force_search_parallel(query, k)` | Exact search: the exact top-k under the index's distance; nothing on an index built with `new_fast_insert` or loaded from one |
 | `remove(id)` | Remove vector |
 
 ### Persistence
@@ -445,7 +444,7 @@ The pipelined path produces **identical results** to the non-pipelined path. Onl
 
 ## AutoTune Search
 
-`SearchQuality::AutoTune` computes optimal `ef_search` range from collection statistics, then delegates to the adaptive two-phase search algorithm. This is the recommended quality setting for applications that want good recall without manual ef tuning.
+On an `HnswIndex` and on a collection, `SearchQuality::AutoTune` computes an `ef_search` range from collection statistics, then delegates to the adaptive two-phase search algorithm; some search paths run it in one pass, scan exactly or ignore the mode instead (see [Search Modes — When the two phases run](../guides/SEARCH_MODES.md#when-the-two-phases-run)). `NativeHnswIndex::search_with_quality` does not: it walks the graph once at Balanced's ef (see Operations). No recorded run measures its latency or recall (#2266).
 
 ### How It Works
 
@@ -454,12 +453,12 @@ The pipelined path produces **identical results** to the non-pipelined path. Onl
      - 0--1K vectors: `k * 2`
      - 1K--10K vectors: `k * 4`
      - 10K--100K vectors: `k * 8`
-     - 100K+ vectors: `k * 12`
+     - more than 100K vectors: `k * 12`
    - **Dimension factor**: high-dimensional spaces (>512) apply a 1.5x multiplier for sparser neighborhoods.
    - **`min_ef`** is clamped to at least `k` (never fewer candidates than requested results).
-   - **`max_ef`** is set to `4 * min_ef`, giving the adaptive second phase ample headroom for hard queries.
+   - **`max_ef`** is set to `4 * min_ef`, a cap the second phase stays under: it doubles `min_ef` once.
 
-2. **Adaptive two-phase search**: starts with `min_ef`, escalates to `max_ef` if the query is hard (same algorithm as `SearchQuality::Adaptive`).
+2. **Adaptive two-phase search**: searches at `min_ef` and, if the query is hard, searches once more at `2 * min_ef`, capped at `max_ef` (same algorithm as `SearchQuality::Adaptive`).
 
 ### Usage
 
@@ -468,6 +467,7 @@ The pipelined path produces **identical results** to the non-pipelined path. Onl
 ```rust
 use velesdb_core::SearchQuality;
 
+// `index` is an `HnswIndex`.
 let results = index.search_with_quality(&query, 10, SearchQuality::AutoTune);
 ```
 
@@ -499,7 +499,7 @@ POST /collections/documents/search
 | Fixed workload, known recall target | `Balanced` or `Accurate` with explicit `ef_search` |
 | Variable collection sizes, no tuning budget | **`AutoTune`** |
 | Latency-critical, recall > 90% acceptable | `Fast` |
-| Must guarantee 100% recall | `Perfect` |
+| Needs the exact top-k | `Perfect` on a collection, or on an `HnswIndex` whose exact-distance features are on (an exhaustive scan); `brute_force_search_parallel` on a `NativeHnswIndex` not built with `new_fast_insert` (nor loaded from one) |
 
 ## Benchmarks
 

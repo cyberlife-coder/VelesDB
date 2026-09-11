@@ -45,15 +45,24 @@ impl HnswIndex {
     ///
     /// # Limitations
     ///
-    /// - No SIMD re-ranking support (`search_with_rerank` falls back to standard search)
-    /// - No brute-force search (`search_brute_force` falls back to HNSW search)
-    /// - Cannot `vacuum()` the index (returns error)
+    /// Exact-distance features are off:
+    ///
+    /// - `search_with_quality` and `search_batch_parallel` skip their automatic
+    ///   two-stage re-rank; an explicit `search_with_rerank` or
+    ///   `search_with_rerank_quality` call still re-ranks, from the graph's
+    ///   stored vectors (`search_with_rerank` from the caller's `rerank_k`
+    ///   candidates, not the pool the index would size)
+    /// - the same two answer `SearchQuality::Perfect`, and any quality on an
+    ///   index of at most 100 vectors, from the graph instead of an exact scan
+    /// - `search_brute_force` falls back to a graph search, and
+    ///   `brute_force_search_parallel` and the GPU scans return nothing;
+    ///   `full_scan_with_bitmap` scans regardless
+    /// - `vacuum()` is refused (returns an error)
     ///
     /// # Use Cases
     ///
     /// - High-velocity streaming data
     /// - Large-scale indexing where recall is more important than perfect precision
-    /// - Memory-constrained environments
     ///
     /// # Errors
     ///
@@ -65,7 +74,7 @@ impl HnswIndex {
     /// use velesdb_core::index::HnswIndex;
     /// use velesdb_core::DistanceMetric;
     ///
-    /// // Fast insert mode: lighter graph params, no exact-distance features
+    /// // Fast insert mode: lighter graph params, exact-distance features off
     /// let index = HnswIndex::new_fast_insert(768, DistanceMetric::Cosine)?;
     /// ```
     pub fn new_fast_insert(dimension: usize, metric: DistanceMetric) -> Result<Self> {
@@ -77,7 +86,8 @@ impl HnswIndex {
     ///
     /// # Trade-offs
     ///
-    /// - **~3-5x faster inserts** than `new()` (M=12, ef=100 vs M=32, ef=400)
+    /// - **~3-5x faster inserts** than `new()` (M=12, ef=100 vs `auto()`'s
+    ///   M=24/300 up to 256 dims, M=32/400 above)
     /// - **Recall**: ~85% (vs ≥95% with standard params)
     /// - **Best for**: Bulk loading, development, benchmarking
     ///
@@ -135,7 +145,8 @@ impl HnswIndex {
         Self::with_params_internal(dimension, metric, params, true)
     }
 
-    /// Internal constructor with vector storage toggle.
+    /// Internal constructor with the exact-distance-features toggle
+    /// (`enable_vector_storage`).
     ///
     /// Honours `params.storage_mode`: `RaBitQ` selects the binary-traversal
     /// backend; every other mode uses the Standard f32 backend (SQ8/Binary
@@ -210,7 +221,11 @@ impl HnswIndex {
     /// * `dimension` - Vector dimension
     /// * `metric` - Distance metric
     /// * `params` - Custom HNSW parameters
-    /// * `enable_vector_storage` - Whether to store vectors for re-ranking
+    /// * `enable_vector_storage` - Whether exact-distance features are on: the
+    ///   automatic two-stage re-rank, the exact scan for `Perfect` and for an
+    ///   index of at most 100 vectors, `search_brute_force`,
+    ///   `brute_force_search_parallel`, the GPU scans and `vacuum` (see
+    ///   [`Self::new_fast_insert`]); the graph keeps its vectors either way
     ///
     /// # Errors
     ///
@@ -482,7 +497,10 @@ impl HnswIndex {
         self.mappings.is_empty()
     }
 
-    /// Returns whether vector storage is enabled.
+    /// Returns whether exact-distance features are on — `false` for an index
+    /// built with [`Self::new_fast_insert`] or `with_params_full(.., false)`, and
+    /// for one loaded from such an index's files. The graph stores its vectors
+    /// either way.
     #[inline]
     #[must_use]
     pub fn has_vector_storage(&self) -> bool {

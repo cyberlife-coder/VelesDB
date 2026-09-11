@@ -92,7 +92,9 @@ impl NativeHnswIndex {
         Self::with_params(dimension, metric, HnswParams::turbo())
     }
 
-    /// Creates an index optimized for fast inserts (no vector storage).
+    /// Creates an index optimized for fast inserts, with its exact-distance
+    /// features off: [`Self::brute_force_search_parallel`] returns nothing. The
+    /// graph still stores every vector.
     ///
     /// # Errors
     ///
@@ -134,7 +136,9 @@ impl NativeHnswIndex {
         self.mappings.is_empty()
     }
 
-    /// Returns whether vector storage is enabled.
+    /// Returns whether exact-distance features are on — `false` for an index
+    /// built with [`Self::new_fast_insert`], or loaded from one. The graph stores
+    /// its vectors either way.
     #[inline]
     #[must_use]
     pub fn has_vector_storage(&self) -> bool {
@@ -288,7 +292,8 @@ impl NativeHnswIndex {
     /// Brute-force exact nearest neighbor search with parallel execution.
     ///
     /// Computes distances to all vectors in the index and returns the k nearest.
-    /// This provides 100% recall but O(n) complexity.
+    /// It returns the exact top-k under the index's own distance, ties aside,
+    /// at O(n) cost.
     ///
     /// # Arguments
     ///
@@ -303,7 +308,7 @@ impl NativeHnswIndex {
     ///
     /// - **Recall validation**: Compare HNSW results against brute-force
     /// - **Small datasets**: When n < 10k, brute-force may be faster
-    /// - **Critical accuracy**: When 100% recall is required
+    /// - **Critical accuracy**: When the exact top-k is required
     // Held across the rayon scan deliberately; the comment below explains
     // why this cannot deadlock a worker (inserts mutate under read guards
     // through interior mutability, so no exclusive write() exists to queue
