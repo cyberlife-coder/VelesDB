@@ -8,12 +8,15 @@ developer's actual Codex configuration.
 
 from __future__ import annotations
 
+import contextlib
 import functools
+import io
 import json
 import os
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import textwrap
 import time
@@ -36,6 +39,11 @@ PWSH_BUDGET_IN_STARTUPS = 200
 # which run 34503494842 spent over 40 s across the launch it killed and the
 # next one.
 PWSH_COLD_START_DEADLINE = 120
+# The least and the most one launch may take, whatever the start-ups read:
+# the floor is the 30 s every launch had before the budget existed, and the
+# ceiling bounds a job with no timeout-minutes when one sample is a burst.
+PWSH_BUDGET_FLOOR = 30.0
+PWSH_BUDGET_CEILING = 180.0
 
 
 def pwsh_argv(pwsh: str, command: str) -> list[str]:
@@ -62,8 +70,8 @@ def _time_pwsh_start(pwsh: str) -> float:
 
 
 @functools.cache
-def pwsh_launch_budget(pwsh: str) -> float | None:
-    """Seconds one pwsh launch may take here, or None if pwsh never started.
+def pwsh_launch_budget(pwsh: str) -> float | str:
+    """Seconds one pwsh launch may take here, or why pwsh could not be timed.
 
     The first pwsh launch on a fresh machine pays a one-time start-up cost
     that has nothing to do with the installer. On GitHub's ubuntu-24.04
@@ -74,14 +82,31 @@ def pwsh_launch_budget(pwsh: str) -> float | None:
     once, outside every test's budget, and the budget is derived from the
     warm start-ups that follow it: a loaded machine starts pwsh slowly and
     gets a proportionally longer budget. The slowest of three is used, so one
-    lucky sample cannot shrink it.
+    lucky sample cannot shrink it, and the budget is kept between
+    PWSH_BUDGET_FLOOR and PWSH_BUDGET_CEILING and printed once. A start-up that
+    fails is cached as well, as the message every pwsh test then fails with,
+    so a broken pwsh is diagnosed once, its stderr included.
     """
     try:
         _time_pwsh_start(pwsh)  # the cold start, kept out of every budget
         warm = max(_time_pwsh_start(pwsh) for _ in range(3))
     except subprocess.TimeoutExpired:
-        return None
-    return PWSH_BUDGET_IN_STARTUPS * warm
+        return f"pwsh did not start within {PWSH_COLD_START_DEADLINE} s"
+    except subprocess.CalledProcessError as failed:
+        stderr = (failed.stderr or b"").decode(errors="replace")
+        return f"pwsh exited {failed.returncode} on start-up:\n{stderr}"
+    except OSError as unrunnable:
+        return f"pwsh could not be run: {unrunnable}"
+    budget = min(
+        max(PWSH_BUDGET_IN_STARTUPS * warm, PWSH_BUDGET_FLOOR), PWSH_BUDGET_CEILING
+    )
+    print(
+        f"pwsh launch budget: {budget:.1f} s ({PWSH_BUDGET_IN_STARTUPS}x a "
+        f"{warm:.2f} s warm start-up, kept within {PWSH_BUDGET_FLOOR:.0f}-"
+        f"{PWSH_BUDGET_CEILING:.0f} s)",
+        file=sys.stderr,
+    )
+    return budget
 
 
 class InstallerHarness(unittest.TestCase):
@@ -196,8 +221,8 @@ class InstallerHarness(unittest.TestCase):
         if pwsh is None:
             self.skipTest("pwsh is not installed")
         budget = pwsh_launch_budget(pwsh)
-        if budget is None:
-            self.fail(f"pwsh did not start within {PWSH_COLD_START_DEADLINE} s")
+        if isinstance(budget, str):
+            self.fail(budget)
         try:
             return subprocess.run(
                 pwsh_argv(pwsh, command),
@@ -211,10 +236,7 @@ class InstallerHarness(unittest.TestCase):
             )
         except subprocess.TimeoutExpired as hung:
             output = (hung.output or b"").decode(errors="replace")
-            self.fail(
-                f"pwsh ran past its {budget:.1f} s budget "
-                f"({PWSH_BUDGET_IN_STARTUPS}x its start-up here):\n{output}"
-            )
+            self.fail(f"pwsh ran past its {hung.timeout:.1f} s budget:\n{output}")
 
     def invocation_log(self) -> list[str]:
         if not self.log.exists():
@@ -228,16 +250,48 @@ class PwshLaunchBudgetTests(InstallerHarness):
             with self.assertRaisesRegex(AssertionError, r"past its 2\.0 s budget"):
                 self.run_pwsh("Start-Sleep -Seconds 60", self.environment())
 
-    def test_a_pwsh_that_never_started_fails_the_launch(self) -> None:
-        with mock.patch(f"{__name__}.pwsh_launch_budget", return_value=None):
+    def test_a_pwsh_that_could_not_be_timed_fails_the_launch(self) -> None:
+        reason = f"pwsh did not start within {PWSH_COLD_START_DEADLINE} s"
+        with mock.patch(f"{__name__}.pwsh_launch_budget", return_value=reason):
             with self.assertRaisesRegex(AssertionError, "did not start within"):
                 self.run_pwsh("exit 0", self.environment())
 
     def test_the_cold_start_is_kept_out_of_the_budget(self) -> None:
-        starts = [45.0, 0.3, 0.2, 0.25]  # cold, then three warm
-        with mock.patch(f"{__name__}._time_pwsh_start", side_effect=starts):
-            budget = pwsh_launch_budget.__wrapped__("pwsh")
+        starts = [45.0, 0.2, 0.25, 0.3]  # cold, then three warm, slowest last
+        printed = io.StringIO()
+        with mock.patch(f"{__name__}._time_pwsh_start", side_effect=starts) as start:
+            with contextlib.redirect_stderr(printed):
+                budget = pwsh_launch_budget.__wrapped__("pwsh")
+        self.assertEqual(start.call_count, 4)
         self.assertEqual(budget, PWSH_BUDGET_IN_STARTUPS * 0.3)
+        self.assertIn(f"pwsh launch budget: {budget:.1f} s", printed.getvalue())
+
+    def test_the_budget_stays_within_its_floor_and_ceiling(self) -> None:
+        for warm, expected in [(0.01, PWSH_BUDGET_FLOOR), (2.0, PWSH_BUDGET_CEILING)]:
+            with mock.patch(
+                f"{__name__}._time_pwsh_start", side_effect=[1.0, warm, warm, warm]
+            ):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(pwsh_launch_budget.__wrapped__("pwsh"), expected)
+
+    def test_a_start_up_that_fails_is_reported_with_its_cause(self) -> None:
+        for failure, message in [
+            (subprocess.TimeoutExpired("pwsh", PWSH_COLD_START_DEADLINE), "did not start within 120 s"),
+            (subprocess.CalledProcessError(1, "pwsh", stderr=b"no libicu"), "exited 1 on start-up:\nno libicu"),
+            (FileNotFoundError(2, "No such file"), "could not be run"),
+        ]:
+            with mock.patch(f"{__name__}._time_pwsh_start", side_effect=failure):
+                self.assertIn(message, pwsh_launch_budget.__wrapped__("pwsh"))
+
+    def test_a_failed_start_up_is_timed_only_once(self) -> None:
+        unrunnable = "/nonexistent/pwsh-that-fails-once"
+        with mock.patch(
+            f"{__name__}._time_pwsh_start", side_effect=OSError("gone")
+        ) as start:
+            first = pwsh_launch_budget(unrunnable)
+            again = pwsh_launch_budget(unrunnable)
+        self.assertEqual(start.call_count, 1)
+        self.assertEqual(again, first)
 
 
 class ShellCodexWiringTests(InstallerHarness):
