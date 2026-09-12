@@ -63,8 +63,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   would merge with it) or a `'` follows (smart punctuation may read the quote
   differently), and a code link a bracket pair would enclose once its own
   brackets go. A test then fails if a published description holds link syntax,
-  code spans included: a `[` that opens on a code span, a bracketed path even
-  as a web link's text (one holding `::`, `@`, `#` or `<`, naming a primitive
+  code spans included: a label holding a code span, a bracketed path even as a
+  web link's text (one holding `::`, `@`, `#` or `<`, naming a primitive
   rustdoc links from a sigil such as `&str` or `*const`, or ending in `()`,
   `!{}` or `!`), a reference-style link or definition, or an inline link to
   anything but a URL or a fragment. (#2261)

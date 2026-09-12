@@ -408,6 +408,7 @@ mod unlink {
             "the [crate::Recollection] it returns",
             "a [struct@Foo] value",
             "see [m!()]",
+            "see [a`b`] here",
         ] {
             assert_eq!(unlink_rustdoc(text), None, "{text:?}");
             assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
@@ -819,21 +820,25 @@ mod unlink {
     /// A shortcut code link whose label is 1000 bytes or longer stays as
     /// written: rustdoc's Markdown parser may stop reading it, and rustdoc
     /// then shows the brackets, as it does for a label holding 500 `é` or a
-    /// thousand single spaces. The guard fails on each. A shorter label is
-    /// rewritten, whatever it holds.
+    /// thousand single spaces. The guard fails on each. The limit is exact: a
+    /// label of 999 bytes is not left for its length, one of 1000 is.
     #[test]
     fn a_shortcut_code_link_past_the_label_limit_stays_as_written() {
         let long_name = format!("see [`E::N{}`] here", "é".repeat(500));
         let long_generics = format!("see [`G<{}A>`] here", "A, ".repeat(1000));
-        for text in [&long_name, &long_generics] {
+        let at_the_limit = format!("[`{}`]", "a".repeat(998));
+        for text in [&long_name, &long_generics, &at_the_limit] {
             assert_eq!(unlink_rustdoc(text), None, "{text:?}");
             assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
         }
-        let short = format!("[`E::N{}`]", "é".repeat(400));
-        assert_eq!(
-            unlink_rustdoc(&short).as_deref(),
-            Some(&short[1..short.len() - 1])
-        );
+        for code in ["a".repeat(997), format!("E::N{}", "é".repeat(400))] {
+            let below = format!("[`{code}`]");
+            assert_eq!(
+                unlink_rustdoc(&below),
+                Some(format!("`{code}`")),
+                "{below:?}"
+            );
+        }
     }
 
     /// A shortcut code link padded inside its brackets or its backticks, or
@@ -1038,22 +1043,21 @@ mod unlink {
         assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
     }
 
-    /// Whether `text` holds rustdoc link syntax: a `[` that opens on a code
-    /// span (`` [`Point`] ``), a bracketed path (`[crate::Point]`, `[fn@f]`,
-    /// `[a#b]`, `[Vec<T>]`, `[&str]`, `[*const]`, `[f()]`, `[m!{}]`, `[m!]`), a
-    /// reference-style link (`[x][y]`, `[x][]`), a reference definition (any
-    /// `]:`), or an inline link to anything but a URL or a fragment. Every link
-    /// the rewrite recognizes is one of these.
+    /// Whether `text` holds rustdoc link syntax: a label holding a code span,
+    /// wherever it opens (`` [`Point`] ``, ``[a`b`]``), a bracketed path
+    /// (`[crate::Point]`, `[fn@f]`, `[a#b]`, `[Vec<T>]`, `[&str]`, `[*const]`,
+    /// `[f()]`, `[m!{}]`, `[m!]`), a reference-style link (`[x][y]`, `[x][]`),
+    /// a reference definition (any `]:`), or an inline link to anything but a
+    /// URL or a fragment. Every link the rewrite recognizes is one of these.
     ///
     /// It reads the raw text, so no Markdown construct (a code span, a quote, a
     /// list item) can hide one of these forms from it. What that costs: a
     /// description cannot show one even as code (`` `[x](y)` ``,
     /// ``[`asc`, `desc`]``, `&[Vec<f32>]`), give a web link text holding code
     /// or a path's mark (`[issue #2261](…)`, `[Try it!](…)`), or write a
-    /// reference-style link or definition, even to a URL;
-    /// and prose that looks like one fails too (`[0, 1]: …`, `m[i][j]`,
-    /// `[#2261]`, `[ops@x.dev]`). A bare `[Point]` passes: it reads the same as
-    /// `[sic]`.
+    /// reference-style link or definition, even to a URL; and prose that looks
+    /// like one fails too (`[0, 1]: …`, `m[i][j]`, `[#2261]`, `[ops@x.dev]`,
+    /// ``[see `x`]``). A bare `[Point]` passes: it reads the same as `[sic]`.
     fn holds_rustdoc_link(text: &str) -> bool {
         text.contains("][")
             || text.contains("]:")
@@ -1062,24 +1066,30 @@ mod unlink {
                 .any(|(at, _)| !is_url(target_start(&text[at + 2..])))
             || text.match_indices('[').any(|(at, _)| {
                 let after = &text[at + 1..];
-                after
-                    .trim_start_matches(|c: char| c.is_whitespace() || c == '>')
-                    .starts_with('`')
-                    || brackets_a_path(after)
+                label_holds_a_backtick(after) || brackets_a_path(after)
             })
+    }
+
+    /// Whether the label `after` starts, up to its first `]`, holds a backtick.
+    /// Code anywhere in a label can make it a rustdoc link: ``[a`b`]`` links to
+    /// `ab`. A `[` no `]` closes opens no link.
+    fn label_holds_a_backtick(after: &str) -> bool {
+        after
+            .split_once(']')
+            .is_some_and(|(label, _)| label.contains('`'))
     }
 
     /// Whether the label `after` starts, up to its `]`, names a path: it holds
     /// `::`, `@`, `#` or `<`, is one of the primitives rustdoc links from a
     /// sigil (`&`, `&mut`, `&str`, `*const`, `*mut`), or ends in `()`, `!{}` or
-    /// `!`, once its backticks are dropped and it is trimmed of whitespace and
-    /// a quote's `>`, as rustdoc reads it. The label is read even as a web
+    /// `!`, once it is trimmed of whitespace and a quote's `>`, as rustdoc
+    /// reads it. A label holding a backtick never gets here:
+    /// `label_holds_a_backtick` flags it first. The label is read even as a web
     /// link's text: an inline link whose target Markdown rejects falls back to
     /// the shortcut link rustdoc resolves. Any other `&` or `*` (`[Q&A]`,
     /// `-[*1..5]->`) is text to rustdoc.
     fn brackets_a_path(after: &str) -> bool {
         after.split_once(']').is_some_and(|(label, _)| {
-            let label = label.replace('`', "");
             let label = label.trim_matches(|c: char| c.is_whitespace() || c == '>');
             label.contains("::")
                 || label.contains(['@', '#', '<'])
@@ -1162,6 +1172,7 @@ mod unlink {
             "write to [ops@x.dev](mailto:ops@x.dev)",
             "one of [`asc`, `desc`]",
             "a `&[Vec<f32>]` slice",
+            "see [see `x`] here",
         ] {
             assert!(holds_rustdoc_link(text), "{text}");
         }
