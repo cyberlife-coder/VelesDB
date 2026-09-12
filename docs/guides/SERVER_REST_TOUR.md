@@ -222,9 +222,10 @@ curl -X POST http://localhost:8080/v1/collections/demo/search \
 detail. A `mode` the server cannot parse (a typo, or `adaptive` with `min`
 above `max`) is a `400` naming the accepted forms on `/search` and
 `/search/ids`, whatever the request's shape (dense, sparse, or both), and on
-each `/search/batch` entry, even where the mode is not applied. The endpoints
-with no `mode` field (`/search/hybrid`, `/search/text`, `/search/multi`)
-ignore it, as they ignore any field they do not know.
+each `/search/batch` entry, even where the mode is not applied. The search
+endpoints with no `mode` field (`/search/hybrid`, `/search/text`,
+`/search/multi`, `/search/multi/ids`, `/graph/search`) ignore it, as they
+ignore any field they do not know.
 
 ### Full-text (BM25)
 

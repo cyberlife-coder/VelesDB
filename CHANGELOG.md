@@ -117,9 +117,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `execute_aggregate`, which the Tauri plugin and embedders call directly,
     now runs the validator too;
   - REST answers `400` on `/search` and `/search/ids`, whatever the request's
-    shape (dense, sparse or hybrid), and on `/search/batch`, naming the entry;
+    shape (dense, sparse, or both), and on `/search/batch`, naming the entry;
     `/search/ids` sends any request carrying a mode past its fast path, which
-    has no quality dispatch of its own;
+    has no quality dispatch of its own. The search endpoints with no `mode`
+    field (`/search/hybrid`, `/search/text`, `/search/multi`,
+    `/search/multi/ids`, `/graph/search`) ignore it, as they ignore any field
+    they do not know;
   - the CLI REPL refuses such a mode at `\set mode`, accepts the aliases
     `auto` and `auto_tune` as the server does, and no longer masks an inline
     `quality` it cannot read with the session mode; the Tauri plugin reports a

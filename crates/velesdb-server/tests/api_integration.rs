@@ -3056,9 +3056,10 @@ async fn test_search_unknown_mode_returns_400() {
     }
 }
 
-/// A bad `mode` is refused on every search shape, including the sparse,
-/// hybrid and batch ones that apply no mode, and by `/query` and
-/// `/query/explain`. The same requests with a good mode succeed (#2267).
+/// A bad `mode` is refused on `/search` and `/search/ids` whatever the
+/// request's shape (sparse, or dense plus sparse), on a `/search/batch` entry,
+/// and by `/query` and `/query/explain` (`V013`). The five `/search*` requests
+/// succeed with a good mode (#2267).
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn test_bad_mode_is_refused_on_every_search_shape() {

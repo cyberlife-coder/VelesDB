@@ -139,7 +139,10 @@ export interface IVelesDBBackend {
       vector: number[] | Float32Array;
       k?: number;
       filter?: FilterInput;
-      /** Per-sub-request search quality preset (default: server default). */
+      /**
+       * Per-sub-request search quality preset. The server answers `400` for a
+       * preset it cannot parse, but applies none to a batch entry (#2267).
+       */
       quality?: SearchQuality;
     }>
   ): Promise<SearchResult[][]>;
