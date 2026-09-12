@@ -227,9 +227,9 @@ fn test_with_unknown_mode_returns_query_error() {
 }
 
 /// A bad mode fails every query shape, including those that return before
-/// the main search (union, `NEAR_FUSED`) and the `quality` alias, and so does
-/// a mode that is not a string. The same queries with a good mode run
-/// (#2267).
+/// the main search (union, `NEAR_FUSED`), the `quality` alias, and a bad mode
+/// an earlier, valid one shadows; so does a mode that is not a string. The
+/// same queries with a good mode run (#2267).
 #[test]
 fn test_with_bad_mode_fails_every_query_shape() {
     let (_dir, col) = setup_with_options_collection();
@@ -239,6 +239,8 @@ fn test_with_bad_mode_fails_every_query_shape() {
     for shape in [
         "SELECT * FROM docs WHERE vector NEAR $v LIMIT 5 WITH (mode = {m})",
         "SELECT * FROM docs WHERE vector NEAR $v LIMIT 5 WITH (quality = {m})",
+        "SELECT * FROM docs WHERE vector NEAR $v LIMIT 5 WITH (mode = 'fast', quality = {m})",
+        "SELECT * FROM docs WHERE vector NEAR $v LIMIT 5 WITH (mode = 'fast', mode = {m})",
         concat!(
             "SELECT * FROM docs WHERE similarity(vector, $v) > 0.1 OR idx > 5 ",
             "LIMIT 5 WITH (mode = {m})"
@@ -256,43 +258,57 @@ fn test_with_bad_mode_fails_every_query_shape() {
     }
 }
 
-/// `mode` wins over its alias `quality`, a bare identifier reads as a string,
-/// and a value that is not a string is an error (#2267).
+/// `mode` wins over its alias `quality`, the first of a repeated key applies,
+/// and a bare identifier reads as a string; but every value given must be a
+/// mode, so a typo or a value that is not a string is an error even where
+/// another value applies (#2267).
 #[test]
 fn test_with_clause_search_quality() {
     use crate::velesql::{WithClause, WithValue};
     use crate::SearchQuality;
     let string = |s: &str| WithValue::String(s.to_string());
-    assert!(matches!(WithClause::new().search_quality(), Ok(None)));
-    assert!(matches!(
-        WithClause::new()
-            .with_option("quality", string("fast"))
-            .search_quality(),
-        Ok(Some(SearchQuality::Fast))
-    ));
-    assert!(matches!(
-        WithClause::new()
-            .with_option("mode", string("fast"))
-            .with_option("quality", string("acurate"))
-            .search_quality(),
-        Ok(Some(SearchQuality::Fast))
-    ));
-    assert!(matches!(
-        WithClause::new()
-            .with_option("mode", WithValue::Identifier("accurate".to_string()))
-            .search_quality(),
-        Ok(Some(SearchQuality::Accurate))
-    ));
-    for bad in [
-        string("acurate"),
-        WithValue::Integer(5),
-        WithValue::Float(0.5),
-        WithValue::Boolean(true),
+    let clause = |options: Vec<(&str, WithValue)>| {
+        options
+            .into_iter()
+            .fold(WithClause::new(), |with, (key, value)| {
+                with.with_option(key, value)
+            })
+    };
+    assert_eq!(WithClause::new().search_quality(), Ok(None));
+    for (options, quality) in [
+        (vec![("quality", string("fast"))], SearchQuality::Fast),
+        (
+            vec![("mode", string("fast")), ("quality", string("accurate"))],
+            SearchQuality::Fast,
+        ),
+        (
+            vec![("quality", string("accurate")), ("mode", string("fast"))],
+            SearchQuality::Fast,
+        ),
+        (
+            vec![("mode", string("fast")), ("mode", string("accurate"))],
+            SearchQuality::Fast,
+        ),
+        (
+            vec![("mode", WithValue::Identifier("accurate".to_string()))],
+            SearchQuality::Accurate,
+        ),
     ] {
-        assert!(WithClause::new()
-            .with_option("mode", bad)
-            .search_quality()
-            .is_err());
+        let with = clause(options);
+        assert_eq!(with.search_quality(), Ok(Some(quality)), "{with:?}");
+    }
+    for options in [
+        vec![("mode", string("acurate"))],
+        vec![("mode", WithValue::Integer(5))],
+        vec![("mode", WithValue::Float(0.5))],
+        vec![("mode", WithValue::Boolean(true))],
+        vec![("mode", string("fast")), ("quality", string("acurate"))],
+        vec![("quality", string("acurate")), ("mode", string("fast"))],
+        vec![("mode", string("fast")), ("mode", string("acurate"))],
+        vec![("MODE", string("fast")), ("Mode", WithValue::Integer(5))],
+    ] {
+        let with = clause(options);
+        assert!(with.search_quality().is_err(), "{with:?}");
     }
 }
 

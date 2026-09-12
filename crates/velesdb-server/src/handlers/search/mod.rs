@@ -26,7 +26,7 @@ use crate::AppState;
 use super::helpers::{apply_pre_check, extract_client_id, get_vector_collection_or_404};
 use pipeline::{
     execute_dense_search_ids, execute_search_request, finish_search_ids_with_cb,
-    finish_search_with_cb, finish_search_with_status, ids_fast_path_eligible,
+    finish_search_with_cb, finish_search_with_status, ids_fast_path_eligible, parse_mode_or_400,
     parse_optional_filter, timeout_response, validate_query_dimension,
 };
 use workers::{run_blocking_search, run_search_with_optional_timeout};
@@ -63,14 +63,18 @@ fn search_preamble(
 /// Executes the full search pipeline and records circuit-breaker on failure.
 ///
 /// Shared by `/search` and `/search/ids` (both accept `SearchRequest`).
+/// `quality_mode` is the request's `mode`, which the handler parsed with
+/// [`parse_mode_or_400`] before this point, so that a bad one is refused as
+/// the client's error and never counted as the collection's failure (#2267).
 #[allow(clippy::result_large_err)]
 fn execute_with_cb(
     state: &AppState,
     name: &str,
     collection: &VectorCollection,
     req: &mut SearchRequest,
+    quality_mode: Option<velesdb_core::SearchQuality>,
 ) -> Result<velesdb_core::Result<Vec<velesdb_core::SearchResult>>, axum::response::Response> {
-    execute_search_request(state, name, collection, req).inspect_err(|_| {
+    execute_search_request(state, name, collection, req, quality_mode).inspect_err(|_| {
         collection.guard_rails().circuit_breaker.record_failure();
     })
 }
@@ -115,6 +119,10 @@ pub async fn search(
         state.operational_metrics.inc_rate_limited();
         return resp;
     }
+    let quality_mode = match parse_mode_or_400(&state, req.mode.as_deref()) {
+        Ok(quality_mode) => quality_mode,
+        Err(resp) => return resp,
+    };
 
     // F-03: honour the per-request `timeout_ms` budget. The synchronous
     // search runs on a blocking worker so the async runtime stays
@@ -132,6 +140,7 @@ pub async fn search(
             &name_for_work,
             &collection_for_work,
             &mut owned_req,
+            quality_mode,
         )
     })
     .await;
@@ -165,8 +174,9 @@ fn execute_search_with_cb_owned(
     name: &str,
     collection: &VectorCollection,
     req: &mut SearchRequest,
+    quality_mode: Option<velesdb_core::SearchQuality>,
 ) -> Result<velesdb_core::Result<Vec<velesdb_core::SearchResult>>, axum::response::Response> {
-    execute_with_cb(state, name, collection, req)
+    execute_with_cb(state, name, collection, req, quality_mode)
 }
 
 /// Owned-request variant for `/search/ids`: takes the `search_ids` fast path
@@ -179,12 +189,13 @@ fn execute_search_ids_with_cb_owned(
     name: &str,
     collection: &VectorCollection,
     req: &mut SearchRequest,
+    quality_mode: Option<velesdb_core::SearchQuality>,
 ) -> Result<velesdb_core::Result<Vec<velesdb_core::SearchResult>>, axum::response::Response> {
     if ids_fast_path_eligible(req) {
         return execute_dense_search_ids(state, name, collection, req)
             .inspect_err(|_| collection.guard_rails().circuit_breaker.record_failure());
     }
-    execute_with_cb(state, name, collection, req)
+    execute_with_cb(state, name, collection, req, quality_mode)
 }
 
 /// Search using BM25 full-text search.
@@ -390,6 +401,10 @@ pub async fn search_ids(
         state.operational_metrics.inc_rate_limited();
         return resp;
     }
+    let quality_mode = match parse_mode_or_400(&state, req.mode.as_deref()) {
+        Ok(quality_mode) => quality_mode,
+        Err(resp) => return resp,
+    };
 
     // F-03: honour the per-request `timeout_ms` budget and run the
     // CPU-bound search on a blocking worker so the async runtime stays
@@ -407,6 +422,7 @@ pub async fn search_ids(
             &name_for_work,
             &collection_for_work,
             &mut owned_req,
+            quality_mode,
         )
     })
     .await;

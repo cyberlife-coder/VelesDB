@@ -113,11 +113,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - VelesQL checks `mode`, and its alias `quality`, in the query validator,
     before any dispatch: every query shape fails with `V013`, the union,
     `SPARSE_NEAR` and `NEAR_FUSED` paths and `EXPLAIN` included, and so does a
-    mode that is not a string (`mode = 5`). A collection's own
+    mode that is not a string (`mode = 5`) or one another entry shadows
+    (`mode = 'fast', quality = 'acurate'`). A collection's own
     `execute_aggregate`, which the Tauri plugin and embedders call directly,
     now runs the validator too;
   - REST answers `400` on `/search` and `/search/ids`, whatever the request's
-    shape (dense, sparse, or both), and on `/search/batch`, naming the entry;
+    shape (dense, sparse, or both), and on `/search/batch`, naming the entry,
+    before the collection's circuit breaker counts the request, so a client
+    repeating a typo cannot make it answer `503` to every other client;
     `/search/ids` sends any request carrying a mode past its fast path, which
     has no quality dispatch of its own. The search endpoints with no `mode`
     field (`/search/hybrid`, `/search/text`, `/search/multi`,

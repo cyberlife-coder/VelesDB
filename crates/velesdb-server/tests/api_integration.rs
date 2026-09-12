@@ -3056,6 +3056,69 @@ async fn test_search_unknown_mode_returns_400() {
     }
 }
 
+/// A bad `mode` is the client's error, not the collection's: refusing it
+/// records no circuit-breaker failure, so a client repeating a typo on
+/// `/search` or `/search/ids` cannot make the collection answer every other
+/// client's searches with `503` (#2267).
+#[tokio::test]
+async fn test_bad_mode_does_not_open_the_circuit_breaker() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let (app, state) = create_test_app_with_state(&temp_dir);
+    let post = |uri: &str, body: &Value| {
+        Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header("Content-Type", "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("Failed to build request")
+    };
+    let collection = json!({"name": "mode_breaker", "dimension": 4, "metric": "cosine"});
+    let response = app
+        .clone()
+        .oneshot(post("/collections", &collection))
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let points = json!({"points": [{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]}]});
+    let response = app
+        .clone()
+        .oneshot(post("/collections/mode_breaker/points", &points))
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+    let threshold = state
+        .db
+        .get_vector_collection("mode_breaker")
+        .expect("the collection exists")
+        .guard_rails()
+        .limits()
+        .circuit_failure_threshold;
+    let uris = [
+        "/collections/mode_breaker/search",
+        "/collections/mode_breaker/search/ids",
+    ];
+    let bad = json!({"vector": [1.0, 0.0, 0.0, 0.0], "top_k": 1, "mode": "acurate"});
+    let good = json!({"vector": [1.0, 0.0, 0.0, 0.0], "top_k": 1});
+    for uri in uris {
+        for _ in 0..threshold {
+            let response = app
+                .clone()
+                .oneshot(post(uri, &bad))
+                .await
+                .expect("Request failed");
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{uri}");
+        }
+    }
+    for uri in uris {
+        let response = app
+            .clone()
+            .oneshot(post(uri, &good))
+            .await
+            .expect("Request failed");
+        assert_eq!(response.status(), StatusCode::OK, "{uri}");
+    }
+}
+
 /// A bad `mode` is refused on `/search` and `/search/ids` whatever the
 /// request's shape (sparse, or dense plus sparse), on a `/search/batch` entry,
 /// and by `/query` and `/query/explain` (`V013`). The five `/search*` requests

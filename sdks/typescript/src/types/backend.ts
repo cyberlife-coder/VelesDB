@@ -140,8 +140,9 @@ export interface IVelesDBBackend {
       k?: number;
       filter?: FilterInput;
       /**
-       * Per-sub-request search quality preset. The server answers `400` for a
-       * preset it cannot parse, but applies none to a batch entry (#2267).
+       * Per-sub-request search quality preset. On the REST backend the server
+       * answers `400` for a preset it cannot parse, but applies none to a batch
+       * entry (#2267); the WASM backend ignores it.
        */
       quality?: SearchQuality;
     }>

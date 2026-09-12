@@ -246,15 +246,19 @@ pub(crate) fn parse_fusion_strategy(
     }
 }
 
-/// Parses a search request's `mode`, or answers `400` naming the accepted
-/// forms. [`execute_search_request`] runs it before choosing a shape, so a
-/// mode the parser rejects fails every shape, including the sparse and hybrid
-/// ones that do not apply it, and never silently (#2267).
+/// Parses a search request's `mode`, or counts a request error and answers
+/// `400` naming the accepted forms. The `/search` and `/search/ids` handlers
+/// run it before the circuit breaker's section and before choosing a shape,
+/// so a mode the parser rejects fails every shape, including the sparse and
+/// hybrid ones that do not apply it, never silently, and never as the
+/// collection's failure (#2267).
 #[allow(clippy::result_large_err)]
 pub(crate) fn parse_mode_or_400(
+    state: &AppState,
     mode: Option<&str>,
 ) -> Result<Option<velesdb_core::SearchQuality>, axum::response::Response> {
     mode.map(parse_search_mode).transpose().map_err(|error| {
+        state.operational_metrics.inc_errors();
         (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse { error, code: None }),
@@ -341,9 +345,8 @@ fn has_sparse_input(req: &SearchRequest) -> bool {
 /// `search_ids` run the same HNSW traversal, so the fast path returns an
 /// identical id/score ranking; any other shape falls back to the generic
 /// pipeline to stay correct. A request carrying a `mode` always falls back,
-/// whether or not it parses: this path has no quality dispatch of its own,
-/// and routing an unparseable mode through it would silently ignore the typo
-/// instead of surfacing it as a 400 (#2267).
+/// as this path has no quality dispatch of its own; the handler has already
+/// refused a `mode` it cannot parse (#2267).
 pub(crate) fn ids_fast_path_eligible(req: &SearchRequest) -> bool {
     !req.vector.is_empty()
         && req.filter.is_none()
@@ -452,17 +455,18 @@ impl<'a> SearchMode<'a> {
 }
 
 /// Runs the full search pipeline (dense, sparse, or hybrid) based on
-/// `SearchRequest` fields. Returns search results or an error response. The
-/// request's `mode` is parsed first ([`parse_mode_or_400`]), whatever the
-/// shape.
+/// `SearchRequest` fields. Returns search results or an error response.
+/// `quality_mode` is the request's `mode`, which the handler parsed with
+/// [`parse_mode_or_400`] before the circuit breaker could count a bad one as
+/// the collection's failure (#2267).
 #[allow(clippy::result_large_err)]
 pub(crate) fn execute_search_request(
     state: &AppState,
     name: &str,
     collection: &VectorCollection,
     req: &mut SearchRequest,
+    quality_mode: Option<velesdb_core::SearchQuality>,
 ) -> Result<velesdb_core::Result<Vec<velesdb_core::SearchResult>>, axum::response::Response> {
-    let quality_mode = parse_mode_or_400(req.mode.as_deref())?;
     let sparse_vec = resolve_sparse_input(req)?;
     let has_dense = !req.vector.is_empty();
 
