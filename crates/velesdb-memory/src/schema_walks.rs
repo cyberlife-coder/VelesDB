@@ -90,9 +90,9 @@ const DISAMBIGUATORS: [&str; 20] = [
 /// differently once its brackets go ([`rustdoc_link`]). A bare `[name]` stays
 /// whether or not rustdoc resolves it (`map[key]`, `[sic]`), and so do
 /// `[0, 1]`, a shortcut code link whose code is not one word or does not read
-/// as a path (``[`a.b`]``) or that is padded ([`code_link`]), and a web link.
-/// Whether a name resolves, a schema cannot check: rustdoc warns on one that
-/// does not, and CI builds each crate's docs with `-D warnings`.
+/// as a path (``[`a.b`]``) or is not singly spaced ([`code_link`]), and a web
+/// link. Whether a name resolves, a schema cannot check: rustdoc warns on one
+/// that does not, and CI builds each crate's docs with `-D warnings`.
 ///
 /// It also leaves as written every link in a text it cannot read exactly
 /// ([`scan_is_exact`]), such as one holding a reference-style link
@@ -382,13 +382,11 @@ const LINE_ENDINGS: [char; 2] = ['\n', '\r'];
 
 /// A code link, ``[`code`]``: shown as its code span when the code is one
 /// word that reads as a path ([`reads_as_a_path`]), without its
-/// disambiguator. A code span padded inside its backticks, on either side
-/// (``[` fn@f `]``, ``[`fn@f `]``), or holding a run of spaces (``[`fn@  f`]``)
-/// stays as written: rustdoc does not always drop its disambiguator there, and
-/// the rewrite does not model when.
+/// disambiguator. A code span that is not singly spaced ([`is_singly_spaced`])
+/// stays as written.
 fn code_link<'a>(label: &'a str, tail: &'a str) -> Option<(Cow<'a, str>, &'a str)> {
     let code = &label[1..label.len() - 1];
-    if code != code.trim() || code.contains("  ") {
+    if !is_singly_spaced(code) {
         return None;
     }
     // rustdoc trims the path after a disambiguator.
@@ -402,6 +400,17 @@ fn code_link<'a>(label: &'a str, tail: &'a str) -> Option<(Cow<'a, str>, &'a str
         Cow::Owned(format!("`{word}`"))
     };
     Some((shown, tail))
+}
+
+/// Whether `code` holds no whitespace but single spaces between words, as a
+/// shortcut code link must for the rewrite to show it. rustdoc 1.90 can keep a
+/// disambiguator in a code span padded inside its backticks (``[` fn@f `]``),
+/// and does in one holding a run of spaces (``[`fn@  f`]``), a form feed or a
+/// vertical tab. The rewrite does not model when, and leaves any whitespace but
+/// a single space, a no-break space included.
+fn is_singly_spaced(code: &str) -> bool {
+    code.split(' ')
+        .all(|word| !word.is_empty() && !word.contains(char::is_whitespace))
 }
 
 /// The path rustdoc 1.90 resolves for the link text `word`: `word` past a call

@@ -549,10 +549,10 @@ mod unlink {
     /// span), and a space between them would show what rustdoc does not. So
     /// does one a `'` follows: rustdoc's smart punctuation reads that `'` as an
     /// apostrophe after `]` or `)`, and as a quote that may open after a
-    /// backtick. The guard fails on each. A `'` before the link reads the same
-    /// either way, and the link is rewritten.
+    /// backtick. The guard fails on each. A `'` before the link, or a `"` after
+    /// it, reads the same either way, and the link is rewritten.
     #[test]
-    fn a_code_link_a_backtick_touches_or_a_quote_follows_stays_as_written() {
+    fn a_code_link_a_backtick_touches_or_an_apostrophe_follows_stays_as_written() {
         for text in [
             "[`a`]`b`",
             "`a`[`b`]",
@@ -567,6 +567,10 @@ mod unlink {
             assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
         }
         assert_eq!(unlink_rustdoc("'[`X`] b").as_deref(), Some("'`X` b"));
+        assert_eq!(
+            unlink_rustdoc("see [`X`]\"a\" end").as_deref(),
+            Some("see `X`\"a\" end")
+        );
     }
 
     /// Brackets that hold no code link rustdoc resolves stay as written, such
@@ -787,6 +791,29 @@ mod unlink {
             assert_eq!(unlink_rustdoc(text), None, "{text:?}");
             assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
         }
+    }
+
+    /// A shortcut code link whose code holds whitespace but single spaces
+    /// between words stays as written: rustdoc 1.90 keeps the disambiguator
+    /// after a form feed or a vertical tab, and the rewrite leaves any other
+    /// whitespace too, a no-break space included. The guard fails on each. A
+    /// single space after the disambiguator goes with it, as in rustdoc.
+    #[test]
+    fn a_shortcut_code_link_holding_other_whitespace_stays_as_written() {
+        for text in [
+            "see [`fn@\u{c}f`] here",
+            "see [`fn@\u{b}f`] here",
+            "see [`fn@ \u{c}f`] here",
+            "see [`struct@\u{c}X`] here",
+            "see [`fn@\u{a0}f`] here",
+        ] {
+            assert_eq!(unlink_rustdoc(text), None, "{text:?}");
+            assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
+        }
+        assert_eq!(
+            unlink_rustdoc("see [`fn@ f`] here").as_deref(),
+            Some("see `f` here")
+        );
     }
 
     /// A shortcut code link padded inside its brackets or its backticks, or
