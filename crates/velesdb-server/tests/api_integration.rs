@@ -2976,6 +2976,214 @@ async fn test_search_ids_with_mode() {
     }
 }
 
+/// An unparseable `mode` must fail with a 400 naming the accepted forms
+/// instead of silently running at the default quality (#2267). Covers both
+/// `/search` and `/search/ids`, whose eligibility check for the ids-only fast
+/// path used to swallow the same typo.
+#[tokio::test]
+async fn test_search_unknown_mode_returns_400() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "unknown_mode",
+                        "dimension": 4,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/unknown_mode/points")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({ "points": [{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]}] }).to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    for uri in [
+        "/collections/unknown_mode/search",
+        "/collections/unknown_mode/search/ids",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "vector": [1.0, 0.0, 0.0, 0.0],
+                            "top_k": 2,
+                            "mode": "acurate"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("Failed to build request"),
+            )
+            .await
+            .expect("Request failed");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "uri={uri}");
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("Failed to read body");
+        let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+        let error = json["error"].as_str().expect("error is string");
+        assert!(error.contains("acurate"), "uri={uri} error={error}");
+    }
+}
+
+/// A bad `mode` is refused on every search shape, including the sparse,
+/// hybrid and batch ones that apply no mode, and by `/query` and
+/// `/query/explain`. The same requests with a good mode succeed (#2267).
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn test_bad_mode_is_refused_on_every_search_shape() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+    let post = |uri: &str, body: &Value| {
+        Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header("Content-Type", "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("Failed to build request")
+    };
+    let collection = json!({"name": "mode_shapes", "dimension": 4, "metric": "cosine"});
+    let response = app
+        .clone()
+        .oneshot(post("/collections", &collection))
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let points = json!({"points": [
+        {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0],
+         "sparse_vectors": {"": {"indices": [0, 1], "values": [1.0, 0.5]}}},
+        {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0],
+         "sparse_vectors": {"": {"indices": [1, 2], "values": [0.8, 0.3]}}}
+    ]});
+    let response = app
+        .clone()
+        .oneshot(post("/collections/mode_shapes/points", &points))
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let sparse = json!({"indices": [0, 1], "values": [1.0, 0.5]});
+    let dense = json!([1.0, 0.0, 0.0, 0.0]);
+    let shapes = |mode: &str| {
+        vec![
+            (
+                "/collections/mode_shapes/search",
+                json!({"sparse_vector": sparse.clone(), "top_k": 2, "mode": mode}),
+            ),
+            (
+                "/collections/mode_shapes/search",
+                json!({
+                    "vector": dense.clone(),
+                    "sparse_vector": sparse.clone(),
+                    "top_k": 2,
+                    "mode": mode
+                }),
+            ),
+            (
+                "/collections/mode_shapes/search/ids",
+                json!({"sparse_vector": sparse.clone(), "top_k": 2, "mode": mode}),
+            ),
+            (
+                "/collections/mode_shapes/search/ids",
+                json!({
+                    "vector": dense.clone(),
+                    "sparse_vector": sparse.clone(),
+                    "top_k": 2,
+                    "mode": mode
+                }),
+            ),
+            (
+                "/collections/mode_shapes/search/batch",
+                json!({"searches": [
+                    {"vector": dense.clone(), "top_k": 2},
+                    {"vector": dense.clone(), "top_k": 2, "mode": mode}
+                ]}),
+            ),
+        ]
+    };
+    for (uri, body) in shapes("fast") {
+        let response = app
+            .clone()
+            .oneshot(post(uri, &body))
+            .await
+            .expect("Request failed");
+        assert_eq!(response.status(), StatusCode::OK, "uri={uri} body={body}");
+    }
+    for (uri, body) in shapes("acurate") {
+        let response = app
+            .clone()
+            .oneshot(post(uri, &body))
+            .await
+            .expect("Request failed");
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "uri={uri} body={body}"
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("Failed to read body");
+        let json: Value = serde_json::from_slice(&bytes).expect("Invalid JSON");
+        let error = json["error"].as_str().expect("error is string");
+        assert!(error.contains("acurate"), "uri={uri} error={error}");
+    }
+
+    let query = json!({
+        "query": "SELECT * FROM mode_shapes WHERE vector NEAR $v LIMIT 2 WITH (mode = 'acurate')",
+        "params": {"v": [1.0, 0.0, 0.0, 0.0]}
+    });
+    for uri in ["/query", "/query/explain"] {
+        let response = app
+            .clone()
+            .oneshot(post(uri, &query))
+            .await
+            .expect("Request failed");
+        assert_eq!(
+            response.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "uri={uri}"
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("Failed to read body");
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(
+            text.contains("V013") && text.contains("acurate"),
+            "uri={uri} body={text}"
+        );
+    }
+}
+
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn test_search_ids_sparse() {

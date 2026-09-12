@@ -91,6 +91,28 @@ impl WithClause {
             .and_then(|v| v.as_str())
     }
 
+    /// The search quality `mode` asks for, `quality` being its alias, or
+    /// `None` when neither is set. `mode` wins over `quality`, as in
+    /// [`Self::get_mode`]. A value that is not a string, or a string
+    /// [`crate::api_types::parse_search_mode`] cannot read, is an error naming
+    /// the accepted forms, never a silent fall-back to the default quality
+    /// (#2267).
+    ///
+    /// # Errors
+    ///
+    /// Returns the message to report when the mode is not a string or names
+    /// none of the accepted forms.
+    #[cfg(feature = "persistence")]
+    pub fn search_quality(&self) -> Result<Option<crate::SearchQuality>, String> {
+        let Some(value) = self.get("mode").or_else(|| self.get("quality")) else {
+            return Ok(None);
+        };
+        let mode = value
+            .as_str()
+            .ok_or_else(|| "Search mode must be a string, such as mode = 'balanced'".to_string())?;
+        crate::api_types::parse_search_mode(mode).map(Some)
+    }
+
     /// Gets ef_search if specified.
     #[must_use]
     #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]

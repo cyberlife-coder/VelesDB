@@ -32,27 +32,32 @@ pub(crate) struct QuerySearchOptions {
 impl QuerySearchOptions {
     /// Extracts search options from an optional WITH clause and fusion clause.
     ///
-    /// Maps `mode` string to [`SearchQuality`](crate::SearchQuality) using the
-    /// same parsing logic as `mode_to_search_quality()`. Invalid mode strings
-    /// are silently ignored (quality remains `None`).
-    #[must_use]
-    pub(crate) fn from_with_clause(with: Option<&crate::velesql::WithClause>) -> Self {
+    /// Maps the `mode` option, or its alias `quality`, to a
+    /// [`SearchQuality`](crate::SearchQuality) through
+    /// [`WithClause::search_quality`](crate::velesql::WithClause::search_quality):
+    /// a mode that is not a string or does not parse is a query error, not a
+    /// silently ignored override (#2267). The query validator rejects such a
+    /// mode first on every query path; this keeps the conversion honest for a
+    /// direct caller.
+    pub(crate) fn from_with_clause(
+        with: Option<&crate::velesql::WithClause>,
+    ) -> crate::error::Result<Self> {
         let Some(with) = with else {
-            return Self::default();
+            return Ok(Self::default());
         };
 
-        let quality = with.get_mode().and_then(parse_mode_to_quality);
+        let quality = with.search_quality().map_err(crate::error::Error::Query)?;
 
         let ef_search = with.get_ef_search();
         let force_rerank = with.get_rerank();
 
-        Self {
+        Ok(Self {
             quality,
             ef_search,
             force_rerank,
             fusion_clause: None,
             executed_strategy_probe: None,
-        }
+        })
     }
 
     /// Attaches the query context's executed-strategy slot, so the filtered
@@ -87,15 +92,6 @@ impl QuerySearchOptions {
     pub(crate) fn has_quality_overrides(&self) -> bool {
         self.quality.is_some() || self.ef_search.is_some() || self.force_rerank.is_some()
     }
-}
-
-/// Maps a mode string from `WITH (mode='...')` to a [`SearchQuality`](crate::SearchQuality).
-///
-/// Delegates to [`crate::api_types::mode_to_search_quality`] which also handles
-/// advanced modes (`custom:<ef>`, `adaptive:<min>:<max>`).
-#[cfg(feature = "persistence")]
-fn parse_mode_to_quality(mode: &str) -> Option<crate::SearchQuality> {
-    crate::api_types::mode_to_search_quality(mode)
 }
 
 /// Extracted query components from the WHERE clause.

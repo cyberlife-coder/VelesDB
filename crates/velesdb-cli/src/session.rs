@@ -251,43 +251,11 @@ fn format_quality(q: SearchQuality) -> String {
     }
 }
 
+/// Parses a `\set mode` value with the parser the server and the query
+/// engine use, so the REPL refuses at `\set` time what every later query
+/// would refuse: a typo, or `adaptive` with `min_ef` above `max_ef` (#2267).
 fn parse_mode(value: &str) -> Result<SearchQuality, String> {
-    let lower = value.to_lowercase();
-    match lower.as_str() {
-        "fast" => Ok(SearchQuality::Fast),
-        "balanced" => Ok(SearchQuality::Balanced),
-        "accurate" => Ok(SearchQuality::Accurate),
-        "perfect" => Ok(SearchQuality::Perfect),
-        "autotune" => Ok(SearchQuality::AutoTune),
-        _ => parse_parameterized_mode(&lower),
-    }
-}
-
-/// Parses `custom:<ef>` and `adaptive:<min>:<max>` mode strings.
-fn parse_parameterized_mode(value: &str) -> Result<SearchQuality, String> {
-    if let Some(ef_str) = value.strip_prefix("custom:") {
-        let ef = ef_str
-            .parse::<usize>()
-            .map_err(|_| format!("Invalid ef value in 'custom:{ef_str}'"))?;
-        return Ok(SearchQuality::Custom(ef));
-    }
-    if let Some(rest) = value.strip_prefix("adaptive:") {
-        let parts: Vec<&str> = rest.splitn(2, ':').collect();
-        if parts.len() != 2 {
-            return Err("adaptive format: adaptive:<min_ef>:<max_ef>".to_string());
-        }
-        let min_ef = parts[0]
-            .parse::<usize>()
-            .map_err(|_| format!("Invalid min_ef in '{value}'"))?;
-        let max_ef = parts[1]
-            .parse::<usize>()
-            .map_err(|_| format!("Invalid max_ef in '{value}'"))?;
-        return Ok(SearchQuality::Adaptive { min_ef, max_ef });
-    }
-    Err(format!(
-        "Invalid mode '{value}'. Valid: fast, balanced, accurate, \
-         perfect, autotune, custom:<ef>, adaptive:<min>:<max>"
-    ))
+    velesdb_core::api_types::parse_search_mode(value)
 }
 
 /// Returns `true` for settings that `\set` stores and displays but that have no
