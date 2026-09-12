@@ -8,7 +8,8 @@ use axum::{
     http::{Request, StatusCode},
 };
 use common::{
-    create_graph_collection, create_graph_node, create_test_app, create_test_app_with_state,
+    create_graph_collection, create_graph_node, create_test_app, create_test_app_with_core_config,
+    create_test_app_with_state,
 };
 use futures::stream;
 use serde_json::{json, Value};
@@ -3054,6 +3055,129 @@ async fn test_search_unknown_mode_returns_400() {
         let error = json["error"].as_str().expect("error is string");
         assert!(error.contains("acurate"), "uri={uri} error={error}");
     }
+}
+
+/// A valid `mode` reaches the search: with `limits.max_perfect_mode_vectors`
+/// at 1, the engine refuses `perfect` over two points on `/search` and
+/// `/search/ids`, where the same request with `fast` runs (#2267).
+#[tokio::test]
+async fn test_a_valid_mode_reaches_the_search() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let config_dir = TempDir::new().expect("Failed to create config dir");
+    let config_path = config_dir.path().join("velesdb.toml");
+    std::fs::write(&config_path, "[limits]\nmax_perfect_mode_vectors = 1\n")
+        .expect("Failed to write config");
+    let app = create_test_app_with_core_config(&temp_dir, &config_path);
+    let post = |uri: &str, body: &Value| {
+        Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header("Content-Type", "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("Failed to build request")
+    };
+    let collection = json!({"name": "mode_applied", "dimension": 4, "metric": "cosine"});
+    let response = app
+        .clone()
+        .oneshot(post("/collections", &collection))
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let points = json!({"points": [
+        {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]},
+        {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0]}
+    ]});
+    let response = app
+        .clone()
+        .oneshot(post("/collections/mode_applied/points", &points))
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+    for uri in [
+        "/collections/mode_applied/search",
+        "/collections/mode_applied/search/ids",
+    ] {
+        let fast = json!({"vector": [1.0, 0.0, 0.0, 0.0], "top_k": 1, "mode": "fast"});
+        let response = app
+            .clone()
+            .oneshot(post(uri, &fast))
+            .await
+            .expect("Request failed");
+        assert_eq!(response.status(), StatusCode::OK, "{uri}");
+        let perfect = json!({"vector": [1.0, 0.0, 0.0, 0.0], "top_k": 1, "mode": "perfect"});
+        let response = app
+            .clone()
+            .oneshot(post(uri, &perfect))
+            .await
+            .expect("Request failed");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{uri}");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("Failed to read body");
+        let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+        let error = json["error"].as_str().expect("error is string");
+        assert!(error.contains("max_perfect_mode_vectors"), "{uri}: {error}");
+    }
+}
+
+/// A refused `mode` counts one request error, as any other refused search
+/// does: `query_errors` rises by one for each bad-mode request on `/search`
+/// and `/search/ids`, and a good request adds none (#2267).
+#[tokio::test]
+async fn test_bad_mode_counts_one_request_error() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let (app, state) = create_test_app_with_state(&temp_dir);
+    let post = |uri: &str, body: &Value| {
+        Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header("Content-Type", "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("Failed to build request")
+    };
+    let collection = json!({"name": "mode_errors", "dimension": 4, "metric": "cosine"});
+    let response = app
+        .clone()
+        .oneshot(post("/collections", &collection))
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let points = json!({"points": [{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]}]});
+    let response = app
+        .clone()
+        .oneshot(post("/collections/mode_errors/points", &points))
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+    let errors = || {
+        state
+            .operational_metrics
+            .query_errors
+            .load(std::sync::atomic::Ordering::Relaxed)
+    };
+    let before = errors();
+    let mut refused = 0_u64;
+    for uri in [
+        "/collections/mode_errors/search",
+        "/collections/mode_errors/search/ids",
+    ] {
+        let bad = json!({"vector": [1.0, 0.0, 0.0, 0.0], "top_k": 1, "mode": "acurate"});
+        let response = app
+            .clone()
+            .oneshot(post(uri, &bad))
+            .await
+            .expect("Request failed");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{uri}");
+        refused += 1;
+        let good = json!({"vector": [1.0, 0.0, 0.0, 0.0], "top_k": 1, "mode": "fast"});
+        let response = app
+            .clone()
+            .oneshot(post(uri, &good))
+            .await
+            .expect("Request failed");
+        assert_eq!(response.status(), StatusCode::OK, "{uri}");
+    }
+    assert_eq!(errors() - before, refused);
 }
 
 /// A bad `mode` is the client's error, not the collection's: refusing it

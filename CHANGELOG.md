@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+> **Note for the next release**: this train refuses input `v6.0.0` accepted
+> (#2267, under **Fixed**): a search `mode` VelesQL or REST cannot parse now
+> fails instead of running at the default quality, and a collection's own
+> `execute_aggregate` refuses a query the validator rejects. Per the declared
+> SemVer policy, tag the next release accordingly: a major bump, or an
+> explicitly documented exception in these release notes.
+
 ### Added
 - **`LockRank::ENTRY_POINT_PROMOTION` (rank 8) in the public lock-rank
   registry (#2259).** The HNSW entry point now moves under a lock, taken
@@ -142,6 +149,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   embedders call directly, now refuses what `Database::execute_aggregate`
   already refused, any query the validator rejects, such as `MAX(score)` under
   a `GROUP BY` with no vector `NEAR` (`V006`), as the VelesQL spec documents.
+  The note at the top of `[Unreleased]` says what that means for the next
+  release's version.
 
 - **The REST OpenAPI document shows no rustdoc link syntax (#2263).** utoipa
   copies doc comments into the OpenAPI document (`docs/openapi.{json,yaml}`,
