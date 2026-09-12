@@ -200,7 +200,7 @@ SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
 WITH (mode = 'adaptive:32:512');
 ```
 
-The mode needs both bounds: a bare `'adaptive'` is not parsed, and today the query then runs at the collection's default mode without an error (#2267).
+The mode needs both bounds: a bare `'adaptive'` is not parsed, and is rejected as a query error rather than running at the collection's default mode (#2267).
 
 **Impact**: easy queries stop after the first phase, so the median query costs less than with a fixed high `ef_search`; no recorded run measures the gain, or its recall, yet (#2266).
 

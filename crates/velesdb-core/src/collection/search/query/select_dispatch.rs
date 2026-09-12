@@ -212,7 +212,7 @@ impl Collection {
                 .as_ref()
                 .is_some_and(Self::condition_contains_or);
         let execution_limit = main_select_execution_limit(stmt, extracted, limit);
-        let search_opts = super::QuerySearchOptions::from_with_clause(stmt.with_clause.as_ref())
+        let search_opts = super::QuerySearchOptions::from_with_clause(stmt.with_clause.as_ref())?
             .with_fusion(stmt.fusion_clause.clone())
             .with_executed_strategy_probe(ctx);
         let (cbo_strategy, cbo_over_fetch) =

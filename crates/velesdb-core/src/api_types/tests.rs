@@ -552,6 +552,53 @@ fn test_mode_to_search_quality_unknown() {
 }
 
 // ============================================================================
+// E2. parse_search_mode: same parsing, but an unparseable mode is an Err (#2267)
+// ============================================================================
+
+#[cfg(feature = "persistence")]
+#[test]
+fn test_parse_search_mode_accepts_every_documented_form() {
+    use super::parse_search_mode;
+    assert!(matches!(
+        parse_search_mode("fast"),
+        Ok(crate::SearchQuality::Fast)
+    ));
+    assert!(matches!(
+        parse_search_mode("BALANCED"),
+        Ok(crate::SearchQuality::Balanced)
+    ));
+    assert!(matches!(
+        parse_search_mode("custom:256"),
+        Ok(crate::SearchQuality::Custom(256))
+    ));
+    assert!(matches!(
+        parse_search_mode("adaptive:32:512"),
+        Ok(crate::SearchQuality::Adaptive {
+            min_ef: 32,
+            max_ef: 512
+        })
+    ));
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn test_parse_search_mode_rejects_unknown_mode() {
+    use super::parse_search_mode;
+    let err = parse_search_mode("acurate").expect_err("typo should be rejected");
+    assert!(err.contains("acurate"));
+    assert!(err.contains("balanced"), "error should name valid values");
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn test_parse_search_mode_rejects_bare_adaptive() {
+    use super::parse_search_mode;
+    // `adaptive` without its `<min_ef>:<max_ef>` bounds is unparseable, same
+    // as any other unknown mode — it does not fall back to a default range.
+    assert!(parse_search_mode("adaptive").is_err());
+}
+
+// ============================================================================
 // Additional edge-case tests for response serialization
 // ============================================================================
 

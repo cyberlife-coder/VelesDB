@@ -6,7 +6,7 @@ use velesdb_core::collection::VectorCollection;
 use velesdb_core::index::sparse::DEFAULT_SPARSE_INDEX_NAME;
 
 use crate::types::{
-    mode_to_search_quality, ErrorResponse, IdScoreResult, SearchIdsResponse, SearchRequest,
+    parse_search_mode, ErrorResponse, IdScoreResult, SearchIdsResponse, SearchRequest,
     SearchResponse, SearchResultResponse,
 };
 use crate::AppState;
@@ -247,6 +247,12 @@ pub(crate) fn parse_fusion_strategy(
 }
 
 /// Executes the dense-only search path, honoring filter, ef_search, and mode.
+///
+/// # Errors
+///
+/// Returns a 400 response when the query dimension does not match, the
+/// filter JSON is malformed, or `mode` does not parse to a known
+/// [`SearchQuality`](velesdb_core::SearchQuality) (#2267).
 #[allow(clippy::result_large_err)]
 pub(crate) fn execute_dense_search(
     state: &AppState,
@@ -260,8 +266,19 @@ pub(crate) fn execute_dense_search(
     }
 
     // Quality-based mode (supports AutoTune which computes ef dynamically).
-    // Supersedes mode_to_ef_search — all named modes map to SearchQuality.
-    let quality_mode = req.mode.as_ref().and_then(|m| mode_to_search_quality(m));
+    // Supersedes mode_to_ef_search — all named modes map to SearchQuality. An
+    // unparseable mode is a 400, not a silent fall-back to the default (#2267).
+    let quality_mode = match req.mode.as_deref().map(parse_search_mode) {
+        Some(Ok(quality)) => Some(quality),
+        Some(Err(error)) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse { error, code: None }),
+            )
+                .into_response())
+        }
+        None => None,
+    };
 
     // Parse the optional metadata filter up front so the search can be routed
     // through the governed facade. Known limitation (#457): when a filter is
@@ -320,17 +337,16 @@ fn has_sparse_input(req: &SearchRequest) -> bool {
 /// reach `collection.search()` in [`execute_dense_search`]. Both `search` and
 /// `search_ids` run the same HNSW traversal, so the fast path returns an
 /// identical id/score ranking; any other shape falls back to the generic
-/// pipeline to stay correct.
+/// pipeline to stay correct. A request carrying a `mode` always falls back,
+/// whether or not it parses: this path has no quality dispatch of its own,
+/// and routing an unparseable mode through it would silently ignore the typo
+/// instead of surfacing it as a 400 (#2267).
 pub(crate) fn ids_fast_path_eligible(req: &SearchRequest) -> bool {
     !req.vector.is_empty()
         && req.filter.is_none()
         && req.ef_search.is_none()
         && !has_sparse_input(req)
-        && req
-            .mode
-            .as_ref()
-            .and_then(|m| mode_to_search_quality(m))
-            .is_none()
+        && req.mode.is_none()
 }
 
 /// Ids-only fast path: runs `search_ids` (HNSW traversal without payload

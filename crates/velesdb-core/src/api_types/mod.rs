@@ -147,3 +147,28 @@ fn parse_advanced_quality(mode: &str) -> Option<crate::SearchQuality> {
     }
     None
 }
+
+/// Parses a search mode string into a [`crate::SearchQuality`], or an error
+/// naming the accepted forms when it cannot be parsed.
+///
+/// Delegates to [`mode_to_search_quality`] for the parsing itself; unlike
+/// that function, an unparseable mode is a distinct `Err` here rather than a
+/// `None` a caller might mistake for "no mode given". Use this at entry
+/// points where the caller should reject a typo instead of silently falling
+/// back to the default quality (#2267).
+///
+/// # Errors
+///
+/// Returns a message naming the accepted forms when `mode` matches none of
+/// them (an unknown name, or `custom:`/`adaptive:` with a malformed or
+/// out-of-order argument).
+#[cfg(feature = "persistence")]
+pub fn parse_search_mode(mode: &str) -> Result<crate::SearchQuality, String> {
+    mode_to_search_quality(mode).ok_or_else(|| {
+        format!(
+            "Unknown search mode '{mode}'. Valid values: 'fast', 'balanced', 'accurate', \
+             'perfect', 'autotune' (aliases: 'auto_tune', 'auto'), 'custom:<ef>', \
+             'adaptive:<min_ef>:<max_ef>' (min_ef <= max_ef)"
+        )
+    })
+}

@@ -2976,6 +2976,86 @@ async fn test_search_ids_with_mode() {
     }
 }
 
+/// An unparseable `mode` must fail with a 400 naming the accepted forms
+/// instead of silently running at the default quality (#2267). Covers both
+/// `/search` and `/search/ids`, whose eligibility check for the ids-only fast
+/// path used to swallow the same typo.
+#[tokio::test]
+async fn test_search_unknown_mode_returns_400() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "unknown_mode",
+                        "dimension": 4,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/unknown_mode/points")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({ "points": [{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]}] }).to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    for uri in [
+        "/collections/unknown_mode/search",
+        "/collections/unknown_mode/search/ids",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "vector": [1.0, 0.0, 0.0, 0.0],
+                            "top_k": 2,
+                            "mode": "acurate"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("Failed to build request"),
+            )
+            .await
+            .expect("Request failed");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "uri={uri}");
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("Failed to read body");
+        let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+        let error = json["error"].as_str().expect("error is string");
+        assert!(error.contains("acurate"), "uri={uri} error={error}");
+    }
+}
+
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn test_search_ids_sparse() {
