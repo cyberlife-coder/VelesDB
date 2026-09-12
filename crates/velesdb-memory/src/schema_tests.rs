@@ -409,6 +409,7 @@ mod unlink {
             "a [struct@Foo] value",
             "see [m!()]",
             "see [a`b`] here",
+            "see [x`] here",
         ] {
             assert_eq!(unlink_rustdoc(text), None, "{text:?}");
             assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
@@ -1043,12 +1044,13 @@ mod unlink {
         assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
     }
 
-    /// Whether `text` holds rustdoc link syntax: a label holding a code span,
-    /// wherever it opens (`` [`Point`] ``, ``[a`b`]``), a bracketed path
-    /// (`[crate::Point]`, `[fn@f]`, `[a#b]`, `[Vec<T>]`, `[&str]`, `[*const]`,
-    /// `[f()]`, `[m!{}]`, `[m!]`), a reference-style link (`[x][y]`, `[x][]`),
-    /// a reference definition (any `]:`), or an inline link to anything but a
-    /// URL or a fragment. Every link the rewrite recognizes is one of these.
+    /// Whether `text` holds rustdoc link syntax: a label holding a backtick,
+    /// wherever it stands (`` [`Point`] ``, ``[a`b`]``, ``[x`]``), a bracketed
+    /// path (`[crate::Point]`, `[fn@f]`, `[a#b]`, `[Vec<T>]`, `[&str]`,
+    /// `[*const]`, `[f()]`, `[m!{}]`, `[m!]`), a reference-style link
+    /// (`[x][y]`, `[x][]`), a reference definition (any `]:`), or an inline
+    /// link to anything but a URL or a fragment. Every link the rewrite
+    /// recognizes is one of these.
     ///
     /// It reads the raw text, so no Markdown construct (a code span, a quote, a
     /// list item) can hide one of these forms from it. What that costs: a
@@ -1071,8 +1073,9 @@ mod unlink {
     }
 
     /// Whether the label `after` starts, up to its first `]`, holds a backtick.
-    /// Code anywhere in a label can make it a rustdoc link: ``[a`b`]`` links to
-    /// `ab`. A `[` no `]` closes opens no link.
+    /// Code anywhere in a label can make it a rustdoc link, and so can a lone
+    /// backtick, which rustdoc drops from the path it resolves: ``[a`b`]``
+    /// links to `ab`, ``[x`]`` to `x`. A `[` no `]` closes opens no link.
     fn label_holds_a_backtick(after: &str) -> bool {
         after
             .split_once(']')
