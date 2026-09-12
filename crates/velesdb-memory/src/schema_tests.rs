@@ -816,6 +816,26 @@ mod unlink {
         );
     }
 
+    /// A shortcut code link whose label is 1000 bytes or longer stays as
+    /// written: rustdoc's Markdown parser may stop reading it, and rustdoc
+    /// then shows the brackets, as it does for a label holding 500 `é` or a
+    /// thousand single spaces. The guard fails on each. A shorter label is
+    /// rewritten, whatever it holds.
+    #[test]
+    fn a_shortcut_code_link_past_the_label_limit_stays_as_written() {
+        let long_name = format!("see [`E::N{}`] here", "é".repeat(500));
+        let long_generics = format!("see [`G<{}A>`] here", "A, ".repeat(1000));
+        for text in [&long_name, &long_generics] {
+            assert_eq!(unlink_rustdoc(text), None, "{text:?}");
+            assert!(holds_rustdoc_link(text), "the guard misses {text:?}");
+        }
+        let short = format!("[`E::N{}`]", "é".repeat(400));
+        assert_eq!(
+            unlink_rustdoc(&short).as_deref(),
+            Some(&short[1..short.len() - 1])
+        );
+    }
+
     /// A shortcut code link padded inside its brackets or its backticks, or
     /// split across a line: the rewrite leaves it, and the guard fails on it.
     /// rustdoc does not always drop a padded code span's disambiguator, and

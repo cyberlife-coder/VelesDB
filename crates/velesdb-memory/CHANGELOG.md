@@ -58,16 +58,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   definition (any `][` or `]:`, even inside backticks), a code span across a
   line, or an inline link it does not render (a web link, one whose text is
   not a code span). It leaves a `#` fragment, a link that spans a line, a
-  shortcut code link padded or holding any whitespace but single spaces, a
-  code link a backtick touches (its code span would merge with it) or a `'`
-  follows (smart punctuation may read the quote differently), and a code link
-  a bracket pair would enclose once its own brackets go. A test then fails if
-  a published description holds link syntax, code spans included: a `[` that
-  opens on a code span, a bracketed path even as a web link's text (one
-  holding `::`, `@`, `#` or `<`, naming a primitive rustdoc links from a sigil
-  such as `&str` or `*const`, or ending in `()`, `!{}` or `!`), a
-  reference-style link or definition, or an inline link to anything but a URL
-  or a fragment. (#2261)
+  shortcut code link padded, holding any whitespace but single spaces or with
+  a label of 1000 bytes or more, a code link a backtick touches (its code span
+  would merge with it) or a `'` follows (smart punctuation may read the quote
+  differently), and a code link a bracket pair would enclose once its own
+  brackets go. A test then fails if a published description holds link syntax,
+  code spans included: a `[` that opens on a code span, a bracketed path even
+  as a web link's text (one holding `::`, `@`, `#` or `<`, naming a primitive
+  rustdoc links from a sigil such as `&str` or `*const`, or ending in `()`,
+  `!{}` or `!`), a reference-style link or definition, or an inline link to
+  anything but a URL or a fragment. (#2261)
 
 ## [0.14.2] - 2026-09-03
 

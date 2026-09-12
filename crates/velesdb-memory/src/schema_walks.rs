@@ -380,13 +380,21 @@ fn spans_a_line(text: &str) -> bool {
 /// What ends a line in Markdown: a line feed or a carriage return.
 const LINE_ENDINGS: [char; 2] = ['\n', '\r'];
 
+/// The length, in bytes, from which the rewrite leaves a shortcut code link's
+/// label. rustdoc's Markdown parser stops reading a link label once it has
+/// counted 1000 of its bytes, and rustdoc then shows the brackets.
+/// pulldown-cmark 0.13 counts whitespace and non-ASCII bytes, and rustdoc 1.90
+/// shows those of a label holding 500 `é`. A shorter label never reaches the
+/// count, whatever the parser counts, so the rewrite does not model it.
+const LABEL_LIMIT: usize = 1000;
+
 /// A code link, ``[`code`]``: shown as its code span when the code is one
 /// word that reads as a path ([`reads_as_a_path`]), without its
-/// disambiguator. A code span that is not singly spaced ([`is_singly_spaced`])
-/// stays as written.
+/// disambiguator. A label of [`LABEL_LIMIT`] bytes or more, or a code span
+/// that is not singly spaced ([`is_singly_spaced`]), stays as written.
 fn code_link<'a>(label: &'a str, tail: &'a str) -> Option<(Cow<'a, str>, &'a str)> {
     let code = &label[1..label.len() - 1];
-    if !is_singly_spaced(code) {
+    if label.len() >= LABEL_LIMIT || !is_singly_spaced(code) {
         return None;
     }
     // rustdoc trims the path after a disambiguator.
