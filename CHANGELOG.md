@@ -131,7 +131,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Breaking for a client, over REST, VelesQL or a binding, that sent an unknown
   mode and silently got results at the default quality: it now needs a mode
   from the documented list (`fast`, `balanced`, `accurate`, `perfect`,
-  `autotune`, `custom:<ef>`, `adaptive:<min_ef>:<max_ef>`).
+  `autotune`, `custom:<ef>`, `adaptive:<min_ef>:<max_ef>`). One more path
+  changes: a collection's own `execute_aggregate`, which the Tauri plugin and
+  embedders call directly, now refuses what `Database::execute_aggregate`
+  already refused, any query the validator rejects, such as `MAX(score)` under
+  a `GROUP BY` with no vector `NEAR` (`V006`), as the VelesQL spec documents.
 
 - **The REST OpenAPI document shows no rustdoc link syntax (#2263).** utoipa
   copies doc comments into the OpenAPI document (`docs/openapi.{json,yaml}`,
