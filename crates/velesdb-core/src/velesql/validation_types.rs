@@ -131,6 +131,9 @@ pub enum ValidationErrorKind {
     /// strategy not allowed for the query shape (e.g. weighted/rsf on
     /// NEAR_FUSED).
     FusionMisconfigured,
+    /// `WITH (mode = ...)`, or its alias `quality`, is not a string or names
+    /// none of the accepted search modes (#2267).
+    InvalidSearchMode,
 }
 
 impl ValidationErrorKind {
@@ -150,6 +153,7 @@ impl ValidationErrorKind {
             Self::SubqueryNotExecutable => "V010",
             Self::GraphMatchAnchorMismatch => "V011",
             Self::FusionMisconfigured => "V012",
+            Self::InvalidSearchMode => "V013",
         }
     }
 
@@ -176,6 +180,7 @@ impl ValidationErrorKind {
                 "MATCH predicate anchor must be an alias declared in FROM/JOIN"
             }
             Self::FusionMisconfigured => "USING FUSION clause is misconfigured",
+            Self::InvalidSearchMode => "Invalid search mode",
         }
     }
 }

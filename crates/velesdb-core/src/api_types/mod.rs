@@ -115,6 +115,9 @@ pub fn default_index_type() -> String {
 /// automatically based on collection statistics, plus advanced modes:
 /// - `"custom:<ef>"` for a custom `ef_search` value
 /// - `"adaptive:<min_ef>:<max_ef>"` for two-phase adaptive search
+///
+/// Returns `None` for a mode it cannot read. An entry point that must refuse
+/// such a mode rather than fall back uses [`parse_search_mode`].
 #[cfg(feature = "persistence")]
 #[must_use]
 pub fn mode_to_search_quality(mode: &str) -> Option<crate::SearchQuality> {

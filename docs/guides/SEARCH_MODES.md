@@ -179,6 +179,8 @@ Adaptive and AutoTune run their two phases only inside `HnswIndex::search_with_q
 - REST reaches it for a dense-only, non-batch search given a `mode` and neither a filter nor `ef_search`. With a filter the mode is not applied (#457), and `ef_search` wins over it.
 - VelesQL reaches it for a `NEAR` with no other `WHERE` condition, given a mode with `WITH (mode = ...)`, unless the query also sets `rerank = false`, which runs one pass. With other conditions it depends on their shape: text, sparse, fused and graph-anchored searches do not apply the mode, and a filter whose bitmap is at most 80% the size of the HNSW index (the bitmap also counts points not yet indexed) skips the second phase or scans exactly (#2268).
 
+Whether or not a shape applies it, the mode is checked: a VelesQL `mode` (or `quality`) that names no form above, or is not a string, fails the query with `V013`, and a REST search or batch entry with one gets a `400`, each naming the accepted forms (#2267).
+
 Where a single graph pass runs, Adaptive uses `max(min_ef, k)` and AutoTune Balanced's `max(160, k*5)`, k being the count the index receives, each scaled by the index size.
 
 **Use cases:**

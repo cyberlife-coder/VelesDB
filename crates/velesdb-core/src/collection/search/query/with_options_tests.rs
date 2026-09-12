@@ -226,6 +226,76 @@ fn test_with_unknown_mode_returns_query_error() {
     assert!(err.to_string().contains("acurate"));
 }
 
+/// A bad mode fails every query shape, including those that return before
+/// the main search (union, `NEAR_FUSED`) and the `quality` alias, and so does
+/// a mode that is not a string. The same queries with a good mode run
+/// (#2267).
+#[test]
+fn test_with_bad_mode_fails_every_query_shape() {
+    let (_dir, col) = setup_with_options_collection();
+    let mut params = HashMap::new();
+    params.insert("v".to_string(), serde_json::json!([0.5, 0.5, 0.5, 0.3]));
+    params.insert("w".to_string(), serde_json::json!([0.1, 0.9, 0.5, 0.3]));
+    for shape in [
+        "SELECT * FROM docs WHERE vector NEAR $v LIMIT 5 WITH (mode = {m})",
+        "SELECT * FROM docs WHERE vector NEAR $v LIMIT 5 WITH (quality = {m})",
+        concat!(
+            "SELECT * FROM docs WHERE similarity(vector, $v) > 0.1 OR idx > 5 ",
+            "LIMIT 5 WITH (mode = {m})"
+        ),
+        "SELECT * FROM docs WHERE vector NEAR_FUSED [$v, $w] LIMIT 5 WITH (mode = {m})",
+    ] {
+        let good = shape.replace("{m}", "'fast'");
+        col.execute_query_str(&good, &params)
+            .unwrap_or_else(|e| panic!("{good}: {e}"));
+        for bad in ["'acurate'", "5", "true"] {
+            let query = shape.replace("{m}", bad);
+            let err = col.execute_query_str(&query, &params).expect_err(&query);
+            assert!(err.to_string().contains("V013"), "{query}: {err}");
+        }
+    }
+}
+
+/// `mode` wins over its alias `quality`, a bare identifier reads as a string,
+/// and a value that is not a string is an error (#2267).
+#[test]
+fn test_with_clause_search_quality() {
+    use crate::velesql::{WithClause, WithValue};
+    use crate::SearchQuality;
+    let string = |s: &str| WithValue::String(s.to_string());
+    assert!(matches!(WithClause::new().search_quality(), Ok(None)));
+    assert!(matches!(
+        WithClause::new()
+            .with_option("quality", string("fast"))
+            .search_quality(),
+        Ok(Some(SearchQuality::Fast))
+    ));
+    assert!(matches!(
+        WithClause::new()
+            .with_option("mode", string("fast"))
+            .with_option("quality", string("acurate"))
+            .search_quality(),
+        Ok(Some(SearchQuality::Fast))
+    ));
+    assert!(matches!(
+        WithClause::new()
+            .with_option("mode", WithValue::Identifier("accurate".to_string()))
+            .search_quality(),
+        Ok(Some(SearchQuality::Accurate))
+    ));
+    for bad in [
+        string("acurate"),
+        WithValue::Integer(5),
+        WithValue::Float(0.5),
+        WithValue::Boolean(true),
+    ] {
+        assert!(WithClause::new()
+            .with_option("mode", bad)
+            .search_quality()
+            .is_err());
+    }
+}
+
 // ============================================================================
 // C. WITH (timeout_ms=...) override
 // ============================================================================

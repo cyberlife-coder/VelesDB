@@ -246,39 +246,42 @@ pub(crate) fn parse_fusion_strategy(
     }
 }
 
-/// Executes the dense-only search path, honoring filter, ef_search, and mode.
+/// Parses a search request's `mode`, or answers `400` naming the accepted
+/// forms. [`execute_search_request`] runs it before choosing a shape, so a
+/// mode the parser rejects fails every shape, including the sparse and hybrid
+/// ones that do not apply it, and never silently (#2267).
+#[allow(clippy::result_large_err)]
+pub(crate) fn parse_mode_or_400(
+    mode: Option<&str>,
+) -> Result<Option<velesdb_core::SearchQuality>, axum::response::Response> {
+    mode.map(parse_search_mode).transpose().map_err(|error| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse { error, code: None }),
+        )
+            .into_response()
+    })
+}
+
+/// Executes the dense-only search path, honoring filter, ef_search, and the
+/// `quality_mode` [`parse_mode_or_400`] parsed from the request's `mode`.
 ///
 /// # Errors
 ///
-/// Returns a 400 response when the query dimension does not match, the
-/// filter JSON is malformed, or `mode` does not parse to a known
-/// [`SearchQuality`](velesdb_core::SearchQuality) (#2267).
+/// Returns a 400 response when the query dimension does not match or the
+/// filter JSON is malformed.
 #[allow(clippy::result_large_err)]
 pub(crate) fn execute_dense_search(
     state: &AppState,
     name: &str,
     collection: &VectorCollection,
     req: &SearchRequest,
+    quality_mode: Option<velesdb_core::SearchQuality>,
 ) -> Result<velesdb_core::Result<Vec<velesdb_core::SearchResult>>, axum::response::Response> {
     let expected_dimension = collection.config().dimension;
     if let Err(error) = validate_query_dimension(state, name, expected_dimension, &req.vector) {
         return Err((StatusCode::BAD_REQUEST, Json(error)).into_response());
     }
-
-    // Quality-based mode (supports AutoTune which computes ef dynamically).
-    // Supersedes mode_to_ef_search — all named modes map to SearchQuality. An
-    // unparseable mode is a 400, not a silent fall-back to the default (#2267).
-    let quality_mode = match req.mode.as_deref().map(parse_search_mode) {
-        Some(Ok(quality)) => Some(quality),
-        Some(Err(error)) => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse { error, code: None }),
-            )
-                .into_response())
-        }
-        None => None,
-    };
 
     // Parse the optional metadata filter up front so the search can be routed
     // through the governed facade. Known limitation (#457): when a filter is
@@ -449,7 +452,9 @@ impl<'a> SearchMode<'a> {
 }
 
 /// Runs the full search pipeline (dense, sparse, or hybrid) based on
-/// `SearchRequest` fields. Returns search results or an error response.
+/// `SearchRequest` fields. Returns search results or an error response. The
+/// request's `mode` is parsed first ([`parse_mode_or_400`]), whatever the
+/// shape.
 #[allow(clippy::result_large_err)]
 pub(crate) fn execute_search_request(
     state: &AppState,
@@ -457,6 +462,7 @@ pub(crate) fn execute_search_request(
     collection: &VectorCollection,
     req: &mut SearchRequest,
 ) -> Result<velesdb_core::Result<Vec<velesdb_core::SearchResult>>, axum::response::Response> {
+    let quality_mode = parse_mode_or_400(req.mode.as_deref())?;
     let sparse_vec = resolve_sparse_input(req)?;
     let has_dense = !req.vector.is_empty();
 
@@ -469,7 +475,7 @@ pub(crate) fn execute_search_request(
         SearchMode::Hybrid { sparse } => {
             execute_hybrid_sparse(state, name, collection, req, sparse, index_name)
         }
-        SearchMode::DenseOnly => execute_dense_search(state, name, collection, req),
+        SearchMode::DenseOnly => execute_dense_search(state, name, collection, req, quality_mode),
         SearchMode::SparseOnly { sparse } => match state.db.authorize_read(
             name,
             velesdb_core::observer::QueryOperationKind::VectorSearch,

@@ -102,20 +102,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   load call alone reports the cost as gone when it has only moved.
 
 ### Fixed
-- **An unparseable search `mode` now fails the query instead of running it
-  silently at the default quality (#2267).** `WITH (mode = '...')` in VelesQL
-  and `"mode": "..."` in a REST search body shared one parser
-  (`mode_to_search_quality`) that returned `None` for anything it could not
-  read — a typo (`'acurate'`), a bare `adaptive` missing its `<min_ef>:<max_ef>`
-  bounds, or any other unknown string — and both call sites read that `None`
-  as "no override given" rather than "not understood". A VelesQL query with
-  a bad mode now returns a query error and a REST `/search` or `/search/ids`
-  request a `400`, each naming the accepted forms; `/search/ids`'s fast path
-  (which has no quality dispatch of its own) now defers to the slow path for
-  any `mode` at all, parseable or not, instead of silently taking the request
-  through unchecked. Breaking for a REST client that was sending an unknown
-  mode and silently getting a `200` at the default quality: it now needs a
-  mode from the documented list (`fast`, `balanced`, `accurate`, `perfect`,
+- **An unparseable search `mode` now fails instead of running silently at the
+  default quality (#2267).** `WITH (mode = '...')` in VelesQL and
+  `"mode": "..."` in a REST search body went through one parser
+  (`mode_to_search_quality`) that returns `None` for anything it cannot read —
+  a typo (`'acurate'`), a bare `adaptive` missing its `<min_ef>:<max_ef>`
+  bounds, or any other unknown string — and its callers read that `None` as
+  "no override given". `api_types::parse_search_mode` rejects such a mode with
+  a message naming the accepted forms, and every entry point now checks it:
+  - VelesQL checks `mode`, and its alias `quality`, in the query validator,
+    before any dispatch: every query shape fails with `V013`, the union,
+    `SPARSE_NEAR` and `NEAR_FUSED` paths and `EXPLAIN` included, and so does a
+    mode that is not a string (`mode = 5`);
+  - REST answers `400` on `/search` and `/search/ids`, whatever the request's
+    shape (dense, sparse or hybrid), and on `/search/batch`, naming the entry;
+    `/search/ids` sends any request carrying a mode past its fast path, which
+    has no quality dispatch of its own;
+  - the CLI REPL refuses such a mode at `\set mode`, and the Tauri plugin
+    reports it with the same message.
+
+  Breaking for a client, over REST, VelesQL or a binding, that sent an unknown
+  mode and silently got results at the default quality: it now needs a mode
+  from the documented list (`fast`, `balanced`, `accurate`, `perfect`,
   `autotune`, `custom:<ef>`, `adaptive:<min_ef>:<max_ef>`).
 
 - **The REST OpenAPI document shows no rustdoc link syntax (#2263).** utoipa

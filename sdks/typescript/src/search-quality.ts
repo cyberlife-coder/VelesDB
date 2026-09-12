@@ -10,7 +10,8 @@
  * - `adaptive:<min>:<max>` — two-phase adaptive search (one escalation on hard queries)
  *
  * The helper preserves the string verbatim and lets the server parse
- * it via `velesdb_core::api_types::mode_to_search_quality`. This
+ * it via `velesdb_core::api_types::parse_search_mode`, which answers a
+ * mode it cannot parse with a 400 naming the accepted forms. This
  * keeps the wire contract in one place (the Rust parser) so the TS
  * SDK does not duplicate the variant parsing logic.
  *

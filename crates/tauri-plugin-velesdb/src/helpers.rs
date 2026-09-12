@@ -187,18 +187,17 @@ pub fn parse_filter(filter: &Option<serde_json::Value>) -> Result<Option<velesdb
 
 /// Parses an optional search quality mode string into a [`SearchQuality`].
 ///
-/// Delegates to [`velesdb_core::api_types::mode_to_search_quality`] to keep
-/// mode parsing in one place. Returns `Ok(None)` when the mode is absent.
+/// Delegates to [`velesdb_core::api_types::parse_search_mode`], so a mode the
+/// server refuses is refused here too, with the same message naming the
+/// accepted forms. Returns `Ok(None)` when the mode is absent.
 ///
 /// [`SearchQuality`]: velesdb_core::SearchQuality
 #[cfg(feature = "persistence")]
 pub fn parse_search_quality(mode: &Option<String>) -> Result<Option<velesdb_core::SearchQuality>> {
-    match mode {
-        None => Ok(None),
-        Some(m) => velesdb_core::api_types::mode_to_search_quality(m)
-            .ok_or_else(|| Error::InvalidConfig(format!("Unknown search quality mode: '{m}'")))
-            .map(Some),
-    }
+    mode.as_deref()
+        .map(velesdb_core::api_types::parse_search_mode)
+        .transpose()
+        .map_err(Error::InvalidConfig)
 }
 
 /// Wraps search results and a start instant into a `SearchResponse`.

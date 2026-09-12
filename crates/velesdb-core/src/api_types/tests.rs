@@ -559,23 +559,52 @@ fn test_mode_to_search_quality_unknown() {
 #[test]
 fn test_parse_search_mode_accepts_every_documented_form() {
     use super::parse_search_mode;
+    use crate::SearchQuality;
+    assert!(matches!(parse_search_mode("fast"), Ok(SearchQuality::Fast)));
     assert!(matches!(
-        parse_search_mode("fast"),
-        Ok(crate::SearchQuality::Fast)
+        parse_search_mode("balanced"),
+        Ok(SearchQuality::Balanced)
     ));
     assert!(matches!(
         parse_search_mode("BALANCED"),
-        Ok(crate::SearchQuality::Balanced)
+        Ok(SearchQuality::Balanced)
+    ));
+    assert!(matches!(
+        parse_search_mode("accurate"),
+        Ok(SearchQuality::Accurate)
+    ));
+    assert!(matches!(
+        parse_search_mode("perfect"),
+        Ok(SearchQuality::Perfect)
+    ));
+    assert!(matches!(
+        parse_search_mode("autotune"),
+        Ok(SearchQuality::AutoTune)
+    ));
+    assert!(matches!(
+        parse_search_mode("auto_tune"),
+        Ok(SearchQuality::AutoTune)
+    ));
+    assert!(matches!(
+        parse_search_mode("auto"),
+        Ok(SearchQuality::AutoTune)
     ));
     assert!(matches!(
         parse_search_mode("custom:256"),
-        Ok(crate::SearchQuality::Custom(256))
+        Ok(SearchQuality::Custom(256))
     ));
     assert!(matches!(
         parse_search_mode("adaptive:32:512"),
-        Ok(crate::SearchQuality::Adaptive {
+        Ok(SearchQuality::Adaptive {
             min_ef: 32,
             max_ef: 512
+        })
+    ));
+    assert!(matches!(
+        parse_search_mode("adaptive:64:64"),
+        Ok(SearchQuality::Adaptive {
+            min_ef: 64,
+            max_ef: 64
         })
     ));
 }

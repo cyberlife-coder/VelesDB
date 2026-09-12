@@ -1575,7 +1575,7 @@ WITH (mode = 'accurate', ef_search = 512, timeout_ms = 5000)
 
 | Option | Type | Values | Description |
 |--------|------|--------|-------------|
-| `mode` | string | `fast`, `balanced`, `accurate`, `perfect`, `autotune`, `custom:<ef>`, `adaptive:<min_ef>:<max_ef>` | Search quality preset: `fast`/`balanced`/`accurate` map to ef_search 96/160/512, `perfect` is an exhaustive scan capped by `limits.max_perfect_mode_vectors`, `autotune` derives an ef range from the collection's size, `custom:<ef>` sets the ef, `adaptive:<min_ef>:<max_ef>` runs the two-phase adaptive search, with `min_ef` at most `max_ef`. Any other value is a query error naming the accepted forms (#2267) |
+| `mode` | string | `fast`, `balanced`, `accurate`, `perfect`, `autotune`, `custom:<ef>`, `adaptive:<min_ef>:<max_ef>` | Search quality preset: `fast`/`balanced`/`accurate` map to ef_search 96/160/512, `perfect` is an exhaustive scan capped by `limits.max_perfect_mode_vectors`, `autotune` derives an ef range from the collection's size, `custom:<ef>` sets the ef, `adaptive:<min_ef>:<max_ef>` runs the two-phase adaptive search, with `min_ef` at most `max_ef`. Any other value, or one that is not a string, fails the query with `V013`, naming the accepted forms, whatever the query's shape (#2267) |
 | `quality` | string | same as `mode` | Alias for `mode` (v3.5+). If both are set, `mode` takes precedence. |
 | `ef_search` | integer | 16--4096 | HNSW ef_search parameter (overrides `mode`) |
 | `timeout_ms` | integer | >= 100 | Per-query timeout in milliseconds |

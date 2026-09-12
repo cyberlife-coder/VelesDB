@@ -32,10 +32,13 @@ pub(crate) struct QuerySearchOptions {
 impl QuerySearchOptions {
     /// Extracts search options from an optional WITH clause and fusion clause.
     ///
-    /// Maps `mode` string to [`SearchQuality`](crate::SearchQuality) using the
-    /// same parsing logic as `mode_to_search_quality()`. A `mode` present but
-    /// unparseable (a typo, or a bare `adaptive` missing its bounds) is a
-    /// query error rather than a silently ignored override (#2267).
+    /// Maps the `mode` option, or its alias `quality`, to a
+    /// [`SearchQuality`](crate::SearchQuality) through
+    /// [`WithClause::search_quality`](crate::velesql::WithClause::search_quality):
+    /// a mode that is not a string or does not parse is a query error, not a
+    /// silently ignored override (#2267). The query validator rejects such a
+    /// mode first on every query path; this keeps the conversion honest for a
+    /// direct caller.
     pub(crate) fn from_with_clause(
         with: Option<&crate::velesql::WithClause>,
     ) -> crate::error::Result<Self> {
@@ -43,7 +46,7 @@ impl QuerySearchOptions {
             return Ok(Self::default());
         };
 
-        let quality = with.get_mode().map(parse_mode_to_quality).transpose()?;
+        let quality = with.search_quality().map_err(crate::error::Error::Query)?;
 
         let ef_search = with.get_ef_search();
         let force_rerank = with.get_rerank();
@@ -89,16 +92,6 @@ impl QuerySearchOptions {
     pub(crate) fn has_quality_overrides(&self) -> bool {
         self.quality.is_some() || self.ef_search.is_some() || self.force_rerank.is_some()
     }
-}
-
-/// Maps a mode string from `WITH (mode='...')` to a [`SearchQuality`](crate::SearchQuality).
-///
-/// Delegates to [`crate::api_types::parse_search_mode`], which also handles
-/// advanced modes (`custom:<ef>`, `adaptive:<min>:<max>`) and rejects a mode
-/// it cannot parse instead of ignoring it.
-#[cfg(feature = "persistence")]
-fn parse_mode_to_quality(mode: &str) -> crate::error::Result<crate::SearchQuality> {
-    crate::api_types::parse_search_mode(mode).map_err(crate::error::Error::Query)
 }
 
 /// Extracted query components from the WHERE clause.

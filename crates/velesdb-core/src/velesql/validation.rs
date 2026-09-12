@@ -74,10 +74,32 @@ impl QueryValidator {
         Self::validate_qualified_wildcards(stmt)?;
         Self::validate_vector_group_by(stmt)?;
         super::validation_fusion::validate_fusion(stmt)?;
+        #[cfg(feature = "persistence")]
+        Self::validate_search_mode(stmt)?;
         stmt.where_clause.as_ref().map_or(Ok(()), |condition| {
             // V011 anchor rule (explicit and implicit binding, guards
             // G1/G2/G3) lives in `validation_anchor.rs`.
             super::validation_anchor::walk_graph_match_anchors(condition, &stmt.from_alias)
+        })
+    }
+
+    /// Validates the search mode `WITH (mode = ...)` asks for, before any
+    /// dispatch. Every query shape passes here, including those that return
+    /// before the main search (union, `SPARSE_NEAR`, `NEAR_FUSED`) and
+    /// EXPLAIN, so a mode the parser rejects never runs at the default
+    /// quality (#2267).
+    #[cfg(feature = "persistence")]
+    fn validate_search_mode(stmt: &super::ast::SelectStatement) -> Result<(), ValidationError> {
+        let Some(with) = stmt.with_clause.as_ref() else {
+            return Ok(());
+        };
+        with.search_quality().map(|_| ()).map_err(|message| {
+            ValidationError::new(
+                ValidationErrorKind::InvalidSearchMode,
+                None,
+                "mode",
+                message,
+            )
         })
     }
 
