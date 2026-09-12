@@ -113,13 +113,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - VelesQL checks `mode`, and its alias `quality`, in the query validator,
     before any dispatch: every query shape fails with `V013`, the union,
     `SPARSE_NEAR` and `NEAR_FUSED` paths and `EXPLAIN` included, and so does a
-    mode that is not a string (`mode = 5`);
+    mode that is not a string (`mode = 5`). A collection's own
+    `execute_aggregate`, which the Tauri plugin and embedders call directly,
+    now runs the validator too;
   - REST answers `400` on `/search` and `/search/ids`, whatever the request's
     shape (dense, sparse or hybrid), and on `/search/batch`, naming the entry;
     `/search/ids` sends any request carrying a mode past its fast path, which
     has no quality dispatch of its own;
-  - the CLI REPL refuses such a mode at `\set mode`, and the Tauri plugin
-    reports it with the same message.
+  - the CLI REPL refuses such a mode at `\set mode`, accepts the aliases
+    `auto` and `auto_tune` as the server does, and no longer masks an inline
+    `quality` it cannot read with the session mode; the Tauri plugin reports a
+    bad mode with the same message.
+
+  This holds in every build with `persistence`. The WASM executor reads no
+  `WITH` option, so it neither applies nor checks a mode.
 
   Breaking for a client, over REST, VelesQL or a binding, that sent an unknown
   mode and silently got results at the default quality: it now needs a mode

@@ -112,8 +112,10 @@ aggregate `ORDER BY` over a `GROUP BY`), a default `LIMIT 10`,
 ## What is rejected, and how
 
 Every unsupported shape is a **loud rejection**. WASM never returns a
-quietly-wrong result for a query it cannot honour. The messages below are a
-historical reference from `@wiscale/velesdb-wasm@4.0.0`.
+quietly-wrong result for a query it cannot honour, with one exception: the
+executor reads no `WITH` option (`mode`, `ef_search`, `rerank`, …), so a query
+carrying one runs as if it had none. The messages below are a historical
+reference from `@wiscale/velesdb-wasm@4.0.0`.
 
 | Shape | Message |
 |---|---|

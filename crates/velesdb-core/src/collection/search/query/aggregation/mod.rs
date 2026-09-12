@@ -152,13 +152,19 @@ impl Collection {
     ///
     /// # Errors
     ///
-    /// Returns an error when SELECT does not contain aggregations, when HAVING is
-    /// used without GROUP BY, or when underlying scan/filter/aggregation operations fail.
+    /// Returns an error when the query fails validation, when SELECT does not
+    /// contain aggregations, when HAVING is used without GROUP BY, or when
+    /// underlying scan/filter/aggregation operations fail.
     pub fn execute_aggregate(
         &self,
         query: &Query,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<serde_json::Value> {
+        // Validate here too: the Tauri plugin and embedders call this entry
+        // point directly, not through `Database::execute_aggregate`, and every
+        // V0xx rule, a bad `mode` included (#2267), must hold on every path.
+        crate::velesql::QueryValidator::validate(query)
+            .map_err(|e| crate::error::Error::Query(e.to_string()))?;
         // Resolve scalar WHERE parameters once (same guard as the SELECT
         // pipeline) so both the static-filter and runtime-eval paths see
         // bound values and missing parameters fail loudly.

@@ -815,3 +815,36 @@ fn test_with_mode_overrides_quality() {
         "mode should take precedence over quality"
     );
 }
+
+/// `mode_value` is `Some` whenever a query names a mode, a value that is not
+/// a string included, where `get_mode` is `None`: a caller deciding whether a
+/// mode was given tests the former (#2267).
+#[test]
+fn test_with_clause_mode_value_sees_a_mode_that_is_not_a_string() {
+    use crate::velesql::{WithClause, WithValue};
+    let with = WithClause::new().with_option("quality", WithValue::Integer(5));
+    assert!(with.mode_value().is_some());
+    assert!(with.get_mode().is_none());
+    assert!(WithClause::new().mode_value().is_none());
+}
+
+/// The collection's own aggregation entry point validates too: the Tauri
+/// plugin and embedders call it directly, not through the Database (#2267).
+#[test]
+fn test_collection_aggregate_rejects_a_bad_mode() {
+    let (_dir, col) = setup_with_options_collection();
+    let params = HashMap::new();
+    let parse = |q: &str| crate::velesql::Parser::parse(q).unwrap_or_else(|e| panic!("{q}: {e}"));
+    col.execute_aggregate(
+        &parse("SELECT COUNT(*) FROM docs WITH (mode = 'fast')"),
+        &params,
+    )
+    .expect("a good mode runs");
+    for bad in ["'acurate'", "5"] {
+        let query = format!("SELECT COUNT(*) FROM docs WITH (mode = {bad})");
+        let err = col
+            .execute_aggregate(&parse(&query), &params)
+            .expect_err(&query);
+        assert!(err.to_string().contains("V013"), "{query}: {err}");
+    }
+}

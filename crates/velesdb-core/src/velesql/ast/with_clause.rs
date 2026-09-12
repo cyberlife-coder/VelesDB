@@ -86,14 +86,23 @@ impl WithClause {
     /// `quality` is an alias for `mode`; if both are set, `mode` takes precedence.
     #[must_use]
     pub fn get_mode(&self) -> Option<&str> {
-        self.get("mode")
-            .or_else(|| self.get("quality"))
-            .and_then(|v| v.as_str())
+        self.mode_value().and_then(WithValue::as_str)
+    }
+
+    /// The raw value `mode` asks for, `quality` being its alias, or `None`
+    /// when neither key is set; `mode` wins when both are. This is the one
+    /// reading of whether a query names a mode: [`Self::get_mode`] and
+    /// [`Self::search_quality`] read it. A caller deciding whether to inject a
+    /// default mode must test it rather than [`Self::get_mode`], which is
+    /// `None` for a value that is not a string (#2267).
+    #[must_use]
+    pub fn mode_value(&self) -> Option<&WithValue> {
+        self.get("mode").or_else(|| self.get("quality"))
     }
 
     /// The search quality `mode` asks for, `quality` being its alias, or
-    /// `None` when neither is set. `mode` wins over `quality`, as in
-    /// [`Self::get_mode`]. A value that is not a string, or a string
+    /// `None` when neither is set, as [`Self::mode_value`] reads them. A value
+    /// that is not a string, or a string that
     /// [`crate::api_types::parse_search_mode`] cannot read, is an error naming
     /// the accepted forms, never a silent fall-back to the default quality
     /// (#2267).
@@ -104,12 +113,15 @@ impl WithClause {
     /// none of the accepted forms.
     #[cfg(feature = "persistence")]
     pub fn search_quality(&self) -> Result<Option<crate::SearchQuality>, String> {
-        let Some(value) = self.get("mode").or_else(|| self.get("quality")) else {
+        let Some(value) = self.mode_value() else {
             return Ok(None);
         };
-        let mode = value
-            .as_str()
-            .ok_or_else(|| "Search mode must be a string, such as mode = 'balanced'".to_string())?;
+        let Some(mode) = value.as_str() else {
+            return Err(format!(
+                "Search mode must be a string. {}",
+                crate::api_types::SEARCH_MODE_FORMS
+            ));
+        };
         crate::api_types::parse_search_mode(mode).map(Some)
     }
 

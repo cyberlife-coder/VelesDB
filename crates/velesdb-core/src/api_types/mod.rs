@@ -151,6 +151,14 @@ fn parse_advanced_quality(mode: &str) -> Option<crate::SearchQuality> {
     None
 }
 
+/// The accepted search mode forms, as every mode error names them.
+#[cfg(feature = "persistence")]
+pub(crate) const SEARCH_MODE_FORMS: &str = concat!(
+    "Valid values: 'fast', 'balanced', 'accurate', 'perfect', ",
+    "'autotune' (aliases: 'auto_tune', 'auto'), 'custom:<ef>', ",
+    "'adaptive:<min_ef>:<max_ef>' (min_ef <= max_ef)"
+);
+
 /// Parses a search mode string into a [`crate::SearchQuality`], or an error
 /// naming the accepted forms when it cannot be parsed.
 ///
@@ -167,11 +175,6 @@ fn parse_advanced_quality(mode: &str) -> Option<crate::SearchQuality> {
 /// out-of-order argument).
 #[cfg(feature = "persistence")]
 pub fn parse_search_mode(mode: &str) -> Result<crate::SearchQuality, String> {
-    mode_to_search_quality(mode).ok_or_else(|| {
-        format!(
-            "Unknown search mode '{mode}'. Valid values: 'fast', 'balanced', 'accurate', \
-             'perfect', 'autotune' (aliases: 'auto_tune', 'auto'), 'custom:<ef>', \
-             'adaptive:<min_ef>:<max_ef>' (min_ef <= max_ef)"
-        )
-    })
+    mode_to_search_quality(mode)
+        .ok_or_else(|| format!("Unknown search mode '{mode}'. {SEARCH_MODE_FORMS}"))
 }
