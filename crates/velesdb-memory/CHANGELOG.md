@@ -36,6 +36,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with the lock released, and the index is read again once the lock is retaken,
   so a concurrent repair wins over the walk (#2246, P5).
 
+- **Tool schemas published rustdoc link syntax as text.** schemars copies
+  each field's doc comment into its JSON Schema `description`, so the schemas
+  every MCP client reads carried intra-doc links only rustdoc resolves —
+  ``[`Name`]``, ``[`Name`](crate::path)`` — 137 of them across 102
+  descriptions of `docs/reference/mcp-tools.json`. The input and output
+  schemas now show each code link as the code span rustdoc shows for it:
+  ``[`Name`]`` becomes `` `Name` ``, and a shortcut code link drops its
+  disambiguator, so ``[`fn@f`]`` becomes `` `f` ``. Only a link whose text
+  is one code span is rewritten: its backticks leave the Markdown around it
+  reading the same, where prose or a bare path (`[text](crate::path)`,
+  `[a::B]`) could turn a neighbour bold or into a list item once its
+  brackets go, so such a link stays as written. Code spans are copied
+  verbatim. A bare `[name]` stays whether or not rustdoc resolves it
+  (`map[key]`, `[sic]`), as do `[0, 1]` and a web link. Only `description`
+  strings are rewritten, never instance data such as a `default`, so nothing
+  else in a schema changes.
+  The rewrite leaves every link in a description it cannot read exactly: one
+  holding a backslash, a tab or four spaces, a code fence, a `<` or an image
+  outside code, a table, a reference-style link or a reference or footnote
+  definition (any `][` or `]:`, even inside backticks), a code span across a
+  line, or an inline link it does not render (a web link, one whose text is
+  not a code span). It leaves a `#` fragment, a link that spans a line, a
+  shortcut code link padded, holding any whitespace but single spaces or with
+  a label of 1000 bytes or more, a code link a backtick touches (its code span
+  would merge with it) or a `'` follows (smart punctuation may read the quote
+  differently), and a code link a bracket pair would enclose once its own
+  brackets go. A test then fails if a published description holds link syntax,
+  code spans included: a label holding a backtick, a bracketed path even as a
+  web link's text (one holding `::`, `@`, `#` or `<`, naming a primitive
+  rustdoc links from a sigil such as `&str` or `*const`, or ending in `()`,
+  `!{}` or `!`), a reference-style link or definition, or an inline link to
+  anything but a URL or a fragment. (#2261)
+
 ## [0.14.2] - 2026-09-03
 
 ### Fixed
