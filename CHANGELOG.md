@@ -122,6 +122,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a bracketed path, a reference-style link or definition, or an inline link
   to anything but a URL or a fragment.
 
+- **The agent-hook suite could fail on a loaded machine, or end without naming
+  what failed (#2277).** `integrations/agent-hooks/test/hooks.test.sh` ran the
+  checks that need a compiled result under the PostToolUse hook's own watchdogs,
+  a 10 s capability probe and a 20 s compilation, and a machine busy enough to
+  miss either made the hook pass the result through, as it should, and those
+  checks fail. They now own both timeouts at the 60 s maximum: the
+  compilation's, hard-coded until now, is `VELESDB_HOOK_COMPILE_TIMEOUT`
+  (default 20, at most 60, validated like `VELESDB_HOOK_PROBE_TIMEOUT`), and a
+  check fails if it stops reaching the watchdog. Every numeric knob also refuses
+  a leading zero now: shell arithmetic read `010` as octal 8, so a timeout of
+  `010` lasted 8 s; it falls back like any invalid value. The suite also piped
+  each payload into its hook: a hook that exits without reading stdin, as the
+  installer's positive control does, could kill that writer with SIGPIPE, and
+  under `set -euo pipefail` the suite then ended with 141 instead of 1, which
+  failed the installer's self-test on #2276. Every hook now takes its payload as
+  a here-string, and a call that exits non-zero fails by name instead of ending
+  the suite. Both were made deterministic first: a fake binary that answers
+  after 30 s, or after 45 s with the probe timeout raised to 60, which still
+  failed on the hard-coded compilation watchdog; and every payload writer
+  delayed by 0.2 s.
+
 - **A node could end up out of reach of every graph search, whatever its
   `ef` (#2259).** HNSW links each new node to its neighbours and each
   neighbour back, evicting from a full list to make room, and nothing checked

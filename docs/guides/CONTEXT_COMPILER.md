@@ -742,6 +742,7 @@ Tuning knobs:
 | `VELESDB_HOOK_TOKEN_BUDGET` | `2000` | Token budget handed to `compile-stdin`. |
 | `VELESDB_HOOK_TOKEN_BUDGET_MAX` | twice `VELESDB_HOOK_TOKEN_BUDGET` | Ceiling a `risk: high` compilation may retry at. Equal to the budget forbids the retry. |
 | `VELESDB_HOOK_PROBE_TIMEOUT` | `10` | Seconds the capability probe may take. |
+| `VELESDB_HOOK_COMPILE_TIMEOUT` | `20` | Seconds each compilation attempt may take. Like `VELESDB_HOOK_PROBE_TIMEOUT`, a whole number from 1 to 60; any other value leaves the result untouched. |
 
 > **The hook refuses a `risk: high` compilation.** It retries once at the
 > ceiling — a 268 KB cargo log is `high` at 2 000 tokens and `medium` at

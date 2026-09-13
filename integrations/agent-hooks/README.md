@@ -354,6 +354,7 @@ rules are strict, and each is covered by `test/hooks.test.sh`:
 | `VELESDB_HOOK_TOKEN_BUDGET_MAX` | twice `VELESDB_HOOK_TOKEN_BUDGET` | Ceiling a `risk: high` compilation may retry at. Set it equal to the budget to forbid the retry. |
 | `VELESDB_MEMORY_BIN` | `velesdb-memory` on `PATH` | Binary to invoke. |
 | `VELESDB_HOOK_PROBE_TIMEOUT` | `10` | Seconds the capability probe may take. |
+| `VELESDB_HOOK_COMPILE_TIMEOUT` | `20` | Seconds each compilation attempt may take. Like `VELESDB_HOOK_PROBE_TIMEOUT`, a whole number from 1 to 60; any other value leaves the result untouched. |
 
 **Fidelity.** A compilation the compiler reports as `risk: high` is **refused**,
 not shipped: `high` means at least one fragment it classifies as critical — a

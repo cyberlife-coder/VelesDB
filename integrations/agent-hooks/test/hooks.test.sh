@@ -17,6 +17,13 @@ FAILED=0
 pass() { printf 'ok - %s\n' "$1"; }
 fail() { printf 'not ok - %s\n' "$1"; FAILED=1; }
 
+# Every hook takes its payload as a here-string, never through a pipe: a hook
+# that exits without reading stdin, as the installer's positive control does,
+# kills the pipe's writer with SIGPIPE, and under `set -euo pipefail` the suite
+# would end with 141 before naming what failed. For the same reason a call that
+# exits non-zero is reported by name instead of ending the suite (#2277).
+hook_exited() { fail "the hook called at line $1 exits 0 (got $2)"; }
+
 # Assert that a block of text injected into a MODEL's context describes
 # load_working_context's return value correctly.
 #
@@ -88,7 +95,7 @@ SESSION_ID="test-session-$$"
 session_start_payload="$(jq -n --arg cwd "$PROJECT_DIR" --arg sid "$SESSION_ID" \
   '{session_id: $sid, cwd: $cwd, hook_event_name: "SessionStart", source: "startup"}')"
 
-session_start_out="$(printf '%s' "$session_start_payload" | bash "$HOOKS_DIR/session-start.sh")"
+session_start_out="$(bash "$HOOKS_DIR/session-start.sh" <<<"$session_start_payload")" || hook_exited "$LINENO" "$?"
 
 if [ -f "$archive_control" ] \
   && [ "$(cat "$archive_control")" = "original bytes still referenced by a transcript" ]; then
@@ -124,7 +131,7 @@ fi
 stop_payload="$(jq -n --arg cwd "$PROJECT_DIR" --arg sid "$SESSION_ID" \
   '{session_id: $sid, cwd: $cwd, hook_event_name: "Stop", last_assistant_message: "done"}')"
 
-stop_out_1="$(printf '%s' "$stop_payload" | bash "$HOOKS_DIR/stop.sh")"
+stop_out_1="$(bash "$HOOKS_DIR/stop.sh" <<<"$stop_payload")" || hook_exited "$LINENO" "$?"
 
 if printf '%s' "$stop_out_1" | jq -e '.decision == "block"' >/dev/null; then
   pass "Stop: first call blocks (decision == block)"
@@ -138,7 +145,7 @@ else
   fail "Stop: reason mentions save_working_context"
 fi
 
-stop_out_2="$(printf '%s' "$stop_payload" | bash "$HOOKS_DIR/stop.sh")"
+stop_out_2="$(bash "$HOOKS_DIR/stop.sh" <<<"$stop_payload")" || hook_exited "$LINENO" "$?"
 
 if printf '%s' "$stop_out_2" | jq -e '.decision == null' >/dev/null; then
   pass "Stop: second call in same session does not block"
@@ -149,7 +156,7 @@ fi
 # A different session_id must get its own reminder (sentinel is per-session).
 other_stop_payload="$(jq -n --arg cwd "$PROJECT_DIR" --arg sid "${SESSION_ID}-other" \
   '{session_id: $sid, cwd: $cwd, hook_event_name: "Stop", last_assistant_message: "done"}')"
-other_stop_out="$(printf '%s' "$other_stop_payload" | bash "$HOOKS_DIR/stop.sh")"
+other_stop_out="$(bash "$HOOKS_DIR/stop.sh" <<<"$other_stop_payload")" || hook_exited "$LINENO" "$?"
 
 if printf '%s' "$other_stop_out" | jq -e '.decision == "block"' >/dev/null; then
   pass "Stop: a different session_id gets its own first-call block"
@@ -163,7 +170,7 @@ fi
 pre_compact_payload="$(jq -n --arg cwd "$PROJECT_DIR" --arg sid "$SESSION_ID" \
   '{session_id: $sid, cwd: $cwd, hook_event_name: "PreCompact", trigger: "auto"}')"
 
-pre_compact_out_1="$(printf '%s' "$pre_compact_payload" | bash "$HOOKS_DIR/pre-compact.sh")"
+pre_compact_out_1="$(bash "$HOOKS_DIR/pre-compact.sh" <<<"$pre_compact_payload")" || hook_exited "$LINENO" "$?"
 
 if printf '%s' "$pre_compact_out_1" | jq -e '.decision == "block"' >/dev/null; then
   pass "PreCompact: first call blocks (decision == block)"
@@ -189,7 +196,7 @@ else
   fail "PreCompact: no hookSpecificOutput wrapper (unsupported for this event)"
 fi
 
-pre_compact_out_2="$(printf '%s' "$pre_compact_payload" | bash "$HOOKS_DIR/pre-compact.sh")"
+pre_compact_out_2="$(bash "$HOOKS_DIR/pre-compact.sh" <<<"$pre_compact_payload")" || hook_exited "$LINENO" "$?"
 
 if printf '%s' "$pre_compact_out_2" | jq -e '. == {}' >/dev/null; then
   pass "PreCompact: second call in same session passes through ({})"
@@ -207,7 +214,7 @@ no_config_sid="test-session-nocfg-$$"
 no_config_payload="$(jq -n --arg cwd "$NO_CONFIG_DIR" --arg sid "$no_config_sid" \
   '{session_id: $sid, cwd: $cwd, hook_event_name: "SessionStart", source: "startup"}')"
 
-no_config_out="$(printf '%s' "$no_config_payload" | bash "$HOOKS_DIR/session-start.sh")"
+no_config_out="$(bash "$HOOKS_DIR/session-start.sh" <<<"$no_config_payload")" || hook_exited "$LINENO" "$?"
 
 if printf '%s' "$no_config_out" | jq -e '.hookSpecificOutput.additionalContext | contains("no-config-project")' >/dev/null; then
   pass "SessionStart: defaults project to basename(cwd) with no config file"
@@ -230,7 +237,7 @@ WINDSURF_TRAJECTORY_ID="test-trajectory-$$"
 windsurf_payload="$(jq -n --arg cwd "$PROJECT_DIR" --arg tid "$WINDSURF_TRAJECTORY_ID" \
   '{trajectory_id: $tid, cwd: $cwd, execution_id: "exec-1", model_name: "test-model"}')"
 
-windsurf_out_1="$(printf '%s' "$windsurf_payload" | bash "$WINDSURF_HOOKS_DIR/pre-user-prompt.sh")"
+windsurf_out_1="$(bash "$WINDSURF_HOOKS_DIR/pre-user-prompt.sh" <<<"$windsurf_payload")" || hook_exited "$LINENO" "$?"
 
 if printf '%s' "$windsurf_out_1" | grep -q "load_working_context"; then
   pass "Windsurf pre_user_prompt: first call mentions load_working_context"
@@ -252,7 +259,7 @@ else
   fail "Windsurf pre_user_prompt: uses project from .velesdb-hooks.json"
 fi
 
-windsurf_out_2="$(printf '%s' "$windsurf_payload" | bash "$WINDSURF_HOOKS_DIR/pre-user-prompt.sh")"
+windsurf_out_2="$(bash "$WINDSURF_HOOKS_DIR/pre-user-prompt.sh" <<<"$windsurf_payload")" || hook_exited "$LINENO" "$?"
 
 if [ -z "$windsurf_out_2" ]; then
   pass "Windsurf pre_user_prompt: second call in same trajectory is silent"
@@ -277,7 +284,7 @@ CODEX_SESSION_ID="test-codex-session-$$"
 codex_session_start_payload="$(jq -n --arg cwd "$PROJECT_DIR" --arg sid "$CODEX_SESSION_ID" \
   '{session_id: $sid, transcript_path: null, cwd: $cwd, hook_event_name: "SessionStart", model: "test-model", permission_mode: "default", source: "startup"}')"
 
-codex_session_start_out="$(printf '%s' "$codex_session_start_payload" | bash "$CODEX_HOOKS_DIR/session-start.sh")"
+codex_session_start_out="$(bash "$CODEX_HOOKS_DIR/session-start.sh" <<<"$codex_session_start_payload")" || hook_exited "$LINENO" "$?"
 
 if printf '%s' "$codex_session_start_out" | jq -e '.hookSpecificOutput.hookEventName == "SessionStart"' >/dev/null; then
   pass "Codex SessionStart: hookSpecificOutput.hookEventName is SessionStart"
@@ -307,7 +314,7 @@ fi
 codex_compact_payload="$(jq -n --arg cwd "$PROJECT_DIR" --arg sid "$CODEX_SESSION_ID" \
   '{session_id: $sid, cwd: $cwd, hook_event_name: "SessionStart", source: "compact"}')"
 
-codex_compact_out="$(printf '%s' "$codex_compact_payload" | bash "$CODEX_HOOKS_DIR/session-start.sh")"
+codex_compact_out="$(bash "$CODEX_HOOKS_DIR/session-start.sh" <<<"$codex_compact_payload")" || hook_exited "$LINENO" "$?"
 
 if printf '%s' "$codex_compact_out" | jq -e '.hookSpecificOutput.additionalContext | contains("COMPACTION") and contains("save_working_context")' >/dev/null; then
   pass "Codex SessionStart: source=compact adds the post-compaction save reminder"
@@ -318,7 +325,7 @@ fi
 codex_stop_payload="$(jq -n --arg cwd "$PROJECT_DIR" --arg sid "$CODEX_SESSION_ID" \
   '{session_id: $sid, cwd: $cwd, hook_event_name: "Stop", stop_hook_active: false, last_assistant_message: "done"}')"
 
-codex_stop_out_1="$(printf '%s' "$codex_stop_payload" | bash "$CODEX_HOOKS_DIR/stop.sh")"
+codex_stop_out_1="$(bash "$CODEX_HOOKS_DIR/stop.sh" <<<"$codex_stop_payload")" || hook_exited "$LINENO" "$?"
 
 if printf '%s' "$codex_stop_out_1" | jq -e '.decision == "block" and (.reason | contains("save_working_context"))' >/dev/null; then
   pass "Codex Stop: first call blocks and asks for save_working_context"
@@ -326,7 +333,7 @@ else
   fail "Codex Stop: first call blocks and asks for save_working_context"
 fi
 
-codex_stop_out_2="$(printf '%s' "$codex_stop_payload" | bash "$CODEX_HOOKS_DIR/stop.sh")"
+codex_stop_out_2="$(bash "$CODEX_HOOKS_DIR/stop.sh" <<<"$codex_stop_payload")" || hook_exited "$LINENO" "$?"
 
 if printf '%s' "$codex_stop_out_2" | jq -e '. == {}' >/dev/null; then
   pass "Codex Stop: second call in same session passes through ({})"
@@ -338,7 +345,7 @@ fi
 # key on `session_id`, and a user running both would otherwise silence one.
 codex_shared_id_payload="$(jq -n --arg cwd "$PROJECT_DIR" --arg sid "$SESSION_ID" \
   '{session_id: $sid, cwd: $cwd, hook_event_name: "Stop"}')"
-codex_shared_id_out="$(printf '%s' "$codex_shared_id_payload" | bash "$CODEX_HOOKS_DIR/stop.sh")"
+codex_shared_id_out="$(bash "$CODEX_HOOKS_DIR/stop.sh" <<<"$codex_shared_id_payload")" || hook_exited "$LINENO" "$?"
 
 if printf '%s' "$codex_shared_id_out" | jq -e '.decision == "block"' >/dev/null; then
   pass "Codex Stop: sentinel is namespaced apart from the Claude Code Stop sentinel"
@@ -348,7 +355,7 @@ fi
 
 codex_no_config_payload="$(jq -n --arg cwd "$NO_CONFIG_DIR" \
   '{session_id: "codex-nocfg", cwd: $cwd, hook_event_name: "SessionStart", source: "resume"}')"
-codex_no_config_out="$(printf '%s' "$codex_no_config_payload" | bash "$CODEX_HOOKS_DIR/session-start.sh")"
+codex_no_config_out="$(bash "$CODEX_HOOKS_DIR/session-start.sh" <<<"$codex_no_config_payload")" || hook_exited "$LINENO" "$?"
 
 if printf '%s' "$codex_no_config_out" | jq -e '.hookSpecificOutput.additionalContext | contains("no-config-project") and contains("rolling")' >/dev/null; then
   pass "Codex SessionStart: falls back to basename(cwd) + \"rolling\" with no config file"
@@ -365,6 +372,14 @@ fi
 # ---------------------------------------------------------------------------
 FAKE_BIN_DIR="$TMP_TEST_DIR/bin"
 mkdir -p "$FAKE_BIN_DIR"
+
+# A check whose verdict needs the compile path to run to completion owns that
+# path's timeouts, at the hook's maximum. The defaults, a 10 s probe and a 20 s
+# compilation, are wall-clock bounds a loaded machine can miss, and the hook
+# then passes the result through as it should: a check expecting a compiled
+# result fails, and one expecting a refusal passes for the wrong reason (#2277).
+# Only the watchdog checks shorten a timeout, on purpose.
+COMPILE_TIMEOUTS=(VELESDB_HOOK_PROBE_TIMEOUT=60 VELESDB_HOOK_COMPILE_TIMEOUT=60)
 
 # Behaves like a compile-stdin-capable binary: consumes stdin, prints the
 # result JSON.
@@ -476,8 +491,8 @@ post_tool_payload() {
 
 # A tool NOT on the allowlist must be left strictly alone, however big it is.
 # Read is the case that matters: the model needs file bytes verbatim.
-read_out="$(post_tool_payload "Read" "read" "$big_output" \
-  | VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-ok" bash "$HOOKS_DIR/post-tool-use.sh")"
+read_out="$(VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-ok" bash "$HOOKS_DIR/post-tool-use.sh" \
+  <<<"$(post_tool_payload "Read" "read" "$big_output")")" || hook_exited "$LINENO" "$?"
 if [ "$(printf '%s' "$read_out" | jq -c .)" = "{}" ]; then
   pass "PostToolUse: Read is never compressed, whatever its size"
 else
@@ -485,8 +500,8 @@ else
 fi
 
 # Below the size threshold, compiling costs more than it saves.
-small_out="$(post_tool_payload "Bash" "small" "tiny output" \
-  | VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-ok" bash "$HOOKS_DIR/post-tool-use.sh")"
+small_out="$(VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-ok" bash "$HOOKS_DIR/post-tool-use.sh" \
+  <<<"$(post_tool_payload "Bash" "small" "tiny output")")" || hook_exited "$LINENO" "$?"
 if [ "$(printf '%s' "$small_out" | jq -c .)" = "{}" ]; then
   pass "PostToolUse: output below the threshold is passed through untouched"
 else
@@ -499,10 +514,10 @@ fi
 unsafe_tmp="$TMP_TEST_DIR/unsafe-optimizer-state"
 mkdir -p "$unsafe_tmp"
 printf 'not a private directory\n' > "$unsafe_tmp/velesdb-agent-hooks-${UID}"
-unsafe_state_out="$(post_tool_payload "Bash" "unsafe-state" "$big_output" \
-  | TMPDIR="$unsafe_tmp" VELESDB_HOOK_MIN_BYTES=1 \
+unsafe_state_out="$(TMPDIR="$unsafe_tmp" VELESDB_HOOK_MIN_BYTES=1 \
     VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-ok" \
-    bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
+    bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null \
+    <<<"$(post_tool_payload "Bash" "unsafe-state" "$big_output")")" || hook_exited "$LINENO" "$?"
 if [ "$(printf '%s' "$unsafe_state_out" | jq -c .)" = "{}" ]; then
   pass "PostToolUse: unsafe private state falls back to untouched output"
 else
@@ -526,9 +541,9 @@ printf 'DO NOT OVERWRITE PROBE\n' > "$probe_victim"
 printf 'DO NOT OVERWRITE RESULT\n' > "$result_victim"
 ln -s "$probe_victim" "$legacy_probe_out"
 ln -s "$result_victim" "$legacy_result"
-hostile_link_out="$(post_tool_payload "Bash" "$hostile_suffix" "$big_output" \
-  | VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-ok" \
-    bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
+hostile_link_out="$(env "${COMPILE_TIMEOUTS[@]}" VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-ok" \
+    bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null \
+    <<<"$(post_tool_payload "Bash" "$hostile_suffix" "$big_output")")" || hook_exited "$LINENO" "$?"
 if printf '%s' "$hostile_link_out" | jq -e '.hookSpecificOutput.updatedToolOutput' >/dev/null \
   && [ -L "$legacy_probe_out" ] && [ -L "$legacy_result" ] \
   && [ "$(cat "$probe_victim")" = "DO NOT OVERWRITE PROBE" ] \
@@ -539,8 +554,8 @@ else
 fi
 
 # The nominal case: an allowlisted tool, over the threshold, capable binary.
-big_out="$(post_tool_payload "Bash" "big" "$big_output" \
-  | VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-ok" bash "$HOOKS_DIR/post-tool-use.sh")"
+big_out="$(env "${COMPILE_TIMEOUTS[@]}" VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-ok" \
+  bash "$HOOKS_DIR/post-tool-use.sh" <<<"$(post_tool_payload "Bash" "big" "$big_output")")" || hook_exited "$LINENO" "$?"
 
 if printf '%s' "$big_out" | jq -e '.hookSpecificOutput.hookEventName == "PostToolUse"' >/dev/null; then
   pass "PostToolUse: replaces the result with hookEventName PostToolUse"
@@ -569,8 +584,8 @@ invalid_bash_payload="$(jq -n --arg cwd "$PROJECT_DIR" --arg sid "$SESSION_ID-ba
   --arg body "$big_output" \
   '{session_id: $sid, cwd: $cwd, hook_event_name: "PostToolUse", tool_name: "Bash",
     tool_input: {command: "echo"}, tool_use_id: "toolu_bad", tool_response: $body}')"
-invalid_bash_out="$(printf '%s' "$invalid_bash_payload" \
-  | VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-ok" bash "$HOOKS_DIR/post-tool-use.sh")"
+invalid_bash_out="$(VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-ok" bash "$HOOKS_DIR/post-tool-use.sh" \
+  <<<"$invalid_bash_payload")" || hook_exited "$LINENO" "$?"
 if [ "$(printf '%s' "$invalid_bash_out" | jq -c .)" = "{}" ]; then
   pass "PostToolUse: an invalid Bash output shape is never replaced"
 else
@@ -579,25 +594,26 @@ fi
 
 image_bash_payload="$(printf '%s' "$(post_tool_payload "Bash" "image" "$big_output")" \
   | jq '.tool_response.isImage = true')"
-image_bash_out="$(printf '%s' "$image_bash_payload" \
-  | VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-ok" bash "$HOOKS_DIR/post-tool-use.sh")"
+image_bash_out="$(VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-ok" bash "$HOOKS_DIR/post-tool-use.sh" \
+  <<<"$image_bash_payload")" || hook_exited "$LINENO" "$?"
 if [ "$(printf '%s' "$image_bash_out" | jq -c .)" = "{}" ]; then
   pass "PostToolUse: a Bash image result is never flattened into text"
 else
   fail "PostToolUse: a Bash image result is never flattened into text"
 fi
 
-low_out="$(post_tool_payload "Bash" "low" "$big_output" \
-  | VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-low" bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
+low_out="$(env "${COMPILE_TIMEOUTS[@]}" VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-low" \
+  bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null \
+  <<<"$(post_tool_payload "Bash" "low" "$big_output")")" || hook_exited "$LINENO" "$?"
 if printf '%s' "$low_out" | jq -e '.hookSpecificOutput.updatedToolOutput.stdout | contains("LOSSLESS SUMMARY")' >/dev/null; then
   pass "PostToolUse: a risk=low compilation IS shipped (second positive control)"
 else
   fail "PostToolUse: a risk=low compilation IS shipped (second positive control)"
 fi
 
-no_savings_out="$(post_tool_payload "Bash" "no-savings" "$big_output" \
-  | VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-no-savings" \
-    bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
+no_savings_out="$(env "${COMPILE_TIMEOUTS[@]}" VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-no-savings" \
+    bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null \
+    <<<"$(post_tool_payload "Bash" "no-savings" "$big_output")")" || hook_exited "$LINENO" "$?"
 if [ "$(printf '%s' "$no_savings_out" | jq -c .)" = "{}" ]; then
   pass "PostToolUse: faithful compilation without net token savings passes through"
 else
@@ -606,29 +622,45 @@ fi
 
 # Environment knobs feed watchdog bounds, arithmetic, and compiler arguments.
 # Invalid expressions must be data, never shell arithmetic, and must fall back
-# before replacing the host result.
+# before replacing the host result. A leading zero is invalid too: arithmetic
+# would read `010` as octal 8. `env` applies its assignments in order, so the
+# knob under test overrides the owned timeouts set before it.
 for invalid_knob in \
   VELESDB_HOOK_MIN_BYTES \
   VELESDB_HOOK_PROBE_TIMEOUT \
+  VELESDB_HOOK_COMPILE_TIMEOUT \
   VELESDB_HOOK_TOKEN_BUDGET \
   VELESDB_HOOK_TOKEN_BUDGET_MAX \
   VELESDB_HOOK_MIN_SAVED_TOKENS
 do
-  invalid_out="$(post_tool_payload "Bash" "invalid-$invalid_knob" "$big_output" \
-    | env "$invalid_knob=1+1" VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-ok" \
-      bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
-  if [ "$(printf '%s' "$invalid_out" | jq -c .)" = "{}" ]; then
-    pass "PostToolUse: invalid $invalid_knob fails closed to passthrough"
-  else
-    fail "PostToolUse: invalid $invalid_knob fails closed to passthrough"
-  fi
+  for invalid_value in '1+1' 010; do
+    invalid_out="$(env "${COMPILE_TIMEOUTS[@]}" "$invalid_knob=$invalid_value" \
+        VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-ok" bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null \
+        <<<"$(post_tool_payload "Bash" "invalid-$invalid_knob" "$big_output")")" || hook_exited "$LINENO" "$?"
+    if [ "$(printf '%s' "$invalid_out" | jq -c .)" = "{}" ]; then
+      pass "PostToolUse: invalid $invalid_knob=$invalid_value fails closed to passthrough"
+    else
+      fail "PostToolUse: invalid $invalid_knob=$invalid_value fails closed to passthrough"
+    fi
+  done
 done
 
+# The one knob that accepts 0: a zero margin still ships a compilation that
+# saves tokens, so refusing leading zeros did not refuse `0` itself.
+zero_margin_out="$(env "${COMPILE_TIMEOUTS[@]}" VELESDB_HOOK_MIN_SAVED_TOKENS=0 \
+    VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-ok" bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null \
+    <<<"$(post_tool_payload "Bash" "zero-margin" "$big_output")")" || hook_exited "$LINENO" "$?"
+if [ "$(printf '%s' "$zero_margin_out" | jq -c .)" != "{}" ]; then
+  pass "PostToolUse: VELESDB_HOOK_MIN_SAVED_TOKENS=0 is valid and ships"
+else
+  fail "PostToolUse: VELESDB_HOOK_MIN_SAVED_TOKENS=0 is valid and ships"
+fi
+
 for bad_risk in missing unknown malformed; do
-  bad_risk_out="$(post_tool_payload "Bash" "risk-$bad_risk" "$big_output" \
-    | FAKE_FINAL_RISK_MODE="$bad_risk" \
+  bad_risk_out="$(env "${COMPILE_TIMEOUTS[@]}" FAKE_FINAL_RISK_MODE="$bad_risk" \
       VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-risk-contract" \
-      bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
+      bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null \
+      <<<"$(post_tool_payload "Bash" "risk-$bad_risk" "$big_output")")" || hook_exited "$LINENO" "$?"
   if [ "$(printf '%s' "$bad_risk_out" | jq -c .)" = "{}" ]; then
     pass "PostToolUse: risk=$bad_risk is refused instead of shipping unverifiable content"
   else
@@ -642,8 +674,9 @@ done
 # this path there is no store behind the `ctx://source/…` handles it mints, so
 # the temp file is the ONLY way back. Shipping that in place of the real result
 # is how a hook meant to save tokens costs a diagnosis.
-high_out="$(post_tool_payload "Bash" "high" "$big_output" \
-  | VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-high" bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
+high_out="$(env "${COMPILE_TIMEOUTS[@]}" VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-high" \
+  bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null \
+  <<<"$(post_tool_payload "Bash" "high" "$big_output")")" || hook_exited "$LINENO" "$?"
 if [ "$(printf '%s' "$high_out" | jq -c .)" = "{}" ]; then
   pass "PostToolUse: a risk=high compilation is refused, leaving the result untouched"
 else
@@ -662,8 +695,9 @@ fi
 
 # Escalate before refusing: the budget is usually what is too tight, not the
 # content that is incompressible.
-esc_out="$(post_tool_payload "Bash" "escalate" "$big_output" \
-  | VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-escalate" bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
+esc_out="$(env "${COMPILE_TIMEOUTS[@]}" VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-escalate" \
+  bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null \
+  <<<"$(post_tool_payload "Bash" "escalate" "$big_output")")" || hook_exited "$LINENO" "$?"
 if printf '%s' "$esc_out" | jq -e '.hookSpecificOutput.updatedToolOutput.stdout | contains("ROOMIER SUMMARY")' >/dev/null; then
   pass "PostToolUse: risk=high at the first budget retries at the ceiling and ships that"
 else
@@ -681,9 +715,9 @@ fi
 # A ceiling equal to the starting budget means there is no second attempt to
 # make, so the first `high` is final. This is what makes the ceiling a real
 # bound rather than a suggestion.
-noesc_out="$(post_tool_payload "Bash" "noesc" "$big_output" \
-  | VELESDB_HOOK_TOKEN_BUDGET=2000 VELESDB_HOOK_TOKEN_BUDGET_MAX=2000 \
-    VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-escalate" bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
+noesc_out="$(env "${COMPILE_TIMEOUTS[@]}" VELESDB_HOOK_TOKEN_BUDGET=2000 VELESDB_HOOK_TOKEN_BUDGET_MAX=2000 \
+    VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-escalate" bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null \
+    <<<"$(post_tool_payload "Bash" "noesc" "$big_output")")" || hook_exited "$LINENO" "$?"
 if [ "$(printf '%s' "$noesc_out" | jq -c .)" = "{}" ]; then
   pass "PostToolUse: a ceiling equal to the budget forbids the retry and refuses"
 else
@@ -725,16 +759,18 @@ if [ -n "$real_bin" ]; then
     repetitive_corpus="$(awk 'BEGIN { for (i = 0; i < 400; i++)
       print "INFO  worker heartbeat ok, queue depth nominal, nothing to report" }')"
 
-    real_high="$(post_tool_payload "Bash" "realhigh" "$critical_corpus" \
-      | VELESDB_MEMORY_BIN="$real_bin" bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
+    real_high="$(env "${COMPILE_TIMEOUTS[@]}" VELESDB_MEMORY_BIN="$real_bin" \
+      bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null \
+      <<<"$(post_tool_payload "Bash" "realhigh" "$critical_corpus")")" || hook_exited "$LINENO" "$?"
     if [ "$(printf '%s' "$real_high" | jq -c .)" = "{}" ]; then
       pass "PostToolUse/real: the real compiler's risk=high verdict is honoured"
     else
       fail "PostToolUse/real: the real compiler's risk=high verdict is honoured"
     fi
 
-    real_ok="$(post_tool_payload "Bash" "realok" "$repetitive_corpus" \
-      | VELESDB_MEMORY_BIN="$real_bin" bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null)"
+    real_ok="$(env "${COMPILE_TIMEOUTS[@]}" VELESDB_MEMORY_BIN="$real_bin" \
+      bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null \
+      <<<"$(post_tool_payload "Bash" "realok" "$repetitive_corpus")")" || hook_exited "$LINENO" "$?"
     if printf '%s' "$real_ok" | jq -e '.hookSpecificOutput.updatedToolOutput.stdout | contains("fidelity risk")' >/dev/null; then
       pass "PostToolUse/real: a compressible corpus is still compressed by the real compiler"
     else
@@ -755,11 +791,11 @@ archive_payload="$(jq -n --arg cwd "$PROJECT_DIR" --arg sid "$SESSION_ID-archive
     tool_input: {command: "build"}, tool_use_id: "toolu_archive",
     tool_response: {stdout: $out, stderr: $err, interrupted: false,
       isImage: false, noOutputExpected: false}}')"
-archive_out="$(printf '%s' "$archive_payload" \
-  | VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-ok" bash "$HOOKS_DIR/post-tool-use.sh")"
+archive_out="$(env "${COMPILE_TIMEOUTS[@]}" VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-ok" \
+  bash "$HOOKS_DIR/post-tool-use.sh" <<<"$archive_payload")" || hook_exited "$LINENO" "$?"
 archive_path="$(printf '%s' "$archive_out" \
   | jq -r '.hookSpecificOutput.updatedToolOutput.stdout' \
-  | sed -n 's/.*serialized as JSON at \(.*\); Read it.*/\1/p')"
+  | sed -n 's/.*serialized as JSON at \(.*\); Read it.*/\1/p')" || true
 if [ -n "$archive_path" ] && [ -f "$archive_path" ]; then
   pass "PostToolUse: the replacement quotes a real path to the original object"
 else
@@ -775,8 +811,8 @@ else
 fi
 
 # A failing compilation must never cost the agent its tool result.
-fail_out="$(post_tool_payload "Bash" "failbin" "$big_output" \
-  | VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-fail" bash "$HOOKS_DIR/post-tool-use.sh")"
+fail_out="$(VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-fail" bash "$HOOKS_DIR/post-tool-use.sh" \
+  <<<"$(post_tool_payload "Bash" "failbin" "$big_output")")" || hook_exited "$LINENO" "$?"
 if [ "$(printf '%s' "$fail_out" | jq -c .)" = "{}" ]; then
   pass "PostToolUse: a failed compilation falls back to the untouched output"
 else
@@ -785,8 +821,8 @@ fi
 
 # No binary at all — the overwhelmingly common case before the release that
 # ships compile-stdin.
-missing_out="$(post_tool_payload "Bash" "nobin" "$big_output" \
-  | VELESDB_MEMORY_BIN="$TMP_TEST_DIR/definitely-not-installed" bash "$HOOKS_DIR/post-tool-use.sh")"
+missing_out="$(VELESDB_MEMORY_BIN="$TMP_TEST_DIR/definitely-not-installed" bash "$HOOKS_DIR/post-tool-use.sh" \
+  <<<"$(post_tool_payload "Bash" "nobin" "$big_output")")" || hook_exited "$LINENO" "$?"
 if [ "$(printf '%s' "$missing_out" | jq -c .)" = "{}" ]; then
   pass "PostToolUse: a missing velesdb-memory binary falls back cleanly"
 else
@@ -796,8 +832,8 @@ fi
 # The hang case: an older binary treats our piped stdin as MCP traffic. The
 # watchdog must bound it AND the hook must still answer.
 old_started="$(date +%s)"
-old_out="$(post_tool_payload "Bash" "oldbin" "$big_output" \
-  | VELESDB_HOOK_PROBE_TIMEOUT=2 VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-old" bash "$HOOKS_DIR/post-tool-use.sh")"
+old_out="$(VELESDB_HOOK_PROBE_TIMEOUT=2 VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-old" bash "$HOOKS_DIR/post-tool-use.sh" \
+  <<<"$(post_tool_payload "Bash" "oldbin" "$big_output")")" || hook_exited "$LINENO" "$?"
 old_elapsed=$(( $(date +%s) - old_started ))
 if [ "$(printf '%s' "$old_out" | jq -c .)" = "{}" ]; then
   pass "PostToolUse: a pre-compile-stdin binary falls back instead of hanging"
@@ -812,6 +848,31 @@ if [ "$old_elapsed" -lt 25 ]; then
   pass "PostToolUse: the watchdog bounds the probe (${old_elapsed}s < the fake binary's 30s)"
 else
   fail "PostToolUse: the watchdog bounds the probe (${old_elapsed}s < the fake binary's 30s)"
+fi
+
+# The compilation has a watchdog of its own. This binary answers the probe at
+# once; on the compilation it prints a shippable result, then runs 15 s before
+# exiting. The 20 s default would wait for it and ship that result, so the
+# original comes back only if VELESDB_HOOK_COMPILE_TIMEOUT reaches the watchdog.
+cat > "$FAKE_BIN_DIR/fake-slow-compile" <<'FAKE'
+#!/usr/bin/env bash
+cat >/dev/null
+case " $* " in
+  *" --query "*)
+    printf '{"content":"LATE SUMMARY","tokens_in":4000,"tokens_out":300,"tokens_saved":3700,"risk":"medium"}\n'
+    exec sleep 15
+    ;;
+esac
+printf '{"content":"PROBE","tokens_in":4,"tokens_out":1,"tokens_saved":3,"risk":"low"}\n'
+FAKE
+chmod +x "$FAKE_BIN_DIR/fake-slow-compile"
+slow_out="$(env "${COMPILE_TIMEOUTS[@]}" VELESDB_HOOK_COMPILE_TIMEOUT=1 \
+  VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-slow-compile" bash "$HOOKS_DIR/post-tool-use.sh" \
+  <<<"$(post_tool_payload "Bash" "slowbin" "$big_output")")" || hook_exited "$LINENO" "$?"
+if [ "$(printf '%s' "$slow_out" | jq -c .)" = "{}" ]; then
+  pass "PostToolUse: VELESDB_HOOK_COMPILE_TIMEOUT bounds the compilation"
+else
+  fail "PostToolUse: VELESDB_HOOK_COMPILE_TIMEOUT bounds the compilation"
 fi
 
 # ---------------------------------------------------------------------------
@@ -853,14 +914,15 @@ buried="$noisy_lines
 error[E0463]: can't find crate for \`core\`
 $noisy_lines"
 
-jq -n --arg cwd "$PROJECT_DIR" --arg sid "$SESSION_ID-obj" --arg body "$buried" \
+obj_payload="$(jq -n --arg cwd "$PROJECT_DIR" --arg sid "$SESSION_ID-obj" --arg body "$buried" \
   '{session_id: $sid, cwd: $cwd, hook_event_name: "PostToolUse", tool_name: "Bash",
     tool_input: {command: "cargo build"}, tool_use_id: "toolu_obj",
     tool_response: {stdout: $body, stderr: "", interrupted: false,
-      isImage: false, noOutputExpected: false}}' \
-  | VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-record" bash "$HOOKS_DIR/post-tool-use.sh" >/dev/null
+      isImage: false, noOutputExpected: false}}')"
+env "${COMPILE_TIMEOUTS[@]}" VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-record" \
+  bash "$HOOKS_DIR/post-tool-use.sh" <<<"$obj_payload" >/dev/null || hook_exited "$LINENO" "$?"
 
-received_lines="$(wc -l < "$TMP_TEST_DIR/received.txt" | tr -d ' ')"
+received_lines="$(wc -l < "$TMP_TEST_DIR/received.txt" | tr -d ' ')" || received_lines=0
 if [ "$received_lines" -gt 1 ]; then
   pass "PostToolUse: an object tool_response reaches the compiler as real lines"
 else
