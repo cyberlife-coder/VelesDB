@@ -134,6 +134,9 @@ pub enum ValidationErrorKind {
     /// `WITH (mode = ...)`, or its alias `quality`, is not a string or names
     /// none of the accepted search modes (#2267).
     InvalidSearchMode,
+    /// `WITH (ef_search = ...)` is not an integer, or is outside the
+    /// documented `[16, 4096]` range (#2274).
+    InvalidEfSearch,
 }
 
 impl ValidationErrorKind {
@@ -154,6 +157,7 @@ impl ValidationErrorKind {
             Self::GraphMatchAnchorMismatch => "V011",
             Self::FusionMisconfigured => "V012",
             Self::InvalidSearchMode => "V013",
+            Self::InvalidEfSearch => "V014",
         }
     }
 
@@ -181,6 +185,7 @@ impl ValidationErrorKind {
             }
             Self::FusionMisconfigured => "USING FUSION clause is misconfigured",
             Self::InvalidSearchMode => "Invalid search mode",
+            Self::InvalidEfSearch => "Invalid ef_search value",
         }
     }
 }

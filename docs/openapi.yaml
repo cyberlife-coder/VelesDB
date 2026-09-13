@@ -1677,6 +1677,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: A field of the wrong type, such as a negative or non-integer ef_search
+          content:
+            text/plain:
+              schema:
+                type: string
   /collections/{name}/search/batch:
     post:
       tags:
@@ -1715,6 +1721,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: A field of the wrong type in an entry, such as a negative ef_search
+          content:
+            text/plain:
+              schema:
+                type: string
   /collections/{name}/search/hybrid:
     post:
       tags:
@@ -1796,6 +1808,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: A field of the wrong type, such as a negative or non-integer ef_search
+          content:
+            text/plain:
+              schema:
+                type: string
   /collections/{name}/search/multi:
     post:
       tags:
@@ -3972,9 +3990,16 @@ components:
           type:
           - integer
           - 'null'
-          description: HNSW `ef_search` parameter.
+          description: |-
+            HNSW `ef_search` parameter, in `[16, 4096]`: an integer outside the
+            range is refused with a `400` naming it (#2274), and a value that is
+            not a non-negative integer fails the body's JSON parsing with a `422`,
+            as any mistyped field does. It wins over `mode` for a dense search with
+            no `filter`; a filtered search applies neither, and a batch entry's is
+            checked but not applied.
           example: 128
-          minimum: 0
+          maximum: 4096
+          minimum: 16
         filter:
           type: object
           description: Optional metadata filter.

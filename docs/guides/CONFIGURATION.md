@@ -519,6 +519,11 @@ SELECT * FROM docs WHERE vector NEAR $v WITH (ef_search = 512);
 
 **Result**: The query uses `ef_search = 512` (runtime override wins).
 
+Within one query, an explicit `ef_search` wins over `mode` (or its alias
+`quality`) on every surface: VelesQL's `WITH`, a REST search body, and the
+REPL, which adds its session setting only to a query that names neither —
+its `\set ef_search` when set, else its `\set mode` (#2274).
+
 > Any `WITH (ef_search = N)` value is passed through as the requested budget —
 > `N` is sent to HNSW (clamped to at least `k`, and still subject to the
 > standard dataset-size scaling), not snapped to a coarse named profile.

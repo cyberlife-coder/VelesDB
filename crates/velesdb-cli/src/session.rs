@@ -61,8 +61,9 @@ impl SessionSettings {
 
     /// Gets the explicitly-set ef_search override, if any.
     ///
-    /// `None` means "use the mode default"; the session only injects an explicit
-    /// `ef_search` into a query's WITH clause, leaving the mode to drive the rest.
+    /// `None` means "use the mode default". The REPL injects one quality
+    /// setting into a query that names none: this `ef_search` when set, else
+    /// the mode.
     #[must_use]
     pub fn ef_search(&self) -> Option<usize> {
         self.ef_search
@@ -71,10 +72,10 @@ impl SessionSettings {
     /// Gets the effective ef_search value.
     ///
     /// Uses a default `k=10` for the quality profile's ef calculation. The query
-    /// path injects the explicit [`Self::ef_search`] override and lets the `mode`
-    /// drive the rest, so this resolved value is used only in tests.
+    /// path injects [`Self::ef_search`] when set and the `mode` otherwise, so
+    /// this resolved value is used only in tests.
     #[must_use]
-    #[allow(dead_code)] // Reason: resolved ef preview for tests; query path injects the explicit override + mode
+    #[allow(dead_code)] // Reason: resolved ef preview, used only in tests
     pub fn effective_ef_search(&self) -> usize {
         self.ef_search.unwrap_or_else(|| self.mode.ef_search(10))
     }
@@ -121,9 +122,10 @@ impl SessionSettings {
                 let ef = value
                     .parse::<usize>()
                     .map_err(|_| format!("Invalid integer: {value}"))?;
-                if !(16..=4096).contains(&ef) {
-                    return Err(format!("ef_search must be between 16 and 4096, got {ef}"));
-                }
+                // Same range the config file and every query-time `WITH
+                // (ef_search = ...)` enforce (#2274) — one definition,
+                // `velesdb_core::api_types::validate_ef_search`.
+                velesdb_core::api_types::validate_ef_search(ef)?;
                 self.ef_search = Some(ef);
                 Ok(())
             }

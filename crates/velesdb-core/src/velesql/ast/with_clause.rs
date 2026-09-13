@@ -147,12 +147,67 @@ impl WithClause {
     }
 
     /// Gets ef_search if specified.
+    ///
+    /// Silently drops a value it cannot read as a plain non-negative integer
+    /// — a typo, a string, or a negative literal (the grammar accepts a
+    /// leading `-`) — rather than reporting it. A caller that must refuse
+    /// such a value instead of treating it as "not given" uses
+    /// [`Self::ef_search`]; one that only needs to know whether an inline
+    /// value was given at all (to decide whether to inject a default over
+    /// it) uses [`Self::ef_search_value`], which sees a value this method
+    /// cannot read (#2274).
     #[must_use]
-    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     pub fn get_ef_search(&self) -> Option<usize> {
         self.get("ef_search")
             .and_then(WithValue::as_integer)
-            .map(|v| v as usize)
+            .and_then(|v| usize::try_from(v).ok())
+    }
+
+    /// The raw value `WITH (ef_search = ...)` gives, or `None` when the
+    /// option is absent; a repeated key's first entry applies. See
+    /// [`Self::ef_search`] for the validated reading.
+    #[must_use]
+    pub fn ef_search_value(&self) -> Option<&WithValue> {
+        self.ef_search_values().next()
+    }
+
+    /// Every value the clause gives `ef_search`, in order.
+    fn ef_search_values(&self) -> impl Iterator<Item = &WithValue> {
+        self.options
+            .iter()
+            .filter(|opt| opt.key.eq_ignore_ascii_case("ef_search"))
+            .map(|opt| &opt.value)
+    }
+
+    /// The `ef_search` `WITH (ef_search = ...)` asks for, checked against the
+    /// documented range (`docs/VELESQL_SPEC.md`), or `None` when the option
+    /// is absent. Unlike [`Self::get_ef_search`], a value that is not an
+    /// integer, or one outside `[16, 4096]` — `-1`, say, which
+    /// [`Self::get_ef_search`] drops as though none were given — is an error
+    /// here, never a silent fall-back to no override (#2274). Every value a
+    /// repeated key gives is checked, even one the first shadows; the first
+    /// applies, as [`Self::ef_search_value`] reads it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message naming the accepted type or range for the first value
+    /// that is not an integer, or an integer outside the documented range.
+    pub fn ef_search(&self) -> Result<Option<usize>, String> {
+        let values = self
+            .ef_search_values()
+            .map(Self::parse_ef_search_value)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(values.first().copied())
+    }
+
+    /// Reads one value given for `ef_search` against the documented range. A
+    /// value that is not an integer gets the message an integer outside the
+    /// range gets, naming the value as the query wrote it.
+    fn parse_ef_search_value(value: &WithValue) -> Result<usize, String> {
+        let Some(raw) = value.as_integer() else {
+            return Err(crate::api_types::ef_search_out_of_range(value));
+        };
+        crate::api_types::parse_with_ef_search(raw)
     }
 
     /// Gets timeout in milliseconds if specified.
@@ -215,6 +270,21 @@ pub enum WithValue {
     Boolean(bool),
     /// Identifier (unquoted string).
     Identifier(String),
+}
+
+/// Renders the value as a `VelesQL` `WITH` clause writes it: a string in
+/// single quotes, each quote inside doubled as the grammar reads it back; an
+/// identifier bare; a float with its fractional part.
+impl std::fmt::Display for WithValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::String(s) => write!(f, "'{}'", s.replace('\'', "''")),
+            Self::Integer(v) => write!(f, "{v}"),
+            Self::Float(v) => write!(f, "{v:?}"),
+            Self::Boolean(v) => write!(f, "{v}"),
+            Self::Identifier(s) => f.write_str(s),
+        }
+    }
 }
 
 impl WithValue {

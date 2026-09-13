@@ -6,8 +6,8 @@ use velesdb_core::collection::VectorCollection;
 use velesdb_core::index::sparse::DEFAULT_SPARSE_INDEX_NAME;
 
 use crate::types::{
-    parse_search_mode, ErrorResponse, IdScoreResult, SearchIdsResponse, SearchRequest,
-    SearchResponse, SearchResultResponse,
+    parse_search_mode, validate_ef_search, ErrorResponse, IdScoreResult, SearchIdsResponse,
+    SearchRequest, SearchResponse, SearchResultResponse,
 };
 use crate::AppState;
 
@@ -259,6 +259,30 @@ pub(crate) fn parse_mode_or_400(
     mode: Option<&str>,
 ) -> Result<Option<velesdb_core::SearchQuality>, axum::response::Response> {
     mode.map(parse_search_mode).transpose().map_err(|error| {
+        state.operational_metrics.inc_errors();
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse { error, code: None }),
+        )
+            .into_response()
+    })
+}
+
+/// Validates a search request's `ef_search` against the documented range, or
+/// counts a request error and answers `400` naming it. Run alongside
+/// [`parse_mode_or_400`], before the circuit breaker could count a value it
+/// rejects as the collection's failure: an out-of-range `ef_search` —
+/// `usize::MAX` from a client, say — must never reach the HNSW traversal it
+/// would otherwise run uncapped (#2274).
+#[allow(clippy::result_large_err)]
+pub(crate) fn validate_ef_search_or_400(
+    state: &AppState,
+    ef_search: Option<usize>,
+) -> Result<(), axum::response::Response> {
+    let Some(ef) = ef_search else {
+        return Ok(());
+    };
+    validate_ef_search(ef).map_err(|error| {
         state.operational_metrics.inc_errors();
         (
             StatusCode::BAD_REQUEST,

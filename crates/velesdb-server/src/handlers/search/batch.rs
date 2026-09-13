@@ -9,7 +9,8 @@ use axum::{
 use std::sync::Arc;
 
 use crate::types::{
-    parse_search_mode, BatchSearchRequest, BatchSearchResponse, ErrorResponse, SearchResponse,
+    parse_search_mode, validate_ef_search, BatchSearchRequest, BatchSearchResponse, ErrorResponse,
+    SearchResponse,
 };
 use crate::AppState;
 
@@ -33,7 +34,13 @@ use crate::handlers::helpers::{
     responses(
         (status = 200, description = "Batch search results", body = BatchSearchResponse),
         (status = 404, description = "Collection not found", body = ErrorResponse),
-        (status = 400, description = "Invalid request", body = ErrorResponse)
+        (status = 400, description = "Invalid request", body = ErrorResponse),
+        (
+            status = 422,
+            description = "A field of the wrong type in an entry, such as a negative ef_search",
+            body = String,
+            content_type = "text/plain"
+        )
     )
 )]
 pub async fn batch_search(
@@ -173,9 +180,10 @@ fn finish_batch_search(
 }
 
 /// Validate every query of a batch request: its vector matches the collection
-/// dimension, and its search mode, when given, is one the parser reads. The
-/// first bad query gets a 400 naming its index. The batch applies no mode,
-/// but a typo must not pass silently there either (#2267).
+/// dimension, and its search mode and `ef_search`, when given, are ones the
+/// parser reads and the documented range accepts. The first bad query gets a
+/// 400 naming its index. The batch applies neither override, but a typo or an
+/// out-of-range value must not pass silently there either (#2267, #2274).
 #[allow(clippy::result_large_err)]
 fn validate_batch_queries(
     state: &AppState,
@@ -191,6 +199,9 @@ fn validate_batch_queries(
             return Err(invalid_batch_query(idx, &error.error, error.code.clone()));
         }
         if let Some(Err(error)) = search.mode.as_deref().map(parse_search_mode) {
+            return Err(invalid_batch_query(idx, &error, None));
+        }
+        if let Some(Err(error)) = search.ef_search.map(validate_ef_search) {
             return Err(invalid_batch_query(idx, &error, None));
         }
     }

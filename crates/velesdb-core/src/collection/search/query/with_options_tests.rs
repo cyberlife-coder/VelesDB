@@ -113,8 +113,9 @@ fn test_query_search_options_from_with_clause_invalid_mode_is_rejected() {
 }
 
 #[test]
-fn test_query_search_options_mode_overrides_ef_search() {
-    // When both mode and ef_search are set, mode takes precedence
+fn test_query_search_options_ef_search_overrides_mode() {
+    // When both mode and ef_search are set, both are captured and the
+    // explicit ef_search is the quality the search runs at (#2274).
     let with = crate::velesql::WithClause::new()
         .with_option(
             "mode",
@@ -123,8 +124,11 @@ fn test_query_search_options_mode_overrides_ef_search() {
         .with_option("ef_search", crate::velesql::WithValue::Integer(64));
     let opts = QuerySearchOptions::from_with_clause(Some(&with)).expect("valid mode");
     assert!(matches!(opts.quality, Some(crate::SearchQuality::Accurate)));
-    // ef_search still captured for backward compat
     assert_eq!(opts.ef_search, Some(64));
+    assert!(matches!(
+        opts.resolved_quality(),
+        crate::SearchQuality::Custom(64)
+    ));
 }
 
 // ============================================================================
@@ -519,20 +523,224 @@ fn test_mode_balanced_is_default_equivalent() {
 
 // --- ef_search edge cases ---
 
+/// Below the documented `[16, 4096]` range: rejected rather than passed
+/// through as a near-useless one-hop traversal (#2274).
 #[test]
-fn test_ef_search_zero() {
+fn test_ef_search_zero_is_rejected() {
     let with = crate::velesql::WithClause::new()
         .with_option("ef_search", crate::velesql::WithValue::Integer(0));
-    let opts = QuerySearchOptions::from_with_clause(Some(&with)).expect("valid mode");
-    assert_eq!(opts.ef_search, Some(0));
+    let err = QuerySearchOptions::from_with_clause(Some(&with))
+        .expect_err("out-of-range ef_search should be rejected");
+    assert!(err.to_string().contains('0'));
 }
 
+/// Above the documented range: rejected rather than run as an oversized
+/// traversal (#2274).
 #[test]
-fn test_ef_search_very_large() {
+fn test_ef_search_very_large_is_rejected() {
     let with = crate::velesql::WithClause::new()
         .with_option("ef_search", crate::velesql::WithValue::Integer(100_000));
-    let opts = QuerySearchOptions::from_with_clause(Some(&with)).expect("valid mode");
-    assert_eq!(opts.ef_search, Some(100_000));
+    let err = QuerySearchOptions::from_with_clause(Some(&with))
+        .expect_err("out-of-range ef_search should be rejected");
+    assert!(err.to_string().contains("100000"));
+}
+
+/// `ef_search = -1` must not cast to `usize::MAX` and run an uncapped
+/// traversal (#2274).
+#[test]
+fn test_ef_search_negative_is_rejected() {
+    let (_dir, col) = setup_with_options_collection();
+    let mut params = HashMap::new();
+    params.insert("v".to_string(), serde_json::json!([0.5, 0.5, 0.5, 0.3]));
+    let err = col
+        .execute_query_str(
+            "SELECT * FROM docs WHERE vector NEAR $v LIMIT 5 WITH (ef_search = -1)",
+            &params,
+        )
+        .expect_err("negative ef_search should be rejected");
+    assert!(err.to_string().contains("V014"), "{err}");
+}
+
+/// A non-integer `ef_search` is ignored today; it must fail instead (#2274).
+#[test]
+fn test_ef_search_non_integer_is_rejected() {
+    let (_dir, col) = setup_with_options_collection();
+    let mut params = HashMap::new();
+    params.insert("v".to_string(), serde_json::json!([0.5, 0.5, 0.5, 0.3]));
+    let err = col
+        .execute_query_str(
+            "SELECT * FROM docs WHERE vector NEAR $v LIMIT 5 WITH (ef_search = 'high')",
+            &params,
+        )
+        .expect_err("non-integer ef_search should be rejected");
+    assert!(err.to_string().contains("V014"), "{err}");
+}
+
+/// `from_with_clause` refuses a bad `ef_search` itself, for a direct caller
+/// the query validator never saw (#2274).
+#[test]
+fn test_query_search_options_from_with_clause_bad_ef_search_is_rejected() {
+    for value in [
+        crate::velesql::WithValue::Integer(-1),
+        crate::velesql::WithValue::Integer(4097),
+        crate::velesql::WithValue::String("high".to_string()),
+    ] {
+        let with = crate::velesql::WithClause::new().with_option("ef_search", value);
+        let err = QuerySearchOptions::from_with_clause(Some(&with))
+            .expect_err("a bad ef_search should be rejected");
+        assert!(err.to_string().contains("ef_search"), "{err}");
+    }
+}
+
+/// A bad `ef_search` a repeated key shadows fails the query too, while two
+/// valid values run with the first (#2274).
+#[test]
+fn test_ef_search_shadowed_by_a_repeated_key_is_rejected() {
+    let (_dir, col) = setup_with_options_collection();
+    let mut params = HashMap::new();
+    params.insert("v".to_string(), serde_json::json!([0.5, 0.5, 0.5, 0.3]));
+    for with in [
+        "(ef_search = 64, ef_search = -1)",
+        "(ef_search = 'high', ef_search = 64)",
+    ] {
+        let query = format!("SELECT * FROM docs WHERE vector NEAR $v LIMIT 5 WITH {with}");
+        let err = col.execute_query_str(&query, &params).expect_err(&query);
+        assert!(err.to_string().contains("V014"), "{query}: {err}");
+    }
+    col.execute_query_str(
+        "SELECT * FROM docs WHERE vector NEAR $v LIMIT 5 WITH (ef_search = 64, ef_search = 128)",
+        &params,
+    )
+    .expect("two valid values run");
+}
+
+/// `WithClause::ef_search` checks every value a repeated key gives, applies
+/// the first, and accepts both ends of `[16, 4096]` (#2274).
+#[test]
+fn test_with_clause_ef_search_reads_every_value() {
+    use crate::velesql::{WithClause, WithValue};
+    let clause = |values: Vec<WithValue>| {
+        values.into_iter().fold(WithClause::new(), |with, value| {
+            with.with_option("ef_search", value)
+        })
+    };
+    assert_eq!(WithClause::new().ef_search(), Ok(None));
+    for (values, ef) in [
+        (vec![WithValue::Integer(64), WithValue::Integer(128)], 64),
+        (vec![WithValue::Integer(16)], 16),
+        (vec![WithValue::Integer(4096)], 4096),
+    ] {
+        assert_eq!(clause(values).ef_search(), Ok(Some(ef)));
+    }
+    for values in [
+        vec![WithValue::Integer(64), WithValue::Integer(-1)],
+        vec![
+            WithValue::Integer(64),
+            WithValue::String("high".to_string()),
+        ],
+        vec![WithValue::Integer(15)],
+        vec![WithValue::Integer(4097)],
+    ] {
+        let with = clause(values);
+        assert!(with.ef_search().is_err(), "{with:?}");
+    }
+}
+
+/// `get_ef_search` drops a negative literal, as its rustdoc says, instead of
+/// casting `-1` to `usize::MAX` (#2274).
+#[test]
+fn test_get_ef_search_drops_a_negative_value() {
+    let with = crate::velesql::WithClause::new()
+        .with_option("ef_search", crate::velesql::WithValue::Integer(-1));
+    assert_eq!(with.get_ef_search(), None);
+}
+
+/// A value that is not an integer gets the one message every out-of-range
+/// `ef_search` gets, naming the value as the query wrote it, rather than a
+/// second message built apart (#2274).
+#[test]
+fn test_a_non_integer_ef_search_gets_the_one_range_message() {
+    use crate::velesql::{WithClause, WithValue};
+    let refusal = |value| {
+        WithClause::new()
+            .with_option("ef_search", value)
+            .ef_search()
+            .expect_err("refused")
+    };
+    let above = refusal(WithValue::Integer(4097));
+    for (value, shown) in [
+        (WithValue::String("high".to_string()), "'high'"),
+        (WithValue::String("it's".to_string()), "'it''s'"),
+        (WithValue::Identifier("high".to_string()), "high"),
+        (WithValue::Float(1.5), "1.5"),
+        (WithValue::Boolean(true), "true"),
+    ] {
+        assert_eq!(refusal(value), above.replace("4097", shown));
+    }
+    let query = "SELECT * FROM docs WHERE vector NEAR $v LIMIT 5 WITH (ef_search = 'it''s')";
+    let with = crate::velesql::Parser::parse(query)
+        .expect("parse")
+        .select
+        .with_clause
+        .expect("the WITH clause");
+    assert_eq!(with.ef_search(), Err(above.replace("4097", "'it''s'")));
+}
+
+/// The collection of [`setup_with_options_collection`], capped so that it
+/// refuses `perfect`: which quality a search runs at becomes observable.
+fn setup_perfect_refusing_collection() -> (TempDir, Collection) {
+    let (dir, col) = setup_with_options_collection();
+    col.set_runtime_limits(crate::collection::RuntimeLimits {
+        max_perfect_mode_vectors: 1,
+        ..crate::collection::RuntimeLimits::default()
+    });
+    (dir, col)
+}
+
+/// An explicit `ef_search` wins over `mode`, or its alias `quality`, when
+/// both are set, as `docs/VELESQL_SPEC.md` documents and REST resolves: over
+/// a collection that refuses `perfect`, `mode = 'perfect'` alone fails while
+/// adding `ef_search = 64` runs (#2274). The plain vector path runs the query
+/// end to end; the filtered one is driven directly, with the options the same
+/// `WITH` text gives, because the planner answers a filtered query over a
+/// collection this small with a scan that applies neither option.
+#[test]
+fn test_explicit_ef_search_wins_over_mode_in_the_search() {
+    let (_dir, col) = setup_perfect_refusing_collection();
+    let v = [0.5_f32, 0.5, 0.5, 0.3];
+    let mut params = HashMap::new();
+    params.insert("v".to_string(), serde_json::json!(v));
+    let filter = crate::filter::Filter::new(crate::filter::Condition::Gte {
+        field: "idx".to_string(),
+        value: serde_json::json!(0),
+    });
+    let filtered = |query: &str| {
+        let with = crate::velesql::Parser::parse(query)
+            .expect("parse")
+            .select
+            .with_clause;
+        let opts = QuerySearchOptions::from_with_clause(with.as_ref()).expect("valid options");
+        col.search_with_filter_and_opts(&v, 5, &filter, &opts)
+    };
+    let query = |with: &str| format!("SELECT * FROM docs WHERE vector NEAR $v LIMIT 5 WITH {with}");
+    let perfect = query("(mode = 'perfect')");
+    for refused in [col.execute_query_str(&perfect, &params), filtered(&perfect)] {
+        let err = refused.expect_err(&perfect);
+        assert!(
+            err.to_string().contains("max_perfect_mode_vectors"),
+            "{perfect}: {err}"
+        );
+    }
+    for with in [
+        "(mode = 'perfect', ef_search = 64)",
+        "(ef_search = 64, quality = 'perfect')",
+    ] {
+        let both = query(with);
+        let plain = col.execute_query_str(&both, &params).expect(&both);
+        assert_eq!(plain.len(), 5, "{both}");
+        let narrowed = filtered(&both).expect(&both);
+        assert_eq!(narrowed.len(), 5, "filtered {both}");
+    }
 }
 
 // --- timeout_ms edge cases ---
@@ -565,7 +773,7 @@ fn test_mode_and_ef_search_both_set() {
         )
         .with_option("ef_search", crate::velesql::WithValue::Integer(4096));
     let opts = QuerySearchOptions::from_with_clause(Some(&with)).expect("valid mode");
-    // Both are available — search_with_opts() decides precedence
+    // Both are captured; `resolved_quality` lets the ef_search win (#2274).
     assert!(matches!(opts.quality, Some(crate::SearchQuality::Fast)));
     assert_eq!(opts.ef_search, Some(4096));
 }
