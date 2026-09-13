@@ -133,8 +133,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   60, validated like `VELESDB_HOOK_PROBE_TIMEOUT`). The watchdog counted rounds
   of `sleep 0.1`, which a loaded machine stretched; it now counts wall-clock
   seconds, kills only once its bound is exceeded, and refuses to start a command
-  under a bound it cannot compare, which used to mean no bound at all. It also
-  hands the command its input explicitly: in a script, bash starts a background
+  under a bound that is not a decimal: on develop, an overflowing bound meant no
+  bound at all, and a non-numeric one failed or killed at once. It also hands
+  the command its input explicitly: in a script, bash starts a background
   command on `/dev/null`, and bash 3.2 does so even when a pipe feeds it, so
   under the stock macOS bash the compiler read nothing and no tool result was
   ever compressed. Every numeric knob now refuses a leading zero, which shell

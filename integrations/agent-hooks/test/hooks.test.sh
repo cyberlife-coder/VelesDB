@@ -672,19 +672,20 @@ fi
 # Environment knobs feed watchdog bounds, arithmetic, and compiler arguments.
 # Invalid expressions must be data, never shell arithmetic, and must fall back
 # before replacing the host result. A leading zero is invalid too: arithmetic
-# would read `010` as octal 8. So is a value past the knob's maximum
-# (`1000000001` is past all of them), and `0`, but for the net margin, whose
-# `0` must ship (checked below). `env` applies its assignments in order, so
-# the knob under test overrides the owned timeouts set before it.
-for invalid_knob in \
-  VELESDB_HOOK_MIN_BYTES \
-  VELESDB_HOOK_PROBE_TIMEOUT \
-  VELESDB_HOOK_COMPILE_TIMEOUT \
-  VELESDB_HOOK_TOKEN_BUDGET \
-  VELESDB_HOOK_TOKEN_BUDGET_MAX \
-  VELESDB_HOOK_MIN_SAVED_TOKENS
+# would read `010` as octal 8. So is each knob's maximum plus one, the value
+# after its colon below, and `0`, but for the net margin, whose `0` must ship
+# (checked below). `env` applies its assignments in order, so the knob under
+# test overrides the owned timeouts set before it.
+for invalid_case in \
+  VELESDB_HOOK_MIN_BYTES:1000000001 \
+  VELESDB_HOOK_PROBE_TIMEOUT:61 \
+  VELESDB_HOOK_COMPILE_TIMEOUT:61 \
+  VELESDB_HOOK_TOKEN_BUDGET:1000001 \
+  VELESDB_HOOK_TOKEN_BUDGET_MAX:1000001 \
+  VELESDB_HOOK_MIN_SAVED_TOKENS:1000001
 do
-  invalid_values=('1+1' 010 1000000001)
+  invalid_knob="${invalid_case%%:*}"
+  invalid_values=('1+1' 010 "${invalid_case#*:}")
   [ "$invalid_knob" = VELESDB_HOOK_MIN_SAVED_TOKENS ] || invalid_values+=(0)
   for invalid_value in "${invalid_values[@]}"; do
     invalid_out="$(env "${COMPILE_TIMEOUTS[@]}" "$invalid_knob=$invalid_value" \
@@ -883,9 +884,12 @@ else
 fi
 
 # The hang case: an older binary treats our piped stdin as MCP traffic. The
-# watchdog must bound it AND the hook must still answer.
+# watchdog must bound it AND the hook must still answer. The compile timeout
+# is held at 60 s, so only VELESDB_HOOK_PROBE_TIMEOUT can cut it short: a
+# probe handed the compile timeout would wait out the fake's 30 s.
 old_started="$(date +%s)"
-old_out="$(VELESDB_HOOK_PROBE_TIMEOUT=2 VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-old" bash "$HOOKS_DIR/post-tool-use.sh" \
+old_out="$(env "${COMPILE_TIMEOUTS[@]}" VELESDB_HOOK_PROBE_TIMEOUT=2 \
+  VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-old" bash "$HOOKS_DIR/post-tool-use.sh" \
   <<<"$(post_tool_payload "Bash" "oldbin" "$big_output")")" || hook_exited "$LINENO" "$?"
 old_elapsed=$(( $(date +%s) - old_started ))
 if [ "$(printf '%s' "$old_out" | jq -c .)" = "{}" ]; then
@@ -898,9 +902,9 @@ fi
 # tight wall-clock budget would just make this assertion fail on a loaded CI
 # runner (observed once, with a full cargo test suite running alongside).
 if [ "$old_elapsed" -lt 25 ]; then
-  pass "PostToolUse: the watchdog bounds the probe (${old_elapsed}s < the fake binary's 30s)"
+  pass "PostToolUse: VELESDB_HOOK_PROBE_TIMEOUT bounds the probe"
 else
-  fail "PostToolUse: the watchdog bounds the probe (${old_elapsed}s < the fake binary's 30s)"
+  fail "PostToolUse: VELESDB_HOOK_PROBE_TIMEOUT bounds the probe (took ${old_elapsed}s of the fake binary's 30s)"
 fi
 
 # The compilation has a watchdog of its own. This binary answers the probe at
