@@ -55,20 +55,13 @@ passthrough() {
 }
 
 # Numeric tuning comes from the environment and reaches arithmetic expansion,
-# loop bounds, or CLI arguments. Accept only small decimal integers so a typo
-# cannot hang every PostToolUse (and shell arithmetic never reparses attacker-
-# controlled expressions). A leading zero is refused: arithmetic reads `010`
-# as octal 8, and `08` not at all.
+# loop bounds, or CLI arguments. Accept only small decimal integers, written
+# without a leading zero (see is_decimal in lib/common.sh), so a typo cannot
+# hang every PostToolUse and shell arithmetic never reparses attacker-
+# controlled expressions.
 # decimal_at_most VALUE MAXIMUM: VALUE is a decimal integer from 0 to MAXIMUM.
 decimal_at_most() {
-  local value="$1"
-  local maximum="$2"
-  case "$value" in
-    0) return 0 ;;
-    ''|0*|*[!0-9]*) return 1 ;;
-  esac
-  [ "${#value}" -le 10 ] || return 1
-  [ "$value" -le "$maximum" ] 2>/dev/null
+  is_decimal "$1" && [ "$1" -le "$2" ]
 }
 
 # positive_decimal_at_most VALUE MAXIMUM: the same, from 1.

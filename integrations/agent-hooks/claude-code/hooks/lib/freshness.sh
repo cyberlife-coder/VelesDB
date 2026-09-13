@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Is the running velesdb-memory daemon the latest published release?
 #
-# Sourced by session-start.sh. Prints ONE line of guidance when the daemon is
-# behind, and nothing at all otherwise — silence is the normal case, so a
-# session that is already current pays no attention cost.
+# Sourced by session-start.sh, after lib/common.sh. Prints ONE line of
+# guidance when the daemon is behind, and nothing at all otherwise — silence
+# is the normal case, so a session that is already current pays no attention
+# cost.
 #
 # Three rules this file exists to respect:
 #
@@ -58,7 +59,11 @@ veles_latest_version() {
   now=$(date +%s)
   if [ -f "$VELESDB_FRESHNESS_CACHE" ]; then
     cached_at=$(sed -n '1p' "$VELESDB_FRESHNESS_CACHE" 2>/dev/null)
-    if [ -n "${cached_at:-}" ] && [ $((now - cached_at)) -lt "$VELESDB_FRESHNESS_TTL_SECONDS" ]; then
+    # This line is whatever the file under HOME holds, and shell arithmetic
+    # evaluates what it reads: a first line `PATH[$(cmd)]` would run cmd. Only
+    # a decimal timestamp (is_decimal, lib/common.sh) is a hit; anything else
+    # is a miss.
+    if is_decimal "${cached_at:-}" && [ $((now - cached_at)) -lt "$VELESDB_FRESHNESS_TTL_SECONDS" ]; then
       sed -n '2p' "$VELESDB_FRESHNESS_CACHE" 2>/dev/null
       return 0
     fi

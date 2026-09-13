@@ -229,6 +229,55 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# SessionStart freshness notice. Its cache lives under HOME for a day, and its
+# first line, a timestamp, reaches shell arithmetic. A `curl` shim stands for
+# the daemon (1.0.0) and for crates.io (9.9.9), so nothing leaves the machine.
+# ---------------------------------------------------------------------------
+FRESH_HOME="$TMP_TEST_DIR/fresh-home"
+FRESH_BIN="$TMP_TEST_DIR/fresh-bin"
+mkdir -p "$FRESH_HOME/.velesdb-memory" "$FRESH_BIN"
+cat > "$FRESH_BIN/curl" <<'SHIM'
+#!/usr/bin/env bash
+case " $* " in
+  *" http://daemon.invalid/mcp "*)
+    printf '{"result":{"serverInfo":{"name":"velesdb-memory","version":"1.0.0"}}}' ;;
+  *" https://crates.io/"*)
+    printf '{"crate":{"max_version":"9.9.9"}}' ;;
+  *) exit 7 ;;
+esac
+SHIM
+chmod +x "$FRESH_BIN/curl"
+fresh_cache="$FRESH_HOME/.velesdb-memory/.latest-version"
+fresh_evaluated="$TMP_TEST_DIR/freshness-cache-was-evaluated"
+
+# Evaluated as arithmetic, this first line would create $fresh_evaluated. It
+# names PATH because the hook runs under `set -u`: an unset array would stop
+# the evaluation before its subscript ran, and PATH is always set.
+printf '%s\n%s\n' "PATH[\$(touch $fresh_evaluated)]" 8.8.8 > "$fresh_cache"
+fresh_out="$(HOME="$FRESH_HOME" PATH="$FRESH_BIN:$PATH" VELESDB_MCP_URL=http://daemon.invalid/mcp \
+  bash "$HOOKS_DIR/session-start.sh" <<<"$session_start_payload")" || hook_exited "$LINENO" "$?"
+if [ ! -e "$fresh_evaluated" ]; then
+  pass "SessionStart: the freshness cache's first line is never evaluated as arithmetic"
+else
+  fail "SessionStart: the freshness cache's first line is never evaluated as arithmetic"
+fi
+if printf '%s' "$fresh_out" | jq -e '.hookSpecificOutput.additionalContext | contains("but 9.9.9 is published")' >/dev/null; then
+  pass "SessionStart: a freshness cache without a timestamp is a miss"
+else
+  fail "SessionStart: a freshness cache without a timestamp is a miss"
+fi
+
+# The control: a fresh timestamp is still a hit, and its version is reported.
+printf '%s\n%s\n' "$(date +%s)" 8.8.8 > "$fresh_cache"
+fresh_hit_out="$(HOME="$FRESH_HOME" PATH="$FRESH_BIN:$PATH" VELESDB_MCP_URL=http://daemon.invalid/mcp \
+  bash "$HOOKS_DIR/session-start.sh" <<<"$session_start_payload")" || hook_exited "$LINENO" "$?"
+if printf '%s' "$fresh_hit_out" | jq -e '.hookSpecificOutput.additionalContext | contains("but 8.8.8 is published")' >/dev/null; then
+  pass "SessionStart: a fresh freshness cache is still read"
+else
+  fail "SessionStart: a fresh freshness cache is still read"
+fi
+
+# ---------------------------------------------------------------------------
 # Windsurf pre_user_prompt — first call with a trajectory_id reminds, second
 # call with the SAME trajectory_id is silent (single-event fold of the
 # Claude Code load+save reminder, since Windsurf has no Stop/PreCompact).
@@ -623,8 +672,10 @@ fi
 # Environment knobs feed watchdog bounds, arithmetic, and compiler arguments.
 # Invalid expressions must be data, never shell arithmetic, and must fall back
 # before replacing the host result. A leading zero is invalid too: arithmetic
-# would read `010` as octal 8. `env` applies its assignments in order, so the
-# knob under test overrides the owned timeouts set before it.
+# would read `010` as octal 8. So is a value past the knob's maximum
+# (`1000000001` is past all of them), and `0`, but for the net margin, whose
+# `0` must ship (checked below). `env` applies its assignments in order, so
+# the knob under test overrides the owned timeouts set before it.
 for invalid_knob in \
   VELESDB_HOOK_MIN_BYTES \
   VELESDB_HOOK_PROBE_TIMEOUT \
@@ -633,7 +684,9 @@ for invalid_knob in \
   VELESDB_HOOK_TOKEN_BUDGET_MAX \
   VELESDB_HOOK_MIN_SAVED_TOKENS
 do
-  for invalid_value in '1+1' 010; do
+  invalid_values=('1+1' 010 1000000001)
+  [ "$invalid_knob" = VELESDB_HOOK_MIN_SAVED_TOKENS ] || invalid_values+=(0)
+  for invalid_value in "${invalid_values[@]}"; do
     invalid_out="$(env "${COMPILE_TIMEOUTS[@]}" "$invalid_knob=$invalid_value" \
         VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-ok" bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null \
         <<<"$(post_tool_payload "Bash" "invalid-$invalid_knob" "$big_output")")" || hook_exited "$LINENO" "$?"
@@ -851,23 +904,26 @@ else
 fi
 
 # The compilation has a watchdog of its own. This binary answers the probe at
-# once; on the compilation it prints a shippable result, then runs 15 s before
-# exiting. The 20 s default would wait for it and ship that result, so the
-# original comes back only if VELESDB_HOOK_COMPILE_TIMEOUT reaches the watchdog.
-cat > "$FAKE_BIN_DIR/fake-slow-compile" <<'FAKE'
+# once; on a compilation it prints a shippable result, then runs
+# FAKE_EXIT_AFTER more seconds before exiting, so whether that result ships is
+# the compile watchdog's decision alone.
+cat > "$FAKE_BIN_DIR/fake-late-exit" <<'FAKE'
 #!/usr/bin/env bash
 cat >/dev/null
 case " $* " in
   *" --query "*)
     printf '{"content":"LATE SUMMARY","tokens_in":4000,"tokens_out":300,"tokens_saved":3700,"risk":"medium"}\n'
-    exec sleep 15
+    exec /bin/sleep "$FAKE_EXIT_AFTER"
     ;;
 esac
 printf '{"content":"PROBE","tokens_in":4,"tokens_out":1,"tokens_saved":3,"risk":"low"}\n'
 FAKE
-chmod +x "$FAKE_BIN_DIR/fake-slow-compile"
-slow_out="$(env "${COMPILE_TIMEOUTS[@]}" VELESDB_HOOK_COMPILE_TIMEOUT=1 \
-  VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-slow-compile" bash "$HOOKS_DIR/post-tool-use.sh" \
+chmod +x "$FAKE_BIN_DIR/fake-late-exit"
+
+# Exiting 15 s later, it would ship under the 20 s default: the original comes
+# back only if VELESDB_HOOK_COMPILE_TIMEOUT reaches the watchdog.
+slow_out="$(env "${COMPILE_TIMEOUTS[@]}" VELESDB_HOOK_COMPILE_TIMEOUT=1 FAKE_EXIT_AFTER=15 \
+  VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-late-exit" bash "$HOOKS_DIR/post-tool-use.sh" \
   <<<"$(post_tool_payload "Bash" "slowbin" "$big_output")")" || hook_exited "$LINENO" "$?"
 if [ "$(printf '%s' "$slow_out" | jq -c .)" = "{}" ]; then
   pass "PostToolUse: VELESDB_HOOK_COMPILE_TIMEOUT bounds the compilation"
@@ -875,10 +931,23 @@ else
   fail "PostToolUse: VELESDB_HOOK_COMPILE_TIMEOUT bounds the compilation"
 fi
 
+# A bound is also a promise: the compilation may run until it. Exiting 3 s
+# later under a 20 s compile timeout, far inside its bound, the result must
+# ship; a watchdog holding the compilation to 1 s would pass the original
+# through instead.
+patient_out="$(env "${COMPILE_TIMEOUTS[@]}" VELESDB_HOOK_COMPILE_TIMEOUT=20 FAKE_EXIT_AFTER=3 \
+  VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-late-exit" bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null \
+  <<<"$(post_tool_payload "Bash" "patient-watchdog" "$big_output")")" || hook_exited "$LINENO" "$?"
+if printf '%s' "$patient_out" | jq -e '.hookSpecificOutput.updatedToolOutput.stdout | contains("LATE SUMMARY")' >/dev/null; then
+  pass "PostToolUse: the compile watchdog lets a compilation run until its bound"
+else
+  fail "PostToolUse: the compile watchdog lets a compilation run until its bound"
+fi
+
 # The watchdogs count wall-clock seconds, not rounds of `sleep 0.1`. A shim
-# makes each of those rounds last 0.5 s, as a loaded machine does, and this
-# binary exits 8 s after printing a shippable compilation. A 2 s watchdog cuts
-# it short within 3.5 s; counting rounds would wait 20 of them, 10 s, and ship.
+# makes each of those rounds last 0.5 s, as a loaded machine does, and the
+# binary exits 8 s after printing its result. A 2 s watchdog cuts it short
+# within 3.5 s; counting rounds would wait 20 of them, 10 s, and ship.
 SLOW_SLEEP_DIR="$FAKE_BIN_DIR/slow-sleep"
 mkdir -p "$SLOW_SLEEP_DIR"
 cat > "$SLOW_SLEEP_DIR/sleep" <<'SHIM'
@@ -887,26 +956,100 @@ if [ "$*" = 0.1 ]; then exec /bin/sleep 0.5; fi
 exec /bin/sleep "$@"
 SHIM
 chmod +x "$SLOW_SLEEP_DIR/sleep"
-cat > "$FAKE_BIN_DIR/fake-compile-8s" <<'FAKE'
-#!/usr/bin/env bash
-cat >/dev/null
-case " $* " in
-  *" --query "*)
-    printf '{"content":"LATE SUMMARY","tokens_in":4000,"tokens_out":300,"tokens_saved":3700,"risk":"medium"}\n'
-    exec /bin/sleep 8
-    ;;
-esac
-printf '{"content":"PROBE","tokens_in":4,"tokens_out":1,"tokens_saved":3,"risk":"low"}\n'
-FAKE
-chmod +x "$FAKE_BIN_DIR/fake-compile-8s"
-wall_out="$(env PATH="$SLOW_SLEEP_DIR:$PATH" VELESDB_HOOK_PROBE_TIMEOUT=60 VELESDB_HOOK_COMPILE_TIMEOUT=2 \
-    VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-compile-8s" bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null \
+wall_out="$(env "${COMPILE_TIMEOUTS[@]}" PATH="$SLOW_SLEEP_DIR:$PATH" VELESDB_HOOK_COMPILE_TIMEOUT=2 \
+    FAKE_EXIT_AFTER=8 VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-late-exit" \
+    bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null \
     <<<"$(post_tool_payload "Bash" "wall-clock-watchdog" "$big_output")")" || hook_exited "$LINENO" "$?"
 if [ "$(printf '%s' "$wall_out" | jq -c .)" = "{}" ]; then
   pass "PostToolUse: the compile watchdog counts wall-clock seconds, not rounds of sleep 0.1"
 else
   fail "PostToolUse: the compile watchdog counts wall-clock seconds, not rounds of sleep 0.1"
 fi
+
+# ---------------------------------------------------------------------------
+# run_with_watchdog, called directly: what it hands the command, and when it
+# may kill it.
+# ---------------------------------------------------------------------------
+# Runs "$@" in a subshell that has sourced the hooks' shared library.
+with_hook_lib() (
+  # shellcheck source=../claude-code/hooks/lib/common.sh
+  . "$HOOKS_DIR/lib/common.sh"
+  "$@"
+)
+watchdog_out="$TMP_TEST_DIR/watchdog-out"
+
+# The command reads the watchdog's stdin. A script has no job control, and
+# without it bash starts a background command on /dev/null unless its stdin is
+# redirected explicitly. Bash 3.2, the stock macOS one, does so even when a
+# pipe feeds the function, as post-tool-use.sh feeds the compiler; bash 5 does
+# so when a here-string feeds it, which is how Linux sees the same regression.
+# shellcheck disable=SC2329 # invoked through with_hook_lib
+pipe_into_watchdog() { printf '%s' "$1" | run_with_watchdog 5 "$watchdog_out" cat; }
+if with_hook_lib pipe_into_watchdog 'piped input' \
+  && [ "$(cat "$watchdog_out")" = "piped input" ]; then
+  pass "run_with_watchdog: input piped into it reaches the command"
+else
+  fail "run_with_watchdog: input piped into it reaches the command"
+fi
+if with_hook_lib run_with_watchdog 5 "$watchdog_out" cat <<<'redirected input' \
+  && [ "$(cat "$watchdog_out")" = "redirected input" ]; then
+  pass "run_with_watchdog: input redirected into it reaches the command"
+else
+  fail "run_with_watchdog: input redirected into it reaches the command"
+fi
+
+# The watchdog never cuts a command short: it kills only once MORE than its
+# bound has passed. SECONDS counts the clock's whole seconds, so a command
+# started just before one ticks sees a second pass at once, and a watchdog
+# killing at its bound would cut it short. That comparison is a function of
+# its own, checked here on fixed values rather than against the clock.
+# expiry_is ELAPSED VERDICT: watchdog_expired at a 1 s bound, ELAPSED seconds
+# after a start fixed at 7.
+expiry_is() {
+  local got="not expired"
+  if with_hook_lib watchdog_expired 7 "$((7 + $1))" 1; then got=expired; fi
+  if [ "$got" = "$2" ]; then
+    pass "run_with_watchdog: $1 s elapsed at a 1 s bound is $2"
+  else
+    fail "run_with_watchdog: $1 s elapsed at a 1 s bound is $2 (got $got)"
+  fi
+}
+expiry_is 0 "not expired"
+expiry_is 1 "not expired"
+expiry_is 2 expired
+
+# The loop must ask that function. Stubbed to answer "expired" at once, it
+# ends a 5 s command at its first poll, and the stub has been handed the bound.
+watchdog_asked="$TMP_TEST_DIR/watchdog-asked"
+# shellcheck disable=SC2329 # invoked through with_hook_lib
+ask_a_stubbed_watchdog() {
+  # shellcheck disable=SC2329 # invoked by run_with_watchdog
+  watchdog_expired() { printf '%s\n' "$3" > "$watchdog_asked"; return 0; }
+  run_with_watchdog 60 "$watchdog_out" sleep 5
+}
+if with_hook_lib ask_a_stubbed_watchdog; then asked_rc=0; else asked_rc=$?; fi
+if [ "$asked_rc" -eq 124 ] && [ "$(cat "$watchdog_asked" 2>/dev/null)" = 60 ]; then
+  pass "run_with_watchdog: kills when watchdog_expired says so, handing it its bound"
+else
+  fail "run_with_watchdog: kills when watchdog_expired says so, handing it its bound (got $asked_rc)"
+fi
+
+# A bound `[` cannot compare is no bound: each poll's `-gt` would fail instead
+# of killing. The watchdog refuses it before the command starts.
+watchdog_started="$TMP_TEST_DIR/watchdog-started"
+for bad_bound in x '1+1' '' 99999999999999999999; do
+  rm -f "$watchdog_started"
+  if with_hook_lib run_with_watchdog "$bad_bound" "$watchdog_out" touch "$watchdog_started"; then
+    bound_rc=0
+  else
+    bound_rc=$?
+  fi
+  if [ "$bound_rc" -eq 124 ] && [ ! -e "$watchdog_started" ]; then
+    pass "run_with_watchdog: the bound '$bad_bound' is refused before the command starts"
+  else
+    fail "run_with_watchdog: the bound '$bad_bound' is refused before the command starts (got $bound_rc)"
+  fi
+done
 
 # ---------------------------------------------------------------------------
 # No hardcoded absolute user paths in the scripts (everything must come from
