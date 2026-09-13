@@ -364,9 +364,10 @@ pub async fn hybrid_search(
 
 /// Lightweight search returning only IDs and scores (no payload hydration).
 ///
-/// Supports the same search modes as the standard `/search` endpoint:
-/// dense, sparse, and hybrid. Honors filter, ef_search, mode, fusion,
-/// and all other `SearchRequest` parameters.
+/// Accepts the same request body as the standard `/search` endpoint, for a
+/// dense, sparse or hybrid search. `mode` is checked on every shape but
+/// applied only to a dense search with neither a `filter` nor `ef_search`:
+/// `ef_search` wins over it, and a filtered search applies neither (#457).
 #[utoipa::path(
     post,
     path = "/collections/{name}/search/ids",

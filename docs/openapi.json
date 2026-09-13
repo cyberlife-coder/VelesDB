@@ -2671,7 +2671,7 @@
           "search"
         ],
         "summary": "Lightweight search returning only IDs and scores (no payload hydration).",
-        "description": "Supports the same search modes as the standard `/search` endpoint:\ndense, sparse, and hybrid. Honors filter, ef_search, mode, fusion,\nand all other `SearchRequest` parameters.",
+        "description": "Accepts the same request body as the standard `/search` endpoint, for a\ndense, sparse or hybrid search. `mode` is checked on every shape but\napplied only to a dense search with neither a `filter` nor `ef_search`:\n`ef_search` wins over it, and a filtered search applies neither (#457).",
         "operationId": "search_ids",
         "parameters": [
           {
@@ -5617,7 +5617,7 @@
               "string",
               "null"
             ],
-            "description": "Search mode preset: fast, balanced, accurate, perfect.",
+            "description": "Search quality preset: `fast`, `balanced`, `accurate`, `perfect`,\n`autotune` (aliases `auto_tune` and `auto`), `custom:<ef>` or\n`adaptive:<min_ef>:<max_ef>` (`min_ef` at most `max_ef`). Any other value\nis refused with a `400` naming these forms (#2267). It applies only to a\ndense search with neither a `filter` nor `ef_search`, and a batch entry's\nis checked but not applied.",
             "example": "balanced"
           },
           "sparse_index": {

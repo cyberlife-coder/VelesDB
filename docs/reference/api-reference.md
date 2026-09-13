@@ -663,11 +663,10 @@ Hybrid search combining vector similarity and BM25 text relevance using Reciproc
 ### POST /collections/:name/search/ids
 
 Lightweight search returning only IDs and scores — no payload hydration.
-Accepts the same request body as `POST /collections/:name/search`: dense,
-sparse and hybrid requests, with `filter` and `fusion`. `mode` is checked on
-every shape but applied only to a dense request with neither a `filter` nor
-`ef_search`: `ef_search` wins over it, and a filtered search applies neither
-(#457).
+Accepts the same request body as `POST /collections/:name/search`, for a
+dense, sparse or hybrid search. `mode` is checked on every shape but applied
+only to a dense search with neither a `filter` nor `ef_search`: `ef_search`
+wins over it, and a filtered search applies neither (#457).
 
 **Response:**
 ```json
