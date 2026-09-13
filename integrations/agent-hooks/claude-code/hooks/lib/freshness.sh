@@ -61,9 +61,11 @@ veles_latest_version() {
     cached_at=$(sed -n '1p' "$VELESDB_FRESHNESS_CACHE" 2>/dev/null)
     # This line is whatever the file under HOME holds, and shell arithmetic
     # evaluates what it reads: a first line `PATH[$(cmd)]` would run cmd. Only
-    # a decimal timestamp (is_decimal, lib/common.sh) is a hit; anything else
-    # is a miss.
-    if is_decimal "${cached_at:-}" && [ $((now - cached_at)) -lt "$VELESDB_FRESHNESS_TTL_SECONDS" ]; then
+    # a decimal timestamp (is_decimal, lib/common.sh) no later than now is a
+    # hit: a later one would make the age negative, below any TTL, and keep
+    # the cache a hit forever.
+    if is_decimal "${cached_at:-}" && [ "$cached_at" -le "$now" ] \
+      && [ $((now - cached_at)) -lt "$VELESDB_FRESHNESS_TTL_SECONDS" ]; then
       sed -n '2p' "$VELESDB_FRESHNESS_CACHE" 2>/dev/null
       return 0
     fi

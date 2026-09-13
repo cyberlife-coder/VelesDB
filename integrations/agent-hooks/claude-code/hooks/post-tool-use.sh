@@ -198,6 +198,9 @@ valid_private_marker "$probe_marker" || passthrough
 [ "$(cat "$probe_marker")" = "yes" ] || passthrough
 
 budget="${VELESDB_HOOK_TOKEN_BUDGET:-2000}"
+# Checked before the arithmetic below reads it. The cap cannot refuse a budget
+# on its own: the ceiling has the same cap and must be at least the budget, so
+# a budget past it is refused by the ceiling's checks as well.
 positive_decimal_at_most "$budget" 1000000 || passthrough
 budget_max="${VELESDB_HOOK_TOKEN_BUDGET_MAX:-$((budget * 2))}"
 positive_decimal_at_most "$budget_max" 1000000 || passthrough

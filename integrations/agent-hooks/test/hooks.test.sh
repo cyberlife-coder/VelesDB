@@ -277,6 +277,17 @@ else
   fail "SessionStart: a fresh freshness cache is still read"
 fi
 
+# A timestamp later than now is a miss too: its age would be negative, below
+# any TTL, and the cache would stay a hit forever.
+printf '%s\n%s\n' 9999999999 8.8.8 > "$fresh_cache"
+fresh_future_out="$(HOME="$FRESH_HOME" PATH="$FRESH_BIN:$PATH" VELESDB_MCP_URL=http://daemon.invalid/mcp \
+  bash "$HOOKS_DIR/session-start.sh" <<<"$session_start_payload")" || hook_exited "$LINENO" "$?"
+if printf '%s' "$fresh_future_out" | jq -e '.hookSpecificOutput.additionalContext | contains("but 9.9.9 is published")' >/dev/null; then
+  pass "SessionStart: a freshness cache stamped later than now is a miss"
+else
+  fail "SessionStart: a freshness cache stamped later than now is a miss"
+fi
+
 # ---------------------------------------------------------------------------
 # Windsurf pre_user_prompt — first call with a trajectory_id reminds, second
 # call with the SAME trajectory_id is silent (single-event fold of the
@@ -438,12 +449,36 @@ cat >/dev/null
 printf '{"content":"COMPILED SUMMARY","tokens_in":4000,"tokens_out":300,"tokens_saved":3700,"risk":"medium"}\n'
 FAKE
 
-# Behaves like a binary whose compilation failed (budget too small, bad input…).
-cat > "$FAKE_BIN_DIR/fake-fail" <<'FAKE'
+# Behaves like a binary whose compilation failed (budget too small, bad input…)
+# after a capability probe that succeeded. It still prints a shippable result,
+# so only its exit status can keep that result from the model.
+cat > "$FAKE_BIN_DIR/fake-compile-fail" <<'FAKE'
 #!/usr/bin/env bash
 cat >/dev/null
-echo "compile-stdin: boom" >&2
-exit 1
+case " $* " in
+  *" --query "*)
+    printf '{"content":"FAILED SUMMARY","tokens_in":4000,"tokens_out":300,"tokens_saved":3700,"risk":"medium"}\n'
+    echo "compile-stdin: boom" >&2
+    exit 1
+    ;;
+esac
+printf '{"content":"PROBE","tokens_in":4,"tokens_out":1,"tokens_saved":3,"risk":"low"}\n'
+FAKE
+
+# Behaves like a binary whose capability probe fails: it answers the probe
+# with a valid result, then exits 1, and would ship any compilation it ran.
+cat > "$FAKE_BIN_DIR/fake-probe-fail" <<'FAKE'
+#!/usr/bin/env bash
+cat >/dev/null
+case " $* " in
+  *" --query "*)
+    printf '{"content":"UNPROBED SUMMARY","tokens_in":4000,"tokens_out":300,"tokens_saved":3700,"risk":"medium"}\n'
+    ;;
+  *)
+    printf '{"content":"PROBE","tokens_in":4,"tokens_out":1,"tokens_saved":3,"risk":"low"}\n'
+    exit 1
+    ;;
+esac
 FAKE
 
 # Behaves like a velesdb-memory RELEASED BEFORE compile-stdin: it ignores the
@@ -522,7 +557,8 @@ cat >/dev/null
 printf '{"content":"ALMOST THE ORIGINAL","tokens_in":4000,"tokens_out":3900,"tokens_saved":100,"risk":"low"}\n'
 FAKE
 
-chmod +x "$FAKE_BIN_DIR/fake-ok" "$FAKE_BIN_DIR/fake-fail" "$FAKE_BIN_DIR/fake-old" \
+chmod +x "$FAKE_BIN_DIR/fake-ok" "$FAKE_BIN_DIR/fake-compile-fail" \
+  "$FAKE_BIN_DIR/fake-probe-fail" "$FAKE_BIN_DIR/fake-old" \
   "$FAKE_BIN_DIR/fake-high" "$FAKE_BIN_DIR/fake-escalate" \
   "$FAKE_BIN_DIR/fake-risk-contract" "$FAKE_BIN_DIR/fake-low" \
   "$FAKE_BIN_DIR/fake-no-savings"
@@ -864,13 +900,26 @@ else
   fail "PostToolUse: the archived Bash object is semantically complete"
 fi
 
-# A failing compilation must never cost the agent its tool result.
-fail_out="$(VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-fail" bash "$HOOKS_DIR/post-tool-use.sh" \
+# A failing compilation must never cost the agent its tool result. The probe
+# succeeds under the owned timeouts, so only the compilation's exit status
+# stands between its result and the model.
+fail_out="$(env "${COMPILE_TIMEOUTS[@]}" VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-compile-fail" \
+  bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null \
   <<<"$(post_tool_payload "Bash" "failbin" "$big_output")")" || hook_exited "$LINENO" "$?"
 if [ "$(printf '%s' "$fail_out" | jq -c .)" = "{}" ]; then
   pass "PostToolUse: a failed compilation falls back to the untouched output"
 else
   fail "PostToolUse: a failed compilation falls back to the untouched output"
+fi
+
+# Nor may a failed capability probe, however valid its answer looks.
+probe_fail_out="$(env "${COMPILE_TIMEOUTS[@]}" VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-probe-fail" \
+  bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null \
+  <<<"$(post_tool_payload "Bash" "probefail" "$big_output")")" || hook_exited "$LINENO" "$?"
+if [ "$(printf '%s' "$probe_fail_out" | jq -c .)" = "{}" ]; then
+  pass "PostToolUse: a capability probe that exits non-zero falls back to the untouched output"
+else
+  fail "PostToolUse: a capability probe that exits non-zero falls back to the untouched output"
 fi
 
 # No binary at all — the overwhelmingly common case before the release that

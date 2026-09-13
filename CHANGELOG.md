@@ -143,7 +143,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/guides/CONTEXT_COMPILER.md` say so once, above their tables. The
   SessionStart freshness check did arithmetic on the first line of its cache
   file, so a line `PATH[$(cmd)]` ran `cmd`; anything but a timestamp is now a
-  cache miss. The suite also piped each payload into its hook: a hook that exits
+  cache miss, and so is a timestamp later than now, which kept the cache a hit
+  forever. The suite also piped each payload into its hook: a hook that exits
   without reading stdin, as the installer's positive control does, could kill
   that writer with SIGPIPE, and under `set -euo pipefail` the suite then ended
   with 141 instead of 1, which failed the installer's self-test on #2276. Every
