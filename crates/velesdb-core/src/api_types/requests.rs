@@ -342,12 +342,12 @@ pub struct SearchRequest {
     /// Number of results to return.
     #[serde(default = "default_top_k")]
     pub top_k: usize,
-    /// Search quality preset: `fast`, `balanced`, `accurate`, `perfect`,
-    /// `autotune` (aliases `auto_tune` and `auto`), `custom:<ef>` or
-    /// `adaptive:<min_ef>:<max_ef>` (`min_ef` at most `max_ef`). Any other value
-    /// is refused with a `400` naming these forms (#2267). It applies only to a
-    /// dense search with neither a `filter` nor `ef_search`, and a batch entry's
-    /// is checked but not applied.
+    /// Search quality preset, in any letter case: `fast`, `balanced`,
+    /// `accurate`, `perfect`, `autotune` (aliases `auto_tune` and `auto`),
+    /// `custom:<ef>` or `adaptive:<min_ef>:<max_ef>` (`min_ef` at most
+    /// `max_ef`). Any other value is refused with a `400` naming these forms
+    /// (#2267). It applies only to a dense search with neither a `filter` nor
+    /// `ef_search`, and a batch entry's is checked but not applied.
     #[serde(default)]
     #[cfg_attr(feature = "openapi", schema(example = "balanced"))]
     pub mode: Option<String>,

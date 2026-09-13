@@ -486,8 +486,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Breaking for a client, over REST, VelesQL or a binding, that sent an unknown
   mode and silently got results at the default quality: it now needs a mode
-  from the documented list (`fast`, `balanced`, `accurate`, `perfect`,
-  `autotune`, `custom:<ef>`, `adaptive:<min_ef>:<max_ef>`). One more path
+  from the documented list, in any letter case (`fast`, `balanced`, `accurate`,
+  `perfect`, `autotune`, `custom:<ef>`, `adaptive:<min_ef>:<max_ef>`). One more path
   changes: a collection's own `execute_aggregate`, which the Tauri plugin and
   embedders call directly, now refuses what `Database::execute_aggregate`
   already refused, any query the validator rejects, such as `MAX(score)` under

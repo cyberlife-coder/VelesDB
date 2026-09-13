@@ -5617,7 +5617,7 @@
               "string",
               "null"
             ],
-            "description": "Search quality preset: `fast`, `balanced`, `accurate`, `perfect`,\n`autotune` (aliases `auto_tune` and `auto`), `custom:<ef>` or\n`adaptive:<min_ef>:<max_ef>` (`min_ef` at most `max_ef`). Any other value\nis refused with a `400` naming these forms (#2267). It applies only to a\ndense search with neither a `filter` nor `ef_search`, and a batch entry's\nis checked but not applied.",
+            "description": "Search quality preset, in any letter case: `fast`, `balanced`,\n`accurate`, `perfect`, `autotune` (aliases `auto_tune` and `auto`),\n`custom:<ef>` or `adaptive:<min_ef>:<max_ef>` (`min_ef` at most\n`max_ef`). Any other value is refused with a `400` naming these forms\n(#2267). It applies only to a dense search with neither a `filter` nor\n`ef_search`, and a batch entry's is checked but not applied.",
             "example": "balanced"
           },
           "sparse_index": {
