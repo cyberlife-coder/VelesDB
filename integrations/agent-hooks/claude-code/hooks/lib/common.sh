@@ -179,17 +179,19 @@ run_with_watchdog() {
 
   "$@" >"$outfile" 2>/dev/null &
   local pid=$!
-  local waited=0
-  local limit=$((secs * 10))
+  local started=$SECONDS
 
+  # The bound is wall-clock time. Counting rounds of `sleep 0.1` let a loaded
+  # machine stretch 20 s to 27. SECONDS counts whole seconds, so waiting until
+  # it exceeds the bound never cuts a command short and overshoots by at most
+  # a second.
   while kill -0 "$pid" 2>/dev/null; do
-    if [ "$waited" -ge "$limit" ]; then
+    if [ $((SECONDS - started)) -gt "$secs" ]; then
       kill -9 "$pid" 2>/dev/null || true
       wait "$pid" 2>/dev/null || true
       return 124
     fi
     sleep 0.1
-    waited=$((waited + 1))
   done
 
   wait "$pid"

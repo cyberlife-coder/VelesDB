@@ -875,6 +875,39 @@ else
   fail "PostToolUse: VELESDB_HOOK_COMPILE_TIMEOUT bounds the compilation"
 fi
 
+# The watchdogs count wall-clock seconds, not rounds of `sleep 0.1`. A shim
+# makes each of those rounds last 0.5 s, as a loaded machine does, and this
+# binary exits 8 s after printing a shippable compilation. A 2 s watchdog cuts
+# it short within 3.5 s; counting rounds would wait 20 of them, 10 s, and ship.
+SLOW_SLEEP_DIR="$FAKE_BIN_DIR/slow-sleep"
+mkdir -p "$SLOW_SLEEP_DIR"
+cat > "$SLOW_SLEEP_DIR/sleep" <<'SHIM'
+#!/usr/bin/env bash
+if [ "$*" = 0.1 ]; then exec /bin/sleep 0.5; fi
+exec /bin/sleep "$@"
+SHIM
+chmod +x "$SLOW_SLEEP_DIR/sleep"
+cat > "$FAKE_BIN_DIR/fake-compile-8s" <<'FAKE'
+#!/usr/bin/env bash
+cat >/dev/null
+case " $* " in
+  *" --query "*)
+    printf '{"content":"LATE SUMMARY","tokens_in":4000,"tokens_out":300,"tokens_saved":3700,"risk":"medium"}\n'
+    exec /bin/sleep 8
+    ;;
+esac
+printf '{"content":"PROBE","tokens_in":4,"tokens_out":1,"tokens_saved":3,"risk":"low"}\n'
+FAKE
+chmod +x "$FAKE_BIN_DIR/fake-compile-8s"
+wall_out="$(env PATH="$SLOW_SLEEP_DIR:$PATH" VELESDB_HOOK_PROBE_TIMEOUT=60 VELESDB_HOOK_COMPILE_TIMEOUT=2 \
+    VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-compile-8s" bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null \
+    <<<"$(post_tool_payload "Bash" "wall-clock-watchdog" "$big_output")")" || hook_exited "$LINENO" "$?"
+if [ "$(printf '%s' "$wall_out" | jq -c .)" = "{}" ]; then
+  pass "PostToolUse: the compile watchdog counts wall-clock seconds, not rounds of sleep 0.1"
+else
+  fail "PostToolUse: the compile watchdog counts wall-clock seconds, not rounds of sleep 0.1"
+fi
+
 # ---------------------------------------------------------------------------
 # No hardcoded absolute user paths in the scripts (everything must come from
 # the stdin payload or the .velesdb-hooks.json config).

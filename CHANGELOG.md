@@ -130,14 +130,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checks fail. They now own both timeouts at the 60 s maximum: the
   compilation's, hard-coded until now, is `VELESDB_HOOK_COMPILE_TIMEOUT`
   (default 20, at most 60, validated like `VELESDB_HOOK_PROBE_TIMEOUT`), and a
-  check fails if it stops reaching the watchdog. Every numeric knob also refuses
-  a leading zero now: shell arithmetic read `010` as octal 8, so a timeout of
-  `010` lasted 8 s; it falls back like any invalid value. The suite also piped
-  each payload into its hook: a hook that exits without reading stdin, as the
-  installer's positive control does, could kill that writer with SIGPIPE, and
-  under `set -euo pipefail` the suite then ended with 141 instead of 1, which
-  failed the installer's self-test on #2276. Every hook now takes its payload as
-  a here-string, and a call that exits non-zero fails by name instead of ending
+  check fails if it stops reaching the watchdog. Both watchdogs now count
+  wall-clock seconds: they counted rounds of `sleep 0.1`, which a loaded machine
+  stretched, 20 s to 27. Every numeric knob also refuses a leading zero now:
+  shell arithmetic read `010` as octal 8, so a timeout of `010` lasted 8 s; it
+  falls back like any invalid value. The suite also piped each payload into its
+  hook: a hook that exits without reading stdin, as the installer's positive
+  control does, could kill that writer with SIGPIPE, and under `set -euo
+  pipefail` the suite then ended with 141 instead of 1, which failed the
+  installer's self-test on #2276. Every hook now takes its payload as a
+  here-string, and a call that exits non-zero fails by name instead of ending
   the suite. Both were made deterministic first: a fake binary that answers
   after 30 s, or after 45 s with the probe timeout raised to 60, which still
   failed on the hard-coded compilation watchdog; and every payload writer
