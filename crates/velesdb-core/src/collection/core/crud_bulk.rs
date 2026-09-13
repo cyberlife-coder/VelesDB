@@ -5,9 +5,9 @@
 //! Raw import path (`upsert_bulk_from_raw`) is in `crud_bulk_raw.rs`.
 //!
 //! When `async_index_builder` is configured, `upsert_bulk` uses an optimized
-//! V2 path: `DirectVectorWriter` writes vectors straight into the graph's
-//! `ContiguousVectors` and `AsyncIndexBuilder` defers HNSW construction for
-//! higher throughput.
+//! V2 path: `DirectVectorWriter` places each vector in the graph's
+//! `ContiguousVectors`, and `AsyncIndexBuilder` defers linking it into the
+//! graph for higher throughput.
 
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
@@ -104,8 +104,9 @@ impl Collection {
 
     /// V2 optimized path: `DirectVectorWriter` + `AsyncIndexBuilder`.
     ///
-    /// Writes vectors directly to `ContiguousVectors`, then enqueues them
-    /// for deferred HNSW construction.
+    /// Places each vector in `ContiguousVectors` and maps its id there, then
+    /// queues the id for the builder to link where it is: each vector is
+    /// written once (#2264).
     fn upsert_bulk_v2_path(
         &self,
         vector_refs: &[(u64, &[f32])],
@@ -128,17 +129,15 @@ impl Collection {
         // WAL + payload write (same durability guarantees as standard path).
         self.store_vectors_and_payloads_inner(vector_refs, points, &old_payloads, fsync)?;
 
-        // Write directly to the graph's ContiguousVectors so vectors are
-        // immediately visible to rerank/brute-force while HNSW construction
-        // is deferred.
+        // Place each vector in the graph's ContiguousVectors, where rerank and
+        // brute force see it at once, and queue its id for the builder to link
+        // that slot. An index with its exact-distance features off gives the
+        // writer no slot to fill: the builder then places the vectors itself.
         let writer = DirectVectorWriter::new(&self.storage.index);
-        writer.write_batch_direct(vector_refs)?;
-
-        // Enqueue for deferred HNSW construction.
-        let tuples: Vec<(u64, Vec<f32>)> =
-            points.iter().map(|p| (p.id, p.vector.clone())).collect();
-
-        let needs_flush = aib.enqueue(tuples);
+        let needs_flush = match writer.write_batch_direct(vector_refs)? {
+            Some(_) => aib.enqueue_placed(vector_refs.iter().map(|&(id, _)| id)),
+            None => aib.enqueue(points.iter().map(|p| (p.id, p.vector.clone())).collect()),
+        };
 
         if needs_flush {
             // Buffer reached merge_threshold — flush synchronously.

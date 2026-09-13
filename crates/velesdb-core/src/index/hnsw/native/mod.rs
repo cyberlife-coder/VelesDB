@@ -78,6 +78,8 @@ pub use sq8_precision::{Sq8Codec, Sq8PrecisionConfig, Sq8PrecisionHnsw};
 #[cfg(test)]
 mod backend_adapter_tests;
 #[cfg(test)]
+mod batch_connect_tests;
+#[cfg(test)]
 mod distance_tests;
 #[cfg(test)]
 mod graph_tests;

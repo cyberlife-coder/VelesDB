@@ -909,7 +909,7 @@ self.reparent_entry_point(previous, node_id);
 
 ### HNSW Slot Allocation
 
-**Module**: `crates/velesdb-core/src/index/hnsw/sharded_mappings.rs`, `crates/velesdb-core/src/index/hnsw/native_inner.rs`, `crates/velesdb-core/src/index/hnsw/index/batch.rs`, `crates/velesdb-core/src/index/hnsw/direct_writer.rs`, `crates/velesdb-core/src/index/hnsw/upsert.rs`, `crates/velesdb-core/src/index/hnsw/index/mod.rs`, `crates/velesdb-core/src/index/hnsw/native_index.rs`, `crates/velesdb-core/src/index/hnsw/index/vacuum.rs`
+**Module**: `crates/velesdb-core/src/index/hnsw/sharded_mappings.rs`, `crates/velesdb-core/src/index/hnsw/native_inner.rs`, `crates/velesdb-core/src/index/hnsw/index/batch.rs`, `crates/velesdb-core/src/index/hnsw/direct_writer.rs`, `crates/velesdb-core/src/index/hnsw/upsert.rs`, `crates/velesdb-core/src/index/hnsw/index/mod.rs`, `crates/velesdb-core/src/index/hnsw/native_index.rs`, `crates/velesdb-core/src/index/hnsw/index/vacuum.rs`, `crates/velesdb-core/src/collection/streaming/async_index_builder.rs`
 
 A slot is an index into the graph's `ContiguousVectors`, and the arena is
 its only allocator: a slot exists once a vector has been pushed into it, and
@@ -926,6 +926,15 @@ slot.
 3. **Assign** — each id is mapped to its slot. An id that was already
    mapped leaves its old slot behind as a tombstone; an id repeated within
    a batch ends on its last occurrence.
+
+The direct writer's slots are linked later, where they are, and nothing
+places them again (#2264). The async builder queues their ids, not their
+vectors, and its drain (`HnswIndex::link_placed`) resolves each id to its
+slot under the read guard. It skips an id deleted since and a slot already
+linked — the id was upserted through the graph since, or a `vacuum` rebuilt
+the graph with it — and links an id queued twice once, at the slot of its
+last write. An index with its exact-distance features off gives the direct
+writer no slot to fill; the builder then places those vectors itself.
 
 **Invariant**: a mapping only ever names a slot that already holds that
 id's vector, so two writers — a bulk load's direct writer and a single

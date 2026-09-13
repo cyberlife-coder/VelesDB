@@ -103,11 +103,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         let query = self.prepare_query(vector);
 
         let node_id = self.allocate_and_store_vector(&query)?;
-        let node_layer = self.random_layer();
-        self.expand_layers(node_id, node_layer);
-        let entry_point = self.entry_point.load(Ordering::Acquire);
-        self.link_new_node(node_id, &query, node_layer, entry_point);
-        self.count.fetch_add(1, Ordering::Relaxed);
+        self.link_node(node_id, &query);
 
         // Invalidate GPU caches — topology and vectors both changed.
         // `vectors.write()` is already released at this point
@@ -120,6 +116,17 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         self.invalidate_gpu_caches();
 
         Ok(node_id)
+    }
+
+    /// Links `node_id`, whose vector the arena already holds, with `query`,
+    /// the prepared form of that vector: draws the node's layer, makes room
+    /// for it in the layers, and connects it through the entry point.
+    pub(in crate::index::hnsw::native) fn link_node(&self, node_id: NodeId, query: &[f32]) {
+        let node_layer = self.random_layer();
+        self.expand_layers(node_id, node_layer);
+        let entry_point = self.entry_point.load(Ordering::Acquire);
+        self.link_new_node(node_id, query, node_layer, entry_point);
+        self.count.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Links a node just placed into the graph, given the entry point it saw.
@@ -293,6 +300,20 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         Ok(assignments)
     }
 
+    /// Phase A of a batch insert for nodes the arena already holds: makes room
+    /// for every slot in the layers, as [`Self::allocate_batch`] does, and
+    /// draws each node's layer, in input order.
+    pub(in crate::index::hnsw::native) fn assign_layers(
+        &self,
+        nodes: &[NodeId],
+    ) -> Vec<(NodeId, usize)> {
+        self.pre_expand_layers(self.with_vectors_read(ContiguousVectors::len));
+        nodes
+            .iter()
+            .map(|&node| (node, self.random_layer()))
+            .collect()
+    }
+
     /// Initializes vector storage if needed and pre-reserves capacity.
     ///
     /// Cold path: the write lock may be held during a buffer resize.
@@ -346,9 +367,9 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     }
 
     /// Pushes `vectors` into the arena without linking them into the graph,
-    /// and returns the first slot: the direct writer's placement, whose graph
-    /// insert is deferred. Each vector is stored as [`Self::allocate_batch`]
-    /// stores it, under one write lock.
+    /// and returns the first slot: the direct writer's placement, which
+    /// [`Self::link_placed`] links later, where it is. Each vector is stored
+    /// as [`Self::allocate_batch`] stores it, under one write lock.
     ///
     /// # Errors
     ///

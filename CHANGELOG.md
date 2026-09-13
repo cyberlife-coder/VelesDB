@@ -109,6 +109,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   load call alone reports the cost as gone when it has only moved.
 
 ### Fixed
+- **`upsert_bulk` with an async index builder wrote every vector into the
+  graph twice (#2264).** Its direct writer places each vector in the graph's
+  arena and maps its id there, so brute force sees it at once; the builder's
+  drain then inserted the copy it had queued, which placed the vector again at
+  a new slot and moved the id to it. The arena held two slots per bulk-loaded
+  point until a vacuum, so `reorder_for_locality`, and with it
+  `POST /collections/{name}/locality/reorder`, refused every collection loaded
+  this way. The same drain mapped again a point deleted after its bulk load,
+  and gave a point upserted in between back the vector it had been
+  bulk-loaded with. The builder now queues ids, not vectors: its drain
+  resolves each id to its slot under the index read guard, skips an id
+  deleted since and a slot already linked, links an id queued twice once, and
+  places nothing. An index with its exact-distance features off gives the
+  direct writer no slot to fill, so for it the builder still places the
+  vectors. The bulk load also stops copying each vector into the queue.
+  Measured with `bulk_insert_v2_benchmark` on a shared machine (load average
+  near 8), so indicative only: the V2 load, which that bench never drains,
+  ran a median 43.88 ms against 44.19 ms on develop, inside its noise; the
+  standard path 131.50 ms against 144.73 ms, a gap this change does not
+  explain, since its code there is an equivalent rewrite of how a batch
+  indexes each node's query. The drain itself is not in that bench.
+
 - **The REST OpenAPI document shows no rustdoc link syntax (#2263).** utoipa
   copies doc comments into the OpenAPI document (`docs/openapi.{json,yaml}`,
   served at `GET /api-docs/openapi.json` by a server built with

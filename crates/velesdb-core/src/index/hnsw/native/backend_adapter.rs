@@ -115,6 +115,21 @@ impl NativeNeighbour {
 // Extended NativeHnsw methods for HnswBackend compatibility
 // ============================================================================
 
+/// Below this many nodes a batch is linked one node at a time: connecting in
+/// parallel costs more than it saves.
+const PARALLEL_BATCH_MIN: usize = 100;
+
+/// The query each node of a batch connects with, in assignment order.
+#[derive(Clone, Copy)]
+enum BatchQueries<'a> {
+    /// The vectors the batch was placed from, each prepared as an insert
+    /// prepares its vector ([`NativeHnsw::with_prepared_query`]).
+    Raw(&'a [&'a [f32]]),
+    /// Vectors read back from the arena, which stores each one in its
+    /// prepared form.
+    Prepared(&'a [&'a [f32]]),
+}
+
 impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     /// Parallel batch insert using rayon.
     ///
@@ -144,15 +159,15 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     /// Places a batch of vectors in the graph and returns the slot each one
     /// got, in input order (#2246).
     ///
-    /// Batches under 100 vectors go one by one; larger ones are pushed into the
-    /// arena in one allocation and connected in parallel.
+    /// Batches under [`PARALLEL_BATCH_MIN`] vectors go one by one; larger ones
+    /// are pushed into the arena in one allocation and connected in parallel.
     ///
     /// # Errors
     ///
     /// Returns an error if any insertion fails.
     pub(crate) fn place_batch(&self, vectors: &[&[f32]]) -> crate::error::Result<Vec<usize>> {
         // For small batches, sequential is faster due to parallelization overhead
-        if vectors.len() < 100 {
+        if vectors.len() < PARALLEL_BATCH_MIN {
             let mut assigned_ids = Vec::with_capacity(vectors.len());
             for vec in vectors {
                 assigned_ids.push(self.insert(vec)?);
@@ -166,16 +181,12 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             return Ok(Vec::new());
         }
 
-        let first_node = assignments[0].0;
-        let connect_start = self.bootstrap_entry_point(&assignments);
-
-        self.connect_batch_chunked(&assignments[connect_start..], vectors, first_node);
-        self.finalize_batch(&assignments, connect_start);
+        self.connect_batch(&assignments, BatchQueries::Raw(vectors));
 
         // Invalidate GPU caches — topology and vectors both changed.
         // Single `insert()` does this per-call; batch path must do it once
         // after all nodes are connected to avoid stale CSR/vector snapshots.
-        // `finalize_batch` has already released every `Vectors` write lock
+        // `connect_batch` has already released every `Vectors` write lock
         // taken during the insert loop, so the helper's mutex acquisition
         // is a flat acquire (rank 5) with nothing on the lock stack —
         // consistent with the declared global order.
@@ -185,6 +196,65 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         // Return the graph-assigned node IDs in input order
         let assigned_ids: Vec<usize> = assignments.iter().map(|(node_id, _)| *node_id).collect();
         Ok(assigned_ids)
+    }
+
+    /// Links into the graph `nodes` the direct writer placed with
+    /// [`Self::push_unlinked`], where they are: nothing is pushed (#2264).
+    ///
+    /// Each node connects with the vector its slot holds. The arena stores a
+    /// vector in the form an insert prepares it in ([`Self::stores_unit_norm`]
+    /// decides both), so the stored vector is read back and not prepared a
+    /// second time. The nodes are linked the way a batch of their number is
+    /// placed: one at a time below [`PARALLEL_BATCH_MIN`], in parallel chunks
+    /// from there.
+    ///
+    /// The caller passes each node once, none of them linked yet, and holds
+    /// the index read guard, so no renumbering moves a slot in between.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error, and links nothing, if the arena does not hold one of
+    /// `nodes`.
+    // Reason: its one caller, the async builder's drain, is persistence-gated.
+    #[cfg_attr(not(feature = "persistence"), allow(dead_code))]
+    pub(in crate::index::hnsw) fn link_placed(&self, nodes: &[NodeId]) -> crate::error::Result<()> {
+        if nodes.is_empty() {
+            return Ok(());
+        }
+        let (stored, dimension) = self
+            .with_vectors_read(|arena| {
+                let mut stored = Vec::with_capacity(nodes.len() * arena.dimension());
+                for &node in nodes {
+                    stored.extend_from_slice(arena.get(node)?);
+                }
+                Some((stored, arena.dimension()))
+            })
+            .ok_or_else(|| {
+                crate::error::Error::Internal("a node to link is not in the arena".to_string())
+            })?;
+        let queries: Vec<&[f32]> = stored.chunks_exact(dimension).collect();
+        if nodes.len() < PARALLEL_BATCH_MIN {
+            for (&node, query) in nodes.iter().zip(&queries) {
+                self.link_node(node, query);
+            }
+        } else {
+            let assignments = self.assign_layers(nodes);
+            self.connect_batch(&assignments, BatchQueries::Prepared(&queries));
+        }
+        // The topology changed, and the vectors with it: `push_unlinked`
+        // placed them without invalidating.
+        #[cfg(feature = "gpu")]
+        self.invalidate_gpu_caches();
+        Ok(())
+    }
+
+    /// Phases B and C of a batch insert, for nodes the arena already holds:
+    /// the first node claims an empty graph's entry point, the others connect
+    /// in chunks, and the batch's highest node is promoted.
+    fn connect_batch(&self, assignments: &[(NodeId, usize)], queries: BatchQueries<'_>) {
+        let connect_start = self.bootstrap_entry_point(assignments);
+        self.connect_batch_chunked(assignments, queries, connect_start);
+        self.finalize_batch(assignments, connect_start);
     }
 
     /// Establishes the first node as entry point if the index is empty.
@@ -305,25 +375,26 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     /// - **Phase 2** (10%-90%): reduced ef (0.5x) — graph is dense enough
     /// - **Phase 3** (last 10%): moderate ef (0.75x) — finalizes connections
     ///
-    /// Takes the **raw** input vectors; each worker derives the prepared
-    /// (cosine-normalized) query on demand via `with_prepared_query`, which
-    /// reuses one thread-local scratch buffer per rayon worker instead of
-    /// holding one owned normalized buffer per batch element alive (PERF2).
+    /// Skips the first `connect_start` assignments, which bootstrapping
+    /// consumed. Each node connects with its entry in `queries`: a raw input
+    /// vector is prepared on demand via `with_prepared_query`, which reuses
+    /// one thread-local scratch buffer per rayon worker instead of holding one
+    /// owned normalized buffer per batch element alive (PERF2); a vector read
+    /// back from the arena is used as it is.
     fn connect_batch_chunked(
         &self,
         assignments: &[(NodeId, usize)],
-        vectors: &[&[f32]],
-        first_node: NodeId,
+        queries: BatchQueries<'_>,
+        connect_start: usize,
     ) {
-        let chunk_size = Self::compute_chunk_size(assignments.len());
-        let schedule = compute_batch_ef_schedule(
-            self.ef_construction,
-            assignments.len(),
-            self.max_connections,
-        );
+        let first_node = assignments[0].0;
+        let to_connect = &assignments[connect_start..];
+        let chunk_size = Self::compute_chunk_size(to_connect.len());
+        let schedule =
+            compute_batch_ef_schedule(self.ef_construction, to_connect.len(), self.max_connections);
         let mut nodes_connected: usize = 0;
 
-        for chunk in assignments.chunks(chunk_size) {
+        for chunk in to_connect.chunks(chunk_size) {
             let loaded = self.entry_point.load(std::sync::atomic::Ordering::Acquire);
             let ep_id = if loaded == NO_ENTRY_POINT {
                 first_node
@@ -340,8 +411,8 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
                 .par_iter()
                 .enumerate()
                 .filter_map(|(i, (node_id, layer))| {
-                    let batch_idx = node_id - first_node;
-                    let anchored = self.with_prepared_query(vectors[batch_idx], |query| {
+                    let position = connect_start + chunk_offset + i;
+                    let anchored = self.with_batch_query(queries, position, |query| {
                         let current_ep = self.greedy_descent_upper_layers(query, *layer, ep_id);
                         let ef = schedule.ef_for_position(chunk_offset + i);
                         let stagnation = ef / 2;
@@ -363,6 +434,19 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             self.count
                 .fetch_add(chunk.len(), std::sync::atomic::Ordering::Relaxed);
             nodes_connected += chunk.len();
+        }
+    }
+
+    /// Runs `f` on the query the node at `position` in a batch connects with.
+    fn with_batch_query<R>(
+        &self,
+        queries: BatchQueries<'_>,
+        position: usize,
+        f: impl FnOnce(&[f32]) -> R,
+    ) -> R {
+        match queries {
+            BatchQueries::Raw(vectors) => self.with_prepared_query(vectors[position], f),
+            BatchQueries::Prepared(queries) => f(queries[position]),
         }
     }
 

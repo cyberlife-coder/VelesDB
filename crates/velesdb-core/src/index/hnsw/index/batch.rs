@@ -89,6 +89,39 @@ impl HnswIndex {
         }
     }
 
+    /// Links into the graph, where they are, the nodes `upsert_bulk`'s direct
+    /// writer placed for `ids`: the async builder's drain (#2264). Returns the
+    /// number of nodes linked.
+    ///
+    /// Each id resolves to its slot now, under the read guard that keeps
+    /// `reorder_for_locality` and `vacuum` from renumbering it. An id no longer
+    /// mapped (deleted since it was queued) is skipped, and so is a slot
+    /// already linked: the id was upserted through the graph since, or a
+    /// `vacuum` rebuilt the graph with it. An id queued twice is linked once,
+    /// at the slot of its last write.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error, and links nothing, if the arena does not hold a slot
+    /// a mapping names.
+    #[cfg(feature = "persistence")]
+    pub(crate) fn link_placed(&self, ids: &[u64]) -> crate::error::Result<usize> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let inner = self.inner.read();
+        let mut slots: Vec<usize> = ids
+            .iter()
+            .filter_map(|&id| self.mappings.get_idx(id))
+            .collect();
+        slots.sort_unstable();
+        slots.dedup();
+        let unlinked = inner.unlinked_nodes(slots);
+        inner.link_placed(&unlinked)?;
+        drop(inner);
+        Ok(unlinked.len())
+    }
+
     /// Performs batch search for multiple queries in parallel.
     ///
     /// `Perfect`, `Adaptive`, `AutoTune`, and an index of at most 100 vectors whose graph holds at

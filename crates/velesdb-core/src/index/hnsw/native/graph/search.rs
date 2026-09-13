@@ -719,9 +719,10 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         &self,
         query: &'a [f32],
     ) -> Cow<'a, [f32]> {
-        if self.distance.is_pre_normalized()
-            && self.distance.metric() == crate::DistanceMetric::Cosine
-        {
+        // The arena's own test: a query is prepared exactly as the arena
+        // stores a vector, so a stored vector is its own prepared query
+        // (`link_placed` connects with one).
+        if self.stores_unit_norm() {
             let mut buf = QUERY_BUF.with(|cell| {
                 let mut borrow = cell.borrow_mut();
                 if borrow.capacity() == 0 {

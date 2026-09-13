@@ -16,6 +16,12 @@ use super::native::{CachedSimdDistance, NativeHnsw, NativeNeighbour, ResumableSe
 use crate::distance::DistanceMetric;
 use std::path::Path;
 
+// Nodes placed in the arena and not linked into the graph yet: crash recovery
+// finds them, the async builder's drain links them (#2246, #2264).
+#[cfg(feature = "persistence")]
+#[path = "native_inner_unlinked.rs"]
+mod unlinked;
+
 /// Opaque resume handle for an escalatable CPU search on the Standard backend.
 ///
 /// Wraps the graph-level [`ResumableSearch`] so callers above the backend
@@ -772,18 +778,6 @@ impl NativeHnswInner {
             HnswBackend::Standard(hnsw) => hnsw.with_vectors_read(f),
             HnswBackend::RaBitQ(rabitq) => rabitq.inner.with_vectors_read(f),
             HnswBackend::Sq8(sq8) => sq8.inner.with_vectors_read(f),
-        }
-    }
-
-    /// The nodes among `nodes` the graph never linked into layer 0: mapped,
-    /// stored, and out of reach of every search. Crash recovery re-indexes
-    /// them (#2246).
-    #[cfg(feature = "persistence")]
-    pub(crate) fn unlinked_nodes(&self, nodes: impl IntoIterator<Item = usize>) -> Vec<usize> {
-        match &self.backend {
-            HnswBackend::Standard(hnsw) => hnsw.unlinked_nodes(nodes),
-            HnswBackend::RaBitQ(rabitq) => rabitq.inner.unlinked_nodes(nodes),
-            HnswBackend::Sq8(sq8) => sq8.inner.unlinked_nodes(nodes),
         }
     }
 

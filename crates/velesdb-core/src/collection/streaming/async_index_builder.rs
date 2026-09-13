@@ -1,17 +1,21 @@
 //! Async HNSW index builder for deferred bulk indexing.
 //!
-//! Buffers vectors and builds the HNSW index either synchronously (via
-//! `flush_sync`) or asynchronously (future Task 4 integration). The buffer
-//! is searchable via brute-force scan for consistency during construction.
+//! Queues what the HNSW index has yet to index, and builds it either
+//! synchronously (via `flush_sync`) or asynchronously (future Task 4
+//! integration). It queues vectors, which a build inserts, and the ids of
+//! vectors `upsert_bulk`'s direct writer already placed in the graph's arena,
+//! which a flush links where they are (#2264). The vector buffer is
+//! searchable via brute-force scan for consistency during construction; the
+//! placed vectors are in the arena, where brute force already sees them.
 //!
 //! # Lock ordering
 //!
-//! Position 11 (after `delta_buffer` at 10). The internal `RwLock` on
-//! `buffer` must never be held while acquiring any lock at position ≤ 10.
+//! Position 11 (after `delta_buffer` at 10). Neither queue's lock (`buffer`,
+//! `placed`) may be held while acquiring any lock at position ≤ 10.
 
 use crate::distance::DistanceMetric;
 use crate::index::hnsw::HnswIndex;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -27,9 +31,10 @@ pub struct AsyncIndexBuilderConfig {
     #[serde(default = "default_merge_threshold")]
     pub merge_threshold: usize,
 
-    /// Reserved — parsed but not yet wired. Flushes currently go through
-    /// `HnswIndex::insert_batch_parallel`, which parallelizes on the global
-    /// rayon pool with no segment notion; this knob changes nothing today.
+    /// Reserved — parsed but not yet wired. Flushes currently connect nodes on
+    /// the global rayon pool with no segment notion, queued vectors through
+    /// `HnswIndex::insert_batch_parallel` and placed ids through the same
+    /// batch connect; this knob changes nothing today.
     /// Wiring it belongs to the pipeline integration tracked under
     /// issue #488 Task 4 (the same one gating this whole builder).
     #[serde(default)]
@@ -49,8 +54,9 @@ impl Default for AsyncIndexBuilderConfig {
     }
 }
 
-/// Async HNSW index builder that buffers vectors and flushes them to the
-/// HNSW index via [`HnswIndex::insert_batch_parallel`].
+/// Async HNSW index builder: queues vectors, which a flush inserts via
+/// [`HnswIndex::insert_batch_parallel`], and the ids of vectors already placed
+/// in the graph's arena, which a flush links where they are.
 ///
 /// Only synchronous flush is currently supported; background-thread
 /// integration into the Collection pipeline is tracked under Issue #488
@@ -59,8 +65,13 @@ impl Default for AsyncIndexBuilderConfig {
 /// Lock order position: 11 (after `delta_buffer` at 10).
 #[allow(dead_code)] // Pipeline integration tracked under Issue #488 Task 4.
 pub struct AsyncIndexBuilder {
-    /// Buffer of vectors pending indexation.
+    /// Vectors pending indexation, from [`Self::enqueue`]: a build inserts
+    /// them, which places and links each one.
     buffer: RwLock<Vec<(u64, Vec<f32>)>>,
+    /// Ids whose vectors `upsert_bulk`'s direct writer has already placed in
+    /// the graph's arena and mapped, from [`Self::enqueue_placed`]: a flush
+    /// links them where they are, so no vector is placed twice (#2264).
+    placed: Mutex<Vec<u64>>,
     /// Configuration.
     config: AsyncIndexBuilderConfig,
     /// Whether a build is currently in progress (shared with background thread).
@@ -74,6 +85,7 @@ impl AsyncIndexBuilder {
     pub fn new(config: AsyncIndexBuilderConfig) -> Self {
         Self {
             buffer: RwLock::new(Vec::new()),
+            placed: Mutex::new(Vec::new()),
             config,
             building: Arc::new(AtomicBool::new(false)),
         }
@@ -87,6 +99,18 @@ impl AsyncIndexBuilder {
         let mut buf = self.buffer.write();
         buf.extend(vectors);
         buf.len() >= self.config.merge_threshold
+    }
+
+    /// Enqueues the ids of vectors already placed in the graph's arena and
+    /// mapped there by `upsert_bulk`'s direct writer, for a flush to link
+    /// where they are.
+    ///
+    /// Returns `true` if the queued ids have reached `merge_threshold`,
+    /// signaling the caller to trigger a build.
+    pub(crate) fn enqueue_placed(&self, ids: impl IntoIterator<Item = u64>) -> bool {
+        let mut placed = self.placed.lock();
+        placed.extend(ids);
+        placed.len() >= self.config.merge_threshold
     }
 
     /// Returns the number of vectors currently buffered.
@@ -132,15 +156,18 @@ impl AsyncIndexBuilder {
         results
     }
 
-    /// Drains the buffer and inserts all buffered vectors into the HNSW
-    /// index via [`HnswIndex::insert_batch_parallel`].
+    /// Drains both queues into the HNSW index: inserts the buffered vectors
+    /// via [`HnswIndex::insert_batch_parallel`], which places and links each
+    /// one, and links the queued ids where the direct writer placed their
+    /// vectors, placing nothing. Returns the number of nodes it indexed.
     ///
     /// Concurrent calls are serialized: the second caller returns
     /// `Ok(0)` while the first is in progress.
     ///
     /// # Errors
     ///
-    /// Returns an error if HNSW insertion fails.
+    /// Returns an error if the graph's arena does not hold a slot a queued id
+    /// is mapped to.
     pub fn flush_sync(&self, hnsw_index: &HnswIndex) -> crate::error::Result<usize> {
         if self.building.swap(true, Ordering::AcqRel) {
             // Another build is in progress — skip
@@ -148,22 +175,20 @@ impl AsyncIndexBuilder {
         }
 
         let vectors = self.drain_buffer();
-        let count = vectors.len();
-
-        if count == 0 {
-            self.building.store(false, Ordering::Release);
-            return Ok(0);
-        }
-
-        let pairs: Vec<(u64, &[f32])> = vectors.iter().map(|(id, v)| (*id, v.as_slice())).collect();
-
-        let inserted = hnsw_index.insert_batch_parallel(pairs);
+        let inserted =
+            hnsw_index.insert_batch_parallel(vectors.iter().map(|(id, v)| (*id, v.as_slice())));
+        let placed = std::mem::take(&mut *self.placed.lock());
+        let linked = hnsw_index.link_placed(&placed);
 
         self.building.store(false, Ordering::Release);
 
-        tracing::debug!("AsyncIndexBuilder::flush_sync: indexed {inserted}/{count} vectors");
-
-        Ok(inserted)
+        let linked = linked?;
+        tracing::debug!(
+            "AsyncIndexBuilder::flush_sync: inserted {inserted}/{} vectors, linked {linked}/{} placed ids",
+            vectors.len(),
+            placed.len()
+        );
+        Ok(inserted + linked)
     }
 
     /// Returns `true` if a build is currently in progress.
@@ -178,6 +203,8 @@ impl AsyncIndexBuilder {
     /// If a build is already in progress, this is a no-op.
     /// The background thread calls `insert_batch_parallel` on the
     /// provided `HnswIndex` and clears the `building` flag on completion.
+    /// Ids queued by `upsert_bulk`'s direct writer are left for
+    /// [`Self::flush_sync`].
     pub fn trigger_build_async(&self, hnsw_index: &Arc<HnswIndex>) {
         if self.building.swap(true, Ordering::AcqRel) {
             return; // Already building

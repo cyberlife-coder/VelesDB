@@ -1,6 +1,7 @@
 //! Tests for `DirectVectorWriter`.
 
 use super::direct_writer::DirectVectorWriter;
+use super::upsert::UpsertResult;
 use super::HnswIndex;
 use crate::distance::DistanceMetric;
 
@@ -29,11 +30,20 @@ fn contiguous_get(index: &HnswIndex, idx: usize) -> Option<Vec<f32>> {
         .with_contiguous_vectors_read(|cv| cv.get(idx).map(<[f32]>::to_vec))
 }
 
+/// `write_batch_direct` into an index with its exact-distance features on,
+/// which places every vector.
+fn placed(writer: &DirectVectorWriter<'_>, batch: &[(u64, &[f32])]) -> Vec<UpsertResult> {
+    writer
+        .write_batch_direct(batch)
+        .expect("test: direct write")
+        .expect("test: an index with exact-distance features on places")
+}
+
 #[test]
 fn test_write_batch_direct_empty() {
     let index = make_index(4);
     let writer = DirectVectorWriter::new(&index);
-    let results = writer.write_batch_direct(&[]).unwrap();
+    let results = placed(&writer, &[]);
     assert!(results.is_empty());
 }
 
@@ -42,7 +52,7 @@ fn test_write_batch_direct_single_vector() {
     let index = make_index(4);
     let writer = DirectVectorWriter::new(&index);
     let vec = [1.0_f32, 2.0, 3.0, 4.0];
-    let results = writer.write_batch_direct(&[(1, &vec)]).unwrap();
+    let results = placed(&writer, &[(1, &vec)]);
 
     assert_eq!(results.len(), 1);
     assert!(results[0].old_idx.is_none());
@@ -63,7 +73,7 @@ fn test_write_batch_direct_multiple_vectors() {
     let v3 = [0.0_f32, 0.0, 1.0];
     let batch: Vec<(u64, &[f32])> = vec![(10, &v1), (20, &v2), (30, &v3)];
 
-    let results = writer.write_batch_direct(&batch).unwrap();
+    let results = placed(&writer, &batch);
     assert_eq!(results.len(), 3);
 
     // All mappings registered
@@ -87,7 +97,7 @@ fn test_write_batch_direct_visible_to_brute_force() {
     let v2 = [4.0_f32, 5.0, 6.0];
     let batch: Vec<(u64, &[f32])> = vec![(1, &v1), (2, &v2)];
 
-    writer.write_batch_direct(&batch).unwrap();
+    placed(&writer, &batch);
 
     let results = index.brute_force_search_parallel(&v1, 2).unwrap();
     assert_eq!(results.len(), 2);
@@ -102,8 +112,8 @@ fn test_upsert_deduplication() {
     let v2 = [0.0_f32, 1.0];
 
     // Insert ID=1 twice — second should replace first
-    let r1 = writer.write_batch_direct(&[(1, &v1)]).unwrap();
-    let r2 = writer.write_batch_direct(&[(1, &v2)]).unwrap();
+    let r1 = placed(&writer, &[(1, &v1)]);
+    let r2 = placed(&writer, &[(1, &v2)]);
 
     assert!(r1[0].old_idx.is_none());
     assert!(r2[0].old_idx.is_some());
@@ -140,7 +150,10 @@ fn test_direct_write_skipped_with_exact_distance_features_off() {
 
     let results = writer.write_batch_direct(&[(1, &v)]).unwrap();
 
-    assert!(results.is_empty());
+    assert!(
+        results.is_none(),
+        "the writer reports that it placed nothing"
+    );
     assert_eq!(index.mappings.get_idx(1), None);
     assert_eq!(
         contiguous_get(&index, 0),
@@ -173,7 +186,7 @@ fn a_direct_write_into_a_cosine_arena_is_unit_norm() {
     let index = HnswIndex::new(4, DistanceMetric::Cosine).expect("test index creation");
     let writer = DirectVectorWriter::new(&index);
     let raw = [3.0_f32, 0.0, 0.0, 4.0];
-    let results = writer.write_batch_direct(&[(1, &raw)]).unwrap();
+    let results = placed(&writer, &[(1, &raw)]);
 
     let stored = contiguous_get(&index, results[0].idx).expect("stored");
     for (got, want) in stored.iter().zip([0.6_f32, 0.0, 0.0, 0.8]) {
