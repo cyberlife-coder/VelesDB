@@ -92,6 +92,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   between releases, which the tool reads as a patch update, arming lints that
   only a release commit could satisfy.
 
+- **`rust-toolchain.toml` decides the Rust version (#1987).**
+  `scripts/tests/test_msrv_single_source.py` fails `CI Success` when the
+  toolchain file and the workspace `rust-version` disagree, when a member
+  crate declares its own `rust-version`, or when a workflow names a Rust
+  version instead of installing from the toolchain file; a job that builds
+  with nightly may, in a comment saying why. It found propagation-guard.yml
+  installing 1.86 while the MSRV is 1.90.
+
+- **Four review signals that block nothing (#1987).** A weekly
+  `minimal-versions` job in `quality-deep.yml`, also run on pull requests that
+  change a `Cargo.toml`, checks `velesdb-core` and `velesdb-memory` with every
+  direct dependency at the lowest version their manifests allow. On a pull
+  request that changes `velesdb-core`, `core-review.yml` prints its
+  `cargo public-api` diff against the base and runs `cargo mutants --in-diff`
+  on the changed code, uploading the report. `codeql.yml` analyzes Rust,
+  Python, JavaScript/TypeScript and the workflows themselves on push, pull
+  request and weekly. None of them is read by `CI Success`.
+
 - **A deferred removal promised for a future major can no longer be skipped by
   that major.** `scripts/check-deferred-removals.py` carries each promise with
   every site that must be gone, and fails the release commit that raises the
@@ -450,6 +468,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NotFound`, matching every sibling accessor.
 
 ### Changed
+- **The published crates declare dependency floors they can actually be built
+  with (#1987).** `-Z direct-minimal-versions` found requirements below what
+  the rest of the dependency graph, or the code itself, needs: `serde` "1.0"
+  where cargo-platform already requires 1.0.228, `figment` "0.10" whose 0.10.0
+  no longer compiles against serde, `tracing` "0.1" whose 0.1.37 drops the `%`
+  of a log field, `ureq` "2" whose 2.0.0 lacks `Transport::kind()`. Each moved
+  to the lowest version the resolve and the compile accept, not to the locked
+  one; only `pest` needed the lockfile to move, 2.9.0 to 2.9.1. A consumer who
+  holds one of these crates below its new floor has to update it.
+
 - **BREAKING (REST, VelesQL, bindings) — an unparseable search `mode` now
   fails instead of running silently at the default quality (#2267).**
   `WITH (mode = '...')` in VelesQL and

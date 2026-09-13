@@ -202,6 +202,10 @@ These signals are tracked but do not block release individually:
 | TODO governance | Every TODO/FIXME/HACK carries an issue tag: `[EPIC-XXX/US-YYY]`, `(PREFIX-NNN)` (e.g. `(EPIC-001)`, `(US-GRAPH-01)`), `#123`, or `#issue` | `scripts/check-todo-annotations.py` |
 | RUSTSEC | All advisories tracked or justified in `deny.toml` | `cargo deny check` in CI (Security Audit job) |
 | Untrusted-input hardening | Corrupt/oversized persisted artifacts (HNSW graph, PQ codebook, sparse, BM25, WAL) are rejected at load, not used to size allocations; WAL `Fsync` is durable before ack; config limits validated in loaders + on open | Regression suites: `storage/storage_reliability_tests.rs`, `index/hnsw/persistence_atomicity_tests.rs`, `quantization/pq_tests.rs`, `quantization/rabitq_tests.rs`, `index/sparse/persistence_tests.rs`, `index/bm25_tests.rs`, `config_tests.rs`, `velesql/parser/robustness_tests.rs` (gated by `cargo test`) |
+| Minimal dependency versions | `velesdb-core` and `velesdb-memory` compile with every direct dependency at the lowest version their manifests allow, on the MSRV toolchain | `minimal-versions` job in `quality-deep.yml` (weekly, and on PRs that change a `Cargo.toml`) |
+| Public API diff | Every addition, change or removal in `velesdb-core`'s public API is printed for review; a *breaking* one is blocked separately, by `semver-checks` in `CI Success` | `public-api` job in `core-review.yml` (PRs that change `crates/velesdb-core/`) |
+| Mutation testing | No mutant of the changed `velesdb-core` code survives its unit tests; the report is uploaded as an artifact | `cargo mutants --in-diff`, `mutants` job in `core-review.yml` (same PRs) |
+| Static analysis | CodeQL findings on Rust, Python, JavaScript/TypeScript and the GitHub Actions workflows, in the Security tab | `codeql.yml` (push, PR, weekly) |
 
 ---
 

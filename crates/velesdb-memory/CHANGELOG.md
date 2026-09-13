@@ -36,6 +36,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with the lock released, and the index is read again once the lock is retaken,
   so a concurrent repair wins over the walk (#2246, P5).
 
+### Changed
+
+- **Dependency floors the crate can actually be built with (#1987).**
+  `tempfile` takes the workspace's 3.14 (the old "3" could never be selected
+  next to velesdb-core's), `ureq` 2.5.0 (the first 2.x with a public
+  `Transport::kind()` and a bounded `rustls`), `tracing` 0.1.39 (0.1.37 and
+  0.1.38 drop the `%` of the HTTP request log's first field), and `hyper`,
+  `hyper-util`, `parking_lot`, `rustls`, `schemars` and `time` the versions the
+  rest of the graph already requires. A consumer holding one of them lower has
+  to update it.
+
 ## [0.14.2] - 2026-09-03
 
 ### Fixed

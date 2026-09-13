@@ -98,6 +98,8 @@ jobs:
     # flake risk to weigh against making the gate required. Loom is also
     # how we catch concurrency-model drift between the `loom` and non-loom
     # builds; silencing this gate would let breakage land for free.
+    # Nightly: velesdb-core's `loom` feature is nightly-only, as its
+    # Cargo.toml documents.
     name: Loom check (nightly)
     runs-on: ubuntu-latest
     steps:
