@@ -42,7 +42,7 @@ use super::native_inner::NativeHnswInner as HnswInner;
 use super::sharded_mappings::ShardedMappings;
 use super::upsert;
 use crate::distance::DistanceMetric;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use std::mem::ManuallyDrop;
 use std::sync::atomic::AtomicU64;
 
@@ -93,6 +93,24 @@ pub struct HnswIndex {
     pub(crate) inner: RwLock<ManuallyDrop<HnswInner>>,
     /// ID mappings (external ID <-> internal index) - lock-free via `DashMap` (EPIC-A.1)
     pub(crate) mappings: ShardedMappings,
+    /// Serializes what renumbers slots: `vacuum` and `reorder_for_locality`
+    /// (#2262).
+    ///
+    /// Taken before `inner`, never while holding it; writers and `save` never
+    /// take it. `vacuum` rebuilds from a snapshot without the graph lock and
+    /// trusts, at its swap, that an id still on the slot the snapshot saw was
+    /// not written since, which holds only while nothing renumbers. `save`
+    /// needs no part of it: it copies the mappings and dumps the graph under
+    /// one read guard, which a renumber's write guard waits for.
+    maintenance: Mutex<()>,
+    /// Serializes saves of this index (#2262). A save rewrites its vectors and
+    /// graph files in place and stamps every file with the generation after
+    /// the one it read from the directory, so two saves into one directory at
+    /// once stamped one generation, and the load took one save's mappings
+    /// beside the other's graph. Taken before `inner`, and never with
+    /// `maintenance`, so a save made during a vacuum's rebuild still saves the
+    /// old graph.
+    saving: Mutex<()>,
     /// Whether exact-distance features are enabled: the automatic two-stage
     /// re-rank (`search_with_quality`, `search_batch_parallel`), the exact
     /// scan those two run for `Perfect` and on an index of at most 100
@@ -211,10 +229,15 @@ impl HnswIndex {
     /// takes the write lock to renumber for the same reason. `ANALYZE` is the
     /// caller, so the exclusion lasts one maintenance pass.
     ///
+    /// The maintenance lock comes first, as in `vacuum`: a renumber between a
+    /// vacuum's snapshot and its swap would move the slots that snapshot
+    /// recorded (#2262).
+    ///
     /// # Errors
     ///
     /// Returns an error if vector storage reordering fails.
     pub fn reorder_for_locality(&self) -> crate::error::Result<()> {
+        let _maintenance = self.maintenance.lock();
         let guard = self.inner.write();
         let reordered = guard.reorder_for_locality()?;
         if let Some(old_to_new) = reordered {

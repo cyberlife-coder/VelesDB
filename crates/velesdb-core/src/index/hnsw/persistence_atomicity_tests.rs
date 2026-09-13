@@ -149,7 +149,7 @@ fn test_save_sidecars_stamps_monotonic_generation() {
     for expected in 1..=3_u64 {
         let new_gen = persistence::next_generation(path).expect("test: next_generation");
         assert_eq!(new_gen, expected);
-        save_sidecars(path, &mappings, &meta, new_gen).expect("test: save");
+        save_sidecars(path, mappings_data(&mappings, 0), &meta, new_gen).expect("test: save");
     }
 
     let loaded_meta = persistence::load_meta(path).expect("test: load meta");
@@ -363,7 +363,8 @@ fn test_save_then_load_roundtrip_gen_bumped_and_legacy_file_removed() {
     // Production callers stamp the graph marker with the same generation
     // before writing the sidecars — mirror that sequence.
     persistence::save_graph_generation(path, new_gen).expect("test: graph gen 8");
-    save_sidecars(path, &mappings, &meta_in, new_gen).expect("test: save bumps gen");
+    save_sidecars(path, mappings_data(&mappings, 0), &meta_in, new_gen)
+        .expect("test: save bumps gen");
 
     let loaded_meta = persistence::load_meta(path).expect("test: reload meta");
     assert_eq!(
@@ -399,7 +400,7 @@ fn test_save_when_no_prior_state_starts_at_gen_1() {
         new_gen, 1,
         "next_generation on a fresh directory must return 1"
     );
-    save_sidecars(path, &mappings, &meta_in, new_gen).expect("test: first save");
+    save_sidecars(path, mappings_data(&mappings, 0), &meta_in, new_gen).expect("test: first save");
 
     let loaded_meta = persistence::load_meta(path).expect("test: reload meta");
     assert_eq!(

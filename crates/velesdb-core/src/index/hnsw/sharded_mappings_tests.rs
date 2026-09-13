@@ -365,19 +365,24 @@ fn test_sharded_mappings_from_parts_preserves_next_idx() {
 }
 
 #[test]
-fn test_clear_resets_mappings_and_next_idx() {
+fn test_clear_for_empties_the_maps_and_counts_every_slot() {
     let mappings = ShardedMappings::new();
     mappings.assign(10, Placed::for_test(0));
     mappings.assign(20, Placed::for_test(1));
     mappings.assign(30, Placed::for_test(2));
-    assert_eq!(mappings.next_idx(), 3, "next_idx advanced before clear");
+    assert_eq!(mappings.next_idx(), 3, "next_idx advanced before clear_for");
 
-    mappings.clear();
+    mappings.clear_for(5);
 
-    assert!(mappings.is_empty(), "clear empties id_to_idx/idx_to_id");
+    assert!(mappings.is_empty(), "clear_for empties id_to_idx/idx_to_id");
     assert!(!mappings.contains(10));
     assert_eq!(mappings.get_id(0), None);
-    assert_eq!(mappings.next_idx(), 0, "clear resets next_idx");
+    assert_eq!(mappings.next_idx(), 5, "clear_for sets next_idx");
+    // An id mapped below the slot count leaves it be: the slots above it are
+    // dead, and still counted.
+    mappings.assign(40, Placed::for_test(1));
+    assert_eq!(mappings.next_idx(), 5, "assign never lowers next_idx");
+    assert_eq!(mappings.next_idx() - mappings.len(), 4, "dead slots");
 }
 
 // -------------------------------------------------------------------------

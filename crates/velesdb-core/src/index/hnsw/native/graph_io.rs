@@ -173,13 +173,24 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     /// * `path` - Directory path for output files
     /// * `basename` - Base name for output files
     ///
+    /// Returns the number of vectors written: the slot count of the dumped
+    /// arena.
+    ///
     /// # Errors
     ///
     /// Returns `io::Error` if file operations fail.
-    pub fn file_dump(&self, path: &Path, basename: &str) -> std::io::Result<()> {
-        let count = self.dump_vectors_file(path, basename)?;
+    pub fn file_dump(&self, path: &Path, basename: &str) -> std::io::Result<usize> {
+        // One arena guard spans both files, taken in the declared order
+        // (vectors 10 here, layers 20 in `dump_graph_file`): no node is pushed
+        // until the graph file is written, so every node and neighbor it names
+        // is in the vectors file (#2262). Released between the two, an insert
+        // could push a node and link it into nodes the vectors file holds,
+        // and the load refused the save.
+        let vectors = self.vectors.read();
+        let count = self.dump_vectors_file(path, basename, vectors.as_ref())?;
         self.dump_graph_file(path, basename, count)?;
-        Ok(())
+        drop(vectors);
+        usize::try_from(count).map_err(std::io::Error::other)
     }
 
     /// Whether this graph's arena holds its cosine vectors unit-norm: the
@@ -191,28 +202,32 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         self.distance.is_pre_normalized() && self.distance.metric() == crate::DistanceMetric::Cosine
     }
 
-    /// Writes vector data to `{basename}.vectors`.
-    // The read guard spans the whole dump on purpose: it is what makes the
-    // written file a consistent snapshot. Releasing it earlier would mean
-    // copying the entire arena first -- hundreds of MiB at production sizes --
-    // to avoid a read lock that excludes no other reader.
-    #[expect(clippy::significant_drop_tightening)]
-    fn dump_vectors_file(&self, path: &Path, basename: &str) -> std::io::Result<u64> {
+    /// Writes `vectors`, this graph's arena, to `{basename}.vectors`.
+    ///
+    /// [`Self::file_dump`] holds the arena's read guard across this file and
+    /// the graph file: it is what makes the two a consistent snapshot.
+    /// Releasing it earlier would mean copying the entire arena first --
+    /// hundreds of MiB at production sizes -- to avoid a read lock, which
+    /// keeps writers out and makes readers queue only behind a writer already
+    /// waiting.
+    fn dump_vectors_file(
+        &self,
+        path: &Path,
+        basename: &str,
+        vectors: Option<&crate::perf_optimizations::ContiguousVectors>,
+    ) -> std::io::Result<u64> {
         let vectors_path = path.join(format!("{basename}.vectors"));
-        let vectors_guard = self.vectors.read();
 
         // Reason: Vector dimensions are always < 65536 and vector count fits u64.
         #[allow(clippy::cast_possible_truncation)]
-        let (count, dimension): (u64, u32) = match vectors_guard.as_ref() {
+        let (count, dimension): (u64, u32) = match vectors {
             Some(v) => (v.len() as u64, v.dimension() as u32),
             None => (0, 0),
         };
         let unit_norm = self.stores_unit_norm();
 
         #[cfg(feature = "persistence")]
-        if let Some(adopted) = vectors_guard
-            .as_ref()
-            .filter(|v| v.backing_path() == Some(vectors_path.as_path()))
+        if let Some(adopted) = vectors.filter(|v| v.backing_path() == Some(vectors_path.as_path()))
         {
             Self::rewrite_adopted_vectors_header(
                 adopted,
@@ -227,7 +242,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         let mut writer = BufWriter::new(File::create(&vectors_path)?);
         Self::write_vectors_header(&mut writer, count, dimension, unit_norm)?;
 
-        if let Some(vectors) = vectors_guard.as_ref() {
+        if let Some(vectors) = vectors {
             Self::write_vector_data(&mut writer, vectors)?;
         }
         writer.flush()?;

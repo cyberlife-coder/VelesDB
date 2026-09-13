@@ -3706,3 +3706,633 @@ fn a_round_passes(rounds: &std::sync::atomic::AtomicU32) -> bool {
         rounds.load(Ordering::Acquire) != seen
     })
 }
+
+/// A vector no other `(id, version)` pair shares: its first two coordinates
+/// are the pair itself, so an exhaustive scan's top-1 on it is unambiguous.
+fn racing_vector(id: u64, version: u8) -> Vec<f32> {
+    let angle = id as f32 * 0.37;
+    vec![id as f32, f32::from(version), angle.sin(), angle.cos()]
+}
+
+/// Writes made while `vacuum` rebuilds survive its swap (#2262). One thread
+/// vacuums in a loop while this one inserts new ids, upserts old ones and
+/// deletes others; afterwards an exhaustive scan sees every write, as if no
+/// vacuum had run.
+#[test]
+fn writes_racing_a_vacuum_survive_it() {
+    // Ids below WRITES are upserted, the next WRITES deleted, the next WRITES
+    // left alone; BASE onwards are inserted during the race.
+    const WRITES: u64 = 300;
+    const BASE: u64 = 3 * WRITES;
+    let index = HnswIndex::new(4, DistanceMetric::Euclidean).unwrap();
+    for id in 0..BASE {
+        index.insert(id, &racing_vector(id, 0));
+    }
+    let vacuums = write_beside_vacuums(&index, WRITES, BASE);
+
+    let [lost, stale, resurrected] = missed_writes(&index, WRITES, BASE);
+    assert!(
+        lost.is_empty() && stale.is_empty() && resurrected.is_empty(),
+        "after {vacuums} vacuums: {} inserts lost (first {:?}), {} upserts still on \
+         their old vector (first {:?}), {} deletes back in the scan (first {:?})",
+        lost.len(),
+        lost.first(),
+        stale.len(),
+        stale.first(),
+        resurrected.len(),
+        resurrected.first(),
+    );
+    assert_eq!(index.len(), BASE as usize, "live ids");
+}
+
+/// Makes `writes` rounds of writes on `index` while another thread vacuums it
+/// in a loop, and returns how many vacuums finished. Round `n` inserts id
+/// `base + n`, upserts id `n` and deletes id `writes + n`. Every 50 rounds
+/// wait for a vacuum to finish, so the vacuuming thread is running at every
+/// checkpoint, not by scheduling luck.
+fn write_beside_vacuums(index: &HnswIndex, writes: u64, base: u64) -> u32 {
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    use std::sync::Barrier;
+
+    let writing = AtomicBool::new(true);
+    let start = Barrier::new(2);
+    let rounds = AtomicU32::new(0);
+    let mut stalled = false;
+    let vacuumed = std::thread::scope(|scope| {
+        let vacuums = scope.spawn(|| {
+            start.wait();
+            while writing.load(Ordering::Acquire) {
+                index.vacuum()?;
+                rounds.fetch_add(1, Ordering::AcqRel);
+            }
+            Ok::<(), VacuumError>(())
+        });
+        start.wait();
+        // Recorded, not asserted: a panic here would leave the vacuuming
+        // thread looping, and the scope waiting on it for ever.
+        for n in 0..writes {
+            if n % 50 == 0 && !a_round_passes(&rounds) {
+                stalled = true;
+                break;
+            }
+            index.insert(base + n, &racing_vector(base + n, 0));
+            index.insert(n, &racing_vector(n, 1));
+            index.remove(writes + n);
+        }
+        writing.store(false, Ordering::Release);
+        vacuums.join()
+    });
+    assert_eq!(
+        vacuumed.expect("test: the vacuuming thread panicked"),
+        Ok(())
+    );
+    assert!(!stalled, "the vacuuming thread stopped making rounds");
+    rounds.load(Ordering::Acquire)
+}
+
+/// The writes `write_beside_vacuums(index, writes, base)` made that an
+/// exhaustive scan misses, in three lists: inserted ids unmapped or not their
+/// own top-1; upserted ids not top-1 on their new vector, or still at distance
+/// 0 on their old one; deleted ids still mapped or still scanned.
+fn missed_writes(index: &HnswIndex, writes: u64, base: u64) -> [Vec<u64>; 3] {
+    let top = |id, version| {
+        let hits = index
+            .search_brute_force(&racing_vector(id, version), 1)
+            .unwrap();
+        hits.first().map(|hit| (hit.id, hit.score))
+    };
+    let on_top = |id, version| top(id, version).map(|(hit, _)| hit) == Some(id);
+    let scanned: std::collections::HashSet<u64> = index
+        .search_brute_force(&racing_vector(0, 0), (base + writes) as usize)
+        .unwrap()
+        .iter()
+        .map(|hit| hit.id)
+        .collect();
+    [
+        (base..base + writes)
+            .filter(|&id| !(index.mappings.contains(id) && on_top(id, 0)))
+            .collect(),
+        (0..writes)
+            .filter(|&id| !on_top(id, 1) || top(id, 0) == Some((id, 0.0)))
+            .collect(),
+        (writes..2 * writes)
+            .filter(|&id| index.mappings.contains(id) || scanned.contains(&id))
+            .collect(),
+    ]
+}
+
+/// Reloads the index saved in `dir` and returns the ids of `ids` whose reloaded
+/// vector `own` refuses, with the reload's tombstone count and its dead slots,
+/// which must be equal. `own(id, stored)` gets the vector the reload resolves
+/// `id` to, `None` when it maps `id` nowhere.
+fn check_reload(
+    dir: &std::path::Path,
+    ids: impl IntoIterator<Item = u64>,
+    own: impl Fn(u64, Option<&[f32]>) -> bool,
+) -> std::io::Result<(Vec<u64>, (usize, usize))> {
+    let reloaded = HnswIndex::load(dir, 4, DistanceMetric::Euclidean)?;
+    let counts = (
+        reloaded.tombstone_count(),
+        reloaded.graph_vector_count() - reloaded.len(),
+    );
+    let graph = reloaded.inner.read();
+    let misresolved = |vectors: &crate::perf_optimizations::ContiguousVectors| {
+        ids.into_iter()
+            .filter(|&id| {
+                let stored = reloaded
+                    .mappings
+                    .get_idx(id)
+                    .and_then(|slot| vectors.get(slot));
+                !own(id, stored)
+            })
+            .collect()
+    };
+    Ok((graph.with_contiguous_vectors(misresolved), counts))
+}
+
+/// A save never straddles a vacuum's swap (#2262): the swap renumbers under
+/// the write guard, and a save copies the mappings and dumps the graph under
+/// one read guard, so it persists the old numbering or the new, never the one
+/// beside the other. Each round races one vacuum, which renumbers every id of
+/// a fresh index, against saves in a loop, each into its own directory, so a
+/// swap waiting on a save lands right after it; every save is reloaded once
+/// the rounds are over.
+#[test]
+fn a_save_racing_a_vacuum_reloads_consistent() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    const IDS: u64 = 1_000;
+    const ROUNDS: usize = 10;
+    let dir = tempfile::tempdir().unwrap();
+    let mut saves = Vec::new();
+    for round in 0..ROUNDS {
+        let index = HnswIndex::new(4, DistanceMetric::Euclidean).unwrap();
+        for id in 0..IDS {
+            index.insert(id, &racing_vector(id, 0));
+        }
+        let vacuumed = AtomicBool::new(false);
+        let vacuum = std::thread::scope(|scope| {
+            let vacuum = scope.spawn(|| {
+                let result = index.vacuum();
+                vacuumed.store(true, Ordering::Release);
+                result
+            });
+            // Recorded, not asserted, like every check made while the vacuum
+            // runs.
+            while !vacuumed.load(Ordering::Acquire) {
+                let path = dir.path().join(saves.len().to_string());
+                let saved = index.save(&path);
+                saves.push((round, path, saved));
+            }
+            vacuum.join()
+        });
+        let vacuum = vacuum.expect("test: the vacuuming thread panicked");
+        assert_eq!(vacuum, Ok(IDS as usize), "round {round}");
+        // The positive control: a fresh index maps id `n` to slot `n`, so a
+        // vacuum that left every id there would give the race nothing to show.
+        assert!(
+            (0..IDS).any(|id| index.mappings.get_idx(id) != Some(id as usize)),
+            "round {round}: the vacuum renumbered nothing"
+        );
+    }
+    let made = saves.len();
+    assert!(made >= ROUNDS, "{made} saves overlapped a vacuum");
+    let inconsistent: Vec<_> = saves
+        .into_iter()
+        .filter_map(|(round, path, saved)| {
+            let own = |id, stored: Option<&[f32]>| stored == Some(racing_vector(id, 0).as_slice());
+            match saved.and_then(|()| check_reload(&path, 0..IDS, own)) {
+                Ok((ids, (count, dead))) if ids.is_empty() && count == dead => None,
+                outcome => Some((round, outcome.map(|(ids, counts)| (ids.len(), counts)))),
+            }
+        })
+        .collect();
+    assert!(
+        inconsistent.is_empty(),
+        "{} of the {made} saves made during a vacuum reloaded inconsistent \
+         (round, misresolved ids and (tombstone count, dead slots), or error): \
+         {inconsistent:?}",
+        inconsistent.len()
+    );
+}
+
+/// After deletes race a vacuum, the tombstone count is every slot of the new
+/// graph that no id names, and the next vacuum leaves none (#2262). `vacuum`
+/// is triggered from that count, so a dead slot it misses is one no vacuum is
+/// asked to reclaim.
+///
+/// Each round deletes every id but the first `KEEP` the mappings iterate while
+/// one vacuum runs. Its snapshot iterates them in that order and the rebuild
+/// places them in it, so the new graph ends on slots of ids deleted during the
+/// rebuild; deleting from the last id back makes that tail die first,
+/// wherever the delete loop and the snapshot cross.
+#[test]
+fn deletes_racing_a_vacuum_keep_the_tombstone_count_exact() {
+    use std::sync::Barrier;
+
+    const IDS: u64 = 2_000;
+    const KEEP: usize = 10;
+    const ROUNDS: usize = 5;
+    // Per round: (tombstone count, dead slots) after the race, then after
+    // the next vacuum.
+    let mut counts = Vec::new();
+    let mut dead_tails = 0;
+    for round in 0..ROUNDS {
+        let index = HnswIndex::new(4, DistanceMetric::Euclidean).unwrap();
+        for id in 0..IDS {
+            index.insert(id, &racing_vector(id, 0));
+        }
+        let order: Vec<u64> = index.mappings.iter().map(|(id, _)| id).collect();
+        let start = Barrier::new(2);
+        let (vacuumed, unmapped) = std::thread::scope(|scope| {
+            let vacuum = scope.spawn(|| {
+                start.wait();
+                index.vacuum()
+            });
+            start.wait();
+            let unmapped = order[KEEP..]
+                .iter()
+                .rev()
+                .filter(|&&id| !index.remove(id))
+                .count();
+            (vacuum.join(), unmapped)
+        });
+        let vacuumed = vacuumed.expect("test: the vacuuming thread panicked");
+        assert!(vacuumed.is_ok(), "round {round}: {vacuumed:?}");
+        assert_eq!(
+            unmapped, 0,
+            "round {round}: ids found unmapped when removed"
+        );
+        assert_eq!(index.len(), KEEP, "round {round}: live ids");
+
+        let dead = || index.graph_vector_count() - index.len();
+        let named_extent = index.mappings.iter().map(|(_, slot)| slot + 1).max();
+        dead_tails += usize::from(named_extent < Some(index.graph_vector_count()));
+        let raced = (index.tombstone_count(), dead());
+        index.vacuum().unwrap();
+        counts.push((round, raced, (index.tombstone_count(), dead())));
+    }
+    // The positive control: a round whose new graph ends on dead slots, the
+    // ones a count bounded by the highest named slot leaves out.
+    assert!(
+        dead_tails > 0,
+        "no round left dead slots at the end of the new graph"
+    );
+    let wrong: Vec<_> = counts
+        .iter()
+        .filter(|&&(_, (count, dead), after)| count != dead || after != (0, 0))
+        .collect();
+    assert!(
+        wrong.is_empty(),
+        "(round, (tombstone count, dead slots) after the race, then after the next \
+         vacuum): {wrong:?}"
+    );
+}
+
+/// Writes racing a save never tear it (#2262): every reload resolves each id
+/// to one of its own vectors, and counts every slot no id names as a
+/// tombstone. A save that dumps the graph, then reads the mappings one map
+/// after the other, saves an id on a slot the saved graph never held when an
+/// insert or upsert lands after the dump, and two maps that disagree when a
+/// write lands between the two reads. One thread saves in a loop, each save
+/// into its own directory, while this one makes the writes
+/// `write_beside_vacuums` makes: upserts, deletes and inserts. Every save is
+/// reloaded once the writes are over.
+#[test]
+fn writes_racing_a_save_reload_consistent() {
+    // As in `writes_racing_a_vacuum_survive_it`: ids below WRITES are
+    // upserted, the next WRITES deleted, the next WRITES left alone; BASE
+    // onwards are inserted during the race.
+    const WRITES: u64 = 300;
+    const BASE: u64 = 3 * WRITES;
+    let dir = tempfile::tempdir().unwrap();
+    let index = HnswIndex::new(4, DistanceMetric::Euclidean).unwrap();
+    for id in 0..BASE {
+        index.insert(id, &racing_vector(id, 0));
+    }
+    let mut stalled = false;
+    let saves = save_beside(&index, dir.path(), |a_save_passes| {
+        for n in 0..WRITES {
+            if n % 50 == 0 && !a_save_passes() {
+                stalled = true;
+                break;
+            }
+            index.insert(n, &racing_vector(n, 1));
+            index.remove(WRITES + n);
+            index.insert(BASE + n, &racing_vector(BASE + n, 0));
+        }
+    });
+    assert!(!stalled, "the saving thread stopped making rounds");
+
+    // Upserted ids stay live throughout, on either vector; deleted and
+    // inserted ones may be absent, never on another vector; the rest never
+    // move.
+    let own = |id, stored: Option<&[f32]>| {
+        let is = |version| stored == Some(racing_vector(id, version).as_slice());
+        match id / WRITES {
+            0 => is(0) || is(1),
+            1 | 3 => stored.is_none() || is(0),
+            _ => is(0),
+        }
+    };
+    let made = saves.len();
+    let torn = torn_saves(saves, &(0..BASE + WRITES), own);
+    assert!(
+        torn.is_empty(),
+        "{} of the {made} saves made during writes reloaded torn: {torn:?}",
+        torn.len()
+    );
+}
+
+/// Batch inserts racing a save never tear its graph files (#2262): every save
+/// reloads, each id on its own vector. `file_dump` wrote the vectors file,
+/// released the arena's lock, then wrote the graph file. A batch reserves its
+/// graph capacity, then waits on the arena's write lock; one waiting when the
+/// vectors file was done pushed nodes that file does not hold and linked them
+/// into saved nodes while the graph file was written, without the layers lock
+/// the graph file's writer holds, and the load refused the save. Vectors of
+/// `WIDE` dimensions make the vectors file slow enough to write that a batch
+/// is often waiting when it ends.
+#[test]
+fn batch_inserts_racing_a_save_reload_consistent() {
+    const BASE: u64 = 4_000;
+    // At least 100: smaller batches go through single inserts.
+    const BATCH: u64 = 200;
+    const BATCHES: u64 = 40;
+    let dir = tempfile::tempdir().unwrap();
+    let index = HnswIndex::new(WIDE, DistanceMetric::Euclidean).unwrap();
+    let insert_batch = |first: u64, len: u64| {
+        let batch: Vec<Vec<f32>> = (first..first + len).map(wide_vector).collect();
+        index.insert_batch_parallel((first..).zip(batch.iter().map(Vec::as_slice)))
+    };
+    assert_eq!(
+        u64::try_from(insert_batch(0, BASE)),
+        Ok(BASE),
+        "base placed"
+    );
+    let mut stalled = false;
+    let mut placed = 0;
+    let saves = save_beside(&index, dir.path(), |a_save_passes| {
+        for n in 0..BATCHES {
+            if n % 5 == 0 && !a_save_passes() {
+                stalled = true;
+                break;
+            }
+            placed += insert_batch(BASE + n * BATCH, BATCH);
+        }
+    });
+    assert!(!stalled, "the saving thread stopped making rounds");
+    assert_eq!(u64::try_from(placed), Ok(BATCHES * BATCH), "vectors placed");
+
+    let own = |id, stored: Option<&[f32]>| {
+        (id >= BASE && stored.is_none()) || stored == Some(wide_vector(id).as_slice())
+    };
+    let made = saves.len();
+    let torn = torn_saves(saves, &(0..BASE + BATCHES * BATCH), own);
+    assert!(
+        torn.is_empty(),
+        "{} of the {made} saves made during batch inserts reloaded torn: {torn:?}",
+        torn.len()
+    );
+}
+
+/// Dimensions of `wide_vector`.
+const WIDE: usize = 128;
+
+/// A `WIDE`-dimensional vector no other id shares: its first coordinate is
+/// the id itself.
+fn wide_vector(id: u64) -> Vec<f32> {
+    let angle = id as f32 * 0.37;
+    let mut vector: Vec<f32> = (0..WIDE)
+        .map(|i| (angle + f32::from(u16::try_from(i).unwrap())).sin())
+        .collect();
+    vector[0] = id as f32;
+    vector
+}
+
+/// Saves `index` in a loop, each save into its own directory under `dir`,
+/// while `write` runs on this thread, and returns every save once `write`
+/// returns. `write` gets a checkpoint that waits for a save to finish and
+/// returns `false` if none does within the bound. It must record what it
+/// checks, not assert it: a panic would leave the saving thread looping, and
+/// the scope waiting on it for ever.
+fn save_beside(
+    index: &HnswIndex,
+    dir: &std::path::Path,
+    write: impl FnOnce(&dyn Fn() -> bool),
+) -> Vec<(std::path::PathBuf, std::io::Result<()>)> {
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    use std::sync::Barrier;
+
+    let writing = AtomicBool::new(true);
+    let start = Barrier::new(2);
+    let rounds = AtomicU32::new(0);
+    let saves = std::thread::scope(|scope| {
+        let saver = scope.spawn(|| {
+            let mut saves = Vec::new();
+            start.wait();
+            while writing.load(Ordering::Acquire) {
+                let path = dir.join(saves.len().to_string());
+                let saved = index.save(&path);
+                saves.push((path, saved));
+                rounds.fetch_add(1, Ordering::AcqRel);
+            }
+            saves
+        });
+        start.wait();
+        write(&|| a_round_passes(&rounds));
+        writing.store(false, Ordering::Release);
+        saver.join()
+    });
+    saves.expect("test: the saving thread panicked")
+}
+
+/// The saves among `saves` that failed, or whose reload `check_reload` faults
+/// over `ids` with `own`, each described by its path and what went wrong.
+fn torn_saves(
+    saves: Vec<(std::path::PathBuf, std::io::Result<()>)>,
+    ids: &std::ops::Range<u64>,
+    own: impl Fn(u64, Option<&[f32]>) -> bool + Copy,
+) -> Vec<String> {
+    saves
+        .into_iter()
+        .filter_map(|(path, saved)| {
+            match saved.and_then(|()| check_reload(&path, ids.clone(), own)) {
+                Ok((ids, (count, dead))) if ids.is_empty() && count == dead => None,
+                Ok((ids, counts)) => Some(format!(
+                    "{}: {} ids misresolved (first {:?}), (tombstone count, dead slots) {counts:?}",
+                    path.display(),
+                    ids.len(),
+                    ids.first()
+                )),
+                Err(e) => Some(format!("{}: {e}", path.display())),
+            }
+        })
+        .collect()
+}
+
+/// A vacuum rebuilds the graph with the index's own parameters, and a save
+/// after it persists them (#2262): the rebuild used `HnswParams::auto` for the
+/// dimension, whatever M, `ef_construction` and alpha the index was built
+/// with.
+#[test]
+fn vacuum_keeps_the_index_parameters() {
+    let built = |index: &HnswIndex| {
+        let graph = index.inner.read();
+        (
+            graph.max_connections(),
+            graph.ef_construction(),
+            graph.alpha().to_bits(),
+        )
+    };
+    let params = HnswParams {
+        max_connections: 12,
+        ef_construction: 90,
+        alpha: 1.0,
+        ..HnswParams::auto(4)
+    };
+    let expected = (12, 90, 1.0_f32.to_bits());
+    let index = HnswIndex::with_params(4, DistanceMetric::Euclidean, params).unwrap();
+    for id in 0..300 {
+        index.insert(id, &racing_vector(id, 0));
+    }
+    for id in 0..100 {
+        index.remove(id);
+    }
+    assert_eq!(built(&index), expected, "as built");
+    assert_eq!(index.vacuum(), Ok(200));
+    assert_eq!(built(&index), expected, "after a vacuum");
+    let dir = tempfile::tempdir().unwrap();
+    index.save(dir.path()).unwrap();
+    let reloaded = HnswIndex::load(dir.path(), 4, DistanceMetric::Euclidean).unwrap();
+    assert_eq!(built(&reloaded), expected, "saved after a vacuum");
+}
+
+/// A vacuum of an index whose ids are all deleted leaves it empty, with no
+/// tombstone, and the next vacuum has nothing to do (#2262). It returned
+/// before rebuilding, so every dead slot stayed, and the tombstone count
+/// kept asking for a vacuum that reclaimed nothing.
+#[test]
+fn vacuum_of_an_index_with_no_live_id_empties_it() {
+    let index = HnswIndex::new(4, DistanceMetric::Euclidean).unwrap();
+    for id in 0..200 {
+        index.insert(id, &racing_vector(id, 0));
+    }
+    let removed = (0..200).filter(|&id| index.remove(id)).count();
+    assert_eq!((removed, index.tombstone_count()), (200, 200), "before");
+    // (tombstones, graph slots, live ids)
+    let state = |index: &HnswIndex| {
+        (
+            index.tombstone_count(),
+            index.graph_vector_count(),
+            index.len(),
+        )
+    };
+    assert_eq!(index.vacuum(), Ok(0));
+    assert_eq!(state(&index), (0, 0, 0), "after a vacuum");
+    let query = racing_vector(7, 0);
+    assert!(
+        VectorIndex::search(&index, &query, 5).is_empty(),
+        "a search of the emptied index"
+    );
+    assert_eq!(index.vacuum(), Ok(0));
+    assert_eq!(state(&index), (0, 0, 0), "after a second vacuum");
+    index.insert(500, &racing_vector(500, 0));
+    let hits = VectorIndex::search(&index, &racing_vector(500, 0), 1);
+    assert_eq!(
+        hits.first().map(|hit| hit.id),
+        Some(500),
+        "a search after an insert"
+    );
+}
+
+/// Two saves of one index into one directory never mix their files (#2262).
+/// A save rewrites its graph file in place and stamps every file with the
+/// generation after the one it reads from the directory, so two saves at once
+/// wrote one graph file at the same offsets, each from its own reading of
+/// neighbor lists a batch was still linking, under one generation. Each round
+/// a batch is pushed, and two threads save into one directory while it links;
+/// the directory is reloaded after every round.
+#[test]
+fn saves_racing_into_one_directory_reload_consistent() {
+    const BASE: u64 = 2_000;
+    // At least 100: the batch path, which pushes every vector, then links.
+    const BATCH: u64 = 200;
+    const ROUNDS: u64 = 20;
+    let dir = tempfile::tempdir().unwrap();
+    let index = HnswIndex::new(WIDE, DistanceMetric::Euclidean).unwrap();
+    let insert_batch = |first: u64, len: u64| {
+        let batch: Vec<Vec<f32>> = (first..first + len).map(wide_vector).collect();
+        index.insert_batch_parallel((first..).zip(batch.iter().map(Vec::as_slice)))
+    };
+    assert_eq!(
+        u64::try_from(insert_batch(0, BASE)),
+        Ok(BASE),
+        "base placed"
+    );
+    let own = |id, stored: Option<&[f32]>| {
+        (id >= BASE && stored.is_none()) || stored == Some(wide_vector(id).as_slice())
+    };
+    let (mut torn, mut unseen, mut short) = (Vec::new(), 0, 0);
+    for round in 0..ROUNDS {
+        let first = BASE + round * BATCH;
+        let (seen, saved, placed) =
+            two_saves_while_a_batch_links(&index, dir.path(), || insert_batch(first, BATCH));
+        unseen += usize::from(!seen);
+        short += usize::from(u64::try_from(placed) != Ok(BATCH));
+        match saved.and_then(|()| check_reload(dir.path(), 0..first + BATCH, own)) {
+            Ok((ids, (count, dead))) if ids.is_empty() && count == dead => {}
+            outcome => torn.push(format!(
+                "round {round}: {:?}",
+                outcome.map(|(ids, counts)| (ids.len(), counts))
+            )),
+        }
+    }
+    assert_eq!(
+        (unseen, short),
+        (0, 0),
+        "(rounds whose batch was never seen pushed, batches placed short)"
+    );
+    assert!(
+        torn.is_empty(),
+        "{} of the {ROUNDS} rounds left a directory that reloads torn \
+         (misresolved ids, (tombstone count, dead slots)), or error: {torn:?}",
+        torn.len()
+    );
+}
+
+/// Runs `batch` on a thread of its own and, once the vectors it pushes are in
+/// the arena, saves `index` into `dir` from two threads at once while it links
+/// them. Returns whether the push was seen, the two saves' outcome, and what
+/// `batch` returned.
+fn two_saves_while_a_batch_links(
+    index: &HnswIndex,
+    dir: &std::path::Path,
+    batch: impl FnOnce() -> usize + Send,
+) -> (bool, std::io::Result<()>, usize) {
+    use std::sync::Barrier;
+
+    let slots = index.graph_vector_count();
+    let start = Barrier::new(2);
+    let save = || {
+        start.wait();
+        index.save(dir)
+    };
+    let (seen, joined, placed) = std::thread::scope(|scope| {
+        let batch = scope.spawn(batch);
+        let seen = (0..10_000_000).any(|_| {
+            std::thread::yield_now();
+            index.graph_vector_count() > slots
+        });
+        let (a, b) = (scope.spawn(save), scope.spawn(save));
+        (seen, [a.join(), b.join()], batch.join())
+    });
+    let saved = joined
+        .into_iter()
+        .try_for_each(|save| save.expect("test: a saving thread panicked"));
+    (
+        seen,
+        saved,
+        placed.expect("test: the batch thread panicked"),
+    )
+}

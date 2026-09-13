@@ -67,12 +67,13 @@ pub trait NativeHnswBackend: Send + Sync {
     /// Sets the index to searching mode after bulk insertions.
     fn set_searching_mode(&mut self, mode: bool);
 
-    /// Dumps the HNSW graph to files for persistence.
+    /// Dumps the HNSW graph to files for persistence, and returns the number
+    /// of vectors written.
     ///
     /// # Errors
     ///
     /// Returns `io::Error` if file operations fail.
-    fn file_dump(&self, path: &Path, basename: &str) -> std::io::Result<()>;
+    fn file_dump(&self, path: &Path, basename: &str) -> std::io::Result<usize>;
 
     /// Transforms raw distance to appropriate score based on metric type.
     ///
@@ -449,7 +450,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnswBackend for NativeHnsw<D> {
         NativeHnsw::set_searching_mode(self, mode);
     }
 
-    fn file_dump(&self, path: &Path, basename: &str) -> std::io::Result<()> {
+    fn file_dump(&self, path: &Path, basename: &str) -> std::io::Result<usize> {
         NativeHnsw::file_dump(self, path, basename)
     }
 

@@ -27,6 +27,8 @@
 //!   then its payload is discarded. [`save_sidecars`] deletes the file so
 //!   a stale copy can never shadow newer graph data.
 
+use super::native_inner::NativeHnswInner;
+use super::sharded_mappings::ShardedMappings;
 use crate::distance::DistanceMetric;
 use crate::storage::atomic_write::atomic_write;
 use std::collections::HashMap;
@@ -361,6 +363,46 @@ pub(crate) fn load_graph_generation(path: &Path) -> std::io::Result<u64> {
     }
 }
 
+/// Dumps `graph` into `path` as `basename`, and returns what a save writes
+/// beside it: the mappings, and the graph's storage mode.
+///
+/// `graph` is borrowed through the caller's read guard on its index, and the
+/// mappings are copied under that guard, before the dump. Every slot they
+/// name then already holds its vector, the arena only grows while the guard
+/// is held, and nothing renumbers under it: the saved mappings name slots of
+/// the saved graph only, each holding the vector it held when named (#2262).
+/// Copied after the dump, as they were, an insert or upsert landing in
+/// between named a slot the saved graph never held, which the next load
+/// refused.
+///
+/// The copy reads the forward map once and derives the reverse map from it,
+/// so the two agree although writers run meanwhile: each id is read once,
+/// with a slot it held during the copy. `next_idx` is the slot count the dump
+/// wrote, so a slot placed after the copy, which no saved id names, reloads
+/// as a tombstone like any other.
+///
+/// # Errors
+///
+/// As [`NativeHnswInner::file_dump`].
+pub(crate) fn dump_graph(
+    graph: &NativeHnswInner,
+    mappings: &ShardedMappings,
+    path: &Path,
+    basename: &str,
+) -> std::io::Result<(HnswMappingsData, crate::StorageMode)> {
+    let id_to_idx: HashMap<u64, usize> = mappings.iter().collect();
+    let idx_to_id = id_to_idx.iter().map(|(&id, &idx)| (idx, id)).collect();
+    let next_idx = graph.file_dump(path, basename)?;
+    let mappings = HnswMappingsData {
+        id_to_idx,
+        idx_to_id,
+        next_idx,
+        // `save_sidecars` stamps the save's generation.
+        generation: 0,
+    };
+    Ok((mappings, graph.storage_mode()))
+}
+
 /// Persists every non-graph sidecar (mappings, meta) for an HNSW index in
 /// one call.
 ///
@@ -369,9 +411,8 @@ pub(crate) fn load_graph_generation(path: &Path) -> std::io::Result<u64> {
 /// drift risk (the two call sites previously had identical code but could
 /// silently diverge on the next field addition to `HnswMeta`).
 ///
-/// The HNSW graph itself is dumped by the caller, because the two index
-/// types use different inner types (`NativeHnswInner` directly vs
-/// `ManuallyDrop<HnswInner>`) that would otherwise require a trait object.
+/// The graph is dumped before, by [`dump_graph`], which also copies the
+/// `mappings` written here: see there for why the copy is taken first.
 /// Vector data lives inside the graph dump (`native_hnsw.vectors`) — the
 /// legacy `native_vectors.bin` duplicate is no longer written and any stale
 /// copy from an older binary is deleted here (PERF1).
@@ -392,26 +433,24 @@ pub(crate) fn load_graph_generation(path: &Path) -> std::io::Result<u64> {
 /// pass the same value to [`save_graph_generation`] and this function, so
 /// the graph file and the sidecars land on the same generation stamp.
 ///
-/// The caller-provided [`HnswMeta::generation`] is ignored; this function
-/// overwrites it with `new_gen`.
+/// The caller-provided [`HnswMeta::generation`] and
+/// [`HnswMappingsData::generation`] are ignored; this function overwrites
+/// both with `new_gen`.
 ///
 /// # Errors
 ///
 /// Returns `io::Error` if any of the file operations fail.
 pub(crate) fn save_sidecars(
     path: &Path,
-    mappings: &super::sharded_mappings::ShardedMappings,
+    mappings: HnswMappingsData,
     meta: &HnswMeta,
     new_gen: u64,
 ) -> std::io::Result<()> {
-    let (id_to_idx, idx_to_id, next_idx) = mappings.as_parts();
     save_mappings(
         path,
         &HnswMappingsData {
-            id_to_idx,
-            idx_to_id,
-            next_idx,
             generation: new_gen,
+            ..mappings
         },
     )?;
     // A leftover legacy vectors file would carry an older generation and

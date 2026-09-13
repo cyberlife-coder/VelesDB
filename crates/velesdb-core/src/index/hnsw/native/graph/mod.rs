@@ -453,6 +453,18 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         self.alpha
     }
 
+    /// Returns M, the maximum connections per node above layer 0.
+    #[must_use]
+    pub fn get_max_connections(&self) -> usize {
+        self.max_connections
+    }
+
+    /// Returns the beam width the graph is built with.
+    #[must_use]
+    pub fn get_ef_construction(&self) -> usize {
+        self.ef_construction
+    }
+
     /// Returns the number of elements in the index.
     #[must_use]
     pub fn len(&self) -> usize {

@@ -238,13 +238,36 @@ impl NativeHnswInner {
     }
 
     /// Returns the VAMANA alpha used by this backend's graph.
-    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
     pub(crate) fn alpha(&self) -> f32 {
         match &self.backend {
             HnswBackend::Standard(g) => g.get_alpha(),
             HnswBackend::RaBitQ(p) => p.inner.get_alpha(),
             HnswBackend::Sq8(p) => p.inner.get_alpha(),
+        }
+    }
+
+    /// Returns M, the maximum connections per node above layer 0, of this
+    /// backend's graph: with [`Self::ef_construction`] and [`Self::alpha`],
+    /// what the graph is built with, what a save persists, and what `vacuum`
+    /// rebuilds it with.
+    #[must_use]
+    pub(crate) fn max_connections(&self) -> usize {
+        match &self.backend {
+            HnswBackend::Standard(g) => g.get_max_connections(),
+            HnswBackend::RaBitQ(p) => p.inner.get_max_connections(),
+            HnswBackend::Sq8(p) => p.inner.get_max_connections(),
+        }
+    }
+
+    /// Returns the beam width this backend's graph is built with (see
+    /// [`Self::max_connections`]).
+    #[must_use]
+    pub(crate) fn ef_construction(&self) -> usize {
+        match &self.backend {
+            HnswBackend::Standard(g) => g.get_ef_construction(),
+            HnswBackend::RaBitQ(p) => p.inner.get_ef_construction(),
+            HnswBackend::Sq8(p) => p.inner.get_ef_construction(),
         }
     }
 
@@ -630,12 +653,13 @@ impl NativeHnswInner {
 // ============================================================================
 
 impl NativeHnswInner {
-    /// Dumps the HNSW graph to files for persistence.
+    /// Dumps the HNSW graph to files for persistence, and returns the number
+    /// of vectors written: the slot count of the dumped arena.
     ///
     /// # Errors
     ///
     /// Returns `io::Error` if file operations fail.
-    pub fn file_dump(&self, path: &Path, basename: &str) -> std::io::Result<()> {
+    pub fn file_dump(&self, path: &Path, basename: &str) -> std::io::Result<usize> {
         match &self.backend {
             HnswBackend::Standard(hnsw) => hnsw.file_dump(path, basename),
             HnswBackend::RaBitQ(rabitq) => rabitq.inner.file_dump(path, basename),

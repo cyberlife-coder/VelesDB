@@ -5,7 +5,7 @@ use crate::distance::DistanceMetric;
 use crate::error::Result;
 use crate::index::hnsw::params::HnswParams;
 use crate::index::hnsw::sharded_mappings::ShardedMappings;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use std::mem::ManuallyDrop;
 use std::path::Path;
 use std::sync::atomic::AtomicU64;
@@ -204,6 +204,8 @@ impl HnswIndex {
             metric,
             inner: RwLock::new(ManuallyDrop::new(inner)),
             mappings,
+            maintenance: Mutex::new(()),
+            saving: Mutex::new(()),
             enable_vector_storage,
             rerank_latency_target_us: AtomicU64::new(0),
             rerank_latency_ema_us: AtomicU64::new(0),
@@ -333,6 +335,8 @@ impl HnswIndex {
             metric: meta.metric,
             inner: RwLock::new(ManuallyDrop::new(inner)),
             mappings,
+            maintenance: Mutex::new(()),
+            saving: Mutex::new(()),
             enable_vector_storage: meta.enable_vector_storage,
             rerank_latency_target_us: AtomicU64::new(0),
             rerank_latency_ema_us: AtomicU64::new(0),
@@ -422,12 +426,21 @@ impl HnswIndex {
     ///
     /// * `path` - Path to the index directory
     ///
+    /// Runs beside searches, writes and a [`Self::vacuum`]'s rebuild. The
+    /// mappings it writes are copied under the read guard the graph is dumped
+    /// under, before the dump, so each id they name resolves to a slot of the
+    /// saved graph holding that id's vector (#2262). Two saves of this index
+    /// run one at a time: they would rewrite the same files under one
+    /// generation.
+    ///
     /// # Errors
     ///
     /// Returns an error if the write fails.
     pub fn save<P: AsRef<Path>>(&self, path: P) -> std::result::Result<(), std::io::Error> {
         use crate::index::hnsw::persistence::{self, HnswMeta};
 
+        // Held to the end: see `saving`.
+        let _saving = self.saving.lock();
         let path = path.as_ref();
         std::fs::create_dir_all(path)?;
 
@@ -438,11 +451,11 @@ impl HnswIndex {
         // follow-up).
         let new_gen = persistence::next_generation(path)?;
 
-        // Dump the HNSW graph itself (caller-specific — see persistence::save_sidecars).
-        let storage_mode = {
+        // Dump the HNSW graph, with the mappings copied under the same guard,
+        // before it (see `persistence::dump_graph`).
+        let (mappings, storage_mode) = {
             let inner = self.inner.read();
-            inner.file_dump(path, "native_hnsw")?;
-            inner.storage_mode()
+            persistence::dump_graph(&inner, &self.mappings, path, "native_hnsw")?
         };
 
         // Graph-generation marker is written IMMEDIATELY after the graph dump
@@ -456,7 +469,7 @@ impl HnswIndex {
         // (a RaBitQ index reloads with the RaBitQ backend).
         persistence::save_sidecars(
             path,
-            &self.mappings,
+            mappings,
             &HnswMeta {
                 dimension: self.dimension,
                 metric: self.metric,

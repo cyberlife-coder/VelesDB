@@ -38,7 +38,8 @@ pub struct ShardedMappings {
     id_to_idx: DashMap<u64, usize>,
     /// Mapping from internal indices to external IDs (lock-free).
     idx_to_id: DashMap<usize, u64>,
-    /// One past the highest slot ever assigned; never decreases until `clear`.
+    /// One past the highest slot ever assigned, or the slot count `clear_for`
+    /// was given if higher; never decreases until the next `clear_for`.
     next_idx: AtomicUsize,
     /// Whether any external id above `u32::MAX` was ever registered.
     ///
@@ -231,7 +232,8 @@ impl ShardedMappings {
         self.id_to_idx.iter().map(|r| (*r.key(), *r.value()))
     }
 
-    /// One past the highest slot ever assigned.
+    /// One past the highest slot ever assigned, or the slot count `clear_for`
+    /// was given if higher.
     ///
     /// Never decreases, even after removals, so `next_idx() - len()` counts
     /// the slots below it that no id names any more.
@@ -240,11 +242,18 @@ impl ShardedMappings {
         self.next_idx.load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    /// Clears all mappings and resets `next_idx`.
-    pub fn clear(&self) {
+    /// Clears all mappings and sets `next_idx` to `slots`, the slot count of
+    /// the arena they are about to name.
+    ///
+    /// `vacuum` installs a new graph and maps into it only the ids still live,
+    /// so a slot of that graph no id comes to name is dead, wherever it falls.
+    /// `next_idx` has to cover it for `next_idx() - len()` to count it (#2262):
+    /// reset to 0 and raised by each `assign`, it would stop at the highest
+    /// slot mapped and leave out the dead slots above it.
+    pub(crate) fn clear_for(&self, slots: usize) {
         self.id_to_idx.clear();
         self.idx_to_id.clear();
-        self.next_idx.store(0, std::sync::atomic::Ordering::Relaxed);
+        self.next_idx.store(slots, Ordering::Relaxed);
     }
 
     /// Renumbers every internal index through `old_to_new`.
@@ -315,11 +324,17 @@ impl ShardedMappings {
         }
     }
 
-    /// Returns cloned data for serialization.
+    /// Both maps and `next_idx`, cloned, each map in its own pass.
+    ///
+    /// For tests, which read the live reverse map through it. A save does not
+    /// use it: with writers running, a write between the two passes leaves maps
+    /// that disagree, so a save copies the forward map alone and derives the
+    /// reverse (see `persistence::dump_graph`).
     ///
     /// # Returns
     ///
-    /// Tuple of (`id_to_idx`, `idx_to_id`, `next_idx`) for serialization.
+    /// Tuple of (`id_to_idx`, `idx_to_id`, `next_idx`).
+    #[cfg(test)]
     #[must_use]
     pub fn as_parts(
         &self,

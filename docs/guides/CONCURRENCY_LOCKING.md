@@ -183,7 +183,24 @@ of AI/RAG applications:
 | Single upsert | Write | ~100us | Briefly |
 | Batch upsert (1000) | Write | ~10ms | Briefly |
 | Collection create | Write (registry) | ~1ms | No (different lock) |
-| HNSW rebuild | Write (index) | Seconds | Yes (rare) |
+| HNSW vacuum: snapshot | Read (index) | Copies every live vector | No |
+| HNSW vacuum: rebuild | None while inserting (at most two brief reads: the storage mode, and a quantized index's quantizer) | Inserts every live vector into a new graph, built with the index's own M, `ef_construction` and alpha: the bulk of a vacuum, seconds on a large index | No: searches and writes run on the old graph |
+| HNSW vacuum: swap | Write (index) | Re-maps every live id and inserts the vectors written during the rebuild: short next to the rebuild, longer the more writes landed during it | Yes |
+| HNSW `reorder_for_locality` | Write (index) | The whole pass: renumbers every node and moves every vector | Yes |
+| HNSW save | Save lock (per index) for the whole save; read (index) while it copies the mappings and writes the graph files | The graph files, then the mappings and meta files under the save lock only | No (see below) |
+
+`vacuum` and `reorder_for_locality` also hold a maintenance lock for their
+whole run, so each waits for the other; searches, writes and saves never take
+it. Saves of one index hold a save lock of their own for their whole run, so
+two saves wait for each other and never for a vacuum. A save made during a vacuum's rebuild saves the old graph, and the swap
+waits for its dump like for any read. A save holds the graph's vector read
+lock from the start of its vectors file to the end of its graph file, so an
+insert waits for both files, and since `parking_lot` locks are task-fair, a
+search arriving after that insert waits too. Measured on a shared machine
+(release build, 100 000 x 128 vectors), a save took about 70 ms and kept a
+single insert waiting up to 35 to 48 ms; holding the lock across both files
+left that unchanged (37 to 42 ms, one outlier at 165 ms), since a single
+insert already waited on the layers lock the graph file's writer holds.
 
 ---
 
