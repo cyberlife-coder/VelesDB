@@ -7,12 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-> **Note for the next release**: this train refuses input `v6.0.0` accepted
-> (#2267, under **Fixed**): a search `mode` VelesQL or REST cannot parse now
-> fails instead of running at the default quality, and a collection's own
-> `execute_aggregate` refuses a query the validator rejects. Per the declared
-> SemVer policy, tag the next release accordingly: a major bump, or an
-> explicitly documented exception in these release notes.
+> **Note for the next release**: this train contains a **breaking** behaviour
+> change (#2267, the first entry under `### Changed`): a search `mode` VelesQL
+> or REST cannot parse now fails instead of running at the default quality,
+> and a collection's own `execute_aggregate` refuses a query the validator
+> rejects. The declared SemVer policy (`docs/FAQ.md`) makes a breaking change
+> a major bump: tag the next release accordingly.
 
 ### Added
 - **`LockRank::ENTRY_POINT_PROMOTION` (rank 8) in the public lock-rank
@@ -109,49 +109,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   load call alone reports the cost as gone when it has only moved.
 
 ### Fixed
-- **An unparseable search `mode` now fails instead of running silently at the
-  default quality (#2267).** `WITH (mode = '...')` in VelesQL and
-  `"mode": "..."` in a REST search body went through one parser
-  (`mode_to_search_quality`) that returns `None` for anything it cannot read —
-  a typo (`'acurate'`), a bare `adaptive` missing its `<min_ef>:<max_ef>`
-  bounds, or any other unknown string — and its callers read that `None` as
-  "no override given". `api_types::parse_search_mode` rejects such a mode with
-  a message naming the accepted forms, and every entry point now checks it:
-  - VelesQL checks `mode`, and its alias `quality`, in the query validator,
-    before any dispatch: every query shape fails with `V013`, the union,
-    `SPARSE_NEAR` and `NEAR_FUSED` paths and `EXPLAIN` included, and so does a
-    mode that is not a string (`mode = 5`) or one another entry shadows
-    (`mode = 'fast', quality = 'acurate'`). A collection's own
-    `execute_aggregate`, which the Tauri plugin and embedders call directly,
-    now runs the validator too;
-  - REST answers `400` on `/search` and `/search/ids`, whatever the request's
-    shape (dense, sparse, or both), and on `/search/batch`, naming the entry,
-    before the collection's circuit breaker counts the request, so a client
-    repeating a typo cannot make it answer `503` to every other client;
-    `/search/ids` sends any request carrying a mode past its fast path, which
-    has no quality dispatch of its own. The search endpoints with no `mode`
-    field (`/search/hybrid`, `/search/text`, `/search/multi`,
-    `/search/multi/ids`, `/graph/search`) ignore it, as they ignore any field
-    they do not know;
-  - the CLI REPL refuses such a mode at `\set mode`, accepts the aliases
-    `auto` and `auto_tune` as the server does, and no longer masks an inline
-    `quality` it cannot read with the session mode; the Tauri plugin reports a
-    bad mode with the same message.
-
-  This holds in every build with `persistence`. The WASM executor reads no
-  `WITH` option, so it neither applies nor checks a mode.
-
-  Breaking for a client, over REST, VelesQL or a binding, that sent an unknown
-  mode and silently got results at the default quality: it now needs a mode
-  from the documented list (`fast`, `balanced`, `accurate`, `perfect`,
-  `autotune`, `custom:<ef>`, `adaptive:<min_ef>:<max_ef>`). One more path
-  changes: a collection's own `execute_aggregate`, which the Tauri plugin and
-  embedders call directly, now refuses what `Database::execute_aggregate`
-  already refused, any query the validator rejects, such as `MAX(score)` under
-  a `GROUP BY` with no vector `NEAR` (`V006`), as the VelesQL spec documents.
-  The note at the top of `[Unreleased]` says what that means for the next
-  release's version.
-
 - **The REST OpenAPI document shows no rustdoc link syntax (#2263).** utoipa
   copies doc comments into the OpenAPI document (`docs/openapi.{json,yaml}`,
   served at `GET /api-docs/openapi.json` by a server built with
@@ -493,6 +450,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NotFound`, matching every sibling accessor.
 
 ### Changed
+- **BREAKING (REST, VelesQL, bindings) — an unparseable search `mode` now
+  fails instead of running silently at the default quality (#2267).**
+  `WITH (mode = '...')` in VelesQL and
+  `"mode": "..."` in a REST search body went through one parser
+  (`mode_to_search_quality`) that returns `None` for anything it cannot read —
+  a typo (`'acurate'`), a bare `adaptive` missing its `<min_ef>:<max_ef>`
+  bounds, or any other unknown string — and its callers read that `None` as
+  "no override given". `api_types::parse_search_mode` rejects such a mode with
+  a message naming the accepted forms, and every entry point now checks it:
+  - VelesQL checks `mode`, and its alias `quality`, in the query validator,
+    before any dispatch: every query shape fails with `V013`, the union,
+    `SPARSE_NEAR` and `NEAR_FUSED` paths and `EXPLAIN` included, and so does a
+    mode that is not a string (`mode = 5`) or one another entry shadows
+    (`mode = 'fast', quality = 'acurate'`). A collection's own
+    `execute_aggregate`, which the Tauri plugin and embedders call directly,
+    now runs the validator too;
+  - REST answers `400` on `/search` and `/search/ids`, whatever the request's
+    shape (dense, sparse, or both), and on `/search/batch`, naming the entry
+    (a batch checks each entry's mode but still applies none),
+    before the collection's circuit breaker counts the request, so a client
+    repeating a typo cannot make it answer `503` to every other client;
+    `/search/ids` sends any request carrying a mode past its fast path, which
+    has no quality dispatch of its own. The search endpoints with no `mode`
+    field (`/search/hybrid`, `/search/text`, `/search/multi`,
+    `/search/multi/ids`, `/graph/search`) ignore it, as they ignore any field
+    they do not know;
+  - the CLI REPL refuses such a mode at `\set mode`, accepts the aliases
+    `auto` and `auto_tune` as the server does, and no longer masks an inline
+    `quality` it cannot read with the session mode; the Tauri plugin reports a
+    bad mode with the same message.
+
+  This holds in every build with `persistence`. The WASM executor reads no
+  `WITH` option, so it neither applies nor checks a mode.
+
+  Breaking for a client, over REST, VelesQL or a binding, that sent an unknown
+  mode and silently got results at the default quality: it now needs a mode
+  from the documented list (`fast`, `balanced`, `accurate`, `perfect`,
+  `autotune`, `custom:<ef>`, `adaptive:<min_ef>:<max_ef>`). One more path
+  changes: a collection's own `execute_aggregate`, which the Tauri plugin and
+  embedders call directly, now refuses what `Database::execute_aggregate`
+  already refused, any query the validator rejects, such as `MAX(score)` under
+  a `GROUP BY` with no vector `NEAR` (`V006`), as the VelesQL spec documents.
+  The note at the top of `[Unreleased]` says what that means for the next
+  release's version.
+
 - **`.vectors` now has a v2 format: the payload starts page-aligned at byte
   4096 instead of byte 16.** The header fields are unchanged and at the same
   offsets; only the payload moved, into a zero-filled reserved gap.

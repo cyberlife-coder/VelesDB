@@ -248,10 +248,11 @@ pub(crate) fn parse_fusion_strategy(
 
 /// Parses a search request's `mode`, or counts a request error and answers
 /// `400` naming the accepted forms. The `/search` and `/search/ids` handlers
-/// run it before the circuit breaker's section and before choosing a shape,
-/// so a mode the parser rejects fails every shape, including the sparse and
-/// hybrid ones that do not apply it, never silently, and never as the
-/// collection's failure (#2267).
+/// run it after the circuit breaker's pre-check, before the section whose
+/// failures the breaker counts, and before choosing a shape: a mode the
+/// parser rejects fails every shape, including the sparse and hybrid ones
+/// that do not apply it, never silently, and never as the collection's
+/// failure (#2267).
 #[allow(clippy::result_large_err)]
 pub(crate) fn parse_mode_or_400(
     state: &AppState,
