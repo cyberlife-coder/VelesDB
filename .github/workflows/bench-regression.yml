@@ -46,7 +46,14 @@ jobs:
           ref: ${{ github.base_ref }}
           path: base
 
-      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install --no-self-update --profile minimal
+
+      # base/ is develop's checkout, with develop's own rust-toolchain.toml:
+      # install that toolchain too, before the baseline build reaches cargo.
+      - name: Install the toolchain base/rust-toolchain.toml pins
+        working-directory: base
+        run: rustup toolchain install --no-self-update --profile minimal
 
       - name: Cache apt packages
         uses: awalsh128/cache-apt-pkgs-action@681749ae568c81c2037cb9185e38b709b261bd2f # v1.6.1

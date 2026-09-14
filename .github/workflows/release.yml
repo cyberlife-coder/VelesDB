@@ -43,7 +43,6 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
-  RUST_VERSION: '1.90'
 
 jobs:
   # ===========================================================================
@@ -136,9 +135,8 @@ jobs:
     needs: validate
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install --no-self-update --profile minimal
       - name: Cache apt packages
         uses: awalsh128/cache-apt-pkgs-action@681749ae568c81c2037cb9185e38b709b261bd2f # v1.6.1
         with:
@@ -183,10 +181,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install --no-self-update --profile minimal
       
       - name: Add target
         run: rustup target add ${{ matrix.target }}
@@ -297,7 +293,8 @@ jobs:
       CRATES_TO_PUBLISH: "velesdb-core velesdb-server velesdb-cli velesdb-migrate velesdb-mobile tauri-plugin-velesdb"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install --no-self-update --profile minimal
 
       - name: Cache apt packages
         uses: awalsh128/cache-apt-pkgs-action@681749ae568c81c2037cb9185e38b709b261bd2f # v1.6.1
@@ -598,18 +595,17 @@ jobs:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Setup Rust (wasm only)
+      - name: Install the toolchain rust-toolchain.toml pins
         if: matrix.package == 'wasm'
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
-          targets: wasm32-unknown-unknown
+        run: |
+          rustup toolchain install --no-self-update --profile minimal
+          rustup target add wasm32-unknown-unknown
 
       - name: Install wasm-pack
         if: matrix.package == 'wasm'
         # Prebuilt binary — NOT `cargo install wasm-pack --locked`, whose own
         # lockfile pins cargo-platform 0.3.3 (MSRV 1.91) and fails to compile
-        # under the pinned RUST_VERSION (1.90). Matches ci.yml's wasm job.
+        # under the toolchain rust-toolchain.toml pins. Matches ci.yml's wasm job.
         uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2.87.5
         with:
           tool: wasm-pack

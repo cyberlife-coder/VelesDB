@@ -41,10 +41,15 @@ jobs:
     name: ThreadSanitizer Concurrency Suite
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # nightly: -Zsanitizer and -Z build-std are unstable.
+      # Set for the whole job, so rust-cache's `cargo metadata` stays on it
+      # too instead of falling back to rust-toolchain.toml.
+      RUSTUP_TOOLCHAIN: nightly
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # rust-src is required to rebuild std under the sanitizer (`-Z build-std`).
+      # nightly: rust-src rebuilds std under the sanitizer (`-Z build-std`).
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # nightly
         with:
           toolchain: nightly
