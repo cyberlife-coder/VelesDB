@@ -14,6 +14,8 @@
  */
 
 import { ConnectionError, NotFoundError, ValidationError, VelesDBError } from './types';
+import type { MemoryService as BindingMemoryService } from '@wiscale/velesdb-wasm';
+import type { AllConstructorParams, AllParams } from './backends/wasm-types';
 
 // The wasm capability floor this SDK's memory surface requires. MUST match
 // package.json's `@wiscale/velesdb-wasm` range — the runtime check in
@@ -529,38 +531,38 @@ export interface RememberedExtraction {
 // other dependency on WasmBackend's collection-oriented types.
 // ---------------------------------------------------------------------------
 
+/** {@link AllParams} of a binding `MemoryService` method. */
+type ServiceParams<M extends keyof BindingMemoryService> = AllParams<BindingMemoryService[M]>;
+
+// Every method takes the binding's full parameter list (`ServiceParams`), so
+// an argument left out, `null` for "none" included, fails the typecheck; only
+// the result shapes, which the binding types as `any`, are stated here.
 interface WasmMemoryServiceInstance {
-  remember(fact: string, links: unknown, metadata: unknown, ttlSeconds?: bigint | null): string;
-  recall(query: string, k: number | null | undefined, filter: unknown): unknown;
-  recallWhere(query: string, filters: unknown, k?: number | null): unknown;
-  recallFused(query: string, k: number | null | undefined, filter: unknown, opts: unknown): unknown;
-  recallFusedDated(
-    query: string,
-    dateField: string,
-    k: number | null | undefined,
-    filter: unknown,
-    opts: unknown
-  ): unknown;
-  relate(from: string, to: string, relation: string): string;
-  unrelate(from: string, to: string, relation: string): unknown;
-  entity(name: string): unknown;
-  rememberExtracted(text: string, metadata: unknown, extractor?: string | null): unknown;
-  forget(id: string): boolean;
-  why(decision: string, maxHops: number | null | undefined, filter: unknown): unknown;
-  compileContext(request: unknown): unknown;
-  compileTranscript(request: unknown): unknown;
-  explainCompilation(request: unknown, fragmentId: string, fragmentIndex?: number | null): unknown;
-  contextSavings(project?: string | null): unknown;
-  suggestBudget(targetModel: string, reserveTokens?: bigint | null): unknown;
-  retrieveContextSource(handle: string): unknown;
-  saveWorkingContext(project: string, session: string, working: unknown): string;
-  loadWorkingContext(project: string, session: string): unknown;
-  listWorkingContexts(project: string): unknown;
-  free(): void;
+  remember(...args: ServiceParams<'remember'>): string;
+  recall(...args: ServiceParams<'recall'>): unknown;
+  recallWhere(...args: ServiceParams<'recallWhere'>): unknown;
+  recallFused(...args: ServiceParams<'recallFused'>): unknown;
+  recallFusedDated(...args: ServiceParams<'recallFusedDated'>): unknown;
+  relate(...args: ServiceParams<'relate'>): string;
+  unrelate(...args: ServiceParams<'unrelate'>): unknown;
+  entity(...args: ServiceParams<'entity'>): unknown;
+  rememberExtracted(...args: ServiceParams<'rememberExtracted'>): unknown;
+  forget(...args: ServiceParams<'forget'>): boolean;
+  why(...args: ServiceParams<'why'>): unknown;
+  compileContext(...args: ServiceParams<'compileContext'>): unknown;
+  compileTranscript(...args: ServiceParams<'compileTranscript'>): unknown;
+  explainCompilation(...args: ServiceParams<'explainCompilation'>): unknown;
+  contextSavings(...args: ServiceParams<'contextSavings'>): unknown;
+  suggestBudget(...args: ServiceParams<'suggestBudget'>): unknown;
+  retrieveContextSource(...args: ServiceParams<'retrieveContextSource'>): unknown;
+  saveWorkingContext(...args: ServiceParams<'saveWorkingContext'>): string;
+  loadWorkingContext(...args: ServiceParams<'loadWorkingContext'>): unknown;
+  listWorkingContexts(...args: ServiceParams<'listWorkingContexts'>): unknown;
+  free(...args: ServiceParams<'free'>): void;
 }
 
 interface WasmMemoryServiceConstructor {
-  new (dimension: number): WasmMemoryServiceInstance;
+  new (...args: AllConstructorParams<typeof BindingMemoryService>): WasmMemoryServiceInstance;
 }
 
 interface MemoryWasmModule {
@@ -768,7 +770,7 @@ export class MemoryService {
         fact,
         options.links ?? [],
         options.metadata,
-        ttl !== undefined ? BigInt(ttl) : undefined
+        ttl !== undefined ? BigInt(ttl) : null
       );
     });
   }
@@ -804,7 +806,7 @@ export class MemoryService {
     k?: number
   ): Promise<MemoryRecollection[]> {
     return wrapWasmCall(
-      () => this.ensureInitialized().recallWhere(query, filters, k) as MemoryRecollection[]
+      () => this.ensureInitialized().recallWhere(query, filters, k ?? null) as MemoryRecollection[]
     );
   }
 
@@ -930,7 +932,7 @@ export class MemoryService {
         this.ensureCapability('rememberExtracted', '4.2.0').rememberExtracted(
           text,
           metadata,
-          extractor
+          extractor ?? null
         ) as RememberedExtraction
     );
   }
@@ -1022,7 +1024,7 @@ export class MemoryService {
         this.ensureCapability('explainCompilation', '3.12.0').explainCompilation(
           request,
           fragmentId,
-          fragmentIndex
+          fragmentIndex ?? null
         ) as ContextDecision
     );
   }
@@ -1036,7 +1038,7 @@ export class MemoryService {
    */
   contextSavings(project?: string): Promise<ContextSavings> {
     return wrapWasmCall(
-      () => this.ensureCapability('contextSavings', '3.12.0').contextSavings(project) as ContextSavings
+      () => this.ensureCapability('contextSavings', '3.12.0').contextSavings(project ?? null) as ContextSavings
     );
   }
 
@@ -1068,7 +1070,7 @@ export class MemoryService {
       }
       return svc.suggestBudget(
         targetModel,
-        reserveTokens !== undefined ? BigInt(reserveTokens) : undefined
+        reserveTokens !== undefined ? BigInt(reserveTokens) : null
       ) as SuggestedBudget;
     });
   }

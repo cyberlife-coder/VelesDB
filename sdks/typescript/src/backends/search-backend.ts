@@ -172,8 +172,9 @@ export async function multiQuerySearch(
  * Multi-query fusion search returning only IDs and scores (no payloads).
  *
  * Lighter than {@link multiQuerySearch} when payloads are not needed — the
- * server skips payload hydration. Metadata filters are not supported on this
- * endpoint; use {@link multiQuerySearch} for filtered fusion.
+ * server skips payload hydration. Its ids-only kernel takes no metadata
+ * filter: a `filter` is sent on, so the server refuses it (`400`) instead of
+ * the SDK dropping it. Use {@link multiQuerySearch} for filtered fusion.
  */
 export async function multiQuerySearchIds(
   transport: SearchTransport,
@@ -195,6 +196,7 @@ export async function multiQuerySearchIds(
     hit_weight: options?.fusionParams?.hitWeight,
     dense_weight: options?.fusionParams?.denseWeight,
     sparse_weight: options?.fusionParams?.sparseWeight,
+    filter: options?.filter,
   });
 
   throwOnError(response, `Collection '${collection}'`);

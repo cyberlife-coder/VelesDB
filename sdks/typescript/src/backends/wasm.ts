@@ -43,7 +43,9 @@ import type { FilterInput } from '../filter';
 import type { CapabilityMap } from '../capabilities';
 import { WASM_CAPABILITIES } from '../capabilities';
 import { ConnectionError, NotFoundError, VelesDBError } from '../types';
-import type { WasmModule, CollectionData } from './wasm-types';
+import type { WasmModule, CollectionData, WasmVectorStore } from './wasm-types';
+import { requireWasmFieldsListed, requireWasmValueListed } from './wasm-capability-guards';
+import { freeSparse, indexSparse, newSparseIds, retireSparse } from './wasm-sparse';
 
 // Internal helpers
 import {
@@ -140,6 +142,9 @@ export class WasmBackend implements IVelesDBBackend {
   // close() during an in-flight init() would let the racy completion of
   // runInit() flip _initialized back to true after close() set it false.
   private _initGen = 0;
+  // Creates the metadata-only store that holds a collection's sparse index.
+  private readonly newSparseStore = (): WasmVectorStore =>
+    this.wasmModule!.VectorStore.new_metadata_only();
 
   // ========================================================================
   // Lifecycle
@@ -196,7 +201,10 @@ export class WasmBackend implements IVelesDBBackend {
   isInitialized(): boolean { return this._initialized; }
 
   async close(): Promise<void> {
-    for (const [, data] of this.collections) { data.store.free(); }
+    for (const [, data] of this.collections) {
+      data.store.free();
+      freeSparse(data.sparseIds);
+    }
     this.collections.clear();
     this._initialized = false;
     this._initInFlight = null;
@@ -225,13 +233,22 @@ export class WasmBackend implements IVelesDBBackend {
     if (this.collections.has(name)) {
       throw new VelesDBError(`Collection '${name}' already exists`, 'COLLECTION_EXISTS');
     }
+    requireWasmFieldsListed('collectionConfig', 'createCollection', config);
+    const mode = config.storageMode ?? 'full';
+    requireWasmValueListed('storageModes', 'createCollection storageMode', mode);
+    requireWasmValueListed(
+      'collectionTypes',
+      'createCollection collectionType',
+      config.collectionType ?? 'vector'
+    );
     const dimension = config.dimension ?? 0;
     const metric = config.metric ?? 'cosine';
-    const store = new this.wasmModule!.VectorStore(dimension, metric);
+    const store = this.wasmModule!.VectorStore.new_with_mode(dimension, metric, mode);
     this.collections.set(name, {
       config: { ...config, metric },
       store,
       payloads: new Map(),
+      sparseIds: newSparseIds(),
       createdAt: new Date(),
     });
   }
@@ -241,6 +258,7 @@ export class WasmBackend implements IVelesDBBackend {
     const collection = this.collections.get(name);
     if (!collection) { throw new NotFoundError(`Collection '${name}'`); }
     collection.store.free();
+    freeSparse(collection.sparseIds);
     this.collections.delete(name);
   }
 
@@ -285,6 +303,9 @@ export class WasmBackend implements IVelesDBBackend {
     } else {
       collection.store.insert(BigInt(id), vector);
     }
+    if (doc.sparseVector) {
+      indexSparse(collection.sparseIds, this.newSparseStore, id, doc.sparseVector);
+    }
 
     if (doc.payload) {
       collection.payloads.set(canonicalPayloadKey(doc.id), doc.payload);
@@ -324,6 +345,9 @@ export class WasmBackend implements IVelesDBBackend {
       if (doc.payload) {
         collection.payloads.set(canonicalPayloadKey(doc.id), doc.payload);
       }
+      if (doc.sparseVector) {
+        indexSparse(collection.sparseIds, this.newSparseStore, toNumericId(doc.id), doc.sparseVector);
+      }
     }
   }
 
@@ -335,7 +359,10 @@ export class WasmBackend implements IVelesDBBackend {
     if (!collection) { throw new NotFoundError(`Collection '${collectionName}'`); }
     const numericId = toNumericId(id);
     const removed = collection.store.remove(BigInt(numericId));
-    if (removed) { collection.payloads.delete(canonicalPayloadKey(id)); }
+    if (removed) {
+      collection.payloads.delete(canonicalPayloadKey(id));
+      retireSparse(collection.sparseIds, this.newSparseStore, numericId);
+    }
     return removed;
   }
 
@@ -345,8 +372,13 @@ export class WasmBackend implements IVelesDBBackend {
     if (!collection) { throw new NotFoundError(`Collection '${collectionName}'`); }
     let count = 0;
     for (const id of ids) {
-      const removed = collection.store.remove(BigInt(toNumericId(id)));
-      if (removed) { collection.payloads.delete(canonicalPayloadKey(id)); count += 1; }
+      const numericId = toNumericId(id);
+      const removed = collection.store.remove(BigInt(numericId));
+      if (removed) {
+        collection.payloads.delete(canonicalPayloadKey(id));
+        retireSparse(collection.sparseIds, this.newSparseStore, numericId);
+        count += 1;
+      }
     }
     return count;
   }

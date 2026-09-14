@@ -109,6 +109,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   load call alone reports the cost as gone when it has only moved.
 
 ### Fixed
+- **The TypeScript SDK's WASM backend refuses what it cannot honour
+  instead of dropping it (#2095).** `textSearch` never passed the caller's
+  `filter` on: velesdb-wasm's `text_search(query, k, field?)` has no filter
+  slot, so rows the filter excluded came back. `hybridSearch`,
+  `multiQuerySearch` and `search` with a `sparseVector` dropped their
+  filters the same way; `search` ignored `sparseIndexName` and
+  `includeVectors: true`; `createCollection` ignored `storageMode` and the
+  HNSW, PQ-rescoring and indexing settings; `query` ignored `timeoutMs` and
+  `stream`. `upsert` and `upsertBatch` never gave the binding a
+  `sparseVector`, so sparse search found nothing, whatever
+  `db.capabilities().sparseSearch` said. `multiQuerySearch` passed only
+  `fusionParams.k`, because the SDK typed the binding's
+  `multi_query_search` from a hand copy that predated the `weights`
+  argument velesdb-wasm has taken since 4.0.0.
+
+  The weights now reach the binding, and every binding function the SDK
+  calls, `VectorStore`'s and `MemoryService`'s alike, is declared with the
+  binding's own full parameter list, optional parameters made required, so
+  an argument the SDK computes and does not pass fails the typecheck; only
+  the two module initialisers, called with or without an argument, are
+  typed by hand. Sparse vectors are indexed. The binding cannot delete
+  postings, so each sparse upsert gets a fresh sparse id and a replaced or
+  deleted point's old one is retired: it never matches again. Retired ids
+  would pile up and slow every sparse search (20,000 replacements of one
+  point took one from 0.0022 ms to 2.03 ms), so the sparse index lives in a
+  store of its own and is rebuilt from the live sparse vectors once retired
+  ids outnumber live ones: it never holds more than twice the live entries,
+  at O(1) amortized cost. velesdb-wasm deleting postings itself (#2287)
+  will make the rebuild unnecessary.
+  `createCollection` creates the store in the requested `storageMode`.
+  `WASM_CAPABILITIES` is the one table the backend consults before it uses
+  an option. It gains `filteredSearch`, `multiQueryFusionParams`,
+  `namedSparseIndexes`, `includeVectors`, `idOnlySearch`, `storageModes`,
+  `collectionTypes`, `collectionConfig` and `queryOptions`; the
+  filter-taking entry points are derived from the backend interface, so a
+  new one cannot be missed; and a conformance test probes every key and
+  value against the backend. The REST backend's `multiQuerySearchIds`
+  dropped a `filter` too: it now sends it on, so velesdb-server's refusal
+  reaches the caller. The SDK's CI job now also runs its lint script.
+
+  Its behaviour changes are listed under Changed.
+
 - **The REST OpenAPI document shows no rustdoc link syntax (#2263).** utoipa
   copies doc comments into the OpenAPI document (`docs/openapi.{json,yaml}`,
   served at `GET /api-docs/openapi.json` by a server built with
@@ -479,6 +521,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NotFound`, matching every sibling accessor.
 
 ### Changed
+- **BREAKING (TypeScript SDK, WASM backend) — an argument the WASM backend
+  cannot apply is refused, and a search's inputs are checked as core checks
+  them (#2095).** Calls that used to succeed with the argument ignored now
+  throw `NOT_SUPPORTED`, naming the backend and the capability: a `filter`
+  on `textSearch`, `hybridSearch`, `multiQuerySearch` or a sparse
+  `search`; `sparseIndexName`; `includeVectors: true`; under
+  `relative_score`, `fusionParams.denseWeight` or `sparseWeight`; under
+  `weighted`, a triple given in part; `createCollection` with
+  `storageMode` `pq` or `rabitq` (velesdb-wasm stores both as SQ8), a
+  `collectionType` other than `vector`, or `hnsw`,
+  `pqRescoreOversampling`, `deferredIndexing` or `asyncIndexBuilder`;
+  `query` with `timeoutMs` or `stream: true`. A `fusionParams` field the
+  chosen strategy never reads is ignored, as core ignores it. Under
+  `weighted`, a triple core would reject (a negative or non-finite weight,
+  or a sum more than 0.001 from 1.0, computed in f32 as core computes it)
+  throws `BAD_REQUEST` instead of the binding's bare string.
+
+  Every search checks its inputs first, as core does. A query vector of
+  the wrong dimension throws `DIMENSION_MISMATCH` whatever `k` is, and
+  `multiQuerySearch` refuses a short or long vector instead of padding or
+  overflowing it. The WASM backend's `multiQuerySearch` takes 1 to 10
+  vectors, as core's does, and more than 10 now throw `BAD_REQUEST`.
+  `db.multiQuerySearch` still refuses an empty list with
+  `VALIDATION_ERROR` before any backend sees it; only a direct
+  `WasmBackend.multiQuerySearch` call, which returned `[]` for one, now
+  throws `BAD_REQUEST`. A non-integer or negative `k` throws
+  `BAD_REQUEST`, core's `k` being unsigned, and a `k` of 0 returns nothing
+  without calling the binding (a sparse search used to return live hits).
+  At runtime a fusion strategy name is read as core reads it, in any case
+  and with the aliases `avg`, `max` and `rsf`, spellings that only untyped
+  (JavaScript) callers can send, since the `FusionStrategy` type keeps the
+  canonical names. `null` or absent means `rrf`, and an unknown name, or
+  any other value that is not a string, throws `BAD_REQUEST`. `'rsf'` used
+  to let `denseWeight` through, and `'WEIGHTED'` dropped the caller's
+  triple. `query` no longer reads `params.k`, which REST ignores: a
+  statement without `LIMIT` returns core's default of 10 rows, `LIMIT` is
+  capped at core's 100,000, and one too large for a u64 throws
+  `BAD_REQUEST`, as core's parser refuses it.
+  On REST, `multiQuerySearchIds` with a `filter` now
+  fails with the server's `400` instead of returning unfiltered ids.
+
 - **BREAKING (REST, VelesQL, bindings) — an unparseable search `mode` now
   fails instead of running silently at the default quality (#2267).**
   `WITH (mode = '...')` in VelesQL and

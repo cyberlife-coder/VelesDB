@@ -245,7 +245,7 @@ describe('MemoryService', () => {
 
     it('remember() passes empty links and undefined metadata/ttl when not provided', async () => {
       await memory.remember('a fact');
-      expect(lastMockInstance!.remember).toHaveBeenCalledWith('a fact', [], undefined, undefined);
+      expect(lastMockInstance!.remember).toHaveBeenCalledWith('a fact', [], undefined, null);
     });
 
     it.each([1.5, -1, Number.NaN, 2 ** 64, Number.POSITIVE_INFINITY])(
@@ -349,7 +349,7 @@ describe('MemoryService', () => {
       expect(lastMockInstance!.rememberExtracted).toHaveBeenCalledWith(
         'edge: Camille | sister of | Theo',
         undefined,
-        undefined
+        null
       );
     });
 
@@ -434,7 +434,7 @@ describe('MemoryService', () => {
     it('explainCompilation() omits fragmentIndex when not provided', async () => {
       const request = { query: 'q', token_budget: 1000, fragments: [{ content: 'x' }] };
       await memory.explainCompilation(request, '1');
-      expect(lastMockInstance!.explainCompilation).toHaveBeenCalledWith(request, '1', undefined);
+      expect(lastMockInstance!.explainCompilation).toHaveBeenCalledWith(request, '1', null);
     });
 
     it('contextSavings() delegates the project and returns the aggregate', async () => {
@@ -447,7 +447,7 @@ describe('MemoryService', () => {
 
     it('contextSavings() works with no project filter', async () => {
       await memory.contextSavings();
-      expect(lastMockInstance!.contextSavings).toHaveBeenCalledWith(undefined);
+      expect(lastMockInstance!.contextSavings).toHaveBeenCalledWith(null);
     });
 
     it('suggestBudget() passes reserveTokens as a BigInt and returns the suggestion', async () => {
@@ -457,11 +457,11 @@ describe('MemoryService', () => {
       expect(budget.suggested_budget).toBe(199000);
     });
 
-    it('suggestBudget() passes undefined reserveTokens when omitted', async () => {
+    it('suggestBudget() passes a null reserveTokens when omitted', async () => {
       await memory.suggestBudget('claude-sonnet-4-5');
       expect(lastMockInstance!.suggestBudget).toHaveBeenCalledWith(
         'claude-sonnet-4-5',
-        undefined
+        null
       );
     });
 

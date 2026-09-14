@@ -10,7 +10,8 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { WasmBackend } from '../src/backends/wasm';
-import { VelesDBError, NotFoundError, ConnectionError } from '../src/types';
+import { VelesDB } from '../src/client';
+import { VelesDBError, NotFoundError, ConnectionError, ValidationError } from '../src/types';
 
 // Mock WASM module — minimal surface for a collection that can report
 // "is_empty" and accept a flush no-op.
@@ -31,7 +32,16 @@ class MockVectorStore {
   query = vi.fn(() => []);
   len = 0;
   is_empty = true;
+  sparse_insert = vi.fn();
   constructor(public dimension: number, _metric: string) {}
+
+  static new_with_mode(dimension: number, metric: string, _mode: string): MockVectorStore {
+    return new MockVectorStore(dimension, metric);
+  }
+
+  static new_metadata_only(): MockVectorStore {
+    return new MockVectorStore(0, 'cosine');
+  }
 }
 
 const mockWasmModule = {
@@ -276,4 +286,23 @@ describe('WasmBackend — stub delegations (rejections)', () => {
       await expect(call()).rejects.toThrow(/not supported|REST backend/i);
     }
   );
+});
+
+describe('VelesDB.multiQuerySearch over WASM — the client refuses an empty list first (#2095)', () => {
+  it('throws VALIDATION_ERROR, as before, and the WASM backend never sees the call', async () => {
+    const db = new VelesDB({ backend: 'wasm' });
+    await db.init();
+    await db.createCollection('c', { dimension: 2, metric: 'cosine' });
+    const backendCall = vi.spyOn(WasmBackend.prototype, 'multiQuerySearch');
+
+    const outcome = await db.multiQuerySearch('c', []).then(
+      () => 'resolved',
+      (error: unknown) => error
+    );
+
+    expect(outcome).toBeInstanceOf(ValidationError);
+    expect((outcome as ValidationError).code).toBe('VALIDATION_ERROR');
+    expect(backendCall).not.toHaveBeenCalled();
+    backendCall.mockRestore();
+  });
 });

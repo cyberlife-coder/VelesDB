@@ -11,10 +11,22 @@ import type {
   MultiQuerySearchOptions,
   QueryOptions,
   QueryApiResponse,
+  FusionParams,
+  FusionParamName,
+  FusionStrategy,
 } from '../types';
 import type { FilterInput } from '../filter';
 import { NotFoundError, VelesDBError } from '../types';
+import { wasmNotSupported } from './shared';
+import {
+  isSet,
+  requireWasmCapability,
+  requireWasmFieldsListed,
+  requireWasmFilterSupport,
+} from './wasm-capability-guards';
+import { sparseHits } from './wasm-sparse';
 import type {
+  CollectionData,
   WasmContext,
   WasmDenseResult,
   WasmSparseResult,
@@ -34,17 +46,13 @@ function searchSparseOnly(
   values: number[],
   k: number
 ): SearchResult[] {
-  const sparseResults: WasmSparseResult[] = collection!.store.sparse_search(
-    new Uint32Array(indices),
-    new Float32Array(values),
-    k
+  return sparseHits(collection!.sparseIds, indices, values, k).map(
+    ([id, score]) => ({
+      id: String(id),
+      score,
+      payload: collection!.payloads.get(ctx.canonicalPayloadKeyFromResultId(id)),
+    })
   );
-
-  return sparseResults.map(r => ({
-    id: String(r.doc_id),
-    score: r.score,
-    payload: collection!.payloads.get(ctx.canonicalPayloadKeyFromResultId(r.doc_id)),
-  }));
 }
 
 function searchHybridFusion(
@@ -56,18 +64,10 @@ function searchHybridFusion(
   k: number
 ): SearchResult[] {
   const denseResults: WasmDenseResult[] = collection!.store.search(queryVector, k);
-  const sparseResults: WasmSparseResult[] = collection!.store.sparse_search(
-    new Uint32Array(indices),
-    new Float32Array(values),
-    k
-  );
-
   const denseForFuse: Array<[number, number]> = denseResults.map(
     ([id, score]) => [Number(id), score]
   );
-  const sparseForFuse: Array<[number, number]> = sparseResults.map(
-    r => [Number(r.doc_id), r.score]
-  );
+  const sparseForFuse = sparseHits(collection!.sparseIds, indices, values, k);
 
   const fused: WasmSparseResult[] = ctx.wasmModule.hybrid_search_fuse(
     denseForFuse, sparseForFuse, 60, k
@@ -116,6 +116,71 @@ function searchDenseOnly(
   });
 }
 
+/**
+ * Refuse the `SearchOptions` this backend cannot apply. `quality` is
+ * accepted and has nothing to tune: WASM search scans every stored vector,
+ * with no graph index whose recall a preset would trade for speed.
+ */
+function refuseUnhonouredSearchOptions(options: SearchOptions | undefined): void {
+  if (options?.includeVectors === true) {
+    requireWasmCapability('includeVectors', 'search with includeVectors: true');
+  }
+  if (isSet(options?.sparseIndexName)) {
+    requireWasmCapability('namedSparseIndexes', 'search with a sparseIndexName');
+  }
+  if (options?.sparseVector) {
+    requireWasmCapability('sparseSearch', 'search with a sparseVector');
+    requireWasmFilterSupport('sparseSearch', options.filter);
+  } else {
+    requireWasmFilterSupport('search', options?.filter);
+  }
+}
+
+/**
+ * How many query vectors core's multi-query search takes
+ * (`validate_multi_query_inputs`, `crates/velesdb-core/src/collection/search/batch.rs`).
+ */
+const MULTI_QUERY_VECTORS = { min: 1, max: 10 } as const;
+
+/**
+ * Validate a search's inputs before anything else, as core does
+ * (`validated_hybrid_params`, `validate_multi_query_inputs`): the number of
+ * query vectors, when the search bounds it; every vector's dimension; and
+ * `k`, a non-negative integer as core's `usize` is. Returns `k`; at 0 the
+ * caller answers with no results and never calls the binding. Every search
+ * runs it first, so no early return can skip it.
+ */
+function validateSearchInputs(
+  collection: CollectionData,
+  vectors: ReadonlyArray<ArrayLike<number>>,
+  k: number,
+  vectorCount?: { readonly min: number; readonly max: number }
+): number {
+  if (vectorCount && (vectors.length < vectorCount.min || vectors.length > vectorCount.max)) {
+    throw new VelesDBError(
+      `a multi-query search takes ${vectorCount.min} to ${vectorCount.max} vectors, as core's ` +
+        `does; got ${vectors.length}`,
+      'BAD_REQUEST'
+    );
+  }
+  const dimension = collection.config.dimension ?? 0;
+  for (const vector of vectors) {
+    if (vector.length !== dimension) {
+      throw new VelesDBError(
+        `Query dimension mismatch: expected ${dimension}, got ${vector.length}`,
+        'DIMENSION_MISMATCH'
+      );
+    }
+  }
+  if (!Number.isInteger(k) || k < 0) {
+    throw new VelesDBError(
+      `k must be a non-negative integer, as core's usize is; got ${k}`,
+      'BAD_REQUEST'
+    );
+  }
+  return k;
+}
+
 // ---------------------------------------------------------------------------
 // Exported search functions
 // ---------------------------------------------------------------------------
@@ -132,14 +197,11 @@ export async function wasmSearch(
   }
 
   const queryVector = query instanceof Float32Array ? query : new Float32Array(query);
-  if (queryVector.length !== collection.config.dimension) {
-    throw new VelesDBError(
-      `Query dimension mismatch: expected ${collection.config.dimension}, got ${queryVector.length}`,
-      'DIMENSION_MISMATCH'
-    );
+  const k = validateSearchInputs(collection, [queryVector], options?.k ?? 10);
+  refuseUnhonouredSearchOptions(options);
+  if (k <= 0) {
+    return [];
   }
-
-  const k = options?.k ?? 10;
 
   if (options?.sparseVector) {
     const { indices, values } = ctx.sparseVectorToArrays(options.sparseVector);
@@ -167,14 +229,21 @@ export async function wasmSearchBatch(
     k?: number;
     filter?: FilterInput;
     /**
-     * Search quality preset. Forwarded through to `wasmSearch` which
-     * currently ignores it because the WASM backend does not yet
-     * support ef_search / SearchQuality. Accepted at the type level
-     * for API parity with the REST backend.
+     * Search quality preset, forwarded to `wasmSearch`. It has nothing to
+     * tune there: WASM search scans every stored vector, which meets the
+     * recall of any preset.
      */
     quality?: import('../types').SearchQuality;
   }>
 ): Promise<SearchResult[][]> {
+  const collection = ctx.getCollection(collectionName);
+  if (!collection) {
+    throw new NotFoundError(`Collection '${collectionName}'`);
+  }
+  for (const s of searches) {
+    validateSearchInputs(collection, [s.vector], s.k ?? 10);
+    requireWasmFilterSupport('searchBatch', s.filter);
+  }
   const results: SearchResult[][] = [];
   for (const s of searches) {
     results.push(
@@ -216,8 +285,14 @@ export async function wasmTextSearch(
   if (!collection) {
     throw new NotFoundError(`Collection '${collectionName}'`);
   }
-  const k = options?.k ?? 10;
-  const raw: WasmSearchResultItem[] = collection.store.text_search(query, k, undefined);
+  const k = validateSearchInputs(collection, [], options?.k ?? 10);
+  requireWasmFilterSupport('textSearch', options?.filter);
+  if (k <= 0) {
+    return [];
+  }
+  // The binding's third argument names one payload field to match. It is
+  // not a filter, which is why a filter is refused above.
+  const raw: WasmSearchResultItem[] = collection.store.text_search(query, k, null);
   return raw.map(r => mapWasmResult(ctx, collection, r));
 }
 
@@ -233,7 +308,11 @@ export async function wasmHybridSearch(
     throw new NotFoundError(`Collection '${collectionName}'`);
   }
   const queryVector = vector instanceof Float32Array ? vector : new Float32Array(vector);
-  const k = options?.k ?? 10;
+  const k = validateSearchInputs(collection, [queryVector], options?.k ?? 10);
+  requireWasmFilterSupport('hybridSearch', options?.filter);
+  if (k <= 0) {
+    return [];
+  }
   const vectorWeight = options?.vectorWeight ?? 0.5;
   const raw: WasmHybridResult[] = collection.store.hybrid_search(
     queryVector, textQuery, k, vectorWeight
@@ -248,6 +327,131 @@ export async function wasmHybridSearch(
 // Multi-query search
 // ---------------------------------------------------------------------------
 
+/** The weighted-fusion fields velesdb-wasm takes as one `[avg, max, hit]` argument. */
+const WEIGHTED_TRIPLE = ['avgWeight', 'maxWeight', 'hitWeight'] as const;
+
+/**
+ * The `fusionParams` fields each strategy reads, as core's builders read
+ * them (velesdb-server's `build_fusion_strategy`, velesdb-wasm's
+ * `fuse_results`). A field the chosen strategy does not read is ignored, as
+ * core ignores it; one it reads and this backend cannot apply is refused.
+ */
+const FUSION_PARAMS_READ: Readonly<Record<FusionStrategy, readonly FusionParamName[]>> = {
+  rrf: ['k'],
+  weighted: WEIGHTED_TRIPLE,
+  relative_score: ['denseWeight', 'sparseWeight'],
+  average: [],
+  maximum: [],
+};
+
+/**
+ * The strategy names core accepts, as velesdb-wasm's `fuse_results` and
+ * velesdb-server's `build_fusion_strategy` read them: lowercased first, with
+ * these aliases.
+ */
+const FUSION_STRATEGY_NAMES: ReadonlyMap<string, FusionStrategy> = new Map([
+  ['rrf', 'rrf'],
+  ['average', 'average'],
+  ['avg', 'average'],
+  ['maximum', 'maximum'],
+  ['max', 'maximum'],
+  ['weighted', 'weighted'],
+  ['relative_score', 'relative_score'],
+  ['rsf', 'relative_score'],
+]);
+
+/**
+ * The canonical strategy `name` stands for, as core reads it. `name` comes
+ * from the caller unchecked, and an untyped (JavaScript) caller can pass any
+ * value: one that is not a string, or a name core does not know, is refused.
+ * The refusal names a value that is not a string by its type, never by
+ * coercing it: `String()` throws on an object with no prototype.
+ */
+function canonicalStrategy(name: unknown): FusionStrategy {
+  const strategy =
+    typeof name === 'string' ? FUSION_STRATEGY_NAMES.get(name.toLowerCase()) : undefined;
+  if (strategy === undefined) {
+    const named = typeof name === 'string' ? `'${name}'` : `of type ${typeof name}`;
+    throw new VelesDBError(
+      `Unknown fusion strategy ${named}: core accepts average (avg), maximum (max), ` +
+        'rrf, weighted and relative_score (rsf), in any case',
+      'BAD_REQUEST'
+    );
+  }
+  return strategy;
+}
+
+/**
+ * How far from 1.0 a weighted triple may sum: core's `validate_weight_sum`
+ * (`crates/velesdb-core/src/fusion/strategy.rs`), an f32 `0.001`. The
+ * binding checks it again, but reports a failure as a bare string.
+ */
+const WEIGHTED_SUM_TOLERANCE = Math.fround(0.001);
+
+/**
+ * Refuse, as core does, a weighted triple with a negative or non-finite
+ * weight, or one that does not sum to 1.0.
+ *
+ * The check runs in f32, as core's `validate_non_negative` and
+ * `validate_weight_sum` do on the `Float32Array` the binding receives: each
+ * weight rounded to f32, summed `(avg + max) + hit` with every step rounded,
+ * then `|sum - 1| > 0.001`. In f64 the two disagree both ways near the
+ * tolerance: `[0.5, 0.5, 0.001]` sums to 1.0010000467 in f32, and
+ * `[0.3, 0.3, 0.399]` to 0.9990000129.
+ */
+function validateWeightedTriple(weights: readonly number[]): void {
+  const f32 = weights.map((weight) => Math.fround(weight));
+  const sum = f32.reduce((total, weight) => Math.fround(total + weight), 0);
+  const invalid = f32.some((weight) => !Number.isFinite(weight) || weight < 0);
+  if (invalid || Math.abs(Math.fround(sum - 1)) > WEIGHTED_SUM_TOLERANCE) {
+    throw new VelesDBError(
+      'multiQuerySearch weighted fusion: avgWeight, maxWeight and hitWeight must be ' +
+        `finite, non-negative and sum to 1.0 within ${WEIGHTED_SUM_TOLERANCE}; ` +
+        `got ${weights.join(', ')}`,
+      'BAD_REQUEST'
+    );
+  }
+}
+
+/**
+ * Translate `fusionParams` into velesdb-wasm's `multi_query_search`
+ * arguments, refusing what the binding cannot apply.
+ *
+ * Only the fields the strategy reads count (`FUSION_PARAMS_READ`): the
+ * weighted triple under `weighted`, the dense/sparse weights under
+ * `relative_score`. Under `weighted`, the three weights travel as one
+ * argument, and the binding applies core's defaults only when that argument
+ * is absent: a partial triple is therefore refused rather than completed
+ * with guessed values, and a complete one is checked against core's rule.
+ */
+function wasmFusionArgs(
+  strategy: FusionStrategy,
+  params: FusionParams | undefined
+): {
+  rrfK: number;
+  weights: Float32Array | null;
+} {
+  const read: FusionParams = {};
+  for (const name of FUSION_PARAMS_READ[strategy]) {
+    read[name] = params?.[name];
+  }
+  requireWasmFieldsListed('multiQueryFusionParams', 'multiQuerySearch fusionParams', read);
+  const rrfK = params?.k ?? 60;
+  const weights = WEIGHTED_TRIPLE.map((name) => read[name]).filter(isSet);
+  if (weights.length === 0) {
+    return { rrfK, weights: null };
+  }
+  if (weights.length !== WEIGHTED_TRIPLE.length) {
+    wasmNotSupported(
+      "multiQuerySearch under 'weighted' with only some of fusionParams avgWeight, maxWeight " +
+        "and hitWeight (capability 'multiQueryFusionParams' lists the three, which velesdb-wasm " +
+        'takes together)'
+    );
+  }
+  validateWeightedTriple(weights);
+  return { rrfK, weights: new Float32Array(weights) };
+}
+
 export async function wasmMultiQuerySearch(
   ctx: WasmContext,
   collectionName: string,
@@ -258,7 +462,11 @@ export async function wasmMultiQuerySearch(
   if (!collection) {
     throw new NotFoundError(`Collection '${collectionName}'`);
   }
-  if (vectors.length === 0) {
+  const k = validateSearchInputs(collection, vectors, options?.k ?? 10, MULTI_QUERY_VECTORS);
+  requireWasmFilterSupport('multiQuerySearch', options?.filter);
+  const strategy = canonicalStrategy(options?.fusion ?? 'rrf');
+  const { rrfK, weights } = wasmFusionArgs(strategy, options?.fusionParams);
+  if (k <= 0) {
     return [];
   }
 
@@ -270,13 +478,13 @@ export async function wasmMultiQuerySearch(
     flat.set(src, idx * dimension);
   });
 
-  const strategy = options?.fusion ?? 'rrf';
   const raw: WasmSearchResultItem[] = collection.store.multi_query_search(
     flat,
     numVectors,
-    options?.k ?? 10,
+    k,
     strategy,
-    options?.fusionParams?.k ?? 60
+    rrfK,
+    weights
   );
 
   return raw.map(r => mapWasmResult(ctx, collection, r));
@@ -314,6 +522,9 @@ interface PureNearQuery {
   limit?: number;
 }
 
+/** The largest `LIMIT` core's parser takes: it reads the value as a u64 (`velesql/parser/helpers.rs`). */
+const LARGEST_U64 = 2n ** 64n - 1n;
+
 /** Parse `queryString` against the pure-NEAR shape or throw `NOT_SUPPORTED`. */
 function parsePureNearQuery(queryString: string): PureNearQuery {
   const match = PURE_NEAR_QUERY.exec(queryString);
@@ -329,32 +540,44 @@ function parsePureNearQuery(queryString: string): PureNearQuery {
   }
   const parsed: PureNearQuery = { from: match[1]!, param: match[2]! };
   if (match[3] !== undefined) {
+    if (BigInt(match[3]) > LARGEST_U64) {
+      throw new VelesDBError(
+        `Invalid LIMIT value '${match[3]}': core's parser reads LIMIT as a u64`,
+        'BAD_REQUEST'
+      );
+    }
     parsed.limit = Number(match[3]);
   }
   return parsed;
 }
 
-/** Resolve top-k: `LIMIT` from the query wins, then `params.k`, then 10. */
-function resolveQueryK(limit: number | undefined, requestedK: unknown): number {
-  if (limit !== undefined) {
-    return limit;
-  }
-  return typeof requestedK === 'number' && Number.isInteger(requestedK) && requestedK > 0
-    ? requestedK
-    : 10;
-}
+/**
+ * The rows a statement without `LIMIT` returns: core's `DEFAULT_SELECT_LIMIT`
+ * (`crates/velesdb-core/src/velesql/ast/select.rs`). Core reads no `k` from a
+ * query's params, so neither does this backend: on REST, `{ k: 0 }` is only
+ * an unused parameter.
+ */
+const DEFAULT_SELECT_LIMIT = 10;
+
+/**
+ * The most rows a statement returns: core's `MAX_LIMIT`, which caps `LIMIT`
+ * in `compute_fetch_limit`
+ * (`crates/velesdb-core/src/collection/search/query/query_pipeline.rs`).
+ */
+const MAX_LIMIT = 100_000;
 
 export async function wasmQuery(
   ctx: WasmContext,
   collectionName: string,
   queryString: string,
   params?: Record<string, unknown>,
-  _options?: QueryOptions
+  options?: QueryOptions
 ): Promise<QueryApiResponse> {
   const collection = ctx.getCollection(collectionName);
   if (!collection) {
     throw new NotFoundError(`Collection '${collectionName}'`);
   }
+  requireWasmFieldsListed('queryOptions', 'query', options);
   const parsed = parsePureNearQuery(queryString);
   if (parsed.from !== collectionName) {
     throw new VelesDBError(
@@ -369,11 +592,15 @@ export async function wasmQuery(
       'BAD_REQUEST'
     );
   }
-  const k = resolveQueryK(parsed.limit, params?.k);
-  const raw: Record<string, unknown>[] = collection.store.query(
-    paramsVector instanceof Float32Array ? paramsVector : new Float32Array(paramsVector),
-    k
+  const queryVector =
+    paramsVector instanceof Float32Array ? paramsVector : new Float32Array(paramsVector);
+  const k = validateSearchInputs(
+    collection,
+    [queryVector],
+    Math.min(parsed.limit ?? DEFAULT_SELECT_LIMIT, MAX_LIMIT)
   );
+  // `LIMIT 0` asks for no rows: there is nothing to ask the binding.
+  const raw: Record<string, unknown>[] = k <= 0 ? [] : collection.store.query(queryVector, k);
 
   return {
     results: raw,
