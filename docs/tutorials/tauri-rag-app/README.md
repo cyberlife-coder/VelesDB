@@ -29,7 +29,7 @@ A desktop application that:
 |---------|-------------|
 | 📄 **Document Ingestion** | Paste or upload text documents |
 | 🔍 **Semantic Search** | Find relevant content using vector similarity |
-| ⚡ **Microsecond Latency** | Search 10k+ documents in <1ms |
+| ⚡ **Low Latency** | In-process search, no network round-trip |
 | 🔒 **100% Offline** | All data stays on your machine |
 | 🖥️ **Cross-Platform** | Windows, macOS, Linux |
 
@@ -37,7 +37,7 @@ A desktop application that:
 
 | Stack | Benefit |
 |-------|---------|
-| **VelesDB** | Fastest embedded vector DB (~39ns dot product) |
+| **VelesDB** | Embedded vector DB with SIMD distance kernels ([measured](../../BENCHMARKS.md#1-dense-search-baseline-simd-kernels)) |
 | **Tauri** | Lightweight Rust desktop framework (vs Electron's 150MB+) |
 | **React** | Modern UI with TypeScript |
 
@@ -747,13 +747,11 @@ This will:
 2. **Search Tab:** Ask questions about the content
 3. Watch the **microsecond latency** in the results!
 
-### 5.3 Expected Performance
+### 5.3 Performance
 
-| Operation | Time |
-|-----------|------|
-| Ingest 1000 chunks | ~50ms |
-| Search (top 5) | <1ms |
-| Memory (10k vectors) | ~50MB |
+No run of this app is recorded, so this tutorial states no timing: measure
+ingestion and search on your own machine. The engine's measured figures, each
+with its machine and date, are in [BENCHMARKS.md](../../BENCHMARKS.md).
 
 ---
 

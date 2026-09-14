@@ -143,11 +143,11 @@ velesdb-core/
 ### `velesdb-core`
 
 Core engine. Contains:
-- **HNSW Index**: Native implementation (1.2x faster than hnsw_rs (benchmarked: 26.9ms vs ~32ms on 100 queries, 5K vectors)) with AVX-512, AVX2, and NEON SIMD acceleration via runtime feature detection
+- **HNSW Index**: Native implementation with AVX-512, AVX2, and NEON SIMD acceleration via runtime feature detection
 - **Typed Collections**: `VectorCollection`, `GraphCollection`, `MetadataCollection` (plus legacy `Collection` for backward compatibility)
 - **VelesQL**: SQL-like query language with vector and graph extensions (pest-based parser)
 - **Storage**: Memory-mapped files, WAL, sharded vectors, compaction
-- **Quantization**: SQ8 (4x), Binary (32x), Product Quantization (8-32x), RaBitQ (32x)
+- **Quantization**: SQ8 (4x smaller), Binary (32x smaller), Product Quantization (`2 × dim / m` smaller, dim/4 at the default m = 8), RaBitQ (32x smaller)
 - **Agent Memory**: Semantic, episodic, and procedural memory patterns for AI agents
 - **Graph Engine**: CsrSnapshot zero-copy BFS/DFS, parallel multi-source BFS, FxHashSet visited sets, parent-pointer path reconstruction
 

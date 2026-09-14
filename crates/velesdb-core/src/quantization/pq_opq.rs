@@ -2,7 +2,7 @@
 //!
 //! When enabled, OPQ computes principal components of the training data via
 //! simultaneous subspace iteration, producing an orthogonal rotation matrix
-//! that reduces inter-subspace correlation and improves recall by 3-15%.
+//! that reduces inter-subspace correlation and improves recall.
 
 #[cfg(feature = "persistence")]
 use crate::error::Error;
@@ -14,7 +14,7 @@ use super::pq::{validate_train_params, ProductQuantizer};
 ///
 /// When `opq_enabled` is true, the function computes the top-D principal components
 /// of the training data via power iteration and uses them as an orthogonal rotation
-/// matrix. This reduces inter-subspace correlation and improves recall by 3-15% on
+/// matrix. This reduces inter-subspace correlation and improves recall on
 /// correlated data. The rotation is a single PCA pass (not iterative IPQ); the
 /// quality of the eigenvectors improves with `power_iterations`.
 ///

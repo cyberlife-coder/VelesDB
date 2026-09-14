@@ -6,9 +6,9 @@
 //! # Native Implementation (v1.0+)
 //!
 //! `VelesDB` uses a custom native HNSW implementation that is:
-//! - **1.2x faster search** than external libraries
-//! - **1.07x faster parallel insert**
-//! - **~99% recall parity** with no accuracy loss
+//! - **faster at search** than the `hnsw_rs` it replaced in 1.0.0
+//! - **faster at parallel insert** (history in `docs/reference/NATIVE_HNSW.md`)
+//! - **at recall parity** with it, with no accuracy loss
 //!
 //! # Module Organization
 //!

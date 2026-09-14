@@ -2234,8 +2234,9 @@ Per-Node Statistics:
   Limit:         0.012ms (rows: 10 → 10)
 ```
 
-When the estimated cost diverges from actual time by more than 10×, a `⚠`
-warning marker is displayed to highlight potential cost model inaccuracies.
+When the estimated cost diverges from actual time by more than a fixed 10×
+threshold (not a measurement), a `⚠` warning marker is displayed to highlight
+potential cost model inaccuracies.
 
 #### HTTP API
 

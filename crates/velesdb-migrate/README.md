@@ -128,7 +128,8 @@ the machine):
    Throughput: 24 vectors/sec
 ```
 
-Success is `Loaded: 3` with `Failed: 0` and exit code 0. Anything else — a
+A three-point run's throughput is not a rate to plan with. Success is
+`Loaded: 3` with `Failed: 0` and exit code 0. Anything else — a
 non-zero `Failed`, or an `Error:` line instead of the summary — means the
 migration did not complete; see [Troubleshooting](#troubleshooting).
 

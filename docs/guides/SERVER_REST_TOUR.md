@@ -566,13 +566,13 @@ Use `code` for programmatic handling (retry, user hint); the full list lives in
 ## 9. Performance reference
 
 Numbers match the canonical contract in
-[`docs/reference/promise-contract.json`](../reference/promise-contract.json)
-(i9-14900KF, AVX2, `--release`, `target-cpu=native`):
+[`docs/reference/promise-contract.json`](../reference/promise-contract.json),
+each on the machine named with it:
 
-- **Cosine similarity**: ~33 ns per operation (768D)
-- **Dot product**: ~21.7 ns per operation (768D), ~35 Gelem/s
-- **HNSW search (index only)**: ~55 µs (10K vectors, 768D, Balanced mode, k=10)
-- **End-to-end search p50**: ~450 µs (10K/384D, WAL on, recall ≥ 96%)
+- **Cosine similarity**: ~33 ns per operation (768D; i9-14900KF, AVX2, in a run of 2026-03-24)
+- **Dot product**: ~21.7 ns per operation (768D; same machine, in a run of 2026-03-27)
+- **HNSW search (index only)**: ~55 µs (10K vectors, 768D, Balanced mode, k=10), measured 2026-03-27 on the i9-14900KF; a quiet re-run on an Apple M5 Pro measured 53.2 µs (2026-07-20)
+- **End-to-end search p50**: ~450 µs (10K/384D, WAL on, recall ≥ 96%), measured 2026-03-27 on 1.7.2 (i9-14900KF, Balanced then at ef 128) by [`velesdb_benchmark.py`](../../benchmarks/velesdb_benchmark.py) — [report](../../benchmarks/report_1.7.2_2026-03-27.json)
 
 ---
 

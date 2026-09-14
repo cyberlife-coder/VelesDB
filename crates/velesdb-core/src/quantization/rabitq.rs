@@ -93,7 +93,7 @@ pub(crate) const fn last_word_mask(dim: usize) -> u64 {
 /// Computes `result[i] = sum_j rotation[i * dim + j] * vector[j]` for each `i`.
 ///
 /// F-12: Uses SIMD dot product per row instead of scalar iterator chain.
-/// For dim=768, this is ~8x faster (SIMD dot product vs scalar sum).
+/// At embedding dimensions such as 768 this beats the scalar sum it replaced.
 #[must_use]
 pub(crate) fn apply_rotation_flat(rotation: &[f32], vector: &[f32], dim: usize) -> Vec<f32> {
     (0..dim)

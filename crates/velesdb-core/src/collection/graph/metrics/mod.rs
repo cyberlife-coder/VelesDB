@@ -5,7 +5,7 @@
 //! - Latency histograms
 //! - Memory usage estimates
 //!
-//! Metrics use atomic operations with relaxed ordering for minimal overhead (~1-5ns per op).
+//! Metrics use atomic operations with relaxed ordering for minimal overhead.
 
 // Reason: Numeric casts in metrics are intentional:
 // - All casts are for histogram bucketing and latency calculations

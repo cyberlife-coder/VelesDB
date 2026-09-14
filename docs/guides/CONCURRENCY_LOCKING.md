@@ -158,9 +158,10 @@ ordering is documented in the source code and `docs/CONCURRENCY_MODEL.md`.
 - ID-to-index mappings use `DashMap` (lock-free concurrent hash map)
 - Parsed query plans are cached lock-free
 
-**Scalability:** Search throughput scales linearly with thread count.
-On an 8-core machine, 8 concurrent search threads achieve ~8x the
-throughput of a single thread.
+**Scalability:** Search throughput grows with thread count, but not
+linearly: 8 concurrent searches reached ~5× the throughput of one on an
+Apple M5 Pro (100K × 768-d, issue #967), limited by DRAM latency, not by
+locks.
 
 ### Writes (Upsert, Delete)
 
@@ -180,9 +181,9 @@ of AI/RAG applications:
 | Vector search | Read | Microseconds | No |
 | Graph traversal | Read (per-shard) | Microseconds | No |
 | Payload lookup | Read | Microseconds | No |
-| Single upsert | Write | ~100us | Briefly |
-| Batch upsert (1000) | Write | ~10ms | Briefly |
-| Collection create | Write (registry) | ~1ms | No (different lock) |
+| Single upsert | Write | Not measured | Briefly |
+| Batch upsert (1000) | Write | Not measured | Briefly |
+| Collection create | Write (registry) | Not measured | No (different lock) |
 | HNSW rebuild | Write (index) | Seconds | Yes (rare) |
 
 ---

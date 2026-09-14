@@ -554,6 +554,10 @@ jobs:
 
       - name: Audit performance claims consistency
         run: python3 scripts/check-perf-claims.py --no-criterion
+      - name: Every performance figure names its measurement
+        run: python3 scripts/check-figure-sources.py
+      - name: Test figure-sources audit script
+        run: python3 -m unittest scripts.tests.test_check_figure_sources
 
       # Both crates pull their own README into the crate docs with
       # `#![doc = include_str!("../README.md")]`, so this step also type-checks

@@ -105,10 +105,11 @@ impl Collection {
     /// passed directly to the core engine, eliminating per-row `Vec<f32>`
     /// allocations. For 100K vectors at 768D this saves ~293 MB of copies.
     ///
-    /// Performance ranking (fresh collection, 384D, i9-class CPU):
-    ///     upsert (list of dicts)   ~5 000 vec/s
-    ///     upsert_bulk (list of dicts) ~12 000 vec/s
-    ///     upsert_bulk_numpy        ~17 000 vec/s   <-- this method
+    /// Performance ranking, slowest first, by the copies each makes (no recorded
+    /// run measures their rates):
+    ///     upsert (list of dicts)
+    ///     upsert_bulk (list of dicts)
+    ///     upsert_bulk_numpy        <-- this method
     ///
     /// Best practices:
     ///     - Always pass float32 numpy arrays (float64 forces a conversion).

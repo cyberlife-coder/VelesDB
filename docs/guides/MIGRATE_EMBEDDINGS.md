@@ -209,7 +209,7 @@ cargo test -p velesdb-memory --release --test online_migration_process \
 The no-capture generation guard was also isolated with Criterion on the same
 machine: direct `NativeStore::count` measured 5.45 ns and guarded
 `MemoryService::fact_count` 6.18 ns, an absolute 0.73 ns increment. The 13%
-relative number is intentionally the worst-looking view of a sub-10 ns
+relative number is intentionally the worst-looking view of a few-nanosecond
 synthetic operation; against the measured 10.2 ms end-to-end write it is below
 the resolution of the request-scale measurement. Re-run with:
 

@@ -87,7 +87,7 @@ breaks the exclusion for *future* openers; nothing in-tree does this.
 | Edge ID registry | `RwLock<HashMap>` | Low | Global, for existence checks |
 | CsrSnapshot | `ArcSwap<Arc<CsrSnapshot>>` | None | Lock-free reads via atomic swap; lazy rebuild on dirty flag |
 | Quantizer (RaBitQ/SQ8) | `parking_lot::RwLock` | None (after training) | Write-once then read-only |
-| Code store (RaBitQ/SQ8) | `parking_lot::RwLock` | Low | Write per insert (~10ns hold) |
+| Code store (RaBitQ/SQ8) | `parking_lot::RwLock` | Low | Write per insert (held for one append) |
 | Training buffer (RaBitQ/SQ8) | `parking_lot::Mutex` | Low | Pre-training only |
 | MmapStorage (compaction) | `parking_lot::RwLock` | High (during compaction) | Exclusive write lock for full compaction duration |
 
@@ -412,14 +412,14 @@ vectors already encoded.
 
 | Pattern | Impact | Acceptable? |
 |---------|--------|-------------|
-| `rabitq_store.write()` serializes post-training inserts | ~10ns per push (single encoded vector append) | Yes: store push is a trivial `Vec::push` operation |
-| Training blocks all inserts for ~60ms | One-time event per index lifetime | Yes: training runs once when the buffer threshold is reached |
+| `rabitq_store.write()` serializes post-training inserts | One short hold per push (a single encoded-vector append) | Yes: store push is a trivial `Vec::push` operation |
+| Training blocks all inserts while it runs | One-time event per index lifetime | Yes: training runs once when the buffer threshold is reached |
 | `reorder_for_locality()` is offline-only | Takes `&self` but must not run during concurrent search | Yes: only called during explicit maintenance, not on the hot path |
 
 ### Mitigation
 
 - Post-training inserts hold `rabitq_store.write()` for the minimum
-  duration needed to push a single encoded vector (~10ns).
+  duration needed to push a single encoded vector (one `Vec::push`).
 - Training is amortized: it runs once when the training buffer reaches its
   threshold, then never again for the lifetime of the index.
 - `reorder_for_locality()` is documented as offline-only and is not exposed
@@ -833,15 +833,16 @@ small (within a single `delete()` call).
 
 ### Startup Latency Impact
 
-Recovery latency depends on the number of gap vectors:
+Recovery latency grows with the number of gap vectors. No run measures it;
+what dominates at each size:
 
-| Gap Size | Expected Recovery Time | Dominant Cost |
-|----------|----------------------|---------------|
-| 0 (no gap) | < 1 ms | O(1) early exit heuristic |
-| 1–100 vectors | < 10 ms | Storage retrieval + HNSW insert |
-| 100–1 000 vectors | 10–100 ms | Parallel HNSW batch insert |
-| 1 000–10 000 vectors | 100 ms–1 s | Parallel HNSW batch insert (rayon) |
-| > 10 000 vectors | > 1 s | Proportional to gap size; mitigated by `HNSW_SAVE_THRESHOLD` |
+| Gap Size | Dominant Cost |
+|----------|---------------|
+| 0 (no gap) | O(1) early exit heuristic |
+| 1–100 vectors | Storage retrieval + HNSW insert |
+| 100–1 000 vectors | Parallel HNSW batch insert |
+| 1 000–10 000 vectors | Parallel HNSW batch insert (rayon) |
+| > 10 000 vectors | Proportional to gap size; mitigated by `HNSW_SAVE_THRESHOLD` |
 
 The `HNSW_SAVE_THRESHOLD` (10 000) bounds the maximum gap size in practice:
 `flush()` forces an HNSW save after 10 000 inserts, so the worst-case
