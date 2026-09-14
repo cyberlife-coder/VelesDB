@@ -109,6 +109,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   load call alone reports the cost as gone when it has only moved.
 
 ### Fixed
+- **The memory-extraction bench records what produced each count, and its report
+  stops comparing runs it cannot compare (#1949).** A re-run of the 2026-08-16
+  campaign on another machine gave other counts, and none of its 26 screening
+  files could say why. Each result file now records the model server's version
+  and the weights' digest (`/api/version`, `/api/tags`) beside the decode
+  options; the daemon an end-to-end run launches, by its `--version` line and
+  sha256; the host, the commit and whether a file it holds differed from it in
+  the working tree, asked of the commit rather than git's index (a file a
+  sparse checkout leaves out counts only while it is still in the working
+  tree); the
+  cases file by its path in the repository, only when the recorded commit
+  holds it, and whether it differed from that commit; when the run started; and the suite it
+  ran, as a case count and a digest of what that phase's scorer reads of each
+  case, in the order that can move its counts: none for screening, the order an
+  end-to-end run writes and reads its passages in. A question left unanswered,
+  or answered in a shape Ollama does not give, is written as null with the
+  reason. The report prints each row's provenance and origin, or `unverified`
+  with the first reason its file records and `unrecorded`, counts the runs
+  behind each row, and flags rows that sum different numbers of runs or cover
+  different suites: the reference screened
+  its Ollama models twice and its MLX ones once, and its two end-to-end rows
+  covered 1 case and 4. A file written before the options were recorded is
+  credited with the one it holds, the `generation_cap` the bench sent as
+  `num_predict` (as `max_tokens` to the MLX server). Every report cell is put on
+  one line with its pipes escaped, so no value a file holds can split a row.
+  Every result file is a row of its own: the order
+  control's replay had replaced the reference row it shares a label with, so the
+  published row showed the replay's timings. The report's Environment section,
+  which printed the rendering machine's commit, rustc and a `num_ctx` no run
+  recorded, is gone. The 2026-08-16 campaign file is re-folded from its result
+  files, restoring that reference row and cutting every absolute path to its
+  last component (the result files, the evidence, keep theirs), and its report
+  is regenerated: #1955 had changed the generator without re-rendering it, so it
+  printed `0` where no reply parsed. Tests fail when the committed report and
+  its generator disagree, and when either holds an absolute path. The
+  extraction-models guide and `docs/BENCHMARKS.md` no longer say the quality
+  verdicts reproduced to the digit: they repeated run for run on the one machine
+  that measured them, and the tiers stay unverified until a re-run with a
+  declared `num_ctx`.
+
 - **The REST OpenAPI document shows no rustdoc link syntax (#2263).** utoipa
   copies doc comments into the OpenAPI document (`docs/openapi.{json,yaml}`,
   served at `GET /api-docs/openapi.json` by a server built with
