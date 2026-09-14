@@ -37,6 +37,7 @@ if [ -z "$session_id" ]; then
 fi
 
 resolve_config "$cwd"
+adopt_working_session "$session_id" save || true
 
 if ! dirty_dir="$(record_dir_path "codex-learning-dirty" "$session_id")" \
   || ! generic_sentinel="$(sentinel_path "codex-stop" "$session_id")" \
@@ -115,6 +116,12 @@ if [ "$dirty_invalid" = "true" ]; then
 fi
 if [ "${#dirty_records[@]}" -gt 0 ]; then
   targets="$(jq -sc '[.[] | {project, session, root}]' "${dirty_records[@]}")"
+  # Each repository is named with the working context this conversation last
+  # saved for it, else with the session PreToolUse froze into its record: the
+  # checklist asks for a save, so a session it only loaded is never named.
+  if adopted_targets="$(adopt_batch_sessions "$session_id" "$targets")"; then
+    targets="$adopted_targets"
+  fi
   for record_file in "${dirty_records[@]}"; do
     root="$(jq -r '.root' "$record_file")"
     marker_id="$(printf '%s\n%s' "$session_id" "$root")"

@@ -38,6 +38,7 @@ if [ -z "$session_id" ]; then
 fi
 
 resolve_config "$cwd"
+adopt_working_session "$session_id" save || true
 
 if ! sentinel="$(sentinel_path "precompact" "$session_id")"; then
   reason="VelesDB private hook-state storage is unsafe or unavailable. Keep the session open, repair the per-user state directory, and retry compaction."

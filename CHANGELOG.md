@@ -109,6 +109,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   load call alone reports the cost as gone when it has only moved.
 
 ### Fixed
+- **The agent hooks remind a conversation of the working context it uses.** The
+  SessionStart, PreCompact and Stop hooks of the Claude Code and Codex
+  integrations named the session set in `.velesdb-hooks.json` (else `rolling`),
+  whatever session the conversation kept its state under. After a compaction, a
+  conversation working under a session of its own was told to load a context it
+  never wrote, and at Stop to save over one another conversation may own.
+  PostToolUse now records the session of each successful `save_working_context`,
+  and of each `load_working_context` that found one, per host session and per
+  project the call names, a save and a load each in a record of its own, so a
+  load never replaces a recorded save, even when the two calls' hooks overlap. A
+  load reminder (SessionStart) names the last session the conversation saved, or
+  else the last it loaded; a save reminder (PreCompact, Stop and the checklist
+  an opted-in repository's Stop gives for an edit batch, Codex's post-compaction
+  reminder) names only one it saved, and otherwise the configured one, so
+  reading another conversation's context never makes it save over that one.
+  After a compaction the Claude Code SessionStart hook asks to load the working
+  context again. Codex runs the hook only for the tools its PostToolUse matcher
+  names: the installer and the snippet now include the two working-context
+  tools. A call naming another project is never adopted for this one; it is kept
+  under its own. A load that found nothing, a failed call, a project name that
+  is empty or holds a control character, and a session name outside
+  `[A-Za-z0-9][A-Za-z0-9._:-]{0,127}` are ignored; jq checks each name as it was
+  sent, a NUL byte or a trailing newline included, before any shell reads it, so
+  none can redirect the reminders or carry text into them. A record is read only
+  when its file holds exactly that one record.
 - **The REST OpenAPI document shows no rustdoc link syntax (#2263).** utoipa
   copies doc comments into the OpenAPI document (`docs/openapi.{json,yaml}`,
   served at `GET /api-docs/openapi.json` by a server built with

@@ -106,15 +106,15 @@ learning_marker_identity() {
   printf '%s\n%s' "$1" "${CONFIG_ROOT:-$PWD}"
 }
 
-# successful_memory_recall PAYLOAD
+# successful_memory_recall TOOL_NAME PAYLOAD
 # A recall counts only after a VelesDB MCP tool returned a successful result.
 # `compile_context` counts only when it actually requested memory_scope.
+# TOOL_NAME is the payload's, as PostToolUse already read it: the hook reads
+# it once, for this check and the working-context recording.
 successful_memory_recall() {
-  local payload="$1"
-  local tool_name
-  tool_name="$(printf '%s' "$payload" | jq -r '.tool_name // empty')"
+  local payload="$2"
 
-  case "$tool_name" in
+  case "$1" in
     mcp__velesdb-memory__recall|mcp__velesdb_memory__recall|\
     mcp__velesdb-memory__recall_fused|mcp__velesdb_memory__recall_fused|\
     mcp__velesdb-memory__recall_where|mcp__velesdb_memory__recall_where|\
@@ -128,6 +128,14 @@ successful_memory_recall() {
       return 1
       ;;
   esac
+
+  successful_tool_response "$payload"
+}
+
+# successful_tool_response PAYLOAD: the MCP call behind a PostToolUse payload
+# returned a non-empty text result and no error.
+successful_tool_response() {
+  local payload="$1"
 
   printf '%s' "$payload" | jq -e '
     ((.tool_response | type) == "object")
@@ -321,6 +329,162 @@ recall_targets_current_project() {
   [ "$scoped_project" = "$PROJECT" ]
 }
 
+# >>> BEGIN: shared byte for byte with the other host's lib/common.sh; test/hooks.test.sh checks it.
+# --- The working context this conversation uses -------------------------------
+# The configured `session` (`.velesdb-hooks.json`, else "rolling") is only a
+# default. A conversation that keeps its state under another session — one per
+# campaign, say — must be reminded of THAT one at SessionStart, PreCompact and
+# Stop: naming the default after a compaction makes it load a stale context, or
+# save over one another conversation owns. PostToolUse records the session of
+# each successful save_working_context, and of each load_working_context that
+# found one, per host session and per project the call names. Saves and loads
+# are recorded apart, so a load never writes over a save, even when the two
+# calls' hooks overlap. A load reminder adopts the saved session, else the
+# loaded one; a save reminder only a session the conversation saved.
+
+# The session name a reminder may quote: a letter or digit, then up to 127
+# letters, digits, `.`, `_`, `:` or `-`. jq checks it on the JSON string as it
+# was sent, anchored with \A and \z, before any shell reads it: `$(…)` would
+# drop a NUL byte and strip a trailing newline, and jq's own `^…$` would admit a
+# trailing newline.
+WORKING_SESSION_CLASS='[A-Za-z0-9][A-Za-z0-9._:-]{0,127}'
+
+# working_context_found PAYLOAD: the load_working_context result says found.
+working_context_found() {
+  printf '%s' "$1" | jq -e '
+    [ (if ((.tool_response | type) == "array") then .tool_response[] else .tool_response.content[]? end)
+      | select(type == "object" and .type == "text")
+      | .text | fromjson? | select(type == "object") | .found ]
+    | any(. == true)
+  ' >/dev/null 2>&1
+}
+
+# working_context_call TOOL_NAME PAYLOAD: print `VIA<TAB>PROJECT<TAB>NAME` for a
+# successful working-context call; fail for any other call. TOOL_NAME is the
+# payload's, as PostToolUse already read it: that hook runs on every tool call,
+# and no other tool may cost a jq run here. The project is the call's own: a
+# conversation may save the context of a repository other than the one its cwd
+# is in, and Stop names each edited repository's own. It must be a non-empty
+# string with no control character, so it keys a record exactly.
+working_context_call() {
+  local payload="$2"
+  local via
+  case "$1" in
+    mcp__velesdb-memory__save_working_context|mcp__velesdb_memory__save_working_context)
+      via=save
+      ;;
+    mcp__velesdb-memory__load_working_context|mcp__velesdb_memory__load_working_context)
+      # A load that found nothing names a session nobody keeps: a typo must
+      # not redirect every later reminder.
+      working_context_found "$payload" || return 1
+      via=load
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+  successful_tool_response "$payload" || return 1
+  printf '%s' "$payload" | jq -r --arg via "$via" --arg class "$WORKING_SESSION_CLASS" '
+    .tool_input
+    | select((.project | type == "string" and length > 0 and (test("[[:cntrl:]]") | not))
+      and (.session | type == "string" and test("\\A" + $class + "\\z")))
+    | "\($via)\t\(.project)\t\(.session)"
+  ' 2>/dev/null
+}
+
+# working_session_marker HOST_SESSION PROJECT VIA: the private record of the
+# session one host session last saved (VIA `save`) or loaded (VIA `load`) for
+# one project. A save and a load never share a record, so no hook writes a
+# record the other kind of call wrote. The memory store keys working contexts
+# by project name, so the record does too.
+working_session_marker() {
+  sentinel_path "working-session-$3" "$(printf '%s\n%s' "$1" "$2")"
+}
+
+# recorded_working_session HOST_SESSION PROJECT VIA: print the session name in
+# the VIA record that host session keeps for that project. The file must hold
+# exactly one record: a second one would add a line to what a reminder quotes.
+# The record must name the host session and the project, since its file name
+# is a checksum two host sessions can share, and say VIA; its name passes the
+# same check as at capture.
+recorded_working_session() {
+  local marker
+  [ -n "$1" ] || return 1
+  marker="$(working_session_marker "$1" "$2" "$3")" || return 1
+  valid_private_marker "$marker" || return 1
+  jq -rs --arg host "$1" --arg project "$2" --arg via "$3" --arg class "$WORKING_SESSION_CLASS" '
+    select(length == 1) | .[0]
+    | select(type == "object" and .host == $host and .project == $project and .via == $via
+      and (.session | type == "string" and test("\\A" + $class + "\\z")))
+    | .session
+  ' "$marker" 2>/dev/null
+}
+
+# remember_working_session HOST_SESSION TOOL_NAME PAYLOAD: record the session of
+# a successful working-context call, for the project the call names, in the
+# record of its kind. A save names the context this conversation writes, a load
+# one it read. Nothing is read before the write: the two kinds never share a
+# record, so a load never replaces a save, however their hooks overlap, and
+# write_private_marker replaces a record whole.
+remember_working_session() {
+  local call
+  local via
+  local project
+  local session
+  local marker
+  call="$(working_context_call "$2" "$3")" || return 1
+  [ -n "$call" ] || return 1
+  IFS=$'\t' read -r via project session <<<"$call"
+  marker="$(working_session_marker "$1" "$project" "$via")" || return 1
+  write_private_marker "$marker" \
+    "$(jq -cn --arg host "$1" --arg project "$project" --arg via "$via" --arg session "$session" \
+      '{host: $host, project: $project, via: $via, session: $session}')"
+}
+
+# adopted_session_for HOST_SESSION PROJECT KIND: print the working context a
+# reminder may name for that project. KIND `any`, for a load reminder: the last
+# session this host session saved, or else the last it loaded, which it may
+# resume. Any other KIND, for a save reminder: only one it saved, since a save
+# reminder must never name a context the conversation only read. A reminder
+# quotes the name inside a call, so a value holding a newline is refused,
+# whatever the record held.
+adopted_session_for() {
+  local session
+  session="$(recorded_working_session "$1" "$2" save)" || session=""
+  if [ -z "$session" ] && [ "$3" = any ]; then
+    session="$(recorded_working_session "$1" "$2" load)" || session=""
+  fi
+  case "$session" in
+    '' | *$'\n'*) return 1 ;;
+  esac
+  printf '%s' "$session"
+}
+
+# adopt_working_session HOST_SESSION KIND: set SESSION to the working context a
+# reminder of that KIND may name for the current project (see
+# adopted_session_for). Fails, leaving SESSION as configured, when there is none.
+adopt_working_session() {
+  local session
+  session="$(adopted_session_for "$1" "$PROJECT" "$2")" || return 1
+  SESSION="$session"
+}
+
+# adopt_batch_sessions HOST_SESSION TARGETS: TARGETS, a JSON array of
+# {project, session, root} as PreToolUse froze them, with each session replaced
+# by the one this host session last saved for that project: the checklist asks
+# for a save. Project names are read NUL-delimited, since one can hold a newline.
+adopt_batch_sessions() {
+  local targets="$2"
+  local project
+  local session
+  while IFS= read -r -d '' project; do
+    session="$(adopted_session_for "$1" "$project" save)" || continue
+    targets="$(printf '%s' "$targets" | jq -c --arg p "$project" --arg s "$session" \
+      'map(if .project == $p then .session = $s else . end)')" || return 1
+  done < <(printf '%s' "$targets" | jq -j '[.[].project] | unique[] | . + "\u0000"')
+  printf '%s' "$targets"
+}
+
 # promote_pending_recall DIR RECALL_KIND HOST_SESSION PAYLOAD
 #
 # An explicit project scope takes precedence. Without one, prefer the pending
@@ -407,3 +571,5 @@ promote_pending_recall() {
   done
   rmdir "$dir" 2>/dev/null || true
 }
+
+# <<< END: shared byte for byte with the other host's lib/common.sh; test/hooks.test.sh checks it.

@@ -1487,6 +1487,40 @@ class LearningLoopPolicy(unittest.TestCase):
                 fourth = self.run_hook(host, "stop.sh", payload)
                 self.assert_passed(fourth, host=host)
 
+    def test_stop_batch_names_the_working_context_the_conversation_saved(self) -> None:
+        """An edit batch's checklist names, for each repository, the working
+        context this conversation last saved for its project, not the session
+        PreToolUse froze into the batch record when the edit happened."""
+        for host in HOSTS:
+            with self.subTest(host=host):
+                session_id = f"{host}-batch-adopts"
+                stop = hook_payload("Stop", cwd=self.nested, session_id=session_id)
+                first = self.run_hook(host, "stop.sh", stop)
+                self.assertEqual(json.loads(first.stdout).get("decision"), "block")
+                self.unlock_with_recall(host, session_id)
+                self.assert_passed(
+                    self.edit(host, session_id, HOSTS[host]["edit_tools"][0]),
+                    host=host,
+                )
+                text = [{"type": "text", "text": '{"id":1,"id_str":"1"}'}]
+                saved = self.run_hook(
+                    host,
+                    "post-tool-use.sh",
+                    hook_payload(
+                        "PostToolUse",
+                        cwd=self.nested,
+                        session_id=session_id,
+                        tool_name="mcp__velesdb-memory__save_working_context",
+                        tool_input={"project": "velesdb", "session": "campaign-batch"},
+                        tool_response=text if host == "claude" else {"content": text},
+                    ),
+                )
+                self.assertEqual(saved.returncode, 0, saved.stderr)
+                batch = json.loads(self.run_hook(host, "stop.sh", stop).stdout)
+                self.assertEqual(batch.get("decision"), "block", batch)
+                self.assertIn('"session":"campaign-batch"', batch.get("reason", ""))
+                self.assertNotIn('"session":"rolling"', batch.get("reason", ""))
+
     def test_skill_states_that_the_four_stage_policy_is_binding(self) -> None:
         body = SKILL.read_text(encoding="utf-8")
         for heading in (
