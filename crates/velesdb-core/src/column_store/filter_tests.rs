@@ -236,6 +236,55 @@ fn filter_geo_distance_non_geopoint_column_returns_empty() {
     assert!(store.filter_geo_distance(&params).is_empty());
 }
 
+// `compare_f64` treats two computed distances within 1mm of each other as
+// equal (`crate::geo_distance_eq`), since a Haversine distance is built from
+// several sin/cos/sqrt/atan2 calls and two equally valid ways of computing
+// the same real-world distance are not bit-identical; that module's own
+// tests reproduce the cross-formula divergence this exists to absorb. Here
+// we only need to confirm `filter_geo_distance` reads the shared tolerance
+// correctly for both `CompareOp` arms.
+#[test]
+fn filter_geo_distance_eq_tolerates_realistic_float_noise() {
+    let store = geo_store();
+    let exact =
+        crate::column_store::haversine::haversine_distance(48.8566, 2.3522, 51.5074, -0.1278);
+    let params = GeoDistanceParams {
+        column: "location",
+        lat: 48.8566,
+        lng: 2.3522,
+        operator: CompareOp::Eq,
+        threshold: exact + 0.0005, // 0.5mm: noise, not a real distance change
+    };
+    assert!(store.filter_geo_distance(&params).contains(&1)); // London
+
+    let not_eq_params = GeoDistanceParams {
+        operator: CompareOp::NotEq,
+        ..params
+    };
+    assert!(!store.filter_geo_distance(&not_eq_params).contains(&1));
+}
+
+#[test]
+fn filter_geo_distance_eq_still_rejects_real_differences() {
+    let store = geo_store();
+    let exact =
+        crate::column_store::haversine::haversine_distance(48.8566, 2.3522, 51.5074, -0.1278);
+    let params = GeoDistanceParams {
+        column: "location",
+        lat: 48.8566,
+        lng: 2.3522,
+        operator: CompareOp::Eq,
+        threshold: exact + 1.0,
+    };
+    assert!(!store.filter_geo_distance(&params).contains(&1));
+
+    let not_eq_params = GeoDistanceParams {
+        operator: CompareOp::NotEq,
+        ..params
+    };
+    assert!(store.filter_geo_distance(&not_eq_params).contains(&1)); // London is a real 343km away
+}
+
 #[test]
 fn filter_geo_bbox_finds_points_in_box() {
     let store = geo_store();

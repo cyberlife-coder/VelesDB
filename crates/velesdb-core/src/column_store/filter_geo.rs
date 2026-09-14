@@ -60,11 +60,20 @@ pub struct GeoBboxParams<'a> {
     pub lng_max: f64,
 }
 
-/// Applies a comparison operator to two `f64` values.
+/// Applies a comparison operator to a computed geo-distance value and a threshold.
+///
+/// `Eq`/`NotEq` go through [`crate::geo_distance_eq::geo_distances_equal`]'s
+/// millimeter tolerance rather than exact float equality: `a` is a Haversine
+/// distance computed via several `sin`/`cos`/`sqrt`/`atan2` calls, and two
+/// equally valid ways of computing the same real-world distance do not
+/// produce bit-identical results (see that module's docs for the measured
+/// divergence and its rationale). Shared with
+/// `filter::matching::compare_geo_distance`, the equivalent comparator for
+/// payload-mirror geo filtering, so the tolerance cannot drift between them.
 fn compare_f64(a: f64, b: f64, op: CompareOp) -> bool {
     match op {
-        CompareOp::Eq => (a - b).abs() < f64::EPSILON,
-        CompareOp::NotEq => (a - b).abs() >= f64::EPSILON,
+        CompareOp::Eq => crate::geo_distance_eq::geo_distances_equal(a, b),
+        CompareOp::NotEq => !crate::geo_distance_eq::geo_distances_equal(a, b),
         CompareOp::Gt => a > b,
         CompareOp::Gte => a >= b,
         CompareOp::Lt => a < b,

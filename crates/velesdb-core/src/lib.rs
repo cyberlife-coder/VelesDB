@@ -131,6 +131,9 @@ mod filter_like_tests;
 #[cfg(test)]
 mod filter_tests;
 pub mod fusion;
+mod geo_distance_eq;
+#[cfg(test)]
+mod geo_distance_eq_tests;
 pub mod gpu;
 #[cfg(test)]
 mod gpu_tests;

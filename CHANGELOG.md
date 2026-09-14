@@ -109,6 +109,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   load call alone reports the cost as gone when it has only moved.
 
 ### Fixed
+- **`GEO_DISTANCE(...) = X` / `!= X` compared a computed Haversine distance
+  against a tolerance too tight to survive how that distance is actually
+  computed**, in both `column_store::filter_geo` (the public `ColumnStore`
+  filter API) and `filter::matching::compare_geo_distance` (VelesQL's own
+  `GEO_DISTANCE` evaluation path, so this changes VelesQL query results for
+  `=`/`!=` on `GEO_DISTANCE`, previously unusable for either operator). An
+  absolute `f64::EPSILON` — the ULP at magnitude 1.0 — made `Eq` reject
+  essentially any real-world distance and `NotEq` accept almost any pair; a
+  first pass scaled that to the compared magnitude, but two independently
+  valid ways of computing the same real distance (for instance, subtracting
+  latitudes in radians versus subtracting in degrees and converting
+  afterward) diverge by up to several hundred ULPs, not the one or two a
+  magnitude-scaled `f64::EPSILON` absorbs — confirmed empirically across
+  50,000 random point pairs (`geo_distance_eq.rs`). Both comparators now
+  share one `pub(crate)` helper (`geo_distance_eq::geo_distances_equal`)
+  with a tolerance of 1mm, chosen with headroom over that measured ceiling
+  while staying far below any distance granularity a real query needs.
+  `aggregation/having.rs`'s own relative-epsilon tolerance is unrelated and
+  unchanged: it compares arbitrary unitless aggregate values, not a
+  physical distance in meters, so a fixed absolute tolerance would not fit
+  it.
+
 - **The REST OpenAPI document shows no rustdoc link syntax (#2263).** utoipa
   copies doc comments into the OpenAPI document (`docs/openapi.{json,yaml}`,
   served at `GET /api-docs/openapi.json` by a server built with

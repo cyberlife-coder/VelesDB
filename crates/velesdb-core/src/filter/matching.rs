@@ -457,18 +457,24 @@ fn haversine_distance_m(lat1: f64, lng1: f64, lat2: f64, lng2: f64) -> f64 {
 }
 
 /// Applies a comparison operator to a geo-distance value and threshold.
+///
+/// `Eq`/`NotEq` go through `crate::geo_distance_eq::geo_distances_equal`'s
+/// millimeter tolerance rather than exact float equality: `dist` is computed
+/// via several sin/cos/sqrt/atan2 calls (see `haversine_distance_m`), and two
+/// equally valid ways of computing the same real-world distance do not
+/// produce bit-identical results (see that module's docs for the measured
+/// divergence and its rationale). Shared with
+/// `column_store::filter_geo::compare_f64`, the equivalent comparator for
+/// `ColumnStore`'s own geo filtering, so the tolerance cannot drift between
+/// them. Unrelated to the HAVING threshold comparator
+/// (`aggregation/having.rs::compare_values`), which compares arbitrary
+/// unitless aggregate values rather than a physical distance in meters and
+/// keeps its own relative-epsilon tolerance.
 fn compare_geo_distance(dist: f64, threshold: f64, op: crate::velesql::CompareOp) -> bool {
     use crate::velesql::CompareOp;
-    // `dist` is computed via several sin/cos/sqrt/atan2 calls (see
-    // `haversine_distance_m`), so plain `f64::EPSILON` — the ULP at magnitude
-    // 1.0 — is tighter than the actual floating-point precision at real-world
-    // distances (meters), making `Eq`/`NotEq` spuriously fail. Scale by
-    // magnitude, floored at 1.0, matching the HAVING threshold comparator
-    // (`aggregation/having.rs::compare_values`).
-    let relative_epsilon = f64::EPSILON * dist.abs().max(threshold.abs()).max(1.0);
     match op {
-        CompareOp::Eq => (dist - threshold).abs() < relative_epsilon,
-        CompareOp::NotEq => (dist - threshold).abs() >= relative_epsilon,
+        CompareOp::Eq => crate::geo_distance_eq::geo_distances_equal(dist, threshold),
+        CompareOp::NotEq => !crate::geo_distance_eq::geo_distances_equal(dist, threshold),
         CompareOp::Gt => dist > threshold,
         CompareOp::Gte => dist >= threshold,
         CompareOp::Lt => dist < threshold,

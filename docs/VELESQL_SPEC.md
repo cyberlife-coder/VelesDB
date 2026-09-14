@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector + graph + column-store search in VelesDB.
 
-**Version**: 3.10.0 | Last updated: 2026-09-10 · Applies to: velesdb-core 6.0.0
+**Version**: 3.10.0 | Last updated: 2026-09-14 · Applies to: velesdb-core 6.0.0
 
 ---
 
@@ -3116,6 +3116,9 @@ SELECT * FROM places WHERE GEO_DISTANCE(location, 48, 2) >= 1000;
 - Null GeoPoint values are excluded from results.
 - Non-GeoPoint or non-existent columns return empty results (no error).
 - Combinable with AND, OR, NOT, and other WHERE operators.
+- `=` and `!=` treat two distances as equal within 1mm, since the computed
+  distance is not bit-exact across equally valid ways of computing it; `<`,
+  `<=`, `>`, `>=` compare exactly.
 
 #### GEO_BBOX
 

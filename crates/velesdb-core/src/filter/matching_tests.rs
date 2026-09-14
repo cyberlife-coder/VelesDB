@@ -7,17 +7,17 @@ fn payload(json: serde_json::Value) -> serde_json::Value {
     json
 }
 
-// A haversine distance is built from several sin/cos/sqrt/atan2 calls, so two
-// otherwise-equal distances can differ by an amount well above `f64::EPSILON`
-// (the ULP at magnitude 1.0) once the magnitude is realistic (meters). This
-// difference sits strictly between the old absolute tolerance and the new
-// relative one, so it reproduces the false "not equal" the absolute epsilon
-// used to produce while still being far too small to be a genuine distance
-// difference.
+// `compare_geo_distance` treats two computed distances within 1mm of each
+// other as equal (`crate::geo_distance_eq`), since a haversine distance is
+// built from several sin/cos/sqrt/atan2 calls and two equally valid ways of
+// computing the same real-world distance are not bit-identical; that
+// module's own tests reproduce the cross-formula divergence this exists to
+// absorb. Here we only need to confirm both `CompareOp` arms read the
+// shared tolerance correctly.
 #[test]
 fn geo_distance_eq_tolerates_realistic_float_noise() {
     let dist = 1000.0;
-    let threshold = dist + 1e-13;
+    let threshold = dist + 0.0001; // 0.1mm: noise, not a real distance change
     assert!(compare_geo_distance(dist, threshold, CompareOp::Eq));
     assert!(!compare_geo_distance(dist, threshold, CompareOp::NotEq));
 }
