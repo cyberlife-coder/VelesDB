@@ -66,7 +66,7 @@
     "tsup": "^8.0.0",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.0.0",
-    "vitest": "^4.0.16"
+    "vitest": "^5.0.0"
   },
   "dependencies": {
     "@wiscale/velesdb-wasm": "^6.0.0"
