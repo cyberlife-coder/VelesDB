@@ -28,6 +28,9 @@ permissions:
   contents: read
 
 env:
+  # rustup never installs a toolchain on its own: a Rust call reached before the
+  # job's install step fails here instead of installing mid-build.
+  RUSTUP_AUTO_INSTALL: "0"
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   CARGO_NET_RETRY: 10

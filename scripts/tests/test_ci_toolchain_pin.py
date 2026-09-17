@@ -15,9 +15,23 @@ file's toolchain in the middle of a build step. That implicit install is where
     error: failed to install component: 'clippy-preview-x86_64-unknown-linux-gnu',
     detected conflict: 'bin/cargo-clippy'
 
-So the file is the only pin. Over every workflow (``*.yml``, ``*.yaml``), every
-composite action and every Dockerfile, this suite holds that:
+So the file is the only pin, and only an install step may install it. Two layers hold that.
 
+At runtime, every workflow sets ``RUSTUP_AUTO_INSTALL: "0"`` in its top-level
+``env`` (rustup 1.28.1 and later honour it). A cargo, rustc or rustup call that
+reaches a toolchain no earlier step installed then fails at once with rustup's
+``error: toolchain '<name>' is not installed`` instead of installing it
+mid-build, whatever shell form reached it. That setting, not the static scan
+below, is what catches every call: shell is not parsed here, and a scan of it
+never converges. The setting does not reach inside a Docker build or container,
+which is why Dockerfiles are checked on their own.
+
+Statically, over every workflow (``*.yml``, ``*.yaml``), every composite action
+and every Dockerfile, this suite holds that:
+
+* every workflow sets ``RUSTUP_AUTO_INSTALL`` to ``"0"`` in its top-level
+  ``env``, and no job or step ``env`` sets it to anything else; no workflow
+  assigns it in a ``run`` or runs ``rustup set auto-install``;
 * nothing names a toolchain but ``nightly``: no ``RUST_VERSION``, no
   ``*toolchain`` key anywhere in a workflow, no ``RUSTUP_TOOLCHAIN``
   assignment (key, inline, ``export``, ``$GITHUB_ENV`` or Dockerfile ``ENV``),
@@ -25,24 +39,34 @@ composite action and every Dockerfile, this suite holds that:
   ``override set|add`` or ``run`` naming one, no ``cargo +<toolchain>`` (by
   path too), no ``FROM rust:<version>`` once ``ARG`` defaults are expanded,
   and the file's channel nowhere outside a comment;
-* every call that reaches cargo -- a build, ``cargo +X``, or
-  ``Swatinem/rust-cache``, which runs ``cargo metadata`` -- finds its toolchain
-  installed by an earlier step of the same job: ``X`` for ``cargo +X``; else the
-  ``RUSTUP_TOOLCHAIN`` or rustup override in force; else the file of the
-  checkout of this repository the call runs in, following ``working-directory``,
-  ``cd``, ``pushd`` and ``popd``, installed by ``rustup toolchain install`` with
-  no toolchain name. Outside every checkout of this repository there is no
-  such file: only the runner's default toolchain, or another repository's;
-* a step that runs a repository script -- ``bash|sh|python3|node|pwsh <path>``,
-  or ``<path>`` itself -- reaches cargo when the script's text names cargo,
-  rustc, rustdoc, rustup, maturin, wasm-pack or cross, or names a script that
-  does. A mention counts as a call: a script that only mentions one is listed
-  in ``SCRIPTS_THAT_ONLY_NAME_A_TOOL`` with its reason. A script the guard
-  cannot resolve or read is a finding. What an installed module loads
-  (``python -m unittest``, ``pytest``) is not followed;
-* an install step under an ``if:`` installs only for calls under the identical
-  ``if:`` (``${{ }}`` and spacing aside). ``success()`` is no condition, and an
-  install under ``always()`` or under none covers every later call;
+* a call the scan reads finds its toolchain installed by an earlier step of the
+  same job. It reads a ``Swatinem/rust-cache`` step (its ``cargo metadata``)
+  and, in each ``run`` line outside a heredoc body, split at ``&&``, ``||``,
+  ``;``, pipes and parentheses, a command whose text holds ``cargo``, ``rustc``
+  or ``rustdoc``, ``cargo +X``, ``maturin build|develop``, ``wasm-pack``,
+  ``napi build`` or ``pip install ... ./crates/``. The toolchain it needs is
+  ``X`` for ``cargo +X``; else the ``RUSTUP_TOOLCHAIN`` or rustup override in
+  force; else the file of the checkout of this repository the call runs in,
+  following ``working-directory``, ``cd``, ``pushd`` and ``popd`` to a literal
+  directory, installed by ``rustup toolchain install`` with no toolchain name.
+  Outside every checkout of this repository there is no such file: only the
+  runner's default toolchain, or another repository's;
+* the scan also reads a command whose first word is ``bash``, ``sh``, ``zsh``,
+  ``python``, ``python3``, ``node`` or ``pwsh`` followed by a script path, or a
+  path run as the command: that command reaches cargo when the script's text
+  names cargo, rustc, rustdoc, rustup, maturin, wasm-pack or cross, or names,
+  by a literal path that resolves, a script that does. A mention counts as a
+  call: a script that only mentions one is listed in
+  ``SCRIPTS_THAT_ONLY_NAME_A_TOOL`` with its reason. A script path it cannot
+  resolve or read is a finding; a nested name holding ``$`` is not followed.
+  Not read: heredoc bodies, wrapper words (``source``, ``.``, ``exec``,
+  ``sudo``, ``timeout``, ``env <options>``, ``xargs``), ``python -m`` and what
+  an installed module loads;
+* an install under an ``if:`` covers only calls under the identical ``if:``
+  (``${{ }}`` and spacing aside), and ``success()`` is no condition. An install
+  under ``always()`` covers every later call. An install with no ``if:`` covers
+  every later call except one that can run after an earlier step failed: an
+  ``if:`` holding ``always()``, ``failure()`` or ``cancelled()``;
 * each ``nightly`` pin carries a ``# nightly: <why>`` comment of its own step or
   key, naming what the job runs on nightly -- a ``-Z`` flag, miri, cargo fuzz or
   cargo careful -- as its ``run:`` values and ``*FLAGS`` variables show, never
@@ -53,12 +77,13 @@ composite action and every Dockerfile, this suite holds that:
 
 Workflows are read by PyYAML, so flow mappings, anchors, aliases, merge keys
 and quoted keys mean what YAML says; a document PyYAML rejects is a finding.
-Anything else the guard does not model is a finding, never a pass: an ``env``
-or ``with`` that is not a mapping, a shell line it cannot tokenize, a ``cd``
-target holding ``$`` or a command substitution, a directory it cannot resolve,
-a Dockerfile heredoc, a COPY or RUN in exec form (options dropped first), a
-COPY of rust-toolchain.toml whose landing it cannot tell, or a ``FROM`` still
-holding ``$`` once ``ARG`` defaults are expanded.
+Some forms the static scan cannot place are findings rather than passes: an
+``env`` or ``with`` that is not a mapping, a shell line it cannot tokenize, a
+``cd`` target holding ``$`` or a command substitution, a directory it cannot
+resolve, a Dockerfile heredoc, a COPY or RUN in exec form (options dropped
+first), a COPY of rust-toolchain.toml whose landing it cannot tell, or a
+``FROM`` still holding ``$`` once ``ARG`` defaults are expanded. Every other
+shell form is left to ``RUSTUP_AUTO_INSTALL``.
 
 PyYAML is the one dependency: every job that runs this suite installs it at one
 pin, and without it the import below fails loudly instead of skipping.
@@ -155,9 +180,16 @@ INSTALL_ELSEWHERE = {
     UNREADABLE: "installs where the guard cannot tell which rust-toolchain.toml governs",
 }
 # `if:` values: `success()` is what a step without one runs under; an install under
-# `always()` runs whenever any later step of the job can.
+# `always()` runs whenever any later step of the job can. A call whose `if:` holds a
+# status function other than `success()` can run after an earlier step failed, and so
+# after an install with no `if:` was skipped.
 UNCONDITIONAL = ""
 ALWAYS = "always()"
+RUNS_AFTER_FAILURE_RE = re.compile(r"\b(?:always|failure|cancelled)\(\)")
+# The runtime backstop: rustup refuses to install a toolchain a call needs.
+AUTO_INSTALL = "RUSTUP_AUTO_INSTALL"
+AUTO_INSTALL_OFF = "0"
+AUTO_INSTALL_CHANGE_RE = re.compile(r"\bRUSTUP_AUTO_INSTALL\s*=|\brustup(?:\.exe)?\s+set\s+auto-install\b")
 EXPRESSION_RE = re.compile(r"^\$\{\{\s*(.*?)\s*\}\}$")
 # A repository script a step runs: `<interpreter> [options] <path>`, or `<path>` itself.
 INTERPRETER_RE = re.compile(r"^(?:bash|sh|zsh|pwsh|node|python(?:3(?:\.\d+)?)?)(?:\.exe)?$")
@@ -764,9 +796,14 @@ class _Walk:
         return chosen or self.override or self.file(directory)
 
     def require(self, where: str, step: Step, needed: str) -> None:
-        """A call of `step` needs `needed`: installed unconditionally, under `always()`, or under the call's own `if:`."""
+        """A call of `step` needs `needed`, installed under `always()` or the call's own `if:`.
+
+        An install with no `if:` also covers a call that runs only while every earlier
+        step succeeded.
+        """
         conditions = self.installed.get(needed, set())
-        if conditions & {UNCONDITIONAL, ALWAYS, step.condition}:
+        covering = {ALWAYS, step.condition} | (set() if RUNS_AFTER_FAILURE_RE.search(step.condition) else {UNCONDITIONAL})
+        if conditions & covering:
             return
         only = "".join(f" (installed only under `if: {c}`)" for c in sorted(conditions))
         self.found.append(f"{where} {_reach(needed)}{only}")
@@ -887,6 +924,27 @@ def findings(text: str, channel: str, root: Path = REPO_ROOT) -> list[str]:
     found = workflow.problems + _key_findings(workflow, reasons) + _scalar_findings(workflow, reasons, channel)
     for name, job in workflow.jobs.items():
         found += job.problems + _job_findings(name, job, workflow, reasons, root)
+    return found
+
+
+def auto_install_findings(text: str) -> list[str]:
+    """Where a workflow or composite action lets rustup install a toolchain on its own."""
+    workflow = parse(text)
+    found = list(workflow.problems)
+    composite = "jobs" not in _pairs(workflow.root)
+    if not composite and workflow.env.get(AUTO_INSTALL) != AUTO_INSTALL_OFF:
+        found.append(f'the workflow does not set {AUTO_INSTALL}: "{AUTO_INSTALL_OFF}" in its top-level env')
+    for name, job in workflow.jobs.items():
+        if job.env.get(AUTO_INSTALL, AUTO_INSTALL_OFF) != AUTO_INSTALL_OFF:
+            found.append(f"{name}: job sets {AUTO_INSTALL} to {job.env[AUTO_INSTALL]!r}")
+        for index, step in enumerate(job.steps):
+            where = f"{name}: step {index}"
+            value = step.env.get(AUTO_INSTALL, None if composite else AUTO_INSTALL_OFF)
+            if value != AUTO_INSTALL_OFF:
+                found.append(f"{where} sets {AUTO_INSTALL} to {value!r}" if value is not None
+                             else f'{where} of a composite action does not set {AUTO_INSTALL}: "{AUTO_INSTALL_OFF}"')
+            if AUTO_INSTALL_CHANGE_RE.search(step.run):
+                found.append(f"{where} changes {AUTO_INSTALL} in its run")
     return found
 
 
@@ -1184,7 +1242,8 @@ def real_findings() -> dict[str, list[str]]:
     channel, _ = toolchain_file()
     report = {}
     for path in workflow_files():
-        found = findings(path.read_text(encoding="utf-8"), channel)
+        text = path.read_text(encoding="utf-8")
+        found = findings(text, channel) + auto_install_findings(text)
         if found:
             report[path.relative_to(REPO_ROOT).as_posix()] = found
     return report
@@ -1855,6 +1914,71 @@ class ScriptAndConditionTests(unittest.TestCase):
         commands = [claim.get("validation_command") or "" for claim in registry["claims"] if claim.get("executable")]
         self.assertTrue(commands)
         self.assertEqual([], [command for command in commands if SCRIPT_TOOL_RE.search(command)])
+
+
+AUTO_INSTALL_ENV = 'env:\n  RUSTUP_AUTO_INSTALL: "0"\n'
+AUTO_INSTALL_JOB = AUTO_INSTALL_ENV + ONE_JOB + CHECKOUT
+
+
+class RuntimeBackstopTests(unittest.TestCase):
+    """Round 8: every workflow turns rustup's automatic install off, and nothing turns it back on."""
+
+    def test_a_workflow_that_turns_auto_install_off_is_silent(self) -> None:
+        self.assertEqual([], auto_install_findings(AUTO_INSTALL_JOB + INSTALL_STEP))
+        self.assertEqual([], auto_install_findings("env:\n  RUSTUP_AUTO_INSTALL: 0\n" + ONE_JOB + CHECKOUT))
+
+    def test_a_workflow_that_leaves_auto_install_on_is_refused(self) -> None:
+        cases = {
+            "no top-level env": ONE_JOB + CHECKOUT,
+            "another value": 'env:\n  RUSTUP_AUTO_INSTALL: "1"\n' + ONE_JOB + CHECKOUT,
+            "a job env only": ONE_JOB.replace("    steps:\n", '    env:\n      RUSTUP_AUTO_INSTALL: "0"\n    steps:\n') + CHECKOUT,
+        }
+        for label, text in cases.items():
+            with self.subTest(case=label):
+                self.assertTrue(_has(auto_install_findings(text), "does not set RUSTUP_AUTO_INSTALL"), label)
+
+    def test_a_job_step_or_run_that_turns_it_back_on_is_refused(self) -> None:
+        cases = {
+            "job env": (AUTO_INSTALL_ENV + ONE_JOB.replace("    steps:\n", '    env:\n      RUSTUP_AUTO_INSTALL: "1"\n    steps:\n')
+                        + CHECKOUT, "j: job sets RUSTUP_AUTO_INSTALL to '1'"),
+            "step env": (AUTO_INSTALL_JOB + '      - env:\n          RUSTUP_AUTO_INSTALL: ""\n        run: cargo build\n',
+                         "j: step 1 sets RUSTUP_AUTO_INSTALL to ''"),
+            "GITHUB_ENV": (AUTO_INSTALL_JOB + '      - run: echo "RUSTUP_AUTO_INSTALL=1" >> "$GITHUB_ENV"\n',
+                           "j: step 1 changes RUSTUP_AUTO_INSTALL in its run"),
+            "rustup set": (AUTO_INSTALL_JOB + "      - run: rustup set auto-install enable\n",
+                           "j: step 1 changes RUSTUP_AUTO_INSTALL in its run"),
+        }
+        for label, (text, wanted) in cases.items():
+            with self.subTest(case=label):
+                self.assertTrue(_has(auto_install_findings(text), wanted), auto_install_findings(text))
+
+    def test_a_workflow_the_loader_rejects_or_a_bare_composite_action_is_refused(self) -> None:
+        self.assertTrue(_has(auto_install_findings(AUTO_INSTALL_JOB + "  - [\n"), "not valid YAML"))
+        composite = "runs:\n  using: composite\n  steps:\n    - run: cargo build\n      shell: bash\n"
+        self.assertTrue(_has(auto_install_findings(composite), "of a composite action does not set RUSTUP_AUTO_INSTALL"))
+        covered = composite.replace("      shell: bash\n", '      shell: bash\n      env:\n        RUSTUP_AUTO_INSTALL: "0"\n')
+        self.assertEqual([], auto_install_findings(covered))
+
+    def test_removing_it_from_a_real_workflow_is_refused(self) -> None:
+        for workflow in ("ci.yml", "tag-release.yml"):
+            with self.subTest(workflow=workflow):
+                text = (WORKFLOW_DIR / workflow).read_text(encoding="utf-8")
+                line = '  RUSTUP_AUTO_INSTALL: "0"\n'
+                self.assertIn(line, text)
+                self.assertTrue(_has(auto_install_findings(text.replace(line, "")), "does not set RUSTUP_AUTO_INSTALL"))
+
+    # Round 7, finding 4: a call that can run after a failure is not covered by an install that cannot.
+    def test_a_call_that_can_run_after_a_failure_needs_an_install_that_can_too(self) -> None:
+        after_failure = ("always()", "failure()", "${{ !cancelled() }}", "cancelled() || github.ref == 'x'")
+        for condition in after_failure:
+            with self.subTest(build=condition):
+                found = _in_repository(INSTALL_STEP + f"      - if: {condition}\n        run: cargo build\n")
+                self.assertTrue(_has(found, f"j: step 2 {REACHES_THE_FILE}"), found)
+                always = "      - if: always()\n        run: rustup toolchain install --no-self-update --profile minimal\n"
+                self.assertEqual([], _in_repository(always + f"      - if: {condition}\n        run: cargo build\n"))
+                same = f"      - if: {condition}\n        run: rustup toolchain install --no-self-update --profile minimal\n"
+                self.assertEqual([], _in_repository(same + f"      - if: {condition}\n        run: cargo build\n"))
+        self.assertEqual([], _in_repository(INSTALL_STEP + "      - if: github.event_name == 'push'\n        run: cargo build\n"))
 
 
 class RealWorkflowTests(unittest.TestCase):
