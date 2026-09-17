@@ -728,9 +728,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   be accepted and dropped: `search`, on every path, hands the string to the
   binding's `search_with_quality`, whose `parse_search_quality` is the one
   implementation of the grammar, so the SDK refuses `'nonsense'` where the
-  REST server answers `400` (#2267). A dense search runs under the named
-  preset, `balanced` when none is named; the preset still tunes nothing,
-  WASM search being brute force.
+  REST server answers `400` (#2267). The refusal is a `VelesDBError`
+  (`BAD_REQUEST`) naming the backend and quoting the binding's words: the
+  binding throws a bare string, which would otherwise reach the caller as a
+  value no `instanceof` narrows. `searchBatch` refuses in the same pre-loop
+  as a filter, before any entry searches, so no batch runs half-way. A dense
+  search runs under the named preset, `balanced` when none is named; the
+  preset still tunes nothing, WASM search being brute force, and a filtered
+  or sparse-only search validates it without applying it.
   On REST, `multiQuerySearchIds` with a `filter` now
   fails with the server's `400` instead of returning unfiltered ids.
 

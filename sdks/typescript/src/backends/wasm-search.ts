@@ -25,6 +25,7 @@ import {
   requireWasmFieldsListed,
   requireWasmFilterSupport,
 } from './wasm-capability-guards';
+import { describeWasmThrow } from './wasm-helpers';
 import { sparseHits } from './wasm-sparse';
 import type {
   CollectionData,
@@ -147,6 +148,11 @@ const DEFAULT_SEARCH_QUALITY: SearchQuality = 'balanced';
  *
  * An untyped (JavaScript) caller can pass any value here, which is why the
  * refusal cannot be left to the type.
+ *
+ * The binding's own refusal is a bare string ({@link describeWasmThrow}), so
+ * letting it escape would hand the caller something no `instanceof` narrows
+ * — the opposite of what this SDK promises. It is re-raised as a
+ * `VelesDBError` carrying the binding's words verbatim.
  */
 function requireParsableQuality(ctx: WasmContext, quality: unknown): void {
   if (!isSet(quality)) {
@@ -155,6 +161,11 @@ function requireParsableQuality(ctx: WasmContext, quality: unknown): void {
   const probe = ctx.wasmModule.VectorStore.new_metadata_only();
   try {
     probe.search_with_quality(new Float32Array(0), 0, quality as SearchQuality);
+  } catch (thrown) {
+    throw new VelesDBError(
+      `WASM backend: ${describeWasmThrow(thrown)}`,
+      'BAD_REQUEST'
+    );
   } finally {
     probe.free();
   }
@@ -331,7 +342,8 @@ export async function wasmSearchBatch(
     k?: number;
     filter?: FilterInput;
     /**
-     * Search quality preset, forwarded to `wasmSearch`. It has nothing to
+     * Search quality preset, refused in the pre-loop below if the binding
+     * cannot parse it, then forwarded to `wasmSearch`. It has nothing to
      * tune there: WASM search scans every stored vector, which meets the
      * recall of any preset.
      */
@@ -342,9 +354,14 @@ export async function wasmSearchBatch(
   if (!collection) {
     throw new NotFoundError(`Collection '${collectionName}'`);
   }
+  // One pre-loop refuses every entry's unhonourable option before any entry
+  // searches: a batch runs whole or not at all. `wasmSearch` checks the same
+  // things again per entry, which is what makes a single search safe; what it
+  // cannot do is speak for the entries after it.
   for (const s of searches) {
     validateSearchInputs(collection, [s.vector], s.k ?? 10);
     requireWasmFilterSupport('searchBatch', s.filter);
+    requireParsableQuality(ctx, s.quality);
   }
   const results: SearchResult[][] = [];
   for (const s of searches) {

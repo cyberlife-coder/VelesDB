@@ -9,6 +9,21 @@
 import type { SparseVector } from '../types';
 import type { CollectionData, WasmModule, WasmContext } from './wasm-types';
 
+/**
+ * Read what velesdb-wasm threw, without assuming it threw an `Error`.
+ *
+ * wasm-bindgen raises a `Result::Err(String)` by throwing **the string
+ * itself**: probed against `@wiscale/velesdb-wasm` 6.0.0, an unparseable
+ * search quality gives `typeof thrown === 'string'` and
+ * `thrown instanceof Error === false`. So `thrown.message` reads
+ * `undefined` and `thrown instanceof Error` never holds — every catch
+ * around a binding call goes through this one reader, and re-raises a typed
+ * SDK error of its own so a caller can still narrow on the class.
+ */
+export function describeWasmThrow(thrown: unknown): string {
+  return thrown instanceof Error ? thrown.message : String(thrown);
+}
+
 /** Normalize a string ID that looks like a pure integer. */
 export function normalizeIdString(id: string): string | null {
   const trimmed = id.trim();

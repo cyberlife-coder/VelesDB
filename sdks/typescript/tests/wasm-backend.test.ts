@@ -102,6 +102,19 @@ describe('WasmBackend', () => {
       expect(backend.isInitialized()).toBe(true);
     });
 
+    it("keeps the binding's reason when it throws a bare string (#2282)", async () => {
+      // wasm-bindgen raises a `Result::Err(String)` by throwing the string
+      // itself, so `error instanceof Error` is false and the `cause` slot
+      // stays empty: the reason has to reach the message or it is lost.
+      mockWasmModule.default.mockRejectedValueOnce(
+        'expected magic word 00 61 73 6d'
+      );
+
+      await expect(backend.init()).rejects.toThrow(
+        /Failed to initialize WASM module: expected magic word 00 61 73 6d/
+      );
+    });
+
     it('should coalesce concurrent init() calls into one wasm-bindgen invocation', async () => {
       // Pre-existing TOCTOU race in init() flagged by Devin Review on PR #709:
       // two callers entering init() before _initialized is set both raced into

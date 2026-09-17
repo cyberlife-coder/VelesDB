@@ -21,6 +21,7 @@ import {
   wasmQuery,
 } from '../src/backends/wasm-search';
 import { NotFoundError, VelesDBError } from '../src/types';
+import type { SearchQuality } from '../src/types';
 import { newSparseIds, sparseHits } from '../src/backends/wasm-sparse';
 import type {
   CollectionData,
@@ -159,17 +160,30 @@ describe('wasmSearch — validation + dense happy path', () => {
   });
 });
 
+/**
+ * What `@wiscale/velesdb-wasm` 6.0.0 throws for an unparseable preset —
+ * a BARE STRING, not an `Error`. wasm-bindgen raises a `Result::Err(String)`
+ * by throwing the string itself, so a fake that throws `new Error(…)` is
+ * kinder than the binding and lets an `e.message` read pass that would
+ * return `undefined` in production. Probed, not assumed:
+ * `probe.search_with_quality(new Float32Array(0), 0, 'nonsense')` reports
+ * `typeof e === 'string'`, `e instanceof Error === false`.
+ */
+const REFUSAL =
+  "Unknown search quality: 'nonsense'. Valid: fast, balanced, accurate, " +
+  'perfect, autotune, custom:<ef>, adaptive:<min_ef>:<max_ef>';
+
+/** A module whose `new_metadata_only()` hands back `probe`. */
+function moduleWithProbe(probe: WasmVectorStore): Partial<WasmModule> {
+  return {
+    VectorStore: {
+      new_metadata_only: () => probe,
+    } as unknown as WasmModule['VectorStore'],
+  };
+}
+
 describe('wasmSearch — quality reaches the binding, and its refusal reaches back (#2282)', () => {
   beforeEach(() => vi.clearAllMocks());
-
-  /** A module whose `new_metadata_only()` hands back `probe`. */
-  function moduleWithProbe(probe: WasmVectorStore): Partial<WasmModule> {
-    return {
-      VectorStore: {
-        new_metadata_only: () => probe,
-      } as unknown as WasmModule['VectorStore'],
-    };
-  }
 
   it('runs a dense search under the preset the caller named', async () => {
     const search_with_quality = vi.fn(() => [[1n, 0.9]]);
@@ -235,7 +249,7 @@ describe('wasmSearch — quality reaches the binding, and its refusal reaches ba
     'a %s search refuses a preset the binding cannot parse',
     async (_path, options) => {
       const refuse = vi.fn(() => {
-        throw new Error("Unknown search quality: 'nonsense'");
+        throw REFUSAL;
       });
       const probe = buildStore({ search_with_quality: refuse });
       const ctx = buildCtx('docs', buildStore(), {
@@ -243,6 +257,13 @@ describe('wasmSearch — quality reaches the binding, and its refusal reaches ba
         wasmModule: moduleWithProbe(probe),
       });
 
+      const rejects = expect(
+        wasmSearch(ctx, 'docs', [], { ...options, quality: 'nonsense' })
+      ).rejects;
+      // A `VelesDBError`, not the bare string: the PR's contract is that a
+      // caller can narrow on the refusal, and `String(thrown)` is all the
+      // binding gives the SDK to put in it.
+      await rejects.toBeInstanceOf(VelesDBError);
       await expect(
         wasmSearch(ctx, 'docs', [], { ...options, quality: 'nonsense' })
       ).rejects.toThrow(/Unknown search quality/);
@@ -254,7 +275,7 @@ describe('wasmSearch — quality reaches the binding, and its refusal reaches ba
 
   it('asks the binding nothing when the caller names no preset', async () => {
     const refuse = vi.fn(() => {
-      throw new Error('the probe must not run');
+      throw 'the probe must not run';
     });
     const probe = buildStore({ search_with_quality: refuse });
     const ctx = buildCtx('docs', buildStore(), {
@@ -264,6 +285,34 @@ describe('wasmSearch — quality reaches the binding, and its refusal reaches ba
     await wasmSearch(ctx, 'docs', [0.1, 0.2]);
 
     expect(refuse).not.toHaveBeenCalled();
+  });
+});
+
+describe('wasmSearchBatch — an unparseable preset stops the batch before it starts (#2282)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('refuses in the pre-loop, so no entry runs half a batch', async () => {
+    // The probe is the binding's parser: it refuses `'nonsense'` and accepts
+    // everything else, so entry 1's own preset is not what stops the batch.
+    const parse = vi.fn((_q: Float32Array, _k: number, quality: string) => {
+      if (quality === 'nonsense') {
+        throw REFUSAL;
+      }
+      return [];
+    });
+    const search_with_quality = vi.fn(() => [[1n, 0.9]]);
+    const ctx = buildCtx('docs', buildStore({ search_with_quality }), {
+      wasmModule: moduleWithProbe(buildStore({ search_with_quality: parse })),
+    });
+
+    await expect(
+      wasmSearchBatch(ctx, 'docs', [
+        { vector: [0.1, 0.2], quality: 'fast' },
+        { vector: [0.3, 0.4], quality: 'nonsense' as SearchQuality },
+      ])
+    ).rejects.toBeInstanceOf(VelesDBError);
+
+    expect(search_with_quality).not.toHaveBeenCalled();
   });
 });
 

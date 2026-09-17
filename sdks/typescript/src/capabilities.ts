@@ -307,8 +307,15 @@ export const REST_CAPABILITIES: Readonly<CapabilityMap> = Object.freeze({
  * a `filter` on an operation `filteredSearch` does not list; a
  * `fusionParams`, `CollectionConfig` or `QueryOptions` field its list leaves
  * out; a storage mode or collection type it cannot create. Search `quality`
- * is accepted: WASM scans every stored vector, which meets any preset's
- * recall. `tests/wasm-capabilities-conformance.test.ts` probes every key
+ * is the one option this map does not decide: velesdb-wasm's own parser
+ * reads it, and a preset it cannot read is refused with `BAD_REQUEST`
+ * rather than accepted and dropped. A preset it can read has nothing to
+ * tune — WASM scans every stored vector, which meets any preset's recall —
+ * and as core states of the same field on REST, it "applies only to a dense
+ * search with neither a `filter` nor `ef_search`"
+ * (`crates/velesdb-core/src/api_types/requests.rs`), so a filtered or
+ * sparse-only search validates it without applying it.
+ * `tests/wasm-capabilities-conformance.test.ts` probes every key
  * against the backend, so the two cannot drift apart unnoticed; the map
  * once said `sparseSearch: false` while sparse search ran (#2095).
  *

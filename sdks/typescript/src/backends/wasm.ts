@@ -53,6 +53,7 @@ import {
   canonicalPayloadKey,
   buildWasmContext,
   buildCollectionInfo,
+  describeWasmThrow,
 } from './wasm-helpers';
 
 // Search & query delegates
@@ -191,8 +192,11 @@ export class WasmBackend implements IVelesDBBackend {
       this.wasmModule = mod;
       this._initialized = true;
     } catch (error) {
+      // The binding throws a bare string as readily as an `Error`
+      // (`describeWasmThrow`), and the `cause` slot takes only the latter,
+      // so the reason goes in the message or it is lost.
       throw new ConnectionError(
-        'Failed to initialize WASM module',
+        `Failed to initialize WASM module: ${describeWasmThrow(error)}`,
         error instanceof Error ? error : undefined
       );
     }
