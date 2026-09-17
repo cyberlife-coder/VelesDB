@@ -194,35 +194,48 @@ class MissingToolTests(unittest.TestCase):
             self.assertIn("ok", result.stdout)
             self.assertNotIn("TOOL MISSING", result.stdout)
 
-    def test_a_toolchain_or_an_option_before_a_missing_subcommand_is_seen_through(self) -> None:
+    def replay(self, env: dict[str, str], tmp: str, command: str) -> subprocess.CompletedProcess:
+        wf = Path(tmp) / "ci.yml"
+        wf.write_text(workflow_with("Cargo", command), encoding="utf-8")
+        return run(wf, env_extra=env)
+
+    def test_a_toolchain_or_a_known_flag_before_a_missing_subcommand_is_seen_through(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             env = fake_rust_toolchain(Path(tmp) / "bin")
             for command in (
                 "cargo +stable definitely-not-a-subcommand-xyz",
                 "cargo --locked definitely-not-a-subcommand-xyz",
-                "cargo --config net.offline=true -Z unstable-options definitely-not-a-subcommand-xyz",
-                "cargo -C crates definitely-not-a-subcommand-xyz",
-                "cargo +stable --color never fmt",
+                "cargo -q --offline --frozen -v definitely-not-a-subcommand-xyz",
+                "cargo +stable --quiet fmt",
             ):
                 with self.subTest(command=command):
-                    wf = Path(tmp) / "ci.yml"
-                    wf.write_text(workflow_with("Cargo", command), encoding="utf-8")
-                    result = run(wf, env_extra=env)
+                    result = self.replay(env, tmp, command)
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assertIn("TOOL MISSING", result.stdout)
-            # The same prefixes before a subcommand cargo has: it runs. Read as
-            # the subcommand, a prefix would be reported missing.
-            for command in (
-                "cargo +full build",
-                "cargo --locked build",
-                "cargo --config net.offline=true -Z unstable-options -C crates --color never --manifest-path Cargo.toml build",
-            ):
+            # A known prefix before a subcommand cargo has: it runs.
+            for command in ("cargo +full build", "cargo --locked build"):
                 with self.subTest(command=command):
-                    wf = Path(tmp) / "ci.yml"
-                    wf.write_text(workflow_with("Cargo", command), encoding="utf-8")
-                    result = run(wf, env_extra=env)
+                    result = self.replay(env, tmp, command)
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assertNotIn("TOOL MISSING", result.stdout)
+
+    def test_any_other_option_runs_cargo_rather_than_being_guessed_at(self) -> None:
+        # The replay keeps no table of the options that take a value: a value
+        # read as the subcommand would report a gate missing and skip it
+        # (`cargo --explain E0308`, `cargo -qZ unstable-options fmt`). Cargo
+        # runs instead, and its own exit code is the verdict.
+        with tempfile.TemporaryDirectory() as tmp:
+            env = fake_rust_toolchain(Path(tmp) / "bin")
+            for command in ("cargo --explain E0308", "cargo -qZ unstable-options fmt --version", "cargo -C crates build"):
+                with self.subTest(command=command):
+                    result = self.replay(env, tmp, command)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn("ok", result.stdout)
+                    self.assertNotIn("TOOL MISSING", result.stdout)
+            result = self.replay(env, tmp, "cargo --config x=1 definitely-not-a-subcommand-xyz")
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn("FAILED", result.stdout)
+            self.assertNotIn("TOOL MISSING", result.stdout)
 
     def test_a_red_gate_whose_output_names_a_missing_tool_stays_red(self) -> None:
         # "Missing tool" is decided by the exit code, never by the output: a

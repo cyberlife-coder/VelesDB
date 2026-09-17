@@ -79,22 +79,24 @@ total=0; ran=0; failed=0; skipped=0; missing=0
 # tool, and the replay exited 0. A shell answers 127 for a command it cannot
 # find. Cargo answers 101 for a subcommand it does not have, the same code as
 # any failing cargo command, so the replay asks first, and a missing one exits
-# 127 before cargo runs. The subcommand is the first argument that is not a
-# `+toolchain`, an option, or the value of an option that takes one
-# (`--config X`, `-Z X`, `-C X`, `--color X`, `--manifest-path X`). It is
-# missing when `cargo --list` does not name it, or when rustup provides it and
-# the toolchain lacks its component: `cargo --list` names rustup's `cargo-fmt`
-# and `cargo-clippy` proxies whether or not rustfmt or clippy is installed.
+# 127 before cargo runs. It looks only when every argument before the
+# subcommand is a `+toolchain` or a flag known to take no value (-q, -v, -vv,
+# --quiet, --verbose, --frozen, --locked, --offline); any other option, which
+# may take a value (`--explain E0308`, `-qZ unstable-options`), runs cargo
+# as written, so a value is never read as a missing subcommand and a gate is
+# never skipped on a guess. A subcommand is missing when `cargo --list` does
+# not name it, or when rustup provides it and the toolchain lacks its
+# component: `cargo --list` names rustup's `cargo-fmt` and `cargo-clippy`
+# proxies whether or not rustfmt or clippy is installed.
 CARGO_SUBCOMMANDS=$(cargo --list 2>/dev/null | awk 'NR > 1 { print $1 }')
 export CARGO_SUBCOMMANDS
 cargo() {
-  local arg sub="" toolchain="" takes_value=0 proxy rustup_bin
+  local arg sub="" toolchain="" proxy rustup_bin
   for arg in "$@"; do
-    if [ "$takes_value" = 1 ]; then takes_value=0; continue; fi
     case "$arg" in
       +*) toolchain="${arg#+}" ;;
-      --config|-Z|-C|--color|--manifest-path) takes_value=1 ;;
-      -*) ;;
+      -q|-v|-vv|--quiet|--verbose|--frozen|--locked|--offline) ;;
+      -*) command cargo "$@"; return ;;
       *) sub="$arg"; break ;;
     esac
   done
