@@ -265,7 +265,7 @@ export const f = {
 
   // --- Geo ------------------------------------------------------------------
 
-  /** Haversine distance comparison: `distance(field, (lat, lng)) <op> threshold`. */
+  /** Great-circle distance comparison (meters): `distance(field, (lat, lng)) <op> threshold`. */
   geoDistance(
     field: string,
     lat: number,
