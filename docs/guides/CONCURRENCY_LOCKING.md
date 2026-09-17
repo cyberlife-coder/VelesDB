@@ -185,7 +185,8 @@ of AI/RAG applications:
 | Collection create | Write (registry) | ~1ms | No (different lock) |
 | HNSW vacuum: snapshot | Read (index) | Copies every live vector | No |
 | HNSW vacuum: rebuild | None while inserting (at most two brief reads: the storage mode, and a quantized index's quantizer) | Inserts every live vector into a new graph, built with the index's own M, `ef_construction` and alpha: the bulk of a vacuum, seconds on a large index | No: searches and writes run on the old graph |
-| HNSW vacuum: swap | Write (index) | Re-maps every live id and inserts the vectors written during the rebuild: short next to the rebuild, longer the more writes landed during it | Yes |
+| HNSW vacuum: catch-up | Read (index) while listing the writes made during the rebuild and copying their vectors out; none while inserting them | Copies those writes into the new graph, in a bounded number of rounds, each taking the writes made during the one before, until a few dozen are left | No: searches and writes run on the old graph |
+| HNSW vacuum: swap | Write (index) | Re-maps every live id and inserts, one at a time and never on rayon, the writes the catch-up left: a few dozen, more only if writes outpaced every round | Yes |
 | HNSW `reorder_for_locality` | Write (index) | The whole pass: renumbers every node and moves every vector | Yes |
 | HNSW save | Save lock (per index) for the whole save; read (index) while it copies the mappings and writes the graph files | The graph files, then the mappings and meta files under the save lock only | No (see below) |
 

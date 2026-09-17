@@ -579,9 +579,14 @@ for neighbor in neighbors {
 
 3. **An HNSW vacuum holds the index write lock for its swap** (#2262):
    - The rebuild runs beside searches and writes, which carry on against the
-     old graph; the swap then copies the writes made meanwhile into the new
-     graph under the write lock, so searches and writes wait for as long as
-     those copies take
+     old graph. The writes made meanwhile are then copied into the new graph
+     without the write lock, in a bounded number of rounds, until a few dozen
+     are left; the swap copies those under the write lock one insert at a
+     time, so searches and writes wait only for them
+   - Nothing runs on rayon under that write lock: rayon workers running batch
+     searches park on the index lock, so a parallel insert waiting for them
+     there never finishes. The swap once did, and the vacuum hung with every
+     search
    - `reorder_for_locality` and a running vacuum wait for each other: one
      maintenance lock, which writers and saves never take, serializes the two.
      A save made during the rebuild saves the old graph; the swap waits for its

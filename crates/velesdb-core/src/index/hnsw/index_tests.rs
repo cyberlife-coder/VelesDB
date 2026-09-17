@@ -3720,17 +3720,64 @@ fn racing_vector(id: u64, version: u8) -> Vec<f32> {
 /// vacuum had run.
 #[test]
 fn writes_racing_a_vacuum_survive_it() {
-    // Ids below WRITES are upserted, the next WRITES deleted, the next WRITES
-    // left alone; BASE onwards are inserted during the race.
-    const WRITES: u64 = 300;
-    const BASE: u64 = 3 * WRITES;
     let index = HnswIndex::new(4, DistanceMetric::Euclidean).unwrap();
-    for id in 0..BASE {
+    for id in 0..RACED_BASE {
         index.insert(id, &racing_vector(id, 0));
     }
-    let vacuums = write_beside_vacuums(&index, WRITES, BASE);
+    assert_writes_survive_vacuums(&index);
+}
 
-    let [lost, stale, resurrected] = missed_writes(&index, WRITES, BASE);
+/// As [`writes_racing_a_vacuum_survive_it`], on an SQ8 index with a trained
+/// quantizer: the vacuum rebuilds it as SQ8, and copies the writes that race
+/// it into that quantized graph, whose inserts encode each vector as they go.
+/// Afterwards the index is still SQ8, its quantizer still trained, and every
+/// write is there. The codes themselves are not read back: the backend that
+/// holds them is private to `native_inner`.
+#[cfg(feature = "persistence")]
+#[test]
+fn writes_racing_a_vacuum_of_an_sq8_index_survive_it() {
+    let params = HnswParams {
+        storage_mode: crate::StorageMode::SQ8,
+        ..HnswParams::auto(4)
+    };
+    let index = HnswIndex::with_params(4, DistanceMetric::Euclidean, params).unwrap();
+    let vectors: Vec<Vec<f32>> = (0..RACED_BASE).map(|id| racing_vector(id, 0)).collect();
+    for (id, vector) in (0..RACED_BASE).zip(&vectors) {
+        index.insert(id, vector);
+    }
+    let samples: Vec<&[f32]> = vectors.iter().map(Vec::as_slice).collect();
+    let quantizer = crate::index::hnsw::native::ScalarQuantizer::train(&samples).unwrap();
+    assert!(
+        index
+            .inner
+            .read()
+            .install_trained_sq8(std::sync::Arc::new(quantizer))
+            .unwrap(),
+        "the index has no SQ8 backend to install the quantizer into"
+    );
+
+    assert_writes_survive_vacuums(&index);
+    let graph = index.inner.read();
+    assert_eq!(graph.storage_mode(), crate::StorageMode::SQ8);
+    assert!(
+        graph.is_sq8_quantizer_trained(),
+        "the vacuums dropped the quantizer"
+    );
+}
+
+/// Ids below [`RACED_WRITES`] are upserted during the race, the next
+/// `RACED_WRITES` deleted, the next `RACED_WRITES` left alone; `RACED_BASE`
+/// onwards are inserted during it.
+const RACED_WRITES: u64 = 300;
+/// The ids an index holds before [`assert_writes_survive_vacuums`] races it.
+const RACED_BASE: u64 = 3 * RACED_WRITES;
+
+/// Races writes against vacuums on `index`, which holds ids `0..RACED_BASE`
+/// on their version-0 vectors, and asserts an exhaustive scan sees every write.
+fn assert_writes_survive_vacuums(index: &HnswIndex) {
+    let vacuums = write_beside_vacuums(index, RACED_WRITES, RACED_BASE);
+
+    let [lost, stale, resurrected] = missed_writes(index, RACED_WRITES, RACED_BASE);
     assert!(
         lost.is_empty() && stale.is_empty() && resurrected.is_empty(),
         "after {vacuums} vacuums: {} inserts lost (first {:?}), {} upserts still on \
@@ -3742,7 +3789,7 @@ fn writes_racing_a_vacuum_survive_it() {
         resurrected.len(),
         resurrected.first(),
     );
-    assert_eq!(index.len(), BASE as usize, "live ids");
+    assert_eq!(index.len(), RACED_BASE as usize, "live ids");
 }
 
 /// Makes `writes` rounds of writes on `index` while another thread vacuums it

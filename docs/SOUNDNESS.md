@@ -960,11 +960,16 @@ each call site keeps an index's guard and its mappings together.
 
 **Invariant**: a write made while `vacuum` rebuilds survives its swap
 (#2262). `vacuum` snapshots each live id with its slot under a read guard,
-rebuilds without one, then re-maps under the write guard from the mappings
-as they stand, not from the snapshot. An id still on the slot the snapshot
-saw takes the slot the rebuild gave its vector. An id on any other slot was
-inserted or upserted since: its vector is copied from the old graph into the
-new one before the old graph is dropped. A snapshot id no longer mapped was
+rebuilds without one, copies the writes made meanwhile into the new graph in
+catch-up rounds that hold a read guard only to list them and copy their
+vectors out, then re-maps under the write guard from the mappings as they
+stand, not from the snapshot. An id still on the slot its vector was read
+from, by the snapshot or a catch-up round, takes the slot that vector got in
+the new graph. An id on any other slot was inserted or upserted since: its
+vector is copied from the old graph into the new one, one insert at a time,
+before the old graph is dropped. No rayon work runs under the write guard: a
+rayon worker parked on the index lock by a batch search cannot run it, and a
+vacuum that waited on one hung. A snapshot id no longer mapped was
 deleted since, and stays deleted; its node in the new graph is a tombstone,
 and counted as one: the re-map sets `next_idx` to the new graph's slot count,
 so `tombstone_count`, which is what triggers a vacuum, counts every slot no id
@@ -977,10 +982,13 @@ parameters the index was built with, and a save after it persists them.
 With no live id the rebuild still runs, into an empty graph, so an index
 whose ids are all deleted is left with no tombstone. Tests:
 `writes_racing_a_vacuum_survive_it`,
+`writes_racing_a_vacuum_of_an_sq8_index_survive_it`,
 `deletes_racing_a_vacuum_keep_the_tombstone_count_exact`,
 `vacuum_keeps_the_index_parameters` and
 `vacuum_of_an_index_with_no_live_id_empties_it` in
-`index/hnsw/index_tests.rs`.
+`index/hnsw/index_tests.rs`, and
+`a_vacuum_carrying_writes_finishes_beside_batch_searches` in
+`tests/vacuum_beside_batch_search.rs`.
 
 **Invariant**: a save persists mappings that name only slots of the graph it
 persists, each holding the vector of the id that names it (#2262). `save`
