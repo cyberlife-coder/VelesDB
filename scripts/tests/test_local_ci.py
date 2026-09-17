@@ -135,19 +135,38 @@ class MissingToolTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("TOOL MISSING", result.stdout)
 
-    def test_a_cargo_style_missing_subcommand_is_not_a_failure(self) -> None:
-        # `cargo machete` says "no such command" and exits 101, not 127. The
-        # first version knew only the shell's wording and reported a FAILING
-        # GATE on a clean tree.
+    def test_a_missing_cargo_subcommand_is_not_a_failure(self) -> None:
+        # `cargo machete` without cargo-machete exits 101, the code of any
+        # failing cargo command. The replay tells them apart before running:
+        # a subcommand cargo does not list exits 127, as a missing command does.
         with tempfile.TemporaryDirectory() as tmp:
             wf = Path(tmp) / "ci.yml"
-            wf.write_text(
-                workflow_with("Cargo subcommand", "'echo \"error: no such command: machete\" >&2; exit 101'"),
-                encoding="utf-8",
-            )
+            wf.write_text(workflow_with("Cargo subcommand", "cargo definitely-not-a-subcommand-xyz"), encoding="utf-8")
             result = run(wf)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("TOOL MISSING", result.stdout)
+
+    def test_a_red_gate_whose_output_names_a_missing_tool_stays_red(self) -> None:
+        # "Missing tool" is decided by the exit code, never by the output: a
+        # guard quoting a doc line such as "... when the plugin is not
+        # installed." failed, and was reported TOOL MISSING with exit 0.
+        phrases = (
+            "Search answers in 42 ms even when the plugin is not installed.",
+            "bash: foo: command not found",
+            "error: no such command: machete",
+            "open: No such file or directory: missing.txt",
+        )
+        for phrase in phrases:
+            for code in (1, 2, 101):
+                with self.subTest(phrase=phrase, code=code), tempfile.TemporaryDirectory() as tmp:
+                    wf = Path(tmp) / "ci.yml"
+                    wf.write_text(
+                        workflow_with("Red gate", f"'echo \"{phrase}\"; exit {code}'"), encoding="utf-8"
+                    )
+                    result = run(wf)
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertIn("FAILED", result.stdout)
+                    self.assertNotIn("TOOL MISSING", result.stdout)
 
 
 class DependencyTests(unittest.TestCase):

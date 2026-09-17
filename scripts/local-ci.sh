@@ -71,6 +71,29 @@ PY
 skippable='GITHUB_|RUNNER_|apt-get|actions/|\$\{\{'
 
 total=0; ran=0; failed=0; skipped=0; missing=0
+
+# A missing tool is decided by the EXIT CODE, never by reading the output. The
+# first versions searched the output for "command not found", "no such
+# command" or "is not installed", so a red gate whose output merely quoted such
+# a phrase (a guard printing the doc line it refused) was reported as a missing
+# tool, and the replay exited 0. A shell answers 127 for a command it cannot
+# find. Cargo answers 101 for a subcommand it does not have, the same code as
+# any failing cargo command, so the replay asks cargo first: a subcommand
+# `cargo --list` does not name exits 127 before cargo runs.
+CARGO_SUBCOMMANDS=$(cargo --list 2>/dev/null | awk 'NR > 1 { print $1 }')
+export CARGO_SUBCOMMANDS
+cargo() {
+  case "${1:-}" in
+    ""|-*|+*) ;;
+    *)
+      if ! printf '%s\n' "$CARGO_SUBCOMMANDS" | grep -qxF -- "$1"; then
+        echo "cargo $1: this cargo has no such subcommand" >&2
+        return 127
+      fi ;;
+  esac
+  command cargo "$@"
+}
+export -f cargo
 declare -a failures=()
 
 while IFS=$'\t' read -r job name run; do
@@ -89,16 +112,12 @@ while IFS=$'\t' read -r job name run; do
   out=$(bash -c "$cmd" 2>&1); rc=$?
   if [ "$rc" -eq 0 ]; then
     ran=$((ran+1)); printf 'ok\n'
-  elif [ "$rc" -eq 127 ] || printf '%s' "$out" | grep -qiE 'command not found|no such command|no such file or directory: [a-z]|is not installed'; then
+  elif [ "$rc" -eq 127 ]; then
     # A tool this machine does not have is NOT a gate that refused. Reporting
     # it as a failure is how a gate starts crying wolf, and a gate that cries
     # wolf gets ignored - then switched off. Say what is missing instead.
-    #
-    # The pattern list is plural because each launcher phrases it differently:
-    # a shell says "command not found" and exits 127, while `cargo machete`
-    # says "no such command" and exits 101. The first version knew only the
-    # shell's wording and reported cargo-machete as a FAILING GATE on a clean
-    # tree - the exact false red this branch exists to prevent.
+    # Any other non-zero exit, a guard's "could not run" included, is a
+    # failure: a gate that did not run verified nothing.
     missing=$((missing+1))
     printf 'TOOL MISSING\n'
     printf '%s\n' "$out" | head -2 | sed 's/^/       /'

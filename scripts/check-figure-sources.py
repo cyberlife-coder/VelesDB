@@ -68,7 +68,7 @@ What it cannot see: this is a heuristic. It does not read
   given in minutes ("1 min 59 s", "56 minutes");
 - a time in a table row whose label is a config word ("| Budget pressure |
   ... | 1.07 ms |");
-- a figure drawn in an image or a chart;
+- a figure drawn in an image or a chart (an image's alt text is read);
 - a Python doctest (`>>>`), which Markdown renders as a quotation and the guard
   therefore reads as prose.
 What binds a figure to its run is the register, not this guard: a figure it
@@ -79,6 +79,7 @@ from __future__ import annotations
 
 import argparse
 import html
+import importlib.metadata
 import json
 import re
 import sys
@@ -93,8 +94,13 @@ except ModuleNotFoundError:  # reported by main(): the guard could not run
     MarkdownIt = None
 
 CONTRACT = Path("docs/reference/promise-contract.json")
-# The parser the guard reads Markdown with. CI installs exactly this version.
-PARSER_REQUIREMENT = "markdown-it-py==4.2.0"
+# The parser the guard reads Markdown with, and the one package it relies on.
+# CI installs exactly these versions; the guard runs with no other, because a
+# different parser renders a different text and the guard would read it in
+# silence (markdown-it-py 3.0.0 passed every test).
+PARSER_PINS = {"markdown-it-py": "4.2.0", "mdurl": "0.1.2"}
+PARSER_REQUIREMENT = " ".join(f"{name}=={version}" for name, version in PARSER_PINS.items())
+installed_version = importlib.metadata.version
 
 # The one number grammar every rule reads.
 _NUM = r"\d+(?:[.,]\d+)*"
@@ -417,6 +423,16 @@ def columns(content: str, source: str, start: int) -> tuple[int, list[int]]:
     return col, out
 
 
+def flattened(children):
+    """The inline tokens in source order, an image replaced by its alt text's
+    tokens: `![p50 42 ms](x.png)` states 42 ms."""
+    for child in children:
+        if child.type == "image":
+            yield from flattened(child.children or ())
+        else:
+            yield child
+
+
 def render(inline, segment: Segment, cell_from: int | None = None):
     """The rendered lines of an inline token: [(segment line, text, where,
     code)], `where` in segment columns. `cell_from` places a table cell, whose
@@ -435,7 +451,7 @@ def render(inline, segment: Segment, cell_from: int | None = None):
         at = content.find(text, cursor) if text else -1
         return at if at >= 0 else cursor
 
-    for child in inline.children or ():
+    for child in flattened(inline.children or ()):
         kind = child.type
         if kind == "text" and child.content:
             at = seek(child.content)
@@ -817,8 +833,9 @@ def ambiguous_sections(rel: str, seen: list[str], sections: set[str]) -> list[st
 
 
 def violations(root: Path) -> list[str]:
-    if MarkdownIt is None:
-        raise RuntimeError(f"{PARSER_REQUIREMENT} is not installed")
+    problem = parser_problem()
+    if problem:
+        raise RuntimeError(problem)
     claims = contract_claims(root)
     parser = markdown()
     found = []
@@ -863,16 +880,27 @@ def violations(root: Path) -> list[str]:
     return found
 
 
+def parser_problem() -> str | None:
+    """Why the pinned parser cannot be used, or None when it can."""
+    if MarkdownIt is None:
+        return "markdown-it-py is not importable"
+    for name, pinned in PARSER_PINS.items():
+        try:
+            version = installed_version(name)
+        except importlib.metadata.PackageNotFoundError:
+            return f"{name} is not installed; the guard needs {name}=={pinned}"
+        if version != pinned:
+            return f"{name} {version} is installed; the guard needs {name}=={pinned}"
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
     args = parser.parse_args(argv)
-    if MarkdownIt is None:
-        print(
-            f"ERROR: {PARSER_REQUIREMENT} is not installed, so the figure guard could not run "
-            f"(python3 -m pip install {PARSER_REQUIREMENT}).",
-            file=sys.stderr,
-        )
+    problem = parser_problem()
+    if problem:
+        print(f"ERROR: {problem}, so the figure guard could not run (python3 -m pip install {PARSER_REQUIREMENT}).", file=sys.stderr)
         return 2
     found = violations(args.root)
     for item in found:

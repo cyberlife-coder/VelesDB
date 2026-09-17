@@ -556,8 +556,8 @@ jobs:
         run: python3 scripts/check-perf-claims.py --no-criterion
       # The figure guard reads Markdown with a real parser, pinned here and in
       # gate-contracts.yml. A venv, because the runner's system Python refuses
-      # a pip install into itself (PEP 668). Without the module the guard
-      # exits 2, never 0.
+      # a pip install into itself (PEP 668). Without these exact versions the
+      # guard exits 2, never 0.
       - name: Install the figure guard's Markdown parser
         run: |
           python3 -m venv /tmp/figure-guard

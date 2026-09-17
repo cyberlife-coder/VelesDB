@@ -743,14 +743,36 @@ class FigureSourcesTest(unittest.TestCase):
         doc = "<table>\n<tr><td>p50 42<!-- x --> ms</td></tr>\n</table>\n"
         self.assertEqual(self.latency_lines(doc), ["docs/G.md:2"])
 
-    def test_the_guard_says_it_could_not_run_without_its_parser(self):
+    def exit_without_the_pinned_parser(self, **patches) -> tuple[int, str]:
         root = self.tree({"docs/G.md": "Search answers in 3 ms.\n"})
-        original = guard.MarkdownIt
-        guard.MarkdownIt = None
-        self.addCleanup(setattr, guard, "MarkdownIt", original)
+        for name, value in patches.items():
+            self.addCleanup(setattr, guard, name, getattr(guard, name))
+            setattr(guard, name, value)
         with contextlib.redirect_stderr(io.StringIO()) as err, contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(guard.main(["--root", str(root)]), 2)
-        self.assertIn("markdown-it-py==4.2.0 is not installed", err.getvalue())
+            code = guard.main(["--root", str(root)])
+        return code, err.getvalue()
+
+    def test_the_guard_says_it_could_not_run_without_its_parser(self):
+        code, err = self.exit_without_the_pinned_parser(MarkdownIt=None)
+        self.assertEqual(code, 2)
+        self.assertIn("markdown-it-py is not importable", err)
+
+    def test_the_guard_runs_with_no_other_parser_version(self):
+        # markdown-it-py 3.0.0 renders differently and passed every test.
+        for name in ("markdown-it-py", "mdurl"):
+            with self.subTest(name=name):
+                code, err = self.exit_without_the_pinned_parser(
+                    installed_version=lambda package, stale=name: "0.0.1" if package == stale else guard.PARSER_PINS[package]
+                )
+                self.assertEqual(code, 2)
+                self.assertIn(f"{name} 0.0.1 is installed; the guard needs {name}=={guard.PARSER_PINS[name]}", err)
+
+    def test_the_pinned_parser_is_the_one_installed_here(self):
+        # The control: with the pins CI installs, the guard runs.
+        self.assertIsNone(guard.parser_problem())
+
+    def test_an_image_alt_text_is_read(self):
+        self.assertEqual(self.latency_lines("See ![p50 42 ms](x.png).\n"), ["docs/G.md:1"])
 
     def test_a_number_with_its_unit_in_a_cell_is_read(self):
         doc = "| Mode | Latency |\n|---|---|\n| Fast | 42 ms |\n"
