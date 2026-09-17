@@ -43,7 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   show each such link as its text, read with pulldown-cmark rather than a
   hand-written scan: ``[`Name`](crate::path)`` becomes `` `Name` ``, and
   a shortcut link drops its disambiguator, so ``[`fn@f`]`` becomes `` `f` ``
-  and `[struct@Foo]` becomes `Foo`. A link is a rustdoc link when its
+  and `[struct@Foo]` becomes `Foo`, and `[Foo#method.id]` shows `Foo`. A link is a rustdoc link when its
   destination reads as an item path, a `#` fragment allowed: an inline or
   reference-style link to one, a definition of one (removed with its line),
   and a reference no definition resolves whose label is one, bare `[Name]`

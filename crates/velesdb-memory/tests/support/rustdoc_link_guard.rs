@@ -17,10 +17,12 @@
 // - a shortcut or collapsed link no definition resolves whose label reads as an
 //   item path, which rustdoc 1.90 treats as an intra-doc link and warns about
 //   when it does not resolve (`` [`X`] ``, `[X]`, `[optional]`, `[a::B]`,
-//   `[fn@f]`, `[f()]`, `[X][]`);
+//   `[fn@f]`, `[f()]`, `[X#method.id]`, `[X][]`);
 // - a reference definition to anything but such a URL (`[x]: crate::y`).
 // Code spans, code blocks and escaped brackets hold no link, so it passes
 // them, and it passes prose brackets that name no item (`[0, 1]`, `[a b]`).
+// `one_pass_is_final` in `src/schema_tests.rs` checks that it flags every
+// text of its pseudo-random mix that the rewrite rewrites.
 
 use pulldown_cmark::{BrokenLink, CowStr, Event, LinkType, Options, Parser, Tag};
 use serde_json::Value;
@@ -87,15 +89,18 @@ fn is_rustdoc_link(link_type: LinkType, destination: &str) -> bool {
 }
 
 /// Whether an unresolved shortcut or collapsed label reads as an item path,
-/// which rustdoc 1.90 treats as an intra-doc link: one code span, or a word
+/// which rustdoc 1.90 treats as an intra-doc link: one code span, or, before
+/// any `#` fragment, a word
 /// of letters, digits and path marks (`::`, `@`, `()`, `!`, `<…>`, `&`, `*`)
-/// holding a letter. A label with a space outside `<…>` (`[0, 1]`), a digit
+/// holding a letter or an underscore. A label with a space outside `<…>` (`[0, 1]`), a digit
 /// alone (`[0]`) or other punctuation (`[YYYY-MM-DD]`) is prose.
 fn names_an_item(label: &str) -> bool {
     let label = label.trim();
     if is_one_code_span(label) {
         return true;
     }
+    // rustdoc resolves the item before a `#` fragment (`[X#method.id]`).
+    let label = label.split_once('#').map_or(label, |(item, _)| item);
     let mut depth = 0_usize;
     let mut after_disambiguator = false;
     let outside_generics: String = label
@@ -115,7 +120,9 @@ fn names_an_item(label: &str) -> bool {
             false
         })
         .collect();
-    outside_generics.chars().any(char::is_alphabetic)
+    outside_generics
+        .chars()
+        .any(|c| c.is_alphabetic() || c == '_')
         && outside_generics
             .chars()
             .all(|c| c.is_alphanumeric() || "_:@!(){}&*;".contains(c))

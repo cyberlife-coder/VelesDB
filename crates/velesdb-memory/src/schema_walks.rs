@@ -115,8 +115,9 @@ const MARKDOWN: Options = Options::ENABLE_TABLES
 /// written: ``[`X`](crate::X)`` becomes `` `X` ``, `[the point](crate::X)`
 /// becomes `the point`, and a shortcut or collapsed link drops its
 /// disambiguator (``[`fn@f`]`` becomes `` `f` ``, `[struct@Foo]` becomes
-/// `Foo`), as rustdoc shows it. A definition of an item path is removed with
-/// its line, block quote markers included.
+/// `Foo`) and its `#` fragment (`[X#method.id]` becomes `X`), as rustdoc
+/// shows it. A definition of an item path is removed with its line, block
+/// quote markers included, or alone when the quote holding it would go too.
 ///
 /// Fail closed by construction: the rewritten text is parsed again, and it
 /// must read as the original with those links' tags dropped, event for event,
@@ -128,13 +129,14 @@ const MARKDOWN: Options = Options::ENABLE_TABLES
 /// is hardened twice).
 pub(super) fn unlink_rustdoc(text: &str) -> Option<String> {
     let parser = parse(text).into_offset_iter();
-    let mut edits: Vec<(Range<usize>, String)> = parser
+    let definitions: Vec<Range<usize>> = parser
         .reference_definitions()
         .iter()
         .filter(|(_, definition)| is_rustdoc_target(&definition.dest))
-        .map(|(_, definition)| (with_its_line_ending(text, &definition.span), String::new()))
+        .map(|(_, definition)| definition.span.clone())
         .collect();
     let events: Vec<(Event<'_>, Range<usize>)> = parser.collect();
+    let mut edits: Vec<(Range<usize>, String)> = Vec::new();
     let mut expected = Vec::with_capacity(events.len());
     let mut at = 0;
     while let Some((event, range)) = events.get(at) {
@@ -159,8 +161,21 @@ pub(super) fn unlink_rustdoc(text: &str) -> Option<String> {
             }
         }
     }
-    let rewritten = apply(text, edits)?;
-    reads_as(&rewritten, expected).then_some(rewritten)
+    // A definition goes with its whole line when the rest reads the same
+    // without it, and alone otherwise: a quote holding only a definition keeps
+    // its marker. The round trip picks; the text stays if neither reads the
+    // same.
+    let removals: [DefinitionRemoval; 2] = [with_its_line, |_, span| span.clone()];
+    removals.iter().find_map(|removal| {
+        let mut all = edits.clone();
+        all.extend(
+            definitions
+                .iter()
+                .map(|span| (removal(text, span), String::new())),
+        );
+        let rewritten = apply(text, all)?;
+        reads_as(&rewritten, expected.clone()).then_some(rewritten)
+    })
 }
 
 /// Whether `rewritten` parses to `expected`, text runs joined, and defines no
@@ -184,18 +199,21 @@ fn link_source(text: &str, link_type: LinkType, range: &Range<usize>) -> Range<u
     range.start..range.end + if collapsed { COLLAPSED.len() } else { 0 }
 }
 
+/// How much of the source a definition's removal takes, given its span.
+type DefinitionRemoval = fn(&str, &Range<usize>) -> Range<usize>;
+
 /// A definition's `span`, widened to its whole line: the line ending after
 /// it, and the block quote markers before it (`> [z]: crate::Z`), which
 /// would otherwise stay as a line of their own. Anything else before it on
 /// the line is kept, and the round trip in [`unlink_rustdoc`] judges the
 /// result.
-fn with_its_line_ending(text: &str, span: &Range<usize>) -> Range<usize> {
+fn with_its_line(text: &str, span: &Range<usize>) -> Range<usize> {
     let line_start = text[..span.start]
         .rfind(LINE_ENDINGS)
         .map_or(0, |ending| ending + 1);
     let only_quote_markers = text[line_start..span.start]
         .chars()
-        .all(|c| c == '>' || c == ' ');
+        .all(|c| c == '>' || c == ' ' || c == '\t');
     let start = if only_quote_markers {
         line_start
     } else {
@@ -316,7 +334,11 @@ fn link_text<'a>(
         }
         let label = merged_text(inner.iter().map(|(event, _)| event.clone()));
         if let [Event::Text(label)] = label.as_slice() {
-            if let Some(path) = without_disambiguator(label.trim()) {
+            // rustdoc shows the path alone: no disambiguator, no fragment.
+            let label = label.trim();
+            let item = label.split_once('#').map_or(label, |(item, _)| item);
+            let path = without_disambiguator(item).unwrap_or(item);
+            if path != label {
                 let shown = path.to_owned();
                 return (shown.clone(), vec![Event::Text(CowStr::from(shown))]);
             }

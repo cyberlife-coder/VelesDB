@@ -475,6 +475,28 @@ mod unlink {
                 "see a::B and Recollection",
             ),
             ("this is [optional] here", "this is optional here"),
+            (
+                "see [Recollection#method.id] and [fn@f#x][]",
+                "see Recollection and f",
+            ),
+        ] {
+            assert_rewritten(text, shown);
+        }
+    }
+
+    /// A definition is removed with as much of its line as leaves the rest
+    /// reading the same: its whole line in a quote that holds more, only the
+    /// definition where the quote would otherwise go. rustdoc accepts each.
+    #[test]
+    fn a_definition_in_a_block_quote_goes_and_the_quote_stays() {
+        for (text, shown) in [
+            ("> [z]: crate::Z\n\nText [z]", "> \n\nText z"),
+            ("Text [z]\n\n> [z]: crate::Z", "Text z\n\n> "),
+            (">\t[z]: crate::Z\n> more", "> more"),
+            (
+                "> see [z].\n>\n> [z]: crate::Z\n> more",
+                "> see z.\n>\n> more",
+            ),
         ] {
             assert_rewritten(text, shown);
         }
@@ -590,6 +612,10 @@ mod unlink {
             "[r]: crate::r\n",
             "[r]",
             "][",
+            "[Recollection#method.id]",
+            "#x",
+            ">\t",
+            "\n\n",
         ];
         let mut seed: usize = 0x2265_2025;
         let mut next = || {
@@ -606,6 +632,11 @@ mod unlink {
                 Some(out) => {
                     rewritten += 1;
                     assert_eq!(unlink_rustdoc(&out), None, "{text:?} -> {out:?}");
+                    // The guard reads at least what the rewrite reads.
+                    assert!(
+                        !rustdoc_links(&text).is_empty(),
+                        "the guard misses {text:?}"
+                    );
                 }
                 None => left += 1,
             }
@@ -713,6 +744,9 @@ mod unlink {
             "see [the point](crate::Point).",
             "see [the point](<crate::Point>).",
             "> see [\n> `Point`] here",
+            "see [Recollection#method.id].",
+            "returns **[Recollection#method.id]**s",
+            "see [`Vec#method.push`] and [a::B#x][]",
         ] {
             assert!(!rustdoc_links(text).is_empty(), "the guard misses {text:?}");
         }
