@@ -153,8 +153,9 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
                 - "full": Full f32 precision (default). Alias: "f32".
                 - "sq8": 8-bit scalar quantization (4x memory reduction). Alias: "int8".
                 - "binary": 1-bit binary quantization (32x memory reduction). Alias: "bit".
-                - "pq": Product quantization (8-32x compression, best for large-scale
-                  datasets). Aliases: "product_quantization", "product-quantization".
+                - "pq": Product quantization (compression of 2 × dim / m, dim/4
+                  at the default m = 8; best for large-scale datasets).
+                  Aliases: "product_quantization", "product-quantization".
                 - "rabitq": RaBitQ with scalar correction (32x compression, good recall).
 
                 Examples: ``storage_mode="int8"`` is equivalent to ``storage_mode="sq8"``.

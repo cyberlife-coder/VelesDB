@@ -291,7 +291,8 @@ fn test_upsert_batch_produces_searchable_results() {
 
 /// Regression test: `upsert()` throughput should be close to `upsert_bulk()`.
 ///
-/// With batched storage + batched HNSW, the gap should be within 3x.
+/// With batched storage + batched HNSW the gap is small; the assertion below
+/// only catches a gross regression.
 /// The remaining overhead is secondary indexes, quantization, text indexing.
 #[test]
 fn test_upsert_throughput_not_degraded_vs_bulk() {

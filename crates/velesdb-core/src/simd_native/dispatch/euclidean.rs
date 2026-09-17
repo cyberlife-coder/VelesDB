@@ -79,7 +79,7 @@ pub fn norm_native(v: &[f32]) -> f32 {
 /// In-place normalization with runtime SIMD dispatch.
 ///
 /// F-07: The scaling phase now uses SIMD (AVX2/AVX-512) instead of a scalar loop.
-/// For 768D vectors, this is ~4-8x faster on the scaling phase.
+/// For 768D vectors, this speeds up the scaling phase.
 #[allow(clippy::inline_always)]
 #[inline(always)]
 pub fn normalize_inplace_native(v: &mut [f32]) {

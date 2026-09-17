@@ -8,8 +8,8 @@
 //! # Performance Targets
 //!
 //! - Bulk import: 50K+ vectors/sec at 768D
-//! - Search latency: < 1ms for 1M vectors
-//! - Memory efficiency: 50% reduction with FP16
+//! - Search latency: sub-millisecond at 1M vectors (see `docs/BENCHMARKS.md` §11.3)
+//! - Memory efficiency: FP16 stores 2 bytes per dimension instead of 4
 //!
 //! # Safety (EPIC-032/US-002)
 //!

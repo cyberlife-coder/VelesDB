@@ -108,9 +108,9 @@ At runtime, VelesDB automatically detects and uses the best available SIMD path 
 
 | Mode | Memory Reduction | Recall Impact | Best For |
 |---|---|---|---|
-| `full` (f32) | 1x (baseline) | Perfect | Small datasets, highest accuracy |
-| `sq8` (8-bit scalar) | 4x | Minimal (~1-2%) | Production workloads, good balance |
-| `binary` (1-bit) | 32x | Moderate (~5-10%) | Very large datasets, rough filtering |
+| `full` (f32) | 1x (baseline, 4 bytes per dimension) | Perfect | Small datasets, highest accuracy |
+| `sq8` (8-bit scalar) | 4x | Small (not measured) | Production workloads, good balance |
+| `binary` (1-bit) | 32x | Larger (not measured) | Very large datasets, rough filtering |
 | `pq` (product quantization) | Configurable | Tunable | Large-scale ANN with ADC search |
 
 ```python
