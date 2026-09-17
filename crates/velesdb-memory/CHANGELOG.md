@@ -9,7 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`http::router_with_session_policy`** (`#[doc(hidden)]`, like its
+  `router_with_limits*` siblings): `router_with_limits_and_keep_alive` plus
+  an explicit eviction floor, so the HTTP transport's integration tests can
+  observe idle-session eviction without waiting out the 300 s default. The
+  public API otherwise grows only by the `VELESDB_MEMORY_HTTP_EVICT_MIN_IDLE_SECS`
+  environment variable described under Fixed (#2289).
+
 ### Fixed
+
+- **At its session cap, the HTTP daemon locked every new client out for up to
+  an hour instead of evicting an idle one.** A client that dies without
+  sending `DELETE` (a killed agent, a crashed process, a host restart) left
+  its slot occupied until `keep_alive` finally expired it — and at the cap,
+  every OTHER live client was refused in the meantime, told to "close an
+  existing session" it had no way to reach. `BoundedSessionManager` now
+  evicts the least-recently-active session that has nothing in flight (no
+  request being served, no open stream), has finished its own `initialize`,
+  and has been idle for at least `VELESDB_MEMORY_HTTP_EVICT_MIN_IDLE_SECS`
+  (new, default 300 s, never above the keep-alive) to admit the new one; it
+  refuses only when no live session qualifies (#2289). The floor is the flood
+  guard: the transport authenticates no one, so without it any local process
+  repeating `initialize` at the cap would evict every client that was merely
+  between two requests. The trade-off left: at the cap, a client silent and
+  streamless for longer than the floor can be evicted by another client's
+  `initialize`, and must re-initialize on the `404` its next request gets.
+  A session whose `initialize` never arrived becomes evictable once rmcp's
+  handshake deadline (`init_timeout`, 60 s) has passed. A request arriving
+  while its session is being evicted gets `404`; one that arrived just before
+  marks the session active, so it is not picked while that request is served.
 
 - **`autograph_failed` counted failing steps, not failed enrichments.** Its doc
   and `memory_status` promise enrichments, but one extraction failing at two

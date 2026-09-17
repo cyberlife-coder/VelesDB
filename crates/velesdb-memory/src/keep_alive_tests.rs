@@ -1,5 +1,63 @@
-use super::{keep_alive_from_raw, DEFAULT_HTTP_KEEP_ALIVE};
+use super::{
+    evict_min_idle_from_raw, keep_alive_from_raw, DEFAULT_HTTP_EVICT_MIN_IDLE,
+    DEFAULT_HTTP_KEEP_ALIVE,
+};
 use std::time::Duration;
+
+#[test]
+fn eviction_floor_defaults_to_five_minutes_and_honours_a_valid_value() {
+    assert_eq!(
+        evict_min_idle_from_raw(None, DEFAULT_HTTP_KEEP_ALIVE),
+        DEFAULT_HTTP_EVICT_MIN_IDLE
+    );
+    assert_eq!(DEFAULT_HTTP_EVICT_MIN_IDLE, Duration::from_secs(300));
+    assert_eq!(
+        evict_min_idle_from_raw(Some(" 900 "), DEFAULT_HTTP_KEEP_ALIVE),
+        Duration::from_secs(900)
+    );
+}
+
+#[test]
+fn eviction_floor_zero_or_nonsense_falls_back_instead_of_disabling_the_guard() {
+    // Zero would let any local process evict every idle client at the cap.
+    for raw in ["0", "", "soon", "-30", "1.5"] {
+        assert_eq!(
+            evict_min_idle_from_raw(Some(raw), DEFAULT_HTTP_KEEP_ALIVE),
+            DEFAULT_HTTP_EVICT_MIN_IDLE,
+            "raw value {raw:?}"
+        );
+    }
+}
+
+#[test]
+fn eviction_floor_never_exceeds_the_keep_alive() {
+    let keep_alive = Duration::from_secs(120);
+    assert_eq!(
+        evict_min_idle_from_raw(Some("7200"), keep_alive),
+        keep_alive,
+        "a floor above the keep-alive can never be reached"
+    );
+    assert_eq!(
+        evict_min_idle_from_raw(None, keep_alive),
+        keep_alive,
+        "the default is bounded by a shorter keep-alive too"
+    );
+}
+
+/// The idle floor is what keeps an eviction from picking a session between
+/// rmcp's `has_session` check and the call it precedes, so the environment
+/// must never be able to set it to zero — not even with the shortest
+/// keep-alive the environment allows.
+#[test]
+fn eviction_floor_from_the_environment_is_never_zero() {
+    let shortest_keep_alive = keep_alive_from_raw(Some("1"));
+    for raw in [None, Some("0"), Some("1"), Some("")] {
+        assert!(
+            evict_min_idle_from_raw(raw, shortest_keep_alive) >= Duration::from_secs(1),
+            "raw value {raw:?}"
+        );
+    }
+}
 
 #[test]
 fn unset_falls_back_to_the_sixty_minute_default() {
