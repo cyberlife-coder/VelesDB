@@ -4,12 +4,13 @@
 
 umask 077
 
+# >>> BEGIN readers: shared byte for byte with every other host's lib/common.sh; test/hooks.test.sh checks it.
 # --- Reading a string exactly --------------------------------------------------
 # `$(…)` strips every trailing newline of what it captures, and a directory
-# name, a project or a session may end in one: a hook would then name another
-# repository than the one it read. These are the readers the Claude Code and
-# Codex libraries share; this integration keeps its own copy, like the rest of
-# this file.
+# name, a project or a session may end in one: a hook would then name, compare
+# or mark another root than the one it read. Every such string is read through
+# these helpers, and an identity is joined with printf -v, never through `$(…)`
+# alone.
 
 # read_exact VAR CMD...: set VAR to CMD's whole output; fail when CMD fails.
 read_exact() {
@@ -30,6 +31,7 @@ read_exact_line() {
 physical_dir() {
   (cd "$1" 2>/dev/null && pwd -P)
 }
+# <<< END readers: shared byte for byte with every other host's lib/common.sh; test/hooks.test.sh checks it.
 
 physical_policy_start() {
   local candidate="$1"
@@ -127,7 +129,7 @@ sentinel_path() {
   local session_id="$2"
   local dir
   local key
-  dir="$(marker_base_dir)" || return 1
+  read_exact dir marker_base_dir || return 1
   key="$(safe_marker_key "$session_id")"
   printf '%s/%s-%s.marker' "$dir" "$kind" "$key"
 }

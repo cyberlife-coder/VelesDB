@@ -10,7 +10,7 @@
 # integrations/agent-hooks/README.md for the full constraint writeup.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" # exact-read-ok: this script's own directory, read before lib/ can be sourced
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=./lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
@@ -22,7 +22,7 @@ require_jq
 
 payload="$(read_stdin_payload)"
 read_exact cwd jq -j '.cwd // empty' <<<"$payload" 2>/dev/null || cwd=""
-session_id="$(printf '%s' "$payload" | jq -r '.session_id // empty' 2>/dev/null || true)"
+session_id="$(printf '%s' "$payload" | jq -r '.session_id // empty' 2>/dev/null || true)" # exact-read-ok: the host's own id, only ever hashed into a marker key
 # Documented values: startup | resume | clear | compact.
 source_kind="$(printf '%s' "$payload" | jq -r '.source // empty' 2>/dev/null || true)"
 if [ -z "$cwd" ]; then

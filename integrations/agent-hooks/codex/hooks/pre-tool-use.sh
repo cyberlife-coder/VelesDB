@@ -3,7 +3,7 @@
 # has completed successfully in the same Codex session.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" # exact-read-ok: this script's own directory, read before lib/ can be sourced
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=./lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
@@ -15,7 +15,7 @@ fi
 payload="$(read_stdin_payload)"
 tool_name="$(printf '%s' "$payload" | jq -r '.tool_name // empty' 2>/dev/null || true)"
 read_exact cwd jq -j '.cwd // empty' <<<"$payload" 2>/dev/null || cwd=""
-session_id="$(printf '%s' "$payload" | jq -r '.session_id // empty' 2>/dev/null || true)"
+session_id="$(printf '%s' "$payload" | jq -r '.session_id // empty' 2>/dev/null || true)" # exact-read-ok: the host's own id, only ever hashed into a marker key
 patch="$(printf '%s' "$payload" | jq -r '.tool_input.command // empty' 2>/dev/null || true)"
 
 [ "$tool_name" = "apply_patch" ] || { echo '{}'; exit 0; }
@@ -75,19 +75,21 @@ while IFS= read -r target_path; do
 
   learning_marker_identity marker_id "$session_id"
   # shellcheck disable=SC2154 # learning_marker_identity sets marker_id (printf -v)
-  if ! sentinel="$(sentinel_path "codex-recall" "$marker_id")"; then
+  if ! read_exact sentinel sentinel_path "codex-recall" "$marker_id"; then
     echo "VelesDB learning-loop guard: private hook-state storage is unsafe or unavailable; apply_patch remains refused." >&2
     exit 2
   fi
+  # shellcheck disable=SC2154 # read_exact sets sentinel (printf -v)
   if ! valid_private_marker "$sentinel"; then
     if [ -e "$sentinel" ] || [ -L "$sentinel" ]; then
       echo "VelesDB learning-loop guard: a recall marker is linked or malformed, so same-session recall cannot be verified. Repair the private hook-state directory before retrying apply_patch." >&2
       exit 2
     fi
-    if ! pending_dir="$(record_dir_path "codex-pending-recall" "$session_id")"; then
+    if ! read_exact pending_dir record_dir_path "codex-pending-recall" "$session_id"; then
       echo "VelesDB learning-loop guard: private hook-state storage is unsafe or unavailable; apply_patch remains refused." >&2
       exit 2
     fi
+    # shellcheck disable=SC2154 # read_exact sets pending_dir (printf -v)
     if ! record_current_project "$pending_dir"; then
       echo "VelesDB learning-loop guard: could not persist the pending repository identity; apply_patch remains refused." >&2
       exit 2
@@ -106,11 +108,12 @@ done <<< "$targets"
 # Mark only after every target has passed, so a rejected multi-repository patch
 # does not create a false edit checkpoint.
 if [ "$needs_checkpoint" = "true" ]; then
-  if ! dirty_dir="$(record_dir_path "codex-learning-dirty" "$session_id")"; then
+  if ! read_exact dirty_dir record_dir_path "codex-learning-dirty" "$session_id"; then
     echo "VelesDB learning-loop guard: private hook-state storage is unsafe or unavailable; apply_patch remains refused." >&2
     exit 2
   fi
   while IFS= read -r record; do
+    # shellcheck disable=SC2154 # read_exact sets dirty_dir (printf -v)
     if ! record_project_json "$dirty_dir" "$record"; then
       echo "VelesDB learning-loop guard: could not persist every edited repository identity; apply_patch remains refused." >&2
       exit 2

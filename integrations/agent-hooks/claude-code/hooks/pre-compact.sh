@@ -19,7 +19,7 @@
 # itself, same mechanism as the save_working_context nudge below.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" # exact-read-ok: this script's own directory, read before lib/ can be sourced
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=./lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
@@ -27,7 +27,7 @@ source "$SCRIPT_DIR/lib/common.sh"
 require_jq
 
 payload="$(read_stdin_payload)"
-session_id="$(printf '%s' "$payload" | jq -r '.session_id // empty' 2>/dev/null || true)"
+session_id="$(printf '%s' "$payload" | jq -r '.session_id // empty' 2>/dev/null || true)" # exact-read-ok: the host's own id, only ever hashed into a marker key
 read_exact cwd jq -j '.cwd // empty' <<<"$payload" 2>/dev/null || cwd=""
 
 if [ -z "$cwd" ]; then
@@ -40,12 +40,13 @@ fi
 resolve_config "$cwd"
 adopt_working_session "$session_id" save || true
 
-if ! sentinel="$(sentinel_path "precompact" "$session_id")"; then
+if ! read_exact sentinel sentinel_path "precompact" "$session_id"; then
   reason="VelesDB private hook-state storage is unsafe or unavailable. Keep the session open, repair the per-user state directory, and retry compaction."
   jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'
   exit 0
 fi
 
+# shellcheck disable=SC2154 # read_exact sets sentinel (printf -v)
 if valid_private_marker "$sentinel"; then
   echo '{}'
   exit 0

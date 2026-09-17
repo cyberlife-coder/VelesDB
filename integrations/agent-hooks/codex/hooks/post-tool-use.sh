@@ -3,7 +3,7 @@
 # and record the working context a successful save or load names.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" # exact-read-ok: this script's own directory, read before lib/ can be sourced
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=./lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
@@ -11,7 +11,7 @@ source "$SCRIPT_DIR/lib/common.sh"
 require_jq
 payload="$(read_stdin_payload)"
 read_exact cwd jq -j '.cwd // empty' <<<"$payload" 2>/dev/null || cwd=""
-session_id="$(printf '%s' "$payload" | jq -r '.session_id // empty' 2>/dev/null || true)"
+session_id="$(printf '%s' "$payload" | jq -r '.session_id // empty' 2>/dev/null || true)" # exact-read-ok: the host's own id, only ever hashed into a marker key
 # The tool name is read once, here: the recall check and the working-context
 # recording both take it, so neither parses the payload for it again.
 tool_name="$(printf '%s' "$payload" | jq -r '.tool_name // empty' 2>/dev/null || true)"
@@ -20,7 +20,8 @@ tool_name="$(printf '%s' "$payload" | jq -r '.tool_name // empty' 2>/dev/null ||
 resolve_config "$cwd"
 if [ -n "$session_id" ] && successful_memory_recall "$tool_name" "$payload"; then
   pending_status=2
-  if pending_dir="$(record_dir_path "codex-pending-recall" "$session_id")"; then
+  if read_exact pending_dir record_dir_path "codex-pending-recall" "$session_id"; then
+    # shellcheck disable=SC2154 # read_exact sets pending_dir (printf -v)
     if promote_pending_recall \
       "$pending_dir" "codex-recall" "$session_id" "$payload"; then
       pending_status=0
@@ -37,7 +38,7 @@ if [ -n "$session_id" ] && successful_memory_recall "$tool_name" "$payload"; the
     && recall_targets_current_project "$payload"; then
     learning_marker_identity marker_id "$session_id"
     # shellcheck disable=SC2154 # learning_marker_identity sets marker_id (printf -v)
-    if marker_path="$(sentinel_path "codex-recall" "$marker_id")"; then
+    if read_exact marker_path sentinel_path "codex-recall" "$marker_id"; then
       touch_private_marker "$marker_path" || true
     fi
   fi

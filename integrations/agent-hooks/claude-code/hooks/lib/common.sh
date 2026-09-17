@@ -242,7 +242,7 @@ sentinel_path() {
   local session_id="$2"
   local dir
   local key
-  dir="$(marker_base_dir)" || return 1
+  read_exact dir marker_base_dir || return 1
   key="$(safe_marker_key "$session_id")"
   printf '%s/%s-%s.marker' "$dir" "$kind" "$key"
 }
@@ -278,7 +278,7 @@ valid_private_marker() {
 private_temp_file() {
   local prefix="$1"
   local dir
-  dir="$(marker_base_dir)" || return 1
+  read_exact dir marker_base_dir || return 1
   mktemp "${dir}/${prefix}.XXXXXX"
 }
 
@@ -305,7 +305,7 @@ project_record() {
 # lost updates when multiple PreToolUse hooks run concurrently.
 record_dir_path() {
   local marker
-  marker="$(sentinel_path "$1" "$2")" || return 1
+  read_exact marker sentinel_path "$1" "$2" || return 1
   printf '%s.records' "${marker%.marker}"
 }
 
@@ -351,6 +351,7 @@ record_current_project() {
 }
 
 # >>> BEGIN: shared byte for byte with the other host's lib/common.sh; test/hooks.test.sh checks it.
+# >>> BEGIN readers: shared byte for byte with every other host's lib/common.sh; test/hooks.test.sh checks it.
 # --- Reading a string exactly --------------------------------------------------
 # `$(…)` strips every trailing newline of what it captures, and a directory
 # name, a project or a session may end in one: a hook would then name, compare
@@ -377,6 +378,7 @@ read_exact_line() {
 physical_dir() {
   (cd "$1" 2>/dev/null && pwd -P)
 }
+# <<< END readers: shared byte for byte with every other host's lib/common.sh; test/hooks.test.sh checks it.
 
 # valid_project_record FILE: FILE holds exactly one pending/dirty record. jq
 # reads every JSON value in a file, and `jq -e` judges only the last, so a file
@@ -560,7 +562,7 @@ working_session_marker() {
 recorded_working_session() {
   local marker
   [ -n "$1" ] || return 1
-  marker="$(working_session_marker "$1" "$2" "$3")" || return 1
+  read_exact marker working_session_marker "$1" "$2" "$3" || return 1
   valid_private_marker "$marker" || return 1
   jq -rs --arg host "$1" --arg project "$2" --arg via "$3" --arg class "$WORKING_SESSION_CLASS" '
     select(length == 1) | .[0]
@@ -585,7 +587,7 @@ remember_working_session() {
   call="$(working_context_call "$2" "$3")" || return 1
   [ -n "$call" ] || return 1
   IFS=$'\t' read -r via project session <<<"$call"
-  marker="$(working_session_marker "$1" "$project" "$via")" || return 1
+  read_exact marker working_session_marker "$1" "$project" "$via" || return 1
   write_private_marker "$marker" \
     "$(jq -cn --arg host "$1" --arg project "$project" --arg via "$via" --arg session "$session" \
       '{host: $host, project: $project, via: $via, session: $session}')"
@@ -600,9 +602,9 @@ remember_working_session() {
 # whatever the record held.
 adopted_session_for() {
   local session
-  session="$(recorded_working_session "$1" "$2" save)" || session=""
+  read_exact_line session recorded_working_session "$1" "$2" save || session=""
   if [ -z "$session" ] && [ "$3" = any ]; then
-    session="$(recorded_working_session "$1" "$2" load)" || session=""
+    read_exact_line session recorded_working_session "$1" "$2" load || session=""
   fi
   case "$session" in
     '' | *$'\n'*) return 1 ;;
@@ -615,7 +617,7 @@ adopted_session_for() {
 # adopted_session_for). Fails, leaving SESSION as configured, when there is none.
 adopt_working_session() {
   local session
-  session="$(adopted_session_for "$1" "$PROJECT" "$2")" || return 1
+  read_exact session adopted_session_for "$1" "$PROJECT" "$2" || return 1
   SESSION="$session"
 }
 
@@ -628,10 +630,10 @@ adopt_batch_sessions() {
   local project
   local session
   while IFS= read -r -d '' project; do
-    session="$(adopted_session_for "$1" "$project" save)" || continue
+    read_exact session adopted_session_for "$1" "$project" save || continue
   targets="$(printf '%s' "$targets" | jq -c --arg p "$project" --arg s "$session" \
       'map(if .project == $p then .session = $s else . end)')" || return 1 # exact-read-ok: compact JSON, whose own newline is the only one
-  done < <(printf '%s' "$targets" | jq -j '[.[].project] | unique[] | . + "\u0000"')
+  done < <(printf '%s' "$targets" | jq -j '[.[].project] | unique[] | . + "\u0000"') # exact-read-ok: NUL-delimited, so no newline separates anything
   printf '%s' "$targets"
 }
 
@@ -698,7 +700,7 @@ promote_pending_recall() {
         [ "$root" = "$CONFIG_ROOT" ] || continue
         ;;
     esac
-    marker_path="$(sentinel_path "$recall_kind" "$host_session"$'\n'"$root")" || return 2
+    read_exact marker_path sentinel_path "$recall_kind" "$host_session"$'\n'"$root" || return 2
     touch_private_marker "$marker_path" || return 2
     rm -f "$file" || return 2
     promoted="true"

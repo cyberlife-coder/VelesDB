@@ -15,7 +15,7 @@
 # fallback still covers design, diagnosis and review sessions with no edit.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" # exact-read-ok: this script's own directory, read before lib/ can be sourced
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=./lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
@@ -26,7 +26,7 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 payload="$(read_stdin_payload)"
-session_id="$(printf '%s' "$payload" | jq -r '.session_id // empty')"
+session_id="$(printf '%s' "$payload" | jq -r '.session_id // empty')" # exact-read-ok: the host's own id, only ever hashed into a marker key
 read_exact cwd jq -j '.cwd // empty' <<<"$payload" 2>/dev/null || cwd=""
 
 if [ -z "$cwd" ]; then
@@ -39,14 +39,15 @@ fi
 resolve_config "$cwd"
 adopt_working_session "$session_id" save || true
 
-if ! dirty_dir="$(record_dir_path "codex-learning-dirty" "$session_id")" \
-  || ! generic_sentinel="$(sentinel_path "codex-stop" "$session_id")" \
-  || ! checkpoint_manifest="$(sentinel_path "codex-learning-checkpoint-manifest" "$session_id")"; then
+if ! read_exact dirty_dir record_dir_path "codex-learning-dirty" "$session_id" \
+  || ! read_exact generic_sentinel sentinel_path "codex-stop" "$session_id" \
+  || ! read_exact checkpoint_manifest sentinel_path "codex-learning-checkpoint-manifest" "$session_id"; then
   reason="VelesDB private hook-state storage is unsafe or unavailable. Keep the session open, repair the per-user state directory, and retry Stop."
   jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'
   exit 0
 fi
 
+# shellcheck disable=SC2154 # read_exact sets checkpoint_manifest (printf -v)
 if valid_private_marker "$checkpoint_manifest"; then
   if ! jq -e '
     type == "object"
@@ -89,6 +90,7 @@ fi
 # so PreToolUse records exact identities in a session-wide queue for Stop.
 dirty_records=()
 dirty_invalid="false"
+# shellcheck disable=SC2154 # read_exact sets dirty_dir (printf -v)
 if [ -L "$dirty_dir" ]; then
   dirty_invalid="true"
 elif [ -d "$dirty_dir" ]; then
@@ -119,19 +121,21 @@ if [ "${#dirty_records[@]}" -gt 0 ]; then
   # Each repository is named with the working context this conversation last
   # saved for it, else with the session PreToolUse froze into its record: the
   # checklist asks for a save, so a session it only loaded is never named.
-  if adopted_targets="$(adopt_batch_sessions "$session_id" "$targets")"; then
+  if read_exact adopted_targets adopt_batch_sessions "$session_id" "$targets"; then
+    # shellcheck disable=SC2154 # read_exact sets adopted_targets (printf -v)
     targets="$adopted_targets"
   fi
   for record_file in "${dirty_records[@]}"; do
     # shellcheck disable=SC2154 # read_exact sets root (printf -v)
     if ! read_exact root jq -j '.root' "$record_file" \
-      || ! checkpoint_marker="$(sentinel_path "codex-stop" "$session_id"$'\n'"$root")" \
+      || ! read_exact checkpoint_marker sentinel_path "codex-stop" "$session_id"$'\n'"$root" \
       || ! touch_private_marker "$checkpoint_marker"; then
       reason="VelesDB could not persist a repository checkpoint marker. Keep the session open and retry Stop; the edit queue remains intact at $dirty_dir."
       jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'
       exit 0
     fi
   done
+  # shellcheck disable=SC2154 # read_exact sets generic_sentinel (printf -v)
   if ! touch_private_marker "$generic_sentinel"; then
     reason="VelesDB could not persist the continuation marker. Keep the session open and retry Stop; the edit queue remains intact at $dirty_dir."
     jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'
@@ -168,11 +172,12 @@ fi
 if learning_loop_enabled; then
   learning_marker_identity marker_id "$session_id"
   # shellcheck disable=SC2154 # learning_marker_identity sets marker_id (printf -v)
-  if ! sentinel="$(sentinel_path "codex-stop" "$marker_id")"; then
+  if ! read_exact sentinel sentinel_path "codex-stop" "$marker_id"; then
     reason="VelesDB private hook-state storage is unsafe or unavailable. Keep the session open, repair the per-user state directory, and retry Stop."
     jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'
     exit 0
   fi
+  # shellcheck disable=SC2154 # read_exact sets sentinel (printf -v)
   if valid_private_marker "$sentinel"; then
     echo '{}'
     exit 0

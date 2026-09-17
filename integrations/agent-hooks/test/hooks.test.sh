@@ -14,6 +14,15 @@ WINDSURF_HOOKS_DIR="$ROOT/windsurf/hooks"
 
 FAILED=0
 
+# shipped_hook_files ROOT: every shell script ROOT ships to a host, NUL
+# separated. Discovered, never listed: a host directory added tomorrow is
+# scanned by every check that reads this, the day it lands. The harness's own
+# tree is not shipped to anyone and is excluded. This is the one discovery the
+# whole file uses, so a check cannot drift onto a narrower set of files.
+shipped_hook_files() {
+  find "$1" -name '*.sh' -not -path '*/test/*' -print0
+}
+
 pass() { printf 'ok - %s\n' "$1"; }
 fail() { printf 'not ok - %s\n' "$1"; FAILED=1; }
 
@@ -1190,7 +1199,7 @@ fi
 # installed, don't fail the suite over its absence)
 # ---------------------------------------------------------------------------
 if command -v shellcheck >/dev/null 2>&1; then
-  if find "$HOOKS_DIR" "$WINDSURF_HOOKS_DIR" "$CODEX_HOOKS_DIR" -name '*.sh' -print0 | xargs -0 shellcheck; then
+  if shipped_hook_files "$ROOT" | xargs -0 shellcheck; then
     pass "shellcheck: hook scripts are clean"
   else
     fail "shellcheck: hook scripts are clean"
@@ -1953,18 +1962,27 @@ WC_SHARED_CHECK="Working context: both hosts' lib/common.sh share their tail byt
 WC_SHARED_BEGIN="# >>> BEGIN: shared byte for byte with the other host's lib/common.sh; test/hooks.test.sh checks it."
 WC_SHARED_END="# <<< END: shared byte for byte with the other host's lib/common.sh; test/hooks.test.sh checks it."
 
-# wc_shared_span LIB: print LIB from its BEGIN marker line to its END marker
-# line, bytes unchanged; fail unless LIB holds each marker line exactly once,
-# BEGIN first and END last.
-wc_shared_span() {
+# marked_span LIB BEGIN END: print LIB from its BEGIN marker line to its END
+# marker line, bytes unchanged; fail unless LIB holds each marker line exactly
+# once, BEGIN first.
+marked_span() {
   local begin end
-  [ "$(grep -cxF "$WC_SHARED_BEGIN" "$1")" = 1 ] || return 1
-  [ "$(grep -cxF "$WC_SHARED_END" "$1")" = 1 ] || return 1
-  begin="$(grep -nxF "$WC_SHARED_BEGIN" "$1")"
-  end="$(grep -nxF "$WC_SHARED_END" "$1")"
+  [ "$(grep -cxF "$2" "$1")" = 1 ] || return 1
+  [ "$(grep -cxF "$3" "$1")" = 1 ] || return 1
+  begin="$(grep -nxF "$2" "$1")"
+  end="$(grep -nxF "$3" "$1")"
   [ "${begin%%:*}" -lt "${end%%:*}" ] || return 1
-  [ "${end%%:*}" = "$(grep -c '' "$1")" ] || return 1
   head -n "${end%%:*}" "$1" | tail -n +"${begin%%:*}"
+}
+
+# wc_shared_span LIB: marked_span for the working-context tail, which must also
+# end the file — a line after END could redefine what the tail defines.
+wc_shared_span() {
+  local end
+  marked_span "$1" "$WC_SHARED_BEGIN" "$WC_SHARED_END" >/dev/null || return 1
+  end="$(grep -nxF "$WC_SHARED_END" "$1")"
+  [ "${end%%:*}" = "$(grep -c '' "$1")" ] || return 1
+  marked_span "$1" "$WC_SHARED_BEGIN" "$WC_SHARED_END"
 }
 if ! wc_shared_span "$HOOKS_DIR/lib/common.sh" >/dev/null \
   || ! wc_shared_span "$CODEX_HOOKS_DIR/lib/common.sh" >/dev/null; then
@@ -1973,6 +1991,40 @@ elif ! cmp -s <(wc_shared_span "$HOOKS_DIR/lib/common.sh") <(wc_shared_span "$CO
   fail "$WC_SHARED_CHECK: the two marked spans differ (diff them)"
 else
   pass "$WC_SHARED_CHECK"
+fi
+
+# The exact readers are one text in every host's lib/common.sh. Windsurf's copy
+# sat outside the tail markers above, so nothing compared it: it is installed by
+# hand and no behaviour check of the other two hosts ever runs it, which is
+# exactly how a copy drifts unnoticed. Its own span is now marked in every host
+# and compared here, and the libraries are discovered, so a host added tomorrow
+# is compared the day it lands rather than the day someone remembers it.
+EXACT_READERS_CHECK="Working context: every host's lib/common.sh shares the exact readers byte for byte"
+EXACT_READERS_BEGIN="# >>> BEGIN readers: shared byte for byte with every other host's lib/common.sh; test/hooks.test.sh checks it."
+EXACT_READERS_END="# <<< END readers: shared byte for byte with every other host's lib/common.sh; test/hooks.test.sh checks it."
+readers_libs=()
+while IFS= read -r -d '' readers_lib; do
+  case "$readers_lib" in
+    */lib/common.sh) readers_libs+=("$readers_lib") ;;
+  esac
+done < <(shipped_hook_files "$ROOT")
+readers_bad=""
+if [ "${#readers_libs[@]}" -lt 2 ]; then
+  readers_bad=" fewer than two lib/common.sh found, so nothing is compared"
+else
+  for readers_lib in "${readers_libs[@]}"; do
+    if ! marked_span "$readers_lib" "$EXACT_READERS_BEGIN" "$EXACT_READERS_END" >/dev/null; then
+      readers_bad="$readers_bad ${readers_lib#"$ROOT"/}: no single well-formed readers span;"
+    elif ! cmp -s <(marked_span "${readers_libs[0]}" "$EXACT_READERS_BEGIN" "$EXACT_READERS_END") \
+      <(marked_span "$readers_lib" "$EXACT_READERS_BEGIN" "$EXACT_READERS_END"); then
+      readers_bad="$readers_bad ${readers_lib#"$ROOT"/}: differs from ${readers_libs[0]#"$ROOT"/};"
+    fi
+  done
+fi
+if [ -z "$readers_bad" ]; then
+  pass "$EXACT_READERS_CHECK (${#readers_libs[@]} libraries)"
+else
+  fail "$EXACT_READERS_CHECK:$readers_bad"
 fi
 
 # A helper that calls a hook names its caller's line when the hook exits
@@ -1996,39 +2048,137 @@ else
   fail "Harness: a helper names its caller's line when a hook exits non-zero:$helper_lines"
 fi
 
-# No hook reads a path, a project or a session through command substitution:
+# No hook reads a path, a project or a session through a substitution:
 # `$(…)` and backticks strip every trailing newline, so a hook would name,
 # compare or mark another repository than the one it read. Every such string is
-# read through read_exact / read_exact_line, and an identity is joined with
-# printf -v. Both spellings of a substitution are searched, whatever the
-# command's flags, in every shipped host, and a line is flagged when either the
-# variable it assigns belongs to the path/project/session/root/cwd family or the
-# substitution reads one of those JSON fields. A substitution that cannot carry
-# a trailing newline — compact JSON, a fixed literal — says so on its own line
-# with `# exact-read-ok: <why>`; a host's own session id and each script's
-# `SCRIPT_DIR` are exempt.
-EXACT_SUBST_CMD='(jq|dirname|basename|readlink|pwd|physical_dir|physical_policy_start|resolve_final_symlink|learning_marker_identity|printf)'
+# read through read_exact / read_exact_line — neither spells a substitution, so
+# neither is matched here — and an identity is joined with printf -v.
+#
+# The rule REFUSES and then exempts, instead of listing what is bad. Each of the
+# four rounds before this one enumerated one axis and was outrun by the next
+# spelling: control characters, then `jq -r`, then a set of flags, then a set of
+# commands — while `$(cat …)`, `$(sed …)`, `$(git rev-parse --show-toplevel)`,
+# `$(basename …)` inside a larger string and the tree's own helpers all walked
+# past. So no command, flag or character is named below. A line is refused when
+# it assigns a variable of the path/project/session/root/cwd family from any
+# substitution — whatever `local`, `export`, `declare`, `readonly` or `typeset`
+# declares it — or when a substitution reads one of those JSON fields.
+#
+# `read -r VAR < <(…)` is a process substitution, not a command substitution,
+# and it is refused too: `read -r` stops at the first newline, so it truncates a
+# value that holds one rather than stripping a trailing one. Different defect,
+# same lost byte, same variables — it belongs to the same rule.
+#
+# The only ways out are proof at the site: read the string through read_exact /
+# read_exact_line, or say on that very line, with `# exact-read-ok: <why>`, why
+# this one cannot carry a trailing newline. Nothing is exempt by its name.
 # shellcheck disable=SC2016 # regular expressions, not expansions
+EXACT_SUBST_DECL='(local|export|declare|readonly|typeset)[[:space:]]+(-[A-Za-z]+[[:space:]]+)*'
+# shellcheck disable=SC2016
 EXACT_SUBST_NAME='[a-z_]*(project|session|root|cwd|dir|path|target|candidate|link|current|marker)[a-z0-9_]*'
 # shellcheck disable=SC2016
-EXACT_SUBST_FIELD='\.(project|session|root|cwd|file_path)([^_A-Za-z]|$)'
-EXACT_SUBST="^[[:space:]]*(! )?${EXACT_SUBST_NAME}=(\"?(\\\$\\(|\`))[^\`]*${EXACT_SUBST_CMD}|(\\\$\\(|\`)[^\`]*${EXACT_SUBST_CMD}[^\`]*${EXACT_SUBST_FIELD}"
-inexact_reads=""
-for exact_file in "$HOOKS_DIR"/*.sh "$HOOKS_DIR"/lib/*.sh "$CODEX_HOOKS_DIR"/*.sh "$CODEX_HOOKS_DIR"/lib/*.sh \
-  "$WINDSURF_HOOKS_DIR"/*.sh "$WINDSURF_HOOKS_DIR"/lib/*.sh; do
-  while IFS= read -r exact_line; do
-    case "$exact_line" in
-      SCRIPT_DIR=*|*'# exact-read-ok: '*) continue ;;
-      session_id=*|*' session_id='*|trajectory_id=*|*' trajectory_id='*) continue ;;
-    esac
-    inexact_reads="$inexact_reads ${exact_file#"$ROOT"/}: $exact_line;"
-  done < <(awk '/^[[:space:]]*#/ { next } { if (sub(/\\$/, "")) { line = line $0 } else { print line $0; line = "" } }' "$exact_file" \
-    | grep -iE "$EXACT_SUBST" || true)
-done
+EXACT_SUBST_FIELD='\.[[:space:]]*\[?[[:space:]]*"?(project|session|root|cwd|file_path)([^_A-Za-z]|$)'
+EXACT_SUBST_ANY='(\$\(|`|<[[:space:]]*\()'
+EXACT_SUBST_ASSIGN="(^|[[:space:]]|[;(&|])(${EXACT_SUBST_DECL})*${EXACT_SUBST_NAME}(\\[[^]]*\\])?\\+?=[^=[:space:]].*${EXACT_SUBST_ANY}"
+EXACT_SUBST_READ="(^|[[:space:]]|;)read[[:space:]].*${EXACT_SUBST_NAME}([[:space:]]|$).*${EXACT_SUBST_ANY}"
+EXACT_SUBST="${EXACT_SUBST_ASSIGN}|${EXACT_SUBST_READ}|${EXACT_SUBST_ANY}[^\`]*${EXACT_SUBST_FIELD}"
+EXACT_SUBST_CHECK="Harness: no shipped hook reads a path, project or session through a substitution"
+
+# inexact_substitution_reads ROOT: every line of ROOT's shipped hooks that takes
+# a path, a project or a session from a substitution without proving the read is
+# exact, as ` <file>: <line>;` each. Prints nothing when the tree is clean. The
+# files come from shipped_hook_files, so this scans whatever the tree holds.
+inexact_substitution_reads() {
+  local exact_root="$1"
+  local exact_file exact_line
+  while IFS= read -r -d '' exact_file; do
+    while IFS= read -r exact_line; do
+      case "$exact_line" in
+        *'# exact-read-ok: '*) continue ;;
+      esac
+      printf ' %s: %s;' "${exact_file#"$exact_root"/}" "$exact_line"
+    done < <(awk '/^[[:space:]]*#/ { next } { if (sub(/\\$/, "")) { line = line $0 } else { print line $0; line = "" } }' "$exact_file" \
+      | grep -iE "$EXACT_SUBST" || true)
+  done < <(shipped_hook_files "$exact_root")
+}
+
+inexact_reads="$(inexact_substitution_reads "$ROOT")"
 if [ -z "$inexact_reads" ]; then
-  pass "Harness: no shipped hook reads a path, project or session through command substitution"
+  pass "$EXACT_SUBST_CHECK"
 else
-  fail "Harness: no shipped hook reads a path, project or session through command substitution:$inexact_reads"
+  fail "$EXACT_SUBST_CHECK:$inexact_reads"
+fi
+
+# The discovery above is itself proven, on a tree the repository does not hold:
+# a host directory nobody has written yet, carrying the defect, must be named,
+# and a harness file carrying the same defect must not be — otherwise "covers
+# every shipped host" would again be true only for the hosts listed today.
+EXACT_SUBST_TREE="$TMP_TEST_DIR/new-host"
+EXACT_SUBST_NEW_HOST='cursor/hooks/stop.sh'
+EXACT_SUBST_NEW_LINE='project_root="$(jq -r .root "$1")"'
+mkdir -p "$EXACT_SUBST_TREE/${EXACT_SUBST_NEW_HOST%/*}" "$EXACT_SUBST_TREE/test"
+printf '#!/usr/bin/env bash\n%s\n' "$EXACT_SUBST_NEW_LINE" > "$EXACT_SUBST_TREE/$EXACT_SUBST_NEW_HOST"
+printf '#!/usr/bin/env bash\n%s\n' "$EXACT_SUBST_NEW_LINE" > "$EXACT_SUBST_TREE/test/harness.sh"
+new_host_reads="$(inexact_substitution_reads "$EXACT_SUBST_TREE")"
+if [ "$new_host_reads" = " $EXACT_SUBST_NEW_HOST: $EXACT_SUBST_NEW_LINE;" ]; then
+  pass "Harness: a host directory the repository does not hold yet is scanned too"
+else
+  fail "Harness: a host directory the repository does not hold yet is scanned too (got:$new_host_reads)"
+fi
+
+# Every spelling the enumerating rules walked past is refused, and every form
+# that proves itself exact is not. Each case is written as the only line of a
+# fixture host, so a rule that stops refusing one of them fails here — where the
+# form is named — instead of waiting for a reviewer to hand-write it again.
+EXACT_SUBST_REFUSED=(
+  'project_root="$(cat "$1")"'
+  'project_root="$(sed -n 1p "$1")"'
+  'project_root="$(awk "NR==1" "$1")"'
+  'project_root="$(git rev-parse --show-toplevel)"'
+  'project_root=`cat "$1"`'
+  'local project_root="$(physical_dir "$1")"'
+  'export PROJECT_ROOT="$(pwd)"'
+  'declare project_root="$(cat "$1")"'
+  'readonly session_dir="$(cat "$1")"'
+  'typeset -r cwd_path="$(cat "$1")"'
+  'marker_path="$(sentinel_path "$1" "$2")"'
+  'read -r project_root < <(jq -r .root "$1")'
+  'target="${A%/}/$(basename "$1")"'
+  'host="$(jq -r '"'"'.["project"]'"'"' "$1")"'
+  'host="$(jq -r .file_path "$1")"'
+)
+EXACT_SUBST_ALLOWED=(
+  'read_exact project_root cat "$1"'
+  'read_exact_line project_root pwd'
+  'project_root="$(printf %s fixed)" # exact-read-ok: a fixed literal'
+  'IFS=$'"'"'\t'"'"' read -r via project session <<<"$call"'
+  'record_project_json "$1" "$(project_record)"'
+)
+EXACT_SUBST_CASES="$TMP_TEST_DIR/subst-cases"
+# exact_subst_verdict LINE: `refused` when the rule flags LINE, `allowed` when
+# it does not. One case per fixture, so nothing on a neighbouring line can
+# account for the verdict.
+exact_subst_verdict() {
+  rm -rf "$EXACT_SUBST_CASES"
+  mkdir -p "$EXACT_SUBST_CASES/host/hooks"
+  printf '#!/usr/bin/env bash\n%s\n' "$1" > "$EXACT_SUBST_CASES/host/hooks/case.sh"
+  if [ -n "$(inexact_substitution_reads "$EXACT_SUBST_CASES")" ]; then
+    printf 'refused'
+  else
+    printf 'allowed'
+  fi
+}
+subst_wrong=""
+for exact_case in "${EXACT_SUBST_REFUSED[@]}"; do
+  [ "$(exact_subst_verdict "$exact_case")" = refused ] || subst_wrong="$subst_wrong not refused: $exact_case;"
+done
+for exact_case in "${EXACT_SUBST_ALLOWED[@]}"; do
+  [ "$(exact_subst_verdict "$exact_case")" = allowed ] || subst_wrong="$subst_wrong not allowed: $exact_case;"
+done
+if [ -z "$subst_wrong" ]; then
+  pass "Harness: the substitution rule refuses every inexact spelling and allows every proven one"
+else
+  fail "Harness: the substitution rule refuses every inexact spelling and allows every proven one:$subst_wrong"
 fi
 
 # No hook is fed by a pipe (#2294). A hook that never reads its input, as the

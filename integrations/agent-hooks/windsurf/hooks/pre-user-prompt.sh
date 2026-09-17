@@ -22,7 +22,7 @@
 # PID if it's ever absent).
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" # exact-read-ok: this script's own directory, read before lib/ can be sourced
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=./lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
@@ -30,7 +30,7 @@ source "$SCRIPT_DIR/lib/common.sh"
 require_jq
 
 payload="$(read_stdin_payload)"
-session_id="$(printf '%s' "$payload" | jq -r '.trajectory_id // empty')"
+session_id="$(printf '%s' "$payload" | jq -r '.trajectory_id // empty')" # exact-read-ok: the host's own id, only ever hashed into a marker key
 if [ -z "$session_id" ]; then
   session_id="windsurf-${PPID:-$$}"
 fi
@@ -41,11 +41,12 @@ fi
 
 resolve_config "$cwd"
 
-if ! sentinel="$(sentinel_path "windsurf-prompt" "$session_id")"; then
+if ! read_exact sentinel sentinel_path "windsurf-prompt" "$session_id"; then
   echo "[velesdb-memory] Private hook-state storage is unsafe or unavailable; the session-memory reminder could not be persisted. Repair the per-user state directory before relying on once-per-session reminders."
   exit 0
 fi
 
+# shellcheck disable=SC2154 # read_exact sets sentinel (printf -v)
 if valid_private_marker "$sentinel"; then
   # Already reminded this session — pass through silently.
   exit 0

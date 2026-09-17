@@ -43,7 +43,7 @@
 #      and a model that was never told to look will not look.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" # exact-read-ok: this script's own directory, read before lib/ can be sourced
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=./lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
@@ -78,7 +78,7 @@ payload="$(read_stdin_payload)"
 printf '%s' "$payload" | jq -e . >/dev/null 2>&1 || passthrough
 
 tool_name="$(printf '%s' "$payload" | jq -r '.tool_name // empty')"
-session_id="$(printf '%s' "$payload" | jq -r '.session_id // empty')"
+session_id="$(printf '%s' "$payload" | jq -r '.session_id // empty')" # exact-read-ok: the host's own id, only ever hashed into a marker key
 read_exact cwd jq -j '.cwd // empty' <<<"$payload" 2>/dev/null || cwd=""
 [ -n "$cwd" ] || cwd="$PWD"
 
@@ -88,7 +88,8 @@ read_exact cwd jq -j '.cwd // empty' <<<"$payload" 2>/dev/null || cwd=""
 resolve_config "$cwd"
 if [ -n "$session_id" ] && successful_memory_recall "$payload"; then
   pending_status=2
-  if pending_dir="$(record_dir_path "pending-recall" "$session_id")"; then
+  if read_exact pending_dir record_dir_path "pending-recall" "$session_id"; then
+    # shellcheck disable=SC2154 # read_exact sets pending_dir (printf -v)
     if promote_pending_recall \
       "$pending_dir" "recall" "$session_id" "$payload"; then
       pending_status=0
@@ -105,7 +106,7 @@ if [ -n "$session_id" ] && successful_memory_recall "$payload"; then
     && recall_targets_current_project "$payload"; then
     learning_marker_identity marker_id "$session_id"
     # shellcheck disable=SC2154 # learning_marker_identity sets marker_id (printf -v)
-    if marker_path="$(sentinel_path "recall" "$marker_id")"; then
+    if read_exact marker_path sentinel_path "recall" "$marker_id"; then
       touch_private_marker "$marker_path" || true
     fi
   fi
@@ -181,9 +182,10 @@ positive_decimal_at_most "$probe_timeout" 60 || passthrough
 compile_timeout="${VELESDB_HOOK_COMPILE_TIMEOUT:-20}"
 positive_decimal_at_most "$compile_timeout" 60 || passthrough
 probe_key="$(safe_marker_key "$bin")"
-if ! probe_marker="$(sentinel_path "compile-stdin-${probe_key}" "$session_id")"; then
+if ! read_exact probe_marker sentinel_path "compile-stdin-${probe_key}" "$session_id"; then
   passthrough
 fi
+# shellcheck disable=SC2154 # read_exact sets probe_marker (printf -v)
 if valid_private_marker "$probe_marker"; then
   :
 elif [ -e "$probe_marker" ] || [ -L "$probe_marker" ]; then
@@ -291,21 +293,23 @@ fi
 
 # Rule 1: archive only when replacement is still possible. Passthrough paths
 # retain the host's original directly and need no duplicate temp copy.
-archive_dir="$(marker_base_dir)/tool-output" || passthrough
+read_exact archive_dir marker_base_dir || passthrough
+archive_dir="${archive_dir}/tool-output"
 [ -L "$archive_dir" ] && passthrough
 mkdir -p "$archive_dir" || passthrough
 if [ ! -d "$archive_dir" ] || [ -L "$archive_dir" ]; then
   passthrough
 fi
 chmod 700 "$archive_dir" || passthrough
-archive="$(mktemp "${archive_dir}/velesdb-output.XXXXXX")" || passthrough
-if ! printf '%s' "$payload" | jq '.tool_response' > "$archive"; then
-  rm -f "$archive" "$compiled_file"
+read_exact_line archive_path mktemp "${archive_dir}/velesdb-output.XXXXXX" || passthrough
+# shellcheck disable=SC2154 # read_exact sets archive_path (printf -v)
+if ! printf '%s' "$payload" | jq '.tool_response' > "$archive_path"; then
+  rm -f "$archive_path" "$compiled_file"
   passthrough
 fi
 
 footer="$(printf '\n\n--- velesdb: compiled %s tokens down to %s (saved %s before this footer, fidelity risk %s). Nothing was deleted — the complete original Bash output object is serialized as JSON at %s; Read it if this view is not enough. The compiler received %s bytes of combined stdout/stderr text. ---' \
-  "$tokens_in" "$tokens_out" "$tokens_saved" "$risk" "$archive" "$original_bytes")"
+  "$tokens_in" "$tokens_out" "$tokens_saved" "$risk" "$archive_path" "$original_bytes")"
 
 # Never replace a result merely because compression was faithful. The footer
 # also costs context, so require a conservative net margin: each footer byte is
@@ -313,7 +317,7 @@ footer="$(printf '\n\n--- velesdb: compiled %s tokens down to %s (saved %s befor
 # minimum. This prevents a roomy retry from increasing paid input tokens.
 min_saved="${VELESDB_HOOK_MIN_SAVED_TOKENS:-128}"
 if ! decimal_at_most "$min_saved" 1000000; then
-  rm -f "$archive" "$compiled_file"
+  rm -f "$archive_path" "$compiled_file"
   passthrough
 fi
 footer_bytes="$(printf '%s' "$footer" | wc -c | tr -d ' ')"
@@ -330,7 +334,7 @@ if ! jq -e \
     and (.tokens_saved >= $minimum)
   ' "$compiled_file" >/dev/null 2>&1
 then
-  rm -f "$archive" "$compiled_file"
+  rm -f "$archive_path" "$compiled_file"
   passthrough
 fi
 rm -f "$compiled_file"
