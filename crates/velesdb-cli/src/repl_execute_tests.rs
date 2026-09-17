@@ -9,7 +9,22 @@ use crate::session::SessionSettings;
 /// Opens a fresh database with a single `docs` collection seeded with `n`
 /// 2-D points, used by the projection/limit/param regression tests.
 fn seed_docs(dir: &TempDir, n: u64) -> Database {
-    let db = Database::open(dir.path()).expect("open db");
+    seed(Database::open(dir.path()).expect("open db"), n)
+}
+
+/// As [`seed_docs`], in a database that refuses `perfect` over more than one
+/// vector: which quality a REPL search runs at becomes observable.
+fn seed_docs_refusing_perfect(dir: &TempDir, n: u64) -> Database {
+    let mut config = velesdb_core::VelesConfig::default();
+    config.limits.max_perfect_mode_vectors = 1;
+    seed(
+        Database::open_with_config(dir.path(), config).expect("open db"),
+        n,
+    )
+}
+
+/// Adds the `docs` collection of `n` 2-D points to `db`.
+fn seed(db: Database, n: u64) -> Database {
     db.create_collection("docs", 2, DistanceMetric::Cosine)
         .expect("create collection");
     let coll = db.get_vector_collection("docs").expect("vector collection");
@@ -194,6 +209,34 @@ fn test_session_mode_is_not_injected_over_an_inline_quality() {
     }
 }
 
+/// An inline `ef_search` the validator refuses is an override too: the
+/// session value must not be injected next to it, so the query still fails
+/// with `V014` (#2274).
+#[test]
+fn test_session_ef_search_is_not_injected_over_an_inline_bad_value() {
+    let mut session = SessionSettings::new();
+    session.set("ef_search", "512").expect("set ef_search");
+    for query in [
+        "SELECT * FROM docs WHERE vector NEAR [1.0, 2.0] WITH (ef_search = 'high')",
+        "SELECT * FROM docs WHERE vector NEAR [1.0, 2.0] WITH (ef_search = true)",
+    ] {
+        let mut parsed = velesdb_core::velesql::Parser::parse(query).expect("parse");
+        crate::repl_execute::apply_session_settings(&mut parsed, &session);
+        let with = parsed
+            .select
+            .with_clause
+            .as_ref()
+            .expect("the WITH clause stays");
+        let given = with
+            .options
+            .iter()
+            .filter(|opt| opt.key.eq_ignore_ascii_case("ef_search"))
+            .count();
+        assert_eq!(given, 1, "no session ef_search next to {query}");
+        assert!(with.ef_search().is_err(), "{query} must still fail");
+    }
+}
+
 /// Regression (parity backlog #19): an inline `WITH(ef_search=N)` must win over
 /// the session value (the session injects only when no inline override exists).
 #[test]
@@ -212,6 +255,103 @@ fn test_inline_ef_search_wins_over_session() {
         with.get_ef_search(),
         Some(64),
         "inline WITH(ef_search) must win over the session value"
+    );
+}
+
+/// A vector search with no `WITH` clause of its own.
+const NEAR: &str = "SELECT * FROM docs WHERE vector NEAR [1.0, 2.0]";
+
+/// The quality options (`mode`, `quality`, `ef_search`) `query` carries once
+/// the REPL has applied `session` to it, in order.
+fn quality_options_after(
+    query: &str,
+    session: &SessionSettings,
+) -> Vec<(String, velesdb_core::velesql::WithValue)> {
+    let mut parsed = velesdb_core::velesql::Parser::parse(query).expect("parse");
+    crate::repl_execute::apply_session_settings(&mut parsed, session);
+    let options = parsed.select.with_clause.map(|with| with.options);
+    options
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|opt| {
+            ["mode", "quality", "ef_search"]
+                .iter()
+                .any(|key| opt.key.eq_ignore_ascii_case(key))
+        })
+        .map(|opt| (opt.key, opt.value))
+        .collect()
+}
+
+/// `\set ef_search` reaches the search when the session also holds a mode.
+/// A session holding only its mode injects that mode alone (`balanced`
+/// untouched, as before #2274); once it also holds an `ef_search` it injects
+/// that alone, so a session at `perfect` then `ef_search = 512` runs where
+/// `perfect` alone is refused (#2274).
+#[test]
+fn test_session_ef_search_reaches_the_search() {
+    use velesdb_core::velesql::WithValue;
+    let dir = TempDir::new().expect("temp dir");
+    let db = seed_docs_refusing_perfect(&dir, 3);
+    let mut session = SessionSettings::new();
+    assert_eq!(
+        quality_options_after(NEAR, &session),
+        [(
+            "mode".to_string(),
+            WithValue::String("balanced".to_string())
+        )]
+    );
+    session.set("mode", "perfect").expect("set mode");
+    let refused = execute_query(&db, NEAR, None, Some(&session)).expect_err("perfect is refused");
+    assert!(
+        format!("{refused:#}").contains("max_perfect_mode_vectors"),
+        "{refused:#}"
+    );
+    session.set("ef_search", "512").expect("set ef_search");
+    execute_query(&db, NEAR, None, Some(&session)).expect("the session ef_search runs");
+    assert_eq!(
+        quality_options_after(NEAR, &session),
+        [("ef_search".to_string(), WithValue::Integer(512))]
+    );
+}
+
+/// An inline `ef_search` beats the session mode: the REPL injects no session
+/// quality next to it, so it runs where the session's `perfect` is refused
+/// (#2274).
+#[test]
+fn test_inline_ef_search_beats_the_session_mode() {
+    use velesdb_core::velesql::WithValue;
+    let dir = TempDir::new().expect("temp dir");
+    let db = seed_docs_refusing_perfect(&dir, 3);
+    let mut session = SessionSettings::new();
+    session.set("mode", "perfect").expect("set mode");
+    let query = "SELECT * FROM docs WHERE vector NEAR [1.0, 2.0] WITH (ef_search = 64)";
+    execute_query(&db, query, None, Some(&session)).expect("the inline ef_search runs");
+    assert_eq!(
+        quality_options_after(query, &session),
+        [("ef_search".to_string(), WithValue::Integer(64))]
+    );
+}
+
+/// An inline `mode` beats a session `ef_search`: the REPL injects no session
+/// quality next to it, so the inline `perfect` is what the search refuses
+/// (#2274).
+#[test]
+fn test_inline_mode_beats_a_session_ef_search() {
+    use velesdb_core::velesql::WithValue;
+    let dir = TempDir::new().expect("temp dir");
+    let db = seed_docs_refusing_perfect(&dir, 3);
+    let mut session = SessionSettings::new();
+    session.set("ef_search", "64").expect("set ef_search");
+    let query = "SELECT * FROM docs WHERE vector NEAR [1.0, 2.0] WITH (mode = 'perfect')";
+    let refused =
+        execute_query(&db, query, None, Some(&session)).expect_err("the inline perfect applies");
+    assert!(
+        format!("{refused:#}").contains("max_perfect_mode_vectors"),
+        "{refused:#}"
+    );
+    assert_eq!(
+        quality_options_after(query, &session),
+        [("mode".to_string(), WithValue::String("perfect".to_string()))]
     );
 }
 

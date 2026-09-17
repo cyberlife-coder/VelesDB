@@ -147,12 +147,68 @@ impl WithClause {
     }
 
     /// Gets ef_search if specified.
+    ///
+    /// Silently drops a value it cannot read as a plain non-negative integer
+    /// — a typo, a string, or a negative literal (the grammar accepts a
+    /// leading `-`) — rather than reporting it. A caller that must refuse
+    /// such a value instead of treating it as "not given" uses
+    /// [`Self::ef_search`]; one that only needs to know whether an inline
+    /// value was given at all (to decide whether to inject a default over
+    /// it) uses [`Self::ef_search_value`], which sees a value this method
+    /// cannot read (#2274).
     #[must_use]
-    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     pub fn get_ef_search(&self) -> Option<usize> {
         self.get("ef_search")
             .and_then(WithValue::as_integer)
-            .map(|v| v as usize)
+            .and_then(|v| usize::try_from(v).ok())
+    }
+
+    /// The raw value `WITH (ef_search = ...)` gives, or `None` when the
+    /// option is absent; a repeated key's first entry applies. See
+    /// [`Self::ef_search`] for the validated reading.
+    #[must_use]
+    pub fn ef_search_value(&self) -> Option<&WithValue> {
+        self.ef_search_values().next()
+    }
+
+    /// Every value the clause gives `ef_search`, in order.
+    fn ef_search_values(&self) -> impl Iterator<Item = &WithValue> {
+        self.options
+            .iter()
+            .filter(|opt| opt.key.eq_ignore_ascii_case("ef_search"))
+            .map(|opt| &opt.value)
+    }
+
+    /// The `ef_search` `WITH (ef_search = ...)` asks for, checked against the
+    /// documented range (`docs/VELESQL_SPEC.md`), or `None` when the option
+    /// is absent. Unlike [`Self::get_ef_search`], a value that is not an
+    /// integer, or one outside `[16, 4096]` — `-1`, say, which
+    /// [`Self::get_ef_search`] drops as though none were given — is an error
+    /// here, never a silent fall-back to no override (#2274). Every value a
+    /// repeated key gives is checked, even one the first shadows; the first
+    /// applies, as [`Self::ef_search_value`] reads it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message naming the accepted type or range for the first value
+    /// that is not an integer, or an integer outside the documented range.
+    pub fn ef_search(&self) -> Result<Option<usize>, String> {
+        let values = self
+            .ef_search_values()
+            .map(Self::parse_ef_search_value)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(values.first().copied())
+    }
+
+    /// Reads one value given for `ef_search` against the documented range. A
+    /// value that is not an integer gets the message an integer outside the
+    /// range gets, naming the value in canonical `VelesQL` form (see
+    /// [`WithValue`]'s `Display`).
+    fn parse_ef_search_value(value: &WithValue) -> Result<usize, String> {
+        let Some(raw) = value.as_integer() else {
+            return Err(crate::api_types::ef_search_out_of_range(value));
+        };
+        crate::api_types::parse_with_ef_search(raw)
     }
 
     /// Gets timeout in milliseconds if specified.
@@ -215,6 +271,64 @@ pub enum WithValue {
     Boolean(bool),
     /// Identifier (unquoted string).
     Identifier(String),
+}
+
+/// Renders the value in canonical `VelesQL` form, which the parser reads back
+/// as this same value in a `WITH` clause — not necessarily as a query wrote
+/// it: `1.50` renders as `1.5` and `TRUE` as `true`.
+///
+/// - A string in single quotes, each quote inside doubled.
+/// - An integer in decimal.
+/// - A float in decimal with a fractional part and never an exponent, which
+///   the grammar has no form for: `1e20` renders as
+///   `100000000000000000000.0`. An infinite float renders as a literal too
+///   large for an `f64`, which the parser reads back as that infinity. `NaN`
+///   has no `VelesQL` form: the parser never produces one, and its display,
+///   `0.0/0.0`, does not parse, rather than reading back as another value
+///   (a bare `NaN` would read back as an identifier).
+/// - `true` or `false`.
+/// - An identifier bare when the parser reads it back bare as that
+///   identifier, and otherwise in double quotes, each double quote inside
+///   doubled: `TRUE`, `true_x` or `my option` would not read back bare.
+impl std::fmt::Display for WithValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::String(s) => write!(f, "'{}'", s.replace('\'', "''")),
+            Self::Integer(v) => write!(f, "{v}"),
+            Self::Float(v) => write_float_literal(f, *v),
+            Self::Boolean(v) => write!(f, "{v}"),
+            Self::Identifier(s) if crate::velesql::parser::reads_back_as_bare_identifier(s) => {
+                f.write_str(s)
+            }
+            Self::Identifier(s) => write!(f, "\"{}\"", s.replace('"', "\"\"")),
+        }
+    }
+}
+
+/// What `NaN` displays as: text the grammar refuses, since no `VelesQL`
+/// literal reads back as `NaN`.
+const NAN_DISPLAY: &str = "0.0/0.0";
+
+/// Writes `v` as a `VelesQL` float literal (`-`? digits `.` digits), see
+/// [`WithValue`]'s `Display`. `f64`'s own `Display` never uses an exponent
+/// and writes the shortest decimal that reads back as `v`, but drops the
+/// fractional part of a whole number (`100` for `100.0`), which the grammar
+/// would read as an integer.
+fn write_float_literal(f: &mut std::fmt::Formatter<'_>, v: f64) -> std::fmt::Result {
+    if v.is_nan() {
+        return f.write_str(NAN_DISPLAY);
+    }
+    if v.is_infinite() {
+        // Ten times `f64::MAX`, which no `f64` holds: it reads back as infinity.
+        let sign = if v.is_sign_negative() { "-" } else { "" };
+        return write!(f, "{sign}{}0.0", f64::MAX);
+    }
+    let digits = v.to_string();
+    if digits.contains('.') {
+        f.write_str(&digits)
+    } else {
+        write!(f, "{digits}.0")
+    }
 }
 
 impl WithValue {

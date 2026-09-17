@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use pyo3::exceptions::{PyDeprecationWarning, PyValueError};
+use pyo3::exceptions::{PyDeprecationWarning, PyOverflowError, PyValueError};
 use pyo3::prelude::*;
 use velesdb_core::FusionStrategy as CoreFusionStrategy;
 use velesdb_core::{GatedRead, QueryOperationKind, SearchResult};
@@ -151,13 +151,17 @@ impl Collection {
     }
 
     /// Search for similar vectors with custom HNSW ef_search parameter.
+    ///
+    /// `ef_search` must be in `[16, 4096]` (`docs/VELESQL_SPEC.md`); any `int`
+    /// outside it, a negative one or one no `i64` holds included, raises
+    /// `ValueError` rather than running an uncapped graph traversal (#2274).
     #[pyo3(signature = (vector, top_k = 10, ef_search = 128, *, principal = None, tenant = None))]
     fn search_with_ef(
         &self,
         py: Python<'_>,
         vector: Py<PyAny>,
         top_k: usize,
-        ef_search: usize,
+        #[pyo3(from_py_with = ef_search_from_py)] ef_search: usize,
         principal: Option<String>,
         tenant: Option<String>,
     ) -> PyResult<Vec<Py<PyAny>>> {
@@ -676,6 +680,22 @@ impl Collection {
             })
             .collect()
     }
+}
+
+/// Reads the `ef_search` Python passes into the documented range. An `int`
+/// no `i64` holds (`2**64`, say) is outside that range too, so pyo3's
+/// `OverflowError` for it becomes the `ValueError` every other out-of-range
+/// value raises, with the one message naming the value as Python prints it
+/// (#2274); a value that is not an `int` keeps its `TypeError`.
+fn ef_search_from_py(ef_search: &Bound<'_, PyAny>) -> PyResult<usize> {
+    let ef = ef_search.extract::<i64>().map_err(|err| {
+        if err.is_instance_of::<PyOverflowError>(ef_search.py()) {
+            PyValueError::new_err(velesdb_core::api_types::ef_search_out_of_range(ef_search))
+        } else {
+            err
+        }
+    })?;
+    velesdb_core::api_types::parse_with_ef_search(ef).map_err(PyValueError::new_err)
 }
 
 /// Parse a Python quality mode string into [`SearchQuality`].

@@ -281,6 +281,21 @@ default_mode = "ultra_fast"
     }
 
     #[test]
+    fn test_config_validate_search_ef_search_out_of_range() {
+        // Arrange: both ends of [16, 4096] pass, the values just past them fail (#2274)
+        for (ef, valid) in [(15, false), (16, true), (4096, true), (4097, false)] {
+            let mut config = VelesConfig::default();
+            config.search.ef_search = Some(ef);
+
+            // Act
+            let result = config.validate();
+
+            // Assert
+            assert_eq!(result.is_ok(), valid, "search.ef_search = {ef}");
+        }
+    }
+
+    #[test]
     fn test_from_toml_rejects_zero_max_collections() {
         // Regression (#907): loaders previously skipped validate(), silently
         // accepting out-of-range values. A zero capacity must now be rejected.
