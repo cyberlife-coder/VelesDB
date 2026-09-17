@@ -39,7 +39,6 @@ env:
 jobs:
   # ===========================================================================
   # ThreadSanitizer - data-race and lock-order violation detection
-  # Nightly: `-Z sanitizer` and `-Z build-std` exist nowhere else.
   # ===========================================================================
   tsan:
     name: ThreadSanitizer Concurrency Suite

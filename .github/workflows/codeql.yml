@@ -30,6 +30,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  # rustup never installs a toolchain on its own: a Rust call reached before the
+  # job's install step fails here instead of installing mid-build.
+  RUSTUP_AUTO_INSTALL: "0"
+
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
@@ -48,6 +53,13 @@ jobs:
         language: [actions, rust, python, javascript-typescript]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The Rust extractor loads the workspace through rust-analyzer, which
+      # calls cargo and reads the standard library's sources: install the
+      # toolchain rust-toolchain.toml pins, with rust-src, before it runs.
+      - name: Install the toolchain rust-toolchain.toml pins
+        if: matrix.language == 'rust'
+        run: rustup toolchain install --no-self-update --profile minimal --component rust-src
 
       - uses: github/codeql-action/init@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
         with:

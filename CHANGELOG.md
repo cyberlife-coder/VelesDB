@@ -102,13 +102,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   between releases, which the tool reads as a patch update, arming lints that
   only a release commit could satisfy.
 
-- **`rust-toolchain.toml` decides the Rust version (#1987).**
+- **`rust-toolchain.toml` and the workspace `rust-version` state one MSRV (#1987).**
   `scripts/tests/test_msrv_single_source.py` fails `CI Success` when the
-  toolchain file and the workspace `rust-version` disagree, when a member
-  crate declares its own `rust-version`, or when a workflow names a Rust
-  version instead of installing from the toolchain file; a job that builds
-  with nightly may, in a comment saying why. It found propagation-guard.yml
-  installing 1.86 while the MSRV is 1.90.
+  toolchain file and the workspace `rust-version` disagree, or when a member
+  crate declares its own `rust-version`. What a workflow may install is
+  `test_ci_toolchain_pin.py`'s rule alone.
 
 - **Four review signals that block nothing (#1987).** A weekly
   `minimal-versions` job in `quality-deep.yml`, also run on pull requests that

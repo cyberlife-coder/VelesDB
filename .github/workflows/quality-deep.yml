@@ -76,7 +76,6 @@ env:
 jobs:
   # ===========================================================================
   # Miri UB Detection - Détecte undefined behavior dans unsafe code
-  # Nightly: Miri is distributed only as a nightly component.
   # ===========================================================================
   miri:
     name: Miri UB Detection
@@ -168,8 +167,6 @@ jobs:
 
   # ===========================================================================
   # Loom Concurrency Tests - Détecte deadlocks et data races
-  # Nightly: velesdb-core's `loom` feature is nightly-only, as its Cargo.toml
-  # documents.
   # ===========================================================================
   loom:
     name: Loom Concurrency Tests
@@ -217,7 +214,6 @@ jobs:
 
   # ===========================================================================
   # Fuzzing - Robustesse des parsers et APIs exposées
-  # Nightly: cargo-fuzz builds with `-Z sanitizer`, a nightly-only flag.
   # ===========================================================================
   fuzz:
     name: Fuzzing
@@ -283,8 +279,6 @@ jobs:
 
   # ===========================================================================
   # cargo-careful - Debug assertions dans la std (optionnel)
-  # Nightly: cargo-careful rebuilds the standard library, which needs nightly
-  # and rust-src.
   # ===========================================================================
   careful:
     name: Careful (extra checks)
@@ -361,11 +355,15 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Nightly for `-Z direct-minimal-versions` only; `cargo check` below
-      # runs on the toolchain rust-toolchain.toml pins.
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # nightly
-        with:
-          toolchain: nightly
+      # Installed before rust-cache, whose `cargo metadata` runs on it, and
+      # before the check below, which builds with it.
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install --no-self-update --profile minimal
+
+      # nightly: `cargo update -Z direct-minimal-versions` is unstable. Only
+      # the resolve step names it (`cargo +nightly`); the check does not.
+      - name: Install nightly for the resolve
+        run: rustup toolchain install nightly --no-self-update --profile minimal
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
