@@ -37,7 +37,7 @@ on:
         type: boolean
         default: true
       run_minimal_versions:
-        description: 'Check velesdb-core and velesdb-memory against their minimal dependency versions'
+        description: 'Check velesdb-core and velesdb-memory, each alone, against their minimal dependency versions on Linux and macOS'
         type: boolean
         default: true
 
@@ -322,8 +322,8 @@ jobs:
             -- --test-threads=1
 
   # ===========================================================================
-  # Minimal versions: velesdb-core and velesdb-memory still compile at the
-  # lowest dependency versions their manifests allow
+  # Minimal versions: velesdb-core and velesdb-memory each still compile at the
+  # lowest dependency versions their manifests allow, on Linux and macOS
   # ===========================================================================
   # A fresh resolve picks the newest version of everything, so it never meets
   # a lower bound that is too low. The consumer who does is one whose other
@@ -334,24 +334,35 @@ jobs:
   # at their newest. The check runs on the MSRV toolchain rust-toolchain.toml
   # pins.
   #
-  # Only the published members take part. `-Z direct-minimal-versions` pins
-  # the direct dependencies of every workspace member, and an unpublished one
-  # (`publish = false`) has no crates.io consumer to hold anything low: its
-  # bounds are nobody's contract, yet they conflicted with the rest of the
-  # graph (velesdb-wasm's wasm-bindgen family). The check then compiles
-  # velesdb-core and velesdb-memory, the two crates ci.yml's `semver-checks`
-  # also scopes itself to; tauri-plugin-velesdb and velesdb-migrate publish a
-  # library too and are not compiled here.
+  # One crate per leg, resolved in a workspace cut down to it: its path
+  # dependencies (velesdb-core, for velesdb-memory) come back in on their own,
+  # and nothing else does. A consumer of velesdb-core never resolves
+  # tauri-plugin-velesdb's graph, so a floor that graph imposes is not one
+  # velesdb-core needs, and a joint resolve would hide the difference.
+  #
+  # Linux and macOS, because a lower bound can build on one and not the other:
+  # tar 0.4.0-0.4.2 masks `st_mode` with `libc::S_IFMT`, a u16 on macOS, and
+  # fails there only. Windows is not checked. velesdb-core and velesdb-memory
+  # are the two crates ci.yml's `semver-checks` also scopes itself to; the other
+  # published members (velesdb-server, velesdb-cli, velesdb-migrate,
+  # velesdb-mobile, tauri-plugin-velesdb) are not compiled here.
   #
   # Not a merge gate: this workflow is outside ci.yml, so `CI Success` never
   # reads it, and its verdict can move with no change here whenever a
   # dependency publishes. A source change that starts using a newer API
   # without raising the bound is caught by the weekly run, not on its PR.
   minimal-versions:
-    name: Minimal versions (velesdb-core, velesdb-memory)
-    runs-on: ubuntu-latest
+    name: Minimal versions (${{ matrix.crate }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_minimal_versions }}
-    timeout-minutes: 30
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        crate: [velesdb-core, velesdb-memory]
+    env:
+      CRATE: ${{ matrix.crate }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -367,19 +378,24 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          shared-key: "velesdb-minimal-versions"
+          shared-key: "velesdb-minimal-versions-${{ matrix.crate }}"
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
 
-      - name: Keep only the published members in the workspace
+      - name: Keep only this crate in the workspace
         run: |
           python3 - <<'PY'
-          import pathlib, re, tomllib
+          import os, pathlib, re, tomllib
+          crate = os.environ["CRATE"]
           root = pathlib.Path("Cargo.toml")
           text = root.read_text()
+          kept = []
           for member in tomllib.loads(text)["workspace"]["members"]:
-              package = tomllib.loads(pathlib.Path(member, "Cargo.toml").read_text())["package"]
-              if package.get("publish") is False:
+              if tomllib.loads(pathlib.Path(member, "Cargo.toml").read_text())["package"]["name"] == crate:
+                  kept.append(member)
+              else:
                   text = re.sub(rf'^\s*"{re.escape(member)}",?\n', "", text, flags=re.M)
+          if len(kept) != 1:
+              raise SystemExit(f"{crate} is not exactly one workspace member: {kept}")
           root.write_text(text)
           PY
           sed -n '/^members/,/^]/p' Cargo.toml
@@ -392,8 +408,8 @@ jobs:
         env:
           CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback
 
-      - name: Check velesdb-core and velesdb-memory
-        run: cargo check -p velesdb-core -p velesdb-memory --all-features
+      - name: Check the crate at its minimal versions
+        run: cargo check -p "$CRATE" --all-features
 
   # ===========================================================================
   # Summary

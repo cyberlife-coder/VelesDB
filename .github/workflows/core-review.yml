@@ -75,13 +75,20 @@ jobs:
       # the nightly flag the job needs is written in this file, not hidden in
       # the tool. Both builds share target/, so dependencies compile once. All
       # features, so an item behind `gpu` or `persistence` is listed too.
+      #
+      # `--cap-lints warn`: this job reports the API, it does not lint the docs.
+      # lib.rs denies `rustdoc::broken_intra_doc_links`, and a newer nightly can
+      # find a broken link the pinned toolchain's rustdoc does not (a
+      # `#[deprecated]` note, in run 35233555756); the base commit cannot be
+      # fixed, so without the cap it would build no JSON and the job no report.
+      # Broken links stay ci.yml's `Rustdoc intra-doc links` step's to fail.
       - name: Diff the public API against the base
         run: |
           base=$(git rev-parse HEAD^1)
           head=$(git rev-parse HEAD)
           for end in base head; do
             git checkout --quiet --detach "${!end}"
-            cargo rustdoc -p velesdb-core --lib --all-features -- -Z unstable-options --output-format json
+            cargo rustdoc -p velesdb-core --lib --all-features -- -Z unstable-options --output-format json --cap-lints warn
             cp target/doc/velesdb_core.json "$RUNNER_TEMP/$end.json"
           done
           cargo public-api diff "$RUNNER_TEMP/base.json" "$RUNNER_TEMP/head.json" > "$RUNNER_TEMP/public-api.txt"
@@ -116,7 +123,7 @@ jobs:
           fetch-depth: 2
 
       - name: Install cargo-mutants (prebuilt)
-        uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2.87.5
+        uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
         with:
           tool: cargo-mutants@27.1.0
 

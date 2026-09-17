@@ -120,10 +120,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Four review signals that block nothing (#1987).** A weekly
   `minimal-versions` job in `quality-deep.yml`, also run on pull requests that
-  change a `Cargo.toml`, checks `velesdb-core` and `velesdb-memory` with every
-  direct dependency at the lowest version their manifests allow. On a pull
+  change a `Cargo.toml`, checks `velesdb-core` and `velesdb-memory`, each
+  resolved alone, with every direct dependency at the lowest version its
+  manifest allows, on Linux and on macOS. On a pull
   request that changes `velesdb-core`, `core-review.yml` prints its
-  `cargo public-api` diff against the base and runs `cargo mutants --in-diff`
+  public API diff against the base (rustdoc JSON built with lints capped, so
+  a doc defect at either end does not stop the report) and runs `cargo mutants --in-diff`
   on the changed code, uploading the report. `codeql.yml` analyzes Rust,
   Python, JavaScript/TypeScript and the workflows themselves on push, pull
   request and weekly. None of them is read by `CI Success`.
@@ -626,8 +628,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no longer compiles against serde, `tracing` "0.1" whose 0.1.37 drops the `%`
   of a log field, `ureq` "2" whose 2.0.0 lacks `Transport::kind()`. Each moved
   to the lowest version the resolve and the compile accept, not to the locked
-  one; only `pest` needed the lockfile to move, 2.9.0 to 2.9.1. A consumer who
-  holds one of these crates below its new floor has to update it.
+  one; only `pest` needed the lockfile to move, 2.9.0 to 2.9.1. `tar` moves to
+  0.4.3, the first release whose `st_mode` mask compiles on macOS: 0.4.0 to
+  0.4.2 mask with `libc::S_IFMT`, a `u16` there and a `u32` on Linux, which is
+  why a Linux-only check never saw it. A consumer who holds one of these crates
+  below its new floor has to update it. Several floors are still above what
+  `velesdb-core`'s or `velesdb-memory`'s own resolve needs (`serde` needs
+  1.0.220, `serde_json` 1.0.127, `time` 0.3.6 there): they come from a resolve
+  of the whole workspace, and lowering one needs a build at the lower version
+  to back it, which the per-crate job now makes possible.
 
 - **BREAKING (REST, VelesQL, bindings) — an unparseable search `mode` now
   fails instead of running silently at the default quality (#2267).**
