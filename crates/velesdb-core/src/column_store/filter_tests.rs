@@ -181,9 +181,9 @@ use crate::column_store::filter_geo::{CompareOp, GeoBboxParams, GeoDistanceParam
 fn geo_store() -> ColumnStore {
     let mut store = ColumnStore::with_schema(&[("location", ColumnType::GeoPoint)]);
     // Paris
-    store.push_row(&[("location", ColumnValue::GeoPoint(48.8566, 2.3522))]);
+    store.push_row(&[("location", ColumnValue::GeoPoint(PARIS.0, PARIS.1))]);
     // London
-    store.push_row(&[("location", ColumnValue::GeoPoint(51.5074, -0.1278))]);
+    store.push_row(&[("location", ColumnValue::GeoPoint(LONDON.0, LONDON.1))]);
     // NYC
     store.push_row(&[("location", ColumnValue::GeoPoint(40.7128, -74.0060))]);
     // Null
@@ -234,6 +234,89 @@ fn filter_geo_distance_non_geopoint_column_returns_empty() {
         threshold: 1_000_000.0,
     };
     assert!(store.filter_geo_distance(&params).is_empty());
+}
+
+// Paris is row 0 and London row 1 of `geo_store`; the reference point is
+// Paris, so London is the row these tests watch.
+const PARIS: (f64, f64) = (48.8566, 2.3522);
+const LONDON: (f64, f64) = (51.5074, -0.1278);
+const LONDON_ROW: usize = 1;
+
+fn london_distance_from_paris() -> f64 {
+    crate::geo_distance::great_circle_distance_m(PARIS.0, PARIS.1, LONDON.0, LONDON.1)
+        .expect("test: valid coordinates")
+}
+
+fn from_paris(operator: CompareOp, threshold: f64) -> GeoDistanceParams<'static> {
+    GeoDistanceParams {
+        column: "location",
+        lat: PARIS.0,
+        lng: PARIS.1,
+        operator,
+        threshold,
+    }
+}
+
+#[test]
+fn filter_geo_distance_eq_is_to_the_millimetre() {
+    let store = geo_store();
+    let dist = london_distance_from_paris();
+    let within = dist + crate::geo_distance::DISTANCE_EQUALITY_RESOLUTION_M / 2.0;
+    let beyond = dist + crate::geo_distance::DISTANCE_EQUALITY_RESOLUTION_M * 2.0;
+
+    assert!(store
+        .filter_geo_distance(&from_paris(CompareOp::Eq, within))
+        .contains(&LONDON_ROW));
+    assert!(!store
+        .filter_geo_distance(&from_paris(CompareOp::NotEq, within))
+        .contains(&LONDON_ROW));
+    assert!(!store
+        .filter_geo_distance(&from_paris(CompareOp::Eq, beyond))
+        .contains(&LONDON_ROW));
+    assert!(store
+        .filter_geo_distance(&from_paris(CompareOp::NotEq, beyond))
+        .contains(&LONDON_ROW));
+}
+
+// #2310: Haversine gave NaN for this exactly antipodal pair, so the row fell
+// out of every comparison.
+#[test]
+fn filter_geo_distance_near_the_antipode_is_a_real_distance() {
+    let mut store = ColumnStore::with_schema(&[("location", ColumnType::GeoPoint)]);
+    store.push_row(&[("location", ColumnValue::GeoPoint(2.5, -120.0))]);
+    let params = GeoDistanceParams {
+        column: "location",
+        lat: -2.5,
+        lng: 60.0,
+        operator: CompareOp::Gt,
+        threshold: 20_000_000.0,
+    };
+    assert_eq!(store.filter_geo_distance(&params), vec![0]);
+    assert_eq!(store.filter_geo_distance_bitmap(&params).len(), 1);
+}
+
+#[test]
+fn filter_geo_distance_off_globe_reference_or_nan_threshold_matches_no_row() {
+    let store = geo_store();
+    let off_globe = [(f64::NAN, PARIS.1), (PARIS.0, f64::NAN), (90.5, PARIS.1)];
+    for (lat, lng) in off_globe {
+        let params = GeoDistanceParams {
+            lat,
+            lng,
+            ..from_paris(CompareOp::NotEq, 0.0)
+        };
+        assert!(
+            store.filter_geo_distance(&params).is_empty(),
+            "({lat}, {lng})"
+        );
+        assert!(
+            store.filter_geo_distance_bitmap(&params).is_empty(),
+            "({lat}, {lng})"
+        );
+    }
+    let nan_threshold = from_paris(CompareOp::NotEq, f64::NAN);
+    assert!(store.filter_geo_distance(&nan_threshold).is_empty());
+    assert!(store.filter_geo_distance_bitmap(&nan_threshold).is_empty());
 }
 
 #[test]
