@@ -56,7 +56,6 @@ import sys
 import tempfile
 import textwrap
 import threading
-import time
 import unittest
 import warnings
 from pathlib import Path
@@ -1750,22 +1749,17 @@ BENCH_CHILD = textwrap.dedent(f"""
 FILTER_RELEASES = 16
 
 
-def process_is_gone(pid: int) -> bool:
-    """Whether `pid` names no live process: none at all, or one that has only to be reaped."""
-    state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True,
-                           text=True, check=False).stdout.strip()
-    return not state or state.startswith("Z")
+# How long a killed clean filter has to close the FIFO it holds: the end of file reaches the
+# reader as soon as the kernel has closed the last writer, so a filter still holding it after
+# this is running, not slow.
+FILTER_DEATH_PATIENCE_S = 10
 
 
-def gone_within_patience(pid: int) -> bool:
-    """Whether `pid` is gone, waited for as long as a launch is given: a killed process ends
-    when the system gets to it, not the instant it is signalled."""
-    deadline = time.monotonic() + LAUNCH_PATIENCE_S
-    while not process_is_gone(pid):
-        if time.monotonic() > deadline:
-            return False
-        time.sleep(0.05)
-    return True
+def writers_gone(descriptor: int, timeout: float) -> bool:
+    """Whether every writer of the FIFO read at `descriptor` has closed it within `timeout`.
+    Nothing is ever written to it, so its becoming readable is its end of file."""
+    readable, _, _ = select.select([descriptor], [], [], timeout)
+    return bool(readable) and os.read(descriptor, 1) == b""
 
 
 def fifo_opened(path: Path) -> int:
@@ -1788,18 +1782,23 @@ def first_line(test: unittest.TestCase, descriptor: int) -> str:
 @contextlib.contextmanager
 def bench_held_by_a_clean_filter(test: unittest.TestCase, call: str, prelude: str = ""):
     """A child running the bench's `call` on a scratch checkout whose clean filter, which git
-    runs while the scratch index exists, writes its pid, then waits for a line to answer.
+    runs while the scratch index exists, opens a FIFO for writing and keeps it, writes its pid,
+    then waits for a line to answer.
 
-    Yields the child, the filter's pid, the directory the child's temporary files go to, and
-    what lets the filter answer. Whatever still runs at the end is killed.
+    Yields the child, the read end of the FIFO the filter holds, which ends once the filter and
+    whatever inherited it are dead, the directory the child's temporary files go to, and what
+    lets the filter answer. A filter still running at the end is killed.
     """
     with scratch_checkout() as root, tempfile.TemporaryDirectory() as tmp:
-        ready, go = Path(tmp) / "ready", Path(tmp) / "go"
+        ready, go, held = Path(tmp) / "ready", Path(tmp) / "go", Path(tmp) / "held"
         ready_end, go_end = fifo_opened(ready), fifo_opened(go)
+        os.mkfifo(held)
+        held_end = os.open(held, os.O_RDONLY | os.O_NONBLOCK)
         (root / ".gitattributes").write_text("cases.json filter=held\n", encoding="utf-8")
         git_commit(root, ".gitattributes")
         git_answer(root, "config", "filter.held.clean",
-                   f"echo $$ >{shlex.quote(str(ready))}; read _ <{shlex.quote(str(go))}; exec cat")
+                   f"exec 3>{shlex.quote(str(held))}; echo $$ >{shlex.quote(str(ready))}; "
+                   f"read _ <{shlex.quote(str(go))}; exec cat")
         scratch = Path(tmp) / "scratch"
         scratch.mkdir()
         child = subprocess.Popen([sys.executable, "-c", prelude + BENCH_CHILD + call, str(root)],
@@ -1807,16 +1806,16 @@ def bench_held_by_a_clean_filter(test: unittest.TestCase, call: str, prelude: st
         pid = None
         try:
             pid = int(first_line(test, ready_end))
-            yield child, pid, scratch, lambda: os.write(go_end, b"go\n" * FILTER_RELEASES)
+            yield child, held_end, scratch, lambda: os.write(go_end, b"go\n" * FILTER_RELEASES)
         finally:
-            if pid is not None and not process_is_gone(pid):
+            if pid is not None and not writers_gone(held_end, 0):
                 with contextlib.suppress(OSError):
                     os.kill(pid, signal.SIGKILL)
             if child.poll() is None:
                 child.kill()
             child.wait()
-            os.close(ready_end)
-            os.close(go_end)
+            for descriptor in (ready_end, go_end, held_end):
+                os.close(descriptor)
 
 
 def terminated_inside_the_scratch_index(test: unittest.TestCase, *, filter_gone: bool = False
@@ -1825,12 +1824,12 @@ def terminated_inside_the_scratch_index(test: unittest.TestCase, *, filter_gone:
     filter runs: what its temporary directory held then, its return code, what it held after,
     and, when `filter_gone` asks, whether the filter was gone (None otherwise)."""
     with bench_held_by_a_clean_filter(test, "bench.run_origin(bench.ROOT / 'cases.json', None)") \
-            as (child, pid, scratch, _release):
+            as (child, held_end, scratch, _release):
         during = sorted(path.name for path in scratch.iterdir())
         child.send_signal(signal.SIGTERM)
         code = child.wait(timeout=LAUNCH_PATIENCE_S)
         after = sorted(path.name for path in scratch.iterdir())
-        gone = gone_within_patience(pid) if filter_gone else None
+        gone = writers_gone(held_end, FILTER_DEATH_PATIENCE_S) if filter_gone else None
     return during, code, after, gone
 
 
@@ -2003,7 +2002,7 @@ class CheckoutOriginTest(unittest.TestCase):
         handler only over the default disposition: the run completes (#2280 review)."""
         prelude = "import signal\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
         call = "print(bench.run_origin(bench.ROOT / 'cases.json', None)['cases_file'])"
-        with bench_held_by_a_clean_filter(self, call, prelude) as (child, _pid, _scratch, release):
+        with bench_held_by_a_clean_filter(self, call, prelude) as (child, _held, _scratch, release):
             child.send_signal(signal.SIGTERM)
             release()
             code = child.wait(timeout=LAUNCH_PATIENCE_S)
@@ -2191,18 +2190,21 @@ class CheckoutOriginTest(unittest.TestCase):
                          f"cases.json (modified ?) · {FAKE_BINARY_VERSION} ({DIGEST[:12]})")
 
 
-# The functions through which the bench reads git: the only ones that may run it, and the
-# only ones whose answers the rest of the bench reads.
+# The functions through which the bench reads git: `_git_output` runs it, the other two read
+# what `_git_output` returned.
 GIT_READERS = ("_git_output", "_git_line", "_git_records")
-# Calls that rewrite what a command printed: none may touch a git answer.
+# Calls that rewrite what a command printed.
 REWRITING_CALLS = ("strip", "rstrip", "lstrip", "splitlines")
 # What makes `subprocess` decode and translate what a command prints.
 DECODING_OPTIONS = ("text", "universal_newlines", "encoding", "errors")
 
 
-def bench_functions() -> "dict[str, ast.FunctionDef]":
-    """Every function the bench's module defines, by name, read by Python's own parser."""
-    tree = ast.parse(SCRIPT_PATH.read_text(encoding="utf-8"))
+def bench_tree() -> ast.Module:
+    """The bench's module, read by Python's own parser."""
+    return ast.parse(SCRIPT_PATH.read_text(encoding="utf-8"))
+
+
+def functions_of(tree: ast.Module) -> "dict[str, ast.FunctionDef]":
     return {node.name: node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
 
 
@@ -2216,14 +2218,15 @@ def called_names(function: ast.AST) -> "set[str]":
             for call in calls_in(function)} - {None}
 
 
-def names_git(function: ast.AST) -> bool:
-    return any(isinstance(node, ast.Constant) and node.value == "git"
-               for node in ast.walk(function))
+def names_git(node: ast.AST) -> bool:
+    """Whether `node` is a string literal naming git as a program: `git`, or a path to it."""
+    return (isinstance(node, ast.Constant) and isinstance(node.value, str)
+            and (node.value == "git" or node.value.endswith("/git")))
 
 
-def git_readers(functions: "dict[str, ast.FunctionDef]") -> "list[str]":
-    """The functions a git answer can reach: those that call a reader, and every bench
-    function they call in turn, which may be handed that answer."""
+def git_callers(functions: "dict[str, ast.FunctionDef]") -> "list[str]":
+    """The readers, the functions that call one, and the bench functions those call by name,
+    and so on down: not the functions that call a caller."""
     reached = {name for name, function in functions.items()
                if name in GIT_READERS or called_names(function) & set(GIT_READERS)}
     frontier = set(reached)
@@ -2235,52 +2238,146 @@ def git_readers(functions: "dict[str, ast.FunctionDef]") -> "list[str]":
     return sorted(reached)
 
 
+def splits_on_whitespace(call: ast.Call) -> bool:
+    """`x.split()` or `x.split(None)`: a split that eats leading and trailing whitespace."""
+    if getattr(call.func, "attr", None) != "split":
+        return False
+    first = call.args[0] if call.args else None
+    return first is None or (isinstance(first, ast.Constant) and first.value is None)
+
+
 def rewriting_findings(name: str, function: ast.FunctionDef) -> "list[str]":
-    """The calls in `function` that rewrite a string: stripping, splitting lines or on spaces."""
+    """The calls in `function` that strip, split lines or split on whitespace, by name."""
     findings = [f"{name} calls {call}" for call in sorted(called_names(function)
                                                           & set(REWRITING_CALLS))]
-    return findings + [f"{name} splits on whitespace" for call in calls_in(function)
-                       if getattr(call.func, "attr", None) == "split" and not call.args]
+    return findings + [f"{name} splits on whitespace"
+                       for call in calls_in(function) if splits_on_whitespace(call)]
 
 
-def git_answer_findings(functions: "dict[str, ast.FunctionDef]") -> "list[str]":
-    """Where the bench runs git other than in `_git_output`, or rewrites a git answer."""
-    findings = [f"{name} names git" for name, function in functions.items()
-                if name != "_git_output" and names_git(function)]
-    for name in git_readers(functions):
+def git_answer_findings(tree: ast.Module) -> "list[str]":
+    """What the tripwire sees (`GitAnswerGuardTest`): a literal naming git outside
+    `_git_output`, a rewriting call in a function around the readers, and a decoding option
+    passed by keyword in `_run`."""
+    functions = functions_of(tree)
+    allowed = {id(node) for node in ast.walk(functions["_git_output"])}
+    findings = [f"line {node.lineno} names git" for node in ast.walk(tree)
+                if names_git(node) and id(node) not in allowed]
+    for name in git_callers(functions):
         findings += rewriting_findings(name, functions[name])
     return findings + [f"_run passes {keyword.arg}" for call in calls_in(functions["_run"])
                        for keyword in call.keywords if keyword.arg in DECODING_OPTIONS]
 
 
 class GitAnswerGuardTest(unittest.TestCase):
-    """A git answer is read as git wrote it, by construction (#2280 review).
+    """A tripwire for the obvious ways back to a rewritten git answer (#2280 review), not a
+    proof that there is none.
 
     `.strip()` on git's answers misread a path beginning or ending with whitespace in three
-    rounds running, each fixing one call. So one function runs git and returns what it printed
-    decoded and untranslated (`_git_output`), two read a line or a `-z` listing from that, and
-    this guard fails when another function names git, or a reader rewrites an answer.
+    rounds running, each fixing one call. The protection is the design: `_git_output` is the
+    only function that runs git, and returns what git printed decoded and untranslated;
+    `_git_line` and `_git_records` read a line or a `-z` listing from that. This test reads the
+    bench with Python's parser and checks exactly three things:
+
+    - no string literal equal to `git`, or ending in `/git`, sits outside `_git_output`,
+      module level included;
+    - no call to `strip`, `rstrip`, `lstrip`, `splitlines`, `split()` or `split(None)`
+      appears in a reader, in a function that calls a reader, or in a bench function those
+      call by name, and so on down (`git_callers`);
+    - `_run` passes none of `text`, `universal_newlines`, `encoding` or `errors` by keyword.
+
+    It follows no data. A git name built at run time, a rewrite in a function that calls a
+    caller, a method reached through an alias, or options passed through `**` all go
+    unnoticed: catching them would take a data-flow analyser, and a hand-written one does not
+    converge.
     """
 
-    def test_no_function_reads_git_but_through_its_readers(self):
-        self.assertEqual(git_answer_findings(bench_functions()), [])
+    def test_no_obvious_way_around_the_readers(self):
+        self.assertEqual(git_answer_findings(bench_tree()), [])
 
-    def test_the_guard_refuses_each_way_around_the_readers(self):
-        """Its refusals, each proven on the bench's own functions with one line added."""
+    def test_the_tripwire_refuses_each_form_it_checks(self):
+        """Each check proven on the bench's own module with one line added: to the function
+        named, or at module level where none is."""
         mutants = {
             "a reader strips": ("_committed_path", "relative.strip()"),
-            "a function handed an answer strips": ("_cases_origin", "relative.rstrip()"),
+            "a function a caller calls strips": ("_cases_origin", "relative.rstrip()"),
             "a reader splits lines": ("_materialized", "top.splitlines()"),
-            "git run directly": ("launched_binary", "subprocess.run(['git', 'status'])"),
-            "decoded as text": ("_run", "subprocess.run([], text=True)"),
             "split on whitespace": ("_changed", "commit.split()"),
+            "split on None": ("_git_line", "output.split(None)"),
+            "git run directly": ("launched_binary", "subprocess.run(['git', 'status'])"),
+            "git named by its path": ("launched_binary", "_run(['/usr/bin/git'], 'status')"),
+            "git named at module level": (None, "GIT = 'git'"),
+            "decoded as text": ("_run", "subprocess.run([], text=True)"),
         }
         for label, (name, line) in mutants.items():
             with self.subTest(label):
-                functions = bench_functions()
-                self.assertEqual(git_answer_findings(functions), [])
-                functions[name].body.insert(0, ast.parse(line).body[0])
-                self.assertNotEqual(git_answer_findings(functions), [])
+                tree = bench_tree()
+                self.assertEqual(git_answer_findings(tree), [])
+                body = tree.body if name is None else functions_of(tree)[name].body
+                body.insert(0, ast.parse(line).body[0])
+                self.assertNotEqual(git_answer_findings(tree), [])
+
+
+# Where an interpreter older than the one running the suite may be found.
+OLDER_PYTHONS = ("/usr/bin/python3", *(f"python3.{minor}" for minor in range(9, 11)))
+
+
+def interpreter_version(program: str) -> "tuple[int, int] | None":
+    """The `(major, minor)` of the interpreter `program` names, or None if there is none."""
+    found = shutil.which(program)
+    if found is None:
+        return None
+    done = subprocess.run([found, "-c", "import sys; print(*sys.version_info[:2])"],
+                          capture_output=True, text=True, check=False,
+                          timeout=LAUNCH_PATIENCE_S)
+    major, _, minor = done.stdout.partition(" ")
+    return (int(major), int(minor)) if done.returncode == 0 else None
+
+
+def oldest_interpreter_at_least(minimum: "tuple[int, int]") -> "tuple[str, tuple[int, int]] | None":
+    """The oldest interpreter on this machine not older than `minimum`, if older than the one
+    running the suite."""
+    found = [(version, program) for program in OLDER_PYTHONS
+             if (version := interpreter_version(program)) is not None and version >= minimum]
+    oldest = min(found, default=None)
+    if oldest is None or oldest[0] >= sys.version_info[:2]:
+        return None
+    return oldest[1], oldest[0]
+
+
+class MinimumPythonTest(unittest.TestCase):
+    """The bench runs on `MINIMUM_PYTHON`, macOS's own `python3` (#2280 review).
+
+    Round 9 passed `process_group`, which Python 3.11 introduced, to `subprocess.Popen`: every
+    command the bench ran then raised `TypeError` under `/usr/bin/python3`, 3.9.6, while the
+    suite, on 3.12 and 3.14, stayed green. Syntax is checked by Python's parser at that
+    version; an API is only checked by running the bench under an interpreter of it, which a
+    machine without one (CI's runner among them) skips, and says why.
+    """
+
+    def test_the_bench_parses_as_its_minimum_python(self):
+        ast.parse(SCRIPT_PATH.read_text(encoding="utf-8"),
+                  feature_version=bench.MINIMUM_PYTHON)
+
+    def test_the_bench_records_an_origin_under_the_oldest_python_here(self):
+        """`run_origin` and `launched_binary` run git and a binary through `_run`."""
+        oldest = oldest_interpreter_at_least(bench.MINIMUM_PYTHON)
+        if oldest is None:
+            self.skipTest(f"no interpreter between {bench.MINIMUM_PYTHON} and the suite's own")
+        program, _version = oldest
+        call = ("import json\nprint(json.dumps(bench.run_origin(bench.ROOT / 'cases.json', "
+                "bench.launched_binary(pathlib.Path(sys.argv[2])))))")
+        with scratch_checkout() as root, tempfile.TemporaryDirectory() as bin_dir:
+            binary = Path(bin_dir) / "velesdb-memory"
+            binary.write_text(FAKE_BINARY_SCRIPT, encoding="utf-8")
+            binary.chmod(0o755)
+            done = subprocess.run([shutil.which(program), "-c", BENCH_CHILD + call, str(root),
+                                   str(binary)], capture_output=True, text=True, check=False,
+                                  timeout=LAUNCH_PATIENCE_S)
+            head = git_answer(root, "rev-parse", "HEAD")
+        self.assertEqual(done.returncode, 0, done.stderr[-2000:])
+        origin = json.loads(done.stdout)
+        self.assertEqual((origin["commit"], origin["cases_file"], origin["binary"]["version"]),
+                         (head, "cases.json", FAKE_BINARY_VERSION))
 
 
 # -------------------------------------------------------------- row per file --

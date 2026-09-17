@@ -45,6 +45,9 @@ Usage:
     python3 scripts/bench-memory-extraction.py screen --config MODEL [--runs N]
     python3 scripts/bench-memory-extraction.py endtoend --config MODEL --binary PATH
     python3 scripts/bench-memory-extraction.py report --results PATH
+
+It runs on Python 3.9 or later (`MINIMUM_PYTHON`): `python3` on macOS is 3.9, and
+CI runs its tests on 3.12.
 """
 
 from __future__ import annotations
@@ -73,6 +76,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+# The oldest Python the bench runs on: macOS's own `python3`. A test parses the bench as
+# this version, and runs it under an interpreter of it when the machine has one.
+MINIMUM_PYTHON = (3, 9)
 ROOT = Path(__file__).resolve().parents[1]
 EXTRACT_RS = ROOT / "crates" / "velesdb-memory" / "src" / "extract.rs"
 CASES_FILE = Path(__file__).resolve().parent / "memory-extraction-cases.json"
@@ -1466,12 +1472,14 @@ def _run(argv: "list[str]", command: str, env: "dict[str, str] | None" = None,
     it is asked ends rather than waiting on the bench's terminal. It runs in a process group
     of its own, stopped whole when it has not answered within `ANSWER_TIMEOUT_S`, when the
     bench is interrupted, or on a SIGTERM (`_ends_by_sigterm`): killing the command alone
-    left what it had started running (#2296).
+    left what it had started running (#2296). The group is a new session's, whose id is the
+    command's pid (`start_new_session`): `process_group` needs Python 3.11, and the bench
+    runs on `MINIMUM_PYTHON`.
     """
     with _ends_by_sigterm():
         try:
             child = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                     stderr=subprocess.PIPE, env=env, process_group=0)
+                                     stderr=subprocess.PIPE, env=env, start_new_session=True)
         except (OSError, subprocess.SubprocessError) as exc:
             return None, f"{command} did not run ({type(exc).__name__})"
         _TERMINATION.groups.add(child.pid)
