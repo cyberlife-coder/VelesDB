@@ -280,8 +280,9 @@ untouched with a warning.
 | `--http-insecure` / `VELESDB_MEMORY_HTTP_INSECURE=1` | Opt OUT of HTTPS and serve plain HTTP, printing a loud warning at startup. For local debugging, or behind a trusted TLS-terminating proxy — not for normal use. |
 | `VELESDB_MEMORY_HTTP_ALLOW_REMOTE=1` | Required before a non-loopback bind host is accepted at all. |
 | `VELESDB_MEMORY_HTTP_MAX_BODY_BYTES` | Max size of a single `/mcp` request body (default 80 MiB: the compiler's full 64 MiB per-request media budget plus text/framing headroom, so a request the core accepts is never refused by the transport alone). An oversized request is rejected instead of being buffered into memory unbounded. |
-| `VELESDB_MEMORY_HTTP_MAX_SESSIONS` | Max concurrent MCP sessions (default 64). Each session holds a worker task and a couple of small bounded channels — cheap individually, but a client that opens sessions without closing them could otherwise grow that without bound. |
+| `VELESDB_MEMORY_HTTP_MAX_SESSIONS` | Max concurrent MCP sessions (default 64). Each session holds a worker task and a couple of small bounded channels — cheap individually, but a client that opens sessions without closing them could otherwise grow that without bound. At the cap, an idle session is evicted to admit the new client — see [The session cap: eviction, and who can evict whom](#the-session-cap-eviction-and-who-can-evict-whom). |
 | `VELESDB_MEMORY_HTTP_KEEP_ALIVE_SECS` | How long a session may sit idle before it is retired (default 3600 — 60 minutes). See [Idle sessions, and why a timeout is not a failed write](#idle-sessions-and-why-a-timeout-is-not-a-failed-write). |
+| `VELESDB_MEMORY_HTTP_EVICT_MIN_IDLE_SECS` | How long a session must have been idle before the session cap may evict it (default 300 — 5 minutes; `0` or an unparseable value falls back to the default; never more than the keep-alive). See [The session cap: eviction, and who can evict whom](#the-session-cap-eviction-and-who-can-evict-whom). |
 | `VELESDB_MEMORY_LOG` | Per-request logging to stderr, as `EnvFilter` directives. Unset (the binary's default) is fully silent; the macOS installer deploys the daemon with the payload-safe incident preset on. See [Reading the daemon's log](#reading-the-daemons-log). |
 | `GET /health` | Plain 200 OK liveness probe, no MCP handshake needed — what the installer and CI use to confirm the daemon is up (over HTTPS too, once TLS is the transport). |
 
@@ -370,6 +371,39 @@ rather than adding a duplicate.
 Do not use the returned id, or the mere absence of an error, as proof of a
 write — only `saved_at` moving is proof. Use `load_working_context` when the
 stored *content* itself has to be verified.
+
+### The session cap: eviction, and who can evict whom
+
+A client that dies without closing its session — a killed agent, a crashed
+process, a host restart — leaves that session in place until the idle timeout
+retires it. Once `VELESDB_MEMORY_HTTP_MAX_SESSIONS` sessions are live, the
+daemon therefore does not refuse a new client outright: it evicts the least
+recently active session that
+
+- has no request in flight and no stream open,
+- has finished its own `initialize`, and
+- has been idle for at least `VELESDB_MEMORY_HTTP_EVICT_MIN_IDLE_SECS`
+  (5 minutes by default).
+
+The evicted client gets a `404` on its next request and must re-initialize.
+Only when no live session meets all three conditions is the new client
+refused, with an error saying none could be evicted and to retry shortly. Each
+eviction is logged (`evicted idle MCP session to admit a new one`, with the
+session id).
+
+The minimum idle age is the guard against a flood. The transport has no
+authentication (below), so any local process can send `initialize` in a loop;
+without the floor, each one at the cap would evict a live client that merely
+had nothing in flight at that instant. With it, a client that sends a request
+at least every five minutes, or keeps its standalone event stream
+(`GET /mcp`) open, is never
+evicted. **The trade-off that remains:** at the cap, a client silent (and
+without an open stream) for longer than the floor *can* be evicted by someone
+else's `initialize`, and a client that mishandles the resulting `404` can lose
+that call, exactly as described above for an expired session. Raising the
+floor narrows that window, but lengthens how long dead clients can hold every
+slot once the cap is reached; a floor above the idle timeout is clamped to it,
+since a session silent that long is retired anyway.
 
 **The transport has no authentication.** Anyone who can reach the socket gets
 full `remember` / `recall` / `relate` access to the store. HTTPS-by-default

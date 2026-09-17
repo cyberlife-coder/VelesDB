@@ -17,9 +17,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its slot occupied until `keep_alive` finally expired it — and at the cap,
   every OTHER live client was refused in the meantime, told to "close an
   existing session" it had no way to reach. `BoundedSessionManager` now
-  evicts the least-recently-used session with nothing in flight (no request
-  being served, no open stream) to admit the new one, and refuses only once
-  every live session is genuinely busy (#2289).
+  evicts the least-recently-active session that has nothing in flight (no
+  request being served, no open stream), has finished its own `initialize`,
+  and has been idle for at least `VELESDB_MEMORY_HTTP_EVICT_MIN_IDLE_SECS`
+  (new, default 300 s, never above the keep-alive) to admit the new one; it
+  refuses only when no live session qualifies (#2289). The floor is the flood
+  guard: the transport authenticates no one, so without it any local process
+  repeating `initialize` at the cap would evict every client that was merely
+  between two requests. The trade-off left: at the cap, a client silent and
+  streamless for longer than the floor can be evicted by another client's
+  `initialize`, and must re-initialize on the `404` its next request gets.
 
 - **`autograph_failed` counted failing steps, not failed enrichments.** Its doc
   and `memory_status` promise enrichments, but one extraction failing at two

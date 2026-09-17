@@ -52,6 +52,7 @@ struct TestServerConfig {
     max_body_bytes: usize,
     max_sessions: usize,
     keep_alive: std::time::Duration,
+    evict_min_idle: std::time::Duration,
 }
 
 impl TestServerConfig {
@@ -60,6 +61,7 @@ impl TestServerConfig {
             max_body_bytes,
             max_sessions,
             keep_alive: velesdb_memory::http::DEFAULT_HTTP_KEEP_ALIVE,
+            evict_min_idle: velesdb_memory::http::DEFAULT_HTTP_EVICT_MIN_IDLE,
         }
     }
 
@@ -68,6 +70,16 @@ impl TestServerConfig {
             max_body_bytes: velesdb_memory::http::DEFAULT_HTTP_MAX_BODY_BYTES,
             max_sessions,
             keep_alive,
+            evict_min_idle: velesdb_memory::http::DEFAULT_HTTP_EVICT_MIN_IDLE,
+        }
+    }
+
+    /// No eviction floor: an idle session is evictable the moment its last
+    /// activity ends, so eviction is observable without waiting minutes.
+    fn evicting_at_once(max_sessions: usize) -> Self {
+        Self {
+            evict_min_idle: std::time::Duration::ZERO,
+            ..Self::with_keep_alive(max_sessions, KEEP_ALIVE_OUTLIVES_THE_TEST)
         }
     }
 }
@@ -124,12 +136,13 @@ async fn spawn_configured(config: TestServerConfig) -> TestServer {
     let server = McpServer::new(service);
 
     let ct = CancellationToken::new();
-    let app = velesdb_memory::http::router_with_limits_and_keep_alive(
+    let app = velesdb_memory::http::router_with_session_policy(
         server,
         ct.child_token(),
         config.max_body_bytes,
         config.max_sessions,
         Some(config.keep_alive),
+        config.evict_min_idle,
     );
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -553,6 +566,11 @@ fn contract_generic_http_fixture_pins_product_keep_alive() {
         velesdb_memory::http::DEFAULT_HTTP_KEEP_ALIVE,
         "generic HTTP fixtures must exercise the product's keep-alive default"
     );
+    assert_eq!(
+        config.evict_min_idle,
+        velesdb_memory::http::DEFAULT_HTTP_EVICT_MIN_IDLE,
+        "generic HTTP fixtures must exercise the product's eviction floor"
+    );
 }
 
 #[test]
@@ -621,8 +639,11 @@ async fn the_session_cap_holds_while_a_slot_is_occupied() {
 #[tokio::test]
 async fn an_idle_session_is_evicted_to_admit_a_new_one_at_the_cap() {
     // Long keep-alive: the first session must survive on its own until the
-    // cap's eviction — not `keep_alive` expiry — is what ends it.
-    let server = spawn_http_server_with_keep_alive(1, KEEP_ALIVE_OUTLIVES_THE_TEST).await;
+    // cap's eviction — not `keep_alive` expiry — is what ends it. No eviction
+    // floor, so the test need not wait it out; the floor itself is pinned by
+    // `a_recently_active_session_is_not_evicted_at_the_cap` below and, on
+    // both sides, by the unit tests with a hand-driven clock.
+    let server = spawn_configured(TestServerConfig::evicting_at_once(1)).await;
 
     let first = try_raw_initialize(server.addr)
         .await
@@ -653,7 +674,7 @@ async fn an_idle_session_is_evicted_to_admit_a_new_one_at_the_cap() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn an_active_session_is_never_evicted_even_though_it_is_older() {
-    let server = spawn_http_server_with_keep_alive(2, KEEP_ALIVE_OUTLIVES_THE_TEST).await;
+    let server = spawn_configured(TestServerConfig::evicting_at_once(2)).await;
 
     // `busy` is created FIRST (so it is the least-recently-used by plain
     // recency) and kept busy with an open standalone stream; `idle` is
@@ -682,6 +703,29 @@ async fn an_active_session_is_never_evicted_even_though_it_is_older() {
     );
 
     drop(stream);
+    shutdown(server).await;
+}
+
+/// The flood guard over the real transport: with the product's eviction
+/// floor, a session that finished its `initialize` a moment ago is idle but
+/// far younger than the floor, so another client's `initialize` at the cap
+/// must be refused rather than evict it.
+#[tokio::test]
+async fn a_recently_active_session_is_not_evicted_at_the_cap() {
+    let server = spawn_http_server_with_keep_alive(1, KEEP_ALIVE_OUTLIVES_THE_TEST).await;
+
+    let first = try_raw_initialize(server.addr)
+        .await
+        .expect("the first session must be created");
+    assert!(
+        try_raw_initialize(server.addr).await.is_none(),
+        "a session idle for less than the eviction floor must not be evicted"
+    );
+    assert!(
+        status_proves_session_is_alive(status_for_session(server.addr, &first).await),
+        "the first session must survive the refused initialize"
+    );
+
     shutdown(server).await;
 }
 
@@ -811,13 +855,17 @@ async fn closing_one_session_frees_exactly_one_slot() {
 
     // Close A explicitly. The session worker ALSO finishes and closes the
     // session on its own — so the accounting sees two closes for one session.
+    //
+    // A's stream stays held until C is admitted: were A still tracked, it
+    // would be busy and unevictable, so C's admission can only come from the
+    // close having freed A's slot — never from evicting A.
     delete_session(server.addr, &a).await;
-    drop(stream_a);
     tokio::time::sleep(std::time::Duration::from_millis(400)).await;
 
     let c = try_raw_initialize(server.addr)
         .await
         .expect("closing A must free A's slot");
+    drop(stream_a);
     // Keep C busy too, so the next check's refusal still means "no slot
     // freed" rather than "C, being idle, got evicted".
     let stream_c = open_standalone_stream(server.addr, &c).await;
