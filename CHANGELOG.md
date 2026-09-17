@@ -162,8 +162,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with, and a save then persisted those; it now rebuilds with the graph's
   own. A vacuum of an index with no live id returned before rebuilding, so
   its dead slots stayed and `needs_vacuum` kept asking; it now rebuilds into
-  an empty graph. Nothing in the tree vacuums from that count (the rebuild
-  endpoint is the only caller), but a caller polling `needs_vacuum` looped.
+  an empty graph. Nothing in the tree vacuums from that count — the two
+  endpoints below are what reach a vacuum, and neither reads it — but a
+  caller polling `needs_vacuum` looped.
   Two saves of one index into one directory rewrote its graph file in place
   under one generation; saves of one index now take a lock of their own,
   never the maintenance lock. `vacuum` and
@@ -178,9 +179,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after the last round looked, so its size has no upper bound (#2335 tracks
   bounding it). The write lock also covers rebuilding the mapping of every
   live id and dropping the old graph. Nothing runs on rayon under that
-  lock, whose batch searches park rayon's workers on it. Reachable through
-  `POST /collections/{name}/index/rebuild`, which accepts writes and flushes
-  meanwhile. Eight tests race a vacuum or saves, and two vacuum an index: one
+  lock, whose batch searches park rayon's workers on it. Two routes reach
+  it, `POST /collections/{name}/index/rebuild` and
+  `POST /collections/{name}/vacuum`, both through `Collection::rebuild_index`,
+  and both accept writes and flushes meanwhile. Eight tests race a vacuum or
+  saves, and two vacuum an index: one
   built with its own parameters, one whose ids are all deleted.
   `writes_racing_a_vacuum_survive_it` fails on the old re-map: 300 of 300
   inserts lost, 300 of 300 upserts still on their old vector, 297 of 300
@@ -189,8 +192,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trained SQ8 index; with the copy of the writes reverted, 300 of 300
   inserts were lost and 300 of 300 upserts left on their old vector.
   `a_vacuum_carrying_writes_finishes_beside_batch_searches`, a test binary of
-  its own on a two-thread rayon pool, fails by its 120 s watchdog when the
-  copy runs on rayon under the write lock: the first vacuum never finished.
+  its own on a two-thread rayon pool, races batches of 256 ids against the
+  swap, so that the copy made under the write lock carries a whole batch:
+  it fails by its 120 s watchdog when that copy runs on rayon, the first
+  vacuum never finishing. Raced one id at a time, the copy stayed under the
+  hundred vectors at which it would reach rayon, and proved nothing.
   `deletes_racing_a_vacuum_keep_the_tombstone_count_exact` failed while the
   swap left `next_idx` at the highest slot mapped: `tombstone_count` read 0
   over 1 229 to 1 361 dead slots, in 5 rounds of 5.

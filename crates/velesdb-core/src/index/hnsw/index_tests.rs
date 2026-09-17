@@ -4131,16 +4131,8 @@ fn batch_inserts_racing_a_save_reload_consistent() {
     const BATCH: u64 = 200;
     const BATCHES: u64 = 40;
     let dir = tempfile::tempdir().unwrap();
-    let index = HnswIndex::new(WIDE, DistanceMetric::Euclidean).unwrap();
-    let insert_batch = |first: u64, len: u64| {
-        let batch: Vec<Vec<f32>> = (first..first + len).map(wide_vector).collect();
-        index.insert_batch_parallel((first..).zip(batch.iter().map(Vec::as_slice)))
-    };
-    assert_eq!(
-        u64::try_from(insert_batch(0, BASE)),
-        Ok(BASE),
-        "base placed"
-    );
+    let index = wide_index_with_base(BASE);
+    let insert_batch = |first: u64, len: u64| insert_wide_batch(&index, first, len);
     let mut stalled = false;
     let mut placed = 0;
     let saves = save_beside(&index, dir.path(), |a_save_passes| {
@@ -4179,6 +4171,30 @@ fn wide_vector(id: u64) -> Vec<f32> {
         .collect();
     vector[0] = id as f32;
     vector
+}
+
+/// Inserts ids `first..first + len` into `index` as one batch, and returns
+/// how many it placed.
+///
+/// `len` is at least 100 in every caller: under that the batch path inserts
+/// one vector at a time, and the races these tests drive need the path that
+/// pushes every vector, then links them.
+fn insert_wide_batch(index: &HnswIndex, first: u64, len: u64) -> usize {
+    let batch: Vec<Vec<f32>> = (first..first + len).map(wide_vector).collect();
+    index.insert_batch_parallel((first..).zip(batch.iter().map(Vec::as_slice)))
+}
+
+/// A `WIDE`-dimensional index holding ids `0..base`, the base the race tests
+/// write on top of. Asserts the base went in whole: a race over a short base
+/// would prove nothing about the one they mean to run.
+fn wide_index_with_base(base: u64) -> HnswIndex {
+    let index = HnswIndex::new(WIDE, DistanceMetric::Euclidean).unwrap();
+    assert_eq!(
+        u64::try_from(insert_wide_batch(&index, 0, base)),
+        Ok(base),
+        "base placed"
+    );
+    index
 }
 
 /// Saves `index` in a loop, each save into its own directory under `dir`,
@@ -4331,16 +4347,8 @@ fn saves_racing_into_one_directory_reload_consistent() {
     const BATCH: u64 = 200;
     const ROUNDS: u64 = 20;
     let dir = tempfile::tempdir().unwrap();
-    let index = HnswIndex::new(WIDE, DistanceMetric::Euclidean).unwrap();
-    let insert_batch = |first: u64, len: u64| {
-        let batch: Vec<Vec<f32>> = (first..first + len).map(wide_vector).collect();
-        index.insert_batch_parallel((first..).zip(batch.iter().map(Vec::as_slice)))
-    };
-    assert_eq!(
-        u64::try_from(insert_batch(0, BASE)),
-        Ok(BASE),
-        "base placed"
-    );
+    let index = wide_index_with_base(BASE);
+    let insert_batch = |first: u64, len: u64| insert_wide_batch(&index, first, len);
     let own = |id, stored: Option<&[f32]>| {
         (id >= BASE && stored.is_none()) || stored == Some(wide_vector(id).as_slice())
     };

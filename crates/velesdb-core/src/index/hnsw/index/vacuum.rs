@@ -295,8 +295,10 @@ impl HnswIndex {
     ///
     /// Starting from that, it copies into `new` the vectors of the ids written
     /// since they were last read, and records where each went, round after
-    /// round, until at most [`CATCH_UP_REMAINDER`] are left or
-    /// [`MAX_CATCH_UP_ROUNDS`] have run.
+    /// round, until a round sees [`CATCH_UP_REMAINDER`] or fewer, or
+    /// [`MAX_CATCH_UP_ROUNDS`] have run. Neither bounds what is left: a write
+    /// in flight maps its ids after the round that stopped looked, and
+    /// [`Self::reconcile`] copies them all (see [`CATCH_UP_REMAINDER`]).
     ///
     /// No write guard is held, so this may run on rayon: `new` is this
     /// vacuum's own graph, and each round holds a read guard only while it
