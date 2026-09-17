@@ -23,7 +23,7 @@ impl Collection {
     /// Decrements old payload histograms and increments new ones in a single
     /// read → modify → write cycle. Used by bulk upsert paths where points
     /// replace existing data (old values must be decremented, new values
-    /// incremented). Avoids the 2× I/O of calling delete + upsert separately.
+    /// incremented). One I/O cycle does what separate delete + upsert calls do in two.
     pub(super) fn update_histograms_replace(
         &self,
         old_payloads: &[Option<serde_json::Value>],

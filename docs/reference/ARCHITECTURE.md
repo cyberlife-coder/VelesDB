@@ -56,7 +56,6 @@ VelesDB core architecture is explicitly **hybrid by design**:
 │  │                     DISTANCE LAYER (SIMD)                        │   │
 │  ├─────────────────────────────────────────────────────────────────┤   │
 │  │  Cosine  │  Euclidean  │  Dot Product  │  Hamming  │  Jaccard   │   │
-│  │  (33.1ns)│   (26.0ns)  │    (21.7ns)   │  (35.8ns) │   (35.1ns) │   │
 │  │                                                                  │   │
 │  │  AVX2/AVX-512 │ ARM64 NEON │ Scalar fallback (incl. WASM —    │   │
 │  │               │ (simd_neon)│ SIMD128 planned)                 │   │
@@ -136,7 +135,7 @@ VelesDB core architecture is explicitly **hybrid by design**:
 
 #### VelesQL Parser (v2.0)
 - SQL-like query language
-- ~1.3M queries/sec parsing
+- Parses a simple query in ~1.26 µs ([BENCHMARKS §7](../BENCHMARKS.md#7-velesql-parser), 2026-03-19, 1.6.0)
 - Bound parameters support
 - **v2.0 Features**:
   - `GROUP BY` / `HAVING` (AND/OR)
@@ -158,7 +157,7 @@ VelesDB core architecture is explicitly **hybrid by design**:
   - Parallel aggregation with Rayon (10K+ datasets)
   - Pre-computed hash for GROUP BY (vs JSON serialization)
   - String interning to avoid allocations in hot path
-- ~2x speedup on large aggregations
+- Speeds up large aggregations (not benchmarked here)
 
 ### 4. Knowledge Graph Layer (EPIC-019)
 
@@ -256,18 +255,18 @@ VelesDB core architecture is explicitly **hybrid by design**:
 
 ### 5. Distance Layer (SIMD)
 
-| Metric | Implementation | Latency (768D) |
-|--------|---------------|----------------|
-| Dot Product | AVX2 FMA | **21.7 ns** |
-| Euclidean | AVX2 FMA | **26.0 ns** |
-| Cosine | AVX2 4-acc, single-sqrt finish | **33.1 ns** |
-| Hamming | AVX2 FP-domain 4-acc | **35.8 ns** |
-| Jaccard | AVX-512 4-acc | **35.1 ns** |
+| Metric | Implementation | Latency (768D) | Run (i9-14900KF, version) |
+|--------|---------------|----------------|---------------------------|
+| Dot Product | AVX2 FMA | **21.7 ns** | 2026-03-27, 1.7.2 |
+| Euclidean | AVX2 FMA | **26.0 ns** | 2026-04-03, 1.11.0 |
+| Cosine | AVX2 4-acc, single-sqrt finish | **33.1 ns** | 2026-03-24, 1.7.0 |
+| Hamming | AVX2 FP-domain 4-acc | **35.8 ns** | 2026-03-24, 1.7.0 |
+| Jaccard | AVX2 4-acc | **35.1 ns** | 2026-03-24, 1.7.0 |
 
-> Per-metric numbers above are the contract values in `docs/reference/promise-contract.json`.
-> Raw micro-benchmark snapshots (March 27 2026 run on a specific machine) live in
-> [`SIMD_PERFORMANCE.md`](SIMD_PERFORMANCE.md) and may differ by ~10% due to
-> methodology / cache state.
+> The rows come from three runs on the same machine, one per date: compare two
+> kernels only within one run. Each row's source is in
+> `docs/reference/promise-contract.json`. The 2026-04-03 run timed all five
+> kernels together: [BENCHMARKS §1](../BENCHMARKS.md#simd-kernel-latency).
 
 **SIMD Strategy**:
 1. **Native (x86_64)**: AVX2/AVX-512 via `core::arch` intrinsics with 4-accumulator ILP
@@ -453,13 +452,13 @@ LIMIT 20 USING FUSION(strategy='rrf', k=60)
 
 | Operation | Throughput |
 |-----------|------------|
-| Insert | ~3.8K-6.4K vec/sec (768D) |
+| Insert (HNSW index, 768D) | [BENCHMARKS §5](../BENCHMARKS.md#5-hnsw-vector-search) |
 | Search k=10 (10K vectors, 768D, HNSW index-only) | ~55 µs |
-| Search end-to-end p50 (10K/384D, WAL ON, recall ≥ 96%) | ~450 µs |
-| Search (100K vectors) | < 5 ms |
-| VelesQL Parse | 1.3M queries/sec |
-| Export (WASM) | 4,479 MB/s |
-| Import (WASM) | 2,943 MB/s |
+| Search end-to-end p50 (10K/384D, WAL ON, recall ≥ 96%) | ~450 µs (2026-03-27, 1.7.2) |
+| Search (100K vectors) | < 5 ms (target, [BENCHMARKS §10](../BENCHMARKS.md#10-performance-targets-by-scale)) |
+| VelesQL parse (simple query) | 1.26 µs, ~794K QPS (2026-03-19, 1.6.0; [BENCHMARKS §7](../BENCHMARKS.md#7-velesql-parser)) |
+| Export (WASM) | 4,479 MB/s (0.3.0 release notes, 2025-12-22) |
+| Import (WASM) | 2,943 MB/s (0.3.0 release notes, 2025-12-22) |
 
 ## Platform Support
 
@@ -482,7 +481,7 @@ instructions for distance calculations via the `simd_native` module, with both
 1-accumulator and 4-accumulator variants depending on vector size.
 
 **Impact:**
-- Distance calculations are ~10% slower than x86_64 with AVX2
+- Distance calculations use NEON instead of AVX2; no recorded run compares the two
 - All other operations (indexing, storage, queries) are unaffected
 - Overall search latency remains in the microsecond range
 

@@ -251,7 +251,7 @@ impl HnswIndex {
     /// candidates.
     ///
     /// Higher quality modes (`Balanced`, `Accurate`) use progressively larger
-    /// oversampling factors (3x, 4x) to pull in candidates that HNSW's greedy
+    /// oversampling factors (3 and 4 times `k`) to pull in candidates that HNSW's greedy
     /// search might miss, at the cost of additional distance computations.
     pub(super) fn should_two_stage_rerank(
         &self,

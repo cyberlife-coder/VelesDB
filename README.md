@@ -172,8 +172,8 @@ No figure here is an estimate from a slide; each links to the log or script in t
 | Claim | Measured | Harness |
 |---|---|---|
 | Real **billed dollars** saved, same agent session sent raw vs compiled (real Claude billing, deterministic fact-checklist grader — no LLM judge) | **21.9 %** at real Retina screenshot weight, quality at parity (23.0/23 facts both arms) | [real-session-benchmark](examples/real-session-benchmark#billed-campaign-results-2026-07-19-cli-runner-claude-sonnet-5) · [raw logs](examples/real-session-benchmark/results/2026-07-19-vibe-cli/) |
-| Real (cl100k) **input-token savings** on a committed 12-turn agent-session corpus | **82.5 %**, compiled in ~0.5 ms mean stateless (~27 ms with source persistence on) | [context_savings](crates/velesdb-memory/examples/context_savings) |
-| **Vector search** latency on the full production path (VelesQL → HNSW → WAL ON → payload hydration) | **450 us** p50 (10K/384D, recall ≥ 96 %) | [docs/BENCHMARKS.md](docs/BENCHMARKS.md) |
+| Real (cl100k) **input-token savings** on a committed 12-turn agent-session corpus | **82.5 %**, compiled in ~0.7 ms mean stateless (~24.5 ms with source persistence on) | [context_savings](crates/velesdb-memory/examples/context_savings) |
+| **Vector search** latency on the full production path (Python SDK → HNSW → payload hydration, WAL ON) | **450 us** p50 (10K/384D, recall ≥ 96 %), measured 2026-03-27 on 1.7.2, when Balanced ran at ef 128 | [velesdb_benchmark.py](benchmarks/velesdb_benchmark.py) · [its report](benchmarks/report_1.7.2_2026-03-27.json) |
 
 > Same campaign, less flattering: **10.9 %** on cropped screenshots, **14.7 %** on a 36-turn day-scale arc, **15.1 %** input tokens on the direct Messages API, and **2.5 %** for the no-screenshots variant — that spread *is* the measured value of the media mechanisms, so we publish it as prominently as the headline. [Honest reading, limitations and full protocol](examples/real-session-benchmark#honest-limitations). Every number on this page is CI-guarded by a [promise contract](docs/reference/promise-contract.json) that pins the README to its committed sources.
 
@@ -193,7 +193,7 @@ No figure here is an estimate from a slide; each links to the log or script in t
 
 **Memory retrieval quality**, public test sets, no AI grader in the loop: **+7.2 pts** multi-hop (HotpotQA), **+9.7 pts** time-scoped recall (TimeQA), **+29 pts** on a controlled task needing both engines at once — [BENCHMARK.md](crates/velesdb-memory/BENCHMARK.md).
 
-**End-to-end search** (canonical): search p50 **450 us** (10K, 384D, WAL ON) · quantization PQ (8–32x), RaBitQ (32x), SQ8 (4x), Binary (32x) — [scope & caveats](docs/guides/QUANTIZATION.md).
+**End-to-end search** (canonical): search p50 **450 us** (10K, 384D, WAL ON; measured 2026-03-27 on 1.7.2, Balanced then at ef 128 — [harness](benchmarks/velesdb_benchmark.py), [report](benchmarks/report_1.7.2_2026-03-27.json)) · quantization PQ (`2 × dim / m` smaller: dim/4 at the default m = 8), RaBitQ (32x smaller), SQ8 (4x smaller), Binary (32x smaller) — [scope & caveats](docs/guides/QUANTIZATION.md).
 
 **Index-only micro-benchmarks** (no WAL, no payload, hot cache — *not* comparable to the end-to-end figure above), each reproducible with `cargo bench -p velesdb-core --bench <name>`: HNSW Search index-only (10K/768D, k=10) **55 us** (`hnsw_benchmark -- hnsw_search_latency`) · SIMD Dot Product (768D, AVX2) **21.7 ns** (`simd_benchmark`) · Recall@10 balanced 99.8% and accurate mode **100%** (10K/128D, `recall_benchmark`) · BM25 Sparse Search index-only (10K docs, top-10) 57.6 us (`sparse_benchmark -- top10_10k_corpus`).
 
@@ -205,7 +205,7 @@ No figure here is an estimate from a slide; each links to the log or script in t
 
 *`ef_search` is each preset's base value, used as-is for k ≤ 32 on up to 10K vectors; `ef_search_for_scale` raises it beyond. Recall@10: `recall_benchmark`, 10K/128D, 2026-09-10 on Apple M5 Pro.*
 
-**Distance metrics** — 5 with SIMD acceleration (AVX-512, AVX2, NEON), at 768D/AVX2 on hot cache: Cosine 33 ns · Euclidean 20 ns · Dot Product 22 ns · Hamming 36 ns · Jaccard 35 ns.
+**Distance metrics** — 5 with SIMD acceleration (AVX-512, AVX2, NEON). At 768D on the i9-14900KF reference (AVX2, hot cache; the April 3, 2026 run in [docs/BENCHMARKS.md](docs/BENCHMARKS.md) §1): Cosine 32 ns · Euclidean 26 ns · Dot Product 22 ns · Hamming 35 ns · Jaccard 27 ns.
 
 **ColumnStore** — typed columnar filtering, **130x faster** than JSON scanning at 100K rows on the i9-14900KF reference (`JSON scan 3.84 ms → ColumnStore 29.5 us`). The ratio is hardware-dependent: on Apple Silicon (M5 Pro, 2026-07-20) the JSON scan itself runs ~2.8× faster, so the same bench measures ~50–105x while the ColumnStore's absolute time holds (~27 µs).
 

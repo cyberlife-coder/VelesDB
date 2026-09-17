@@ -62,7 +62,7 @@ pub struct MatchMetrics {
     pub total_results: AtomicU64,
     /// Sum of all latencies in nanoseconds (for average calculation).
     pub latency_sum_ns: AtomicU64,
-    /// Latency histogram buckets [<1ms, <5ms, <10ms, <25ms, <50ms, <100ms, <250ms, <500ms, <1s, <5s, ≥5s].
+    /// Latency histogram: one counter per [`LATENCY_BUCKETS_MS`] bound, plus an overflow bucket.
     pub latency_buckets: [AtomicU64; 11],
     /// Maximum depth reached in traversals.
     pub max_depth_reached: AtomicU64,

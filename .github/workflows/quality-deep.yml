@@ -42,6 +42,9 @@ permissions:
   contents: read
 
 env:
+  # rustup never installs a toolchain on its own: a Rust call reached before the
+  # job's install step fails here instead of installing mid-build.
+  RUSTUP_AUTO_INSTALL: "0"
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   CARGO_NET_RETRY: 10
@@ -58,6 +61,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # nightly: Miri ships with nightly only; the override below keeps every
+      # cargo call of this job, rust-cache's included, on it.
       - name: Install Miri
         run: |
           rustup toolchain install nightly --component miri
@@ -121,8 +126,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # rust-toolchain.toml pins the toolchain; the rustup shim installs it
-      # on first cargo invocation.
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install --no-self-update --profile minimal
+
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: "velesdb-crossover"
@@ -146,9 +152,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # nightly
-        with:
-          toolchain: nightly
+      # loom needs only `--cfg loom`, which the pinned toolchain builds.
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install --no-self-update --profile minimal
 
       - name: Cache apt packages
         uses: awalsh128/cache-apt-pkgs-action@681749ae568c81c2037cb9185e38b709b261bd2f # v1.6.1
@@ -164,7 +170,7 @@ jobs:
       # Tests Loom existants (storage, sync primitives)
       - name: Run Loom tests
         run: |
-          cargo +nightly test --features loom,persistence \
+          cargo test --features loom,persistence \
             -p velesdb-core --test loom_tests \
             -- --test-threads=1
         env:
@@ -175,7 +181,7 @@ jobs:
       # Tests Loom inline dans storage/
       - name: Run Loom storage tests
         run: |
-          cargo +nightly test --features loom,persistence \
+          cargo test --features loom,persistence \
             -p velesdb-core storage::loom \
             -- --test-threads=1
         env:
@@ -190,9 +196,15 @@ jobs:
     runs-on: ubuntu-latest
     if: ${{ github.event_name == 'schedule' || inputs.run_fuzz }}
     timeout-minutes: 30
+    env:
+      # nightly: cargo-fuzz instruments with -Zsanitizer.
+      # Set for the whole job, so rust-cache's `cargo metadata` stays on it
+      # too instead of falling back to rust-toolchain.toml.
+      RUSTUP_TOOLCHAIN: nightly
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # nightly: cargo fuzz needs it; installed here, so rustup never installs it mid-step.
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # nightly
         with:
           toolchain: nightly
@@ -250,9 +262,15 @@ jobs:
     if: ${{ github.event_name == 'schedule' }}
     timeout-minutes: 20
     continue-on-error: true
+    env:
+      # nightly: cargo-careful rebuilds std with -Zbuild-std.
+      # Set for the whole job, so rust-cache's `cargo metadata` stays on it
+      # too instead of falling back to rust-toolchain.toml.
+      RUSTUP_TOOLCHAIN: nightly
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # nightly: cargo careful needs it; installed here, so rustup never installs it mid-step.
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # nightly
         with:
           toolchain: nightly

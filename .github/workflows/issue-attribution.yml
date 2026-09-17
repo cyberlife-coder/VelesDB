@@ -28,6 +28,11 @@ concurrency:
   group: issue-attribution-${{ github.event.issue.number }}-${{ github.event.comment.id || 'body' }}
   cancel-in-progress: true
 
+env:
+  # rustup never installs a toolchain on its own: a Rust call reached before the
+  # job's install step fails here instead of installing mid-build.
+  RUSTUP_AUTO_INSTALL: "0"
+
 jobs:
   guard:
     name: Reject AI attribution in issues and comments

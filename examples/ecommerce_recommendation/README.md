@@ -177,18 +177,18 @@ let final_recommendations: Vec<_> = hybrid_candidates
 | Co-purchase relations | ~17,000-20,000 (seeded RNG) |
 | Metadata fields/product | 11 |
 
-Latency numbers depend on hardware and are printed at runtime via `Instant::elapsed()`. They are not deterministic. On an i9-14900KF, typical values observed during development:
+Latency numbers depend on hardware and are printed at runtime via `Instant::elapsed()`. No run of this demo is recorded, so this README states none. What each query runs:
 
-| Query | Typical Latency | Notes |
-|-------|----------------|-------|
-| Vector search | ~100-300us | HNSW search + payload retrieval |
-| Post-filter | ~1-10us | In-memory filter on vector results |
-| Co-purchase lookup | ~1-10us | Direct metadata access |
-| Hybrid search | ~200-500us | Vector + BM25 + RRF fusion + post-filter |
+| Query | What it runs |
+|-------|--------------|
+| Vector search | HNSW search + payload retrieval |
+| Post-filter | In-memory filter on vector results |
+| Co-purchase lookup | Direct metadata access |
+| Hybrid search | Vector + BM25 + RRF fusion + post-filter |
 
 ### Performance Context
 
-VelesDB's raw HNSW index-only benchmark is **~55µs** for 10K/768D vectors (k=10, Balanced mode); end-to-end p50 is **~450µs** (10K/384D, WAL ON). The demo latencies are higher because:
+VelesDB's raw HNSW index-only benchmark is **~55µs** for 10K/768D vectors (k=10, Balanced mode; i9-14900KF, 2026-03-27); end-to-end p50 is **~450µs** (10K/384D, WAL ON; measured 2026-03-27 on 1.7.2). The demo latencies are higher because:
 
 - The demo includes payload deserialization and result construction
 - Hybrid search adds BM25 indexing overhead and RRF fusion
@@ -254,7 +254,7 @@ The example includes Playwright E2E tests validating:
 
 - **Data generation**: 5000 products, co-purchase relationships
 - **Query execution**: All 4 query types complete successfully
-- **Performance**: All queries under 10ms threshold
+- **Performance**: `tests/e2e.spec.ts` fails a vector or filtered search over its 10 ms limit, and a graph lookup over 1 ms
 - **Output format**: Graph query syntax, performance summary metrics
 
 ```bash

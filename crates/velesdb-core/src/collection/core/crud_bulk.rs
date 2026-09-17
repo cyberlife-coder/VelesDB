@@ -27,8 +27,7 @@ impl Collection {
     /// - Parallel payload + vector I/O via `rayon::join` (Issue #424)
     /// - Single flush at the end (not per-point)
     /// - No HNSW index save (deferred for performance)
-    /// - ~15x faster than previous sequential approach on large batches (5000+)
-    /// - Benchmark: 25-30 Kvec/s on 768D vectors
+    /// - Faster than the previous sequential approach on large batches (5000+)
     ///
     /// # Errors
     ///
@@ -279,7 +278,7 @@ impl Collection {
     /// Stores payloads and updates BM25 text index + label index in bulk.
     ///
     /// Uses `LogPayloadStorage::store_batch()` for a single WAL sync instead
-    /// of per-point fsync, improving bulk insert throughput by 10-50x.
+    /// of per-point fsync: a batch pays one sync, not one per point.
     ///
     /// When `fsync` is `false`, WAL entries are written and the buffer is
     /// flushed to the OS kernel, but `sync_all()` is skipped.

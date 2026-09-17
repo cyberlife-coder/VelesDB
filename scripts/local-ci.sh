@@ -71,6 +71,54 @@ PY
 skippable='GITHUB_|RUNNER_|apt-get|actions/|\$\{\{'
 
 total=0; ran=0; failed=0; skipped=0; missing=0
+
+# A missing tool is decided by the EXIT CODE, never by reading the output. The
+# first versions searched the output for "command not found", "no such
+# command" or "is not installed", so a red gate whose output merely quoted such
+# a phrase (a guard printing the doc line it refused) was reported as a missing
+# tool, and the replay exited 0. A shell answers 127 for a command it cannot
+# find. Cargo answers 101 for a subcommand it does not have, the same code as
+# any failing cargo command, so the replay asks first, and a missing one exits
+# 127 before cargo runs. It looks only when every argument before the
+# subcommand is a flag known to take no value (-q, -v, -vv, --quiet,
+# --verbose, --frozen, --locked, --offline), or a `+toolchain` as the FIRST
+# argument, the only place rustup reads one; any other option, which
+# may take a value (`--explain E0308`, `-qZ unstable-options`), or a later
+# `+toolchain`, which cargo refuses as a command (`-q +nightly fmt`), runs cargo
+# as written, so a value is never read as a missing subcommand and a gate is
+# never skipped on a guess. A subcommand is missing when `cargo --list` does
+# not name it, or when rustup provides it and the toolchain lacks its
+# component: `cargo --list` names rustup's `cargo-fmt` and `cargo-clippy`
+# proxies whether or not rustfmt or clippy is installed.
+CARGO_SUBCOMMANDS=$(cargo --list 2>/dev/null | awk 'NR > 1 { print $1 }')
+export CARGO_SUBCOMMANDS
+cargo() {
+  local arg sub="" toolchain="" proxy rustup_bin first=1
+  for arg in "$@"; do
+    case "$arg" in
+      +*) [ "$first" = 1 ] || { command cargo "$@"; return; }; toolchain="${arg#+}" ;;
+      -q|-v|-vv|--quiet|--verbose|--frozen|--locked|--offline) ;;
+      -*) command cargo "$@"; return ;;
+      *) sub="$arg"; break ;;
+    esac
+    first=0
+  done
+  if [ -n "$sub" ]; then
+    if ! printf '%s\n' "$CARGO_SUBCOMMANDS" | grep -qxF -- "$sub"; then
+      echo "cargo $sub: this cargo has no such subcommand" >&2
+      return 127
+    fi
+    proxy=$(command -v "cargo-$sub" 2>/dev/null)
+    rustup_bin=$(command -v rustup 2>/dev/null)
+    if [ -n "$proxy" ] && [ -n "$rustup_bin" ] && [ "$proxy" -ef "$rustup_bin" ] \
+      && ! rustup which ${toolchain:+--toolchain "$toolchain"} "cargo-$sub" >/dev/null 2>&1; then
+      echo "cargo $sub: the toolchain lacks the rustup component behind cargo-$sub" >&2
+      return 127
+    fi
+  fi
+  command cargo "$@"
+}
+export -f cargo
 declare -a failures=()
 
 while IFS=$'\t' read -r job name run; do
@@ -89,16 +137,12 @@ while IFS=$'\t' read -r job name run; do
   out=$(bash -c "$cmd" 2>&1); rc=$?
   if [ "$rc" -eq 0 ]; then
     ran=$((ran+1)); printf 'ok\n'
-  elif [ "$rc" -eq 127 ] || printf '%s' "$out" | grep -qiE 'command not found|no such command|no such file or directory: [a-z]|is not installed'; then
+  elif [ "$rc" -eq 127 ]; then
     # A tool this machine does not have is NOT a gate that refused. Reporting
     # it as a failure is how a gate starts crying wolf, and a gate that cries
     # wolf gets ignored - then switched off. Say what is missing instead.
-    #
-    # The pattern list is plural because each launcher phrases it differently:
-    # a shell says "command not found" and exits 127, while `cargo machete`
-    # says "no such command" and exits 101. The first version knew only the
-    # shell's wording and reported cargo-machete as a FAILING GATE on a clean
-    # tree - the exact false red this branch exists to prevent.
+    # Any other non-zero exit, a guard's "could not run" included, is a
+    # failure: a gate that did not run verified nothing.
     missing=$((missing+1))
     printf 'TOOL MISSING\n'
     printf '%s\n' "$out" | head -2 | sed 's/^/       /'

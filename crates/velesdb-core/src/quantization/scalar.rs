@@ -1,7 +1,7 @@
 //! Scalar Quantization (SQ8) for memory-efficient vector storage.
 //!
 //! Implements 8-bit scalar quantization to reduce memory usage by 4x
-//! while maintaining >95% recall accuracy. Includes both scalar and
+//! at a small recall cost. Includes both scalar and
 //! SIMD-optimized distance functions.
 
 use std::io;

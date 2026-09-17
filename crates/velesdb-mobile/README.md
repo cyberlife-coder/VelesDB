@@ -40,8 +40,8 @@ layer itself (`why()` recall trails) lives in
   semantic + BM25 hybrid retrieval with no connectivity.
 - An on-device agent that keeps a semantic memory of past interactions
   (`VelesSemanticMemory`) and a small knowledge graph (`MobileGraphStore`).
-- An IoT/edge build where binary quantization trades ~5–10% recall for 32x less
-  memory per vector.
+- An IoT/edge build where binary quantization trades some recall for
+  32x less memory per vector.
 - A read-audited app: a Swift/Kotlin `MobileObserver` sees every read and can **deny**
   it (`MobileAccessDecision`), for consent gating or per-tenant isolation.
 

@@ -16,7 +16,7 @@ may need the Enterprise tier.
 | Workload | Scaling |
 |---|---|
 | Multiple threads writing to **different** collections | Linear with CPU cores |
-| A single thread (or client) writing to **one** collection, using batched upserts | Hardware-limited (25-30 Kvec/s on 768-dim vectors) |
+| A single thread (or client) writing to **one** collection, using batched upserts | Hardware-limited: one fsync per batch (no recorded run measures the rate) |
 | Multiple threads writing to the **same** collection | Serialized behind a per-collection writer lock |
 | Read-heavy workloads (search, scroll, match) | Fully parallel; multiple readers scale independently of writers |
 
@@ -62,8 +62,9 @@ Python `collection.upsert(points)` call with a list), VelesDB:
 3. Performs **one** `fsync` at the end, instead of 1000.
 4. Releases the lock.
 
-This amortizes the fsync cost across the whole batch. On an NVMe SSD
-with 768-dim vectors, this path sustains **25-30 Kvec/s** single-client.
+This amortizes the fsync cost across the whole batch. How fast this path
+goes single-client depends on the disk and the dimension; no recorded run
+measures it at 768D.
 
 ### Where the ceiling is
 
@@ -181,8 +182,8 @@ without serialization. The feature is designed for:
   memory collection (semantic + episodic patterns from the Agent
   Memory SDK).
 
-**Expected benefit**: 2-4x aggregate write throughput on 8+ concurrent
-writers per collection. Single-client bulk imports are unchanged
+**Expected benefit**: higher aggregate write throughput with 8+ concurrent
+writers per collection (not measured in this repository). Single-client bulk imports are unchanged
 (already at the hardware ceiling with the Community batched path).
 
 **Other Enterprise features** (see velesdb.com/enterprise for the
@@ -213,12 +214,13 @@ most embedded or local-first databases (SQLite uses single-writer,
 many readers). It is intentional because it keeps WAL recovery simple
 and avoids a whole class of concurrency bugs.
 
-### Can I hit 25-30 Kvec/s with my Python code?
+### How fast can my Python code write?
 
-Yes, with batched upserts on 768-dim vectors on an NVMe SSD. Run the
-benchmarks in `benches/` for your specific hardware. Reported numbers
-in `docs/BENCHMARKS.md` use `cargo bench` on a developer-class machine
-and include the full production path (WAL + recall >= 95%).
+Use batched upserts: each batch costs one fsync. No recorded run measures the
+resulting rate at 768D, so run the benchmarks in `benches/` for your specific
+hardware. Each section of
+`docs/BENCHMARKS.md` says what it measures; most are `cargo bench`
+micro-benchmarks on a developer-class machine, not the full production path.
 
 ### Can I use multi-process writers?
 

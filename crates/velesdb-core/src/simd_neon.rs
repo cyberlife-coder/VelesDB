@@ -18,7 +18,7 @@ use std::arch::aarch64::*;
 /// # Performance
 /// - Uses `vfmaq_f32` (fused multiply-add)
 /// - Processes 4 elements per iteration
-/// - ~3-4x faster than scalar on M1/M2
+/// - Faster than scalar on M1/M2
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
 #[inline]

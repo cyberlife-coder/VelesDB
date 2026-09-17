@@ -4,7 +4,10 @@
 
 **Goal**: prove with reproducible measurements that a developer arriving on a clean Linux machine reaches their first vector search result in well under five minutes, regardless of which language stack they pick (Python, Rust, TypeScript, or REST against the server binary).
 
-> **Frozen reference run — 2026-05-01, `velesdb-core@1.14.2` / `velesdb-server@1.14.2`.**
+> **Frozen reference run — 2026-04-29, `velesdb-core@1.13.7` / `velesdb-server@1.13.7`.**
+> Those are the timestamp of its JSON report and the versions the harness pinned
+> that day; a later version-alignment pass had relabeled the run 1.14.2 without
+> re-running it.
 > The numbers below are a point-in-time measurement, not a live dashboard. The
 > `scripts/dx-timing/scenario_*.sh` harness has since been re-pinned to a
 > newer release (currently `3.12.0`) so it keeps installing cleanly, but these
@@ -16,7 +19,7 @@
 
 ## TL;DR
 
-| Scenario | Median | Range | Status vs. 300 s SLO |
+| Scenario | Median | Range | Status vs. the #379 SLO |
 |----------|--------|-------|----------------------|
 | **A. Python — `pip install velesdb` + `Database` + first `search`** | **4.95 s** | 4.56–5.66 | ✅ < 60 s target |
 | **B. Rust — `cargo new` + `cargo add velesdb-core` + `cargo run --release`** | **25.40 s** | 24.99–30.25 | ✅ first compile dominates |
@@ -32,9 +35,9 @@ Each scenario was run **three times** in a freshly created Docker container, wit
 | Scenario | Base image | What's pre-installed | What the timer covers |
 |----------|------------|----------------------|-----------------------|
 | **A. Python** | `ubuntu:24.04` + `python3` + `python3-venv` + `python3-pip` | minimal CPython stack | `python3 -m venv` → `pip install velesdb numpy` → import + open + create + upsert + search |
-| **B. Rust** | `rust:1-slim` | latest stable Rust toolchain (≥ 1.95) | `cargo new` → `cargo add velesdb-core@1.14.2 serde_json` → `cargo run --release` |
+| **B. Rust** | `rust:1-slim` | latest stable Rust toolchain (≥ 1.95) | `cargo new` → `cargo add velesdb-core@1.13.7 serde_json` → `cargo run --release` |
 | **C. TypeScript** | `node:20-slim` | Node 20 + npm | `mkdir` → `npm install @wiscale/velesdb-sdk` → `node index.mjs` (WASM init + upsert + search) |
-| **D. Server** | `rust:1-slim` (with `pkg-config`, `libssl-dev`, `curl`) | Rust toolchain ready to compile | `cargo install --locked velesdb-server@1.14.2` → start binary → wait `/health` → POST collection + points + search via REST |
+| **D. Server** | `rust:1-slim` (with `pkg-config`, `libssl-dev`, `curl`) | Rust toolchain ready to compile | `cargo install --locked velesdb-server@1.13.7` → start binary → wait `/health` → POST collection + points + search via REST |
 
 Timing harness: [`scripts/dx-timing/run_all.sh`](../../scripts/dx-timing/run_all.sh). Per-scenario scripts: [`scenario_python.sh`](../../scripts/dx-timing/scenario_python.sh), [`scenario_rust.sh`](../../scripts/dx-timing/scenario_rust.sh), [`scenario_node.sh`](../../scripts/dx-timing/scenario_node.sh), [`scenario_server.sh`](../../scripts/dx-timing/scenario_server.sh).
 
@@ -48,7 +51,7 @@ bash scripts/dx-timing/run_all.sh
 
 Prerequisites: Docker (≥ 20), ~5 GB free disk for the three base images, an outbound network connection to crates.io / PyPI / npm.
 
-The orchestrator emits a JSON report at `benchmarks/dx-timing/results-<timestamp>.json` and exits non-zero if any median exceeds the 300 s SLO.
+The orchestrator emits a JSON report at `benchmarks/dx-timing/results-<timestamp>.json` and exits non-zero if any median exceeds the SLO's 300 s limit.
 
 ## Honesty notes (DX friction observed during measurement)
 
@@ -66,7 +69,7 @@ The PyO3 bindings call into the NumPy C API at first use, but the published `vel
 
 ### 2. `Cargo.toml` advertised `rust-version = "1.83"` but `velesdb-core` actually requires Rust ≥ 1.89 — **resolved in v1.14.0**
 
-The Rust scenario initially failed to compile with `rust:1.86-slim` (499 errors) because `crates/velesdb-core/src/simd_native/x86_avx512.rs:1428` uses `#[target_feature(enable = "avx512vpopcntdq")]`, a target feature stabilized in Rust 1.89. Up to and including v1.13.8 the workspace `Cargo.toml` declared `rust-version = "1.83"`, which was misleading: builds on a 1.83–1.88 toolchain were already broken silently. **Resolved in v1.14.0**: the workspace `rust-version` is now `1.89`, `CONTRIBUTING.md` and the examples READMEs say `Rust 1.89+`, and `.clippy.toml` matches. The DX harness pins `rust:1-slim` (latest stable) so it tracks the MSRV automatically.
+The Rust scenario initially failed to compile with `rust:1.86-slim` (499 errors) because `crates/velesdb-core/src/simd_native/x86_avx512.rs:1428` uses `#[target_feature(enable = "avx512vpopcntdq")]`, a target feature stabilized in Rust 1.89. Up to and including v1.13.8 the workspace `Cargo.toml` declared `rust-version = "1.83"`, which was misleading: builds on a 1.83–1.88 toolchain were already broken silently. **Resolved in v1.14.0**: the workspace `rust-version` is now `1.89`, `CONTRIBUTING.md` and the examples READMEs say `Rust 1.89+`, and `.clippy.toml` matches. This run used `rust:1-slim` (latest stable), so the harness tracks the MSRV automatically; it now builds from `rust:slim`, the same latest stable release under its unversioned tag.
 
 ### 3. The repo `Dockerfile` carried a stale `LABEL version="1.12.0"` — **resolved in v1.14.0**
 
@@ -78,7 +81,7 @@ While building the Node scenario, `new VelesDB({ backend: 'wasm' }).init()` cras
 
 ## Cache behaviour caveat
 
-The Node scenario median (0.48 s) is unusually low because `npm` populates a registry cache after the first install of a tiny dependency tree (the SDK has only one dependency, `@wiscale/velesdb-wasm`). A genuinely-first-time developer with an empty `~/.npm` typically sees 4–8 s on the same scenario, dominated by the npm registry round-trip. The other three scenarios are not as heavily affected because their work is dominated by compile time (Rust, server) or wheel download (Python).
+The Node scenario median (0.48 s) is unusually low because `npm` populates a registry cache after the first install of a tiny dependency tree (the SDK has only one dependency, `@wiscale/velesdb-wasm`). A genuinely-first-time developer with an empty `~/.npm` waits longer on the same scenario, dominated by the npm registry round-trip (no recorded run times it). The other three scenarios are not as heavily affected because their work is dominated by compile time (Rust, server) or wheel download (Python).
 
 If you want a worst-case figure to quote externally, take the **maximum across all three runs** rather than the median:
 
