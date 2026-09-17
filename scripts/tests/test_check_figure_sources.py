@@ -7,7 +7,9 @@ what it refuses.
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import json
 import re
 import tempfile
@@ -245,9 +247,9 @@ class FigureSourcesTest(unittest.TestCase):
     def test_a_measured_time_beside_a_parameter_name_is_still_caught(self):
         # No latency keyword on these rows: only the table rule sees them, so
         # only a parameter segment (not `limit` inside `limited`) may exempt one.
-        doc = "| `export_elapsed_ms` | 2.1 ms |\n| Rate-limited export | 3 ms |\n"
+        doc = "| Name | Cost |\n|---|---|\n| `export_elapsed_ms` | 2.1 ms |\n| Rate-limited export | 3 ms |\n"
         root = self.tree({"docs/G.md": doc})
-        self.assertEqual([v.split(": ")[0] for v in self.flagged(root)], ["docs/G.md:1", "docs/G.md:2"])
+        self.assertEqual([v.split(": ")[0] for v in self.flagged(root)], ["docs/G.md:3", "docs/G.md:4"])
 
     def test_a_ratio_scaling_an_ef_parameter_is_left_alone(self):
         lines = [
@@ -284,7 +286,7 @@ class FigureSourcesTest(unittest.TestCase):
             "The 32-wide loop (4x f32x8) runs at ~1.8x the scalar loop.": ["~1.8x"],
         }
         for line, expected in cases.items():
-            self.assertEqual([line[s:e] for _, s, e in guard.figures(line)], expected, line)
+            self.assertEqual(self.figure_texts(line), expected, line)
 
 
     def test_a_time_below_the_millisecond_needs_no_keyword(self):
@@ -329,7 +331,7 @@ class FigureSourcesTest(unittest.TestCase):
             "Binary is 32x smaller; batching gives ~8x the throughput.": ["~8x"],
         }
         for line, expected in cases.items():
-            self.assertEqual([line[s:e] for _, s, e in guard.figures(line)], expected, line)
+            self.assertEqual(self.figure_texts(line), expected, line)
 
     def test_a_size_word_further_away_or_in_another_cell_exempts_nothing(self):
         # The size word sits within three words of its ratio, in its clause,
@@ -402,7 +404,7 @@ class FigureSourcesTest(unittest.TestCase):
             "The default is 30 s, which is 15x too long here.": ["15x"],
         }
         for line, expected in cases.items():
-            self.assertEqual([line[s:e] for _, s, e in guard.figures(line)], expected, line)
+            self.assertEqual(self.figure_texts(line), expected, line)
 
 
     def test_a_config_word_elsewhere_in_a_table_row_exempts_no_time(self):
@@ -424,7 +426,7 @@ class FigureSourcesTest(unittest.TestCase):
             "| Retry back-off | 100 ms by default |": [],
         }
         for line, expected in cases.items():
-            self.assertEqual([line[s:e] for _, s, e in guard.figures(line, header)], expected, line)
+            self.assertEqual(self.figure_texts(line, header), expected, line)
 
 
     def test_readmes_under_examples_are_in_scope(self):
@@ -435,8 +437,21 @@ class FigureSourcesTest(unittest.TestCase):
         self.assertEqual([v.split(": ")[0] for v in self.flagged(root)], ["examples/demo/README.md:1"])
 
 
+    def figure_spans(self, line: str, header: str | None = None) -> list[tuple[int, int]]:
+        """Where, in `line`, the guard reads a figure: the line parsed alone,
+        or as the one row of a table under `header`."""
+        doc = [line]
+        if header:
+            columns = len(guard.cells(header))
+            doc = [header, "|" + "---|" * columns, line]
+        rendered = [e for e in guard.read_document(doc, "text") if isinstance(e, guard.Line) and e.number == len(doc)]
+        return [guard.raw_span(rendered[0], s, e) for _, s, e in guard.figures(rendered[0])] if rendered else []
+
+    def figure_texts(self, line: str, header: str | None = None) -> list[str]:
+        return [line[s:e] for s, e in self.figure_spans(line, header)]
+
     def numbers_flagged(self, line: str, header: str | None = None) -> list[str]:
-        spans = [(s, e) for _, s, e in guard.figures(line, header)]
+        spans = self.figure_spans(line, header)
         return sorted({m.group() for m in guard.NUMBER.finditer(line) if any(s <= m.start() < e for s, e in spans)})
 
     def test_a_table_cell_is_read_with_its_column_header(self):
@@ -481,10 +496,10 @@ class FigureSourcesTest(unittest.TestCase):
             "with per-batch latency 66% higher than single-threaded.",
             "A search takes 3 seconds.",
             "The p50 is 2 msec.",
-            "| Fast | 3 seconds |",
         ]
-        root = self.tree({"docs/G.md": "\n".join(lines) + "\n"})
-        self.assertEqual(len(self.flagged(root)), len(lines))
+        table = "\n| Mode | Cost |\n|---|---|\n| Fast | 3 seconds |\n"
+        root = self.tree({"docs/G.md": "\n".join(lines) + "\n" + table})
+        self.assertEqual(len(self.flagged(root)), len(lines) + 1)
 
     def test_a_config_word_exempts_the_time_or_ratio_beside_it(self):
         # A poll interval, a retry count or a setting is configured; a measured
@@ -553,7 +568,8 @@ class FigureSourcesTest(unittest.TestCase):
         return [v.split(": ")[0] for v in self.flagged(root) if ": unreadable figure: " in v]
 
     def test_a_mark_between_a_number_and_its_unit_in_a_cell_is_unreadable(self):
-        doc = "| Mode | Latency (ms) |\n|---|---|\n| D | **3.2** ms |\n| F | **1.2** \u00b5s |\n"
+        # A footnote or a literal mark, not markup a renderer takes out.
+        doc = "| Mode | Latency (ms) |\n|---|---|\n| D | 3.2\u00b9 ms |\n| F | 1.2\\* \u00b5s |\n"
         self.assertEqual(self.unreadable(doc), ["docs/G.md:3", "docs/G.md:4"])
 
     def test_a_footnote_on_a_cell_under_a_header_unit_is_unreadable(self):
@@ -591,14 +607,27 @@ class FigureSourcesTest(unittest.TestCase):
         self.assertEqual(self.unreadable(doc), [])
         self.assertEqual(self.numbers_flagged("| months | 2,592,000 |", "| Unit | Build time (s) |"), ["2,592,000"])
 
-    def test_every_markup_between_a_number_and_its_unit_is_unreadable(self):
-        # The guard does not list these shapes: it takes markup out of the line
-        # and reports whatever number and unit it did not read in place.
+    def test_markup_a_renderer_takes_out_is_read_as_the_figure_it_renders(self):
+        # Emphasis, links, HTML comments and tags, entities: the parser renders
+        # them as a reader sees them, and the guard reads the rendered figure,
+        # refused until registered and passed once it is.
         shapes = [
-            "__42__ ms", "_42_ ms", "<b>42</b> ms", "42<br>ms", "42&nbsp;ms", "`42` ms", "~~42~~ ms",
-            "**42** ms", "42\u00b9 ms", "42 ms\u00b9", "[42](#run) ms", "42\u200bms", "a_**42** ms", ".5 ms",
+            "__42__ ms", "_42_ ms", "<b>42</b> ms", "42<br>ms", "42&nbsp;ms", "~~42~~ ms", "**42** ms",
+            "[42](#run) ms", "42<!---->ms", "42 <!-- note --> ms", "[42][run] ms",
         ]
-        # Every character CommonMark or GFM uses as syntax, one at a time.
+        for shape in shapes:
+            doc = f"The p50 is {shape}.\n\n[run]: https://example.com\n"
+            flagged = self.flagged(self.tree({"docs/G.md": doc}))
+            self.assertEqual([v.split(": ", 2)[:2] for v in flagged], [["docs/G.md:1", "latency with no registered measurement"]], shape)
+            self.assertEqual(self.flagged(self.tree({"docs/G.md": doc}, claims=(("docs/G.md", shape),))), [], shape)
+        self.assertEqual(self.numbers_flagged("Cosine 42<!---->\u00b5s."), ["42"])
+        self.assertEqual(self.numbers_flagged("| A | 42<!---->ms |", "| Case | p50 |"), ["42"])
+
+    def test_a_mark_the_renderer_leaves_between_a_number_and_its_unit_is_unreadable(self):
+        # What still keeps a number from its unit once rendered: code, a
+        # superscript, an invisible character, a leading point, a literal mark.
+        shapes = ["`42` ms", "42\u00b9 ms", "42 ms\u00b9", "42\u200bms", ".5 ms"]
+        # Every character CommonMark or GFM uses as syntax, left literal.
         shapes += [f"42{mark} ms" for mark in "*_`~\\[]()<>|^#!"]
         for shape in shapes:
             line = f"The p50 is {shape}.\n"
@@ -615,7 +644,7 @@ class FigureSourcesTest(unittest.TestCase):
         # A number or a unit glued to a name on either side is part of it.
         # (No config word here: "poll_10us" would be exempt as a poll.)
         for row in ("| a | step_10us |", "| a | v1.5 ms |", "| a | 42 ms_total |", "| a | 3 s-curve |"):
-            self.assertEqual(list(guard.figures(row)), [], row)
+            self.assertEqual(self.numbers_flagged(row, "| a | b |"), [], row)
 
     def test_a_name_an_operator_or_a_range_is_no_unreadable_figure(self):
         # Marks that are text, not markup, stay: a spaced `*` is no emphasis, an
@@ -627,16 +656,16 @@ class FigureSourcesTest(unittest.TestCase):
     def test_code_is_left_to_the_other_rules(self):
         # A code span, a fenced block and a doc-test hold code, not prose.
         self.assertEqual(self.unreadable("Call `wait(**42** ms)` first.\n"), [])
-        self.assertEqual(self.unreadable("```\nlet d = **42** ms;\n```\nThe p50 is **42** ms.\n"), ["docs/G.md:4"])
+        self.assertEqual(self.unreadable("```\nlet d = 42\u00b9 ms;\n```\nThe p50 is 42\u00b9 ms.\n"), ["docs/G.md:4"])
         source = (
             "/// ```\n"
-            "/// let d = **42** ms;\n"
+            "/// let d = 42\u00b9 ms;\n"
             "/// ```\n"
-            "/// The p50 is **42** ms.\n"
+            "/// The p50 is 42\u00b9 ms.\n"
             "fn f() {}\n"
             "/// ```\n"
             "fn g() {}\n"
-            "/// The p99 is **42** ms.\n"
+            "/// The p99 is 42\u00b9 ms.\n"
         )
         root = self.tree({"crates/c/src/lib.rs": source})
         flagged = [v.split(": ")[0] for v in self.flagged(root) if ": unreadable figure: " in v]
@@ -644,8 +673,84 @@ class FigureSourcesTest(unittest.TestCase):
         self.assertEqual(flagged, ["crates/c/src/lib.rs:4", "crates/c/src/lib.rs:8"])
 
     def test_a_mark_between_a_number_and_its_unit_in_prose_is_unreadable_even_when_claimed(self):
-        self.assertEqual(self.unreadable("The p50 is **42** ms.\n"), ["docs/G.md:1"])
-        self.assertEqual(self.unreadable("The p50 is **42** ms.\n", claim="The p50 is **42** ms"), ["docs/G.md:1"])
+        self.assertEqual(self.unreadable("The p50 is 42\u00b9 ms.\n"), ["docs/G.md:1"])
+        self.assertEqual(self.unreadable("The p50 is 42\u00b9 ms.\n", claim="The p50 is 42\u00b9 ms"), ["docs/G.md:1"])
+
+    def latency_lines(self, doc: str) -> list[str]:
+        return [v.split(": ")[0] for v in self.flagged(self.tree({"docs/G.md": doc})) if ": latency " in v]
+
+    def test_a_fence_ends_where_the_parser_ends_it(self):
+        # A `~~~` inside a backtick fence does not close it; a line that opens
+        # with backticks and closes them is inline code; a backtick fence whose
+        # info string holds a backtick is no fence. None hides what follows.
+        after = "\np50 42&nbsp;ms.\n"
+        self.assertEqual(self.latency_lines("```\n~~~\np50 1 ms\n```\n" + after), ["docs/G.md:6"])
+        self.assertEqual(self.latency_lines("```x``` is inline\n" + after), ["docs/G.md:3"])
+        self.assertEqual(self.latency_lines("````x````\n" + after), ["docs/G.md:3"])
+
+    def test_code_blocks_hold_no_figure(self):
+        # A fenced or an indented code block is code, not a claim (#2313).
+        self.assertEqual(self.latency_lines("```\nlet total = 1000 * ms; // p50 42 ms\n```\n"), [])
+        self.assertEqual(self.latency_lines("Text.\n\n    p50 42 ms\n"), [])
+
+    def test_a_table_without_outer_pipes_is_read(self):
+        doc = "Case | Latency (ms)\n--- | ---\nA | ~42\nB | 42\n"
+        root = self.tree({"docs/G.md": doc})
+        self.assertEqual(
+            [v.split(": ", 2)[:2] for v in self.flagged(root)],
+            [
+                ["docs/G.md:3", "unreadable figure"],
+                ["docs/G.md:3", "latency with no registered measurement"],
+                ["docs/G.md:4", "latency with no registered measurement"],
+            ],
+        )
+
+    def test_a_heading_does_not_wrap_into_the_line_under_it(self):
+        # Only two lines of one paragraph read as one sentence.
+        self.assertEqual(self.flagged(self.tree({"docs/G.md": "## Recall@10 in\n0.98 on SIFT1M.\n"})), [])
+        self.assertEqual(len(self.flagged(self.tree({"docs/G.md": "Recall@10 in\n0.98 on SIFT1M.\n"}))), 1)
+
+    def test_a_docstring_is_read_once_its_indentation_is_removed(self):
+        # A method's docstring is indented past a code block's four spaces: as
+        # `inspect.cleandoc` does, the common indentation goes first.
+        source = 'class C:\n    def f(self):\n        """Search.\n\n        The p50 is 42 ms.\n        """\n'
+        root = self.tree({"crates/velesdb-python/python/velesdb/m.py": source})
+        self.assertEqual([v.split(": ")[0] for v in self.flagged(root)], ["crates/velesdb-python/python/velesdb/m.py:5"])
+
+    def test_a_figure_keeps_its_place_in_the_file_line_after_an_entity_or_an_escaped_pipe(self):
+        # A claim covers the figure its text overlaps in the file's own line.
+        # An entity renders one character from six, an escaped pipe one from
+        # two: the figures after them must still land where they are written,
+        # or a claim beside a figure would cover it, or miss it.
+        line = "p50&nbsp;is 3 ms; the p99 is 9 ms."
+        root = self.tree({"docs/G.md": line + "\n"}, claims=(("docs/G.md", "3 ms"), ("docs/G.md", "9 ms")))
+        self.assertEqual(self.flagged(root), [])
+        doc = "| Case |\n|---|\n| x \\| 3 ms |\n"
+        root = self.tree({"docs/G.md": doc}, claims=(("docs/G.md", "x \\| "),))
+        self.assertEqual([v.split(": ")[0] for v in self.flagged(root)], ["docs/G.md:3"])
+
+    def test_a_link_reference_definition_is_no_prose(self):
+        self.assertEqual(self.latency_lines('See [run].\n\n[run]: https://example.com "p50 42 ms"\n'), [])
+
+    def test_a_mermaid_diagram_is_read(self):
+        # GitHub draws a mermaid block, labels and all: its figures are shown.
+        self.assertEqual(
+            [v.split(": ")[0] for v in self.flagged(self.tree({"docs/G.md": "```mermaid\nA -->|x| B[BFS 290ns]\n```\n"}))],
+            ["docs/G.md:2"],
+        )
+
+    def test_a_raw_html_block_is_read_through_its_text(self):
+        doc = "<table>\n<tr><td>p50 42<!-- x --> ms</td></tr>\n</table>\n"
+        self.assertEqual(self.latency_lines(doc), ["docs/G.md:2"])
+
+    def test_the_guard_says_it_could_not_run_without_its_parser(self):
+        root = self.tree({"docs/G.md": "Search answers in 3 ms.\n"})
+        original = guard.MarkdownIt
+        guard.MarkdownIt = None
+        self.addCleanup(setattr, guard, "MarkdownIt", original)
+        with contextlib.redirect_stderr(io.StringIO()) as err, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(guard.main(["--root", str(root)]), 2)
+        self.assertIn("markdown-it-py==4.2.0 is not installed", err.getvalue())
 
     def test_a_number_with_its_unit_in_a_cell_is_read(self):
         doc = "| Mode | Latency |\n|---|---|\n| Fast | 42 ms |\n"

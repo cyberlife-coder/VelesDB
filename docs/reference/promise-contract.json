@@ -5171,6 +5171,23 @@
       "last_updated": "2026-09-13"
     },
     {
+      "id": "rustdoc_memory_batched_write_row299",
+      "file": "crates/velesdb-memory/src/migration/tests/performance.rs",
+      "must_contain": "| 16 000 | 3 345.8      | **16.3**    | **61 524**    |",
+      "validation_command": "cargo test -p velesdb-memory --release -- --ignored batched_write_cost_stays_flat_as_the_volume_doubles",
+      "executable": false,
+      "source": "commit a4950038 (2026-08-03) recorded this table in the doc comment of batched_write_cost_stays_flat_as_the_volume_doubles, 're-measured with the same code on the same machine, --release, batch 1 024'; 6a64778e moved it here unchanged. measured_version is the workspace version of that commit.",
+      "measured_on": "2026-08-03 (date of commit a4950038, which records the run)",
+      "measured_machine": "unknown (the doc comment says 'an idle machine'; commit a4950038 names none)",
+      "measured_version": "4.2.0",
+      "stale_accepted": {
+        "reason": "The test's own recorded measurement (a4950038, 4.2.0); re-running it writes 31 000 facts on a machine at rest, not done in this change.",
+        "granted": "2026-09-13",
+        "for_workspace_major": 6
+      },
+      "last_updated": "2026-09-13"
+    },
+    {
       "id": "rustdoc_memory_paging_cost_row412",
       "file": "crates/velesdb-memory/src/migration/tests/performance.rs",
       "must_contain": "| 250   | 10.3 ms  | 41.1    | —                 |",
