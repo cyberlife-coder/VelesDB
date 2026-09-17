@@ -261,12 +261,14 @@ impl VelesConfig {
 
     fn validate_search(&self) -> Result<(), ConfigError> {
         if let Some(ef) = self.search.ef_search {
-            if !(16..=4096).contains(&ef) {
-                return Err(ConfigError::InvalidValue {
+            // Same range the CLI's `\set ef_search` and every query-time
+            // `WITH (ef_search = ...)` enforce (#2274) — one definition.
+            crate::api_types::validate_ef_search(ef).map_err(|message| {
+                ConfigError::InvalidValue {
                     key: "search.ef_search".to_string(),
-                    message: format!("value {ef} is out of range [16, 4096]"),
-                });
-            }
+                    message,
+                }
+            })?;
         }
 
         if self.search.max_results == 0 || self.search.max_results > 10000 {

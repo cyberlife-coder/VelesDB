@@ -628,6 +628,52 @@ fn test_parse_search_mode_rejects_bare_adaptive() {
 }
 
 // ============================================================================
+// F. validate_ef_search / parse_with_ef_search (#2274)
+// ============================================================================
+
+#[test]
+fn test_validate_ef_search_accepts_the_documented_range() {
+    use super::validate_ef_search;
+    assert!(validate_ef_search(16).is_ok());
+    assert!(validate_ef_search(4096).is_ok());
+    assert!(validate_ef_search(160).is_ok());
+}
+
+#[test]
+fn test_validate_ef_search_rejects_outside_the_range() {
+    use super::validate_ef_search;
+    let err = validate_ef_search(0).expect_err("below range");
+    assert!(err.contains('0'));
+    let err = validate_ef_search(4097).expect_err("above range");
+    assert!(err.contains("4097"));
+}
+
+#[test]
+fn test_parse_with_ef_search_accepts_the_documented_range() {
+    use super::parse_with_ef_search;
+    assert_eq!(parse_with_ef_search(16), Ok(16));
+    assert_eq!(parse_with_ef_search(4096), Ok(4096));
+}
+
+/// The VelesQL grammar accepts a leading `-` on any integer literal, so
+/// `ef_search = -1` must be rejected here rather than cast to
+/// `usize::MAX` — an uncapped graph traversal (#2274).
+#[test]
+fn test_parse_with_ef_search_rejects_negative() {
+    use super::parse_with_ef_search;
+    let err = parse_with_ef_search(-1).expect_err("negative ef_search should be rejected");
+    assert!(err.contains("-1"));
+}
+
+#[test]
+fn test_parse_with_ef_search_rejects_outside_the_range() {
+    use super::parse_with_ef_search;
+    assert!(parse_with_ef_search(0).is_err());
+    assert!(parse_with_ef_search(4097).is_err());
+    assert!(parse_with_ef_search(i64::MAX).is_err());
+}
+
+// ============================================================================
 // Additional edge-case tests for response serialization
 // ============================================================================
 

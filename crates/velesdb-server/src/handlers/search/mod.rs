@@ -27,7 +27,7 @@ use super::helpers::{apply_pre_check, extract_client_id, get_vector_collection_o
 use pipeline::{
     execute_dense_search_ids, execute_search_request, finish_search_ids_with_cb,
     finish_search_with_cb, finish_search_with_status, ids_fast_path_eligible, parse_mode_or_400,
-    parse_optional_filter, timeout_response, validate_query_dimension,
+    parse_optional_filter, timeout_response, validate_ef_search_or_400, validate_query_dimension,
 };
 use workers::{run_blocking_search, run_search_with_optional_timeout};
 
@@ -96,7 +96,13 @@ fn execute_with_cb(
     responses(
         (status = 200, description = "Search results", body = SearchResponse),
         (status = 404, description = "Collection not found", body = crate::types::ErrorResponse),
-        (status = 400, description = "Invalid request", body = crate::types::ErrorResponse)
+        (status = 400, description = "Invalid request", body = crate::types::ErrorResponse),
+        (
+            status = 422,
+            description = "A field of the wrong type, such as a negative or non-integer ef_search",
+            body = String,
+            content_type = "text/plain"
+        )
     )
 )]
 #[allow(clippy::result_large_err)]
@@ -123,6 +129,9 @@ pub async fn search(
         Ok(quality_mode) => quality_mode,
         Err(resp) => return resp,
     };
+    if let Err(resp) = validate_ef_search_or_400(&state, req.ef_search) {
+        return resp;
+    }
 
     // F-03: honour the per-request `timeout_ms` budget. The synchronous
     // search runs on a blocking worker so the async runtime stays
@@ -379,7 +388,13 @@ pub async fn hybrid_search(
     responses(
         (status = 200, description = "IDs-only search results", body = SearchIdsResponse),
         (status = 404, description = "Collection not found", body = crate::types::ErrorResponse),
-        (status = 400, description = "Invalid request", body = crate::types::ErrorResponse)
+        (status = 400, description = "Invalid request", body = crate::types::ErrorResponse),
+        (
+            status = 422,
+            description = "A field of the wrong type, such as a negative or non-integer ef_search",
+            body = String,
+            content_type = "text/plain"
+        )
     )
 )]
 #[allow(clippy::result_large_err)]
@@ -406,6 +421,9 @@ pub async fn search_ids(
         Ok(quality_mode) => quality_mode,
         Err(resp) => return resp,
     };
+    if let Err(resp) = validate_ef_search_or_400(&state, req.ef_search) {
+        return resp;
+    }
 
     // F-03: honour the per-request `timeout_ms` budget and run the
     // CPU-bound search on a blocking worker so the async runtime stays
