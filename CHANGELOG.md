@@ -152,11 +152,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   typed by hand. Sparse vectors are indexed. The binding cannot delete
   postings, so each sparse upsert gets a fresh sparse id and a replaced or
   deleted point's old one is retired: it never matches again. Retired ids
-  would pile up and slow every sparse search (20,000 replacements of one
-  point took one from 0.0022 ms to 2.03 ms), so the sparse index lives in a
-  store of its own and is rebuilt from the live sparse vectors once retired
-  ids outnumber live ones: it never holds more than twice the live entries,
-  at O(1) amortized cost. velesdb-wasm deleting postings itself (#2287)
+  would pile up, and every sparse search over-fetches by their number, so a
+  search's cost would grow with the replacements a collection has seen. The
+  sparse index therefore lives in a store of its own and is rebuilt from the
+  live sparse vectors once retired ids outnumber live ones: it never holds
+  more than twice the live entries, at O(1) amortized cost. velesdb-wasm deleting postings itself (#2287)
   will make the rebuild unnecessary.
   `createCollection` creates the store in the requested `storageMode`.
   `WASM_CAPABILITIES` is the one table the backend consults before it uses
