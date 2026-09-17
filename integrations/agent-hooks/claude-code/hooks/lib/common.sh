@@ -297,16 +297,6 @@ project_record() {
     '{project: $project, session: $session, root: $root}'
 }
 
-valid_project_record() {
-  jq -e '
-    type == "object"
-    and ((keys | sort) == ["project", "root", "session"])
-    and ((.project | type) == "string")
-    and ((.session | type) == "string")
-    and ((.root | type) == "string" and (.root | length) > 0)
-  ' "$1" >/dev/null 2>&1
-}
-
 # record_dir_path KIND SESSION_ID: a session-specific directory whose records
 # are independently atomically replaced. One file per project identity avoids
 # lost updates when multiple PreToolUse hooks run concurrently.
@@ -358,6 +348,22 @@ record_current_project() {
 }
 
 # >>> BEGIN: shared byte for byte with the other host's lib/common.sh; test/hooks.test.sh checks it.
+# valid_project_record FILE: FILE holds exactly one pending/dirty record. jq
+# reads every JSON value in a file, and `jq -e` judges only the last, so a file
+# holding two records passed; its readers then saw both. It is slurped, and
+# every reader of a record takes that one value (`jq -s '.[0]…'`).
+valid_project_record() {
+  jq -s -e '
+    length == 1
+    and (.[0]
+      | type == "object"
+      and ((keys | sort) == ["project", "root", "session"])
+      and ((.project | type) == "string")
+      and ((.session | type) == "string")
+      and ((.root | type) == "string" and (.root | length) > 0))
+  ' "$1" >/dev/null 2>&1
+}
+
 # --- The project a recall is scoped to -----------------------------------------
 # A recall names its project in `filter.project`, or in compile_context's
 # `memory_scope.project`. That name is compared inside jq, as it was sent, and
@@ -627,7 +633,7 @@ promote_pending_recall() {
   for file in "$dir"/*.json; do
     [ -e "$file" ] || [ -L "$file" ] || continue
     [ -f "$file" ] && [ ! -L "$file" ] && valid_project_record "$file" || return 2
-    canonical="$(jq -c '{project, session, root}' "$file")" || return 2
+    canonical="$(jq -sc '.[0] | {project, session, root}' "$file")" || return 2
     expected="$(safe_marker_key "$canonical")" || return 2
     expected="${expected}.json"
     [ "$(basename "$file")" = "$expected" ] || return 2
@@ -650,7 +656,7 @@ promote_pending_recall() {
   fi
 
   for file in "${files[@]}"; do
-    root="$(jq -r '.root' "$file")" || return 2
+    root="$(jq -sr '.[0].root' "$file")" || return 2
     case "$select_by" in
       project)
         recall_scope_is_record "$payload" "$file" || continue

@@ -1501,20 +1501,26 @@ wc_edit_allowed() {
   [ "$rc" -eq 0 ] && [ "$out" = '{}' ]
 }
 
+# wc_scoped_recall_payload HOOKS_DIR HOST_SESSION CWD PROJECT: print the
+# payload wc_scoped_recall feeds.
+wc_scoped_recall_payload() {
+  WC_CWD="$3" wc_payload "$1" "$2" "mcp__velesdb-memory__recall_fused" \
+    unused unused '{"memories":[{"content":"a prior failure","id_str":"1"}]}' \
+    | jq -c --arg project "$4" '.tool_input = {query: "prior failures", filter: {project: $project}}'
+}
+
 # wc_scoped_recall HOOKS_DIR HOST_SESSION CWD PROJECT: feed that host's
 # PostToolUse a successful recall_fused run from CWD with filter.project
 # PROJECT, its result in the shape the host sends.
 wc_scoped_recall() {
   local payload
-  payload="$(WC_CWD="$3" wc_payload "$1" "$2" "mcp__velesdb-memory__recall_fused" \
-    unused unused '{"memories":[{"content":"a prior failure","id_str":"1"}]}')"
-  payload="$(jq -c --arg project "$4" '.tool_input = {query: "prior failures", filter: {project: $project}}' <<<"$payload")"
+  payload="$(wc_scoped_recall_payload "$@")"
   bash "$1/post-tool-use.sh" <<<"$payload" >/dev/null || hook_exited "${BASH_LINENO[0]}" "$?"
 }
 
 wc_host_checks() {
   local dir="$1" label="$2" sid="$wc_sid-$3" text order run save load first second first_pid second_pid
-  local payload reads runs=0 lost=0 shape refused wt project passed_early scope pending scope_n scope_sid scope_leaks
+  local payload reads runs=0 lost=0 shape refused wt project passed_early scope pending scope_n scope_sid scope_leaks two_dir two_key two_status two_markers
 
   # A save reminder names only a session the conversation saved: after a load
   # alone, Stop, and Claude Code's PreCompact, still name the configured one.
@@ -1660,6 +1666,33 @@ wc_host_checks() {
   else
     pass "$label: a project-scoped recall leaves another project's edit refused"
   fi
+
+  # A pending record file holding two records is malformed state: a scoped
+  # recall's promotion refuses it (2), keeps it as it was, and writes no
+  # marker, for either root. Its name is the checksum the file's own content
+  # gives, so only the single-record rule can refuse it.
+  two_dir="$TMP_TEST_DIR/two-records-$3"
+  mkdir -p "$two_dir"
+  {
+    jq -cn --arg root "$TMP_TEST_DIR/ll-$3-one" '{project: "ll-project-shared", session: "rolling", root: $root}'
+    jq -cn '{project: "ll-project-shared", session: "rolling", root: "/made-up-root"}'
+  } > "$two_dir/records"
+  two_key="$(bash -c 'source "$1/lib/common.sh"; safe_marker_key "$(jq -c "{project, session, root}" "$2")"' \
+    _ "$dir" "$two_dir/records")"
+  mv "$two_dir/records" "$two_dir/$two_key.json"
+  cp "$two_dir/$two_key.json" "$TMP_TEST_DIR/two-records-$3.expected"
+  payload="$(wc_scoped_recall_payload "$dir" "$sid-aq" "$TMP_TEST_DIR/ll-$3-one" ll-project-shared)"
+  two_status=0
+  bash -c 'source "$1/lib/common.sh"; promote_pending_recall "$2" two-records-recall "$3" "$4"' \
+    _ "$dir" "$two_dir" "$sid-aq" "$payload" >/dev/null 2>&1 || two_status=$?
+  two_markers="$(find "$HOOK_STATE_DIR" -name "two-records-recall-*" | wc -l | tr -d ' ')"
+  if [ "$two_status" = 2 ] && [ "$two_markers" = 0 ] \
+    && cmp -s "$two_dir/$two_key.json" "$TMP_TEST_DIR/two-records-$3.expected"; then
+    pass "$label: a pending record file holding two records is refused, kept, and marks nothing"
+  else
+    fail "$label: a pending record file holding two records is refused, kept, and marks nothing: status $two_status, $two_markers marker(s), file $( [ -f "$two_dir/$two_key.json" ] && echo kept || echo gone)"
+  fi
+  rm -f "$HOOK_STATE_DIR"/two-records-recall-*
 
   # The worktree a recall runs from is unlocked too when only another worktree
   # of its project had a refused edit: a parent whose subagent waited edits next.
