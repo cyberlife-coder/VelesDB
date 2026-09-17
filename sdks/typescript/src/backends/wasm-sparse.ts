@@ -13,10 +13,11 @@
  * retired ids so the dead cannot crowd live points out of the top `k`. As in
  * core, an upsert without a sparse vector keeps the point's current one.
  *
- * Retired postings would otherwise pile up for good, slowing every search
- * (20,000 replacements of one point took a sparse search from 0.0022 ms to
- * 2.03 ms). So the sparse index lives in a store of its own, a metadata-only
- * velesdb-wasm store beside the collection's vector store, and once retired
+ * Retired postings would otherwise pile up for good, and every search would
+ * over-fetch by their number, so the cost of a search would grow with the
+ * replacements a collection has seen. The sparse index therefore lives in a
+ * store of its own, a metadata-only velesdb-wasm store beside the
+ * collection's vector store, and once retired
  * ids outnumber live ones it is rebuilt from the live sparse vectors the SDK
  * keeps: the index then never holds more than twice the live entries, and a
  * rebuild costs O(live) once per `live` retirements, O(1) amortized. The
