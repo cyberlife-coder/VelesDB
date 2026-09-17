@@ -1,6 +1,6 @@
 # VelesDB Performance Benchmarks
 
-*Last updated: 2026-09-10 · Applies to: velesdb-core 6.0.0. Figures are re-validated at each release only when re-measured — each section carries its own measurement date and machine; this stamp tracks the document revision, not a fresh measurement.*
+*Last updated: 2026-09-13 · Applies to: velesdb-core 6.0.0. Figures are re-validated at each release only when re-measured — each section carries its own measurement date and machine; this stamp tracks the document revision, not a fresh measurement.*
 
 ---
 
@@ -493,11 +493,15 @@ human reading outputs. Three findings, and no latency figures:
   schema as Ollama's `format` took the 8 GB tier from no eligible model to two,
   and took one model from zero valid replies to all of them. `velesdb-memory`
   does not send `format` today, so this measures a product change.
-- **Quality is deterministic here, latency is not.** Two full campaigns half an
-  hour apart reproduced every quality verdict to the digit under greedy
-  decoding, while the order control — first configuration replayed last —
-  disagreed with itself by 26% and then 55% on timing. The timings are
-  therefore not published.
+- **Quality repeated on one machine; latency did not.** Two full campaigns half
+  an hour apart on the same machine gave the same quality counts run for run
+  under greedy decoding, while the order control — first configuration replayed
+  last — disagreed with itself by 26% and then 55% on timing. The timings are
+  therefore not published. The quality counts are unverified beyond that
+  machine: a re-run elsewhere gave different ones, and none of the 26
+  screening files the two campaigns published records the Ollama version, or
+  any decode option but the generation cap, that would say why; the 2 that
+  hold their model's digest hold it by accident (#1949).
 
 Full tables: [`benchmarks/results/2026-08-16-memory-extraction-report.md`](../benchmarks/results/2026-08-16-memory-extraction-report.md).
 How to choose, including for models we did not test:
