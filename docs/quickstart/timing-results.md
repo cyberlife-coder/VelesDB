@@ -66,7 +66,7 @@ The PyO3 bindings call into the NumPy C API at first use, but the published `vel
 
 ### 2. `Cargo.toml` advertised `rust-version = "1.83"` but `velesdb-core` actually requires Rust ≥ 1.89 — **resolved in v1.14.0**
 
-The Rust scenario initially failed to compile with `rust:1.86-slim` (499 errors) because `crates/velesdb-core/src/simd_native/x86_avx512.rs:1428` uses `#[target_feature(enable = "avx512vpopcntdq")]`, a target feature stabilized in Rust 1.89. Up to and including v1.13.8 the workspace `Cargo.toml` declared `rust-version = "1.83"`, which was misleading: builds on a 1.83–1.88 toolchain were already broken silently. **Resolved in v1.14.0**: the workspace `rust-version` is now `1.89`, `CONTRIBUTING.md` and the examples READMEs say `Rust 1.89+`, and `.clippy.toml` matches. The DX harness pins `rust:1-slim` (latest stable) so it tracks the MSRV automatically.
+The Rust scenario initially failed to compile with `rust:1.86-slim` (499 errors) because `crates/velesdb-core/src/simd_native/x86_avx512.rs:1428` uses `#[target_feature(enable = "avx512vpopcntdq")]`, a target feature stabilized in Rust 1.89. Up to and including v1.13.8 the workspace `Cargo.toml` declared `rust-version = "1.83"`, which was misleading: builds on a 1.83–1.88 toolchain were already broken silently. **Resolved in v1.14.0**: the workspace `rust-version` is now `1.89`, `CONTRIBUTING.md` and the examples READMEs say `Rust 1.89+`, and `.clippy.toml` matches. This run used `rust:1-slim` (latest stable), so the harness tracks the MSRV automatically; it now builds from `rust:slim`, the same latest stable release under its unversioned tag.
 
 ### 3. The repo `Dockerfile` carried a stale `LABEL version="1.12.0"` — **resolved in v1.14.0**
 
