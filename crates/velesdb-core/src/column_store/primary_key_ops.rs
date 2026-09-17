@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use super::haversine;
+use super::coordinates;
 use super::types::{ColumnStoreError, ColumnValue, TypedColumn};
 use super::ColumnStore;
 
@@ -28,7 +28,7 @@ impl ColumnStore {
         // Validate GeoPoint coordinates regardless of primary key presence.
         for (_, value) in values {
             if let ColumnValue::GeoPoint(lat, lng) = value {
-                haversine::validate_coordinates(*lat, *lng)?;
+                coordinates::validate_coordinates(*lat, *lng)?;
             }
         }
 
@@ -101,7 +101,7 @@ impl ColumnStore {
                 continue;
             }
             if let ColumnValue::GeoPoint(lat, lng) = value {
-                haversine::validate_coordinates(*lat, *lng)?;
+                coordinates::validate_coordinates(*lat, *lng)?;
             }
             if let Some(col) = columns.get(*col_name) {
                 if !matches!(value, ColumnValue::Null) {
@@ -273,7 +273,7 @@ impl ColumnStore {
             // applies columns one by one, so a bad coordinate in the middle of
             // the batch must be caught before the first column is written.
             if let ColumnValue::GeoPoint(lat, lng) = value {
-                haversine::validate_coordinates(*lat, *lng)?;
+                coordinates::validate_coordinates(*lat, *lng)?;
             }
         }
         Ok(())
