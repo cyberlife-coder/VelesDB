@@ -32,6 +32,7 @@ ones.
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import copy
 import datetime
@@ -45,6 +46,8 @@ import math
 import os
 import platform
 import re
+import select
+import shlex
 import shutil
 import signal
 import socket
@@ -53,6 +56,7 @@ import sys
 import tempfile
 import textwrap
 import threading
+import time
 import unittest
 import warnings
 from pathlib import Path
@@ -940,6 +944,7 @@ def checkout_origin() -> dict:
     root = SCRIPT_PATH.parents[1]
     return {"machine": platform.machine(), "os": platform.platform(terse=True),
             "commit": git_answer(root, "rev-parse", "HEAD"),
+            "repository_prefix": git_answer(root, "rev-parse", "--show-prefix"),
             "uncommitted_changes": working_files_differ(root)}
 
 
@@ -1578,6 +1583,18 @@ class EndToEndRuntimeTest(unittest.TestCase):
         self.assertEqual((silent["version"], silent["missing"].get("version")),
                          (None, "velesdb-memory --version did not answer within 1 s"))
 
+    def test_a_version_that_is_not_utf8_is_recorded_not_raised(self):
+        """A `--version` whose bytes are not UTF-8 is recorded, the byte it cannot decode
+        replaced: decoded as text, it raised out of the run (#2280 review)."""
+        with tempfile.TemporaryDirectory() as bin_dir:
+            binary = Path(bin_dir) / "velesdb-memory"
+            binary.write_text("#!/bin/sh\nprintf '\\377velesdb-memory 1.0.0\\n'\n",
+                              encoding="utf-8")
+            binary.chmod(0o755)
+            with patient_launches():
+                record = bench.launched_binary(binary)
+        self.assertEqual(record["version"], "\ufffdvelesdb-memory 1.0.0")
+
     def test_a_binary_records_the_first_line_of_its_version(self):
         script = "#!/bin/sh\necho 'velesdb-memory 1.2.3'\necho 'built from a dirty tree'\n"
         record, _rendered = self.endtoend_then_report(script=script)
@@ -1719,35 +1736,102 @@ INDEX_STATES = (("taken out of the index", take_out_of_the_index, False),
                 ("edited inside a sparse checkout's cone", edit_in_a_sparse_checkout, True))
 
 
-def terminated_inside_the_scratch_index(test: unittest.TestCase) -> "tuple[list, int, list]":
-    """A child blocked inside the scratch index's span, signalled once it says it is there:
-    what its temporary directory held then, its return code, and what it held after."""
-    child = textwrap.dedent(f"""
-        import importlib.util, time
-        spec = importlib.util.spec_from_file_location("bench", {str(SCRIPT_PATH)!r})
-        bench = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(bench)
-        def blocked(*_argv, **_options):
-            print("inside", flush=True)
-            time.sleep(600)
-        bench._git = blocked
-        bench._changed("0" * 40)
-    """)
-    with tempfile.TemporaryDirectory() as tmp:
-        process = subprocess.Popen([sys.executable, "-c", child], stdout=subprocess.PIPE,
-                                   text=True, env={**os.environ, "TMPDIR": tmp})
+# The program a child runs: the bench loaded from its file, its `ROOT` the checkout named by
+# its first argument, then whatever the test gives it.
+BENCH_CHILD = textwrap.dedent(f"""
+    import importlib.util, os, pathlib, signal, sys, tempfile
+    spec = importlib.util.spec_from_file_location("bench", {str(SCRIPT_PATH)!r})
+    bench = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bench)
+    bench.ROOT = pathlib.Path(sys.argv[1])
+""")
+
+# How many times a held clean filter may be let go: more than git runs it in one run.
+FILTER_RELEASES = 16
+
+
+def process_is_gone(pid: int) -> bool:
+    """Whether `pid` names no live process: none at all, or one that has only to be reaped."""
+    state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True,
+                           text=True, check=False).stdout.strip()
+    return not state or state.startswith("Z")
+
+
+def gone_within_patience(pid: int) -> bool:
+    """Whether `pid` is gone, waited for as long as a launch is given: a killed process ends
+    when the system gets to it, not the instant it is signalled."""
+    deadline = time.monotonic() + LAUNCH_PATIENCE_S
+    while not process_is_gone(pid):
+        if time.monotonic() > deadline:
+            return False
+        time.sleep(0.05)
+    return True
+
+
+def fifo_opened(path: Path) -> int:
+    """A FIFO at `path`, held open for reading and writing: a read never meets its end, and a
+    write never waits for a reader."""
+    os.mkfifo(path)
+    return os.open(path, os.O_RDWR)
+
+
+def first_line(test: unittest.TestCase, descriptor: int) -> str:
+    """The first line written to the FIFO held at `descriptor`, waited for as long as a launch."""
+    chosen, _, _ = select.select([descriptor], [], [], LAUNCH_PATIENCE_S)
+    test.assertTrue(chosen, "the clean filter never said it was running")
+    line = b""
+    while not line.endswith(b"\n"):
+        line += os.read(descriptor, 1)
+    return line.decode("ascii")
+
+
+@contextlib.contextmanager
+def bench_held_by_a_clean_filter(test: unittest.TestCase, call: str, prelude: str = ""):
+    """A child running the bench's `call` on a scratch checkout whose clean filter, which git
+    runs while the scratch index exists, writes its pid, then waits for a line to answer.
+
+    Yields the child, the filter's pid, the directory the child's temporary files go to, and
+    what lets the filter answer. Whatever still runs at the end is killed.
+    """
+    with scratch_checkout() as root, tempfile.TemporaryDirectory() as tmp:
+        ready, go = Path(tmp) / "ready", Path(tmp) / "go"
+        ready_end, go_end = fifo_opened(ready), fifo_opened(go)
+        (root / ".gitattributes").write_text("cases.json filter=held\n", encoding="utf-8")
+        git_commit(root, ".gitattributes")
+        git_answer(root, "config", "filter.held.clean",
+                   f"echo $$ >{shlex.quote(str(ready))}; read _ <{shlex.quote(str(go))}; exec cat")
+        scratch = Path(tmp) / "scratch"
+        scratch.mkdir()
+        child = subprocess.Popen([sys.executable, "-c", prelude + BENCH_CHILD + call, str(root)],
+                                 env={**os.environ, "TMPDIR": str(scratch)})
+        pid = None
         try:
-            test.assertEqual(process.stdout.readline().strip(), "inside")
-            during = sorted(path.name for path in Path(tmp).iterdir())
-            process.send_signal(signal.SIGTERM)
-            code = process.wait(timeout=LAUNCH_PATIENCE_S)
+            pid = int(first_line(test, ready_end))
+            yield child, pid, scratch, lambda: os.write(go_end, b"go\n" * FILTER_RELEASES)
         finally:
-            if process.poll() is None:
-                process.kill()
-                process.wait()
-            process.stdout.close()
-        after = sorted(path.name for path in Path(tmp).iterdir())
-    return during, code, after
+            if pid is not None and not process_is_gone(pid):
+                with contextlib.suppress(OSError):
+                    os.kill(pid, signal.SIGKILL)
+            if child.poll() is None:
+                child.kill()
+            child.wait()
+            os.close(ready_end)
+            os.close(go_end)
+
+
+def terminated_inside_the_scratch_index(test: unittest.TestCase, *, filter_gone: bool = False
+                                        ) -> "tuple[list, int, list, bool | None]":
+    """A child held inside the scratch index's span by git's clean filter, signalled once the
+    filter runs: what its temporary directory held then, its return code, what it held after,
+    and, when `filter_gone` asks, whether the filter was gone (None otherwise)."""
+    with bench_held_by_a_clean_filter(test, "bench.run_origin(bench.ROOT / 'cases.json', None)") \
+            as (child, pid, scratch, _release):
+        during = sorted(path.name for path in scratch.iterdir())
+        child.send_signal(signal.SIGTERM)
+        code = child.wait(timeout=LAUNCH_PATIENCE_S)
+        after = sorted(path.name for path in scratch.iterdir())
+        gone = gone_within_patience(pid) if filter_gone else None
+    return during, code, after, gone
 
 
 class CheckoutOriginTest(unittest.TestCase):
@@ -1815,7 +1899,7 @@ class CheckoutOriginTest(unittest.TestCase):
         with scratch_checkout() as root:
             path, gap = bench._committed_path(root / "cases.json", "0" * 40)
         self.assertIsNone(path)
-        self.assertRegex(gap, r"^git ls-tree 0{40} -- :\(literal\)cases\.json exited \d+$")
+        self.assertRegex(gap, r"^git ls-tree -z 0{40} -- :\(literal\)cases\.json exited \d+$")
 
     def test_a_name_git_would_read_as_a_pattern_is_taken_as_written(self):
         """As pathspecs, `:cases.json` names `cases.json` and `case?.json` matches it: neither
@@ -1897,7 +1981,7 @@ class CheckoutOriginTest(unittest.TestCase):
         """SIGTERM while the scratch index exists: Python's default handler ends the process
         without cleaning up, so the bench raises it where it lands for that span (#2280
         review)."""
-        during, _code, after = terminated_inside_the_scratch_index(self)
+        during, _code, after, _gone = terminated_inside_the_scratch_index(self)
         self.assertTrue(during and all(name.startswith("velesdb-bench-index-") for name in during),
                         during)
         self.assertEqual(after, [])
@@ -1905,8 +1989,44 @@ class CheckoutOriginTest(unittest.TestCase):
     def test_a_terminated_run_still_dies_by_the_signal(self):
         """Cleaned up, the process then dies by SIGTERM itself, as it would have outside that
         span: no exit status stands in for the signal (#2280 review)."""
-        _during, code, _after = terminated_inside_the_scratch_index(self)
+        _during, code, _after, _gone = terminated_inside_the_scratch_index(self)
         self.assertEqual(code, -signal.SIGTERM)
+
+    def test_a_terminated_run_leaves_no_git_child_behind(self):
+        """Git runs in a process group of its own, which a SIGTERM to the bench stops whole:
+        git killed alone left the clean filter it started running after the bench died (#2296)."""
+        _during, _code, _after, gone = terminated_inside_the_scratch_index(self, filter_gone=True)
+        self.assertTrue(gone, "the clean filter git started outlived the bench")
+
+    def test_a_run_that_ignores_sigterm_is_not_ended_by_it(self):
+        """A process that ignores SIGTERM keeps ignoring it inside the bench, which installs its
+        handler only over the default disposition: the run completes (#2280 review)."""
+        prelude = "import signal\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        call = "print(bench.run_origin(bench.ROOT / 'cases.json', None)['cases_file'])"
+        with bench_held_by_a_clean_filter(self, call, prelude) as (child, _pid, _scratch, release):
+            child.send_signal(signal.SIGTERM)
+            release()
+            code = child.wait(timeout=LAUNCH_PATIENCE_S)
+        self.assertEqual(code, 0)
+
+    def test_a_sigterm_while_the_scratch_index_is_removed_still_removes_it(self):
+        """A SIGTERM that lands while the scratch directory is removed lets the removal finish,
+        then ends the process by the signal: raised inside the removal, it left the directory
+        behind (#2280 review)."""
+        call = textwrap.dedent("""
+            original = tempfile.TemporaryDirectory.cleanup
+            def cleanup(self):
+                os.kill(os.getpid(), signal.SIGTERM)
+                original(self)
+            tempfile.TemporaryDirectory.cleanup = cleanup
+            bench._changed("0" * 40)
+        """)
+        with scratch_checkout() as root, tempfile.TemporaryDirectory() as tmp:
+            done = subprocess.run([sys.executable, "-c", BENCH_CHILD + call, str(root)],
+                                  env={**os.environ, "TMPDIR": tmp}, check=False,
+                                  timeout=LAUNCH_PATIENCE_S)
+            left = sorted(path.name for path in Path(tmp).iterdir())
+        self.assertEqual((done.returncode, left), (-signal.SIGTERM, []))
 
     def test_a_dirty_file_git_left_outside_the_cone_is_changed(self):
         """Git leaves a file its sparse rules exclude when the file is dirty: still in the working
@@ -1927,7 +2047,7 @@ class CheckoutOriginTest(unittest.TestCase):
         self.assertEqual((origin["cases_file"], origin["cases_file_modified"],
                           origin["uncommitted_changes"]), ("left-out/cases.json", True, True))
         self.assertEqual((below["cases_file"], below["cases_file_modified"],
-                          below["uncommitted_changes"]), ("cases.json", False, True))
+                          below["uncommitted_changes"]), ("kept/cases.json", False, True))
 
     def test_a_name_that_starts_with_a_space_is_read_whole(self):
         """`-z` output is read as git wrote it: stripped, it lost a leading space, so an edited
@@ -1955,7 +2075,74 @@ class CheckoutOriginTest(unittest.TestCase):
             with mock.patch.object(bench, "ROOT", outer / "sub"):
                 origin = bench.run_origin(outer / "sub" / "cases.json", None)
         self.assertEqual((origin["cases_file"], origin["cases_file_modified"],
-                          origin["uncommitted_changes"]), ("cases.json", True, True))
+                          origin["uncommitted_changes"]), ("sub/cases.json", True, True))
+
+    def test_a_bench_below_the_repository_root_records_where_it_sits(self):
+        """A bench below the toplevel of the repository git finds from it records that
+        repository's commit, so it records where it sits in it, and names the cases file from
+        that root: the commit and the path then name the file together (#2296)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            outer = Path(tmp).resolve()
+            (outer / "sub").mkdir()
+            (outer / "sub" / "cases.json").write_text("{}\n", encoding="utf-8")
+            git_answer(outer, "init", "--quiet")
+            git_commit(outer, "sub/cases.json")
+            with mock.patch.object(bench, "ROOT", outer / "sub"):
+                below = bench.run_origin(outer / "sub" / "cases.json", None)
+            head = git_answer(outer, "rev-parse", "HEAD")
+            named = git_answer(outer, "cat-file", "-t", f"{below['commit']}:{below['cases_file']}")
+        with scratch_checkout() as root:
+            at_root = bench.run_origin(root / "cases.json", None)
+        self.assertEqual((below["commit"], below["repository_prefix"], below["cases_file"]),
+                         (head, "sub/", "sub/cases.json"))
+        self.assertEqual(named, "blob")
+        self.assertEqual((at_root["repository_prefix"], at_root["cases_file"]), ("", "cases.json"))
+        self.assertNotIn("repository_prefix", at_root["missing"])
+
+    def test_every_git_answer_is_read_as_git_wrote_it(self):
+        """No git answer is stripped or has its line endings translated: a repository, a bench
+        directory and a file whose names begin and end with a space and a tab, the file's
+        holding a carriage return, are read whole (#2280 review: the class rounds 6 and 7 fixed
+        one call at a time)."""
+        edge = " \t"
+        with tempfile.TemporaryDirectory() as tmp:
+            repository = Path(tmp).resolve() / f"{edge}repo{edge}"
+            bench_dir, name = f"{edge}bench{edge}", f"{edge}cases\r.json{edge}"
+            (repository / bench_dir).mkdir(parents=True)
+            (repository / bench_dir / name).write_text("{}\n", encoding="utf-8")
+            git_answer(repository, "init", "--quiet")
+            git_commit(repository, f"{bench_dir}/{name}")
+            (repository / bench_dir / name).write_text(EDITED, encoding="utf-8")
+            with mock.patch.object(bench, "ROOT", repository / bench_dir):
+                below = bench.run_origin(repository / bench_dir / name, None)
+            head = git_answer(repository, "rev-parse", "HEAD")
+        self.assertEqual(
+            {key: below.get(key) for key in ("commit", "repository_prefix", "cases_file",
+                                             "cases_file_modified", "uncommitted_changes")},
+            {"commit": head, "repository_prefix": f"{bench_dir}/",
+             "cases_file": f"{bench_dir}/{name}", "cases_file_modified": True,
+             "uncommitted_changes": True})
+
+    def test_a_dirty_file_outside_the_cone_is_found_under_a_toplevel_named_with_spaces(self):
+        """The sparse rules' answer, and the toplevel a left-out file is looked for under, are
+        read whole: stripped, the toplevel lost its edges, the file was not found there, and a
+        dirty file git left outside the cone read as no change (#2280 review)."""
+        edge = " \t"
+        with tempfile.TemporaryDirectory() as tmp:
+            repository = Path(tmp).resolve() / f"{edge}repo{edge}"
+            left_out = f"{edge}out{edge}/{edge}file{edge}"
+            for relative in ("kept/cases.json", left_out):
+                (repository / relative).parent.mkdir(parents=True, exist_ok=True)
+                (repository / relative).write_text("{}\n", encoding="utf-8")
+            git_answer(repository, "init", "--quiet")
+            git_commit(repository, "kept/cases.json", left_out)
+            (repository / left_out).write_text(EDITED, encoding="utf-8")
+            git_answer(repository, "sparse-checkout", "set", "kept")
+            self.assertTrue((repository / left_out).exists())
+            with mock.patch.object(bench, "ROOT", repository):
+                origin = bench.run_origin(repository / "kept" / "cases.json", None)
+        self.assertEqual((origin["cases_file"], origin["cases_file_modified"],
+                          origin["uncommitted_changes"]), ("kept/cases.json", False, True))
 
     def test_an_untracked_file_is_no_change_to_the_commit(self):
         """`uncommitted_changes` is about the files the commit holds: a stray draft changes no
@@ -2002,6 +2189,98 @@ class CheckoutOriginTest(unittest.TestCase):
         self.assertEqual(report_table(rendered, "## Configurations")["m"].get("origin"),
                          f"arm64 · macOS-26.0 · {'c' * 12} (modified ?) · "
                          f"cases.json (modified ?) · {FAKE_BINARY_VERSION} ({DIGEST[:12]})")
+
+
+# The functions through which the bench reads git: the only ones that may run it, and the
+# only ones whose answers the rest of the bench reads.
+GIT_READERS = ("_git_output", "_git_line", "_git_records")
+# Calls that rewrite what a command printed: none may touch a git answer.
+REWRITING_CALLS = ("strip", "rstrip", "lstrip", "splitlines")
+# What makes `subprocess` decode and translate what a command prints.
+DECODING_OPTIONS = ("text", "universal_newlines", "encoding", "errors")
+
+
+def bench_functions() -> "dict[str, ast.FunctionDef]":
+    """Every function the bench's module defines, by name, read by Python's own parser."""
+    tree = ast.parse(SCRIPT_PATH.read_text(encoding="utf-8"))
+    return {node.name: node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+
+
+def calls_in(function: ast.AST) -> "list[ast.Call]":
+    return [node for node in ast.walk(function) if isinstance(node, ast.Call)]
+
+
+def called_names(function: ast.AST) -> "set[str]":
+    """The functions and methods `function` calls, by name."""
+    return {getattr(call.func, "id", None) or getattr(call.func, "attr", None)
+            for call in calls_in(function)} - {None}
+
+
+def names_git(function: ast.AST) -> bool:
+    return any(isinstance(node, ast.Constant) and node.value == "git"
+               for node in ast.walk(function))
+
+
+def git_readers(functions: "dict[str, ast.FunctionDef]") -> "list[str]":
+    """The functions a git answer can reach: those that call a reader, and every bench
+    function they call in turn, which may be handed that answer."""
+    reached = {name for name, function in functions.items()
+               if name in GIT_READERS or called_names(function) & set(GIT_READERS)}
+    frontier = set(reached)
+    while frontier:
+        callees = {call.func.id for name in frontier for call in calls_in(functions[name])
+                   if isinstance(call.func, ast.Name)}
+        frontier = (callees & set(functions)) - reached
+        reached |= frontier
+    return sorted(reached)
+
+
+def rewriting_findings(name: str, function: ast.FunctionDef) -> "list[str]":
+    """The calls in `function` that rewrite a string: stripping, splitting lines or on spaces."""
+    findings = [f"{name} calls {call}" for call in sorted(called_names(function)
+                                                          & set(REWRITING_CALLS))]
+    return findings + [f"{name} splits on whitespace" for call in calls_in(function)
+                       if getattr(call.func, "attr", None) == "split" and not call.args]
+
+
+def git_answer_findings(functions: "dict[str, ast.FunctionDef]") -> "list[str]":
+    """Where the bench runs git other than in `_git_output`, or rewrites a git answer."""
+    findings = [f"{name} names git" for name, function in functions.items()
+                if name != "_git_output" and names_git(function)]
+    for name in git_readers(functions):
+        findings += rewriting_findings(name, functions[name])
+    return findings + [f"_run passes {keyword.arg}" for call in calls_in(functions["_run"])
+                       for keyword in call.keywords if keyword.arg in DECODING_OPTIONS]
+
+
+class GitAnswerGuardTest(unittest.TestCase):
+    """A git answer is read as git wrote it, by construction (#2280 review).
+
+    `.strip()` on git's answers misread a path beginning or ending with whitespace in three
+    rounds running, each fixing one call. So one function runs git and returns what it printed
+    decoded and untranslated (`_git_output`), two read a line or a `-z` listing from that, and
+    this guard fails when another function names git, or a reader rewrites an answer.
+    """
+
+    def test_no_function_reads_git_but_through_its_readers(self):
+        self.assertEqual(git_answer_findings(bench_functions()), [])
+
+    def test_the_guard_refuses_each_way_around_the_readers(self):
+        """Its refusals, each proven on the bench's own functions with one line added."""
+        mutants = {
+            "a reader strips": ("_committed_path", "relative.strip()"),
+            "a function handed an answer strips": ("_cases_origin", "relative.rstrip()"),
+            "a reader splits lines": ("_materialized", "top.splitlines()"),
+            "git run directly": ("launched_binary", "subprocess.run(['git', 'status'])"),
+            "decoded as text": ("_run", "subprocess.run([], text=True)"),
+            "split on whitespace": ("_changed", "commit.split()"),
+        }
+        for label, (name, line) in mutants.items():
+            with self.subTest(label):
+                functions = bench_functions()
+                self.assertEqual(git_answer_findings(functions), [])
+                functions[name].body.insert(0, ast.parse(line).body[0])
+                self.assertNotEqual(git_answer_findings(functions), [])
 
 
 # -------------------------------------------------------------- row per file --

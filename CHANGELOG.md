@@ -118,14 +118,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sha256; the host, the commit and whether a file it holds differed from it in
   the working tree, asked of the commit rather than git's index (a file a
   sparse checkout leaves out counts only while it is still in the working
-  tree); the
-  cases file by its path in the repository, only when the recorded commit
+  tree), and where the bench's checkout sits below that repository's root; the
+  cases file by its path from that root, only when the recorded commit
   holds it, and whether it differed from that commit; when the run started; and the suite it
   ran, as a case count and a digest of what that phase's scorer reads of each
   case, in the order that can move its counts: none for screening, the order an
   end-to-end run writes and reads its passages in. A question left unanswered,
   or answered in a shape Ollama does not give, is written as null with the
-  reason. The report prints each row's provenance and origin, or `unverified`
+  reason. Git's answers are read as git wrote them, never stripped, so a path
+  that begins or ends with whitespace is read whole, and a SIGTERM stops git
+  together with whatever git started, such as a clean filter (#2296). The report prints each row's provenance and origin, or `unverified`
   with the first reason its file records and `unrecorded`, counts the runs
   behind each row, and flags rows that sum different numbers of runs or cover
   different suites: the reference screened

@@ -66,6 +66,7 @@ import ssl
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unicodedata
 import urllib.error
@@ -1381,72 +1382,151 @@ NO_COMMIT = "no commit was recorded to compare it with"
 ANSWER_TIMEOUT_S = 30
 
 
-def _answer(argv: "list[str]", command: str, env: "dict[str, str] | None" = None,
-            feed: str = "", raw: bool = False) -> "tuple[str | None, str | None]":
-    """What a command prints, or why there is nothing: `command` names it in the reason.
-
-    Its input is `feed`, then closed, so a binary that reads it instead of answering
-    the flag it is asked ends rather than waiting on the bench's terminal. It has
-    `ANSWER_TIMEOUT_S` to answer; past that it is killed, and the reason says so.
-    What it prints is stripped, unless `raw`: a `-z` listing is read as written, since
-    a path may begin with a space.
-    """
-    try:
-        done = subprocess.run(argv, capture_output=True, text=True, env=env,
-                              timeout=ANSWER_TIMEOUT_S, input=feed)
-    except (OSError, subprocess.SubprocessError) as exc:
-        if isinstance(exc, subprocess.TimeoutExpired):
-            return None, f"{command} did not answer within {ANSWER_TIMEOUT_S} s"
-        return None, f"{command} did not run ({type(exc).__name__})"
-    if done.returncode != 0:
-        return None, f"{command} exited {done.returncode}"
-    return (done.stdout if raw else done.stdout.strip()), None
-
-
-def _git(*argv: str, env: "dict[str, str] | None" = None, feed: str = "",
-         raw: bool = False) -> "tuple[str | None, str | None]":
-    """One answer from git about the checkout this script runs from, or why there is none."""
-    return _answer(["git", "-C", str(ROOT), *argv], f"git {' '.join(argv)}", env, feed, raw)
-
-
-def _paths(listing: str) -> "frozenset[str]":
-    """The paths a git command printed with `-z`, one per NUL."""
-    return frozenset(filter(None, listing.split("\0")))
-
-
 class _Terminated(BaseException):
-    """SIGTERM, raised where it lands so that what a `with` or a `finally` holds is released.
+    """A SIGTERM, raised once the command it stopped has ended, so that what a `with` or a
+    `finally` holds is released.
 
     Not `SystemExit`: the bench is no gate, and ends by no exit status of its own.
     """
 
 
-def _raise_terminated(_signum: int, _frame: object) -> None:
-    raise _Terminated
+class _Termination:
+    """What the bench's SIGTERM handler knows while it is installed (`_ends_by_sigterm`): the
+    process groups of the commands running, which it stops, and whether a SIGTERM came."""
+
+    def __init__(self) -> None:
+        self.requested = False
+        self.groups: "set[int]" = set()
+
+
+_TERMINATION = _Termination()
+
+
+def _stop_group(group: int) -> None:
+    """Kill every process in `group`: a command, and whatever it started, such as a clean
+    filter git runs (#2296). A group already gone is nothing to stop."""
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.killpg(group, signal.SIGKILL)
+
+
+def _on_sigterm(_signum: int, _frame: object) -> None:
+    """Note the SIGTERM and stop the commands running; raise nothing here.
+
+    An exception raised where the signal lands could land inside the removal of a scratch
+    directory and leave it behind (#2280 review). The command stopped, `_run` raises
+    `_Terminated` where the bench is between two steps.
+    """
+    _TERMINATION.requested = True
+    for group in tuple(_TERMINATION.groups):
+        _stop_group(group)
 
 
 @contextlib.contextmanager
-def _cleans_up_on_sigterm():
-    """SIGTERM, while this lasts, first releases what the `with` blocks inside it hold,
-    then ends the process by the signal itself, as it would have ended outside (#1949).
+def _ends_by_sigterm():
+    """A SIGTERM, while this lasts, stops the commands running, lets what the `with` blocks
+    inside it hold be released, then ends the process by the signal itself, as it would have
+    ended outside (#1949).
 
-    Python's default handler ends the process at once, and a scratch directory a `with`
-    holds is left behind. The bench runs this from its main thread, the one a handler
-    can be set from.
+    Python's default disposition ends the process at once: a scratch directory a `with` holds
+    is left behind, and a command started in a process group of its own runs on. Installed
+    only over that default, and only by the outermost span: a disposition the caller chose,
+    `SIG_IGN` among them, stays the caller's (#2280 review). A handler can only be set from
+    the main thread, and the bench runs there.
     """
-    previous = signal.signal(signal.SIGTERM, _raise_terminated)
+    if (signal.getsignal(signal.SIGTERM) is not signal.SIG_DFL
+            or threading.current_thread() is not threading.main_thread()):
+        yield
+        return
+    _TERMINATION.requested = False
+    signal.signal(signal.SIGTERM, _on_sigterm)
     try:
         yield
-    except _Terminated:
-        signal.signal(signal.SIGTERM, signal.SIG_DFL)
-        os.kill(os.getpid(), signal.SIGTERM)
-        raise
     finally:
-        signal.signal(signal.SIGTERM, previous)
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        if _TERMINATION.requested:
+            os.kill(os.getpid(), signal.SIGTERM)
+
+
+def _stop_command(child: subprocess.Popen) -> None:
+    """Stop a command that has not answered, with its whole group, and reap it without
+    reading what it printed: a process that escaped the group may hold its output open."""
+    _stop_group(child.pid)
+    for stream in (child.stdin, child.stdout, child.stderr):
+        with contextlib.suppress(OSError):
+            stream.close()
+    child.wait()
+
+
+def _run(argv: "list[str]", command: str, env: "dict[str, str] | None" = None,
+         feed: bytes = b"") -> "tuple[bytes | None, str | None]":
+    """The bytes a command prints, untouched, or why there are none: `command` names it in
+    the reason.
+
+    Its input is `feed`, then closed, so a binary that reads it instead of answering the flag
+    it is asked ends rather than waiting on the bench's terminal. It runs in a process group
+    of its own, stopped whole when it has not answered within `ANSWER_TIMEOUT_S`, when the
+    bench is interrupted, or on a SIGTERM (`_ends_by_sigterm`): killing the command alone
+    left what it had started running (#2296).
+    """
+    with _ends_by_sigterm():
+        try:
+            child = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE, env=env, process_group=0)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return None, f"{command} did not run ({type(exc).__name__})"
+        _TERMINATION.groups.add(child.pid)
+        try:
+            if _TERMINATION.requested:
+                _stop_group(child.pid)
+            output, _ = child.communicate(feed, timeout=ANSWER_TIMEOUT_S)
+        except BaseException as exc:
+            _stop_command(child)
+            if not isinstance(exc, subprocess.TimeoutExpired):
+                raise
+            return None, f"{command} did not answer within {ANSWER_TIMEOUT_S} s"
+        finally:
+            _TERMINATION.groups.discard(child.pid)
+        if _TERMINATION.requested:
+            raise _Terminated
+    if child.returncode != 0:
+        return None, f"{command} exited {child.returncode}"
+    return output, None
+
+
+def _git_output(*argv: str, env: "dict[str, str] | None" = None,
+                feed: str = "") -> "tuple[str | None, str | None]":
+    """Git's answer about the checkout this script runs from, exactly as git printed it, or
+    why there is none.
+
+    The one place the bench runs git. What git prints is decoded as the file system names
+    paths (`os.fsdecode`), and neither stripped nor its line endings translated: a path may
+    begin or end with a space or a tab, or hold a carriage return. Stripping git's answers
+    misread such paths in three rounds running, one call at a time (#2280 review); a test
+    now refuses any other function that names git, and any rewriting of what these return.
+    Read a one-line answer with `_git_line`, a `-z` listing with `_git_records`.
+    """
+    output, gap = _run(["git", "-C", str(ROOT), *argv], f"git {' '.join(argv)}", env,
+                       os.fsencode(feed))
+    return (None, gap) if output is None else (os.fsdecode(output), None)
+
+
+def _git_line(*argv: str) -> "tuple[str | None, str | None]":
+    """A one-line git answer, less only the newline git ends that line with."""
+    output, gap = _git_output(*argv)
+    return (None, gap) if output is None else (output.removesuffix("\n"), None)
+
+
+def _git_records(*argv: str, env: "dict[str, str] | None" = None,
+                 feed: str = "") -> "tuple[tuple[str, ...] | None, str | None]":
+    """The records of a `-z` git answer, each as git wrote it: git ends every one with a NUL."""
+    output, gap = _git_output(*argv, env=env, feed=feed)
+    if output is None:
+        return None, gap
+    return (tuple(output.removesuffix("\0").split("\0")) if output else ()), None
 
 
 def _in_repository(path: Path) -> "str | None":
-    """`path` relative to the repository, or None when it lies outside it."""
+    """`path` relative to the bench's checkout, or None when it lies outside it."""
     try:
         return path.resolve().relative_to(ROOT).as_posix()
     except ValueError:
@@ -1460,8 +1540,8 @@ def _literal(path: str) -> str:
 
 
 def _committed_path(path: Path, commit: "str | None") -> "tuple[str | None, str | None]":
-    """`path` relative to the repository if the recorded `commit` holds a file there; or
-    None, and why it holds none.
+    """`path` relative to the bench's checkout if the recorded `commit` holds a file there;
+    or None, and why it holds none.
 
     The commit is asked, not git's index, which can disagree with it both ways: a
     file staged but not committed is at no commit, and one committed then taken out
@@ -1473,30 +1553,33 @@ def _committed_path(path: Path, commit: "str | None") -> "tuple[str | None, str 
         return None, OUTSIDE_REPOSITORY
     if not commit:
         return None, NO_COMMIT
-    entry, gap = _git("ls-tree", commit, "--", _literal(relative))
-    fields = (entry or "").partition("\t")[0].split()
-    if fields[1:2] != ["blob"]:
+    entries, gap = _git_records("ls-tree", "-z", commit, "--", _literal(relative))
+    header = (entries or ("",))[0].partition("\t")[0]
+    if header.split(" ")[1:2] != ["blob"]:
         return None, gap or NOT_AT_COMMIT
     return relative, None
 
 
-def _cases_origin(cases_file: Path, commit: "str | None", changed: "frozenset[str] | None",
-                  changed_gap: "str | None") -> "tuple[dict, dict]":
+def _cases_origin(cases_file: Path, commit: "str | None",
+                  prefix: "tuple[str | None, str | None]",
+                  changed: "tuple[frozenset[str] | None, str | None]") -> "tuple[dict, dict]":
     """The cases file as `origin` records it, and why each field it leaves null is null.
 
-    Whether it differs is read from the comparison `uncommitted_changes` comes from
-    (`_changed`): one comparison answers both, so the two cannot disagree. That
-    comparison names paths from the repository's root, which ROOT may sit below, so the
-    cases file is looked for under the prefix `rev-parse --show-prefix` names.
+    It is named from the root of the repository whose commit is recorded, which the bench's
+    checkout may sit below at `prefix` (`rev-parse --show-prefix`), so the commit and the path
+    name the file together (#2296). Whether it differs is read from the comparison
+    `uncommitted_changes` comes from (`_changed`), which names paths from that same root: one
+    comparison answers both, so the two cannot disagree.
     """
     fields = ("cases_file", "cases_file_modified")
     relative, gap = _committed_path(cases_file, commit)
-    if relative is None:
-        return dict.fromkeys(fields), dict.fromkeys(fields, gap)
-    prefix, prefix_gap = _git("rev-parse", "--show-prefix")
-    modified = None if changed is None or prefix is None else f"{prefix}{relative}" in changed
-    return (dict(zip(fields, (relative, modified))),
-            {"cases_file_modified": changed_gap or prefix_gap})
+    below, prefix_gap = prefix
+    if relative is None or below is None:
+        return dict.fromkeys(fields), dict.fromkeys(fields, gap or prefix_gap)
+    named = f"{below}{relative}"
+    files, files_gap = changed
+    return ({"cases_file": named, "cases_file_modified": None if files is None else named in files},
+            {"cases_file_modified": files_gap})
 
 
 def _materialized(paths: "frozenset[str]") -> "tuple[frozenset[str] | None, str | None]":
@@ -1507,21 +1590,21 @@ def _materialized(paths: "frozenset[str]") -> "tuple[frozenset[str] | None, str 
     where it is, and that one still counts (#1949). Paths are named from the repository's
     root, and looked for there. Outside a sparse checkout, every path counts.
     """
-    sparse, _ = _git("config", "--bool", "core.sparseCheckout")
+    sparse, _ = _git_line("config", "--bool", "core.sparseCheckout")
     if sparse != "true" or not paths:
         return paths, None
-    kept, gap = _git("sparse-checkout", "check-rules", "-z", feed="\0".join(sorted(paths)),
-                     raw=True)
-    top, top_gap = _git("rev-parse", "--show-toplevel")
+    kept, gap = _git_records("sparse-checkout", "check-rules", "-z",
+                             feed="\0".join(sorted(paths)) + "\0")
+    top, top_gap = _git_line("rev-parse", "--show-toplevel")
     if kept is None or top is None:
         return None, gap or top_gap
-    return paths - {path for path in paths - _paths(kept)
+    return paths - {path for path in paths - frozenset(kept)
                     if not os.path.lexists(Path(top, path))}, None
 
 
 def _changed(commit: "str | None") -> "tuple[frozenset[str] | None, str | None]":
     """The files the recorded `commit` holds that differ from it in the working tree, or
-    are missing; or why git did not say.
+    are missing, named from the repository's root; or why git did not say.
 
     Asked of the commit through an index of its own, never the checkout's: `read-tree`
     fills a scratch index with the commit, `update-index --refresh` hashes each working
@@ -1531,20 +1614,23 @@ def _changed(commit: "str | None") -> "tuple[frozenset[str] | None, str | None]"
     `--skip-worktree`, and `hash-object`, which reads no index, normalises a CRLF file
     that `text=auto` leaves as committed (#1949). A clean file a sparse checkout's rules
     leave out, and git removed, is not missing (`_materialized`). An untracked file is
-    not counted: it changes no committed code. A SIGTERM on the way still removes the
-    scratch index before it ends the process (`_cleans_up_on_sigterm`).
+    not counted: it changes no committed code. A SIGTERM on the way stops git, and whatever
+    git started, and still removes the scratch index before it ends the process
+    (`_ends_by_sigterm`).
     """
     if not commit:
         return None, NO_COMMIT
-    with (_cleans_up_on_sigterm(),
+    with (_ends_by_sigterm(),
           tempfile.TemporaryDirectory(prefix="velesdb-bench-index-") as scratch):
         env = {**os.environ, "GIT_INDEX_FILE": str(Path(scratch) / "index")}
-        for argv in (("read-tree", commit), ("update-index", "-q", "--refresh"),
-                     ("diff-files", "--name-only", "-z")):
-            answer, gap = _git(*argv, env=env, raw=True)
+        for argv in (("read-tree", commit), ("update-index", "-q", "--refresh")):
+            _, gap = _git_output(*argv, env=env)
             if gap:
                 return None, gap
-        return _materialized(_paths(answer))
+        changed, gap = _git_records("diff-files", "--name-only", "-z", env=env)
+    if changed is None:
+        return None, gap
+    return _materialized(frozenset(changed))
 
 
 def _sha256_of(path: Path) -> "tuple[str | None, str | None]":
@@ -1565,13 +1651,15 @@ def launched_binary(binary: Path) -> dict:
     it, on PATH when named bare, so the file hashed is the file run. Its path is
     recorded relative to the repository, where a build leaves it untracked: its
     sha256, not a commit, identifies it. One outside the repository is null.
-    Whatever goes unanswered stays null, with the reason under `missing`.
+    Whatever goes unanswered stays null, with the reason under `missing`. What it prints
+    is read as UTF-8, a byte that is not replaced rather than raised out of the run.
     """
     found = Path(shutil.which(str(binary)) or binary)
-    printed, version_gap = _answer([str(found), "--version"], f"{found.name} --version")
+    printed, version_gap = _run([str(found), "--version"], f"{found.name} --version")
+    text = printed.decode("utf-8", "replace").strip() if printed else ""
     digest, digest_gap = _sha256_of(found)
     record = {"path": _in_repository(found),
-              "version": printed.splitlines()[0] if printed else None,
+              "version": text.splitlines()[0] if text else None,
               "sha256": digest}
     reasons = {"path": OUTSIDE_REPOSITORY,
                "version": version_gap or f"{found.name} --version printed nothing",
@@ -1609,7 +1697,11 @@ def run_origin(cases_file: Path, binary: "dict | None") -> dict:
     local worktree path (#1949). A commit alone would claim that the code at it
     ran, so `uncommitted_changes` says whether the working files differed from it
     (`_changed`).
-    The cases file is recorded by its path in the repository, and only if the
+    The commit is that of the repository git finds from the bench's checkout, which
+    may sit below its root: `repository_prefix` records where (`rev-parse
+    --show-prefix`, empty at the root), so a bench copied into another repository
+    says so (#2296).
+    The cases file is recorded by its path from that root, and only if the
     recorded commit holds it as a file, with `cases_file_modified` saying whether
     its content differs from that file (`_cases_origin`); otherwise both are null,
     with the reason.
@@ -1618,20 +1710,23 @@ def run_origin(cases_file: Path, binary: "dict | None") -> dict:
     built elsewhere: `binary` records it (`launched_binary`, `served_binary`),
     and is None for a phase that drives none.
     """
-    commit, commit_gap = _git("rev-parse", "HEAD")
-    changed, changed_gap = _changed(commit)
-    cases, cases_reasons = _cases_origin(cases_file, commit, changed, changed_gap)
+    commit, commit_gap = _git_line("rev-parse", "HEAD")
+    prefix, prefix_gap = _git_line("rev-parse", "--show-prefix")
+    changed = _changed(commit)
+    cases, cases_reasons = _cases_origin(cases_file, commit, (prefix, prefix_gap), changed)
     origin = {
         "machine": platform.machine() or None,
         "os": platform.platform(terse=True) or None,
         "commit": commit or None,
-        "uncommitted_changes": None if changed is None else bool(changed),
+        "repository_prefix": prefix,
+        "uncommitted_changes": None if changed[0] is None else bool(changed[0]),
         **cases,
     }
     reasons = {"machine": "the platform names no machine",
                "os": "the platform names no system",
                "commit": commit_gap or "git rev-parse HEAD named no commit",
-               "uncommitted_changes": changed_gap,
+               "repository_prefix": prefix_gap,
+               "uncommitted_changes": changed[1],
                **cases_reasons}
     missing = {key: reasons[key] for key, value in origin.items() if value is None}
     return {**origin, "binary": binary, "missing": missing}
