@@ -41,8 +41,11 @@ fs2 = { version = "0.4", optional = true }
 # dependency follows `persistence`, so wasm/no-default consumers do not carry
 # filesystem code.
 tempfile = { workspace = true, optional = true }
-# Pinned to rmcp's schemars (1.2.x) so domain types and MCP DTOs share one
-# JsonSchema derive — no duplicate wire/domain structs.
+# Same `schemars` as rmcp, so domain types and MCP DTOs share one JsonSchema
+# derive — no duplicate wire/domain structs. That sharing comes from Cargo
+# unifying two caret requirements, not from this floor: rmcp 3.1.0 asks only
+# for `^1` (`cargo update -p schemars --precise 1.0.0` resolves here). 1.0.2 is
+# the lowest 1.x this crate's own minimal-versions resolve selects.
 schemars = "1.0.2"
 # The MCP server stack — optional, behind the (default) `mcp` feature. Library
 # consumers (e.g. the language bindings) build with `default-features = false`
@@ -105,8 +108,14 @@ futures = { version = "0.3", optional = true }
 rcgen = { version = "0.14", optional = true, features = ["x509-parser"] }
 # `CertificateParams::not_before`/`not_after` are `time::OffsetDateTime` —
 # rcgen's own public field type, not re-exported, so constructing "now" and
-# "now + N days" needs `time` directly. Version pinned to match rcgen's own
-# `^0.3.6` requirement.
+# "now + N days" needs `time` directly. rcgen 0.14.0 asks for `^0.3.6` itself,
+# but the `x509-parser` feature enabled above pulls x509-parser 0.17.0, which
+# asks for `^0.3.35`, so this crate's own resolve accepts nothing below 0.3.35
+# (`cargo update -p time --precise 0.3.6` fails on that requirement,
+# `--precise 0.3.35` succeeds). 0.3.47 is above it — it comes from
+# a resolve of the whole workspace, where `plist` requires it — and is kept
+# rather than lowered because no build at 0.3.35 backs the lower number yet;
+# see the root CHANGELOG's #1987 entry.
 time = { version = "0.3.47", optional = true }
 # TLS termination for the HTTP transport — same stack `velesdb-server`
 # already uses (`src/tls.rs` there), reused here rather than adding

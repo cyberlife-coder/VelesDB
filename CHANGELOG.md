@@ -660,9 +660,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   why a Linux-only check never saw it. A consumer who holds one of these crates
   below its new floor has to update it. Several floors are still above what
   `velesdb-core`'s or `velesdb-memory`'s own resolve needs (`serde` needs
-  1.0.220, `serde_json` 1.0.127, `time` 0.3.6 there): they come from a resolve
+  1.0.220, `serde_json` 1.0.127, `time` 0.3.35 there): they come from a resolve
   of the whole workspace, and lowering one needs a build at the lower version
-  to back it, which the per-crate job now makes possible.
+  to back it, which the per-crate job now makes possible. `time`'s figure is
+  `x509-parser`'s, reached through rcgen — not rcgen's own `^0.3.6`, which its
+  `x509-parser` feature raises.
 
 - **BREAKING (REST, VelesQL, bindings) — an unparseable search `mode` now
   fails instead of running silently at the default quality (#2267).**

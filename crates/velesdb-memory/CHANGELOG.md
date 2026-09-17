@@ -61,14 +61,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Dependency floors the crate can actually be built with (#1987).**
-  `tempfile` takes the workspace's 3.14 (the old "3" could never be selected
-  next to velesdb-core's), `ureq` 2.5.0 (the first 2.x with a public
-  `Transport::kind()` and a bounded `rustls`), `tracing` 0.1.39 (0.1.37 and
-  0.1.38 drop the `%` of the HTTP request log's first field), and `hyper`,
-  `hyper-util`, `parking_lot`, `rustls`, `schemars` and `time` the versions the
-  rest of the graph already requires. A consumer holding one of them lower has
-  to update it.
+- **Dependency floors the crate can actually be built with (#1987).** Each was
+  measured on this crate's own resolve — the workspace cut down to it, as the
+  `minimal-versions` job does — and not on a resolve of every workspace member.
+  Seven are exactly what that graph requires: `tempfile` 3.14 (the workspace
+  bound velesdb-core declares; the old "3" could never be selected next to it),
+  `reqwest` 0.13.2 and `ureq` 2.5.0 and `parking_lot` 0.12.3 (velesdb-core
+  again), `hyper` 1.6.0 (hyper-util 0.1.12 requires it), and, through the
+  `reqwest` dev-dependency, `hyper-util` 0.1.12 and `rustls` 0.23.27
+  (rustls-platform-verifier 0.6.2). Two are above what it requires and are
+  declared so deliberately: `schemars` 1.0.2, where rmcp 3.1.0 asks only for
+  `^1`, and `time` 0.3.47, where rcgen's `x509-parser` requires `^0.3.35`.
+  `ureq` and `tracing` also carry a compile reason: 2.x before 2.4.0 has no
+  public `Transport::kind()` and 2.4.0 leaves its `rustls` bound open, and
+  `tracing` 0.1.37 and 0.1.38 drop the `%` of the HTTP request log's first
+  field, so 0.1.39. A consumer holding one of them lower has to update it.
 
 ## [0.14.2] - 2026-09-03
 
