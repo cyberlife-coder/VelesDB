@@ -432,8 +432,11 @@ mod unlink {
             ("see [the point](crate::Point) here", "see the point here"),
             ("see [the point][crate::Point] here", "see the point here"),
             ("see [crate::Point] here", "see crate::Point here"),
-            ("see [fn@stream] here", "see fn@stream here"),
+            ("see [fn@stream] here", "see stream here"),
+            ("see [method@Foo::bar] here", "see Foo::bar here"),
+            ("see [struct@ Foo][] here", "see Foo here"),
             ("see [stream()] here", "see stream() here"),
+            ("see [c](crate::Foo#method.bar) here", "see c here"),
             (
                 "see *[the point](crate::Point)* here",
                 "see *the point* here",
@@ -446,8 +449,43 @@ mod unlink {
                 "see [the recollection][rec].\n\n[rec]: crate::Recollection\n",
                 "see the recollection.\n\n",
             ),
+            (
+                "> see [z].\n>\n> [z]: crate::Z\n> more",
+                "> see z.\n>\n> more",
+            ),
         ] {
             assert_rewritten(text, shown);
+        }
+    }
+
+    /// rustdoc 1.90 reads every bracketed item path as an intra-doc link and
+    /// warns when it does not resolve (`[optional]`, `map[key]`: "unresolved
+    /// link to `optional`"), so a doc comment CI builds with `-D warnings`
+    /// holds one only when it resolves. The rewrite and the guard read a bare
+    /// `[Name]` the same way.
+    #[test]
+    fn a_bare_item_path_is_a_rustdoc_link() {
+        for (text, shown) in [
+            (
+                "see [SegmentInfo] and [struct@SegmentInfo].",
+                "see SegmentInfo and SegmentInfo.",
+            ),
+            (
+                "see [a::B] and [Recollection][]",
+                "see a::B and Recollection",
+            ),
+            ("this is [optional] here", "this is optional here"),
+        ] {
+            assert_rewritten(text, shown);
+        }
+    }
+
+    /// rustdoc resolves no intra-doc link in an image or an autolink, so the
+    /// rewrite leaves both, and the guard fails on an item path there.
+    #[test]
+    fn an_image_or_an_autolink_to_an_item_path_is_left_and_flagged() {
+        for text in ["an image ![alt](crate::X) here", "see <crate::X> here"] {
+            assert_refused(text);
         }
     }
 
@@ -467,9 +505,9 @@ mod unlink {
             "~~~\n[x](crate::y)\n~~~",
             "Example:\n\n    let w = [`crate::X`];",
             "see \\[`crate::X`\\] here",
-            "in [0, 1] and map[key] and fragments[i]",
-            "a bare [Recollection] reads like [sic]",
-            "the list [`asc`, `desc`] and m[i]",
+            "in [0, 1] and [1, 2] on [YYYY-MM-DD], item [0]",
+            "the list [`asc`, `desc`] and [a b]",
+            "an image ![logo](https://x.dev/a.png) and <ops@x.dev>",
         ] {
             assert_eq!(unlink_rustdoc(text), None, "{text:?}");
             assert_eq!(rustdoc_links(text), Vec::<String>::new(), "{text:?}");

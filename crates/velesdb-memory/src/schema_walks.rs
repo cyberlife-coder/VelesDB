@@ -109,12 +109,14 @@ const MARKDOWN: Options = Options::ENABLE_TABLES
 /// (``[`X`](crate::X)``), a link to a definition (`[x][y]` or `[x]` with
 /// `[y]: crate::X`), and a reference no definition resolves, which the
 /// broken-link callback accepts as a link the way rustdoc finds intra-doc
-/// links ([`resolve_rustdoc_reference`]). A web link, a relative URL and a
-/// bare `[name]` stay. The link becomes its text as written:
-/// ``[`X`](crate::X)`` becomes `` `X` ``, `[the point](crate::X)` becomes
-/// `the point`, and a shortcut code link drops its disambiguator
-/// (``[`fn@f`]`` becomes `` `f` ``), as rustdoc shows it. A definition of an
-/// item path is removed.
+/// links ([`resolve_rustdoc_reference`]); a `#` fragment after the path is
+/// allowed. A web link, a relative URL, an image, an autolink and prose
+/// brackets that name no item (`[0, 1]`) stay. The link becomes its text as
+/// written: ``[`X`](crate::X)`` becomes `` `X` ``, `[the point](crate::X)`
+/// becomes `the point`, and a shortcut or collapsed link drops its
+/// disambiguator (``[`fn@f`]`` becomes `` `f` ``, `[struct@Foo]` becomes
+/// `Foo`), as rustdoc shows it. A definition of an item path is removed with
+/// its line, block quote markers included.
 ///
 /// Fail closed by construction: the rewritten text is parsed again, and it
 /// must read as the original with those links' tags dropped, event for event,
@@ -182,37 +184,47 @@ fn link_source(text: &str, link_type: LinkType, range: &Range<usize>) -> Range<u
     range.start..range.end + if collapsed { COLLAPSED.len() } else { 0 }
 }
 
-/// A definition's `span`, with the line ending after it: removing the
-/// definition removes its line.
+/// A definition's `span`, widened to its whole line: the line ending after
+/// it, and the block quote markers before it (`> [z]: crate::Z`), which
+/// would otherwise stay as a line of their own. Anything else before it on
+/// the line is kept, and the round trip in [`unlink_rustdoc`] judges the
+/// result.
 fn with_its_line_ending(text: &str, span: &Range<usize>) -> Range<usize> {
+    let line_start = text[..span.start]
+        .rfind(LINE_ENDINGS)
+        .map_or(0, |ending| ending + 1);
+    let only_quote_markers = text[line_start..span.start]
+        .chars()
+        .all(|c| c == '>' || c == ' ');
+    let start = if only_quote_markers {
+        line_start
+    } else {
+        span.start
+    };
     let rest = &text[span.end..];
     let ending = ["\r\n", "\n", "\r"]
         .iter()
         .find(|ending| rest.starts_with(**ending))
         .map_or(0, |ending| ending.len());
-    span.start..span.end + ending
+    start..span.end + ending
 }
+
+/// The characters that end a line in Markdown.
+const LINE_ENDINGS: [char; 2] = ['\n', '\r'];
 
 fn parse(text: &str) -> Parser<'_, impl BrokenLinkCallback<'_>> {
     Parser::new_with_broken_link_callback(text, MARKDOWN, Some(resolve_rustdoc_reference))
 }
 
 /// The broken-link callback: a reference no definition resolves is a link
-/// when rustdoc would resolve it as an item. A reference-style link
-/// (`[text][crate::X]`) names its target, so a path is enough. A shortcut or
-/// collapsed link (`[X]`, `[X][]`) is also prose (`map[key]`, `[sic]`), so it
-/// must be code, hold `::`, or carry a disambiguator (``[`X`]``, `[a::B]`,
-/// `[fn@f]`, `[f()]`). A bare `[Name]` stays: rustdoc may resolve it, but it
-/// reads as bracketed prose.
+/// when its label reads as an item path, whatever its form (``[`X`]``,
+/// `[X]`, `[a::B]`, `[fn@f]`, `[f()]`, `[X][]`, `[text][crate::X]`). That is
+/// how rustdoc 1.90 reads it: a bare `[optional]` or the `[key]` of
+/// `map[key]` is an intra-doc link it warns about when it does not resolve,
+/// so a doc comment CI documents with `-D warnings` holds one only when it
+/// does. Prose brackets that are no path (`[0, 1]`, `[a b]`) stay.
 fn resolve_rustdoc_reference(link: BrokenLink<'_>) -> Option<(CowStr<'_>, CowStr<'_>)> {
-    let label = link.reference.trim();
-    let is_link = is_rustdoc_target(label)
-        && (link.link_type == LinkType::Reference
-            || label.starts_with('`')
-            || label.contains("::")
-            || without_disambiguator(label).is_some()
-            || CALL_SUFFIXES.iter().any(|suffix| label.ends_with(suffix)));
-    is_link.then_some((link.reference, CowStr::Borrowed("")))
+    is_rustdoc_target(&link.reference).then_some((link.reference, CowStr::Borrowed("")))
 }
 
 /// Whether a link of `link_type` to `destination` is a rustdoc link. A link
@@ -238,7 +250,8 @@ fn is_rustdoc_target(target: &str) -> bool {
         .strip_prefix('`')
         .and_then(|code| code.strip_suffix('`'))
         .map_or(target, str::trim);
-    let path = without_disambiguator(target).unwrap_or(target);
+    let item = target.split_once('#').map_or(target, |(item, _)| item);
+    let path = without_disambiguator(item).unwrap_or(item);
     let path = CALL_SUFFIXES
         .iter()
         .find_map(|suffix| path.strip_suffix(suffix))
@@ -294,10 +307,19 @@ fn link_text<'a>(
             | LinkType::Collapsed
             | LinkType::CollapsedUnknown
     );
-    if let [(Event::Code(code), _)] = inner {
-        if let Some(path) = without_disambiguator(code).filter(|_| names_its_target) {
-            let shown = source.replacen(&**code, path, 1);
-            return (shown, vec![Event::Code(CowStr::from(path.to_owned()))]);
+    if names_its_target {
+        if let [(Event::Code(code), _)] = inner {
+            if let Some(path) = without_disambiguator(code) {
+                let shown = source.replacen(&**code, path, 1);
+                return (shown, vec![Event::Code(CowStr::from(path.to_owned()))]);
+            }
+        }
+        let label = merged_text(inner.iter().map(|(event, _)| event.clone()));
+        if let [Event::Text(label)] = label.as_slice() {
+            if let Some(path) = without_disambiguator(label.trim()) {
+                let shown = path.to_owned();
+                return (shown.clone(), vec![Event::Text(CowStr::from(shown))]);
+            }
         }
     }
     let events = inner.iter().map(|(event, _)| event.clone()).collect();

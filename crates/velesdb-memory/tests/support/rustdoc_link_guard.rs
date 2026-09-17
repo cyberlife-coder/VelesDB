@@ -10,15 +10,17 @@
 // `src/schema_walks.rs` does, but decides on its own, and more broadly: its
 // broken-link callback accepts every reference, so it sees each bracket
 // Markdown could read as a link, and it flags
-// - a link to anything but an `http`, `https` or `mailto` URL or a fragment
-//   (`[x](crate::y)`, `[x](../y.html)`), whatever its text;
-// - a reference-style link or collapsed link no definition resolves (`[x][y]`,
-//   `[x][]`);
-// - a shortcut link whose label is code, holds `::` or `@`, or ends in `()` or
-//   `!` (`` [`X`] ``, `[a::B]`, `[fn@f]`, `[f()]`);
+// - a link, an autolink or an image to anything but an `http`, `https` or
+//   `mailto` URL or a fragment (`[x](crate::y)`, `[x](../y.html)`,
+//   `<crate::y>`, `![x](crate::y)`), whatever its text;
+// - a reference-style link no definition resolves (`[x][y]`);
+// - a shortcut or collapsed link no definition resolves whose label reads as an
+//   item path, which rustdoc 1.90 treats as an intra-doc link and warns about
+//   when it does not resolve (`` [`X`] ``, `[X]`, `[optional]`, `[a::B]`,
+//   `[fn@f]`, `[f()]`, `[X][]`);
 // - a reference definition to anything but such a URL (`[x]: crate::y`).
 // Code spans, code blocks and escaped brackets hold no link, so it passes
-// them, and it passes a bare `[name]`, which reads as prose.
+// them, and it passes prose brackets that name no item (`[0, 1]`, `[a b]`).
 
 use pulldown_cmark::{BrokenLink, CowStr, Event, LinkType, Options, Parser, Tag};
 use serde_json::Value;
@@ -45,15 +47,19 @@ pub fn rustdoc_links(text: &str) -> Vec<String> {
         .map(|(_, definition)| text[definition.span.clone()].to_owned())
         .collect();
     for (event, range) in parser {
-        if let Event::Start(Tag::Link {
-            link_type,
-            dest_url,
-            ..
-        }) = event
-        {
-            if is_rustdoc_link(link_type, &dest_url) {
-                found.push(text[range].to_owned());
-            }
+        let flagged = match event {
+            Event::Start(Tag::Link {
+                link_type,
+                dest_url,
+                ..
+            }) => is_rustdoc_link(link_type, &dest_url),
+            // rustdoc resolves no intra-doc link in an image, but an item
+            // path there is still no address a client can load.
+            Event::Start(Tag::Image { dest_url, .. }) => !is_publishable(&dest_url),
+            _ => false,
+        };
+        if flagged {
+            found.push(text[range].to_owned());
         }
     }
     found
@@ -69,20 +75,50 @@ fn accept_every_reference(link: BrokenLink<'_>) -> Option<(CowStr<'_>, CowStr<'_
 
 fn is_rustdoc_link(link_type: LinkType, destination: &str) -> bool {
     match link_type {
-        LinkType::Inline | LinkType::Reference | LinkType::Collapsed | LinkType::Shortcut => {
-            !is_publishable(destination)
-        }
-        LinkType::ReferenceUnknown | LinkType::CollapsedUnknown => true,
-        LinkType::ShortcutUnknown => {
-            let label = destination.trim();
-            is_one_code_span(label)
-                || label.contains("::")
-                || label.contains('@')
-                || label.ends_with("()")
-                || label.ends_with('!')
-        }
+        LinkType::Inline
+        | LinkType::Reference
+        | LinkType::Collapsed
+        | LinkType::Shortcut
+        | LinkType::Autolink => !is_publishable(destination),
+        LinkType::ReferenceUnknown => true,
+        LinkType::ShortcutUnknown | LinkType::CollapsedUnknown => names_an_item(destination),
         _ => false,
     }
+}
+
+/// Whether an unresolved shortcut or collapsed label reads as an item path,
+/// which rustdoc 1.90 treats as an intra-doc link: one code span, or a word
+/// of letters, digits and path marks (`::`, `@`, `()`, `!`, `<…>`, `&`, `*`)
+/// holding a letter. A label with a space outside `<…>` (`[0, 1]`), a digit
+/// alone (`[0]`) or other punctuation (`[YYYY-MM-DD]`) is prose.
+fn names_an_item(label: &str) -> bool {
+    let label = label.trim();
+    if is_one_code_span(label) {
+        return true;
+    }
+    let mut depth = 0_usize;
+    let mut after_disambiguator = false;
+    let outside_generics: String = label
+        .chars()
+        .filter(|&c| {
+            // rustdoc trims the path after a disambiguator (`[struct@ Foo]`).
+            let skip = after_disambiguator && c.is_whitespace();
+            after_disambiguator = c == '@' || skip;
+            if skip {
+                return false;
+            }
+            match c {
+                '<' => depth += 1,
+                '>' => depth = depth.saturating_sub(1),
+                _ => return depth == 0,
+            }
+            false
+        })
+        .collect();
+    outside_generics.chars().any(char::is_alphabetic)
+        && outside_generics
+            .chars()
+            .all(|c| c.is_alphanumeric() || "_:@!(){}&*;".contains(c))
 }
 
 /// Whether `label` is code and nothing else (`` `X` ``, ``` ``a`b`` ```), not

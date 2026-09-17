@@ -42,12 +42,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``[`Name`]``, ``[`Name`](crate::path)``. The input and output schemas now
   show each such link as its text, read with pulldown-cmark rather than a
   hand-written scan: ``[`Name`](crate::path)`` becomes `` `Name` ``, and
-  a shortcut code link drops its disambiguator, so ``[`fn@f`]`` becomes
-  `` `f` ``. A link is a rustdoc link when its destination reads as an item
-  path: an inline or reference-style link to one, a definition of one (removed
-  with it), and a reference no definition resolves that is code, holds `::` or
-  carries a disambiguator. Web links, code spans, code blocks, escaped brackets
-  and a bare `[name]` stay. The rewrite is fail closed: the rewritten
+  a shortcut link drops its disambiguator, so ``[`fn@f`]`` becomes `` `f` ``
+  and `[struct@Foo]` becomes `Foo`. A link is a rustdoc link when its
+  destination reads as an item path, a `#` fragment allowed: an inline or
+  reference-style link to one, a definition of one (removed with its line),
+  and a reference no definition resolves whose label is one, bare `[Name]`
+  included, as rustdoc 1.90 reads it. Web links, images, autolinks, code
+  spans, code blocks, escaped brackets and prose brackets that name no item
+  (`[0, 1]`) stay. The rewrite is fail closed: the rewritten
   description must parse to the original with those links dropped, or it stays
   as written. Only `description` strings are rewritten, never instance data
   such as a `default`. A test reads every description of every tool's live
