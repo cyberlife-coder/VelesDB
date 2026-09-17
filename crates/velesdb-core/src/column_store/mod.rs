@@ -36,14 +36,14 @@
 mod batch;
 #[cfg(test)]
 mod batch_tests;
+pub(crate) mod coordinates;
+#[cfg(test)]
+mod coordinates_tests;
 mod filter;
 mod filter_array;
 mod filter_geo;
 #[cfg(test)]
 mod filter_tests;
-pub(crate) mod haversine;
-#[cfg(test)]
-mod haversine_tests;
 mod primary_key_ops;
 mod string_table;
 mod types;
