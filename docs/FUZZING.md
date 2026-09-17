@@ -38,7 +38,7 @@ fuzz_snapshot_parser
 |--------|-----------|------------|----------|
 | `fuzz_velesql_parser` | VelesQL Parser | No panic, valid AST or error | 🔥 HIGH |
 | `fuzz_distance_metrics` | Distance Calculations | No NaN/panic, bounded output | 🔥 HIGH |
-| `fuzz_snapshot_parser` | Snapshot Decoder | Roundtrip, no corruption | 🚀 MEDIUM |
+| `fuzz_snapshot_parser` | Payload Snapshot Parser | No panic, malformed input rejected with an error | 🚀 MEDIUM |
 
 ### fuzz_velesql_parser
 
@@ -64,10 +64,10 @@ cargo +nightly fuzz run fuzz_distance_metrics
 
 ### fuzz_snapshot_parser
 
-Tests snapshot serialization/deserialization:
+Feeds arbitrary bytes to the parser `LogPayloadStorage` runs on `payloads.snapshot` when it opens (`storage::parse_payload_snapshot`, compiled only under `--cfg fuzzing`):
 - **Input**: Arbitrary bytes
-- **Invariant**: Decode → Encode → Decode must roundtrip (if decode succeeds)
-- **Coverage**: Collection snapshots, metadata, vector data
+- **Invariant**: Must never panic; every malformed input is rejected with an error, and no allocation is sized from an unchecked length
+- **Coverage**: The payload-index snapshot: header, entry count, entries, CRC32
 
 ```bash
 cargo +nightly fuzz run fuzz_snapshot_parser
@@ -146,7 +146,7 @@ fuzz/
 │   │   ├── valid_match_01
 │   │   └── edge_case_empty
 │   ├── distance_metrics/   # Vector pair seeds
-│   └── snapshot_parser/    # Binary snapshot seeds
+│   └── fuzz_snapshot_parser/  # Payload-snapshot seeds
 ```
 
 ### Adding Seeds
