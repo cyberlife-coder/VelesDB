@@ -309,7 +309,9 @@ fn without_disambiguator(target: &str) -> Option<&str> {
 
 /// The source a link shows, given its `inner` events, and the events the
 /// rewritten text must read there. A shortcut or collapsed link whose text is
-/// one code span shows that code less its disambiguator, as rustdoc does.
+/// one code span, or prose, shows that text less its disambiguator and its
+/// `#` fragment, as rustdoc does: both branches read it through
+/// [`shown_path`].
 fn link_text<'a>(
     text: &str,
     link_type: LinkType,
