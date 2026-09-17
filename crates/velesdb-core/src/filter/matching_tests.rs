@@ -1,5 +1,6 @@
-use super::{compare_geo_distance, like_match, CompiledLikePattern};
+use super::{like_match, CompiledLikePattern};
 use crate::filter::Condition;
+use crate::geo_distance::{great_circle_distance_m, DISTANCE_EQUALITY_RESOLUTION_M};
 use crate::velesql::CompareOp;
 use serde_json::json;
 
@@ -7,25 +8,58 @@ fn payload(json: serde_json::Value) -> serde_json::Value {
     json
 }
 
-// `compare_geo_distance` treats two computed distances within 1mm of each
-// other as equal (`crate::geo_distance_eq`), since a haversine distance is
-// built from several sin/cos/sqrt/atan2 calls and two equally valid ways of
-// computing the same real-world distance are not bit-identical; that
-// module's own tests reproduce the cross-formula divergence this exists to
-// absorb. Here we only need to confirm both `CompareOp` arms read the
-// shared tolerance correctly.
-#[test]
-fn geo_distance_eq_tolerates_realistic_float_noise() {
-    let dist = 1000.0;
-    let threshold = dist + 0.0001; // 0.1mm: noise, not a real distance change
-    assert!(compare_geo_distance(dist, threshold, CompareOp::Eq));
-    assert!(!compare_geo_distance(dist, threshold, CompareOp::NotEq));
+const PARIS: (f64, f64) = (48.8566, 2.3522);
+const LONDON: (f64, f64) = (51.5074, -0.1278);
+
+/// A payload whose `location` is `(lat, lng)`.
+fn located_at((lat, lng): (f64, f64)) -> serde_json::Value {
+    payload(json!({"location": {"lat": lat, "lng": lng}}))
+}
+
+/// `GEO_DISTANCE(location, lat, lng) operator threshold`.
+fn geo_distance((lat, lng): (f64, f64), operator: CompareOp, threshold: f64) -> Condition {
+    Condition::GeoDistance {
+        field: "location".into(),
+        lat,
+        lng,
+        operator,
+        threshold,
+    }
 }
 
 #[test]
-fn geo_distance_eq_still_rejects_real_differences() {
-    assert!(!compare_geo_distance(1000.0, 1000.5, CompareOp::Eq));
-    assert!(compare_geo_distance(1000.0, 1000.5, CompareOp::NotEq));
+fn geo_distance_eq_is_to_the_millimetre() {
+    let london = located_at(LONDON);
+    let dist = great_circle_distance_m(LONDON.0, LONDON.1, PARIS.0, PARIS.1)
+        .expect("test: valid coordinates");
+    let within = dist + DISTANCE_EQUALITY_RESOLUTION_M / 2.0;
+    let beyond = dist + DISTANCE_EQUALITY_RESOLUTION_M * 2.0;
+
+    assert!(geo_distance(PARIS, CompareOp::Eq, within).matches(&london));
+    assert!(!geo_distance(PARIS, CompareOp::NotEq, within).matches(&london));
+    assert!(!geo_distance(PARIS, CompareOp::Eq, beyond).matches(&london));
+    assert!(geo_distance(PARIS, CompareOp::NotEq, beyond).matches(&london));
+}
+
+// #2310: Haversine gave NaN for this exactly antipodal pair, so the payload
+// fell out of every comparison.
+#[test]
+fn geo_distance_near_the_antipode_is_a_real_distance() {
+    let point = located_at((2.5, -120.0));
+    assert!(geo_distance((-2.5, 60.0), CompareOp::Gt, 20_000_000.0).matches(&point));
+}
+
+// A payload point or a reference point off the globe has no distance, and a
+// NaN threshold compares with nothing: `!=` matches no row, like a missing
+// location.
+#[test]
+fn geo_distance_off_globe_point_or_nan_threshold_matches_no_row() {
+    let off_globe = located_at((90.5, PARIS.1));
+    assert!(!geo_distance(LONDON, CompareOp::NotEq, 0.0).matches(&off_globe));
+
+    let paris = located_at(PARIS);
+    assert!(!geo_distance((f64::NAN, LONDON.1), CompareOp::NotEq, 0.0).matches(&paris));
+    assert!(!geo_distance(LONDON, CompareOp::NotEq, f64::NAN).matches(&paris));
 }
 
 // Verify that comparing against null never matches ordering predicates.

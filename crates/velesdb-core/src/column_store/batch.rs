@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use super::haversine;
+use super::coordinates;
 use super::types::{
     BatchUpdate, BatchUpdateResult, BatchUpsertResult, ColumnStoreError, ColumnValue, ExpireResult,
     TypedColumn, UpsertResult,
@@ -351,7 +351,7 @@ impl ColumnStore {
         lat: f64,
         lng: f64,
     ) -> Result<(), ColumnStoreError> {
-        haversine::validate_coordinates(lat, lng)?;
+        coordinates::validate_coordinates(lat, lng)?;
         if row_idx >= vec.len() {
             return Err(ColumnStoreError::IndexOutOfBounds(row_idx));
         }

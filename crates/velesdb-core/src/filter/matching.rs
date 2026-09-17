@@ -115,8 +115,8 @@ fn match_geo_distance(
 ) -> bool {
     get_field(payload, field).is_some_and(|v| {
         extract_geo_point(v).is_some_and(|(plat, plng)| {
-            let dist = haversine_distance_m(plat, plng, lat, lng);
-            compare_geo_distance(dist, threshold, operator)
+            let dist = crate::geo_distance::great_circle_distance_m(plat, plng, lat, lng);
+            crate::geo_distance::distance_satisfies(dist, operator.into(), threshold)
         })
     })
 }
@@ -439,46 +439,6 @@ impl CompiledLikePattern {
         }
 
         dp_prev[n]
-    }
-}
-
-/// Haversine great-circle distance. Returns distance in **meters** (WGS-84 mean radius).
-///
-/// Kept local so this module compiles without the `persistence` feature
-/// (which gates `column_store::haversine`).
-fn haversine_distance_m(lat1: f64, lng1: f64, lat2: f64, lng2: f64) -> f64 {
-    const EARTH_RADIUS_M: f64 = 6_371_000.0;
-    let (lat1, lng1) = (lat1.to_radians(), lng1.to_radians());
-    let (lat2, lng2) = (lat2.to_radians(), lng2.to_radians());
-    let dlat = lat2 - lat1;
-    let dlng = lng2 - lng1;
-    let a = (dlat / 2.0).sin().powi(2) + lat1.cos() * lat2.cos() * (dlng / 2.0).sin().powi(2);
-    EARTH_RADIUS_M * 2.0 * a.sqrt().atan2((1.0 - a).sqrt())
-}
-
-/// Applies a comparison operator to a geo-distance value and threshold.
-///
-/// `Eq`/`NotEq` go through `crate::geo_distance_eq::geo_distances_equal`'s
-/// millimeter tolerance rather than exact float equality: `dist` is computed
-/// via several sin/cos/sqrt/atan2 calls (see `haversine_distance_m`), and two
-/// equally valid ways of computing the same real-world distance do not
-/// produce bit-identical results (see that module's docs for the measured
-/// divergence and its rationale). Shared with
-/// `column_store::filter_geo::compare_f64`, the equivalent comparator for
-/// `ColumnStore`'s own geo filtering, so the tolerance cannot drift between
-/// them. Unrelated to the HAVING threshold comparator
-/// (`aggregation/having.rs::compare_values`), which compares arbitrary
-/// unitless aggregate values rather than a physical distance in meters and
-/// keeps its own relative-epsilon tolerance.
-fn compare_geo_distance(dist: f64, threshold: f64, op: crate::velesql::CompareOp) -> bool {
-    use crate::velesql::CompareOp;
-    match op {
-        CompareOp::Eq => crate::geo_distance_eq::geo_distances_equal(dist, threshold),
-        CompareOp::NotEq => !crate::geo_distance_eq::geo_distances_equal(dist, threshold),
-        CompareOp::Gt => dist > threshold,
-        CompareOp::Gte => dist >= threshold,
-        CompareOp::Lt => dist < threshold,
-        CompareOp::Lte => dist <= threshold,
     }
 }
 

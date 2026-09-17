@@ -109,27 +109,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   load call alone reports the cost as gone when it has only moved.
 
 ### Fixed
-- **`GEO_DISTANCE(...) = X` / `!= X` compared a computed Haversine distance
-  against a tolerance too tight to survive how that distance is actually
-  computed**, in both `column_store::filter_geo` (the public `ColumnStore`
-  filter API) and `filter::matching::compare_geo_distance` (VelesQL's own
-  `GEO_DISTANCE` evaluation path, so this changes VelesQL query results for
-  `=`/`!=` on `GEO_DISTANCE`, previously unusable for either operator). An
-  absolute `f64::EPSILON` — the ULP at magnitude 1.0 — made `Eq` reject
-  essentially any real-world distance and `NotEq` accept almost any pair; a
-  first pass scaled that to the compared magnitude, but two independently
-  valid ways of computing the same real distance (for instance, subtracting
-  latitudes in radians versus subtracting in degrees and converting
-  afterward) diverge by up to several hundred ULPs, not the one or two a
-  magnitude-scaled `f64::EPSILON` absorbs — confirmed empirically across
-  50,000 random point pairs (`geo_distance_eq.rs`). Both comparators now
-  share one `pub(crate)` helper (`geo_distance_eq::geo_distances_equal`)
-  with a tolerance of 1mm, chosen with headroom over that measured ceiling
-  while staying far below any distance granularity a real query needs.
-  `aggregation/having.rs`'s own relative-epsilon tolerance is unrelated and
-  unchanged: it compares arbitrary unitless aggregate values, not a
-  physical distance in meters, so a fixed absolute tolerance would not fit
-  it.
+- **`GEO_DISTANCE` was inaccurate or NaN near the antipode, and its `=` /
+  `!=` depended on floating-point rounding (#2310).** Both evaluation paths,
+  `ColumnStore::filter_geo_distance` and VelesQL's payload filtering
+  (`filter::matching`), carried their own copy of the Haversine formula,
+  `2·atan2(√a, √(1−a))`. Near the antipode `1−a` loses its significant
+  digits, so the distance was off by up to decimetres (0.10 m on the pair
+  pinned by `geo_distance_tests::near_antipodal_pair_reproduces_its_reference`),
+  and rounding could push `a` above 1, making the distance NaN: the row then
+  dropped out of every comparison. Both paths now call one function,
+  `geo_distance::great_circle_distance_m`, which uses the spherical Vincenty
+  form, well conditioned everywhere and never NaN for valid coordinates.
+  Distances computed away from the antipode can change in their last bits;
+  near it they are now accurate. Equality was also fragile:
+  `ColumnStore` compared against an absolute `f64::EPSILON`, and the VelesQL
+  path against `f64::EPSILON` scaled to the distance, both tighter than the
+  rounding of the computation itself. Both now follow one product rule, in
+  `geo_distance::distance_satisfies`: two distances are equal when they
+  agree to the millimetre; `<`, `<=`, `>`, `>=` still compare exactly. A
+  reference or payload point outside `[-90, 90]` / `[-180, 180]` (NaN
+  included), which used to get a meaningless distance, now has none and,
+  like a NaN threshold, matches no row under any operator, `!=` included.
+  The formula is
+  checked against 60-digit reference distances and, by the ignored
+  `geo_distance_tests::sweep_agrees_with_the_chord_formulation`, against an
+  independent formulation over a seeded sample of the whole sphere and of
+  the antipode's neighbourhood.
 
 - **The REST OpenAPI document shows no rustdoc link syntax (#2263).** utoipa
   copies doc comments into the OpenAPI document (`docs/openapi.{json,yaml}`,
