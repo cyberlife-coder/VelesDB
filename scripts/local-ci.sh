@@ -78,19 +78,39 @@ total=0; ran=0; failed=0; skipped=0; missing=0
 # a phrase (a guard printing the doc line it refused) was reported as a missing
 # tool, and the replay exited 0. A shell answers 127 for a command it cannot
 # find. Cargo answers 101 for a subcommand it does not have, the same code as
-# any failing cargo command, so the replay asks cargo first: a subcommand
-# `cargo --list` does not name exits 127 before cargo runs.
+# any failing cargo command, so the replay asks first, and a missing one exits
+# 127 before cargo runs. The subcommand is the first argument that is not a
+# `+toolchain`, an option, or the value of an option that takes one
+# (`--config X`, `-Z X`, `-C X`, `--color X`, `--manifest-path X`). It is
+# missing when `cargo --list` does not name it, or when rustup provides it and
+# the toolchain lacks its component: `cargo --list` names rustup's `cargo-fmt`
+# and `cargo-clippy` proxies whether or not rustfmt or clippy is installed.
 CARGO_SUBCOMMANDS=$(cargo --list 2>/dev/null | awk 'NR > 1 { print $1 }')
 export CARGO_SUBCOMMANDS
 cargo() {
-  case "${1:-}" in
-    ""|-*|+*) ;;
-    *)
-      if ! printf '%s\n' "$CARGO_SUBCOMMANDS" | grep -qxF -- "$1"; then
-        echo "cargo $1: this cargo has no such subcommand" >&2
-        return 127
-      fi ;;
-  esac
+  local arg sub="" toolchain="" takes_value=0 proxy rustup_bin
+  for arg in "$@"; do
+    if [ "$takes_value" = 1 ]; then takes_value=0; continue; fi
+    case "$arg" in
+      +*) toolchain="${arg#+}" ;;
+      --config|-Z|-C|--color|--manifest-path) takes_value=1 ;;
+      -*) ;;
+      *) sub="$arg"; break ;;
+    esac
+  done
+  if [ -n "$sub" ]; then
+    if ! printf '%s\n' "$CARGO_SUBCOMMANDS" | grep -qxF -- "$sub"; then
+      echo "cargo $sub: this cargo has no such subcommand" >&2
+      return 127
+    fi
+    proxy=$(command -v "cargo-$sub" 2>/dev/null)
+    rustup_bin=$(command -v rustup 2>/dev/null)
+    if [ -n "$proxy" ] && [ -n "$rustup_bin" ] && [ "$proxy" -ef "$rustup_bin" ] \
+      && ! rustup which ${toolchain:+--toolchain "$toolchain"} "cargo-$sub" >/dev/null 2>&1; then
+      echo "cargo $sub: the toolchain lacks the rustup component behind cargo-$sub" >&2
+      return 127
+    fi
+  fi
   command cargo "$@"
 }
 export -f cargo

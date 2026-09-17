@@ -19,12 +19,42 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "local-ci.sh"
 
 
-def run(workflow: Path | None, *args: str) -> subprocess.CompletedProcess:
+def fake_rust_toolchain(bin_dir: Path) -> dict[str, str]:
+    """A cargo and a rustup on PATH. The default toolchain lacks the rustfmt
+    component and the toolchain `full` has it: `cargo --list` names `fmt`
+    either way (rustup's `cargo-fmt` proxy is always there), and only
+    `rustup which` tells them apart. A listed subcommand that runs exits 0; an
+    unknown one exits 101, as cargo does. No download, no real toolchain."""
+    bin_dir.mkdir()
+    rustup = bin_dir / "rustup"
+    rustup.write_text(
+        "#!/usr/bin/env bash\n"
+        "[ \"$1\" = which ] || exit 0\n"
+        "[ \"$2 $3\" = \"--toolchain full\" ] && { echo /toolchain/bin/\"${@: -1}\"; exit 0; }\n"
+        "[ \"${@: -1}\" = cargo-fmt ] && { echo \"error: 'cargo-fmt' is not installed\" >&2; exit 1; }\n"
+        "echo /toolchain/bin/\"${@: -1}\"\n",
+        encoding="utf-8",
+    )
+    cargo = bin_dir / "cargo"
+    cargo.write_text(
+        "#!/usr/bin/env bash\n"
+        "for a in \"$@\"; do [ \"$a\" = --list ] && { printf 'Installed Commands:\\n    build\\n    fmt\\n'; exit 0; }; done\n"
+        "for a in \"$@\"; do [ \"$a\" = definitely-not-a-subcommand-xyz ] && { echo \"error: no such command\" >&2; exit 101; }; done\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    for tool in (rustup, cargo):
+        tool.chmod(0o755)
+    (bin_dir / "cargo-fmt").symlink_to(rustup)
+    return {"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
+
+
+def run(workflow: Path | None, *args: str, env_extra: dict[str, str] | None = None) -> subprocess.CompletedProcess:
     # The synthetic workflows below declare `lint` only. The script's default
     # covers every gate job, and asking for an absent one is an error — see
     # `test_an_unknown_job_answers_2`. Scoping here keeps these tests about
     # derivation rather than about job coverage.
-    env = dict(os.environ, JOBS="lint")
+    env = dict(os.environ, JOBS="lint", **(env_extra or {}))
     if workflow is not None:
         env["WORKFLOW"] = str(workflow)
     return subprocess.run(
@@ -145,6 +175,54 @@ class MissingToolTests(unittest.TestCase):
             result = run(wf)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("TOOL MISSING", result.stdout)
+
+    def test_a_rustup_component_that_is_absent_is_a_missing_tool(self) -> None:
+        # `cargo --list` names `fmt` whether or not rustfmt is installed: the
+        # proxy is rustup's. Only `rustup which cargo-fmt` knows.
+        with tempfile.TemporaryDirectory() as tmp:
+            env = fake_rust_toolchain(Path(tmp) / "bin")
+            wf = Path(tmp) / "ci.yml"
+            wf.write_text(workflow_with("Format", "cargo fmt --version"), encoding="utf-8")
+            result = run(wf, env_extra=env)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("TOOL MISSING", result.stdout)
+            # A toolchain that has the component runs it: the check asks that
+            # toolchain, not the default one.
+            wf.write_text(workflow_with("Format", "cargo +full fmt --version"), encoding="utf-8")
+            result = run(wf, env_extra=env)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("ok", result.stdout)
+            self.assertNotIn("TOOL MISSING", result.stdout)
+
+    def test_a_toolchain_or_an_option_before_a_missing_subcommand_is_seen_through(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = fake_rust_toolchain(Path(tmp) / "bin")
+            for command in (
+                "cargo +stable definitely-not-a-subcommand-xyz",
+                "cargo --locked definitely-not-a-subcommand-xyz",
+                "cargo --config net.offline=true -Z unstable-options definitely-not-a-subcommand-xyz",
+                "cargo -C crates definitely-not-a-subcommand-xyz",
+                "cargo +stable --color never fmt",
+            ):
+                with self.subTest(command=command):
+                    wf = Path(tmp) / "ci.yml"
+                    wf.write_text(workflow_with("Cargo", command), encoding="utf-8")
+                    result = run(wf, env_extra=env)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn("TOOL MISSING", result.stdout)
+            # The same prefixes before a subcommand cargo has: it runs. Read as
+            # the subcommand, a prefix would be reported missing.
+            for command in (
+                "cargo +full build",
+                "cargo --locked build",
+                "cargo --config net.offline=true -Z unstable-options -C crates --color never --manifest-path Cargo.toml build",
+            ):
+                with self.subTest(command=command):
+                    wf = Path(tmp) / "ci.yml"
+                    wf.write_text(workflow_with("Cargo", command), encoding="utf-8")
+                    result = run(wf, env_extra=env)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertNotIn("TOOL MISSING", result.stdout)
 
     def test_a_red_gate_whose_output_names_a_missing_tool_stays_red(self) -> None:
         # "Missing tool" is decided by the exit code, never by the output: a

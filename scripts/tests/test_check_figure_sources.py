@@ -8,6 +8,7 @@ what it refuses.
 from __future__ import annotations
 
 import contextlib
+import importlib.metadata
 import importlib.util
 import io
 import json
@@ -766,6 +767,19 @@ class FigureSourcesTest(unittest.TestCase):
                 )
                 self.assertEqual(code, 2)
                 self.assertIn(f"{name} 0.0.1 is installed; the guard needs {name}=={guard.PARSER_PINS[name]}", err)
+
+    def test_the_guard_says_which_pinned_package_is_not_installed(self):
+        for name in ("markdown-it-py", "mdurl"):
+            with self.subTest(name=name):
+
+                def version(package, absent=name):
+                    if package == absent:
+                        raise importlib.metadata.PackageNotFoundError(package)
+                    return guard.PARSER_PINS[package]
+
+                code, err = self.exit_without_the_pinned_parser(installed_version=version)
+                self.assertEqual(code, 2)
+                self.assertIn(f"{name} is not installed; the guard needs {name}=={guard.PARSER_PINS[name]}", err)
 
     def test_the_pinned_parser_is_the_one_installed_here(self):
         # The control: with the pins CI installs, the guard runs.
