@@ -43,7 +43,7 @@ use crate::mcp::McpServer;
 
 mod session_limit;
 
-use session_limit::BoundedSessionManager;
+use session_limit::{BoundedSessionManager, EvictionPolicy};
 
 /// Default bind address for `--http` / `VELESDB_MEMORY_HTTP=1` when neither
 /// `VELESDB_MEMORY_HTTP_BIND` nor `--http-port` overrides it. Loopback-only:
@@ -358,7 +358,11 @@ pub fn router_with_session_policy(
     if let Some(keep_alive) = keep_alive {
         inner.session_config.keep_alive = Some(keep_alive);
     }
-    let session_manager = BoundedSessionManager::new(inner, max_sessions, evict_min_idle);
+    let policy = EvictionPolicy {
+        min_idle: evict_min_idle,
+        init_timeout: inner.session_config.init_timeout,
+    };
+    let session_manager = BoundedSessionManager::new(inner, max_sessions, policy);
     let mcp_service: StreamableHttpService<McpServer, BoundedSessionManager<LocalSessionManager>> =
         StreamableHttpService::new(
             move || Ok(server.clone()),

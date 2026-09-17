@@ -385,8 +385,14 @@ recently active session that
 - has been idle for at least `VELESDB_MEMORY_HTTP_EVICT_MIN_IDLE_SECS`
   (5 minutes by default).
 
-The evicted client gets a `404` on its next request and must re-initialize.
-Only when no live session meets all three conditions is the new client
+A session whose `initialize` never arrived is also evictable once the
+transport's handshake deadline (60 seconds) has passed with no activity on
+it: no client can still be using it.
+
+The evicted client gets a `404` on its next request and must re-initialize;
+a request that reaches a session while it is being evicted gets that `404`
+too, rather than being served by a session about to close.
+Only when no live session is evictable is the new client
 refused, with an error saying none could be evicted and to retry shortly. Each
 eviction is logged (`evicted idle MCP session to admit a new one`, with the
 session id).

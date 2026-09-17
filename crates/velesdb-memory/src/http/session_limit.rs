@@ -26,7 +26,7 @@
 //! [`SessionManager::close_session`] for it. **That is wrong**, and it is
 //! worth stating plainly because it sent one investigation down the wrong
 //! path: rmcp's `StreamableHttpService` spawns a task per session that awaits
-//! the service and then calls `close_session` (rmcp 2.2.0,
+//! the service and then calls `close_session` (rmcp 3.3.0,
 //! `streamable_http_server/tower.rs`), so an idle-expired session IS closed
 //! and its slot IS returned. `tests/http_transport.rs` pins that down.
 //!
@@ -69,12 +69,18 @@
 //! is cleared synchronously, before the first await of `initialize_session`,
 //! and in the same step its activity guard marks the session busy until the
 //! handshake returns: success, failure, or a request dropped mid-handshake
-//! all leave the session evictable afterwards. A session whose
-//! `initialize_session` is never called at all (rmcp's restore path can fail
-//! between `restore_session` and it) stays unevictable, but not for long:
-//! `LocalSessionManager`'s worker gives up after `SessionConfig::init_timeout`
-//! (60 s by default) without an `initialize`, and rmcp then closes the
-//! session, which frees its slot.
+//! all leave the session evictable afterwards.
+//!
+//! A session whose handshake never happens is not protected forever. On
+//! rmcp's create path its worker gives up after `SessionConfig::init_timeout`
+//! (60 s by default in rmcp 3.3.0) and rmcp's per-session task closes it. On
+//! the restore path nothing does: `restore_session` can succeed and the
+//! restore then fail before `initialize_session` is called, and no task is
+//! left to close that session. So the wrapper applies the same deadline
+//! itself (`EvictionPolicy::init_timeout`): a session still awaiting its
+//! `initialize` that long after its last activity is abandoned, and is
+//! evictable like an idle one — the minimum idle age does not apply, since no
+//! client can be using a session its worker has already given up on.
 //!
 //! # Two locks, and why marking a session busy never awaits
 //!
@@ -86,9 +92,17 @@
 //! therefore taken synchronously at the start of the call: a request that is
 //! cancelled cannot stop halfway between "looked up" and "marked busy", and a
 //! request waiting on an admission in progress cannot leave a session
-//! stranded in its busy-at-birth state. Eviction picks its victim under that
-//! same plain mutex, so a session is either marked busy before the pick (and
-//! skipped) or not at all.
+//! stranded in its busy-at-birth state.
+//!
+//! Eviction picks its victim under that same plain mutex, and in the same
+//! step marks it closing (`SessionCounters::closing`). A request that looked
+//! the session up before the pick holds it busy, so it is not picked; one that
+//! arrives after the pick, while the inner close is still running, is refused
+//! instead of being admitted onto a session about to disappear: `has_session`
+//! answers `false` (the transport's `404`), and a call already past that check
+//! gets [`BoundedSessionManagerError::SessionClosing`]. The mark is lifted if
+//! the close fails or the evicting call is dropped mid-close, and the session
+//! then carries on untouched.
 //!
 //! # Who can evict whom: the minimum idle age
 //!
@@ -166,8 +180,12 @@ struct SessionCounters {
     /// Non-zero means "busy" — never pick this session for eviction.
     in_flight: AtomicU32,
     /// Set from creation until `initialize_session` is entered: a session
-    /// still waiting for its own handshake is not idle, it is being born.
+    /// still waiting for its own handshake is not idle, it is being born —
+    /// until `EvictionPolicy::init_timeout` says it has been abandoned.
     awaiting_initialize: AtomicBool,
+    /// Set while this session is being evicted: no new activity is admitted
+    /// onto it. See [`ClosingMark`].
+    closing: AtomicBool,
     /// Logical tick of the most recent end of activity; orders the LRU pick
     /// strictly, even between stamps the clock cannot tell apart.
     last_tick: AtomicU64,
@@ -202,6 +220,7 @@ impl ActivityClock {
         let counters = SessionCounters {
             in_flight: AtomicU32::new(0),
             awaiting_initialize: AtomicBool::new(true),
+            closing: AtomicBool::new(false),
             last_tick: AtomicU64::new(0),
             last_touched_nanos: AtomicU64::new(0),
         };
@@ -209,17 +228,53 @@ impl ActivityClock {
         Arc::new(counters)
     }
 
-    /// Nothing in flight, handshake done, and quiet for at least `min_idle`.
-    fn is_evictable(&self, counters: &SessionCounters, min_idle: Duration) -> bool {
+    /// Nothing in flight, not already being evicted, and quiet for long
+    /// enough: `policy.min_idle` once the handshake is done, or
+    /// `policy.init_timeout` while it never happened.
+    fn is_evictable(&self, counters: &SessionCounters, policy: EvictionPolicy) -> bool {
         if counters.in_flight.load(Ordering::Relaxed) != 0
-            || counters.awaiting_initialize.load(Ordering::Relaxed)
+            || counters.closing.load(Ordering::Relaxed)
         {
             return false;
         }
-        let idle_nanos = self
+        if counters.awaiting_initialize.load(Ordering::Relaxed) {
+            return policy
+                .init_timeout
+                .is_some_and(|abandoned_after| self.quiet_for(counters, abandoned_after));
+        }
+        self.quiet_for(counters, policy.min_idle)
+    }
+
+    fn quiet_for(&self, counters: &SessionCounters, at_least: Duration) -> bool {
+        let quiet_nanos = self
             .now_nanos()
             .saturating_sub(counters.last_touched_nanos.load(Ordering::Relaxed));
-        u128::from(idle_nanos) >= min_idle.as_nanos()
+        u128::from(quiet_nanos) >= at_least.as_nanos()
+    }
+}
+
+/// When a live session may be evicted to admit a new one.
+#[derive(Debug, Clone, Copy)]
+pub struct EvictionPolicy {
+    /// How long a session that finished its handshake must have had nothing
+    /// in flight (the flood guard; see the module docs).
+    pub min_idle: Duration,
+    /// The inner manager's handshake deadline (`SessionConfig::init_timeout`):
+    /// a session still awaiting its `initialize` this long after its last
+    /// activity is abandoned. `None` never treats one as abandoned.
+    pub init_timeout: Option<Duration>,
+}
+
+/// Marks an eviction victim closing for as long as it lives. Created under the
+/// `live` mutex at the moment the victim is picked, and dropped on every exit
+/// from the eviction: after a successful close the victim is already out of
+/// `live`, so lifting the mark changes nothing; after a failed close, or when
+/// the evicting call is dropped mid-close, lifting it hands the session back.
+struct ClosingMark(Arc<SessionCounters>);
+
+impl Drop for ClosingMark {
+    fn drop(&mut self) {
+        self.0.closing.store(false, Ordering::Relaxed);
     }
 }
 
@@ -282,7 +337,7 @@ impl<S: Stream> Stream for GuardedStream<S> {
 pub struct BoundedSessionManager<SM> {
     inner: SM,
     max_sessions: usize,
-    min_idle: Duration,
+    policy: EvictionPolicy,
     /// Serializes changes to the SET of live sessions (admission and close)
     /// across the inner manager's awaits.
     admission: tokio::sync::Mutex<()>,
@@ -292,11 +347,11 @@ pub struct BoundedSessionManager<SM> {
 }
 
 impl<SM> BoundedSessionManager<SM> {
-    pub fn new(inner: SM, max_sessions: usize, min_idle: Duration) -> Self {
+    pub fn new(inner: SM, max_sessions: usize, policy: EvictionPolicy) -> Self {
         Self::with_clock(
             inner,
             max_sessions,
-            min_idle,
+            policy,
             Arc::new(MonotonicClock::start()),
         )
     }
@@ -304,13 +359,13 @@ impl<SM> BoundedSessionManager<SM> {
     pub(crate) fn with_clock(
         inner: SM,
         max_sessions: usize,
-        min_idle: Duration,
+        policy: EvictionPolicy,
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
             inner,
             max_sessions,
-            min_idle,
+            policy,
             admission: tokio::sync::Mutex::new(()),
             live: Mutex::new(HashMap::new()),
             activity: Arc::new(ActivityClock {
@@ -348,16 +403,32 @@ impl<SM> BoundedSessionManager<SM> {
     /// guard for `id`. Synchronous on purpose: the increment happens under the
     /// `live` mutex eviction picks its victim under, with no await before it,
     /// so neither a concurrent eviction nor a cancelled request can separate
-    /// the lookup from the increment. Returns `None` for an unknown id so
+    /// the lookup from the increment. Returns `Ok(None)` for an unknown id so
     /// callers still forward the operation to `inner` unguarded and let it
-    /// answer with its own "session not found".
-    fn activity_guard(&self, id: &SessionId) -> Option<ActivityGuard> {
+    /// answer with its own "session not found", and refuses a session an
+    /// eviction has already picked.
+    fn activity_guard<E>(
+        &self,
+        id: &SessionId,
+    ) -> Result<Option<ActivityGuard>, BoundedSessionManagerError<E>> {
         let live = self.live();
-        let counters = live.get(id)?;
-        Some(ActivityGuard::begin(
+        let Some(counters) = live.get(id) else {
+            return Ok(None);
+        };
+        if counters.closing.load(Ordering::Relaxed) {
+            return Err(BoundedSessionManagerError::SessionClosing);
+        }
+        Ok(Some(ActivityGuard::begin(
             Arc::clone(counters),
             Arc::clone(&self.activity),
-        ))
+        )))
+    }
+
+    /// Whether `id` has been picked by an eviction still in progress.
+    fn is_closing(&self, id: &SessionId) -> bool {
+        self.live()
+            .get(id)
+            .is_some_and(|counters| counters.closing.load(Ordering::Relaxed))
     }
 }
 
@@ -377,6 +448,14 @@ pub enum BoundedSessionManagerError<E> {
         max_sessions: usize,
         min_idle_secs: u64,
     },
+    /// The session is being evicted to admit another client. The transport
+    /// normally answers such a request with `404` (see `has_session`); this
+    /// error only reaches a call that passed that check just before the pick.
+    #[error(
+        "this MCP session is being closed to admit another client; initialize a \
+         new session"
+    )]
+    SessionClosing,
     /// The wrapped session manager itself failed.
     #[error(transparent)]
     Inner(#[from] E),
@@ -412,7 +491,7 @@ where
         // birth flag is cleared in one synchronous step, so even a request
         // dropped at its first await leaves the session evictable once the
         // guard is released.
-        let guard = self.activity_guard(id);
+        let guard = self.activity_guard(id)?;
         if let Some(guard) = &guard {
             guard
                 .counters
@@ -425,6 +504,12 @@ where
     }
 
     async fn has_session(&self, id: &SessionId) -> Result<bool, Self::Error> {
+        // A session an eviction has picked is already gone as far as clients
+        // are concerned: answering `false` makes the transport reply `404`,
+        // the signal a client re-initializes on.
+        if self.is_closing(id) {
+            return Ok(false);
+        }
         self.inner.has_session(id).await.map_err(Into::into)
     }
 
@@ -446,7 +531,7 @@ where
         id: &SessionId,
         message: ClientJsonRpcMessage,
     ) -> Result<impl Stream<Item = ServerSseMessage> + Send + Sync + 'static, Self::Error> {
-        let guard = self.activity_guard(id);
+        let guard = self.activity_guard(id)?;
         let stream = self.inner.create_stream(id, message).await?;
         Ok(GuardedStream {
             inner: Box::pin(stream),
@@ -459,7 +544,7 @@ where
         id: &SessionId,
         message: ClientJsonRpcMessage,
     ) -> Result<(), Self::Error> {
-        let _guard = self.activity_guard(id);
+        let _guard = self.activity_guard(id)?;
         self.inner
             .accept_message(id, message)
             .await
@@ -470,7 +555,7 @@ where
         &self,
         id: &SessionId,
     ) -> Result<impl Stream<Item = ServerSseMessage> + Send + Sync + 'static, Self::Error> {
-        let guard = self.activity_guard(id);
+        let guard = self.activity_guard(id)?;
         let stream = self.inner.create_standalone_stream(id).await?;
         Ok(GuardedStream {
             inner: Box::pin(stream),
@@ -483,7 +568,7 @@ where
         id: &SessionId,
         last_event_id: String,
     ) -> Result<impl Stream<Item = ServerSseMessage> + Send + Sync + 'static, Self::Error> {
-        let guard = self.activity_guard(id);
+        let guard = self.activity_guard(id)?;
         let stream = self.inner.resume(id, last_event_id).await?;
         Ok(GuardedStream {
             inner: Box::pin(stream),
@@ -496,11 +581,14 @@ where
         id: SessionId,
     ) -> Result<RestoreOutcome<Self::Transport>, Self::Error> {
         // Unlike `create_session`, whether a slot is needed at all is only
-        // known once `inner` answers: `AlreadyPresent` and `NotSupported` (the
-        // trait default, and `LocalSessionManager`'s answer) create nothing,
-        // so they must evict nothing. Room is made only for a genuine restore
-        // — and if none can be made, the restored session is closed again
-        // rather than admitted past the cap.
+        // known once `inner` answers. `LocalSessionManager` (rmcp 3.3.0)
+        // answers `AlreadyPresent` when the id is already in memory and
+        // otherwise creates a fresh session worker and answers `Restored`;
+        // the trait's default answers `NotSupported`. Only `Restored` creates
+        // anything, so only it takes a slot — and if none can be made, the
+        // restored session is closed again rather than admitted past the cap.
+        // rmcp only calls this when a session store is configured, which
+        // `router` does not do today.
         let _admission = self.admission.lock().await;
         let outcome = self.inner.restore_session(id.clone()).await?;
         if !matches!(outcome, RestoreOutcome::Restored(_)) {
@@ -528,26 +616,31 @@ where
     /// no live session is evictable, since then there is nothing safe to
     /// reclaim. Called with the admission lock held.
     ///
-    /// The victim stays in `live` until the inner close has succeeded, so a
-    /// close that fails, or a caller dropped mid-close, never leaves an open
-    /// session untracked.
+    /// The victim is marked closing in the same critical section that picks
+    /// it (see [`ClosingMark`]), and stays in `live` until the inner close has
+    /// succeeded, so a close that fails, or a caller dropped mid-close, never
+    /// leaves an open session untracked or a request admitted onto a session
+    /// being closed.
     async fn evict_one_idle(&self) -> Result<(), BoundedSessionManagerError<SM::Error>> {
-        let victim = self
-            .live()
-            .iter()
-            .filter(|(_, counters)| self.activity.is_evictable(counters, self.min_idle))
-            .min_by_key(|(_, counters)| counters.last_tick.load(Ordering::Relaxed))
-            .map(|(id, _)| id.clone())
-            .ok_or(BoundedSessionManagerError::TooManySessions {
-                max_sessions: self.max_sessions,
-                min_idle_secs: self.min_idle.as_secs(),
-            })?;
+        let (victim, _closing) = {
+            let live = self.live();
+            let (id, counters) = live
+                .iter()
+                .filter(|(_, counters)| self.activity.is_evictable(counters, self.policy))
+                .min_by_key(|(_, counters)| counters.last_tick.load(Ordering::Relaxed))
+                .ok_or(BoundedSessionManagerError::TooManySessions {
+                    max_sessions: self.max_sessions,
+                    min_idle_secs: self.policy.min_idle.as_secs(),
+                })?;
+            counters.closing.store(true, Ordering::Relaxed);
+            (id.clone(), ClosingMark(Arc::clone(counters)))
+        };
         self.inner.close_session(&victim).await?;
         self.live().remove(&victim);
         tracing::info!(
             session = %victim,
             max_sessions = self.max_sessions,
-            min_idle_secs = self.min_idle.as_secs(),
+            min_idle_secs = self.policy.min_idle.as_secs(),
             "evicted idle MCP session to admit a new one"
         );
         Ok(())

@@ -12,6 +12,11 @@ use std::sync::Mutex;
 /// always stated, never inferred from how fast the test happened to run.
 const TEST_MIN_IDLE: Duration = Duration::from_secs(60);
 
+/// The handshake deadline every test manager is built with — well past any
+/// single advance of [`TEST_MIN_IDLE`] the other tests make, so only the test
+/// about abandoned handshakes ever reaches it.
+const TEST_INIT_TIMEOUT: Duration = Duration::from_secs(600);
+
 /// A `ClientJsonRpcMessage` value for tests driving `create_stream`/`resume`:
 /// its content is irrelevant here — `FakeSessionManager` ignores it — only
 /// its type matters to satisfy the signature.
@@ -82,6 +87,9 @@ struct FakeSessionManager {
     initialize: FakeInitialize,
     /// `create_session` fails when set.
     fails_create: bool,
+    /// When set, `close_session` waits for a permit before closing, so a test
+    /// can act while an eviction's close is still in progress.
+    close_gate: Option<Arc<tokio::sync::Semaphore>>,
 }
 
 /// How [`FakeSessionManager::initialize_session`] answers.
@@ -136,6 +144,12 @@ impl SessionManager for FakeSessionManager {
         // incidental — it is exactly what makes a close-counting wrapper
         // unable to tell a second close from a first, so a fake that
         // errored here would hide the defect these tests exist to pin.
+        if let Some(gate) = &self.close_gate {
+            gate.acquire()
+                .await
+                .expect("close gate is never closed")
+                .forget();
+        }
         let mut sessions = self.sessions.lock().expect("lock");
         sessions.retain(|existing| existing != id);
         Ok(())
@@ -198,7 +212,10 @@ fn bounded_over(inner: FakeSessionManager, max_sessions: usize) -> (TestManager,
     let manager = BoundedSessionManager::with_clock(
         inner,
         max_sessions,
-        TEST_MIN_IDLE,
+        EvictionPolicy {
+            min_idle: TEST_MIN_IDLE,
+            init_timeout: Some(TEST_INIT_TIMEOUT),
+        },
         Arc::clone(&clock) as Arc<dyn Clock>,
     );
     (manager, clock)
@@ -376,9 +393,9 @@ async fn a_session_with_an_open_stream_is_never_evicted() {
 /// rmcp creates a session, spawns its worker, and only then initializes it.
 /// A session in that gap is not idle: evicting it would fail its own
 /// `initialize`. With A busy and B created but not initialized, the cap has
-/// nothing to reclaim — however old B is.
+/// nothing to reclaim — even once B is older than the idle floor.
 #[tokio::test]
-async fn a_session_awaiting_initialize_is_never_evicted() {
+async fn a_session_awaiting_initialize_is_not_evicted_as_idle() {
     let (manager, clock) = bounded(2);
     let a = open_initialized(&manager).await;
     let stream_a = manager
@@ -462,6 +479,93 @@ async fn a_handshake_dropped_at_its_first_await_leaves_the_session_evictable() {
         .await
         .expect("A's abandoned handshake is over, so A is evictable");
     assert!(!manager.is_live(&a));
+}
+
+/// A session whose handshake never happened is abandoned once the inner
+/// manager's `init_timeout` has passed (rmcp's restore path can leave such a
+/// session with nothing left to close it): it becomes evictable then, one
+/// nanosecond later than it would be protected, and not before.
+#[tokio::test]
+async fn a_session_never_initialized_is_evictable_after_the_init_timeout() {
+    let (manager, clock) = bounded(1);
+    let (a, _ta) = manager.create_session().await.expect("create A");
+
+    clock.advance(TEST_INIT_TIMEOUT - Duration::from_nanos(1));
+    let err = manager
+        .create_session()
+        .await
+        .expect_err("A's handshake may still arrive, so A is not evictable");
+    assert!(err.is_too_many_sessions(), "{err}");
+    assert!(manager.is_live(&a));
+
+    clock.advance(Duration::from_nanos(1));
+    manager
+        .create_session()
+        .await
+        .expect("A's handshake deadline has passed, so A is abandoned and evictable");
+    assert!(!manager.is_live(&a));
+}
+
+/// An eviction's victim is marked closing in the step that picks it: a request
+/// arriving while the close is still running is refused (and `has_session`
+/// says the session is gone, so the transport answers 404) instead of being
+/// admitted onto a session about to be closed.
+#[tokio::test]
+async fn a_session_picked_for_eviction_admits_no_new_request() {
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let inner = FakeSessionManager {
+        close_gate: Some(Arc::clone(&gate)),
+        ..FakeSessionManager::default()
+    };
+    let (manager, clock) = bounded_over(inner, 1);
+    let a = open_initialized(&manager).await;
+    clock.advance(TEST_MIN_IDLE);
+
+    let mut admission = Box::pin(manager.create_session());
+    assert!(
+        futures::poll!(admission.as_mut()).is_pending(),
+        "the eviction is waiting on A's close"
+    );
+    assert!(
+        !manager.has_session(&a).await.expect("has_session answers"),
+        "a session being evicted must look gone to the transport"
+    );
+    let refused = manager.create_standalone_stream(&a).await.err();
+    assert!(
+        matches!(refused, Some(BoundedSessionManagerError::SessionClosing)),
+        "no stream may be opened on a session being evicted: {refused:?}"
+    );
+
+    gate.add_permits(1);
+    admission
+        .await
+        .expect("the newcomer is admitted once A is closed");
+    assert!(!manager.is_live(&a));
+}
+
+/// An eviction abandoned mid-close (its caller dropped) hands the victim back:
+/// the closing mark is lifted and the session serves requests again.
+#[tokio::test]
+async fn an_eviction_dropped_mid_close_hands_the_session_back() {
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let inner = FakeSessionManager {
+        close_gate: Some(Arc::clone(&gate)),
+        ..FakeSessionManager::default()
+    };
+    let (manager, clock) = bounded_over(inner, 1);
+    let a = open_initialized(&manager).await;
+    clock.advance(TEST_MIN_IDLE);
+
+    assert!(
+        manager.create_session().now_or_never().is_none(),
+        "the eviction is waiting on A's close when it is dropped"
+    );
+    assert!(manager.is_live(&a));
+    assert!(manager.has_session(&a).await.expect("has_session answers"));
+    manager
+        .accept_message(&a, dummy_message())
+        .await
+        .expect("A serves requests again once the eviction is abandoned");
 }
 
 /// Recency is stamped when activity ENDS: a stream opened long ago that

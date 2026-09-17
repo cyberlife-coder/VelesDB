@@ -36,6 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   between two requests. The trade-off left: at the cap, a client silent and
   streamless for longer than the floor can be evicted by another client's
   `initialize`, and must re-initialize on the `404` its next request gets.
+  A session whose `initialize` never arrived becomes evictable once rmcp's
+  handshake deadline (`init_timeout`, 60 s) has passed, and a session picked
+  for eviction refuses new requests (the transport answers `404`) until its
+  close completes.
 
 - **`autograph_failed` counted failing steps, not failed enrichments.** Its doc
   and `memory_status` promise enrichments, but one extraction failing at two
