@@ -724,6 +724,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   statement without `LIMIT` returns core's default of 10 rows, `LIMIT` is
   capped at core's 100,000, and one too large for a u64 throws
   `BAD_REQUEST`, as core's parser refuses it.
+  A `quality` preset velesdb-wasm cannot parse now throws where it used to
+  be accepted and dropped: `search`, on every path, hands the string to the
+  binding's `search_with_quality`, whose `parse_search_quality` is the one
+  implementation of the grammar, so the SDK refuses `'nonsense'` where the
+  REST server answers `400` (#2267). A dense search runs under the named
+  preset, `balanced` when none is named; the preset still tunes nothing,
+  WASM search being brute force.
   On REST, `multiQuerySearchIds` with a `filter` now
   fails with the server's `400` instead of returning unfiltered ids.
 

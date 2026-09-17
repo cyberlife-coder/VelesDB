@@ -111,6 +111,15 @@ export interface WasmVectorStore {
   /** k-NN dense search. Returns array of [id, score] tuples. */
   search(...args: StoreParams<'search'>): WasmDenseResult[];
 
+  /**
+   * k-NN dense search under a named quality preset. Returns the same
+   * `[id, score]` tuples as {@link search}: WASM search is brute force, so
+   * the preset tunes nothing. It is parsed all the same
+   * (`parse_search_quality`), which is the only place an unparseable preset
+   * is refused — the SDK has no second copy of that grammar.
+   */
+  search_with_quality(...args: StoreParams<'search_with_quality'>): WasmDenseResult[];
+
   /** k-NN search with metadata filter. Returns array of {id, score, payload}. */
   search_with_filter(...args: StoreParams<'search_with_filter'>): WasmFilteredResult[];
 

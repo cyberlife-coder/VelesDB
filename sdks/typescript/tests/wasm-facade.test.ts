@@ -24,6 +24,9 @@ class MockVectorStore {
   get = vi.fn(() => null);
   free = vi.fn();
   search = vi.fn(() => []);
+  // The binding parses the preset, then runs the same brute-force search
+  // (`search_with_quality` in velesdb-wasm's `vector_store.rs`).
+  search_with_quality = vi.fn((q: Float32Array, k: number) => this.search(q, k));
   search_with_filter = vi.fn(() => []);
   sparse_search = vi.fn(() => []);
   text_search = vi.fn(() => []);

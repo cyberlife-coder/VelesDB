@@ -14,6 +14,7 @@ import type {
   FusionParams,
   FusionParamName,
   FusionStrategy,
+  SearchQuality,
 } from '../types';
 import type { FilterInput } from '../filter';
 import { NotFoundError, VelesDBError } from '../types';
@@ -61,9 +62,12 @@ function searchHybridFusion(
   queryVector: Float32Array,
   indices: number[],
   values: number[],
-  k: number
+  k: number,
+  quality: SearchQuality
 ): SearchResult[] {
-  const denseResults: WasmDenseResult[] = collection!.store.search(queryVector, k);
+  const denseResults: WasmDenseResult[] = collection!.store.search_with_quality(
+    queryVector, k, quality
+  );
   const denseForFuse: Array<[number, number]> = denseResults.map(
     ([id, score]) => [Number(id), score]
   );
@@ -102,9 +106,12 @@ function searchDenseOnly(
   ctx: WasmContext,
   collection: ReturnType<WasmContext['getCollection']>,
   queryVector: Float32Array,
-  k: number
+  k: number,
+  quality: SearchQuality
 ): SearchResult[] {
-  const rawResults: WasmDenseResult[] = collection!.store.search(queryVector, k);
+  const rawResults: WasmDenseResult[] = collection!.store.search_with_quality(
+    queryVector, k, quality
+  );
 
   return rawResults.map(([id, score]) => {
     const result: SearchResult = { id: String(id), score };
@@ -117,9 +124,48 @@ function searchDenseOnly(
 }
 
 /**
- * Refuse the `SearchOptions` this backend cannot apply. `quality` is
- * accepted and has nothing to tune: WASM search scans every stored vector,
- * with no graph index whose recall a preset would trade for speed.
+ * The preset a dense WASM search runs under when the caller names none.
+ *
+ * WASM search is brute force, so every preset scans the same vectors; the
+ * binding still parses the string, and `balanced` is the one core treats as
+ * the default.
+ */
+const DEFAULT_SEARCH_QUALITY: SearchQuality = 'balanced';
+
+/**
+ * Refuse a `quality` preset the binding's own parser refuses.
+ *
+ * `parse_search_quality` (velesdb-wasm) is the single implementation of the
+ * preset grammar — `fast`/`balanced`/`accurate`/`perfect`/`autotune`,
+ * `custom:<ef>`, `adaptive:<min>:<max>`. Restating it here would be a second
+ * copy free to drift from it, so the check delegates to the binding, which
+ * exposes the parser on `search_with_quality` alone. A metadata-only store
+ * holds no vectors and has dimension 0, so it parses the preset and scans
+ * nothing: every search path is refused alike, including the filtered and
+ * sparse-only paths, which have no quality-taking binding method, and a
+ * `k <= 0` search, which runs no search at all.
+ *
+ * An untyped (JavaScript) caller can pass any value here, which is why the
+ * refusal cannot be left to the type.
+ */
+function requireParsableQuality(ctx: WasmContext, quality: unknown): void {
+  if (!isSet(quality)) {
+    return;
+  }
+  const probe = ctx.wasmModule.VectorStore.new_metadata_only();
+  try {
+    probe.search_with_quality(new Float32Array(0), 0, quality as SearchQuality);
+  } finally {
+    probe.free();
+  }
+}
+
+/**
+ * Refuse the `SearchOptions` this backend cannot apply. `quality` is applied
+ * — handed to `search_with_quality` — but has nothing to tune: WASM search
+ * scans every stored vector, with no graph index whose recall a preset would
+ * trade for speed. What it must not do is pass unread, so an unparseable
+ * preset is refused here as the REST server refuses it.
  */
 function refuseUnhonouredSearchOptions(options: SearchOptions | undefined): void {
   if (options?.includeVectors === true) {
@@ -253,6 +299,8 @@ export async function wasmSearch(
   const queryVector = query instanceof Float32Array ? query : new Float32Array(query);
   const k = validateSearchInputs(collection, [queryVector], options?.k ?? 10);
   refuseUnhonouredSearchOptions(options);
+  requireParsableQuality(ctx, options?.quality);
+  const quality = options?.quality ?? DEFAULT_SEARCH_QUALITY;
   if (k <= 0) {
     return [];
   }
@@ -264,7 +312,7 @@ export async function wasmSearch(
       && collection.config.dimension > 0;
 
     return hasDense
-      ? searchHybridFusion(ctx, collection, queryVector, indices, values, k)
+      ? searchHybridFusion(ctx, collection, queryVector, indices, values, k, quality)
       : searchSparseOnly(ctx, collection, indices, values, k);
   }
 
@@ -272,7 +320,7 @@ export async function wasmSearch(
     return searchWithFilter(ctx, collection, queryVector, k, options.filter);
   }
 
-  return searchDenseOnly(ctx, collection, queryVector, k);
+  return searchDenseOnly(ctx, collection, queryVector, k, quality);
 }
 
 export async function wasmSearchBatch(

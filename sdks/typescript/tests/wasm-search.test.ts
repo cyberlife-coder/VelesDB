@@ -32,7 +32,7 @@ import type {
 type StoreStub = Partial<Record<keyof WasmVectorStore, unknown>>;
 
 function buildStore(overrides: StoreStub = {}): WasmVectorStore {
-  return {
+  const stub: StoreStub = {
     search: vi.fn(() => []),
     search_with_filter: vi.fn(() => []),
     sparse_search: vi.fn(() => []),
@@ -50,7 +50,15 @@ function buildStore(overrides: StoreStub = {}): WasmVectorStore {
     remove: vi.fn(),
     get: vi.fn(),
     ...overrides,
-  } as unknown as WasmVectorStore;
+  };
+  const store = stub as unknown as WasmVectorStore;
+  // The binding parses the preset, then runs the same brute-force search
+  // (`search_with_quality` in velesdb-wasm's `vector_store.rs`), so a test
+  // that stubs `search` covers both unless it stubs this one too.
+  stub.search_with_quality ??= vi.fn((q: Float32Array, k: number) =>
+    store.search(q, k)
+  );
+  return store;
 }
 
 function buildCtx(
@@ -71,7 +79,12 @@ function buildCtx(
   };
   const module: WasmModule = {
     default: vi.fn(() => Promise.resolve()),
-    VectorStore: (() => ({})) as unknown as WasmModule['VectorStore'],
+    // `new_metadata_only` is the empty store `requireParsableQuality` asks
+    // the binding to parse a preset against; here it parses nothing, so a
+    // test that needs the real refusal stubs it.
+    VectorStore: {
+      new_metadata_only: () => buildStore(),
+    } as unknown as WasmModule['VectorStore'],
     hybrid_search_fuse: vi.fn(() => []),
     ...opts.wasmModule,
   } as WasmModule;
@@ -143,6 +156,114 @@ describe('wasmSearch — validation + dense happy path', () => {
 
     await wasmSearch(ctx, 'docs', new Float32Array([0.1, 0.2]));
     expect(search).toHaveBeenCalledWith(expect.any(Float32Array), 10);
+  });
+});
+
+describe('wasmSearch — quality reaches the binding, and its refusal reaches back (#2282)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  /** A module whose `new_metadata_only()` hands back `probe`. */
+  function moduleWithProbe(probe: WasmVectorStore): Partial<WasmModule> {
+    return {
+      VectorStore: {
+        new_metadata_only: () => probe,
+      } as unknown as WasmModule['VectorStore'],
+    };
+  }
+
+  it('runs a dense search under the preset the caller named', async () => {
+    const search_with_quality = vi.fn(() => [[1n, 0.9]]);
+    const store = buildStore({ search_with_quality });
+    const ctx = buildCtx('docs', store);
+
+    await wasmSearch(ctx, 'docs', [0.1, 0.2], { k: 3, quality: 'accurate' });
+
+    expect(search_with_quality).toHaveBeenCalledWith(
+      expect.any(Float32Array),
+      3,
+      'accurate'
+    );
+  });
+
+  it("names 'balanced' when the caller names no preset", async () => {
+    const search_with_quality = vi.fn(() => []);
+    const store = buildStore({ search_with_quality });
+    const ctx = buildCtx('docs', store);
+
+    await wasmSearch(ctx, 'docs', [0.1, 0.2]);
+
+    expect(search_with_quality).toHaveBeenCalledWith(
+      expect.any(Float32Array),
+      10,
+      'balanced'
+    );
+  });
+
+  it("fuses a hybrid search's dense leg under the caller's preset", async () => {
+    const search_with_quality = vi.fn(() => [[1n, 0.9]]);
+    const store = buildStore({
+      search_with_quality,
+      sparse_search: vi.fn(() => [{ doc_id: 2n, score: 0.5 }]),
+    });
+    const ctx = buildCtx('docs', store, {
+      wasmModule: { hybrid_search_fuse: vi.fn(() => []) },
+    });
+    ctx.getCollection('docs')!.sparseIds.store = store;
+
+    await wasmSearch(ctx, 'docs', [0.1, 0.2], {
+      k: 2,
+      quality: 'fast',
+      sparseVector: { 1: 0.5 },
+    });
+
+    expect(search_with_quality).toHaveBeenCalledWith(
+      expect.any(Float32Array),
+      2,
+      'fast'
+    );
+  });
+
+  // Every path, including the two with no quality-taking binding method and
+  // the one that runs no search at all: none may accept a preset the binding
+  // refuses. The fake only refuses; the grammar stays in velesdb-wasm.
+  it.each([
+    ['dense', {}],
+    ['filtered', { filter: { tenant: 'a' } }],
+    ['sparse-only', { sparseVector: { 1: 0.5 } }],
+    ['k <= 0', { k: 0 }],
+  ] as const)(
+    'a %s search refuses a preset the binding cannot parse',
+    async (_path, options) => {
+      const refuse = vi.fn(() => {
+        throw new Error("Unknown search quality: 'nonsense'");
+      });
+      const probe = buildStore({ search_with_quality: refuse });
+      const ctx = buildCtx('docs', buildStore(), {
+        dimension: 0,
+        wasmModule: moduleWithProbe(probe),
+      });
+
+      await expect(
+        wasmSearch(ctx, 'docs', [], { ...options, quality: 'nonsense' })
+      ).rejects.toThrow(/Unknown search quality/);
+
+      expect(refuse).toHaveBeenCalledWith(expect.any(Float32Array), 0, 'nonsense');
+      expect(probe.free).toHaveBeenCalled();
+    }
+  );
+
+  it('asks the binding nothing when the caller names no preset', async () => {
+    const refuse = vi.fn(() => {
+      throw new Error('the probe must not run');
+    });
+    const probe = buildStore({ search_with_quality: refuse });
+    const ctx = buildCtx('docs', buildStore(), {
+      wasmModule: moduleWithProbe(probe),
+    });
+
+    await wasmSearch(ctx, 'docs', [0.1, 0.2]);
+
+    expect(refuse).not.toHaveBeenCalled();
   });
 });
 

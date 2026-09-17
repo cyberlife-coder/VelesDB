@@ -15,6 +15,9 @@ class MockVectorStore {
   insert_with_payload = vi.fn();
   insert_batch = vi.fn();
   search = vi.fn(() => [[BigInt(1), 0.95], [BigInt(2), 0.85]]);
+  // The binding parses the preset, then runs the same brute-force search
+  // (`search_with_quality` in velesdb-wasm's `vector_store.rs`).
+  search_with_quality = vi.fn((q: Float32Array, k: number) => this.search(q, k));
   search_with_filter = vi.fn(() => [
     { id: BigInt(1), score: 0.95, payload: { title: 'filtered' } },
   ]);
