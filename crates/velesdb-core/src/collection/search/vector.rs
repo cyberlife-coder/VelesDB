@@ -433,7 +433,8 @@ impl Collection {
 
     /// Routes vector search through `QuerySearchOptions` from a WITH clause.
     ///
-    /// Priority: `quality` (from `mode`) > `ef_search` > default `search()`.
+    /// Priority: an explicit `ef_search` > `quality` (from `mode`) > default
+    /// `search()`, through `QuerySearchOptions::resolved_quality`.
     /// When `force_rerank` is `Some(true)`, applies explicit SIMD reranking
     /// regardless of quality mode. When `Some(false)`, suppresses automatic
     /// reranking even if the quality mode would enable it.
@@ -452,13 +453,7 @@ impl Collection {
             return self.search(query, k);
         }
 
-        // Resolve the search quality: explicit mode > exact ef_search > default.
-        let quality = opts.quality.unwrap_or_else(|| {
-            opts.ef_search.map_or(
-                crate::SearchQuality::Balanced,
-                super::vector_filter::ef_to_quality,
-            )
-        });
+        let quality = opts.resolved_quality();
 
         // Parity item E: gate Perfect-mode over-cap once here, covering the
         // forced-rerank / no-rerank branches that bypass `search_with_quality`.
