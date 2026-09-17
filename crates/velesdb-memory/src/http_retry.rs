@@ -44,7 +44,7 @@ pub(crate) struct RetryConfig {
 /// fresh connection. A longer schedule would only pile load onto an Ollama that
 /// is already struggling, and would inflate the worst case of
 /// `remember_extracted`, which issues one embed per fact *and* one per entity
-/// hub. Total added latency on a hard failure: ~300 ms.
+/// hub. A hard failure therefore adds both delays to the call.
 pub(crate) const HTTP_RETRIES: RetryConfig = RetryConfig {
     max_retries: 2,
     initial_delay: Duration::from_millis(100),

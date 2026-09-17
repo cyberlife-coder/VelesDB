@@ -40,7 +40,7 @@ Recall@10 = (Number of true top-10 neighbors found) / 10 × 100%
 | Recall | Meaning |
 |--------|---------------|
 | **100%** | All true neighbors found (exact search) |
-| **95-99%** | Excellent, sufficient for 99% of RAG/recommendation cases |
+| **95-99%** | Excellent for most RAG and recommendation uses |
 | **90-95%** | Acceptable for exploration/prototyping |
 | **< 90%** | Risk of missing important results |
 

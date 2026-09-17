@@ -22,11 +22,14 @@
 //!
 //! # Performance Targets
 //!
-//! | Volume | Without Index | With Trigram | Speedup |
-//! |--------|---------------|--------------|---------|
-//! | 10K    | 45ms          | < 5ms        | > 9x    |
-//! | 100K   | 450ms         | < 20ms       | > 22x   |
-//! | 1M     | 4.5s          | < 100ms      | > 45x   |
+//! Design targets, not measurements: no recorded run times this index, nor the
+//! scan it replaces.
+//!
+//! | Volume | With Trigram (target) |
+//! |--------|-----------------------|
+//! | 10K    | < 5ms                 |
+//! | 100K   | < 20ms                |
+//! | 1M     | < 100ms               |
 #![allow(clippy::doc_markdown)] // Includes architecture/ISA identifiers in markdown tables.
 
 pub mod fingerprint;

@@ -597,7 +597,7 @@ fn test_map_empty() {
 ///
 /// One relevant document out of ten, returned at rank 1. The old shape divided
 /// by the retrieved-relevant count — one — and reported a flawless `1.0` for
-/// 10% recall. Textbook AP divides by the corpus total, so it reports 0.1: high
+/// a one-in-ten recall. Textbook AP divides by the corpus total, so it reports 0.1: high
 /// precision on what came back, and no credit for the nine that did not.
 #[test]
 fn test_map_penalises_missed_relevant_documents() {

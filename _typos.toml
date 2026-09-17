@@ -19,6 +19,12 @@ extend-exclude = [
     "*.svg",
 ]
 
+[default]
+# A commit hash is no word: typos splits `1ede859e` and reads its `ede` as a
+# misspelled `edge`. Only a hex token holding a digit is skipped, so a word
+# made of hex letters alone ("defaced") is still checked.
+extend-ignore-re = ['\b[0-9a-f]{0,39}[0-9][0-9a-f]{0,39}\b']
+
 [default.extend-words]
 abd = "abd"
 abord = "abord"

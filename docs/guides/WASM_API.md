@@ -187,8 +187,8 @@ the historical `@wiscale/velesdb-wasm@4.0.0` package):
 | Mode | Bytes per 768-D vector | Compression | Trade-off |
 |---|---|---|---|
 | `full` | 3080 | 1× | Maximum precision, the default. |
-| `sq8` | 784 | ~4× | Scalar quantization, ~1 % recall loss. |
-| `binary` | 104 | ~30× | Edge / IoT / mobile PWA, ~5–10 % recall loss. |
+| `sq8` | 784 | ~4× | Scalar quantization, small recall loss. |
+| `binary` | 104 | ~30× | Edge / IoT / mobile PWA, larger recall loss. |
 
 `ProductQuantization` and `RaBitQ` exist in the storage-mode enum but are
 **not usable from WASM**: they need `rayon`/`ndarray`/`persistence`, which are

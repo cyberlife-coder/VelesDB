@@ -16,7 +16,7 @@ impl MmapStorage {
     /// # P2 Optimization
     ///
     /// Uses aggressive pre-allocation to minimize blocking:
-    /// - Exponential growth (2x) for amortized O(1)
+    /// - Exponential growth (each resize at least doubles the file) for amortized O(1)
     /// - 64MB minimum growth to reduce resize frequency
     pub(crate) fn ensure_capacity(&mut self, required_len: usize) -> io::Result<()> {
         let start = Instant::now();

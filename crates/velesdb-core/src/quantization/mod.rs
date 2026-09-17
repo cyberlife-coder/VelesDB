@@ -7,7 +7,7 @@
 //! | Metric | f32 | SQ8 | Binary |
 //! |--------|-----|-----|--------|
 //! | RAM/vector (768d) | 3 KB | 770 bytes | 96 bytes |
-//! | Cache efficiency | Baseline | ~4x better | ~32x better |
+//! | Cache efficiency | Baseline | 4x (1 byte per dim) | 32x (1 bit per dim) |
 //! | Recall loss | 0% | ~0.5-1% | ~5-10% |
 //!
 //! ## Engine integration status
@@ -159,12 +159,12 @@ pub enum StorageMode {
     SQ8,
     /// Accepted and persisted, but currently behaves exactly like [`Full`] —
     /// same status as [`SQ8`](StorageMode::SQ8). For a real quantized search
-    /// path use [`RaBitQ`](StorageMode::RaBitQ) (32x, wired end-to-end).
+    /// path use [`RaBitQ`](StorageMode::RaBitQ) (1 bit per dimension, wired end-to-end).
     ///
     /// [`Full`]: StorageMode::Full
     Binary,
-    /// Product Quantization (PQ) for aggressive lossy compression (8x-16x
-    /// typical). Search-path mode: wired into the query hot path for ADC
+    /// Product Quantization (PQ): lossy compression, `2 × dim / m` smaller
+    /// than f32 (dim/4 at the default m = 8). Search-path mode: wired into the query hot path for ADC
     /// (Asymmetric Distance Computation) rescoring.
     ProductQuantization,
     /// `RaBitQ` binary quantization for 32x compression with scalar correction.

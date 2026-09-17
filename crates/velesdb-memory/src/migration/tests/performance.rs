@@ -304,8 +304,9 @@ fn the_per_point_write_cost_is_attributed_to_payload_or_vector() {
 /// (ratios 0.85, 0.86, 0.95, 0.97) because the fixed costs amortise — better
 /// than the linear behaviour this test was written to demand.
 ///
-/// What that changes for the migration: a million-fact rebuild moves from
-/// roughly 56 minutes to roughly 16 seconds, so throughput is no longer what
+/// What that changes for the migration: at those per-fact costs, a million-fact
+/// rebuild moves from roughly 56 minutes to roughly 16 seconds (arithmetic, no
+/// million-fact run), so throughput is no longer what
 /// decides whether an offline rebuild is acceptable.
 ///
 /// `#[ignore]`d: writes 31 000 facts in total.
@@ -546,7 +547,7 @@ fn the_cursor_cost_per_fact_does_not_grow_like_the_offset_walk() {
 
 /// What the two rebuild regimes cost per fact, measured instead of inferred.
 ///
-/// `embedder_cost` is [`Capability::Missing`], and its blocker text quotes
+/// `embedder_cost` is [`Capability::Missing`], and its blocker text used to quote
 /// `16.3 us/fact to re-insert`. That is the REINSERTION cost, measured on the
 /// store, in the regime where the embedder is never called at all. Reading it as
 /// an embedder cost is what makes "the embedder dominates a rebuild" look
@@ -577,7 +578,7 @@ fn the_cursor_cost_per_fact_does_not_grow_like_the_offset_walk() {
 /// | ratio                           | ×23        |
 ///
 /// **×23, not orders of magnitude — and the ratio depends on the payload.**
-/// Comparing an embedding time against the `16.3 us/fact` in the blocker text
+/// Comparing an embedding time against the `16.3 us/fact` the blocker text quoted
 /// suggests a factor near ten thousand. It is wrong on both terms.
 ///
 /// Probed the same day, same 1024 dimensions, payload carrying NO text:

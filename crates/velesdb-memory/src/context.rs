@@ -675,7 +675,7 @@ fn pieces(
 /// tiny `token_budget` (or a tiny caller-supplied `max_chunk_bytes`) would
 /// drive the ceiling toward one byte and explode a large fragment into one
 /// heap `String` per byte. At 256 bytes the per-piece `String` overhead is
-/// under 10 %, so pieces stay bounded by ~`input_bytes / 256` — no
+/// under a tenth, so pieces stay bounded by ~`input_bytes / 256` — no
 /// amplification beyond the already-capped input size ([`crate::limits`]).
 const MIN_CHUNK_BYTES: usize = 256;
 

@@ -4,7 +4,7 @@
 //!
 //! # Performance
 //!
-//! - **16 shards**: Reduces lock contention by 16x on concurrent reads
+//! - **16 shards**: concurrent reads spread over 16 independent locks
 //! - **Hash-based routing**: O(1) shard selection using ID % 16
 //! - **Independent locks**: Reads to different shards don't block each other
 

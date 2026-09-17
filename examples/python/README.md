@@ -4,7 +4,7 @@
 
 Runnable examples demonstrating the VelesDB Python SDK (PyO3 bindings).
 
-## Start here — `hello_velesdb.py` (≈ 5 seconds)
+## Start here — `hello_velesdb.py`
 
 ```bash
 pip install velesdb

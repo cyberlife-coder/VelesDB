@@ -31,12 +31,12 @@
 //!
 //! ## Features
 //!
-//! - **Blazing Fast**: HNSW index with explicit SIMD (4x faster)
+//! - **Blazing Fast**: HNSW index with explicit SIMD
 //! - **5 Distance Metrics**: Cosine, Euclidean, Dot Product, Hamming, Jaccard
 //! - **Hybrid Search**: Vector + BM25 full-text with RRF fusion
 //! - **Graph Engine**: typed edges on any collection, BFS/DFS, `MATCH` patterns
 //! - **`VelesQL`**: one SQL-like language across all three engines
-//! - **Quantization**: SQ8 (4x) and Binary (32x) memory compression
+//! - **Quantization**: SQ8 (4x compression) and Binary (32x compression)
 //! - **Persistent Storage**: Memory-mapped files for efficient disk access
 //!
 //! ## Quick Start

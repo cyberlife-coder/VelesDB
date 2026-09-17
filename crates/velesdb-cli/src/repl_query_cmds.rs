@@ -139,7 +139,7 @@ fn print_cost_metadata(output: &velesdb_core::velesql::ExplainOutput) {
     }
 }
 
-/// Returns `true` when estimated cost diverges from actual time by more than 10×.
+/// Returns `true` when estimated cost diverges from actual time by more than the 10× threshold.
 fn divergence_exceeds_threshold(estimated_ms: f64, actual_ms: f64) -> bool {
     if estimated_ms <= 0.0 || actual_ms <= 0.0 {
         return false;

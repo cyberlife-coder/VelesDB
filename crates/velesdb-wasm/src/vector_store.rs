@@ -24,8 +24,8 @@ use crate::{DistanceMetric, QueryResult, StorageMode};
 /// # Storage Modes
 ///
 /// - `Full`: f32 precision, best recall
-/// - `SQ8`: 4x memory reduction, ~1% recall loss
-/// - `Binary`: 32x memory reduction, ~5-10% recall loss
+/// - `SQ8`: 4x memory reduction, small recall loss
+/// - `Binary`: 32x memory reduction, larger recall loss
 #[wasm_bindgen]
 pub struct VectorStore {
     /// Vector IDs in insertion order
@@ -89,7 +89,7 @@ impl VectorStore {
         self.dimension == 0
     }
 
-    /// Creates store with mode: full (4B/dim), sq8 (4x compression), binary (32x).
+    /// Creates store with mode: full (4B/dim), sq8 (4x compression), binary (32x compression).
     #[wasm_bindgen]
     pub fn new_with_mode(
         dimension: usize,
