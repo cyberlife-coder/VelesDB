@@ -3757,10 +3757,9 @@ fn writes_racing_a_vacuum_of_an_sq8_index_survive_it() {
     );
 
     assert_writes_survive_vacuums(&index);
-    let graph = index.inner.read();
-    assert_eq!(graph.storage_mode(), crate::StorageMode::SQ8);
+    assert_eq!(index.inner.read().storage_mode(), crate::StorageMode::SQ8);
     assert!(
-        graph.is_sq8_quantizer_trained(),
+        index.inner.read().is_sq8_quantizer_trained(),
         "the vacuums dropped the quantizer"
     );
 }

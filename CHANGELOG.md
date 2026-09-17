@@ -164,11 +164,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   left one insert at a time: nothing runs on rayon under that lock, whose
   batch searches park rayon's workers on it. Reachable through
   `POST /collections/{name}/index/rebuild`, which accepts writes and flushes
-  meanwhile. Six tests race a vacuum or saves, and two vacuum an index: one
+  meanwhile. Eight tests race a vacuum or saves, and two vacuum an index: one
   built with its own parameters, one whose ids are all deleted.
   `writes_racing_a_vacuum_survive_it` fails on the old re-map: 300 of 300
   inserts lost, 300 of 300 upserts still on their old vector, 297 of 300
   deletes back in an exhaustive scan.
+  `writes_racing_a_vacuum_of_an_sq8_index_survive_it` runs the same race on a
+  trained SQ8 index; with the copy of the writes reverted, 300 of 300
+  inserts were lost and 300 of 300 upserts left on their old vector.
+  `a_vacuum_carrying_writes_finishes_beside_batch_searches`, a test binary of
+  its own on a two-thread rayon pool, fails by its 120 s watchdog when the
+  copy runs on rayon under the write lock: the first vacuum never finished.
   `deletes_racing_a_vacuum_keep_the_tombstone_count_exact` failed while the
   swap left `next_idx` at the highest slot mapped: `tombstone_count` read 0
   over 1 229 to 1 361 dead slots, in 5 rounds of 5.

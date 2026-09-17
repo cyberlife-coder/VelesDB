@@ -21,10 +21,11 @@
 //!
 //! Each vacuum runs on its own thread and reports through a channel read with
 //! a timeout. A vacuum that does not report in time is a hang: the test
-//! prints what it saw and exits the process with a failure code, since the
-//! parked threads can never be joined.
+//! writes what it saw to the process's stderr and exits with a failure code,
+//! since the parked threads can never be joined.
 
 use std::collections::HashSet;
+use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
@@ -51,12 +52,6 @@ fn vector(id: u64) -> Vec<f32> {
     (0..DIMENSION)
         .map(|i| ((id as f32) * 0.31 + (i as f32) * 0.17).sin())
         .collect()
-}
-
-/// Prints `msg` from a fresh thread: libtest captures the test thread's
-/// stderr and would swallow it before `process::exit`.
-fn print_to_real_stderr(msg: String) {
-    let _ = thread::spawn(move || eprintln!("{msg}")).join();
 }
 
 #[test]
@@ -89,50 +84,9 @@ fn a_vacuum_carrying_writes_finishes_beside_batch_searches() {
 
     let next_id = Arc::new(AtomicU64::new(INDEXED));
     let mut raced = Vec::new();
-    for attempt in 0..ATTEMPTS {
-        let vacuuming = Arc::new(AtomicBool::new(true));
-        let (report, reported) = mpsc::channel();
-        let vacuum = {
-            let (index, vacuuming) = (Arc::clone(&index), Arc::clone(&vacuuming));
-            thread::spawn(move || {
-                let result = index.vacuum();
-                vacuuming.store(false, Ordering::Release);
-                let _ = report.send(result);
-            })
-        };
-        let writes = {
-            let (index, vacuuming, next_id) = (
-                Arc::clone(&index),
-                Arc::clone(&vacuuming),
-                Arc::clone(&next_id),
-            );
-            thread::spawn(move || {
-                let mut made = 0_u64;
-                while vacuuming.load(Ordering::Acquire) {
-                    let id = next_id.fetch_add(1, Ordering::AcqRel);
-                    index.insert(id, &vector(id));
-                    made += 1;
-                }
-                made
-            })
-        };
-
-        let Ok(result) = reported.recv_timeout(HANG_BOUND) else {
-            print_to_real_stderr(format!(
-                "HANG: vacuum {attempt} did not finish within {HANG_BOUND:?} beside batch \
-                 searches on a {}-thread rayon pool; vacuums finished before it, with the \
-                 writes that raced each: {raced:?}",
-                rayon::current_num_threads(),
-            ));
-            std::process::exit(1);
-        };
-        vacuum.join().expect("test: the vacuuming thread panicked");
-        let made = writes.join().expect("test: the writing thread panicked");
-        assert!(result.is_ok(), "vacuum {attempt}: {result:?}");
+    while raced.len() < ATTEMPTS && raced.last().is_none_or(|&made| made < RACING_WRITES) {
+        let made = race_one_vacuum(&index, &next_id, &raced);
         raced.push(made);
-        if made >= RACING_WRITES {
-            break;
-        }
     }
     stop.store(true, Ordering::Release);
     searches
@@ -146,15 +100,7 @@ fn a_vacuum_carrying_writes_finishes_beside_batch_searches() {
         "no vacuum raced {RACING_WRITES} writes in {ATTEMPTS} attempts: {raced:?}"
     );
     let written = next_id.load(Ordering::Acquire);
-    let scanned: HashSet<u64> = index
-        .search_brute_force(&vector(0), index.len())
-        .expect("test: exhaustive scan")
-        .iter()
-        .map(|hit| hit.id)
-        .collect();
-    let lost: Vec<u64> = (INDEXED..written)
-        .filter(|id| !scanned.contains(id))
-        .collect();
+    let lost = unscanned(&index, INDEXED..written);
     assert!(
         lost.is_empty(),
         "{} of {} ids written during the vacuums missing from an exhaustive scan \
@@ -163,4 +109,74 @@ fn a_vacuum_carrying_writes_finishes_beside_batch_searches() {
         written - INDEXED,
         lost.first()
     );
+}
+
+/// Runs one vacuum of `index` while a thread inserts ids from `next_id` until
+/// it ends, and returns how many it inserted. `raced` holds what the vacuums
+/// before this one returned, for the hang report.
+///
+/// A vacuum that has not ended within [`HANG_BOUND`] exits the process.
+fn race_one_vacuum(index: &Arc<HnswIndex>, next_id: &Arc<AtomicU64>, raced: &[u64]) -> u64 {
+    let vacuuming = Arc::new(AtomicBool::new(true));
+    let (report, reported) = mpsc::channel();
+    let vacuum = {
+        let (index, vacuuming) = (Arc::clone(index), Arc::clone(&vacuuming));
+        thread::spawn(move || {
+            let result = index.vacuum();
+            vacuuming.store(false, Ordering::Release);
+            let _ = report.send(result);
+        })
+    };
+    let writes = {
+        let (index, next_id) = (Arc::clone(index), Arc::clone(next_id));
+        thread::spawn(move || {
+            let mut made = 0_u64;
+            while vacuuming.load(Ordering::Acquire) {
+                let id = next_id.fetch_add(1, Ordering::AcqRel);
+                index.insert(id, &vector(id));
+                made += 1;
+            }
+            made
+        })
+    };
+
+    let result = match reported.recv_timeout(HANG_BOUND) {
+        Ok(result) => result,
+        Err(mpsc::RecvTimeoutError::Disconnected) => panic!(
+            "the vacuuming thread ended without reporting: {:?}",
+            vacuum.join()
+        ),
+        Err(mpsc::RecvTimeoutError::Timeout) => report_hang(raced),
+    };
+    vacuum.join().expect("test: the vacuuming thread panicked");
+    let made = writes.join().expect("test: the writing thread panicked");
+    assert!(result.is_ok(), "vacuum {}: {result:?}", raced.len());
+    made
+}
+
+/// Reports a vacuum that did not end within [`HANG_BOUND`], after the
+/// vacuums whose racing writes `raced` holds, and exits the process.
+fn report_hang(raced: &[u64]) -> ! {
+    // Straight to the process's stderr: libtest captures `eprintln!` on the
+    // test thread and the threads it spawns, and `exit` drops what it holds.
+    let _ = writeln!(
+        std::io::stderr(),
+        "HANG: vacuum {} did not finish within {HANG_BOUND:?} beside batch searches \
+         on a {}-thread rayon pool; the vacuums before it finished with these writes \
+         racing each: {raced:?}",
+        raced.len(),
+        rayon::current_num_threads(),
+    );
+    std::process::exit(1);
+}
+
+/// The ids of `ids` an exhaustive scan of `index` does not return.
+fn unscanned(index: &HnswIndex, ids: std::ops::Range<u64>) -> Vec<u64> {
+    let scanned: HashSet<u64> = index
+        .search_brute_force(&vector(0), index.len())
+        .expect("test: exhaustive scan")
+        .iter()
+        .map(|hit| hit.id)
+        .collect();
+    ids.filter(|id| !scanned.contains(id)).collect()
 }
