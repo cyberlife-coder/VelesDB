@@ -173,7 +173,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   where command substitution stripped a trailing newline: a repository whose
   directory name ends in one is unlocked by its own recall, never under the
   name of the directory it resembles, and a pending record holding two records
-  is refused instead of acted on.
+  is refused instead of acted on. The Windsurf hook reads them the same way, so
+  its reminder names the project of the repository it runs in instead of the
+  parent directory's when that repository's directory name ends in a newline.
 - **`GEO_DISTANCE` was inaccurate or NaN near the antipode, and its `=` /
   `!=` depended on floating-point rounding (#2310).** Both evaluation paths,
   `ColumnStore::filter_geo_distance` and VelesQL's payload filtering

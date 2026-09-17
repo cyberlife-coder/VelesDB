@@ -4,16 +4,43 @@
 
 umask 077
 
+# --- Reading a string exactly --------------------------------------------------
+# `$(…)` strips every trailing newline of what it captures, and a directory
+# name, a project or a session may end in one: a hook would then name another
+# repository than the one it read. These are the readers the Claude Code and
+# Codex libraries share; this integration keeps its own copy, like the rest of
+# this file.
+
+# read_exact VAR CMD...: set VAR to CMD's whole output; fail when CMD fails.
+read_exact() {
+  local read_exact_out
+  read_exact_out="$("${@:2}" && printf x)" || return 1
+  printf -v "$1" '%s' "${read_exact_out%x}"
+}
+
+# read_exact_line VAR CMD...: the same, less the one newline that ends the line
+# CMD prints (pwd, dirname, basename, readlink).
+read_exact_line() {
+  local read_exact_line_out
+  read_exact read_exact_line_out "${@:2}" || return 1
+  printf -v "$1" '%s' "${read_exact_line_out%$'\n'}"
+}
+
+# physical_dir DIR: DIR's physical path, as `pwd -P` prints it.
+physical_dir() {
+  (cd "$1" 2>/dev/null && pwd -P)
+}
+
 physical_policy_start() {
   local candidate="$1"
   local depth=0
   while [ ! -d "$candidate" ] && [ "$depth" -lt 40 ]; do
     [ "$candidate" = "/" ] && break
-    candidate="$(dirname "$candidate")"
+    read_exact_line candidate dirname -- "$candidate" || return 1
     depth=$((depth + 1))
   done
   [ -d "$candidate" ] || return 1
-  (cd "$candidate" 2>/dev/null && pwd -P)
+  physical_dir "$candidate"
 }
 
 # require_jq: fail loudly (not silently) if jq is missing, since every hook
@@ -34,7 +61,7 @@ require_jq() {
 resolve_config() {
   local start_dir="$1"
   local physical_start
-  physical_start="$(physical_policy_start "$start_dir")" || return 1
+  read_exact_line physical_start physical_policy_start "$start_dir" || return 1
   start_dir="$physical_start"
   local dir="$start_dir"
   local config=""
@@ -48,19 +75,19 @@ resolve_config() {
     if [ "$dir" = "/" ] || [ -z "$dir" ]; then
       break
     fi
-    dir="$(dirname "$dir")"
+    read_exact_line dir dirname -- "$dir" || return 1
     depth=$((depth + 1))
   done
 
   PROJECT=""
   SESSION=""
   if [ -n "$config" ] && jq -e . "$config" >/dev/null 2>&1; then
-    PROJECT="$(jq -r '.project // empty' "$config")"
-    SESSION="$(jq -r '.session // empty' "$config")"
+    read_exact PROJECT jq -j '.project // empty' "$config" || PROJECT=""
+    read_exact SESSION jq -j '.session // empty' "$config" || SESSION=""
   fi
 
   if [ -z "$PROJECT" ]; then
-    PROJECT="$(basename "$start_dir")"
+    read_exact_line PROJECT basename -- "$start_dir" || PROJECT=""
   fi
   if [ -z "$SESSION" ]; then
     SESSION="rolling"

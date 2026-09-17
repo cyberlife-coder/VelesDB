@@ -550,8 +550,8 @@ adopt_batch_sessions() {
   local session
   while IFS= read -r -d '' project; do
     session="$(adopted_session_for "$1" "$project" save)" || continue
-    targets="$(printf '%s' "$targets" | jq -c --arg p "$project" --arg s "$session" \
-      'map(if .project == $p then .session = $s else . end)')" || return 1
+  targets="$(printf '%s' "$targets" | jq -c --arg p "$project" --arg s "$session" \
+      'map(if .project == $p then .session = $s else . end)')" || return 1 # exact-read-ok: compact JSON, whose own newline is the only one
   done < <(printf '%s' "$targets" | jq -j '[.[].project] | unique[] | . + "\u0000"')
   printf '%s' "$targets"
 }
@@ -587,7 +587,7 @@ promote_pending_recall() {
   for file in "$dir"/*.json; do
     [ -e "$file" ] || [ -L "$file" ] || continue
     [ -f "$file" ] && [ ! -L "$file" ] && valid_project_record "$file" || return 2
-    canonical="$(jq -sc '.[0] | {project, session, root}' "$file")" || return 2
+    canonical="$(jq -sc '.[0] | {project, session, root}' "$file")" || return 2 # exact-read-ok: compact JSON, whose own newline is the only one
     expected="$(safe_marker_key "$canonical")" || return 2
     expected="${expected}.json"
     [ "${file##*/}" = "$expected" ] || return 2

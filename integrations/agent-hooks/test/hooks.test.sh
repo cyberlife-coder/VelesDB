@@ -326,6 +326,21 @@ else
   fail "Windsurf pre_user_prompt: uses project from .velesdb-hooks.json"
 fi
 
+# The reminder names the project of the repository it runs in, even when that
+# repository's directory name ends in a newline: `$(…)` would strip it and walk
+# up to the parent, whose project is another one (round 14).
+WINDSURF_NL_DIR="$TMP_TEST_DIR/windsurf-newline-repo"$'\n'
+mkdir -p "$WINDSURF_NL_DIR"
+printf '{"project": "windsurf-newline-project", "session": "rolling"}\n' > "$WINDSURF_NL_DIR/.velesdb-hooks.json"
+windsurf_nl_payload="$(jq -n --arg cwd "$WINDSURF_NL_DIR" --arg tid "$WINDSURF_TRAJECTORY_ID-nl" \
+  '{trajectory_id: $tid, cwd: $cwd, execution_id: "exec-nl", model_name: "test-model"}')"
+windsurf_nl_out="$(bash "$WINDSURF_HOOKS_DIR/pre-user-prompt.sh" <<<"$windsurf_nl_payload")" || hook_exited "$LINENO" "$?"
+if printf '%s' "$windsurf_nl_out" | grep -qF 'project="windsurf-newline-project"'; then
+  pass "Windsurf pre_user_prompt: a repository whose directory name ends in a newline keeps its own project"
+else
+  fail "Windsurf pre_user_prompt: a repository whose directory name ends in a newline keeps its own project: $(printf '%s' "$windsurf_nl_out" | grep -oE 'project="[^"]*"' | head -n 1)"
+fi
+
 windsurf_out_2="$(bash "$WINDSURF_HOOKS_DIR/pre-user-prompt.sh" <<<"$windsurf_payload")" || hook_exited "$LINENO" "$?"
 
 if [ -z "$windsurf_out_2" ]; then
@@ -1521,7 +1536,7 @@ wc_scoped_recall() {
 
 wc_host_checks() {
   local dir="$1" label="$2" sid="$wc_sid-$3" text order run save load first second first_pid second_pid
-  local payload reads runs=0 lost=0 shape refused wt project passed_early scope pending scope_n scope_sid scope_leaks malformed bad_dir bad_key bad_status bad_markers odd odd_n odd_root odd_before odd_after exact_kind exact_dir exact_root exact_key exact_status exact_marked exact_other exact_state
+  local payload reads runs=0 lost=0 shape refused wt project passed_early scope pending scope_n scope_sid scope_leaks odd_project malformed bad_dir bad_key bad_status bad_markers odd odd_n odd_root odd_before odd_after exact_kind exact_dir exact_root exact_key exact_status exact_marked exact_other exact_state
 
   # A save reminder names only a session the conversation saved: after a load
   # alone, Stop, and Claude Code's PreCompact, still name the configured one.
@@ -1712,22 +1727,28 @@ wc_host_checks() {
   # in a newline, is unlocked by a scoped recall like any other: its record is
   # written, validated and read back exactly.
   odd_n=0
-  for odd in tab newline; do
+  for odd in tab newline project-newline; do
     odd_n=$((odd_n + 1))
-    odd_root="$TMP_TEST_DIR/ll-$3-$odd"$'\t'repo
-    [ "$odd" = tab ] || odd_root="$TMP_TEST_DIR/ll-$3-newline-repo"$'\n'
+    odd_project=ll-odd-path
+    case "$odd" in
+      tab) odd_root="$TMP_TEST_DIR/ll-$3-tab"$'\t'repo ;;
+      newline) odd_root="$TMP_TEST_DIR/ll-$3-newline-repo"$'\n' ;;
+      # A project name ending in a newline is the config's, read from the file
+      # the repository ships: only the exact name unlocks it.
+      *) odd_root="$TMP_TEST_DIR/ll-$3-project-newline"; odd_project="ll-odd-project"$'\n' ;;
+    esac
     mkdir -p "$odd_root"
-    printf '{"project": "ll-odd-path", "session": "rolling", "enforce_learning_loop": true}\n' \
+    jq -cn --arg project "$odd_project" '{project: $project, session: "rolling", enforce_learning_loop: true}' \
       > "$odd_root/.velesdb-hooks.json"
     odd_before=allowed odd_after=refused
     wc_edit_allowed "$dir" "$sid-ar-$odd_n" "$odd_root" || odd_before=refused
-    wc_scoped_recall "$dir" "$sid-ar-$odd_n" "$odd_root" ll-odd-path
+    wc_scoped_recall "$dir" "$sid-ar-$odd_n" "$odd_root" "$odd_project"
     if wc_edit_allowed "$dir" "$sid-ar-$odd_n" "$odd_root"; then
       odd_after=allowed
     fi
     # The root its name resembles without the newline is another opted-in
     # repository, and stays refused: the unlock went to the exact root.
-    if [ "$odd" = newline ]; then
+    if [ "$odd" = newline ]; then  # the root's own name, not the project's
       mkdir -p "${odd_root%$'\n'}"
       printf '{"project": "ll-odd-sibling", "session": "rolling", "enforce_learning_loop": true}\n' \
         > "${odd_root%$'\n'}/.velesdb-hooks.json"
@@ -1975,29 +1996,39 @@ else
   fail "Harness: a helper names its caller's line when a hook exits non-zero:$helper_lines"
 fi
 
-# No hook reads a path, a project or a session through command substitution
-# alone: `$(…)` strips every trailing newline, so a hook would name, compare or
-# mark another repository than the one it read. Both hosts' hooks and libraries
-# read them through read_exact / read_exact_line (lib/common.sh) and join an
-# identity with printf -v; this search, comments skipped and continuation lines
-# joined, fails on a `$(jq -r` of a project, session, root or cwd, and on a
-# `$(…)` of dirname, basename, readlink, pwd -P or a two-line identity.
-# shellcheck disable=SC2016 # a regular expression, not an expansion
-EXACT_READ='\$\((printf .%s. "\$payload" \| )?jq -s?r[^)]*\.(project|session|root|cwd|file_path)([^_A-Za-z]|$)|\$\((dirname|basename|readlink|physical_policy_start|physical_dir|resolve_final_symlink|learning_marker_identity) |pwd -P\)"|\$\(printf .%s\\n%s.'
+# No hook reads a path, a project or a session through command substitution:
+# `$(…)` and backticks strip every trailing newline, so a hook would name,
+# compare or mark another repository than the one it read. Every such string is
+# read through read_exact / read_exact_line, and an identity is joined with
+# printf -v. Both spellings of a substitution are searched, whatever the
+# command's flags, in every shipped host, and a line is flagged when either the
+# variable it assigns belongs to the path/project/session/root/cwd family or the
+# substitution reads one of those JSON fields. A substitution that cannot carry
+# a trailing newline — compact JSON, a fixed literal — says so on its own line
+# with `# exact-read-ok: <why>`; a host's own session id and each script's
+# `SCRIPT_DIR` are exempt.
+EXACT_SUBST_CMD='(jq|dirname|basename|readlink|pwd|physical_dir|physical_policy_start|resolve_final_symlink|learning_marker_identity|printf)'
+# shellcheck disable=SC2016 # regular expressions, not expansions
+EXACT_SUBST_NAME='[a-z_]*(project|session|root|cwd|dir|path|target|candidate|link|current|marker)[a-z0-9_]*'
+# shellcheck disable=SC2016
+EXACT_SUBST_FIELD='\.(project|session|root|cwd|file_path)([^_A-Za-z]|$)'
+EXACT_SUBST="^[[:space:]]*(! )?${EXACT_SUBST_NAME}=(\"?(\\\$\\(|\`))[^\`]*${EXACT_SUBST_CMD}|(\\\$\\(|\`)[^\`]*${EXACT_SUBST_CMD}[^\`]*${EXACT_SUBST_FIELD}"
 inexact_reads=""
-for exact_file in "$HOOKS_DIR"/*.sh "$HOOKS_DIR"/lib/common.sh "$CODEX_HOOKS_DIR"/*.sh "$CODEX_HOOKS_DIR"/lib/common.sh; do
+for exact_file in "$HOOKS_DIR"/*.sh "$HOOKS_DIR"/lib/*.sh "$CODEX_HOOKS_DIR"/*.sh "$CODEX_HOOKS_DIR"/lib/*.sh \
+  "$WINDSURF_HOOKS_DIR"/*.sh "$WINDSURF_HOOKS_DIR"/lib/*.sh; do
   while IFS= read -r exact_line; do
     case "$exact_line" in
-      SCRIPT_DIR=*) continue ;;
+      SCRIPT_DIR=*|*'# exact-read-ok: '*) continue ;;
+      session_id=*|*' session_id='*|trajectory_id=*|*' trajectory_id='*) continue ;;
     esac
     inexact_reads="$inexact_reads ${exact_file#"$ROOT"/}: $exact_line;"
   done < <(awk '/^[[:space:]]*#/ { next } { if (sub(/\\$/, "")) { line = line $0 } else { print line $0; line = "" } }' "$exact_file" \
-    | grep -E "$EXACT_READ" || true)
+    | grep -iE "$EXACT_SUBST" || true)
 done
 if [ -z "$inexact_reads" ]; then
-  pass "Harness: no hook reads a path, project or session through command substitution alone"
+  pass "Harness: no shipped hook reads a path, project or session through command substitution"
 else
-  fail "Harness: no hook reads a path, project or session through command substitution alone:$inexact_reads"
+  fail "Harness: no shipped hook reads a path, project or session through command substitution:$inexact_reads"
 fi
 
 # No hook is fed by a pipe (#2294). A hook that never reads its input, as the

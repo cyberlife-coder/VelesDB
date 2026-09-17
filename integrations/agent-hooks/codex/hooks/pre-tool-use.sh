@@ -20,7 +20,9 @@ patch="$(printf '%s' "$payload" | jq -r '.tool_input.command // empty' 2>/dev/nu
 
 [ "$tool_name" = "apply_patch" ] || { echo '{}'; exit 0; }
 [ -n "$cwd" ] || cwd="$PWD"
-targets="$(printf '%s' "$patch" | awk '
+# apply_patch names one target per header line, so no target can hold a
+# newline; the program lives in a variable so the read that uses it can say so.
+PATCH_TARGETS_AWK='
   /^\*\*\* (Add|Update|Delete) File: / {
     sub(/^\*\*\* (Add|Update|Delete) File: /, "")
     print
@@ -29,7 +31,8 @@ targets="$(printf '%s' "$patch" | awk '
     sub(/^\*\*\* Move to: /, "")
     print
   }
-')"
+'
+targets="$(printf '%s' "$patch" | awk "$PATCH_TARGETS_AWK")" # exact-read-ok: one patch header per line, so no target can hold a newline
 [ -n "$targets" ] || targets="."
 
 needs_checkpoint="false"
@@ -96,7 +99,7 @@ while IFS= read -r target_path; do
   dirty_projects="$(jq -cn \
     --argjson projects "$dirty_projects" \
     --argjson record "$record" \
-    '($projects + [$record]) | unique_by(.root)')"
+    '($projects + [$record]) | unique_by(.root)')" # exact-read-ok: compact JSON, whose own newline is the only one
   needs_checkpoint="true"
 done <<< "$targets"
 

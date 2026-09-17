@@ -34,7 +34,7 @@ session_id="$(printf '%s' "$payload" | jq -r '.trajectory_id // empty')"
 if [ -z "$session_id" ]; then
   session_id="windsurf-${PPID:-$$}"
 fi
-cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty')"
+read_exact cwd jq -j '.cwd // empty' <<<"$payload" 2>/dev/null || cwd=""
 if [ -z "$cwd" ]; then
   cwd="$PWD"
 fi

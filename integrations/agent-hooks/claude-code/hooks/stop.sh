@@ -62,7 +62,7 @@ if valid_private_marker "$checkpoint_manifest"; then
   fi
   manifest_state="$(jq -r '.state' "$checkpoint_manifest")"
   if [ "$manifest_state" = "pending" ]; then
-    targets="$(jq -c '.targets' "$checkpoint_manifest")"
+    targets="$(jq -c '.targets' "$checkpoint_manifest")" # exact-read-ok: compact JSON, whose own newline is the only one
     reason="Before finishing, complete the VelesDB learning loop for every edited repository in this recovered batch ($targets): 1. Recall prior patterns; 2. Decision: remember each non-trivial decision; 3. Causality: relate each decision to its cause and each incident to its root cause with outgoing relations; 4. Feedback: send feedback for every recalled memory that helped or misled. Then call save_working_context for every listed project/session with its distilled state and stop."
     response="$(jq -n --arg reason "$reason" '{decision: "block", reason: $reason}')"
     delivered_manifest="$(jq -c '.state = "delivered"' "$checkpoint_manifest")"
@@ -95,7 +95,7 @@ elif [ -d "$dirty_dir" ]; then
       dirty_invalid="true"
       break
     fi
-    canonical="$(jq -c '{project, session, root}' "$record_file")"
+    canonical="$(jq -c '{project, session, root}' "$record_file")" # exact-read-ok: compact JSON, whose own newline is the only one
     if [ "${record_file##*/}" != "$(safe_marker_key "$canonical").json" ]; then
       dirty_invalid="true"
       break
@@ -111,7 +111,7 @@ if [ "$dirty_invalid" = "true" ]; then
   exit 0
 fi
 if [ "${#dirty_records[@]}" -gt 0 ]; then
-  targets="$(jq -sc '[.[] | {project, session, root}]' "${dirty_records[@]}")"
+  targets="$(jq -sc '[.[] | {project, session, root}]' "${dirty_records[@]}")" # exact-read-ok: compact JSON, whose own newline is the only one
   # Each repository is named with the working context this conversation last
   # saved for it, else with the session PreToolUse froze into its record: the
   # checklist asks for a save, so a session it only loaded is never named.
