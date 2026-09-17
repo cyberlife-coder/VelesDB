@@ -37,82 +37,10 @@ fn strip_in_value(value: &mut Value) {
     }
 }
 
-/// Recursively widen every property named in `keys` (resolving the `items`
-/// of array-typed ones) from `integer` to `["integer", "string"]`, across
-/// the whole schema tree — `$defs` included.
-///
-/// The advertised-schema counterpart of the `context::wire` id contract:
-/// under `CompilePolicy::ids_as_strings` a response id field crosses as a
-/// decimal string, and `fragments[].id` accepts one on input — and the
-/// official MCP SDKs validate `structuredContent` against the advertised
-/// `outputSchema` (spec 2025-06-18), so a schema typing those fields
-/// `integer` only would make every opted-in response fail validation for
-/// exactly the clients the option exists for. Same shape of tree walk as
-/// [`strip_int_formats`], but keyed: only the named properties widen.
-///
-/// `mcp`-gated: the advertised tool schemas are its only consumer.
+/// The rustdoc-link rewrite and the id widening (see the module doc).
 #[cfg(feature = "mcp")]
-pub(crate) fn widen_id_properties(map: &mut Map<String, Value>, keys: &[&str]) {
-    if let Some(Value::Object(properties)) = map.get_mut("properties") {
-        for (name, subschema) in properties.iter_mut() {
-            if keys.contains(&name.as_str()) {
-                widen_id_schema(subschema);
-            }
-        }
-    }
-    for value in map.values_mut() {
-        widen_in_value(value, keys);
-    }
-}
-
-#[cfg(feature = "mcp")]
-fn widen_in_value(value: &mut Value, keys: &[&str]) {
-    match value {
-        Value::Object(map) => widen_id_properties(map, keys),
-        Value::Array(items) => items.iter_mut().for_each(|item| widen_in_value(item, keys)),
-        _ => {}
-    }
-}
-
-/// Widen one id property's schema: `integer` → `["integer", "string"]`
-/// (keeping any `null` of an optional field), recursing into `items` for an
-/// array of ids. `minimum: 0` may stay — JSON Schema numeric keywords apply
-/// to numbers only, so the string form is unaffected.
-#[cfg(feature = "mcp")]
-fn widen_id_schema(schema: &mut Value) {
-    let Value::Object(map) = schema else {
-        return;
-    };
-    match map.get("type").cloned() {
-        Some(Value::String(kind)) if kind == "integer" => {
-            map.insert(
-                "type".to_owned(),
-                Value::Array(vec![
-                    Value::String("integer".to_owned()),
-                    Value::String("string".to_owned()),
-                ]),
-            );
-        }
-        Some(Value::String(kind)) if kind == "array" => {
-            if let Some(items) = map.get_mut("items") {
-                widen_id_schema(items);
-            }
-        }
-        Some(Value::Array(mut kinds)) => {
-            let has_integer = kinds.iter().any(|kind| kind == "integer");
-            let has_string = kinds.iter().any(|kind| kind == "string");
-            if has_integer && !has_string {
-                let after = kinds
-                    .iter()
-                    .position(|kind| kind == "integer")
-                    .map_or(kinds.len(), |position| position + 1);
-                kinds.insert(after, Value::String("string".to_owned()));
-                map.insert("type".to_owned(), Value::Array(kinds));
-            }
-        }
-        _ => {}
-    }
-}
+#[path = "schema_walks.rs"]
+mod walks;
 
 /// Mots-cles numeriques qu'un slot annonce `string` ne contraint plus.
 /// JSON Schema applique `minimum`/`maximum`/`multipleOf` aux nombres
@@ -134,7 +62,7 @@ const INERT_NUMERIC_KEYWORDS: [&str; 6] = [
 #[cfg(feature = "mcp")]
 const UNION_KEYWORDS: [&str; 4] = ["anyOf", "oneOf", "allOf", "$ref"];
 
-/// Le pendant ENTREE de [`widen_id_properties`] : chaque propriete nommee
+/// Le pendant ENTREE de [`walks::widen_id_properties`] : chaque propriete nommee
 /// dans `keys` est annoncee `type: "string"`, tout court.
 ///
 /// `widen_id_properties` reste — il sert la SORTIE, ou un id traverse en
@@ -251,7 +179,7 @@ type InlineChain = Vec<String>;
 /// "#/$defs/ContextDecisionRef"}`, so a `$defs`-blind harness saw "array of
 /// anything" and never learned that `rule_id` (or `SourceReference`'s
 /// `handle`) is required. Hence the same tree walk as
-/// [`widen_id_properties`] — `properties`, `items`, then a generic descent —
+/// [`walks::widen_id_properties`] — `properties`, `items`, then a generic descent —
 /// bounded by [`MAX_INLINE_DEPTH`] and an [`InlineChain`] cycle guard.
 ///
 /// Sibling keywords on the slot (e.g. `description`) override the inlined
@@ -1033,11 +961,14 @@ impl WireInputSchema {
         Self(map)
     }
 
-    /// L'ordre compte. `stringify_id_properties` d'abord, pour que les copies
+    /// La reecriture des liens rustdoc passe avant tout : elle ne touche que
+    /// les `description`, donc rien de ce qui suit n'en depend. Ensuite,
+    /// l'ordre compte. `stringify_id_properties` d'abord, pour que les copies
     /// faites par l'inliner heritent du type deja pose ; l'inliner ensuite,
     /// pour que chaque branche porte un `type` direct ; la scalarisation en
     /// dernier, parce qu'elle ne promeut qu'une branche deja typee.
     fn harden(mut self, id_keys: &[&str]) -> Self {
+        walks::unlink_rustdoc_descriptions(&mut self.0);
         stringify_id_properties(&mut self.0, id_keys);
         inline_ref_only_properties(&mut self.0);
         scalarize_slot_types(&mut self);
@@ -1056,10 +987,11 @@ impl WireOutputSchema {
         Self((*schema).clone())
     }
 
-    /// Elargissement des ids puis inlining. Pas de scalarisation : voir le
-    /// commentaire de section.
+    /// Liens rustdoc reecrits, puis elargissement des ids, puis inlining. Pas
+    /// de scalarisation : voir le commentaire de section.
     fn harden(mut self) -> Self {
-        widen_id_properties(&mut self.0, WIRE_ID_KEYS);
+        walks::unlink_rustdoc_descriptions(&mut self.0);
+        walks::widen_id_properties(&mut self.0, WIRE_ID_KEYS);
         inline_ref_only_properties(&mut self.0);
         self
     }
@@ -1085,7 +1017,7 @@ pub(crate) fn wire_safe_input_schema<T: schemars::JsonSchema + std::any::Any>(
     WireInputSchema::derived::<T>().harden(id_keys).publish()
 }
 
-/// Repasse le durcissement universel (inlining + scalarisation) sur le
+/// Repasse le durcissement universel (liens rustdoc, inlining + scalarisation) sur le
 /// schema d'ENTREE d'un outil deja construit.
 ///
 /// C'est le point de passage unique de `McpServer::combined_router` : une
@@ -1106,8 +1038,8 @@ pub(crate) fn reharden_tool_input(tool: &mut rmcp::model::Tool) {
         .publish();
 }
 
-/// Le schema de sortie ANNONCE d'un outil : ids elargis, puis `$ref` inlines
-/// et `$defs` inatteignables elagues.
+/// Le schema de sortie ANNONCE d'un outil : liens rustdoc reecrits, ids
+/// elargis, puis `$ref` inlines et `$defs` inatteignables elagues.
 ///
 /// Vit ici plutot que dans `mcp/context_tools.rs` parce que les outils de
 /// `mcp.rs` l'appellent aussi : le laisser dans un module gate sur `context`

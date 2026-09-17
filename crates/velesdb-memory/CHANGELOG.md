@@ -66,6 +66,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with the lock released, and the index is read again once the lock is retaken,
   so a concurrent repair wins over the walk (#2246, P5).
 
+- **Tool schemas published rustdoc link syntax as text.** schemars copies each
+  field's doc comment into its JSON Schema `description`, so the schemas every
+  MCP client reads carried intra-doc links only rustdoc resolves:
+  ``[`Name`]``, ``[`Name`](crate::path)``. The input and output schemas now
+  show each such link as its text, read with pulldown-cmark rather than a
+  hand-written scan: ``[`Name`](crate::path)`` becomes `` `Name` ``. A
+  shortcut or collapsed link shows its path as rustdoc does, without a
+  disambiguator or a `#` fragment: ``[`fn@f`]`` becomes `` `f` ``,
+  `[struct@Foo]` becomes `Foo` and `[Foo#method.id]` becomes `Foo`. A link is
+  a rustdoc link when its destination reads as an item path, a `#` fragment
+  allowed: an inline or reference-style link to one, a definition of one, and
+  a reference no definition resolves whose label is one, a bare `[Name]` or
+  `[optional]` included, as rustdoc 1.90 reads it. A definition is removed
+  with its line, or alone when that line is all its block quote holds. Web
+  links, images, autolinks, code spans, code blocks, escaped brackets and
+  prose brackets that name no item (`[0, 1]`) stay. The rewrite is fail
+  closed: the rewritten description must parse to the original with those
+  links dropped, or it stays as written. Only `description` strings are
+  rewritten, never instance data such as a `default`. A test reads every
+  description of every tool's live input and output schema, and of
+  `docs/reference/mcp-tools.json`, with pulldown-cmark and fails on a rustdoc
+  link. (#2261)
+
 ## [0.14.2] - 2026-09-03
 
 ### Fixed
