@@ -283,8 +283,9 @@ pub enum WithValue {
 ///   the grammar has no form for: `1e20` renders as
 ///   `100000000000000000000.0`. An infinite float renders as a literal too
 ///   large for an `f64`, which the parser reads back as that infinity. `NaN`
-///   has no `VelesQL` form and renders as `NaN`; the parser never produces
-///   one.
+///   has no `VelesQL` form: the parser never produces one, and its display,
+///   `0.0/0.0`, does not parse, rather than reading back as another value
+///   (a bare `NaN` would read back as an identifier).
 /// - `true` or `false`.
 /// - An identifier bare when the parser reads it back bare as that
 ///   identifier, and otherwise in double quotes, each double quote inside
@@ -304,6 +305,10 @@ impl std::fmt::Display for WithValue {
     }
 }
 
+/// What `NaN` displays as: text the grammar refuses, since no `VelesQL`
+/// literal reads back as `NaN`.
+const NAN_DISPLAY: &str = "0.0/0.0";
+
 /// Writes `v` as a `VelesQL` float literal (`-`? digits `.` digits), see
 /// [`WithValue`]'s `Display`. `f64`'s own `Display` never uses an exponent
 /// and writes the shortest decimal that reads back as `v`, but drops the
@@ -311,7 +316,7 @@ impl std::fmt::Display for WithValue {
 /// would read as an integer.
 fn write_float_literal(f: &mut std::fmt::Formatter<'_>, v: f64) -> std::fmt::Result {
     if v.is_nan() {
-        return write!(f, "{v}");
+        return f.write_str(NAN_DISPLAY);
     }
     if v.is_infinite() {
         // Ten times `f64::MAX`, which no `f64` holds: it reads back as infinity.

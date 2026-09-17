@@ -26,6 +26,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   moves `aws-lc-rs`, `aws-lc-sys` and `rustls-webpki` as rustls requires.
 
 ### Added
+- **`impl Display for WithValue` (#2274).** A `WITH` option value renders
+  in canonical VelesQL form, which the parser reads back as the same value:
+  a string single-quoted with each quote doubled, a float in decimal with a
+  fractional part and never an exponent, an identifier bare only when the
+  grammar reads it back bare and double-quoted otherwise. It is not the
+  query's own spelling (`1.50` shows as `1.5`, `TRUE` as `true`). `NaN`,
+  which the parser never produces and no literal reads back as, displays as
+  text that does not parse. Every `V014` message names a value that is not
+  an integer this way.
 - **`LockRank::ENTRY_POINT_PROMOTION` (rank 8) in the public lock-rank
   registry (#2259).** The HNSW entry point now moves under a lock, taken
   after the GPU snapshot's and before the vector store's; an implementation

@@ -111,10 +111,34 @@ fn parse_back(shown: &str) -> Result<WithValue, String> {
     }
 }
 
+/// Whether `shown` reads back as exactly `value`: a float bit for bit, so a
+/// lost sign on `-0.0`, which `PartialEq` equates with `0.0`, is a failure.
+fn reads_back_as(shown: &str, value: &WithValue) -> Result<(), String> {
+    let back = parse_back(shown)?;
+    let same = match (&back, value) {
+        (WithValue::Float(back), WithValue::Float(v)) => back.to_bits() == v.to_bits(),
+        _ => back == *value,
+    };
+    if same {
+        Ok(())
+    } else {
+        Err(format!("{shown} read back as {back:?}, not {value:?}"))
+    }
+}
+
 /// Asserts that `value` renders as a text the parser reads back as `value`.
 fn assert_round_trips(value: &WithValue) {
     let shown = value.to_string();
-    assert_eq!(parse_back(&shown).as_ref(), Ok(value), "shown as {shown}");
+    assert_eq!(reads_back_as(&shown, value), Ok(()));
+}
+
+/// `NaN` has no `VelesQL` form: its display must not parse at all, rather
+/// than read back as another value (a bare `NaN` reads back as an identifier).
+#[test]
+fn test_with_value_display_of_nan_does_not_parse() {
+    let shown = WithValue::Float(f64::NAN).to_string();
+    let back = parse_back(&shown);
+    assert!(back.is_err(), "{shown} read back as {back:?}");
 }
 
 #[test]
@@ -192,7 +216,7 @@ proptest::proptest! {
         let value = WithValue::Float(v);
         let shown = value.to_string();
         proptest::prop_assert!(!shown.contains(['e', 'E']), "{shown}");
-        proptest::prop_assert_eq!(parse_back(&shown), Ok(value));
+        proptest::prop_assert_eq!(reads_back_as(&shown, &value), Ok(()));
     }
 
     #[test]
