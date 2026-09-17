@@ -2259,13 +2259,18 @@ def git_answer_findings(tree: ast.Module) -> "list[str]":
     `_git_output`, a rewriting call in a function around the readers, and a decoding option
     passed by keyword in `_run`."""
     functions = functions_of(tree)
-    allowed = {id(node) for node in ast.walk(functions["_git_output"])}
-    findings = [f"line {node.lineno} names git" for node in ast.walk(tree)
-                if names_git(node) and id(node) not in allowed]
+    findings = git_name_findings(tree, functions["_git_output"])
     for name in git_callers(functions):
         findings += rewriting_findings(name, functions[name])
     return findings + [f"_run passes {keyword.arg}" for call in calls_in(functions["_run"])
                        for keyword in call.keywords if keyword.arg in DECODING_OPTIONS]
+
+
+def git_name_findings(tree: ast.Module, runner: ast.FunctionDef) -> "list[str]":
+    """Each literal naming git (`names_git`) anywhere in `tree` but inside `runner`."""
+    allowed = {id(node) for node in ast.walk(runner)}
+    return [f"line {node.lineno} names git" for node in ast.walk(tree)
+            if names_git(node) and id(node) not in allowed]
 
 
 class GitAnswerGuardTest(unittest.TestCase):
