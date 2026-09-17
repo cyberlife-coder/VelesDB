@@ -101,14 +101,17 @@ permissions:
   contents: read
 
 env:
+  # rustup never installs a toolchain on its own: a Rust call reached before the
+  # job's install step fails here instead of installing mid-build.
+  RUSTUP_AUTO_INSTALL: "0"
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-Dwarnings"
   RUST_BACKTRACE: 1
   CARGO_INCREMENTAL: 0
   CARGO_NET_RETRY: 10
-  # 1.90 is the workspace MSRV: roaring 0.11.4 declares rust-version = 1.90.0,
-  # so a 1.89 toolchain only builds when the dep is already in cache.
-  RUST_VERSION: "1.90"
+  # No toolchain version in this file: each job installs the one
+  # rust-toolchain.toml names, from that file, before its first cargo call
+  # (scripts/tests/test_ci_toolchain_pin.py).
   # Skip Python detection for pyo3 - avoids environment contamination issues
   PYO3_NO_PYTHON: "1"
 
@@ -130,10 +133,8 @@ jobs:
           # every pull request and passed vacuously.
           fetch-depth: 0
 
-      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
-          components: rustfmt, clippy
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install --no-self-update --profile minimal
 
       - name: Cache apt packages
         uses: awalsh128/cache-apt-pkgs-action@681749ae568c81c2037cb9185e38b709b261bd2f # v1.6.1
@@ -604,9 +605,8 @@ jobs:
           docker-images: true
           swap-storage: false
 
-      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install --no-self-update --profile minimal
 
       - name: Cache apt packages
         uses: awalsh128/cache-apt-pkgs-action@681749ae568c81c2037cb9185e38b709b261bd2f # v1.6.1
@@ -689,9 +689,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install --no-self-update --profile minimal
 
       - name: Install cargo-deny
         run: cargo install cargo-deny --locked
@@ -721,9 +720,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install --no-self-update --profile minimal
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -781,6 +779,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # `cargo machete` below is a cargo call inside the repository.
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install --no-self-update --profile minimal
+
       - name: Install hygiene tools (prebuilt)
         uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
         with:
@@ -823,9 +825,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install --no-self-update --profile minimal
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -870,9 +871,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install --no-self-update --profile minimal
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -902,10 +902,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
-          components: clippy
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install --no-self-update --profile minimal
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -936,18 +934,15 @@ jobs:
         with:
           python-version: '3.12'
 
-      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
-          targets: wasm32-unknown-unknown
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: |
+          rustup toolchain install --no-self-update --profile minimal
+          rustup target add wasm32-unknown-unknown
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: "velesdb-ci-wasm"
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
-
-      - name: Install wasm32 target (belt-and-suspenders)
-        run: rustup target add wasm32-unknown-unknown
 
       - name: Check WASM build (no default features)
         run: cargo check -p velesdb-wasm --no-default-features --target wasm32-unknown-unknown
@@ -989,9 +984,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install --no-self-update --profile minimal
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -1067,6 +1061,16 @@ jobs:
       - name: Self-test the CI wiring
         run: python3 -m unittest scripts.tests.test_ci_gate_reachability
 
+      # rust-toolchain.toml is the only toolchain pin: every job that builds
+      # Rust installs its toolchain, from the file, before its first cargo
+      # call. The suite reads the workflows with PyYAML, installed here at
+      # gate-contracts.yml's pin; without it the suite fails to import.
+      - name: Install PyYAML for the toolchain pin
+        run: python -m pip install --disable-pip-version-check pyyaml==6.0.3
+
+      - name: Self-test the toolchain pin
+        run: python3 -m unittest scripts.tests.test_ci_toolchain_pin
+
       # The bundled npm copies of the two skills, byte for byte. The blocking
       # comparison is crates/velesdb-node/__test__/skills-sync.spec.mjs under
       # node-binding-tests — this one costs milliseconds and no toolchain, so
@@ -1126,9 +1130,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install --no-self-update --profile minimal
 
       - name: Cache apt packages
         uses: awalsh128/cache-apt-pkgs-action@681749ae568c81c2037cb9185e38b709b261bd2f # v1.6.1
@@ -1182,8 +1185,12 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: Install stable Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      # Before pip: its first `cargo` call used to make rustup install this
+      # toolchain mid-build, which intermittently died with "detected
+      # conflict: 'bin/cargo-clippy'" (runs 34509954412, 34656653039,
+      # 34760724019).
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install --no-self-update --profile minimal
 
       # Cargo registry cache only (NOT the velesdb-python/target directory;
       # half-compiled pyo3 build artefacts from previous CI hotfix attempts
@@ -1265,8 +1272,8 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: Install stable Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install --no-self-update --profile minimal
 
       - name: Cache Cargo registry
         uses: actions/cache@v6
@@ -1307,8 +1314,8 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install stable Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install --no-self-update --profile minimal
 
       - name: Cache Cargo registry
         uses: actions/cache@v6
@@ -1482,11 +1489,9 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install stable Rust toolchain
+      - name: Install the toolchain rust-toolchain.toml pins
         if: needs.node-windows-changed.outputs.relevant == 'true'
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
+        run: rustup toolchain install --no-self-update --profile minimal
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: needs.node-windows-changed.outputs.relevant == 'true'
@@ -1520,10 +1525,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
-          components: llvm-tools-preview
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: |
+          rustup toolchain install --no-self-update --profile minimal
+          rustup component add llvm-tools-preview
 
       - name: Cache apt packages
         uses: awalsh128/cache-apt-pkgs-action@681749ae568c81c2037cb9185e38b709b261bd2f # v1.6.1
@@ -1592,9 +1597,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install --no-self-update --profile minimal
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -1645,9 +1649,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install --no-self-update --profile minimal
 
       - name: Cache apt packages
         uses: awalsh128/cache-apt-pkgs-action@681749ae568c81c2037cb9185e38b709b261bd2f # v1.6.1
@@ -1691,9 +1694,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install --no-self-update --profile minimal
 
       - name: Cache apt packages
         uses: awalsh128/cache-apt-pkgs-action@681749ae568c81c2037cb9185e38b709b261bd2f # v1.6.1
@@ -1881,10 +1883,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: needs.perf-path-changed.outputs.relevant == 'true'
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # stable
+      - name: Install the toolchain rust-toolchain.toml pins
         if: needs.perf-path-changed.outputs.relevant == 'true'
-        with:
-          toolchain: "1.90"
+        run: rustup toolchain install --no-self-update --profile minimal
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         if: needs.perf-path-changed.outputs.relevant == 'true'
         with:
