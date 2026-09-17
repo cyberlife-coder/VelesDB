@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > query the validator rejects. The declared SemVer policy (`docs/FAQ.md`)
 > makes a breaking change a major bump: tag the next release accordingly.
 
+### Security
+
+- **`rustls` 0.23.43 → 0.23.45 (RUSTSEC-2026-0285: TLS 1.3 handshake
+  messages incorrectly accepted across encryption level boundaries).** The
+  advisory is dated 2026-09-14 (#2317's audit at 07:19 UTC that day still
+  passed); it turns the `Security Audit` gate red on `develop` and on every
+  open PR with an unchanged lockfile.
+  Lockfile only, `cargo update -p rustls --precise 0.23.45`, which also
+  moves `aws-lc-rs`, `aws-lc-sys` and `rustls-webpki` as rustls requires.
+
 ### Added
 - **`LockRank::ENTRY_POINT_PROMOTION` (rank 8) in the public lock-rank
   registry (#2259).** The HNSW entry point now moves under a lock, taken
@@ -134,6 +144,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A test fails when a published description holds link syntax: a code link,
   a bracketed path, a reference-style link or definition, or an inline link
   to anything but a URL or a fragment.
+
+- **The agent-hook suite could fail on a loaded machine or end without naming
+  what failed (#2277), and PostToolUse never compressed under the stock macOS
+  bash.** `integrations/agent-hooks/test/hooks.test.sh` ran the checks that need
+  a compiled result under the PostToolUse hook's own watchdogs, a 10 s
+  capability probe and a 20 s compilation, and a machine busy enough to miss
+  either made the hook pass the result through, as it should, and those checks
+  fail. They now own both timeouts at the 60 s maximum: the compilation's,
+  hard-coded until now, is `VELESDB_HOOK_COMPILE_TIMEOUT` (default 20, at most
+  60, validated like `VELESDB_HOOK_PROBE_TIMEOUT`). The watchdog counted rounds
+  of `sleep 0.1`, which a loaded machine stretched; it now counts wall-clock
+  seconds, kills only once its bound is exceeded, and refuses to start a command
+  under a bound that is not a decimal: on develop, an overflowing bound meant no
+  bound at all, and a non-numeric one failed or killed at once. It also hands
+  the command its input explicitly: in a script, bash starts a background
+  command on `/dev/null`, and bash 3.2 does so even when a pipe feeds it, so
+  under the stock macOS bash the compiler read nothing and no tool result was
+  ever compressed. Every numeric knob now refuses a leading zero, which shell
+  arithmetic reads as octal, and the hooks README and
+  `docs/guides/CONTEXT_COMPILER.md` say so once, above their tables. The
+  SessionStart freshness check did arithmetic on the first line of its cache
+  file, so a line `PATH[$(cmd)]` ran `cmd`; anything but a timestamp is now a
+  cache miss, and so is a timestamp later than now, which kept the cache a hit
+  forever. The suite also piped each payload into its hook: a hook that exits
+  without reading stdin, as the installer's positive control does, could kill
+  that writer with SIGPIPE, and under `set -euo pipefail` the suite then ended
+  with 141 instead of 1, which failed the installer's self-test on #2276. Every
+  hook now takes its payload as a here-string, and a call that exits non-zero
+  fails by name instead of ending the suite.
 
 - **A node could end up out of reach of every graph search, whatever its
   `ef` (#2259).** HNSW links each new node to its neighbours and each

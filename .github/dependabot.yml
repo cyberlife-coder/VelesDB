@@ -40,6 +40,14 @@ updates:
     open-pull-requests-limit: 3
     target-branch: "develop"
     groups:
+      # vitest and its @vitest/* plugins pin each other to the exact same
+      # version (@vitest/coverage-v8@5.0.0 peers vitest@5.0.0). Bumped apart,
+      # npm ci fails with ERESOLVE in every TypeScript job, as #2315 did.
+      # This group must stay ahead of npm-sdk-non-major: a dependency joins
+      # the first group that matches it.
+      vitest:
+        applies-to: version-updates
+        patterns: ["vitest", "@vitest/*"]
       npm-sdk-non-major:
         applies-to: version-updates
         update-types: ["minor", "patch"]

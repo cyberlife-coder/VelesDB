@@ -345,6 +345,10 @@ rules are strict, and each is covered by `test/hooks.test.sh`:
   the compiler's gross saving must also cover every footer byte plus a
   configurable net margin. Otherwise the original passes through.
 
+Every numeric knob below is a decimal integer written without a leading zero
+(`05` is refused, like `1+1`), and a refused or out-of-range value leaves the
+tool result untouched.
+
 | Env var | Default | Meaning |
 |---|---|---|
 | `VELESDB_HOOK_COMPRESS_TOOLS` | `Bash` | May disable `Bash`; naming another tool does not opt an unverified output schema into replacement. |
@@ -353,7 +357,8 @@ rules are strict, and each is covered by `test/hooks.test.sh`:
 | `VELESDB_HOOK_TOKEN_BUDGET` | `2000` | Token budget handed to `compile-stdin`. |
 | `VELESDB_HOOK_TOKEN_BUDGET_MAX` | twice `VELESDB_HOOK_TOKEN_BUDGET` | Ceiling a `risk: high` compilation may retry at. Set it equal to the budget to forbid the retry. |
 | `VELESDB_MEMORY_BIN` | `velesdb-memory` on `PATH` | Binary to invoke. |
-| `VELESDB_HOOK_PROBE_TIMEOUT` | `10` | Seconds the capability probe may take. |
+| `VELESDB_HOOK_PROBE_TIMEOUT` | `10` | Seconds the capability probe may take, from 1 to 60. |
+| `VELESDB_HOOK_COMPILE_TIMEOUT` | `20` | Seconds each compilation attempt may take, from 1 to 60. |
 
 **Fidelity.** A compilation the compiler reports as `risk: high` is **refused**,
 not shipped: `high` means at least one fragment it classifies as critical — a

@@ -161,9 +161,32 @@ read_stdin_payload() {
   cat
 }
 
+# is_decimal VALUE: VALUE is a decimal integer written without a leading zero,
+# at most 10 digits long. Only such text may reach a number in these hooks:
+# shell arithmetic evaluates what it reads (`PATH[$(cmd)]` runs cmd), reads
+# `010` as octal 8 where `[` reads 10, and `[` cannot compare more digits than
+# a 64-bit integer holds.
+is_decimal() {
+  case "$1" in
+    0) return 0 ;;
+    ''|0*|*[!0-9]*) return 1 ;;
+  esac
+  [ "${#1}" -le 10 ]
+}
+
+# watchdog_expired STARTED NOW BOUND: true once more than BOUND seconds
+# separate STARTED from NOW. All three are decimals: run_with_watchdog hands it
+# two readings of SECONDS and a bound is_decimal has accepted. It is a function
+# of its own so that the comparison is checked on fixed values, not on a clock.
+watchdog_expired() {
+  [ $(($2 - $1)) -gt "$3" ]
+}
+
 # run_with_watchdog SECONDS OUTFILE CMD...
-# Run CMD with stdout captured into OUTFILE, killing it after SECONDS.
-# Returns CMD's exit status, or 124 if it had to be killed.
+# Run CMD on this function's stdin, with stdout captured into OUTFILE, killing
+# it once more than SECONDS seconds of wall-clock time have passed.
+# Returns CMD's exit status, or 124 if it had to be killed or if SECONDS is not
+# a decimal (see is_decimal), in which case CMD never starts.
 #
 # Why not `timeout`: it is GNU coreutils, absent from a stock macOS (where it
 # is `gtimeout`, if installed at all). A hook runs on every tool call and must
@@ -177,19 +200,31 @@ run_with_watchdog() {
   local outfile="$2"
   shift 2
 
-  "$@" >"$outfile" 2>/dev/null &
-  local pid=$!
-  local waited=0
-  local limit=$((secs * 10))
+  # A bound `[` cannot read is no bound: each `-gt` below would fail instead
+  # of comparing, and nothing would ever be killed.
+  is_decimal "$secs" || return 124
 
+  # `<&0` is not a no-op. A script has no job control, and without it bash
+  # starts a background command on /dev/null unless its stdin is redirected
+  # explicitly. Bash 5 exempts it when a pipe feeds this function, but not a
+  # here-string; bash 3.2, the stock macOS one, exempts neither, so there the
+  # compiler read nothing and PostToolUse never compressed.
+  "$@" <&0 >"$outfile" 2>/dev/null &
+  local pid=$!
+  local started=$SECONDS
+
+  # The bound is wall-clock time: counting rounds of `sleep 0.1` let the forks
+  # between them, and a loaded machine, stretch it. SECONDS ticks with the
+  # clock's whole seconds, so killing only once more than `secs` of them have
+  # passed never cuts a command short, and overshoots the bound by at most a
+  # second plus one poll.
   while kill -0 "$pid" 2>/dev/null; do
-    if [ "$waited" -ge "$limit" ]; then
+    if watchdog_expired "$started" "$SECONDS" "$secs"; then
       kill -9 "$pid" 2>/dev/null || true
       wait "$pid" 2>/dev/null || true
       return 124
     fi
     sleep 0.1
-    waited=$((waited + 1))
   done
 
   wait "$pid"
