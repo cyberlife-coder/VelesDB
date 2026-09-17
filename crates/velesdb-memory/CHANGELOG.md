@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`http::router_with_session_policy`** (`#[doc(hidden)]`, like its
+  `router_with_limits*` siblings): `router_with_limits_and_keep_alive` plus
+  an explicit eviction floor, so the HTTP transport's integration tests can
+  observe idle-session eviction without waiting out the 300 s default. The
+  public API otherwise grows only by the `VELESDB_MEMORY_HTTP_EVICT_MIN_IDLE_SECS`
+  environment variable described under Fixed (#2289).
+
 ### Fixed
 
 - **At its session cap, the HTTP daemon locked every new client out for up to

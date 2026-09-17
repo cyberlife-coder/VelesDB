@@ -189,7 +189,8 @@ fn keep_alive_from_raw(raw: Option<&str>) -> std::time::Duration {
 /// one quiet for six minutes. Raising the value narrows the window above and
 /// lengthens how long dead clients can hold every slot once the cap is
 /// reached; see `session_limit` for the full reasoning.
-pub const DEFAULT_HTTP_EVICT_MIN_IDLE: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+pub(crate) const DEFAULT_HTTP_EVICT_MIN_IDLE: std::time::Duration =
+    std::time::Duration::from_secs(5 * 60);
 
 /// Resolve the minimum idle age before eviction from
 /// `VELESDB_MEMORY_HTTP_EVICT_MIN_IDLE_SECS`, bounded above by `keep_alive`.
@@ -200,7 +201,7 @@ pub const DEFAULT_HTTP_EVICT_MIN_IDLE: std::time::Duration = std::time::Duration
 /// above `keep_alive` is clamped to it — a session silent for `keep_alive`
 /// is retired by rmcp anyway, so no larger floor could ever be reached.
 #[must_use]
-pub fn http_evict_min_idle_from_env(keep_alive: std::time::Duration) -> std::time::Duration {
+fn http_evict_min_idle_from_env(keep_alive: std::time::Duration) -> std::time::Duration {
     evict_min_idle_from_raw(
         std::env::var("VELESDB_MEMORY_HTTP_EVICT_MIN_IDLE_SECS")
             .ok()
@@ -244,13 +245,13 @@ fn evict_min_idle_from_raw(
 /// - `BoundedSessionManager` bounds concurrent sessions
 ///   ([`http_max_sessions_from_env`]), and, once that bound is hit, evicts
 ///   the least-recently-active session that has had nothing in flight for
-///   at least [`http_evict_min_idle_from_env`] to admit the new one, rather
+///   at least `VELESDB_MEMORY_HTTP_EVICT_MIN_IDLE_SECS` to admit the new one, rather
 ///   than refusing it outright — refusing only when no live session
 ///   qualifies (`session_limit`, #2289). This is what keeps one client that
 ///   died without `DELETE` from locking every other client out until
 ///   [`http_keep_alive_from_env`] finally expires it, while a client active
 ///   more often than that floor cannot be evicted by others' `initialize`
-///   calls (see [`DEFAULT_HTTP_EVICT_MIN_IDLE`] for the trade-off left).
+///   calls (see `session_limit` for the trade-off left).
 ///
 /// Sessions are retired after [`http_keep_alive_from_env`] of silence — 60
 /// minutes by default rather than rmcp's 5, so an agent's normal pauses do not
@@ -267,8 +268,7 @@ fn evict_min_idle_from_raw(
 /// `VELESDB_MEMORY_HTTP_KEEP_ALIVE_SECS` ([`http_keep_alive_from_env`],
 /// default [`DEFAULT_HTTP_KEEP_ALIVE`]) and
 /// `VELESDB_MEMORY_HTTP_EVICT_MIN_IDLE_SECS`
-/// ([`http_evict_min_idle_from_env`], default
-/// [`DEFAULT_HTTP_EVICT_MIN_IDLE`], never above the keep-alive).
+/// (default 300 s, never above the keep-alive).
 pub fn router(server: McpServer, cancellation_token: CancellationToken) -> Router {
     let keep_alive = http_keep_alive_from_env();
     router_with_session_policy(
@@ -319,7 +319,7 @@ pub fn router_with_limits(
 /// Exposed so tests can inject a very short timeout (~100–200 ms) and observe
 /// a full expire-and-reuse cycle without waiting minutes of wall-clock time.
 ///
-/// Uses [`DEFAULT_HTTP_EVICT_MIN_IDLE`] as the eviction floor; tests that
+/// Uses the product's default eviction floor (300 s); tests that
 /// exercise eviction itself call [`router_with_session_policy`].
 #[doc(hidden)]
 pub fn router_with_limits_and_keep_alive(
@@ -342,7 +342,7 @@ pub fn router_with_limits_and_keep_alive(
 /// [`router_with_limits_and_keep_alive`], but with the eviction floor passed
 /// explicitly too: how long a session must have been idle before the session
 /// cap may evict it to admit a new client (see
-/// [`DEFAULT_HTTP_EVICT_MIN_IDLE`]). Unlike [`http_evict_min_idle_from_env`],
+/// `session_limit`). Unlike `VELESDB_MEMORY_HTTP_EVICT_MIN_IDLE_SECS`,
 /// the value is taken as given — a test passes `Duration::ZERO` to observe
 /// eviction over the real transport without waiting minutes.
 #[doc(hidden)]

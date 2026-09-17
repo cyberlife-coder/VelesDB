@@ -52,7 +52,8 @@ struct TestServerConfig {
     max_body_bytes: usize,
     max_sessions: usize,
     keep_alive: std::time::Duration,
-    evict_min_idle: std::time::Duration,
+    /// `None` keeps the product's eviction floor; `Some` overrides it.
+    evict_min_idle: Option<std::time::Duration>,
 }
 
 impl TestServerConfig {
@@ -61,7 +62,7 @@ impl TestServerConfig {
             max_body_bytes,
             max_sessions,
             keep_alive: velesdb_memory::http::DEFAULT_HTTP_KEEP_ALIVE,
-            evict_min_idle: velesdb_memory::http::DEFAULT_HTTP_EVICT_MIN_IDLE,
+            evict_min_idle: None,
         }
     }
 
@@ -70,7 +71,7 @@ impl TestServerConfig {
             max_body_bytes: velesdb_memory::http::DEFAULT_HTTP_MAX_BODY_BYTES,
             max_sessions,
             keep_alive,
-            evict_min_idle: velesdb_memory::http::DEFAULT_HTTP_EVICT_MIN_IDLE,
+            evict_min_idle: None,
         }
     }
 
@@ -78,7 +79,7 @@ impl TestServerConfig {
     /// activity ends, so eviction is observable without waiting minutes.
     fn evicting_at_once(max_sessions: usize) -> Self {
         Self {
-            evict_min_idle: std::time::Duration::ZERO,
+            evict_min_idle: Some(std::time::Duration::ZERO),
             ..Self::with_keep_alive(max_sessions, KEEP_ALIVE_OUTLIVES_THE_TEST)
         }
     }
@@ -136,14 +137,23 @@ async fn spawn_configured(config: TestServerConfig) -> TestServer {
     let server = McpServer::new(service);
 
     let ct = CancellationToken::new();
-    let app = velesdb_memory::http::router_with_session_policy(
-        server,
-        ct.child_token(),
-        config.max_body_bytes,
-        config.max_sessions,
-        Some(config.keep_alive),
-        config.evict_min_idle,
-    );
+    let app = match config.evict_min_idle {
+        None => velesdb_memory::http::router_with_limits_and_keep_alive(
+            server,
+            ct.child_token(),
+            config.max_body_bytes,
+            config.max_sessions,
+            Some(config.keep_alive),
+        ),
+        Some(evict_min_idle) => velesdb_memory::http::router_with_session_policy(
+            server,
+            ct.child_token(),
+            config.max_body_bytes,
+            config.max_sessions,
+            Some(config.keep_alive),
+            evict_min_idle,
+        ),
+    };
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind ephemeral loopback port");
@@ -567,9 +577,8 @@ fn contract_generic_http_fixture_pins_product_keep_alive() {
         "generic HTTP fixtures must exercise the product's keep-alive default"
     );
     assert_eq!(
-        config.evict_min_idle,
-        velesdb_memory::http::DEFAULT_HTTP_EVICT_MIN_IDLE,
-        "generic HTTP fixtures must exercise the product's eviction floor"
+        config.evict_min_idle, None,
+        "generic HTTP fixtures must not override the product's eviction floor"
     );
 }
 

@@ -1,4 +1,5 @@
 use super::*;
+use futures::FutureExt;
 use rmcp::model::{
     ClientNotification, EmptyResult, InitializedNotification, NumberOrString, ServerResult,
 };
@@ -77,10 +78,20 @@ struct FakeSessionManager {
     /// `restore_session` answers `Restored` (and records the id) when set,
     /// the trait's default `NotSupported` otherwise.
     restores: bool,
-    /// `initialize_session` fails when set.
-    fails_initialize: bool,
+    /// How `initialize_session` answers.
+    initialize: FakeInitialize,
     /// `create_session` fails when set.
     fails_create: bool,
+}
+
+/// How [`FakeSessionManager::initialize_session`] answers.
+#[derive(Debug, Default, Clone, Copy)]
+enum FakeInitialize {
+    #[default]
+    Succeeds,
+    Fails,
+    /// Never completes: stands for a handshake still in progress.
+    Hangs,
 }
 
 #[derive(Debug, Error)]
@@ -105,13 +116,14 @@ impl SessionManager for FakeSessionManager {
         _id: &SessionId,
         _message: ClientJsonRpcMessage,
     ) -> Result<ServerJsonRpcMessage, Self::Error> {
-        if self.fails_initialize {
-            return Err(FakeError("initialize refused".into()));
+        match self.initialize {
+            FakeInitialize::Succeeds => Ok(ServerJsonRpcMessage::response(
+                ServerResult::EmptyResult(EmptyResult {}),
+                NumberOrString::Number(0),
+            )),
+            FakeInitialize::Fails => Err(FakeError("initialize refused".into())),
+            FakeInitialize::Hangs => std::future::pending().await,
         }
-        Ok(ServerJsonRpcMessage::response(
-            ServerResult::EmptyResult(EmptyResult {}),
-            NumberOrString::Number(0),
-        ))
     }
 
     async fn has_session(&self, id: &SessionId) -> Result<bool, Self::Error> {
@@ -228,12 +240,12 @@ async fn create_session_evicts_an_idle_session_past_the_limit() {
         .await
         .expect("a third session must be admitted by evicting an idle one");
     assert_eq!(
-        manager.live_count().await,
+        manager.live_count(),
         2,
         "the cap itself must still hold — eviction makes room, it doesn't lift the ceiling"
     );
     assert!(
-        !manager.is_live(&a).await,
+        !manager.is_live(&a),
         "the least-recently-active idle session (the first) must be the one evicted"
     );
 }
@@ -281,8 +293,8 @@ async fn eviction_picks_the_least_recently_used_idle_session() {
         .create_session()
         .await
         .expect("third session admitted by evicting the oldest idle one");
-    assert!(!manager.is_live(&a).await, "A is oldest, so A is evicted");
-    assert!(manager.is_live(&b).await, "B is newer, so B survives");
+    assert!(!manager.is_live(&a), "A is oldest, so A is evicted");
+    assert!(manager.is_live(&b), "B is newer, so B survives");
 }
 
 /// Recency follows ACTIVITY, not creation order: A is created first but used
@@ -306,11 +318,11 @@ async fn activity_after_creation_makes_a_session_more_recent() {
         .await
         .expect("third session admitted by evicting an idle one");
     assert!(
-        manager.is_live(&a).await,
+        manager.is_live(&a),
         "A was active more recently than B, so A must survive"
     );
     assert!(
-        !manager.is_live(&b).await,
+        !manager.is_live(&b),
         "B is the least recently active session, so B is the one evicted"
     );
 }
@@ -333,11 +345,11 @@ async fn a_session_with_an_open_stream_is_never_evicted() {
         .await
         .expect("third session admitted by evicting the only idle candidate");
     assert!(
-        manager.is_live(&busy).await,
+        manager.is_live(&busy),
         "the busy session must survive despite being the oldest"
     );
     assert!(
-        !manager.is_live(&idle).await,
+        !manager.is_live(&idle),
         "the idle session must be the one evicted, even though it is newer"
     );
 
@@ -356,7 +368,7 @@ async fn a_session_with_an_open_stream_is_never_evicted() {
         .await
         .expect("fourth session admitted now that the stream closed");
     assert!(
-        !manager.is_live(&busy).await,
+        !manager.is_live(&busy),
         "once its stream closes, the formerly-busy session is evictable like any other"
     );
 }
@@ -382,7 +394,7 @@ async fn a_session_awaiting_initialize_is_never_evicted() {
         .expect_err("C must be refused: A is busy and B has not finished initializing");
     assert!(err.is_too_many_sessions(), "{err}");
     assert!(
-        manager.is_live(&b).await,
+        manager.is_live(&b),
         "B must still be live for its initialize"
     );
 
@@ -395,7 +407,7 @@ async fn a_session_awaiting_initialize_is_never_evicted() {
         .create_session()
         .await
         .expect("once B's handshake is over and it has idled, it is evictable");
-    assert!(!manager.is_live(&b).await);
+    assert!(!manager.is_live(&b));
     drop(stream_a);
 }
 
@@ -404,7 +416,7 @@ async fn a_session_awaiting_initialize_is_never_evicted() {
 #[tokio::test]
 async fn a_failed_initialize_still_leaves_the_session_evictable() {
     let inner = FakeSessionManager {
-        fails_initialize: true,
+        initialize: FakeInitialize::Fails,
         ..FakeSessionManager::default()
     };
     let (manager, clock) = bounded_over(inner, 1);
@@ -419,7 +431,58 @@ async fn a_failed_initialize_still_leaves_the_session_evictable() {
         .create_session()
         .await
         .expect("A's failed handshake is over, so A is evictable");
-    assert!(!manager.is_live(&a).await);
+    assert!(!manager.is_live(&a));
+}
+
+/// A handshake whose request is dropped at its first await must not leave
+/// the session protected by its birth flag. The admission lock is held, as a
+/// concurrent admission would hold it, while the handshake is polled once and
+/// dropped: had `initialize_session` waited on that lock before clearing the
+/// flag, the session would stay unevictable however long it then sat idle.
+#[tokio::test]
+async fn a_handshake_dropped_at_its_first_await_leaves_the_session_evictable() {
+    let inner = FakeSessionManager {
+        initialize: FakeInitialize::Hangs,
+        ..FakeSessionManager::default()
+    };
+    let (manager, clock) = bounded_over(inner, 1);
+    let (a, _ta) = manager.create_session().await.expect("create A");
+    {
+        let _concurrent_admission = manager.admission.lock().await;
+        let handshake = manager.initialize_session(&a, dummy_message());
+        assert!(
+            handshake.now_or_never().is_none(),
+            "the handshake is still in progress when its request is dropped"
+        );
+    }
+    clock.advance(TEST_MIN_IDLE * 100);
+
+    manager
+        .create_session()
+        .await
+        .expect("A's abandoned handshake is over, so A is evictable");
+    assert!(!manager.is_live(&a));
+}
+
+/// Recency is stamped when activity ENDS: a stream opened long ago that
+/// closed a moment ago leaves its session young, not ten floors old.
+#[tokio::test]
+async fn recency_is_stamped_when_activity_ends_not_when_it_starts() {
+    let (manager, clock) = bounded(1);
+    let a = open_initialized(&manager).await;
+    let stream = manager
+        .create_stream(&a, dummy_message())
+        .await
+        .expect("open a stream on A");
+    clock.advance(TEST_MIN_IDLE * 10);
+    drop(stream);
+
+    let err = manager
+        .create_session()
+        .await
+        .expect_err("A's stream ended just now, so A is not evictable");
+    assert!(err.is_too_many_sessions(), "{err}");
+    assert!(manager.is_live(&a));
 }
 
 /// Both sides of the eviction floor, one nanosecond apart: a session quiet
@@ -436,14 +499,14 @@ async fn only_a_session_idle_for_the_minimum_age_is_evicted() {
         .await
         .expect_err("A has been idle for less than the floor, so nothing is evictable");
     assert!(err.is_too_many_sessions(), "{err}");
-    assert!(manager.is_live(&a).await, "A must survive the refusal");
+    assert!(manager.is_live(&a), "A must survive the refusal");
 
     clock.advance(Duration::from_nanos(1));
     manager
         .create_session()
         .await
         .expect("A has now been idle for exactly the floor, so it is evicted");
-    assert!(!manager.is_live(&a).await);
+    assert!(!manager.is_live(&a));
 }
 
 /// Idle age is measured from the END of the last activity: a session idle
@@ -462,7 +525,7 @@ async fn activity_restarts_the_idle_age() {
         .create_session()
         .await
         .expect_err("A was active just now, so it is not evictable");
-    assert!(manager.is_live(&a).await);
+    assert!(manager.is_live(&a));
 }
 
 /// `LocalSessionManager` (like the trait default) answers `NotSupported` to
@@ -479,7 +542,7 @@ async fn a_restore_that_creates_nothing_evicts_nothing() {
         .expect("restore answers");
     assert!(matches!(outcome, RestoreOutcome::NotSupported));
     assert!(
-        manager.is_live(&a).await,
+        manager.is_live(&a),
         "an idle session must not be evicted to make room for a restore that created nothing"
     );
 }
@@ -502,7 +565,7 @@ async fn a_genuine_restore_at_the_cap_evicts_or_is_undone() {
         .await
         .expect_err("A is younger than the floor, so the restore cannot be admitted");
     assert!(err.is_too_many_sessions(), "{err}");
-    assert!(!manager.is_live(&young).await);
+    assert!(!manager.is_live(&young));
     assert!(
         !manager
             .inner
@@ -519,8 +582,8 @@ async fn a_genuine_restore_at_the_cap_evicts_or_is_undone() {
         .await
         .expect("A is evictable now");
     assert!(matches!(outcome, RestoreOutcome::Restored(_)));
-    assert!(!manager.is_live(&a).await, "A made room for the restore");
-    assert!(manager.is_live(&old).await);
+    assert!(!manager.is_live(&a), "A made room for the restore");
+    assert!(manager.is_live(&old));
 }
 
 #[tokio::test]
@@ -581,13 +644,13 @@ async fn closing_the_same_session_twice_frees_exactly_one_slot() {
     let (manager, _clock) = bounded(2);
     let (a, _ta) = manager.create_session().await.expect("session A");
     let (_b, _tb) = manager.create_session().await.expect("session B");
-    assert_eq!(manager.live_count().await, 2);
+    assert_eq!(manager.live_count(), 2);
 
     manager.close_session(&a).await.expect("first close");
     manager.close_session(&a).await.expect("second close");
 
     assert_eq!(
-        manager.live_count().await,
+        manager.live_count(),
         1,
         "closing ONE session twice must still free exactly one slot"
     );
@@ -596,7 +659,7 @@ async fn closing_the_same_session_twice_frees_exactly_one_slot() {
         .await
         .expect("the freed slot must be reusable");
     assert_eq!(
-        manager.live_count().await,
+        manager.live_count(),
         2,
         "only ONE slot was freed, so a second admission must never push past the cap"
     );
@@ -617,7 +680,7 @@ async fn closing_an_unknown_session_frees_nothing() {
         .await
         .expect("closing an unknown id is a no-op, not an error");
 
-    assert_eq!(manager.live_count().await, 1);
+    assert_eq!(manager.live_count(), 1);
     manager
         .create_session()
         .await
@@ -638,5 +701,5 @@ async fn many_create_then_close_cycles_never_exhaust_the_bound() {
             .unwrap_or_else(|_| panic!("cycle {cycle} must still be able to open a session"));
         manager.close_session(&id).await.expect("close");
     }
-    assert_eq!(manager.live_count().await, 0);
+    assert_eq!(manager.live_count(), 0);
 }

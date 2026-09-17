@@ -66,12 +66,29 @@
 //! spawns the session worker, and only then `initialize_session`; a session
 //! that looked idle in that gap could be evicted by a concurrent client at
 //! the cap, and its own `initialize` would then fail with a `500`. The flag
-//! is cleared once `initialize_session` is entered, whose own activity guard
-//! then holds the session busy until the handshake returns — success or
-//! failure. The residue: a session whose `initialize_session` is never
-//! called at all — rmcp's restore path can fail between `restore_session`
-//! and it — stays unevictable until `keep_alive` retires it, which is the
-//! pre-#2289 behaviour, confined to that one failure.
+//! is cleared synchronously, before the first await of `initialize_session`,
+//! and in the same step its activity guard marks the session busy until the
+//! handshake returns: success, failure, or a request dropped mid-handshake
+//! all leave the session evictable afterwards. A session whose
+//! `initialize_session` is never called at all (rmcp's restore path can fail
+//! between `restore_session` and it) stays unevictable, but not for long:
+//! `LocalSessionManager`'s worker gives up after `SessionConfig::init_timeout`
+//! (60 s by default) without an `initialize`, and rmcp then closes the
+//! session, which frees its slot.
+//!
+//! # Two locks, and why marking a session busy never awaits
+//!
+//! Admission (the cap check, the eviction it may trigger, the creation) and
+//! close are serialized by an async lock held across the inner manager's
+//! awaits, so two admissions can never both take the last slot. The map of
+//! live sessions sits behind a separate plain mutex that is never held
+//! across an await. Every per-call guard, and the birth flag above, is
+//! therefore taken synchronously at the start of the call: a request that is
+//! cancelled cannot stop halfway between "looked up" and "marked busy", and a
+//! request waiting on an admission in progress cannot leave a session
+//! stranded in its busy-at-birth state. Eviction picks its victim under that
+//! same plain mutex, so a session is either marked busy before the pick (and
+//! skipped) or not at all.
 //!
 //! # Who can evict whom: the minimum idle age
 //!
@@ -101,7 +118,7 @@
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
@@ -111,7 +128,6 @@ use rmcp::transport::streamable_http_server::session::{
     RestoreOutcome, ServerSseMessage, SessionId, SessionManager,
 };
 use thiserror::Error;
-use tokio::sync::Mutex;
 
 /// Where [`BoundedSessionManager`] reads "now" when it measures how long a
 /// session has been idle. Production uses [`MonotonicClock`]; tests inject a
@@ -143,7 +159,7 @@ impl Clock for MonotonicClock {
 ///
 /// Lives behind an `Arc` rather than directly in the `live` map's value,
 /// because releasing `in_flight` happens from [`ActivityGuard`]'s `Drop`,
-/// which cannot `.await` the async [`Mutex`] guarding that map.
+/// which should not have to take the map's lock at all.
 #[derive(Debug)]
 struct SessionCounters {
     /// Calls (and open streams) currently being served for this session.
@@ -219,7 +235,7 @@ struct ActivityGuard {
 }
 
 impl ActivityGuard {
-    /// Must be called while the `live` lock is held, so no eviction can
+    /// Must be called while the `live` mutex is held, so no eviction can
     /// choose this session between its lookup and this increment.
     fn begin(counters: Arc<SessionCounters>, clock: Arc<ActivityClock>) -> Self {
         counters.in_flight.fetch_add(1, Ordering::Relaxed);
@@ -267,6 +283,10 @@ pub struct BoundedSessionManager<SM> {
     inner: SM,
     max_sessions: usize,
     min_idle: Duration,
+    /// Serializes changes to the SET of live sessions (admission and close)
+    /// across the inner manager's awaits.
+    admission: tokio::sync::Mutex<()>,
+    /// The live sessions. Never held across an await; see the module docs.
     live: Mutex<HashMap<SessionId, Arc<SessionCounters>>>,
     activity: Arc<ActivityClock>,
 }
@@ -291,6 +311,7 @@ impl<SM> BoundedSessionManager<SM> {
             inner,
             max_sessions,
             min_idle,
+            admission: tokio::sync::Mutex::new(()),
             live: Mutex::new(HashMap::new()),
             activity: Arc::new(ActivityClock {
                 tick: AtomicU64::new(0),
@@ -299,26 +320,39 @@ impl<SM> BoundedSessionManager<SM> {
         }
     }
 
+    /// The live-session map. Every critical section on it is a few map or
+    /// atomic operations that cannot leave it half-updated, so a poisoned
+    /// mutex (a panic elsewhere while it was held) is recovered, not
+    /// propagated.
+    fn live(&self) -> MutexGuard<'_, HashMap<SessionId, Arc<SessionCounters>>> {
+        self.live.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn is_full(&self) -> bool {
+        self.live().len() >= self.max_sessions
+    }
+
     /// Number of sessions currently believed to be alive.
     #[cfg(test)]
-    pub(crate) async fn live_count(&self) -> usize {
-        self.live.lock().await.len()
+    pub(crate) fn live_count(&self) -> usize {
+        self.live().len()
     }
 
     /// Whether `id` is currently tracked as live.
     #[cfg(test)]
-    pub(crate) async fn is_live(&self, id: &SessionId) -> bool {
-        self.live.lock().await.contains_key(id)
+    pub(crate) fn is_live(&self, id: &SessionId) -> bool {
+        self.live().contains_key(id)
     }
 
     /// Start (or, for an id this wrapper does not track, skip) an activity
-    /// guard for `id`. The increment happens under the `live` lock — the lock
-    /// eviction holds — so a session cannot be picked as a victim between
-    /// being looked up here and being marked busy. Returns `None` for an
-    /// unknown id so callers still forward the operation to `inner` unguarded
-    /// and let it answer with its own "session not found".
-    async fn activity_guard(&self, id: &SessionId) -> Option<ActivityGuard> {
-        let live = self.live.lock().await;
+    /// guard for `id`. Synchronous on purpose: the increment happens under the
+    /// `live` mutex eviction picks its victim under, with no await before it,
+    /// so neither a concurrent eviction nor a cancelled request can separate
+    /// the lookup from the increment. Returns `None` for an unknown id so
+    /// callers still forward the operation to `inner` unguarded and let it
+    /// answer with its own "session not found".
+    fn activity_guard(&self, id: &SessionId) -> Option<ActivityGuard> {
+        let live = self.live();
         let counters = live.get(id)?;
         Some(ActivityGuard::begin(
             Arc::clone(counters),
@@ -356,16 +390,16 @@ where
     type Transport = SM::Transport;
 
     async fn create_session(&self) -> Result<(SessionId, Self::Transport), Self::Error> {
-        // The lock spans the check, the eviction it may trigger, AND the
-        // creation, so two concurrent callers cannot both see room for the
-        // last slot. A failed creation records nothing, so there is no
-        // reservation left to leak.
-        let mut live = self.live.lock().await;
-        if live.len() >= self.max_sessions {
-            self.evict_one_idle(&mut live).await?;
+        // The admission lock spans the check, the eviction it may trigger,
+        // AND the creation, so two concurrent callers cannot both see room
+        // for the last slot. A failed creation records nothing, so there is
+        // no reservation left to leak.
+        let _admission = self.admission.lock().await;
+        if self.is_full() {
+            self.evict_one_idle().await?;
         }
         let (id, transport) = self.inner.create_session().await?;
-        live.insert(id.clone(), self.activity.new_session());
+        self.live().insert(id.clone(), self.activity.new_session());
         Ok((id, transport))
     }
 
@@ -374,9 +408,11 @@ where
         id: &SessionId,
         message: ClientJsonRpcMessage,
     ) -> Result<ServerJsonRpcMessage, Self::Error> {
-        let guard = self.activity_guard(id).await;
-        // The guard now holds the session busy until the handshake returns —
-        // success, failure or cancellation alike — so the birth flag can go.
+        // No await before this point: the guard marks the session busy and the
+        // birth flag is cleared in one synchronous step, so even a request
+        // dropped at its first await leaves the session evictable once the
+        // guard is released.
+        let guard = self.activity_guard(id);
         if let Some(guard) = &guard {
             guard
                 .counters
@@ -397,10 +433,10 @@ where
         // close of the same session — the routine case, `DELETE` from the
         // client plus rmcp's own close when the session worker finishes —
         // cannot free a slot that belongs to a still-live session.
-        let mut live = self.live.lock().await;
+        let _admission = self.admission.lock().await;
         let result = self.inner.close_session(id).await;
         if result.is_ok() {
-            live.remove(id);
+            self.live().remove(id);
         }
         result.map_err(Into::into)
     }
@@ -410,7 +446,7 @@ where
         id: &SessionId,
         message: ClientJsonRpcMessage,
     ) -> Result<impl Stream<Item = ServerSseMessage> + Send + Sync + 'static, Self::Error> {
-        let guard = self.activity_guard(id).await;
+        let guard = self.activity_guard(id);
         let stream = self.inner.create_stream(id, message).await?;
         Ok(GuardedStream {
             inner: Box::pin(stream),
@@ -423,7 +459,7 @@ where
         id: &SessionId,
         message: ClientJsonRpcMessage,
     ) -> Result<(), Self::Error> {
-        let _guard = self.activity_guard(id).await;
+        let _guard = self.activity_guard(id);
         self.inner
             .accept_message(id, message)
             .await
@@ -434,7 +470,7 @@ where
         &self,
         id: &SessionId,
     ) -> Result<impl Stream<Item = ServerSseMessage> + Send + Sync + 'static, Self::Error> {
-        let guard = self.activity_guard(id).await;
+        let guard = self.activity_guard(id);
         let stream = self.inner.create_standalone_stream(id).await?;
         Ok(GuardedStream {
             inner: Box::pin(stream),
@@ -447,7 +483,7 @@ where
         id: &SessionId,
         last_event_id: String,
     ) -> Result<impl Stream<Item = ServerSseMessage> + Send + Sync + 'static, Self::Error> {
-        let guard = self.activity_guard(id).await;
+        let guard = self.activity_guard(id);
         let stream = self.inner.resume(id, last_event_id).await?;
         Ok(GuardedStream {
             inner: Box::pin(stream),
@@ -465,19 +501,19 @@ where
         // so they must evict nothing. Room is made only for a genuine restore
         // — and if none can be made, the restored session is closed again
         // rather than admitted past the cap.
-        let mut live = self.live.lock().await;
+        let _admission = self.admission.lock().await;
         let outcome = self.inner.restore_session(id.clone()).await?;
         if !matches!(outcome, RestoreOutcome::Restored(_)) {
             return Ok(outcome);
         }
-        if live.len() >= self.max_sessions {
-            if let Err(refusal) = self.evict_one_idle(&mut live).await {
+        if self.is_full() {
+            if let Err(refusal) = self.evict_one_idle().await {
                 drop(outcome);
                 self.inner.close_session(&id).await?;
                 return Err(refusal);
             }
         }
-        live.insert(id, self.activity.new_session());
+        self.live().insert(id, self.activity.new_session());
         Ok(outcome)
     }
 }
@@ -490,12 +526,14 @@ where
     /// [`ActivityClock::is_evictable`]), making room for the caller's new
     /// one. Errors with [`BoundedSessionManagerError::TooManySessions`] when
     /// no live session is evictable, since then there is nothing safe to
-    /// reclaim.
-    async fn evict_one_idle(
-        &self,
-        live: &mut HashMap<SessionId, Arc<SessionCounters>>,
-    ) -> Result<(), BoundedSessionManagerError<SM::Error>> {
-        let victim = live
+    /// reclaim. Called with the admission lock held.
+    ///
+    /// The victim stays in `live` until the inner close has succeeded, so a
+    /// close that fails, or a caller dropped mid-close, never leaves an open
+    /// session untracked.
+    async fn evict_one_idle(&self) -> Result<(), BoundedSessionManagerError<SM::Error>> {
+        let victim = self
+            .live()
             .iter()
             .filter(|(_, counters)| self.activity.is_evictable(counters, self.min_idle))
             .min_by_key(|(_, counters)| counters.last_tick.load(Ordering::Relaxed))
@@ -505,7 +543,7 @@ where
                 min_idle_secs: self.min_idle.as_secs(),
             })?;
         self.inner.close_session(&victim).await?;
-        live.remove(&victim);
+        self.live().remove(&victim);
         tracing::info!(
             session = %victim,
             max_sessions = self.max_sessions,
