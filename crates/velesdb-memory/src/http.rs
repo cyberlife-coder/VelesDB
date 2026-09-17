@@ -43,7 +43,7 @@ use crate::mcp::McpServer;
 
 mod session_limit;
 
-use session_limit::BoundedSessionManager;
+use session_limit::{BoundedSessionManager, EvictionPolicy};
 
 /// Default bind address for `--http` / `VELESDB_MEMORY_HTTP=1` when neither
 /// `VELESDB_MEMORY_HTTP_BIND` nor `--http-port` overrides it. Loopback-only:
@@ -164,6 +164,64 @@ fn keep_alive_from_raw(raw: Option<&str>) -> std::time::Duration {
         .map_or(DEFAULT_HTTP_KEEP_ALIVE, std::time::Duration::from_secs)
 }
 
+/// Default minimum time a session must have been idle — no request in
+/// flight, no stream open, handshake done — before the session cap may
+/// evict it to admit a new client: 5 minutes, rmcp's own default idle
+/// timeout.
+///
+/// Eviction at the cap (#2289) keeps a client that died without `DELETE`
+/// from locking every other client out for the whole [`DEFAULT_HTTP_KEEP_ALIVE`].
+/// But the transport authenticates no one, so without a floor any local
+/// process repeating `initialize` at the cap could evict every live client
+/// that just happened to be between two requests. This floor is what makes
+/// the difference: a client active at least every five minutes, or holding
+/// its standalone SSE stream open, is never evicted however hard others
+/// push, and a new client is refused instead.
+///
+/// What it does not remove: at the cap, a client silent (and streamless)
+/// for longer than this CAN be evicted, gets a `404` on its next request and
+/// must re-initialize — the situation [`DEFAULT_HTTP_KEEP_ALIVE`] documents
+/// clients mishandling (#1727). Five minutes is shorter than the silences
+/// [`DEFAULT_HTTP_KEEP_ALIVE`] was lengthened for, and that is deliberate:
+/// expiry hits every quiet client whatever the load, while eviction happens
+/// only at the cap, one session per admitted client, and always takes the
+/// least-recently-active candidate — a client dead for an hour goes before
+/// one quiet for six minutes. Raising the value narrows the window above and
+/// lengthens how long dead clients can hold every slot once the cap is
+/// reached; see `session_limit` for the full reasoning.
+pub(crate) const DEFAULT_HTTP_EVICT_MIN_IDLE: std::time::Duration =
+    std::time::Duration::from_secs(5 * 60);
+
+/// Resolve the minimum idle age before eviction from
+/// `VELESDB_MEMORY_HTTP_EVICT_MIN_IDLE_SECS`, bounded above by `keep_alive`.
+///
+/// Unset, unparseable, or `0` falls back to [`DEFAULT_HTTP_EVICT_MIN_IDLE`]:
+/// `0` would let any local process evict every idle client, removing the
+/// flood guard altogether, which is not something to reach by typo. A value
+/// above `keep_alive` is clamped to it — a session silent for `keep_alive`
+/// is retired by rmcp anyway, so no larger floor could ever be reached.
+#[must_use]
+fn http_evict_min_idle_from_env(keep_alive: std::time::Duration) -> std::time::Duration {
+    evict_min_idle_from_raw(
+        std::env::var("VELESDB_MEMORY_HTTP_EVICT_MIN_IDLE_SECS")
+            .ok()
+            .as_deref(),
+        keep_alive,
+    )
+}
+
+/// The parsing half of [`http_evict_min_idle_from_env`]; split out for the
+/// same no-shared-env-in-tests reason as [`keep_alive_from_raw`].
+fn evict_min_idle_from_raw(
+    raw: Option<&str>,
+    keep_alive: std::time::Duration,
+) -> std::time::Duration {
+    raw.and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|&secs| secs > 0)
+        .map_or(DEFAULT_HTTP_EVICT_MIN_IDLE, std::time::Duration::from_secs)
+        .min(keep_alive)
+}
+
 /// Build the axum [`Router`] serving the MCP streamable-HTTP transport at
 /// `/mcp` and a plain liveness probe at `/health` (used by the installer
 /// script and CI to confirm the daemon is up without speaking MCP itself).
@@ -185,19 +243,41 @@ fn keep_alive_from_raw(raw: Option<&str>) -> std::time::Duration {
 /// - [`RequestBodyLimit`] bounds a single request body
 ///   ([`http_max_body_bytes_from_env`]).
 /// - `BoundedSessionManager` bounds concurrent sessions
-///   ([`http_max_sessions_from_env`]).
+///   ([`http_max_sessions_from_env`]), and, once that bound is hit, evicts
+///   the least-recently-active session that has had nothing in flight for
+///   at least `VELESDB_MEMORY_HTTP_EVICT_MIN_IDLE_SECS` to admit the new one, rather
+///   than refusing it outright — refusing only when no live session
+///   qualifies (`session_limit`, #2289). This is what keeps one client that
+///   died without `DELETE` from locking every other client out until
+///   [`http_keep_alive_from_env`] finally expires it, while a client active
+///   more often than that floor cannot be evicted by others' `initialize`
+///   calls (see `session_limit` for the trade-off left).
 ///
 /// Sessions are retired after [`http_keep_alive_from_env`] of silence — 60
 /// minutes by default rather than rmcp's 5, so an agent's normal pauses do not
 /// expire the session out from under it. See [`DEFAULT_HTTP_KEEP_ALIVE`] for
 /// what that mitigates and, just as importantly, what it does not.
+///
+/// Configured via four environment variables, all read once at process
+/// start (`router`, not `router_with_*`, which take the resolved values
+/// instead so tests can inject tiny ones without racing shared process-wide
+/// env state): `VELESDB_MEMORY_HTTP_MAX_BODY_BYTES`
+/// ([`http_max_body_bytes_from_env`], default
+/// [`DEFAULT_HTTP_MAX_BODY_BYTES`]), `VELESDB_MEMORY_HTTP_MAX_SESSIONS`
+/// ([`http_max_sessions_from_env`], default [`DEFAULT_HTTP_MAX_SESSIONS`]),
+/// `VELESDB_MEMORY_HTTP_KEEP_ALIVE_SECS` ([`http_keep_alive_from_env`],
+/// default [`DEFAULT_HTTP_KEEP_ALIVE`]) and
+/// `VELESDB_MEMORY_HTTP_EVICT_MIN_IDLE_SECS`
+/// (default 300 s, never above the keep-alive).
 pub fn router(server: McpServer, cancellation_token: CancellationToken) -> Router {
-    router_with_limits_and_keep_alive(
+    let keep_alive = http_keep_alive_from_env();
+    router_with_session_policy(
         server,
         cancellation_token,
         http_max_body_bytes_from_env(),
         http_max_sessions_from_env(),
-        Some(http_keep_alive_from_env()),
+        Some(keep_alive),
+        http_evict_min_idle_from_env(keep_alive),
     )
 }
 
@@ -238,6 +318,9 @@ pub fn router_with_limits(
 ///
 /// Exposed so tests can inject a very short timeout (~100–200 ms) and observe
 /// a full expire-and-reuse cycle without waiting minutes of wall-clock time.
+///
+/// Uses the product's default eviction floor (300 s); tests that
+/// exercise eviction itself call [`router_with_session_policy`].
 #[doc(hidden)]
 pub fn router_with_limits_and_keep_alive(
     server: McpServer,
@@ -246,11 +329,40 @@ pub fn router_with_limits_and_keep_alive(
     max_sessions: usize,
     keep_alive: Option<std::time::Duration>,
 ) -> Router {
+    router_with_session_policy(
+        server,
+        cancellation_token,
+        max_body_bytes,
+        max_sessions,
+        keep_alive,
+        DEFAULT_HTTP_EVICT_MIN_IDLE,
+    )
+}
+
+/// [`router_with_limits_and_keep_alive`], but with the eviction floor passed
+/// explicitly too: how long a session must have been idle before the session
+/// cap may evict it to admit a new client (see
+/// `session_limit`). Unlike `VELESDB_MEMORY_HTTP_EVICT_MIN_IDLE_SECS`,
+/// the value is taken as given — a test passes `Duration::ZERO` to observe
+/// eviction over the real transport without waiting minutes.
+#[doc(hidden)]
+pub fn router_with_session_policy(
+    server: McpServer,
+    cancellation_token: CancellationToken,
+    max_body_bytes: usize,
+    max_sessions: usize,
+    keep_alive: Option<std::time::Duration>,
+    evict_min_idle: std::time::Duration,
+) -> Router {
     let mut inner = LocalSessionManager::default();
     if let Some(keep_alive) = keep_alive {
         inner.session_config.keep_alive = Some(keep_alive);
     }
-    let session_manager = BoundedSessionManager::new(inner, max_sessions);
+    let policy = EvictionPolicy {
+        min_idle: evict_min_idle,
+        init_timeout: inner.session_config.init_timeout,
+    };
+    let session_manager = BoundedSessionManager::new(inner, max_sessions, policy);
     let mcp_service: StreamableHttpService<McpServer, BoundedSessionManager<LocalSessionManager>> =
         StreamableHttpService::new(
             move || Ok(server.clone()),
