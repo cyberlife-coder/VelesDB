@@ -190,7 +190,7 @@ pub enum Condition {
         /// Values that must all be present in the array
         values: Vec<Value>,
     },
-    /// Geospatial distance filter: Haversine distance comparison.
+    /// Geospatial distance filter: great-circle distance comparison.
     GeoDistance {
         /// Field name containing `GeoPoint` data
         field: String,

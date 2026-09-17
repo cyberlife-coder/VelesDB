@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector + graph + column-store search in VelesDB.
 
-**Version**: 3.10.0 | Last updated: 2026-09-13 · Applies to: velesdb-core 6.0.0
+**Version**: 3.10.0 | Last updated: 2026-09-17 · Applies to: velesdb-core 6.0.0
 
 ---
 
@@ -3105,7 +3105,7 @@ VelesQL returns structured errors:
 
 #### GEO_DISTANCE
 
-Computes the Haversine great-circle distance in meters between a GeoPoint column value and a reference coordinate pair.
+Computes the great-circle distance in meters, on a sphere of radius 6,371 km, between a GeoPoint column value and a reference coordinate pair. The distance uses the spherical Vincenty formula, accurate for every pair of points, antipodes included.
 
 ```sql
 SELECT * FROM places WHERE GEO_DISTANCE(location, 48.8566, 2.3522) < 500;
@@ -3117,6 +3117,12 @@ SELECT * FROM places WHERE GEO_DISTANCE(location, 48, 2) >= 1000;
 - Null GeoPoint values are excluded from results.
 - Non-GeoPoint or non-existent columns return empty results (no error).
 - Combinable with AND, OR, NOT, and other WHERE operators.
+- `=` and `!=` follow one rule: two distances are equal when they agree to
+  the millimetre (they differ by less than 1 mm). `<`, `<=`, `>`, `>=`
+  compare exactly.
+- A point whose latitude is outside `[-90, 90]` or longitude outside
+  `[-180, 180]`, in the row or in the query, has no distance: the comparison
+  matches no row under any operator, `!=` included, as for a null GeoPoint.
 
 #### GEO_BBOX
 

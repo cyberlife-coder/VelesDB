@@ -129,6 +129,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   load call alone reports the cost as gone when it has only moved.
 
 ### Fixed
+- **`GEO_DISTANCE` was inaccurate or NaN near the antipode, and its `=` /
+  `!=` depended on floating-point rounding (#2310).** Both evaluation paths,
+  `ColumnStore::filter_geo_distance` and VelesQL's payload filtering
+  (`filter::matching`), carried their own copy of the Haversine formula,
+  `2·atan2(√a, √(1−a))`. Near the antipode `1−a` loses its significant
+  digits, so the distance was off by up to decimetres (0.10 m on the pair
+  pinned by `geo_distance_tests::near_antipodal_pair_reproduces_its_reference`),
+  and rounding could push `a` above 1, making the distance NaN: the row then
+  dropped out of every comparison. Both paths now call one function,
+  `geo_distance::great_circle_distance_m`, which uses the spherical Vincenty
+  form, well conditioned everywhere and never NaN for valid coordinates.
+  Distances computed away from the antipode can change in their last bits;
+  near it they are now accurate. Equality was also fragile:
+  `ColumnStore` compared against an absolute `f64::EPSILON`, and the VelesQL
+  path against `f64::EPSILON` scaled to the distance, both tighter than the
+  rounding of the computation itself. Both now follow one product rule, in
+  `geo_distance::distance_satisfies`: two distances are equal when they
+  agree to the millimetre; `<`, `<=`, `>`, `>=` still compare exactly. A
+  reference or payload point outside `[-90, 90]` / `[-180, 180]` (NaN
+  included), which used to get a meaningless distance, now has none and,
+  like a NaN threshold, matches no row under any operator, `!=` included.
+  The formula is checked against 60-digit reference distances and, by the ignored
+  `geo_distance_tests::sweep_agrees_with_the_chord_formulation`, against an
+  independent formulation over a seeded sample of the whole sphere and of
+  the antipode's neighbourhood.
+
 - **VelesQL's `ef_search` overrides `mode`, as documented (#2274).** A query
   that set both ran at the `mode` and ignored the `ef_search`, though
   `docs/VELESQL_SPEC.md` said `ef_search` overrides `mode` and REST resolves

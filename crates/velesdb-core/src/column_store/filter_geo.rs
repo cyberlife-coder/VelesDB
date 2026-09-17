@@ -5,9 +5,9 @@
 
 use roaring::RoaringBitmap;
 
-use super::haversine::haversine_distance;
 use super::types::TypedColumn;
 use super::ColumnStore;
+use crate::geo_distance::{distance_satisfies, great_circle_distance_m};
 
 /// Comparison operator for geo-distance filters.
 ///
@@ -60,42 +60,19 @@ pub struct GeoBboxParams<'a> {
     pub lng_max: f64,
 }
 
-/// Applies a comparison operator to two `f64` values.
-fn compare_f64(a: f64, b: f64, op: CompareOp) -> bool {
-    match op {
-        CompareOp::Eq => (a - b).abs() < f64::EPSILON,
-        CompareOp::NotEq => (a - b).abs() >= f64::EPSILON,
-        CompareOp::Gt => a > b,
-        CompareOp::Gte => a >= b,
-        CompareOp::Lt => a < b,
-        CompareOp::Lte => a <= b,
-    }
-}
-
 impl ColumnStore {
-    /// Returns row indices where the Haversine distance satisfies the comparison.
+    /// Returns row indices where the great-circle distance satisfies the comparison.
+    ///
+    /// The distance and the comparison rule (equality to the millimetre, no
+    /// match for an out-of-range reference point or a NaN threshold) come
+    /// from the crate's `geo_distance` module, shared with `VelesQL` payload
+    /// filtering.
     ///
     /// Returns empty results for non-existent or non-GeoPoint columns.
     /// Excludes deleted rows and null values.
     #[must_use]
     pub fn filter_geo_distance(&self, params: &GeoDistanceParams<'_>) -> Vec<usize> {
-        let Some(TypedColumn::GeoPoint(col)) = self.columns.get(params.column) else {
-            return Vec::new();
-        };
-        col.iter()
-            .enumerate()
-            .filter_map(|(idx, v)| {
-                let (lat, lng) = (*v).as_ref()?;
-                let dist = haversine_distance(*lat, *lng, params.lat, params.lng);
-                if compare_f64(dist, params.threshold, params.operator)
-                    && !self.is_row_deleted_bitmap(idx)
-                {
-                    Some(idx)
-                } else {
-                    None
-                }
-            })
-            .collect()
+        self.geo_distance_rows(params).collect()
     }
 
     /// Bitmap variant of `filter_geo_distance`.
@@ -103,23 +80,54 @@ impl ColumnStore {
     /// Safely skips indices exceeding `u32::MAX`.
     #[must_use]
     pub fn filter_geo_distance_bitmap(&self, params: &GeoDistanceParams<'_>) -> RoaringBitmap {
-        let Some(TypedColumn::GeoPoint(col)) = self.columns.get(params.column) else {
-            return RoaringBitmap::new();
-        };
-        col.iter()
-            .enumerate()
-            .filter_map(|(idx, v)| {
-                let (lat, lng) = (*v).as_ref()?;
-                let dist = haversine_distance(*lat, *lng, params.lat, params.lng);
-                if compare_f64(dist, params.threshold, params.operator)
-                    && !self.is_row_deleted_bitmap(idx)
-                {
-                    u32::try_from(idx).ok()
-                } else {
-                    None
-                }
-            })
+        self.geo_distance_rows(params)
+            .filter_map(|idx| u32::try_from(idx).ok())
             .collect()
+    }
+
+    /// Rows whose point satisfies `GEO_DISTANCE` (see `filter_geo_distance`).
+    fn geo_distance_rows<'a>(
+        &'a self,
+        params: &'a GeoDistanceParams<'_>,
+    ) -> impl Iterator<Item = usize> + 'a {
+        let operator = params.operator.into();
+        self.geo_rows(params.column, move |lat, lng| {
+            let dist = great_circle_distance_m(lat, lng, params.lat, params.lng);
+            distance_satisfies(dist, operator, params.threshold)
+        })
+    }
+
+    /// Rows whose point lies in the `GEO_BBOX` (see `filter_geo_bbox`).
+    fn geo_bbox_rows<'a>(
+        &'a self,
+        params: &'a GeoBboxParams<'_>,
+    ) -> impl Iterator<Item = usize> + 'a {
+        let inverted = params.lat_min > params.lat_max || params.lng_min > params.lng_max;
+        // `take(0)` yields nothing without reading a single row.
+        let limit = if inverted { 0 } else { usize::MAX };
+        self.geo_rows(params.column, move |lat, lng| {
+            (params.lat_min..=params.lat_max).contains(&lat)
+                && (params.lng_min..=params.lng_max).contains(&lng)
+        })
+        .take(limit)
+    }
+
+    /// Live, non-null rows of the `GeoPoint` column `column` whose point
+    /// satisfies `keep`; no row when the column is missing or not a
+    /// `GeoPoint` column.
+    fn geo_rows<'a>(
+        &'a self,
+        column: &'a str,
+        keep: impl Fn(f64, f64) -> bool + 'a,
+    ) -> impl Iterator<Item = usize> + 'a {
+        let points = match self.columns.get(column) {
+            Some(TypedColumn::GeoPoint(col)) => col.as_slice(),
+            _ => &[],
+        };
+        points.iter().enumerate().filter_map(move |(idx, point)| {
+            let (lat, lng) = (*point)?;
+            (keep(lat, lng) && !self.is_row_deleted_bitmap(idx)).then_some(idx)
+        })
     }
 
     /// Returns row indices where the GeoPoint falls within the bounding box (inclusive).
@@ -128,28 +136,7 @@ impl ColumnStore {
     /// or when `lat_min > lat_max` or `lng_min > lng_max`.
     #[must_use]
     pub fn filter_geo_bbox(&self, params: &GeoBboxParams<'_>) -> Vec<usize> {
-        if params.lat_min > params.lat_max || params.lng_min > params.lng_max {
-            return Vec::new();
-        }
-        let Some(TypedColumn::GeoPoint(col)) = self.columns.get(params.column) else {
-            return Vec::new();
-        };
-        col.iter()
-            .enumerate()
-            .filter_map(|(idx, v)| {
-                let (lat, lng) = (*v).as_ref()?;
-                if *lat >= params.lat_min
-                    && *lat <= params.lat_max
-                    && *lng >= params.lng_min
-                    && *lng <= params.lng_max
-                    && !self.is_row_deleted_bitmap(idx)
-                {
-                    Some(idx)
-                } else {
-                    None
-                }
-            })
-            .collect()
+        self.geo_bbox_rows(params).collect()
     }
 
     /// Bitmap variant of `filter_geo_bbox`.
@@ -157,27 +144,8 @@ impl ColumnStore {
     /// Safely skips indices exceeding `u32::MAX`.
     #[must_use]
     pub fn filter_geo_bbox_bitmap(&self, params: &GeoBboxParams<'_>) -> RoaringBitmap {
-        if params.lat_min > params.lat_max || params.lng_min > params.lng_max {
-            return RoaringBitmap::new();
-        }
-        let Some(TypedColumn::GeoPoint(col)) = self.columns.get(params.column) else {
-            return RoaringBitmap::new();
-        };
-        col.iter()
-            .enumerate()
-            .filter_map(|(idx, v)| {
-                let (lat, lng) = (*v).as_ref()?;
-                if *lat >= params.lat_min
-                    && *lat <= params.lat_max
-                    && *lng >= params.lng_min
-                    && *lng <= params.lng_max
-                    && !self.is_row_deleted_bitmap(idx)
-                {
-                    u32::try_from(idx).ok()
-                } else {
-                    None
-                }
-            })
+        self.geo_bbox_rows(params)
+            .filter_map(|idx| u32::try_from(idx).ok())
             .collect()
     }
 }
