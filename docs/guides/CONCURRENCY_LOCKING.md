@@ -185,8 +185,8 @@ of AI/RAG applications:
 | Collection create | Write (registry) | ~1ms | No (different lock) |
 | HNSW vacuum: snapshot | Read (index) | Copies every live vector | No |
 | HNSW vacuum: rebuild | None while inserting (at most two brief reads: the storage mode, and a quantized index's quantizer) | Inserts every live vector into a new graph, built with the index's own M, `ef_construction` and alpha: the bulk of a vacuum, seconds on a large index | No: searches and writes run on the old graph |
-| HNSW vacuum: catch-up | Read (index) while listing the writes made during the rebuild and copying their vectors out; none while inserting them | Copies those writes into the new graph, in a bounded number of rounds, each taking the writes made during the one before, until a few dozen are left | No: searches and writes run on the old graph |
-| HNSW vacuum: swap | Write (index) | Re-maps every live id and inserts, one at a time and never on rayon, the writes the catch-up left: a few dozen, more only if writes outpaced every round | Yes |
+| HNSW vacuum: catch-up | Read (index) while listing the writes made during the rebuild and copying their vectors out; none while inserting them | Copies those writes into the new graph, in at most four rounds, each taking the writes made during the one before, until 64 or fewer are left | No: searches and writes run on the old graph |
+| HNSW vacuum: swap | Write (index) | Inserts, one at a time and never on rayon, the writes the catch-up left (up to 64, or whatever its fourth round leaves when writes outpace the copy: no bound), rebuilds the mapping of every live id, and drops the old graph | Yes |
 | HNSW `reorder_for_locality` | Write (index) | The whole pass: renumbers every node and moves every vector | Yes |
 | HNSW save | Save lock (per index) for the whole save; read (index) while it copies the mappings and writes the graph files | The graph files, then the mappings and meta files under the save lock only | No (see below) |
 
@@ -197,11 +197,7 @@ two saves wait for each other and never for a vacuum. A save made during a vacuu
 waits for its dump like for any read. A save holds the graph's vector read
 lock from the start of its vectors file to the end of its graph file, so an
 insert waits for both files, and since `parking_lot` locks are task-fair, a
-search arriving after that insert waits too. Measured on a shared machine
-(release build, 100 000 x 128 vectors), a save took about 70 ms and kept a
-single insert waiting up to 35 to 48 ms; holding the lock across both files
-left that unchanged (37 to 42 ms, one outlier at 165 ms), since a single
-insert already waited on the layers lock the graph file's writer holds.
+search arriving after that insert waits too.
 
 ---
 

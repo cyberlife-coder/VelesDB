@@ -54,8 +54,10 @@ type Carried = FxHashMap<u64, (usize, usize)>;
 const MAX_CATCH_UP_ROUNDS: usize = 4;
 
 /// Writes left at or under which `vacuum` stops catching up and takes the
-/// write guard: it copies them there one by one, holding back every search
-/// meanwhile, so the remainder is kept to a few dozen single inserts.
+/// write guard, where it copies them one by one while every search waits.
+/// This bounds what is left only when a round gets there: after
+/// [`MAX_CATCH_UP_ROUNDS`] the vacuum takes the guard whatever the last round
+/// left, which writes that outpace the copy make as large as they like.
 const CATCH_UP_REMAINDER: usize = 64;
 
 /// The slot `id` got in the new graph, if `carried` holds its vector as it is
@@ -149,10 +151,13 @@ impl HnswIndex {
     ///   the old graph into the new one, still without the write lock, in a
     ///   bounded number of rounds, each copying the writes made during the one
     ///   before. The swap re-maps the ids mapped at that moment, not the
-    ///   snapshot's: it copies, one at a time, the writes the rounds left (a
-    ///   few dozen, unless writes outpaced the rounds), and an id deleted since stays
-    ///   deleted. One write lock covers the swap, the re-map and those last
-    ///   copies, so a search never sees a half-built mapping.
+    ///   snapshot's: it copies, one at a time, the writes the rounds left, and
+    ///   an id deleted since stays deleted. The rounds stop once few writes are
+    ///   left, but also after a fixed number of rounds, so writes that outpace
+    ///   the copy leave the swap as many as they like. One write lock covers
+    ///   those last copies, the re-map of every live id and dropping the old
+    ///   graph, so a search never sees a half-built mapping, and waits for all
+    ///   three.
     /// - [`Self::reorder_for_locality`] waits for a running vacuum, and a
     ///   vacuum for a running reorder: the two share one maintenance lock.
     ///   [`Self::save`] takes no part in it: during the rebuild it saves the

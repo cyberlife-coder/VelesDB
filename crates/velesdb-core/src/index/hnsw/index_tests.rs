@@ -3638,7 +3638,7 @@ fn deletes_racing_a_renumber_stay_deleted() {
     let mut unmapped = Vec::new();
     let mut stalled = false;
     std::thread::scope(|scope| {
-        scope.spawn(|| {
+        let renumbers = scope.spawn(|| {
             start.wait();
             while deleting.load(Ordering::Acquire) || rounds.load(Ordering::Acquire) % 2 == 1 {
                 let graph = index.inner.write();
@@ -3654,7 +3654,7 @@ fn deletes_racing_a_renumber_stay_deleted() {
         // deletes wait for a renumber to finish, so the renumbering thread is
         // running at every checkpoint, not by scheduling luck.
         for (n, id) in (0..IDS as u64).step_by(2).enumerate() {
-            if n % 200 == 0 && !a_round_passes(&rounds) {
+            if n % 200 == 0 && !a_round_passes(&rounds, &renumbers) {
                 stalled = true;
                 break;
             }
@@ -3694,17 +3694,42 @@ fn deletes_racing_a_renumber_stay_deleted() {
     );
 }
 
-/// Spins, yielding, until `rounds` moves past the value it holds now; `false`
-/// when it never does within the bound, so the remover stops waiting on a
-/// peer that stopped making rounds. A peer blocked for ever still hangs the
-/// scope that joins it.
-fn a_round_passes(rounds: &std::sync::atomic::AtomicU32) -> bool {
+/// Spins, yielding, until `rounds` moves past the value it holds now, and
+/// returns `true`; returns `false` once `peer`, the thread making the rounds,
+/// has ended without moving it, so the caller stops waiting on a peer that
+/// stopped making rounds (see [`seen_before_it_ends`]).
+fn a_round_passes<T>(
+    rounds: &std::sync::atomic::AtomicU32,
+    peer: &std::thread::ScopedJoinHandle<'_, T>,
+) -> bool {
     use std::sync::atomic::Ordering;
     let seen = rounds.load(Ordering::Acquire);
-    (0..10_000_000).any(|_| {
+    seen_before_it_ends(peer, || rounds.load(Ordering::Acquire) != seen)
+}
+
+/// Spins, yielding, until `seen` holds, and returns `true`; returns `false`
+/// once `peer`, the thread expected to bring it about, has ended without it.
+///
+/// Nothing else bounds the wait. A bound on spins is a bound on time, and a
+/// loaded machine slows the peer past it: such a bound read a save still
+/// running as a stall, and failed `batch_inserts_racing_a_save_reload_consistent`
+/// under a full test run. A peer blocked for ever hangs this, as it hangs the
+/// scope that joins it.
+fn seen_before_it_ends<T>(
+    peer: &std::thread::ScopedJoinHandle<'_, T>,
+    seen: impl Fn() -> bool,
+) -> bool {
+    loop {
+        // Read before `seen`: whatever the peer did, it did before it ended.
+        let ended = peer.is_finished();
+        if seen() {
+            return true;
+        }
+        if ended {
+            return false;
+        }
         std::thread::yield_now();
-        rounds.load(Ordering::Acquire) != seen
-    })
+    }
 }
 
 /// A vector no other `(id, version)` pair shares: its first two coordinates
@@ -3817,7 +3842,7 @@ fn write_beside_vacuums(index: &HnswIndex, writes: u64, base: u64) -> u32 {
         // Recorded, not asserted: a panic here would leave the vacuuming
         // thread looping, and the scope waiting on it for ever.
         for n in 0..writes {
-            if n % 50 == 0 && !a_round_passes(&rounds) {
+            if n % 50 == 0 && !a_round_passes(&rounds, &vacuums) {
                 stalled = true;
                 break;
             }
@@ -4159,7 +4184,7 @@ fn wide_vector(id: u64) -> Vec<f32> {
 /// Saves `index` in a loop, each save into its own directory under `dir`,
 /// while `write` runs on this thread, and returns every save once `write`
 /// returns. `write` gets a checkpoint that waits for a save to finish and
-/// returns `false` if none does within the bound. It must record what it
+/// returns `false` if the saving thread ended first. It must record what it
 /// checks, not assert it: a panic would leave the saving thread looping, and
 /// the scope waiting on it for ever.
 fn save_beside(
@@ -4186,7 +4211,7 @@ fn save_beside(
             saves
         });
         start.wait();
-        write(&|| a_round_passes(&rounds));
+        write(&|| a_round_passes(&rounds, &saver));
         writing.store(false, Ordering::Release);
         saver.join()
     });
@@ -4366,10 +4391,7 @@ fn two_saves_while_a_batch_links(
     };
     let (seen, joined, placed) = std::thread::scope(|scope| {
         let batch = scope.spawn(batch);
-        let seen = (0..10_000_000).any(|_| {
-            std::thread::yield_now();
-            index.graph_vector_count() > slots
-        });
+        let seen = seen_before_it_ends(&batch, || index.graph_vector_count() > slots);
         let (a, b) = (scope.spawn(save), scope.spawn(save));
         (seen, [a.join(), b.join()], batch.join())
     });
