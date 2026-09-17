@@ -898,14 +898,14 @@ SELECT * FROM items WHERE created_at > NOW()
 
 Defines a time duration with the syntax `INTERVAL '<magnitude> <unit>'`:
 
-| Unit | Aliases | Seconds |
+| Unit | Aliases | Interval (seconds) |
 |------|---------|---------|
 | seconds | s, sec, second | 1 |
 | minutes | m, min, minute | 60 |
 | hours | h, hour | 3,600 |
 | days | d, day | 86,400 |
 | weeks | w, week | 604,800 |
-| months | month | ~2,592,000 (30 days) |
+| months (30 days) | month | 2,592,000 |
 
 #### Temporal Arithmetic
 

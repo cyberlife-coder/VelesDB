@@ -39,14 +39,18 @@ its table cell's label, and exempts that value alone. A number in a code span
 is exempt only as code (`sleep(10us)`, `4 × dim`): a quantity standing alone
 in one (`29.5 us`) is a figure.
 
-It fails closed on time figures: it reads one in exactly three forms, a bare
-number under a header that names its unit ("| Build time (s) |" over "| 42 |"),
-a number with its unit ("42 ms"), and either inside one emphasis pair ("**42**",
-"**42 ms**"). Any other shape that holds a number next to a time unit is an
-unreadable figure, reported with the form to write, whatever the register
-holds: a mark between the number and its unit ("**42** ms"), a footnote on a
-unit, a cell or a header ("42 ms¹", "42¹", "Build time (s)¹"), a bold header
-("**Build time (s)**"), or any other cell under a time unit ("~42").
+It fails closed on time figures, by construction rather than by a list of
+shapes. It reads a time in exactly three forms: a number with its unit
+("42 ms"), a bare number under a header where a time unit stands as a word
+("| Build time (s) |", "| µs/fact |" over "| 42 |"), and either inside one
+emphasis pair ("**42**", "__42 ms__"). It takes the markup out of every line
+(Markdown and GFM syntax, HTML tags and entities, link targets, superscripts,
+invisible characters) and reports any number with a time unit left there that
+it does not read on the line itself, at the same place, as an unreadable
+figure, whatever the register holds: "**42** ms", "42¹ ms", "<b>42</b> ms",
+"42&nbsp;ms", "`42` ms", "~~42~~ ms". So is any other cell under a time-unit
+header ("~42", "42¹"). A code span, a fenced block and a doc-test hold code:
+the unreadable rule leaves them alone.
 
 What it cannot see: this is a heuristic. It does not read
 - a number written with no unit and no such word ("4,000 of them a second");
@@ -66,17 +70,31 @@ import argparse
 import json
 import re
 import sys
+import unicodedata
 from pathlib import Path
 
 CONTRACT = Path("docs/reference/promise-contract.json")
 
-_NUM = r"\d+(?:[.,]\d+)?"
+# The one number grammar every rule reads.
+_NUM = r"\d+(?:[.,]\d+)*"
+NUMBER = re.compile(_NUM)
 # Markdown emphasis or code may wrap a figure: `**130x** faster`.
 _MARK = r"(?:\*\*|__|\*|_|`)?"
 # A footnote marker may follow the word: `faster²`.
 _SUP = "[" + "".join(chr(c) for c in (0xB9, 0xB2, 0xB3, *range(0x2070, 0x207A))) + "]*"
 # A time unit written out or abbreviated: "450 usec", "3 seconds", "2 msec".
+# The abbreviations are matched in lower case: "MS" names no unit.
 _LONG_TIME = r"(?:[nuµμm]?secs?|(?:nano|micro|milli)?seconds?)"
+_SUB_MS_UNIT = r"(?:(?-i:ns|[µμ]s|us)|[nuµμ]secs?|nanoseconds?|microseconds?)"
+_TIME_UNIT = rf"(?:(?-i:ns|[µμ]s|us|ms|s)|{_LONG_TIME})"
+# Where a time starts and ends. A number glued to a name is part of it
+# (`poll_10us`, `f32s`, `v1.5 ms`), and so is a unit before a hyphen ("US-012"
+# is a user story, not a microsecond). An emphasis underscore is no part of a
+# name: `__42 ms__` is 42 ms.
+_BEFORE = r"(?<![^\W_])(?<!\.)(?<![^\W_]_)"
+_AFTER = r"(?![^\W_]|-)(?!_[^\W_])"
+# A time as every rule reads it: a number with its unit.
+_TIME = rf"{_BEFORE}{_NUM}\s*{_TIME_UNIT}{_AFTER}"
 KINDS: dict[str, re.Pattern[str]] = {
     "speed ratio": re.compile(
         rf"{_NUM}\s*(?:[-–]\s*{_NUM}\s*)?[x×]{_MARK}\s+{_MARK}(?:faster|slower|speed-?ups?|quicker){_SUP}\b"
@@ -111,48 +129,62 @@ KINDS: dict[str, re.Pattern[str]] = {
         rf"[^.\n]{{0,40}}?"
         rf"|\b(?:takes?|took|runs?|completes?|answers?|responds?|compiles?|finishes?|returns?)\s+(?:in\s+)?"
         rf"(?:about\s+|under\s+|~|<\s*)?)"
-        # The unit is matched in lower case and never before a hyphen: a user
-        # story tag such as "US-012" is not a microsecond.
-        rf"(?<![\w.]){_NUM}\s*(?:(?-i:ns|µs|us|ms|s)|{_LONG_TIME})\b(?!-)",
+        rf"{_TIME}",
         re.I,
     ),
     # Below the millisecond a number needs no keyword ("Cosine 32 ns"): it is a
     # measurement unless a config word qualifies it ("the poll interval is 100
     # µs"). Milliseconds and seconds need a keyword, a verb or a table: timeouts
     # are set in them. A number glued to a name (`poll_10us`) is part of it.
-    "time": re.compile(
-        rf"(?<![\w.]){_NUM}\s*(?:(?-i:ns|[µμ]s|us)|[nuµμ]secs?|nanoseconds?|microseconds?)(?![\w-])", re.I
-    ),
+    "time": re.compile(rf"{_BEFORE}{_NUM}\s*{_SUB_MS_UNIT}{_AFTER}", re.I),
 }
 # A time in a table row, in a Markdown file or a doc comment, is a measurement
 # whatever its column says: a benchmark table names its keyword once, in the
 # header. Each time of the row is judged on its own (`qualified`): a config
 # word exempts the value it qualifies, in its cell, as its column header or as
 # its row label ("| query timeout | 30 s |"), and no other value of the row.
-TABLE_TIME = re.compile(rf"(?<![\w.]){_NUM}\s*(?:(?-i:ns|µs|us|ms|s)|{_LONG_TIME})\b(?!-)")
+TABLE_TIME = re.compile(_TIME, re.I)
 # A column header may carry the unit of its cells: "| Latency (ms) |",
 # "| Build time [s] |". Emphasis around a cell's number is no part of it.
 HEADER_UNIT = re.compile(r"^(.*?)\s*(?:\(([^()]{1,12})\)|\[([^\[\]]{1,12})\])\s*$")
 # One emphasis pair around a whole cell ("**42**", "**42 ms**") is no part of it.
 ONE_PAIR = re.compile(r"^(\*\*|__|\*|_)(\S(?:.*\S)?)\1$")
 
-# Fail closed. A time is read in exactly these forms: a bare number under a
-# header that names its unit ("| Build time (s) |" over "| 42 |"), a number
-# with its unit ("42 ms"), and either inside one emphasis pair ("**42**",
-# "**42 ms**"). Any other shape that holds a number next to a time unit is an
-# unreadable figure, reported with the form to write, whatever the register
-# holds: a mark between the number and its unit ("**42** ms", "42\u00b9 ms"), a
-# footnote glued to the unit ("42 ms\u00b9"), a header unit the guard cannot
-# read ("**Build time (s)**", "Build time (s)\u00b9"), and any cell under a time
-# unit that is not one of the forms ("42\u00b9", "~42", "0.30–1.35").
-_TIME_UNIT = rf"(?:(?-i:ns|[µμ]s|us|ms|s)|{_LONG_TIME})"
-_SUPERSCRIPTS = "".join(chr(c) for c in (0xB9, 0xB2, 0xB3, *range(0x2070, 0x207A)))
-MARKED_TIME = re.compile(
-    rf"(?<![\w.]){_NUM}\s*(?:\*\*|__|\*|_|[{_SUPERSCRIPTS}])+\s*{_TIME_UNIT}(?![\w-])"
-    rf"|(?<![\w.]){_NUM}\s*{_TIME_UNIT}[{_SUPERSCRIPTS}]+",
-    re.I,
-)
-HEADER_TIME_UNIT = re.compile(rf"[(\[]\s*{_TIME_UNIT}\s*[)\]]", re.I)
+# Fail closed, by construction. The guard reads a time in exactly three forms:
+# a number with its unit ("42 ms", `TABLE_TIME`), a bare number under a header that
+# names a time unit ("| µs/fact |" over "| 42 |"), and either inside one
+# emphasis pair ("**42**", "__42 ms__"). It does not list the shapes it cannot
+# read: it takes the markup out of each line (`markup_free`) and reports every
+# number with a time unit left there that `TABLE_TIME` does not read on the raw
+# line, at the same place, as an unreadable figure, whatever the register
+# holds: "**42** ms", "42¹ ms", "42 ms¹", "<b>42</b> ms", "42&nbsp;ms",
+# "`42` ms", "~~42~~ ms".
+#
+# The markup taken out: every character CommonMark and GFM use as syntax
+# (emphasis, code, strikethrough, escapes, links and images, raw HTML, tables,
+# footnotes, headings), an HTML tag or entity, a link target,
+# a superscript and an invisible format character. A `*` or `_` with blank
+# space on both sides is no emphasis ("4 * ms"), and an underscore between two
+# letters or digits belongs to a name (`poll_10us`): both stay. So do dashes,
+# quotes and every other mark of the text itself.
+#
+# Code is not prose: a time wholly inside a code span, a fenced block or a
+# doc-test is left to the rules above.
+MARKDOWN_SYNTAX = frozenset("*_`~\\[]()<>|^#!")
+HIDDEN_CATEGORIES = ("No", "Cf")
+MARKUP = re.compile(r"</?[A-Za-z][^<>]*>|&(?:[A-Za-z][A-Za-z0-9]*|#\d+|#[xX][0-9A-Fa-f]+);")
+LINK_TARGET = re.compile(r"\]\([^()\s]*\)")
+TEXT_MARK = re.compile(r"(?<!\S)([*_])\1*(?!\S)|(?<=[^\W_])_(?=[^\W_])")
+BARE_TIME = re.compile(rf"{_NUM}\s*{_TIME_UNIT}", re.I)
+# What glues a number or a unit to a name, as `_BEFORE` and `_AFTER` read it
+# on the raw line. A point before a number is no name: ".5 ms" is a time the
+# guard does not read, so it is reported.
+GLUED_BEFORE = re.compile(r"\w")
+GLUED_AFTER = re.compile(r"[\w-]")
+# A column header names a time unit when one stands as a word in it: "(ms)",
+# "[s]", "µs/fact", "**Build time (s)**". A unit after a slash is a rate's
+# denominator ("Queries/s"), after an apostrophe a possessive ("Rust's").
+HEADER_TIME_UNIT = re.compile(rf"(?<![\w/'’]){_TIME_UNIT}(?![^\W_])", re.I)
 READABLE_CELL = re.compile(rf"^{_NUM}(?:\s*{_TIME_UNIT})?$", re.I)
 # What leads a doc comment's text, so two wrapped lines join on their words.
 LEAD = re.compile(r"^\s*(?:(?:///|//!|\*)\s*)?")
@@ -348,8 +380,9 @@ def header_figures(line: str, header: str | None):
             probes.append(f"{unit.group(1)} {bare} {sign}")
         kind = next((kind for probe in probes for kind, _, _ in line_figures(probe)), None)
         # A time unit in the header reads a bare cell as a time, as a unit in
-        # the cell does ("| Build time (s) |" or "[s]" over "| 42 |", "| **42** |").
-        if not kind and unit and TABLE_TIME.search(f"{bare} {sign}"):
+        # the cell does ("| Build time (s) |", "[s]" or "µs/fact" over "| 42 |",
+        # "| **42** |").
+        if not kind and HEADER_TIME_UNIT.search(name) and READABLE_CELL.match(bare):
             kind = "latency"
         # The cell's own labels still qualify it: its row label and column
         # header, as for any figure of the row ("| query timeout | 30 s |").
@@ -363,22 +396,57 @@ def inner(text: str) -> str:
     return pair.group(2) if pair else text
 
 
+def markup_free(line: str) -> tuple[str, list[int]]:
+    """The line with its markup taken out (see MARKDOWN_SYNTAX), and, for each
+    character left, its index in the line."""
+    dropped = set()
+    for match in MARKUP.finditer(line):
+        dropped.update(range(*match.span()))
+    for match in LINK_TARGET.finditer(line):
+        dropped.update(range(match.start() + 1, match.end()))
+    kept = {i for match in TEXT_MARK.finditer(line) for i in range(*match.span())}
+    text, where = [], []
+    for at, char in enumerate(line):
+        if at in dropped or (
+            at not in kept and (char in MARKDOWN_SYNTAX or unicodedata.category(char) in HIDDEN_CATEGORIES)
+        ):
+            continue
+        text.append(char)
+        where.append(at)
+    return "".join(text), where
+
+
+def glued(text: str, where: list[int], start: int, end: int) -> bool:
+    """Whether text[start:end] touches a name on either side in the raw line
+    too: markup taken out between them is a boundary, not glue."""
+    before = start > 0 and where[start - 1] == where[start] - 1 and GLUED_BEFORE.match(text[start - 1])
+    after = end < len(text) and where[end] == where[end - 1] + 1 and GLUED_AFTER.match(text[end])
+    return bool(before or after)
+
+
+def in_code_span(line: str, start: int, end: int) -> bool:
+    """Whether line[start:end] lies wholly inside one code span."""
+    return any(span.start() < start and end < span.end() for span in CODE_SPAN.finditer(line))
+
+
 def unreadable_figures(line: str, header: str | None):
     """Each (start, end, form) of a figure written in a shape the guard does not
     read exactly, with the form to write instead. Fail closed: such a figure is
     a finding, never a pass."""
-    for match in MARKED_TIME.finditer(line):
-        yield match.start(), match.end(), "`42 ms` or `**42 ms**`"
+    text, where = markup_free(line)
+    read = {match.span() for match in TABLE_TIME.finditer(line)}
+    for match in BARE_TIME.finditer(text):
+        if glued(text, where, *match.span()):
+            continue
+        start, end = where[match.start()], where[match.end() - 1] + 1
+        if (start, end) not in read and not in_code_span(line, start, end):
+            yield start, end, "`42 ms` or `**42 ms**`"
     if header is None or not TABLE_ROW.match(line):
         return
     names = [header[start:end].strip() for start, end in cells(header)]
     for column, (start, end) in enumerate(cells(line)):
         text, name = line[start:end].strip(), names[column] if column < len(names) else ""
-        if not re.search(r"\d", text) or not HEADER_TIME_UNIT.search(name):
-            continue
-        if not HEADER_UNIT.match(name):
-            yield start, end, "a header `Name (unit)`, with nothing around it"
-        elif not READABLE_CELL.match(inner(text)):
+        if NUMBER.search(text) and HEADER_TIME_UNIT.search(name) and not READABLE_CELL.match(inner(text)):
             yield start, end, "`42`, `42 s` or `**42**`"
 
 
@@ -487,11 +555,18 @@ def violations(root: Path) -> list[str]:
         in_fence = False
         header = previous = None
         prose = None  # (number, line) of the previous line, when it is prose
+        last = 0  # the number of the previous documentation line
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         if kind == "text":
             found.extend(ambiguous_sections(rel, lines, sections_claimed))
         for number, line in doc_lines(lines, kind):
-            if kind == "text" and FENCE.match(line):
+            # A doc comment's fence (a doc-test) opens after its `///`, and the
+            # comment ends where a line of code interrupts it.
+            fence = FENCE.match(line if kind == "text" else line[LEAD.match(line).end() :])
+            if kind != "text" and number != last + 1:
+                in_fence = False
+            last = number
+            if fence:
                 in_fence = not in_fence
             elif kind == "text" and not in_fence and HEADING.match(line):
                 heading = line.strip()
@@ -504,7 +579,7 @@ def violations(root: Path) -> list[str]:
             if prose and prose[0] == number - 1 and is_prose(line):
                 wrapped = wrapped_figures(prose[1], line)
             prose = (number, line) if is_prose(line) else None
-            for _, _, form in unreadable_figures(line, header):
+            for _, _, form in () if fence or in_fence else unreadable_figures(line, header):
                 found.append(f"{rel}:{number}: unreadable figure: rewrite as {form}: {line.strip()[:140]}")
                 break
             if heading in sections_claimed:

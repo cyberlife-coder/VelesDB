@@ -19,7 +19,7 @@
 
 ## TL;DR
 
-| Scenario | Median | Range | Status vs. 300 s SLO |
+| Scenario | Median | Range | Status vs. the #379 SLO |
 |----------|--------|-------|----------------------|
 | **A. Python — `pip install velesdb` + `Database` + first `search`** | **4.95 s** | 4.56–5.66 | ✅ < 60 s target |
 | **B. Rust — `cargo new` + `cargo add velesdb-core` + `cargo run --release`** | **25.40 s** | 24.99–30.25 | ✅ first compile dominates |

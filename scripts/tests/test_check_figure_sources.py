@@ -437,7 +437,7 @@ class FigureSourcesTest(unittest.TestCase):
 
     def numbers_flagged(self, line: str, header: str | None = None) -> list[str]:
         spans = [(s, e) for _, s, e in guard.figures(line, header)]
-        return sorted({m.group() for m in re.finditer(r"\d+(?:[.,]\d+)?", line) if any(s <= m.start() < e for s, e in spans)})
+        return sorted({m.group() for m in guard.NUMBER.finditer(line) if any(s <= m.start() < e for s, e in spans)})
 
     def test_a_table_cell_is_read_with_its_column_header(self):
         # A results table names its keyword once, in its header, and a unit in
@@ -560,13 +560,88 @@ class FigureSourcesTest(unittest.TestCase):
         doc = "| Mode | Build time (s) |\n|---|---|\n| Fast | 42\u00b9 |\n"
         self.assertEqual(self.unreadable(doc), ["docs/G.md:3"])
 
-    def test_a_footnote_on_a_header_unit_is_unreadable(self):
-        doc = "| Mode | Build time (s)\u00b9 |\n|---|---|\n| Fast | 42 |\n"
-        self.assertEqual(self.unreadable(doc), ["docs/G.md:3"])
+    def test_any_time_unit_standing_as_a_word_in_a_header_reads_its_column(self):
+        # performance.rs states "| µs/fact |" over "| 41.1 |": a unit need not
+        # stand alone in parentheses, and markup around the header hides none.
+        for header in ("| n | \u00b5s/fact |", "| n | us/fact |", "| n | **Build time (s)** |", "| n | Build time (s)\u00b9 |"):
+            self.assertEqual(self.numbers_flagged("| 250 | 41.1 |", header), ["41.1"], header)
+            doc = f"{header}\n|---|---|\n| 250 | 41.1 |\n| 500 | ~48 |\n"
+            self.assertEqual(self.unreadable(doc), ["docs/G.md:4"], header)
+        # A word that merely contains a unit, at its end or at its start, names none.
+        for header in ("| n | items |", "| n | msgs |", "| n | sections |"):
+            self.assertEqual(self.numbers_flagged("| 250 | 41.1 |", header), [], header)
 
-    def test_a_bold_header_unit_is_unreadable(self):
-        doc = "| Mode | **Build time (s)** |\n|---|---|\n| Fast | 42 |\n"
-        self.assertEqual(self.unreadable(doc), ["docs/G.md:3"])
+    def test_each_readable_cell_under_a_header_unit_is_read_not_refused(self):
+        # "42", "42 s" and either inside one emphasis pair, "**" or "__".
+        header = "| Mode | Build time (s) |"
+        for cell in ("42", "42 s", "**42**", "__42__", "**42 s**", "__42 s__"):
+            row = f"| Fast | {cell} |"
+            self.assertEqual(self.unreadable(f"{header}\n|---|---|\n{row}\n"), [], cell)
+            self.assertEqual(self.numbers_flagged(row, header), ["42"], cell)
+
+    def test_a_rate_or_a_possessive_in_a_header_is_no_time_unit(self):
+        # "Queries/s" is a rate: its cells are not times, so "12K" is no
+        # unreadable time; nor is the "s" of "Rust's".
+        for header in ("| Mode | Queries/s |", "| Mode | Rust's build |"):
+            self.assertEqual(self.unreadable(f"{header}\n|---|---|\n| Fast | 12K |\n"), [], header)
+
+    def test_a_number_with_digit_groups_is_one_number(self):
+        # "2,592,000" is one number, read as a cell like "3,600".
+        doc = "| Unit | Build time (s) |\n|---|---|\n| months | 2,592,000 |\n"
+        self.assertEqual(self.unreadable(doc), [])
+        self.assertEqual(self.numbers_flagged("| months | 2,592,000 |", "| Unit | Build time (s) |"), ["2,592,000"])
+
+    def test_every_markup_between_a_number_and_its_unit_is_unreadable(self):
+        # The guard does not list these shapes: it takes markup out of the line
+        # and reports whatever number and unit it did not read in place.
+        shapes = [
+            "__42__ ms", "_42_ ms", "<b>42</b> ms", "42<br>ms", "42&nbsp;ms", "`42` ms", "~~42~~ ms",
+            "**42** ms", "42\u00b9 ms", "42 ms\u00b9", "[42](#run) ms", "42\u200bms", "a_**42** ms", ".5 ms",
+        ]
+        # Every character CommonMark or GFM uses as syntax, one at a time.
+        shapes += [f"42{mark} ms" for mark in "*_`~\\[]()<>|^#!"]
+        for shape in shapes:
+            line = f"The p50 is {shape}.\n"
+            self.assertEqual(self.unreadable(line), ["docs/G.md:1"], shape)
+            self.assertEqual(self.unreadable(line, claim=f"The p50 is {shape}"), ["docs/G.md:1"], shape)
+
+    def test_a_time_inside_one_underscore_pair_is_read(self):
+        # `__42 ms__` renders as `**42 ms**` does, and is read the same way.
+        self.assertEqual(self.numbers_flagged("The median is __42 ms__."), ["42"])
+        self.assertEqual(self.numbers_flagged("| Fast | __42 ms__ |", "| Mode | Latency |"), ["42"])
+        self.assertEqual(self.unreadable("The median is __42 ms__.\n"), [])
+
+    def test_a_time_glued_to_a_name_is_no_figure(self):
+        # A number or a unit glued to a name on either side is part of it.
+        # (No config word here: "poll_10us" would be exempt as a poll.)
+        for row in ("| a | step_10us |", "| a | v1.5 ms |", "| a | 42 ms_total |", "| a | 3 s-curve |"):
+            self.assertEqual(list(guard.figures(row)), [], row)
+
+    def test_a_name_an_operator_or_a_range_is_no_unreadable_figure(self):
+        # Marks that are text, not markup, stay: a spaced `*` is no emphasis, an
+        # underscore inside a name belongs to it, a dash or an apostrophe is text.
+        for line in ("`poll_10us` and poll_10us", "four f32s", "4 * ms", "it took 1\u20133 s", "Rust's 3 s build",
+                     "the 3 s-curve", "q_42_ms"):
+            self.assertEqual(self.unreadable(line + "\n"), [], line)
+
+    def test_code_is_left_to_the_other_rules(self):
+        # A code span, a fenced block and a doc-test hold code, not prose.
+        self.assertEqual(self.unreadable("Call `wait(**42** ms)` first.\n"), [])
+        self.assertEqual(self.unreadable("```\nlet d = **42** ms;\n```\nThe p50 is **42** ms.\n"), ["docs/G.md:4"])
+        source = (
+            "/// ```\n"
+            "/// let d = **42** ms;\n"
+            "/// ```\n"
+            "/// The p50 is **42** ms.\n"
+            "fn f() {}\n"
+            "/// ```\n"
+            "fn g() {}\n"
+            "/// The p99 is **42** ms.\n"
+        )
+        root = self.tree({"crates/c/src/lib.rs": source})
+        flagged = [v.split(": ")[0] for v in self.flagged(root) if ": unreadable figure: " in v]
+        # A doc comment that a line of code interrupts closes its doc-test.
+        self.assertEqual(flagged, ["crates/c/src/lib.rs:4", "crates/c/src/lib.rs:8"])
 
     def test_a_mark_between_a_number_and_its_unit_in_prose_is_unreadable_even_when_claimed(self):
         self.assertEqual(self.unreadable("The p50 is **42** ms.\n"), ["docs/G.md:1"])
