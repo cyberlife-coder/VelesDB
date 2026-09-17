@@ -86,6 +86,12 @@ tokio-util = { workspace = true, optional = true }
 # before it reaches the inner service, so it works regardless of how the
 # body is consumed downstream.
 tower-http = { workspace = true, optional = true, features = ["limit"] }
+# The Markdown parser the advertised tool schemas are read with, so the
+# rustdoc links schemars copies from doc comments into each `description` are
+# found as rustdoc finds them rather than by a hand-written scan (#2261, see
+# `src/schema_walks.rs`). `mcp`-gated: the tool schemas are its only consumer.
+# No default features: the rewrite reads events and offsets, never HTML.
+pulldown-cmark = { version = "0.13.3", optional = true, default-features = false }
 # `futures::Stream`, the bound `rmcp::SessionManager`'s streaming methods
 # return — needed to forward them from `BoundedSessionManager` (src/http/
 # session_limit.rs) to the wrapped `LocalSessionManager`.
@@ -150,6 +156,7 @@ optional = true
 # product's own pitch without them (#1846 aftermath).
 default = ["mcp", "persistence", "context", "embedder-http", "extractor-http"]
 mcp = [
+    "dep:pulldown-cmark",
     "dep:rmcp",
     "dep:tokio",
     "dep:tracing",

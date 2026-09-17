@@ -319,3 +319,441 @@ fn admits_null(slot: &serde_json::Value) -> bool {
         }),
     }
 }
+
+/// The rustdoc-link rewrite applied to every published description (#2261).
+#[cfg(feature = "mcp")]
+mod unlink {
+    use super::super::walks::{unlink_rustdoc, unlink_rustdoc_descriptions};
+    use serde_json::{json, Value};
+
+    mod guard {
+        include!("../tests/support/rustdoc_link_guard.rs");
+    }
+    use guard::{descriptions_with_rustdoc_links, rustdoc_links};
+
+    /// Asserts `text` is rewritten to `shown`, and that the guard flags the
+    /// text and passes what it becomes.
+    fn assert_rewritten(text: &str, shown: &str) {
+        assert_eq!(unlink_rustdoc(text).as_deref(), Some(shown), "{text:?}");
+        assert!(!rustdoc_links(text).is_empty(), "the guard misses {text:?}");
+        assert_eq!(rustdoc_links(shown), Vec::<String>::new(), "{shown:?}");
+    }
+
+    /// Asserts `text` is left as written and the guard flags it: a text the
+    /// rewrite refuses cannot be published unnoticed.
+    fn assert_refused(text: &str) {
+        assert_eq!(unlink_rustdoc(text), None, "{text:?}");
+        assert!(!rustdoc_links(text).is_empty(), "the guard misses {text:?}");
+    }
+
+    #[test]
+    fn a_code_link_shows_its_code_span() {
+        for (text, shown) in [
+            (
+                "see [`A::b`] and [`c`](crate::d::c).",
+                "see `A::b` and `c`.",
+            ),
+            (
+                "the [`crate::Recollection`] it returns",
+                "the `crate::Recollection` it returns",
+            ),
+            (
+                "the [`Recollection`][] it returns",
+                "the `Recollection` it returns",
+            ),
+            ("a [`call`](f()) here", "a `call` here"),
+            ("see [`x`](m!()) and [`y`](m!)", "see `x` and `y`"),
+            ("see [`x`]( crate::y )", "see `x`"),
+            ("see [`x`](crate::y \"title\")", "see `x`"),
+            (
+                "the [`stable id`](super::fragment_id) of a fragment",
+                "the `stable id` of a fragment",
+            ),
+            ("a [`builder`](fn@crate::build) call", "a `builder` call"),
+            ("call [`build()`] first", "call `build()` first"),
+            ("the [`vec!`] macro", "the `vec!` macro"),
+            (
+                "the [`HashMap<K, V>`] it holds",
+                "the `HashMap<K, V>` it holds",
+            ),
+            ("see [`&str`] and [`*const`]", "see `&str` and `*const`"),
+            ("see [``a`b``](crate::y) here", "see ``a`b`` here"),
+            ("see [`a[`](crate::y) here", "see `a[` here"),
+            ("in [0, 1) see [`x`](crate::y)", "in [0, 1) see `x`"),
+            ("`vec![]` and [`X`]", "`vec![]` and `X`"),
+            ("Title\n---\nsee [`A`]", "Title\n---\nsee `A`"),
+            ("> quoted [`A::b`]\n> here", "> quoted `A::b`\n> here"),
+            ("- item [`A::b`]\n- next", "- item `A::b`\n- next"),
+        ] {
+            assert_rewritten(text, shown);
+        }
+    }
+
+    /// rustdoc 1.90 drops each of these kinds from the text it shows for a
+    /// shortcut code link, and so does the rewrite. It knows no `tyalias@` or
+    /// `typealias@`: a link with one is no rustdoc link, stays as written, and
+    /// the guard flags it.
+    #[test]
+    fn every_disambiguator_rustdoc_accepts_is_dropped() {
+        for kind in [
+            "struct",
+            "enum",
+            "trait",
+            "union",
+            "mod",
+            "module",
+            "const",
+            "constant",
+            "static",
+            "fn",
+            "function",
+            "method",
+            "derive",
+            "field",
+            "variant",
+            "type",
+            "value",
+            "macro",
+            "prim",
+            "primitive",
+        ] {
+            assert_rewritten(&format!("see [`{kind}@X`]"), "see `X`");
+        }
+        for kind in ["tyalias", "typealias"] {
+            assert_refused(&format!("see [`{kind}@X`]"));
+        }
+    }
+
+    /// A link whose text is prose shows that prose, and a link to a definition
+    /// loses the definition with it.
+    #[test]
+    fn a_prose_link_and_a_reference_style_link_show_their_text() {
+        for (text, shown) in [
+            ("see [the point](crate::Point) here", "see the point here"),
+            ("see [the point][crate::Point] here", "see the point here"),
+            ("see [crate::Point] here", "see crate::Point here"),
+            ("see [fn@stream] here", "see stream here"),
+            ("see [method@Foo::bar] here", "see Foo::bar here"),
+            ("see [struct@ Foo][] here", "see Foo here"),
+            ("see [stream()] here", "see stream() here"),
+            ("see [c](crate::Foo#method.bar) here", "see c here"),
+            (
+                "see *[the point](crate::Point)* here",
+                "see *the point* here",
+            ),
+            (
+                "see [`Recollection`][rec].\n\n[rec]: crate::Recollection\n",
+                "see `Recollection`.\n\n",
+            ),
+            (
+                "see [the recollection][rec].\n\n[rec]: crate::Recollection\n",
+                "see the recollection.\n\n",
+            ),
+            (
+                "> see [z].\n>\n> [z]: crate::Z\n> more",
+                "> see z.\n>\n> more",
+            ),
+        ] {
+            assert_rewritten(text, shown);
+        }
+    }
+
+    /// rustdoc 1.90 reads every bracketed item path as an intra-doc link and
+    /// warns when it does not resolve (`[optional]`, `map[key]`: "unresolved
+    /// link to `optional`"), so a doc comment CI builds with `-D warnings`
+    /// holds one only when it resolves. The rewrite and the guard read a bare
+    /// `[Name]` the same way.
+    #[test]
+    fn a_bare_item_path_is_a_rustdoc_link() {
+        for (text, shown) in [
+            (
+                "see [SegmentInfo] and [struct@SegmentInfo].",
+                "see SegmentInfo and SegmentInfo.",
+            ),
+            (
+                "see [a::B] and [Recollection][]",
+                "see a::B and Recollection",
+            ),
+            ("this is [optional] here", "this is optional here"),
+            (
+                "see [Recollection#method.id] and [fn@f#x][]",
+                "see Recollection and f",
+            ),
+            (
+                "see [`Recollection#method.id`] here",
+                "see `Recollection` here",
+            ),
+            ("see [`fn@f#x`] here", "see `f` here"),
+        ] {
+            assert_rewritten(text, shown);
+        }
+    }
+
+    /// A definition is removed with as much of its line as leaves the rest
+    /// reading the same: its whole line in a quote that holds more, only the
+    /// definition where the quote would otherwise go. rustdoc accepts each.
+    #[test]
+    fn a_definition_in_a_block_quote_goes_and_the_quote_stays() {
+        for (text, shown) in [
+            ("> [z]: crate::Z\n\nText [z]", "> \n\nText z"),
+            ("Text [z]\n\n> [z]: crate::Z", "Text z\n\n> "),
+            (">\t[z]: crate::Z\n> more", "> more"),
+            (
+                "> see [z].\n>\n> [z]: crate::Z\n> more",
+                "> see z.\n>\n> more",
+            ),
+        ] {
+            assert_rewritten(text, shown);
+        }
+    }
+
+    /// rustdoc resolves no intra-doc link in an image or an autolink, so the
+    /// rewrite leaves both, and the guard fails on an item path there.
+    #[test]
+    fn an_image_or_an_autolink_to_an_item_path_is_left_and_flagged() {
+        for text in ["an image ![alt](crate::X) here", "see <crate::X> here"] {
+            assert_refused(text);
+        }
+    }
+
+    /// What rustdoc does not link is published unchanged, and the guard passes
+    /// it: web links, a fragment, a mail address, inline code holding brackets
+    /// or link syntax, code blocks, escaped brackets, and prose brackets.
+    #[test]
+    fn what_rustdoc_does_not_link_survives_unchanged() {
+        for text in [
+            "see [docs](https://example.com/a) and [the spec](http://x.dev/spec)",
+            "see [`Point`](https://docs.rs/velesdb-core)",
+            "write to [the team](mailto:team@x.dev), jump to [the top](#top)",
+            "see <https://x.dev/a[crate::X]b>",
+            "the syntax `[x](crate::y)` is code, so is `[`",
+            "`decisions[fragment_index]` and ``a [`b`] c``",
+            "```rust\nlet w = [`crate::X`];\n```",
+            "~~~\n[x](crate::y)\n~~~",
+            "Example:\n\n    let w = [`crate::X`];",
+            "see \\[`crate::X`\\] here",
+            "in [0, 1] and [1, 2] on [YYYY-MM-DD], item [0]",
+            "the list [`asc`, `desc`] and [a b]",
+            "an image ![logo](https://x.dev/a.png) and <ops@x.dev>",
+        ] {
+            assert_eq!(unlink_rustdoc(text), None, "{text:?}");
+            assert_eq!(rustdoc_links(text), Vec::<String>::new(), "{text:?}");
+        }
+    }
+
+    /// The rewrite is fail closed: when the text without a link's brackets
+    /// would not read as the text with them (a neighbour turns bold, two code
+    /// spans merge, a new link forms), the text
+    /// stays as written, and the guard fails on it.
+    #[test]
+    fn a_rewrite_that_would_change_its_neighbours_is_refused() {
+        for text in [
+            "returns **[Recollection](crate::Recollection)**s",
+            "[`a`]`b`",
+            "`a`[`b`]",
+            "[[`a`]](crate::x)",
+        ] {
+            assert_refused(text);
+        }
+    }
+
+    /// A link to what is neither an item path nor a URL the guard lets
+    /// through (a relative URL, another scheme) is no rustdoc link, so the
+    /// rewrite leaves it. The guard is broader and fails on it: a published
+    /// description links only to a web page, a mail address or a fragment.
+    #[test]
+    fn a_link_to_neither_a_path_nor_a_web_url_is_left_and_flagged() {
+        for text in [
+            "see [docs](../x.html)",
+            "see [x](@foo)",
+            "see [y](http:crate)",
+            "see [spec](ftp://x.dev)",
+        ] {
+            assert_refused(text);
+        }
+    }
+
+    /// One pass is final: a rewritten text holds no link a second pass would
+    /// rewrite, checked on a pseudo-random mix of brackets, backticks, colons,
+    /// emphasis and links, which both rewrites and refuses.
+    #[test]
+    fn one_pass_is_final() {
+        let tokens = [
+            "[",
+            "]",
+            "`",
+            "``",
+            "(",
+            ")",
+            "crate::x",
+            "a",
+            " ",
+            ":",
+            "\n",
+            "[`X`]",
+            "[`Y`](crate::y)",
+            "*",
+            "**",
+            "!",
+            "0, 1",
+            "[a",
+            "b]",
+            "]]",
+            "[[",
+            "[`Z`]]",
+            "[see ",
+            "](",
+            "`b`",
+            "_",
+            "'",
+            "]:",
+            "\"",
+            "# ",
+            "fn@f",
+            "\\",
+            "    ",
+            "- ",
+            "> ",
+            "[r]: crate::r\n",
+            "[r]",
+            "][",
+            "[Recollection#method.id]",
+            "#x",
+            ">\t",
+            "\n\n",
+        ];
+        let mut seed: usize = 0x2265_2025;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let (mut rewritten, mut left) = (0_usize, 0_usize);
+        for _ in 0..20_000 {
+            let len = 1 + next() % 14;
+            let text: String = (0..len).map(|_| tokens[next() % tokens.len()]).collect();
+            match unlink_rustdoc(&text) {
+                Some(out) => {
+                    rewritten += 1;
+                    assert_eq!(unlink_rustdoc(&out), None, "{text:?} -> {out:?}");
+                    // The guard reads at least what the rewrite reads.
+                    assert!(
+                        !rustdoc_links(&text).is_empty(),
+                        "the guard misses {text:?}"
+                    );
+                }
+                None => left += 1,
+            }
+        }
+        assert!(
+            rewritten > 0 && left > 0,
+            "rewritten {rewritten}, left {left}"
+        );
+    }
+
+    /// Every `description` of a schema is rewritten, at any depth and under a
+    /// property named like a keyword, and instance data is not.
+    #[test]
+    fn every_description_is_rewritten_and_nothing_else() {
+        let mut schema = json!({
+            "description": "a [`Top`]",
+            "default": { "description": "[`kept`]" },
+            "examples": [{ "description": "[`kept`]" }],
+            "example": { "description": "[`kept`]" },
+            "const": { "description": "[`kept`]" },
+            "enum": [{ "description": "[`kept`]" }],
+            "properties": {
+                "default": { "description": "named [`N`]" },
+                "description": { "type": "string", "description": "field [`F`](crate::F)" },
+                "tags": {
+                    "type": "array",
+                    "items": { "description": "item [`I`]" },
+                    "default": ["[`not a description`]"]
+                }
+            },
+            "$defs": { "enum": { "description": "def [`D`]" } },
+            "anyOf": [{ "description": "any [`A`]" }],
+            "oneOf": [{ "description": "one [`O`]" }],
+            "additionalProperties": { "description": "extra [`E`]" },
+            "patternProperties": { "example": { "description": "pattern [`P`]" } },
+            "definitions": { "default": { "description": "old [`G`]" } },
+            "dependentSchemas": { "const": { "description": "dep [`S`]" } },
+            "dependencies": { "enum": { "description": "deps [`Y`]" } }
+        });
+        unlink_rustdoc_descriptions(schema.as_object_mut().expect("test: an object"));
+        assert_eq!(
+            schema,
+            json!({
+                "description": "a `Top`",
+                "default": { "description": "[`kept`]" },
+                "examples": [{ "description": "[`kept`]" }],
+                "example": { "description": "[`kept`]" },
+                "const": { "description": "[`kept`]" },
+                "enum": [{ "description": "[`kept`]" }],
+                "properties": {
+                    "default": { "description": "named `N`" },
+                    "description": { "type": "string", "description": "field `F`" },
+                    "tags": {
+                        "type": "array",
+                        "items": { "description": "item `I`" },
+                        "default": ["[`not a description`]"]
+                    }
+                },
+                "$defs": { "enum": { "description": "def `D`" } },
+                "anyOf": [{ "description": "any `A`" }],
+                "oneOf": [{ "description": "one `O`" }],
+                "additionalProperties": { "description": "extra `E`" },
+                "patternProperties": { "example": { "description": "pattern `P`" } },
+                "definitions": { "default": { "description": "old `G`" } },
+                "dependentSchemas": { "const": { "description": "dep `S`" } },
+                "dependencies": { "enum": { "description": "deps `Y`" } }
+            })
+        );
+    }
+
+    /// The committed capture of what the server publishes, kept equal to the
+    /// live schema by `mcp_tools_drift`, holds no rustdoc link in any
+    /// description. `mcp_schema_bdd` checks the live schemas themselves.
+    #[test]
+    fn the_published_tool_schema_carries_no_rustdoc_link() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/reference/mcp-tools.json"
+        );
+        let text = std::fs::read_to_string(path).expect("test: read the snapshot");
+        let snapshot: Value = serde_json::from_str(&text).expect("test: snapshot is JSON");
+        let linked = descriptions_with_rustdoc_links(&snapshot);
+        assert!(
+            linked.is_empty(),
+            "{} published descriptions still carry rustdoc link syntax, e.g. {:?}",
+            linked.len(),
+            &linked[..linked.len().min(5)]
+        );
+    }
+
+    /// The guard flags each rustdoc link form on its own, whether or not the
+    /// rewrite would rewrite it.
+    #[test]
+    fn the_guard_flags_each_link_form() {
+        for text in [
+            "a JSON-encoded [`Point`].",
+            "a JSON-encoded [ `Point` ].",
+            "see [crate::Point].",
+            "see [fn@stream].",
+            "see [stream()].",
+            "see [vec!].",
+            "see [the point][Point].",
+            "see [Point][].",
+            "[p]: crate::Point",
+            "see [the point](crate::Point).",
+            "see [the point](<crate::Point>).",
+            "> see [\n> `Point`] here",
+            "see [Recollection#method.id].",
+            "returns **[Recollection#method.id]**s",
+            "see [`Vec#method.push`] and [a::B#x][]",
+        ] {
+            assert!(!rustdoc_links(text).is_empty(), "the guard misses {text:?}");
+        }
+    }
+}
