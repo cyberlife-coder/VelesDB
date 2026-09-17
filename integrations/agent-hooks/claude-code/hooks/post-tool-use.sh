@@ -43,7 +43,7 @@
 #      and a model that was never told to look will not look.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" # exact-read-ok: this script's own directory, read before lib/ can be sourced
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" # exact-read-ok: the next line sources lib/ from this value, so a byte lost here fails loudly instead of naming another tree
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=./lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
@@ -78,7 +78,7 @@ payload="$(read_stdin_payload)"
 printf '%s' "$payload" | jq -e . >/dev/null 2>&1 || passthrough
 
 tool_name="$(printf '%s' "$payload" | jq -r '.tool_name // empty')"
-session_id="$(printf '%s' "$payload" | jq -r '.session_id // empty')" # exact-read-ok: the host's own id, only ever hashed into a marker key
+read_exact session_id jq -j '.session_id // empty' <<<"$payload"
 read_exact cwd jq -j '.cwd // empty' <<<"$payload" 2>/dev/null || cwd=""
 [ -n "$cwd" ] || cwd="$PWD"
 

@@ -23,7 +23,7 @@
 # Where this file sits, so the notice below can name the updater beside it
 # instead of a path guessed at authoring time. `BASH_SOURCE[0]` is this file
 # even though it is *sourced*, which is exactly what makes it usable here.
-VELESDB_FRESHNESS_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" # exact-read-ok: this script's own directory
+VELESDB_FRESHNESS_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" # exact-read-ok: its only use is the printf below, in advice a human reads and runs; nothing compares, marks or opens with it
 
 VELESDB_FRESHNESS_CACHE="${HOME}/.velesdb-memory/.latest-version"
 VELESDB_FRESHNESS_TTL_SECONDS=86400

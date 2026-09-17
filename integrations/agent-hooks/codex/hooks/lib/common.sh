@@ -505,13 +505,16 @@ remember_working_session() {
   local project
   local session
   local marker
+  local record
   call="$(working_context_call "$2" "$3")" || return 1
   [ -n "$call" ] || return 1
   IFS=$'\t' read -r via project session <<<"$call"
   read_exact marker working_session_marker "$1" "$project" "$via" || return 1
-  write_private_marker "$marker" \
-    "$(jq -cn --arg host "$1" --arg project "$project" --arg via "$via" --arg session "$session" \
-      '{host: $host, project: $project, via: $via, session: $session}')"
+  # shellcheck disable=SC2016 # the names inside the jq program are jq's, not the shell's
+  read_exact_line record jq -cn --arg host "$1" --arg project "$project" --arg via "$via" \
+    --arg session "$session" '{host: $host, project: $project, via: $via, session: $session}' \
+    || return 1
+  write_private_marker "$marker" "$record"
 }
 
 # adopted_session_for HOST_SESSION PROJECT KIND: print the working context a

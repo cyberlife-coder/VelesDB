@@ -19,12 +19,32 @@ FAILED=0
 # scanned by every check that reads this, the day it lands. The harness's own
 # tree is not shipped to anyone and is excluded. This is the one discovery the
 # whole file uses, so a check cannot drift onto a narrower set of files.
+#
+# The exclusion is anchored on ROOT. `-not -path '*/test/*'` matched the
+# ABSOLUTE path, so a checkout under any directory called `test` — a CI runner's
+# workspace, a reviewer's probe copy — excluded the whole tree and discovered
+# nothing at all. Every check below then reported ok over the empty set.
 shipped_hook_files() {
-  find "$1" -name '*.sh' -not -path '*/test/*' -print0
+  find "$1" -name '*.sh' -not -path "$1/test/*" -print0
 }
 
 pass() { printf 'ok - %s\n' "$1"; }
 fail() { printf 'not ok - %s\n' "$1"; FAILED=1; }
+
+# An empty discovery must fail loudly, never pass: it is the one input every
+# check below shares, and a check that runs over nothing prints the same `ok` as
+# a check that ran over everything. Counted here, once, before any consumer.
+shipped_hook_count() {
+  shipped_hook_files "$1" | tr -dc '\0' | wc -c | tr -d '[:space:]'
+}
+SHIPPED_HOOK_COUNT="$(shipped_hook_count "$ROOT")"
+if [ "$SHIPPED_HOOK_COUNT" -gt 0 ]; then
+  pass "Harness: the shipped-hook discovery is not empty ($SHIPPED_HOOK_COUNT files)"
+else
+  fail "Harness: the shipped-hook discovery is not empty"
+  echo "no shipped hook was discovered under $ROOT; every check below would report ok over nothing" >&2
+  exit 1
+fi
 
 # Every hook takes its payload as a here-string, never through a pipe: a hook
 # that exits without reading stdin, as the installer's positive control does,
@@ -2048,57 +2068,87 @@ else
   fail "Harness: a helper names its caller's line when a hook exits non-zero:$helper_lines"
 fi
 
-# No hook reads a path, a project or a session through a substitution:
-# `$(…)` and backticks strip every trailing newline, so a hook would name,
-# compare or mark another repository than the one it read. Every such string is
-# read through read_exact / read_exact_line — neither spells a substitution, so
-# neither is matched here — and an identity is joined with printf -v.
+# No hook reads a path, a project or a session inexactly: `$(…)` and backticks
+# strip every trailing newline, and `read` stops at the first one, so a hook
+# would name, compare or mark another repository than the one it read. Every
+# such string is read through read_exact / read_exact_line.
 #
-# The rule REFUSES and then exempts, instead of listing what is bad. Each of the
-# four rounds before this one enumerated one axis and was outrun by the next
-# spelling: control characters, then `jq -r`, then a set of flags, then a set of
-# commands — while `$(cat …)`, `$(sed …)`, `$(git rev-parse --show-toplevel)`,
-# `$(basename …)` inside a larger string and the tree's own helpers all walked
-# past. So no command, flag or character is named below. A line is refused when
-# it assigns a variable of the path/project/session/root/cwd family from any
-# substitution — whatever `local`, `export`, `declare`, `readonly` or `typeset`
-# declares it — or when a substitution reads one of those JSON fields.
+# THE RULE IS AN EFFECT, NOT A SHAPE, and that is the whole point. Each round
+# before this one described the shape of the offending code and was outrun by
+# the next shape the very next round: forbidden CHARACTERS, then a FLAG
+# (`jq -r`, which the code had already stopped using), then ten COMMANDS, then
+# ASSIGNMENT SYNTAX (`NAME=`, `read `) — which `printf -v NAME`, `mapfile -t
+# NAME`, `readarray`, `eval "NAME=…"`, `: "${NAME:=…}"`, a plain
+# `read NAME < file` and even an unquoted `NAME=$(…)` all walked past. So
+# nothing below names a command, a flag, a character or an assignment syntax.
 #
-# `read -r VAR < <(…)` is a process substitution, not a command substitution,
-# and it is refused too: `read -r` stops at the first newline, so it truncates a
-# value that holds one rather than stripping a trailing one. Different defect,
-# same lost byte, same variables — it belongs to the same rule.
+# A line is refused when BOTH hold:
+#   1. it brings a value in from outside this process — a command substitution,
+#      a process substitution, or a `<` redirection of any kind; and
+#   2. a name of the path/project/session/root/cwd family sits somewhere a value
+#      can land on it: `=` follows the name (which covers `NAME=`, `NAME+=`,
+#      `NAME[i]=`, `${NAME:=…}` and the same inside `eval`, `declare` or any
+#      quoting), or the name is handed to something as a bare word — which is
+#      how EVERY builtin and every function that writes through a name receives
+#      it, whether or not anyone has written that one yet.
+# A substitution that reads one of the family's JSON fields is refused too.
 #
-# The only ways out are proof at the site: read the string through read_exact /
-# read_exact_line, or say on that very line, with `# exact-read-ok: <why>`, why
-# this one cannot carry a trailing newline. Nothing is exempt by its name.
+# The two ways out are proofs at the site, never a name on a list:
+#   * read the value through read_exact / read_exact_line. Neither spells a
+#     substitution nor a redirection, so such a line carries no value source and
+#     condition 1 is false — the exemption needs no clause of its own.
+#   * say on that very line, with `# exact-read-ok: <why>`, why this value
+#     cannot lose a byte. A bootstrap reason is not such a proof.
+#
+# Two normalisations keep the rule honest rather than narrow. Single-quoted text
+# is inert — bash expands nothing and assigns nothing inside it — so a jq
+# program and an English sentence cannot make a line look like a read. And the
+# first word of a line is a command, not a name a value lands in, so a helper
+# whose own name carries a family word is not mistaken for a variable.
 # shellcheck disable=SC2016 # regular expressions, not expansions
-EXACT_SUBST_DECL='(local|export|declare|readonly|typeset)[[:space:]]+(-[A-Za-z]+[[:space:]]+)*'
-# shellcheck disable=SC2016
 EXACT_SUBST_NAME='[a-z_]*(project|session|root|cwd|dir|path|target|candidate|link|current|marker)[a-z0-9_]*'
-# shellcheck disable=SC2016
-EXACT_SUBST_FIELD='\.[[:space:]]*\[?[[:space:]]*"?(project|session|root|cwd|file_path)([^_A-Za-z]|$)'
-EXACT_SUBST_ANY='(\$\(|`|<[[:space:]]*\()'
-EXACT_SUBST_ASSIGN="(^|[[:space:]]|[;(&|])(${EXACT_SUBST_DECL})*${EXACT_SUBST_NAME}(\\[[^]]*\\])?\\+?=[^=[:space:]].*${EXACT_SUBST_ANY}"
-EXACT_SUBST_READ="(^|[[:space:]]|;)read[[:space:]].*${EXACT_SUBST_NAME}([[:space:]]|$).*${EXACT_SUBST_ANY}"
-EXACT_SUBST="${EXACT_SUBST_ASSIGN}|${EXACT_SUBST_READ}|${EXACT_SUBST_ANY}[^\`]*${EXACT_SUBST_FIELD}"
+# A value arriving from outside this process. `<<` and `<<<` are excluded on
+# purpose: a here-document and a here-string are text this process already holds.
+# Backslashes are doubled throughout: awk unescapes a `-v` value once before the
+# regex engine sees it.
+EXACT_SUBST_ANY='(\\$\\(|`|<[[:space:]]*\\(|(^|[^<])<[[:space:]]*[^<[:space:]])'
+EXACT_SUBST_ASSIGN="${EXACT_SUBST_NAME}(\\\\[[^]]*\\\\])?[+:]?=([^=]|\$)"
+EXACT_SUBST_WORD="[^\$([:alnum:]_{\`]${EXACT_SUBST_NAME}([^[:alnum:]_]|\$)"
+EXACT_SUBST_FIELD="${EXACT_SUBST_ANY}[^\`]*\\\\.[[:space:]]*\\\\[?[[:space:]]*\"?(project|session|root|cwd|file_path)([^_A-Za-z]|\$)"
+EXACT_SUBST_SQ="'[^']*'"
 EXACT_SUBST_CHECK="Harness: no shipped hook reads a path, project or session through a substitution"
 
+# The scanner, as one awk pass: join a `\`-continued line to the next, drop a
+# whole-line comment, honour `# exact-read-ok:`, then apply the rule above to
+# the raw line (the JSON-field arm, whose `.["project"]` spelling lives inside
+# single quotes) and to the normalised one (every other arm).
+EXACT_SUBST_AWK='
+/^[[:space:]]*#/ { next }
+{ if (sub(/\\$/, "")) { joined = joined $0; next } }
+{
+  raw = joined $0; joined = ""
+  if (index(raw, "# exact-read-ok: ")) next
+  low = tolower(raw)
+  if (low ~ field) { print raw; next }
+  norm = low
+  gsub(sq, "", norm)
+  sub(/^[ \t]+/, "", norm)
+  if (norm ~ any && (norm ~ assign || norm ~ word)) print raw
+}'
+
 # inexact_substitution_reads ROOT: every line of ROOT's shipped hooks that takes
-# a path, a project or a session from a substitution without proving the read is
-# exact, as ` <file>: <line>;` each. Prints nothing when the tree is clean. The
-# files come from shipped_hook_files, so this scans whatever the tree holds.
+# a path, a project or a session inexactly, as ` <file>: <line>;` each. Prints
+# nothing when the tree is clean. The files come from shipped_hook_files, so
+# this scans whatever the tree holds.
 inexact_substitution_reads() {
   local exact_root="$1"
   local exact_file exact_line
   while IFS= read -r -d '' exact_file; do
     while IFS= read -r exact_line; do
-      case "$exact_line" in
-        *'# exact-read-ok: '*) continue ;;
-      esac
       printf ' %s: %s;' "${exact_file#"$exact_root"/}" "$exact_line"
-    done < <(awk '/^[[:space:]]*#/ { next } { if (sub(/\\$/, "")) { line = line $0 } else { print line $0; line = "" } }' "$exact_file" \
-      | grep -iE "$EXACT_SUBST" || true)
+    done < <(awk -v any="$EXACT_SUBST_ANY" -v assign="$EXACT_SUBST_ASSIGN" \
+      -v word="$EXACT_SUBST_WORD" -v field="$EXACT_SUBST_FIELD" \
+      -v sq="$EXACT_SUBST_SQ" "$EXACT_SUBST_AWK" "$exact_file")
   done < <(shipped_hook_files "$exact_root")
 }
 
@@ -2126,10 +2176,33 @@ else
   fail "Harness: a host directory the repository does not hold yet is scanned too (got:$new_host_reads)"
 fi
 
+# A checkout can live anywhere, including under a directory called `test` — a CI
+# workspace, a reviewer's probe copy. The exclusion must strip the tree's OWN
+# test directory and nothing else, so the same fixture is scanned again from a
+# root whose absolute path carries a `test` component. Before this round the
+# find matched that component and discovered zero files, and both this guard and
+# the shellcheck step reported ok over the empty set.
+EXACT_SUBST_UNDER_TEST="$TMP_TEST_DIR/test/checkout"
+mkdir -p "$EXACT_SUBST_UNDER_TEST/${EXACT_SUBST_NEW_HOST%/*}" "$EXACT_SUBST_UNDER_TEST/test"
+printf '#!/usr/bin/env bash\n%s\n' "$EXACT_SUBST_NEW_LINE" > "$EXACT_SUBST_UNDER_TEST/$EXACT_SUBST_NEW_HOST"
+printf '#!/usr/bin/env bash\n%s\n' "$EXACT_SUBST_NEW_LINE" > "$EXACT_SUBST_UNDER_TEST/test/harness.sh"
+under_test_reads="$(inexact_substitution_reads "$EXACT_SUBST_UNDER_TEST")"
+under_test_count="$(shipped_hook_count "$EXACT_SUBST_UNDER_TEST")"
+if [ "$under_test_reads" = " $EXACT_SUBST_NEW_HOST: $EXACT_SUBST_NEW_LINE;" ] && [ "$under_test_count" -gt 0 ]; then
+  pass "Harness: a checkout under a directory named test still discovers its hooks"
+else
+  fail "Harness: a checkout under a directory named test still discovers its hooks (count:$under_test_count got:$under_test_reads)"
+fi
+
 # Every spelling the enumerating rules walked past is refused, and every form
 # that proves itself exact is not. Each case is written as the only line of a
 # fixture host, so a rule that stops refusing one of them fails here — where the
 # form is named — instead of waiting for a reviewer to hand-write it again.
+#
+# The table is not the rule: the rule refuses by effect and these are samples of
+# it. The block below the blank comment line is what round 16's assignment-syntax
+# rule shipped green — every one of them sets a variable squarely inside the
+# declared family — plus forms nobody had written down when this round started.
 EXACT_SUBST_REFUSED=(
   'project_root="$(cat "$1")"'
   'project_root="$(sed -n 1p "$1")"'
@@ -2146,6 +2219,26 @@ EXACT_SUBST_REFUSED=(
   'target="${A%/}/$(basename "$1")"'
   'host="$(jq -r '"'"'.["project"]'"'"' "$1")"'
   'host="$(jq -r .file_path "$1")"'
+  # Green under round 16's assignment-syntax rule, and everything after them:
+  'printf -v project_root '"'"'%s'"'"' "$(cat "$1")"'
+  'IFS= read -r session_dir < "$1"'
+  ': "${cwd_path:=$(cat "$1")}"'
+  'mapfile -t project_dir < <(cat "$1")'
+  'readarray -t project_dir < <(cat "$1")'
+  'eval "project_root=$(cat "$1")"'
+  'IFS= read -r project_root < "$f"'
+  'project_root=$(cat "$1")'
+  '{ read -r project_root; } < "$1"'
+  'declare -g "project_root=$(cat "$1")"'
+  'printf -v "project_root" %s "$(< "$1")"'
+  'exec 3< "$1"; read -r -u 3 project_root'
+  'project_root=${OTHER:-$(cat "$1")}'
+  'project_root+="$(cat "$1")"'
+  'getopts p: opt && session_dir="$(cat "$OPTARG")"'
+  'mapfile -t -d '"'"''"'"' project_dir < "$1"'
+  'source /dev/stdin <<< "project_root=$(cat "$1")"'
+  'read -rd '"'"''"'"' project_root < "$1"'
+  'read -r project_root <&"$reader_fd"'
 )
 EXACT_SUBST_ALLOWED=(
   'read_exact project_root cat "$1"'
@@ -2153,6 +2246,8 @@ EXACT_SUBST_ALLOWED=(
   'project_root="$(printf %s fixed)" # exact-read-ok: a fixed literal'
   'IFS=$'"'"'\t'"'"' read -r via project session <<<"$call"'
   'record_project_json "$1" "$(project_record)"'
+  'read_exact_line record jq -cn --arg project "$project" '"'"'{project: $project}'"'"''
+  'printf '"'"'run `%s/update-daemon.sh` EARLY in this session'"'"' "$dir"'
 )
 EXACT_SUBST_CASES="$TMP_TEST_DIR/subst-cases"
 # exact_subst_verdict LINE: `refused` when the rule flags LINE, `allowed` when

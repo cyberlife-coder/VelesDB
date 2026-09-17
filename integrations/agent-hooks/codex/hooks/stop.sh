@@ -15,7 +15,7 @@
 # fallback still covers design, diagnosis and review sessions with no edit.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" # exact-read-ok: this script's own directory, read before lib/ can be sourced
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" # exact-read-ok: the next line sources lib/ from this value, so a byte lost here fails loudly instead of naming another tree
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=./lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
@@ -26,7 +26,7 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 payload="$(read_stdin_payload)"
-session_id="$(printf '%s' "$payload" | jq -r '.session_id // empty')" # exact-read-ok: the host's own id, only ever hashed into a marker key
+read_exact session_id jq -j '.session_id // empty' <<<"$payload"
 read_exact cwd jq -j '.cwd // empty' <<<"$payload" 2>/dev/null || cwd=""
 
 if [ -z "$cwd" ]; then
@@ -141,8 +141,10 @@ if [ "${#dirty_records[@]}" -gt 0 ]; then
     jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'
     exit 0
   fi
-  pending_manifest="$(jq -cn --argjson targets "$targets" \
-    '{state: "pending", targets: $targets}')"
+  # shellcheck disable=SC2016 # the names inside the jq program are jq's, not the shell's
+  read_exact_line pending_manifest jq -cn --argjson targets "$targets" \
+    '{state: "pending", targets: $targets}'
+  # shellcheck disable=SC2154 # read_exact_line sets pending_manifest (printf -v)
   if ! write_private_marker "$checkpoint_manifest" "$pending_manifest"; then
     reason="VelesDB could not persist the complete checkpoint manifest. Keep the session open and retry Stop; the edit queue remains intact at $dirty_dir."
     jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'

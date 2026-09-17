@@ -22,7 +22,7 @@
 # PID if it's ever absent).
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" # exact-read-ok: this script's own directory, read before lib/ can be sourced
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" # exact-read-ok: the next line sources lib/ from this value, so a byte lost here fails loudly instead of naming another tree
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=./lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
@@ -30,7 +30,7 @@ source "$SCRIPT_DIR/lib/common.sh"
 require_jq
 
 payload="$(read_stdin_payload)"
-session_id="$(printf '%s' "$payload" | jq -r '.trajectory_id // empty')" # exact-read-ok: the host's own id, only ever hashed into a marker key
+read_exact session_id jq -j '.trajectory_id // empty' <<<"$payload"
 if [ -z "$session_id" ]; then
   session_id="windsurf-${PPID:-$$}"
 fi

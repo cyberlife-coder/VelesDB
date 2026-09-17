@@ -21,7 +21,7 @@
 # integrations/agent-hooks/README.md for the full constraint writeup.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" # exact-read-ok: this script's own directory, read before lib/ can be sourced
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" # exact-read-ok: the next line sources lib/ from this value, so a byte lost here fails loudly instead of naming another tree
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=./lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
@@ -36,7 +36,7 @@ fi
 
 # Documented values: startup | resume | clear | compact.
 source_kind="$(printf '%s' "$payload" | jq -r '.source // empty')"
-session_id="$(printf '%s' "$payload" | jq -r '.session_id // empty')" # exact-read-ok: the host's own id, only ever hashed into a marker key
+read_exact session_id jq -j '.session_id // empty' <<<"$payload"
 
 resolve_config "$cwd"
 # A save reminder names only a session this conversation saved.
