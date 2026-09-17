@@ -155,8 +155,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   learning-loop guard keeps the refused edits of one host session in one place,
   and subagents share their parent's session. A recall scoped to a project
   found two worktrees of it waiting and promoted neither, so no edit could
-  proceed in any of them. It now unlocks each worktree of that project, and no
-  other project's.
+  proceed in any of them. It now unlocks each worktree of that project with a
+  refused edit, and the worktree the recall ran from even when its own edit was
+  never refused, and no other project's. The project a recall names is compared
+  as it was sent: a name followed by a newline no longer unlocks the project it
+  resembles.
 - **The REST OpenAPI document shows no rustdoc link syntax (#2263).** utoipa
   copies doc comments into the OpenAPI document (`docs/openapi.{json,yaml}`,
   served at `GET /api-docs/openapi.json` by a server built with

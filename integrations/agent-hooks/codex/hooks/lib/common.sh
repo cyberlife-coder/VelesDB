@@ -278,6 +278,22 @@ record_current_project() {
   record_project_json "$1" "$(project_record)"
 }
 
+# >>> BEGIN: shared byte for byte with the other host's lib/common.sh; test/hooks.test.sh checks it.
+# --- The project a recall is scoped to -----------------------------------------
+# A recall names its project in `filter.project`, or in compile_context's
+# `memory_scope.project`. That name is compared inside jq, as it was sent, and
+# never read through `$(…)`: command substitution strips trailing newlines, so
+# a recall scoped to "proj2\n" would unlock proj2.
+RECALL_SCOPE='
+  if ((.tool_input.filter | type) == "object" and (.tool_input.filter | has("project"))) then
+    .tool_input.filter.project
+  elif ((.tool_input.memory_scope | type) == "object" and (.tool_input.memory_scope | has("project"))) then
+    .tool_input.memory_scope.project
+  else
+    null
+  end'
+
+# recall_scope_present PAYLOAD: the recall names a project, valid or not.
 recall_scope_present() {
   printf '%s' "$1" | jq -e '
     ((.tool_input.filter | type) == "object" and (.tool_input.filter | has("project")))
@@ -286,30 +302,31 @@ recall_scope_present() {
   ' >/dev/null 2>&1
 }
 
-recall_scope_project() {
-  printf '%s' "$1" | jq -er '
-    if ((.tool_input.filter | type) == "object" and (.tool_input.filter | has("project"))) then
-      .tool_input.filter.project
-    elif ((.tool_input.memory_scope | type) == "object" and (.tool_input.memory_scope | has("project"))) then
-      .tool_input.memory_scope.project
-    else
-      empty
-    end
-    | select(type == "string" and length > 0)
-  ' 2>/dev/null
+# recall_scope_valid PAYLOAD: the project the recall names is a non-empty string.
+recall_scope_valid() {
+  printf '%s' "$1" | jq -e "$RECALL_SCOPE"' | type == "string" and length > 0' >/dev/null 2>&1
 }
 
+# recall_scope_is PAYLOAD PROJECT: the recall names exactly PROJECT.
+recall_scope_is() {
+  printf '%s' "$1" | jq -e --arg project "$2" \
+    "$RECALL_SCOPE"' | type == "string" and length > 0 and . == $project' >/dev/null 2>&1
+}
+
+# recall_scope_is_record PAYLOAD RECORD_FILE: the recall names exactly the
+# project of that pending record, read by jq from the file.
+recall_scope_is_record() {
+  printf '%s' "$1" | jq -e --slurpfile record "$2" \
+    "$RECALL_SCOPE"' | type == "string" and length > 0 and . == $record[0].project' >/dev/null 2>&1
+}
+
+# recall_targets_current_project PAYLOAD: an unscoped recall, or one scoped to
+# the current project.
 recall_targets_current_project() {
-  local payload="$1"
-  local scoped_project
-  if ! recall_scope_present "$payload"; then
-    return 0
-  fi
-  scoped_project="$(recall_scope_project "$payload")" || return 1
-  [ "$scoped_project" = "$PROJECT" ]
+  recall_scope_present "$1" || return 0
+  recall_scope_is "$1" "$PROJECT"
 }
 
-# >>> BEGIN: shared byte for byte with the other host's lib/common.sh; test/hooks.test.sh checks it.
 # --- The working context this conversation uses -------------------------------
 # The configured `session` (`.velesdb-hooks.json`, else "rolling") is only a
 # default. A conversation that keeps its state under another session — one per
@@ -516,8 +533,6 @@ promote_pending_recall() {
   local payload="$4"
   local file
   local root
-  local project
-  local scoped_project=""
   local select_by
   local promoted="false"
   local canonical
@@ -545,7 +560,7 @@ promote_pending_recall() {
   fi
 
   if recall_scope_present "$payload"; then
-    scoped_project="$(recall_scope_project "$payload")" || return 3
+    recall_scope_valid "$payload" || return 3
     select_by="project"
   elif learning_loop_enabled; then
     select_by="current-root"
@@ -559,8 +574,7 @@ promote_pending_recall() {
     root="$(jq -r '.root' "$file")" || return 2
     case "$select_by" in
       project)
-        project="$(jq -r '.project' "$file")" || return 2
-        [ "$project" = "$scoped_project" ] || continue
+        recall_scope_is_record "$payload" "$file" || continue
         ;;
       current-root)
         [ "$root" = "$CONFIG_ROOT" ] || continue

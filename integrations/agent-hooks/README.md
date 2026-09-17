@@ -443,7 +443,9 @@ same host session promotes it when the recall runs from that root, when it is
 the sole pending target from an unconfigured cwd, or when the recall explicitly
 filters that project. A recall filtering a project promotes every pending
 worktree of that project, since subagents share their parent's host session
-and a recall's memories are per project, not per checkout. A multi-repository
+and a recall's memories are per project, not per checkout; it also unlocks the
+opted-in root it runs from when that root belongs to the project, whether or
+not an edit there was refused first. A multi-repository
 patch may therefore need
 one refused-attempt/recall cycle per unseen repository. After the edit passes,
 independent per-repository records let concurrent hooks feed a session-wide

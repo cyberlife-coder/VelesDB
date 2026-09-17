@@ -1501,9 +1501,20 @@ wc_edit_allowed() {
   [ "$rc" -eq 0 ] && [ "$out" = '{}' ]
 }
 
+# wc_scoped_recall HOOKS_DIR HOST_SESSION CWD PROJECT: feed that host's
+# PostToolUse a successful recall_fused run from CWD with filter.project
+# PROJECT, its result in the shape the host sends.
+wc_scoped_recall() {
+  local payload
+  payload="$(WC_CWD="$3" wc_payload "$1" "$2" "mcp__velesdb-memory__recall_fused" \
+    unused unused '{"memories":[{"content":"a prior failure","id_str":"1"}]}')"
+  payload="$(jq -c --arg project "$4" '.tool_input = {query: "prior failures", filter: {project: $project}}' <<<"$payload")"
+  bash "$1/post-tool-use.sh" <<<"$payload" >/dev/null || hook_exited "${BASH_LINENO[0]}" "$?"
+}
+
 wc_host_checks() {
   local dir="$1" label="$2" sid="$wc_sid-$3" text order run save load first second first_pid second_pid
-  local payload reads runs=0 lost=0 shape refused wt project passed_early
+  local payload reads runs=0 lost=0 shape refused wt project passed_early scope pending scope_n scope_sid scope_leaks
 
   # A save reminder names only a session the conversation saved: after a load
   # alone, Stop, and Claude Code's PreCompact, still name the configured one.
@@ -1637,10 +1648,7 @@ wc_host_checks() {
   else
     pass "$label: each worktree's edit is refused before a recall"
   fi
-  payload="$(WC_CWD="$TMP_TEST_DIR/ll-$3-one" wc_payload "$dir" "$sid-an" "mcp__velesdb-memory__recall_fused" \
-    ll-project-shared unused '{"memories":[{"content":"a prior failure","id_str":"1"}]}' \
-    | jq -c '.tool_input = {query: "prior failures", filter: {project: "ll-project-shared"}}')"
-  bash "$dir/post-tool-use.sh" <<<"$payload" >/dev/null || hook_exited "$LINENO" "$?"
+  wc_scoped_recall "$dir" "$sid-an" "$TMP_TEST_DIR/ll-$3-one" ll-project-shared
   if wc_edit_allowed "$dir" "$sid-an" "$TMP_TEST_DIR/ll-$3-one" \
     && wc_edit_allowed "$dir" "$sid-an" "$TMP_TEST_DIR/ll-$3-two"; then
     pass "$label: a project-scoped recall unlocks both worktrees of that project"
@@ -1651,6 +1659,38 @@ wc_host_checks() {
     fail "$label: a project-scoped recall leaves another project's edit refused"
   else
     pass "$label: a project-scoped recall leaves another project's edit refused"
+  fi
+
+  # The worktree a recall runs from is unlocked too when only another worktree
+  # of its project had a refused edit: a parent whose subagent waited edits next.
+  wc_edit_allowed "$dir" "$sid-ao" "$TMP_TEST_DIR/ll-$3-two" || true
+  wc_scoped_recall "$dir" "$sid-ao" "$TMP_TEST_DIR/ll-$3-one" ll-project-shared
+  if wc_edit_allowed "$dir" "$sid-ao" "$TMP_TEST_DIR/ll-$3-one" \
+    && wc_edit_allowed "$dir" "$sid-ao" "$TMP_TEST_DIR/ll-$3-two"; then
+    pass "$label: a scoped recall unlocks the worktree it ran from, which had no refused edit"
+  else
+    fail "$label: a scoped recall unlocks the worktree it ran from, which had no refused edit"
+  fi
+
+  # A recall scoped to the project's name plus a trailing newline or space
+  # names another project: it unlocks nothing, whether this worktree's edit
+  # waited (the pending record's project) or not (the current project).
+  scope_leaks="" scope_n=0
+  for scope in $'ll-project-shared\n' 'll-project-shared '; do
+    for pending in waiting fresh; do
+      scope_n=$((scope_n + 1))
+      scope_sid="$sid-ap-$scope_n"
+      [ "$pending" = fresh ] || wc_edit_allowed "$dir" "$scope_sid" "$TMP_TEST_DIR/ll-$3-one" || true
+      wc_scoped_recall "$dir" "$scope_sid" "$TMP_TEST_DIR/ll-$3-one" "$scope"
+      if wc_edit_allowed "$dir" "$scope_sid" "$TMP_TEST_DIR/ll-$3-one"; then
+        scope_leaks="$scope_leaks $(printf '%q' "$scope")/$pending"
+      fi
+    done
+  done
+  if [ -z "$scope_leaks" ]; then
+    pass "$label: a recall scoped to the project's name plus a newline or a space unlocks nothing"
+  else
+    fail "$label: a recall scoped to the project's name plus a newline or a space unlocks nothing: unlocked by$scope_leaks"
   fi
 
   if [ "$dir" = "$CODEX_HOOKS_DIR" ]; then

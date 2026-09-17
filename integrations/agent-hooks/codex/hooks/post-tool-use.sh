@@ -28,14 +28,16 @@ if [ -n "$session_id" ] && successful_memory_recall "$tool_name" "$payload"; the
       pending_status=$?
     fi
   fi
-  if [ "$pending_status" -ne 0 ]; then
-    if { [ "$pending_status" -eq 1 ] || [ "$pending_status" -eq 3 ]; } \
-      && learning_loop_enabled \
-      && recall_targets_current_project "$payload"; then
-      marker_id="$(learning_marker_identity "$session_id")"
-      if marker_path="$(sentinel_path "codex-recall" "$marker_id")"; then
-        touch_private_marker "$marker_path" || true
-      fi
+  # The recall also unlocks the root it ran from, whether or not it promoted a
+  # pending edit elsewhere: a parent whose subagent's worktree waited must not
+  # have its own next edit refused (#2308). Malformed or unreadable pending
+  # state (2) marks nothing.
+  if [ "$pending_status" -ne 2 ] \
+    && learning_loop_enabled \
+    && recall_targets_current_project "$payload"; then
+    marker_id="$(learning_marker_identity "$session_id")"
+    if marker_path="$(sentinel_path "codex-recall" "$marker_id")"; then
+      touch_private_marker "$marker_path" || true
     fi
   fi
 fi
