@@ -18,7 +18,7 @@ fn test_build_rate_limit_config_burst_one() {
 /// BUG-1 regression: replenishment rate must scale with `burst`.
 ///
 /// With `per_second(burst)`, the full bucket refills within 1 second.
-/// Previously, `per_second(1)` hardcoded 1 token/sec regardless of burst.
+/// Previously, `per_second(1)` hardcoded a limit of 1 token/sec regardless of burst.
 #[test]
 fn test_rate_limit_replenishment_scales_with_burst() {
     // burst=100 → per_second(100) → 100 tokens/sec replenishment.

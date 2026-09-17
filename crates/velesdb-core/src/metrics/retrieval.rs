@@ -267,8 +267,8 @@ pub fn hit_rate<T: Eq + Hash + Copy>(query_results: &[(Vec<T>, Vec<T>)], k: usiz
 /// This used to take `&[Vec<bool>]` and divide by the count of relevant items
 /// *retrieved*, while its documentation stated the formula above. The two
 /// disagree exactly where the metric earns its keep: retrieving 1 of 10
-/// relevant documents, at rank 1, scored `AP = 1.0` — a perfect score for 10%
-/// recall. A ranking quality metric that cannot see what it missed will always
+/// relevant documents, at rank 1, scored `AP = 1.0` — a perfect score for a
+/// recall of one in ten. A ranking quality metric that cannot see what it missed will always
 /// flatter a system that returns one confident result and stops.
 ///
 /// The old shape could not express the fix: `&[bool]` over retrieved positions

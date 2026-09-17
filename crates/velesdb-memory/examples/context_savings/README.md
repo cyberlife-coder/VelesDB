@@ -30,8 +30,8 @@ Cross-checked with a **real cl100k tokenizer** through the Node binding
 (**75.4 % real savings**, matching the estimated ratio), and the output fits
 the budget in real tokens at every setting. The stress harness (same
 directory, release addon) measures ~22 ms at the DoS caps (1024 × 1 KB
-fragments) and ~160 ms on a 10 MB corpus; the MCP `compile_context` stdio
-round-trip measures p50 ≈ 0.6 ms on the release binary.
+fragments) and ~160 ms on a 10 MB corpus. The MCP `compile_context` stdio
+round-trip has no recorded measurement yet.
 
 On this corpus the savings come from 7 duplicate drops (repeated pipeline
 facts across turns) and the log collapse (120 lines → 3 annotated lines);

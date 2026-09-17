@@ -44,7 +44,7 @@ query-path errors and `V006 → V012` for FUSION-clause errors.
 ## 2. REST status codes (`/match` and graph mutations)
 
 The `/match` endpoint and the graph-mutation handlers previously hand-rolled
-error responses (invented codes, blanket `500`s). They now route through the
+error responses (invented codes, a blanket `500`). They now route through the
 canonical error mapper:
 
 | Case | Before | After |

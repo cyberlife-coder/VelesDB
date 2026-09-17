@@ -29,7 +29,7 @@ use parking_lot::RwLock;
 ///
 /// # Performance Characteristics
 ///
-/// - **Recall**: ~99% parity with `hnsw_rs` (verified by parity tests)
+/// - **Recall**: matched `hnsw_rs` until 1.0.0 removed it (`docs/reference/NATIVE_HNSW.md`)
 /// - **Insert**: Comparable performance with SIMD distance calculations
 /// - **Search**: Optimized with `CachedSimdDistance` engine
 /// - **Persistence**: Native binary format (not compatible with `hnsw_rs` format)

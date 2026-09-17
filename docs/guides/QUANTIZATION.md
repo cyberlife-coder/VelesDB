@@ -53,7 +53,7 @@ reopen, but currently changes neither memory use nor the search path — use
 > metrics whose ordering int8 L2 cannot preserve (DotProduct, Hamming,
 > Jaccard), search stays exact f32.
 
-> **What the 4x figure is, and what it is not:** it is the size of the
+> **What the 4x compression is, and what it is not:** it is the size of the
 > codes. The f32 vectors are still there — exact re-ranking needs them — but
 > since [#2112](https://github.com/cyberlife-coder/VelesDB/issues/2112) they
 > live in a file-backed arena rather than an anonymous allocation, so the
@@ -94,8 +94,10 @@ println!("Memory saved: {}%",
 | Operation | f32 (768D) | SQ8 (768D) | Gain |
 |-----------|------------|------------|------|
 | **Memory** | 3072 bytes | 776 bytes | **4x** |
-| **Dot Product** | 41 ns | ~60 ns | -30% |
-| **Recall@10** | 99.4% | ~97.5% | -2% |
+
+No recorded run measures SQ8's distance speed or recall at 768D; the SQ8
+latency and recall that are measured (2K × 64D) are in
+[BENCHMARKS §2](../BENCHMARKS.md#pq-vs-sq8-vs-full-hnsw-latency-pq_hnsw_benchmark).
 
 ---
 
@@ -103,8 +105,8 @@ println!("Memory saved: {}%",
 
 > **Status: collection mode behaves as `full`.**
 > Same as SQ8: `storage='binary'` mode stores and searches full-precision
-> f32 (its never-read insertion-time cache was removed). For effective 32x
-> compression in the query path, use RaBitQ. The `BinaryQuantizedVector`
+> f32 (its never-read insertion-time cache was removed). For codes of 1 bit
+> per dimension instead of 32 in the query path, use RaBitQ. The `BinaryQuantizedVector`
 > primitives remain directly usable.
 
 Each `f32` value becomes **1 bit**:
@@ -142,7 +144,7 @@ println!("Memory: {} bytes (vs {} bytes f32)",
 
 ---
 
-## PQ: Product Quantization (8-32x)
+## PQ: Product Quantization (`2 × dim / m` smaller, dim/4 at the default m = 8)
 
 ### How does it work?
 
@@ -165,7 +167,7 @@ After:  [idx_1, idx_2, ..., idx_m]  → m × 1 = 8 bytes (m=8)
 ### When to use PQ?
 
 - **Large datasets** (100K+ vectors) where memory is a limiting factor
-- **Approximate search is acceptable** (85-95% recall with rescoring)
+- **Approximate search is acceptable** (PQ trades recall for memory; rescoring recovers part of it)
 - **Low latency required**: ADC (Asymmetric Distance Computation) avoids decoding the vectors
 
 ### Training via VelesQL
@@ -201,8 +203,8 @@ OPQ applies an orthogonal rotation to the vectors before PQ quantization. This r
 
 **When to enable OPQ:**
 - Data with strong correlations between dimensions (clustered embeddings)
-- Typical recall improvement: +3-8% on correlated data
-- Extra cost: 2x training time (PCA rotation matrix computation)
+- Improves recall on correlated data (the gain is not measured here)
+- Extra cost: a longer training, which first computes a PCA rotation matrix (not measured here)
 
 **When not to enable OPQ:**
 - Already decorrelated or uniformly distributed data
@@ -210,17 +212,17 @@ OPQ applies an orthogonal rotation to the vectors before PQ quantization. This r
 
 ### PQ Performance
 
-| Configuration | Memory (768D, 100K vecs) | Recall@10 | Latency |
-|---------------|--------------------------|-----------|---------|
-| f32 (baseline) | 295 MB | 99.4% | ~2 ms |
-| PQ m=8, k=256 | ~8 MB | ~85% | ~1 ms |
-| PQ m=16, k=256 | ~16 MB | ~90% | ~1.2 ms |
-| PQ m=8 + rescore 4x | ~8 MB + rescore | ~93% | ~3 ms |
-| PQ m=8 + OPQ | ~8 MB | ~88% | ~1 ms |
+No recorded run measures PQ recall or latency at 768D and 100K vectors, so
+this guide gives none. The PQ figures that are measured, at 5K × 128D (recall)
+and 2K × 64D (latency), are in
+[BENCHMARKS §2](../BENCHMARKS.md#2-pq-recall-and-latency). Memory follows from
+the arithmetic: a PQ code stores one `u16` centroid id per subspace, so
+`2 × m` bytes per vector (16 bytes at m = 8) against `4 × dim` for f32 (3072
+bytes at 768D), plus the codebook.
 
 ---
 
-## RaBitQ: Randomized Binary Quantization (32x)
+## RaBitQ: Randomized Binary Quantization (32x smaller)
 
 > **Status: wired end-to-end into the collection query path, including
 > across restarts.**
@@ -236,7 +238,7 @@ OPQ applies an orthogonal rotation to the vectors before PQ quantization. This r
 > 1000-insertion threshold) is also persisted to `rabitq.idx` on a full
 > flush, at parity with the PQ codebook.
 
-> **What the 32x figure is, and what it is not:** it is the size of the
+> **What the 32x compression is, and what it is not:** it is the size of the
 > codes. The backend keeps the full-precision f32 for exact re-ranking, with
 > the 1-bit codes alongside. Since
 > [#2112](https://github.com/cyberlife-coder/VelesDB/issues/2112) that f32
@@ -313,8 +315,13 @@ The residual 150.4 MiB is those codes plus the graph, which is the
 lower un-evictable floor, not a smaller process.
 
 The 4.8x build time is the honest other side — but almost none of it is the
-arena. Filling the same 100 000 vectors into each backing, with no graph and
-no quantizer in the frame:
+arena.
+
+### Arena fill time
+
+Measured apart, the same day, by #2128 (commit adc85f5b, five runs; it names
+no machine): filling the same 100 000 vectors into each backing, with no graph
+and no quantizer in the frame.
 
 | Backing | Fill time |
 |---|---|
@@ -323,14 +330,15 @@ no quantizer in the frame:
 
 The heap figure is steady; the mapped one is I/O-bound and climbs as repeated
 293 MiB writes fill the host's dirty-page pool, so it is reported as a range
-rather than a point. Even at its worst it is **1.3 s of the 106.4 s that
-separates an SQ8 build from a Full one — under 1.3%**. The rest is quantizer
-training and code encoding, which `SQ8` pays with any backing.
+rather than a point. Even at its worst it is **1.35 s of the 106.4 s that
+separates an SQ8 build from a Full one — under 1.3%**, a share taken across
+the two runs (the build times are the resident-set run's). The rest is
+quantizer training and code encoding, which `SQ8` pays with any backing.
 
 ### Why the arena is not configurable
 
 That 1.3% ceiling is the whole case. An opt-out would let a caller avoid at
-most ~1 s of build time and the cold-re-rank penalty, in exchange for
+most 1.35 s of build time and the cold-re-rank penalty, in exchange for
 234.6 MiB of un-evictable RAM, a new persisted setting, and another branch
 through the backend dispatch.
 
@@ -340,7 +348,7 @@ happens there; the mapping only costs latency once memory is tight, which is
 exactly when its 61% saving is worth having. The trade is self-regulating.
 
 Two costs *are* paid unconditionally and are the honest counterweight: the
-+11% total RSS, and the 0.24 s. Reopen this if either turns out to hurt a
++11% total RSS, and the arena fill time (1.35 s at worst). Reopen this if either turns out to hurt a
 real deployment — measurements first, per the note above.
 
 ### Cold-page re-rank cost
@@ -451,13 +459,8 @@ Run the benchmarks:
 cargo bench --bench quantization_benchmark
 ```
 
-Typical results (768D, modern CPU):
-
-```
-SQ8 Encode/768        time:   [1.2 µs 1.3 µs 1.4 µs]
-Dot Product f32_simd  time:   [41 ns 42 ns 43 ns]
-Dot Product sq8_simd  time:   [58 ns 60 ns 62 ns]
-```
+No run of this bench is recorded with the machine it ran on, so this guide
+quotes no figure from it: run it on your own hardware.
 
 ---
 

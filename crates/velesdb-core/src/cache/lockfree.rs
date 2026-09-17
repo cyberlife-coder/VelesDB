@@ -6,11 +6,13 @@
 //!
 //! # Performance
 //!
+//! No recorded run times these operations; what each one touches:
+//!
 //! | Operation | L1 Hit | L1 Miss + L2 Hit |
 //! |-----------|--------|------------------|
-//! | get() | ~50ns (lock-free) | ~500ns (with promotion) |
-//! | peek() | ~30ns (L1 only) | N/A |
-//! | insert() | ~100ns (write-through) | - |
+//! | get() | lock-free | L2, then promotion to L1 |
+//! | peek() | L1 only | N/A |
+//! | insert() | write-through | - |
 
 // Reason: Numeric casts in cache metrics are intentional:
 // - All casts are for hit rate calculations and statistics

@@ -8,11 +8,14 @@
 //!
 //! # Performance Targets
 //!
-//! | Architecture | Trigrams/cycle | Speedup vs Scalar |
-//! |--------------|----------------|-------------------|
-//! | AVX-512      | 21             | ~7x               |
-//! | AVX2         | 10             | ~3.5x             |
-//! | NEON         | 5              | ~1.8x             |
+//! Ceilings from the arithmetic, not measurements: trigrams per iteration
+//! over the scalar path's ~3.
+//!
+//! | Architecture | Trigrams/iteration | Ceiling vs scalar |
+//! |--------------|--------------------|-------------------|
+//! | AVX-512      | 21                 | 21 / 3 = 7        |
+//! | AVX2         | 10                 | 10 / 3 ≈ 3.3      |
+//! | NEON         | 5                  | 5 / 3 ≈ 1.7       |
 #![allow(clippy::wildcard_imports)] // SIMD intrinsics imports are clearer in this low-level module.
 #![allow(clippy::ptr_as_ptr)] // Pointer casts are intrinsic-compatible and kept explicit.
 #![allow(clippy::implicit_hasher)] // Default HashSet hasher is sufficient for trigram sets.
