@@ -1426,6 +1426,10 @@ describe('WASM search — a weight is a finite number, as REST reads an f32 (#20
     ['weighted', 'denseWeight', Number.NaN],
     ['relative_score', 'avgWeight', 'abc'],
     ['relative_score', 'denseWeight', Number.NaN],
+    // The REST backend sends a null weight as JSON `null`, which an f32 field refuses.
+    ['rrf', 'avgWeight', null],
+    ['average', 'sparseWeight', null],
+    ['weighted', 'hitWeight', null],
   ] as const)('under %s, refuses fusionParams.%s = %s with BAD_REQUEST', async (fusion, name, value) => {
     const multi = vi.fn(() => []);
     const ctx = buildCtx('docs', buildStore({ multi_query_search: multi }));

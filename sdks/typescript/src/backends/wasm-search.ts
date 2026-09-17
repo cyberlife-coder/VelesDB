@@ -485,7 +485,10 @@ function validateWeightedTriple(weights: readonly number[]): void {
  * Every field given is checked for its type first, whichever strategy reads
  * it: REST deserializes the whole request before it reads the strategy, so a
  * `k` that is not a `u32`, or a weight that is not a finite `f32`, refuses
- * the request even where the strategy would ignore the field.
+ * the request even where the strategy would ignore the field. A weight
+ * given as `null` counts as given: the REST backend sends it as JSON
+ * `null`, which an `f32` field refuses. (`k` differs: both backends read a
+ * `null` `k` as absent, 60.)
  */
 function wasmFusionArgs(
   strategy: FusionStrategy,
@@ -497,7 +500,7 @@ function wasmFusionArgs(
   const rrfK = requireU32('fusionParams.k', params?.k ?? 60, "core's rrf_k, a u32");
   for (const name of FUSION_WEIGHTS) {
     const weight = params?.[name];
-    if (isSet(weight)) {
+    if (weight !== undefined) {
       requireFiniteNumber(`fusionParams.${name}`, weight);
     }
   }

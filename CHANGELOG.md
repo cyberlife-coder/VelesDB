@@ -639,7 +639,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `query` with `timeoutMs` or `stream: true`. A `fusionParams` field the
   chosen strategy never reads is ignored, as core ignores it, but only
   once it is well formed: every weight given must be a finite number
-  under every strategy, as REST's `f32` fields must. Under
+  under every strategy, as REST's `f32` fields must, and `null` counts as
+  given, since the REST backend sends it as JSON `null`. Under
   `weighted`, a triple core would reject (a negative or non-finite weight,
   or a sum more than 0.001 from 1.0, computed in f32 as core computes it)
   throws `BAD_REQUEST` instead of the binding's bare string.
