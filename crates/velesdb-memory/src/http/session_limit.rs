@@ -95,14 +95,31 @@
 //! stranded in its busy-at-birth state.
 //!
 //! Eviction picks its victim under that same plain mutex, and in the same
-//! step marks it closing (`SessionCounters::closing`). A request that looked
-//! the session up before the pick holds it busy, so it is not picked; one that
-//! arrives after the pick, while the inner close is still running, is refused
-//! instead of being admitted onto a session about to disappear: `has_session`
-//! answers `false` (the transport's `404`), and a call already past that check
-//! gets [`BoundedSessionManagerError::SessionClosing`]. The mark is lifted if
-//! the close fails or the evicting call is dropped mid-close, and the session
-//! then carries on untouched.
+//! step marks it closing (`SessionCounters::closing`). A request reaches a
+//! session in two steps — rmcp's `has_session` check, then the call that
+//! serves it — and both are covered:
+//!
+//! - a request whose `has_session` comes after the pick gets `false`, which
+//!   the transport answers with `404`, the signal a client re-initializes on;
+//! - a request whose `has_session` comes before the pick has stamped the
+//!   session active in that check, under the same mutex, so the session is
+//!   younger than the idle floor and is not picked while that request goes
+//!   on to take its activity guard.
+//!
+//! The second guarantee relies on the floor being longer than the gap between
+//! those two steps (microseconds). The floor never reaches zero in production:
+//! `VELESDB_MEMORY_HTTP_EVICT_MIN_IDLE_SECS` rejects `0` and is clamped to the
+//! keep-alive, itself at least a second; only the hidden test router
+//! `router_with_session_policy` can pass a zero floor. Should the gap ever
+//! exceed the floor anyway, the call is refused with
+//! [`BoundedSessionManagerError::SessionClosing`] (which the transport answers
+//! with `500`) rather than served by a session being closed. The mark is
+//! lifted if the close fails or the evicting call is dropped mid-close, and the
+//! session then carries on untouched.
+//!
+//! Side effect, deliberate: a `has_session` check counts as activity for
+//! recency and idle age. rmcp only makes that check at the start of a real
+//! request, so this is the same signal an activity guard gives a moment later.
 //!
 //! # Who can evict whom: the minimum idle age
 //!
@@ -424,11 +441,25 @@ impl<SM> BoundedSessionManager<SM> {
         )))
     }
 
-    /// Whether `id` has been picked by an eviction still in progress.
-    fn is_closing(&self, id: &SessionId) -> bool {
-        self.live()
-            .get(id)
-            .is_some_and(|counters| counters.closing.load(Ordering::Relaxed))
+    /// Record that a request is about to use `id`, and say whether it may.
+    ///
+    /// rmcp 3.3.0 calls `has_session` at the start of every `GET` and `POST`
+    /// on an existing session, and nowhere else, before the call that serves
+    /// the request. Under the `live` mutex eviction picks under, this either
+    /// refuses a session already picked (`false`, the transport's `404`) or
+    /// stamps it active, which makes it younger than the idle floor: no
+    /// eviction can pick it in the gap before the request's own activity
+    /// guard is taken. An id this wrapper does not track is left to `inner`.
+    fn check_in(&self, id: &SessionId) -> bool {
+        let live = self.live();
+        match live.get(id) {
+            Some(counters) if counters.closing.load(Ordering::Relaxed) => false,
+            Some(counters) => {
+                self.activity.touch(counters);
+                true
+            }
+            None => true,
+        }
     }
 }
 
@@ -448,9 +479,11 @@ pub enum BoundedSessionManagerError<E> {
         max_sessions: usize,
         min_idle_secs: u64,
     },
-    /// The session is being evicted to admit another client. The transport
-    /// normally answers such a request with `404` (see `has_session`); this
-    /// error only reaches a call that passed that check just before the pick.
+    /// The session is being evicted to admit another client. Defensive: a
+    /// request normally never sees it, because `has_session` either refuses
+    /// a picked session (`404`) or stamps it active so it is not picked (see
+    /// the module docs). It is only returned if the gap between those two
+    /// steps outlasts the idle floor.
     #[error(
         "this MCP session is being closed to admit another client; initialize a \
          new session"
@@ -506,8 +539,9 @@ where
     async fn has_session(&self, id: &SessionId) -> Result<bool, Self::Error> {
         // A session an eviction has picked is already gone as far as clients
         // are concerned: answering `false` makes the transport reply `404`,
-        // the signal a client re-initializes on.
-        if self.is_closing(id) {
+        // the signal a client re-initializes on. Any other tracked session is
+        // stamped active here; see `check_in`.
+        if !self.check_in(id) {
             return Ok(false);
         }
         self.inner.has_session(id).await.map_err(Into::into)

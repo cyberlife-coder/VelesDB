@@ -543,6 +543,35 @@ async fn a_session_picked_for_eviction_admits_no_new_request() {
     assert!(!manager.is_live(&a));
 }
 
+/// A request reaches a session in two steps: rmcp's `has_session`, then the
+/// call that serves it. An eviction landing between the two must not pick the
+/// session and fail that call: the check stamps the session active, so it is
+/// no longer past the idle floor and the newcomer is refused instead.
+#[tokio::test]
+async fn a_session_a_request_has_just_checked_is_not_picked_for_eviction() {
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let inner = FakeSessionManager {
+        close_gate: Some(Arc::clone(&gate)),
+        ..FakeSessionManager::default()
+    };
+    let (manager, clock) = bounded_over(inner, 1);
+    let a = open_initialized(&manager).await;
+    clock.advance(TEST_MIN_IDLE);
+
+    assert!(manager.has_session(&a).await.expect("has_session answers"));
+    let admission = manager.create_session().now_or_never();
+    assert!(
+        matches!(&admission, Some(Err(err)) if err.is_too_many_sessions()),
+        "A was just checked by a request, so the newcomer must be refused, not evict A: \
+         {admission:?}"
+    );
+    let served = manager.create_stream(&a, dummy_message()).await.err();
+    assert!(
+        served.is_none(),
+        "the request that checked A must be served: {served:?}"
+    );
+}
+
 /// An eviction abandoned mid-close (its caller dropped) hands the victim back:
 /// the closing mark is lifted and the session serves requests again.
 #[tokio::test]

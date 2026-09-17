@@ -389,9 +389,11 @@ A session whose `initialize` never arrived is also evictable once the
 transport's handshake deadline (60 seconds) has passed with no activity on
 it: no client can still be using it.
 
-The evicted client gets a `404` on its next request and must re-initialize;
-a request that reaches a session while it is being evicted gets that `404`
-too, rather than being served by a session about to close.
+The evicted client gets a `404` on its next request and must re-initialize.
+A request that arrives while its session is being evicted gets that `404`
+too; a request that arrived just before counts as activity, so its session
+is no longer idle and is not picked for eviction while that request is
+served.
 Only when no live session is evictable is the new client
 refused, with an error saying none could be evicted and to retry shortly. Each
 eviction is logged (`evicted idle MCP session to admit a new one`, with the

@@ -44,6 +44,21 @@ fn eviction_floor_never_exceeds_the_keep_alive() {
     );
 }
 
+/// The idle floor is what keeps an eviction from picking a session between
+/// rmcp's `has_session` check and the call it precedes, so the environment
+/// must never be able to set it to zero — not even with the shortest
+/// keep-alive the environment allows.
+#[test]
+fn eviction_floor_from_the_environment_is_never_zero() {
+    let shortest_keep_alive = keep_alive_from_raw(Some("1"));
+    for raw in [None, Some("0"), Some("1"), Some("")] {
+        assert!(
+            evict_min_idle_from_raw(raw, shortest_keep_alive) >= Duration::from_secs(1),
+            "raw value {raw:?}"
+        );
+    }
+}
+
 #[test]
 fn unset_falls_back_to_the_sixty_minute_default() {
     assert_eq!(keep_alive_from_raw(None), DEFAULT_HTTP_KEEP_ALIVE);
