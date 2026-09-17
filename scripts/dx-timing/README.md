@@ -20,7 +20,7 @@ bash scripts/dx-timing/run_all.sh
 Prerequisites:
 
 - Docker Desktop ≥ 20 (or Docker Engine on Linux). Linux is the canonical target; the harness runs on Windows / WSL too via Git-Bash with `MSYS_NO_PATHCONV` auto-detected.
-- ~5 GB of free disk for the three base images (`ubuntu:24.04`, `rust:1-slim`, `node:20-slim`).
+- ~5 GB of free disk for the three base images (`ubuntu:24.04`, `rust:slim`, `node:20-slim`).
 - Outbound network access to crates.io, PyPI, npm registry, and Docker Hub.
 
 The orchestrator:
