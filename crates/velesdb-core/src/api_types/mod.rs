@@ -186,10 +186,11 @@ pub const MIN_EF_SEARCH: usize = 16;
 pub const MAX_EF_SEARCH: usize = 4096;
 
 /// The message every `ef_search` rejection reports, `shown` being the value
-/// as the caller gave it: a `usize` for [`validate_ef_search`], the original
+/// the caller gave: a `usize` for [`validate_ef_search`], the original
 /// `i64` for [`parse_with_ef_search`] so a negative value prints as itself
 /// rather than the `usize` it failed to become, a `VelesQL` value that is not
-/// an integer as the query wrote it, and the Python `int` itself for one no
+/// an integer in canonical `VelesQL` form (`WithValue`'s `Display`, which the
+/// parser reads back), and the Python `int` itself for one no
 /// `i64` holds, which the Python binding refuses before
 /// [`parse_with_ef_search`] can read it. Public so that each surface
 /// reporting a bad `ef_search` builds this one message instead of a copy.

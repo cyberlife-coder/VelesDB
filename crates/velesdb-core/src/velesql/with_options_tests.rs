@@ -92,3 +92,124 @@ fn test_with_group_limit_option() {
         "group_limit value must be parsed as Integer(50)"
     );
 }
+
+// ============================================================================
+// WithValue's Display: canonical VelesQL the parser reads back
+// ============================================================================
+
+/// Parses `shown` as the value of a `WITH` option, as a query would carry it.
+fn parse_back(shown: &str) -> Result<WithValue, String> {
+    let sql = format!("SELECT * FROM docs LIMIT 5 WITH (opt = {shown})");
+    let query = Parser::parse(&sql).map_err(|e| format!("{sql}: {e:?}"))?;
+    let mut with = query
+        .select
+        .with_clause
+        .ok_or_else(|| format!("{sql}: no WITH clause"))?;
+    match with.options.as_mut_slice() {
+        [only] => Ok(only.value.clone()),
+        options => Err(format!("{sql}: {} options", options.len())),
+    }
+}
+
+/// Asserts that `value` renders as a text the parser reads back as `value`.
+fn assert_round_trips(value: &WithValue) {
+    let shown = value.to_string();
+    assert_eq!(parse_back(&shown).as_ref(), Ok(value), "shown as {shown}");
+}
+
+#[test]
+fn test_with_value_display_reads_back_as_the_same_value() {
+    let identifier = |s: &str| WithValue::Identifier(s.to_string());
+    let string = |s: &str| WithValue::String(s.to_string());
+    for value in [
+        WithValue::Integer(0),
+        WithValue::Integer(4097),
+        WithValue::Integer(-1),
+        WithValue::Integer(i64::MIN),
+        WithValue::Integer(i64::MAX),
+        WithValue::Float(1.5),
+        WithValue::Float(-1.5),
+        WithValue::Float(100.0),
+        WithValue::Float(-0.0),
+        WithValue::Float(1e20),
+        WithValue::Float(-1e300),
+        WithValue::Float(f64::MAX),
+        WithValue::Float(1e-20),
+        WithValue::Float(f64::MIN_POSITIVE),
+        WithValue::Float(5e-324),
+        WithValue::Float(f64::INFINITY),
+        WithValue::Float(f64::NEG_INFINITY),
+        WithValue::Boolean(true),
+        WithValue::Boolean(false),
+        string(""),
+        string("high"),
+        string("it's"),
+        string("''"),
+        string("a \"b\" \\n"),
+        identifier("high"),
+        identifier("_x9"),
+        identifier("TRUE"),
+        identifier("false"),
+        identifier("true_x"),
+        identifier("my option"),
+        identifier("9lives"),
+        identifier("say \"hi\""),
+        identifier("-1"),
+        identifier("1.5"),
+    ] {
+        assert_round_trips(&value);
+    }
+}
+
+/// The forms the review of #2276 found unreadable or mistaken for another
+/// value, pinned to their canonical text.
+#[test]
+fn test_with_value_display_writes_the_canonical_text() {
+    for (value, shown) in [
+        (WithValue::Float(1e20), "100000000000000000000.0"),
+        (WithValue::Float(1.50), "1.5"),
+        (WithValue::Float(100.0), "100.0"),
+        (WithValue::Float(1e-7), "0.0000001"),
+        (WithValue::String("it's".to_string()), "'it''s'"),
+        (WithValue::Identifier("high".to_string()), "high"),
+        (WithValue::Identifier("TRUE".to_string()), "\"TRUE\""),
+        (WithValue::Identifier("a\"b".to_string()), "\"a\"\"b\""),
+        (WithValue::Boolean(true), "true"),
+    ] {
+        assert_eq!(value.to_string(), shown);
+    }
+}
+
+proptest::proptest! {
+    #[test]
+    fn prop_a_finite_float_reads_back(
+        v in proptest::num::f64::POSITIVE
+            | proptest::num::f64::NEGATIVE
+            | proptest::num::f64::NORMAL
+            | proptest::num::f64::SUBNORMAL
+            | proptest::num::f64::ZERO
+    ) {
+        let value = WithValue::Float(v);
+        let shown = value.to_string();
+        proptest::prop_assert!(!shown.contains(['e', 'E']), "{shown}");
+        proptest::prop_assert_eq!(parse_back(&shown), Ok(value));
+    }
+
+    #[test]
+    fn prop_an_integer_reads_back(v in proptest::num::i64::ANY) {
+        let value = WithValue::Integer(v);
+        proptest::prop_assert_eq!(parse_back(&value.to_string()), Ok(value));
+    }
+
+    #[test]
+    fn prop_a_string_reads_back(s in "\\PC*") {
+        let value = WithValue::String(s);
+        proptest::prop_assert_eq!(parse_back(&value.to_string()), Ok(value));
+    }
+
+    #[test]
+    fn prop_an_identifier_reads_back(s in "\\PC+") {
+        let value = WithValue::Identifier(s);
+        proptest::prop_assert_eq!(parse_back(&value.to_string()), Ok(value));
+    }
+}

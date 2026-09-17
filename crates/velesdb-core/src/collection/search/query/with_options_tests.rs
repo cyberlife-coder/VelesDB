@@ -656,7 +656,7 @@ fn test_get_ef_search_drops_a_negative_value() {
 }
 
 /// A value that is not an integer gets the one message every out-of-range
-/// `ef_search` gets, naming the value as the query wrote it, rather than a
+/// `ef_search` gets, naming the value in canonical `VelesQL` form, rather than a
 /// second message built apart (#2274).
 #[test]
 fn test_a_non_integer_ef_search_gets_the_one_range_message() {

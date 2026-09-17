@@ -202,7 +202,8 @@ impl WithClause {
 
     /// Reads one value given for `ef_search` against the documented range. A
     /// value that is not an integer gets the message an integer outside the
-    /// range gets, naming the value as the query wrote it.
+    /// range gets, naming the value in canonical `VelesQL` form (see
+    /// [`WithValue`]'s `Display`).
     fn parse_ef_search_value(value: &WithValue) -> Result<usize, String> {
         let Some(raw) = value.as_integer() else {
             return Err(crate::api_types::ef_search_out_of_range(value));
@@ -272,18 +273,56 @@ pub enum WithValue {
     Identifier(String),
 }
 
-/// Renders the value as a `VelesQL` `WITH` clause writes it: a string in
-/// single quotes, each quote inside doubled as the grammar reads it back; an
-/// identifier bare; a float with its fractional part.
+/// Renders the value in canonical `VelesQL` form, which the parser reads back
+/// as this same value in a `WITH` clause — not necessarily as a query wrote
+/// it: `1.50` renders as `1.5` and `TRUE` as `true`.
+///
+/// - A string in single quotes, each quote inside doubled.
+/// - An integer in decimal.
+/// - A float in decimal with a fractional part and never an exponent, which
+///   the grammar has no form for: `1e20` renders as
+///   `100000000000000000000.0`. An infinite float renders as a literal too
+///   large for an `f64`, which the parser reads back as that infinity. `NaN`
+///   has no `VelesQL` form and renders as `NaN`; the parser never produces
+///   one.
+/// - `true` or `false`.
+/// - An identifier bare when the parser reads it back bare as that
+///   identifier, and otherwise in double quotes, each double quote inside
+///   doubled: `TRUE`, `true_x` or `my option` would not read back bare.
 impl std::fmt::Display for WithValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::String(s) => write!(f, "'{}'", s.replace('\'', "''")),
             Self::Integer(v) => write!(f, "{v}"),
-            Self::Float(v) => write!(f, "{v:?}"),
+            Self::Float(v) => write_float_literal(f, *v),
             Self::Boolean(v) => write!(f, "{v}"),
-            Self::Identifier(s) => f.write_str(s),
+            Self::Identifier(s) if crate::velesql::parser::reads_back_as_bare_identifier(s) => {
+                f.write_str(s)
+            }
+            Self::Identifier(s) => write!(f, "\"{}\"", s.replace('"', "\"\"")),
         }
+    }
+}
+
+/// Writes `v` as a `VelesQL` float literal (`-`? digits `.` digits), see
+/// [`WithValue`]'s `Display`. `f64`'s own `Display` never uses an exponent
+/// and writes the shortest decimal that reads back as `v`, but drops the
+/// fractional part of a whole number (`100` for `100.0`), which the grammar
+/// would read as an integer.
+fn write_float_literal(f: &mut std::fmt::Formatter<'_>, v: f64) -> std::fmt::Result {
+    if v.is_nan() {
+        return write!(f, "{v}");
+    }
+    if v.is_infinite() {
+        // Ten times `f64::MAX`, which no `f64` holds: it reads back as infinity.
+        let sign = if v.is_sign_negative() { "-" } else { "" };
+        return write!(f, "{sign}{}0.0", f64::MAX);
+    }
+    let digits = v.to_string();
+    if digits.contains('.') {
+        f.write_str(&digits)
+    } else {
+        write!(f, "{digits}.0")
     }
 }
 
