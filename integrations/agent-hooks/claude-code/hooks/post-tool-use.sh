@@ -79,7 +79,7 @@ printf '%s' "$payload" | jq -e . >/dev/null 2>&1 || passthrough
 
 tool_name="$(printf '%s' "$payload" | jq -r '.tool_name // empty')"
 session_id="$(printf '%s' "$payload" | jq -r '.session_id // empty')"
-cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty')"
+read_exact cwd jq -j '.cwd // empty' <<<"$payload" 2>/dev/null || cwd=""
 [ -n "$cwd" ] || cwd="$PWD"
 
 # This happens before the compiler allowlist and size checks: MCP recall
@@ -103,7 +103,8 @@ if [ -n "$session_id" ] && successful_memory_recall "$payload"; then
   if [ "$pending_status" -ne 2 ] \
     && learning_loop_enabled \
     && recall_targets_current_project "$payload"; then
-    marker_id="$(learning_marker_identity "$session_id")"
+    learning_marker_identity marker_id "$session_id"
+    # shellcheck disable=SC2154 # learning_marker_identity sets marker_id (printf -v)
     if marker_path="$(sentinel_path "recall" "$marker_id")"; then
       touch_private_marker "$marker_path" || true
     fi

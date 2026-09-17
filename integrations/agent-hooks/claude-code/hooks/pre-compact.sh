@@ -28,7 +28,7 @@ require_jq
 
 payload="$(read_stdin_payload)"
 session_id="$(printf '%s' "$payload" | jq -r '.session_id // empty' 2>/dev/null || true)"
-cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null || true)"
+read_exact cwd jq -j '.cwd // empty' <<<"$payload" 2>/dev/null || cwd=""
 
 if [ -z "$cwd" ]; then
   cwd="$PWD"

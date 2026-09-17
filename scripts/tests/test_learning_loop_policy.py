@@ -255,7 +255,7 @@ class LearningLoopPolicy(unittest.TestCase):
         common = HOSTS[host]["root"] / "lib" / "common.sh"
         command = (
             'source "$1"; CONFIG_ROOT="$2"; '
-            'marker_id="$(learning_marker_identity "$3")"; '
+            'learning_marker_identity marker_id "$3"; '
             'sentinel_path "$4" "$marker_id"'
         )
         result = subprocess.run(

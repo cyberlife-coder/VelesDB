@@ -13,11 +13,11 @@ physical_policy_start() {
   local depth=0
   while [ ! -d "$candidate" ] && [ "$depth" -lt 40 ]; do
     [ "$candidate" = "/" ] && break
-    candidate="$(dirname "$candidate")"
+    read_exact_line candidate dirname -- "$candidate" || return 1
     depth=$((depth + 1))
   done
   [ -d "$candidate" ] || return 1
-  (cd "$candidate" 2>/dev/null && pwd -P)
+  physical_dir "$candidate"
 }
 
 resolve_final_symlink() {
@@ -25,10 +25,13 @@ resolve_final_symlink() {
   local link
   local depth=0
   while [ -L "$current" ] && [ "$depth" -lt 20 ]; do
-    link="$(readlink "$current")" || return 1
+    read_exact_line link readlink -- "$current" || return 1
     case "$link" in
       /*) current="$link" ;;
-      *) current="$(dirname "$current")/$link" ;;
+      *)
+        read_exact_line current dirname -- "$current" || return 1
+        current="$current/$link"
+        ;;
     esac
     depth=$((depth + 1))
   done
@@ -54,7 +57,7 @@ require_jq() {
 resolve_config() {
   local start_dir="$1"
   local physical_start
-  physical_start="$(physical_policy_start "$start_dir")" || return 1
+  read_exact_line physical_start physical_policy_start "$start_dir" || return 1
   start_dir="$physical_start"
   local dir="$start_dir"
   local config=""
@@ -68,7 +71,7 @@ resolve_config() {
     if [ "$dir" = "/" ] || [ -z "$dir" ]; then
       break
     fi
-    dir="$(dirname "$dir")"
+    read_exact_line dir dirname -- "$dir" || return 1
     depth=$((depth + 1))
   done
 
@@ -77,14 +80,14 @@ resolve_config() {
   CONFIG_ROOT=""
   ENFORCE_LEARNING_LOOP="false"
   if [ -n "$config" ] && jq -e . "$config" >/dev/null 2>&1; then
-    PROJECT="$(jq -r '.project // empty' "$config")"
-    SESSION="$(jq -r '.session // empty' "$config")"
+    read_exact PROJECT jq -j '.project // empty' "$config" || PROJECT=""
+    read_exact SESSION jq -j '.session // empty' "$config" || SESSION=""
     ENFORCE_LEARNING_LOOP="$(jq -r 'if .enforce_learning_loop == true then "true" else "false" end' "$config")"
-    CONFIG_ROOT="$(cd "$dir" 2>/dev/null && pwd -P)" || CONFIG_ROOT="$dir"
+    read_exact_line CONFIG_ROOT physical_dir "$dir" || CONFIG_ROOT="$dir"
   fi
 
   if [ -z "$PROJECT" ]; then
-    PROJECT="$(basename "$start_dir")"
+    read_exact_line PROJECT basename -- "$start_dir" || PROJECT=""
   fi
   if [ -z "$SESSION" ]; then
     SESSION="rolling"
@@ -98,11 +101,11 @@ learning_loop_enabled() {
   [ "${ENFORCE_LEARNING_LOOP:-false}" = "true" ]
 }
 
-# learning_marker_identity SESSION_ID: scope mechanical learning markers to
+# learning_marker_identity VAR SESSION_ID: set VAR to the identity that scopes mechanical learning markers to
 # both the host session and the opted-in repository. One Claude session can
 # change cwd, so a recall in repo A must never unlock an edit in repo B.
 learning_marker_identity() {
-  printf '%s\n%s' "$1" "${CONFIG_ROOT:-$PWD}"
+  printf -v "$1" '%s\n%s' "$2" "${CONFIG_ROOT:-$PWD}"
 }
 
 # successful_memory_recall PAYLOAD
@@ -348,12 +351,39 @@ record_current_project() {
 }
 
 # >>> BEGIN: shared byte for byte with the other host's lib/common.sh; test/hooks.test.sh checks it.
+# --- Reading a string exactly --------------------------------------------------
+# `$(…)` strips every trailing newline of what it captures, and a directory
+# name, a project or a session may end in one: a hook would then name, compare
+# or mark another root than the one it read. Every such string is read through
+# these helpers, and an identity is joined with printf -v, never through `$(…)`
+# alone.
+
+# read_exact VAR CMD...: set VAR to CMD's whole output; fail when CMD fails.
+read_exact() {
+  local read_exact_out
+  read_exact_out="$("${@:2}" && printf x)" || return 1
+  printf -v "$1" '%s' "${read_exact_out%x}"
+}
+
+# read_exact_line VAR CMD...: the same, less the one newline that ends the line
+# CMD prints (pwd, dirname, basename, readlink).
+read_exact_line() {
+  local read_exact_line_out
+  read_exact read_exact_line_out "${@:2}" || return 1
+  printf -v "$1" '%s' "${read_exact_line_out%$'\n'}"
+}
+
+# physical_dir DIR: DIR's physical path, as `pwd -P` prints it.
+physical_dir() {
+  (cd "$1" 2>/dev/null && pwd -P)
+}
+
 # valid_project_record FILE: FILE holds exactly one pending/dirty record. jq
 # reads every JSON value in a file, and `jq -e` judges only the last, so a file
 # holding two records passed; its readers then saw both. It is slurped, and
-# every reader of a record takes that one value (`jq -s '.[0]…'`). No field may
-# hold a control character: a reader's `$(…)` strips a trailing newline, and
-# would act on a root the record does not name.
+# every reader of a record takes that one value (`jq -s '.[0]…'`). A field may
+# hold any character a path or a name can, a tab or a trailing newline included
+# (its readers read it exactly), but no NUL, which no shell string can hold.
 valid_project_record() {
   jq -s -e '
     length == 1
@@ -363,7 +393,7 @@ valid_project_record() {
       and ((.project | type) == "string")
       and ((.session | type) == "string")
       and ((.root | type) == "string" and (.root | length) > 0)
-      and ([.project, .session, .root] | all(test("[[:cntrl:]]") | not)))
+      and ([.project, .session, .root] | all(.[]; explode | all(. != 0))))
   ' "$1" >/dev/null 2>&1
 }
 
@@ -518,7 +548,7 @@ working_context_call() {
 # record the other kind of call wrote. The memory store keys working contexts
 # by project name, so the record does too.
 working_session_marker() {
-  sentinel_path "working-session-$3" "$(printf '%s\n%s' "$1" "$2")"
+  sentinel_path "working-session-$3" "$1"$'\n'"$2"
 }
 
 # recorded_working_session HOST_SESSION PROJECT VIA: print the session name in
@@ -639,7 +669,7 @@ promote_pending_recall() {
     canonical="$(jq -sc '.[0] | {project, session, root}' "$file")" || return 2
     expected="$(safe_marker_key "$canonical")" || return 2
     expected="${expected}.json"
-    [ "$(basename "$file")" = "$expected" ] || return 2
+    [ "${file##*/}" = "$expected" ] || return 2
     files+=("$file")
   done
   if [ "${#files[@]}" -eq 0 ]; then
@@ -659,7 +689,7 @@ promote_pending_recall() {
   fi
 
   for file in "${files[@]}"; do
-    root="$(jq -sr '.[0].root' "$file")" || return 2
+    read_exact root jq -sj '.[0].root' "$file" || return 2
     case "$select_by" in
       project)
         recall_scope_is_record "$payload" "$file" || continue
@@ -668,7 +698,7 @@ promote_pending_recall() {
         [ "$root" = "$CONFIG_ROOT" ] || continue
         ;;
     esac
-    marker_path="$(sentinel_path "$recall_kind" "$(printf '%s\n%s' "$host_session" "$root")")" || return 2
+    marker_path="$(sentinel_path "$recall_kind" "$host_session"$'\n'"$root")" || return 2
     touch_private_marker "$marker_path" || return 2
     rm -f "$file" || return 2
     promoted="true"

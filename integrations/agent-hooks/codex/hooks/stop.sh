@@ -27,7 +27,7 @@ fi
 
 payload="$(read_stdin_payload)"
 session_id="$(printf '%s' "$payload" | jq -r '.session_id // empty')"
-cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty')"
+read_exact cwd jq -j '.cwd // empty' <<<"$payload" 2>/dev/null || cwd=""
 
 if [ -z "$cwd" ]; then
   cwd="$PWD"
@@ -100,7 +100,7 @@ elif [ -d "$dirty_dir" ]; then
       break
     fi
     canonical="$(jq -c '{project, session, root}' "$record_file")"
-    if [ "$(basename "$record_file")" != "$(safe_marker_key "$canonical").json" ]; then
+    if [ "${record_file##*/}" != "$(safe_marker_key "$canonical").json" ]; then
       dirty_invalid="true"
       break
     fi
@@ -123,9 +123,9 @@ if [ "${#dirty_records[@]}" -gt 0 ]; then
     targets="$adopted_targets"
   fi
   for record_file in "${dirty_records[@]}"; do
-    root="$(jq -r '.root' "$record_file")"
-    marker_id="$(printf '%s\n%s' "$session_id" "$root")"
-    if ! checkpoint_marker="$(sentinel_path "codex-stop" "$marker_id")" \
+    # shellcheck disable=SC2154 # read_exact sets root (printf -v)
+    if ! read_exact root jq -j '.root' "$record_file" \
+      || ! checkpoint_marker="$(sentinel_path "codex-stop" "$session_id"$'\n'"$root")" \
       || ! touch_private_marker "$checkpoint_marker"; then
       reason="VelesDB could not persist a repository checkpoint marker. Keep the session open and retry Stop; the edit queue remains intact at $dirty_dir."
       jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'
@@ -166,7 +166,8 @@ if [ "${#dirty_records[@]}" -gt 0 ]; then
 fi
 
 if learning_loop_enabled; then
-  marker_id="$(learning_marker_identity "$session_id")"
+  learning_marker_identity marker_id "$session_id"
+  # shellcheck disable=SC2154 # learning_marker_identity sets marker_id (printf -v)
   if ! sentinel="$(sentinel_path "codex-stop" "$marker_id")"; then
     reason="VelesDB private hook-state storage is unsafe or unavailable. Keep the session open, repair the per-user state directory, and retry Stop."
     jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'

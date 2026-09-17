@@ -169,7 +169,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused edit, and the worktree the recall ran from even when its own edit was
   never refused, and no other project's. The project a recall names is compared
   as it was sent: a name followed by a newline no longer unlocks the project it
-  resembles.
+  resembles. The hooks read a repository's path, project and session exactly,
+  where command substitution stripped a trailing newline: a repository whose
+  directory name ends in one is unlocked by its own recall, never under the
+  name of the directory it resembles, and a pending record holding two records
+  is refused instead of acted on.
 - **VelesQL's `ef_search` overrides `mode`, as documented (#2274).** A query
   that set both ran at the `mode` and ignored the `ef_search`, though
   `docs/VELESQL_SPEC.md` said `ef_search` overrides `mode` and REST resolves

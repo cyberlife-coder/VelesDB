@@ -1484,12 +1484,13 @@ fi
 # name. TAG keeps each host's host sessions apart.
 # wc_edit_allowed HOOKS_DIR HOST_SESSION ROOT: that host's PreToolUse lets an
 # edit of ROOT/src/lib.rs, run from ROOT, through (exit 0 and `{}`). Any other
-# answer, a refusal by exit 2 included, is not a pass.
+# answer, a refusal by exit 2 included, is not a pass. Codex's patch names the
+# file relative to cwd: a patch header is one line, and ROOT may hold a newline.
 wc_edit_allowed() {
   local payload out rc=0
   if [ "$1" = "$CODEX_HOOKS_DIR" ]; then
     payload="$(jq -n --arg cwd "$3" --arg sid "$2" \
-      --arg patch "$(printf '*** Begin Patch\n*** Update File: %s/src/lib.rs\n@@\n-old\n+new\n*** End Patch' "$3")" \
+      --arg patch $'*** Begin Patch\n*** Update File: src/lib.rs\n@@\n-old\n+new\n*** End Patch' \
       '{session_id: $sid, cwd: $cwd, hook_event_name: "PreToolUse", tool_name: "apply_patch",
         tool_input: {command: $patch}}')"
   else
@@ -1520,7 +1521,7 @@ wc_scoped_recall() {
 
 wc_host_checks() {
   local dir="$1" label="$2" sid="$wc_sid-$3" text order run save load first second first_pid second_pid
-  local payload reads runs=0 lost=0 shape refused wt project passed_early scope pending scope_n scope_sid scope_leaks malformed bad_dir bad_key bad_status bad_markers
+  local payload reads runs=0 lost=0 shape refused wt project passed_early scope pending scope_n scope_sid scope_leaks malformed bad_dir bad_key bad_status bad_markers odd odd_n odd_root odd_before odd_after exact_kind exact_dir exact_root exact_key exact_status exact_marked exact_other exact_state
 
   # A save reminder names only a session the conversation saved: after a load
   # alone, Stop, and Claude Code's PreCompact, still name the configured one.
@@ -1591,9 +1592,14 @@ wc_host_checks() {
       else
         first="$load" second="$save"
       fi
+      # SC2031 (info): each `$!` is read right after its own job, in this
+      # shell. shellcheck began reporting these lines when the library it
+      # follows gained its exact readers; no single reader alone causes it.
       bash "$dir/post-tool-use.sh" <<<"$first" >/dev/null 2>&1 &
+      # shellcheck disable=SC2031
       first_pid=$!
       bash "$dir/post-tool-use.sh" <<<"$second" >/dev/null 2>&1 &
+      # shellcheck disable=SC2031
       second_pid=$!
       wait "$first_pid" || hook_exited "$LINENO" "$?"
       wait "$second_pid" || hook_exited "$LINENO" "$?"
@@ -1669,11 +1675,11 @@ wc_host_checks() {
 
   # A malformed pending record file is refused (2) by a scoped recall's
   # promotion, kept as it was, and marks nothing, for any root: one holding two
-  # records, and one whose root ends in a newline (`$(…)` would strip it and
-  # mark a root the file does not name). Each file is named by the checksum
-  # promotion expects for its first record, so the name check lets it through
-  # and only the record validation can refuse it.
-  for malformed in two-records root-newline; do
+  # records, and one whose root holds a NUL, which no shell string can hold.
+  # Each file is named by the checksum promotion expects for its first record,
+  # so the name check lets it through and only the record validation can
+  # refuse it.
+  for malformed in two-records root-nul; do
     bad_dir="$TMP_TEST_DIR/malformed-$malformed-$3"
     mkdir -p "$bad_dir"
     if [ "$malformed" = two-records ]; then
@@ -1682,7 +1688,7 @@ wc_host_checks() {
         jq -cn '{project: "ll-project-shared", session: "rolling", root: "/made-up-root"}'
       } > "$bad_dir/record"
     else
-      jq -cn --arg root "$TMP_TEST_DIR/ll-$3-one"$'\n' '{project: "ll-project-shared", session: "rolling", root: $root}' \
+      jq -cn --arg root "$TMP_TEST_DIR/ll-$3-one" '{project: "ll-project-shared", session: "rolling", root: ($root + "\u0000")}' \
         > "$bad_dir/record"
     fi
     bad_key="$(bash -c 'source "$1/lib/common.sh"; safe_marker_key "$(jq -sc ".[0] | {project, session, root}" "$2")"' \
@@ -1701,6 +1707,72 @@ wc_host_checks() {
     fi
     rm -f "$HOOK_STATE_DIR"/malformed-recall-*
   done
+
+  # An opted-in repository whose path holds a tab, or whose directory name ends
+  # in a newline, is unlocked by a scoped recall like any other: its record is
+  # written, validated and read back exactly.
+  odd_n=0
+  for odd in tab newline; do
+    odd_n=$((odd_n + 1))
+    odd_root="$TMP_TEST_DIR/ll-$3-$odd"$'\t'repo
+    [ "$odd" = tab ] || odd_root="$TMP_TEST_DIR/ll-$3-newline-repo"$'\n'
+    mkdir -p "$odd_root"
+    printf '{"project": "ll-odd-path", "session": "rolling", "enforce_learning_loop": true}\n' \
+      > "$odd_root/.velesdb-hooks.json"
+    odd_before=allowed odd_after=refused
+    wc_edit_allowed "$dir" "$sid-ar-$odd_n" "$odd_root" || odd_before=refused
+    wc_scoped_recall "$dir" "$sid-ar-$odd_n" "$odd_root" ll-odd-path
+    if wc_edit_allowed "$dir" "$sid-ar-$odd_n" "$odd_root"; then
+      odd_after=allowed
+    fi
+    # The root its name resembles without the newline is another opted-in
+    # repository, and stays refused: the unlock went to the exact root.
+    if [ "$odd" = newline ]; then
+      mkdir -p "${odd_root%$'\n'}"
+      printf '{"project": "ll-odd-sibling", "session": "rolling", "enforce_learning_loop": true}\n' \
+        > "${odd_root%$'\n'}/.velesdb-hooks.json"
+      if wc_edit_allowed "$dir" "$sid-ar-$odd_n" "${odd_root%$'\n'}"; then
+        odd_after="$odd_after, and its sibling without the newline allowed too"
+      fi
+    fi
+    if [ "$odd_before" = refused ] && [ "$odd_after" = allowed ]; then
+      pass "$label: a repository whose path holds a $odd is refused, then unlocked by a scoped recall"
+    else
+      fail "$label: a repository whose path holds a $odd is refused, then unlocked by a scoped recall: $odd_before before, $odd_after after"
+    fi
+  done
+
+  # A record's root is marked exactly: one ending in a newline marks that root,
+  # never the root it resembles without the newline, whose edit stays refused.
+  exact_kind=recall
+  [ "$dir" != "$CODEX_HOOKS_DIR" ] || exact_kind=codex-recall
+  exact_dir="$TMP_TEST_DIR/exact-root-$3"
+  mkdir -p "$exact_dir"
+  exact_root="$TMP_TEST_DIR/ll-$3-one"
+  jq -cn --arg root "$exact_root"$'\n' '{project: "ll-project-shared", session: "rolling", root: $root}' \
+    > "$exact_dir/record"
+  exact_key="$(bash -c 'source "$1/lib/common.sh"; safe_marker_key "$(jq -sc ".[0] | {project, session, root}" "$2")"' \
+    _ "$dir" "$exact_dir/record")"
+  mv "$exact_dir/record" "$exact_dir/$exact_key.json"
+  payload="$(wc_scoped_recall_payload "$dir" "$sid-as" "$PROJECT_DIR" ll-project-shared)"
+  exact_status=0
+  bash -c 'source "$1/lib/common.sh"; promote_pending_recall "$2" "$3" "$4" "$5"' \
+    _ "$dir" "$exact_dir" "$exact_kind" "$sid-as" "$payload" >/dev/null 2>&1 || exact_status=$?
+  exact_marked="$(bash -c 'source "$1/lib/common.sh"; sentinel_path "$2" "$3"' \
+    _ "$dir" "$exact_kind" "$sid-as"$'\n'"$exact_root"$'\n')"
+  exact_other="$(bash -c 'source "$1/lib/common.sh"; sentinel_path "$2" "$3"' \
+    _ "$dir" "$exact_kind" "$sid-as"$'\n'"$exact_root")"
+  exact_state="status $exact_status, exact marker absent, stripped marker absent, edit refused"
+  [ ! -f "$exact_marked" ] || exact_state="${exact_state/exact marker absent/exact marker present}"
+  [ ! -e "$exact_other" ] || exact_state="${exact_state/stripped marker absent/stripped marker present}"
+  if wc_edit_allowed "$dir" "$sid-as" "$exact_root"; then
+    exact_state="${exact_state/edit refused/edit allowed}"
+  fi
+  if [ "$exact_state" = "status 0, exact marker present, stripped marker absent, edit refused" ]; then
+    pass "$label: a record whose root ends in a newline marks that exact root, not the root without it"
+  else
+    fail "$label: a record whose root ends in a newline marks that exact root, not the root without it: $exact_state"
+  fi
 
   # The worktree a recall runs from is unlocked too when only another worktree
   # of its project had a refused edit: a parent whose subagent waited edits next.
@@ -1901,6 +1973,31 @@ if [ -z "$helper_lines" ]; then
   pass "Harness: a helper names its caller's line when a hook exits non-zero"
 else
   fail "Harness: a helper names its caller's line when a hook exits non-zero:$helper_lines"
+fi
+
+# No hook reads a path, a project or a session through command substitution
+# alone: `$(…)` strips every trailing newline, so a hook would name, compare or
+# mark another repository than the one it read. Both hosts' hooks and libraries
+# read them through read_exact / read_exact_line (lib/common.sh) and join an
+# identity with printf -v; this search, comments skipped and continuation lines
+# joined, fails on a `$(jq -r` of a project, session, root or cwd, and on a
+# `$(…)` of dirname, basename, readlink, pwd -P or a two-line identity.
+# shellcheck disable=SC2016 # a regular expression, not an expansion
+EXACT_READ='\$\((printf .%s. "\$payload" \| )?jq -s?r[^)]*\.(project|session|root|cwd|file_path)([^_A-Za-z]|$)|\$\((dirname|basename|readlink|physical_policy_start|physical_dir|resolve_final_symlink|learning_marker_identity) |pwd -P\)"|\$\(printf .%s\\n%s.'
+inexact_reads=""
+for exact_file in "$HOOKS_DIR"/*.sh "$HOOKS_DIR"/lib/common.sh "$CODEX_HOOKS_DIR"/*.sh "$CODEX_HOOKS_DIR"/lib/common.sh; do
+  while IFS= read -r exact_line; do
+    case "$exact_line" in
+      SCRIPT_DIR=*) continue ;;
+    esac
+    inexact_reads="$inexact_reads ${exact_file#"$ROOT"/}: $exact_line;"
+  done < <(awk '/^[[:space:]]*#/ { next } { if (sub(/\\$/, "")) { line = line $0 } else { print line $0; line = "" } }' "$exact_file" \
+    | grep -E "$EXACT_READ" || true)
+done
+if [ -z "$inexact_reads" ]; then
+  pass "Harness: no hook reads a path, project or session through command substitution alone"
+else
+  fail "Harness: no hook reads a path, project or session through command substitution alone:$inexact_reads"
 fi
 
 # No hook is fed by a pipe (#2294). A hook that never reads its input, as the

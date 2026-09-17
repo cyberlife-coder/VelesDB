@@ -29,7 +29,7 @@ source "$SCRIPT_DIR/lib/common.sh"
 require_jq
 
 payload="$(read_stdin_payload)"
-cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty')"
+read_exact cwd jq -j '.cwd // empty' <<<"$payload" 2>/dev/null || cwd=""
 if [ -z "$cwd" ]; then
   cwd="$PWD"
 fi
