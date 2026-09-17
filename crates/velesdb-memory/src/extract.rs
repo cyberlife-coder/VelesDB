@@ -1062,7 +1062,7 @@ impl OllamaExtractor {
     /// subordinate to the global `timeout` in `ureq` and must not be read as a
     /// per-read guarantee; `timeout_connect` and `timeout_write` are the two
     /// that actually bite. The connect bound matters most here: `ureq`'s own
-    /// default is 30 s, which for a `localhost` daemon is 15x too long — and
+    /// default is 30 s, against the 2 s given here to a `localhost` daemon — and
     /// with replays, that idle wait would be paid three times over.
     #[must_use]
     pub fn new(base_url: impl Into<String>, model: impl Into<String>) -> Self {

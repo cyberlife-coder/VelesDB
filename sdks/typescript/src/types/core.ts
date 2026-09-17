@@ -96,7 +96,7 @@ export interface CollectionConfig {
   metric?: DistanceMetric;
   /** Storage mode for vector quantization (default: 'full')
    * - 'full': Full f32 precision (3 KB/vector for 768D)
-   * - 'sq8': 8-bit scalar quantization, 4x memory reduction (~1% recall loss)
+   * - 'sq8': 8-bit scalar quantization, 4x memory reduction
    * - 'binary': 1-bit binary quantization, 32x memory reduction (edge/IoT)
    * - 'pq': Product quantization (requires training via `trainPq`)
    * - 'rabitq': RaBitQ quantization (binary + rescoring)

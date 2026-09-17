@@ -653,9 +653,9 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// **Cause 2 — DRAM latency (fundamental hardware limit, not fixable in SW).**
     /// 100 K × 768-dim = 307 MB of vector data; the M5 Pro's shared L3 is 24 MB.
     /// HNSW beam-search (ef = 320) accesses ~400–600 random 3 KB chunks per query,
-    /// almost all of which miss L3 and stall on DRAM (~100 ns latency each).
+    /// almost all of which miss L3 and stall on DRAM.
     /// With 8 threads sharing one memory controller (~32 outstanding requests),
-    /// each thread sees ~4× more DRAM stalls than a lone thread, giving the
+    /// each thread sees more DRAM stalls than a lone thread, giving the
     /// observed ~5× rather than ~8× throughput scaling.  This is an inherent
     /// physical limit; software mitigations are:
     ///   - FP16 storage (halves DRAM traffic, not yet implemented),
@@ -664,8 +664,8 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     ///
     /// **`parking_lot::RwLock` reader-counter overhead**: each `read()` does one
     /// `fetch_add` + one `fetch_sub` on the lock word. At 8 threads × 2 locks ×
-    /// 2 ops = 32 atomic ops per search over ~10 ms, this adds < 5 µs and is
-    /// not a meaningful contributor.
+    /// 2 ops = 32 atomic ops per search, next to a whole graph traversal, this
+    /// is not a meaningful contributor.
     ///
     /// If vector storage is not yet initialized, the closure is **not** called
     /// and `R::default()` is returned.

@@ -300,7 +300,7 @@ fn test_hnsw_new_turbo_mode() {
     // Assert - basic functionality works
     assert_eq!(index.len(), 100);
 
-    // Search should still work (lower recall expected ~85%)
+    // Search should still work (turbo trades recall for build speed)
     let query: Vec<f32> = (0..64).map(|j| j as f32 * 0.01).collect();
     let results = index.search(&query, 10);
     assert!(!results.is_empty()); // At least some results

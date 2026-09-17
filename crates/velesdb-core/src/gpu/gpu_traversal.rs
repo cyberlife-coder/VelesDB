@@ -13,7 +13,7 @@
 //! # Activation Threshold
 //!
 //! GPU traversal is only beneficial for large indices (>500K vectors).
-//! Below this, the fixed GPU dispatch overhead (~900μs × iterations)
+//! Below this, the fixed GPU dispatch overhead (paid once per iteration)
 //! exceeds the CPU SIMD search time. Use [`should_traverse_gpu`] to check.
 
 #![allow(clippy::similar_names)]

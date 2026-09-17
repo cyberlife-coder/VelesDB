@@ -84,7 +84,7 @@ for r in results:
 
 ### Performance
 
-| Metric | Typical Value |
+| Metric | Target (not measured) |
 |--------|---------------|
 | Latency (p50) | < 5ms |
 | Latency (p99) | < 15ms |
@@ -155,7 +155,7 @@ for expert in experts {
 
 ### Performance
 
-| Metric | Typical Value |
+| Metric | Target (not measured) |
 |--------|---------------|
 | Latency (p50) | < 10ms |
 | Latency (p99) | < 30ms |
@@ -222,7 +222,7 @@ console.log('Discovered concepts:', [...discoveryMap.entries()]);
 
 ### Performance
 
-| Metric | Typical Value |
+| Metric | Target (not measured) |
 |--------|---------------|
 | Latency (1 hop) | < 5ms |
 | Latency (3 hops) | < 50ms |
@@ -276,7 +276,7 @@ for r in results:
 
 ### Performance
 
-| Metric | Typical Value |
+| Metric | Target (not measured) |
 |--------|---------------|
 | Latency | < 20ms |
 | Aggregation overhead | < 5ms |
@@ -341,7 +341,7 @@ for (const article of results.results) {
 
 ### Performance
 
-| Metric | Typical Value |
+| Metric | Target (not measured) |
 |--------|---------------|
 | Latency (p50) | < 3ms |
 | Latency (p99) | < 10ms |
@@ -414,7 +414,7 @@ recommendations = items.query("""
 
 ### Performance
 
-| Metric | Typical Value |
+| Metric | Target (not measured) |
 |--------|---------------|
 | Latency | < 15ms |
 | Recall@10 | 0.85+ |
@@ -484,7 +484,7 @@ else:
 
 ### Performance
 
-| Metric | Typical Value |
+| Metric | Target (not measured) |
 |--------|---------------|
 | Latency | < 5ms per check |
 | Precision@0.95 | 0.98+ |
@@ -561,7 +561,7 @@ plt.show()
 
 ### Performance
 
-| Metric | Typical Value |
+| Metric | Target (not measured) |
 |--------|---------------|
 | Latency | < 50ms |
 | Time range | Unlimited |
@@ -636,7 +636,7 @@ print(f"Critical components: {len(report['critical'])}")
 
 ### Performance
 
-| Metric | Typical Value |
+| Metric | Target (not measured) |
 |--------|---------------|
 | Latency (3 hops) | < 30ms |
 | Latency (5 hops) | < 100ms |
@@ -757,7 +757,7 @@ Current question: Can you check the shipping?
 
 ### Performance
 
-| Metric | Typical Value |
+| Metric | Target (not measured) |
 |--------|---------------|
 | Store latency | < 5ms |
 | Retrieve latency | < 10ms |

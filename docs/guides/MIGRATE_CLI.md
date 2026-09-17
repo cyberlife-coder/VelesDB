@@ -206,7 +206,7 @@ files — are **not** part of the schema and have no effect.
 | `collection` | string | required | Destination collection, created if absent |
 | `dimension` | integer | required | Vector dimension; must equal the source dimension |
 | `metric` | enum | `cosine` | `cosine`, `euclidean`, `dot` (aliases `dot_product`, `DotProduct`), `hamming`, `jaccard` |
-| `storage_mode` | enum | `full` | `full`, `sq8` (4x), `binary` (32x), `pq` (alias `product_quantization`), `rabitq` |
+| `storage_mode` | enum | `full` | `full`, `sq8` (1 byte per dimension), `binary` (1 bit per dimension), `pq` (alias `product_quantization`), `rabitq` |
 | `graph_collection` | string | none | Graph collection receiving the edges declared in `relations` |
 
 `dimension` has no default: omitting it fails with

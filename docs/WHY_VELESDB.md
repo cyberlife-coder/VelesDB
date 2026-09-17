@@ -20,10 +20,10 @@ The same frame extends to what agents *send*, not just what they recall: the **d
 | **ColumnStore** | Built-in typed columns | Payload indexes | Metadata filtering | Metadata filtering | Inverted indexes |
 | **Query Language** | VelesQL (SQL-like + vector + graph) | REST / gRPC filters | REST filters | Python DSL | GraphQL |
 | **Hybrid Search** | Vector + BM25 + Graph in one query | Vector + payload | Vector + metadata | Vector + metadata | Vector + BM25 |
-| **Quantization** | SQ8 (4x), Binary (32x), PQ, RaBitQ | SQ, PQ | Proprietary | None | PQ, BQ |
+| **Quantization** | SQ8 (4x smaller), Binary (32x smaller), PQ, RaBitQ | SQ, PQ | Proprietary | None | PQ, BQ |
 | **WASM Support** | Yes (browser-side search) | No | No | No | No |
 | **Mobile Support** | iOS / Android (UniFFI) | No | No | No | No |
-| **Latency** | Sub-millisecond (in-process) | ~1-5 ms (network) | ~10-50 ms (cloud) | ~1-5 ms (in-process) | ~5-20 ms (network) |
+| **Latency** | Sub-millisecond (in-process) | Network round trip | Network round trip (cloud service) | In-process | Network round trip |
 | **License** | Source-available | Apache-2.0 | Proprietary | Apache-2.0 | BSD-3 |
 
 **Sources:** [Qdrant docs](https://qdrant.tech/documentation/), [Pinecone docs](https://docs.pinecone.io/), [ChromaDB docs](https://docs.trychroma.com/), [Weaviate docs](https://weaviate.io/developers/weaviate).
@@ -86,7 +86,7 @@ The integrated architecture directly supports AI agent memory requirements:
 
 VelesDB achieves sub-millisecond latency through:
 
-- **Native HNSW implementation** — in our internal benchmarks (5K vectors, 128D, 100 queries), our implementation measured 26.9ms vs ~32ms for `hnsw_rs`, approximately 1.2x faster. Results may vary by dataset and parameters
+- **Native HNSW implementation** — no external HNSW library since 1.0.0, which replaced `hnsw_rs` after beating it on search speed ([history](reference/NATIVE_HNSW.md#performance)); current latencies are in [BENCHMARKS.md](BENCHMARKS.md). Results vary by dataset and parameters
 - **Explicit SIMD kernels** (AVX-512, AVX2, NEON) with runtime feature detection
 - **Memory-mapped storage** for zero-copy vector access
 - **Lock-free read paths** using `parking_lot::RwLock` with 256-shard concurrent edge stores

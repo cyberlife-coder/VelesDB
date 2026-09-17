@@ -449,9 +449,9 @@ impl GpuAccelerator {
 
     /// Returns `true` if GPU reranking is likely faster than sequential SIMD.
     ///
-    /// Benchmarks show wgpu has ~900 us of fixed overhead per dispatch (buffer
-    /// upload + compute pass + poll + readback). SIMD with prefetch remains
-    /// faster until the payload exceeds ~1 MB of float data (262,144 f32s).
+    /// wgpu pays a fixed overhead per dispatch (buffer upload + compute pass +
+    /// poll + readback), which no recorded run measures, so SIMD with prefetch
+    /// is kept until the payload exceeds ~1 MB of float data (262,144 f32s).
     /// The threshold `rerank_k * dimension > 262_144` corresponds to roughly
     /// 100K vectors at dim=3 or 170 vectors at dim=1536.
     #[must_use]

@@ -349,8 +349,8 @@ impl SparseInvertedIndex {
     /// Exploits the per-segment invariant (`postings[term_id]` is already
     /// sorted by `doc_id` in both mutable and frozen segments) to perform a
     /// k-way merge in `O(N · M)` instead of the general `O(N log N)` sort
-    /// previously used — a ~5x reduction in the hot-path work when
-    /// `M ∈ {1, 2}` (the common case for a single-freeze corpus).
+    /// previously used — `M` steps per posting instead of `log N`, a win
+    /// when `M ∈ {1, 2}` (the common case for a single-freeze corpus).
     #[must_use]
     pub fn get_all_postings(&self, term_id: u32) -> Vec<PostingEntry> {
         let frozen_runs = self.collect_frozen_runs(term_id);
