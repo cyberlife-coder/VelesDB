@@ -327,18 +327,16 @@ fn link_text<'a>(
     );
     if names_its_target {
         if let [(Event::Code(code), _)] = inner {
-            if let Some(path) = without_disambiguator(code) {
+            let path = shown_path(code);
+            if path != &**code {
                 let shown = source.replacen(&**code, path, 1);
                 return (shown, vec![Event::Code(CowStr::from(path.to_owned()))]);
             }
         }
         let label = merged_text(inner.iter().map(|(event, _)| event.clone()));
         if let [Event::Text(label)] = label.as_slice() {
-            // rustdoc shows the path alone: no disambiguator, no fragment.
-            let label = label.trim();
-            let item = label.split_once('#').map_or(label, |(item, _)| item);
-            let path = without_disambiguator(item).unwrap_or(item);
-            if path != label {
+            let path = shown_path(label);
+            if path != label.trim() {
                 let shown = path.to_owned();
                 return (shown.clone(), vec![Event::Text(CowStr::from(shown))]);
             }
@@ -346,6 +344,15 @@ fn link_text<'a>(
     }
     let events = inner.iter().map(|(event, _)| event.clone()).collect();
     (source.to_owned(), events)
+}
+
+/// The path a shortcut or collapsed link's label shows, as rustdoc shows it:
+/// trimmed, without its `#` fragment and without its disambiguator
+/// (`fn@f#x` shows `f`). Code and prose labels both go through it.
+fn shown_path(label: &str) -> &str {
+    let label = label.trim();
+    let item = label.split_once('#').map_or(label, |(item, _)| item);
+    without_disambiguator(item).unwrap_or(item)
 }
 
 /// `text` with each edit applied, or `None` when there is none or two

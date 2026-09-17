@@ -90,10 +90,10 @@ fn is_rustdoc_link(link_type: LinkType, destination: &str) -> bool {
 
 /// Whether an unresolved shortcut or collapsed label reads as an item path,
 /// which rustdoc 1.90 treats as an intra-doc link: one code span, or, before
-/// any `#` fragment, a word
-/// of letters, digits and path marks (`::`, `@`, `()`, `!`, `<…>`, `&`, `*`)
-/// holding a letter or an underscore. A label with a space outside `<…>` (`[0, 1]`), a digit
-/// alone (`[0]`) or other punctuation (`[YYYY-MM-DD]`) is prose.
+/// any `#` fragment, a word of letters, digits and path marks (`::`, `@`,
+/// `()`, `!`, `<…>`, `&`, `*`) holding a letter or an underscore. A label
+/// with a space outside `<…>` (`[0, 1]`), a digit alone (`[0]`) or other
+/// punctuation (`[YYYY-MM-DD]`) is prose.
 fn names_an_item(label: &str) -> bool {
     let label = label.trim();
     if is_one_code_span(label) {

@@ -479,6 +479,11 @@ mod unlink {
                 "see [Recollection#method.id] and [fn@f#x][]",
                 "see Recollection and f",
             ),
+            (
+                "see [`Recollection#method.id`] here",
+                "see `Recollection` here",
+            ),
+            ("see [`fn@f#x`] here", "see `f` here"),
         ] {
             assert_rewritten(text, shown);
         }
