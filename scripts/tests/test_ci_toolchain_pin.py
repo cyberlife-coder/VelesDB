@@ -33,6 +33,16 @@ composite action and every Dockerfile, this suite holds that:
   ``cd``, ``pushd`` and ``popd``, installed by ``rustup toolchain install`` with
   no toolchain name. Outside every checkout of this repository there is no
   such file: only the runner's default toolchain, or another repository's;
+* a step that runs a repository script -- ``bash|sh|python3|node|pwsh <path>``,
+  or ``<path>`` itself -- reaches cargo when the script's text names cargo,
+  rustc, rustdoc, rustup, maturin, wasm-pack or cross, or names a script that
+  does. A mention counts as a call: a script that only mentions one is listed
+  in ``SCRIPTS_THAT_ONLY_NAME_A_TOOL`` with its reason. A script the guard
+  cannot resolve or read is a finding. What an installed module loads
+  (``python -m unittest``, ``pytest``) is not followed;
+* an install step under an ``if:`` installs only for calls under the identical
+  ``if:`` (``${{ }}`` and spacing aside). ``success()`` is no condition, and an
+  install under ``always()`` or under none covers every later call;
 * each ``nightly`` pin carries a ``# nightly: <why>`` comment of its own step or
   key, naming what the job runs on nightly -- a ``-Z`` flag, miri, cargo fuzz or
   cargo careful -- as its ``run:`` values and ``*FLAGS`` variables show, never
@@ -56,6 +66,7 @@ pin, and without it the import below fails loudly instead of skipping.
 
 from __future__ import annotations
 
+import json
 import posixpath
 import re
 import shlex
@@ -65,6 +76,7 @@ import tomllib
 import unittest
 from dataclasses import dataclass, field
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
@@ -141,6 +153,42 @@ REACH = {
 INSTALL_ELSEWHERE = {
     OUTSIDE: "installs outside every checkout, so not rust-toolchain.toml's toolchain",
     UNREADABLE: "installs where the guard cannot tell which rust-toolchain.toml governs",
+}
+# `if:` values: `success()` is what a step without one runs under; an install under
+# `always()` runs whenever any later step of the job can.
+UNCONDITIONAL = ""
+ALWAYS = "always()"
+EXPRESSION_RE = re.compile(r"^\$\{\{\s*(.*?)\s*\}\}$")
+# A repository script a step runs: `<interpreter> [options] <path>`, or `<path>` itself.
+INTERPRETER_RE = re.compile(r"^(?:bash|sh|zsh|pwsh|node|python(?:3(?:\.\d+)?)?)(?:\.exe)?$")
+INLINE_CODE_FLAGS = frozenset({"-c", "-e", "--eval", "-p", "--print", "-Command", "-"})
+MODULE_FLAG = "-m"
+SCRIPT_SUFFIX = r"\.(?:sh|bash|py|ps1|mjs|cjs|js)"
+SCRIPT_SUFFIX_RE = re.compile(SCRIPT_SUFFIX + "$")
+# What a script's text must not name for it to count as no build: every tool that
+# resolves rust-toolchain.toml or installs a toolchain. Read over the whole text,
+# comments and strings included, so a mention counts as a call until a reason below
+# says otherwise.
+SCRIPT_TOOL_RE = re.compile(
+    r"(?<![\w./-])(?:cargo|rustc|rustdoc|rustup|maturin|wasm-pack|cross)(?:\.exe)?(?![\w/-])(?!\.(?:toml|lock)\b)"
+)
+# Another script a script's text names, followed whether it calls it or only mentions it.
+SCRIPT_NAME_RE = re.compile(r"[\w./-]*[\w-]" + SCRIPT_SUFFIX + r"(?![\w.-])")
+# Scripts whose text names a tool (or a script that does) without running it. Each
+# entry is checked to still name one, so it cannot outlive its reason.
+SCRIPTS_THAT_ONLY_NAME_A_TOOL = {
+    "scripts/check-version-sync.py": "runs no command: it names the cargo registry in a docstring and reads "
+                                     "version pins out of the dx-timing scenarios it names",
+    "scripts/check-promise-contract.py": "names `cargo bench` as a documentary claim it skips; the executable "
+                                         "claims it runs name no tool, which a test holds",
+    "scripts/bench-memory-extraction.py": "calls `rustc --version` only in `report --from-dir`, which no workflow "
+                                          "runs, and `cross` is a variable",
+    "scripts/check-ai-attribution.py": "runs git only; it names the refusal-vector test in its help text",
+    "scripts/check-doc-contract.sh": "runs grep only; it names run-production-gates.sh in its header comment",
+    "scripts/check-mcp-doc-contract.py": "runs `git ls-files` only; the scripts it names are files it reads",
+    "integrations/agent-hooks/test/hooks.test.sh": "names cargo in comments and in a hook payload it feeds as data",
+    "integrations/agent-hooks/claude-code/hooks/lib/freshness.sh": "names `cargo install` in a comment saying the hook "
+                                                                   "never runs it",
 }
 
 
@@ -226,6 +274,7 @@ class Step:
     inputs: dict[str, str] = field(default_factory=dict)
     env: dict[str, str] = field(default_factory=dict)
     directory: str = ""
+    condition: str = UNCONDITIONAL  # the step's `if:`, normalised
     first: int = 0  # 0-based line of the step's first code line
     last: int = 0  # bound: the next step's first line, or the job's end
 
@@ -262,8 +311,16 @@ def _step(node: yaml.Node, where: str, problems: list[str]) -> Step:
         inputs=_strings(pairs, "with", where, problems),
         env=_strings(pairs, "env", where, problems),
         directory=_string(pairs, "working-directory", where, problems),
+        condition=_condition(_string(pairs, "if", where, problems)),
         first=node.start_mark.line,
     )
+
+
+def _condition(text: str) -> str:
+    """An `if:` as written, `${{ }}` and spacing dropped; `success()` is no condition."""
+    text = " ".join(text.split())
+    text = match.group(1) if (match := EXPRESSION_RE.match(text)) else text
+    return UNCONDITIONAL if text == "success()" else text
 
 
 def _job(name: str, key: yaml.Node, node: yaml.Node, end: int) -> Job:
@@ -617,17 +674,71 @@ def _cd(directory: str, target: str) -> str:
     return UNKNOWN_DIR if directory == UNKNOWN_DIR else _resolve(posixpath.join(directory, target))
 
 
+# --- scripts: a step that runs one reaches cargo when the script does ------------------
+
+
+def _script(command: list[str]) -> tuple[str, bool] | None:
+    """The file a command runs, and whether the guard must read it; None when it runs no file.
+
+    `bash x.sh`, `python3 -B x.py`, `node x.mjs` or `pwsh -File x.ps1` run a script
+    that must be read. So does a path run as the command when it carries a script
+    suffix (`./scripts/x.sh`); a suffixless one (`./mcp-publisher`, a binary an
+    earlier step fetched) is read only when it is a file of the repository, and so
+    is `python -m <module>`, an installed module otherwise. Inline code (`-c`, `-e`,
+    `-p`, `-`) and a bare interpreter run no file.
+    """
+    words = command[:]
+    while words and (ASSIGNMENT_WORD_RE.match(words[0]) or words[0] == "env"):
+        words.pop(0)
+    if not words:
+        return None
+    if not INTERPRETER_RE.match(posixpath.basename(words[0])):
+        return (words[0], SCRIPT_SUFFIX_RE.search(words[0]) is not None) if "/" in words[0] else None
+    arguments = iter(words[1:])
+    for word in arguments:
+        if word in INLINE_CODE_FLAGS:
+            return None
+        if word == MODULE_FLAG:
+            module = next(arguments, "")
+            return (module.replace(".", "/") + ".py", False) if module else None
+        if not word.startswith("-"):
+            return word, True
+    return None
+
+
+def script_builds(root: Path, path: str, exempt: dict[str, str] = SCRIPTS_THAT_ONLY_NAME_A_TOOL, seen: frozenset[str] = frozenset()) -> bool:
+    """Whether the repository script at `path` (relative to `root`) names a tool, or a script that does.
+
+    Every script name its text holds is followed where it resolves, against the
+    script's directory or the root, whether the script calls it or only mentions
+    it; a name that resolves nowhere is no file of the repository.
+    """
+    if path in exempt or path in seen:
+        return False
+    text = (root / path).read_text(encoding="utf-8", errors="replace")
+    if SCRIPT_TOOL_RE.search(text):
+        return True
+    for name in dict.fromkeys(SCRIPT_NAME_RE.findall(text)):
+        for base in (posixpath.dirname(path), ""):
+            candidate = posixpath.normpath(posixpath.join(base, name.lstrip("/")))
+            if not candidate.startswith(("..", "/")) and (root / candidate).is_file():
+                if script_builds(root, candidate, exempt, seen | {path}):
+                    return True
+                break
+    return False
+
+
 # --- the walk: what each job installs, and what each call needs ------------------------
 
 
 class _Walk:
     """One job, step by step: its checkouts, the toolchains it installed, and what each call needs."""
 
-    def __init__(self, name: str, job: Job, workflow: Workflow, reasons: _Reasons) -> None:
-        self.name, self.job, self.workflow, self.reasons = name, job, workflow, reasons
+    def __init__(self, name: str, job: Job, workflow: Workflow, reasons: _Reasons, root: Path) -> None:
+        self.name, self.job, self.workflow, self.reasons, self.root = name, job, workflow, reasons, root
         self.needs = _job_needs(job, workflow)
         self.copies: dict[str, str] = {}  # checkout path -> repository ("" for this one)
-        self.installed: set[str] = set()
+        self.installed: dict[str, set[str]] = {}  # toolchain -> the `if:` of each step that installed it
         self.override: str | None = None  # `rustup override set <toolchain>`
         self.exported: str | None = None  # RUSTUP_TOOLCHAIN written to $GITHUB_ENV
         self.found: list[str] = []
@@ -652,9 +763,40 @@ class _Walk:
         )
         return chosen or self.override or self.file(directory)
 
-    def require(self, where: str, needed: str) -> None:
-        if needed not in self.installed:
-            self.found.append(f"{where} {_reach(needed)}")
+    def require(self, where: str, step: Step, needed: str) -> None:
+        """A call of `step` needs `needed`: installed unconditionally, under `always()`, or under the call's own `if:`."""
+        conditions = self.installed.get(needed, set())
+        if conditions & {UNCONDITIONAL, ALWAYS, step.condition}:
+            return
+        only = "".join(f" (installed only under `if: {c}`)" for c in sorted(conditions))
+        self.found.append(f"{where} {_reach(needed)}{only}")
+
+    def script(self, where: str, directory: str, command: list[str]) -> bool:
+        """Whether the command runs a repository script that reaches cargo; a script it cannot read is a finding."""
+        named = _script(command)
+        if named is None:
+            return False
+        script, must_read = named
+        path, problem = self._script_path(directory, script)
+        if path is not None and (self.root / path).is_file():
+            return script_builds(self.root, path)
+        if must_read:
+            self.found.append(f"{where} runs {script!r}, which the guard cannot read: {problem or 'no such file in the repository'}")
+        return False
+
+    def _script_path(self, directory: str, script: str) -> tuple[str | None, str | None]:
+        """The script's path inside this repository, or why the guard cannot tell it."""
+        if "$" in script or "`" in script or directory == UNKNOWN_DIR:
+            return None, "its path is not a literal the guard can resolve"
+        target = _cd(directory, script)
+        if target == UNKNOWN_DIR:
+            return None, "its path leaves the workspace"
+        owner = self.file(target)
+        if owner.startswith(FOREIGN):
+            return None, f"it is a file of {owner.removeprefix(FOREIGN)}, not of this repository"
+        if not owner.startswith("file:"):
+            return None, "it is outside every checkout of this repository"
+        return posixpath.relpath(target, owner.removeprefix("file:")), None
 
     def visit(self, index: int, step: Step) -> None:
         where = f"{self.name}: step {index}"
@@ -672,7 +814,7 @@ class _Walk:
         elif step.uses.startswith(TOOLCHAIN_ACTION):
             self._toolchain_action(where, step)
         elif step.uses.startswith(RUST_CACHE_ACTION):
-            self.require(where, self.toolchain(step, "."))
+            self.require(where, step, self.toolchain(step, "."))
         elif step.uses.startswith(CACHE_ACTION) and TOOLCHAIN_PATHS_RE.search(step.inputs.get("path", "")):
             self.found.append(f"{where} caches a toolchain path: {step.inputs['path']!r}")
 
@@ -683,7 +825,7 @@ class _Walk:
 
     def _toolchain_action(self, where: str, step: Step) -> None:
         if "toolchain" in step.inputs:
-            self.installed.add(step.inputs["toolchain"])
+            self.installed.setdefault(step.inputs["toolchain"], set()).add(step.condition)
         else:
             self.found.append(f"{where} installs the action's ref, not rust-toolchain.toml's toolchain")
 
@@ -695,11 +837,11 @@ class _Walk:
         text = " ".join(command)
         explained = range(step.first, step.last)
         self.found += _pin_findings(line, _pins(text), lambda: self.reasons.given(explained, self.needs))
-        line_env = self._rustup(where, text, shell.directory) or self._environment(command, text, shell) or shell.exported
+        line_env = self._rustup(where, step, text, shell.directory) or self._environment(command, text, shell) or shell.exported
         for match in PLUS_RE.finditer(text):
-            self.require(where, match.group(1))
-        if BUILD_RE.search(text):
-            self.require(where, self.toolchain(step, shell.directory, line_env))
+            self.require(where, step, match.group(1))
+        if self.script(where, shell.directory, command) or BUILD_RE.search(text):
+            self.require(where, step, self.toolchain(step, shell.directory, line_env))
 
     def _environment(self, command: list[str], text: str, shell: _Shell) -> str | None:
         """RUSTUP_TOOLCHAIN set for this command; record what `export` and $GITHUB_ENV set for later."""
@@ -709,41 +851,42 @@ class _Walk:
             shell.exported = _assigned(command) or shell.exported
         return _prefix_toolchain(command)
 
-    def _rustup(self, where: str, text: str, directory: str) -> str | None:
+    def _rustup(self, where: str, step: Step, text: str, directory: str) -> str | None:
         """Record what the command installs or overrides; return the toolchain `rustup run` names."""
         ran = None
         for match in RUSTUP_RE.finditer(text):
             verb, named = _verb(match), _named(match.group(2))
             if _installs(verb, named):
-                self._install(where, named or self.file(directory))
+                self._install(where, step, named or self.file(directory))
             elif verb in OVERRIDE_VERBS and named:
                 self.override = named
             elif verb == "run":
                 ran = named
         return ran
 
-    def _install(self, where: str, target: str) -> None:
+    def _install(self, where: str, step: Step, target: str) -> None:
         if target in INSTALL_ELSEWHERE:
             self.found.append(f"{where} {INSTALL_ELSEWHERE[target]}")
         elif target.startswith(FOREIGN):
             self.found.append(f"{where} installs in a checkout of {target.removeprefix(FOREIGN)}, not from this repository's rust-toolchain.toml")
         else:
-            self.installed.add(target)
+            self.installed.setdefault(target, set()).add(step.condition)
 
 
-def _job_findings(name: str, job: Job, workflow: Workflow, reasons: _Reasons) -> list[str]:
-    walk = _Walk(name, job, workflow, reasons)
+def _job_findings(name: str, job: Job, workflow: Workflow, reasons: _Reasons, root: Path) -> list[str]:
+    walk = _Walk(name, job, workflow, reasons, root)
     for index, step in enumerate(job.steps):
         walk.visit(index, step)
     return walk.found
 
 
-def findings(text: str, channel: str) -> list[str]:
+def findings(text: str, channel: str, root: Path = REPO_ROOT) -> list[str]:
+    """What is wrong with a workflow whose repository scripts live under `root`."""
     workflow = parse(text)
     reasons = _Reasons(workflow.raw)
     found = workflow.problems + _key_findings(workflow, reasons) + _scalar_findings(workflow, reasons, channel)
     for name, job in workflow.jobs.items():
-        found += job.problems + _job_findings(name, job, workflow, reasons)
+        found += job.problems + _job_findings(name, job, workflow, reasons, root)
     return found
 
 
@@ -1597,6 +1740,121 @@ class FindingsTests(unittest.TestCase):
             with self.subTest(base=base):
                 found = dockerfile_findings(DOCKERFILE_FROM_THE_FILE.replace("rust:bookworm", base), "1.90")
                 self.assertTrue(_has(found, "names a Rust image by version"), found)
+
+
+REACHES_THE_FILE = "reaches cargo before rust-toolchain.toml's toolchain is installed"
+CANNOT_READ = "which the guard cannot read"
+# Round 6: a synthetic repository whose scripts reach cargo directly, through another
+# script, or not at all.
+SCRIPTS = {
+    "scripts/gates.sh": "#!/usr/bin/env bash\ncargo test -p velesdb-core\n",
+    "scripts/outer.py": "import subprocess\nsubprocess.run(['bash', 'scripts/gates.sh'], check=True)\n",
+    "scripts/lint.py": "print('no build here')\n",
+}
+SCRIPT_FORMS = ("bash scripts/gates.sh", "sh scripts/gates.sh", "./scripts/gates.sh", "python3 -B scripts/outer.py",
+                "cd scripts && ./gates.sh", "FOO=1 bash scripts/gates.sh")
+
+
+def _in_repository(steps: str, files: dict[str, str] | None = None) -> list[str]:
+    """Findings for one job over a repository holding `files`."""
+    with tempfile.TemporaryDirectory() as tmp:
+        for path, text in (SCRIPTS if files is None else files).items():
+            (Path(tmp) / path).parent.mkdir(parents=True, exist_ok=True)
+            (Path(tmp) / path).write_text(text, encoding="utf-8")
+        return findings(ONE_JOB + CHECKOUT + steps, "1.90", Path(tmp))
+
+
+def _real_variant(workflow: str, old: str, new: str) -> list[str]:
+    text = (WORKFLOW_DIR / workflow).read_text(encoding="utf-8")
+    if old not in text:
+        raise ValueError(f"not in {workflow}: {old!r}")
+    return findings(text.replace(old, new), toolchain_file()[0])
+
+
+class ScriptAndConditionTests(unittest.TestCase):
+    """Round 6: a script that reaches cargo is a build; a conditional install covers only its condition."""
+
+    def test_a_step_running_a_script_that_reaches_cargo_is_a_build(self) -> None:
+        for form in SCRIPT_FORMS:
+            with self.subTest(form=form):
+                self.assertTrue(_has(_in_repository(f"      - run: {form}\n"), f"j: step 1 {REACHES_THE_FILE}"))
+                self.assertEqual([], _in_repository(INSTALL_STEP + f"      - run: {form}\n"))
+
+    def test_a_script_that_reaches_no_tool_is_not_a_build(self) -> None:
+        self.assertEqual([], _in_repository("      - run: python3 scripts/lint.py\n"))
+
+    def test_a_script_that_cannot_be_read_is_a_finding(self) -> None:
+        for form in ("bash scripts/missing.sh", "bash \"$DIR/gates.sh\"", "./scripts/missing.py",
+                     "bash /tmp/gates.sh", "bash ../gates.sh"):
+            with self.subTest(form=form):
+                self.assertTrue(_has(_in_repository(INSTALL_STEP + f"      - run: {form}\n"), CANNOT_READ))
+        foreign = "      - uses: actions/checkout@v7\n        with:\n          repository: o/r\n          path: other\n"
+        self.assertTrue(_has(_in_repository(foreign + INSTALL_STEP + "      - run: bash other/gates.sh\n"), "a file of o/r"))
+
+    def test_a_fetched_binary_an_installed_module_or_inline_code_is_no_script(self) -> None:
+        for form in ("./mcp-publisher publish", "python -m pip install pyyaml", "node -p \"require('./package.json')\"",
+                     "python3 -c 'print(1)'", "/tmp/venv/bin/pip install x"):
+            with self.subTest(form=form):
+                self.assertEqual([], _in_repository(f"      - run: {form}\n"))
+
+    def test_an_exempt_script_is_not_followed(self) -> None:
+        with mock.patch.dict(SCRIPTS_THAT_ONLY_NAME_A_TOOL, {"scripts/gates.sh": "test"}):
+            self.assertEqual([], _in_repository("      - run: bash scripts/gates.sh\n"))
+
+    def test_a_conditional_install_covers_only_a_build_under_the_same_condition(self) -> None:
+        install = "      - if: ${{ matrix.rust }}\n        run: rustup toolchain install --no-self-update --profile minimal\n"
+        cases = {
+            "": True,
+            "        if: ${{ github.event_name == 'push' }}\n": True,
+            "        if: matrix.rust\n": False,
+            "        if: ${{  matrix.rust }}\n": False,
+        }
+        for condition, refused in cases.items():
+            with self.subTest(condition=condition):
+                found = _in_repository(install + "      - run: cargo build\n" + condition)
+                self.assertEqual(refused, _has(found, "installed only under `if: matrix.rust`"), found)
+
+    def test_an_install_under_always_covers_every_build_and_success_is_no_condition(self) -> None:
+        for condition, build in (("always()", "failure()"), ("${{ always() }}", "cancelled()"), ("success()", "success()")):
+            with self.subTest(condition=condition):
+                install = f"      - if: {condition}\n        run: rustup toolchain install --no-self-update --profile minimal\n"
+                self.assertEqual([], _in_repository(install + f"      - if: {build}\n        run: cargo build\n"))
+        # `success()` on the build is the default: an install with no `if:` covers it...
+        self.assertEqual([], _in_repository(INSTALL_STEP + "      - if: success()\n        run: cargo build\n"))
+        # ...and an install under `success()` covers a build with no `if:`.
+        success = "      - if: success()\n        run: rustup toolchain install --no-self-update --profile minimal\n"
+        self.assertEqual([], _in_repository(success + "      - run: cargo build\n"))
+
+    # The review's reproduction (a): production-gates.yml reaches cargo only inside its script.
+    def test_production_gates_without_its_install_step_is_refused(self) -> None:
+        found = _real_variant("production-gates.yml",
+                              "      - name: Install the toolchain rust-toolchain.toml pins\n"
+                              "        run: rustup toolchain install --no-self-update --profile minimal\n", "")
+        self.assertTrue(_has(found, f"gates: step 1 {REACHES_THE_FILE}"), found)
+
+    # The review's reproduction (b): binary-size.yml's install step made conditional.
+    def test_binary_size_with_a_disabled_install_step_is_refused(self) -> None:
+        found = _real_variant("binary-size.yml", "      - name: Install the toolchain rust-toolchain.toml pins\n",
+                              "      - name: Install the toolchain rust-toolchain.toml pins\n        if: false\n")
+        self.assertTrue(_has(found, "installed only under `if: false`"), found)
+
+    def test_every_exempt_script_still_names_a_tool(self) -> None:
+        for path in SCRIPTS_THAT_ONLY_NAME_A_TOOL:
+            others = {other: why for other, why in SCRIPTS_THAT_ONLY_NAME_A_TOOL.items() if other != path}
+            with self.subTest(script=path):
+                self.assertTrue(script_builds(REPO_ROOT, path, others), "the exemption outlived its reason")
+
+    # The reasons two exemptions give, held.
+    def test_no_workflow_runs_the_extraction_bench_report(self) -> None:
+        for path in workflow_files():
+            with self.subTest(workflow=path.name):
+                self.assertNotRegex(path.read_text(encoding="utf-8"), r"bench-memory-extraction\.py\s+report\b")
+
+    def test_no_executable_promise_claim_names_a_tool(self) -> None:
+        registry = json.loads((REPO_ROOT / "docs" / "reference" / "promise-contract.json").read_text(encoding="utf-8"))
+        commands = [claim.get("validation_command") or "" for claim in registry["claims"] if claim.get("executable")]
+        self.assertTrue(commands)
+        self.assertEqual([], [command for command in commands if SCRIPT_TOOL_RE.search(command)])
 
 
 class RealWorkflowTests(unittest.TestCase):
