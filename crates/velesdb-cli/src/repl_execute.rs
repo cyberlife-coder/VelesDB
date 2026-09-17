@@ -70,7 +70,9 @@ pub fn apply_session_settings(
 }
 
 /// Injects the session `mode`/`ef_search` into the SELECT `WITH` options,
-/// preserving any inline override (inline wins).
+/// preserving any inline override (inline wins). A `mode` or `quality` of any
+/// value is an override, so one the parser cannot read still fails the query
+/// instead of running at the session mode (#2267).
 fn inject_session_with_options(
     select: &mut velesdb_core::velesql::SelectStatement,
     session: &SessionSettings,
@@ -78,7 +80,7 @@ fn inject_session_with_options(
     use velesdb_core::velesql::{WithClause, WithValue};
 
     let with = select.with_clause.get_or_insert_with(WithClause::new);
-    if with.get_mode().is_none() {
+    if with.mode_value().is_none() {
         with.options.push(velesdb_core::velesql::WithOption {
             key: "mode".to_string(),
             value: WithValue::String(session.mode_str()),

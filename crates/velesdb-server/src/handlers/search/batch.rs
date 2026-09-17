@@ -8,7 +8,9 @@ use axum::{
 };
 use std::sync::Arc;
 
-use crate::types::{BatchSearchRequest, BatchSearchResponse, ErrorResponse, SearchResponse};
+use crate::types::{
+    parse_search_mode, BatchSearchRequest, BatchSearchResponse, ErrorResponse, SearchResponse,
+};
 use crate::AppState;
 
 use super::pipeline::{
@@ -58,7 +60,7 @@ pub async fn batch_search(
         return resp;
     }
 
-    if let Err(resp) = validate_batch_dimensions(&state, &name, &collection, &req) {
+    if let Err(resp) = validate_batch_queries(&state, &name, &collection, &req) {
         state.operational_metrics.inc_errors();
         return resp;
     }
@@ -170,9 +172,12 @@ fn finish_batch_search(
     Json(BatchSearchResponse { results, timing_ms }).into_response()
 }
 
-/// Validate that every query vector in a batch request matches the collection dimension.
+/// Validate every query of a batch request: its vector matches the collection
+/// dimension, and its search mode, when given, is one the parser reads. The
+/// first bad query gets a 400 naming its index. The batch applies no mode,
+/// but a typo must not pass silently there either (#2267).
 #[allow(clippy::result_large_err)]
-fn validate_batch_dimensions(
+fn validate_batch_queries(
     state: &AppState,
     name: &str,
     collection: &velesdb_core::collection::VectorCollection,
@@ -183,17 +188,25 @@ fn validate_batch_dimensions(
         if let Err(error) =
             validate_query_dimension(state, name, expected_dimension, &search.vector)
         {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: format!("Invalid query at index {idx}: {}", error.error),
-                    code: error.code.clone(),
-                }),
-            )
-                .into_response());
+            return Err(invalid_batch_query(idx, &error.error, error.code.clone()));
+        }
+        if let Some(Err(error)) = search.mode.as_deref().map(parse_search_mode) {
+            return Err(invalid_batch_query(idx, &error, None));
         }
     }
     Ok(())
+}
+
+/// The 400 answering the batch query at `idx`.
+fn invalid_batch_query(idx: usize, error: &str, code: Option<String>) -> axum::response::Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(ErrorResponse {
+            error: format!("Invalid query at index {idx}: {error}"),
+            code,
+        }),
+    )
+        .into_response()
 }
 
 /// Parse filters from each search in a batch request.

@@ -118,6 +118,11 @@ fn test_parse_search_quality_invalid() {
     assert!(parse_search_quality(&Some(String::new())).is_err());
     assert!(parse_search_quality(&Some("custom:abc".to_string())).is_err());
     assert!(parse_search_quality(&Some("adaptive:512:32".to_string())).is_err());
+    let err = parse_search_quality(&Some("acurate".to_string())).expect_err("typo");
+    assert!(
+        err.to_string().contains("balanced"),
+        "names the accepted forms: {err}"
+    );
 }
 
 // =====================================================================

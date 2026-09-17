@@ -55,17 +55,18 @@ passthrough() {
 }
 
 # Numeric tuning comes from the environment and reaches arithmetic expansion,
-# loop bounds, or CLI arguments. Accept only small decimal integers so a typo
-# cannot hang every PostToolUse (and shell arithmetic never reparses attacker-
-# controlled expressions).
+# loop bounds, or CLI arguments. Accept only small decimal integers, written
+# without a leading zero (see is_decimal in lib/common.sh), so a typo cannot
+# hang every PostToolUse and shell arithmetic never reparses attacker-
+# controlled expressions.
+# decimal_at_most VALUE MAXIMUM: VALUE is a decimal integer from 0 to MAXIMUM.
+decimal_at_most() {
+  is_decimal "$1" && [ "$1" -le "$2" ]
+}
+
+# positive_decimal_at_most VALUE MAXIMUM: the same, from 1.
 positive_decimal_at_most() {
-  local value="$1"
-  local maximum="$2"
-  case "$value" in
-    ''|*[!0-9]*) return 1 ;;
-  esac
-  [ "${#value}" -le 10 ] || return 1
-  [ "$value" -gt 0 ] 2>/dev/null && [ "$value" -le "$maximum" ] 2>/dev/null
+  [ "$1" != 0 ] && decimal_at_most "$1" "$2"
 }
 
 command -v jq >/dev/null 2>&1 || passthrough
@@ -166,6 +167,9 @@ command -v "$bin" >/dev/null 2>&1 || passthrough
 # apart without any version guessing, and without risking a hang.
 probe_timeout="${VELESDB_HOOK_PROBE_TIMEOUT:-10}"
 positive_decimal_at_most "$probe_timeout" 60 || passthrough
+# Each compilation attempt gets a watchdog of its own, bounded like the probe's.
+compile_timeout="${VELESDB_HOOK_COMPILE_TIMEOUT:-20}"
+positive_decimal_at_most "$compile_timeout" 60 || passthrough
 probe_key="$(safe_marker_key "$bin")"
 if ! probe_marker="$(sentinel_path "compile-stdin-${probe_key}" "$session_id")"; then
   passthrough
@@ -194,6 +198,9 @@ valid_private_marker "$probe_marker" || passthrough
 [ "$(cat "$probe_marker")" = "yes" ] || passthrough
 
 budget="${VELESDB_HOOK_TOKEN_BUDGET:-2000}"
+# Checked before the arithmetic below reads it. The cap cannot refuse a budget
+# on its own: the ceiling has the same cap and must be at least the budget, so
+# a budget past it is refused by the ceiling's checks as well.
 positive_decimal_at_most "$budget" 1000000 || passthrough
 budget_max="${VELESDB_HOOK_TOKEN_BUDGET_MAX:-$((budget * 2))}"
 positive_decimal_at_most "$budget_max" 1000000 || passthrough
@@ -206,7 +213,7 @@ fi
 # One compilation attempt at $1 tokens, into $compiled_file.
 compile_at() {
   printf '%s' "$text" \
-    | run_with_watchdog 20 "$compiled_file" "$bin" compile-stdin --budget "$1" \
+    | run_with_watchdog "$compile_timeout" "$compiled_file" "$bin" compile-stdin --budget "$1" \
       --query "$tool_name output"
 }
 
@@ -295,10 +302,7 @@ footer="$(printf '\n\n--- velesdb: compiled %s tokens down to %s (saved %s befor
 # counted as if it were a whole token (an upper bound), then add the configured
 # minimum. This prevents a roomy retry from increasing paid input tokens.
 min_saved="${VELESDB_HOOK_MIN_SAVED_TOKENS:-128}"
-case "$min_saved" in
-  ''|*[!0-9]*) rm -f "$archive" "$compiled_file"; passthrough ;;
-esac
-if [ "${#min_saved}" -gt 7 ] || [ "$min_saved" -gt 1000000 ]; then
+if ! decimal_at_most "$min_saved" 1000000; then
   rm -f "$archive" "$compiled_file"
   passthrough
 fi

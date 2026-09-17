@@ -130,4 +130,6 @@ fn test_set_mode_invalid() {
     assert!(session.set("mode", "nonexistent").is_err());
     assert!(session.set("mode", "custom:abc").is_err());
     assert!(session.set("mode", "adaptive:32").is_err());
+    // min_ef above max_ef: every query would refuse it, so `\set` does (#2267).
+    assert!(session.set("mode", "adaptive:512:32").is_err());
 }

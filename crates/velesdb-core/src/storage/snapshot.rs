@@ -62,13 +62,6 @@ pub(crate) fn crc32_hash(data: &[u8]) -> u32 {
     !crc
 }
 
-/// Loads index from a snapshot file.
-///
-/// Returns `(index, wal_position)` if successful.
-///
-/// # Errors
-///
-/// Returns an error if the snapshot file is missing, corrupt, or has an invalid format.
 /// Validates magic, version, and minimum size of snapshot data.
 fn validate_snapshot_format(data: &[u8]) -> io::Result<()> {
     if data.len() < 25 {
@@ -131,13 +124,35 @@ fn validate_snapshot_header(data: &[u8]) -> io::Result<(u64, usize)> {
     Ok((wal_pos, entry_count))
 }
 
+/// Loads index from a snapshot file.
+///
+/// Returns `(index, wal_position)` if successful.
+///
+/// # Errors
+///
+/// Returns `NotFound` if [`Path::exists`] reports no snapshot file, which it
+/// also does for a path it cannot reach; the read's error if the file cannot
+/// be read; and `InvalidData` (see [`parse_snapshot`]) if it is corrupt or has
+/// an invalid format.
 pub(crate) fn load_snapshot(snapshot_path: &Path) -> io::Result<(FxHashMap<u64, u64>, u64)> {
     if !snapshot_path.exists() {
         return Err(io::Error::new(io::ErrorKind::NotFound, "No snapshot"));
     }
 
-    let data = std::fs::read(snapshot_path)?;
-    let (wal_pos, entry_count) = validate_snapshot_header(&data)?;
+    parse_snapshot(&std::fs::read(snapshot_path)?)
+}
+
+/// Parses snapshot bytes into `(index, wal_position)`.
+///
+/// This is the whole parser: [`load_snapshot`] only adds reading the file (see
+/// its errors). It takes bytes so the `fuzz_snapshot_parser` target can drive
+/// it, through `storage::parse_payload_snapshot`.
+///
+/// # Errors
+///
+/// Returns `InvalidData` if `data` is not a well-formed snapshot.
+pub(crate) fn parse_snapshot(data: &[u8]) -> io::Result<(FxHashMap<u64, u64>, u64)> {
+    let (wal_pos, entry_count) = validate_snapshot_header(data)?;
 
     let mut index = FxHashMap::default();
     index.reserve(entry_count);

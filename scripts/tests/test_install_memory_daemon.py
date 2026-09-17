@@ -8,20 +8,109 @@ developer's actual Codex configuration.
 
 from __future__ import annotations
 
+import contextlib
+import functools
+import io
 import json
 import os
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import textwrap
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SHELL_INSTALLER = REPO_ROOT / "scripts" / "install-memory-daemon.sh"
 POWERSHELL_INSTALLER = REPO_ROOT / "scripts" / "install-memory-daemon.ps1"
+
+# A pwsh launch is called hung once it outlasts this many start-ups of pwsh
+# on the same machine. A steady installer launch costs 2 to 4 of them and a
+# busy one up to 12, but on a loaded machine one launch ran past 50 while
+# the start-ups timed seconds before it read 0.25 s: a burst can land
+# between the measurement and the launch. 200 leaves four times that.
+PWSH_BUDGET_IN_STARTUPS = 200
+# Deadline of each calibration start-up below, which no budget covers yet.
+# The cold one is the slow one: run 34503494842 spent over 40 s across the
+# launch it killed and the next one.
+PWSH_COLD_START_DEADLINE = 120
+# The least and the most one launch may take, whatever the start-ups read:
+# the floor is the 30 s every launch had before the budget existed, and the
+# ceiling bounds a job with no timeout-minutes when one sample is a burst.
+PWSH_BUDGET_FLOOR = 30.0
+PWSH_BUDGET_CEILING = 180.0
+
+
+def pwsh_argv(pwsh: str, command: str) -> list[str]:
+    """The one pwsh command line of this suite: calibration and tests share it."""
+    return [pwsh, "-NoProfile", "-NonInteractive", "-Command", command]
+
+
+def _time_pwsh_start(pwsh: str) -> float:
+    """Seconds pwsh takes to start and exit, in a fresh HOME like each test's.
+
+    HOME holds PowerShell's start-up JIT profile, so a reused one would time
+    a faster start than any test launch gets.
+    """
+    with tempfile.TemporaryDirectory(prefix="pwsh-start-") as home:
+        began = time.monotonic()
+        subprocess.run(
+            pwsh_argv(pwsh, "exit 0"),
+            env={**os.environ, "HOME": home},
+            capture_output=True,
+            timeout=PWSH_COLD_START_DEADLINE,
+            check=True,
+        )
+        return time.monotonic() - began
+
+
+def _stderr(failure: subprocess.TimeoutExpired | subprocess.CalledProcessError) -> str:
+    """What a pwsh start-up wrote to stderr before it failed, as text."""
+    return (failure.stderr or b"").decode(errors="replace")
+
+
+@functools.cache
+def pwsh_launch_budget(pwsh: str) -> float | str:
+    """Seconds one pwsh launch may take here, or why pwsh could not be timed.
+
+    The first pwsh launch on a fresh machine pays a one-time start-up cost
+    that has nothing to do with the installer. On GitHub's ubuntu-24.04
+    runners the first pwsh test of this suite took 2.9 to 19.9 s in six green
+    runs and every later one 0.8 to 1.8 s -- the same installer, in an
+    equally fresh HOME. In run 34503494842 the first ran past its 30 s
+    timeout and the next still took 12.3 s. So the cold start is paid here,
+    once, outside every test's budget, and the budget is derived from the
+    warm start-ups that follow it: a loaded machine starts pwsh slowly and
+    gets a proportionally longer budget. The slowest of three is used, so one
+    lucky sample cannot shrink it, and the budget is kept between
+    PWSH_BUDGET_FLOOR and PWSH_BUDGET_CEILING and printed once. A start-up that
+    fails is cached as well, as the message every pwsh test then fails with,
+    so a broken pwsh is diagnosed once, its stderr included.
+    """
+    try:
+        _time_pwsh_start(pwsh)  # the cold start, kept out of every budget
+        warm = max(_time_pwsh_start(pwsh) for _ in range(3))
+    except subprocess.TimeoutExpired as hung:
+        return f"pwsh did not start within {hung.timeout:g} s:\n{_stderr(hung)}"
+    except subprocess.CalledProcessError as failed:
+        return f"pwsh exited {failed.returncode} on start-up:\n{_stderr(failed)}"
+    except OSError as unrunnable:
+        return f"pwsh could not be run: {unrunnable}"
+    budget = min(
+        max(PWSH_BUDGET_IN_STARTUPS * warm, PWSH_BUDGET_FLOOR), PWSH_BUDGET_CEILING
+    )
+    print(
+        f"pwsh launch budget: {budget:.1f} s ({PWSH_BUDGET_IN_STARTUPS}x a "
+        f"{warm:.2f} s warm start-up, kept within {PWSH_BUDGET_FLOOR:.0f}-"
+        f"{PWSH_BUDGET_CEILING:.0f} s)",
+        file=sys.stderr,
+    )
+    return budget
 
 
 class InstallerHarness(unittest.TestCase):
@@ -120,9 +209,6 @@ class InstallerHarness(unittest.TestCase):
         )
 
     def run_powershell(self, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-        pwsh = shutil.which("pwsh")
-        if pwsh is None:
-            self.skipTest("pwsh is not installed")
         quoted_path = str(POWERSHELL_INSTALLER).replace("'", "''")
         skipped = ",".join(f"'{name}'" for name in self.skipped_clients())
         command = (
@@ -130,21 +216,132 @@ class InstallerHarness(unittest.TestCase):
             f"& '{quoted_path}' -WireOnly -SkipCaTrust "
             f"-SkipClient @({skipped})"
         )
-        return subprocess.run(
-            [pwsh, "-NoProfile", "-NonInteractive", "-Command", command],
-            cwd=REPO_ROOT,
-            env=env,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=30,
-            check=False,
-        )
+        return self.run_pwsh(command, env)
+
+    def run_pwsh(
+        self, command: str, env: dict[str, str]
+    ) -> subprocess.CompletedProcess[str]:
+        pwsh = shutil.which("pwsh")
+        if pwsh is None:
+            self.skipTest("pwsh is not installed")
+        budget = pwsh_launch_budget(pwsh)
+        if isinstance(budget, str):
+            self.fail(budget)
+        try:
+            return subprocess.run(
+                pwsh_argv(pwsh, command),
+                cwd=REPO_ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=budget,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as hung:
+            output = (hung.output or b"").decode(errors="replace")
+            self.fail(f"pwsh ran past its {hung.timeout:.1f} s budget:\n{output}")
 
     def invocation_log(self) -> list[str]:
         if not self.log.exists():
             return []
         return self.log.read_text(encoding="utf-8").splitlines()
+
+
+class PwshLaunchBudgetTests(InstallerHarness):
+    def test_a_launch_past_its_budget_fails_instead_of_hanging(self) -> None:
+        with mock.patch(f"{__name__}.pwsh_launch_budget", return_value=2.0):
+            with self.assertRaisesRegex(AssertionError, r"past its 2\.0 s budget"):
+                self.run_pwsh("Start-Sleep -Seconds 60", self.environment())
+
+    def test_a_launch_past_its_budget_shows_its_output_so_far(self) -> None:
+        """What the launch printed before its budget ran out is in the failure.
+
+        The launch is mocked: a real pwsh's first start-up can outlast any
+        budget short enough to test, and would print nothing before it.
+        """
+        hung = subprocess.TimeoutExpired("pwsh", 2.0, output=b"out-2272\n")
+        with mock.patch(f"{__name__}.pwsh_launch_budget", return_value=2.0):
+            with mock.patch(f"{__name__}.subprocess.run", side_effect=hung):
+                with self.assertRaisesRegex(
+                    AssertionError, r"past its 2\.0 s budget:\nout-2272"
+                ):
+                    self.run_pwsh("Start-Sleep -Seconds 60", self.environment())
+
+    def test_a_pwsh_that_could_not_be_timed_fails_the_launch(self) -> None:
+        reason = f"pwsh did not start within {PWSH_COLD_START_DEADLINE} s"
+        with mock.patch(f"{__name__}.pwsh_launch_budget", return_value=reason):
+            with self.assertRaisesRegex(AssertionError, "did not start within"):
+                self.run_pwsh("exit 0", self.environment())
+
+    def test_the_cold_start_is_kept_out_of_the_budget(self) -> None:
+        """The cold sample never enters the budget, and the slowest warm one sets
+        it, wherever it falls among the three."""
+        for warm in ([0.3, 0.2, 0.25], [0.2, 0.3, 0.25], [0.2, 0.25, 0.3]):
+            printed = io.StringIO()
+            with mock.patch(
+                f"{__name__}._time_pwsh_start", side_effect=[45.0, *warm]
+            ) as start:
+                with contextlib.redirect_stderr(printed):
+                    budget = pwsh_launch_budget.__wrapped__("pwsh")
+            self.assertEqual(start.call_count, 4, warm)
+            self.assertEqual(budget, PWSH_BUDGET_IN_STARTUPS * 0.3, warm)
+            self.assertIn(f"pwsh launch budget: {budget:.1f} s", printed.getvalue())
+
+    def test_the_budget_stays_within_its_floor_and_ceiling(self) -> None:
+        for warm, expected in [(0.01, PWSH_BUDGET_FLOOR), (2.0, PWSH_BUDGET_CEILING)]:
+            with mock.patch(
+                f"{__name__}._time_pwsh_start", side_effect=[1.0, warm, warm, warm]
+            ):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(pwsh_launch_budget.__wrapped__("pwsh"), expected)
+
+    def test_a_start_up_that_fails_is_reported_with_its_cause(self) -> None:
+        for failure, message in [
+            (
+                subprocess.TimeoutExpired("pwsh", 7, stderr=b"no libicu"),
+                "did not start within 7 s:\nno libicu",
+            ),
+            (
+                subprocess.CalledProcessError(1, "pwsh", stderr=b"no libicu"),
+                "exited 1 on start-up:\nno libicu",
+            ),
+            (FileNotFoundError(2, "No such file"), "could not be run"),
+        ]:
+            with mock.patch(f"{__name__}._time_pwsh_start", side_effect=failure):
+                self.assertIn(message, pwsh_launch_budget.__wrapped__("pwsh"))
+
+    def test_a_failed_start_up_is_timed_only_once(self) -> None:
+        unrunnable = "/nonexistent/pwsh-that-fails-once"
+        with mock.patch(
+            f"{__name__}._time_pwsh_start", side_effect=OSError("gone")
+        ) as start:
+            first = pwsh_launch_budget(unrunnable)
+            again = pwsh_launch_budget(unrunnable)
+        self.assertEqual(start.call_count, 1)
+        self.assertEqual(again, first)
+
+    def test_each_start_up_is_timed_in_a_fresh_home_under_its_deadline(self) -> None:
+        homes = []
+        clock = [100.0]
+
+        def record(argv, **kwargs):
+            clock[0] += 1.5  # the start-up takes 1.5 s on the fake clock
+            home = kwargs["env"]["HOME"]
+            homes.append(home)
+            self.assertTrue(Path(home).is_dir())
+            self.assertEqual(argv, pwsh_argv("pwsh", "exit 0"))
+            self.assertEqual(kwargs["timeout"], PWSH_COLD_START_DEADLINE)
+            self.assertIs(kwargs["check"], True)
+            self.assertIs(kwargs["capture_output"], True)
+            return subprocess.CompletedProcess(argv, 0)
+
+        with mock.patch(f"{__name__}.subprocess.run", side_effect=record):
+            with mock.patch.object(time, "monotonic", side_effect=lambda: clock[0]):
+                took = [_time_pwsh_start("pwsh"), _time_pwsh_start("pwsh")]
+        self.assertEqual(took, [1.5, 1.5])
+        self.assertEqual(len(set(homes)), 2)
+        self.assertNotIn(os.environ.get("HOME"), homes)
 
 
 class ShellCodexWiringTests(InstallerHarness):
@@ -262,9 +459,6 @@ class PowerShellClaudeWiringTests(InstallerHarness):
         )
         env = self.environment()
         env["FAKE_CLAUDE_LOG"] = str(claude_log)
-        pwsh = shutil.which("pwsh")
-        if pwsh is None:
-            self.skipTest("pwsh is not installed")
         quoted_path = str(POWERSHELL_INSTALLER).replace("'", "''")
         command = (
             "$PSNativeCommandUseErrorActionPreference = $true; "
@@ -272,16 +466,7 @@ class PowerShellClaudeWiringTests(InstallerHarness):
             "-SkipClient @('codex','claude-desktop','windsurf','devin')"
         )
 
-        result = subprocess.run(
-            [pwsh, "-NoProfile", "-NonInteractive", "-Command", command],
-            cwd=REPO_ROOT,
-            env=env,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=30,
-            check=False,
-        )
+        result = self.run_pwsh(command, env)
 
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertEqual(
@@ -297,9 +482,6 @@ class PowerShellClaudeWiringTests(InstallerHarness):
 
 class PowerShellUninstallTests(InstallerHarness):
     def test_failed_native_removals_do_not_skip_json_cleanup(self) -> None:
-        pwsh = shutil.which("pwsh")
-        if pwsh is None:
-            self.skipTest("pwsh is not installed")
         self._write_executable("claude", "#!/bin/sh\nexit 41\n")
         desktop_dir = self.root / "appdata" / "Claude"
         desktop_dir.mkdir(parents=True)
@@ -328,16 +510,7 @@ class PowerShellUninstallTests(InstallerHarness):
                     f"& '{quoted_path}' -Uninstall"
                 )
 
-                result = subprocess.run(
-                    [pwsh, "-NoProfile", "-NonInteractive", "-Command", command],
-                    cwd=REPO_ROOT,
-                    env=env,
-                    text=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    timeout=30,
-                    check=False,
-                )
+                result = self.run_pwsh(command, env)
 
                 self.assertEqual(result.returncode, 0, result.stdout)
                 after = json.loads(config.read_text(encoding="utf-8"))
@@ -409,10 +582,6 @@ class DesktopBridgeContractTests(InstallerHarness):
         self.assertNotIn("NODE_TLS_REJECT_UNAUTHORIZED", entry["env"])
 
     def test_powershell_installer_writes_the_same_pinned_bridge(self) -> None:
-        pwsh = shutil.which("pwsh")
-        if pwsh is None:
-            self.skipTest("pwsh is not installed")
-
         fake_npx = self._write_executable("npx.cmd", "#!/bin/sh\nexit 99\n")
         self._write_fake_node("node.exe")
         self._write_executable("mcp-remote.cmd", "#!/bin/sh\nexit 98\n")
@@ -427,16 +596,7 @@ class DesktopBridgeContractTests(InstallerHarness):
             f"& '{quoted_path}' -WireOnly -SkipCaTrust "
             "-SkipClient @('claude-code','codex','windsurf','devin')"
         )
-        result = subprocess.run(
-            [pwsh, "-NoProfile", "-NonInteractive", "-Command", command],
-            cwd=REPO_ROOT,
-            env=self.environment(),
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=30,
-            check=False,
-        )
+        result = self.run_pwsh(command, self.environment())
 
         self.assertEqual(result.returncode, 0, result.stdout)
         entry = json.loads(config.read_text(encoding="utf-8"))["mcpServers"][
@@ -495,9 +655,6 @@ class DesktopBridgeContractTests(InstallerHarness):
         self.assertIn("Refusing to wire Claude Desktop", result.stdout)
 
     def test_powershell_installer_refuses_disabled_tls_verification(self) -> None:
-        pwsh = shutil.which("pwsh")
-        if pwsh is None:
-            self.skipTest("pwsh is not installed")
         self._write_executable("npx.cmd", "#!/bin/sh\nexit 99\n")
         self._write_fake_node("node.exe")
         desktop_dir = self.root / "appdata" / "Claude"
@@ -513,16 +670,7 @@ class DesktopBridgeContractTests(InstallerHarness):
             f"& '{quoted_path}' -WireOnly -SkipCaTrust "
             "-SkipClient @('claude-code','codex','windsurf','devin')"
         )
-        result = subprocess.run(
-            [pwsh, "-NoProfile", "-NonInteractive", "-Command", command],
-            cwd=REPO_ROOT,
-            env=env,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=30,
-            check=False,
-        )
+        result = self.run_pwsh(command, env)
 
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertEqual(json.loads(config.read_text(encoding="utf-8")), {})
@@ -561,9 +709,6 @@ class DesktopBridgeContractTests(InstallerHarness):
         self.assertIn("minimum 20.18.1", result.stdout)
 
     def test_powershell_installer_refuses_unsupported_node(self) -> None:
-        pwsh = shutil.which("pwsh")
-        if pwsh is None:
-            self.skipTest("pwsh is not installed")
         self._write_executable("npx.cmd", "#!/bin/sh\nexit 99\n")
         self._write_fake_node("node.exe", "v18.20.8")
         desktop_dir = self.root / "appdata" / "Claude"
@@ -577,16 +722,7 @@ class DesktopBridgeContractTests(InstallerHarness):
             f"& '{quoted_path}' -WireOnly -SkipCaTrust "
             "-SkipClient @('claude-code','codex','windsurf','devin')"
         )
-        result = subprocess.run(
-            [pwsh, "-NoProfile", "-NonInteractive", "-Command", command],
-            cwd=REPO_ROOT,
-            env=self.environment(),
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=30,
-            check=False,
-        )
+        result = self.run_pwsh(command, self.environment())
 
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertEqual(json.loads(config.read_text(encoding="utf-8")), {})

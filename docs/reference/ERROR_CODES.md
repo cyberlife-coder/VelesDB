@@ -146,7 +146,7 @@ version incompatibility, or internal bugs:
 
 - **Variant**: `Query(String)`
 - **Message**: `Query error: {details}`
-- **Cause**: A VelesQL query failed to parse, validate, or execute. This wraps parse errors with position and context information, and also covers **query-shape and bind-parameter rejections** at execution time: an unsupported query shape (e.g. multiple `similarity()` under `OR`, `NEAR_FUSED` mixed with another vector predicate, `HAVING` without `GROUP BY`, an empty MATCH pattern) and a missing or malformed bind parameter (e.g. `$v` not provided, a sparse-vector parameter that is not a valid index/value map). USING FUSION misconfigurations carry the embedded validation code `V012` (`FusionMisconfigured`).
+- **Cause**: A VelesQL query failed to parse, validate, or execute. This wraps parse errors with position and context information, and also covers **query-shape and bind-parameter rejections** at execution time: an unsupported query shape (e.g. multiple `similarity()` under `OR`, `NEAR_FUSED` mixed with another vector predicate, `HAVING` without `GROUP BY`, an empty MATCH pattern) and a missing or malformed bind parameter (e.g. `$v` not provided, a sparse-vector parameter that is not a valid index/value map). USING FUSION misconfigurations carry the embedded validation code `V012` (`FusionMisconfigured`), and a `WITH (mode = ...)` that is not a string or names no search mode carries `V013` (`InvalidSearchMode`).
 - **Resolution**: Check the VelesQL syntax. Refer to `docs/VELESQL_SPEC.md` for the grammar specification. The error message includes the position of the parsing failure.
 - **Recoverable**: Yes
 

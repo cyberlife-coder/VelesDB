@@ -219,8 +219,13 @@ curl -X POST http://localhost:8080/v1/collections/demo/search \
 \* Recall@10 in `recall_benchmark` (10K random 128-D vectors, an index built with `HnswParams::max_recall`, 100 queries), measured 2026-09-10 on 6.0.0; see [BENCHMARKS.md](../BENCHMARKS.md#hnsw-recall-profiles-10k128d).
 
 [SEARCH_MODES.md](SEARCH_MODES.md) explains the latency/recall trade-off in
-detail. An unrecognized `mode` string is ignored (the collection default
-applies).
+detail. A `mode` the server cannot parse (a typo, or `adaptive` with `min`
+above `max`) is a `400` naming the accepted forms on `/search` and
+`/search/ids`, whatever the request's shape (dense, sparse, or both), and on
+each `/search/batch` entry, even where the mode is not applied. The search
+endpoints with no `mode` field (`/search/hybrid`, `/search/text`,
+`/search/multi`, `/search/multi/ids`, `/graph/search`) ignore it, as they
+ignore any field they do not know.
 
 ### Full-text (BM25)
 

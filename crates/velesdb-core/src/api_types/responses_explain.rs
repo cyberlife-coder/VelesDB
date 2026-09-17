@@ -59,7 +59,8 @@ pub struct ExplainResponse {
 /// `VectorFirst` undercounts via its `limit(1)` existence-BFS frontier and
 /// `Parallel` double-counts a node touched by both legs. The
 /// `traversal_counters_approximate` flag exposes this honesty contract in a
-/// machine-readable form (backlog #26), mirroring [`NodeStatsResponse::estimated`].
+/// machine-readable form (backlog #26), mirroring the `estimated` flag of
+/// `NodeStatsResponse`.
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct ActualStatsResponse {

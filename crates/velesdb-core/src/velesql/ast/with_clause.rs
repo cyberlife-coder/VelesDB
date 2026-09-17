@@ -86,9 +86,64 @@ impl WithClause {
     /// `quality` is an alias for `mode`; if both are set, `mode` takes precedence.
     #[must_use]
     pub fn get_mode(&self) -> Option<&str> {
-        self.get("mode")
-            .or_else(|| self.get("quality"))
-            .and_then(|v| v.as_str())
+        self.mode_value().and_then(WithValue::as_str)
+    }
+
+    /// The raw value `mode` asks for, `quality` being its alias, or `None`
+    /// when neither key is set. `mode` wins when both are set, and a key's
+    /// first entry when it repeats. This is the one reading of whether a query
+    /// names a mode: [`Self::get_mode`] and [`Self::search_quality`] read it.
+    /// A caller deciding whether to inject a default mode must test it rather
+    /// than [`Self::get_mode`], which is `None` for a value that is not a
+    /// string (#2267).
+    #[must_use]
+    pub fn mode_value(&self) -> Option<&WithValue> {
+        self.mode_values().next()
+    }
+
+    /// Every value the clause gives the mode, in the order
+    /// [`Self::mode_value`] prefers them: each `mode` entry, then each
+    /// `quality` one.
+    fn mode_values(&self) -> impl Iterator<Item = &WithValue> {
+        ["mode", "quality"].into_iter().flat_map(move |key| {
+            self.options
+                .iter()
+                .filter(move |opt| opt.key.eq_ignore_ascii_case(key))
+                .map(|opt| &opt.value)
+        })
+    }
+
+    /// The search quality `mode` asks for, `quality` being its alias, or
+    /// `None` when neither is set, as [`Self::mode_value`] reads them. Every
+    /// value the clause gives the mode is checked, even one another value
+    /// shadows: a value that is not a string, or a string that
+    /// [`crate::api_types::parse_search_mode`] cannot read, is an error naming
+    /// the accepted forms, never a silent fall-back to the default quality or
+    /// to another value (#2267).
+    ///
+    /// # Errors
+    ///
+    /// Returns the message to report for the first value given for the mode
+    /// that is not a string or names none of the accepted forms.
+    #[cfg(feature = "persistence")]
+    pub fn search_quality(&self) -> Result<Option<crate::SearchQuality>, String> {
+        let qualities = self
+            .mode_values()
+            .map(Self::parse_mode_value)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(qualities.first().copied())
+    }
+
+    /// Reads one value given for the mode as a search quality.
+    #[cfg(feature = "persistence")]
+    fn parse_mode_value(value: &WithValue) -> Result<crate::SearchQuality, String> {
+        let Some(mode) = value.as_str() else {
+            return Err(format!(
+                "Search mode must be a string. {}",
+                crate::api_types::SEARCH_MODE_FORMS
+            ));
+        };
+        crate::api_types::parse_search_mode(mode)
     }
 
     /// Gets ef_search if specified.

@@ -172,6 +172,28 @@ fn test_session_ef_search_injected_into_ast() {
     );
 }
 
+/// An inline `quality` that is not a string is an override too: the session
+/// mode must not be injected over it, so the query still fails with `V013`
+/// instead of running at the session mode (#2267).
+#[test]
+fn test_session_mode_is_not_injected_over_an_inline_quality() {
+    let session = SessionSettings::new();
+    for query in [
+        "SELECT * FROM docs WHERE vector NEAR [1.0, 2.0] WITH (quality = 5)",
+        "SELECT * FROM docs WHERE vector NEAR [1.0, 2.0] WITH (quality = true)",
+    ] {
+        let mut parsed = velesdb_core::velesql::Parser::parse(query).expect("parse");
+        crate::repl_execute::apply_session_settings(&mut parsed, &session);
+        let with = parsed
+            .select
+            .with_clause
+            .as_ref()
+            .expect("the WITH clause stays");
+        assert!(with.get("mode").is_none(), "no session mode over {query}");
+        assert!(with.search_quality().is_err(), "{query} must still fail");
+    }
+}
+
 /// Regression (parity backlog #19): an inline `WITH(ef_search=N)` must win over
 /// the session value (the session injects only when no inline override exists).
 #[test]

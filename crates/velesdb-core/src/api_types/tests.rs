@@ -552,6 +552,82 @@ fn test_mode_to_search_quality_unknown() {
 }
 
 // ============================================================================
+// E2. parse_search_mode: same parsing, but an unparseable mode is an Err (#2267)
+// ============================================================================
+
+#[cfg(feature = "persistence")]
+#[test]
+fn test_parse_search_mode_accepts_every_documented_form() {
+    use super::parse_search_mode;
+    use crate::SearchQuality;
+    assert!(matches!(parse_search_mode("fast"), Ok(SearchQuality::Fast)));
+    assert!(matches!(
+        parse_search_mode("balanced"),
+        Ok(SearchQuality::Balanced)
+    ));
+    assert!(matches!(
+        parse_search_mode("BALANCED"),
+        Ok(SearchQuality::Balanced)
+    ));
+    assert!(matches!(
+        parse_search_mode("accurate"),
+        Ok(SearchQuality::Accurate)
+    ));
+    assert!(matches!(
+        parse_search_mode("perfect"),
+        Ok(SearchQuality::Perfect)
+    ));
+    assert!(matches!(
+        parse_search_mode("autotune"),
+        Ok(SearchQuality::AutoTune)
+    ));
+    assert!(matches!(
+        parse_search_mode("auto_tune"),
+        Ok(SearchQuality::AutoTune)
+    ));
+    assert!(matches!(
+        parse_search_mode("auto"),
+        Ok(SearchQuality::AutoTune)
+    ));
+    assert!(matches!(
+        parse_search_mode("custom:256"),
+        Ok(SearchQuality::Custom(256))
+    ));
+    assert!(matches!(
+        parse_search_mode("adaptive:32:512"),
+        Ok(SearchQuality::Adaptive {
+            min_ef: 32,
+            max_ef: 512
+        })
+    ));
+    assert!(matches!(
+        parse_search_mode("adaptive:64:64"),
+        Ok(SearchQuality::Adaptive {
+            min_ef: 64,
+            max_ef: 64
+        })
+    ));
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn test_parse_search_mode_rejects_unknown_mode() {
+    use super::parse_search_mode;
+    let err = parse_search_mode("acurate").expect_err("typo should be rejected");
+    assert!(err.contains("acurate"));
+    assert!(err.contains("balanced"), "error should name valid values");
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn test_parse_search_mode_rejects_bare_adaptive() {
+    use super::parse_search_mode;
+    // `adaptive` without its `<min_ef>:<max_ef>` bounds is unparseable, same
+    // as any other unknown mode — it does not fall back to a default range.
+    assert!(parse_search_mode("adaptive").is_err());
+}
+
+// ============================================================================
 // Additional edge-case tests for response serialization
 // ============================================================================
 
