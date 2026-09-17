@@ -107,7 +107,7 @@ collection.upsert([
     {"id": 1, "vector": [0.1, 0.2, 0.3, 0.4], "payload": {"key": "value"}}
 ])
 
-# Bulk insert (optimized for high-throughput - 3-7x faster)
+# Bulk insert (optimized for high throughput)
 # Uses parallel HNSW insertion + single flush at the end
 collection.upsert_bulk([
     {"id": i, "vector": vectors[i].tolist()} for i in range(10000)
@@ -405,7 +405,7 @@ collection = db.create_collection("sq8", dimension=768, storage_mode="sq8")
 # Binary quantization - 1 bit per dimension (32x compression)
 collection = db.create_collection("binary", dimension=768, storage_mode="binary")
 
-# Product quantization - 8-32x compression, best for large-scale datasets
+# Product quantization - compression of 2 × dim / m (dim/4 at the default m = 8), best for large-scale datasets
 collection = db.create_collection("pq", dimension=768, storage_mode="pq")
 
 # RaBitQ - 32x compression with scalar correction, best for high-compression with good recall
@@ -417,7 +417,7 @@ collection = db.create_collection("rabitq", dimension=768, storage_mode="rabitq"
 | `full` | `f32` | 3,072 bytes | 1x | Maximum accuracy |
 | `sq8` | `int8` | 768 bytes | 4x | Good accuracy/memory balance |
 | `binary` | `bit` | 96 bytes | 32x | Edge/IoT, massive scale |
-| `pq` | `product_quantization`, `product-quantization` | 96-384 bytes | 8-32x | Large-scale datasets, lossy |
+| `pq` | `product_quantization`, `product-quantization` | 16 bytes at the default m = 8 (`2 × m`), plus the codebook | 192x at m = 8 (`2 × dim / m`) | Large-scale datasets, lossy |
 | `rabitq` | — | 96 bytes | 32x | High-compression with good recall |
 
 Canonical names and aliases are interchangeable: `storage_mode="f32"` is
@@ -427,10 +427,13 @@ equivalent to `storage_mode="full"`.
 
 For large-scale data import, use `upsert_bulk()` instead of `upsert()`:
 
-| Method | 10k vectors (768D) | Notes |
-|--------|-------------------|-------|
-| `upsert()` | ~47s | Flushes after each batch |
-| `upsert_bulk()` | **~3s** | Single flush + parallel HNSW |
+| Method | Notes |
+|--------|-------|
+| `upsert()` | Flushes after each batch |
+| `upsert_bulk()` | Single flush + parallel HNSW |
+
+No recorded run times these two at 10K × 768D; the measured Python insert rate
+(10K × 384D, `upsert`) is in [PYTHON_PERFORMANCE.md](PYTHON_PERFORMANCE.md).
 
 ```python
 # Recommended for bulk import

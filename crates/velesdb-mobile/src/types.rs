@@ -114,13 +114,13 @@ impl From<DistanceMetric> for CoreDistanceMetric {
 pub enum StorageMode {
     /// Full f32 precision (4 bytes/dimension). Best recall.
     Full,
-    /// SQ8: 8-bit scalar quantization (1 byte/dimension). 4x compression, ~1% recall loss.
+    /// SQ8: 8-bit scalar quantization (1 byte/dimension). 4x compression, small recall loss.
     Sq8,
-    /// Binary: 1-bit quantization (1 bit/dimension). 32x compression, ~5-10% recall loss.
+    /// Binary: 1-bit quantization (1 bit/dimension). 32x compression, larger recall loss.
     Binary,
-    /// Product Quantization (PQ): aggressive lossy compression (8x-16x typical).
+    /// Product Quantization (PQ): lossy compression, `2 × dim / m` smaller than f32 for m subspaces (dim/4 at m = 8).
     ProductQuantization,
-    /// `RaBitQ`: 1-bit with rotation + scalar correction. 32x compression, ~1-2% recall loss.
+    /// `RaBitQ`: 1-bit with rotation + scalar correction. 32x compression, small recall loss.
     Rabitq,
 }
 

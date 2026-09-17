@@ -1,5 +1,5 @@
 # VelesDB Benchmark Dockerfile
-# Uses pre-compiled binary to avoid Rust nightly dependency issues
+# Runs a pre-compiled binary: this image builds no Rust
 #
 # Prerequisites: cargo build --release --bin velesdb-server
 

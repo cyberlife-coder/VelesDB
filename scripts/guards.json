@@ -407,6 +407,37 @@
       ]
     },
     {
+      "script": "scripts/check-figure-sources.py",
+      "purpose": "Every performance figure in the docs and the rustdoc is registered in the promise contract with the run behind it.",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "lint",
+      "required": true,
+      "mode": "strict",
+      "self_test": "scripts.tests.test_check_figure_sources",
+      "self_test_required": true,
+      "blind_spot": {
+        "issue": null,
+        "summary": "A heuristic by design: it recognizes a figure by its unit together with a keyword, a verb or a table context (below the millisecond, the unit alone). A number written with no unit and no such word, or a figure drawn in an image, passes unseen; the promise contract, not this guard, is what binds a figure to its run."
+      },
+      "must_refuse": [
+        {
+          "vector": "a bare quantity in a code span that no claim registers, the shape README.md hid until #2266",
+          "files": {
+            "docs/reference/promise-contract.json": "{\"claims\": []}\n",
+            "docs/guides/G.md": "The scan ends at `ColumnStore 29.5 us`.\n"
+          },
+          "accepts": {
+            "docs/reference/promise-contract.json": "{\"claims\": [{\"file\": \"docs/guides/G.md\", \"must_contain\": \"`ColumnStore 29.5 us`\"}]}\n",
+            "docs/guides/G.md": "The scan ends at `ColumnStore 29.5 us`.\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        }
+      ]
+    },
+    {
       "script": "scripts/check-mcp-doc-contract.py",
       "purpose": "Documented MCP return shapes match the published outputSchema.",
       "workflow": ".github/workflows/ci.yml",

@@ -23,8 +23,8 @@ comment stated the textbook `AP = (1/R)·Σ P(k)·rel(k)` with `R` the total
 relevant in the corpus.
 
 The two disagree exactly where the metric earns its keep. Retrieving **1 of
-10** relevant documents, at rank 1, scored a flawless `AP = 1.0` — 10 %
-recall reported as perfect. A ranking metric blind to what it missed always
+10** relevant documents, at rank 1, scored a flawless `AP = 1.0` — a recall of one
+in ten reported as perfect. A ranking metric blind to what it missed always
 flatters a system that returns one confident result and stops.
 
 `&[bool]` over retrieved positions cannot express `R`, so the signature had

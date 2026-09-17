@@ -21,14 +21,14 @@
 //!
 //! ```bash
 //! # Integration models (tests/loom_tests.rs):
-//! cargo test -p velesdb-core --features loom,persistence --test loom_tests
+//! LOOM_MAX_PREEMPTIONS=3 RUSTFLAGS="--cfg loom" cargo test -p velesdb-core --features loom,persistence --test loom_tests -- --test-threads=1
 //! # Storage models (src/storage/loom_tests.rs, a unit-test target):
-//! cargo test -p velesdb-core --features loom,persistence --lib storage::loom
+//! LOOM_MAX_PREEMPTIONS=3 RUSTFLAGS="--cfg loom" cargo test -p velesdb-core --features loom,persistence storage::loom -- --test-threads=1
 //! ```
 //!
-//! CI runs the same models on a schedule with `RUSTFLAGS="--cfg loom"` set
-//! explicitly (`quality-deep.yml`); the build.rs makes local runs work without
-//! it. Note: these validate hand-written loom *models* of the lock ordering,
+//! These are the commands CI runs on a schedule (`quality-deep.yml`); their
+//! `RUSTFLAGS="--cfg loom"` is redundant with the build.rs bridge, and
+//! harmless. Note: these validate hand-written loom *models* of the lock ordering,
 //! not the production `parking_lot`/`dashmap` types directly.
 //!
 //! # EPIC-023: Loom Concurrency Testing

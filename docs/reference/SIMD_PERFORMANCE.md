@@ -27,13 +27,16 @@ The `simd_native` module provides hand-tuned SIMD implementations using `core::a
 
 ## Architecture Support
 
-| Platform | Implementation | Instructions | Performance (768D) |
-|----------|----------------|-------------|-------------------|
-| **x86_64 AVX-512** | simd_native | 512-bit 8/4-acc | ~38-42ns |
-| **x86_64 AVX2+FMA** | simd_native | 256-bit 4/1-acc | ~40-82ns |
-| **aarch64** | simd_native | NEON 128-bit | ~60-100ns |
-| **WASM** | scalar fallback (SIMD128 planned) | Native Rust | see Fallback |
-| **Fallback** | Scalar | Native Rust | ~150-200ns |
+| Platform | Implementation | Instructions | Measured (768D) |
+|----------|----------------|-------------|-----------------|
+| **x86_64 AVX-512** | simd_native | 512-bit 8/4-acc | not measured |
+| **x86_64 AVX2+FMA** | simd_native | 256-bit 4/1-acc | [Distance Functions](#distance-functions-768d-vectors) |
+| **aarch64** | simd_native | NEON 128-bit | not measured |
+| **WASM** | scalar fallback (SIMD128 planned) | Native Rust | not measured |
+| **Fallback** | Scalar | Native Rust | not measured |
+
+No recorded run gives the ranges this table used to show; the one platform
+measured is the AVX2+FMA reference machine, below.
 
 ### Tiered Dispatch Strategy (EPIC-077)
 
@@ -161,7 +164,7 @@ inference).
 - `velesdb simd info` prints a static summary rather than the detected
   runtime level.
 
-## Performance Benchmarks (March 27, 2026)
+## Performance Benchmarks (March 2026)
 
 ### Distance Functions (768D vectors)
 
@@ -170,21 +173,23 @@ inference).
 | `dot_product_native` | **19.8ns** | 38.8 Gelem/s | Baseline |
 | `euclidean_native` | **22.5ns** | 34.1 Gelem/s | Improved |
 | `cosine_similarity_native` | **33.1ns** | 23.2 Gelem/s | Optimized (4-acc, single-sqrt finish) |
-| `cosine_normalized_native` | **19.8ns** | 38.8 Gelem/s | Same as dot |
-| `hamming_distance_native` | **35.8ns** | 21.5M ops/s | FP-domain 4-acc (no cross-domain penalty) + NEON + batch |
+| `cosine_normalized_native` | — | — | Calls `dot_product_native`: the same kernel, not timed on its own |
+| `hamming_distance_native` | **35.8ns** | 21.5 Gelem/s | FP-domain 4-acc (no cross-domain penalty) + NEON + batch |
 | `jaccard_similarity_native` | **35.1ns** | 21.9 Gelem/s | Optimized (4-acc + NEON + batch) |
 
-*Measured March 27, 2026 on i9-14900KF (24C/32T, AVX2+FMA), 64GB DDR5, Rust 1.92.0, Windows 11 Pro, sequential run on idle machine.*
+*`dot_product_native` was measured March 27, 2026 (commit 126d5a9a), the euclidean, cosine, hamming and jaccard rows March 24, 2026 (commit dd0d2457); both runs on i9-14900KF (24C/32T, AVX2+FMA), 64GB DDR5, Windows 11 Pro, sequential on an idle machine. Throughput is 768 divided by the latency.*
 
 ### Scaling by Dimension (simd_native)
 
-| Dimension | Cosine | Dot Product | Model |
-|-----------|--------|-------------|-------|
-| 128 | 8.1ns | 5.4ns | MiniLM |
-| 384 | 20.1ns | 12.0ns | all-MiniLM-L6-v2 |
-| 768 | 33.1ns | 19.8ns | BERT, ada-002 |
-| 1536 | 69.0ns | 43.8ns | text-embedding-3-small |
-| 3072 | 112.2ns | 91.2ns | text-embedding-3-large |
+| Dimension | Cosine | Dot Product | Model | Run |
+|-----------|--------|-------------|-------|-----|
+| 128 | 8.1ns | 5.4ns | MiniLM | 2026-03-19 |
+| 384 | 20.1ns | 12.0ns | all-MiniLM-L6-v2 | 2026-03-19 |
+| 768 | 33.1ns | 19.8ns | BERT, ada-002 | cosine 2026-03-24, dot product 2026-03-27 |
+| 1536 | 69.0ns | 43.8ns | text-embedding-3-small | 2026-03-19 |
+| 3072 | 112.2ns | 91.2ns | text-embedding-3-large | 2026-03-19 |
+
+*Three runs on the i9-14900KF: the March 19, 2026 run (release commit 92cc35bd) for every row but 768, which takes the two runs of the table above. Compare dimensions only within one run.*
 
 ## Optimization Techniques
 
@@ -209,7 +214,7 @@ for i in 0..simd_len {
 **Why it works:**
 - Modern CPUs have 4+ FMA units (Zen 3+, Alder Lake+)
 - Out-of-order execution can run all 4 accumulators in parallel
-- ~15-20% faster than single-accumulator SIMD
+- No recorded run measures the gain over a single accumulator
 
 ### 2. Pre-Normalized Vectors
 
@@ -219,7 +224,7 @@ For cosine similarity with pre-normalized vectors:
 // Standard cosine: fused single pass over dot and both norms
 pub fn cosine_similarity_native(a: &[f32], b: &[f32]) -> f32;
 
-// Normalized: 1 pass (dot only) - 40% faster!
+// Normalized: 1 pass (dot only) - it calls dot_product_native
 pub fn cosine_normalized_native(a: &[f32], b: &[f32]) -> f32;
 ```
 
@@ -241,7 +246,7 @@ unsafe {
 
 **Benefits:**
 - Hides memory latency during HNSW traversal
-- ~10-20% improvement on large datasets
+- Gain on large datasets not measured here
 - Critical for cold cache scenarios
 
 ### 4. Contiguous Memory Layout
@@ -263,11 +268,13 @@ pub struct ContiguousVectors {
 
 On Intel Skylake-X and later CPUs, AVX-512 instructions incur a significant **warmup cost**:
 
-| Phase | Cycles | Time @ 4GHz |
-|-------|--------|-------------|
-| License transition | ~20,000 | ~5μs |
-| Register file power-up | ~36,000 | ~9μs |
-| **Total warmup** | **~56,000** | **~14μs** |
+| Phase | Cycles |
+|-------|--------|
+| License transition | ~20,000 |
+| Register file power-up | ~36,000 |
+| **Total warmup** | **~56,000** |
+
+At 4 GHz, 4,000 cycles take one microsecond.
 
 ### Why This Matters
 

@@ -136,7 +136,7 @@ Compile-time features (`Cargo.toml`):
 | `update-check` | off | HTTP client for automatic version checking |
 | `internal-bench` | off | Exposes internal hooks used by some benches |
 | `bench-sift1m` | off | SIFT1M benchmark. Links `ureq`/TLS as a **regular** dependency — never enable in a shipping build |
-| `loom` | off | Loom concurrency testing (nightly only) |
+| `loom` | off | Loom concurrency testing (built with `--cfg loom`) |
 | `test-fault-injection` | off | RAII guards forcing internal failures in tests. Never enable in production |
 
 Runtime settings (HNSW parameters, limits, storage, logging) are read from
@@ -185,7 +185,8 @@ hardware and its reproduction command live in
 | Native HNSW search with AVX-512/AVX2/NEON SIMD | **450µs p50** end-to-end | 10K points, 384D, WAL on, recall ≥ 96% |
 | `ColumnStore` filtering vs. scanning JSON payloads | up to **130x** faster | integer equality, 100K rows |
 
-Reproduce with `cargo bench -p velesdb-core --bench hnsw_benchmark` and
+Reproduce the first with `python benchmarks/velesdb_benchmark.py --recall`
+(measured 2026-03-27 on 1.7.2, when Balanced ran at ef 128), the second with
 `cargo bench -p velesdb-core --bench column_filter_benchmark`.
 
 Numbers move with hardware and dataset. Treat them as the shape of the
@@ -225,7 +226,7 @@ the platforms and toolchains the project builds and tests on.
 | Windows `x86_64` (MSVC) | Supported | CI: `--all-features` check on `windows-latest` |
 | macOS aarch64 / `x86_64` | Supported | Release pipeline builds both Darwin targets |
 | `wasm32-unknown-unknown` | Supported, restricted | CI checks `--no-default-features` only; no filesystem persistence |
-| Rust nightly | Build-checked | Only for the `loom` concurrency feature |
+| Rust nightly | Scheduled deep-quality jobs only | Miri, fuzzing, `ThreadSanitizer` and cargo-careful; every other build uses `rust-toolchain.toml` |
 
 ## Troubleshooting
 

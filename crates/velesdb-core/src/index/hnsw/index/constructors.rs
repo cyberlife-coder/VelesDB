@@ -40,8 +40,8 @@ impl HnswIndex {
     ///
     /// # Performance
     ///
-    /// - **~2-3x faster inserts** than `new()` (M/2, ef/2)
-    /// - **Recall**: ~90% (vs ≥95% with standard params)
+    /// - **Faster inserts** than `new()` (M/2, ef/2; measured in `docs/BENCHMARKS.md`)
+    /// - **Recall**: lower than with `new()`'s parameters (not measured)
     ///
     /// # Limitations
     ///
@@ -86,9 +86,9 @@ impl HnswIndex {
     ///
     /// # Trade-offs
     ///
-    /// - **~3-5x faster inserts** than `new()` (M=12, ef=100 vs `auto()`'s
-    ///   M=24/300 up to 256 dims, M=32/400 above)
-    /// - **Recall**: ~85% (vs ≥95% with standard params)
+    /// - **Faster inserts** than `new()` (M=12, ef=100 vs `auto()`'s
+    ///   M=24/300 up to 256 dims, M=32/400 above; measured in `docs/BENCHMARKS.md`)
+    /// - **Recall**: lower than with `new()`'s parameters (not measured)
     /// - **Best for**: Bulk loading, development, benchmarking
     ///
     /// After bulk loading, consider rebuilding with higher params for production.

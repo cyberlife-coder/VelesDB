@@ -7,23 +7,24 @@
 //!
 //! # Design
 //!
-//! - 64 buckets covering 1µs to ~18 hours (log2 scale)
+//! - 64 buckets, one per power of two of the value in microseconds (log2 scale)
 //! - Each bucket is an `AtomicU64` counter
 //! - `record()` is wait-free (single atomic increment)
 //! - `percentile()` requires reading all buckets (still lock-free)
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Number of histogram buckets (covers 1µs to ~18h with log2 scale).
+/// Number of histogram buckets: one per power of two of a `u64` value.
 const NUM_BUCKETS: usize = 64;
 
 /// Lock-free histogram for latency measurements.
 ///
 /// Uses logarithmic bucketing for memory efficiency while maintaining
-/// accuracy across a wide range of latencies (1µs to hours).
+/// accuracy across a wide range of latencies, from microseconds to hours.
 #[derive(Debug)]
 pub struct LockFreeHistogram {
-    /// Bucket counters (log2 scale, each bucket is 2x the previous)
+    /// Bucket counters on a log2 scale: bucket `i` counts the values in
+    /// `[2^i, 2^(i+1))` (bucket 0 also counts 0).
     buckets: [AtomicU64; NUM_BUCKETS],
     /// Total count of all recorded values
     count: AtomicU64,

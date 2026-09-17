@@ -1,5 +1,7 @@
-# Build stage
-FROM rust:1.98-bookworm AS builder
+# Build stage. Unversioned on purpose: the image carries rustup and a stable
+# toolchain this build does not use; the build runs on the toolchain
+# rust-toolchain.toml pins, installed below.
+FROM rust:bookworm AS builder
 
 LABEL maintainer="VelesDB Team <contact@wiscale.fr>"
 LABEL version="6.0.0"
@@ -12,6 +14,11 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
     pkg-config \
     libssl-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# The toolchain rust-toolchain.toml pins -- the one CI tests -- installed
+# from that file before anything reaches cargo.
+COPY rust-toolchain.toml ./
+RUN rustup toolchain install --no-self-update --profile minimal
 
 # Copy manifests and source
 COPY Cargo.toml Cargo.lock ./

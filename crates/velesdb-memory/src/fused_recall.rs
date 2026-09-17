@@ -145,8 +145,8 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     /// pool (before the final `k` cutoff) to `reranker` for a second-stage
     /// re-score, then truncates to `k`. Closes the ranking-miss gap the
     /// `LoCoMo` ceiling diagnostic found: a relevant fact can be IN the pool
-    /// (recall@64 ≈ 89% on multi-hop) yet outranked out of a tight `k`
-    /// (recall@8 ≈ 50%) — a reranker recovers it without widening `k` itself.
+    /// (multi-hop recall@64 far above recall@8) yet outranked out of a tight
+    /// `k` — a reranker recovers it without widening `k` itself.
     ///
     /// No built-in reranker ships: bring your own (cross-encoder, LLM judge,
     /// …) via [`Reranker`]. Never call this as a default — a reranker can

@@ -1,6 +1,6 @@
 # VelesDB Performance Benchmarks
 
-*Last updated: 2026-09-10 · Applies to: velesdb-core 6.0.0. Figures are re-validated at each release only when re-measured — each section carries its own measurement date and machine; this stamp tracks the document revision, not a fresh measurement.*
+*Last updated: 2026-09-13 · Applies to: velesdb-core 6.0.0. Figures are re-validated at each release only when re-measured — each section carries its own measurement date and machine; this stamp tracks the document revision, not a fresh measurement.*
 
 ---
 
@@ -72,27 +72,28 @@ Product Quantization (PQ) trades recall for memory compression and faster approx
 
 | Mode | Recall@10 | Search Latency (50 queries) | Per-Query |
 |------|-----------|----------------------------|-----------|
-| **Full Precision** | 87.6% | 19.1 ms | 382 us |
-| **PQ (m=8, k=256, rescore)** | (needs re-measure; PQ-07 contract asserts recall>=0.92) | 30.6 ms | 612 us |
+| **Full Precision** | 98.4% | 19.1 ms ² | 382 us ² |
+| **PQ (m=8, k=256, rescore)** | (needs re-measure; PQ-07 contract asserts recall>=0.92) | 30.6 ms ² | 612 us ² |
 
 Notes:
-- Full-precision recall is 87.6% (not 100%) because HNSW is approximate search.
+- Full-precision recall@10 is 98.4% on this uniform-random setup (not 100%, because HNSW is approximate search), from the run recorded by commit e35d9612 on 2026-03-08, which moved the benchmark to uniform-random data and restored its >= 0.95 assert. The figure this row showed before came from the clustered data the benchmark generated until the day before (7f05d0f0).
+- ² The latencies come from that earlier clustered-data run (2026-03-07, commit 7f05d0f0, when the PQ row let the benchmark choose m and k automatically) and have not been re-measured on the current setup.
 - The PQ recall@10 cell needs re-measurement; the PQ-07 contract asserts recall>=0.92, so the prior 30.6% figure was an obsolete artifact rather than a representative result.
 - Rescore oversampling (default 4x) is applied.
 
 ### PQ vs SQ8 vs Full HNSW Latency (pq_hnsw_benchmark)
 
-**Setup:** 2,000 vectors, 64D, L2 distance, top-20 search.
+**Setup:** 2,000 vectors, 64D, L2 distance, top-20 search. Recorded by commit 7f05d0f0 (2026-03-07), which added this table together with the Test Environment above.
 
 | Storage Mode | Search Latency | Recall@50 | Compression |
 |--------------|---------------|-----------|-------------|
 | **Full Precision** | 24.9 us | baseline | 1x |
 | **SQ8** | 25.2 us | 100% | 4x |
-| **PQ** | 257.6 us | 68.0% | ~16-32x |
+| **PQ** | 257.6 us | 68.0% | 16x (64D, m = 8) |
 
 Key findings:
 - **SQ8 is the best general-purpose mode**: zero recall loss with 4x compression and identical latency.
-- PQ search is slower due to ADC (Asymmetric Distance Computation) table lookups, but delivers 16--32x compression for memory-constrained deployments.
+- PQ search is slower due to ADC (Asymmetric Distance Computation) table lookups, but delivers 16x compression at 64D (m = 8) for memory-constrained deployments.
 - PQ recall improves significantly with higher dimensionality (256D+) and OPQ rotation.
 
 *Run `cargo bench -p velesdb-core --bench pq_recall_benchmark -- --noplot` to regenerate recall numbers.*
@@ -161,21 +162,23 @@ The RRF fusion step is a simple score merge with no distance computation, so hyb
 | **Search k=10** (10K/768D) | 47.0 µs | 21.3K QPS |
 | **Search k=50** | 63.5 µs | -- |
 | **Search k=100** | 151.5 µs | -- |
-| **Insert 1K x 768D** (sequential) | 263.7 ms | 3.8K vec/s |
-| **Parallel Insert 1K x 768D** | 156.5 ms | 6.4K vec/s |
-| **Parallel Insert 10K x 768D** | 2.26 s | 4.4K vec/s |
+| **Insert 1K x 768D** (sequential) | 299.79 ms | 3.3K vec/s |
+| **Parallel Insert 1K x 768D** | 25.01 ms | 40.0K vec/s |
+| **Parallel Insert 10K x 768D** | 281.23 ms | 35.6K vec/s |
+
+*The Search k=10 row and its QPS were measured March 27, 2026 on the reference machine (commit 126d5a9a). The k=50 and k=100 rows come from the v1.6.0 release run (commit 92cc35bd, March 20, 2026, idle i9-14900KF). The three insert rows are the "Current" column (commit 4eb1c1f0, after PR #363 and #365) of [`benchmarks/results/pr363_365_comparison.md`](../benchmarks/results/pr363_365_comparison.md) §1–2, measured March 23, 2026 on the i9-14900KF, quiet machine (`hnsw_insert` and `hnsw_insert_parallel`). They replace the v1.6.0 insert rows, which measured the parallel path before #363's batch-insert pipeline. Commit fc1e3fe1 (#2271) has since slowed parallel builds; no run re-measures these rows.*
 
 ### HNSW Recall Profiles (10K/128D)
 
-| Profile | ef_search | Recall@10 | Latency P50 |
-|---------|-----------|-----------|-------------|
-| Fast | 96 | 97.4% | 36 us |
-| Balanced | 160 | 99.8% | 57 us |
-| Accurate | 512 | 100.0% | 130 us |
-| Perfect | exhaustive | 100.0% | 200 us |
-| Adaptive | 32, then 64 if hard | — | — |
+| Profile | ef_search | Recall@10 |
+|---------|-----------|-----------|
+| Fast | 96 | 97.4% |
+| Balanced | 160 | 99.8% |
+| Accurate | 512 | 100.0% |
+| Perfect | exhaustive | 100.0% |
+| Adaptive | 32, then 64 if hard | — |
 
-*Recall values from `recall_benchmark`'s recall report (10K random 128-D vectors, Cosine, an index built with `HnswParams::max_recall`: M=32, ef_construction=500; 100 queries, k=10), re-measured 2026-09-10 on 6.0.0 (Apple M5 Pro) at the current presets; two runs gave the same figures. Neither that report nor the March run records the Adaptive row, so it carries no figure (#2266). Latencies were measured March 19, 2026, on the reference machine with the ef defaults of that time (Fast=64, Balanced=128), so the Fast and Balanced latencies are slightly optimistic until re-measured there. ef_search values are base values (scaled with k).*
+*Recall values from `recall_benchmark`'s recall report (10K random 128-D vectors, Cosine, an index built with `HnswParams::max_recall`: M=32, ef_construction=500; 100 queries, k=10), re-measured 2026-09-10 on 6.0.0 (Apple M5 Pro) at the current presets; two runs gave the same figures. Neither that report nor the March run records the Adaptive row, so it carries no figure (#2266). No recorded run measures latency at these presets, so the table shows none: the latency column it carried was attributed to the March 19, 2026 run, but its figures were already in this file when commit 92cc35bd recorded that run, which left them unchanged, and they date from ef values no row uses today (Fast 64, Balanced 128, Accurate 256, Perfect as HNSW at ef 2048). ef_search values are base values (scaled with k).*
 
 Recall@10 >= 95% is the design target for Balanced mode and above: the 10K table above measures Balanced at 99.8%, and at 1M §11.3 measures Accurate at 0.98 — a measured target, not a hard guarantee, since HNSW is an approximate index. The **Adaptive** mode starts with a low ef and escalates only for hard queries; its median-latency gain has no recorded measurement here. Use `HnswParams::for_dataset_size()` for automatic parameter tuning.
 
@@ -193,6 +196,18 @@ Three changes eliminated lock contention in `Collection::upsert()`:
 3. **Batch I/O** — Vectors and payloads are written via `store_batch()` (1 WAL write + 1 flush each) instead of N individual `store()` calls with N fsyncs.
 
 Local measurement (i9-14900KF, 10K vectors, 384D): upsert throughput ~808 vec/s before, ~16,151 vec/s after. The upsert/bulk ratio dropped from ~19x to ~1x.
+
+### Index Constructor Insert Speed
+
+*Measured 2026-03-23 on the 1.6.0 tree (commit 4eb1c1f0), Intel Core i9-14900KF, 64 GB, Windows 11 Pro, quiet machine: `hnsw_benchmark`'s `hnsw_insert_fast` group, 1K × 768D sequential inserts, Criterion. Source: [`benchmarks/results/pr363_365_comparison.md`](../benchmarks/results/pr363_365_comparison.md) §1.*
+
+| Constructor | Parameters at 768D | Insert 1K × 768D | vs `new` |
+|-------------|--------------------|------------------|----------|
+| `HnswIndex::new` | `auto()`: M=32, ef_construction=400 | 275.08 ms | baseline |
+| `HnswIndex::new_fast_insert` | `fast_indexing()`: M=16, ef_construction=200 | 99.60 ms | 2.8x faster |
+| `HnswIndex::new_turbo` | `turbo()`: M=12, ef_construction=100 | 55.68 ms | 4.9x faster |
+
+The three parameter formulas are unchanged since that run. No run measures these constructors' recall.
 
 ---
 
@@ -231,11 +246,13 @@ execution.
 | **Cache Hit** | **1.08 µs** | **926K QPS** |
 | EXPLAIN Plan (simple) | 65.4 ns | 15.3M QPS |
 
-*Measured March 19, 2026, sequential run on idle machine.*
+*Measured March 19, 2026, sequential run on idle machine; the Cache Hit row was re-measured March 24, 2026 (commit dd0d2457).*
 
 ---
 
 ## 8. Graph (EdgeStore)
+
+*Recorded by commit 69638b38 (2026-03-11, 1.5.1), whose run re-measured every benchmark on the i9-14900KF with Rust 1.92.0.*
 
 | Operation | Latency |
 |-----------|---------|
@@ -264,6 +281,8 @@ execution.
 
 ### Filtered Search — Bitmap Pre-filter V2 (Issue #487)
 
+*Recorded by commit 8939a728 (2026-04-03, 1.11.0), which names no machine.*
+
 | Selectivity | Latency | Strategy |
 |-------------|---------|----------|
 | **1% (rare)** | 32 µs | Full-scan brute-force |
@@ -272,6 +291,8 @@ execution.
 | **Unfiltered baseline** | 83 µs | Reference |
 
 ### Bulk Insert V2 (Issue #488)
+
+*`bulk_insert_v2_benchmark`: 10,000 vectors of 16 dimensions (its `DIMENSION`), recorded by commit 8939a728 (2026-04-03), which names no machine.*
 
 | Operation | Latency | Throughput |
 |-----------|---------|------------|
@@ -348,11 +369,17 @@ architectures without a reproducible side-by-side harness — see above.
 
 ## 10. Performance Targets by Scale
 
-| Dataset Size | Search P99 | Recall@10 | Status |
-|--------------|------------|-----------|--------|
-| 10K vectors | < 1 ms | >= 98% | Achieved |
-| 100K vectors | < 5 ms | >= 95% | Achieved (96.1%) |
-| 1M vectors | < 50 ms | >= 95% | Target |
+These are targets, not measurements: no recorded run measures search P99 at
+any of these scales, and recall is measured in §5 (10K) and §11.3 (1M). The
+100K row used to read "Achieved (96.1%)"; that recall came from a Docker run
+recorded by commit 32bfd2df (2026-03-07) whose P99 was far above the 5 ms
+target, so it met the row's recall target, not its latency target.
+
+| Dataset Size | Search P99 target | Recall@10 target |
+|--------------|-------------------|------------------|
+| 10K vectors | < 1 ms | >= 98% |
+| 100K vectors | < 5 ms | >= 95% |
+| 1M vectors | < 50 ms | >= 95% |
 
 ---
 
@@ -382,7 +409,7 @@ Section 9 explains why VelesDB does not currently publish head-to-head competito
 
 First reproducible run, **VelesDB v3.3.0** (M=16, ef_construction=200, L2), full 1M base × 10K queries. Host: **Apple Silicon (M-series, ARM64/NEON), rustc release build**, measured on an **otherwise-idle machine, single bench process** (Criterion 20-sample with 95% CIs; latency stable within ±1% run-to-run). The i9-14900KF `target-cpu=native` reference run is tracked separately — latency is hardware-specific; **recall is hardware-independent**, so the recall columns are portable.
 
-**Plain-HNSW path** (`search_raw`, fixed `ef_search`, no reranking — the apples-to-apples methodology comparable to the libraries below):
+**Plain-HNSW path** (`search_raw`, fixed `ef_search`, no reranking — the apples-to-apples methodology comparable to the SIFT1M numbers HNSWlib, Faiss or ScaNN publish):
 
 | ef_search | Recall@10 | p50 latency (Criterion median) |
 |-----------|-----------|--------------------------------|
@@ -403,18 +430,15 @@ Notes:
 - Recall climbs monotonically with `ef_search`; ef=128 (0.9435) clears the ≥ 0.90 regression floor (§11.5) with margin.
 - ¹ **This row is `Perfect`, an exhaustive scan.** It comes from `sift1m_recall.rs` (#1225), whose quality report calls `HnswIndex::search_with_quality(…, Perfect)`: that returns `search_brute_force` over every stored vector before any ef is computed. The `~8192` the row used to show was `Perfect.ef_search_for_scale(10, 1M)`, a computed label, not an effort that ran. Why an exhaustive scan scores 0.9994 rather than 1.0 against SIFT1M's ground truth is not established: distance ties among SIFT's integer-valued vectors, broken differently from the ground truth, and f32 rounding are candidates, not measured causes. A collection refuses `Perfect` at 1M under the default `limits.max_perfect_mode_vectors` (500 000); this bench calls `HnswIndex` directly, which has no cap.
 
-Literature reference points (published by the respective libraries on similar hardware — **not VelesDB numbers**, orientation only):
-
-| Library | Config | Recall@10 | Per-query latency |
-|---------|--------|-----------|-------------------|
-| HNSWlib | M=16, ef=128 | ≈ 0.99 | ≈ 0.1–0.3 ms |
-| Faiss IVF+PQ | nlist=1024, nprobe=16 | 0.85–0.95 | ≈ 0.5–1 ms |
-| ScaNN | default | 0.98–0.99 | ≈ 0.1–0.2 ms |
+Other libraries' SIFT1M figures are not reproduced here: this section cited no
+source for the ones it used to show, and none was re-measured on this harness.
+Compare against the numbers each library publishes for its own configuration
+(§9).
 
 ### 11.4 How to run
 
 ```bash
-# One-shot: download + index + measure (first run ≈ 3–5 min)
+# One-shot: download + index + measure (the first run downloads SIFT1M)
 cargo bench -p velesdb-core --bench sift1m_recall --features bench-sift1m
 
 # Using pre-downloaded data (offline / CI runner):
@@ -433,7 +457,7 @@ cargo bench -p velesdb-core --bench sift1m_recall --features bench-sift1m 2>&1 \
 ### 11.5 How to interpret
 
 - **Recall@10 < 0.90 at ef=128** → HNSW quality regression. Block the merge; investigate before accepting.
-- **p50 latency > 1 ms at ef=128 on reference hardware** → performance regression vs v1.11.x baseline.
+- **p50 latency > 1 ms at ef=128 on reference hardware** → treat as a performance regression (latency is reported, not gated — §11.6).
 - **QPS < 1,000 single-thread** → SIMD dispatch or `target-cpu=native` flag may be disabled on the build host.
 
 ### 11.6 CI coverage
@@ -469,11 +493,15 @@ human reading outputs. Three findings, and no latency figures:
   schema as Ollama's `format` took the 8 GB tier from no eligible model to two,
   and took one model from zero valid replies to all of them. `velesdb-memory`
   does not send `format` today, so this measures a product change.
-- **Quality is deterministic here, latency is not.** Two full campaigns half an
-  hour apart reproduced every quality verdict to the digit under greedy
-  decoding, while the order control — first configuration replayed last —
-  disagreed with itself by 26% and then 55% on timing. The timings are
-  therefore not published.
+- **Quality repeated on one machine; latency did not.** Two full campaigns half
+  an hour apart on the same machine gave the same quality counts run for run
+  under greedy decoding, while the order control — first configuration replayed
+  last — disagreed with itself by 26% and then 55% on timing. The timings are
+  therefore not published. The quality counts are unverified beyond that
+  machine: a re-run elsewhere gave different ones, and none of the 26
+  screening files the two campaigns published records the Ollama version, or
+  any decode option but the generation cap, that would say why; the 2 that
+  hold their model's digest hold it by accident (#1949).
 
 Full tables: [`benchmarks/results/2026-08-16-memory-extraction-report.md`](../benchmarks/results/2026-08-16-memory-extraction-report.md).
 How to choose, including for models we did not test:

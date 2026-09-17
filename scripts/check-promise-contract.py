@@ -5,7 +5,15 @@ Five independent gates run here:
 
 1. Registry gate — every claim in ``docs/reference/promise-contract.json`` must
    still be present in the file it points at, so benchmark/headline promises
-   cannot silently drift.
+   cannot silently drift. A claim names ``id``, ``file``, ``must_contain``,
+   ``source``, ``validation_command``, ``executable`` and its provenance
+   (``measured_on``, ``measured_machine``, ``measured_version``; see
+   ``check_provenance``). ``must_contain`` is normally a verbatim part of the
+   line that states the figure. With ``"covers_section": true`` it is instead a
+   Markdown heading line, exactly as written, and the claim registers every
+   figure of that section at once: a table measured in one run is recorded
+   once, with that run's provenance. This gate checks both forms alike;
+   ``scripts/check-figure-sources.py`` is what reads the heading form.
 2. Anti-overclaim gate (Requirement 10.4) — no ``sq8``/``binary`` doc string may
    associate a search-throughput claim with those Capacity Modes. Their
    collection search path stays full-precision f32, so promising throughput
@@ -316,13 +324,15 @@ def workspace_version(root: pathlib.Path) -> str:
 
 
 def unsourced_claims(claims: list[dict]) -> list[str]:
-    """Claims whose provenance is recorded as ``unknown`` — visible debt."""
+    """Claims whose provenance is recorded as ``unknown`` — visible debt. A
+    reason may follow the word ("unknown (commit abc names none)"): the value
+    is still unknown, and the claim still counts."""
     return [
         f"[{claim.get('id', '<unknown>')}] measured_on={claim.get('measured_on')!r} "
         f"machine={claim.get('measured_machine')!r}"
         for claim in claims
-        if str(claim.get("measured_on")).lower() == "unknown"
-        or str(claim.get("measured_machine")).lower() == "unknown"
+        if str(claim.get("measured_on")).lower().startswith("unknown")
+        or str(claim.get("measured_machine")).lower().startswith("unknown")
     ]
 
 

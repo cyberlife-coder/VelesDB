@@ -858,7 +858,7 @@ A background thread prunes stale IP entries from the rate limiter map every 60 s
 ### Examples
 
 ```toml
-# Production: 200 req/s per IP
+# Production: a 200 req/s limit per IP
 [server]
 rate_limit = 200
 

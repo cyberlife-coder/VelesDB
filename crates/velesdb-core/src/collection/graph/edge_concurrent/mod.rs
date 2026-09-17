@@ -71,7 +71,7 @@ pub struct ConcurrentEdgeStore {
     pub(super) num_shards: usize,
     /// Global registry of edge IDs with source node for optimized removal.
     /// Maps edge_id -> source_node_id for O(1) shard lookup during removal.
-    /// F-19: FxHashMap ~2x faster than std HashMap for u64 keys (no SipHash).
+    /// F-19: FxHashMap rather than std HashMap for u64 keys (no SipHash).
     pub(super) edge_ids: RwLock<FxHashMap<u64, u64>>,
     /// CSR-like read snapshot for zero-copy neighbor lookups during BFS/DFS.
     ///
@@ -261,7 +261,7 @@ impl ConcurrentEdgeStore {
     ///
     /// Acquires the `edge_ids` write lock once for the entire batch,
     /// inserts all edges into their respective shards, then invalidates
-    /// the CSR snapshot once at the end. This is **10-50x faster** than
+    /// the CSR snapshot once at the end. This is much faster than
     /// calling `add_edge` in a loop for large batches.
     ///
     /// Edges that already exist (duplicate IDs) are silently skipped.
