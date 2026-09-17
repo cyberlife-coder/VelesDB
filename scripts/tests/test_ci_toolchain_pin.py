@@ -93,6 +93,7 @@ pin, and without it the import below fails loudly instead of skipping.
 
 from __future__ import annotations
 
+import ast
 import json
 import posixpath
 import re
@@ -216,8 +217,8 @@ SCRIPTS_THAT_ONLY_NAME_A_TOOL = {
                                      "version pins out of the dx-timing scenarios it names",
     "scripts/check-promise-contract.py": "names `cargo bench` as a documentary claim it skips; the executable "
                                          "claims it runs name no tool, which a test holds",
-    "scripts/bench-memory-extraction.py": "calls `rustc --version` only in `report --from-dir`, which no workflow "
-                                          "runs, and `cross` is a variable",
+    "scripts/bench-memory-extraction.py": "runs no Rust tool: it names `cargo build` in the rebuild hint of a "
+                                          "daemon error, and `cross` is a variable and a word of prose",
     "scripts/check-ai-attribution.py": "runs git only; it names the refusal-vector test in its help text",
     "scripts/check-doc-contract.sh": "runs grep only; it names run-production-gates.sh in its header comment",
     "scripts/check-mcp-doc-contract.py": "runs `git ls-files` only; the scripts it names are files it reads",
@@ -1911,10 +1912,14 @@ class ScriptAndConditionTests(unittest.TestCase):
                 self.assertTrue(script_builds(REPO_ROOT, path, others), "the exemption outlived its reason")
 
     # The reasons two exemptions give, held.
-    def test_no_workflow_runs_the_extraction_bench_report(self) -> None:
-        for path in workflow_files():
-            with self.subTest(workflow=path.name):
-                self.assertNotRegex(path.read_text(encoding="utf-8"), r"bench-memory-extraction\.py\s+report\b")
+    def test_the_extraction_bench_names_no_rust_tool_as_a_program(self) -> None:
+        """A command's program is a string that is the tool's name alone (`["rustc", "--version"]`):
+        read by Python's parser, the bench holds none, so what it names it only prints."""
+        tree = ast.parse((REPO_ROOT / "scripts" / "bench-memory-extraction.py").read_text(encoding="utf-8"))
+        programs = [node.value for node in ast.walk(tree)
+                    if isinstance(node, ast.Constant) and isinstance(node.value, str)
+                    and SCRIPT_TOOL_RE.fullmatch(node.value)]
+        self.assertEqual([], programs)
 
     def test_no_executable_promise_claim_names_a_tool(self) -> None:
         registry = json.loads((REPO_ROOT / "docs" / "reference" / "promise-contract.json").read_text(encoding="utf-8"))

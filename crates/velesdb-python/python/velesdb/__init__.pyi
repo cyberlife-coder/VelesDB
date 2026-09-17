@@ -528,7 +528,13 @@ class Collection:
         principal: Optional[str] = None,
         tenant: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """Search with custom HNSW ef_search parameter."""
+        """Search with custom HNSW ef_search parameter.
+
+        Raises:
+            ValueError: if ef_search is outside [16, 4096], a negative int
+                or one beyond 64 bits included.
+            TypeError: if ef_search is not an int.
+        """
         ...
 
     def search_ids(

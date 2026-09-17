@@ -2537,6 +2537,16 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "A field of the wrong type, such as a negative or non-integer ef_search",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         }
       }
@@ -2596,6 +2606,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A field of the wrong type in an entry, such as a negative ef_search",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -2721,6 +2741,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A field of the wrong type, such as a negative or non-integer ef_search",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -5586,9 +5616,10 @@
               "integer",
               "null"
             ],
-            "description": "HNSW `ef_search` parameter.",
+            "description": "HNSW `ef_search` parameter, in `[16, 4096]`: an integer outside the\nrange is refused with a `400` naming it (#2274), and a value that is\nnot a non-negative integer fails the body's JSON parsing with a `422`,\nas any mistyped field does. It wins over `mode` for a dense search with\nno `filter`; a filtered search applies neither, and a batch entry's is\nchecked but not applied.",
             "example": 128,
-            "minimum": 0
+            "maximum": 4096,
+            "minimum": 16
           },
           "filter": {
             "type": "object",
