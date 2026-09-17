@@ -75,12 +75,20 @@ impl QueryValidator {
         Self::validate_vector_group_by(stmt)?;
         super::validation_fusion::validate_fusion(stmt)?;
         #[cfg(feature = "persistence")]
-        Self::validate_search_mode(stmt)?;
+        Self::validate_with_options(stmt)?;
         stmt.where_clause.as_ref().map_or(Ok(()), |condition| {
             // V011 anchor rule (explicit and implicit binding, guards
             // G1/G2/G3) lives in `validation_anchor.rs`.
             super::validation_anchor::walk_graph_match_anchors(condition, &stmt.from_alias)
         })
+    }
+
+    /// Validates the search options `WITH (...)` gives, before any dispatch:
+    /// the mode (`V013`), then `ef_search` (`V014`).
+    #[cfg(feature = "persistence")]
+    fn validate_with_options(stmt: &super::ast::SelectStatement) -> Result<(), ValidationError> {
+        Self::validate_search_mode(stmt)?;
+        Self::validate_ef_search(stmt)
     }
 
     /// Validates the search mode `WITH (mode = ...)` asks for, before any
@@ -98,6 +106,30 @@ impl QueryValidator {
                 ValidationErrorKind::InvalidSearchMode,
                 None,
                 "mode",
+                message,
+            )
+        })
+    }
+
+    /// Validates the `ef_search` `WITH (ef_search = ...)` asks for, before
+    /// any dispatch. Every query shape passes here, mirroring
+    /// [`Self::validate_search_mode`]: a value that is not an integer, or an
+    /// integer outside the documented `[16, 4096]` range — `-1`, which casts
+    /// to near `usize::MAX` and runs an uncapped graph traversal — never
+    /// reaches the search path (#2274).
+    ///
+    /// Gated like [`Self::validate_search_mode`]: the WASM executor reads no
+    /// `WITH` option, so it neither applies nor checks `ef_search` either.
+    #[cfg(feature = "persistence")]
+    fn validate_ef_search(stmt: &super::ast::SelectStatement) -> Result<(), ValidationError> {
+        let Some(with) = stmt.with_clause.as_ref() else {
+            return Ok(());
+        };
+        with.ef_search().map(|_| ()).map_err(|message| {
+            ValidationError::new(
+                ValidationErrorKind::InvalidEfSearch,
+                None,
+                "ef_search",
                 message,
             )
         })

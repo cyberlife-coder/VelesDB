@@ -93,6 +93,29 @@ def test_explain_returns_plan_dict(temp_db_path):
     assert "tree" in explain
 
 
+def test_search_with_ef_refuses_an_ef_search_outside_its_range(temp_db_path):
+    """An ef_search outside [16, 4096], a negative one or one no C long holds
+    included, raises the one ValueError, naming it; one that is not an int
+    raises TypeError (#2274)."""
+    db = velesdb.Database(temp_db_path)
+    collection = db.create_collection("ef_range", dimension=4, metric="cosine")
+    _seed_collection(collection)
+    for ef in (16, 4096):
+        assert len(collection.search_with_ef([1.0, 0.0, 0.0, 0.0], top_k=2, ef_search=ef)) == 2
+
+    def refusal(ef):
+        with pytest.raises(ValueError) as caught:
+            collection.search_with_ef([1.0, 0.0, 0.0, 0.0], top_k=2, ef_search=ef)
+        return str(caught.value)
+
+    above = refusal(4097)
+    assert "ef_search" in above and above.endswith("4097"), above
+    for ef in (-1, 15, 2**63, 2**64, -(2**63) - 1):
+        assert refusal(ef) == above.replace("4097", str(ef))
+    with pytest.raises(TypeError):
+        collection.search_with_ef([1.0, 0.0, 0.0, 0.0], top_k=2, ef_search=1.5)
+
+
 def test_search_with_ef_and_search_ids(temp_db_path):
     db = velesdb.Database(temp_db_path)
     collection = db.create_collection("search_variants", dimension=4, metric="cosine")

@@ -80,6 +80,107 @@ fn test_openapi_has_schemas() {
     );
 }
 
+/// The published OpenAPI document, as JSON.
+fn openapi_json() -> Value {
+    let json = ApiDoc::openapi()
+        .to_json()
+        .expect("Failed to serialize OpenAPI spec");
+    serde_json::from_str(&json).expect("the spec is JSON")
+}
+
+/// The schema `schema` names through a `$ref`, or `schema` itself.
+fn resolve_ref<'a>(schemas: &'a Value, schema: &'a Value) -> &'a Value {
+    schema["$ref"]
+        .as_str()
+        .and_then(|name| name.strip_prefix("#/components/schemas/"))
+        .map_or(schema, |name| &schemas[name])
+}
+
+/// Whether a request body `schema` carries an `ef_search`: as its own
+/// property, or through one of its properties, an array's items included.
+fn carries_ef_search(schemas: &Value, schema: &Value) -> bool {
+    let has_ef = |schema: &Value| {
+        resolve_ref(schemas, schema)["properties"]
+            .get("ef_search")
+            .is_some()
+    };
+    let body = resolve_ref(schemas, schema);
+    has_ef(body)
+        || body["properties"]
+            .as_object()
+            .is_some_and(|props| props.values().any(|p| has_ef(p) || has_ef(&p["items"])))
+}
+
+/// The bounds the document publishes for `ef_search`, in every schema that
+/// carries one, are the validator's. utoipa's `minimum` and `maximum` take
+/// only a literal, so this pins the literals to
+/// `velesdb_core::api_types::{MIN_EF_SEARCH, MAX_EF_SEARCH}` (#2274).
+#[test]
+fn test_openapi_ef_search_bounds_are_the_validators() {
+    let spec = openapi_json();
+    let carrying: Vec<(&String, &Value)> = spec["components"]["schemas"]
+        .as_object()
+        .expect("schemas")
+        .iter()
+        .filter_map(|(name, schema)| schema["properties"].get("ef_search").map(|ef| (name, ef)))
+        .collect();
+    assert!(
+        carrying
+            .iter()
+            .any(|(name, _)| name.as_str() == "SearchRequest"),
+        "SearchRequest carries an ef_search"
+    );
+    for (name, ef) in carrying {
+        assert_eq!(
+            ef["minimum"],
+            serde_json::json!(velesdb_core::api_types::MIN_EF_SEARCH),
+            "{name}: {ef}"
+        );
+        assert_eq!(
+            ef["maximum"],
+            serde_json::json!(velesdb_core::api_types::MAX_EF_SEARCH),
+            "{name}: {ef}"
+        );
+    }
+}
+
+/// Every path whose request body carries an `ef_search` documents the `422`
+/// a mistyped one gets, axum's plain-text JSON rejection, besides the `400`
+/// an out-of-range one gets (#2274).
+#[test]
+fn test_openapi_paths_taking_an_ef_search_document_422() {
+    let spec = openapi_json();
+    let schemas = &spec["components"]["schemas"];
+    let taking: Vec<(&String, &Value)> = spec["paths"]
+        .as_object()
+        .expect("paths")
+        .iter()
+        .flat_map(|(path, ops)| {
+            let ops = ops.as_object().expect("operations");
+            ops.values().map(move |op| (path, op))
+        })
+        .filter(|(_, op)| {
+            let body = &op["requestBody"]["content"]["application/json"]["schema"];
+            carries_ef_search(schemas, body)
+        })
+        .collect();
+    for known in [
+        "/collections/{name}/search",
+        "/collections/{name}/search/batch",
+    ] {
+        assert!(
+            taking.iter().any(|(path, _)| path.as_str() == known),
+            "{known} takes an ef_search"
+        );
+    }
+    for (path, op) in taking {
+        assert!(
+            op["responses"].get("422").is_some(),
+            "{path} documents no 422"
+        );
+    }
+}
+
 /// Regenerates `docs/openapi.{json,yaml}` in place instead of only
 /// comparing against them. Opt-in via `UPDATE_OPENAPI_SNAPSHOT=1` so that
 /// a plain `cargo test` — including the default parallel test threads —
