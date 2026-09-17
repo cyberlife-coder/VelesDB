@@ -659,11 +659,11 @@ impl NativeHnswInner {
     /// # Errors
     ///
     /// Returns `io::Error` if file operations fail.
-    pub fn file_dump(&self, path: &Path, basename: &str) -> std::io::Result<usize> {
+    pub(crate) fn file_dump_counted(&self, path: &Path, basename: &str) -> std::io::Result<usize> {
         match &self.backend {
-            HnswBackend::Standard(hnsw) => hnsw.file_dump(path, basename),
-            HnswBackend::RaBitQ(rabitq) => rabitq.inner.file_dump(path, basename),
-            HnswBackend::Sq8(sq8) => sq8.inner.file_dump(path, basename),
+            HnswBackend::Standard(hnsw) => hnsw.file_dump_counted(path, basename),
+            HnswBackend::RaBitQ(rabitq) => rabitq.inner.file_dump_counted(path, basename),
+            HnswBackend::Sq8(sq8) => sq8.inner.file_dump_counted(path, basename),
         }
     }
 

@@ -173,13 +173,25 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     /// * `path` - Directory path for output files
     /// * `basename` - Base name for output files
     ///
-    /// Returns the number of vectors written: the slot count of the dumped
-    /// arena.
-    ///
     /// # Errors
     ///
     /// Returns `io::Error` if file operations fail.
-    pub fn file_dump(&self, path: &Path, basename: &str) -> std::io::Result<usize> {
+    pub fn file_dump(&self, path: &Path, basename: &str) -> std::io::Result<()> {
+        self.file_dump_counted(path, basename).map(drop)
+    }
+
+    /// [`Self::file_dump`], returning the number of vectors written: the slot
+    /// count of the dumped arena, which a save persists as its `next_idx`.
+    ///
+    /// Crate-private, so that `file_dump` and the
+    /// [`NativeHnswBackend`](super::NativeHnswBackend) method external code
+    /// may implement keep their public signature: only the crate's own save
+    /// reads the count.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::file_dump`].
+    pub(crate) fn file_dump_counted(&self, path: &Path, basename: &str) -> std::io::Result<usize> {
         // One arena guard spans both files, taken in the declared order
         // (vectors 10 here, layers 20 in `dump_graph_file`): no node is pushed
         // until the graph file is written, so every node and neighbor it names

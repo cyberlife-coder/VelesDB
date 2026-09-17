@@ -383,7 +383,7 @@ pub(crate) fn load_graph_generation(path: &Path) -> std::io::Result<u64> {
 ///
 /// # Errors
 ///
-/// As [`NativeHnswInner::file_dump`].
+/// As [`NativeHnswInner::file_dump_counted`].
 pub(crate) fn dump_graph(
     graph: &NativeHnswInner,
     mappings: &ShardedMappings,
@@ -392,7 +392,7 @@ pub(crate) fn dump_graph(
 ) -> std::io::Result<(HnswMappingsData, crate::StorageMode)> {
     let id_to_idx: HashMap<u64, usize> = mappings.iter().collect();
     let idx_to_id = id_to_idx.iter().map(|(&id, &idx)| (idx, id)).collect();
-    let next_idx = graph.file_dump(path, basename)?;
+    let next_idx = graph.file_dump_counted(path, basename)?;
     let mappings = HnswMappingsData {
         id_to_idx,
         idx_to_id,

@@ -162,6 +162,21 @@ fn test_transform_score_dot_product() {
 // TDD Tests: file_dump and file_load
 // =========================================================================
 
+/// `file_dump` is public on the unsealed `NativeHnswBackend` trait and on
+/// `NativeHnsw`, both reachable as `velesdb_core::index::hnsw::native::*`:
+/// changing what it returns breaks every implementation written against
+/// the released API. The crate's save reads the dumped count through the
+/// crate-private `file_dump_counted` instead (#2262). `cargo semver-checks`
+/// did not report the change when it was made, so these coercions pin it.
+#[test]
+fn file_dump_keeps_its_public_signature() {
+    type Dump<T> = fn(&T, &std::path::Path, &str) -> std::io::Result<()>;
+    let _: Dump<NativeHnsw<CachedSimdDistance>> =
+        <NativeHnsw<CachedSimdDistance> as crate::index::hnsw::native::NativeHnswBackend>::file_dump;
+    let _: Dump<NativeHnsw<CachedSimdDistance>> =
+        crate::index::hnsw::native::NativeHnsw::<CachedSimdDistance>::file_dump;
+}
+
 #[test]
 fn test_file_dump_creates_files() {
     let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
