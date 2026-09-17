@@ -2354,9 +2354,16 @@ class MinimumPythonTest(unittest.TestCase):
 
     Round 9 passed `process_group`, which Python 3.11 introduced, to `subprocess.Popen`: every
     command the bench ran then raised `TypeError` under `/usr/bin/python3`, 3.9.6, while the
-    suite, on 3.12 and 3.14, stayed green. Syntax is checked by Python's parser at that
-    version; an API is only checked by running the bench under an interpreter of it, which a
-    machine without one (CI's runner among them) skips, and says why.
+    suite, on 3.12 and 3.14, stayed green.
+
+    Two checks, neither complete alone. The parse check asks the running parser to accept only
+    `MINIMUM_PYTHON`'s grammar (`ast.parse(feature_version=...)`), which is best effort: it
+    refuses `match`, `except*` and type parameters, but lets through what the parser does not
+    track by version, such as a PEP 701 f-string (`f"{"x"}"` parses on 3.12 and 3.14 with
+    `feature_version=(3, 9)`, and is a SyntaxError on 3.9.6). Only running the bench under an
+    interpreter of that version checks its syntax and its APIs for real, and that happens only
+    where the machine has one: without, the test skips and says why, and on CI's runner, which
+    has none, the parse check is all that runs.
     """
 
     def test_the_bench_parses_as_its_minimum_python(self):
