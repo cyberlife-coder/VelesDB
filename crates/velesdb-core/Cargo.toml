@@ -108,8 +108,8 @@ version = "2.7"
 ## - `gpu`: Enables wgpu-based GPU acceleration for distance calculations.
 ## - `update-check`: Enables HTTP client for automatic version checking.
 ## - `openapi`: Enables utoipa::ToSchema derives on api_types DTOs.
-## - `loom`: Enables loom-based concurrency testing (nightly only).
-##   Run with: `cargo +nightly test --features loom --test loom_tests`
+## - `loom`: Enables loom-based concurrency testing (built with `--cfg loom`).
+##   Run with: `LOOM_MAX_PREEMPTIONS=3 RUSTFLAGS="--cfg loom" cargo test -p velesdb-core --features loom,persistence --test loom_tests -- --test-threads=1`
 ## - `bytemuck`: Compatibility only — see the note on its line below.
 default = ["persistence"]
 gpu = ["wgpu", "pollster", "bytemuck"]

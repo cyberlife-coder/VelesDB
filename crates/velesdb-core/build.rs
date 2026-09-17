@@ -13,8 +13,13 @@
 //! (`[lints.rust] unexpected_cfgs`); it is re-registered here so the crate also
 //! builds cleanly when compiled by a bare `rustc` invocation that does not read
 //! those manifest lints.
+//!
+//! It also registers `cfg(fuzzing)`, which cargo-fuzz sets on every crate it
+//! builds and Cargo never sets: `storage::parse_payload_snapshot`, the entry the
+//! `fuzz_snapshot_parser` target drives, is compiled under it and in unit tests.
 fn main() {
     println!("cargo::rustc-check-cfg=cfg(loom)");
+    println!("cargo::rustc-check-cfg=cfg(fuzzing)");
     // `CARGO_FEATURE_LOOM` is set by Cargo whenever the `loom` feature is on.
     if std::env::var_os("CARGO_FEATURE_LOOM").is_some() {
         println!("cargo::rustc-cfg=loom");

@@ -732,7 +732,9 @@ covered by
   a compilation error, an empty compiled result — each one leaves the tool
   result exactly as it was.
 
-Tuning knobs:
+Tuning knobs. Every numeric one is a decimal integer written without a leading
+zero (`05` is refused, like `1+1`), and a refused or out-of-range value leaves
+the tool result untouched:
 
 | Variable | Default | Effect |
 |---|---|---|
@@ -741,7 +743,8 @@ Tuning knobs:
 | `VELESDB_HOOK_MIN_SAVED_TOKENS` | `128` | Minimum conservative net saving after counting each footer byte as one token. |
 | `VELESDB_HOOK_TOKEN_BUDGET` | `2000` | Token budget handed to `compile-stdin`. |
 | `VELESDB_HOOK_TOKEN_BUDGET_MAX` | twice `VELESDB_HOOK_TOKEN_BUDGET` | Ceiling a `risk: high` compilation may retry at. Equal to the budget forbids the retry. |
-| `VELESDB_HOOK_PROBE_TIMEOUT` | `10` | Seconds the capability probe may take. |
+| `VELESDB_HOOK_PROBE_TIMEOUT` | `10` | Seconds the capability probe may take, from 1 to 60. |
+| `VELESDB_HOOK_COMPILE_TIMEOUT` | `20` | Seconds each compilation attempt may take, from 1 to 60. |
 
 > **The hook refuses a `risk: high` compilation.** It retries once at the
 > ceiling — a 268 KB cargo log is `high` at 2 000 tokens and `medium` at
