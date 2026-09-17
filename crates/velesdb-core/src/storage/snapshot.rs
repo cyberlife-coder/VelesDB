@@ -130,9 +130,10 @@ fn validate_snapshot_header(data: &[u8]) -> io::Result<(u64, usize)> {
 ///
 /// # Errors
 ///
-/// Returns `NotFound` if there is no snapshot file, the read's error if it
-/// cannot be read, and `InvalidData` (see [`parse_snapshot`]) if it is corrupt
-/// or has an invalid format.
+/// Returns `NotFound` if [`Path::exists`] reports no snapshot file, which it
+/// also does for a path it cannot reach; the read's error if the file cannot
+/// be read; and `InvalidData` (see [`parse_snapshot`]) if it is corrupt or has
+/// an invalid format.
 pub(crate) fn load_snapshot(snapshot_path: &Path) -> io::Result<(FxHashMap<u64, u64>, u64)> {
     if !snapshot_path.exists() {
         return Err(io::Error::new(io::ErrorKind::NotFound, "No snapshot"));
@@ -143,9 +144,9 @@ pub(crate) fn load_snapshot(snapshot_path: &Path) -> io::Result<(FxHashMap<u64, 
 
 /// Parses snapshot bytes into `(index, wal_position)`.
 ///
-/// This is the whole parser: [`load_snapshot`] only adds reading the file, and
-/// `NotFound` when there is none. It takes bytes so the `fuzz_snapshot_parser`
-/// target can drive it, through `storage::parse_payload_snapshot`.
+/// This is the whole parser: [`load_snapshot`] only adds reading the file (see
+/// its errors). It takes bytes so the `fuzz_snapshot_parser` target can drive
+/// it, through `storage::parse_payload_snapshot`.
 ///
 /// # Errors
 ///

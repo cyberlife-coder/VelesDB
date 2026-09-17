@@ -14,6 +14,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > rejects. The declared SemVer policy (`docs/FAQ.md`) makes a breaking change
 > a major bump: tag the next release accordingly.
 
+### Security
+
+- **`rustls` 0.23.43 → 0.23.45 (RUSTSEC-2026-0285: TLS 1.3 handshake
+  messages incorrectly accepted across encryption level boundaries).** The
+  advisory is dated 2026-09-14 (#2317's audit at 07:19 UTC that day still
+  passed); it turns the `Security Audit` gate red on `develop` and on every
+  open PR with an unchanged lockfile.
+  Lockfile only, `cargo update -p rustls --precise 0.23.45`, which also
+  moves `aws-lc-rs`, `aws-lc-sys` and `rustls-webpki` as rustls requires.
+
 ### Added
 - **`LockRank::ENTRY_POINT_PROMOTION` (rank 8) in the public lock-rank
   registry (#2259).** The HNSW entry point now moves under a lock, taken
