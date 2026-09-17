@@ -49,15 +49,20 @@ type Carried = FxHashMap<u64, (usize, usize)>;
 /// Most catch-up rounds [`HnswIndex::vacuum`] runs before it takes the write
 /// guard. Each round copies the writes made during the one before, so under a
 /// steady write rate the rounds shrink as long as copying is faster than
-/// writing; the bound ends a vacuum that writes outpace, which then copies the
-/// rest under the write guard.
+/// writing; the bound ends a vacuum that writes outpace, which then copies
+/// what is left under the write guard (see [`CATCH_UP_REMAINDER`]).
 const MAX_CATCH_UP_ROUNDS: usize = 4;
 
 /// Writes left at or under which `vacuum` stops catching up and takes the
 /// write guard, where it copies them one by one while every search waits.
-/// This bounds what is left only when a round gets there: after
-/// [`MAX_CATCH_UP_ROUNDS`] the vacuum takes the guard whatever the last round
-/// left, which writes that outpace the copy make as large as they like.
+///
+/// This is when the catch-up stops trying, not a bound on what it leaves.
+/// [`HnswIndex::reconcile`] copies every id mapped but not carried when the guard
+/// is granted, and a write in flight joins that set after this check: a batch
+/// assigns its ids between the last round and the guard, so a round that saw
+/// nothing left can still be followed by a copy of the whole batch. Bounding
+/// it — adaptive rounds, or a sealed watermark as velesdb-memory's online
+/// migration uses — is tracked in #2335.
 const CATCH_UP_REMAINDER: usize = 64;
 
 /// The slot `id` got in the new graph, if `carried` holds its vector as it is
@@ -151,10 +156,13 @@ impl HnswIndex {
     ///   the old graph into the new one, still without the write lock, in a
     ///   bounded number of rounds, each copying the writes made during the one
     ///   before. The swap re-maps the ids mapped at that moment, not the
-    ///   snapshot's: it copies, one at a time, the writes the rounds left, and
-    ///   an id deleted since stays deleted. The rounds stop once few writes are
-    ///   left, but also after a fixed number of rounds, so writes that outpace
-    ///   the copy leave the swap as many as they like. One write lock covers
+    ///   snapshot's: it copies, one at a time, every id mapped but not yet
+    ///   carried when the guard is granted, and an id deleted since stays
+    ///   deleted. The rounds stop once few writes are left, or after a fixed
+    ///   number of them; that is when the catch-up stops trying, and bounds
+    ///   nothing. A write in flight, a whole batch, maps its ids after the
+    ///   last round looked and before the guard is granted, so the swap can
+    ///   copy them all (#2335). One write lock covers
     ///   those last copies, the re-map of every live id and dropping the old
     ///   graph, so a search never sees a half-built mapping, and waits for all
     ///   three.

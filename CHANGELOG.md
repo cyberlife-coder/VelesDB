@@ -171,12 +171,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never take; a save made during a rebuild saves the old graph. The writes
   made during the rebuild are copied into the new graph before the write
   lock, in at most four rounds, each taking the writes made during the one
-  before; the rounds stop once 64 or fewer are left. The swap copies what
-  is left one insert at a time: up to 64, or whatever the fourth round
-  leaves when writes outpace the copy, which has no bound. The write lock
-  also covers rebuilding the mapping of every live id and dropping the old
-  graph. Nothing runs on rayon under that lock, whose batch searches park
-  rayon's workers on it. Reachable through
+  before; the rounds stop once 64 or fewer are left, or once four have run.
+  Those two describe when the catch-up stops trying, not how much the swap
+  copies: the swap copies every id mapped but not yet carried when the write
+  lock is granted, and a write in flight — a whole batch — joins that set
+  after the last round looked, so its size has no upper bound (#2335 tracks
+  bounding it). The write lock also covers rebuilding the mapping of every
+  live id and dropping the old graph. Nothing runs on rayon under that
+  lock, whose batch searches park rayon's workers on it. Reachable through
   `POST /collections/{name}/index/rebuild`, which accepts writes and flushes
   meanwhile. Eight tests race a vacuum or saves, and two vacuum an index: one
   built with its own parameters, one whose ids are all deleted.
