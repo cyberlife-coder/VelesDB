@@ -272,7 +272,9 @@ record_current_project() {
 # valid_project_record FILE: FILE holds exactly one pending/dirty record. jq
 # reads every JSON value in a file, and `jq -e` judges only the last, so a file
 # holding two records passed; its readers then saw both. It is slurped, and
-# every reader of a record takes that one value (`jq -s '.[0]…'`).
+# every reader of a record takes that one value (`jq -s '.[0]…'`). No field may
+# hold a control character: a reader's `$(…)` strips a trailing newline, and
+# would act on a root the record does not name.
 valid_project_record() {
   jq -s -e '
     length == 1
@@ -281,7 +283,8 @@ valid_project_record() {
       and ((keys | sort) == ["project", "root", "session"])
       and ((.project | type) == "string")
       and ((.session | type) == "string")
-      and ((.root | type) == "string" and (.root | length) > 0))
+      and ((.root | type) == "string" and (.root | length) > 0)
+      and ([.project, .session, .root] | all(test("[[:cntrl:]]") | not)))
   ' "$1" >/dev/null 2>&1
 }
 

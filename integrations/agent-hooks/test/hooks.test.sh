@@ -1520,7 +1520,7 @@ wc_scoped_recall() {
 
 wc_host_checks() {
   local dir="$1" label="$2" sid="$wc_sid-$3" text order run save load first second first_pid second_pid
-  local payload reads runs=0 lost=0 shape refused wt project passed_early scope pending scope_n scope_sid scope_leaks two_dir two_key two_status two_markers
+  local payload reads runs=0 lost=0 shape refused wt project passed_early scope pending scope_n scope_sid scope_leaks malformed bad_dir bad_key bad_status bad_markers
 
   # A save reminder names only a session the conversation saved: after a load
   # alone, Stop, and Claude Code's PreCompact, still name the configured one.
@@ -1667,32 +1667,40 @@ wc_host_checks() {
     pass "$label: a project-scoped recall leaves another project's edit refused"
   fi
 
-  # A pending record file holding two records is malformed state: a scoped
-  # recall's promotion refuses it (2), keeps it as it was, and writes no
-  # marker, for either root. Its name is the checksum the file's own content
-  # gives, so only the single-record rule can refuse it.
-  two_dir="$TMP_TEST_DIR/two-records-$3"
-  mkdir -p "$two_dir"
-  {
-    jq -cn --arg root "$TMP_TEST_DIR/ll-$3-one" '{project: "ll-project-shared", session: "rolling", root: $root}'
-    jq -cn '{project: "ll-project-shared", session: "rolling", root: "/made-up-root"}'
-  } > "$two_dir/records"
-  two_key="$(bash -c 'source "$1/lib/common.sh"; safe_marker_key "$(jq -c "{project, session, root}" "$2")"' \
-    _ "$dir" "$two_dir/records")"
-  mv "$two_dir/records" "$two_dir/$two_key.json"
-  cp "$two_dir/$two_key.json" "$TMP_TEST_DIR/two-records-$3.expected"
-  payload="$(wc_scoped_recall_payload "$dir" "$sid-aq" "$TMP_TEST_DIR/ll-$3-one" ll-project-shared)"
-  two_status=0
-  bash -c 'source "$1/lib/common.sh"; promote_pending_recall "$2" two-records-recall "$3" "$4"' \
-    _ "$dir" "$two_dir" "$sid-aq" "$payload" >/dev/null 2>&1 || two_status=$?
-  two_markers="$(find "$HOOK_STATE_DIR" -name "two-records-recall-*" | wc -l | tr -d ' ')"
-  if [ "$two_status" = 2 ] && [ "$two_markers" = 0 ] \
-    && cmp -s "$two_dir/$two_key.json" "$TMP_TEST_DIR/two-records-$3.expected"; then
-    pass "$label: a pending record file holding two records is refused, kept, and marks nothing"
-  else
-    fail "$label: a pending record file holding two records is refused, kept, and marks nothing: status $two_status, $two_markers marker(s), file $( [ -f "$two_dir/$two_key.json" ] && echo kept || echo gone)"
-  fi
-  rm -f "$HOOK_STATE_DIR"/two-records-recall-*
+  # A malformed pending record file is refused (2) by a scoped recall's
+  # promotion, kept as it was, and marks nothing, for any root: one holding two
+  # records, and one whose root ends in a newline (`$(…)` would strip it and
+  # mark a root the file does not name). Each file is named by the checksum
+  # promotion expects for its first record, so the name check lets it through
+  # and only the record validation can refuse it.
+  for malformed in two-records root-newline; do
+    bad_dir="$TMP_TEST_DIR/malformed-$malformed-$3"
+    mkdir -p "$bad_dir"
+    if [ "$malformed" = two-records ]; then
+      {
+        jq -cn --arg root "$TMP_TEST_DIR/ll-$3-one" '{project: "ll-project-shared", session: "rolling", root: $root}'
+        jq -cn '{project: "ll-project-shared", session: "rolling", root: "/made-up-root"}'
+      } > "$bad_dir/record"
+    else
+      jq -cn --arg root "$TMP_TEST_DIR/ll-$3-one"$'\n' '{project: "ll-project-shared", session: "rolling", root: $root}' \
+        > "$bad_dir/record"
+    fi
+    bad_key="$(bash -c 'source "$1/lib/common.sh"; safe_marker_key "$(jq -sc ".[0] | {project, session, root}" "$2")"' \
+      _ "$dir" "$bad_dir/record")"
+    mv "$bad_dir/record" "$bad_dir/$bad_key.json"
+    cp "$bad_dir/$bad_key.json" "$bad_dir.expected"
+    payload="$(wc_scoped_recall_payload "$dir" "$sid-aq-$malformed" "$TMP_TEST_DIR/ll-$3-one" ll-project-shared)"
+    bad_status=0
+    bash -c 'source "$1/lib/common.sh"; promote_pending_recall "$2" malformed-recall "$3" "$4"' \
+      _ "$dir" "$bad_dir" "$sid-aq-$malformed" "$payload" >/dev/null 2>&1 || bad_status=$?
+    bad_markers="$(find "$HOOK_STATE_DIR" -name "malformed-recall-*" | wc -l | tr -d ' ')"
+    if [ "$bad_status" = 2 ] && [ "$bad_markers" = 0 ] && cmp -s "$bad_dir/$bad_key.json" "$bad_dir.expected"; then
+      pass "$label: a pending record file ($malformed) is refused, kept, and marks nothing"
+    else
+      fail "$label: a pending record file ($malformed) is refused, kept, and marks nothing: status $bad_status, $bad_markers marker(s), file $( [ -f "$bad_dir/$bad_key.json" ] && echo kept || echo gone)"
+    fi
+    rm -f "$HOOK_STATE_DIR"/malformed-recall-*
+  done
 
   # The worktree a recall runs from is unlocked too when only another worktree
   # of its project had a refused edit: a parent whose subagent waited edits next.
