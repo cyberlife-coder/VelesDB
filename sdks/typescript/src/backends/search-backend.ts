@@ -138,29 +138,42 @@ export async function hybridSearch(
   return response.data?.results ?? [];
 }
 
+/**
+ * The request body both multi-query endpoints send.
+ *
+ * `/search/multi` and `/search/multi/ids` read the same fusion request; only
+ * the path and the result shape differ. Written out twice, the two copies
+ * drifted — `filter` was added to one of them alone — so the body is built
+ * here once and each endpoint posts it.
+ */
+function multiQueryBody(
+  vectors: Array<number[] | Float32Array>,
+  options: MultiQuerySearchOptions | undefined
+): Record<string, unknown> {
+  return {
+    vectors: vectors.map(toNumberArray),
+    top_k: options?.k ?? 10,
+    strategy: options?.fusion ?? 'rrf',
+    rrf_k: options?.fusionParams?.k ?? 60,
+    avg_weight: options?.fusionParams?.avgWeight,
+    max_weight: options?.fusionParams?.maxWeight,
+    hit_weight: options?.fusionParams?.hitWeight,
+    dense_weight: options?.fusionParams?.denseWeight,
+    sparse_weight: options?.fusionParams?.sparseWeight,
+    filter: options?.filter,
+  };
+}
+
 export async function multiQuerySearch(
   transport: SearchTransport,
   collection: string,
   vectors: Array<number[] | Float32Array>,
   options?: MultiQuerySearchOptions
 ): Promise<SearchResult[]> {
-  const formattedVectors = vectors.map(toNumberArray);
-
   const response = await transport.requestJson<{ results: SearchResult[] }>(
     'POST',
     `${collectionPath(collection)}/search/multi`,
-    {
-      vectors: formattedVectors,
-      top_k: options?.k ?? 10,
-      strategy: options?.fusion ?? 'rrf',
-      rrf_k: options?.fusionParams?.k ?? 60,
-      avg_weight: options?.fusionParams?.avgWeight,
-      max_weight: options?.fusionParams?.maxWeight,
-      hit_weight: options?.fusionParams?.hitWeight,
-      dense_weight: options?.fusionParams?.denseWeight,
-      sparse_weight: options?.fusionParams?.sparseWeight,
-      filter: options?.filter,
-    }
+    multiQueryBody(vectors, options)
   );
 
   throwOnError(response, `Collection '${collection}'`);
@@ -182,22 +195,13 @@ export async function multiQuerySearchIds(
   vectors: Array<number[] | Float32Array>,
   options?: MultiQuerySearchOptions
 ): Promise<Array<{ id: number; score: number }>> {
-  const formattedVectors = vectors.map(toNumberArray);
-
   const response = await transport.requestJson<{
     results: Array<{ id: number; score: number }>;
-  }>('POST', `${collectionPath(collection)}/search/multi/ids`, {
-    vectors: formattedVectors,
-    top_k: options?.k ?? 10,
-    strategy: options?.fusion ?? 'rrf',
-    rrf_k: options?.fusionParams?.k ?? 60,
-    avg_weight: options?.fusionParams?.avgWeight,
-    max_weight: options?.fusionParams?.maxWeight,
-    hit_weight: options?.fusionParams?.hitWeight,
-    dense_weight: options?.fusionParams?.denseWeight,
-    sparse_weight: options?.fusionParams?.sparseWeight,
-    filter: options?.filter,
-  });
+  }>(
+    'POST',
+    `${collectionPath(collection)}/search/multi/ids`,
+    multiQueryBody(vectors, options)
+  );
 
   throwOnError(response, `Collection '${collection}'`);
 
