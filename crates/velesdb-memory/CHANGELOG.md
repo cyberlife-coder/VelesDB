@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **At its session cap, the HTTP daemon locked every new client out for up to
+  an hour instead of evicting an idle one.** A client that dies without
+  sending `DELETE` (a killed agent, a crashed process, a host restart) left
+  its slot occupied until `keep_alive` finally expired it — and at the cap,
+  every OTHER live client was refused in the meantime, told to "close an
+  existing session" it had no way to reach. `BoundedSessionManager` now
+  evicts the least-recently-used session with nothing in flight (no request
+  being served, no open stream) to admit the new one, and refuses only once
+  every live session is genuinely busy (#2289).
+
 - **`autograph_failed` counted failing steps, not failed enrichments.** Its doc
   and `memory_status` promise enrichments, but one extraction failing at two
   hub writes counted two, and the entity stage counted once per extracted

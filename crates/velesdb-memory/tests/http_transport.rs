@@ -495,6 +495,24 @@ async fn try_raw_initialize(addr: SocketAddr) -> Option<String> {
         .map(std::borrow::ToOwned::to_owned)
 }
 
+/// Open (and hold) `session_id`'s standalone SSE stream, the same
+/// long-lived GET a real client keeps open in the background for
+/// server-initiated messages (`rmcp`'s `spawn_common_stream`). Marks the
+/// session busy at `BoundedSessionManager` for as long as the returned
+/// response is held — headers are received as soon as the server starts
+/// the stream, and the connection then just backpressures if nobody reads
+/// the body, which is enough to keep the underlying stream (and its
+/// `GuardedStream` activity guard) from ever being dropped.
+async fn open_standalone_stream(addr: SocketAddr, session_id: &str) -> reqwest::Response {
+    reqwest::Client::new()
+        .get(format!("http://{addr}/mcp"))
+        .header("Accept", "text/event-stream")
+        .header("Mcp-Session-Id", session_id)
+        .send()
+        .await
+        .expect("standalone GET /mcp reaches the server")
+}
+
 /// Status code the server answers for a `tools/list` carrying `session_id`.
 async fn status_for_session(addr: SocketAddr, session_id: &str) -> reqwest::StatusCode {
     reqwest::Client::new()
@@ -560,19 +578,26 @@ async fn the_session_cap_holds_while_a_slot_is_occupied() {
     // the cap check landed AFTER the 150 ms expiry, the slot was legitimately
     // free, and the refusal that never came was read as a broken cap.
     // Reproduced deterministically by sleeping 200 ms before the check.
+    //
+    // Since #2289, an IDLE session at the cap is evicted rather than
+    // refusing the new one (see `an_idle_session_is_evicted_...` below), so
+    // this test keeps its one session genuinely busy with an open standalone
+    // stream — the only case where the cap still refuses outright.
     let server = spawn_http_server_with_keep_alive(1, KEEP_ALIVE_OUTLIVES_THE_TEST).await;
 
     let first = try_raw_initialize(server.addr)
         .await
         .expect("the first session must be created");
+    let stream = open_standalone_stream(server.addr, &first).await;
     assert!(
         try_raw_initialize(server.addr).await.is_none(),
-        "the cap must hold while the only slot is genuinely occupied"
+        "the cap must hold while the only slot is genuinely busy"
     );
 
     // The positive control. Without it, an `initialize` that refused
     // unconditionally would satisfy the assertion above while proving nothing
     // about the cap.
+    drop(stream);
     assert_eq!(
         delete_session(server.addr, &first).await,
         202,
@@ -585,6 +610,78 @@ async fn the_session_cap_holds_while_a_slot_is_occupied() {
          that never admits anyone is not a cap, it is an outage"
     );
 
+    shutdown(server).await;
+}
+
+// ===========================================================================
+// Idle eviction at the cap (#2289): a dead or merely quiet client must not
+// lock every other client out until `keep_alive` finally expires it.
+// ===========================================================================
+
+#[tokio::test]
+async fn an_idle_session_is_evicted_to_admit_a_new_one_at_the_cap() {
+    // Long keep-alive: the first session must survive on its own until the
+    // cap's eviction — not `keep_alive` expiry — is what ends it.
+    let server = spawn_http_server_with_keep_alive(1, KEEP_ALIVE_OUTLIVES_THE_TEST).await;
+
+    let first = try_raw_initialize(server.addr)
+        .await
+        .expect("the first session must be created");
+
+    // `first` has done nothing since its own `initialize` completed, so it
+    // is idle: the second `initialize` must be ADMITTED by evicting it,
+    // not refused — the behavior change #2289 exists to make.
+    let second = try_raw_initialize(server.addr)
+        .await
+        .expect("an idle session at the cap must be evicted to admit a new one");
+    assert_ne!(
+        second, first,
+        "the admitted session must be a NEW session, not the old id reused"
+    );
+    assert_eq!(
+        status_for_session(server.addr, &first).await,
+        reqwest::StatusCode::NOT_FOUND,
+        "the evicted session must be gone"
+    );
+    assert!(
+        status_proves_session_is_alive(status_for_session(server.addr, &second).await),
+        "the newly admitted session must be alive"
+    );
+
+    shutdown(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn an_active_session_is_never_evicted_even_though_it_is_older() {
+    let server = spawn_http_server_with_keep_alive(2, KEEP_ALIVE_OUTLIVES_THE_TEST).await;
+
+    // `busy` is created FIRST (so it is the least-recently-used by plain
+    // recency) and kept busy with an open standalone stream; `idle` is
+    // created second (newer) and left untouched. If eviction picked by
+    // recency alone it would take `busy`; it must take `idle` instead.
+    let busy = try_raw_initialize(server.addr)
+        .await
+        .expect("first (busy) session");
+    let stream = open_standalone_stream(server.addr, &busy).await;
+    let idle = try_raw_initialize(server.addr)
+        .await
+        .expect("second (idle) session");
+
+    try_raw_initialize(server.addr)
+        .await
+        .expect("a third session must be admitted by evicting the idle one");
+
+    assert_eq!(
+        status_for_session(server.addr, &idle).await,
+        reqwest::StatusCode::NOT_FOUND,
+        "the idle session must be the one evicted"
+    );
+    assert!(
+        status_proves_session_is_alive(status_for_session(server.addr, &busy).await),
+        "the busy session must survive despite being the oldest"
+    );
+
+    drop(stream);
     shutdown(server).await;
 }
 
@@ -692,33 +789,45 @@ async fn delete_session(addr: SocketAddr, session_id: &str) -> u16 {
         .as_u16()
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn closing_one_session_frees_exactly_one_slot() {
     // Two slots, and a keep_alive long enough that nothing expires during the
     // test — the only thing that may free a slot here is the explicit DELETE.
+    //
+    // Both sessions are kept BUSY (open standalone stream) rather than left
+    // idle: since #2289 an idle session at the cap is evicted rather than
+    // causing a refusal, which would make "refused" stop meaning "no slot
+    // freed" — the distinction this test exists to prove.
     let server = spawn_http_server_with_keep_alive(2, std::time::Duration::from_secs(30)).await;
 
     let a = try_raw_initialize(server.addr).await.expect("session A");
-    let _b = try_raw_initialize(server.addr).await.expect("session B");
+    let b = try_raw_initialize(server.addr).await.expect("session B");
+    let stream_a = open_standalone_stream(server.addr, &a).await;
+    let stream_b = open_standalone_stream(server.addr, &b).await;
     assert!(
         try_raw_initialize(server.addr).await.is_none(),
-        "with both slots occupied the third session must be refused"
+        "with both slots occupied by busy sessions the third session must be refused"
     );
 
     // Close A explicitly. The session worker ALSO finishes and closes the
     // session on its own — so the accounting sees two closes for one session.
     delete_session(server.addr, &a).await;
+    drop(stream_a);
     tokio::time::sleep(std::time::Duration::from_millis(400)).await;
 
-    assert!(
-        try_raw_initialize(server.addr).await.is_some(),
-        "closing A must free A's slot"
-    );
+    let c = try_raw_initialize(server.addr)
+        .await
+        .expect("closing A must free A's slot");
+    // Keep C busy too, so the next check's refusal still means "no slot
+    // freed" rather than "C, being idle, got evicted".
+    let stream_c = open_standalone_stream(server.addr, &c).await;
     assert!(
         try_raw_initialize(server.addr).await.is_none(),
-        "closing ONE session must free exactly ONE slot — B still holds the other, \
-         so this fourth session must be refused"
+        "closing ONE session must free exactly ONE slot — B and C between them \
+         still hold both (busy) slots, so this fourth session must be refused"
     );
 
+    drop(stream_b);
+    drop(stream_c);
     shutdown(server).await;
 }

@@ -185,12 +185,25 @@ fn keep_alive_from_raw(raw: Option<&str>) -> std::time::Duration {
 /// - [`RequestBodyLimit`] bounds a single request body
 ///   ([`http_max_body_bytes_from_env`]).
 /// - `BoundedSessionManager` bounds concurrent sessions
-///   ([`http_max_sessions_from_env`]).
+///   ([`http_max_sessions_from_env`]), and, once that bound is hit, evicts
+///   the least-recently-used session with nothing in flight to admit the
+///   new one rather than refusing it outright — refusing only when every
+///   live session is busy (`session_limit`, #2289). This is what keeps one
+///   client that died without `DELETE` from locking every other client out
+///   until [`http_keep_alive_from_env`] finally expires it.
 ///
 /// Sessions are retired after [`http_keep_alive_from_env`] of silence — 60
 /// minutes by default rather than rmcp's 5, so an agent's normal pauses do not
 /// expire the session out from under it. See [`DEFAULT_HTTP_KEEP_ALIVE`] for
 /// what that mitigates and, just as importantly, what it does not.
+///
+/// Configured via two environment variables, both read once at process
+/// start (`router`, not `router_with_limits*`, which take the resolved
+/// values instead so tests can inject tiny ones without racing shared
+/// process-wide env state): `VELESDB_MEMORY_HTTP_MAX_SESSIONS`
+/// ([`http_max_sessions_from_env`], default [`DEFAULT_HTTP_MAX_SESSIONS`])
+/// and `VELESDB_MEMORY_HTTP_KEEP_ALIVE_SECS`
+/// ([`http_keep_alive_from_env`], default [`DEFAULT_HTTP_KEEP_ALIVE`]).
 pub fn router(server: McpServer, cancellation_token: CancellationToken) -> Router {
     router_with_limits_and_keep_alive(
         server,

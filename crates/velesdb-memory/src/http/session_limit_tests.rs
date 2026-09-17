@@ -1,7 +1,17 @@
 use super::*;
+use rmcp::model::{ClientNotification, InitializedNotification};
 use rmcp::transport::Transport;
 use rmcp::RoleServer;
 use std::sync::Mutex;
+
+/// A `ClientJsonRpcMessage` value for tests driving `create_stream`/`resume`:
+/// its content is irrelevant here — `FakeSessionManager` ignores it — only
+/// its type matters to satisfy the signature.
+fn dummy_message() -> ClientJsonRpcMessage {
+    ClientJsonRpcMessage::notification(ClientNotification::InitializedNotification(
+        InitializedNotification::default(),
+    ))
+}
 
 /// `SessionManager::Transport` must implement `Transport<RoleServer>`,
 /// which rules out a bare `()` — this is the smallest thing that
@@ -122,28 +132,126 @@ async fn create_session_succeeds_under_the_limit() {
     assert!(manager.create_session().await.is_ok());
 }
 
+/// At the cap, a session with nothing in flight is evicted rather than the
+/// new one being refused — the whole point of #2289.
 #[tokio::test]
-async fn create_session_refuses_past_the_limit() {
+async fn create_session_evicts_an_idle_session_past_the_limit() {
     let manager = BoundedSessionManager::new(FakeSessionManager::default(), 2);
-    manager.create_session().await.expect("first session");
+    let (a, _ta) = manager.create_session().await.expect("first session");
     manager.create_session().await.expect("second session");
+
+    manager
+        .create_session()
+        .await
+        .expect("a third session must be admitted by evicting an idle one");
+    assert_eq!(
+        manager.live_count().await,
+        2,
+        "the cap itself must still hold — eviction makes room, it doesn't lift the ceiling"
+    );
+    assert!(
+        !manager.is_live(&a).await,
+        "the least-recently-used idle session (the first) must be the one evicted"
+    );
+}
+
+/// The positive control for the eviction test above: refusal still happens,
+/// but only once every live session is busy and there is nothing left to
+/// reclaim. An open stream is what marks a session busy (see
+/// `GuardedStream`); it is dropped, not consumed, so `futures::stream::empty`
+/// from `FakeSessionManager` never gets a chance to end it on its own.
+#[tokio::test]
+async fn create_session_refuses_past_the_limit_when_every_session_is_busy() {
+    let manager = BoundedSessionManager::new(FakeSessionManager::default(), 2);
+    let (a, _ta) = manager.create_session().await.expect("first session");
+    let (b, _tb) = manager.create_session().await.expect("second session");
+    let stream_a = manager
+        .create_stream(&a, dummy_message())
+        .await
+        .expect("stream on session A");
+    let stream_b = manager
+        .create_stream(&b, dummy_message())
+        .await
+        .expect("stream on session B");
 
     let err = manager
         .create_session()
         .await
-        .expect_err("third session must be refused");
+        .expect_err("a third session must be refused while both live ones are busy");
     assert!(err.is_too_many_sessions());
+
+    drop(stream_a);
+    drop(stream_b);
+}
+
+/// Among several idle candidates, eviction always picks the one least
+/// recently touched, not just any of them.
+#[tokio::test]
+async fn eviction_picks_the_least_recently_used_idle_session() {
+    let manager = BoundedSessionManager::new(FakeSessionManager::default(), 2);
+    let (a, _ta) = manager.create_session().await.expect("session A (oldest)");
+    let (b, _tb) = manager.create_session().await.expect("session B (newer)");
+
+    manager
+        .create_session()
+        .await
+        .expect("third session admitted by evicting the oldest idle one");
+    assert!(!manager.is_live(&a).await, "A is oldest, so A is evicted");
+    assert!(manager.is_live(&b).await, "B is newer, so B survives");
+}
+
+/// A session with an open stream is never evicted, even if it is the
+/// least-recently-used session by timestamp — busy overrides recency.
+#[tokio::test]
+async fn a_session_with_an_open_stream_is_never_evicted() {
+    let manager = BoundedSessionManager::new(FakeSessionManager::default(), 2);
+    let (busy, _t_busy) = manager.create_session().await.expect("session (oldest)");
+    let stream = manager
+        .create_stream(&busy, dummy_message())
+        .await
+        .expect("open a stream on the oldest session");
+    let (idle, _t_idle) = manager.create_session().await.expect("session (newer)");
+
+    manager
+        .create_session()
+        .await
+        .expect("third session admitted by evicting the only idle candidate");
+    assert!(
+        manager.is_live(&busy).await,
+        "the busy session must survive despite being the oldest"
+    );
+    assert!(
+        !manager.is_live(&idle).await,
+        "the idle session must be the one evicted, even though it is newer"
+    );
+
+    // Dropping the stream releases the guard, so the now-idle session
+    // becomes evictable again.
+    drop(stream);
+    manager
+        .create_session()
+        .await
+        .expect("fourth session admitted now that the stream closed");
+    assert!(
+        !manager.is_live(&busy).await,
+        "once its stream closes, the formerly-busy session is evictable like any other"
+    );
 }
 
 #[tokio::test]
 async fn closing_a_session_frees_a_slot_for_a_new_one() {
     let manager = BoundedSessionManager::new(FakeSessionManager::default(), 1);
     let (id, _transport) = manager.create_session().await.expect("first session");
+    let stream = manager
+        .create_stream(&id, dummy_message())
+        .await
+        .expect("keep the only session busy so the cap genuinely refuses");
     manager
         .create_session()
         .await
-        .expect_err("second session must be refused while the first is live");
+        .expect_err("second session must be refused while the first is live and busy");
 
+    drop(stream);
     manager
         .close_session(&id)
         .await
@@ -261,16 +369,21 @@ async fn closing_the_same_session_twice_frees_exactly_one_slot() {
         .create_session()
         .await
         .expect("the freed slot must be reusable");
-    manager
-        .create_session()
-        .await
-        .expect_err("but only ONE slot was freed, so the next must be refused");
+    assert_eq!(
+        manager.live_count().await,
+        2,
+        "only ONE slot was freed, so a second admission must never push past the cap"
+    );
 }
 
 #[tokio::test]
 async fn closing_an_unknown_session_frees_nothing() {
     let manager = BoundedSessionManager::new(FakeSessionManager::default(), 1);
-    let (_a, _ta) = manager.create_session().await.expect("session A");
+    let (a, _ta) = manager.create_session().await.expect("session A");
+    let stream = manager
+        .create_stream(&a, dummy_message())
+        .await
+        .expect("keep A busy so a stray close can't be mistaken for a freed slot");
 
     let stranger: SessionId = "never-created".to_string().into();
     manager
@@ -282,7 +395,9 @@ async fn closing_an_unknown_session_frees_nothing() {
     manager
         .create_session()
         .await
-        .expect_err("an unknown id must not free the live session's slot");
+        .expect_err("an unknown id must not free the live, busy session's slot");
+
+    drop(stream);
 }
 
 #[tokio::test]
