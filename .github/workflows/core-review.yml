@@ -106,12 +106,16 @@ jobs:
   # value, `<` turned into `<=`, ...) and reruns the unit tests for each
   # rewrite. A mutant that survives is changed code no test pins down.
   #
-  # Its cost on this crate has never been measured, and measuring it is what
-  # this job is for before anything leans on it. So it is bounded: only the
+  # Its cost on this crate is why nothing leans on it. A dry run against a real
+  # velesdb-core diff (run 34767190150) found 22 mutants, spent 86s + 743s on
+  # the unmutated baseline, and was cut at 45 minutes having reported no mutant
+  # at all: one `--lib` pass is ~12 minutes, so the budget reaches a couple of
+  # them. So it is bounded and its report is partial by construction: only the
   # changed code is mutated, only the `--lib` tests run (this repository keeps
   # its unit tests beside each module), and the run is cut at 45 minutes with
   # whatever it has. The report, `mutants.out/` with `missed.txt` listing the
-  # survivors, is uploaded either way.
+  # survivors *among the mutants reached*, is uploaded either way. A survivor
+  # in it is real; an empty `missed.txt` is not a clean diff.
   # ===========================================================================
   mutants:
     name: Mutants on the diff (velesdb-core)

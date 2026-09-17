@@ -120,13 +120,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Four review signals that block nothing (#1987).** A weekly
   `minimal-versions` job in `quality-deep.yml`, also run on pull requests that
-  change a `Cargo.toml`, checks `velesdb-core` and `velesdb-memory`, each
-  resolved alone, with every direct dependency at the lowest version its
-  manifest allows, on Linux and on macOS. On a pull
+  change the workspace manifest or a member's, checks `velesdb-core` and
+  `velesdb-memory`, each resolved alone, with every direct dependency at the
+  lowest version the resolve accepts, on Linux and on macOS. On a pull
   request that changes `velesdb-core`, `core-review.yml` prints its
   public API diff against the base (rustdoc JSON built with lints capped, so
   a doc defect at either end does not stop the report) and runs `cargo mutants --in-diff`
-  on the changed code, uploading the report. `codeql.yml` analyzes Rust,
+  on the changed code, uploading the report. That last one is partial by
+  construction: a 45-minute budget over mutants that cost about twelve minutes
+  each, so a survivor it names is real and an empty report is not a clean diff.
+  `codeql.yml` analyzes Rust,
   Python, JavaScript/TypeScript and the workflows themselves on push, pull
   request and weekly. None of them is read by `CI Success`.
 

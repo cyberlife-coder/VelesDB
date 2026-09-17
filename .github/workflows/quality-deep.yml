@@ -323,16 +323,20 @@ jobs:
 
   # ===========================================================================
   # Minimal versions: velesdb-core and velesdb-memory each still compile at the
-  # lowest dependency versions their manifests allow, on Linux and macOS
+  # lowest dependency versions their own resolve accepts, on Linux and macOS
   # ===========================================================================
   # A fresh resolve picks the newest version of everything, so it never meets
   # a lower bound that is too low. The consumer who does is one whose other
   # dependencies hold a crate at the bottom of the range our manifest allows:
   # a `foo = "1.2"` whose code needs 1.4 then fails in their build, never in
   # ours. `-Z direct-minimal-versions` builds that consumer: each direct
-  # dependency at the lowest version its requirement allows, transitive ones
-  # at their newest. The check runs on the MSRV toolchain rust-toolchain.toml
-  # pins.
+  # dependency at the lowest version the resolve accepts, transitive ones at
+  # their newest. The resolve, not the manifest taken alone: another crate in
+  # the same graph requiring the same dependency raises it, and the check then
+  # says nothing about the versions below that. velesdb-memory declared
+  # `ureq = "2"` before #1987 and still resolved to 2.5.0, because
+  # velesdb-core's own `[dependencies.ureq]` asks for 2.5.0; both now declare
+  # 2.5.0. The check runs on the MSRV toolchain rust-toolchain.toml pins.
   #
   # One crate per leg, resolved in a workspace cut down to it: its path
   # dependencies (velesdb-core, for velesdb-memory) come back in on their own,
