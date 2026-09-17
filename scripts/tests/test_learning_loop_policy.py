@@ -733,6 +733,43 @@ class LearningLoopPolicy(unittest.TestCase):
                     self.edit(host, f"{host}-session-b", tool_name), host=host
                 )
 
+    def test_recall_result_sent_as_a_json_string_unlocks(self) -> None:
+        # Claude Code passes an MCP result's structured output as a JSON
+        # string, as its transcripts store it; this one is a redacted
+        # recall_fused result of that shape. Both hosts share the check.
+        response = json.dumps(
+            {
+                "memories": [
+                    {
+                        "content": "a prior failure in this area",
+                        "id": 1,
+                        "id_str": "1",
+                        "metadata": {"project": "velesdb"},
+                        "score": 0.6,
+                    }
+                ]
+            }
+        )
+        for host, contract in HOSTS.items():
+            with self.subTest(host=host):
+                session_id = f"{host}-string-response"
+                tool_name = contract["edit_tools"][0]
+                self.assert_blocked(self.edit(host, session_id, tool_name), host=host)
+                post = self.run_hook(
+                    host,
+                    "post-tool-use.sh",
+                    hook_payload(
+                        "PostToolUse",
+                        cwd=self.nested,
+                        session_id=session_id,
+                        tool_name="mcp__velesdb-memory__recall_fused",
+                        tool_input={"query": "prior failures in this area"},
+                        tool_response=response,
+                    ),
+                )
+                self.assertEqual(post.returncode, 0, post.stderr)
+                self.assert_passed(self.edit(host, session_id, tool_name), host=host)
+
     def test_successful_recall_is_scoped_to_one_repository(self) -> None:
         other_project = self.private / "other-velesdb-worktree"
         other_nested = other_project / "crates" / "contract"
@@ -1379,6 +1416,13 @@ class LearningLoopPolicy(unittest.TestCase):
             [{"type": "text", "text": 42}],
             [{"type": "text", "text": ""}],
             "ok",
+            "",
+            "{}",
+            "[]",
+            '[{"type": "text", "text": "x"}]',
+            '{"error": "refused"}',
+            '{"isError": true, "memories": []}',
+            '{"content": [], "memories": []}',
             None,
             {"structuredContent": {}},
             {"content": [], "isError": False},

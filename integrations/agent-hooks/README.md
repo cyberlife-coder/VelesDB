@@ -439,9 +439,12 @@ the documented target is absent. Every lookup is bounded to 20 directories:
 
 When the target repository differs from `cwd`, the refused edit records that
 repository as pending. The next successful supported VelesDB recall in the
-same host session promotes it only when the target is unambiguous: the recall
-runs from that root, explicitly filters that project, or it is the sole pending
-target from an unconfigured cwd. A multi-repository patch may therefore need
+same host session promotes it when the recall runs from that root, when it is
+the sole pending target from an unconfigured cwd, or when the recall explicitly
+filters that project. A recall filtering a project promotes every pending
+worktree of that project, since subagents share their parent's host session
+and a recall's memories are per project, not per checkout. A multi-repository
+patch may therefore need
 one refused-attempt/recall cycle per unseen repository. After the edit passes,
 independent per-repository records let concurrent hooks feed a session-wide
 `Stop` checkpoint without losing an identity.

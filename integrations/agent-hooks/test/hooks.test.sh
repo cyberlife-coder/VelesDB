@@ -21,7 +21,10 @@ fail() { printf 'not ok - %s\n' "$1"; FAILED=1; }
 # that exits without reading stdin, as the installer's positive control does,
 # kills the pipe's writer with SIGPIPE, and under `set -euo pipefail` the suite
 # would end with 141 before naming what failed. For the same reason a call that
-# exits non-zero is reported by name instead of ending the suite (#2277).
+# exits non-zero is reported by name instead of ending the suite (#2277). A
+# helper that calls a hook for its caller passes the caller's line,
+# `"${BASH_LINENO[0]}"`: its own `$LINENO` would name the helper's line, the
+# same for every call.
 hook_exited() { fail "the hook called at line $1 exits 0 (got $2)"; }
 
 # Assert that a block of text injected into a MODEL's context describes
@@ -1228,18 +1231,23 @@ WC_MISSING='{"found":false,"other_sessions":[]}'
 
 # wc_payload HOOKS_DIR HOST_SESSION TOOL PROJECT SESSION RESULT_TEXT [IS_ERROR]:
 # the PostToolUse payload of a velesdb-memory working-context call, in the
-# shape its host sends: Claude Code passes a successful MCP result's content
-# array itself, Codex the CallToolResult envelope (see successful_tool_response).
+# shape its host sends (see successful_tool_response). Claude Code passes a
+# successful result as a JSON string, as its transcripts store it; Codex the
+# CallToolResult envelope. WC_SHAPE (`string`, `array` or `envelope`) sends
+# another shape instead: Claude Code's older payloads passed the content array
+# itself. A failed call is an envelope with isError in every host.
 wc_payload() {
-  local envelope=false
-  [ "$1" = "$CODEX_HOOKS_DIR" ] && envelope=true
+  local shape=string
+  [ "$1" = "$CODEX_HOOKS_DIR" ] && shape=envelope
+  shape="${WC_SHAPE:-$shape}"
   jq -n --arg cwd "${WC_CWD:-$PROJECT_DIR}" --arg sid "$2" --arg tool "$3" --arg project "$4" \
-    --arg session "$5" --arg text "$6" --argjson err "${7:-false}" --argjson envelope "$envelope" \
+    --arg session "$5" --arg text "$6" --argjson err "${7:-false}" --arg shape "$shape" \
     '{session_id: $sid, cwd: $cwd, hook_event_name: "PostToolUse", tool_name: $tool,
       tool_input: {project: $project, session: $session},
       tool_response: (if $err then {content: [{type: "text", text: $text}], isError: true}
-                      elif $envelope then {content: [{type: "text", text: $text}]}
-                      else [{type: "text", text: $text}] end)}'
+                      elif $shape == "envelope" then {content: [{type: "text", text: $text}]}
+                      elif $shape == "array" then [{type: "text", text: $text}]
+                      else $text end)}'
 }
 
 # wc_call HOOKS_DIR HOST_SESSION TOOL PROJECT SESSION RESULT_TEXT [IS_ERROR]:
@@ -1247,7 +1255,7 @@ wc_payload() {
 wc_call() {
   local payload
   payload="$(wc_payload "$@")"
-  bash "$1/post-tool-use.sh" <<<"$payload" >/dev/null || hook_exited "$LINENO" "$?"
+  bash "$1/post-tool-use.sh" <<<"$payload" >/dev/null || hook_exited "${BASH_LINENO[0]}" "$?"
 }
 
 # wc_context HOOKS_DIR HOST_SESSION SOURCE: set WC_TEXT to the SessionStart
@@ -1259,7 +1267,7 @@ wc_context() {
   local payload out
   payload="$(jq -n --arg cwd "${WC_CWD:-$PROJECT_DIR}" --arg sid "$2" --arg src "$3" \
     '{session_id: $sid, cwd: $cwd, hook_event_name: "SessionStart", source: $src}')"
-  out="$(bash "$1/session-start.sh" <<<"$payload")" || hook_exited "$LINENO" "$?"
+  out="$(bash "$1/session-start.sh" <<<"$payload")" || hook_exited "${BASH_LINENO[0]}" "$?"
   WC_TEXT="$(jq -r '.hookSpecificOutput.additionalContext' <<<"$out" 2>/dev/null || true)"
 }
 
@@ -1270,7 +1278,7 @@ wc_reason() {
   payload="$(jq -n --arg cwd "${WC_CWD:-$PROJECT_DIR}" --arg sid "$3" --arg event "$2" \
     '{session_id: $sid, cwd: $cwd, hook_event_name: $event, trigger: "auto",
       stop_hook_active: false, last_assistant_message: "done"}')"
-  out="$(bash "$1/$2.sh" <<<"$payload")" || hook_exited "$LINENO" "$?"
+  out="$(bash "$1/$2.sh" <<<"$payload")" || hook_exited "${BASH_LINENO[0]}" "$?"
   WC_TEXT="$(jq -r '.reason // empty' <<<"$out" 2>/dev/null || true)"
 }
 
@@ -1474,9 +1482,28 @@ fi
 # working-context section must pass. The two libraries share that section, but
 # each host's hooks call their own copy, so a regression in either must fail by
 # name. TAG keeps each host's host sessions apart.
+# wc_edit_allowed HOOKS_DIR HOST_SESSION ROOT: that host's PreToolUse lets an
+# edit of ROOT/src/lib.rs, run from ROOT, through (exit 0 and `{}`). Any other
+# answer, a refusal by exit 2 included, is not a pass.
+wc_edit_allowed() {
+  local payload out rc=0
+  if [ "$1" = "$CODEX_HOOKS_DIR" ]; then
+    payload="$(jq -n --arg cwd "$3" --arg sid "$2" \
+      --arg patch "$(printf '*** Begin Patch\n*** Update File: %s/src/lib.rs\n@@\n-old\n+new\n*** End Patch' "$3")" \
+      '{session_id: $sid, cwd: $cwd, hook_event_name: "PreToolUse", tool_name: "apply_patch",
+        tool_input: {command: $patch}}')"
+  else
+    payload="$(jq -n --arg cwd "$3" --arg sid "$2" --arg file "$3/src/lib.rs" \
+      '{session_id: $sid, cwd: $cwd, hook_event_name: "PreToolUse", tool_name: "Edit",
+        tool_input: {file_path: $file}}')"
+  fi
+  out="$(bash "$1/pre-tool-use.sh" <<<"$payload" 2>/dev/null)" || rc=$?
+  [ "$rc" -eq 0 ] && [ "$out" = '{}' ]
+}
+
 wc_host_checks() {
   local dir="$1" label="$2" sid="$wc_sid-$3" text order run save load first second first_pid second_pid
-  local payload reads runs=0 lost=0
+  local payload reads runs=0 lost=0 shape refused wt project passed_early
 
   # A save reminder names only a session the conversation saved: after a load
   # alone, Stop, and Claude Code's PreCompact, still name the configured one.
@@ -1565,12 +1592,75 @@ wc_host_checks() {
     fail "$label: overlapping save and load hooks, in either order, leave the save for Stop: the save was lost in $lost of $runs runs"
   fi
 
+  # Each shape a host may send a result in is read, by both hosts' shared
+  # check: a save in it is named by Stop, a load that found one by SessionStart.
+  for shape in string array envelope; do
+    WC_SHAPE="$shape" wc_call "$dir" "$sid-aj-$shape" "$WC_SAVE" test-project "campaign-$shape" "$WC_SAVED"
+    wc_reason "$dir" stop "$sid-aj-$shape"
+    wc_expect "$label: a save whose result is a JSON $shape is adopted" "$WC_TEXT" "campaign-$shape"
+    WC_SHAPE="$shape" wc_call "$dir" "$sid-ak-$shape" "$WC_LOAD" test-project "campaign-read-$shape" "$WC_FOUND"
+    wc_context "$dir" "$sid-ak-$shape" startup
+    wc_expect "$label: a load whose result is a JSON $shape is adopted" "$WC_TEXT" "campaign-read-$shape"
+  done
+  # A string result counts only when it decodes to a non-empty object with no
+  # error: text, an empty object, an array or an error is refused.
+  refused=0
+  for text in 'saved' '{}' '[{"id":1}]' '{"error":"refused"}' '{"isError":true,"id":1}' \
+    '{"content":[],"id":1}'; do
+    refused=$((refused + 1))
+    WC_SHAPE=string wc_call "$dir" "$sid-al-$refused" "$WC_SAVE" test-project campaign-bad "$text"
+    wc_reason "$dir" stop "$sid-al-$refused"
+    wc_expect "$label: a string result that is not a successful object is not adopted ($text)" \
+      "$WC_TEXT" rolling
+  done
+  WC_SHAPE=string wc_call "$dir" "$sid-am" "$WC_LOAD" test-project campaign-typo "$WC_MISSING"
+  wc_context "$dir" "$sid-am" startup
+  wc_expect "$label: a string load that found nothing is not adopted" "$WC_TEXT" rolling
+
+  # A recall scoped to a project unlocks every worktree of that project with
+  # a refused edit in this host session, and no other project's (#2308).
+  # Subagents share their parent's host session, so their worktrees' pending
+  # edits wait in one place; the recall's memories are per project.
+  passed_early=""
+  for wt in one two other; do
+    project=ll-project-shared
+    [ "$wt" != other ] || project=ll-project-other
+    mkdir -p "$TMP_TEST_DIR/ll-$3-$wt"
+    jq -cn --arg project "$project" '{project: $project, session: "rolling", enforce_learning_loop: true}' \
+      > "$TMP_TEST_DIR/ll-$3-$wt/.velesdb-hooks.json"
+    if wc_edit_allowed "$dir" "$sid-an" "$TMP_TEST_DIR/ll-$3-$wt"; then
+      passed_early="$passed_early $wt"
+    fi
+  done
+  if [ -n "$passed_early" ]; then
+    fail "$label: each worktree's edit is refused before a recall: passed in$passed_early"
+  else
+    pass "$label: each worktree's edit is refused before a recall"
+  fi
+  payload="$(WC_CWD="$TMP_TEST_DIR/ll-$3-one" wc_payload "$dir" "$sid-an" "mcp__velesdb-memory__recall_fused" \
+    ll-project-shared unused '{"memories":[{"content":"a prior failure","id_str":"1"}]}' \
+    | jq -c '.tool_input = {query: "prior failures", filter: {project: "ll-project-shared"}}')"
+  bash "$dir/post-tool-use.sh" <<<"$payload" >/dev/null || hook_exited "$LINENO" "$?"
+  if wc_edit_allowed "$dir" "$sid-an" "$TMP_TEST_DIR/ll-$3-one" \
+    && wc_edit_allowed "$dir" "$sid-an" "$TMP_TEST_DIR/ll-$3-two"; then
+    pass "$label: a project-scoped recall unlocks both worktrees of that project"
+  else
+    fail "$label: a project-scoped recall unlocks both worktrees of that project"
+  fi
+  if wc_edit_allowed "$dir" "$sid-an" "$TMP_TEST_DIR/ll-$3-other"; then
+    fail "$label: a project-scoped recall leaves another project's edit refused"
+  else
+    pass "$label: a project-scoped recall leaves another project's edit refused"
+  fi
+
   if [ "$dir" = "$CODEX_HOOKS_DIR" ]; then
     # One whole Codex PostToolUse call for a successful recall reads the
     # payload's tool name once: the recall check and the recording both take
     # it from the hook. A second read would cost every recall-family call a
     # jq run more than develop's hook, which read it only in the recall check.
-    # The response check must have run too, or the call proved nothing.
+    # The response check must have run too, or the call proved nothing. Every
+    # logged jq run whose arguments name `tool_name` counts as a read, whatever
+    # its spelling (`.tool_name // empty`, `.tool_name`, `.["tool_name"]`).
     payload="$(jq -n --arg cwd "$PROJECT_DIR" --arg sid "$sid-ai" --arg text '{"results":[]}' \
       '{session_id: $sid, cwd: $cwd, hook_event_name: "PostToolUse",
         tool_name: "mcp__velesdb-memory__recall", tool_input: {query: "q"},
@@ -1578,8 +1668,8 @@ wc_host_checks() {
     : > "$WC_JQ_LOG"
     WC_REAL_JQ="$(command -v jq)" WC_JQ_LOG="$WC_JQ_LOG" PATH="$WC_JQ_SHIM:$PATH" \
       bash "$dir/post-tool-use.sh" <<<"$payload" >/dev/null 2>&1 || hook_exited "$LINENO" "$?"
-    reads="$(grep -cF '.tool_name // empty' "$WC_JQ_LOG" || true)"
-    if [ "$reads" = 1 ] && grep -qF '.tool_response.content' "$WC_JQ_LOG"; then
+    reads="$(grep -cF 'tool_name' "$WC_JQ_LOG" || true)"
+    if [ "$reads" = 1 ] && grep -qF 'def text_block' "$WC_JQ_LOG"; then
       pass "$label: a PostToolUse call reads the tool name once"
     else
       fail "$label: a PostToolUse call reads the tool name once: read $reads times in $(grep -c . "$WC_JQ_LOG") jq runs"
@@ -1711,15 +1801,40 @@ else
   pass "$WC_SHARED_CHECK"
 fi
 
+# A helper that calls a hook names its caller's line when the hook exits
+# non-zero, not the helper's own. Each helper runs here in a subshell, on hooks
+# that exit 3, so the failure it reports is read and not counted.
+EXITING_HOOKS_DIR="$TMP_TEST_DIR/exiting-hooks"
+mkdir -p "$EXITING_HOOKS_DIR"
+for hook in post-tool-use session-start stop; do
+  printf 'exit 3\n' > "$EXITING_HOOKS_DIR/$hook.sh"
+done
+helper_lines=""
+report="$(wc_call "$EXITING_HOOKS_DIR" exiting "$WC_SAVE" test-project x "$WC_SAVED")"; line=$LINENO
+grep -qF "line $line exits 0 (got 3)" <<<"$report" || helper_lines="$helper_lines wc_call: $report;"
+report="$(wc_context "$EXITING_HOOKS_DIR" exiting startup)"; line=$LINENO
+grep -qF "line $line exits 0 (got 3)" <<<"$report" || helper_lines="$helper_lines wc_context: $report;"
+report="$(wc_reason "$EXITING_HOOKS_DIR" stop exiting)"; line=$LINENO
+grep -qF "line $line exits 0 (got 3)" <<<"$report" || helper_lines="$helper_lines wc_reason: $report;"
+if [ -z "$helper_lines" ]; then
+  pass "Harness: a helper names its caller's line when a hook exits non-zero"
+else
+  fail "Harness: a helper names its caller's line when a hook exits non-zero:$helper_lines"
+fi
+
 # No hook is fed by a pipe (#2294). A hook that never reads its input, as the
 # installer's self-test swaps in, kills a piped writer with SIGPIPE, and under
 # `set -euo pipefail` the suite then ends with 141 before naming what failed.
-# The harness's own text is searched, continuation lines joined and comments
-# skipped, for a pipe whose command, after any variable assignments, is `bash`
-# running a `.sh` file.
-HOOK_PIPE='\|[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=("[^"]*"|[^[:space:]]*)[[:space:]]+)*bash[[:space:]]+"[^"]*\.sh"'
-piped_hooks="$(awk '/^[[:space:]]*#/ { next } { if (sub(/\\$/, "")) { line = line $0 } else { print line $0; line = "" } }' \
-  "${BASH_SOURCE[0]}" | grep -E "$HOOK_PIPE" || true)"
+# The harness's own text is searched, comments skipped, for a pipe whose
+# command, after any variable assignments or an `env` with its arguments, is
+# `bash` running a `.sh` file. A line continued by `\` is joined to the next,
+# and so is a line that ends in `|`, where bash continues the pipe too.
+HOOK_PIPE_WORD='([^|;&[:space:]"]|"[^"]*")+'
+HOOK_PIPE="\\|[[:space:]]*(env[[:space:]]+(${HOOK_PIPE_WORD}[[:space:]]+)*)?([A-Za-z_][A-Za-z0-9_]*=${HOOK_PIPE_WORD}[[:space:]]+)*bash[[:space:]]+\"[^\"]*\\.sh\""
+piped_hooks="$(awk '
+  /^[[:space:]]*#/ { next }
+  { if (sub(/\\$/, "")) { line = line $0 } else if ($0 ~ /\|[[:space:]]*$/) { line = line $0 " " } else { print line $0; line = "" } }
+' "${BASH_SOURCE[0]}" | grep -E "$HOOK_PIPE" || true)"
 if [ -z "$piped_hooks" ]; then
   pass "Harness: no hook call is fed by a pipe"
 else

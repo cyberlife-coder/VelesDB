@@ -134,6 +134,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sent, a NUL byte or a trailing newline included, before any shell reads it, so
   none can redirect the reminders or carry text into them. A record is read only
   when its file holds exactly that one record.
+- **The agent hooks read an MCP result Claude Code sends as a JSON string.**
+  Claude Code passes a velesdb-memory tool's result to PostToolUse as a JSON
+  string, which the hooks' success check refused, so in a Claude Code session
+  no successful recall unlocked the learning-loop guard and no working-context
+  call was recorded.
+  Both hosts' hooks now share one check: a string counts when it decodes to a
+  non-empty object with no error, and a load's `found` is read from it too.
+- **One recall unlocks every worktree of the project it names (#2308).** The
+  learning-loop guard keeps the refused edits of one host session in one place,
+  and subagents share their parent's session. A recall scoped to a project
+  found two worktrees of it waiting and promoted neither, so no edit could
+  proceed in any of them. It now unlocks each worktree of that project, and no
+  other project's.
 - **The REST OpenAPI document shows no rustdoc link syntax (#2263).** utoipa
   copies doc comments into the OpenAPI document (`docs/openapi.{json,yaml}`,
   served at `GET /api-docs/openapi.json` by a server built with

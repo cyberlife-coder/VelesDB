@@ -132,26 +132,6 @@ successful_memory_recall() {
   successful_tool_response "$payload"
 }
 
-# successful_tool_response PAYLOAD: the MCP call behind a PostToolUse payload
-# returned a non-empty text result and no error.
-successful_tool_response() {
-  local payload="$1"
-
-  printf '%s' "$payload" | jq -e '
-    ((.tool_response | type) == "object")
-    and ((.tool_response.content? | type) == "array")
-    and any(
-      .tool_response.content[];
-      (type == "object")
-      and (.type == "text")
-      and ((.text? | type) == "string")
-      and ((.text | length) > 0)
-    )
-    and ((.tool_response.isError // .tool_response.is_error // false) == false)
-    and ((.tool_response.error? // null) == null)
-  ' >/dev/null 2>&1
-}
-
 # read_stdin_payload: read the hook's JSON payload from stdin exactly once.
 read_stdin_payload() {
   cat
@@ -349,12 +329,47 @@ recall_targets_current_project() {
 # trailing newline.
 WORKING_SESSION_CLASS='[A-Za-z0-9][A-Za-z0-9._:-]{0,127}'
 
-# working_context_found PAYLOAD: the load_working_context result says found.
+# successful_tool_response PAYLOAD: the MCP call behind a PostToolUse payload
+# returned a successful result. A host sends it in one of three shapes, each
+# kept strict so that `{}`, an error, an empty content array or an empty text
+# never counts:
+#   - a JSON string: Claude Code passes the tool's structured output encoded,
+#     as its transcripts store it (`{"memories":[...]}`, `{"found":true,...}`,
+#     `{"id":...,"id_str":"..."}`). It counts only when it decodes to a
+#     non-empty object with no error, and with a text block if it has content;
+#   - the result's `content` array itself;
+#   - the complete CallToolResult envelope, as Codex passes it.
+# Both hosts share this check, so a shape one host starts sending is already
+# read by the other's.
+successful_tool_response() {
+  printf '%s' "$1" | jq -e '
+    def text_block:
+      (type == "object") and (.type == "text")
+      and ((.text? | type) == "string") and ((.text | length) > 0);
+    def no_error:
+      ((.isError // .is_error // false) == false) and ((.error? // null) == null);
+    .tool_response
+    | if (type == "array") then any(.[]; text_block)
+      elif (type == "object") then
+        ((.content? | type) == "array") and any(.content[]; text_block) and no_error
+      elif (type == "string") then
+        (fromjson? // null)
+        | (type == "object") and (length > 0) and no_error
+          and (((.content? | type) != "array") or any(.content[]; text_block))
+      else false end
+  ' >/dev/null 2>&1
+}
+
+# working_context_found PAYLOAD: the load_working_context result says found,
+# in whichever shape successful_tool_response reads: the decoded string itself,
+# or the JSON text of a content block.
 working_context_found() {
   printf '%s' "$1" | jq -e '
-    [ (if ((.tool_response | type) == "array") then .tool_response[] else .tool_response.content[]? end)
-      | select(type == "object" and .type == "text")
-      | .text | fromjson? | select(type == "object") | .found ]
+    [ .tool_response
+      | if (type == "string") then .
+        elif (type == "array") then (.[] | select(type == "object" and .type == "text") | .text)
+        else (.content[]? | select(type == "object" and .type == "text") | .text) end
+      | fromjson? | select(type == "object") | .found ]
     | any(. == true)
   ' >/dev/null 2>&1
 }
@@ -487,7 +502,10 @@ adopt_batch_sessions() {
 
 # promote_pending_recall DIR RECALL_KIND HOST_SESSION PAYLOAD
 #
-# An explicit project scope takes precedence. Without one, prefer the pending
+# An explicit project scope promotes every pending root of that project: a
+# recall's memories are per project, not per checkout, and subagents share
+# their parent's host session, so the refused edits of several worktrees of one
+# project wait in one directory (#2308). Without a scope, promote the pending
 # record for the current opted-in root; from an unconfigured cwd, a sole target
 # is unambiguous. Return 0 when promoted, 1 when no pending record exists, 2 on
 # malformed state/I/O, and 3 when valid pending state does not match the recall.
@@ -499,13 +517,11 @@ promote_pending_recall() {
   local file
   local root
   local project
-  local scoped_project
-  local selected_root=""
-  local ambiguous="false"
-  local scope_present="false"
+  local scoped_project=""
+  local select_by
+  local promoted="false"
   local canonical
   local expected
-  local marker_id
   local marker_path
   local -a files=()
 
@@ -529,46 +545,33 @@ promote_pending_recall() {
   fi
 
   if recall_scope_present "$payload"; then
-    scope_present="true"
     scoped_project="$(recall_scope_project "$payload")" || return 3
-  fi
-  if [ "$scope_present" = "true" ]; then
-    for file in "${files[@]}"; do
-      project="$(jq -r '.project' "$file")" || return 2
-      [ "$project" = "$scoped_project" ] || continue
-      root="$(jq -r '.root' "$file")" || return 2
-      if [ -z "$selected_root" ]; then
-        selected_root="$root"
-      elif [ "$selected_root" != "$root" ]; then
-        ambiguous="true"
-      fi
-    done
-    [ "$ambiguous" = "false" ] || selected_root=""
+    select_by="project"
   elif learning_loop_enabled; then
-    for file in "${files[@]}"; do
-      root="$(jq -r '.root' "$file")" || return 2
-      if [ "$root" = "$CONFIG_ROOT" ]; then
-        selected_root="$root"
-        break
-      fi
-    done
+    select_by="current-root"
+  elif [ "${#files[@]}" -eq 1 ]; then
+    select_by="sole"
+  else
+    return 3
   fi
 
-  if [ -z "$selected_root" ] && ! learning_loop_enabled \
-    && [ "$scope_present" = "false" ] && [ "${#files[@]}" -eq 1 ]; then
-    selected_root="$(jq -r '.root' "${files[0]}")" || return 2
-  fi
-  [ -n "$selected_root" ] || return 3
-
-  marker_id="$(printf '%s\n%s' "$host_session" "$selected_root")"
-  marker_path="$(sentinel_path "$recall_kind" "$marker_id")" || return 2
-  touch_private_marker "$marker_path" || return 2
   for file in "${files[@]}"; do
     root="$(jq -r '.root' "$file")" || return 2
-    if [ "$root" = "$selected_root" ]; then
-      rm -f "$file" || return 2
-    fi
+    case "$select_by" in
+      project)
+        project="$(jq -r '.project' "$file")" || return 2
+        [ "$project" = "$scoped_project" ] || continue
+        ;;
+      current-root)
+        [ "$root" = "$CONFIG_ROOT" ] || continue
+        ;;
+    esac
+    marker_path="$(sentinel_path "$recall_kind" "$(printf '%s\n%s' "$host_session" "$root")")" || return 2
+    touch_private_marker "$marker_path" || return 2
+    rm -f "$file" || return 2
+    promoted="true"
   done
+  [ "$promoted" = "true" ] || return 3
   rmdir "$dir" 2>/dev/null || true
 }
 

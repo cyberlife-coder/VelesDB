@@ -128,8 +128,9 @@ unrelated projects are never blocked.
 The guard markers live under `${TMPDIR:-/tmp}/velesdb-agent-hooks-$UID/`, keyed on
 both the opted-in repository root and `session_id`, and namespaced so Codex
 cannot collide with Claude Code. A refused target is queued; a recall promotes
-it only when cwd, an explicit project filter, or a sole pending record makes
-the target unambiguous. Recall persists for that repository and host session.
+it when it runs from that repository, when it is the sole pending record, or
+when the recall filters its project, which promotes every pending worktree of
+that project. Recall persists for that repository and host session.
 Each accepted patch records every opted-in target in its own atomic file, so
 parallel hooks cannot lose a repository. `Stop` names every project/session
 that must be saved and retains the complete batch in a recoverable manifest
