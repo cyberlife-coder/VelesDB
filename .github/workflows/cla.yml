@@ -11,6 +11,11 @@ permissions:
   pull-requests: write
   statuses: write
 
+env:
+  # rustup never installs a toolchain on its own: a Rust call reached before the
+  # job's install step fails here instead of installing mid-build.
+  RUSTUP_AUTO_INSTALL: "0"
+
 jobs:
   cla-assistant:
     runs-on: ubuntu-latest

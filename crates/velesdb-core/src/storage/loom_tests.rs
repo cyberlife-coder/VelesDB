@@ -6,7 +6,7 @@
 //! # Running Loom Tests
 //!
 //! ```bash
-//! RUSTFLAGS="--cfg loom" cargo test --test loom_tests --release
+//! LOOM_MAX_PREEMPTIONS=3 RUSTFLAGS="--cfg loom" cargo test -p velesdb-core --features loom,persistence storage::loom -- --test-threads=1
 //! ```
 //!
 //! # What Loom Tests
