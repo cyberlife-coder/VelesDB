@@ -30,8 +30,10 @@ Statically, over every workflow (``*.yml``, ``*.yaml``), every composite action
 and every Dockerfile, this suite holds that:
 
 * every workflow sets ``RUSTUP_AUTO_INSTALL`` to ``"0"`` in its top-level
-  ``env``, and no job or step ``env`` sets it to anything else; no workflow
-  assigns it in a ``run`` or runs ``rustup set auto-install``;
+  ``env`` (a composite action, on each step), and the name appears nowhere else
+  in the document: not in another ``env``, a ``run``, a ``shell`` or
+  ``defaults``, since a mention can set, unset or re-enable it in forms no scan
+  enumerates. Nothing runs ``rustup set auto-install`` either;
 * nothing names a toolchain but ``nightly``: no ``RUST_VERSION``, no
   ``*toolchain`` key anywhere in a workflow, no ``RUSTUP_TOOLCHAIN``
   assignment (key, inline, ``export``, ``$GITHUB_ENV`` or Dockerfile ``ENV``),
@@ -189,7 +191,8 @@ RUNS_AFTER_FAILURE_RE = re.compile(r"\b(?:always|failure|cancelled)\(\)")
 # The runtime backstop: rustup refuses to install a toolchain a call needs.
 AUTO_INSTALL = "RUSTUP_AUTO_INSTALL"
 AUTO_INSTALL_OFF = "0"
-AUTO_INSTALL_CHANGE_RE = re.compile(r"\bRUSTUP_AUTO_INSTALL\s*=|\brustup(?:\.exe)?\s+set\s+auto-install\b")
+AUTO_INSTALL_MENTION_RE = re.compile(re.escape(AUTO_INSTALL) + r"|\brustup(?:\.exe)?\s+set\s+auto-install\b")
+AUTO_INSTALL_PAST_TOP_LEVEL = f"names {AUTO_INSTALL} past the top-level env key"
 EXPRESSION_RE = re.compile(r"^\$\{\{\s*(.*?)\s*\}\}$")
 # A repository script a step runs: `<interpreter> [options] <path>`, or `<path>` itself.
 INTERPRETER_RE = re.compile(r"^(?:bash|sh|zsh|pwsh|node|python(?:3(?:\.\d+)?)?)(?:\.exe)?$")
@@ -934,17 +937,21 @@ def auto_install_findings(text: str) -> list[str]:
     composite = "jobs" not in _pairs(workflow.root)
     if not composite and workflow.env.get(AUTO_INSTALL) != AUTO_INSTALL_OFF:
         found.append(f'the workflow does not set {AUTO_INSTALL}: "{AUTO_INSTALL_OFF}" in its top-level env')
-    for name, job in workflow.jobs.items():
-        if job.env.get(AUTO_INSTALL, AUTO_INSTALL_OFF) != AUTO_INSTALL_OFF:
-            found.append(f"{name}: job sets {AUTO_INSTALL} to {job.env[AUTO_INSTALL]!r}")
-        for index, step in enumerate(job.steps):
-            where = f"{name}: step {index}"
-            value = step.env.get(AUTO_INSTALL, None if composite else AUTO_INSTALL_OFF)
-            if value != AUTO_INSTALL_OFF:
-                found.append(f"{where} sets {AUTO_INSTALL} to {value!r}" if value is not None
-                             else f'{where} of a composite action does not set {AUTO_INSTALL}: "{AUTO_INSTALL_OFF}"')
-            if AUTO_INSTALL_CHANGE_RE.search(step.run):
-                found.append(f"{where} changes {AUTO_INSTALL} in its run")
+    allowed = {id(key) for key, _ in [_pairs(_value(_pairs(workflow.root), "env")).get(AUTO_INSTALL, (None, None))]}
+    if composite:
+        for name, job in workflow.jobs.items():
+            for index, step in enumerate(job.steps):
+                if step.env.get(AUTO_INSTALL) != AUTO_INSTALL_OFF:
+                    found.append(f'{name}: step {index} of a composite action does not set {AUTO_INSTALL}: "{AUTO_INSTALL_OFF}"')
+        steps = _value(_pairs(_value(_pairs(workflow.root), "runs")), "steps")
+        items = steps.value if isinstance(steps, yaml.SequenceNode) else []
+        allowed = {id(pair[0]) for item in items if (pair := _pairs(_value(_pairs(item), "env")).get(AUTO_INSTALL))}
+    # Past the one key that turns it off, any mention may set, unset or re-enable it
+    # (`env -u`, `unset`, `Remove-Item Env:`, a `shell:` wrapper, `$GITHUB_ENV`): no form is parsed.
+    scalars = [key for key, _, _ in _mapping_pairs(workflow.root)] + [node for node, _ in _value_scalars(workflow.root)]
+    for node in scalars:
+        if isinstance(node, yaml.ScalarNode) and id(node) not in allowed and AUTO_INSTALL_MENTION_RE.search(node.value):
+            found.append(f"line {node.start_mark.line + 1} {AUTO_INSTALL_PAST_TOP_LEVEL}: {node.value.strip()[:80]!r}")
     return found
 
 
@@ -1918,6 +1925,7 @@ class ScriptAndConditionTests(unittest.TestCase):
 
 AUTO_INSTALL_ENV = 'env:\n  RUSTUP_AUTO_INSTALL: "0"\n'
 AUTO_INSTALL_JOB = AUTO_INSTALL_ENV + ONE_JOB + CHECKOUT
+OUTSIDE_TOP_LEVEL = AUTO_INSTALL_PAST_TOP_LEVEL
 
 
 class RuntimeBackstopTests(unittest.TestCase):
@@ -1937,20 +1945,33 @@ class RuntimeBackstopTests(unittest.TestCase):
             with self.subTest(case=label):
                 self.assertTrue(_has(auto_install_findings(text), "does not set RUSTUP_AUTO_INSTALL"), label)
 
-    def test_a_job_step_or_run_that_turns_it_back_on_is_refused(self) -> None:
+    # Rounds 8 and 9: anything past the top-level key that names the variable may set or remove it.
+    def test_every_mention_past_the_top_level_key_is_refused(self) -> None:
+        with_job_defaults = ONE_JOB.replace("    steps:\n", "    defaults:\n      run:\n        shell: env -u RUSTUP_AUTO_INSTALL bash -e {0}\n    steps:\n")
         cases = {
-            "job env": (AUTO_INSTALL_ENV + ONE_JOB.replace("    steps:\n", '    env:\n      RUSTUP_AUTO_INSTALL: "1"\n    steps:\n')
-                        + CHECKOUT, "j: job sets RUSTUP_AUTO_INSTALL to '1'"),
-            "step env": (AUTO_INSTALL_JOB + '      - env:\n          RUSTUP_AUTO_INSTALL: ""\n        run: cargo build\n',
-                         "j: step 1 sets RUSTUP_AUTO_INSTALL to ''"),
-            "GITHUB_ENV": (AUTO_INSTALL_JOB + '      - run: echo "RUSTUP_AUTO_INSTALL=1" >> "$GITHUB_ENV"\n',
-                           "j: step 1 changes RUSTUP_AUTO_INSTALL in its run"),
-            "rustup set": (AUTO_INSTALL_JOB + "      - run: rustup set auto-install enable\n",
-                           "j: step 1 changes RUSTUP_AUTO_INSTALL in its run"),
+            "job env": AUTO_INSTALL_ENV + ONE_JOB.replace("    steps:\n", '    env:\n      RUSTUP_AUTO_INSTALL: "1"\n    steps:\n') + CHECKOUT,
+            "job env set to 0": AUTO_INSTALL_ENV + ONE_JOB.replace("    steps:\n", '    env:\n      RUSTUP_AUTO_INSTALL: "0"\n    steps:\n') + CHECKOUT,
+            "step env": AUTO_INSTALL_JOB + '      - env:\n          RUSTUP_AUTO_INSTALL: ""\n        run: cargo build\n',
+            "GITHUB_ENV assignment": AUTO_INSTALL_JOB + '      - run: echo "RUSTUP_AUTO_INSTALL=1" >> "$GITHUB_ENV"\n',
+            "rustup set": AUTO_INSTALL_JOB + "      - run: rustup set auto-install enable\n",
+            "unset": AUTO_INSTALL_JOB + "      - run: unset RUSTUP_AUTO_INSTALL && cargo build\n",
+            "env -u": AUTO_INSTALL_JOB + "      - run: env -u RUSTUP_AUTO_INSTALL cargo build\n",
+            "pwsh Remove-Item": AUTO_INSTALL_JOB + "      - shell: pwsh\n        run: Remove-Item Env:RUSTUP_AUTO_INSTALL\n",
+            "step shell": AUTO_INSTALL_JOB + "      - shell: env -u RUSTUP_AUTO_INSTALL bash -e {0}\n        run: cargo build\n",
+            "job defaults shell": AUTO_INSTALL_ENV + with_job_defaults + CHECKOUT + "      - run: cargo build\n",
+            "workflow defaults shell": (AUTO_INSTALL_ENV + "defaults:\n  run:\n    shell: env -u RUSTUP_AUTO_INSTALL bash -e {0}\n"
+                                        + ONE_JOB + CHECKOUT),
+            "multi-line GITHUB_ENV": (AUTO_INSTALL_JOB + '      - run: |\n          echo "RUSTUP_AUTO_INSTALL<<EOF" >> "$GITHUB_ENV"\n'
+                                      '          echo 1 >> "$GITHUB_ENV"\n          echo EOF >> "$GITHUB_ENV"\n'),
+            "printf into GITHUB_ENV": AUTO_INSTALL_JOB + "      - run: printf '%s=\\n' RUSTUP_AUTO_INSTALL >> \"$GITHUB_ENV\"\n",
         }
-        for label, (text, wanted) in cases.items():
+        for label, text in cases.items():
             with self.subTest(case=label):
-                self.assertTrue(_has(auto_install_findings(text), wanted), auto_install_findings(text))
+                found = auto_install_findings(text)
+                self.assertTrue(_has(found, OUTSIDE_TOP_LEVEL), found)
+
+    def test_the_top_level_key_itself_is_not_a_mention(self) -> None:
+        self.assertEqual([], auto_install_findings(AUTO_INSTALL_JOB + INSTALL_STEP + "      - run: cargo build\n"))
 
     def test_a_workflow_the_loader_rejects_or_a_bare_composite_action_is_refused(self) -> None:
         self.assertTrue(_has(auto_install_findings(AUTO_INSTALL_JOB + "  - [\n"), "not valid YAML"))
