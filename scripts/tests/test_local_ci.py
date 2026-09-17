@@ -40,6 +40,8 @@ def fake_rust_toolchain(bin_dir: Path) -> dict[str, str]:
         "#!/usr/bin/env bash\n"
         "for a in \"$@\"; do [ \"$a\" = --list ] && { printf 'Installed Commands:\\n    build\\n    fmt\\n'; exit 0; }; done\n"
         "for a in \"$@\"; do [ \"$a\" = definitely-not-a-subcommand-xyz ] && { echo \"error: no such command\" >&2; exit 101; }; done\n"
+        # rustup reads a toolchain only in first place; later, cargo sees a command.
+        "for a in \"${@:2}\"; do case \"$a\" in +*) echo \"error: no such command: $a\" >&2; exit 101;; esac; done\n"
         "exit 0\n",
         encoding="utf-8",
     )
@@ -207,6 +209,7 @@ class MissingToolTests(unittest.TestCase):
                 "cargo --locked definitely-not-a-subcommand-xyz",
                 "cargo -q --offline --frozen -v definitely-not-a-subcommand-xyz",
                 "cargo +stable --quiet fmt",
+                "cargo +stable -q fmt",
             ):
                 with self.subTest(command=command):
                     result = self.replay(env, tmp, command)
@@ -232,10 +235,18 @@ class MissingToolTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assertIn("ok", result.stdout)
                     self.assertNotIn("TOOL MISSING", result.stdout)
-            result = self.replay(env, tmp, "cargo --config x=1 definitely-not-a-subcommand-xyz")
-            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-            self.assertIn("FAILED", result.stdout)
-            self.assertNotIn("TOOL MISSING", result.stdout)
+            # A `+toolchain` counts only as the first argument, as rustup reads
+            # it: anywhere later cargo refuses it as a command, and the gate fails.
+            for command in (
+                "cargo --config x=1 definitely-not-a-subcommand-xyz",
+                "cargo -q +nightly fmt --version",
+                "cargo --quiet +nightly definitely-not-a-subcommand-xyz",
+            ):
+                with self.subTest(command=command):
+                    result = self.replay(env, tmp, command)
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertIn("FAILED", result.stdout)
+                    self.assertNotIn("TOOL MISSING", result.stdout)
 
     def test_a_red_gate_whose_output_names_a_missing_tool_stays_red(self) -> None:
         # "Missing tool" is decided by the exit code, never by the output: a

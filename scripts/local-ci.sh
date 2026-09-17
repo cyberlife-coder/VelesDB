@@ -80,9 +80,11 @@ total=0; ran=0; failed=0; skipped=0; missing=0
 # find. Cargo answers 101 for a subcommand it does not have, the same code as
 # any failing cargo command, so the replay asks first, and a missing one exits
 # 127 before cargo runs. It looks only when every argument before the
-# subcommand is a `+toolchain` or a flag known to take no value (-q, -v, -vv,
-# --quiet, --verbose, --frozen, --locked, --offline); any other option, which
-# may take a value (`--explain E0308`, `-qZ unstable-options`), runs cargo
+# subcommand is a flag known to take no value (-q, -v, -vv, --quiet,
+# --verbose, --frozen, --locked, --offline), or a `+toolchain` as the FIRST
+# argument, the only place rustup reads one; any other option, which
+# may take a value (`--explain E0308`, `-qZ unstable-options`), or a later
+# `+toolchain`, which cargo refuses as a command (`-q +nightly fmt`), runs cargo
 # as written, so a value is never read as a missing subcommand and a gate is
 # never skipped on a guess. A subcommand is missing when `cargo --list` does
 # not name it, or when rustup provides it and the toolchain lacks its
@@ -91,14 +93,15 @@ total=0; ran=0; failed=0; skipped=0; missing=0
 CARGO_SUBCOMMANDS=$(cargo --list 2>/dev/null | awk 'NR > 1 { print $1 }')
 export CARGO_SUBCOMMANDS
 cargo() {
-  local arg sub="" toolchain="" proxy rustup_bin
+  local arg sub="" toolchain="" proxy rustup_bin first=1
   for arg in "$@"; do
     case "$arg" in
-      +*) toolchain="${arg#+}" ;;
+      +*) [ "$first" = 1 ] || { command cargo "$@"; return; }; toolchain="${arg#+}" ;;
       -q|-v|-vv|--quiet|--verbose|--frozen|--locked|--offline) ;;
       -*) command cargo "$@"; return ;;
       *) sub="$arg"; break ;;
     esac
+    first=0
   done
   if [ -n "$sub" ]; then
     if ! printf '%s\n' "$CARGO_SUBCOMMANDS" | grep -qxF -- "$sub"; then
