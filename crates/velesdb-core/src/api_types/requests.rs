@@ -146,7 +146,7 @@ pub enum SparseVectorInput {
 ///
 /// Prevents memory amplification: a 100 MB JSON body of sparse indices/values
 /// can decompress to a much larger in-memory `Vec<(u32, f32)>`. Sparse NLP
-/// embeddings (SPLADE, BM25) typically have < 1 K NNZ; 65 536 gives a 60× headroom
+/// embeddings (SPLADE, BM25) typically have < 1 K NNZ; 65 536 (64 × 1 K) gives headroom
 /// over typical workloads while bounding worst-case allocation to ~512 KB per vector.
 pub const MAX_SPARSE_NNZ: usize = 65_536;
 

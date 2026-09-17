@@ -5,8 +5,8 @@
 //!
 //! # Performance Goals
 //!
-//! - Maintain 50M+ items/sec filter throughput at 100k items (vs 19M/s with
-//!   JSON) — measured by the `column_filter_benchmark` micro-benchmark of
+//! - Filter far faster than a scan of the same items' JSON payloads: at 100k
+//!   items, `docs/BENCHMARKS.md` §6 records the `column_filter_benchmark` run of
 //!   this module's filtering API. The `SELECT ... WHERE` query path invokes
 //!   these typed filters through the per-collection payload mirror
 //!   (`collection::payload_mirror`), built adaptively for scan-heavy

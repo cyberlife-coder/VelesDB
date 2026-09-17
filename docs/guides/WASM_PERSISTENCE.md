@@ -113,24 +113,20 @@ All of these are async.
 
 ## Performance
 
-The figures below are **indicative** and carried over from the previous README
-revision. They were not re-measured for this document; treat them as an order
-of magnitude, not a guarantee, and re-run the benches on your own target
-hardware before relying on them.
+The serialization rates below come from the 0.3.0 release notes (CHANGELOG,
+2025-12-22), which name no machine, and were not re-measured since; treat them
+as an order of magnitude, not a guarantee, and re-run the benches on your own
+target hardware before relying on them.
 
-Serialization throughput, 10 000 vectors of 768 dimensions:
+Serialization throughput (the times are those rates applied to 10 000 vectors
+of 768 dimensions, ~30.7 MB):
 
 | Operation | Time | Throughput |
 |---|---|---|
 | `export_to_bytes` | ~7 ms | ~4479 MB/s |
 | `import_from_bytes` | ~10 ms | ~2943 MB/s |
 
-Typical in-browser latency:
-
-| Operation | 768-D vectors | 10 000 vectors |
-|---|---|---|
-| Insert | ~1 µs | ~10 ms |
-| Search | ~50 µs | ~5 ms |
+No recorded run measures in-browser insert or search latency.
 
 Search is brute-force O(n) over every vector — there is no HNSW graph in the
 WASM build — so search latency grows linearly with `store.len`.

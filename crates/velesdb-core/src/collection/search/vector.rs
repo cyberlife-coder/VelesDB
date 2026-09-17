@@ -507,7 +507,7 @@ impl Collection {
 
     /// Performs fast vector similarity search returning only IDs and scores.
     ///
-    /// Perf: This is ~3-5x faster than `search()` because it skips vector/payload retrieval.
+    /// Perf: faster than `search()` because it skips vector/payload retrieval.
     /// Use this when you only need IDs and scores, not full point data.
     ///
     /// # Arguments

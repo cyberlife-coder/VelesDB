@@ -19,12 +19,44 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "local-ci.sh"
 
 
-def run(workflow: Path | None, *args: str) -> subprocess.CompletedProcess:
+def fake_rust_toolchain(bin_dir: Path) -> dict[str, str]:
+    """A cargo and a rustup on PATH. The default toolchain lacks the rustfmt
+    component and the toolchain `full` has it: `cargo --list` names `fmt`
+    either way (rustup's `cargo-fmt` proxy is always there), and only
+    `rustup which` tells them apart. A listed subcommand that runs exits 0; an
+    unknown one exits 101, as cargo does. No download, no real toolchain."""
+    bin_dir.mkdir()
+    rustup = bin_dir / "rustup"
+    rustup.write_text(
+        "#!/usr/bin/env bash\n"
+        "[ \"$1\" = which ] || exit 0\n"
+        "[ \"$2 $3\" = \"--toolchain full\" ] && { echo /toolchain/bin/\"${@: -1}\"; exit 0; }\n"
+        "[ \"${@: -1}\" = cargo-fmt ] && { echo \"error: 'cargo-fmt' is not installed\" >&2; exit 1; }\n"
+        "echo /toolchain/bin/\"${@: -1}\"\n",
+        encoding="utf-8",
+    )
+    cargo = bin_dir / "cargo"
+    cargo.write_text(
+        "#!/usr/bin/env bash\n"
+        "for a in \"$@\"; do [ \"$a\" = --list ] && { printf 'Installed Commands:\\n    build\\n    fmt\\n'; exit 0; }; done\n"
+        "for a in \"$@\"; do [ \"$a\" = definitely-not-a-subcommand-xyz ] && { echo \"error: no such command\" >&2; exit 101; }; done\n"
+        # rustup reads a toolchain only in first place; later, cargo sees a command.
+        "for a in \"${@:2}\"; do case \"$a\" in +*) echo \"error: no such command: $a\" >&2; exit 101;; esac; done\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    for tool in (rustup, cargo):
+        tool.chmod(0o755)
+    (bin_dir / "cargo-fmt").symlink_to(rustup)
+    return {"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
+
+
+def run(workflow: Path | None, *args: str, env_extra: dict[str, str] | None = None) -> subprocess.CompletedProcess:
     # The synthetic workflows below declare `lint` only. The script's default
     # covers every gate job, and asking for an absent one is an error — see
     # `test_an_unknown_job_answers_2`. Scoping here keeps these tests about
     # derivation rather than about job coverage.
-    env = dict(os.environ, JOBS="lint")
+    env = dict(os.environ, JOBS="lint", **(env_extra or {}))
     if workflow is not None:
         env["WORKFLOW"] = str(workflow)
     return subprocess.run(
@@ -135,19 +167,108 @@ class MissingToolTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("TOOL MISSING", result.stdout)
 
-    def test_a_cargo_style_missing_subcommand_is_not_a_failure(self) -> None:
-        # `cargo machete` says "no such command" and exits 101, not 127. The
-        # first version knew only the shell's wording and reported a FAILING
-        # GATE on a clean tree.
+    def test_a_missing_cargo_subcommand_is_not_a_failure(self) -> None:
+        # `cargo machete` without cargo-machete exits 101, the code of any
+        # failing cargo command. The replay tells them apart before running:
+        # a subcommand cargo does not list exits 127, as a missing command does.
         with tempfile.TemporaryDirectory() as tmp:
             wf = Path(tmp) / "ci.yml"
-            wf.write_text(
-                workflow_with("Cargo subcommand", "'echo \"error: no such command: machete\" >&2; exit 101'"),
-                encoding="utf-8",
-            )
+            wf.write_text(workflow_with("Cargo subcommand", "cargo definitely-not-a-subcommand-xyz"), encoding="utf-8")
             result = run(wf)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("TOOL MISSING", result.stdout)
+
+    def test_a_rustup_component_that_is_absent_is_a_missing_tool(self) -> None:
+        # `cargo --list` names `fmt` whether or not rustfmt is installed: the
+        # proxy is rustup's. Only `rustup which cargo-fmt` knows.
+        with tempfile.TemporaryDirectory() as tmp:
+            env = fake_rust_toolchain(Path(tmp) / "bin")
+            wf = Path(tmp) / "ci.yml"
+            wf.write_text(workflow_with("Format", "cargo fmt --version"), encoding="utf-8")
+            result = run(wf, env_extra=env)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("TOOL MISSING", result.stdout)
+            # A toolchain that has the component runs it: the check asks that
+            # toolchain, not the default one.
+            wf.write_text(workflow_with("Format", "cargo +full fmt --version"), encoding="utf-8")
+            result = run(wf, env_extra=env)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("ok", result.stdout)
+            self.assertNotIn("TOOL MISSING", result.stdout)
+
+    def replay(self, env: dict[str, str], tmp: str, command: str) -> subprocess.CompletedProcess:
+        wf = Path(tmp) / "ci.yml"
+        wf.write_text(workflow_with("Cargo", command), encoding="utf-8")
+        return run(wf, env_extra=env)
+
+    def test_a_toolchain_or_a_known_flag_before_a_missing_subcommand_is_seen_through(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = fake_rust_toolchain(Path(tmp) / "bin")
+            for command in (
+                "cargo +stable definitely-not-a-subcommand-xyz",
+                "cargo --locked definitely-not-a-subcommand-xyz",
+                "cargo -q --offline --frozen -v definitely-not-a-subcommand-xyz",
+                "cargo +stable --quiet fmt",
+                "cargo +stable -q fmt",
+            ):
+                with self.subTest(command=command):
+                    result = self.replay(env, tmp, command)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn("TOOL MISSING", result.stdout)
+            # A known prefix before a subcommand cargo has: it runs.
+            for command in ("cargo +full build", "cargo --locked build"):
+                with self.subTest(command=command):
+                    result = self.replay(env, tmp, command)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertNotIn("TOOL MISSING", result.stdout)
+
+    def test_any_other_option_runs_cargo_rather_than_being_guessed_at(self) -> None:
+        # The replay keeps no table of the options that take a value: a value
+        # read as the subcommand would report a gate missing and skip it
+        # (`cargo --explain E0308`, `cargo -qZ unstable-options fmt`). Cargo
+        # runs instead, and its own exit code is the verdict.
+        with tempfile.TemporaryDirectory() as tmp:
+            env = fake_rust_toolchain(Path(tmp) / "bin")
+            for command in ("cargo --explain E0308", "cargo -qZ unstable-options fmt --version", "cargo -C crates build"):
+                with self.subTest(command=command):
+                    result = self.replay(env, tmp, command)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn("ok", result.stdout)
+                    self.assertNotIn("TOOL MISSING", result.stdout)
+            # A `+toolchain` counts only as the first argument, as rustup reads
+            # it: anywhere later cargo refuses it as a command, and the gate fails.
+            for command in (
+                "cargo --config x=1 definitely-not-a-subcommand-xyz",
+                "cargo -q +nightly fmt --version",
+                "cargo --quiet +nightly definitely-not-a-subcommand-xyz",
+            ):
+                with self.subTest(command=command):
+                    result = self.replay(env, tmp, command)
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertIn("FAILED", result.stdout)
+                    self.assertNotIn("TOOL MISSING", result.stdout)
+
+    def test_a_red_gate_whose_output_names_a_missing_tool_stays_red(self) -> None:
+        # "Missing tool" is decided by the exit code, never by the output: a
+        # guard quoting a doc line such as "... when the plugin is not
+        # installed." failed, and was reported TOOL MISSING with exit 0.
+        phrases = (
+            "Search answers in 42 ms even when the plugin is not installed.",
+            "bash: foo: command not found",
+            "error: no such command: machete",
+            "open: No such file or directory: missing.txt",
+        )
+        for phrase in phrases:
+            for code in (1, 2, 101):
+                with self.subTest(phrase=phrase, code=code), tempfile.TemporaryDirectory() as tmp:
+                    wf = Path(tmp) / "ci.yml"
+                    wf.write_text(
+                        workflow_with("Red gate", f"'echo \"{phrase}\"; exit {code}'"), encoding="utf-8"
+                    )
+                    result = run(wf)
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertIn("FAILED", result.stdout)
+                    self.assertNotIn("TOOL MISSING", result.stdout)
 
 
 class DependencyTests(unittest.TestCase):

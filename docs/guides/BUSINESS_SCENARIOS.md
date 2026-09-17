@@ -24,11 +24,11 @@ LIMIT 12
 
 **Business Impact:**
 
-> *Illustrative scenario. "Before" estimates are architectural approximations, not measured benchmarks. VelesDB numbers are from internal testing. Actual results depend on data scale, query complexity, and hardware. See [BENCHMARKS.md](../BENCHMARKS.md) for reproducible measurements.*
+> *Illustrative scenario. "Before" estimates are architectural approximations, not measured benchmarks. No recorded run measures the VelesDB column either. Actual results depend on data scale, query complexity, and hardware. See [BENCHMARKS.md](../BENCHMARKS.md) for reproducible measurements.*
 
 | Metric | Before | After VelesDB |
 |--------|--------|---------------|
-| Query latency | 350ms (3 DBs) | **2ms** |
+| Query path | 3 databases, 3 round trips | **1 in-process query** |
 | Infrastructure | $2,400/mo | **$0** (local) |
 | Dev complexity | 3 integrations | **1 API** |
 
@@ -51,11 +51,11 @@ RETURN tx.id, account.id, similarity() as fraud_score
 
 **Business Impact:**
 
-> *Illustrative scenario. "Before" estimates are architectural approximations, not measured benchmarks. VelesDB numbers are from internal testing. Actual results depend on data scale, query complexity, and hardware. See [BENCHMARKS.md](../BENCHMARKS.md) for reproducible measurements.*
+> *Illustrative scenario. "Before" estimates are architectural approximations, not measured benchmarks. No recorded run measures the VelesDB column either. Actual results depend on data scale, query complexity, and hardware. See [BENCHMARKS.md](../BENCHMARKS.md) for reproducible measurements.*
 
 | Metric | Before | After VelesDB |
 |--------|--------|---------------|
-| Detection time | 2-5 seconds | **< 10ms** |
+| Detection path | Remote service call | **In-process, no network** |
 | False positives | 15% | **8%** (better context) |
 | Compliance | Cloud concerns | **On-premise OK** |
 
@@ -79,12 +79,12 @@ RETURN treatment.name, AVG(success_rate) as effectiveness
 
 **Business Impact:**
 
-> *Illustrative scenario. "Before" estimates are architectural approximations, not measured benchmarks. VelesDB numbers are from internal testing. Actual results depend on data scale, query complexity, and hardware. See [BENCHMARKS.md](../BENCHMARKS.md) for reproducible measurements.*
+> *Illustrative scenario. "Before" estimates are architectural approximations, not measured benchmarks. No recorded run measures the VelesDB column either. Actual results depend on data scale, query complexity, and hardware. See [BENCHMARKS.md](../BENCHMARKS.md) for reproducible measurements.*
 
 | Metric | Before | After VelesDB |
 |--------|--------|---------------|
 | Data location | Cloud (HIPAA risk) | **100% on-premise** |
-| Query time | 500ms+ | **< 5ms** |
+| Query path | Cloud API round trip | **Local, in-process** |
 | Integration | 3 vendors | **1 binary** |
 
 ---
@@ -108,11 +108,11 @@ LIMIT 10
 
 **Business Impact:**
 
-> *Illustrative scenario. "Before" estimates are architectural approximations, not measured benchmarks. VelesDB numbers are from internal testing. Actual results depend on data scale, query complexity, and hardware. See [BENCHMARKS.md](../BENCHMARKS.md) for reproducible measurements.*
+> *Illustrative scenario. "Before" estimates are architectural approximations, not measured benchmarks. No recorded run measures the VelesDB column either. Actual results depend on data scale, query complexity, and hardware. See [BENCHMARKS.md](../BENCHMARKS.md) for reproducible measurements.*
 
 | Metric | Before | After VelesDB |
 |--------|--------|---------------|
-| Context retrieval | 100-200ms | **< 1ms** |
+| Context retrieval | Network round trip | **In-process, no network** |
 | Memory footprint | 500MB+ | **~14 MB binary** |
 | Works offline | No | **Yes** |
 
@@ -287,7 +287,7 @@ curl -X POST http://localhost:8080/collections \
   -d '{"name": "image_hashes", "dimension": 256, "metric": "hamming"}'
 ```
 ```sql
--- Find near-duplicate images (bit-level comparison, ~36ns per distance)
+-- Find near-duplicate images (bit-level comparison)
 SELECT * FROM image_hashes
 WHERE vector NEAR $perceptual_hash
   AND source = 'user_uploads'
@@ -316,13 +316,13 @@ LIMIT 20
 
 **Performance by Metric (768D vectors):**
 
-| Metric | Latency | Throughput | SIMD Optimized |
-|--------|---------|------------|----------------|
-| **Cosine** | 33.1 ns | 30M ops/sec | AVX2 |
-| **Euclidean** | 26.0 ns | 34M ops/sec | AVX2 |
-| **DotProduct** | 21.7 ns | ~46M ops/sec | AVX2 |
-| **Hamming** | **35.8 ns** | **28M ops/sec** | POPCNT |
-| **Jaccard** | 35.1 ns | 28M ops/sec | AVX2 |
+| Metric | Latency | SIMD Optimized |
+|--------|---------|----------------|
+| **Cosine** | 33.1 ns | AVX2 |
+| **Euclidean** | 26.0 ns | AVX2 |
+| **DotProduct** | 21.7 ns | AVX2 |
+| **Hamming** | **35.8 ns** | POPCNT |
+| **Jaccard** | 35.1 ns | AVX2 |
 
 > Per-metric latency values are the contract numbers in `docs/reference/promise-contract.json`.
 

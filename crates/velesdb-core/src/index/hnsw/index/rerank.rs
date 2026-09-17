@@ -15,6 +15,10 @@ impl HnswIndex {
     /// then re-ranks them using our SIMD-optimized distance functions for
     /// exact distance computation, returning the top `k` results.
     ///
+    /// It re-ranks whether or not the index enables its exact-distance
+    /// features (`enable_vector_storage`): the graph always holds the
+    /// vectors, and the flag only gates what the index runs on its own.
+    ///
     /// # Errors
     ///
     /// Returns [`crate::error::Error::DimensionMismatch`] if the query dimension does not
@@ -55,6 +59,9 @@ impl HnswIndex {
     }
 
     /// Searches with SIMD-based re-ranking using a custom quality for initial search.
+    ///
+    /// Like [`Self::search_with_rerank`], it re-ranks whether or not
+    /// `enable_vector_storage` is set.
     ///
     /// # Errors
     ///

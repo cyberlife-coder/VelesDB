@@ -9,7 +9,7 @@
 //! - **Dot Product**: Direct FMA-optimized intrinsics
 //! - **Hamming (binary)**: `DistanceMetric::calculate` uses the f32 variant
 //!   (0.5 threshold per component); the POPCNT-on-packed-u64 fast path
-//!   (~48x faster) is a separate API consumed by the `RaBitQ` pipeline
+//!   is a separate API consumed by the `RaBitQ` pipeline
 //! - **Jaccard**: Set similarity with SIMD acceleration
 
 use crate::simd_native;
@@ -134,10 +134,8 @@ impl DistanceMetric {
     ///
     /// # Performance
     ///
-    /// Uses SIMD-optimized implementations. Typical latencies for 768d vectors:
-    /// - Cosine: ~32ns
-    /// - Euclidean: ~20ns
-    /// - Dot Product: ~18ns
+    /// Uses SIMD-optimized implementations. Their measured latencies, each
+    /// with the run behind it, are in `docs/BENCHMARKS.md`.
     #[must_use]
     #[inline]
     pub fn calculate(&self, a: &[f32], b: &[f32]) -> f32 {

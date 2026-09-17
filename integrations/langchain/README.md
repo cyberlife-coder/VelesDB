@@ -72,7 +72,7 @@ VelesDBVectorStore(
     path: str = "./velesdb_data",
     collection_name: str = "langchain",
     metric: str = "cosine",         # "cosine", "euclidean", "dot" (aliases: "dotproduct", "inner", "ip"), "hamming", "jaccard"
-    storage_mode: str = "full",     # "full"/"f32", "sq8"/"int8" (4× compression), "binary"/"bit" (32× compression), "pq" (8-32× compression), "rabitq" (32× with scalar correction)
+    storage_mode: str = "full",     # "full"/"f32", "sq8"/"int8" (4× compression), "binary"/"bit" (32× compression), "pq" (2 × dim / m compression), "rabitq" (32× with scalar correction)
     search_quality: str = None,     # "fast", "balanced", "accurate", "perfect", "autotune", "custom:N", "adaptive:MIN:MAX"
 )
 ```

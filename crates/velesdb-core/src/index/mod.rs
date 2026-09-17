@@ -91,7 +91,7 @@ pub trait VectorIndex: Send + Sync {
     /// This method acquires locks for each insertion. For bulk loading, use:
     /// - `HnswIndex::insert_batch_parallel()` - Best for all batches
     ///
-    /// Calling `insert()` in a loop incurs ~3x lock overhead per vector compared
+    /// Calling `insert()` in a loop pays the lock overhead once per vector, compared
     /// to batch methods which acquire locks once for the entire batch.
     fn insert(&self, id: u64, vector: &[f32]);
 

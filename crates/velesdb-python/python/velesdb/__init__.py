@@ -669,10 +669,11 @@ class Database:
                 - ``"full"`` (``"f32"``): Full f32 precision — best recall.
                 - ``"sq8"`` (``"int8"``): 8-bit scalar quantization — 4x compression.
                 - ``"binary"`` (``"bit"``): 1-bit binary quantization — 32x compression.
-                - ``"pq"`` (``"product_quantization"``): Product Quantization — 8x-16x
-                  compression via trained codebooks (requires a training step).
+                - ``"pq"`` (``"product_quantization"``): Product Quantization —
+                  compression to ``2 × dim / m`` via trained codebooks (dim/4 at the default m = 8;
+                  requires a training step).
                 - ``"rabitq"``: RaBitQ — 1-bit with rotation + scalar correction,
-                  32x compression with ~1-2% recall loss.
+                  32x compression; no recorded run measures its recall loss.
 
             hnsw: Optional :class:`HnswOptions` dataclass with typed HNSW
                 parameters. Replaces the legacy v1.12 flat kwargs
