@@ -1202,3 +1202,167 @@ describe("wasmQuery — LIMIT is read as core's parser reads it, a u64 (#2095)",
     expect(query).toHaveBeenLastCalledWith(expect.any(Float32Array), 100_000);
   });
 });
+
+// ---------------------------------------------------------------------------
+// #2095 round 9 — every number this backend reads is checked for the binding
+// that receives it: a 32-bit `k`, a u32 RRF `k`, and a value that is not a
+// number named by its type, never coerced.
+// ---------------------------------------------------------------------------
+
+/** The largest integer velesdb-wasm's 32-bit `usize` and core's `u32` carry. */
+const LARGEST_U32 = 2 ** 32 - 1;
+
+/** The message part naming a refused value: its type when it is not a number. */
+function named(value: unknown): string {
+  return typeof value === 'number' ? String(value) : `of type ${typeof value}`;
+}
+
+describe("WASM search — k fits velesdb-wasm's 32-bit usize (#2095)", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it.each([
+    ['search', 'search', (ctx: WasmContext, k: number) => wasmSearch(ctx, 'docs', [0.1, 0.2], { k })],
+    [
+      'searchBatch',
+      'search',
+      (ctx: WasmContext, k: number) => wasmSearchBatch(ctx, 'docs', [{ vector: [0.1, 0.2], k }]),
+    ],
+    [
+      'multiQuerySearch',
+      'multi_query_search',
+      (ctx: WasmContext, k: number) => wasmMultiQuerySearch(ctx, 'docs', [[0.1, 0.2]], { k }),
+    ],
+  ] as const)('%s passes k = 2^32 - 1 to the binding', async (_label, method, call) => {
+    const binding = vi.fn(() => []);
+    const ctx = buildCtx('docs', buildStore({ [method]: binding }), { dimension: 2 });
+
+    await call(ctx, LARGEST_U32);
+
+    expect(binding).toHaveBeenCalledTimes(1);
+    expect((binding.mock.calls[0] as unknown[]).includes(LARGEST_U32)).toBe(true);
+  });
+
+  it.each([2 ** 32, 2 ** 32 + 2])(
+    'every search path refuses k = %s, which the binding would wrap modulo 2^32',
+    async (k) => {
+      const store = buildStore({ search: vi.fn(() => [[1n, 0.9]]) });
+      const ctx = buildCtx('docs', store, { dimension: 2 });
+
+      const calls = [
+        () => wasmSearch(ctx, 'docs', [0.1, 0.2], { k }),
+        () => wasmSearchBatch(ctx, 'docs', [{ vector: [0.1, 0.2], k }]),
+        () => wasmTextSearch(ctx, 'docs', 'q', { k }),
+        () => wasmHybridSearch(ctx, 'docs', [0.1, 0.2], 'q', { k }),
+        () => wasmMultiQuerySearch(ctx, 'docs', [[0.1, 0.2]], { k }),
+      ];
+      for (const call of calls) {
+        const outcome = await settle(call());
+        expect(outcome).toBeInstanceOf(VelesDBError);
+        expect((outcome as VelesDBError).code).toBe('BAD_REQUEST');
+      }
+      expect(bindingCallCount(store)).toBe(0);
+    }
+  );
+});
+
+describe('wasmMultiQuerySearch — fusionParams.k is a u32, as core reads it (#2095)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it.each([0, LARGEST_U32])('passes fusionParams.k = %s to the binding', async (k) => {
+    const multi = vi.fn(() => []);
+    const ctx = buildCtx('docs', buildStore({ multi_query_search: multi }));
+
+    await wasmMultiQuerySearch(ctx, 'docs', [[0.1, 0.2]], { fusionParams: { k } });
+
+    expect((multi.mock.calls[0] as unknown[])[4]).toBe(k);
+  });
+
+  // REST's `rrf_k` is a `u32` field: a value that does not deserialize refuses the
+  // whole request, whichever strategy it names.
+  it.each([
+    ['rrf', -1],
+    ['rrf', 1.5],
+    ['rrf', Number.NaN],
+    ['rrf', 2 ** 32],
+    ['rrf', 'abc'],
+    ['rrf', Object.create(null)],
+    ['average', -1],
+  ] as const)('under %s, refuses fusionParams.k = %s before the binding sees it', async (fusion, k) => {
+    const multi = vi.fn(() => []);
+    const ctx = buildCtx('docs', buildStore({ multi_query_search: multi }));
+
+    const outcome = await settle(
+      wasmMultiQuerySearch(ctx, 'docs', [[0.1, 0.2]], { fusion, fusionParams: { k: k as never } })
+    );
+
+    expect(outcome).toBeInstanceOf(VelesDBError);
+    expect((outcome as VelesDBError).code).toBe('BAD_REQUEST');
+    expect((outcome as VelesDBError).message).toContain(named(k));
+    expect(multi).not.toHaveBeenCalled();
+  });
+});
+
+describe('WASM search — a number option that is not a number is BAD_REQUEST, named by its type (#2095)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  // `Object.create(null)` has no prototype, so any coercion of it throws a TypeError;
+  // a string would be coerced by the binding, where REST's JSON number refuses it.
+  const NOT_NUMBERS = [
+    ['a string', '5'],
+    ['an object with no prototype', Object.create(null)],
+  ] as const;
+
+  it.each(NOT_NUMBERS)('every search path refuses k as %s', async (_label, k) => {
+    const store = buildStore();
+    const ctx = buildCtx('docs', store, { dimension: 2 });
+
+    const calls = [
+      () => wasmSearch(ctx, 'docs', [0.1, 0.2], { k: k as never }),
+      () => wasmSearchBatch(ctx, 'docs', [{ vector: [0.1, 0.2], k: k as never }]),
+      () => wasmTextSearch(ctx, 'docs', 'q', { k: k as never }),
+      () => wasmHybridSearch(ctx, 'docs', [0.1, 0.2], 'q', { k: k as never }),
+      () => wasmMultiQuerySearch(ctx, 'docs', [[0.1, 0.2]], { k: k as never }),
+    ];
+    for (const call of calls) {
+      const outcome = await settle(call());
+      expect(outcome).toBeInstanceOf(VelesDBError);
+      expect((outcome as VelesDBError).code).toBe('BAD_REQUEST');
+      expect((outcome as VelesDBError).message).toContain(named(k));
+    }
+    expect(bindingCallCount(store)).toBe(0);
+  });
+
+  it.each(NOT_NUMBERS)('multiQuerySearch refuses a weighted triple holding %s', async (_label, weight) => {
+    const multi = vi.fn(() => []);
+    const ctx = buildCtx('docs', buildStore({ multi_query_search: multi }));
+
+    const outcome = await settle(
+      wasmMultiQuerySearch(ctx, 'docs', [[0.1, 0.2]], {
+        fusion: 'weighted',
+        fusionParams: { avgWeight: weight as never, maxWeight: 0.5, hitWeight: 0 },
+      })
+    );
+
+    expect(outcome).toBeInstanceOf(VelesDBError);
+    expect((outcome as VelesDBError).code).toBe('BAD_REQUEST');
+    expect((outcome as VelesDBError).message).toContain(named(weight));
+    expect(multi).not.toHaveBeenCalled();
+  });
+
+  // With k = 0 too: the check runs before the early return, as every input check does.
+  it.each(NOT_NUMBERS)('hybridSearch refuses vectorWeight as %s, whatever k is', async (_label, vectorWeight) => {
+    const hybrid = vi.fn(() => []);
+    const ctx = buildCtx('docs', buildStore({ hybrid_search: hybrid }), { dimension: 2 });
+
+    for (const k of [10, 0]) {
+      const outcome = await settle(
+        wasmHybridSearch(ctx, 'docs', [0.1, 0.2], 'q', { k, vectorWeight: vectorWeight as never })
+      );
+
+      expect(outcome).toBeInstanceOf(VelesDBError);
+      expect((outcome as VelesDBError).code).toBe('BAD_REQUEST');
+      expect((outcome as VelesDBError).message).toContain(named(vectorWeight));
+    }
+    expect(hybrid).not.toHaveBeenCalled();
+  });
+});

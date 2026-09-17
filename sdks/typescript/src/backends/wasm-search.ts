@@ -143,17 +143,61 @@ function refuseUnhonouredSearchOptions(options: SearchOptions | undefined): void
 const MULTI_QUERY_VECTORS = { min: 1, max: 10 } as const;
 
 /**
+ * The largest integer velesdb-wasm's `usize` carries: the binding is built for
+ * wasm32, where `usize` is 32-bit and a larger `k` wraps modulo 2^32. It is
+ * also the largest `u32`, the type of REST's `rrf_k`.
+ */
+const LARGEST_U32 = 2 ** 32 - 1;
+
+/**
+ * Name a refused value in a message without coercing it: a number by its
+ * value, anything else by its type. `String()` and template interpolation
+ * throw on an object with no prototype.
+ */
+function describeValue(value: unknown): string {
+  return typeof value === 'number' ? String(value) : `a value of type ${typeof value}`;
+}
+
+/**
+ * `value` as a number, or `BAD_REQUEST` naming its type. The binding would
+ * coerce a string, and throw a `TypeError` on an object with no prototype,
+ * where REST's JSON number refuses both.
+ */
+function requireNumber(name: string, value: unknown): number {
+  if (typeof value !== 'number') {
+    throw new VelesDBError(`${name} must be a number; got ${describeValue(value)}`, 'BAD_REQUEST');
+  }
+  return value;
+}
+
+/**
+ * `value` as an integer from 0 to 2^32 - 1, or `BAD_REQUEST`; `bound` names
+ * the type that bounds it.
+ */
+function requireU32(name: string, value: unknown, bound: string): number {
+  const n = requireNumber(name, value);
+  if (!Number.isInteger(n) || n < 0 || n > LARGEST_U32) {
+    throw new VelesDBError(
+      `${name} must be an integer from 0 to ${LARGEST_U32} (${bound}); got ${describeValue(n)}`,
+      'BAD_REQUEST'
+    );
+  }
+  return n;
+}
+
+/**
  * Validate a search's inputs before anything else, as core does
  * (`validated_hybrid_params`, `validate_multi_query_inputs`): the number of
  * query vectors, when the search bounds it; every vector's dimension; and
- * `k`, a non-negative integer as core's `usize` is. Returns `k`; at 0 the
- * caller answers with no results and never calls the binding. Every search
- * runs it first, so no early return can skip it.
+ * `k`, a non-negative integer as core's `usize` is, at most 2^32 - 1 since
+ * velesdb-wasm's `usize` is 32-bit. Returns `k`; at 0 the caller answers
+ * with no results and never calls the binding. Every search runs it first,
+ * so no early return can skip it.
  */
 function validateSearchInputs(
   collection: CollectionData,
   vectors: ReadonlyArray<ArrayLike<number>>,
-  k: number,
+  k: unknown,
   vectorCount?: { readonly min: number; readonly max: number }
 ): number {
   if (vectorCount && (vectors.length < vectorCount.min || vectors.length > vectorCount.max)) {
@@ -172,13 +216,7 @@ function validateSearchInputs(
       );
     }
   }
-  if (!Number.isInteger(k) || k < 0) {
-    throw new VelesDBError(
-      `k must be a non-negative integer, as core's usize is; got ${k}`,
-      'BAD_REQUEST'
-    );
-  }
-  return k;
+  return requireU32('k', k, "core's usize, 32-bit in velesdb-wasm");
 }
 
 // ---------------------------------------------------------------------------
@@ -310,10 +348,10 @@ export async function wasmHybridSearch(
   const queryVector = vector instanceof Float32Array ? vector : new Float32Array(vector);
   const k = validateSearchInputs(collection, [queryVector], options?.k ?? 10);
   requireWasmFilterSupport('hybridSearch', options?.filter);
+  const vectorWeight = requireNumber('vectorWeight', options?.vectorWeight ?? 0.5);
   if (k <= 0) {
     return [];
   }
-  const vectorWeight = options?.vectorWeight ?? 0.5;
   const raw: WasmHybridResult[] = collection.store.hybrid_search(
     queryVector, textQuery, k, vectorWeight
   );
@@ -389,8 +427,9 @@ function canonicalStrategy(name: unknown): FusionStrategy {
 const WEIGHTED_SUM_TOLERANCE = Math.fround(0.001);
 
 /**
- * Refuse, as core does, a weighted triple with a negative or non-finite
- * weight, or one that does not sum to 1.0.
+ * Refuse, as core does, a weighted triple with a weight that is not a
+ * number, a negative or non-finite one, or one that does not sum to 1.0.
+ * Returns the three weights.
  *
  * The check runs in f32, as core's `validate_non_negative` and
  * `validate_weight_sum` do on the `Float32Array` the binding receives: each
@@ -399,18 +438,20 @@ const WEIGHTED_SUM_TOLERANCE = Math.fround(0.001);
  * tolerance: `[0.5, 0.5, 0.001]` sums to 1.0010000467 in f32, and
  * `[0.3, 0.3, 0.399]` to 0.9990000129.
  */
-function validateWeightedTriple(weights: readonly number[]): void {
-  const f32 = weights.map((weight) => Math.fround(weight));
+function validateWeightedTriple(weights: readonly unknown[]): number[] {
+  const numbers = weights.map((weight, i) => requireNumber(WEIGHTED_TRIPLE[i]!, weight));
+  const f32 = numbers.map((weight) => Math.fround(weight));
   const sum = f32.reduce((total, weight) => Math.fround(total + weight), 0);
   const invalid = f32.some((weight) => !Number.isFinite(weight) || weight < 0);
   if (invalid || Math.abs(Math.fround(sum - 1)) > WEIGHTED_SUM_TOLERANCE) {
     throw new VelesDBError(
       'multiQuerySearch weighted fusion: avgWeight, maxWeight and hitWeight must be ' +
         `finite, non-negative and sum to 1.0 within ${WEIGHTED_SUM_TOLERANCE}; ` +
-        `got ${weights.join(', ')}`,
+        `got ${numbers.join(', ')}`,
       'BAD_REQUEST'
     );
   }
+  return numbers;
 }
 
 /**
@@ -423,6 +464,7 @@ function validateWeightedTriple(weights: readonly number[]): void {
  * argument, and the binding applies core's defaults only when that argument
  * is absent: a partial triple is therefore refused rather than completed
  * with guessed values, and a complete one is checked against core's rule.
+ * `k` is checked under every strategy (`requireU32`).
  */
 function wasmFusionArgs(
   strategy: FusionStrategy,
@@ -436,7 +478,9 @@ function wasmFusionArgs(
     read[name] = params?.[name];
   }
   requireWasmFieldsListed('multiQueryFusionParams', 'multiQuerySearch fusionParams', read);
-  const rrfK = params?.k ?? 60;
+  // REST's `rrf_k` is a `u32`: a value that does not deserialize refuses the
+  // request whichever strategy it names, and the binding takes it as a u32.
+  const rrfK = requireU32('fusionParams.k', params?.k ?? 60, "core's rrf_k, a u32");
   const weights = WEIGHTED_TRIPLE.map((name) => read[name]).filter(isSet);
   if (weights.length === 0) {
     return { rrfK, weights: null };
@@ -448,8 +492,7 @@ function wasmFusionArgs(
         'takes together)'
     );
   }
-  validateWeightedTriple(weights);
-  return { rrfK, weights: new Float32Array(weights) };
+  return { rrfK, weights: new Float32Array(validateWeightedTriple(weights)) };
 }
 
 export async function wasmMultiQuerySearch(

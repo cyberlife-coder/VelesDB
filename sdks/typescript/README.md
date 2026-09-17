@@ -388,7 +388,7 @@ Vector similarity search.
 | `sparseVector` | `Record<number, number>` | - | Sparse vector for hybrid sparse+dense search |
 | `quality` | `SearchQuality` | - | Search quality mode (e.g., `'fast'`, `'balanced'`, `'custom:256'`, `'adaptive:32:512'`) |
 
-> **WASM backend:** `filter` applies to dense search only. Combined with `sparseVector` it is refused with `NOT_SUPPORTED`, and so are `sparseIndexName` and `includeVectors: true`; none of them is silently ignored. `quality` is accepted and has nothing to tune, since WASM search scans every stored vector. `k` must be a non-negative integer, as core's is (`BAD_REQUEST` otherwise), and 0 returns nothing. `db.capabilities()` reports each case (`filteredSearch`, `namedSparseIndexes`, `includeVectors`).
+> **WASM backend:** `filter` applies to dense search only. Combined with `sparseVector` it is refused with `NOT_SUPPORTED`, and so are `sparseIndexName` and `includeVectors: true`; none of them is silently ignored. `quality` is accepted and has nothing to tune, since WASM search scans every stored vector. `k` must be an integer from 0 to 2^32 - 1: non-negative as core's is, and at most 2^32 - 1 because velesdb-wasm's `usize` is 32-bit (`BAD_REQUEST` otherwise, a value that is not a number included); 0 returns nothing. `db.capabilities()` reports each case (`filteredSearch`, `namedSparseIndexes`, `includeVectors`).
 
 ```typescript
 const results = await db.search('docs', queryVector, {
@@ -477,7 +477,7 @@ const results = await db.hybridSearch(
 );
 ```
 
-> **WASM backend:** the text side is the same substring match as `textSearch`, scored 1 when it matches and 0 otherwise, then blended linearly with the vector score by `vectorWeight`. A `filter` is refused with `NOT_SUPPORTED`.
+> **WASM backend:** the text side is the same substring match as `textSearch`, scored 1 when it matches and 0 otherwise, then blended linearly with the vector score by `vectorWeight`. A `filter` is refused with `NOT_SUPPORTED`, and a `vectorWeight` that is not a number with `BAD_REQUEST`.
 
 #### `db.multiQuerySearch(collection, vectors, options?)`
 
@@ -513,7 +513,7 @@ const results = await db.multiQuerySearch('docs', [emb1, emb2], {
 });
 ```
 
-> **WASM backend:** all five strategies run. `weighted` takes `avgWeight`, `maxWeight` and `hitWeight` together: pass all three, or none for core's defaults. A partial set is refused, because the binding cannot fill in the rest, and so is a set core would reject (a negative or non-finite weight, or a sum more than 0.001 from 1.0, computed in f32 as core computes it), with `BAD_REQUEST`. A field the chosen strategy never reads is ignored, as core ignores it. TypeScript callers pass the canonical names of `FusionStrategy`; from untyped (JavaScript) callers, the runtime reads a name as core does, in any case and with the aliases `avg`, `max` and `rsf`. `null` or absent means `rrf`, and an unknown name, or any other value that is not a string, is refused with `BAD_REQUEST`. `db.multiQuerySearch` refuses an empty vector list with `VALIDATION_ERROR`, as it always has, and the WASM backend refuses more than 10 vectors with `BAD_REQUEST`, as core does. WASM `relative_score` averages the query branches with equal weight, so under `relative_score` `denseWeight` and `sparseWeight` are refused with `NOT_SUPPORTED`, and so is a `filter`. Every query vector must have the collection's dimension: a short one is refused with `DIMENSION_MISMATCH`, never padded. `db.capabilities().multiQueryFusionParams` lists the `fusionParams` fields a backend applies.
+> **WASM backend:** all five strategies run. `weighted` takes `avgWeight`, `maxWeight` and `hitWeight` together: pass all three, or none for core's defaults. A partial set is refused, because the binding cannot fill in the rest, and so is a set core would reject (a negative or non-finite weight, or a sum more than 0.001 from 1.0, computed in f32 as core computes it), with `BAD_REQUEST`. A field the chosen strategy never reads is ignored, as core ignores it, except `k`, which must be an integer from 0 to 2^32 - 1 under every strategy, as REST's `u32` `rrf_k` must (`BAD_REQUEST` otherwise). A weight that is not a number is refused with `BAD_REQUEST`. TypeScript callers pass the canonical names of `FusionStrategy`; from untyped (JavaScript) callers, the runtime reads a name as core does, in any case and with the aliases `avg`, `max` and `rsf`. `null` or absent means `rrf`, and an unknown name, or any other value that is not a string, is refused with `BAD_REQUEST`. `db.multiQuerySearch` refuses an empty vector list with `VALIDATION_ERROR`, as it always has, and the WASM backend refuses more than 10 vectors with `BAD_REQUEST`, as core does. WASM `relative_score` averages the query branches with equal weight, so under `relative_score` `denseWeight` and `sparseWeight` are refused with `NOT_SUPPORTED`, and so is a `filter`. Every query vector must have the collection's dimension: a short one is refused with `DIMENSION_MISMATCH`, never padded. `db.capabilities().multiQueryFusionParams` lists the `fusionParams` fields a backend applies.
 
 #### Named sparse indexes — `sparseIndexName` vs `sparseSearchNamed()`
 

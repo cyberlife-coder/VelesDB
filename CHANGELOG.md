@@ -547,8 +547,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `VALIDATION_ERROR` before any backend sees it; only a direct
   `WasmBackend.multiQuerySearch` call, which returned `[]` for one, now
   throws `BAD_REQUEST`. A non-integer or negative `k` throws
-  `BAD_REQUEST`, core's `k` being unsigned, and a `k` of 0 returns nothing
-  without calling the binding (a sparse search used to return live hits).
+  `BAD_REQUEST`, core's `k` being unsigned, and so does a `k` above
+  2^32 - 1, since velesdb-wasm's `usize` is 32-bit and the binding would
+  wrap it (a `k` of 2^32 returned no rows, 2^32 + 2 two). A `k` of 0
+  returns nothing without calling the binding (a sparse search used to
+  return live hits). `fusionParams.k` must be an integer from 0 to
+  2^32 - 1, core's `u32`, whichever strategy is named, where -1, 1.5 or
+  `'abc'` used to reach the binding. A `k`, a weight or a `vectorWeight`
+  that is not a number throws `BAD_REQUEST` naming its type, where the
+  binding coerced a string and an object with no prototype ended in a
+  `TypeError`.
   At runtime a fusion strategy name is read as core reads it, in any case
   and with the aliases `avg`, `max` and `rsf`, spellings that only untyped
   (JavaScript) callers can send, since the `FusionStrategy` type keeps the
