@@ -607,8 +607,8 @@ each sibling file:
 - **Prompt caching changes the *cost* arithmetic, not the token counts.** A
   real harness caches the growing prefix, so the raw arm's resent history
   is mostly billed as cache reads (~10% of the input price on Anthropic's
-  posted pricing) rather than full-price input — **21%/17% fewer tokens
-  does NOT mean 21%/17% lower $ cost** under caching. Conversely, arm B's
+  posted pricing) rather than full-price input — **20.3%/17.2% fewer tokens
+  does NOT mean 20.3%/17.2% lower $ cost** under caching. Conversely, arm B's
   per-turn recompilation can rewrite earlier parts of the payload and churn
   the cacheable prefix where the raw arm's append-only history caches
   cleanly. The ONLINE mode reports `cache_creation`/`cache_read` separately

@@ -377,7 +377,7 @@ The three you interact with most:
 # 1. Bump every manifest in lock-step
 python3 scripts/bump_version.py <X.Y.Z>
 python3 scripts/check-version-sync.py   # every policed manifest must align
-python scripts/check-promise-contract.py # 19 claims must pass
+python scripts/check-promise-contract.py # every claim must pass
 cargo update --workspace                 # refresh Cargo.lock
 
 # 2. Open release/<vX.Y.Z> -> main, wait for ALL CI green on the merge commit

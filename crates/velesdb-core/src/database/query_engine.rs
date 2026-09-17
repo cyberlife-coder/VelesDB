@@ -507,10 +507,9 @@ impl Database {
     /// query clone (Requirement 8.2 — Quality Bar Gate 2, p50 latency).
     ///
     /// Compiled only under `cfg(test)`, so it adds nothing to the production
-    /// surface. The full ≤ 450 µs wall-clock p50 contract is enforced
-    /// separately by the `Perf Gate (E2E)` workflow
-    /// (`.github/workflows/perf-gate-e2e.yml`); this accessor pins the
-    /// structural "zero-overhead when no observer" half of the gate
+    /// surface. Wall-clock p50 is checked separately, against a loose floor,
+    /// by the `perf-gate-e2e` job of `.github/workflows/ci.yml`; this accessor
+    /// pins the structural "zero-overhead when no observer" half of the gate
     /// deterministically, without a flaky timing threshold.
     #[cfg(test)]
     pub(crate) fn read_gate_cow_for_test<'q>(

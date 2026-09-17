@@ -98,7 +98,7 @@ fn test_query_timer_drop_counts_as_failure() {
 ///
 /// `to_prometheus` exports these counts as `le="{bound}"`, and Prometheus
 /// defines `le` as **less than or equal**. Bucketing with `ms < bound` moved an
-/// exact-bound observation one bucket up, so a query that took exactly 25 ms
+/// exact-bound observation one bucket up, so an observation of exactly 25 ms
 /// was reported as *not* being ≤ 25 ms.
 #[test]
 fn a_match_latency_on_a_bucket_bound_lands_in_that_bucket() {

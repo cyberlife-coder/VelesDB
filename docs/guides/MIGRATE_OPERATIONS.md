@@ -27,19 +27,10 @@ Recommended starting batch sizes, matching the templates the crate ships:
 | Elasticsearch / OpenSearch, Redis | 100 |
 | JSON / CSV file (no network) | 1000 |
 
-The following per-source rates are indicative ranges carried over from earlier
-releases. They are **not** benchmarked figures and no CI job asserts them; treat
-them as an order of magnitude only.
-
-| Source | Indicative rate |
-|---|---|
-| Local Qdrant | 10,000+ points/s |
-| Cloud Qdrant | 1,000–5,000 points/s |
-| Supabase | 1,000–3,000 points/s |
-| Pinecone | 500–2,000 points/s |
-| Weaviate | 2,000–5,000 points/s |
-| Milvus | 3,000–8,000 points/s |
-| ChromaDB | 2,000–5,000 points/s |
+No per-source migration rate is given: the ranges earlier releases listed were
+not benchmarked, and no CI job asserted them. The rate depends on the source's
+API and rate limits; timing a `--dry-run` (step 1 below), which walks the whole
+source without writing, estimates the extraction side on your own setup.
 
 Tuning checklist:
 
@@ -48,8 +39,8 @@ Tuning checklist:
 2. Lower `batch_size` for managed sources; raise it for local ones.
 3. Larger batches hold more points in memory at once. Reduce `batch_size`
    before anything else if the process grows too large.
-4. `storage_mode: sq8` cuts destination memory ~4x with ~99% recall;
-   `binary` cuts it ~32x with ~95% recall.
+4. `storage_mode: sq8` makes destination memory ~4x smaller and `binary` ~32x smaller, each
+   at some recall cost ([Quantization](QUANTIZATION.md)).
 5. Leave `checkpoint_enabled: true` on large migrations so an interruption
    resumes instead of restarting.
 
@@ -138,7 +129,7 @@ escape hatch. Checks 1 to 3 always apply.
 ### Retries
 
 Each extraction batch is retried up to 3 times with exponential backoff and
-jitter (100 ms initial delay, 2x multiplier, 5 s cap). Rate limits, I/O errors,
+jitter (100 ms initial delay, doubled on each retry, 5 s cap). Rate limits, I/O errors,
 timeouts, connection resets and 5xx responses are treated as retryable;
 authentication and schema errors are not. Retry behaviour is not configurable
 from YAML — see

@@ -115,11 +115,11 @@ use velesdb_core::{Database, DistanceMetric, StorageMode};
 
 let db = Database::open("./data")?;
 
-// SQ8: 4x memory reduction, ~1% recall loss
+// SQ8: 4x memory reduction, small recall loss
 db.create_collection_with_options(
     "sq8_collection", 768, DistanceMetric::Cosine, StorageMode::SQ8)?;
 
-// Binary: 32x memory reduction, ~10-15% recall loss (IoT / edge)
+// Binary: 32x memory reduction, larger recall loss (IoT / edge)
 db.create_collection_with_options(
     "binary_collection", 768, DistanceMetric::Hamming, StorageMode::Binary)?;
 
@@ -138,8 +138,8 @@ the SIMD distance kernels are documented in
 
 ## Bulk ingestion
 
-For high-throughput import (measured at 3.8K–6.4K vectors/sec at collection
-level with persistence, 768D — see [Core performance](./CORE_PERFORMANCE.md)):
+For high-throughput import (what is measured, and at which dimension, is in
+[Core performance](./CORE_PERFORMANCE.md)):
 
 ```rust
 use velesdb_core::{Database, DistanceMetric, Point};

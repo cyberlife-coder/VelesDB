@@ -185,7 +185,8 @@ hardware and its reproduction command live in
 | Native HNSW search with AVX-512/AVX2/NEON SIMD | **450µs p50** end-to-end | 10K points, 384D, WAL on, recall ≥ 96% |
 | `ColumnStore` filtering vs. scanning JSON payloads | up to **130x** faster | integer equality, 100K rows |
 
-Reproduce with `cargo bench -p velesdb-core --bench hnsw_benchmark` and
+Reproduce the first with `python benchmarks/velesdb_benchmark.py --recall`
+(measured 2026-03-27 on 1.7.2, when Balanced ran at ef 128), the second with
 `cargo bench -p velesdb-core --bench column_filter_benchmark`.
 
 Numbers move with hardware and dataset. Treat them as the shape of the

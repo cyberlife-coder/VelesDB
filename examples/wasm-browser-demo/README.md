@@ -61,12 +61,9 @@ No console output or build step is needed -- everything runs visually in the pag
 
 ## Performance
 
-Typical results on modern hardware:
-
-| Operation | 10K vectors (128D) | 100K vectors (128D) |
-|-----------|-------------------|---------------------|
-| Insert    | ~50ms             | ~500ms              |
-| Search    | ~1ms              | ~10ms               |
+No recorded run backs typical timings for this demo, so none are given here.
+The core's measured figures, each with the run behind it, are in
+[docs/BENCHMARKS.md](../../docs/BENCHMARKS.md).
 
 ## Use Cases
 

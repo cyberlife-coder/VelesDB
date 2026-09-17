@@ -308,9 +308,9 @@ pub enum StorageMode {
     /// Full precision (32-bit float). No compression.
     #[default]
     Full,
-    /// Scalar quantization (8-bit). 4x compression, ~99% recall.
+    /// Scalar quantization (8-bit). 4x compression, small recall loss.
     SQ8,
-    /// Binary quantization (1-bit). 32x compression, ~95% recall.
+    /// Binary quantization (1-bit). 32x compression, larger recall loss.
     Binary,
     /// Product quantization. High compression with trained codebooks.
     #[serde(alias = "product_quantization")]

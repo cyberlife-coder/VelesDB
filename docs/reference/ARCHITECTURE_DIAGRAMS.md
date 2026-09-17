@@ -81,8 +81,8 @@ graph TD
     end
 
     subgraph "Quantization"
-        SQ8[SQ8 - 4x]
-        BIN[Binary - 32x]
+        SQ8[SQ8 - 1 byte/dim]
+        BIN[Binary - 1 bit/dim]
         PQ[Product Quant]
         RABITQ[RaBitQ]
     end

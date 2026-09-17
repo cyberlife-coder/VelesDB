@@ -321,19 +321,20 @@ Guardrails are the other half of the control plane: `updateGuardrails(limits)` s
 
 ### Storage modes
 
-| Mode | Compression | Memory/dim | Recall loss | Use case |
-|------|-------------|------------|-------------|----------|
-| `Full` | 1x | 4 bytes | 0% | Best quality |
-| `Sq8` | 4x | 1 byte | ~1% | **Recommended for mobile** |
-| `Binary` | 32x | 1 bit | ~5–10% | Extreme constraints (IoT) |
-| `ProductQuantization` | 8x–16x typical | codebook | aggressive | Train first with `trainPq` |
-| `Rabitq` | 32x | 1 bit | ~1–2% | 1-bit plus rotation and scalar correction |
+| Mode | Compression | Memory/dim | Use case |
+|------|-------------|------------|----------|
+| `Full` | 1x | 4 bytes | Best quality |
+| `Sq8` | 4x | 1 byte | **Recommended for mobile** |
+| `Binary` | 32x | 1 bit | Extreme constraints (IoT) |
+| `ProductQuantization` | `2 × dim / m` (m subspaces) | `2 × m / dim` bytes, plus the codebook | Train first with `trainPq` |
+| `Rabitq` | 32x | 1 bit | 1-bit plus rotation and scalar correction |
 
-(Compression and recall figures above are the ones documented on the enum itself in
-`crates/velesdb-mobile/src/types.rs`.)
+Compression follows from each mode's encoding, as the enum documents it in
+`crates/velesdb-mobile/src/types.rs`. No recorded run measures these modes'
+recall on mobile, so the table gives none.
 
 ```swift
-// iOS — SQ8: 4x less memory, ~1% recall loss
+// iOS — SQ8: 4x less memory, small recall loss
 try db.createCollectionWithStorage(
     name: "embeddings",
     dimension: 384,

@@ -17,15 +17,19 @@ VelesDB supports five storage modes via the `StorageMode` enum
 
 ### When to Use Each Mode
 
-| Mode | Aliases | Compression | Recall@10 (768D) | Training Required | Training time | Best For |
-|------|---------|-------------|------------------|-------------------|---------------|----------|
-| `Full` (default) | `f32` | 1x (baseline) | 99.4% | No | - | Small datasets (<100K), maximum precision |
-| `SQ8` | `int8` | 4x | ~97.5% | No | - | Medium datasets (100K-10M), general purpose, Edge |
-| `ProductQuantization` (m=8) | | ~48x | ~85% | Yes | ~5s/100K | Large datasets, limited memory |
-| `ProductQuantization` + rescore | | ~48x | ~93% | Yes | ~5s/100K | Recall/memory trade-off |
-| `ProductQuantization` + OPQ | | ~48x | ~88% | Yes | ~10s/100K | Correlated data |
-| `Binary` | `bit` | 32x | ~85% | No | - | Edge/IoT, fingerprints, memory-constrained |
-| `RaBitQ` | | 32x | ~90-93% | Yes (rotation matrix) | ~2s/100K | High compression with better recall than Binary |
+| Mode | Aliases | Compression | Training Required | Best For |
+|------|---------|-------------|-------------------|----------|
+| `Full` (default) | `f32` | 1x (baseline) | No | Small datasets (<100K), maximum precision |
+| `SQ8` | `int8` | 4x (1 byte per dimension) | No | Medium datasets (100K-10M), general purpose, Edge |
+| `ProductQuantization` (m=8) | | `2 × m` bytes per vector: 16 bytes, against 3072 for f32 at 768D | Yes | Large datasets, limited memory |
+| `ProductQuantization` + rescore | | same codes as PQ | Yes | Recall/memory trade-off |
+| `ProductQuantization` + OPQ | | same codes as PQ, plus the rotation matrix | Yes | Correlated data |
+| `Binary` | `bit` | 32x (1 bit per dimension) | No | Edge/IoT, fingerprints, memory-constrained |
+| `RaBitQ` | | 32x (1 bit per dimension) | Yes (rotation matrix) | High compression with better recall than Binary |
+
+No recorded run measures these modes' recall or training time at 768D, so the
+table gives neither; the measured PQ and SQ8 figures (5K × 128D, 2K × 64D) are
+in [BENCHMARKS §2](../BENCHMARKS.md#2-pq-recall-and-latency).
 
 > Search-path wiring differs per mode: in the collection query path only RaBitQ
 > and PQ are wired up today, while SQ8/Binary are capacity modes at the
@@ -127,10 +131,10 @@ let params = HnswParams::million_scale(768);
 // Maximum recall: aggressive params for evaluation
 let params = HnswParams::max_recall(768);
 
-// Turbo: M=12, ef=100 — fastest build, ~85% recall
+// Turbo: M=12, ef=100 — fastest build, at a lower recall
 let params = HnswParams::turbo();
 
-// Fast indexing: M/2, ef/2 of auto — balanced speed/recall, ~90% recall
+// Fast indexing: M/2, ef/2 of auto — faster build, at a lower recall
 let params = HnswParams::fast_indexing(768);
 
 // Fully custom
@@ -143,9 +147,13 @@ VelesDB offers three index constructors with different speed/recall tradeoffs:
 
 | Constructor | HNSW Params | Recall | Insert Speed | Use Case |
 |-------------|-------------|--------|-------------|----------|
-| `HnswIndex::new(dim, metric)` | `auto()` (M=24, ef_construction=300 up to 256 dims; M=32, 400 above) | ≥95% | Baseline | Production workloads |
-| `HnswIndex::new_fast_insert(dim, metric)` | `fast_indexing()` (M/2, ef/2) | ~90% | ~2-3x faster | High-velocity streaming |
-| `HnswIndex::new_turbo(dim, metric)` | `turbo()` (M=12, ef=100) | ~85% | ~3-5x faster | Bulk loading, development, benchmarks |
+| `HnswIndex::new(dim, metric)` | `auto()` (M=24, ef_construction=300 up to 256 dims; M=32, 400 above) | ≥95% target¹ | Baseline | Production workloads |
+| `HnswIndex::new_fast_insert(dim, metric)` | `fast_indexing()` (M/2, ef/2) | Lower (not measured) | 2.8x faster ² | High-velocity streaming |
+| `HnswIndex::new_turbo(dim, metric)` | `turbo()` (M=12, ef=100) | Lower (not measured) | 4.9x faster ² | Bulk loading, development, benchmarks |
+
+¹ The collection default path, built with `auto()`, measured 97.6% recall@10 end to end (10K × 384D clustered set, Balanced then at ef 128; 2026-03-27 on 1.7.2, [report](../../benchmarks/report_1.7.2_2026-03-27.json)).
+
+² Sequential inserts against `new()`, 1K × 768D, 2026-03-23 on 1.6.0: [BENCHMARKS.md](../BENCHMARKS.md#index-constructor-insert-speed).
 
 **Recommended pattern**: Use `new_turbo()` for initial bulk import, then rebuild with
 `new()` or `with_params()` for production search quality.
@@ -179,11 +187,11 @@ Large batch inserts are automatically optimized with several techniques:
 
 1. **Chunked Phase B** — Batches are split into optimal chunks (computed by `compute_chunk_size()`). Each chunk updates the global entry point, improving graph connectivity for subsequent chunks. This is particularly effective for batches > 1000 vectors.
 
-2. **Alloc/Connect Separation** — Node allocation is separated from edge connection. All node slots are pre-allocated first, then edges are connected in parallel without lock contention on the allocator. This yields ~2x throughput improvement for large batches.
+2. **Alloc/Connect Separation** — Node allocation is separated from edge connection. All node slots are pre-allocated first, then edges are connected in parallel without lock contention on the allocator. This raises throughput for large batches; the combined effect of #363 and #365 is measured in [`pr363_365_comparison.md`](../../benchmarks/results/pr363_365_comparison.md).
 
 Both optimizations are automatic and require no configuration. Use `insert_batch_parallel()` for best performance on large datasets.
 
-3. **Batch Upsert Fast-Path (v1.7.2)** — Pure-insert workloads (all new IDs) now skip the expensive `DashMap::entry()` write lock introduced by upsert semantics in v1.7.0. A read-lock `contains_key()` check routes new IDs to a cheaper allocation path. This eliminates the ~14% overhead observed on pure-insert workloads. Mixed workloads (some new, some existing IDs) automatically fall back to the full upsert path for correctness.
+3. **Batch Upsert Fast-Path (v1.7.2)** — Pure-insert workloads (all new IDs) now skip the expensive `DashMap::entry()` write lock introduced by upsert semantics in v1.7.0. A read-lock `contains_key()` check routes new IDs to a cheaper allocation path. This eliminates that lock's overhead on pure-insert workloads (no recorded run measures it). Mixed workloads (some new, some existing IDs) automatically fall back to the full upsert path for correctness.
 
 4. **Upsert Lock Contention Fix (v1.7.2)** — `Collection::upsert()` was previously bottlenecked by three sources of lock contention: (a) a write lock on the HNSW index for each insert (changed to a read lock since `NativeHnswInner::insert` uses internal per-node synchronization), (b) per-point `insert_or_defer()` calls replaced by a single `bulk_index_or_defer()` batch call, and (c) per-point I/O replaced by `store_batch()` with 1 fsync per storage. The result is a 3-phase pipeline: batch storage, per-point secondary updates (no storage locks held), then batch HNSW insert. On local benchmarks (i9-14900KF, 10K/384D), this closed the throughput gap between `upsert()` and `upsert_bulk()` from ~19x to ~1x.
 
@@ -609,15 +617,17 @@ built-in search handles alignment internally.
    (`reorder_for_locality()`), vectors can be transposed into a block-columnar (PDX)
    layout via `ColumnarVectors`. Each block contains 64 vectors with dimensions
    interleaved, enabling the SIMD kernel to broadcast `query[d]` once and compute
-   the d-th contribution for all 64 vectors simultaneously. This achieves 64x better
-   register reuse compared to standard array-of-structures layout. The conversion is
+   the d-th contribution for all 64 vectors simultaneously: one broadcast of `query[d]`
+   serves 64 vectors, where the standard array-of-structures layout reloads it per vector. The conversion is
    automatic after reordering for indices above 1000 vectors.
 
 ---
 
 ## Performance Metrics (v1.7.2)
 
-Reference benchmarks captured on 2026-03-27 with `target-cpu=native`.
+Reference benchmarks captured on 2026-03-27 with `target-cpu=native`, as commit
+df217860 records them. The canonical end-to-end figure comes from a second run
+that day, `benchmarks/report_1.7.2_2026-03-27.json`.
 
 **Hardware:** Intel i9-14900KF, 64 GB DDR5, Windows 11
 
@@ -625,20 +635,19 @@ Reference benchmarks captured on 2026-03-27 with `target-cpu=native`.
 
 | Benchmark | Configuration | Result |
 |-----------|---------------|--------|
-| Search top-10 | 5K vectors, 768D, Cosine | ~55 us |
-| Parallel insert | 1K vectors, 768D | ~20.7 ms (48.2K vec/s) |
+| Search top-10 | 10K vectors, 768D, Cosine | ~55 us |
 | SIMD dot product | 768D (AVX2/AVX-512) | ~21.7 ns |
 
 ### Python Bindings (PyO3 + NumPy)
 
 | Benchmark | Configuration | Result |
 |-----------|---------------|--------|
-| Bulk insert | 10K vectors, 384D | ~15.4K vec/s |
-| Search (avg) | 10K vectors, 384D, top-10 | ~630 us |
+| Insert (WAL on) | 10K vectors, 384D | ~15K vec/s |
+| Search p50 | 10K vectors, 384D, top-10 | ~571 us |
 
 These numbers include all overhead (lock acquisition, HNSW traversal, result
 conversion). Actual SIMD kernel throughput is higher — the ~21.7 ns dot product
-processes 768 floats at >35 GFLOP/s per core.
+covers 768 floats, over 35 billion elements per second per core.
 
 **Note:** Micro-benchmarks on Windows have 5-10% noise. Use the numbers above as
 order-of-magnitude references, not exact targets. For reproducible comparisons,

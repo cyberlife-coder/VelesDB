@@ -8,9 +8,9 @@
 //!
 //! # Performance
 //!
-//! - **32x memory bandwidth reduction** during traversal (vs 4x for SQ8)
-//! - **XOR + popcount** distance: ~2 ns per candidate (vs ~10 ns for f32)
-//! - **Query preparation overhead**: ~60 us for 768D (amortized over hundreds
+//! - **32x memory bandwidth reduction** during traversal (vs 4x less bandwidth for SQ8)
+//! - **XOR + popcount** distance: cheaper per candidate than f32
+//! - **Query preparation overhead**: one query rotation (amortized over hundreds
 //!   of distance evaluations per search)
 
 use super::distance::DistanceEngine;

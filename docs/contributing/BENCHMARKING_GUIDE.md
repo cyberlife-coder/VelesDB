@@ -120,12 +120,12 @@ fn bench_with_config(c: &mut Criterion) {
 ### Understanding Output
 
 ```
-cosine_similarity/768d    time:   [76.12 ns 76.36 ns 76.64 ns]
-                          change: [-76.37% -75.89% -75.42%] (p = 0.00 < 0.05)
+cosine_similarity/768d    time:   [<lower> <estimate> <upper>]
+                          change: [<lower>% <estimate>% <upper>%] (p = 0.00 < 0.05)
                           Performance has improved.
 ```
 
-- **[76.12 ns 76.36 ns 76.64 ns]**: Lower bound, estimate, upper bound
+- **time**: Lower bound, estimate, upper bound (a run prints numbers where the placeholders stand)
 - **change**: Comparison to previous run (if available)
 - **p value**: Statistical significance (< 0.05 = significant)
 
@@ -253,7 +253,7 @@ Use the comparison script to analyze x86_64 vs ARM64 performance:
 
 ### Interpreting ARM64 Results
 
-| Status | Meaning | Action |
+| Status | Threshold in `compare-arch-benchmarks.ps1` | Action |
 |--------|---------|--------|
 | 🟢 ARM64 FASTER | ARM64 >10% faster | Document win |
 | 🔴 x86 FASTER | x86_64 >10% faster | Investigate NEON codegen |

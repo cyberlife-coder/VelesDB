@@ -266,7 +266,7 @@ Create a vector collection.
 |------|---------------|-------------|----------|
 | `full` | 3 KB/vector | 1x | Default, max precision |
 | `sq8` | 776 B/vector | **4x** | Production scale, RAM-constrained |
-| `binary` | 96 B/vector | **32x** | Edge devices, IoT |
+| `binary` | 96 B/vector | **32x** (1 bit per dimension) | Edge devices, IoT |
 
 ```typescript
 await db.createCollection('embeddings', {
