@@ -2203,6 +2203,7 @@ fi
 # it. The block below the blank comment line is what round 16's assignment-syntax
 # rule shipped green — every one of them sets a variable squarely inside the
 # declared family — plus forms nobody had written down when this round started.
+# shellcheck disable=SC2016 # fixture text handed to the rule, never expanded
 EXACT_SUBST_REFUSED=(
   'project_root="$(cat "$1")"'
   'project_root="$(sed -n 1p "$1")"'
@@ -2240,6 +2241,7 @@ EXACT_SUBST_REFUSED=(
   'read -rd '"'"''"'"' project_root < "$1"'
   'read -r project_root <&"$reader_fd"'
 )
+# shellcheck disable=SC2016 # fixture text handed to the rule, never expanded
 EXACT_SUBST_ALLOWED=(
   'read_exact project_root cat "$1"'
   'read_exact_line project_root pwd'
