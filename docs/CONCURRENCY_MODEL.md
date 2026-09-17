@@ -1017,15 +1017,15 @@ flag alone activates them — `RUSTFLAGS="--cfg loom"` is **not** required local
 `cargo test --features loom` (without the bridge) would compile loom but run
 zero tests, which is the trap the build.rs removes.
 
+These are the commands CI runs (`quality-deep.yml`), with the preemption bound
+it uses; the `RUSTFLAGS` is redundant locally and harmless.
+
 ```bash
 # Integration models (tests/loom_tests.rs)
-cargo test -p velesdb-core --features loom,persistence --test loom_tests
+LOOM_MAX_PREEMPTIONS=3 RUSTFLAGS="--cfg loom" cargo test -p velesdb-core --features loom,persistence --test loom_tests -- --test-threads=1
 
 # Storage models (src/storage/loom_tests.rs, a unit-test target)
-cargo test -p velesdb-core --features loom,persistence --lib storage::loom
-
-# With limited preemptions (faster)
-LOOM_MAX_PREEMPTIONS=2 cargo test -p velesdb-core --features loom,persistence --test loom_tests
+LOOM_MAX_PREEMPTIONS=3 RUSTFLAGS="--cfg loom" cargo test -p velesdb-core --features loom,persistence storage::loom -- --test-threads=1
 ```
 
 ### Stress Testing

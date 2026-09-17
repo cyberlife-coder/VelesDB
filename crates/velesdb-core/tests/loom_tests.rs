@@ -6,7 +6,7 @@
 //! # Running Loom Tests
 //!
 //! ```bash
-//! cargo +nightly test --features loom --test loom_tests
+//! LOOM_MAX_PREEMPTIONS=3 RUSTFLAGS="--cfg loom" cargo test -p velesdb-core --features loom,persistence --test loom_tests -- --test-threads=1
 //! ```
 //!
 //! # EPIC-023: Loom Concurrency Testing
