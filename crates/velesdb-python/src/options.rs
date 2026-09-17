@@ -153,7 +153,7 @@ impl HnswOptions {
         Self::from_params(HnswParams::fast())
     }
 
-    /// **Preset — turbo**: maximum insert throughput, ~85% recall.
+    /// **Preset — turbo**: maximum insert throughput, at a lower recall.
     ///
     /// Best for bulk loading, benchmarking, and cold-start ingestion
     /// where search quality is not yet the priority. Maps to

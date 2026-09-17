@@ -19,12 +19,12 @@ Once a collection has been analyzed, `EXPLAIN.estimated_cost_ms` is derived from
 
 These two code paths produce values in different magnitude ranges:
 
-| Example (10 K rows, VectorSearch `ef=100`, `k=10`) | Cost reported |
+| Example (10 K rows, VectorSearch `ef=100`, `k=10`) | `estimated_cost_ms` reported |
 |---|---|
-| Before `ANALYZE` (heuristic) | ≈ 0.1 ms |
-| After `ANALYZE` (calibrated, `COST_UNIT_TO_MS = 0.001`) | ≈ 2.2 ms |
+| Before `ANALYZE` (heuristic) | ≈ 0.1 |
+| After `ANALYZE` (calibrated, `COST_UNIT_TO_MS = 0.001`) | ≈ 2.2 |
 
-The ratio (~22×) is **not** a regression; it reflects that the calibrated path counts more operations per unit (probe visits, comparisons, I/O page reads) whereas the heuristic uses rule-of-thumb constants directly. Users comparing `EXPLAIN` output across an `ANALYZE` boundary should expect this jump.
+The jump between the two estimates is **not** a regression; it reflects that the calibrated path counts more operations per unit (probe visits, comparisons, I/O page reads) whereas the heuristic uses rule-of-thumb constants directly. Users comparing `EXPLAIN` output across an `ANALYZE` boundary should expect this jump.
 
 **Resolution path**: pin `COST_UNIT_TO_MS` empirically via a micro-benchmark that times a known plan shape on reference hardware, then rescale the constant so pre/post-`ANALYZE` costs align at the same operating point. Not blocker for correctness — both paths rank the same plan shape consistently within their own range.
 

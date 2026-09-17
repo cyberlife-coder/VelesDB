@@ -198,11 +198,11 @@ impl HnswParams {
 
     /// Creates turbo parameters for maximum insert throughput.
     ///
-    /// **Target**: 5k+ vec/s (vs ~2k/s with `auto` params)
+    /// **Goal**: faster inserts than `auto` params (measured in `docs/BENCHMARKS.md`)
     ///
     /// # Trade-offs
     ///
-    /// - **Recall**: ~85% (vs ≥95% with standard params)
+    /// - **Recall**: lower than with standard params (not measured)
     /// - **Best for**: Bulk loading, development, benchmarking
     /// - **Not recommended for**: Production search workloads
     ///
@@ -293,7 +293,7 @@ impl HnswParams {
     ///
     /// # Memory Savings
     ///
-    /// | Dimension | Full (f32) | SQ8 (u8) | Reduction |
+    /// | Dimension | Full (f32) | SQ8 (u8) | Memory reduction |
     /// |-----------|------------|----------|----------|
     /// | 768 | 3 KB | 776 B | 4x |
     /// | 1536 | 6 KB | 1.5 KB | 4x |
@@ -444,7 +444,7 @@ impl SearchQuality {
     ///
     /// # Large-scale optimization (v0.9+)
     ///
-    /// - **Accurate**: 512 base (was 256), scales with k×16 for ≥95% recall at 100K+
+    /// - **Accurate**: 512 base (was 256), scales with k×16 to hold recall at 100K+
     /// - **Perfect**: 4096 base, scaled with k×100 — the ef a graph traversal
     ///   would use. With its exact-distance features on, `HnswIndex` does not
     ///   traverse for `Perfect`: it scans exhaustively (#2238), so this is not

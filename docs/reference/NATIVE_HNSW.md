@@ -6,12 +6,12 @@
 
 ## Performance
 
-*Benchmarked March 20, 2026 — Intel Core i9-14900KF, 64GB DDR5, Windows 11, Rust 1.92.0*
+*A historical comparison against `hnsw_rs`, recorded on 2026-01-08 while it was still an optional backend and published in the 1.0.0 changelog, the release that removed it. The machine is not recorded, and the comparison can no longer be re-run; current figures are in [BENCHMARKS.md](../BENCHMARKS.md#5-hnsw-vector-search).*
 
-| Operation | Native HNSW | External libs | Improvement |
-|-----------|-------------|---------------|-------------|
-| **Search (100 queries)** | 26.9 ms | ~32 ms | **1.2x faster** ✅ |
-| **Parallel Insert (5k)** | 1.47 s | ~1.6 s | **1.07x faster** ✅ |
+| Operation | Native HNSW | `hnsw_rs` | Improvement |
+|-----------|-------------|-----------|-------------|
+| **Search (100 queries, 5K vectors)** | 26.9 ms | 32.4 ms | **1.2x faster** ✅ |
+| **Parallel Insert (5K vectors)** | 1.47 s | 1.57 s | **1.07x faster** ✅ |
 | **Recall** | ~99% | baseline | Parity ✓ |
 
 > **Key insight**: Native HNSW excels at **search operations** — the most critical path for production workloads.
@@ -76,10 +76,14 @@ let loaded = NativeHnswIndex::load("./my_index", 768, DistanceMetric::Cosine)?;
 
 | Method | Params | Recall | Speed | Description |
 |--------|--------|--------|-------|-------------|
-| `new(dim, metric)` | `auto(dim)`: M=24, ef_construction=300 up to 256 dims; M=32, 400 above | ≥95% | Baseline | Production workloads |
+| `new(dim, metric)` | `auto(dim)`: M=24, ef_construction=300 up to 256 dims; M=32, 400 above | ≥95% target¹ | Baseline | Production workloads |
 | `with_params(dim, metric, params)` | Custom | Custom | Custom | Full control |
-| `new_turbo(dim, metric)` | M=12, ef=100 | ~85% | 3-5x faster | Bulk import, dev, benchmarks |
+| `new_turbo(dim, metric)` | M=12, ef=100 | Lower (not measured) | 4.9x faster ² | Bulk import, dev, benchmarks |
 | `new_fast_insert(dim, metric)` | as `new` | as `new` | as `new` | `new` with exact-distance features off: `brute_force_search_parallel` returns nothing |
+
+¹ The collection default path (`auto()` parameters) measured 97.6% recall@10 end to end (10K × 384D clustered set, Balanced then at ef 128; 2026-03-27 on 1.7.2).
+
+² Sequential inserts against `new`, measured on `HnswIndex` with the same parameters (1K × 768D, 2026-03-23 on 1.6.0): [BENCHMARKS.md](../BENCHMARKS.md#index-constructor-insert-speed).
 
 ### Operations
 
@@ -89,7 +93,7 @@ let loaded = NativeHnswIndex::load("./my_index", 768, DistanceMetric::Cosine)?;
 | `insert_batch(&[(id, vec)])` | Batch insert |
 | `insert_batch_parallel(items)` | Parallel batch insert |
 | `search(query, k)` | Standard search (Balanced mode) |
-| `search_with_quality(query, k, quality)` | Search with quality preset (Fast/Balanced/Accurate/Perfect/Adaptive/AutoTune). On this type every preset walks the graph: `Perfect` at its large ef, `Adaptive` at `max(min_ef, k)` without escalating, `AutoTune` at Balanced's ef — each scaled up to 2x above 10K vectors by `ef_search_for_scale`; `brute_force_search_parallel` is the exhaustive path |
+| `search_with_quality(query, k, quality)` | Search with quality preset (Fast/Balanced/Accurate/Perfect/Adaptive/AutoTune). On this type every preset walks the graph: `Perfect` at its large ef, `Adaptive` at `max(min_ef, k)` without escalating, `AutoTune` at Balanced's ef — each scaled up to 2x its ef above 10K vectors by `ef_search_for_scale`; `brute_force_search_parallel` is the exhaustive path |
 | `search_batch_parallel(queries, k, quality)` | Batch parallel search, each query as `search_with_quality` |
 | `brute_force_search_parallel(query, k)` | Exact search: the exact top-k under the index's distance; nothing on an index built with `new_fast_insert` or loaded from one |
 | `remove(id)` | Remove vector |
@@ -334,8 +338,8 @@ POST /collections
 
 ### Search Flow
 
-1. **Query preparation**: Rotate the query vector using the learned orthogonal rotation matrix. Cost: ~60 us for 768D (amortized over hundreds of distance evaluations per search).
-2. **Binary traversal**: Traverse the HNSW graph using XOR + popcount binary distances with affine correction factors. Oversampling ratio of 6x compensates for coarser binary fidelity (vs 4x for SQ8). Cost: ~2 ns per candidate.
+1. **Query preparation**: Rotate the query vector using the learned orthogonal rotation matrix. Cost: one matrix-vector product, amortized over the hundreds of distance evaluations of a search (not benchmarked on its own).
+2. **Binary traversal**: Traverse the HNSW graph using XOR + popcount binary distances with affine correction factors. Oversampling ratio of 6x compensates for coarser binary fidelity (SQ8 oversamples 4x). Cost: an XOR and a popcount per candidate (not benchmarked on its own).
 3. **Float32 re-ranking**: Collect `k * 6` coarse candidates, then compute exact f32 distances from the inner `NativeHnsw` vector store. Return the top-k with exact distances.
 
 If the quantizer is not yet trained, search falls back transparently to standard f32 distances.
@@ -371,8 +375,8 @@ rabitq_hnsw.force_train_quantizer()?;
 | Metric | Standard (f32) | RaBitQ | Ratio |
 |--------|---------------|--------|-------|
 | Memory bandwidth per candidate | 1x | 1/32x | **32x reduction** |
-| Distance computation | ~10 ns (f32 SIMD) | ~2 ns (XOR + popcount) | **5x faster** |
-| Query preparation | 0 | ~60 us (768D) | One-time per query |
+| Distance computation | f32 SIMD | XOR + popcount | Cheaper per candidate (not benchmarked) |
+| Query preparation | 0 | One query rotation (not benchmarked) | One-time per query |
 | Minimum index size | N/A | 5000 vectors | Below threshold: f32 fallback |
 
 ## Cosine: Pre-Normalized Dot-Product Kernel
@@ -454,7 +458,7 @@ On an `HnswIndex` and on a collection, `SearchQuality::AutoTune` computes an `ef
      - 1K--10K vectors: `k * 4`
      - 10K--100K vectors: `k * 8`
      - more than 100K vectors: `k * 12`
-   - **Dimension factor**: high-dimensional spaces (>512) apply a 1.5x multiplier for sparser neighborhoods.
+   - **Dimension factor**: high-dimensional spaces (>512) multiply the base ef by 1.5 for sparser neighborhoods.
    - **`min_ef`** is clamped to at least `k` (never fewer candidates than requested results).
    - **`max_ef`** is set to `4 * min_ef`, a cap the second phase stays under: it doubles `min_ef` once.
 
@@ -498,7 +502,7 @@ POST /collections/documents/search
 |----------|-------------------|
 | Fixed workload, known recall target | `Balanced` or `Accurate` with explicit `ef_search` |
 | Variable collection sizes, no tuning budget | **`AutoTune`** |
-| Latency-critical, recall > 90% acceptable | `Fast` |
+| Latency-critical, a small recall loss acceptable | `Fast` |
 | Needs the exact top-k | `Perfect` on a collection, or on an `HnswIndex` whose exact-distance features are on (an exhaustive scan); `brute_force_search_parallel` on a `NativeHnswIndex` not built with `new_fast_insert` (nor loaded from one) |
 
 ## Benchmarks

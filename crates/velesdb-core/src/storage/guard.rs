@@ -67,7 +67,7 @@ use std::sync::atomic::AtomicU64;
 /// in-flight remap impossible, so that mismatch is unreachable in practice.
 ///
 /// The epoch uses wrapping `u64` arithmetic. Overflow is theoretically possible
-/// after 2^64 remaps (~584 years at 1B/sec) but practically irrelevant.
+/// after 2^64 remaps (~584 years at a billion remaps per second) but practically irrelevant.
 pub struct VectorSliceGuard<'a> {
     /// Read guard holding the mmap lock – guarantees the mapping is pinned for the guard lifetime
     pub(super) _guard: RwLockReadGuard<'a, MmapMut>,

@@ -1,8 +1,8 @@
 //! Optional second-stage re-scoring of a [`MemoryService::recall_fused`]
 //! candidate pool, the layer that lifts a ranking miss (a relevant fact deep
 //! in the pool, below the fusion cutoff) into the final `k` — the lever
-//! validated on the LoCoMo ceiling diagnostic (multi-hop recall@8 = 50%,
-//! recall@64 = 89%: the gold fact is IN the pool, just outranked).
+//! validated on the LoCoMo ceiling diagnostic (multi-hop recall@8 far below
+//! recall@64: the gold fact is IN the pool, just outranked).
 //!
 //! Mirroring the [`crate::embedder`]/[`crate::extract`] pattern, the
 //! plug-point is dependency-free (bring your own cross-encoder or LLM by
