@@ -171,6 +171,22 @@ function requireNumber(name: string, value: unknown): number {
 }
 
 /**
+ * `value` as a finite number, or `BAD_REQUEST`: what REST's `f32` fields
+ * take. The REST backend's `JSON.stringify` sends NaN and ±Infinity as
+ * `null`, which such a field refuses, so this backend refuses them too
+ * rather than hand them to the binding.
+ */
+function requireFiniteNumber(name: string, value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new VelesDBError(
+      `${name} must be a finite number; got ${describeValue(value)}`,
+      'BAD_REQUEST'
+    );
+  }
+  return value;
+}
+
+/**
  * `value` as an integer from 0 to 2^32 - 1, or `BAD_REQUEST`; `bound` names
  * the type that bounds it.
  */
@@ -348,7 +364,7 @@ export async function wasmHybridSearch(
   const queryVector = vector instanceof Float32Array ? vector : new Float32Array(vector);
   const k = validateSearchInputs(collection, [queryVector], options?.k ?? 10);
   requireWasmFilterSupport('hybridSearch', options?.filter);
-  const vectorWeight = requireNumber('vectorWeight', options?.vectorWeight ?? 0.5);
+  const vectorWeight = requireFiniteNumber('vectorWeight', options?.vectorWeight ?? 0.5);
   if (k <= 0) {
     return [];
   }
@@ -367,6 +383,9 @@ export async function wasmHybridSearch(
 
 /** The weighted-fusion fields velesdb-wasm takes as one `[avg, max, hit]` argument. */
 const WEIGHTED_TRIPLE = ['avgWeight', 'maxWeight', 'hitWeight'] as const;
+
+/** Every `fusionParams` weight: each an `f32` field of REST's `MultiQuerySearchRequest`. */
+const FUSION_WEIGHTS = [...WEIGHTED_TRIPLE, 'denseWeight', 'sparseWeight'] as const;
 
 /**
  * The `fusionParams` fields each strategy reads, as core's builders read
@@ -427,9 +446,9 @@ function canonicalStrategy(name: unknown): FusionStrategy {
 const WEIGHTED_SUM_TOLERANCE = Math.fround(0.001);
 
 /**
- * Refuse, as core does, a weighted triple with a weight that is not a
- * number, a negative or non-finite one, or one that does not sum to 1.0.
- * Returns the three weights.
+ * Refuse, as core does, a weighted triple with a negative weight, one that
+ * is not finite once rounded to f32, or one that does not sum to 1.0.
+ * `wasmFusionArgs` has already refused a weight that is not a finite number.
  *
  * The check runs in f32, as core's `validate_non_negative` and
  * `validate_weight_sum` do on the `Float32Array` the binding receives: each
@@ -438,20 +457,18 @@ const WEIGHTED_SUM_TOLERANCE = Math.fround(0.001);
  * tolerance: `[0.5, 0.5, 0.001]` sums to 1.0010000467 in f32, and
  * `[0.3, 0.3, 0.399]` to 0.9990000129.
  */
-function validateWeightedTriple(weights: readonly unknown[]): number[] {
-  const numbers = weights.map((weight, i) => requireNumber(WEIGHTED_TRIPLE[i]!, weight));
-  const f32 = numbers.map((weight) => Math.fround(weight));
+function validateWeightedTriple(weights: readonly number[]): void {
+  const f32 = weights.map((weight) => Math.fround(weight));
   const sum = f32.reduce((total, weight) => Math.fround(total + weight), 0);
   const invalid = f32.some((weight) => !Number.isFinite(weight) || weight < 0);
   if (invalid || Math.abs(Math.fround(sum - 1)) > WEIGHTED_SUM_TOLERANCE) {
     throw new VelesDBError(
       'multiQuerySearch weighted fusion: avgWeight, maxWeight and hitWeight must be ' +
         `finite, non-negative and sum to 1.0 within ${WEIGHTED_SUM_TOLERANCE}; ` +
-        `got ${numbers.join(', ')}`,
+        `got ${weights.join(', ')}`,
       'BAD_REQUEST'
     );
   }
-  return numbers;
 }
 
 /**
@@ -464,7 +481,11 @@ function validateWeightedTriple(weights: readonly unknown[]): number[] {
  * argument, and the binding applies core's defaults only when that argument
  * is absent: a partial triple is therefore refused rather than completed
  * with guessed values, and a complete one is checked against core's rule.
- * `k` is checked under every strategy (`requireU32`).
+ *
+ * Every field given is checked for its type first, whichever strategy reads
+ * it: REST deserializes the whole request before it reads the strategy, so a
+ * `k` that is not a `u32`, or a weight that is not a finite `f32`, refuses
+ * the request even where the strategy would ignore the field.
  */
 function wasmFusionArgs(
   strategy: FusionStrategy,
@@ -473,14 +494,18 @@ function wasmFusionArgs(
   rrfK: number;
   weights: Float32Array | null;
 } {
+  const rrfK = requireU32('fusionParams.k', params?.k ?? 60, "core's rrf_k, a u32");
+  for (const name of FUSION_WEIGHTS) {
+    const weight = params?.[name];
+    if (isSet(weight)) {
+      requireFiniteNumber(`fusionParams.${name}`, weight);
+    }
+  }
   const read: FusionParams = {};
   for (const name of FUSION_PARAMS_READ[strategy]) {
     read[name] = params?.[name];
   }
   requireWasmFieldsListed('multiQueryFusionParams', 'multiQuerySearch fusionParams', read);
-  // REST's `rrf_k` is a `u32`: a value that does not deserialize refuses the
-  // request whichever strategy it names, and the binding takes it as a u32.
-  const rrfK = requireU32('fusionParams.k', params?.k ?? 60, "core's rrf_k, a u32");
   const weights = WEIGHTED_TRIPLE.map((name) => read[name]).filter(isSet);
   if (weights.length === 0) {
     return { rrfK, weights: null };
@@ -492,7 +517,8 @@ function wasmFusionArgs(
         'takes together)'
     );
   }
-  return { rrfK, weights: new Float32Array(validateWeightedTriple(weights)) };
+  validateWeightedTriple(weights);
+  return { rrfK, weights: new Float32Array(weights) };
 }
 
 export async function wasmMultiQuerySearch(

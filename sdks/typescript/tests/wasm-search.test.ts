@@ -1366,3 +1366,81 @@ describe('WASM search — a number option that is not a number is BAD_REQUEST, n
     expect(hybrid).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// #2095 round 10 — a weight is a finite number, as REST's f32 fields are, and
+// every fusionParams weight sent is checked whichever strategy reads it.
+// ---------------------------------------------------------------------------
+
+/**
+ * Values REST's f32 fields refuse: `JSON.stringify` sends each as `null`,
+ * which serde does not read as an f32.
+ */
+const NON_FINITE = [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY];
+
+describe('WASM search — a weight is a finite number, as REST reads an f32 (#2095)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it.each(NON_FINITE)('hybridSearch refuses vectorWeight = %s before the binding sees it', async (vectorWeight) => {
+    const hybrid = vi.fn(() => []);
+    const ctx = buildCtx('docs', buildStore({ hybrid_search: hybrid }), { dimension: 2 });
+
+    const outcome = await settle(wasmHybridSearch(ctx, 'docs', [0.1, 0.2], 'q', { vectorWeight }));
+
+    expect(outcome).toBeInstanceOf(VelesDBError);
+    expect((outcome as VelesDBError).code).toBe('BAD_REQUEST');
+    expect((outcome as VelesDBError).message).toContain(`vectorWeight must be a finite number; got ${vectorWeight}`);
+    expect(hybrid).not.toHaveBeenCalled();
+  });
+
+  it.each(NON_FINITE)(
+    'multiQuerySearch refuses a weighted triple holding %s, naming the field',
+    async (avgWeight) => {
+      const multi = vi.fn(() => []);
+      const ctx = buildCtx('docs', buildStore({ multi_query_search: multi }));
+
+      const outcome = await settle(
+        wasmMultiQuerySearch(ctx, 'docs', [[0.1, 0.2]], {
+          fusion: 'weighted',
+          fusionParams: { avgWeight, maxWeight: 0.5, hitWeight: 0.5 },
+        })
+      );
+
+      expect(outcome).toBeInstanceOf(VelesDBError);
+      expect((outcome as VelesDBError).code).toBe('BAD_REQUEST');
+      expect((outcome as VelesDBError).message).toContain(
+        `fusionParams.avgWeight must be a finite number; got ${avgWeight}`
+      );
+      expect(multi).not.toHaveBeenCalled();
+    }
+  );
+
+  // REST deserializes every field of the request before it reads the strategy, so a
+  // weight of the wrong type refuses it even where the strategy would never read it.
+  it.each([
+    ['rrf', 'avgWeight', 'abc'],
+    ['rrf', 'maxWeight', Number.NEGATIVE_INFINITY],
+    ['rrf', 'hitWeight', Object.create(null)],
+    ['rrf', 'denseWeight', Number.NaN],
+    ['average', 'sparseWeight', Number.POSITIVE_INFINITY],
+    ['weighted', 'denseWeight', Number.NaN],
+    ['relative_score', 'avgWeight', 'abc'],
+    ['relative_score', 'denseWeight', Number.NaN],
+  ] as const)('under %s, refuses fusionParams.%s = %s with BAD_REQUEST', async (fusion, name, value) => {
+    const multi = vi.fn(() => []);
+    const ctx = buildCtx('docs', buildStore({ multi_query_search: multi }));
+
+    const outcome = await settle(
+      wasmMultiQuerySearch(ctx, 'docs', [[0.1, 0.2]], {
+        fusion,
+        fusionParams: { [name]: value as never },
+      })
+    );
+
+    expect(outcome).toBeInstanceOf(VelesDBError);
+    expect((outcome as VelesDBError).code).toBe('BAD_REQUEST');
+    expect((outcome as VelesDBError).message).toContain(`fusionParams.${name} must be a finite number`);
+    expect((outcome as VelesDBError).message).toContain(named(value));
+    expect(multi).not.toHaveBeenCalled();
+  });
+});

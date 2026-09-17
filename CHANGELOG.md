@@ -122,7 +122,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The TypeScript SDK's WASM backend refuses what it cannot honour
   instead of dropping it (#2095).** `textSearch` never passed the caller's
   `filter` on: velesdb-wasm's `text_search(query, k, field?)` has no filter
-  slot, so rows the filter excluded came back. `hybridSearch`,
+  slot, so the filter was never applied. `hybridSearch`,
   `multiQuerySearch` and `search` with a `sparseVector` dropped their
   filters the same way; `search` ignored `sparseIndexName` and
   `includeVectors: true`; `createCollection` ignored `storageMode` and the
@@ -158,6 +158,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   value against the backend. The REST backend's `multiQuerySearchIds`
   dropped a `filter` too: it now sends it on, so velesdb-server's refusal
   reaches the caller. The SDK's CI job now also runs its lint script.
+  On velesdb-wasm 6.0.0, the results of `textSearch`, `hybridSearch` and a
+  filtered `search` are affected by #2332, which this change does not touch.
 
   Its behaviour changes are listed under Changed.
 
@@ -543,7 +545,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `collectionType` other than `vector`, or `hnsw`,
   `pqRescoreOversampling`, `deferredIndexing` or `asyncIndexBuilder`;
   `query` with `timeoutMs` or `stream: true`. A `fusionParams` field the
-  chosen strategy never reads is ignored, as core ignores it. Under
+  chosen strategy never reads is ignored, as core ignores it, but only
+  once it is well formed: every weight given must be a finite number
+  under every strategy, as REST's `f32` fields must. Under
   `weighted`, a triple core would reject (a negative or non-finite weight,
   or a sum more than 0.001 from 1.0, computed in f32 as core computes it)
   throws `BAD_REQUEST` instead of the binding's bare string.
@@ -566,7 +570,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `'abc'` used to reach the binding. A `k`, a weight or a `vectorWeight`
   that is not a number throws `BAD_REQUEST` naming its type, where the
   binding coerced a string and an object with no prototype ended in a
-  `TypeError`.
+  `TypeError`. A weight or a `vectorWeight` that is NaN or infinite throws
+  `BAD_REQUEST` too, as REST refuses it (JSON sends each as `null`, which
+  an `f32` field does not accept), where the binding received it.
   At runtime a fusion strategy name is read as core reads it, in any case
   and with the aliases `avg`, `max` and `rsf`, spellings that only untyped
   (JavaScript) callers can send, since the `FusionStrategy` type keeps the
