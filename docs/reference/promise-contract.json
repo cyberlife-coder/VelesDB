@@ -1,5 +1,5 @@
 {
-  "last_updated": "2026-09-13",
+  "last_updated": "2026-09-18",
   "claims": [
     {
       "id": "root_readme_hnsw_latency_microseconds",
@@ -5739,6 +5739,42 @@
         "for_workspace_major": 6
       },
       "last_updated": "2026-09-14"
+    },
+    {
+      "id": "hnsw_batch_pool_handoff_flat_cost",
+      "file": "crates/velesdb-core/src/index/hnsw/native/backend_adapter.rs",
+      "must_contain": "a flat ~32 us of thread hand-off, measured",
+      "validation_command": "n/a — rayon thread hand-off cost, not a repository benchmark",
+      "executable": false,
+      "source": "Standalone rayon micro-benchmark (a 2-crate scratch binary: the same sequential work called directly, then through `ThreadPool::install`), release, 2 000 iterations after a 50-iteration warm-up, medians: n=1 41 ns direct vs 32 250 ns via install; n=10 541 ns vs 33 083 ns; n=50 2 792 ns vs 34 084 ns; n=99 5 667 ns vs 36 834 ns; n=1 000 59 541 ns vs 70 041 ns. The hand-off is flat in the work it wraps, which is the point: it is what a sub-threshold batch would pay for a pool `place_batch` never enters. It justifies the `PARALLEL_BATCH_MIN` condition in `insert_batch_parallel` (#2343); it is a platform-dependent scheduling cost, not a product promise, so no user-facing number depends on it.",
+      "last_updated": "2026-09-18",
+      "measured_on": "2026-09-18",
+      "measured_machine": "Apple M5 Pro (18 cores, macOS 26.6.2, release, idle)",
+      "measured_version": "6.0.0"
+    },
+    {
+      "id": "hnsw_sub_threshold_pool_handoff",
+      "file": "crates/velesdb-core/src/index/hnsw/index/global_pool_tests.rs",
+      "must_contain": "paying `install`'s flat thread hand-off (~32 us",
+      "validation_command": "n/a — rayon thread hand-off cost, not a repository benchmark",
+      "executable": false,
+      "source": "Standalone rayon micro-benchmark (a 2-crate scratch binary: the same sequential work called directly, then through `ThreadPool::install`), release, 2 000 iterations after a 50-iteration warm-up, medians: n=1 41 ns direct vs 32 250 ns via install; n=10 541 ns vs 33 083 ns; n=50 2 792 ns vs 34 084 ns; n=99 5 667 ns vs 36 834 ns; n=1 000 59 541 ns vs 70 041 ns. The hand-off is flat in the work it wraps, which is the point: it is what a sub-threshold batch would pay for a pool `place_batch` never enters. It justifies the `PARALLEL_BATCH_MIN` condition in `insert_batch_parallel` (#2343); it is a platform-dependent scheduling cost, not a product promise, so no user-facing number depends on it.",
+      "last_updated": "2026-09-18",
+      "measured_on": "2026-09-18",
+      "measured_machine": "Apple M5 Pro (18 cores, macOS 26.6.2, release, idle)",
+      "measured_version": "6.0.0"
+    },
+    {
+      "id": "hnsw_sub_threshold_work_in_place",
+      "file": "crates/velesdb-core/src/index/hnsw/index/global_pool_tests.rs",
+      "must_contain": "against 541 ns of work for ten vectors",
+      "validation_command": "n/a — rayon thread hand-off cost, not a repository benchmark",
+      "executable": false,
+      "source": "Standalone rayon micro-benchmark (a 2-crate scratch binary: the same sequential work called directly, then through `ThreadPool::install`), release, 2 000 iterations after a 50-iteration warm-up, medians: n=1 41 ns direct vs 32 250 ns via install; n=10 541 ns vs 33 083 ns; n=50 2 792 ns vs 34 084 ns; n=99 5 667 ns vs 36 834 ns; n=1 000 59 541 ns vs 70 041 ns. The hand-off is flat in the work it wraps, which is the point: it is what a sub-threshold batch would pay for a pool `place_batch` never enters. It justifies the `PARALLEL_BATCH_MIN` condition in `insert_batch_parallel` (#2343); it is a platform-dependent scheduling cost, not a product promise, so no user-facing number depends on it.",
+      "last_updated": "2026-09-18",
+      "measured_on": "2026-09-18",
+      "measured_machine": "Apple M5 Pro (18 cores, macOS 26.6.2, release, idle)",
+      "measured_version": "6.0.0"
     }
   ],
   "claim_families": [
