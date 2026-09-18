@@ -3719,6 +3719,38 @@ async fn test_bad_mode_is_refused_on_every_search_shape() {
             "uri={uri} body={text}"
         );
     }
+
+    // Precedence inside the pre-check `/search` and `/search/ids` share: a
+    // request carrying BOTH a bad `mode` and a bad `ef_search` answers the
+    // `mode` error, because `mode` is parsed first. Without this case the
+    // order of the two validations is pinned by nothing and either one may
+    // answer, changing the 400 body a client reads.
+    let both_bad = json!({
+        "vector": dense.clone(),
+        "top_k": 2,
+        "mode": "acurate",
+        "ef_search": 0
+    });
+    for uri in [
+        "/collections/mode_shapes/search",
+        "/collections/mode_shapes/search/ids",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(post(uri, &both_bad))
+            .await
+            .expect("Request failed");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "uri={uri}");
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("Failed to read body");
+        let json: Value = serde_json::from_slice(&bytes).expect("Invalid JSON");
+        let error = json["error"].as_str().expect("error is string");
+        assert!(
+            error.starts_with("Unknown search mode"),
+            "uri={uri}: mode must be refused before ef_search, got {error}"
+        );
+    }
 }
 
 #[tokio::test]

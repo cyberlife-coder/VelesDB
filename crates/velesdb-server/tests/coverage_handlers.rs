@@ -6,6 +6,9 @@
 //!   per-vector dimension validation (the indexed 400), and the
 //!   rate-limited (429) preamble path shared by `/search/multi` and
 //!   `/search/multi/ids`.
+//! - `handlers/search/mod.rs` — the operational counters
+//!   `search_request_pre_check` records for `/search` and `/search/ids`
+//!   (vector-query counter, and `status="rate_limited"` on a 429).
 //! - `handlers/graph/handlers.rs` — `build_edge` rejection of non-object
 //!   /non-null `properties` (400) for both the single-edge and batch
 //!   endpoints.
@@ -245,6 +248,92 @@ async fn test_multi_query_search_rate_limited_returns_429() {
     .await;
 
     assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+}
+
+// ============================================================================
+// search/mod.rs — the counters `search_request_pre_check` records for both
+// `/search` and `/search/ids`
+// ============================================================================
+
+/// The vector-query counter, as `GET /metrics` names it.
+const VECTOR_QUERIES: &str = "velesdb_queries_by_type{type=\"vector\"}";
+
+/// The rate-limited query counter, as `GET /metrics` names it.
+const RATE_LIMITED: &str = "velesdb_queries_total{status=\"rate_limited\"}";
+
+/// Reads one counter out of a Prometheus exposition body: the line opening
+/// with `key`, whose last whitespace-separated field is the value.
+fn counter(exposition: &str, key: &str) -> u64 {
+    let line = exposition
+        .lines()
+        .find(|line| line.starts_with(key))
+        .unwrap_or_else(|| panic!("test: no `{key}` sample in:\n{exposition}"));
+    line.split_whitespace()
+        .next_back()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or_else(|| panic!("test: `{line}` carries no numeric value"))
+}
+
+/// `/search` and `/search/ids` share `search_request_pre_check`, so both must
+/// move the same two counters: one vector query per accepted request, and —
+/// the counter being recorded BEFORE the guard rail, so a refused request
+/// stays visible by type — one vector query AND one `status="rate_limited"`
+/// on a 429.
+///
+/// The assertions read the very string `GET /metrics` serves for these two
+/// families: `handlers/metrics.rs` pushes `operational_metrics
+/// .export_prometheus()` into its body verbatim, and the integration router
+/// in `tests/common/mod.rs` does not mount that route.
+#[tokio::test]
+async fn test_search_pre_check_records_vector_and_rate_limited_metrics() {
+    for route in ["search", "search/ids"] {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let (app, state) = create_test_app_with_state(&temp_dir);
+        let name = "pre_check_metrics";
+        seed_vector_collection(&app, name).await;
+        let uri = format!("/collections/{name}/{route}");
+        let body = json!({"vector": [1.0, 0.0, 0.0, 0.0], "top_k": 2});
+
+        let before = state.operational_metrics.export_prometheus();
+        let resp = post(&app, &uri, body.clone()).await;
+        assert_eq!(resp.status(), StatusCode::OK, "uri={uri}");
+        let accepted = state.operational_metrics.export_prometheus();
+        assert_eq!(
+            counter(&accepted, VECTOR_QUERIES),
+            counter(&before, VECTOR_QUERIES) + 1,
+            "uri={uri}: an accepted search must count one vector query"
+        );
+        assert_eq!(
+            counter(&accepted, RATE_LIMITED),
+            counter(&before, RATE_LIMITED),
+            "uri={uri}: an accepted search is not rate-limited"
+        );
+
+        // Exhaust the default ("anonymous") client's bucket so the next
+        // request trips `apply_pre_check` inside the shared pre-check.
+        state
+            .db
+            .get_vector_collection(name)
+            .expect("collection exists after seeding")
+            .guard_rails()
+            .rate_limiter
+            .exhaust("anonymous");
+
+        let resp = post(&app, &uri, body).await;
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS, "uri={uri}");
+        let refused = state.operational_metrics.export_prometheus();
+        assert_eq!(
+            counter(&refused, RATE_LIMITED),
+            counter(&accepted, RATE_LIMITED) + 1,
+            "uri={uri}: a rate-limited search must count one rate-limited query"
+        );
+        assert_eq!(
+            counter(&refused, VECTOR_QUERIES),
+            counter(&accepted, VECTOR_QUERIES) + 1,
+            "uri={uri}: the vector counter is recorded before the guard rail, \
+             so a rate-limited search stays visible by type"
+        );
+    }
 }
 
 // ============================================================================
