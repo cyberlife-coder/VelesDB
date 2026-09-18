@@ -39,7 +39,10 @@ export interface SearchOptions {
   k?: number;
   /** Filter expression (optional). Accepts typed `Filter` (recommended) or legacy raw JSON. */
   filter?: FilterInput;
-  /** Include vectors in results (default: false) */
+  /**
+   * Include vectors in results (default: false). The WASM backend refuses
+   * `true` with `NOT_SUPPORTED` (`capabilities().includeVectors` is `false`).
+   */
   includeVectors?: boolean;
   /** Optional sparse vector for hybrid sparse+dense search */
   sparseVector?: SparseVector;
@@ -51,8 +54,9 @@ export interface SearchOptions {
    * For a **pure sparse** query against a named index (no dense vector),
    * call `db.sparseSearchNamed()` instead — see {@link SparseSearchNamedOptions}.
    *
-   * **Backend support:** REST only. The WASM backend silently ignores this
-   * field and uses the collection's single sparse index regardless.
+   * **Backend support:** REST only. A WASM collection has a single sparse
+   * index, so the WASM backend refuses this field with `NOT_SUPPORTED`
+   * (`capabilities().namedSparseIndexes` is `false`).
    */
   sparseIndexName?: string;
   /** Search quality preset (default: 'balanced'). */
@@ -62,27 +66,36 @@ export interface SearchOptions {
 /** Fusion strategy for multi-query search */
 export type FusionStrategy = 'rrf' | 'average' | 'maximum' | 'weighted' | 'relative_score';
 
+/** Parameters of a multi-query fusion strategy. */
+export interface FusionParams {
+  /** RRF k parameter (default: 60) */
+  k?: number;
+  /** Weighted fusion: average weight (default: 0.6) */
+  avgWeight?: number;
+  /** Weighted fusion: max weight (default: 0.3) */
+  maxWeight?: number;
+  /** Weighted fusion: hit weight (default: 0.1) */
+  hitWeight?: number;
+  /** Relative score fusion: dense vector weight (default: 0.5) */
+  denseWeight?: number;
+  /** Relative score fusion: sparse vector weight (default: 0.5) */
+  sparseWeight?: number;
+}
+
+/** Name of one {@link FusionParams} field. */
+export type FusionParamName = keyof FusionParams;
+
 /** Multi-query search options */
 export interface MultiQuerySearchOptions {
   /** Number of results to return (default: 10) */
   k?: number;
   /** Fusion strategy (default: 'rrf') */
   fusion?: FusionStrategy;
-  /** Fusion parameters */
-  fusionParams?: {
-    /** RRF k parameter (default: 60) */
-    k?: number;
-    /** Weighted fusion: average weight (default: 0.6) */
-    avgWeight?: number;
-    /** Weighted fusion: max weight (default: 0.3) */
-    maxWeight?: number;
-    /** Weighted fusion: hit weight (default: 0.1) */
-    hitWeight?: number;
-    /** Relative score fusion: dense vector weight (default: 0.5) */
-    denseWeight?: number;
-    /** Relative score fusion: sparse vector weight (default: 0.5) */
-    sparseWeight?: number;
-  };
+  /**
+   * Fusion parameters. `db.capabilities().multiQueryFusionParams` lists the
+   * fields the backend applies; the WASM backend refuses the others.
+   */
+  fusionParams?: FusionParams;
   /** Filter expression (optional). Accepts typed `Filter` (recommended) or legacy raw JSON. */
   filter?: FilterInput;
 }

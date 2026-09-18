@@ -51,7 +51,7 @@ export type { Filter, Condition, CompareOp, FilterInput, JsonValue } from './fil
 export { searchQualityToMode } from './search-quality';
 export type { SearchQualityWire } from './search-quality';
 export { REST_CAPABILITIES, WASM_CAPABILITIES } from './capabilities';
-export type { CapabilityMap } from './capabilities';
+export type { CapabilityMap, FilteredSearchOperation } from './capabilities';
 export {
   VelesError,
   CollectionExistsError,

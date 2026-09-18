@@ -290,6 +290,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   save taking no lock: 3 to 6 of some 40 saves each reloaded 997 to 1 000 of
   1 000 ids onto other ids' vectors, or was refused as corrupt.
 
+- **The TypeScript SDK's WASM backend refuses what it cannot honour
+  instead of dropping it (#2095).** `textSearch` never passed the caller's
+  `filter` on: velesdb-wasm's `text_search(query, k, field?)` has no filter
+  slot, so the filter was never applied. `hybridSearch`,
+  `multiQuerySearch` and `search` with a `sparseVector` dropped their
+  filters the same way; `search` ignored `sparseIndexName` and
+  `includeVectors: true`; `createCollection` ignored `storageMode` and the
+  HNSW, PQ-rescoring and indexing settings; `query` ignored `timeoutMs` and
+  `stream`. `upsert` and `upsertBatch` never gave the binding a
+  `sparseVector`, so sparse search found nothing, whatever
+  `db.capabilities().sparseSearch` said. `multiQuerySearch` passed only
+  `fusionParams.k`, because the SDK typed the binding's
+  `multi_query_search` from a hand copy that predated the `weights`
+  argument velesdb-wasm has taken since 4.0.0.
+
+  The weights now reach the binding, and every binding function the SDK
+  calls, `VectorStore`'s and `MemoryService`'s alike, is declared with the
+  binding's own full parameter list, optional parameters made required, so
+  an argument the SDK computes and does not pass fails the typecheck; only
+  the two module initialisers, called with or without an argument, are
+  typed by hand. Sparse vectors are indexed. The binding cannot delete
+  postings, so each sparse upsert gets a fresh sparse id and a replaced or
+  deleted point's old one is retired: it never matches again. Retired ids
+  would pile up, and every sparse search over-fetches by their number, so a
+  search's cost would grow with the replacements a collection has seen. The
+  sparse index therefore lives in a store of its own and is rebuilt from the
+  live sparse vectors once retired ids outnumber live ones: it never holds
+  more than twice the live entries, at O(1) amortized cost. velesdb-wasm deleting postings itself (#2287)
+  will make the rebuild unnecessary.
+  `createCollection` creates the store in the requested `storageMode`.
+  `WASM_CAPABILITIES` is the one table the backend consults before it uses
+  an option. It gains `filteredSearch`, `multiQueryFusionParams`,
+  `namedSparseIndexes`, `includeVectors`, `idOnlySearch`, `storageModes`,
+  `collectionTypes`, `collectionConfig` and `queryOptions`; the
+  filter-taking entry points are derived from the backend interface, so a
+  new one cannot be missed; and a conformance test probes every key and
+  value against the backend. The REST backend's `multiQuerySearchIds`
+  dropped a `filter` too: it now sends it on, so velesdb-server's refusal
+  reaches the caller. The SDK's CI job now also runs its lint script.
+  On velesdb-wasm 6.0.0, the results of `textSearch`, `hybridSearch` and a
+  filtered `search` are affected by #2332, which this change does not touch.
+
+  Its behaviour changes are listed under Changed.
+
 - **`GEO_DISTANCE` was inaccurate or NaN near the antipode, and its `=` /
   `!=` depended on floating-point rounding (#2310).** Both evaluation paths,
   `ColumnStore::filter_geo_distance` and VelesQL's payload filtering
@@ -807,6 +851,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to back it, which the per-crate job now makes possible. `time`'s figure is
   `x509-parser`'s, reached through rcgen — not rcgen's own `^0.3.6`, which its
   `x509-parser` feature raises.
+
+- **BREAKING (TypeScript SDK, WASM backend) — an argument the WASM backend
+  cannot apply is refused, and a search's inputs are checked as core checks
+  them (#2095).** Calls that used to succeed with the argument ignored now
+  throw `NOT_SUPPORTED`, naming the backend and the capability: a `filter`
+  on `textSearch`, `hybridSearch`, `multiQuerySearch` or a sparse
+  `search`; `sparseIndexName`; `includeVectors: true`; under
+  `relative_score`, `fusionParams.denseWeight` or `sparseWeight`; under
+  `weighted`, a triple given in part; `createCollection` with
+  `storageMode` `pq` or `rabitq` (velesdb-wasm stores both as SQ8), a
+  `collectionType` other than `vector`, or `hnsw`,
+  `pqRescoreOversampling`, `deferredIndexing` or `asyncIndexBuilder`;
+  `query` with `timeoutMs` or `stream: true`. A `fusionParams` field the
+  chosen strategy never reads is ignored, as core ignores it, but only
+  once it is well formed: every weight given must be a finite number
+  under every strategy, as REST's `f32` fields must, and `null` counts as
+  given, since the REST backend sends it as JSON `null`. Under
+  `weighted`, a triple core would reject (a negative or non-finite weight,
+  or a sum more than 0.001 from 1.0, computed in f32 as core computes it)
+  throws `BAD_REQUEST` instead of the binding's bare string.
+
+  Every search checks its inputs first, as core does. A query vector of
+  the wrong dimension throws `DIMENSION_MISMATCH` whatever `k` is, and
+  `multiQuerySearch` refuses a short or long vector instead of padding or
+  overflowing it. The WASM backend's `multiQuerySearch` takes 1 to 10
+  vectors, as core's does, and more than 10 now throw `BAD_REQUEST`.
+  `db.multiQuerySearch` still refuses an empty list with
+  `VALIDATION_ERROR` before any backend sees it; only a direct
+  `WasmBackend.multiQuerySearch` call, which returned `[]` for one, now
+  throws `BAD_REQUEST`. A non-integer or negative `k` throws
+  `BAD_REQUEST`, core's `k` being unsigned, and so does a `k` above
+  2^32 - 1, since velesdb-wasm's `usize` is 32-bit and the binding would
+  wrap it (a `k` of 2^32 returned no rows, 2^32 + 2 two). A `k` of 0
+  returns nothing without calling the binding (a sparse search used to
+  return live hits). `fusionParams.k` must be an integer from 0 to
+  2^32 - 1, core's `u32`, whichever strategy is named, where -1, 1.5 or
+  `'abc'` used to reach the binding. A `k`, a weight or a `vectorWeight`
+  that is not a number throws `BAD_REQUEST` naming its type, where the
+  binding coerced a string and an object with no prototype ended in a
+  `TypeError`. A weight or a `vectorWeight` that is NaN or infinite throws
+  `BAD_REQUEST` too, as REST refuses it (JSON sends each as `null`, which
+  an `f32` field does not accept), where the binding received it.
+  At runtime a fusion strategy name is read as core reads it, in any case
+  and with the aliases `avg`, `max` and `rsf`, spellings that only untyped
+  (JavaScript) callers can send, since the `FusionStrategy` type keeps the
+  canonical names. `null` or absent means `rrf`, and an unknown name, or
+  any other value that is not a string, throws `BAD_REQUEST`. `'rsf'` used
+  to let `denseWeight` through, and `'WEIGHTED'` dropped the caller's
+  triple. `query` no longer reads `params.k`, which REST ignores: a
+  statement without `LIMIT` returns core's default of 10 rows, `LIMIT` is
+  capped at core's 100,000, and one too large for a u64 throws
+  `BAD_REQUEST`, as core's parser refuses it.
+  A `quality` preset velesdb-wasm cannot parse now throws where it used to
+  be accepted and dropped: `search`, on every path, hands the string to the
+  binding's `search_with_quality`, whose `parse_search_quality` is the one
+  implementation of the grammar, so the SDK refuses `'nonsense'` where the
+  REST server answers `400` (#2267). The refusal is a `VelesDBError`
+  (`BAD_REQUEST`) naming the backend and quoting the binding's words: the
+  binding throws a bare string, which would otherwise reach the caller as a
+  value no `instanceof` narrows. `searchBatch` refuses in the same pre-loop
+  as a filter, before any entry searches, so no batch runs half-way. A dense
+  search runs under the named preset, `balanced` when none is named; the
+  preset still tunes nothing, WASM search being brute force, and a filtered
+  or sparse-only search validates it without applying it.
+  Every catch around a binding call reads the thrown value through one
+  reader, `describeWasmThrow`, including the memory wedge's `init()`: a
+  failed `@wiscale/velesdb-wasm` load or a failed `MemoryService`
+  construction now names its reason in the `ConnectionError`'s message,
+  where before the message said only that initialization had failed. On
+  6.0.0 those two reject with a `WebAssembly.CompileError`, which `cause`
+  does carry; the bare-string shape is the method-call path's, and the one
+  reader covers both rather than assuming either. That reader is total: a
+  prototype-less object or a hostile `toString` is named by its type rather
+  than coerced, so the reader can never replace the binding's reason with a
+  `TypeError` of its own.
+  On REST, `multiQuerySearchIds` with a `filter` now
+  fails with the server's `400` instead of returning unfiltered ids.
 
 - **BREAKING (REST, VelesQL, bindings) — an unparseable search `mode` now
   fails instead of running silently at the default quality (#2267).**
