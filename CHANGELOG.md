@@ -150,6 +150,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   load call alone reports the cost as gone when it has only moved.
 
 ### Fixed
+- **The agent hooks remind a conversation of the working context it uses.** The
+  SessionStart, PreCompact and Stop hooks of the Claude Code and Codex
+  integrations named the session set in `.velesdb-hooks.json` (else `rolling`),
+  whatever session the conversation kept its state under. After a compaction, a
+  conversation working under a session of its own was told to load a context it
+  never wrote, and at Stop to save over one another conversation may own.
+  PostToolUse now records the session of each successful `save_working_context`,
+  and of each `load_working_context` that found one, per host session and per
+  project the call names, a save and a load each in a record of its own, so a
+  load never replaces a recorded save, even when the two calls' hooks overlap. A
+  load reminder (SessionStart) names the last session the conversation saved, or
+  else the last it loaded; a save reminder (PreCompact, Stop and the checklist
+  an opted-in repository's Stop gives for an edit batch, Codex's post-compaction
+  reminder) names only one it saved, and otherwise the configured one, so
+  reading another conversation's context never makes it save over that one.
+  After a compaction the Claude Code SessionStart hook asks to load the working
+  context again. Codex runs the hook only for the tools its PostToolUse matcher
+  names: the installer and the snippet now include the two working-context
+  tools. A call naming another project is never adopted for this one; it is kept
+  under its own. A load that found nothing, a failed call, a project name that
+  is empty or holds a control character, and a session name outside
+  `[A-Za-z0-9][A-Za-z0-9._:-]{0,127}` are ignored; jq checks each name as it was
+  sent, a NUL byte or a trailing newline included, before any shell reads it, so
+  none can redirect the reminders or carry text into them. A record is read only
+  when its file holds exactly that one record.
+- **The agent hooks read an MCP result Claude Code sends as a JSON string.**
+  Claude Code passes a velesdb-memory tool's result to PostToolUse as a JSON
+  string, which the hooks' success check refused, so in a Claude Code session
+  no successful recall unlocked the learning-loop guard and no working-context
+  call was recorded.
+  Both hosts' hooks now share one check: a string counts when it decodes to a
+  non-empty object with no error, and a load's `found` is read from it too.
+- **One recall unlocks every worktree of the project it names (#2308).** The
+  learning-loop guard keeps the refused edits of one host session in one place,
+  and subagents share their parent's session. A recall scoped to a project
+  found two worktrees of it waiting and promoted neither, so no edit could
+  proceed in any of them. It now unlocks each worktree of that project with a
+  refused edit, and the worktree the recall ran from even when its own edit was
+  never refused, and no other project's. The project a recall names is compared
+  as it was sent: a name followed by a newline no longer unlocks the project it
+  resembles. The hooks read a repository's path, project and session exactly,
+  where command substitution stripped a trailing newline: a repository whose
+  directory name ends in one is unlocked by its own recall, never under the
+  name of the directory it resembles, and a pending record holding two records
+  is refused instead of acted on. The Windsurf hook reads them the same way, so
+  its reminder names the project of the repository it runs in instead of the
+  parent directory's when that repository's directory name ends in a newline.
+
 - **The TypeScript SDK's WASM backend refuses what it cannot honour
   instead of dropping it (#2095).** `textSearch` never passed the caller's
   `filter` on: velesdb-wasm's `text_search(query, k, field?)` has no filter

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# SessionStart hook: tell the model to resume its rolling working context.
+# SessionStart hook: tell the model to resume its working context — the session
+# this conversation last saved, else the one it last loaded, else the configured
+# one — and, after a compaction, to load it again.
 #
 # Why a hook and not a second velesdb-memory process: the store is
 # mono-process (flock). The MCP server already running inside this Claude
@@ -8,7 +10,7 @@
 # integrations/agent-hooks/README.md for the full constraint writeup.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" # exact-read-ok: a line below sources lib/ from this value, so a byte lost here fails loudly instead of naming another tree
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=./lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
@@ -19,14 +21,25 @@ source "$SCRIPT_DIR/lib/freshness.sh"
 require_jq
 
 payload="$(read_stdin_payload)"
-cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null || true)"
+read_exact cwd jq -j '.cwd // empty' <<<"$payload" 2>/dev/null || cwd=""
+read_exact session_id jq -j '.session_id // empty' <<<"$payload" 2>/dev/null || session_id=""
+# Documented values: startup | resume | clear | compact.
+source_kind="$(printf '%s' "$payload" | jq -r '.source // empty' 2>/dev/null || true)"
 if [ -z "$cwd" ]; then
   cwd="$PWD"
 fi
 
 resolve_config "$cwd"
+session_note=""
+if adopt_working_session "$session_id" any; then
+  session_note=", the session this conversation last saved (else the one it last loaded),"
+fi
 
-context="Session memory (velesdb-memory): call load_working_context(project=\"$PROJECT\", session=\"$SESSION\") as your first action, unless you already loaded it earlier this session. It restores the prior distilled state (goal, constraints, verified facts, decisions, pending actions) left by save_working_context, so work continues instead of re-deriving context from scratch. load_working_context returns {found, working, other_sessions}: read 'working' for the state. If 'found' is false, nothing was saved under that EXACT project+session — but check 'other_sessions' before starting fresh: a similarly-named session listed there means the session id was a typo, not a new task. 'other_sessions' is filled in on a hit too, so if one of them looks more like the session you meant, you may have just resumed the wrong work. Reinforcement loop: whenever a memory surfaced by recall/recall_fused (or pulled into compile_context — its decision carries the memory_id) actually helps you, call feedback(id, true) with the id_str string; if it misled you, feedback(id, false). This is what makes ranking improve with use — skipping it keeps confidence flat."
+context="Session memory (velesdb-memory): call load_working_context(project=\"$PROJECT\", session=\"$SESSION\")$session_note as your first action, unless you already loaded it earlier this session. It restores the prior distilled state (goal, constraints, verified facts, decisions, pending actions) left by save_working_context, so work continues instead of re-deriving context from scratch. load_working_context returns {found, working, other_sessions}: read 'working' for the state. If 'found' is false, nothing was saved under that EXACT project+session — but check 'other_sessions' before starting fresh: a similarly-named session listed there means the session id was a typo, not a new task. 'other_sessions' is filled in on a hit too, so if one of them looks more like the session you meant, you may have just resumed the wrong work. Reinforcement loop: whenever a memory surfaced by recall/recall_fused (or pulled into compile_context — its decision carries the memory_id) actually helps you, call feedback(id, true) with the id_str string; if it misled you, feedback(id, false). This is what makes ranking improve with use — skipping it keeps confidence flat."
+
+if [ "$source_kind" = "compact" ]; then
+  context="$context This session was just compacted, which discarded what an earlier load restored: call it again now, even if you already did."
+fi
 
 # A daemon behind the published release is worth one line, and only when it
 # is true: an up-to-date session sees nothing. Best-effort by construction —

@@ -3,7 +3,7 @@
 # recall has completed successfully in the same agent session.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" # exact-read-ok: a line below sources lib/ from this value, so a byte lost here fails loudly instead of naming another tree
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=./lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
@@ -14,9 +14,9 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 payload="$(read_stdin_payload)"
 tool_name="$(printf '%s' "$payload" | jq -r '.tool_name // empty' 2>/dev/null || true)"
-cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null || true)"
-session_id="$(printf '%s' "$payload" | jq -r '.session_id // empty' 2>/dev/null || true)"
-target_path="$(printf '%s' "$payload" | jq -r '.tool_input.file_path // empty' 2>/dev/null || true)"
+read_exact cwd jq -j '.cwd // empty' <<<"$payload" 2>/dev/null || cwd=""
+read_exact session_id jq -j '.session_id // empty' <<<"$payload" 2>/dev/null || session_id=""
+read_exact target_path jq -j '.tool_input.file_path // empty' <<<"$payload" 2>/dev/null || target_path=""
 
 case "$tool_name" in
   Edit|Write) ;;
@@ -29,7 +29,7 @@ if [ -n "$target_path" ]; then
     /*) target="$target_path" ;;
     *) target="$cwd/$target_path" ;;
   esac
-  policy_start="$(dirname "$target")"
+  read_exact_line policy_start dirname -- "$target"
 else
   # A covered tool without its documented target is evaluated conservatively
   # from cwd rather than treated as automatically unconfigured.
@@ -41,8 +41,10 @@ if ! resolve_config "$policy_start"; then
 fi
 if [ -L "${target:-}" ]; then
   lexical_enforced="$ENFORCE_LEARNING_LOOP"
-  if ! resolved_target="$(resolve_final_symlink "$target")" \
-    || ! resolve_config "$(dirname "$resolved_target")"; then
+  # shellcheck disable=SC2154 # read_exact sets resolved_target and resolved_dir (printf -v)
+  if ! read_exact resolved_target resolve_final_symlink "$target" \
+    || ! read_exact_line resolved_dir dirname -- "$resolved_target" \
+    || ! resolve_config "$resolved_dir"; then
     echo "VelesDB learning-loop guard: a final symlink target could not be resolved safely; recall cannot authorize this edit. Retry with a physical non-symlink path." >&2
     exit 2
   fi
@@ -59,18 +61,21 @@ learning_loop_enabled || { echo '{}'; exit 0; }
   exit 2
 }
 
-marker_id="$(learning_marker_identity "$session_id")"
-if ! sentinel="$(sentinel_path "recall" "$marker_id")"; then
+learning_marker_identity marker_id "$session_id" # exact-read-ok: printf -v from arguments this process already holds; nothing is read
+# shellcheck disable=SC2154 # learning_marker_identity sets marker_id (printf -v)
+if ! read_exact sentinel sentinel_path "recall" "$marker_id"; then
   echo "VelesDB learning-loop guard: private hook-state storage is unsafe or unavailable; the edit remains refused." >&2
   exit 2
 fi
+# shellcheck disable=SC2154 # read_exact sets sentinel (printf -v)
 if valid_private_marker "$sentinel"; then
   # Stop consumes this marker after the covered edit batch and can therefore
   # remind again after a later edit without looping on the continuation.
-  if ! dirty_dir="$(record_dir_path "learning-dirty" "$session_id")"; then
+  if ! read_exact dirty_dir record_dir_path "learning-dirty" "$session_id"; then
     echo "VelesDB learning-loop guard: private hook-state storage is unsafe or unavailable; the edit remains refused." >&2
     exit 2
   fi
+  # shellcheck disable=SC2154 # read_exact sets dirty_dir (printf -v)
   if ! record_current_project "$dirty_dir"; then
     echo "VelesDB learning-loop guard: could not persist the edited repository identity; the edit remains refused." >&2
     exit 2
@@ -83,10 +88,11 @@ if [ -e "$sentinel" ] || [ -L "$sentinel" ]; then
   exit 2
 fi
 
-if ! pending_dir="$(record_dir_path "pending-recall" "$session_id")"; then
+if ! read_exact pending_dir record_dir_path "pending-recall" "$session_id"; then
   echo "VelesDB learning-loop guard: private hook-state storage is unsafe or unavailable; the edit remains refused." >&2
   exit 2
 fi
+# shellcheck disable=SC2154 # read_exact sets pending_dir (printf -v)
 if ! record_current_project "$pending_dir"; then
   echo "VelesDB learning-loop guard: could not persist the pending repository identity; the edit remains refused." >&2
   exit 2

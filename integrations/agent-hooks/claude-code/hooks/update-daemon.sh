@@ -38,7 +38,7 @@ if [ ! -f "$manifest" ]; then
 fi
 
 before=$(running_version || true)
-target=$(grep -m1 '^version' "$manifest" | cut -d'"' -f2)
+target=$(grep -m1 '^version' "$manifest" | cut -d'"' -f2) # exact-read-ok: a crate version between two quotes of one TOML line; it cannot hold the newline $( ) strips
 echo "daemon: ${before:-unreachable} → building ${target} from ${REPO}"
 
 # The daemon's own features, not the crate defaults: http for the shared
