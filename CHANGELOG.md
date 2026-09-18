@@ -386,13 +386,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deleted since and a slot already linked, links an id queued twice once, and
   places nothing. An index with its exact-distance features off gives the
   direct writer no slot to fill, so for it the builder still places the
-  vectors. The bulk load also stops copying each vector into the queue.
-  Measured with `bulk_insert_v2_benchmark` on a shared machine (load average
-  near 8), so indicative only: the V2 load, which that bench never drains,
-  ran a median 43.88 ms against 44.19 ms on develop, inside its noise; the
-  standard path 131.50 ms against 144.73 ms, a gap this change does not
-  explain, since its code there is an equivalent rewrite of how a batch
-  indexes each node's query. The drain itself is not in that bench.
+  vectors. The bulk load also stops copying each vector into the queue. The
+  drain connects on a rayon pool of its own, never the global one: it links
+  under the index read guard, and a global worker that takes that same guard
+  under a pending `vacuum` writer would deadlock (#2343). A drain whose link
+  fails puts its ids back on the queue, and `trigger_build_async`, which
+  drains the vector buffer only, refuses while placed ids wait.
 
 - **The REST OpenAPI document shows no rustdoc link syntax (#2263).** utoipa
   copies doc comments into the OpenAPI document (`docs/openapi.{json,yaml}`,

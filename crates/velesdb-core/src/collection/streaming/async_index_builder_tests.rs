@@ -15,6 +15,20 @@ fn make_index(dim: usize) -> HnswIndex {
     HnswIndex::new(dim, DistanceMetric::Cosine).expect("test index creation")
 }
 
+/// `count` vectors to enqueue, id `i` carrying the `i % dim`-th basis vector.
+///
+/// Iterating as `usize` keeps the index arithmetic lossless; the id is a
+/// `u64`, which `usize` cannot overflow on any supported target.
+fn basis_vectors(count: usize, dim: usize) -> Vec<(u64, Vec<f32>)> {
+    (0..count)
+        .map(|i| {
+            let mut v = vec![0.0_f32; dim];
+            v[i % dim] = 1.0;
+            (u64::try_from(i).expect("test: an id fits a u64"), v)
+        })
+        .collect()
+}
+
 #[test]
 fn test_new_creates_empty_builder() {
     let builder = AsyncIndexBuilder::new(default_config());
@@ -84,13 +98,7 @@ fn test_flush_sync_indexes_vectors() {
     let builder = AsyncIndexBuilder::new(default_config());
 
     // Enqueue some vectors
-    let vectors: Vec<(u64, Vec<f32>)> = (0..20)
-        .map(|i| {
-            let mut v = vec![0.0_f32; dim];
-            v[i % dim] = 1.0;
-            (i as u64, v)
-        })
-        .collect();
+    let vectors = basis_vectors(20, dim);
 
     builder.enqueue(vectors);
     assert_eq!(builder.buffer_len(), 20);
@@ -159,13 +167,7 @@ fn test_trigger_build_async_indexes_in_background() {
     let builder = AsyncIndexBuilder::new(default_config());
 
     // Enqueue vectors
-    let vectors: Vec<(u64, Vec<f32>)> = (0..20)
-        .map(|i| {
-            let mut v = vec![0.0_f32; dim];
-            v[i % dim] = 1.0;
-            (i as u64, v)
-        })
-        .collect();
+    let vectors = basis_vectors(20, dim);
 
     builder.enqueue(vectors);
     assert_eq!(builder.buffer_len(), 20);
@@ -224,15 +226,7 @@ fn test_trigger_build_async_skips_when_already_building() {
     assert!(builder.is_building());
 
     // Enqueue vectors that should stay buffered because the trigger is skipped.
-    // Iterate as usize so index arithmetic stays lossless; cast to u64 for the id
-    // (usize → u64 cannot truncate on any supported target).
-    let vectors: Vec<(u64, Vec<f32>)> = (0..5_usize)
-        .map(|i| {
-            let mut v = vec![0.0_f32; dim];
-            v[i % dim] = 1.0;
-            (i as u64, v)
-        })
-        .collect();
+    let vectors = basis_vectors(5, dim);
     builder.enqueue(vectors);
     assert_eq!(builder.buffer_len(), 5);
 
@@ -254,4 +248,63 @@ fn test_trigger_build_async_skips_when_already_building() {
 
     // Restore invariant so builder is not left in a permanently-locked state.
     builder.force_set_building(false);
+}
+
+/// A slot no arena ever held: `link_placed` reports it as unlinked, then
+/// fails to read its vector back — the error its `# Errors` section
+/// documents, on the path this builder drains.
+const ABSENT_SLOT: usize = 4_242;
+
+/// A failed link must not consume the queue. `flush_sync` empties `placed`
+/// before it links, and `link_placed` links nothing when it fails: without
+/// the requeue the ids are gone and no retry can reach their slots, which
+/// stay out of every search until crash recovery or a vacuum finds them.
+#[test]
+fn a_failed_link_puts_the_drained_ids_back_on_the_queue() {
+    let index = make_index(4);
+    let builder = AsyncIndexBuilder::new(default_config());
+    index
+        .mappings
+        .assign(7, crate::index::hnsw::Placed::for_test(ABSENT_SLOT));
+    builder.enqueue_placed([7]);
+    assert_eq!(builder.placed_len(), 1, "premise: one id is queued");
+
+    let err = builder
+        .flush_sync(&index)
+        .expect_err("a slot outside the arena fails the link");
+
+    assert!(
+        matches!(err, crate::error::Error::Internal(_)),
+        "the arena reported the missing slot: {err}"
+    );
+    assert_eq!(
+        builder.placed_len(),
+        1,
+        "the drained id is back on the queue, so a later flush still links it"
+    );
+    assert!(!builder.is_building(), "the build flag is cleared");
+}
+
+/// `trigger_build_async` drains the vector buffer only, so it must refuse
+/// while placed ids wait: a background build that reported done with slots
+/// still unlinked is the hazard #488 Task 4 would wire.
+#[test]
+fn trigger_build_async_refuses_while_placed_ids_wait() {
+    let dim = 4;
+    let index = std::sync::Arc::new(make_index(dim));
+    let builder = AsyncIndexBuilder::new(default_config());
+    builder.enqueue_placed([7]);
+    let vectors = basis_vectors(5, dim);
+    builder.enqueue(vectors);
+
+    builder.trigger_build_async(&index);
+
+    assert_eq!(
+        builder.buffer_len(),
+        5,
+        "the vector buffer is not drained past the placed queue"
+    );
+    assert_eq!(builder.placed_len(), 1, "the placed queue is untouched");
+    assert!(!builder.is_building(), "no background build was started");
+    assert_eq!(index.len(), 0, "the index did not change");
 }

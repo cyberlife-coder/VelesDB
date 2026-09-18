@@ -246,3 +246,7 @@ impl Drop for HnswIndex {
 #[cfg(test)]
 #[path = "safety_tests.rs"]
 mod safety_tests;
+
+#[cfg(all(test, feature = "persistence"))]
+#[path = "link_pool_tests.rs"]
+mod link_pool_tests;

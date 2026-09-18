@@ -31,10 +31,11 @@ pub struct AsyncIndexBuilderConfig {
     #[serde(default = "default_merge_threshold")]
     pub merge_threshold: usize,
 
-    /// Reserved — parsed but not yet wired. Flushes currently connect nodes on
-    /// the global rayon pool with no segment notion, queued vectors through
-    /// `HnswIndex::insert_batch_parallel` and placed ids through the same
-    /// batch connect; this knob changes nothing today.
+    /// Reserved — parsed but not yet wired. Flushes currently connect nodes
+    /// with no segment notion: queued vectors through
+    /// `HnswIndex::insert_batch_parallel`, on the global rayon pool, and
+    /// placed ids through the same batch connect, on the pool
+    /// `HnswIndex::link_placed` keeps for it; this knob changes nothing today.
     /// Wiring it belongs to the pipeline integration tracked under
     /// issue #488 Task 4 (the same one gating this whole builder).
     #[serde(default)]
@@ -119,6 +120,12 @@ impl AsyncIndexBuilder {
         self.buffer.read().len()
     }
 
+    /// Returns the number of placed ids still waiting to be linked.
+    #[must_use]
+    pub(crate) fn placed_len(&self) -> usize {
+        self.placed.lock().len()
+    }
+
     /// Drains and returns all buffered vectors.
     pub fn drain_buffer(&self) -> Vec<(u64, Vec<f32>)> {
         let mut buf = self.buffer.write();
@@ -178,17 +185,36 @@ impl AsyncIndexBuilder {
         let inserted =
             hnsw_index.insert_batch_parallel(vectors.iter().map(|(id, v)| (*id, v.as_slice())));
         let placed = std::mem::take(&mut *self.placed.lock());
+        let queued = placed.len();
         let linked = hnsw_index.link_placed(&placed);
 
         self.building.store(false, Ordering::Release);
 
-        let linked = linked?;
+        let linked = match linked {
+            Ok(linked) => linked,
+            Err(e) => {
+                self.requeue_placed(placed);
+                return Err(e);
+            }
+        };
         tracing::debug!(
-            "AsyncIndexBuilder::flush_sync: inserted {inserted}/{} vectors, linked {linked}/{} placed ids",
+            "AsyncIndexBuilder::flush_sync: inserted {inserted}/{} vectors, linked {linked}/{queued} placed ids",
             vectors.len(),
-            placed.len()
         );
         Ok(inserted + linked)
+    }
+
+    /// Puts drained ids back at the head of the queue, ahead of what was
+    /// queued while the flush ran.
+    ///
+    /// `link_placed` links nothing when it fails, so the drain must not be
+    /// what loses the ids: their slots are in the arena and out of every
+    /// search until something links them, and only crash recovery or a vacuum
+    /// would find them again.
+    fn requeue_placed(&self, mut ids: Vec<u64>) {
+        let mut queue = self.placed.lock();
+        ids.append(&mut queue);
+        *queue = ids;
     }
 
     /// Returns `true` if a build is currently in progress.
@@ -203,9 +229,22 @@ impl AsyncIndexBuilder {
     /// If a build is already in progress, this is a no-op.
     /// The background thread calls `insert_batch_parallel` on the
     /// provided `HnswIndex` and clears the `building` flag on completion.
-    /// Ids queued by `upsert_bulk`'s direct writer are left for
-    /// [`Self::flush_sync`].
+    ///
+    /// It drains the vector buffer only, so it refuses while ids queued by
+    /// `upsert_bulk`'s direct writer are waiting: draining one queue and
+    /// leaving the other is what would let a build report done with slots
+    /// still unlinked. The background body cannot link them itself — only
+    /// `building` is shared with it, not the queues, so it could neither read
+    /// them nor put them back on error — and linking them belongs to
+    /// [`Self::flush_sync`], which owns both. The check is a check and not a
+    /// barrier: an id queued after it waits for the next flush, as before.
     pub fn trigger_build_async(&self, hnsw_index: &Arc<HnswIndex>) {
+        if !self.placed.lock().is_empty() {
+            tracing::debug!(
+                "AsyncIndexBuilder: placed ids are queued; flush_sync drains both queues"
+            );
+            return;
+        }
         if self.building.swap(true, Ordering::AcqRel) {
             return; // Already building
         }

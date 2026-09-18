@@ -6,6 +6,40 @@ use crate::scored_result::ScoredResult;
 use crate::validation::validate_dimension_match;
 use rayon::prelude::*;
 
+/// The rayon pool [`HnswIndex::link_placed`] connects on, and nothing else.
+///
+/// The drain holds `HnswIndex::inner.read()` across the connect phase, and
+/// that phase joins on rayon. On the global pool that closes the cycle of
+/// \#2343: a pending `vacuum` writer blocks every new reader, so a global
+/// worker that takes `inner.read()` — `rerank_candidates_simd`, the per-query
+/// search — parks, the drain's own jobs never get a worker, and the guard the
+/// writer waits on is never released. A pool of its own runs only the connect
+/// jobs, which reach the graph's arena and layers and never `HnswIndex`
+/// itself, so no job on it can take `inner` and the cycle has no edge to
+/// close. Work is not stolen across rayon pools, so the isolation holds.
+///
+/// This narrows the drain only. `insert_batch_parallel` still joins on the
+/// global pool under the same guard (`batch.rs`, below), as it does on
+/// `develop`; that entrant and the 26 `inner` acquisitions under
+/// `index/hnsw/index/` are what \#2343 tracks.
+#[cfg(feature = "persistence")]
+fn link_pool() -> crate::error::Result<&'static rayon::ThreadPool> {
+    static POOL: std::sync::OnceLock<Option<rayon::ThreadPool>> = std::sync::OnceLock::new();
+    POOL.get_or_init(|| {
+        rayon::ThreadPoolBuilder::new()
+            .thread_name(|i| format!("veles-hnsw-link-{i}"))
+            .build()
+            .inspect_err(|e| tracing::error!("link_placed: dedicated rayon pool: {e}"))
+            .ok()
+    })
+    .as_ref()
+    .ok_or_else(|| {
+        crate::error::Error::Internal(
+            "the dedicated rayon pool the drain links on is unavailable".to_string(),
+        )
+    })
+}
+
 impl HnswIndex {
     /// Inserts multiple vectors in parallel using rayon.
     ///
@@ -100,15 +134,21 @@ impl HnswIndex {
     /// `vacuum` rebuilt the graph with it. An id queued twice is linked once,
     /// at the slot of its last write.
     ///
+    /// The guard is held across the connect phase, so that phase runs on
+    /// [`link_pool`] and never on the global rayon pool: a global worker can
+    /// take `inner.read()`, and under a pending `vacuum` writer that closes
+    /// the deadlock cycle of \#2343.
+    ///
     /// # Errors
     ///
     /// Returns an error, and links nothing, if the arena does not hold a slot
-    /// a mapping names.
+    /// a mapping names, or if the dedicated pool cannot be built.
     #[cfg(feature = "persistence")]
     pub(crate) fn link_placed(&self, ids: &[u64]) -> crate::error::Result<usize> {
         if ids.is_empty() {
             return Ok(0);
         }
+        let pool = link_pool()?;
         let inner = self.inner.read();
         let mut slots: Vec<usize> = ids
             .iter()
@@ -117,7 +157,8 @@ impl HnswIndex {
         slots.sort_unstable();
         slots.dedup();
         let unlinked = inner.unlinked_nodes(slots);
-        inner.link_placed(&unlinked)?;
+        let graph: &crate::index::hnsw::native_inner::NativeHnswInner = &inner;
+        pool.install(|| graph.link_placed(&unlinked))?;
         drop(inner);
         Ok(unlinked.len())
     }
