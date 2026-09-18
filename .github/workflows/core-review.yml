@@ -108,14 +108,18 @@ jobs:
   #
   # Its cost on this crate is why nothing leans on it. A dry run against a real
   # velesdb-core diff (run 34767190150) found 22 mutants, spent 86s + 743s on
-  # the unmutated baseline, and was cut at 45 minutes having reported no mutant
-  # at all: one `--lib` pass is ~12 minutes, so the budget reaches a couple of
-  # them. So it is bounded and its report is partial by construction: only the
-  # changed code is mutated, only the `--lib` tests run (this repository keeps
-  # its unit tests beside each module), and the run is cut at 45 minutes with
-  # whatever it has. The report, `mutants.out/` with `missed.txt` listing the
-  # survivors *among the mutants reached*, is uploaded either way. A survivor
-  # in it is real; an empty `missed.txt` is not a clean diff.
+  # the unmutated baseline, and was cut at 45 minutes with 2 of the 22 tested
+  # (both caught) and a third still building — the console printed none of it,
+  # but the uploaded artifact records them. One `--lib` pass is ~12 minutes, so
+  # the budget reaches a couple. It is therefore bounded and its report partial
+  # by construction: only the changed code is mutated, only the `--lib` tests
+  # run (this repository keeps its unit tests beside each module), and the run
+  # is cut at 45 minutes with whatever it has. The report, `mutants.out/` with
+  # `missed.txt` listing the survivors *among the mutants reached*, is uploaded
+  # whenever a mutant was reached; when the filter selects none, `cargo mutants`
+  # writes no `mutants.out/` and the upload step skips with "No files were
+  # found". A survivor is real; an empty or absent `missed.txt` is not a clean
+  # diff.
   # ===========================================================================
   mutants:
     name: Mutants on the diff (velesdb-core)
