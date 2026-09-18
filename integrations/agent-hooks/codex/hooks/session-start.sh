@@ -41,7 +41,8 @@ read_exact session_id jq -j '.session_id // empty' <<<"$payload"
 resolve_config "$cwd"
 # A save reminder names only a session this conversation saved.
 save_session="$SESSION"
-if adopted="$(adopted_session_for "$session_id" "$PROJECT" save)"; then
+if read_exact adopted adopted_session_for "$session_id" "$PROJECT" save; then
+  # shellcheck disable=SC2154 # read_exact sets adopted (printf -v)
   save_session="$adopted"
 fi
 session_note=""

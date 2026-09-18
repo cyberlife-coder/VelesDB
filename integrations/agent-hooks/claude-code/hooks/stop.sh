@@ -168,7 +168,7 @@ if [ "${#dirty_records[@]}" -gt 0 ]; then
 fi
 
 if learning_loop_enabled; then
-  learning_marker_identity marker_id "$session_id"
+  learning_marker_identity marker_id "$session_id" # exact-read-ok: printf -v from arguments this process already holds; nothing is read
   # shellcheck disable=SC2154 # learning_marker_identity sets marker_id (printf -v)
   if ! read_exact sentinel sentinel_path "stop" "$marker_id"; then
     reason="VelesDB private hook-state storage is unsafe or unavailable. Keep the session open, repair the per-user state directory, and retry Stop."

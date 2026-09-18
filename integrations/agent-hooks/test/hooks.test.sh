@@ -2070,85 +2070,175 @@ fi
 
 # No hook reads a path, a project or a session inexactly: `$(…)` and backticks
 # strip every trailing newline, and `read` stops at the first one, so a hook
-# would name, compare or mark another repository than the one it read. Every
-# such string is read through read_exact / read_exact_line.
+# would name, compare or mark another repository than the one it read.
 #
-# THE RULE IS AN EFFECT, NOT A SHAPE, and that is the whole point. Each round
-# before this one described the shape of the offending code and was outrun by
-# the next shape the very next round: forbidden CHARACTERS, then a FLAG
+# THIS GUARD IS A WHITELIST, and that inversion is the whole point. Every round
+# before this one wrote a scanner that tried to RECOGNISE a bad read, and each
+# was outrun by a spelling nobody had listed: forbidden CHARACTERS, then a FLAG
 # (`jq -r`, which the code had already stopped using), then ten COMMANDS, then
-# ASSIGNMENT SYNTAX (`NAME=`, `read `) — which `printf -v NAME`, `mapfile -t
-# NAME`, `readarray`, `eval "NAME=…"`, `: "${NAME:=…}"`, a plain
-# `read NAME < file` and even an unquoted `NAME=$(…)` all walked past. So
-# nothing below names a command, a flag, a character or an assignment syntax.
+# ASSIGNMENT SYNTAX (`NAME=`, `read `), then three named VALUE SOURCES — which
+# omitted the pipe, so `cat "$1" | { read -r project_root; }` passed the guard
+# while truncating at the first newline. A hand-written recogniser of a real
+# language never converges. So nothing below enumerates what is bad.
 #
-# A line is refused when BOTH hold:
-#   1. it brings a value in from outside this process — a command substitution,
-#      a process substitution, or a `<` redirection of any kind; and
-#   2. a name of the path/project/session/root/cwd family sits somewhere a value
-#      can land on it: `=` follows the name (which covers `NAME=`, `NAME+=`,
-#      `NAME[i]=`, `${NAME:=…}` and the same inside `eval`, `declare` or any
-#      quoting), or the name is handed to something as a bare word — which is
-#      how EVERY builtin and every function that writes through a name receives
-#      it, whether or not anyone has written that one yet.
-# A substitution that reads one of the family's JSON fields is refused too.
+# A variable whose name is in the path/project/session/root/cwd family may be
+# SET only by one of three forms, and each is a proof at the site:
+#   1. `read_exact NAME …` or `read_exact_line NAME …`, the readers that keep
+#      every byte;
+#   2. an assignment whose right-hand side brings in no value from outside this
+#      process — no command substitution, no backtick, no redirection, no pipe;
+#   3. a line saying, with `# exact-read-ok: <why>`, why this value cannot lose
+#      a byte. A bootstrap reason is not such a proof.
+# Anything else is refused, WITHOUT the guard knowing how the value arrives.
+# The unknown spelling is refused by default instead of missed by default.
 #
-# The two ways out are proofs at the site, never a name on a list:
-#   * read the value through read_exact / read_exact_line. Neither spells a
-#     substitution nor a redirection, so such a line carries no value source and
-#     condition 1 is false — the exemption needs no clause of its own.
-#   * say on that very line, with `# exact-read-ok: <why>`, why this value
-#     cannot lose a byte. A bootstrap reason is not such a proof.
+# That also dissolves the line/block problem rather than parsing around it: a
+# `while IFS= read -r project_root; do … done < <(cat "$1")` is refused at the
+# `read`, whatever feeds it, so no block has to be joined to its `done` and no
+# redirection has to be recognised at all.
 #
-# Two normalisations keep the rule honest rather than narrow. Single-quoted text
-# is inert — bash expands nothing and assigns nothing inside it — so a jq
-# program and an English sentence cannot make a line look like a read. And the
-# first word of a line is a command, not a name a value lands in, so a helper
-# whose own name carries a family word is not mistaken for a variable.
+# What the guard must still see is where a value CAN land on a name, and that is
+# read off shell text — which is why the normalisation is a quoting lexer and
+# not a pair of substitutions. Quoting is a CLOSED grammar (code, '…', "…",
+# `…`, $( … )) where "a bad read" is an open one, so erasing what is inside
+# quotes is what keeps an English sentence, a jq program or a heredoc body from
+# reading as a variable being set. The previous `gsub(/'[^']*'/,"")` paired
+# apostrophes blindly: in `echo "don't"; project_root="$(cat "$1")" # the repo's
+# root` it ate the substitution between two English apostrophes and allowed the
+# line. The lexer below tracks state instead, across lines, and the fixture
+# table asserts that case.
+#
+# A second, narrower rule survives unchanged beside the whitelist: a
+# substitution that reads one of the family's JSON fields is refused even when
+# the variable it lands in is named nothing in particular, because there the
+# name gives nothing away.
 # shellcheck disable=SC2016 # regular expressions, not expansions
 EXACT_SUBST_NAME='[a-z_]*(project|session|root|cwd|dir|path|target|candidate|link|current|marker)[a-z0-9_]*'
-# A value arriving from outside this process. `<<` and `<<<` are excluded on
-# purpose: a here-document and a here-string are text this process already holds.
+# A name a value can land on: `=` follows it, which covers `NAME=`, `NAME+=`,
+# `NAME[i]=` and `${NAME:=…}`. The prefix class keeps an option (`--dir=`) and a
+# field (`.path=`) from reading as one.
+EXACT_SUBST_ASSIGN="(^|[^-._\$[:alnum:]])${EXACT_SUBST_NAME}(\\\\[[^]]*\\\\])?[+:]?=([^=]|\$)"
+# …or the name handed to something as a bare word, which is how EVERY builtin
+# and every function that writes through a name receives it, whether or not
+# anyone has written that one yet.
+EXACT_SUBST_WORD="(^|[[:space:]])${EXACT_SUBST_NAME}([[:space:]]|\$)"
+# A value arriving from outside this process. `<` covers `<`, `<<`, `<<<` and
+# `< <(…)` alike, and `|` is the pipe the enumerations kept missing.
 # Backslashes are doubled throughout: awk unescapes a `-v` value once before the
 # regex engine sees it.
+EXACT_SUBST_SOURCE='(\\$\\(|`|<|\\|)'
+# Words that introduce a command instead of being one, so that the command of a
+# statement is found and its own name is never mistaken for a value's target.
+EXACT_SUBST_KEYWORD='^(if|then|elif|else|while|until|for|do|done|case|esac|time|!|command|builtin|exec|local|declare|export|readonly|typeset|nohup)[ \t]+'
 EXACT_SUBST_ANY='(\\$\\(|`|<[[:space:]]*\\(|(^|[^<])<[[:space:]]*[^<[:space:]])'
-EXACT_SUBST_ASSIGN="${EXACT_SUBST_NAME}(\\\\[[^]]*\\\\])?[+:]?=([^=]|\$)"
-EXACT_SUBST_WORD="[^\$([:alnum:]_{\`]${EXACT_SUBST_NAME}([^[:alnum:]_]|\$)"
 EXACT_SUBST_FIELD="${EXACT_SUBST_ANY}[^\`]*\\\\.[[:space:]]*\\\\[?[[:space:]]*\"?(project|session|root|cwd|file_path)([^_A-Za-z]|\$)"
-EXACT_SUBST_SQ="'[^']*'"
-EXACT_SUBST_CHECK="Harness: no shipped hook reads a path, project or session through a substitution"
+EXACT_SUBST_CHECK="Harness: no shipped hook sets a path, project or session outside the approved forms"
 
-# The scanner, as one awk pass: join a `\`-continued line to the next, drop a
-# whole-line comment, honour `# exact-read-ok:`, then apply the rule above to
-# the raw line (the JSON-field arm, whose `.["project"]` spelling lives inside
-# single quotes) and to the normalised one (every other arm).
+# The scanner, as one awk pass: erase what is inside quotes and comments, join a
+# `\`-continued statement and skip a heredoc body, honour `# exact-read-ok:`,
+# refuse a family JSON field read through a substitution, then hold every
+# statement of the line to the whitelist.
 EXACT_SUBST_AWK='
-/^[[:space:]]*#/ { next }
-{ if (sub(/\\$/, "")) { joined = joined $0; next } }
+# blank(TEXT): TEXT with the contents of every quoted run replaced by spaces and
+# any comment removed, so what remains is code at the same offsets. Quote state
+# is carried across lines in depth/stack; the comment is left in `comment`.
+function blank(s,   i, c, n, out, top) {
+  n = length(s); out = ""; i = 1; comment = ""
+  while (i <= n) {
+    c = substr(s, i, 1); top = stack[depth]
+    if (top == "S") {
+      if (c == "\x27") { depth--; out = out c } else out = out " "
+      i++
+    } else if (top == "D") {
+      if (c == "\\") { out = out (i < n ? "  " : " "); i += 2 }
+      else if (c == "\"") { depth--; out = out c; i++ }
+      else if (c == "$" && substr(s, i + 1, 1) == "(") { stack[++depth] = "C"; out = out "$("; i += 2 }
+      else if (c == "`") { stack[++depth] = "B"; out = out c; i++ }
+      else { out = out " "; i++ }
+    } else if (top == "B") {
+      if (c == "`") depth--
+      out = out c; i++
+    } else if (c == "#" && (i == 1 || substr(s, i - 1, 1) ~ /[ \t]/)) {
+      comment = substr(s, i); break
+    } else if (c == "\x27") { stack[++depth] = "S"; out = out c; i++ }
+    else if (c == "\"") { stack[++depth] = "D"; out = out c; i++ }
+    else if (c == "\\") { out = out (i < n ? "  " : " "); i += 2 }
+    else if (c == "`") { stack[++depth] = "B"; out = out c; i++ }
+    else if (c == "$" && substr(s, i + 1, 1) == "(") { stack[++depth] = "C"; out = out "$("; i += 2 }
+    else if (c == ")" && top == "C" && depth > 0) { depth--; out = out c; i++ }
+    else { out = out c; i++ }
+  }
+  return out
+}
+BEGIN { depth = 0; stack[0] = "C" }
+heredoc != "" { if ($0 ~ heredoc) heredoc = ""; next }
 {
-  raw = joined $0; joined = ""
-  if (index(raw, "# exact-read-ok: ")) next
-  low = tolower(raw)
-  if (low ~ field) { print raw; next }
-  norm = low
-  gsub(sq, "", norm)
-  sub(/^[ \t]+/, "", norm)
-  if (norm ~ any && (norm ~ assign || norm ~ word)) print raw
+  code = blank($0)
+  raw = raw_joined $0
+  # The field arm stays a PHYSICAL-line rule. It reads the raw text, because the
+  # jq field it looks for lives inside single quotes, and only as far as the code
+  # of this line goes, so a comment mentioning filter.project is prose. Judging
+  # it per statement would refuse every multi-line jq program that inspects
+  # .project, which is most of them.
+  if (index(comment, "exact-read-ok: ")) exempt = 1
+  else if (tolower(substr($0, 1, length(code))) ~ field) fieldhit = 1
+  # A trailing `\` continues the statement unless it sits inside single quotes,
+  # where it is a literal backslash; and a statement is not finished while a
+  # quote is still open, so a multi-line jq program is one statement and carries
+  # one `# exact-read-ok:` for the whole of it.
+  if ((stack[depth] != "S" && $0 ~ /\\$/) || depth > 0) { raw_joined = raw "\n"; code_joined = code_joined code "\n"; next }
+  code = code_joined code; code_joined = ""; raw_joined = ""
+  ok = exempt; exempt = 0
+  hit = fieldhit; fieldhit = 0
+  # A heredoc opens where `<<` survives in CODE and a tag follows it; `<<<` has
+  # no tag and is a here-string this process already holds.
+  if (match(code, /<<-?[ \t]*/)) {
+    tag = substr($0, RSTART + RLENGTH)
+    sub(/^["\x27]/, "", tag)
+    if (match(tag, /^[A-Za-z_][A-Za-z0-9_]*/)) heredoc = "^[ \t]*" substr(tag, 1, RLENGTH) "[ \t]*$"
+  }
+  if (ok) next
+  if (hit) { print raw; next }
+  low = tolower(substr(raw, 1, length(code)))
+  # One statement at a time. The bare-word arm reads CODE, where a name can only
+  # be a name. The assignment arm reads the NAME in the raw text at the same
+  # offsets, because `eval "project_root=$(…)"` and `: "${cwd_path:=$(…)}"` spell
+  # it inside a quoted run that becomes code later — but it reads the VALUE
+  # SOURCE in the code, so that a `|` inside a quoted awk program is text and not
+  # a pipe. blank() emits one character per character consumed, so the two slices
+  # line up.
+  pos = 1; ncode = length(code)
+  while (pos <= ncode) {
+    tail = substr(code, pos)
+    if (match(tail, /;+|&&|\|\|/)) { len = RSTART - 1; nxt = pos + RSTART + RLENGTH - 1 }
+    else { len = length(tail); nxt = ncode + 1 }
+    scode = tolower(substr(code, pos, len))
+    sraw = tolower(substr(low, pos, len))
+    s = scode
+    pos = nxt
+    sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s)
+    while (match(s, kw)) s = substr(s, RLENGTH + 1)
+    cmd = s; sub(/[ \t].*/, "", cmd)
+    if (cmd == "read_exact" || cmd == "read_exact_line") continue
+    rest = s; sub(/^[^ \t]*/, "", rest)
+    if (rest ~ word) { print raw; next }
+    if (sraw ~ assign && scode ~ source) { print raw; next }
+  }
 }'
 
-# inexact_substitution_reads ROOT: every line of ROOT's shipped hooks that takes
-# a path, a project or a session inexactly, as ` <file>: <line>;` each. Prints
-# nothing when the tree is clean. The files come from shipped_hook_files, so
-# this scans whatever the tree holds.
+# inexact_substitution_reads ROOT: every line of ROOT's shipped hooks that sets
+# a path, a project or a session outside the approved forms, as ` <file>:
+# <line>;` each. Prints nothing when the tree is clean. The files come from
+# shipped_hook_files, so this scans whatever the tree holds.
 inexact_substitution_reads() {
   local exact_root="$1"
   local exact_file exact_line
   while IFS= read -r -d '' exact_file; do
     while IFS= read -r exact_line; do
       printf ' %s: %s;' "${exact_file#"$exact_root"/}" "$exact_line"
-    done < <(awk -v any="$EXACT_SUBST_ANY" -v assign="$EXACT_SUBST_ASSIGN" \
-      -v word="$EXACT_SUBST_WORD" -v field="$EXACT_SUBST_FIELD" \
-      -v sq="$EXACT_SUBST_SQ" "$EXACT_SUBST_AWK" "$exact_file")
+    done < <(awk -v assign="$EXACT_SUBST_ASSIGN" -v word="$EXACT_SUBST_WORD" \
+      -v source="$EXACT_SUBST_SOURCE" -v kw="$EXACT_SUBST_KEYWORD" \
+      -v field="$EXACT_SUBST_FIELD" "$EXACT_SUBST_AWK" "$exact_file")
   done < <(shipped_hook_files "$exact_root")
 }
 
@@ -2194,62 +2284,91 @@ else
   fail "Harness: a checkout under a directory named test still discovers its hooks (count:$under_test_count got:$under_test_reads)"
 fi
 
-# Every spelling the enumerating rules walked past is refused, and every form
-# that proves itself exact is not. Each case is written as the only line of a
-# fixture host, so a rule that stops refusing one of them fails here — where the
-# form is named — instead of waiting for a reviewer to hand-write it again.
+# The whitelist is asserted in both directions, because a guard that refuses
+# everything is as useless as one that refuses nothing. Each case is the only
+# statement of a fixture host, so a rule that stops refusing one of them fails
+# here — where the form is named — instead of waiting for a reviewer to
+# hand-write it again. A fixture may span lines: the redirection that feeds a
+# read no longer has to sit on the read's own line for the guard to see it,
+# because the guard does not look at the redirection at all.
 #
-# The table is not the rule: the rule refuses by effect and these are samples of
-# it. The block below the blank comment line is what round 16's assignment-syntax
-# rule shipped green — every one of them sets a variable squarely inside the
-# declared family — plus forms nobody had written down when this round started.
+# The first block is what round 17's rule shipped green. Its condition 1 listed
+# three value sources and omitted the pipe, so every piped read below truncated
+# at the first newline while the harness reported ok; its rule was per line, so
+# the same read passed by moving its `< "$1"` to the `done`; and its
+# `gsub(/'[^']*'/,"")` paired apostrophes blindly, so a substitution between two
+# English apostrophes was deleted before the rule ever saw it.
 # shellcheck disable=SC2016 # fixture text handed to the rule, never expanded
 EXACT_SUBST_REFUSED=(
+  # A pipe is a value source. `printf 'a\nb\n' | { read -r project_root; }`
+  # really yields `got=[a]`: the truncation this guard exists to stop.
+  'cat "$1" | { read -r project_root; }'
+  'cat "$1" | while IFS= read -r project_root; do :; done'
+  'cat "$1" | mapfile -t project_dir'
+  'printf %s "$p" | IFS= read -r session_dir'
+  # The read and what feeds it, on different lines.
+  'while IFS= read -r project_root; do
+  :
+done < "$1"'
+  'while IFS= read -r project_root; do
+  :
+done < <(cat "$1")'
+  'exec 3< "$1"
+read -r -u 3 project_root'
+  'read -r project_root <<EOF
+$(cat "$1")
+EOF'
+  'until [ -n "$project_dir" ]; do
+  read -r project_dir
+done < "$1"'
+  'for _ in 1; do
+  read -r cwd_path
+done < "$1"'
+  # An odd number of apostrophes must not delete the code between them.
+  'echo "don'"'"'t"; project_root="$(cat "$1")" # the repo'"'"'s root'
+  # Spellings nobody had written down when this round started.
+  'coproc project_root { cat "$1"; }'
+  'select target_path in $(cat "$1"); do break; done'
+  'declare -n session_link=other; session_link="$(cat "$1")"'
+  'read -r -a project_dir <<<"$(cat "$1")"'
+  'project_root="$(cat "$1")"; readonly project_root'
+  'if ! candidate_dir=$(cat "$1"); then :; fi'
+  'eval "project_root=$(cat "$1")"'
+  ': "${cwd_path:=$(cat "$1")}"'
+  # Refused by every earlier round too, kept so no round loses ground.
   'project_root="$(cat "$1")"'
-  'project_root="$(sed -n 1p "$1")"'
-  'project_root="$(awk "NR==1" "$1")"'
-  'project_root="$(git rev-parse --show-toplevel)"'
   'project_root=`cat "$1"`'
   'local project_root="$(physical_dir "$1")"'
   'export PROJECT_ROOT="$(pwd)"'
-  'declare project_root="$(cat "$1")"'
-  'readonly session_dir="$(cat "$1")"'
-  'typeset -r cwd_path="$(cat "$1")"'
-  'marker_path="$(sentinel_path "$1" "$2")"'
-  'read -r project_root < <(jq -r .root "$1")'
+  'printf -v project_root '"'"'%s'"'"' "$(cat "$1")"'
+  'mapfile -t project_dir < <(cat "$1")'
+  'project_root=${OTHER:-$(cat "$1")}'
+  'getopts p: opt && session_dir="$(cat "$OPTARG")"'
   'target="${A%/}/$(basename "$1")"'
   'host="$(jq -r '"'"'.["project"]'"'"' "$1")"'
   'host="$(jq -r .file_path "$1")"'
-  # Green under round 16's assignment-syntax rule, and everything after them:
-  'printf -v project_root '"'"'%s'"'"' "$(cat "$1")"'
-  'IFS= read -r session_dir < "$1"'
-  ': "${cwd_path:=$(cat "$1")}"'
-  'mapfile -t project_dir < <(cat "$1")'
-  'readarray -t project_dir < <(cat "$1")'
-  'eval "project_root=$(cat "$1")"'
-  'IFS= read -r project_root < "$f"'
-  'project_root=$(cat "$1")'
-  '{ read -r project_root; } < "$1"'
-  'declare -g "project_root=$(cat "$1")"'
-  'printf -v "project_root" %s "$(< "$1")"'
-  'exec 3< "$1"; read -r -u 3 project_root'
-  'project_root=${OTHER:-$(cat "$1")}'
-  'project_root+="$(cat "$1")"'
-  'getopts p: opt && session_dir="$(cat "$OPTARG")"'
-  'mapfile -t -d '"'"''"'"' project_dir < "$1"'
-  'source /dev/stdin <<< "project_root=$(cat "$1")"'
-  'read -rd '"'"''"'"' project_root < "$1"'
-  'read -r project_root <&"$reader_fd"'
 )
+# The approved forms, and the ordinary code around them that must keep passing:
+# prose, a jq program and a heredoc body are text, not a variable being set.
 # shellcheck disable=SC2016 # fixture text handed to the rule, never expanded
 EXACT_SUBST_ALLOWED=(
   'read_exact project_root cat "$1"'
   'read_exact_line project_root pwd'
+  'read_exact cwd jq -j .cwd "$1" || cwd=""'
   'project_root="$(printf %s fixed)" # exact-read-ok: a fixed literal'
-  'IFS=$'"'"'\t'"'"' read -r via project session <<<"$call"'
+  'project_root=/tmp/fixed'
+  'session_dir=""'
+  'project_root="$OTHER_ROOT"'
+  '[ -n "$cwd" ] || cwd="$PWD"'
   'record_project_json "$1" "$(project_record)"'
   'read_exact_line record jq -cn --arg project "$project" '"'"'{project: $project}'"'"''
   'printf '"'"'run `%s/update-daemon.sh` EARLY in this session'"'"' "$dir"'
+  'echo "the private hook-state directory holds this session'"'"'s marker" >&2'
+  'reason="Keep the session open, repair the per-user state directory, and retry."'
+  'case "$target_path" in /*) :;; esac'
+  'cat <<EOF
+call load_working_context(project="$PROJECT", session="$SESSION") first
+EOF'
 )
 EXACT_SUBST_CASES="$TMP_TEST_DIR/subst-cases"
 # exact_subst_verdict LINE: `refused` when the rule flags LINE, `allowed` when
@@ -2273,9 +2392,9 @@ for exact_case in "${EXACT_SUBST_ALLOWED[@]}"; do
   [ "$(exact_subst_verdict "$exact_case")" = allowed ] || subst_wrong="$subst_wrong not allowed: $exact_case;"
 done
 if [ -z "$subst_wrong" ]; then
-  pass "Harness: the substitution rule refuses every inexact spelling and allows every proven one"
+  pass "Harness: the whitelist refuses every spelling outside the approved forms and allows every one inside them"
 else
-  fail "Harness: the substitution rule refuses every inexact spelling and allows every proven one:$subst_wrong"
+  fail "Harness: the whitelist refuses every spelling outside the approved forms and allows every one inside them:$subst_wrong"
 fi
 
 # No hook is fed by a pipe (#2294). A hook that never reads its input, as the

@@ -297,7 +297,7 @@ project_record() {
     --arg project "$PROJECT" \
     --arg session "$SESSION" \
     --arg root "$CONFIG_ROOT" \
-    '{project: $project, session: $session, root: $root}'
+    '{project: $project, session: $session, root: $root}' # exact-read-ok: these are jq's own --arg bindings, not shell variables
 }
 
 # record_dir_path KIND SESSION_ID: a session-specific directory whose records
@@ -430,7 +430,7 @@ recall_scope_valid() {
 # recall_scope_is PAYLOAD PROJECT: the recall names exactly PROJECT.
 recall_scope_is() {
   printf '%s' "$1" | jq -e --arg project "$2" \
-    "$RECALL_SCOPE"' | type == "string" and length > 0 and . == $project' >/dev/null 2>&1
+    "$RECALL_SCOPE"' | type == "string" and length > 0 and . == $project' >/dev/null 2>&1 # exact-read-ok: these are jq's own --arg bindings, not shell variables
 }
 
 # recall_scope_is_record PAYLOAD RECORD_FILE: the recall names exactly the
@@ -569,7 +569,7 @@ recorded_working_session() {
     | select(type == "object" and .host == $host and .project == $project and .via == $via
       and (.session | type == "string" and test("\\A" + $class + "\\z")))
     | .session
-  ' "$marker" 2>/dev/null
+  ' "$marker" 2>/dev/null # exact-read-ok: these are jq's own --arg bindings, not shell variables
 }
 
 # remember_working_session HOST_SESSION TOOL_NAME PAYLOAD: record the session of
@@ -587,7 +587,7 @@ remember_working_session() {
   local record
   call="$(working_context_call "$2" "$3")" || return 1
   [ -n "$call" ] || return 1
-  IFS=$'\t' read -r via project session <<<"$call"
+  IFS=$'\t' read -r via project session <<<"$call" # exact-read-ok: one tab-separated record from working_context_call, which rejects every control character
   read_exact marker working_session_marker "$1" "$project" "$via" || return 1
   # shellcheck disable=SC2016 # the names inside the jq program are jq's, not the shell's
   read_exact_line record jq -cn --arg host "$1" --arg project "$project" --arg via "$via" \
@@ -632,7 +632,7 @@ adopt_batch_sessions() {
   local targets="$2"
   local project
   local session
-  while IFS= read -r -d '' project; do
+  while IFS= read -r -d '' project; do # exact-read-ok: NUL-delimited, so no newline separates anything
     read_exact session adopted_session_for "$1" "$project" save || continue
   targets="$(printf '%s' "$targets" | jq -c --arg p "$project" --arg s "$session" \
       'map(if .project == $p then .session = $s else . end)')" || return 1 # exact-read-ok: compact JSON, whose own newline is the only one

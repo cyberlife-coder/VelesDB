@@ -37,7 +37,7 @@ targets="$(printf '%s' "$patch" | awk "$PATCH_TARGETS_AWK")" # exact-read-ok: on
 
 needs_checkpoint="false"
 dirty_projects='[]'
-while IFS= read -r target_path; do
+while IFS= read -r target_path; do # exact-read-ok: one patch header per line, so no target can hold a newline
   [ -n "$target_path" ] || continue
   case "$target_path" in
     /*) target="$target_path" ;;
@@ -73,7 +73,7 @@ while IFS= read -r target_path; do
     exit 2
   }
 
-  learning_marker_identity marker_id "$session_id"
+  learning_marker_identity marker_id "$session_id" # exact-read-ok: printf -v from arguments this process already holds; nothing is read
   # shellcheck disable=SC2154 # learning_marker_identity sets marker_id (printf -v)
   if ! read_exact sentinel sentinel_path "codex-recall" "$marker_id"; then
     echo "VelesDB learning-loop guard: private hook-state storage is unsafe or unavailable; apply_patch remains refused." >&2
@@ -118,6 +118,6 @@ if [ "$needs_checkpoint" = "true" ]; then
       echo "VelesDB learning-loop guard: could not persist every edited repository identity; apply_patch remains refused." >&2
       exit 2
     fi
-  done < <(printf '%s' "$dirty_projects" | jq -c '.[]')
+  done < <(printf '%s' "$dirty_projects" | jq -c '.[]') # exact-read-ok: compact JSON, whose own newline is the only one
 fi
 echo '{}'

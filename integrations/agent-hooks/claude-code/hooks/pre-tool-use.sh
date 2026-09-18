@@ -61,7 +61,7 @@ learning_loop_enabled || { echo '{}'; exit 0; }
   exit 2
 }
 
-learning_marker_identity marker_id "$session_id"
+learning_marker_identity marker_id "$session_id" # exact-read-ok: printf -v from arguments this process already holds; nothing is read
 # shellcheck disable=SC2154 # learning_marker_identity sets marker_id (printf -v)
 if ! read_exact sentinel sentinel_path "recall" "$marker_id"; then
   echo "VelesDB learning-loop guard: private hook-state storage is unsafe or unavailable; the edit remains refused." >&2
