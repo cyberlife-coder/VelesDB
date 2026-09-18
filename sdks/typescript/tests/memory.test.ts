@@ -196,9 +196,20 @@ describe('MemoryService', () => {
       await expect(memory.recall('query')).rejects.toThrow(ConnectionError);
     });
 
-    it('wraps a wasm-bindgen default() failure in ConnectionError', async () => {
-      mockWasmModule.default.mockRejectedValueOnce(new Error('boom'));
-      await expect(memory.init()).rejects.toThrow(ConnectionError);
+    it("wraps a wasm-bindgen default() failure in ConnectionError, keeping the binding's reason (#2282)", async () => {
+      // A bare string, not `new Error('boom')`: wasm-bindgen raises a
+      // `Result::Err(String)` by throwing the string itself, a shape
+      // `@wiscale/velesdb-wasm` 6.0.0 really produces and `new Error(…)`
+      // never does. The `cause` slot takes only an `Error`, so a fake
+      // kinder than the binding hides the reason being dropped.
+      mockWasmModule.default.mockRejectedValueOnce(
+        'expected magic word 00 61 73 6d'
+      );
+      const rejection = memory.init();
+      await expect(rejection).rejects.toBeInstanceOf(ConnectionError);
+      await expect(rejection).rejects.toThrow(
+        /Failed to initialize the memory wedge WASM module: expected magic word 00 61 73 6d/
+      );
       expect(memory.isInitialized()).toBe(false);
     });
 

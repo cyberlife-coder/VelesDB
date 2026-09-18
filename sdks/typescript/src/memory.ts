@@ -16,6 +16,10 @@
 import { ConnectionError, NotFoundError, ValidationError, VelesDBError } from './types';
 import type { MemoryService as BindingMemoryService } from '@wiscale/velesdb-wasm';
 import type { AllConstructorParams, AllParams } from './backends/wasm-types';
+// One reader of anything the binding throws, and the guarded read both it
+// and `toTypedError` are built on — a second copy is how the two drifted
+// apart before (`describeWasmThrow` was total here and not there).
+import { describeWasmThrow, tryRead } from './backends/wasm-helpers';
 
 // The wasm capability floor this SDK's memory surface requires. MUST match
 // package.json's `@wiscale/velesdb-wasm` range — the runtime check in
@@ -646,8 +650,11 @@ export class MemoryService {
     try {
       mod = (await import('@wiscale/velesdb-wasm')) as unknown as MemoryWasmModule;
     } catch (error) {
+      // As below: the loader's glue can reject with a bare string, and the
+      // `cause` slot takes only an `Error`, so the reason goes in the
+      // message or it is lost.
       throw new ConnectionError(
-        'Failed to load @wiscale/velesdb-wasm',
+        `Failed to load @wiscale/velesdb-wasm: ${describeWasmThrow(error)}`,
         error instanceof Error ? error : undefined
       );
     }
@@ -673,8 +680,13 @@ export class MemoryService {
       this.inner = new mod.MemoryService(this.dimension);
       this._initialized = true;
     } catch (error) {
+      // `mod.default()` and `new mod.MemoryService()` are binding calls: the
+      // binding throws a bare string as readily as an `Error`
+      // (`describeWasmThrow`), and the `cause` slot takes only the latter,
+      // so the reason goes in the message or it is lost — the same defect
+      // this PR fixed at `backends/wasm.ts`'s own init catch.
       throw new ConnectionError(
-        'Failed to initialize the memory wedge WASM module',
+        `Failed to initialize the memory wedge WASM module: ${describeWasmThrow(error)}`,
         error instanceof Error ? error : undefined
       );
     }
@@ -1287,15 +1299,6 @@ function degradedError(message: string | undefined, fallback: string): VelesDBEr
     message !== undefined ? `wasm error (translation failed): ${message}` : fallback,
     'INTERNAL'
   );
-}
-
-/** A guarded read: captures the result, or the fact that reading threw. */
-function tryRead<T>(read: () => T): { ok: boolean; value: T | undefined } {
-  try {
-    return { ok: true, value: read() };
-  } catch {
-    return { ok: false, value: undefined };
-  }
 }
 
 /**

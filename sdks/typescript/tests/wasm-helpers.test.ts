@@ -17,6 +17,7 @@ import {
   sparseVectorToArrays,
   buildWasmContext,
   buildCollectionInfo,
+  describeWasmThrow,
 } from '../src/backends/wasm-helpers';
 import type {
   CollectionData,
@@ -192,6 +193,84 @@ describe('buildCollectionInfo', () => {
     expect(info.dimension).toBe(0);
     expect(info.metric).toBe('cosine');
     expect(info.count).toBe(0);
+  });
+});
+
+/**
+ * `describeWasmThrow` runs INSIDE a catch block, so it must be total: if it
+ * throws, the reason it was written to salvage is replaced by its own
+ * `TypeError` and the caller reads a message about primitive conversion
+ * instead of what the binding said. Every shape below is one a wasm binding
+ * can hand back — `Result::Err(String)` is the common one, and the exotic
+ * ones (prototype-less object, poisoned `toString`) are the same hazard
+ * `describeValue` (`wasm-search.ts`) and `toTypedError` (`memory.ts`)
+ * already guard against elsewhere in this SDK.
+ */
+describe('describeWasmThrow is total (#2282)', () => {
+  it("returns a bare string verbatim — wasm-bindgen's Result::Err(String)", () => {
+    expect(describeWasmThrow('expected magic word 00 61 73 6d')).toBe(
+      'expected magic word 00 61 73 6d'
+    );
+  });
+
+  it("returns an Error's message", () => {
+    expect(describeWasmThrow(new Error('boom'))).toBe('boom');
+  });
+
+  it("returns a WebAssembly.RuntimeError's message", () => {
+    expect(describeWasmThrow(new WebAssembly.RuntimeError('unreachable'))).toBe(
+      'unreachable'
+    );
+  });
+
+  it.each([
+    ['undefined', undefined, 'undefined'],
+    ['null', null, 'null'],
+    ['a number', 42, '42'],
+    ['a plain object', { a: 1 }, '[object Object]'],
+  ] as const)('coerces %s', (_label, thrown, expected) => {
+    expect(describeWasmThrow(thrown)).toBe(expected);
+  });
+
+  it('names a prototype-less object by its type instead of coercing it', () => {
+    // `String(Object.create(null))` throws "Cannot convert object to
+    // primitive value": the value has no `toString`, and no prototype to
+    // inherit one from.
+    const thrown: unknown = Object.create(null);
+    expect(() => describeWasmThrow(thrown)).not.toThrow();
+    expect(describeWasmThrow(thrown)).toBe('a value of type object');
+  });
+
+  it('survives a toString that throws', () => {
+    const thrown = {
+      toString() {
+        throw new TypeError('poisoned');
+      },
+    };
+    expect(() => describeWasmThrow(thrown)).not.toThrow();
+    expect(describeWasmThrow(thrown)).toBe('a value of type object');
+  });
+
+  it('survives an Error whose message getter throws', () => {
+    const thrown = new Error('unread');
+    Object.defineProperty(thrown, 'message', {
+      get() {
+        throw new TypeError('poisoned');
+      },
+    });
+    expect(() => describeWasmThrow(thrown)).not.toThrow();
+    expect(describeWasmThrow(thrown)).toBe('a value of type object');
+  });
+
+  it('survives a revoked proxy, whose prototype walk throws', () => {
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+    expect(() => describeWasmThrow(proxy)).not.toThrow();
+    expect(describeWasmThrow(proxy)).toBe('a value of type object');
+  });
+
+  it('survives a symbol, which interpolation refuses to coerce', () => {
+    expect(() => describeWasmThrow(Symbol('s'))).not.toThrow();
   });
 });
 

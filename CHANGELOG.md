@@ -736,6 +736,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   search runs under the named preset, `balanced` when none is named; the
   preset still tunes nothing, WASM search being brute force, and a filtered
   or sparse-only search validates it without applying it.
+  Every catch around a binding call reads the thrown value through one
+  reader, `describeWasmThrow`, including the memory wedge's `init()`: a
+  failed `@wiscale/velesdb-wasm` load or a failed `MemoryService`
+  construction now names its reason in the `ConnectionError`'s message,
+  where before only an `Error` survived — the `cause` slot takes nothing
+  else, so a bare string was dropped whole. That reader is itself total: a
+  prototype-less object or a hostile `toString` is named by its type rather
+  than coerced, so the reader can never replace the binding's reason with a
+  `TypeError` of its own.
   On REST, `multiQuerySearchIds` with a `filter` now
   fails with the server's `400` instead of returning unfiltered ids.
 

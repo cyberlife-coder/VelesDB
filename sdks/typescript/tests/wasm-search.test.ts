@@ -257,16 +257,17 @@ describe('wasmSearch — quality reaches the binding, and its refusal reaches ba
         wasmModule: moduleWithProbe(probe),
       });
 
-      const rejects = expect(
-        wasmSearch(ctx, 'docs', [], { ...options, quality: 'nonsense' })
-      ).rejects;
       // A `VelesDBError`, not the bare string: the PR's contract is that a
       // caller can narrow on the refusal, and `String(thrown)` is all the
-      // binding gives the SDK to put in it.
-      await rejects.toBeInstanceOf(VelesDBError);
-      await expect(
+      // binding gives the SDK to put in it. The CODE is part of that
+      // contract — README, CHANGELOG and `capabilities.ts` all name
+      // `BAD_REQUEST` for an unparseable preset — so it is asserted, not
+      // merely the class: `toBeInstanceOf(VelesDBError)` alone survives
+      // `'BAD_REQUEST' → 'INTERNAL'`.
+      const outcome = await settle(
         wasmSearch(ctx, 'docs', [], { ...options, quality: 'nonsense' })
-      ).rejects.toThrow(/Unknown search quality/);
+      );
+      expectBadRequest(outcome, /Unknown search quality/);
 
       expect(refuse).toHaveBeenCalledWith(expect.any(Float32Array), 0, 'nonsense');
       expect(probe.free).toHaveBeenCalled();
@@ -305,12 +306,13 @@ describe('wasmSearchBatch — an unparseable preset stops the batch before it st
       wasmModule: moduleWithProbe(buildStore({ search_with_quality: parse })),
     });
 
-    await expect(
+    const outcome = await settle(
       wasmSearchBatch(ctx, 'docs', [
         { vector: [0.1, 0.2], quality: 'fast' },
         { vector: [0.3, 0.4], quality: 'nonsense' as SearchQuality },
       ])
-    ).rejects.toBeInstanceOf(VelesDBError);
+    );
+    expectBadRequest(outcome, /Unknown search quality/);
 
     expect(search_with_quality).not.toHaveBeenCalled();
   });
@@ -559,10 +561,10 @@ describe('wasmQuery', () => {
 
   it('throws BAD_REQUEST when params.q is not a vector', async () => {
     const ctx = buildCtx('docs', buildStore());
-    await expect(wasmQuery(ctx, 'docs', PURE_NEAR, {})).rejects.toThrow(VelesDBError);
-    await expect(wasmQuery(ctx, 'docs', PURE_NEAR, {})).rejects.toThrow(
-      /params\.q/
-    );
+    // The title said BAD_REQUEST; only the class and the message were
+    // asserted, so `'BAD_REQUEST' → anything` survived. The code is asserted
+    // here, as everywhere this SDK promises one in prose.
+    expectBadRequest(await settle(wasmQuery(ctx, 'docs', PURE_NEAR, {})), /params\.q/);
   });
 
   it('accepts Float32Array or number[] for params.q', async () => {
@@ -719,6 +721,20 @@ async function settle<T>(promise: Promise<T>): Promise<unknown> {
     (value) => value,
     (error: unknown) => error
   );
+}
+
+/**
+ * A refusal the SDK issues on its own behalf: a `VelesDBError` whose `.code`
+ * is `BAD_REQUEST`. The code is the contract README, CHANGELOG and
+ * `capabilities.ts` state in prose, so it is asserted rather than the class
+ * alone — `toBeInstanceOf(VelesDBError)` by itself survives any rewrite of
+ * the code literal.
+ */
+function expectBadRequest(outcome: unknown, message: RegExp): void {
+  expect(outcome).toBeInstanceOf(VelesDBError);
+  const err = outcome as VelesDBError;
+  expect(err.code).toBe('BAD_REQUEST');
+  expect(err.message).toMatch(message);
 }
 
 function expectRefusal(outcome: unknown, capability: string): void {
