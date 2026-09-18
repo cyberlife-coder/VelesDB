@@ -94,7 +94,7 @@ CODEX_STATUS_MESSAGES: "dict[str, str]" = {
     "SessionStart": "velesdb-memory: resume working context",
     "Stop": "velesdb-memory: save working context",
     "PreToolUse": "velesdb-memory: require recall before edit",
-    "PostToolUse": "velesdb-memory: record successful recall",
+    "PostToolUse": "velesdb-memory: record recall and working context",
 }
 
 #: Files an installed tree may hold that the repo does not ship. Same rule as
@@ -140,7 +140,7 @@ def matcher_for(client: str, event: str) -> "str | None":
     if event == "PreToolUse":
         return "^(Edit|Write)$" if client == "claude" else "^(apply_patch|Edit|Write)$"
     if client == "codex" and event == "PostToolUse":
-        return "^mcp__velesdb[-_]memory__(recall|recall_fused|recall_where|compile_context|entity|why)$"
+        return "^mcp__velesdb[-_]memory__(recall|recall_fused|recall_where|compile_context|entity|why|save_working_context|load_working_context)$"
     return None
 
 

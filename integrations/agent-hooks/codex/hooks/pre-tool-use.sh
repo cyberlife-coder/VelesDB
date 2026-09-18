@@ -3,7 +3,7 @@
 # has completed successfully in the same Codex session.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" # exact-read-ok: a line below sources lib/ from this value, so a byte lost here fails loudly instead of naming another tree
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=./lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
@@ -14,13 +14,15 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 payload="$(read_stdin_payload)"
 tool_name="$(printf '%s' "$payload" | jq -r '.tool_name // empty' 2>/dev/null || true)"
-cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null || true)"
-session_id="$(printf '%s' "$payload" | jq -r '.session_id // empty' 2>/dev/null || true)"
+read_exact cwd jq -j '.cwd // empty' <<<"$payload" 2>/dev/null || cwd=""
+read_exact session_id jq -j '.session_id // empty' <<<"$payload" 2>/dev/null || session_id=""
 patch="$(printf '%s' "$payload" | jq -r '.tool_input.command // empty' 2>/dev/null || true)"
 
 [ "$tool_name" = "apply_patch" ] || { echo '{}'; exit 0; }
 [ -n "$cwd" ] || cwd="$PWD"
-targets="$(printf '%s' "$patch" | awk '
+# apply_patch names one target per header line, so no target can hold a
+# newline; the program lives in a variable so the read that uses it can say so.
+PATCH_TARGETS_AWK='
   /^\*\*\* (Add|Update|Delete) File: / {
     sub(/^\*\*\* (Add|Update|Delete) File: /, "")
     print
@@ -29,12 +31,13 @@ targets="$(printf '%s' "$patch" | awk '
     sub(/^\*\*\* Move to: /, "")
     print
   }
-')"
+'
+targets="$(printf '%s' "$patch" | awk "$PATCH_TARGETS_AWK")" # exact-read-ok: one patch header per line, so no target can hold a newline
 [ -n "$targets" ] || targets="."
 
 needs_checkpoint="false"
 dirty_projects='[]'
-while IFS= read -r target_path; do
+while IFS= read -r target_path; do # exact-read-ok: one patch header per line, so no target can hold a newline
   [ -n "$target_path" ] || continue
   case "$target_path" in
     /*) target="$target_path" ;;
@@ -43,7 +46,7 @@ while IFS= read -r target_path; do
   if [ "$target_path" = "." ]; then
     policy_start="$cwd"
   else
-    policy_start="$(dirname "$target")"
+    read_exact_line policy_start dirname -- "$target"
   fi
   if ! resolve_config "$policy_start"; then
     echo "VelesDB learning-loop guard: a physical patch target could not be resolved safely; apply_patch remains refused." >&2
@@ -51,8 +54,10 @@ while IFS= read -r target_path; do
   fi
   if [ -L "$target" ]; then
     lexical_enforced="$ENFORCE_LEARNING_LOOP"
-    if ! resolved_target="$(resolve_final_symlink "$target")" \
-      || ! resolve_config "$(dirname "$resolved_target")"; then
+    # shellcheck disable=SC2154 # read_exact sets resolved_target and resolved_dir (printf -v)
+    if ! read_exact resolved_target resolve_final_symlink "$target" \
+      || ! read_exact_line resolved_dir dirname -- "$resolved_target" \
+      || ! resolve_config "$resolved_dir"; then
       echo "VelesDB learning-loop guard: a final symlink target could not be resolved safely; recall cannot authorize this patch. Retry with a physical non-symlink path." >&2
       exit 2
     fi
@@ -68,20 +73,23 @@ while IFS= read -r target_path; do
     exit 2
   }
 
-  marker_id="$(learning_marker_identity "$session_id")"
-  if ! sentinel="$(sentinel_path "codex-recall" "$marker_id")"; then
+  learning_marker_identity marker_id "$session_id" # exact-read-ok: printf -v from arguments this process already holds; nothing is read
+  # shellcheck disable=SC2154 # learning_marker_identity sets marker_id (printf -v)
+  if ! read_exact sentinel sentinel_path "codex-recall" "$marker_id"; then
     echo "VelesDB learning-loop guard: private hook-state storage is unsafe or unavailable; apply_patch remains refused." >&2
     exit 2
   fi
+  # shellcheck disable=SC2154 # read_exact sets sentinel (printf -v)
   if ! valid_private_marker "$sentinel"; then
     if [ -e "$sentinel" ] || [ -L "$sentinel" ]; then
       echo "VelesDB learning-loop guard: a recall marker is linked or malformed, so same-session recall cannot be verified. Repair the private hook-state directory before retrying apply_patch." >&2
       exit 2
     fi
-    if ! pending_dir="$(record_dir_path "codex-pending-recall" "$session_id")"; then
+    if ! read_exact pending_dir record_dir_path "codex-pending-recall" "$session_id"; then
       echo "VelesDB learning-loop guard: private hook-state storage is unsafe or unavailable; apply_patch remains refused." >&2
       exit 2
     fi
+    # shellcheck disable=SC2154 # read_exact sets pending_dir (printf -v)
     if ! record_current_project "$pending_dir"; then
       echo "VelesDB learning-loop guard: could not persist the pending repository identity; apply_patch remains refused." >&2
       exit 2
@@ -93,22 +101,23 @@ while IFS= read -r target_path; do
   dirty_projects="$(jq -cn \
     --argjson projects "$dirty_projects" \
     --argjson record "$record" \
-    '($projects + [$record]) | unique_by(.root)')"
+    '($projects + [$record]) | unique_by(.root)')" # exact-read-ok: compact JSON, whose own newline is the only one
   needs_checkpoint="true"
 done <<< "$targets"
 
 # Mark only after every target has passed, so a rejected multi-repository patch
 # does not create a false edit checkpoint.
 if [ "$needs_checkpoint" = "true" ]; then
-  if ! dirty_dir="$(record_dir_path "codex-learning-dirty" "$session_id")"; then
+  if ! read_exact dirty_dir record_dir_path "codex-learning-dirty" "$session_id"; then
     echo "VelesDB learning-loop guard: private hook-state storage is unsafe or unavailable; apply_patch remains refused." >&2
     exit 2
   fi
   while IFS= read -r record; do
+    # shellcheck disable=SC2154 # read_exact sets dirty_dir (printf -v)
     if ! record_project_json "$dirty_dir" "$record"; then
       echo "VelesDB learning-loop guard: could not persist every edited repository identity; apply_patch remains refused." >&2
       exit 2
     fi
-  done < <(printf '%s' "$dirty_projects" | jq -c '.[]')
+  done < <(printf '%s' "$dirty_projects" | jq -c '.[]') # exact-read-ok: compact JSON, whose own newline is the only one
 fi
 echo '{}'
