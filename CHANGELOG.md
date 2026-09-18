@@ -150,6 +150,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   load call alone reports the cost as gone when it has only moved.
 
 ### Fixed
+- **A batch insert no longer deadlocks the index against a concurrent
+  `vacuum` (#2343).** `HnswIndex::insert_batch_parallel` held the index read
+  guard across a rayon join on the **global** pool. A `vacuum` asking for the
+  write guard blocks every new reader, so the global workers that take the
+  read guard — the per-query search and SIMD reranking — parked; the insert's
+  own jobs never got a worker, and the guard the vacuum waited on was never
+  released. Nothing advanced, on an index serving reads: reproduced as three
+  hangs in six runs on an idle machine.
+  The place phase now runs on the dedicated pool the bulk drain already used,
+  and only at or above `PARALLEL_BATCH_MIN`, below which it enters no pool at
+  all. No search path changed, and no public API. **Debug builds gain one
+  panic**: calling `insert_batch_parallel` or `link_placed` from a rayon
+  worker is refused, because such a caller keeps running its own pool's jobs
+  while it waits and can re-close the same cycle by stealing. Release builds
+  carry no check.
 - **The agent hooks remind a conversation of the working context it uses.** The
   SessionStart, PreCompact and Stop hooks of the Claude Code and Codex
   integrations named the session set in `.velesdb-hooks.json` (else `rolling`),

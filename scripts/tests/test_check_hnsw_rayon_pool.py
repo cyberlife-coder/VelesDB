@@ -153,6 +153,60 @@ class HnswRayonPoolGuard(unittest.TestCase):
                     result = run_guard(Path(holder.name))
                 self.assertEqual(result.returncode, 1, f"{call} slipped past: {result.stdout}")
 
+    def test_a_closed_install_does_not_vouch_for_what_follows(self):
+        """Indentation is not containment.
+
+        The first version walked up for any less-indented `.install(` and
+        accepted the submission, so a closure that had already closed still
+        vouched for code below it. A review probe of this exact shape got
+        PASSED — the guard asserting a property it did not check.
+        """
+        closed = (
+            "impl HnswIndex {\n    fn f(&self) {\n"
+            "        graph_pool()?.install(|| self.items.par_iter().count());\n"
+            "        if big {\n"
+            "            self.items.par_iter().map(|x| inner.score(x)).count()\n"
+            "        }\n    }\n}\n"
+        )
+        holder = tree({str(HNSW / "newcomer.rs"): closed})
+        with holder:
+            result = run_guard(Path(holder.name))
+        self.assertEqual(result.returncode, 1, result.stdout)
+
+    def test_an_open_install_still_vouches_for_what_it_contains(self):
+        """The fix must not refuse the legitimate shape it exists to allow."""
+        for body in (
+            # multi-line closure
+            "impl HnswIndex {\n    fn f(&self) {\n"
+            "        graph_pool()?.install(|| {\n"
+            "            self.items.par_iter().count()\n"
+            "        })\n    }\n}\n",
+            # the whole call on one line
+            "impl HnswIndex {\n    fn f(&self) {\n"
+            "        graph_pool()?.install(|| self.items.par_iter().count())\n"
+            "    }\n}\n",
+        ):
+            with self.subTest(body=body.splitlines()[2].strip()):
+                holder = tree({str(HNSW / "newcomer.rs"): body})
+                with holder:
+                    result = run_guard(Path(holder.name))
+                self.assertEqual(result.returncode, 0, result.stdout)
+
+    def test_an_install_in_a_previous_function_does_not_carry_over(self):
+        body = (
+            "impl HnswIndex {\n"
+            "    fn a(&self) {\n"
+            "        graph_pool()?.install(|| { self.items.par_iter().count() })\n"
+            "    }\n"
+            "    fn b(&self) {\n"
+            "        self.items.par_iter().count()\n"
+            "    }\n}\n"
+        )
+        holder = tree({str(HNSW / "newcomer.rs"): body})
+        with holder:
+            result = run_guard(Path(holder.name))
+        self.assertEqual(result.returncode, 1, result.stdout)
+
     def test_the_real_repository_passes(self):
         result = run_guard(REPO)
         self.assertEqual(result.returncode, 0, result.stdout)

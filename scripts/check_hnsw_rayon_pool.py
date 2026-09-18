@@ -133,23 +133,64 @@ def strip_line(line: str) -> str:
 
 
 def installed_at(lines: list[str], index: int) -> bool:
-    """Whether line `index` sits inside an `.install(` closure.
+    """Whether line `index` sits inside an `.install(` closure that is STILL OPEN.
 
-    The dedicated pool's `install` opens a closure that the submission is
-    written inside, so the call appears above it and at a lower indentation.
+    Indentation alone does not answer this. An earlier version walked upwards
+    for any less-indented line carrying `.install(` and accepted the
+    submission, so a closure that had already closed still vouched for code
+    written below it:
+
+    ```text
+    graph_pool()?.install(|| self.items.par_iter().count());   // closes here
+    if big {
+        self.items.par_iter().count()   // accepted, on the global pool
+    }
+    ```
+
+    A review probe of exactly that shape got `PASSED`. The guard was claiming
+    a property -- "lexically inside an `.install(` closure" -- that it did not
+    check, which is the failure mode it exists to prevent, one level up.
+
+    So the bracket depth is counted instead. Walking back from the submission,
+    every `)`/`}`/`]` seen deepens the nesting the submission sits in and
+    every opener unwinds it; an `.install(` counts only when the walk reaches
+    it at depth zero, meaning its parenthesis is one the submission is still
+    inside. The walk stops at the enclosing `fn`.
     """
-    indent = len(lines[index]) - len(lines[index].lstrip())
+    depth = 0
     for i in range(index, -1, -1):
         line = strip_line(lines[i])
         if not line.strip():
             continue
-        line_indent = len(line) - len(line.lstrip())
-        if line_indent >= indent and i != index:
-            continue
-        if ".install(" in line:
-            return True
-        if FN_RE.search(line):
+
+        # On the submission's own line, only what precedes it counts.
+        if i == index:
+            column = SUBMIT_RE.search(line)
+            segment = line[: column.start()] if column else line
+        else:
+            segment = line
+
+        if i != index and FN_RE.search(segment) and depth <= 0:
             return False
+
+        # Right to left: a closer takes us one level deeper into the nesting
+        # the submission lives in, an opener at depth zero is UNMATCHED going
+        # backwards, which is exactly what "encloses the submission" means.
+        #
+        # The check has to happen on that opener, not on the line. On
+        # `graph_pool()?.install(|| ...par_iter()...);` every bracket is
+        # balanced, so a line-level `".install(" in segment` test sees depth
+        # zero again at the end and vouches for code the closure no longer
+        # contains — the false negative a review probe caught.
+        for position in range(len(segment) - 1, -1, -1):
+            ch = segment[position]
+            if ch in ")}]":
+                depth += 1
+            elif ch in "({[":
+                if depth > 0:
+                    depth -= 1
+                elif segment[:position].rstrip().endswith(".install"):
+                    return True
     return False
 
 
