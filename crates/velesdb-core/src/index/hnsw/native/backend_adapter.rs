@@ -117,7 +117,14 @@ impl NativeNeighbour {
 
 /// Below this many nodes a batch is linked one node at a time: connecting in
 /// parallel costs more than it saves.
-const PARALLEL_BATCH_MIN: usize = 100;
+///
+/// `pub(crate)` because it decides two things that must agree: whether
+/// `place_batch` enters rayon at all, and therefore whether
+/// `HnswIndex::insert_batch_parallel` needs the dedicated pool. Reading the
+/// same constant in both places keeps a batch from being dispatched to a pool
+/// it will not use — a flat ~32 us of thread hand-off, measured, which a
+/// batch of 10 would pay 60-fold over doing the work in place.
+pub(crate) const PARALLEL_BATCH_MIN: usize = 100;
 
 /// The query each node of a batch connects with, in assignment order.
 #[derive(Clone, Copy)]

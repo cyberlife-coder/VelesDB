@@ -510,6 +510,15 @@ jobs:
       - name: Check for .unwrap() in production code
         run: python3 scripts/check_prod_unwraps.py
 
+      # #2343 was a closed deadlock cycle: an HNSW operation holding
+      # `inner.read()` joined on the GLOBAL rayon pool, a pending `vacuum`
+      # writer blocked every new reader, and the global workers that take
+      # `inner.read()` parked — the guard holder never got its worker. Every
+      # such submission now runs on the dedicated `graph_pool`; this refuses a
+      # new one that neither does nor says why it is safe.
+      - name: Check HNSW rayon submissions stay off the global pool
+        run: python3 scripts/check_hnsw_rayon_pool.py
+
       # REL-07 ran only at release time (release.yml), so a version drift in a
       # policed manifest was invisible until tagging. Running the same checker
       # at PR time surfaces the drift in the PR that introduces it (<5s, pure
@@ -540,6 +549,9 @@ jobs:
 
       - name: Test prod-unwraps audit script
         run: python3 -m unittest scripts.tests.test_check_prod_unwraps
+
+      - name: Test HNSW rayon-pool audit script
+        run: python3 -m unittest scripts.tests.test_check_hnsw_rayon_pool
 
       - name: Test inline-tests audit script
         run: python3 -m unittest scripts.tests.test_check_inline_tests

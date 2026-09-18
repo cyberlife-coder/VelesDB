@@ -221,6 +221,56 @@ note above). In debug builds the HNSW tier's `record_lock_acquire` will *warn*
 (never panic) on a violation — and only among the tracked ranks
 (`GpuVectorsSnapshot` / `EntryPointPromotion` / `Vectors` / `Layers`).
 
+### The HNSW Index Guard and rayon: a liveness rule, not an ordering one
+
+Lock *order* is not enough for `HnswIndex::inner`. Ordering rules keep two
+threads from taking the same pair of locks in opposite directions; this one
+keeps a single lock from deadlocking against itself through a thread pool:
+
+> **A thread holding `HnswIndex::inner` never waits on the global rayon pool.**
+
+`parking_lot`'s `RwLock` is deliberately not read-re-entrant under a waiting
+writer: a pending `write()` blocks every *new* `read()`, so that a stream of
+readers cannot starve a writer. That fairness is what closes the cycle of
+\#2343 when the rule above is broken:
+
+1. a `vacuum` asks for `inner.write()` and waits for the current readers;
+2. a batch operation holds `inner.read()` and waits for its rayon jobs;
+3. those jobs run on the **global** pool, where the per-query search and
+   `rerank_candidates_simd` take `inner.read()` — new readers, so the pending
+   writer parks them;
+4. the parked workers are the ones step 2 is waiting for.
+
+Nobody advances, and no ordering discipline would have prevented it: only one
+lock is involved.
+
+Both operations that hold the guard and join on rayon therefore submit to a
+dedicated pool, `graph_pool` in `index/hnsw/index/batch.rs`:
+`HnswIndex::insert_batch_parallel`'s place phase and `HnswIndex::link_placed`'s
+connect phase. Their jobs reach the graph's arena, layers and entry point and
+never `HnswIndex` itself, so no job on that pool can take `inner`; rayon does
+not steal work across pools, so the isolation is structural rather than a
+timing assumption.
+
+Two checks hold the rule, because neither is sufficient alone:
+
+- `crates/velesdb-core/src/index/hnsw/index/global_pool_tests.rs` parks every
+  global rayon worker, then requires each guard holder to finish anyway. It is
+  deterministic: an operation that joins on the global pool cannot finish,
+  whatever the machine's timing. Before the fix it timed out at 60 s; after it,
+  both holders finish in 0.05 s.
+- `scripts/check_hnsw_rayon_pool.py` (CI job `lint`) refuses a *new* rayon
+  submission anywhere under `index/hnsw/` that is neither on the dedicated pool
+  nor listed with the reason it cannot close the cycle. It cannot decide by
+  itself whether a submission runs under a held guard — the one that deadlocked
+  reached `par_iter` three calls down, in another file — so it requires the
+  reason to be written rather than inferred.
+
+A wall-clock bound on a racing test would not do instead: under heavy load a
+batch that is merely slow and one that is deadlocked print the same thing.
+Telling them apart needs the stack, not the clock — which is why the rule is
+held by a structural test and a guard, not by a timeout.
+
 ### Reserved Premium Rank Range [40, 59]
 
 The inclusive ordinal range **`[40, 59]`** is reserved for premium-owned lock

@@ -1363,6 +1363,48 @@
           ]
         }
       ]
+    },
+    {
+      "script": "scripts/check_hnsw_rayon_pool.py",
+      "purpose": "No HNSW rayon submission reaches the GLOBAL pool without a written reason (#2343): a holder of HnswIndex::inner that joins on the global pool closes a deadlock cycle with a pending vacuum writer.",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "lint",
+      "required": true,
+      "mode": "strict",
+      "self_test": "scripts.tests.test_check_hnsw_rayon_pool",
+      "self_test_required": true,
+      "blind_spot": {
+        "issue": null,
+        "summary": "It cannot decide whether a submission runs under a held guard: the one that deadlocked reached par_iter three calls down, in another file. It does not try — it requires every submission to be on the dedicated pool or listed in ALLOWED with a reason, so a new one is refused until someone writes that reason down. The behavioural half of the rule is crates/velesdb-core/src/index/hnsw/index/global_pool_tests.rs, which parks every global rayon worker and requires each guard holder to finish anyway."
+      },
+      "must_refuse": [
+        {
+          "vector": "a new HNSW function that joins on the global pool while holding inner.read() - the shape of #2343",
+          "files": {
+            "crates/velesdb-core/src/index/hnsw/newcomer.rs": "impl HnswIndex {\n    fn a_new_holder(&self) -> usize {\n        let inner = self.inner.read();\n        self.items.par_iter().map(|x| inner.score(x)).count()\n    }\n}\n"
+          },
+          "accepts": {
+            "crates/velesdb-core/src/index/hnsw/newcomer.rs": "impl HnswIndex {\n    fn a_new_holder(&self) -> usize {\n        let inner = self.inner.read();\n        graph_pool()?.install(|| {\n            self.items.par_iter().map(|x| inner.score(x)).count()\n        })\n    }\n}\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        },
+        {
+          "vector": "a writer appearing on NativeHnswIndex::inner, which voids the allowance brute_force_search_parallel rests on",
+          "files": {
+            "crates/velesdb-core/src/index/hnsw/native_index.rs": "impl NativeHnswIndex {\n    pub fn compact(&self) {\n        let mut inner = self.inner.write();\n        inner.compact();\n    }\n}\n"
+          },
+          "accepts": {
+            "crates/velesdb-core/src/index/hnsw/native_index.rs": "impl NativeHnswIndex {\n    pub fn peek(&self) {\n        let inner = self.inner.read();\n        inner.len();\n    }\n}\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        }
+      ]
     }
   ],
   "unwired": [

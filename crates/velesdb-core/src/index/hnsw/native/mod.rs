@@ -49,6 +49,10 @@ pub(crate) mod rabitq_precision;
 mod search;
 pub(crate) mod sq8_precision;
 
+/// Re-exported for `index/batch.rs`: the same threshold decides whether
+/// `place_batch` enters rayon and whether `insert_batch_parallel` needs the
+/// dedicated pool, so both read one constant.
+pub(crate) use backend_adapter::PARALLEL_BATCH_MIN;
 pub use backend_adapter::{NativeHnswBackend, NativeNeighbour};
 pub use distance::{CachedSimdDistance, CpuDistance, DistanceEngine};
 pub(crate) use graph::ResumableSearch;
