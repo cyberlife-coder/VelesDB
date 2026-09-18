@@ -246,6 +246,17 @@ impl HnswIndex {
         drop(guard);
         Ok(())
     }
+
+    /// Takes the maintenance lock, for the test that proves
+    /// `reorder_for_locality` waits on it.
+    ///
+    /// The field is private to this module and the index's tests live one
+    /// module up, beside the fixtures they share with the vacuum races; this
+    /// is the whole of what they need from it.
+    #[cfg(test)]
+    pub(crate) fn lock_maintenance(&self) -> parking_lot::MutexGuard<'_, ()> {
+        self.maintenance.lock()
+    }
 }
 
 impl Drop for HnswIndex {

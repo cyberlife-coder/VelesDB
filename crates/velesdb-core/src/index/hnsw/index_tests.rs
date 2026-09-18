@@ -4412,3 +4412,120 @@ fn two_saves_while_a_batch_links(
         placed.expect("test: the batch thread panicked"),
     )
 }
+
+/// Vectors in the fixtures that reorder. `reorder_for_locality` declines
+/// below 1000 vectors (`REORDER_THRESHOLD`, private to
+/// `native::graph::reorder`) and returns `None`, which no caller can tell
+/// apart from the pass doing nothing, so both tests below clear that gate
+/// with margin.
+const RENUMBERED: u64 = 1_200;
+
+/// `reorder_for_locality` renumbers the slots, and the mappings move with
+/// them.
+///
+/// Nothing reached the pass before this test: `cargo mutants` replaced the
+/// whole body of `HnswIndex::reorder_for_locality` with `Ok(())` and the
+/// `--lib` suite stayed green, so the maintenance lock this branch puts in
+/// front of it was guarding a function no test made do anything.
+///
+/// Should `REORDER_THRESHOLD` ever rise past [`RENUMBERED`], the pass starts
+/// declining here, `moved` falls to zero, and this test says so rather than
+/// passing on a silent skip.
+#[test]
+fn reordering_renumbers_the_slots_and_the_mappings_follow() {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let index = wide_index_with_base(RENUMBERED);
+    let before: BTreeMap<u64, usize> = index.mappings.iter().collect();
+
+    index.reorder_for_locality().expect("test: reorder");
+
+    let after: BTreeMap<u64, usize> = index.mappings.iter().collect();
+    let moved = after
+        .iter()
+        .filter(|&(id, idx)| before.get(id) != Some(idx))
+        .count();
+    println!("{moved} of {} mapped ids changed slot", before.len());
+    assert!(
+        moved > 0,
+        "reorder_for_locality left every one of the {} mapped ids on the slot \
+         it already held: it renumbered nothing",
+        before.len()
+    );
+    assert_eq!(
+        before.keys().copied().collect::<Vec<_>>(),
+        after.keys().copied().collect::<Vec<_>>(),
+        "the renumbering lost or invented ids"
+    );
+    assert_eq!(
+        before.values().copied().collect::<BTreeSet<usize>>(),
+        after.values().copied().collect::<BTreeSet<usize>>(),
+        "{moved} of the {} ids moved, but not onto the slots they started \
+         from: the renumbering is not a permutation of them",
+        before.len()
+    );
+    for id in [0, RENUMBERED / 2, RENUMBERED - 1] {
+        assert_eq!(
+            index.search(&wide_vector(id), 1).first().map(|hit| hit.id),
+            Some(id),
+            "after the renumbering {id}'s own vector no longer finds {id}: \
+             the mappings did not follow the slots"
+        );
+    }
+}
+
+/// `reorder_for_locality` waits on the maintenance lock.
+///
+/// That is the arm of "serializes what renumbers slots" (#2262) no other
+/// test drives — the race tests above all enter through `vacuum`. A renumber
+/// let through between a vacuum's snapshot and its swap moves the very slots
+/// that snapshot recorded.
+///
+/// The bound on "waits" is measured, not chosen: one unheld reorder of this
+/// same index is timed first, and the held one is given `BLOCKED_FACTOR`
+/// times that to escape. Without the lock it finishes in about one such
+/// unit, so the margin is the factor itself, and it follows the machine
+/// instead of a constant written here.
+#[test]
+fn reorder_waits_for_the_maintenance_lock() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Instant;
+
+    /// Unheld reorders of the same index the held one is given to escape in.
+    const BLOCKED_FACTOR: u32 = 50;
+
+    let index = wide_index_with_base(RENUMBERED);
+    let started = Instant::now();
+    index
+        .reorder_for_locality()
+        .expect("test: the unheld reorder");
+    let baseline = started.elapsed();
+    let window = BLOCKED_FACTOR * baseline;
+    println!("unheld reorder {baseline:?}, window {window:?} ({BLOCKED_FACTOR}x)");
+    assert!(
+        !window.is_zero(),
+        "the unheld reorder was not measurable, so the window it sizes bounds \
+         nothing"
+    );
+
+    let held = index.lock_maintenance();
+    let renumbered = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        let blocked = scope.spawn(|| {
+            index
+                .reorder_for_locality()
+                .expect("test: the held reorder");
+            renumbered.store(true, Ordering::Release);
+        });
+        std::thread::sleep(window);
+        let escaped = renumbered.load(Ordering::Acquire);
+        drop(held);
+        blocked.join().expect("test: the reorder thread panicked");
+        assert!(
+            !escaped,
+            "reorder_for_locality renumbered within {window:?} while the \
+             maintenance lock was held: it does not take the lock its doc \
+             claims, and a vacuum's swap can be renumbered under it"
+        );
+    });
+}
