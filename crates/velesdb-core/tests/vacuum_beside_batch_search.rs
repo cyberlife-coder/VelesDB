@@ -33,13 +33,19 @@
 //! a timeout. A vacuum that does not report in time is a hang: the test
 //! writes what it saw to the process's stderr and exits with a failure code,
 //! since the parked threads can never be joined.
+//!
+//! That timeout is measured, not chosen: the test times one unraced vacuum
+//! and allows each raced one [`HANG_FACTOR`] times that. A vacuum's cost is
+//! the machine's and the profile's — the same rebuild takes seconds on an
+//! idle dev box and much longer in debug on a two-vCPU runner — while a
+//! parked vacuum never ends, whatever the machine.
 
 use std::collections::HashSet;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use velesdb_core::distance::DistanceMetric;
 use velesdb_core::index::HnswIndex;
@@ -77,9 +83,22 @@ const RACING_WRITES: u64 = 2 * RACING_BATCH;
 /// Vacuums tried before the test gives up on racing `RACING_WRITES` writes
 /// against one of them.
 const ATTEMPTS: usize = 5;
-/// A vacuum of this index takes seconds; one that has not reported by then
-/// is parked for good.
-const HANG_BOUND: Duration = Duration::from_secs(120);
+/// Times the cost of one unraced vacuum a raced one may take before the test
+/// calls it parked for good.
+///
+/// A fixed budget is a hidden claim about the machine: the same rebuild takes
+/// seconds on an idle box and much longer in debug on a two-core runner,
+/// which is how a constant turned a correct vacuum into a red build. Timing
+/// the baseline instead makes the budget follow the machine, and this factor
+/// only has to cover what racing adds on top. Measured on this index, in
+/// debug, on the two-thread pool this test builds — unraced baseline against
+/// the first raced vacuum of the same run — 2.3 to 4.0 s against 6.5 to
+/// 6.8 s with nothing else running, 8.7 s against 15.5 s behind 34 busy
+/// spinners, 22.8 s against 6.8 s behind 72: both move together, and the
+/// ratio stayed under three. Forty leaves room for a baseline timed in a
+/// quiet window against a vacuum raced in a busy one. A parked vacuum never
+/// ends on any machine, so a generous bound still catches it, only later.
+const HANG_FACTOR: u32 = 40;
 
 fn vector(id: u64) -> Vec<f32> {
     #[allow(clippy::cast_precision_loss)] // test data generation only
@@ -104,6 +123,14 @@ fn a_vacuum_carrying_writes_finishes_beside_batch_searches() {
         index.remove(id);
     }
 
+    // The bound the raced vacuums are held to, from one vacuum of this index
+    // with nothing racing it: same rebuild, same machine, same profile.
+    let started = Instant::now();
+    index.vacuum().expect("test: the unraced baseline vacuum");
+    let baseline = started.elapsed();
+    let hang_bound = HANG_FACTOR * baseline;
+    println!("baseline vacuum {baseline:?}, hang bound {hang_bound:?} ({HANG_FACTOR}x)");
+
     let stop = Arc::new(AtomicBool::new(false));
     let searches = {
         let (index, stop) = (Arc::clone(&index), Arc::clone(&stop));
@@ -119,7 +146,7 @@ fn a_vacuum_carrying_writes_finishes_beside_batch_searches() {
     let next_write = Arc::new(AtomicU64::new(0));
     let mut raced = Vec::new();
     while raced.len() < ATTEMPTS && raced.last().is_none_or(|&made| made < RACING_WRITES) {
-        let made = race_one_vacuum(&index, &next_write, &raced);
+        let made = race_one_vacuum(&index, &next_write, &raced, hang_bound);
         raced.push(made);
     }
     stop.store(true, Ordering::Release);
@@ -175,8 +202,14 @@ fn write_racing_batch(index: &HnswIndex, first: u64) -> u64 {
 /// guard is granted: the swap's own copy covers that batch (see
 /// [`RACING_BATCH`]).
 ///
-/// A vacuum that has not ended within [`HANG_BOUND`] exits the process.
-fn race_one_vacuum(index: &Arc<HnswIndex>, next_write: &Arc<AtomicU64>, raced: &[u64]) -> u64 {
+/// A vacuum that has not ended within `hang_bound` exits the process.
+fn race_one_vacuum(
+    index: &Arc<HnswIndex>,
+    next_write: &Arc<AtomicU64>,
+    raced: &[u64],
+    hang_bound: Duration,
+) -> u64 {
+    let started = Instant::now();
     let vacuuming = Arc::new(AtomicBool::new(true));
     let (report, reported) = mpsc::channel();
     let vacuum = {
@@ -199,30 +232,35 @@ fn race_one_vacuum(index: &Arc<HnswIndex>, next_write: &Arc<AtomicU64>, raced: &
         })
     };
 
-    let result = match reported.recv_timeout(HANG_BOUND) {
+    let result = match reported.recv_timeout(hang_bound) {
         Ok(result) => result,
         Err(mpsc::RecvTimeoutError::Disconnected) => panic!(
             "the vacuuming thread ended without reporting: {:?}",
             vacuum.join()
         ),
-        Err(mpsc::RecvTimeoutError::Timeout) => report_hang(raced),
+        Err(mpsc::RecvTimeoutError::Timeout) => report_hang(raced, hang_bound),
     };
     vacuum.join().expect("test: the vacuuming thread panicked");
     let made = writes.join().expect("test: the writing thread panicked");
     assert!(result.is_ok(), "vacuum {}: {result:?}", raced.len());
+    println!(
+        "vacuum {} took {:?} of {hang_bound:?}, {made} writes racing it",
+        raced.len(),
+        started.elapsed()
+    );
     made
 }
 
-/// Reports a vacuum that did not end within [`HANG_BOUND`], after the
-/// vacuums whose racing writes `raced` holds, and exits the process.
-fn report_hang(raced: &[u64]) -> ! {
+/// Reports a vacuum that did not end within `hang_bound`, after the vacuums
+/// whose racing writes `raced` holds, and exits the process.
+fn report_hang(raced: &[u64], hang_bound: Duration) -> ! {
     // Straight to the process's stderr: libtest captures `eprintln!` on the
     // test thread and the threads it spawns, and `exit` drops what it holds.
     let _ = writeln!(
         std::io::stderr(),
-        "HANG: vacuum {} did not finish within {HANG_BOUND:?} beside batch searches \
-         on a {}-thread rayon pool; the vacuums before it finished with these writes \
-         racing each: {raced:?}",
+        "HANG: vacuum {} did not finish within {hang_bound:?} ({HANG_FACTOR}x one \
+         unraced vacuum of this index) beside batch searches on a {}-thread rayon \
+         pool; the vacuums before it finished with these writes racing each: {raced:?}",
         raced.len(),
         rayon::current_num_threads(),
     );

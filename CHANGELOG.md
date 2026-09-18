@@ -194,8 +194,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `a_vacuum_carrying_writes_finishes_beside_batch_searches`, a test binary of
   its own on a two-thread rayon pool, races batches of 256 ids against the
   swap, so that the copy made under the write lock carries a whole batch:
-  it fails by its 120 s watchdog when that copy runs on rayon, the first
-  vacuum never finishing. Raced one id at a time, the copy stayed under the
+  it fails by its watchdog — forty times one unraced vacuum of that index,
+  timed by the test itself, since the cost of a vacuum is the machine's and
+  the profile's — when that copy runs on rayon, the first vacuum never
+  finishing. Raced one id at a time, the copy stayed under the
   hundred vectors at which it would reach rayon, and proved nothing.
   `deletes_racing_a_vacuum_keep_the_tombstone_count_exact` failed while the
   swap left `next_idx` at the highest slot mapped: `tombstone_count` read 0
