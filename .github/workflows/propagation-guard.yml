@@ -97,6 +97,9 @@ jobs:
       - name: Typecheck
         working-directory: sdks/typescript
         run: npm run typecheck
+      - name: Lint
+        working-directory: sdks/typescript
+        run: npm run lint
       - name: Run full vitest suite
         working-directory: sdks/typescript
         run: npm test

@@ -455,9 +455,25 @@ describe('multiQuerySearchIds', () => {
     expect(body.rrf_k).toBe(60);
     expect(body.top_k).toBe(10);
     expect(body.vectors).toEqual([[0.1], [0.2]]);
-    // ids-only endpoint must not forward a filter.
+    // No filter given, so none is sent.
     expect(body.filter).toBeUndefined();
     expect(result).toEqual([{ id: 1, score: 0.9 }]);
+  });
+
+  it('forwards a filter, so the server refuses it rather than the SDK dropping it (#2095)', async () => {
+    const transport = buildTransport();
+    (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      data: { results: [] },
+    });
+    const filter = { condition: { type: 'eq', field: 'tenant', value: 'mine' } };
+
+    await multiQuerySearchIds(transport, 'docs', [[0.1]], { filter });
+
+    const body = (transport.requestJson as ReturnType<typeof vi.fn>).mock.calls[0]![2] as Record<
+      string,
+      unknown
+    >;
+    expect(body.filter).toBe(filter);
   });
 
   it('forwards fusion / fusionParams and normalises Float32Array vectors', async () => {

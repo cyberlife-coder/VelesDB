@@ -690,7 +690,7 @@ impl VelesConfig {
     /// Returns the effective `ef_search` value.
     #[deprecated(
         since = "5.2.0",
-        note = "the engine resolves [search] through SearchConfig::resolved_quality \
+        note = "the engine resolves `[search]` through `SearchConfig::resolved_quality` \
                 since #2087, not through this; it returns usize::MAX for Perfect, \
                 a value nothing reads as a signal (#2238)"
     )]
