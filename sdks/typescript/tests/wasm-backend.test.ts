@@ -102,16 +102,19 @@ describe('WasmBackend', () => {
       expect(backend.isInitialized()).toBe(true);
     });
 
-    it("keeps the binding's reason when it throws a bare string (#2282)", async () => {
-      // wasm-bindgen raises a `Result::Err(String)` by throwing the string
-      // itself, so `error instanceof Error` is false and the `cause` slot
-      // stays empty: the reason has to reach the message or it is lost.
+    it("keeps the loader's reason, which lives only in the message (#2282)", async () => {
+      // Probed on 6.0.0: `mod.default()` rejects with a
+      // `WebAssembly.CompileError`. The reason has to reach the message
+      // anyway — a caller reading `err.message` sees only "Failed to
+      // initialize WASM module" unless it is carried there.
       mockWasmModule.default.mockRejectedValueOnce(
-        'expected magic word 00 61 73 6d'
+        new WebAssembly.CompileError(
+          'WebAssembly.instantiate(): expected magic word 00 61 73 6d'
+        )
       );
 
       await expect(backend.init()).rejects.toThrow(
-        /Failed to initialize WASM module: expected magic word 00 61 73 6d/
+        /Failed to initialize WASM module: WebAssembly\.instantiate\(\): expected magic word 00 61 73 6d/
       );
     });
 

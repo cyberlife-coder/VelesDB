@@ -197,18 +197,22 @@ describe('MemoryService', () => {
     });
 
     it("wraps a wasm-bindgen default() failure in ConnectionError, keeping the binding's reason (#2282)", async () => {
-      // A bare string, not `new Error('boom')`: wasm-bindgen raises a
-      // `Result::Err(String)` by throwing the string itself, a shape
-      // `@wiscale/velesdb-wasm` 6.0.0 really produces and `new Error(…)`
-      // never does. The `cause` slot takes only an `Error`, so a fake
-      // kinder than the binding hides the reason being dropped.
+      // What the loader really rejects with, probed on 6.0.0: a
+      // `WebAssembly.CompileError`, not a bare string. wasm-bindgen's
+      // `Result::Err(String)` shape reaches user code from a METHOD call
+      // (`throw takeObject(…)` in the glue), and `mod.default()`'s glue has
+      // no such unwrap. The reason must still reach the message: a caller
+      // reading only `err.message` otherwise sees "Failed to initialize the
+      // memory wedge" with nothing about magic words.
       mockWasmModule.default.mockRejectedValueOnce(
-        'expected magic word 00 61 73 6d'
+        new WebAssembly.CompileError(
+          'WebAssembly.instantiate(): expected magic word 00 61 73 6d'
+        )
       );
       const rejection = memory.init();
       await expect(rejection).rejects.toBeInstanceOf(ConnectionError);
       await expect(rejection).rejects.toThrow(
-        /Failed to initialize the memory wedge WASM module: expected magic word 00 61 73 6d/
+        /Failed to initialize the memory wedge WASM module: WebAssembly\.instantiate\(\): expected magic word 00 61 73 6d/
       );
       expect(memory.isInitialized()).toBe(false);
     });

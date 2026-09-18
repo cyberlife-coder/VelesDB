@@ -650,9 +650,11 @@ export class MemoryService {
     try {
       mod = (await import('@wiscale/velesdb-wasm')) as unknown as MemoryWasmModule;
     } catch (error) {
-      // As below: the loader's glue can reject with a bare string, and the
-      // `cause` slot takes only an `Error`, so the reason goes in the
-      // message or it is lost.
+      // As below: the reason goes in the message because a caller reading
+      // `err.message` would otherwise see only "Failed to load
+      // @wiscale/velesdb-wasm". `describeWasmThrow` reads the thrown value
+      // because a module resolution failure is not guaranteed to be an
+      // `Error`.
       throw new ConnectionError(
         `Failed to load @wiscale/velesdb-wasm: ${describeWasmThrow(error)}`,
         error instanceof Error ? error : undefined
@@ -680,11 +682,13 @@ export class MemoryService {
       this.inner = new mod.MemoryService(this.dimension);
       this._initialized = true;
     } catch (error) {
-      // `mod.default()` and `new mod.MemoryService()` are binding calls: the
-      // binding throws a bare string as readily as an `Error`
-      // (`describeWasmThrow`), and the `cause` slot takes only the latter,
-      // so the reason goes in the message or it is lost — the same defect
-      // this PR fixed at `backends/wasm.ts`'s own init catch.
+      // `mod.default()` and `new mod.MemoryService()` are binding calls.
+      // Probed on 6.0.0: the former rejects with a
+      // `WebAssembly.CompileError`, and the latter's glue holds no `Result`
+      // unwrap, so neither throws a bare string — that shape belongs to the
+      // method-call path. The reason still goes in the message, or a caller
+      // reading `err.message` learns nothing; and `describeWasmThrow` reads
+      // it, because what a foreign runtime throws is not ours to assume.
       throw new ConnectionError(
         `Failed to initialize the memory wedge WASM module: ${describeWasmThrow(error)}`,
         error instanceof Error ? error : undefined

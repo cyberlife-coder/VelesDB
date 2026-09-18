@@ -192,9 +192,12 @@ export class WasmBackend implements IVelesDBBackend {
       this.wasmModule = mod;
       this._initialized = true;
     } catch (error) {
-      // The binding throws a bare string as readily as an `Error`
-      // (`describeWasmThrow`), and the `cause` slot takes only the latter,
-      // so the reason goes in the message or it is lost.
+      // Probed on 6.0.0: this loader rejects with a
+      // `WebAssembly.CompileError`, so `cause` does carry it. The reason
+      // still goes in the message, because a caller reading `err.message`
+      // would otherwise see only "Failed to initialize WASM module".
+      // `describeWasmThrow` reads it because a foreign runtime is free to
+      // throw a non-`Error` — on the method-call path this binding does.
       throw new ConnectionError(
         `Failed to initialize WASM module: ${describeWasmThrow(error)}`,
         error instanceof Error ? error : undefined

@@ -740,8 +740,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reader, `describeWasmThrow`, including the memory wedge's `init()`: a
   failed `@wiscale/velesdb-wasm` load or a failed `MemoryService`
   construction now names its reason in the `ConnectionError`'s message,
-  where before only an `Error` survived — the `cause` slot takes nothing
-  else, so a bare string was dropped whole. That reader is itself total: a
+  where before the message said only that initialization had failed. On
+  6.0.0 those two reject with a `WebAssembly.CompileError`, which `cause`
+  does carry; the bare-string shape is the method-call path's, and the one
+  reader covers both rather than assuming either. That reader is total: a
   prototype-less object or a hostile `toString` is named by its type rather
   than coerced, so the reader can never replace the binding's reason with a
   `TypeError` of its own.
