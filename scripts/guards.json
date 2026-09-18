@@ -1363,6 +1363,51 @@
           ]
         }
       ]
+    },
+    {
+      "script": "scripts/check_guard_python_pins.py",
+      "purpose": "The guards' Python pins live only in scripts/requirements-guards.txt; no workflow pins them inline.",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "lint",
+      "required": true,
+      "mode": "strict",
+      "self_test": "scripts.tests.test_check_guard_python_pins",
+      "self_test_required": true,
+      "blind_spot": {
+        "issue": null,
+        "summary": "It polices only the packages requirements-guards.txt declares, and only `pip install` lines in .github/workflows/*.yml. A pin moved into a shell script the workflow calls would escape it. It does refuse a deleted or empty requirements file, so removing the single source cannot make it vacuously green."
+      },
+      "must_refuse": [
+        {
+          "vector": "the line gate-contracts.yml actually carried before requirements-guards.txt existed: three pins inline, repeated in ci.yml, with nothing keeping them in step",
+          "files": {
+            ".github/workflows/gate-contracts.yml": "      - name: Install the guard suites' Python dependencies\n        run: python -m pip install --disable-pip-version-check pyyaml==6.0.3 markdown-it-py==4.2.0 mdurl==0.1.2\n",
+            "scripts/requirements-guards.txt": "pyyaml==6.0.3\nmarkdown-it-py==4.2.0\nmdurl==0.1.2\n"
+          },
+          "accepts": {
+            ".github/workflows/gate-contracts.yml": "      - name: Install the guard suites' Python dependencies\n        run: python -m pip install --disable-pip-version-check -r scripts/requirements-guards.txt\n",
+            "scripts/requirements-guards.txt": "pyyaml==6.0.3\nmarkdown-it-py==4.2.0\nmdurl==0.1.2\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        },
+        {
+          "vector": "the single source deleted, which must fail rather than leave the guard with nothing to check",
+          "files": {
+            ".github/workflows/gate-contracts.yml": "      - name: Install the guard suites' Python dependencies\n        run: python -m pip install --disable-pip-version-check -r scripts/requirements-guards.txt\n"
+          },
+          "accepts": {
+            ".github/workflows/gate-contracts.yml": "      - name: Install the guard suites' Python dependencies\n        run: python -m pip install --disable-pip-version-check -r scripts/requirements-guards.txt\n",
+            "scripts/requirements-guards.txt": "pyyaml==6.0.3\nmarkdown-it-py==4.2.0\nmdurl==0.1.2\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        }
+      ]
     }
   ],
   "unwired": [

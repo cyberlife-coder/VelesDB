@@ -102,6 +102,9 @@ bench_output.txt
 
 # Python virtual environment
 .venv/
+# CONTRIBUTING tells contributors to build this one for the guard scripts'
+# Python dependencies (scripts/requirements-guards.txt).
+.venv-guards/
 __pycache__/
 *.pyc
 *.pyd

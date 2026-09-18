@@ -510,6 +510,13 @@ jobs:
       - name: Check for .unwrap() in production code
         run: python3 scripts/check_prod_unwraps.py
 
+      # The guards' Python pins were written inline in three `pip install`
+      # lines across two workflows, each package pinned in at least two of
+      # them; both workflows said so in a comment and neither could enforce
+      # it. scripts/requirements-guards.txt is now the only place they live.
+      - name: Check the guards' Python pins have one source
+        run: python3 scripts/check_guard_python_pins.py
+
       # REL-07 ran only at release time (release.yml), so a version drift in a
       # policed manifest was invisible until tagging. Running the same checker
       # at PR time surfaces the drift in the PR that introduces it (<5s, pure
@@ -541,6 +548,9 @@ jobs:
       - name: Test prod-unwraps audit script
         run: python3 -m unittest scripts.tests.test_check_prod_unwraps
 
+      - name: Test guard-python-pins audit script
+        run: python3 -m unittest scripts.tests.test_check_guard_python_pins
+
       - name: Test inline-tests audit script
         run: python3 -m unittest scripts.tests.test_check_inline_tests
 
@@ -555,14 +565,16 @@ jobs:
 
       - name: Audit performance claims consistency
         run: python3 scripts/check-perf-claims.py --no-criterion
-      # The figure guard reads Markdown with a real parser, pinned here and in
-      # gate-contracts.yml. A venv, because the runner's system Python refuses
-      # a pip install into itself (PEP 668). Without these exact versions the
-      # guard exits 2, never 0.
+      # The figure guard reads Markdown with a real parser. Its pins live in
+      # scripts/requirements-guards.txt, which is the only place they are
+      # written: they used to be repeated here and in gate-contracts.yml, and
+      # nothing failed when one moved without the other. A venv, because the
+      # runner's system Python refuses a pip install into itself (PEP 668).
+      # Without these exact versions the guard exits 2, never 0.
       - name: Install the figure guard's Markdown parser
         run: |
           python3 -m venv /tmp/figure-guard
-          /tmp/figure-guard/bin/pip install --quiet --disable-pip-version-check markdown-it-py==4.2.0 mdurl==0.1.2
+          /tmp/figure-guard/bin/pip install --quiet --disable-pip-version-check -r scripts/requirements-guards.txt
       - name: Every performance figure names its measurement
         run: /tmp/figure-guard/bin/python scripts/check-figure-sources.py
       - name: Test figure-sources audit script
@@ -1075,10 +1087,10 @@ jobs:
 
       # rust-toolchain.toml is the only toolchain pin: every job that builds
       # Rust installs its toolchain, from the file, before its first cargo
-      # call. The suite reads the workflows with PyYAML, installed here at
-      # gate-contracts.yml's pin; without it the suite fails to import.
-      - name: Install PyYAML for the toolchain pin
-        run: python -m pip install --disable-pip-version-check pyyaml==6.0.3
+      # call. The suite reads the workflows with PyYAML, whose pin lives in
+      # scripts/requirements-guards.txt; without it the suite fails to import.
+      - name: Install the guard scripts' Python dependencies
+        run: python -m pip install --disable-pip-version-check -r scripts/requirements-guards.txt
 
       - name: Self-test the toolchain pin
         run: python3 -m unittest scripts.tests.test_ci_toolchain_pin
