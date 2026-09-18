@@ -1,0 +1,166 @@
+name: Core Review
+
+# Two reports on a pull request that changes velesdb-core, written for the
+# reviewer rather than for the merge button: the public API it adds, changes
+# or removes, and the changed code no unit test notices when it is mutated.
+# Neither blocks. This workflow lives outside ci.yml, so `CI Success`, the
+# only required check, neither waits for these jobs nor reads them: red here
+# means "read the report", not "cannot merge".
+#
+# The path filter is safe only because nothing here is required. A required
+# check behind a filter is absent on the pull requests it filters out, and an
+# absent required check blocks them (ci.yml's `pull_request` trigger, #1465).
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'crates/velesdb-core/**'
+      - '.github/workflows/core-review.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # rustup never installs a toolchain on its own: a Rust call reached before the
+  # job's install step fails here instead of installing mid-build.
+  RUSTUP_AUTO_INSTALL: "0"
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+
+jobs:
+  # ===========================================================================
+  # Public API diff. ci.yml's `semver-checks` fails a BREAKING change; this
+  # job prints every change, additions included, so a new public item is a
+  # decision the reviewer saw rather than a side effect. It is in the job
+  # summary.
+  #
+  # Blind spot shared with `semver-checks`: both build on x86_64 Linux, so a
+  # public item that only compiles for aarch64 (`simd_neon`) or wasm32 is in
+  # neither report.
+  # ===========================================================================
+  public-api:
+    name: Public API diff (velesdb-core)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # nightly: rustdoc writes JSON only under `-Z unstable-options
+      # --output-format json`. Set for the whole job, so the tool's install
+      # and both rustdoc builds run on the nightly installed below.
+      RUSTUP_TOOLCHAIN: nightly
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # HEAD is the merge commit GitHub builds for the pull request; its
+          # first parent is the base it was merged onto. Depth 2 fetches both.
+          fetch-depth: 2
+
+      # nightly: the rustdoc JSON below needs `-Z unstable-options`; installed
+      # here, so rustup never installs it mid-step. cargo-public-api 0.52
+      # reads the JSON of every nightly since 2025-08-02; a nightly that
+      # changes the format breaks this job until the tool is bumped.
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # nightly
+        with:
+          toolchain: nightly
+
+      # No prebuilt binary is published, so it is built from source.
+      - name: Install cargo-public-api
+        run: cargo install cargo-public-api --version 0.52.0 --locked
+
+      # Each end's rustdoc JSON is built here and the two files are diffed, so
+      # the nightly flag the job needs is written in this file, not hidden in
+      # the tool. Both builds share target/, so dependencies compile once. All
+      # features, so an item behind `gpu` or `persistence` is listed too.
+      #
+      # `--cap-lints warn`: this job reports the API, it does not lint the docs.
+      # lib.rs denies `rustdoc::broken_intra_doc_links`, and a newer nightly can
+      # find a broken link the pinned toolchain's rustdoc does not (a
+      # `#[deprecated]` note, in run 35233555756); the base commit cannot be
+      # fixed, so without the cap it would build no JSON and the job no report.
+      # Broken links stay ci.yml's `Rustdoc intra-doc links` step's to fail.
+      - name: Diff the public API against the base
+        run: |
+          base=$(git rev-parse HEAD^1)
+          head=$(git rev-parse HEAD)
+          for end in base head; do
+            git checkout --quiet --detach "${!end}"
+            cargo rustdoc -p velesdb-core --lib --all-features -- -Z unstable-options --output-format json --cap-lints warn
+            cp target/doc/velesdb_core.json "$RUNNER_TEMP/$end.json"
+          done
+          cargo public-api diff "$RUNNER_TEMP/base.json" "$RUNNER_TEMP/head.json" > "$RUNNER_TEMP/public-api.txt"
+          cat "$RUNNER_TEMP/public-api.txt"
+          {
+            echo '### velesdb-core public API, base to this pull request'
+            echo '```'
+            cat "$RUNNER_TEMP/public-api.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ===========================================================================
+  # Mutation testing on the diff. cargo-mutants rewrites the code this pull
+  # request changes in crates/velesdb-core/src (a body replaced by a default
+  # value, `<` turned into `<=`, ...) and reruns the unit tests for each
+  # rewrite. A mutant that survives is changed code no test pins down.
+  #
+  # Its cost on this crate is why nothing leans on it. A dry run against a real
+  # velesdb-core diff (run 34767190150) found 22 mutants, spent 86s + 743s on
+  # the unmutated baseline, and was cut at 45 minutes with 2 of the 22 tested
+  # (both caught) and a third still building — the console printed none of it,
+  # but the uploaded artifact records them. One `--lib` pass is ~12 minutes, so
+  # the budget reaches a couple. It is therefore bounded and its report partial
+  # by construction: only the changed code is mutated, only the `--lib` tests
+  # run (this repository keeps its unit tests beside each module), and the run
+  # is cut at 45 minutes with whatever it has. The report, `mutants.out/` with
+  # `missed.txt` listing the survivors *among the mutants reached*, is uploaded
+  # whenever a mutant was reached; when the filter selects none, `cargo mutants`
+  # writes no `mutants.out/` and the upload step skips with "No files were
+  # found". A survivor is real; an empty or absent `missed.txt` is not a clean
+  # diff.
+  # ===========================================================================
+  mutants:
+    name: Mutants on the diff (velesdb-core)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+
+      - name: Install cargo-mutants (prebuilt)
+        uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+        with:
+          tool: cargo-mutants@27.1.0
+
+      # cargo-mutants builds and tests with cargo, which resolves
+      # rust-toolchain.toml.
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install --no-self-update --profile minimal
+
+      # Empty when the pull request changes no source of velesdb-core (only
+      # its tests, say); cargo-mutants then reports nothing and exits 0.
+      - name: Diff velesdb-core's sources against the base
+        run: git diff HEAD^1 HEAD -- crates/velesdb-core/src > "$RUNNER_TEMP/core-src.diff"
+
+      # Exit 2: a mutant survived; 3: one timed out. Either turns this job red
+      # for the reviewer and blocks nothing.
+      #
+      # `--test-threads=1` as everywhere else: the suite shares filesystem
+      # state. No `RUSTFLAGS=-Dwarnings`, unlike ci.yml: a mutant that leaves
+      # an argument unused would fail to build and be filed as unviable
+      # instead of being tested.
+      - name: Mutate the changed code
+        timeout-minutes: 45
+        run: cargo mutants -p velesdb-core --in-diff "$RUNNER_TEMP/core-src.diff" -- --lib -- --test-threads=1
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutants-out
+          path: mutants.out/
+          if-no-files-found: ignore
+          retention-days: 14
