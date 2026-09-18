@@ -181,7 +181,16 @@ latency cost even though it saves no paid-model tokens on that path.
 Works with zero further setup (each project defaults to
 `project = basename(cwd)`, `session = "rolling"`) — drop a
 `.velesdb-hooks.json` (format below) in a project root only where you want a
-deliberate project label instead of the directory name. The blocking
+deliberate project label instead of the directory name. The configured
+`session` is a default, not a pin: once a conversation saves its working
+context under another session of the same project, or loads one that exists,
+its reminders name that session: `SessionStart` the last it saved, or else the
+last it loaded; `PreCompact` and `Stop`, which ask for a save, only one it
+saved, and otherwise the configured one. A save or load that names another
+project is never adopted for this one; it is kept under that project, as if
+the call had been made from there. A load that found nothing, a failed call,
+a project name that is empty or holds a control character, and a session
+name outside `[A-Za-z0-9][A-Za-z0-9._:-]{0,127}` are ignored. The blocking
 recall-before-edit guard is stricter: it stays disabled unless that file sets
 `enforce_learning_loop` to `true`.
 
@@ -309,11 +318,11 @@ install section above — it folds the same load/save loop into one event.)
 
 | Event | What it does | Mechanism |
 |---|---|---|
-| `SessionStart` | Fires on every session start (new, resume, clear, or post-compact). Emits `additionalContext` telling the model to call `load_working_context(project, session)` as its first action if it hasn't already. | `hookSpecificOutput.additionalContext` — supported by `SessionStart`. |
-| `Stop` | Fires whenever Claude is about to stop responding, not only at final session exit. In an opted-in repository it blocks on the first Stop and after each later covered edit batch with the four-step checklist and `save_working_context`; each continuation passes. Without enforcement it retains the legacy first-Stop save reminder. | `{"decision":"block","reason":"..."}` plus repository-and-session first-Stop markers, a session-wide queue carrying every edited repository identity, and an atomic pending/delivered manifest that makes an interrupted checklist recoverable. |
-| `PreCompact` | Fires before the transcript is compacted (manual or auto-triggered). The **first** `PreCompact` per session is blocked with a reason telling the model to `compile_transcript` the about-to-be-compacted transcript (deterministic compression, not lossy compaction) and `save_working_context` first; later ones pass through. | Its own block-once-then-pass sentinel, separate from edit checkpoints. |
+| `SessionStart` | Fires on every session start (new, resume, clear, or post-compact). Emits `additionalContext` telling the model to call `load_working_context(project, session)` as its first action if it hasn't already, naming the last session this conversation saved for the project, or else the last it loaded, or else the configured one; after a compaction (`source: "compact"`) it asks for that load again. | `hookSpecificOutput.additionalContext` — supported by `SessionStart`. |
+| `Stop` | Fires whenever Claude is about to stop responding, not only at final session exit. In an opted-in repository it blocks on the first Stop and after each later covered edit batch with the four-step checklist and `save_working_context`; each continuation passes. Without enforcement it retains the legacy first-Stop save reminder. Either names only a session this conversation saved, and otherwise the configured one: never one it only loaded. The checklist names each edited repository's own. | `{"decision":"block","reason":"..."}` plus repository-and-session first-Stop markers, a session-wide queue carrying every edited repository identity, and an atomic pending/delivered manifest that makes an interrupted checklist recoverable. |
+| `PreCompact` | Fires before the transcript is compacted (manual or auto-triggered). The **first** `PreCompact` per session is blocked with a reason telling the model to `compile_transcript` the about-to-be-compacted transcript (deterministic compression, not lossy compaction) and `save_working_context` first, naming only a session this conversation saved, and otherwise the configured one; later ones pass through. | Its own block-once-then-pass sentinel, separate from edit checkpoints. |
 | `PreToolUse` | In an opted-in project, refuses the first `Edit`/`Write` until the same host session has completed a successful VelesDB recall in that repository. | Exit 2 with an actionable reason; the refused target is queued so a successful recall remains bound to it even if the host `cwd` is elsewhere. |
-| `PostToolUse` | Marks a successful VelesDB recall for the edit guard. Separately, when a schema-valid `Bash` result exceeds the size threshold, compiles it through `velesdb-memory compile-stdin` and replaces the view only if fidelity and net-savings gates pass. | Success-gated sentinel plus shape-preserving `hookSpecificOutput.updatedToolOutput` for compression. |
+| `PostToolUse` | Marks a successful VelesDB recall for the edit guard, and records the session of a successful `save_working_context`, or of a `load_working_context` that found one, for the reminders above. Separately, when a schema-valid `Bash` result exceeds the size threshold, compiles it through `velesdb-memory compile-stdin` and replaces the view only if fidelity and net-savings gates pass. | Success-gated sentinel plus shape-preserving `hookSpecificOutput.updatedToolOutput` for compression. |
 
 **Design note — the only hook that reduces the payload itself.** The three
 lifecycle continuations can only ask the model to call a tool; whether context
@@ -345,6 +354,10 @@ rules are strict, and each is covered by `test/hooks.test.sh`:
   the compiler's gross saving must also cover every footer byte plus a
   configurable net margin. Otherwise the original passes through.
 
+Every numeric knob below is a decimal integer written without a leading zero
+(`05` is refused, like `1+1`), and a refused or out-of-range value leaves the
+tool result untouched.
+
 | Env var | Default | Meaning |
 |---|---|---|
 | `VELESDB_HOOK_COMPRESS_TOOLS` | `Bash` | May disable `Bash`; naming another tool does not opt an unverified output schema into replacement. |
@@ -353,7 +366,8 @@ rules are strict, and each is covered by `test/hooks.test.sh`:
 | `VELESDB_HOOK_TOKEN_BUDGET` | `2000` | Token budget handed to `compile-stdin`. |
 | `VELESDB_HOOK_TOKEN_BUDGET_MAX` | twice `VELESDB_HOOK_TOKEN_BUDGET` | Ceiling a `risk: high` compilation may retry at. Set it equal to the budget to forbid the retry. |
 | `VELESDB_MEMORY_BIN` | `velesdb-memory` on `PATH` | Binary to invoke. |
-| `VELESDB_HOOK_PROBE_TIMEOUT` | `10` | Seconds the capability probe may take. |
+| `VELESDB_HOOK_PROBE_TIMEOUT` | `10` | Seconds the capability probe may take, from 1 to 60. |
+| `VELESDB_HOOK_COMPILE_TIMEOUT` | `20` | Seconds each compilation attempt may take, from 1 to 60. |
 
 **Fidelity.** A compilation the compiler reports as `risk: high` is **refused**,
 not shipped: `high` means at least one fragment it classifies as critical — a
@@ -425,9 +439,14 @@ the documented target is absent. Every lookup is bounded to 20 directories:
 
 When the target repository differs from `cwd`, the refused edit records that
 repository as pending. The next successful supported VelesDB recall in the
-same host session promotes it only when the target is unambiguous: the recall
-runs from that root, explicitly filters that project, or it is the sole pending
-target from an unconfigured cwd. A multi-repository patch may therefore need
+same host session promotes it when the recall runs from that root, when it is
+the sole pending target from an unconfigured cwd, or when the recall explicitly
+filters that project. A recall filtering a project promotes every pending
+worktree of that project, since subagents share their parent's host session
+and a recall's memories are per project, not per checkout; it also unlocks the
+opted-in root it runs from when that root belongs to the project, whether or
+not an edit there was refused first. A multi-repository
+patch may therefore need
 one refused-attempt/recall cycle per unseen repository. After the edit passes,
 independent per-repository records let concurrent hooks feed a session-wide
 `Stop` checkpoint without losing an identity.

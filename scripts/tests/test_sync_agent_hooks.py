@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import os
 import shlex
 import shutil
@@ -90,7 +91,7 @@ CODEX_STATUS_MESSAGES = {
     "SessionStart": "velesdb-memory: resume working context",
     "Stop": "velesdb-memory: save working context",
     "PreToolUse": "velesdb-memory: require recall before edit",
-    "PostToolUse": "velesdb-memory: record successful recall",
+    "PostToolUse": "velesdb-memory: record recall and working context",
 }
 
 #: A settings.json with foreign hooks arranged the way a real one is — note
@@ -1204,6 +1205,31 @@ class HarnessIsWired(unittest.TestCase):
                 "not ok - PostToolUse/real: the checkout binary exposes an explicit fidelity risk",
                 result.stdout,
             )
+
+
+class CodexMatcherCoversEveryObservedTool(unittest.TestCase):
+    """Codex runs post-tool-use.sh only for tools its PostToolUse matcher names.
+    A tool the hook's recall gate or working-context capture accepts, but the
+    matcher omits, is a capture Codex never performs, and the harness, which
+    feeds the script directly, cannot see it."""
+
+    def test_every_tool_the_hook_accepts_is_matched(self) -> None:
+        spec = importlib.util.spec_from_file_location("sync_agent_hooks_matcher", SCRIPT)
+        installer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(installer)
+        matcher = installer.matcher_for("codex", "PostToolUse")
+        library = (CODEX_SOURCE / "lib" / "common.sh").read_text(encoding="utf-8")
+        accepted = set()
+        for function in ("successful_memory_recall", "working_context_call"):
+            start = library.index(f"{function}() {{")
+            body = library[start : library.index("\n}\n", start)]
+            accepted |= set(re.findall(r"mcp__velesdb[-_]memory__[a-z_]+", body))
+        both_spellings = {
+            f"mcp__velesdb{sep}memory__{tool}_working_context" for sep in "-_" for tool in ("save", "load")
+        }
+        self.assertTrue(both_spellings <= accepted, sorted(both_spellings - accepted))
+        missed = sorted(name for name in accepted if not re.search(matcher, name))
+        self.assertEqual(missed, [], f"the Codex PostToolUse matcher {matcher!r} omits them")
 
 
 if __name__ == "__main__":

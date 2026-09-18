@@ -32,8 +32,8 @@ pub struct SearchResume(ResumableSearch);
 /// Backend selector for the native HNSW index.
 ///
 /// `Standard` uses full f32 distances. `RaBitQ` uses binary graph traversal
-/// (32x compression) with f32 re-ranking; `Sq8` uses int8 traversal (4x
-/// bandwidth reduction) with f32 re-ranking.
+/// (32x compression) with f32 re-ranking; `Sq8` uses int8 traversal
+/// (4x bandwidth reduction) with f32 re-ranking.
 // SAFETY: `Standard` (272 B) is the hot path — boxing it would add pointer
 // indirection on every search call. The quantized backends are boxed
 // intentionally to avoid inflating `Standard`-mode layout across cache lines.

@@ -28,14 +28,14 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.8", features = ["env-filter"] }
 
 # CLI
 clap = { version = "4.6", features = ["derive", "env"] }
 
 # HTTP client for API-based sources
 # Use native-tls to avoid ring 0.17.14 compilation issues on aarch64-apple-darwin
-reqwest = { version = "0.13", features = [
+reqwest = { version = "0.13.2", features = [
     "json",
     "native-tls",
     "query",
@@ -55,7 +55,7 @@ dialoguer = { version = "0.12", features = ["fuzzy-select"] }
 console = "0.16"
 
 # Async utilities
-async-trait = "0.1"
+async-trait = "0.1.89"
 
 # UUID for point IDs
 uuid = { version = "1.23", features = ["v4", "serde"] }

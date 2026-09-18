@@ -40,7 +40,7 @@ Recall@10 = (Number of true top-10 neighbors found) / 10 × 100%
 | Recall | Meaning |
 |--------|---------------|
 | **100%** | All true neighbors found (exact search) |
-| **95-99%** | Excellent, sufficient for 99% of RAG/recommendation cases |
+| **95-99%** | Excellent for most RAG and recommendation uses |
 | **90-95%** | Acceptable for exploration/prototyping |
 | **< 90%** | Risk of missing important results |
 
@@ -177,7 +177,7 @@ Adaptive and AutoTune run their two phases only inside `HnswIndex::search_with_q
 
 - The Rust API reaches it through `Collection::search_with_quality`.
 - REST reaches it for a dense-only, non-batch search given a `mode` and neither a filter nor `ef_search`. With a filter the mode is not applied (#457), and `ef_search` wins over it.
-- VelesQL reaches it for a `NEAR` with no other `WHERE` condition, given a mode with `WITH (mode = ...)`, unless the query also sets `rerank = false`, which runs one pass. With other conditions it depends on their shape: text, sparse, fused and graph-anchored searches do not apply the mode, and a filter whose bitmap is at most 80% the size of the HNSW index (the bitmap also counts points not yet indexed) skips the second phase or scans exactly (#2268).
+- VelesQL reaches it for a `NEAR` with no other `WHERE` condition, given a mode with `WITH (mode = ...)` and no `ef_search`, which wins over it, unless the query also sets `rerank = false`, which runs one pass. With other conditions it depends on their shape: text, sparse, fused and graph-anchored searches do not apply the mode, and a filter whose bitmap is at most 80% the size of the HNSW index (the bitmap also counts points not yet indexed) skips the second phase or scans exactly (#2268).
 
 Whether or not a shape applies it, the mode is checked: a VelesQL `mode` (or `quality`) that names no form above, or is not a string, fails the query with `V013`, and a `/search` or `/search/ids` request, or a `/search/batch` entry, with one gets a `400`, each naming the accepted forms (#2267); the endpoints with no `mode` field ignore it, as they ignore any field they do not know. The WASM executor reads no `WITH` option, so it neither applies nor checks a mode.
 

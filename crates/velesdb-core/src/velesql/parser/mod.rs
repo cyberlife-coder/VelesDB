@@ -82,6 +82,21 @@ pub(crate) fn extract_identifier(pair: &Pair<'_, Rule>) -> String {
     }
 }
 
+/// Whether the grammar reads `text`, written bare as a `WITH` value, back as
+/// the identifier `text`: the whole of it, and not as a boolean, a number or
+/// a prefix of it (`true_x` reads `true` then fails). Decided by the grammar
+/// itself, so [`super::ast::WithValue`]'s canonical form never guesses.
+pub(crate) fn reads_back_as_bare_identifier(text: &str) -> bool {
+    VelesQLParser::parse(Rule::with_value, text)
+        .ok()
+        .and_then(|mut pairs| pairs.next())
+        .filter(|value| value.as_str() == text)
+        .and_then(|value| value.into_inner().next())
+        .is_some_and(|inner| {
+            inner.as_rule() == Rule::identifier && extract_identifier(&inner) == text
+        })
+}
+
 /// `VelesQL` query parser.
 pub struct Parser;
 

@@ -9,7 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`http::router_with_session_policy`** (`#[doc(hidden)]`, like its
+  `router_with_limits*` siblings): `router_with_limits_and_keep_alive` plus
+  an explicit eviction floor, so the HTTP transport's integration tests can
+  observe idle-session eviction without waiting out the 300 s default. The
+  public API otherwise grows only by the `VELESDB_MEMORY_HTTP_EVICT_MIN_IDLE_SECS`
+  environment variable described under Fixed (#2289).
+
 ### Fixed
+
+- **At its session cap, the HTTP daemon locked every new client out for up to
+  an hour instead of evicting an idle one.** A client that dies without
+  sending `DELETE` (a killed agent, a crashed process, a host restart) left
+  its slot occupied until `keep_alive` finally expired it — and at the cap,
+  every OTHER live client was refused in the meantime, told to "close an
+  existing session" it had no way to reach. `BoundedSessionManager` now
+  evicts the least-recently-active session that has nothing in flight (no
+  request being served, no open stream), has finished its own `initialize`,
+  and has been idle for at least `VELESDB_MEMORY_HTTP_EVICT_MIN_IDLE_SECS`
+  (new, default 300 s, never above the keep-alive) to admit the new one; it
+  refuses only when no live session qualifies (#2289). The floor is the flood
+  guard: the transport authenticates no one, so without it any local process
+  repeating `initialize` at the cap would evict every client that was merely
+  between two requests. The trade-off left: at the cap, a client silent and
+  streamless for longer than the floor can be evicted by another client's
+  `initialize`, and must re-initialize on the `404` its next request gets.
+  A session whose `initialize` never arrived becomes evictable once rmcp's
+  handshake deadline (`init_timeout`, 60 s) has passed. A request arriving
+  while its session is being evicted gets `404`; one that arrived just before
+  marks the session active, so it is not picked while that request is served.
 
 - **`autograph_failed` counted failing steps, not failed enrichments.** Its doc
   and `memory_status` promise enrichments, but one extraction failing at two
@@ -35,6 +65,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   process for a full scan, while its doc called the walk bounded. It now runs
   with the lock released, and the index is read again once the lock is retaken,
   so a concurrent repair wins over the walk (#2246, P5).
+
+- **Tool schemas published rustdoc link syntax as text.** schemars copies each
+  field's doc comment into its JSON Schema `description`, so the schemas every
+  MCP client reads carried intra-doc links only rustdoc resolves:
+  ``[`Name`]``, ``[`Name`](crate::path)``. The input and output schemas now
+  show each such link as its text, read with pulldown-cmark rather than a
+  hand-written scan: ``[`Name`](crate::path)`` becomes `` `Name` ``. A
+  shortcut or collapsed link shows its path as rustdoc does, without a
+  disambiguator or a `#` fragment: ``[`fn@f`]`` becomes `` `f` ``,
+  `[struct@Foo]` becomes `Foo` and `[Foo#method.id]` becomes `Foo`. A link is
+  a rustdoc link when its destination reads as an item path, a `#` fragment
+  allowed: an inline or reference-style link to one, a definition of one, and
+  a reference no definition resolves whose label is one, a bare `[Name]` or
+  `[optional]` included, as rustdoc 1.90 reads it. A definition is removed
+  with its line, or alone when that line is all its block quote holds. Web
+  links, images, autolinks, code spans, code blocks, escaped brackets and
+  prose brackets that name no item (`[0, 1]`) stay. The rewrite is fail
+  closed: the rewritten description must parse to the original with those
+  links dropped, or it stays as written. Only `description` strings are
+  rewritten, never instance data such as a `default`. A test reads every
+  description of every tool's live input and output schema, and of
+  `docs/reference/mcp-tools.json`, with pulldown-cmark and fails on a rustdoc
+  link. (#2261)
+
+### Changed
+
+- **Dependency floors the crate can actually be built with (#1987).** Each was
+  measured on this crate's own resolve — the workspace cut down to it, as the
+  `minimal-versions` job does — and not on a resolve of every workspace member.
+  Seven are exactly what that graph requires: `tempfile` 3.14 (the workspace
+  bound velesdb-core declares; the old "3" could never be selected next to it),
+  `reqwest` 0.13.2 and `ureq` 2.5.0 and `parking_lot` 0.12.3 (velesdb-core
+  again), `hyper` 1.6.0 (hyper-util 0.1.12 requires it), and, through the
+  `reqwest` dev-dependency, `hyper-util` 0.1.12 and `rustls` 0.23.27
+  (rustls-platform-verifier 0.6.2). Two are above what it requires and are
+  declared so deliberately: `schemars` 1.0.2, where rmcp 3.1.0 asks only for
+  `^1`, and `time` 0.3.47, where rcgen's `x509-parser` requires `^0.3.35`.
+  `ureq` and `tracing` also carry a compile reason: 2.x before 2.4.0 has no
+  public `Transport::kind()` and 2.4.0 leaves its `rustls` bound open, and
+  `tracing` 0.1.37 and 0.1.38 drop the `%` of the HTTP request log's first
+  field, so 0.1.39. A consumer holding one of them lower has to update it.
 
 ## [0.14.2] - 2026-09-03
 

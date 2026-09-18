@@ -462,7 +462,7 @@ pub(crate) unsafe fn cosine_fused_avx512(a: &[f32], b: &[f32]) -> f32 {
 
 /// AVX-512 fused cosine similarity with 4-way unrolling for large dimensions.
 ///
-/// Processes 64 floats per iteration using 12 accumulators (4x dot, 4x norm_a, 4x norm_b).
+/// Processes 64 floats per iteration using 12 accumulators (4 each for dot, norm_a and norm_b).
 /// AVX-512 has 32 zmm registers, so 12 accumulators + 8 temporaries fit comfortably.
 ///
 /// # Safety
@@ -566,8 +566,8 @@ pub(crate) unsafe fn cosine_fused_avx512_4acc(a: &[f32], b: &[f32]) -> f32 {
 
 /// AVX-512 fused cosine similarity with 8-way unrolling for very large vectors.
 ///
-/// Processes 128 floats per iteration using 24 accumulators (8x dot, 8x norm_a,
-/// 8x norm_b). AVX-512 has 32 ZMM registers, so 24 accumulators fit with 8
+/// Processes 128 floats per iteration using 24 accumulators (8 each for dot,
+/// norm_a and norm_b). AVX-512 has 32 ZMM registers, so 24 accumulators fit with 8
 /// registers available for temporaries during load/compute phases.
 ///
 /// # Safety

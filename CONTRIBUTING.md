@@ -178,7 +178,9 @@ merge moved the repo ahead of your installed skills.
 ### Prerequisites
 
 - Rust 1.90+ (stable) — the workspace MSRV, declared in `Cargo.toml`
-  (`rust-version`) and pinned in `rust-toolchain.toml` so local matches CI.
+  (`rust-version`) and pinned in `rust-toolchain.toml` so local matches CI;
+  `scripts/tests/test_msrv_single_source.py` fails `CI Success` when the two
+  disagree or when a member crate declares its own `rust-version`.
   Two things force it: `avx512vpopcntdq` `target_feature`, stabilized in 1.89
   (see `crates/velesdb-core/src/simd_native/x86_avx512.rs`), and `roaring
   0.11.4`, which declares `rust-version = 1.90.0` — on 1.89 the workspace only
@@ -377,7 +379,7 @@ The three you interact with most:
 # 1. Bump every manifest in lock-step
 python3 scripts/bump_version.py <X.Y.Z>
 python3 scripts/check-version-sync.py   # every policed manifest must align
-python scripts/check-promise-contract.py # 19 claims must pass
+python scripts/check-promise-contract.py # every claim must pass
 cargo update --workspace                 # refresh Cargo.lock
 
 # 2. Open release/<vX.Y.Z> -> main, wait for ALL CI green on the merge commit

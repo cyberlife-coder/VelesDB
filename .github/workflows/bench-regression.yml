@@ -29,6 +29,9 @@ permissions:
   contents: read
 
 env:
+  # rustup never installs a toolchain on its own: a Rust call reached before the
+  # job's install step fails here instead of installing mid-build.
+  RUSTUP_AUTO_INSTALL: "0"
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
 
@@ -46,7 +49,14 @@ jobs:
           ref: ${{ github.base_ref }}
           path: base
 
-      - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install --no-self-update --profile minimal
+
+      # base/ is develop's checkout, with develop's own rust-toolchain.toml:
+      # install that toolchain too, before the baseline build reaches cargo.
+      - name: Install the toolchain base/rust-toolchain.toml pins
+        working-directory: base
+        run: rustup toolchain install --no-self-update --profile minimal
 
       - name: Cache apt packages
         uses: awalsh128/cache-apt-pkgs-action@681749ae568c81c2037cb9185e38b709b261bd2f # v1.6.1

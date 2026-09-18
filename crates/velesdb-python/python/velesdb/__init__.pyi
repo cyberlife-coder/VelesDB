@@ -392,11 +392,12 @@ class Collection:
         The numpy array must be C-contiguous (row-major). If not,
         a ValueError is raised.
 
-        Performance ranking (fresh collection, 384D, i9-class CPU)::
+        Performance ranking, slowest first, by the copies each makes (no
+        recorded run measures their rates)::
 
-            upsert (list of dicts)       ~5 000 vec/s
-            upsert_bulk (list of dicts)  ~12 000 vec/s
-            upsert_bulk_numpy            ~17 000 vec/s   <-- this method
+            upsert (list of dicts)
+            upsert_bulk (list of dicts)
+            upsert_bulk_numpy            <-- this method
 
         Best practices:
             * Always pass float32 numpy arrays (float64 forces a conversion).
@@ -527,7 +528,13 @@ class Collection:
         principal: Optional[str] = None,
         tenant: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """Search with custom HNSW ef_search parameter."""
+        """Search with custom HNSW ef_search parameter.
+
+        Raises:
+            ValueError: if ef_search is outside [16, 4096], a negative int
+                or one beyond 64 bits included.
+            TypeError: if ef_search is not an int.
+        """
         ...
 
     def search_ids(
@@ -2923,7 +2930,7 @@ class HnswOptions:
 
     @staticmethod
     def turbo() -> "HnswOptions":
-        """Preset for maximum insert throughput (~85% recall)."""
+        """Preset for maximum insert throughput, at a lower recall."""
         ...
 
     @staticmethod

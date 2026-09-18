@@ -260,13 +260,15 @@ Create a vector collection.
 | `hnsw` | `{ m?: number, efConstruction?: number }` | - | HNSW index tuning |
 | `description` | `string` | - | Optional description |
 
+> **WASM backend:** `storageMode` takes `full`, `sq8` or `binary`, by those names. `pq` and `rabitq` are refused with `NOT_SUPPORTED`, since velesdb-wasm would store them as SQ8, and so is any `collectionType` other than `vector`. `hnsw`, `pqRescoreOversampling`, `deferredIndexing` and `asyncIndexBuilder` are refused too: WASM builds no HNSW graph and scans every stored vector, so they have nowhere to go. `db.capabilities()` lists what applies (`storageModes`, `collectionTypes`, `collectionConfig`).
+
 ##### Storage Modes
 
 | Mode | Memory (768D) | Compression | Use Case |
 |------|---------------|-------------|----------|
 | `full` | 3 KB/vector | 1x | Default, max precision |
 | `sq8` | 776 B/vector | **4x** | Production scale, RAM-constrained |
-| `binary` | 96 B/vector | **32x** | Edge devices, IoT |
+| `binary` | 96 B/vector | **32x** (1 bit per dimension) | Edge devices, IoT |
 
 ```typescript
 await db.createCollection('embeddings', {
@@ -326,6 +328,8 @@ await db.upsert('docs', {
 });
 ```
 
+> **WASM backend:** a `sparseVector` is indexed with the point, so sparse search finds it. A later `sparseVector` for the same id replaces it, an upsert without one keeps it (as core does), and a deleted point never comes back in sparse results. Replaced and deleted sparse vectors are purged from the index once they outnumber the live ones.
+
 #### `db.upsertBatch(collection, documents)`
 
 Upsert multiple vectors in a single call. More efficient than repeated `upsert()`.
@@ -383,6 +387,8 @@ Vector similarity search.
 | `includeVectors` | `boolean` | `false` | Include vectors in results |
 | `sparseVector` | `Record<number, number>` | - | Sparse vector for hybrid sparse+dense search |
 | `quality` | `SearchQuality` | - | Search quality mode (e.g., `'fast'`, `'balanced'`, `'custom:256'`, `'adaptive:32:512'`) |
+
+> **WASM backend:** `filter` applies to dense search only (with velesdb-wasm 6.0.0, filtered results are affected by #2332). Combined with `sparseVector` it is refused with `NOT_SUPPORTED`, and so are `sparseIndexName` and `includeVectors: true`; none of them is silently ignored. `quality` goes to velesdb-wasm's own parser, so a preset it cannot read (`fast`, `balanced`, `accurate`, `perfect`, `autotune`, `custom:<ef>`, `adaptive:<min_ef>:<max_ef>`) is refused with `BAD_REQUEST` instead of being accepted and dropped — and `searchBatch` refuses in its pre-loop, before any entry searches. A preset it can read has nothing to tune, since WASM search scans every stored vector; as core states of the same field on REST, it "applies only to a dense search with neither a `filter` nor `ef_search`", so a filtered or sparse-only search validates the preset without applying it. `k` must be an integer from 0 to 2^32 - 1: non-negative as core's is, and at most 2^32 - 1 because velesdb-wasm's `usize` is 32-bit (`BAD_REQUEST` otherwise, a value that is not a number included); 0 returns nothing. `db.capabilities()` reports each case (`filteredSearch`, `namedSparseIndexes`, `includeVectors`).
 
 ```typescript
 const results = await db.search('docs', queryVector, {
@@ -456,6 +462,8 @@ Full-text search using BM25 scoring.
 const results = await db.textSearch('docs', 'machine learning', { k: 10 });
 ```
 
+> **WASM backend:** the WASM build has no BM25 index. A `filter` is refused with `NOT_SUPPORTED` rather than return rows the filter excludes (`db.capabilities().filteredSearch` does not list `'textSearch'`). With velesdb-wasm 6.0.0, `textSearch` results are affected by #2332.
+
 #### `db.hybridSearch(collection, vector, textQuery, options?)`
 
 Combined vector similarity + BM25 text search with RRF fusion.
@@ -468,6 +476,8 @@ const results = await db.hybridSearch(
   { k: 10, vectorWeight: 0.7 }  // 70% vector, 30% text
 );
 ```
+
+> **WASM backend:** a `filter` is refused with `NOT_SUPPORTED`, and a `vectorWeight` that is not a finite number with `BAD_REQUEST`, as REST refuses it. With velesdb-wasm 6.0.0, `hybridSearch` results are affected by #2332.
 
 #### `db.multiQuerySearch(collection, vectors, options?)`
 
@@ -503,7 +513,7 @@ const results = await db.multiQuerySearch('docs', [emb1, emb2], {
 });
 ```
 
-> **Note:** WASM supports `rrf`, `average`, `maximum`. The `weighted` and `relative_score` strategies are REST-only.
+> **WASM backend:** all five strategies run. `weighted` takes `avgWeight`, `maxWeight` and `hitWeight` together: pass all three, or none for core's defaults. A partial set is refused, because the binding cannot fill in the rest, and so is a set core would reject (a negative or non-finite weight, or a sum more than 0.001 from 1.0, computed in f32 as core computes it), with `BAD_REQUEST`. A field the chosen strategy never reads is ignored, as core ignores it, except `k`, which must be an integer from 0 to 2^32 - 1 under every strategy, as REST's `u32` `rrf_k` must (`BAD_REQUEST` otherwise). Every weight given, `avgWeight`, `maxWeight`, `hitWeight`, `denseWeight` or `sparseWeight`, must be a finite number under every strategy too, as REST's `f32` fields must (`BAD_REQUEST` otherwise); a weight passed as `null` is refused as well, since the REST backend sends it as JSON `null`. TypeScript callers pass the canonical names of `FusionStrategy`; from untyped (JavaScript) callers, the runtime reads a name as core does, in any case and with the aliases `avg`, `max` and `rsf`. `null` or absent means `rrf`, and an unknown name, or any other value that is not a string, is refused with `BAD_REQUEST`. `db.multiQuerySearch` refuses an empty vector list with `VALIDATION_ERROR`, as it always has, and the WASM backend refuses more than 10 vectors with `BAD_REQUEST`, as core does. WASM `relative_score` averages the query branches with equal weight, so under `relative_score` `denseWeight` and `sparseWeight` are refused with `NOT_SUPPORTED`, and so is a `filter`. Every query vector must have the collection's dimension: a short one is refused with `DIMENSION_MISMATCH`, never padded. `db.capabilities().multiQueryFusionParams` lists the `fusionParams` fields a backend applies.
 
 #### Named sparse indexes — `sparseIndexName` vs `sparseSearchNamed()`
 
@@ -534,7 +544,7 @@ const sparseOnly = await db.sparseSearchNamed(
 When the collection has only one (default) sparse index, omit `sparseIndexName` on `db.search()`; the server picks the default. For named indexes, both APIs require the explicit name.
 
 > **Note:** Both APIs are REST-only when a named index is required.
-> The WASM backend has no concept of named sparse indexes — `sparseIndexName` is silently ignored on `db.search()` (the collection's single sparse index is used), and `db.sparseSearchNamed()` throws `wasmNotSupported`. Tracked as a follow-up to either surface a `wasmNotSupported` throw on `sparseIndexName` or implement named-sparse support in WASM.
+> The WASM backend has no concept of named sparse indexes: `sparseIndexName` on `db.search()` and `db.sparseSearchNamed()` both throw `NOT_SUPPORTED` (`db.capabilities().namedSparseIndexes` is `false`).
 
 ---
 
@@ -631,6 +641,8 @@ Query options:
 |--------|------|---------|-------------|
 | `timeoutMs` | `number` | `30000` | Query timeout in milliseconds |
 | `stream` | `boolean` | `false` | Enable streaming response |
+
+> **WASM backend:** `timeoutMs` and `stream: true` are refused with `NOT_SUPPORTED`: `query()` runs in process and answers at once (`db.capabilities().queryOptions` is empty). The number of rows is the statement's `LIMIT`, capped at core's 100,000, or core's default of 10: `params.k` is not read, as on REST. A `LIMIT` too large for a u64 is refused with `BAD_REQUEST`, as core's parser refuses it.
 
 #### `db.queryExplain(queryString, params?)`
 
@@ -1136,7 +1148,7 @@ import {
 4. **Use `searchIds()`** when you only need IDs and scores (skips payload transfer)
 5. **Use `streamInsert()`** for high-throughput ingestion with backpressure handling
 6. **Pre-initialize** the client at app startup (`await db.init()`)
-7. **Tune HNSW** with `hnsw: { m: 16, efConstruction: 200 }` for higher recall
+7. **Tune HNSW** with `hnsw: { m: 16, efConstruction: 200 }` for higher recall (REST backend; WASM builds no HNSW graph)
 
 ## License
 

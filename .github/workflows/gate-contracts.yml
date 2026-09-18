@@ -21,6 +21,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # rustup never installs a toolchain on its own: a Rust call reached before the
+  # job's install step fails here instead of installing mid-build.
+  RUSTUP_AUTO_INSTALL: "0"
+
 jobs:
   script-gates:
     name: Repository guard contracts
@@ -36,7 +41,9 @@ jobs:
       # would have been the cheaper fix and the wrong one: a suite that skips
       # in CI is a suite CI does not run.
       - name: Install the guard suites' Python dependencies
-        run: python -m pip install --disable-pip-version-check pyyaml==6.0.3
+        # markdown-it-py (and its mdurl): scripts/check-figure-sources.py parses
+        # Markdown with it, and its suite and refusal vector run here too.
+        run: python -m pip install --disable-pip-version-check pyyaml==6.0.3 markdown-it-py==4.2.0 mdurl==0.1.2
       - name: Run the guard contract suites
         run: python -m unittest discover -s scripts/tests -p "test_*.py" -t . -v
 

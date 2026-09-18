@@ -19,8 +19,8 @@
 //!
 //! Concrete backends are type aliases over this struct:
 //! [`RaBitQPrecisionHnsw`](super::rabitq_precision::RaBitQPrecisionHnsw)
-//! (binary, 32x) and
-//! [`Sq8PrecisionHnsw`](super::sq8_precision::Sq8PrecisionHnsw) (int8, 4x).
+//! (binary, 1 bit per dimension) and
+//! [`Sq8PrecisionHnsw`](super::sq8_precision::Sq8PrecisionHnsw) (int8, 1 byte per dimension).
 //! Graph traversal logic is in [`super::quantized_traversal`].
 
 use super::distance::DistanceEngine;

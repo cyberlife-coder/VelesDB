@@ -146,7 +146,7 @@ pub enum SparseVectorInput {
 ///
 /// Prevents memory amplification: a 100 MB JSON body of sparse indices/values
 /// can decompress to a much larger in-memory `Vec<(u32, f32)>`. Sparse NLP
-/// embeddings (SPLADE, BM25) typically have < 1 K NNZ; 65 536 gives a 60× headroom
+/// embeddings (SPLADE, BM25) typically have < 1 K NNZ; 65 536 (64 × 1 K) gives headroom
 /// over typical workloads while bounding worst-case allocation to ~512 KB per vector.
 pub const MAX_SPARSE_NNZ: usize = 65_536;
 
@@ -351,9 +351,20 @@ pub struct SearchRequest {
     #[serde(default)]
     #[cfg_attr(feature = "openapi", schema(example = "balanced"))]
     pub mode: Option<String>,
-    /// HNSW `ef_search` parameter.
+    /// HNSW `ef_search` parameter, in `[16, 4096]`: an integer outside the
+    /// range is refused with a `400` naming it (#2274), and a value that is
+    /// not a non-negative integer fails the body's JSON parsing with a `422`,
+    /// as any mistyped field does. It wins over `mode` for a dense search with
+    /// no `filter`; a filtered search applies neither, and a batch entry's is
+    /// checked but not applied.
     #[serde(default)]
-    #[cfg_attr(feature = "openapi", schema(example = 128))]
+    // utoipa's `minimum` and `maximum` take only a literal: velesdb-server's
+    // `test_openapi_ef_search_bounds_are_the_validators` pins these to
+    // `MIN_EF_SEARCH` and `MAX_EF_SEARCH`.
+    #[cfg_attr(
+        feature = "openapi",
+        schema(example = 128, minimum = 16, maximum = 4096)
+    )]
     pub ef_search: Option<usize>,
     /// Query timeout in milliseconds.
     #[serde(default)]

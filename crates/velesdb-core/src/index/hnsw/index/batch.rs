@@ -35,7 +35,7 @@ impl HnswIndex {
     ///
     /// # Performance (v0.8.5+)
     ///
-    /// - **~15x faster** than sequential insertion (29k/s vs 1.9k/s on 8-core CPU)
+    /// - **Faster** than sequential insertion on multi-core CPUs
     /// - Automatically scales with available CPU cores
     /// - Lock-free ID mapping via `DashMap`
     ///
@@ -357,7 +357,7 @@ impl HnswIndex {
 
     /// Minimum dataset size for GPU brute-force dispatch.
     ///
-    /// Benchmarks show wgpu has ~900 us of fixed overhead per dispatch.
+    /// wgpu pays a fixed overhead per dispatch, which no recorded run measures.
     /// Below 100K vectors, rayon parallel SIMD is faster due to zero
     /// GPU buffer upload overhead.
     #[cfg(feature = "gpu")]

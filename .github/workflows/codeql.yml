@@ -1,0 +1,71 @@
+name: CodeQL
+
+# GitHub's semantic code analysis, beside Codacy's opengrep rules and
+# SonarCloud. Findings go to the repository's Security tab and annotate the
+# pull request that introduces them. Not a merge gate: this workflow lives
+# outside ci.yml, so `CI Success`, the only required check, never reads it.
+#
+# Every language is analyzed from source (`build-mode: none`): no cargo build,
+# no npm install, no Python environment, so a run costs the analysis alone.
+on:
+  push:
+    branches: [main, develop]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+  pull_request:
+    branches: [main, develop]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+  schedule:
+    # Wednesdays 05:31 UTC, off the on-the-hour spike. A weekly run applies
+    # newly released queries to code no pull request touched.
+    - cron: '31 5 * * 3'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # rustup never installs a toolchain on its own: a Rust call reached before the
+  # job's install step fails here instead of installing mid-build.
+  RUSTUP_AUTO_INSTALL: "0"
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      # Upload the results to code scanning.
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        # `actions` runs the workflow queries (script injection, untrusted
+        # checkout) over .github/workflows. Swift and Kotlin appear only as
+        # two mobile quickstart examples.
+        language: [actions, rust, python, javascript-typescript]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The Rust extractor loads the workspace through rust-analyzer, which
+      # calls cargo and reads the standard library's sources: install the
+      # toolchain rust-toolchain.toml pins, with rust-src, before it runs.
+      - name: Install the toolchain rust-toolchain.toml pins
+        if: matrix.language == 'rust'
+        run: rustup toolchain install --no-self-update --profile minimal --component rust-src
+
+      - uses: github/codeql-action/init@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+
+      - uses: github/codeql-action/analyze@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        with:
+          category: /language:${{ matrix.language }}

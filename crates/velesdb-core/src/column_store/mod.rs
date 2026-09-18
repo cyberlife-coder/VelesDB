@@ -5,8 +5,8 @@
 //!
 //! # Performance Goals
 //!
-//! - Maintain 50M+ items/sec filter throughput at 100k items (vs 19M/s with
-//!   JSON) — measured by the `column_filter_benchmark` micro-benchmark of
+//! - Filter far faster than a scan of the same items' JSON payloads: at 100k
+//!   items, `docs/BENCHMARKS.md` §6 records the `column_filter_benchmark` run of
 //!   this module's filtering API. The `SELECT ... WHERE` query path invokes
 //!   these typed filters through the per-collection payload mirror
 //!   (`collection::payload_mirror`), built adaptively for scan-heavy
@@ -36,14 +36,14 @@
 mod batch;
 #[cfg(test)]
 mod batch_tests;
+pub(crate) mod coordinates;
+#[cfg(test)]
+mod coordinates_tests;
 mod filter;
 mod filter_array;
 mod filter_geo;
 #[cfg(test)]
 mod filter_tests;
-pub(crate) mod haversine;
-#[cfg(test)]
-mod haversine_tests;
 mod primary_key_ops;
 mod string_table;
 mod types;

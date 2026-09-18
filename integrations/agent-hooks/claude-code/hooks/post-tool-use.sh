@@ -43,7 +43,7 @@
 #      and a model that was never told to look will not look.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" # exact-read-ok: a line below sources lib/ from this value, so a byte lost here fails loudly instead of naming another tree
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=./lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
@@ -55,17 +55,18 @@ passthrough() {
 }
 
 # Numeric tuning comes from the environment and reaches arithmetic expansion,
-# loop bounds, or CLI arguments. Accept only small decimal integers so a typo
-# cannot hang every PostToolUse (and shell arithmetic never reparses attacker-
-# controlled expressions).
+# loop bounds, or CLI arguments. Accept only small decimal integers, written
+# without a leading zero (see is_decimal in lib/common.sh), so a typo cannot
+# hang every PostToolUse and shell arithmetic never reparses attacker-
+# controlled expressions.
+# decimal_at_most VALUE MAXIMUM: VALUE is a decimal integer from 0 to MAXIMUM.
+decimal_at_most() {
+  is_decimal "$1" && [ "$1" -le "$2" ]
+}
+
+# positive_decimal_at_most VALUE MAXIMUM: the same, from 1.
 positive_decimal_at_most() {
-  local value="$1"
-  local maximum="$2"
-  case "$value" in
-    ''|*[!0-9]*) return 1 ;;
-  esac
-  [ "${#value}" -le 10 ] || return 1
-  [ "$value" -gt 0 ] 2>/dev/null && [ "$value" -le "$maximum" ] 2>/dev/null
+  [ "$1" != 0 ] && decimal_at_most "$1" "$2"
 }
 
 command -v jq >/dev/null 2>&1 || passthrough
@@ -77,8 +78,8 @@ payload="$(read_stdin_payload)"
 printf '%s' "$payload" | jq -e . >/dev/null 2>&1 || passthrough
 
 tool_name="$(printf '%s' "$payload" | jq -r '.tool_name // empty')"
-session_id="$(printf '%s' "$payload" | jq -r '.session_id // empty')"
-cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty')"
+read_exact session_id jq -j '.session_id // empty' <<<"$payload"
+read_exact cwd jq -j '.cwd // empty' <<<"$payload" 2>/dev/null || cwd=""
 [ -n "$cwd" ] || cwd="$PWD"
 
 # This happens before the compiler allowlist and size checks: MCP recall
@@ -87,7 +88,8 @@ cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty')"
 resolve_config "$cwd"
 if [ -n "$session_id" ] && successful_memory_recall "$payload"; then
   pending_status=2
-  if pending_dir="$(record_dir_path "pending-recall" "$session_id")"; then
+  if read_exact pending_dir record_dir_path "pending-recall" "$session_id"; then
+    # shellcheck disable=SC2154 # read_exact sets pending_dir (printf -v)
     if promote_pending_recall \
       "$pending_dir" "recall" "$session_id" "$payload"; then
       pending_status=0
@@ -95,16 +97,26 @@ if [ -n "$session_id" ] && successful_memory_recall "$payload"; then
       pending_status=$?
     fi
   fi
-  if [ "$pending_status" -ne 0 ]; then
-    if { [ "$pending_status" -eq 1 ] || [ "$pending_status" -eq 3 ]; } \
-      && learning_loop_enabled \
-      && recall_targets_current_project "$payload"; then
-      marker_id="$(learning_marker_identity "$session_id")"
-      if marker_path="$(sentinel_path "recall" "$marker_id")"; then
-        touch_private_marker "$marker_path" || true
-      fi
+  # The recall also unlocks the root it ran from, whether or not it promoted a
+  # pending edit elsewhere: a parent whose subagent's worktree waited must not
+  # have its own next edit refused (#2308). Malformed or unreadable pending
+  # state (2) marks nothing.
+  if [ "$pending_status" -ne 2 ] \
+    && learning_loop_enabled \
+    && recall_targets_current_project "$payload"; then
+    learning_marker_identity marker_id "$session_id" # exact-read-ok: printf -v from arguments this process already holds; nothing is read
+    # shellcheck disable=SC2154 # learning_marker_identity sets marker_id (printf -v)
+    if read_exact marker_path sentinel_path "recall" "$marker_id"; then
+      touch_private_marker "$marker_path" || true
     fi
   fi
+fi
+# A session this conversation saves becomes the one the SessionStart,
+# PreCompact and Stop reminders name; one it only loads, the one SessionStart
+# asks it to load (lib/common.sh). The tool name read above is passed in, so
+# no other tool costs the recording a jq run.
+if [ -n "$session_id" ]; then
+  remember_working_session "$session_id" "$tool_name" "$payload" || true
 fi
 [ -n "$session_id" ] || session_id="unknown-session"
 
@@ -166,10 +178,14 @@ command -v "$bin" >/dev/null 2>&1 || passthrough
 # apart without any version guessing, and without risking a hang.
 probe_timeout="${VELESDB_HOOK_PROBE_TIMEOUT:-10}"
 positive_decimal_at_most "$probe_timeout" 60 || passthrough
+# Each compilation attempt gets a watchdog of its own, bounded like the probe's.
+compile_timeout="${VELESDB_HOOK_COMPILE_TIMEOUT:-20}"
+positive_decimal_at_most "$compile_timeout" 60 || passthrough
 probe_key="$(safe_marker_key "$bin")"
-if ! probe_marker="$(sentinel_path "compile-stdin-${probe_key}" "$session_id")"; then
+if ! read_exact probe_marker sentinel_path "compile-stdin-${probe_key}" "$session_id"; then
   passthrough
 fi
+# shellcheck disable=SC2154 # read_exact sets probe_marker (printf -v)
 if valid_private_marker "$probe_marker"; then
   :
 elif [ -e "$probe_marker" ] || [ -L "$probe_marker" ]; then
@@ -194,6 +210,9 @@ valid_private_marker "$probe_marker" || passthrough
 [ "$(cat "$probe_marker")" = "yes" ] || passthrough
 
 budget="${VELESDB_HOOK_TOKEN_BUDGET:-2000}"
+# Checked before the arithmetic below reads it. The cap cannot refuse a budget
+# on its own: the ceiling has the same cap and must be at least the budget, so
+# a budget past it is refused by the ceiling's checks as well.
 positive_decimal_at_most "$budget" 1000000 || passthrough
 budget_max="${VELESDB_HOOK_TOKEN_BUDGET_MAX:-$((budget * 2))}"
 positive_decimal_at_most "$budget_max" 1000000 || passthrough
@@ -206,7 +225,7 @@ fi
 # One compilation attempt at $1 tokens, into $compiled_file.
 compile_at() {
   printf '%s' "$text" \
-    | run_with_watchdog 20 "$compiled_file" "$bin" compile-stdin --budget "$1" \
+    | run_with_watchdog "$compile_timeout" "$compiled_file" "$bin" compile-stdin --budget "$1" \
       --query "$tool_name output"
 }
 
@@ -274,32 +293,31 @@ fi
 
 # Rule 1: archive only when replacement is still possible. Passthrough paths
 # retain the host's original directly and need no duplicate temp copy.
-archive_dir="$(marker_base_dir)/tool-output" || passthrough
+read_exact archive_dir marker_base_dir || passthrough
+archive_dir="${archive_dir}/tool-output"
 [ -L "$archive_dir" ] && passthrough
 mkdir -p "$archive_dir" || passthrough
 if [ ! -d "$archive_dir" ] || [ -L "$archive_dir" ]; then
   passthrough
 fi
 chmod 700 "$archive_dir" || passthrough
-archive="$(mktemp "${archive_dir}/velesdb-output.XXXXXX")" || passthrough
-if ! printf '%s' "$payload" | jq '.tool_response' > "$archive"; then
-  rm -f "$archive" "$compiled_file"
+read_exact_line archive_path mktemp "${archive_dir}/velesdb-output.XXXXXX" || passthrough
+# shellcheck disable=SC2154 # read_exact sets archive_path (printf -v)
+if ! printf '%s' "$payload" | jq '.tool_response' > "$archive_path"; then
+  rm -f "$archive_path" "$compiled_file"
   passthrough
 fi
 
 footer="$(printf '\n\n--- velesdb: compiled %s tokens down to %s (saved %s before this footer, fidelity risk %s). Nothing was deleted — the complete original Bash output object is serialized as JSON at %s; Read it if this view is not enough. The compiler received %s bytes of combined stdout/stderr text. ---' \
-  "$tokens_in" "$tokens_out" "$tokens_saved" "$risk" "$archive" "$original_bytes")"
+  "$tokens_in" "$tokens_out" "$tokens_saved" "$risk" "$archive_path" "$original_bytes")"
 
 # Never replace a result merely because compression was faithful. The footer
 # also costs context, so require a conservative net margin: each footer byte is
 # counted as if it were a whole token (an upper bound), then add the configured
 # minimum. This prevents a roomy retry from increasing paid input tokens.
 min_saved="${VELESDB_HOOK_MIN_SAVED_TOKENS:-128}"
-case "$min_saved" in
-  ''|*[!0-9]*) rm -f "$archive" "$compiled_file"; passthrough ;;
-esac
-if [ "${#min_saved}" -gt 7 ] || [ "$min_saved" -gt 1000000 ]; then
-  rm -f "$archive" "$compiled_file"
+if ! decimal_at_most "$min_saved" 1000000; then
+  rm -f "$archive_path" "$compiled_file"
   passthrough
 fi
 footer_bytes="$(printf '%s' "$footer" | wc -c | tr -d ' ')"
@@ -316,7 +334,7 @@ if ! jq -e \
     and (.tokens_saved >= $minimum)
   ' "$compiled_file" >/dev/null 2>&1
 then
-  rm -f "$archive" "$compiled_file"
+  rm -f "$archive_path" "$compiled_file"
   passthrough
 fi
 rm -f "$compiled_file"

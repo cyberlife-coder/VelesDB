@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector + graph + column-store search in VelesDB.
 
-**Version**: 3.10.0 | Last updated: 2026-09-10 · Applies to: velesdb-core 6.0.0
+**Version**: 3.10.0 | Last updated: 2026-09-17 · Applies to: velesdb-core 6.0.0
 
 ---
 
@@ -898,14 +898,14 @@ SELECT * FROM items WHERE created_at > NOW()
 
 Defines a time duration with the syntax `INTERVAL '<magnitude> <unit>'`:
 
-| Unit | Aliases | Seconds |
+| Unit | Aliases | Interval (seconds) |
 |------|---------|---------|
 | seconds | s, sec, second | 1 |
 | minutes | m, min, minute | 60 |
 | hours | h, hour | 3,600 |
 | days | d, day | 86,400 |
 | weeks | w, week | 604,800 |
-| months | month | ~2,592,000 (30 days) |
+| months (30 days) | month | 2,592,000 |
 
 #### Temporal Arithmetic
 
@@ -1577,7 +1577,7 @@ WITH (mode = 'accurate', ef_search = 512, timeout_ms = 5000)
 |--------|------|--------|-------------|
 | `mode` | string | `fast`, `balanced`, `accurate`, `perfect`, `autotune`, `custom:<ef>`, `adaptive:<min_ef>:<max_ef>` | Search quality preset: `fast`/`balanced`/`accurate` map to ef_search 96/160/512, `perfect` is an exhaustive scan capped by `limits.max_perfect_mode_vectors`, `autotune` derives an ef range from the collection's size, `custom:<ef>` sets the ef, `adaptive:<min_ef>:<max_ef>` runs the two-phase adaptive search, with `min_ef` at most `max_ef`. Names match in any letter case. Every value given for the mode is checked, even one another `mode` or `quality` entry shadows: any other value, or one that is not a string, fails the query with `V013`, naming the accepted forms, whatever the query's shape, in every build with `persistence` (the server, the CLI, Python, Tauri); the WASM executor reads no `WITH` option (#2267) |
 | `quality` | string | same as `mode` | Alias for `mode` (v3.5+). If both are set, `mode` takes precedence, and a repeated key's first value applies; every value given is checked as `mode`'s are. |
-| `ef_search` | integer | 16--4096 | HNSW ef_search parameter (overrides `mode`) |
+| `ef_search` | integer | 16--4096 | HNSW ef_search parameter (overrides `mode`). Enforced, for every value a repeated key gives: a value that is not an integer, or one outside this range — a negative literal included, which the grammar accepts and a plain cast would wrap to near `usize::MAX` — fails the query with `V014`, in every build with `persistence`; the WASM executor reads no `WITH` option (#2274) |
 | `timeout_ms` | integer | >= 100 | Per-query timeout in milliseconds |
 | `rerank` | boolean | `true`/`false` | Two-stage SIMD reranking (retrieves 4x candidates, re-ranks with exact distance) |
 | `quantization` | string | `f32`, `int8`, `dual`, `auto` | Quantization mode for search |
@@ -2234,8 +2234,9 @@ Per-Node Statistics:
   Limit:         0.012ms (rows: 10 → 10)
 ```
 
-When the estimated cost diverges from actual time by more than 10×, a `⚠`
-warning marker is displayed to highlight potential cost model inaccuracies.
+When the estimated cost diverges from actual time by more than a fixed 10×
+threshold (not a measurement), a `⚠` warning marker is displayed to highlight
+potential cost model inaccuracies.
 
 #### HTTP API
 
@@ -3104,7 +3105,7 @@ VelesQL returns structured errors:
 
 #### GEO_DISTANCE
 
-Computes the Haversine great-circle distance in meters between a GeoPoint column value and a reference coordinate pair.
+Computes the great-circle distance in meters, on a sphere of radius 6,371 km, between a GeoPoint column value and a reference coordinate pair. The distance uses the spherical Vincenty formula, accurate for every pair of points, antipodes included.
 
 ```sql
 SELECT * FROM places WHERE GEO_DISTANCE(location, 48.8566, 2.3522) < 500;
@@ -3116,6 +3117,12 @@ SELECT * FROM places WHERE GEO_DISTANCE(location, 48, 2) >= 1000;
 - Null GeoPoint values are excluded from results.
 - Non-GeoPoint or non-existent columns return empty results (no error).
 - Combinable with AND, OR, NOT, and other WHERE operators.
+- `=` and `!=` follow one rule: two distances are equal when they agree to
+  the millimetre (they differ by less than 1 mm). `<`, `<=`, `>`, `>=`
+  compare exactly.
+- A point whose latitude is outside `[-90, 90]` or longitude outside
+  `[-180, 180]`, in the row or in the query, has no distance: the comparison
+  matches no row under any operator, `!=` included, as for a null GeoPoint.
 
 #### GEO_BBOX
 

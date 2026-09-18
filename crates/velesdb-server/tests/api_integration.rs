@@ -3057,6 +3057,355 @@ async fn test_search_unknown_mode_returns_400() {
     }
 }
 
+/// An `ef_search` outside the documented `[16, 4096]` range must fail with a
+/// 400 naming the range instead of silently running an oversized or
+/// near-useless traversal (#2274). Covers `/search` and `/search/ids`, whose
+/// fast-path eligibility check must not swallow the same out-of-range value.
+#[tokio::test]
+async fn test_search_out_of_range_ef_search_returns_400() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "bad_ef_search",
+                        "dimension": 4,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/bad_ef_search/points")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({ "points": [{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]}] }).to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    for uri in [
+        "/collections/bad_ef_search/search",
+        "/collections/bad_ef_search/search/ids",
+    ] {
+        for ef_search in [0, 999_999] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(uri)
+                        .header("Content-Type", "application/json")
+                        .body(Body::from(
+                            json!({
+                                "vector": [1.0, 0.0, 0.0, 0.0],
+                                "top_k": 2,
+                                "ef_search": ef_search
+                            })
+                            .to_string(),
+                        ))
+                        .expect("Failed to build request"),
+                )
+                .await
+                .expect("Request failed");
+            assert_eq!(
+                response.status(),
+                StatusCode::BAD_REQUEST,
+                "uri={uri} ef_search={ef_search}"
+            );
+
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("Failed to read body");
+            let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+            let error = json["error"].as_str().expect("error is string");
+            assert!(
+                error.contains("ef_search"),
+                "uri={uri} ef_search={ef_search} error={error}"
+            );
+        }
+    }
+}
+
+/// A valid `ef_search` reaches the search: over REST it wins over `mode` for
+/// a dense search, so with `limits.max_perfect_mode_vectors` at 1, `perfect`
+/// alone is refused over two points while `perfect` with `ef_search = 64`
+/// runs, on `/search` and `/search/ids` (#2274).
+#[tokio::test]
+async fn test_a_valid_ef_search_reaches_the_search() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let config_dir = TempDir::new().expect("Failed to create config dir");
+    let config_path = config_dir.path().join("velesdb.toml");
+    std::fs::write(&config_path, "[limits]\nmax_perfect_mode_vectors = 1\n")
+        .expect("Failed to write config");
+    let app = create_test_app_with_core_config(&temp_dir, &config_path);
+    let post = |uri: &str, body: &Value| {
+        Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header("Content-Type", "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("Failed to build request")
+    };
+    let collection = json!({"name": "ef_applied", "dimension": 4, "metric": "cosine"});
+    let response = app
+        .clone()
+        .oneshot(post("/collections", &collection))
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let points = json!({"points": [
+        {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]},
+        {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0]},
+    ]});
+    let response = app
+        .clone()
+        .oneshot(post("/collections/ef_applied/points", &points))
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+    for uri in [
+        "/collections/ef_applied/search",
+        "/collections/ef_applied/search/ids",
+    ] {
+        let perfect = json!({"vector": [1.0, 0.0, 0.0, 0.0], "top_k": 1, "mode": "perfect"});
+        let response = app
+            .clone()
+            .oneshot(post(uri, &perfect))
+            .await
+            .expect("Request failed");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{uri}");
+        let with_ef = json!({
+            "vector": [1.0, 0.0, 0.0, 0.0],
+            "top_k": 1,
+            "mode": "perfect",
+            "ef_search": 64
+        });
+        let response = app
+            .clone()
+            .oneshot(post(uri, &with_ef))
+            .await
+            .expect("Request failed");
+        assert_eq!(response.status(), StatusCode::OK, "{uri}");
+    }
+}
+
+/// A refused `ef_search` counts one request error, as a refused `mode` does:
+/// `query_errors` rises by one for each out-of-range request on `/search` and
+/// `/search/ids`, and a request at either end of the range adds none (#2274).
+#[tokio::test]
+async fn test_bad_ef_search_counts_one_request_error() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let (app, state) = create_test_app_with_state(&temp_dir);
+    let post = |uri: &str, body: &Value| {
+        Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header("Content-Type", "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("Failed to build request")
+    };
+    let collection = json!({"name": "ef_errors", "dimension": 4, "metric": "cosine"});
+    let response = app
+        .clone()
+        .oneshot(post("/collections", &collection))
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let points = json!({"points": [{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]}]});
+    let response = app
+        .clone()
+        .oneshot(post("/collections/ef_errors/points", &points))
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+    let errors = || {
+        state
+            .operational_metrics
+            .query_errors
+            .load(std::sync::atomic::Ordering::Relaxed)
+    };
+    let before = errors();
+    let mut refused = 0_u64;
+    for uri in [
+        "/collections/ef_errors/search",
+        "/collections/ef_errors/search/ids",
+    ] {
+        for ef in [15, 4097] {
+            let bad = json!({"vector": [1.0, 0.0, 0.0, 0.0], "top_k": 1, "ef_search": ef});
+            let response = app
+                .clone()
+                .oneshot(post(uri, &bad))
+                .await
+                .expect("Request failed");
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{uri} {ef}");
+            refused += 1;
+        }
+        for ef in [16, 4096] {
+            let good = json!({"vector": [1.0, 0.0, 0.0, 0.0], "top_k": 1, "ef_search": ef});
+            let response = app
+                .clone()
+                .oneshot(post(uri, &good))
+                .await
+                .expect("Request failed");
+            assert_eq!(response.status(), StatusCode::OK, "{uri} {ef}");
+        }
+    }
+    assert_eq!(errors() - before, refused);
+}
+
+/// A bad `ef_search` is the client's error, not the collection's: refusing it
+/// records no circuit-breaker failure, exactly like a bad `mode` (#2267), and
+/// a `/search/batch` entry is checked too, naming its index, though the batch
+/// applies no `ef_search` either (#2274).
+#[tokio::test]
+async fn test_bad_ef_search_does_not_open_the_circuit_breaker_and_is_checked_in_batch() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let (app, state) = create_test_app_with_state(&temp_dir);
+    let post = |uri: &str, body: &Value| {
+        Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header("Content-Type", "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("Failed to build request")
+    };
+    let collection = json!({"name": "ef_search_breaker", "dimension": 4, "metric": "cosine"});
+    let response = app
+        .clone()
+        .oneshot(post("/collections", &collection))
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let points = json!({"points": [{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]}]});
+    let response = app
+        .clone()
+        .oneshot(post("/collections/ef_search_breaker/points", &points))
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let threshold = state
+        .db
+        .get_vector_collection("ef_search_breaker")
+        .expect("the collection exists")
+        .guard_rails()
+        .limits()
+        .circuit_failure_threshold;
+    let uris = [
+        "/collections/ef_search_breaker/search",
+        "/collections/ef_search_breaker/search/ids",
+    ];
+    let bad = json!({"vector": [1.0, 0.0, 0.0, 0.0], "top_k": 1, "ef_search": 999_999});
+    let good = json!({"vector": [1.0, 0.0, 0.0, 0.0], "top_k": 1});
+    for uri in uris {
+        for _ in 0..threshold {
+            let response = app
+                .clone()
+                .oneshot(post(uri, &bad))
+                .await
+                .expect("Request failed");
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{uri}");
+        }
+    }
+    for uri in uris {
+        let response = app
+            .clone()
+            .oneshot(post(uri, &good))
+            .await
+            .expect("Request failed");
+        assert_eq!(response.status(), StatusCode::OK, "{uri}");
+    }
+
+    let batch = json!({"searches": [
+        {"vector": [1.0, 0.0, 0.0, 0.0], "top_k": 1},
+        {"vector": [1.0, 0.0, 0.0, 0.0], "top_k": 1, "ef_search": 999_999}
+    ]});
+    let response = app
+        .clone()
+        .oneshot(post("/collections/ef_search_breaker/search/batch", &batch))
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("Failed to read body");
+    let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+    let error = json["error"].as_str().expect("error is string");
+    assert!(error.contains("index 1"), "{error}");
+}
+
+/// An `ef_search` that is not a non-negative integer fails the body's JSON
+/// parsing: axum answers a plain-text `422` on every path whose body carries
+/// one, and the OpenAPI document declares that answer, in that content type,
+/// on each (#2274).
+#[tokio::test]
+async fn test_a_mistyped_ef_search_gets_the_documented_422() {
+    let spec = serde_json::to_value(velesdb_server::ApiDoc::openapi()).expect("the spec is JSON");
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+    let post = |uri: &str, body: &Value| {
+        Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header("Content-Type", "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("Failed to build request")
+    };
+    for ef in [json!(-1), json!("high"), json!(1.5)] {
+        let search = json!({"vector": [1.0, 0.0, 0.0, 0.0], "top_k": 1, "ef_search": ef});
+        for (path, body) in [
+            ("/collections/{name}/search", search.clone()),
+            ("/collections/{name}/search/ids", search.clone()),
+            (
+                "/collections/{name}/search/batch",
+                json!({"searches": [search.clone()]}),
+            ),
+        ] {
+            let uri = path.replace("{name}", "ef_typed");
+            let response = app
+                .clone()
+                .oneshot(post(&uri, &body))
+                .await
+                .expect("Request failed");
+            assert_eq!(
+                response.status(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "{uri} {body}"
+            );
+            let content_type = &response.headers()[axum::http::header::CONTENT_TYPE];
+            assert!(
+                content_type.as_bytes().starts_with(b"text/plain"),
+                "{uri}: {content_type:?}"
+            );
+            let declared = &spec["paths"][path]["post"]["responses"]["422"]["content"];
+            assert!(
+                declared.get("text/plain").is_some(),
+                "{path} declares no plain-text 422: {declared}"
+            );
+        }
+    }
+}
+
 /// A valid `mode` reaches the search: with `limits.max_perfect_mode_vectors`
 /// at 1, the engine refuses `perfect` over two points on `/search` and
 /// `/search/ids`, where the same request with `fast` runs (#2267).
@@ -3368,6 +3717,38 @@ async fn test_bad_mode_is_refused_on_every_search_shape() {
         assert!(
             text.contains("V013") && text.contains("acurate"),
             "uri={uri} body={text}"
+        );
+    }
+
+    // Precedence inside the pre-check `/search` and `/search/ids` share: a
+    // request carrying BOTH a bad `mode` and a bad `ef_search` answers the
+    // `mode` error, because `mode` is parsed first. Without this case the
+    // order of the two validations is pinned by nothing and either one may
+    // answer, changing the 400 body a client reads.
+    let both_bad = json!({
+        "vector": dense.clone(),
+        "top_k": 2,
+        "mode": "acurate",
+        "ef_search": 0
+    });
+    for uri in [
+        "/collections/mode_shapes/search",
+        "/collections/mode_shapes/search/ids",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(post(uri, &both_bad))
+            .await
+            .expect("Request failed");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "uri={uri}");
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("Failed to read body");
+        let json: Value = serde_json::from_slice(&bytes).expect("Invalid JSON");
+        let error = json["error"].as_str().expect("error is string");
+        assert!(
+            error.starts_with("Unknown search mode"),
+            "uri={uri}: mode must be refused before ef_search, got {error}"
         );
     }
 }

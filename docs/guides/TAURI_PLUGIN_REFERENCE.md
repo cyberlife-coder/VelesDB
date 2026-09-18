@@ -173,7 +173,7 @@ Passed as `storageMode` on `create_collection`.
 |------|-------------|----------|
 | `full` | 1x (f32) | Maximum accuracy (default) |
 | `sq8` | 4x | Good accuracy / memory balance |
-| `binary` | 32x | Edge / IoT, massive scale |
+| `binary` | 32x (1 bit per dimension) | Edge / IoT, massive scale |
 | `pq` | Variable | Product quantization, ultra-compact |
 | `rabitq` | Variable | RaBitQ binary quantization with rescoring |
 
@@ -217,20 +217,13 @@ layer on top of the filtered file. Field-by-field reference: the
 
 ---
 
-## Indicative latencies
+## Latency
 
-These order-of-magnitude figures were carried over from the plugin README.
-**No benchmark in this repository reproduces them for the plugin**; the
-measured numbers live in `crates/velesdb-core/benches/` and in the
-[tuning guide](./TUNING_GUIDE.md). Treat the table as a rough expectation, not
-a guarantee.
-
-| Operation | Indicative latency |
-|-----------|--------------------|
-| Vector search (10k vectors) | < 1 ms |
-| Text search (BM25) | < 5 ms |
-| Hybrid search | < 10 ms |
-| Insert (batch of 100) | < 10 ms |
+No benchmark in this repository measures the plugin, so this page states no
+latency for it; the figures its README used to carry were never reproduced
+here. The engine's measured numbers, each with its machine and date, live in
+[BENCHMARKS.md](../BENCHMARKS.md) and the [tuning guide](./TUNING_GUIDE.md); a
+plugin call adds Tauri's IPC to them.
 
 ---
 

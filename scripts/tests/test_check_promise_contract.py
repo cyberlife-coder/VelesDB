@@ -454,5 +454,19 @@ class RealRegistryExecutableClaimsTests(unittest.TestCase):
         self.assertEqual(executable_count + documentary_count, len(claims))
 
 
+class UnsourcedClaimTests(unittest.TestCase):
+    """A provenance that starts with ``unknown`` is unsourced, whatever reason
+    follows it: "unknown (commit abc names none)" names no machine either."""
+
+    def test_an_unknown_with_a_reason_counts_as_unsourced(self):
+        claims = [
+            {"id": "a", "measured_on": "2026-01-01", "measured_machine": "unknown (commit abc names none)"},
+            {"id": "b", "measured_on": "unknown", "measured_machine": "i9-14900KF"},
+            {"id": "c", "measured_on": "2026-01-01", "measured_machine": "i9-14900KF"},
+        ]
+        found = cpc.unsourced_claims(claims)
+        self.assertEqual([entry.split("]")[0] + "]" for entry in found], ["[a]", "[b]"])
+
+
 if __name__ == "__main__":
     unittest.main()

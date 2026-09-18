@@ -317,7 +317,7 @@ impl ScalarQuantizer {
 
     /// Computes approximate L2 distance between quantized vectors.
     ///
-    /// This is ~4x faster than float32 due to SIMD efficiency.
+    /// Faster than the float32 distance, thanks to SIMD efficiency.
     #[inline]
     #[must_use]
     pub fn distance_l2_quantized(&self, a: &QuantizedVector, b: &QuantizedVector) -> u32 {

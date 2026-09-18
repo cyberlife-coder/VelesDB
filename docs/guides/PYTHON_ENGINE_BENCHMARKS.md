@@ -9,26 +9,27 @@ numbers and how to close that gap, read
 
 VelesDB is built in Rust with explicit SIMD optimizations:
 
-| Operation | Time (768D) | Throughput |
-|-----------|-------------|------------|
-| Cosine | ~33.1 ns | 23.2 Gelem/s |
-| Euclidean | ~26.0 ns | 34.1 Gelem/s |
-| Dot Product | ~21.7 ns | ~35 Gelem/s |
-| Hamming | ~35.8 ns | -- |
+| Operation | Time (768D) |
+|-----------|-------------|
+| Cosine | ~33.1 ns |
+| Euclidean | ~26.0 ns |
+| Dot Product | ~21.7 ns |
+| Hamming | ~35.8 ns |
 
 ## System benchmarks (native Rust engine)
 
 | Benchmark | Result |
 |-----------|--------|
-| **HNSW Search index-only (10K/768D)** | **~55 µs** (k=10, Balanced mode) |
-| **End-to-end p50 (10K/384D, WAL ON)** | **~450 µs** (canonical, recall ≥ 96%) |
+| **HNSW Search index-only (10K/768D)** | **~55 µs** (k=10, Balanced mode; i9-14900KF, 2026-03-27) |
+| **End-to-end p50 (10K/384D, WAL ON)** | **~450 µs** (canonical, recall ≥ 96%; measured 2026-03-27 on 1.7.2) |
 | **Recall@10 (Accurate)** | **100%** (10K/128D, `recall_benchmark`) |
-| **Insert throughput vs pgvector** | **3.8-7x faster** (10K-100K vectors, internal benchmarks on i9-14900KF, not independently verified) |
+| **Insert throughput vs pgvector** | No ratio claimed: no run of the Docker comparison kit (`benchmarks/`) is recorded for a current version |
 
 > Numbers match `docs/reference/promise-contract.json` (the single source
 > of truth for the README perf claims).
 
-*Measured with Criterion.rs on i9-14900KF. See
+*The rows come from different runs: the SIMD, index-only HNSW and end-to-end
+figures from the i9-14900KF, the recall from an Apple M5 Pro (2026-09-10). See
 [benchmarks/](../../benchmarks/) for methodology.*
 
 ---

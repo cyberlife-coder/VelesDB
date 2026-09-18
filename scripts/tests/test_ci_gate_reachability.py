@@ -682,6 +682,7 @@ class BlockingBehaviourTests(unittest.TestCase):
             "scripts.tests.test_check_mcp_doc_contract",
             "scripts.tests.test_ci_gate_reachability",
             "scripts.tests.test_skill_copies_are_identical",
+            "scripts.tests.test_ci_toolchain_pin",
         ):
             with self.subTest(suite=suite):
                 self.assertIn(suite, block)

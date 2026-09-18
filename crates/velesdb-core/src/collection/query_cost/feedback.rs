@@ -38,7 +38,7 @@ const MIN_SAMPLES: u64 = 10;
 const ALPHA_NUMERATOR: u64 = 5;
 const ALPHA_DENOMINATOR: u64 = 100;
 
-/// Outlier rejection threshold: skip if observed ÷ EMA > 10×.
+/// Outlier rejection threshold: skip if observed ÷ EMA > 10.
 const OUTLIER_RATIO: f64 = 10.0;
 
 /// Safety bounds for the adjusted ms_per_cost_unit.

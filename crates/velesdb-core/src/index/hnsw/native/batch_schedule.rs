@@ -17,9 +17,9 @@
 pub(in crate::index::hnsw::native) struct BatchEfSchedule {
     /// Phase 1 ef: full `ef_construction` for the scaffold.
     pub scaffold_ef: usize,
-    /// Phase 2 ef: reduced (0.5x) for the dense bulk.
+    /// Phase 2 ef: reduced (0.5x the base ef) for the dense bulk.
     pub bulk_ef: usize,
-    /// Phase 3 ef: moderate (0.75x) for finalization.
+    /// Phase 3 ef: moderate (0.75x the base ef) for finalization.
     pub finalize_ef: usize,
     /// Number of nodes in the scaffold phase (first 10%).
     pub scaffold_count: usize,

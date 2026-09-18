@@ -1069,7 +1069,7 @@ behavior or data inconsistency can occur:
 - The one-time write to `rabitq_index` followed by read-only access is a
   well-established "initialize once, read many" pattern with no data race.
 - `rabitq_store` serializes writes via `RwLock::write()`, and each write
-  holds the lock for ~10ns (a single `Vec::push`), minimizing contention.
+  holds the lock for a single `Vec::push`, minimizing contention.
 
 ### Lock Ordering (MobileGraphStore)
 

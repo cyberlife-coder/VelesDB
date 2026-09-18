@@ -22,7 +22,7 @@
 ///
 /// - Avoids expensive `sqrt()` call from libc
 /// - Uses bit manipulation + one Newton-Raphson iteration
-/// - ~2x faster than standard sqrt on most CPUs
+/// - Faster than standard sqrt on most CPUs
 ///
 /// # References
 ///
@@ -77,7 +77,7 @@ pub(crate) fn cosine_finish_fast(dot: f32, norm_a_sq: f32, norm_b_sq: f32) -> f3
 ///
 /// # Performance
 ///
-/// - ~20-50% faster than standard cosine_similarity_native
+/// - No recorded run measures its gain over `cosine_similarity_native`
 /// - Uses single-pass dot product + norms computation
 /// - Avoids libc sqrt() overhead
 ///

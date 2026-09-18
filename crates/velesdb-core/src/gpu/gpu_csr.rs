@@ -47,7 +47,7 @@ impl CsrGraph {
     /// Builds a CSR graph from a single HNSW [`Layer`].
     ///
     /// Acquires a read lock on each node's neighbor list sequentially.
-    /// For 1M nodes with average degree 16, this takes ~50ms.
+    /// Linear in nodes plus edges; no recorded run times it.
     ///
     /// # Arguments
     ///
