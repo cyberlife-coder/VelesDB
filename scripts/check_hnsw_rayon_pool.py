@@ -34,9 +34,18 @@ from pathlib import Path
 SCAN_DIR = Path("crates/velesdb-core/src/index/hnsw")
 
 #: A rayon submission: work handed to a pool, which the caller then waits on.
+#:
+#: The `_mut` and `_exact` variants are named explicitly because leaving them
+#: out let the guard pass the very shape it claims to refuse: a review probe
+#: appended `v.par_iter_mut().for_each(...)` to `backend_adapter.rs` and the
+#: guard answered `PASSED`. A guard whose pattern is narrower than its promise
+#: is worse than no guard, so the alternation below is deliberately wide and
+#: `test_a_mutable_parallel_iterator_is_not_a_blind_spot` pins it.
 SUBMIT_RE = re.compile(
-    r"\.(?:par_iter|par_chunks|par_bridge|into_par_iter|par_sort\w*)\s*\(|"
-    r"\brayon::(?:join|scope|spawn|in_place_scope)\s*\("
+    r"\.(?:par_iter(?:_mut)?|par_chunks(?:_mut|_exact(?:_mut)?)?|par_bridge|"
+    r"into_par_iter|par_drain|par_extend|par_split(?:_mut)?|par_windows|"
+    r"par_sort\w*)\s*\(|"
+    r"\brayon::(?:join|scope|spawn|in_place_scope|scope_fifo|spawn_fifo)\s*\("
 )
 
 #: `fn name(` at any indentation, capturing the name.

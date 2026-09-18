@@ -33,9 +33,10 @@ pub struct AsyncIndexBuilderConfig {
 
     /// Reserved — parsed but not yet wired. Flushes currently connect nodes
     /// with no segment notion: queued vectors through
-    /// `HnswIndex::insert_batch_parallel`, on the global rayon pool, and
-    /// placed ids through the same batch connect, on the pool
-    /// `HnswIndex::link_placed` keeps for it; this knob changes nothing today.
+    /// `HnswIndex::insert_batch_parallel` and placed ids through
+    /// `HnswIndex::link_placed`, both submitting to the one dedicated pool
+    /// those two share (`graph_pool`, \#2343) rather than the global one;
+    /// this knob changes nothing today.
     /// Wiring it belongs to the pipeline integration tracked under
     /// issue #488 Task 4 (the same one gating this whole builder).
     #[serde(default)]

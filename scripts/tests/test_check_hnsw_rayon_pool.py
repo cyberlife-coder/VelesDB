@@ -126,6 +126,33 @@ class HnswRayonPoolGuard(unittest.TestCase):
             result = run_guard(Path(holder.name))
         self.assertEqual(result.returncode, 0, result.stdout)
 
+    def test_a_mutable_parallel_iterator_is_not_a_blind_spot(self):
+        """`par_iter` was matched, `par_iter_mut` was not.
+
+        A review probe appended `v.par_iter_mut().for_each(...)` to the HNSW
+        module and the guard answered PASSED -- it let through the exact shape
+        it promises to refuse. Every submission form the pattern now covers is
+        asserted here, because a pattern narrower than its promise is worse
+        than no pattern.
+        """
+        for call in (
+            "v.par_iter_mut().for_each(|x| *x += 1);",
+            "v.par_chunks_mut(8).for_each(|c| c[0] = 1.0);",
+            "v.par_drain(..).count();",
+            "v.into_par_iter().count();",
+            "rayon::scope_fifo(|s| s.spawn_fifo(|_| ()));",
+        ):
+            with self.subTest(call=call):
+                body = (
+                    "impl HnswIndex {\n    fn sneaky(&self) {\n"
+                    "        let inner = self.inner.read();\n"
+                    f"        {call}\n    }}\n}}\n"
+                )
+                holder = tree({str(HNSW / "probe.rs"): body})
+                with holder:
+                    result = run_guard(Path(holder.name))
+                self.assertEqual(result.returncode, 1, f"{call} slipped past: {result.stdout}")
+
     def test_the_real_repository_passes(self):
         result = run_guard(REPO)
         self.assertEqual(result.returncode, 0, result.stdout)
