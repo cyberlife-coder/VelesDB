@@ -178,7 +178,9 @@ merge moved the repo ahead of your installed skills.
 ### Prerequisites
 
 - Rust 1.90+ (stable) — the workspace MSRV, declared in `Cargo.toml`
-  (`rust-version`) and pinned in `rust-toolchain.toml` so local matches CI.
+  (`rust-version`) and pinned in `rust-toolchain.toml` so local matches CI;
+  `scripts/tests/test_msrv_single_source.py` fails `CI Success` when the two
+  disagree or when a member crate declares its own `rust-version`.
   Two things force it: `avx512vpopcntdq` `target_feature`, stabilized in 1.89
   (see `crates/velesdb-core/src/simd_native/x86_avx512.rs`), and `roaring
   0.11.4`, which declares `rust-version = 1.90.0` — on 1.89 the workspace only
