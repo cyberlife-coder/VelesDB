@@ -220,3 +220,36 @@ fn a_sub_threshold_insert_places_while_every_global_rayon_worker_is_parked() {
         "every vector in the small batch is placed"
     );
 }
+
+/// The precondition is a check, and a check nobody trips is not one.
+///
+/// Calling from a rayon worker is the shape that re-closes \#2343 by stealing
+/// (`graph_pool`'s doc has the `rayon-core` quote), so the `debug_assert!`
+/// that refuses it must be shown refusing. Without this, a wrong predicate --
+/// `.is_some()` instead of `.is_none()` -- would pass the whole suite: the
+/// three tests above only ever reach the assert from a plain thread, where it
+/// holds either way.
+///
+/// The batch is over `PARALLEL_BATCH_MIN` on purpose: only that path installs
+/// the pool, and only it carries the precondition. The sub-threshold case is
+/// the opposite claim and has its own test above.
+#[test]
+#[serial]
+#[should_panic(expected = "rayon worker")]
+fn calling_from_a_rayon_worker_is_refused() {
+    let index = HnswIndex::new(DIM, DistanceMetric::Euclidean).expect("test: index");
+    let vectors = batch_vectors(POINTS);
+    let batch: Vec<(u64, &[f32])> = vectors
+        .iter()
+        .enumerate()
+        .map(|(id, v)| (u64::try_from(id).expect("test: fits a u64"), v.as_slice()))
+        .collect();
+
+    // A pool of its own, so the refusal is what fails the test rather than
+    // this call competing with whatever else holds the global pool.
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .expect("test: probe pool");
+    pool.install(|| index.insert_batch_parallel(batch));
+}

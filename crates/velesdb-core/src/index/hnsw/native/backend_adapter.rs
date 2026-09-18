@@ -122,8 +122,11 @@ impl NativeNeighbour {
 /// `place_batch` enters rayon at all, and therefore whether
 /// `HnswIndex::insert_batch_parallel` needs the dedicated pool. Reading the
 /// same constant in both places keeps a batch from being dispatched to a pool
-/// it will not use — a flat ~32 us of thread hand-off, measured, which a
-/// batch of 10 would pay 60-fold over doing the work in place.
+/// it will not use — a flat ~32 us of thread hand-off, measured, which costs
+/// a small batch several times what placing it does.
+/// `HnswIndex::insert_batch_parallel` carries the measured table; it is not
+/// repeated here, because the figure this comment used to carry was a stale
+/// copy of it and said the opposite of the measurement.
 pub(crate) const PARALLEL_BATCH_MIN: usize = 100;
 
 /// The query each node of a batch connects with, in assignment order.

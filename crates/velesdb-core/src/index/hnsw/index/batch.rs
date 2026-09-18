@@ -83,6 +83,15 @@ impl HnswIndex {
     /// maps nothing and returns 0, with the cause logged; nodes the graph had
     /// already placed stay unmapped, as tombstones.
     ///
+    /// # Panics
+    ///
+    /// In debug builds, if called from a rayon worker with a batch large
+    /// enough to reach the dedicated pool. Such a caller would keep executing
+    /// its own pool's jobs while waiting on this one (`rayon-core`'s
+    /// `Registry::in_worker_cross`), and a stolen job that takes the index
+    /// read guard would re-close \#2343's deadlock cycle. Release builds carry
+    /// no check. A smaller batch installs no pool and is never refused.
+    ///
     /// # Performance (v0.8.5+)
     ///
     /// - **Faster** than sequential insertion on multi-core CPUs
@@ -138,18 +147,6 @@ impl HnswIndex {
         // less still (`docs/BENCHMARKS.md` measures ~300 us per vector at
         // 768D against ~6.5 us here). The threshold read here is
         // `place_batch`'s own, so the two cannot drift apart.
-        // The guard below is held across a rayon join, which is safe only off
-        // a rayon worker — see `graph_pool`. Conservative on purpose: a call
-        // from `graph_pool` itself would run inline and be harmless, but no
-        // job on that pool reaches `HnswIndex`, so the stricter rule costs
-        // nothing and states the invariant a reader can check.
-        debug_assert!(
-            rayon::current_thread_index().is_none(),
-            "insert_batch_parallel holds the index guard across a rayon join: \
-             calling it from a rayon worker lets that worker steal a job which \
-             takes inner.read(), re-closing #2343's cycle"
-        );
-
         // Standard is the only backend whose `place_batch` reaches rayon:
         // RaBitQ and Sq8 insert one vector at a time at every length, to keep
         // their positional code store consistent with NodeId order
@@ -159,6 +156,15 @@ impl HnswIndex {
         // backend test here: `place_batch` owns that decision, and duplicating
         // it is how the two drift apart.
         let pool = if items.len() >= PARALLEL_BATCH_MIN {
+            // Only this branch joins on rayon under the guard, so only this
+            // branch has the precondition. A sub-threshold batch enters no
+            // pool and must not be refused for being called from a worker.
+            debug_assert!(
+                rayon::current_thread_index().is_none(),
+                "insert_batch_parallel holds the index guard across a rayon join: \
+                 calling it from a rayon worker lets that worker steal a job which \
+                 takes inner.read(), re-closing #2343's cycle"
+            );
             match graph_pool() {
                 Ok(pool) => Some(pool),
                 Err(e) => {
@@ -214,6 +220,12 @@ impl HnswIndex {
     ///
     /// Returns an error, and links nothing, if the arena does not hold a slot
     /// a mapping names, or if the dedicated pool cannot be built.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, if called from a rayon worker — see
+    /// [`HnswIndex::insert_batch_parallel`] for why. Release builds carry no
+    /// check.
     #[cfg(feature = "persistence")]
     pub(crate) fn link_placed(&self, ids: &[u64]) -> crate::error::Result<usize> {
         if ids.is_empty() {

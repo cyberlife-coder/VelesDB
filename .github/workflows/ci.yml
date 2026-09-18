@@ -518,6 +518,7 @@ jobs:
       # new one that neither does nor says why it is safe.
       - name: Check HNSW rayon submissions stay off the global pool
         run: python3 scripts/check_hnsw_rayon_pool.py
+
       # The guards' Python pins were written inline in three `pip install`
       # lines across two workflows, each package pinned in at least two of
       # them; both workflows said so in a comment and neither could enforce
@@ -558,6 +559,7 @@ jobs:
 
       - name: Test HNSW rayon-pool audit script
         run: python3 -m unittest scripts.tests.test_check_hnsw_rayon_pool
+
       - name: Test guard-python-pins audit script
         run: python3 -m unittest scripts.tests.test_check_guard_python_pins
 
