@@ -19,9 +19,18 @@ use rayon::prelude::*;
 ///
 /// A pool of its own breaks that cycle at its only edge. The jobs submitted
 /// here reach the graph's arena, layers and entry point and never `HnswIndex`
-/// itself, so no job on this pool can take `inner`, and work is not stolen
-/// across rayon pools — the isolation is what rayon guarantees, not a timing
-/// assumption.
+/// itself, so no job on this pool can take `inner`.
+///
+/// That isolation holds **only for a caller that is not already a rayon
+/// worker**, and the precondition is asserted rather than assumed. A thread
+/// that belongs to another pool does not merely block in `install`:
+/// `rayon-core`'s `Registry::in_worker_cross` (1.13.0, `registry.rs`) says so
+/// — "This thread is a member of a different pool, so let it process other
+/// work while waiting for this `op` to complete" — and then calls
+/// `current_thread.wait_until(&job.latch)`. A global worker installing here
+/// while holding `inner.read()` would keep running *global* jobs, one of
+/// which takes `inner.read()`, parks behind the pending writer, and closes
+/// \#2343's cycle again by stealing instead of by starvation.
 ///
 /// Both holders that join on rayon use it: [`HnswIndex::link_placed`]'s
 /// connect phase (\#2290) and [`HnswIndex::insert_batch_parallel`]'s place
@@ -117,10 +126,38 @@ impl HnswIndex {
         // deadlock cycle of #2343.
         //
         // A smaller batch places node by node and never enters rayon, so it
-        // needs no pool and must not pay for one: `install` costs a flat ~32 us
-        // of thread hand-off whatever the work inside, which a batch of 10
-        // (541 ns in place) would pay 60-fold. The threshold read here is
+        // needs no pool and must not pay for one. `install` costs a flat
+        // ~32 us of thread hand-off whatever the work inside, and what that
+        // is worth depends entirely on the batch: measured on this call at
+        // 16 dimensions, release, medians of 20 runs — n=1 places in 250 ns,
+        // so the hand-off would be 128x the work; n=10 in 7.96 us, 4x; n=50
+        // in 161 us, 20%; n=99 in 1.28 ms, 2.5%. So the skip earns its keep
+        // on tiny batches and almost nothing at the threshold, and it is
+        // worth stating that way rather than as one dramatic ratio. At a
+        // larger dimension the same batch costs more and the hand-off matters
+        // less still (`docs/BENCHMARKS.md` measures ~300 us per vector at
+        // 768D against ~6.5 us here). The threshold read here is
         // `place_batch`'s own, so the two cannot drift apart.
+        // The guard below is held across a rayon join, which is safe only off
+        // a rayon worker — see `graph_pool`. Conservative on purpose: a call
+        // from `graph_pool` itself would run inline and be harmless, but no
+        // job on that pool reaches `HnswIndex`, so the stricter rule costs
+        // nothing and states the invariant a reader can check.
+        debug_assert!(
+            rayon::current_thread_index().is_none(),
+            "insert_batch_parallel holds the index guard across a rayon join: \
+             calling it from a rayon worker lets that worker steal a job which \
+             takes inner.read(), re-closing #2343's cycle"
+        );
+
+        // Standard is the only backend whose `place_batch` reaches rayon:
+        // RaBitQ and Sq8 insert one vector at a time at every length, to keep
+        // their positional code store consistent with NodeId order
+        // (`native_inner::parallel_insert`). They therefore never need the
+        // pool; the length test below still installs it for them, which costs
+        // the hand-off above and nothing else. Left as is rather than adding a
+        // backend test here: `place_batch` owns that decision, and duplicating
+        // it is how the two drift apart.
         let pool = if items.len() >= PARALLEL_BATCH_MIN {
             match graph_pool() {
                 Ok(pool) => Some(pool),
@@ -182,6 +219,11 @@ impl HnswIndex {
         if ids.is_empty() {
             return Ok(0);
         }
+        debug_assert!(
+            rayon::current_thread_index().is_none(),
+            "link_placed holds the index guard across a rayon join: see \
+             insert_batch_parallel for why a rayon worker must not call it"
+        );
         let pool = graph_pool()?;
         let inner = self.inner.read();
         let mut slots: Vec<usize> = ids

@@ -107,6 +107,25 @@ class HnswRayonPoolGuard(unittest.TestCase):
             result = run_guard(Path(holder.name))
         self.assertEqual(result.returncode, 0, result.stdout)
 
+    def test_a_writer_added_elsewhere_in_the_hnsw_module_is_refused(self):
+        """The field is `pub(crate)`: its own file is not the only risk.
+
+        An earlier version scanned `native_index.rs` alone, so a writer added
+        from any other file of the module would have voided
+        `brute_force_search_parallel`'s allowance in silence.
+        """
+        holder = tree({str(HNSW / "elsewhere.rs"): NATIVE_WRITER})
+        with holder:
+            result = run_guard(Path(holder.name))
+        self.assertEqual(result.returncode, 1, result.stdout)
+
+    def test_a_known_hnsw_index_writer_is_not_reported(self):
+        """`HnswIndex` has a writer by design -- that is what graph_pool is for."""
+        holder = tree({str(HNSW / "index" / "vacuum.rs"): NATIVE_WRITER})
+        with holder:
+            result = run_guard(Path(holder.name))
+        self.assertEqual(result.returncode, 0, result.stdout)
+
     def test_the_real_repository_passes(self):
         result = run_guard(REPO)
         self.assertEqual(result.returncode, 0, result.stdout)

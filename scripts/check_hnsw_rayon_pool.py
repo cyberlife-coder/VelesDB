@@ -63,8 +63,17 @@ ALLOWED: dict[str, str] = {
         "read held across the join has no exclusive writer to queue behind."
     ),
     "connect_batch_chunked": (
-        "the graph's own connect phase. Its callers reach it only through "
-        "`graph_pool().install(...)`, and it takes no `HnswIndex` lock itself."
+        "the graph's own connect phase, and it takes no `HnswIndex` lock "
+        "itself. It is NOT reached only through `graph_pool().install(...)` -- "
+        "an earlier version of this entry claimed that and it was false. "
+        "`vacuum.rs` reaches it through `parallel_insert` on a freshly built, "
+        "unpublished `HnswInner` with no guard live (the `self.inner.read()` "
+        "on the line above is a temporary, dropped at its statement), and "
+        "`native_index.rs` reaches it holding `NativeHnswIndex::inner.read()`. "
+        "The second one is the interesting case, and it is safe for a "
+        "different reason: that lock has no writer anywhere in the crate, so "
+        "there is no pending writer for a stolen reader to queue behind. The "
+        "check below is what keeps that reason true."
     ),
 }
 
@@ -72,8 +81,29 @@ ALLOWED: dict[str, str] = {
 #: `brute_force_search_parallel` safe while holding a read guard across rayon.
 #: If a writer is ever added, that allowance is void — so the guard checks it
 #: rather than trusting the comment that states it.
-NATIVE_INDEX_FILE = Path("crates/velesdb-core/src/index/hnsw/native_index.rs")
-NATIVE_WRITE_RE = re.compile(r"\binner\.write\s*\(\s*\)")
+#: `NativeHnswIndex::inner` is `pub(crate)`, so a writer can be added from any
+#: file of the HNSW module -- not only from the one that declares it. Scanning
+#: just that file, as an earlier version did, would have let the allowance rot
+#: silently.
+#:
+#: Scoped to `index/hnsw/` rather than the whole crate on purpose: `inner` is a
+#: common field name (`cache::lru`, `velesql::cache` each have their own), and
+#: a scan of `src/` reported six writers on unrelated locks. Declared blind
+#: spot, in `guards.json` too: a writer added from OUTSIDE `index/hnsw/` would
+#: escape this check. Narrowing the field's visibility to its module is what
+#: would make the compiler enforce it, and that is a visibility change with no
+#: place in a deadlock fix.
+NATIVE_INDEX_SCAN_DIR = Path("crates/velesdb-core/src/index/hnsw")
+NATIVE_WRITE_RE = re.compile(r"\binner(?:_guard)?\s*[:=][^\n]*\.write\s*\(\s*\)|\binner\.write\s*\(\s*\)")
+
+#: The `inner.write()` sites that belong to `HnswIndex`, which HAS a writer by
+#: design and whose holders are the ones `graph_pool` exists for. Keyed by
+#: path so a writer appearing anywhere else is reported.
+KNOWN_HNSW_WRITERS = {
+    "crates/velesdb-core/src/index/hnsw/index/mod.rs",
+    "crates/velesdb-core/src/index/hnsw/index/search.rs",
+    "crates/velesdb-core/src/index/hnsw/index/vacuum.rs",
+}
 
 
 def enclosing_fn(lines: list[str], index: int) -> str:
@@ -139,21 +169,35 @@ def scan_file(path: Path, root: Path) -> list[str]:
 
 
 def scan_native_index_writer(root: Path) -> list[str]:
-    """`brute_force_search_parallel`'s allowance depends on there being none."""
-    path = root / NATIVE_INDEX_FILE
-    if not path.is_file():
+    """`brute_force_search_parallel`'s allowance depends on there being none.
+
+    It holds `NativeHnswIndex::inner.read()` across a global-pool join, which
+    cannot deadlock only because that lock has no writer. The field is
+    `pub(crate)`, so the whole crate is scanned rather than its own file.
+    """
+    scan_dir = root / NATIVE_INDEX_SCAN_DIR
+    if not scan_dir.is_dir():
         return []
     violations: list[str] = []
-    for index, raw in enumerate(path.read_text(encoding="utf-8").splitlines()):
-        if NATIVE_WRITE_RE.search(strip_line(raw)):
-            violations.append(
-                f"{NATIVE_INDEX_FILE}:{index + 1}: a writer on "
-                f"`NativeHnswIndex::inner`.\n"
-                f"    `brute_force_search_parallel` holds a read guard across "
-                f"a global-pool join, which was safe only while this lock had "
-                f"no writer. Move that join onto the dedicated pool, or drop "
-                f"the guard before it, then remove the entry from ALLOWED."
-            )
+    for path in sorted(scan_dir.rglob("*.rs")):
+        relative = path.relative_to(root).as_posix()
+        if relative in KNOWN_HNSW_WRITERS:
+            continue
+        if path.name.endswith("_tests.rs") or "/tests/" in path.as_posix():
+            continue
+        for index, raw in enumerate(path.read_text(encoding="utf-8").splitlines()):
+            if NATIVE_WRITE_RE.search(strip_line(raw)):
+                violations.append(
+                    f"{relative}:{index + 1}: a writer on an index `inner` "
+                    f"lock outside the known `HnswIndex` sites.\n"
+                    f"    If this is `NativeHnswIndex::inner`, "
+                    f"`brute_force_search_parallel` holds a read guard on it "
+                    f"across a global-pool join and was safe only while that "
+                    f"lock had no writer: move the join onto the dedicated "
+                    f"pool, or drop the guard before it, then remove the entry "
+                    f"from ALLOWED. If it is a new `HnswIndex` writer, add its "
+                    f"file to KNOWN_HNSW_WRITERS."
+                )
     return violations
 
 

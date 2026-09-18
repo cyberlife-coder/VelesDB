@@ -14,9 +14,35 @@
 //! pools, so the isolation these tests assert is the isolation that holds in
 //! production.
 
+//! # Why these tests are `#[serial]`
+//!
+//! Each one parks EVERY global rayon worker, which is process-global state.
+//! Run in parallel with each other, the first takes them all and the second
+//! waits for a worker that never comes: its premise times out at `DEADLINE`,
+//! and for those 60 seconds every other test in the binary that needs the
+//! global pool is starved too. Measured, not feared — the pre-commit hook
+//! runs `cargo test --workspace --lib` with no `--test-threads=1`, and it
+//! failed with `gpu_rerank_tests::test_batch_search_*` "running for over 60
+//! seconds" and a SIGABRT.
+//!
+//! `#[serial]` is what fixes that, and only that: as
+//! `alloc_guard_tests.rs` records for the allocation ceiling, it excludes
+//! other `#[serial]` tests and nothing else. It is enough here because one of
+//! these tests holds the parking for milliseconds (0.05 s for all three) --
+//! the 60-second stall came from two of them deadlocking, not from the
+//! parking itself. `link_pool_tests.rs`, the single test this file replaces,
+//! needed no annotation for exactly that reason: there was nothing for it to
+//! race.
+//!
+//! Moving them to their own test binary -- the repository's other answer to
+//! process-global state -- would cost more than it buys: they would leave
+//! `--lib`, and `cargo mutants` runs `-- --lib`, so the mutants they kill
+//! (including `replace >= with <` on the threshold) would start surviving.
+
 use super::HnswIndex;
 use crate::distance::DistanceMetric;
 use crate::index::hnsw::native::PARALLEL_BATCH_MIN;
+use serial_test::serial;
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -119,6 +145,7 @@ fn place_with_every_global_worker_parked(count: usize) -> Result<usize, mpsc::Re
 /// worker the parked jobs never give back, holding `inner.read()` the whole
 /// time. That is exactly the guard a concurrent `vacuum` writer is waiting on.
 #[test]
+#[serial]
 fn insert_batch_parallel_places_while_every_global_rayon_worker_is_parked() {
     let inserted = place_with_every_global_worker_parked(POINTS)
         .expect("insert_batch_parallel waited on the global rayon pool: it placed nothing in time");
@@ -132,6 +159,7 @@ fn insert_batch_parallel_places_while_every_global_rayon_worker_is_parked() {
 /// the drain alone: the rule is one rule over both holders, and the pool it
 /// names is no longer the drain's own.
 #[test]
+#[serial]
 fn link_placed_links_while_every_global_rayon_worker_is_parked() {
     use crate::index::hnsw::direct_writer::DirectVectorWriter;
 
@@ -176,12 +204,14 @@ fn link_placed_links_while_every_global_rayon_worker_is_parked() {
 ///
 /// This pins the coupling the fast path rests on. `insert_batch_parallel`
 /// skips the dedicated pool below the threshold because `place_batch` places
-/// sequentially there, and paying `install`'s flat thread hand-off (~32 us
-/// measured, against 541 ns of work for ten vectors) would be a latency
-/// regression on every small insert. If that sub-threshold path ever reached
+/// sequentially there, and paying `install`'s flat thread hand-off for a pool
+/// it never enters is cost for nothing — most of all on a tiny batch, where
+/// the hand-off dwarfs the placement (see `batch.rs` for the measured
+/// figures). If that sub-threshold path ever reached
 /// the global pool, the skip would become a deadlock instead of an
 /// optimisation, and this test is what says so.
 #[test]
+#[serial]
 fn a_sub_threshold_insert_places_while_every_global_rayon_worker_is_parked() {
     let inserted = place_with_every_global_worker_parked(POINTS_BELOW_THRESHOLD)
         .expect("a sub-threshold insert reached the global rayon pool: it placed nothing in time");
