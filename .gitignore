@@ -177,3 +177,7 @@ test_repl_data/
 # la racine versionne maintenant un `.velesdb-hooks.json` stable et sans
 # donnees machine afin que tous les worktrees gardent la meme identite.
 .agents/
+
+# cargo-mutants writes its report here. It ran as a CI job until #2339 and is
+# a local tool now; 45 of these files reached the history through #2347.
+mutants.out/

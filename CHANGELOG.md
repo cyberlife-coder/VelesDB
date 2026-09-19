@@ -125,11 +125,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lowest version the resolve accepts, on Linux and on macOS. On a pull
   request that changes `velesdb-core`, `core-review.yml` prints its
   public API diff against the base (rustdoc JSON built with lints capped, so
-  a doc defect at either end does not stop the report) and runs `cargo mutants --in-diff`
-  on the changed code, uploading the report. That last one is partial by
-  construction: a 45-minute budget over mutants that cost about twelve minutes
-  each, so a survivor it names is real and an empty report is not a clean diff.
-  `codeql.yml` analyzes Rust,
+  a doc defect at either end does not stop the report). A `cargo mutants
+  --in-diff` job shipped beside it in this train and was removed before
+  release (see `### Removed`). `codeql.yml` analyzes Rust,
   Python, JavaScript/TypeScript and the workflows themselves on push, pull
   request and weekly. None of them is read by `CI Success`.
 
@@ -148,6 +146,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   load one carries a control arm because a mapped load does not read the
   vectors — it maps them, and the pages fault in on first touch, so timing the
   load call alone reports the cost as gone when it has only moved.
+
+### Removed
+- **The `mutants` job in `core-review.yml` (#2339).** It ran on every pull
+  request touching `velesdb-core` and never once returned a verdict on a real
+  diff: both runs that met one were cut at the 45-minute action limit — the
+  first with 2 of 22 mutants tested and a third still building, the second
+  with none of 59 tested after 105 s of build and 981 s of unmutated
+  baseline. Finishing one would take about six shards, each re-paying that
+  baseline, for a report nothing is allowed to block on; narrowing the test
+  set buys between x2.3 and x28 depending on the module (893 s for the full
+  `--lib` pass, 380 s filtered to hnsw, 32 s to sparse) and nothing at all on
+  a diff spanning two. Mutation testing stays what it has actually been worth
+  here — a reviewer aiming it at one area by hand, as on #2282 — and
+  `QUALITY_BAR.md` now says so and gives the command. The 45 files of
+  `mutants.out/` that reached the history through #2347 are removed with it,
+  and the directory is ignored.
 
 ### Fixed
 - **`NativeHnswIndex::save` now serializes with itself, as `HnswIndex::save`
@@ -177,8 +191,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without it the mutated code is compiled out, so no test can observe the
   mutation. Measured on #2347's own diff, over the six mutants in
   `sparse_index::op_count::record_binary_search`: **six MISSED without the
-  feature, six caught with it** — the job now passes it, at no extra mutant
-  and no extra run.
+  feature, six caught with it**. The CI job that would have carried the flag
+  is gone (see `### Removed`); the flag is now part of the command
+  `QUALITY_BAR.md` gives a reviewer running the tool by hand.
 - **A batch insert no longer deadlocks the index against a concurrent
   `vacuum` (#2343).** `HnswIndex::insert_batch_parallel` held the index read
   guard across a rayon join on the **global** pool. A `vacuum` asking for the

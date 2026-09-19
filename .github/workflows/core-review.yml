@@ -1,11 +1,30 @@
 name: Core Review
 
-# Two reports on a pull request that changes velesdb-core, written for the
+# One report on a pull request that changes velesdb-core, written for the
 # reviewer rather than for the merge button: the public API it adds, changes
-# or removes, and the changed code no unit test notices when it is mutated.
-# Neither blocks. This workflow lives outside ci.yml, so `CI Success`, the
-# only required check, neither waits for these jobs nor reads them: red here
-# means "read the report", not "cannot merge".
+# or removes. It does not block. This workflow lives outside ci.yml, so
+# `CI Success`, the only required check, neither waits for this job nor reads
+# it: red here means "read the report", not "cannot merge".
+#
+# A `mutants` job sat here too and was removed (#2339). It never once returned
+# a verdict on a real velesdb-core diff: the only two runs that met one were
+# cut at the 45-minute action limit, the first with 2 of 22 mutants tested and
+# a third still building, the second with none of 59 tested after 105 s of
+# build and 981 s of unmutated baseline. Six shards of about 45 minutes each,
+# every one re-paying that baseline, is the price of a complete verdict on a
+# report nothing is allowed to block on; narrowing the test set buys between
+# x2.3 and x28 depending on the module, and nothing at all on a diff that
+# spans two. Mutation testing has earned its keep here as a reviewer's local
+# tool aimed at one area -- 25 mutations on #2282's guards, 23 killed, both
+# survivors turned into findings -- and that is what it stays. Run it by hand:
+#
+#     cargo mutants -p velesdb-core --features internal-bench \
+#       --file '<the file under review>' -- --lib -- --test-threads=1
+#
+# `--features internal-bench` is not optional: cargo-mutants picks mutants
+# from the source text with no knowledge of `cfg`, so code the feature gates
+# is mutated either way and, without it, compiled out -- every such mutant is
+# then reported MISSED although no test could possibly kill it (#2348).
 #
 # The path filter is safe only because nothing here is required. A required
 # check behind a filter is absent on the pull requests it filters out, and an
@@ -99,83 +118,3 @@ jobs:
             cat "$RUNNER_TEMP/public-api.txt"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-
-  # ===========================================================================
-  # Mutation testing on the diff. cargo-mutants rewrites the code this pull
-  # request changes in crates/velesdb-core/src (a body replaced by a default
-  # value, `<` turned into `<=`, ...) and reruns the unit tests for each
-  # rewrite. A mutant that survives is changed code no test pins down.
-  #
-  # Its cost on this crate is why nothing leans on it. A dry run against a real
-  # velesdb-core diff (run 34767190150) found 22 mutants, spent 86s + 743s on
-  # the unmutated baseline, and was cut at 45 minutes with 2 of the 22 tested
-  # (both caught) and a third still building — the console printed none of it,
-  # but the uploaded artifact records them. One `--lib` pass is ~12 minutes, so
-  # the budget reaches a couple. It is therefore bounded and its report partial
-  # by construction: only the changed code is mutated, only the `--lib` tests
-  # run (this repository keeps its unit tests beside each module), and the run
-  # is cut at 45 minutes with whatever it has.
-  #
-  # `--features internal-bench` because cargo-mutants selects mutants
-  # syntactically, from the source text, with no knowledge of `cfg`. Code the
-  # feature gates is mutated either way — the mutant list is byte-identical
-  # with and without the flag — but without it that code is compiled out, so
-  # no test can observe the mutation and every one of those mutants is
-  # reported MISSED. Measured on #2347's own diff, over the six mutants in
-  # `sparse_index::op_count::record_binary_search`: six MISSED without the
-  # flag, six caught with it. It therefore adds no mutant and no test run; it
-  # turns survivors that mean nothing into a verdict that means something
-  # (#2348).
-  #
-  # The report, `mutants.out/` with `missed.txt` listing the survivors *among
-  # the mutants reached*, is uploaded
-  # whenever a mutant was reached; when the filter selects none, `cargo mutants`
-  # writes no `mutants.out/` and the upload step skips with "No files were
-  # found". A survivor is real; an empty or absent `missed.txt` is not a clean
-  # diff.
-  # ===========================================================================
-  mutants:
-    name: Mutants on the diff (velesdb-core)
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 2
-
-      - name: Install cargo-mutants (prebuilt)
-        uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
-        with:
-          tool: cargo-mutants@27.1.0
-
-      # cargo-mutants builds and tests with cargo, which resolves
-      # rust-toolchain.toml.
-      - name: Install the toolchain rust-toolchain.toml pins
-        run: rustup toolchain install --no-self-update --profile minimal
-
-      # Empty when the pull request changes no source of velesdb-core (only
-      # its tests, say); cargo-mutants then reports nothing and exits 0.
-      - name: Diff velesdb-core's sources against the base
-        run: git diff HEAD^1 HEAD -- crates/velesdb-core/src > "$RUNNER_TEMP/core-src.diff"
-
-      # Exit 2: a mutant survived; 3: one timed out. Either turns this job red
-      # for the reviewer and blocks nothing.
-      #
-      # `--test-threads=1` as everywhere else: the suite shares filesystem
-      # state. No `RUSTFLAGS=-Dwarnings`, unlike ci.yml: a mutant that leaves
-      # an argument unused would fail to build and be filed as unviable
-      # instead of being tested.
-      - name: Mutate the changed code
-        timeout-minutes: 45
-        run: |
-          cargo mutants -p velesdb-core --features internal-bench \
-            --in-diff "$RUNNER_TEMP/core-src.diff" -- --lib -- --test-threads=1
-
-      - name: Upload the report
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: mutants-out
-          path: mutants.out/
-          if-no-files-found: ignore
-          retention-days: 14
