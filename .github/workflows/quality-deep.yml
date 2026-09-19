@@ -24,6 +24,10 @@ on:
         description: 'Run Loom concurrency tests'
         type: boolean
         default: true
+      run_careful:
+        description: 'Run cargo-careful (std debug assertions)'
+        type: boolean
+        default: true
       run_fuzz:
         description: 'Run fuzzing (5 min per target)'
         type: boolean
@@ -292,7 +296,12 @@ jobs:
   careful:
     name: Careful (extra checks)
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'schedule' }}
+    # Dispatchable, like every other job here. It was the only one without a
+    # `run_*` input, so a fix to it could not be verified without waiting for
+    # the next weekly run -- which is how it stayed red from 2026-08-09 to
+    # 2026-09-13 without anyone confirming a repair (#2292). A job you cannot
+    # trigger is a job whose fixes ship on credit.
+    if: ${{ github.event_name == 'schedule' || inputs.run_careful }}
     timeout-minutes: 20
     continue-on-error: true
     env:
