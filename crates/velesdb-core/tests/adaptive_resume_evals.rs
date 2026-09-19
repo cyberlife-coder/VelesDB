@@ -1,5 +1,39 @@
 //! Deterministic A/B harness for the resumable adaptive escalation (#2077).
 //!
+//! # Why Euclidean, and not Cosine
+//!
+//! The harness needs every query to escalate: a run where phase 2 never
+//! happens measures nothing, whatever its saving reads. The corpus is built
+//! to force that — a `POCKET`-sized cluster of near-duplicates, smaller than
+//! `K`, so the tail of every top-`K` falls into the far background — and
+//! under Euclidean it does, on all `NQ` queries.
+//!
+//! Under Cosine it cannot, and no corpus can fix it. `should_escalate` takes
+//! the spread relative to the lower score's distance from the metric's floor,
+//! so on Cosine `spread = (first - last) / (last + 1)`, and reaching the
+//! threshold of 2 with a perfect top hit needs `last <= -1/3`: the *tenth*
+//! neighbour must be anti-correlated with the query. A corpus of `NQ`
+//! near-orthogonal directions cannot produce that for all of them at once —
+//! a vector at cosine `<= -1/3` from every one of `NQ` random directions
+//! would need `v . sum(dir) <= -NQ/3`, while `|sum(dir)| ~ sqrt(NQ)`, which
+//! for `NQ = 40` reads `-13.3 <= -6.3`.
+//!
+//! Measured on this exact corpus, phase 1 at `min_ef`:
+//!
+//! | metric | first | last | spread | over the threshold |
+//! | --- | --- | --- | --- | --- |
+//! | Cosine | 0.9988 | 0.16 to 0.18 | 0.70 to 0.72 | **0 / 40** |
+//! | Euclidean | 0.049 | 1.28 to 1.29 | 24.9 to 25.1 | **40 / 40** |
+//!
+//! The corpus was never the problem: it is hard either way. Cosine's
+//! escalation is what is out of reach, on any data whose tenth neighbour is
+//! not anti-correlated — which no realistic corpus produces (filed on #2266,
+//! whose own note says no run had measured these spreads).
+//!
+//! Every vector here is normalised, so ranking by Euclidean distance and by
+//! cosine similarity are the same order (`||a-b||^2 = 2 - 2 a.b`), and
+//! `ground_truth` needs no change: it still scores by dot product.
+//!
 //! Requires `--features internal-bench` (registered with `required-features`
 //! in `Cargo.toml`, run by the `quality-deep` workflow next to
 //! `cost_crossover`). Uses the process-global distance-evaluation counter,
@@ -26,6 +60,8 @@ use velesdb_core::internal_bench::{hnsw_distance_evals, reset_hnsw_distance_eval
 use velesdb_core::{DistanceMetric, HnswIndex, SearchQuality, VectorIndex};
 
 const DIM: usize = 256;
+/// See the module note: Cosine cannot reach the escalation threshold here.
+const METRIC: DistanceMetric = DistanceMetric::Euclidean;
 const N: u64 = 3_000;
 const K: usize = 10;
 const NQ: u64 = 40;
@@ -67,7 +103,7 @@ fn query_dir(q: u64) -> Vec<f32> {
 /// background, which drives the spread heuristic over its escalation
 /// threshold on every query.
 fn build_index() -> HnswIndex {
-    let index = HnswIndex::new(DIM, DistanceMetric::Cosine).unwrap();
+    let index = HnswIndex::new(DIM, METRIC).unwrap();
     for q in 0..NQ {
         let dir = query_dir(q);
         for p in 0..POCKET {

@@ -238,8 +238,17 @@ jobs:
           shared-key: "velesdb-fuzz"
           save-if: true
 
+      # `--locked`: without it `cargo install` re-resolves cargo-fuzz's
+      # dependencies to their newest versions, and this step runs on the
+      # stable toolchain `rust-toolchain.toml` pins, not on the nightly
+      # installed above for the runs. On 2026-09-13 that resolved
+      # `cargo-platform 0.3.3`, which requires rustc 1.91, and the install
+      # failed on 1.90 before a single fuzz target ran -- the whole job red,
+      # for three scheduled runs, on a dependency of a tool (#2292). The
+      # lockfile cargo-fuzz ships resolves what its release was tested with,
+      # and cargo itself suggests this flag in the failure.
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
 
       # VelesQL Parser - input utilisateur critique
       - name: Fuzz VelesQL parser
@@ -300,8 +309,10 @@ jobs:
           toolchain: nightly
           components: rust-src
 
+      # `--locked` for the same reason as cargo-fuzz above: an unpinned
+      # re-resolve turns a tool's dependency release into a red scheduled run.
       - name: Install cargo-careful
-        run: cargo install cargo-careful
+        run: cargo install cargo-careful --locked
 
       - name: Cache apt packages
         uses: awalsh128/cache-apt-pkgs-action@681749ae568c81c2037cb9185e38b709b261bd2f # v1.6.1
@@ -314,11 +325,27 @@ jobs:
           shared-key: "velesdb-careful"
 
       # Tests avec assertions std activées
+      # `--lib --tests`, so doctests are left out. They cannot compile in this
+      # configuration and never could: `#![doc = include_str!("../README.md")]`
+      # pulls the crate's front page into the docs, and the front page
+      # documents `Database`, which `persistence` gates. Under
+      # `--no-default-features` every example naming it fails with
+      # `E0432: unresolved import velesdb_core::Database` -- two of them did,
+      # in three scheduled runs running (#2292).
+      #
+      # Nothing is lost by leaving them out. `cargo test --doc --package
+      # velesdb-core` runs in ci.yml's `lint` job, inside `CI Success`, with
+      # the default features the README describes -- so doctests are checked
+      # on every pull request, in the configuration they are written for.
+      # They would add nothing here either way: cargo-careful exists to run
+      # code against a std built with debug assertions, and the README's
+      # examples are `no_run`.
       - name: Run careful tests
         run: |
           cargo +nightly careful test \
             -p velesdb-core \
             --no-default-features \
+            --lib --tests \
             -- --test-threads=1
 
   # ===========================================================================

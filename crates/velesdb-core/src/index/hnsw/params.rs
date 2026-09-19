@@ -407,6 +407,31 @@ pub enum SearchQuality {
     ///
     /// Easy queries (dense cluster hits) stop after phase 1. No recorded run
     /// measures its latency or recall against a fixed ef yet (#2266).
+    ///
+    /// # Phase 2 is out of reach on Cosine
+    ///
+    /// The spread is divided by the lower score's distance from the metric's
+    /// floor, and Cosine's floor is `-1`. So `spread = (first - last) /
+    /// (last + 1)`, and reaching 2.0 with a perfect top hit needs
+    /// `last <= -1/3`: the **k-th** result must be anti-correlated with the
+    /// query. Ordinary data does not do that — in 256 dimensions the best of
+    /// 3,000 random vectors sits near `+0.17`, not below `-0.33`.
+    ///
+    /// Measured on one 3,000 x 256 corpus built to be hard (clusters smaller
+    /// than `k`, so every top-`k` tail falls into the far background),
+    /// phase 1 at `min_ef = 32`, `k = 10`:
+    ///
+    /// | metric | first | last | spread | queries over 2.0 |
+    /// | --- | --- | --- | --- | --- |
+    /// | Cosine | 0.9988 | 0.16 to 0.18 | 0.70 to 0.72 | 0 / 40 |
+    /// | Euclidean | 0.049 | 1.28 to 1.29 | 24.9 to 25.1 | 40 / 40 |
+    ///
+    /// On a Cosine collection this variant is therefore a single pass at
+    /// `min_ef`, whatever `max_ef` says, and so is [`Self::AutoTune`], which
+    /// delegates to the same algorithm. Whether the threshold or the Cosine
+    /// baseline should change is a behaviour question, open on #2266: moving
+    /// either one trades latency for recall on every Cosine query, and no run
+    /// measures that trade yet.
     Adaptive {
         /// Minimum `ef_search` (starting point). Default: 32.
         min_ef: usize,
