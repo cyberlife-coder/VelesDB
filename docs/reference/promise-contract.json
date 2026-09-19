@@ -1,5 +1,5 @@
 {
-  "last_updated": "2026-09-13",
+  "last_updated": "2026-09-18",
   "claims": [
     {
       "id": "root_readme_hnsw_latency_microseconds",
@@ -5739,6 +5739,18 @@
         "for_workspace_major": 6
       },
       "last_updated": "2026-09-14"
+    },
+    {
+      "id": "hnsw_batch_pool_handoff_flat_cost",
+      "file": "crates/velesdb-core/src/index/hnsw/native/backend_adapter.rs",
+      "must_contain": "a flat ~32 us of thread hand-off, measured",
+      "validation_command": "n/a — rayon thread hand-off cost, not a repository benchmark",
+      "executable": false,
+      "source": "Two measurements, kept apart because conflating them is what made the first version of this claim wrong. (1) The hand-off: a standalone rayon micro-benchmark, release, 2 000 iterations after warm-up, shows `ThreadPool::install` costs a flat ~32 us to a caller outside the pool, independent of the work it wraps. (2) What a batch actually costs: `HnswIndex::insert_batch_parallel` itself, 16 dimensions, release, medians of 20 runs on a fresh index — n=1 250 ns, n=10 7 958 ns, n=50 161 333 ns, n=99 1 283 125 ns, n=1 000 6 457 916 ns. The hand-off is therefore 128x the work at n=1, 4x at n=10, 20% at n=50 and 2.5% at n=99, which is why `insert_batch_parallel` installs the pool only at or above `PARALLEL_BATCH_MIN`. An earlier version of this claim compared the hand-off against a SYNTHETIC loop rather than against this call and reported 61x at n=10; that figure was wrong and is not used anywhere. The ratio also falls with dimension: docs/BENCHMARKS.md measures ~300 us per vector at 768D against ~6.5 us here. A platform- and dimension-dependent scheduling cost, not a product promise.",
+      "last_updated": "2026-09-18",
+      "measured_on": "2026-09-18",
+      "measured_machine": "Apple M5 Pro (18 cores, macOS 26.6.2, release, idle)",
+      "measured_version": "6.0.0"
     }
   ],
   "claim_families": [
