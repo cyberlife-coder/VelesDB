@@ -207,6 +207,32 @@ class HnswRayonPoolGuard(unittest.TestCase):
             result = run_guard(Path(holder.name))
         self.assertEqual(result.returncode, 1, result.stdout)
 
+    def test_an_exemption_does_not_travel_by_function_name(self):
+        """`ALLOWED` is keyed by `path::fn`, and that is not cosmetic.
+
+        `search_batch_parallel` and `brute_force_search_parallel` are each
+        defined twice under `index/hnsw/`: on `HnswIndex` (`index/batch.rs`,
+        whose lock HAS a writer -- `vacuum`) and on `NativeHnswIndex`
+        (`native_index.rs`, whose lock has none). Keyed by bare name, one
+        reason written about the second type exempted the first, so a new
+        `par_iter` under a held guard in `index/batch.rs` -- #2343's exact
+        shape -- would have passed with nobody asked to justify it.
+        """
+        body = (
+            "impl HnswIndex {\n"
+            "    pub fn brute_force_search_parallel(&self) {\n"
+            "        let inner = self.inner.read();\n"
+            "        self.v.par_iter().map(|x| inner.score(x)).count()\n"
+            "    }\n}\n"
+        )
+        holder = tree({str(HNSW / "index" / "newfile.rs"): body})
+        with holder:
+            result = run_guard(Path(holder.name))
+        self.assertEqual(result.returncode, 1, result.stdout)
+        # The message must name the key the author has to add, not the bare
+        # name, or it sends them to write an entry that would not match.
+        self.assertIn("index/newfile.rs::brute_force_search_parallel", result.stdout)
+
     def test_the_real_repository_passes(self):
         result = run_guard(REPO)
         self.assertEqual(result.returncode, 0, result.stdout)

@@ -52,26 +52,46 @@ SUBMIT_RE = re.compile(
 FN_RE = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)\s*[(<]")
 
 #: Submissions that may stay on the global pool, and why each one cannot close
-#: the cycle. Keyed by the function that submits, which survives line moves.
+#: the cycle.
+#:
+#: Keyed by `path::function`, not by the bare name. Two of these names exist
+#: TWICE under `index/hnsw/`: `search_batch_parallel` and
+#: `brute_force_search_parallel` are defined both on `HnswIndex`
+#: (`index/batch.rs`, whose `inner` HAS a writer — `vacuum`) and on
+#: `NativeHnswIndex` (`native_index.rs`, whose lock has none). A bare-name key
+#: exempted both, so a future `par_iter` added under a held guard in
+#: `index/batch.rs` — #2343's exact shape — would have been waved through on a
+#: reason written about the other type, with nobody ever asked to justify it.
 ALLOWED: dict[str, str] = {
-    "search_batch_parallel": (
+    "index/batch.rs::search_batch_parallel": (
         "holds no `inner` guard when it submits: the per-query jobs take and "
         "release their own. A pending writer parks them until the vacuum ends "
         "— bounded, and no holder is waiting on them."
     ),
-    "search_batch_with_rerank": (
+    "native_index.rs::search_batch_parallel": (
+        "same shape on `NativeHnswIndex`, and that lock has no writer under "
+        "`index/hnsw/` at all (see the companion check), so there is nothing "
+        "for a parked reader to queue behind."
+    ),
+    "index/batch.rs::search_batch_with_rerank": (
         "same as `search_batch_parallel`: no guard is held across the join."
     ),
-    "brute_force_search_rayon": (
+    "index/batch.rs::brute_force_search_rayon": (
         "copies the slab out and drops the guard before submitting "
         "(`as_flat_slice().to_vec()`), so nothing is held across the join."
     ),
-    "brute_force_search_parallel": (
-        "on `NativeHnswIndex`, whose `inner` has no writer anywhere in the "
-        "crate — verified by this guard's companion check below — so a shared "
-        "read held across the join has no exclusive writer to queue behind."
+    "index/batch.rs::brute_force_search_parallel": (
+        "on `HnswIndex`, and it drops the guard before submitting — the slab "
+        "is copied out first, exactly as `brute_force_search_rayon` does."
     ),
-    "connect_batch_chunked": (
+    "native_index.rs::brute_force_search_parallel": (
+        "on `NativeHnswIndex`. It DOES hold a read guard across the join, and "
+        "that is safe only because this lock has no writer under "
+        "`index/hnsw/`, the scope the companion check below covers. A writer "
+        "added outside that scope is the declared blind spot, in this file "
+        "and in `guards.json`."
+    ),
+    "native/backend_adapter.rs::connect_batch_chunked": (
         "the graph's own connect phase, and it takes no `HnswIndex` lock "
         "itself. It is NOT reached only through `graph_pool().install(...)` -- "
         "an earlier version of this entry claimed that and it was false. "
@@ -80,9 +100,10 @@ ALLOWED: dict[str, str] = {
         "on the line above is a temporary, dropped at its statement), and "
         "`native_index.rs` reaches it holding `NativeHnswIndex::inner.read()`. "
         "The second one is the interesting case, and it is safe for a "
-        "different reason: that lock has no writer anywhere in the crate, so "
-        "there is no pending writer for a stolen reader to queue behind. The "
-        "check below is what keeps that reason true."
+        "different reason: that lock has no writer under `index/hnsw/`, the "
+        "scope the companion check below covers, so there is no pending writer "
+        "for a stolen reader to queue behind. A writer added outside that "
+        "scope is the declared blind spot, here and in `guards.json`."
     ),
 }
 
@@ -204,16 +225,20 @@ def scan_file(path: Path, root: Path) -> list[str]:
         if installed_at(lines, index):
             continue
         name = enclosing_fn(lines, index)
-        if name in ALLOWED:
-            continue
         relative = path.relative_to(root)
+        # `path::fn`, relative to the HNSW module, so two same-named functions
+        # on two different types cannot share one exemption.
+        key = f"{relative.relative_to(SCAN_DIR).as_posix()}::{name}"
+        if key in ALLOWED:
+            continue
         violations.append(
             f"{relative}:{index + 1}: `{name}` submits to the global rayon "
             f"pool.\n"
             f"    Put it on the dedicated pool — `graph_pool()?.install(|| ...)` "
-            f"in index/hnsw/index/batch.rs — or add `{name}` to ALLOWED in "
-            f"{Path(__file__).name} with the reason it cannot close #2343's "
-            f"cycle."
+            f"in index/hnsw/index/batch.rs — or add the key `{key}` to ALLOWED "
+            f"in {Path(__file__).name} with the reason it cannot close #2343's "
+            f"cycle. The key carries the path on purpose: two types under "
+            f"index/hnsw/ define functions of the same name."
         )
     return violations
 
