@@ -309,9 +309,15 @@ jobs:
           echo "::error::velesdb-memory ne se publierait pas. Une API core utilisee ici doit d'abord exister sur crates.io (cf. l'echec de la 0.11.3)."
           exit 1
 
+      # `openapi` and `test-fault-injection` ride here for the same reason
+      # `internal-bench` rides on the pass below: clippy only lints what it
+      # compiles, and no pedantic pass named them. `openapi` alone gates 128
+      # `cfg` sites. `scripts/check_feature_lint_coverage.py` is what keeps
+      # this list and the crate's features in step (#2348).
       - name: Run Clippy (strict)
         run: |
-          cargo clippy --workspace --all-targets --features persistence,gpu,update-check \
+          cargo clippy --workspace --all-targets \
+            --features persistence,gpu,update-check,openapi,test-fault-injection \
             --exclude velesdb-python --exclude velesdb-node \
             -- -D warnings -D clippy::pedantic
 
@@ -328,9 +334,21 @@ jobs:
       # lint fixed, this configuration reports zero findings across the
       # workspace, so the step goes green on arrival instead of importing a
       # backlog.
+      # `internal-bench` rides on THIS pass rather than a third one, so the two
+      # clippy steps between them cover both states of the feature: the gpu
+      # pass above lints it OFF, this one lints it ON. Nothing was linting it
+      # ON before — both passes named `persistence[,gpu],update-check` — and
+      # the `internal-bench` jobs that exist are `cargo check`, which does not
+      # lint. Three `clippy::pedantic` violations reached #2347's review
+      # through that hole (#2348).
+      #
+      # Cost measured rather than assumed, as for the no-gpu pass itself: the
+      # feature adds 19 s of recompilation on a warm tree and no new job, since
+      # this step runs either way.
       - name: Run Clippy (strict, no gpu)
         run: |
-          cargo clippy --workspace --all-targets --features persistence,update-check \
+          cargo clippy --workspace --all-targets \
+            --features persistence,update-check,internal-bench \
             --exclude velesdb-python --exclude velesdb-node \
             -- -D warnings -D clippy::pedantic
 
@@ -526,6 +544,15 @@ jobs:
       - name: Check the guards' Python pins have one source
         run: python3 scripts/check_guard_python_pins.py
 
+      # `cargo clippy --features a,b` lints what those features switch on and
+      # nothing else. Seven of the crate's ten features gate code; the clippy
+      # invocations between them named three, so `internal-bench` (29 cfg
+      # sites), `openapi` (128), `test-fault-injection` and `bench-sift1m`
+      # were compiled by no pedantic pass at all. Three violations reached
+      # #2347's review that way. This keeps the two lists in step.
+      - name: Check every feature that gates code is linted
+        run: python3 scripts/check_feature_lint_coverage.py
+
       # REL-07 ran only at release time (release.yml), so a version drift in a
       # policed manifest was invisible until tagging. Running the same checker
       # at PR time surfaces the drift in the PR that introduces it (<5s, pure
@@ -562,6 +589,9 @@ jobs:
 
       - name: Test guard-python-pins audit script
         run: python3 -m unittest scripts.tests.test_check_guard_python_pins
+
+      - name: Test feature-lint-coverage audit script
+        run: python3 -m unittest scripts.tests.test_check_feature_lint_coverage
 
       - name: Test inline-tests audit script
         run: python3 -m unittest scripts.tests.test_check_inline_tests
@@ -1180,11 +1210,21 @@ jobs:
           shared-key: "velesdb-ci"
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
 
-      - name: cargo check (bench + feature)
-        run: cargo check -p velesdb-core --benches --features bench-sift1m
+      # clippy rather than check: same build, stricter verdict, and the only
+      # place `bench-sift1m` is compiled on a pull request (the nightly bench
+      # workflow also builds it, hours later and on a schedule). Its optional
+      # dependencies -- ureq and its TLS stack -- are why the feature stays
+      # out of the workspace clippy passes; linting it here costs nothing
+      # extra, since this job already builds them (#2348).
+      - name: cargo clippy (bench + feature)
+        run: |
+          cargo clippy -p velesdb-core --benches --features bench-sift1m \
+            -- -D warnings -D clippy::pedantic
 
-      - name: cargo check (sift1m loader unit tests)
-        run: cargo check --tests -p velesdb-core --features bench-sift1m --test sift1m_loader_unit_tests
+      - name: cargo clippy (sift1m loader unit tests)
+        run: |
+          cargo clippy --tests -p velesdb-core --features bench-sift1m \
+            --test sift1m_loader_unit_tests -- -D warnings -D clippy::pedantic
 
   # ===========================================================================
   # Python Integration Tests (uniquement si integrations/ modifié)

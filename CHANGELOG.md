@@ -150,6 +150,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   load call alone reports the cost as gone when it has only moved.
 
 ### Fixed
+- **Every velesdb-core feature that gates code is now linted and mutated
+  (#2348).** `cargo clippy --features a,b` lints what those features switch
+  on and nothing else, and the two workspace passes between them named four
+  of the ten features the crate declares. `internal-bench` (29 `cfg` sites),
+  `openapi` (128) and `test-fault-injection` were compiled by no pedantic
+  pass at all — they had `cargo check` jobs, which do not lint — and three
+  `clippy::pedantic` violations reached a review through that hole. The two
+  passes now cover both states of every feature between them, the SIFT1M job
+  runs clippy instead of check (same build, stricter verdict), and
+  `scripts/check_feature_lint_coverage.py` refuses a feature that gates code
+  no pedantic pass compiles. One violation surfaced immediately and is
+  fixed: a 113-line fault-injection test in `velesdb-server`, now three
+  helpers and an 80-line body.
+  `cargo-mutants` had the same blind spot for a different reason: it picks
+  mutants from the source text, with no knowledge of `cfg`. The mutant list
+  is byte-identical with and without `--features internal-bench`, but
+  without it the mutated code is compiled out, so no test can observe the
+  mutation. Measured on #2347's own diff, over the six mutants in
+  `sparse_index::op_count::record_binary_search`: **six MISSED without the
+  feature, six caught with it** — the job now passes it, at no extra mutant
+  and no extra run.
 - **A batch insert no longer deadlocks the index against a concurrent
   `vacuum` (#2343).** `HnswIndex::insert_batch_parallel` held the index read
   guard across a rayon join on the **global** pool. A `vacuum` asking for the
