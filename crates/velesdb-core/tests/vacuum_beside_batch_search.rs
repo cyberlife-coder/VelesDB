@@ -29,16 +29,30 @@
 //!
 //! # Anti-hang guard
 //!
-//! Each vacuum runs on its own thread and reports through a channel read with
-//! a timeout. A vacuum that does not report in time is a hang: the test
-//! writes what it saw to the process's stderr and exits with a failure code,
-//! since the parked threads can never be joined.
+//! Each vacuum runs on its own thread and reports through a channel. A vacuum
+//! the test calls parked can never be joined, so the test writes what it saw
+//! to the process's stderr and exits with a failure code.
 //!
-//! That timeout is measured, not chosen: the test times one unraced vacuum
-//! and allows each raced one [`HANG_FACTOR`] times that. A vacuum's cost is
-//! the machine's and the profile's — the same rebuild takes seconds on an
-//! idle dev box and much longer in debug on a two-vCPU runner — while a
-//! parked vacuum never ends, whatever the machine.
+//! What it calls parked is **the absence of progress, not slowness**. The
+//! deadlock this test exists for stops the writing thread too: the batch that
+//! holds the index read guard is the one waiting on a rayon worker that will
+//! never come. So the guard watches the writer's own counter, and fires only
+//! when neither the vacuum nor the writes have advanced for
+//! [`STALL_WINDOWS`] windows of [`stall_window`] each. A slow vacuum keeps
+//! its writer advancing and is never reported; a parked one advances nothing,
+//! on any machine and in any profile.
+//!
+//! A time budget was tried first and is kept only as a backstop
+//! ([`CEILING_FACTOR`]), because it is a hidden claim about the machine. The
+//! first version allowed forty times one unraced vacuum on the strength of a
+//! measured raced/unraced ratio "under three". Re-measured, four runs on an
+//! idle machine with nothing else running, that claim does not hold: the
+//! ratio is 20.6 to 26.7, and the closest run finished 152.9 s into a 229.2 s
+//! bound, 1.50x from firing. A budget that nearly fires on a correct vacuum
+//! is a red build waiting for a slower runner, which is how a guard gets
+//! deleted. The ratio is what it is because a raced vacuum's cost is
+//! dominated by an unbounded catch-up (#2335), not because racing adds a
+//! constant to a rebuild.
 
 use std::collections::HashSet;
 use std::io::Write;
@@ -83,22 +97,51 @@ const RACING_WRITES: u64 = 2 * RACING_BATCH;
 /// Vacuums tried before the test gives up on racing `RACING_WRITES` writes
 /// against one of them.
 const ATTEMPTS: usize = 5;
-/// Times the cost of one unraced vacuum a raced one may take before the test
-/// calls it parked for good.
+/// Consecutive windows without a single write completed before the test calls
+/// the vacuum parked.
 ///
-/// A fixed budget is a hidden claim about the machine: the same rebuild takes
-/// seconds on an idle box and much longer in debug on a two-core runner,
-/// which is how a constant turned a correct vacuum into a red build. Timing
-/// the baseline instead makes the budget follow the machine, and this factor
-/// only has to cover what racing adds on top. Measured on this index, in
-/// debug, on the two-thread pool this test builds — unraced baseline against
-/// the first raced vacuum of the same run — 2.3 to 4.0 s against 6.5 to
-/// 6.8 s with nothing else running, 8.7 s against 15.5 s behind 34 busy
-/// spinners, 22.8 s against 6.8 s behind 72: both move together, and the
-/// ratio stayed under three. Forty leaves room for a baseline timed in a
-/// quiet window against a vacuum raced in a busy one. A parked vacuum never
-/// ends on any machine, so a generous bound still catches it, only later.
-const HANG_FACTOR: u32 = 40;
+/// One window is not enough: a vacuum's swap takes the write guard, and every
+/// writer waits on it for as long as that copy runs. Three windows of a whole
+/// unraced vacuum each is far longer than any guard this index holds, and
+/// still finite while a parked one is not.
+const STALL_WINDOWS: u32 = 3;
+/// The floor under one stall window, for a baseline so short that three of
+/// them would fire on scheduling noise alone.
+const STALL_FLOOR: Duration = Duration::from_secs(2);
+/// Times the cost of one unraced vacuum a raced one may take before the test
+/// gives up on it, whatever the writer is doing.
+///
+/// The backstop, not the detector: [`STALL_WINDOWS`] is what catches the
+/// deadlock this test exists for, which stops the writer as well. This only
+/// catches a park that somehow leaves the writes advancing, and it is set far
+/// above anything measured so a correct vacuum never reaches it. Measured on
+/// this index, in debug, on the two-thread pool this test builds — unraced
+/// baseline against the raced vacuum of the same run, four runs on an idle
+/// machine:
+///
+/// | baseline | raced | ratio |
+/// | --- | --- | --- |
+/// | 5.73 s | 152.95 s | 26.7 |
+/// | 5.18 s | 107.01 s | 20.6 |
+/// | 5.25 s | 125.25 s | 23.9 |
+/// | 6.02 s | 128.58 s | 21.4 |
+///
+/// The forty this started at bounded the first of those at 229.2 s, which it
+/// reached within 1.50x. A fifth run, on the same machine with the rest of
+/// the suite building beside it, measured 18.05 s against 108.56 s: a ratio
+/// of 6.0, because load slows the baseline more than it slows the catch-up.
+/// That is the whole argument against a fixed factor -- the ratio is not a
+/// property of the code, it moves between 6 and 27 with what else is
+/// running. Four hundred is fifteen times the worst ratio seen: a vacuum
+/// that ends cannot reach it, and a parked one is caught by the stall count
+/// long before.
+const CEILING_FACTOR: u32 = 400;
+
+/// How long the guard waits for a write to land before counting a window as
+/// stalled: one unraced vacuum, or [`STALL_FLOOR`], whichever is longer.
+fn stall_window(baseline: Duration) -> Duration {
+    baseline.max(STALL_FLOOR)
+}
 
 fn vector(id: u64) -> Vec<f32> {
     #[allow(clippy::cast_precision_loss)] // test data generation only
@@ -128,8 +171,12 @@ fn a_vacuum_carrying_writes_finishes_beside_batch_searches() {
     let started = Instant::now();
     index.vacuum().expect("test: the unraced baseline vacuum");
     let baseline = started.elapsed();
-    let hang_bound = HANG_FACTOR * baseline;
-    println!("baseline vacuum {baseline:?}, hang bound {hang_bound:?} ({HANG_FACTOR}x)");
+    let window = stall_window(baseline);
+    let ceiling = CEILING_FACTOR * baseline;
+    println!(
+        "baseline vacuum {baseline:?}, stall window {window:?} x{STALL_WINDOWS}, \
+         ceiling {ceiling:?} ({CEILING_FACTOR}x)"
+    );
 
     let stop = Arc::new(AtomicBool::new(false));
     let searches = {
@@ -146,7 +193,7 @@ fn a_vacuum_carrying_writes_finishes_beside_batch_searches() {
     let next_write = Arc::new(AtomicU64::new(0));
     let mut raced = Vec::new();
     while raced.len() < ATTEMPTS && raced.last().is_none_or(|&made| made < RACING_WRITES) {
-        let made = race_one_vacuum(&index, &next_write, &raced, hang_bound);
+        let made = race_one_vacuum(&index, &next_write, &raced, window, ceiling);
         raced.push(made);
     }
     stop.store(true, Ordering::Release);
@@ -202,12 +249,15 @@ fn write_racing_batch(index: &HnswIndex, first: u64) -> u64 {
 /// guard is granted: the swap's own copy covers that batch (see
 /// [`RACING_BATCH`]).
 ///
-/// A vacuum that has not ended within `hang_bound` exits the process.
+/// A vacuum that neither ends nor lets a write land for [`STALL_WINDOWS`]
+/// windows of `window`, or that has not ended within `ceiling` whatever the
+/// writer is doing, exits the process.
 fn race_one_vacuum(
     index: &Arc<HnswIndex>,
     next_write: &Arc<AtomicU64>,
     raced: &[u64],
-    hang_bound: Duration,
+    window: Duration,
+    ceiling: Duration,
 ) -> u64 {
     let started = Instant::now();
     let vacuuming = Arc::new(AtomicBool::new(true));
@@ -220,47 +270,170 @@ fn race_one_vacuum(
             let _ = report.send(result);
         })
     };
+    // Bumped by the writing thread after every batch: the guard below reads
+    // it, not the clock, to tell a slow vacuum from a parked one.
+    let progress = Arc::new(AtomicU64::new(0));
     let writes = {
-        let (index, next_write) = (Arc::clone(index), Arc::clone(next_write));
+        let (index, next_write, progress) = (
+            Arc::clone(index),
+            Arc::clone(next_write),
+            Arc::clone(&progress),
+        );
         thread::spawn(move || {
             let mut made = 0_u64;
             while vacuuming.load(Ordering::Acquire) {
                 let first = next_write.fetch_add(RACING_BATCH, Ordering::AcqRel);
                 made += write_racing_batch(&index, first);
+                progress.store(made, Ordering::Release);
             }
             made
         })
     };
 
-    let result = match reported.recv_timeout(hang_bound) {
-        Ok(result) => result,
-        Err(mpsc::RecvTimeoutError::Disconnected) => panic!(
-            "the vacuuming thread ended without reporting: {:?}",
-            vacuum.join()
-        ),
-        Err(mpsc::RecvTimeoutError::Timeout) => report_hang(raced, hang_bound),
+    let waited = wait_for_the_vacuum(&reported, &progress, window, ceiling);
+    if let Waited::GaveUp(made, windows, elapsed) = waited {
+        report_hang(raced, made, windows, window, elapsed);
+    }
+    let joined = vacuum.join();
+    let Waited::Reported(result) = waited else {
+        panic!("the vacuuming thread ended without reporting: {joined:?}")
     };
-    vacuum.join().expect("test: the vacuuming thread panicked");
+    joined.expect("test: the vacuuming thread panicked");
     let made = writes.join().expect("test: the writing thread panicked");
     assert!(result.is_ok(), "vacuum {}: {result:?}", raced.len());
     println!(
-        "vacuum {} took {:?} of {hang_bound:?}, {made} writes racing it",
+        "vacuum {} took {:?} of at most {ceiling:?}, {made} writes racing it",
         raced.len(),
         started.elapsed()
     );
     made
 }
 
-/// Reports a vacuum that did not end within `hang_bound`, after the vacuums
-/// whose racing writes `raced` holds, and exits the process.
-fn report_hang(raced: &[u64], hang_bound: Duration) -> ! {
+/// What waiting for a vacuum ended in.
+#[derive(Debug)]
+enum Waited<T> {
+    /// The vacuum reported.
+    Reported(T),
+    /// The channel closed without a report.
+    Closed,
+    /// The guard gave up: writes completed, windows without one, time waited.
+    GaveUp(u64, u32, Duration),
+}
+
+/// Waits for the vacuum to report, watching `progress` rather than the clock.
+///
+/// Decides; it does not act on the decision. `report_hang` exits the process,
+/// which no test could observe, so the giving-up path is returned instead and
+/// [`the_guard_gives_up_when_nothing_advances`] drives it.
+fn wait_for_the_vacuum<T>(
+    reported: &mpsc::Receiver<T>,
+    progress: &AtomicU64,
+    window: Duration,
+    ceiling: Duration,
+) -> Waited<T> {
+    let started = Instant::now();
+    let mut stalled_windows = 0;
+    let mut last_progress = progress.load(Ordering::Acquire);
+    loop {
+        match reported.recv_timeout(window) {
+            Ok(result) => return Waited::Reported(result),
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Waited::Closed,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
+        let made = progress.load(Ordering::Acquire);
+        if made == last_progress {
+            stalled_windows += 1;
+        } else {
+            // One window of progress clears the count: the guard reports a
+            // stall that is current, never a sum of unrelated pauses.
+            stalled_windows = 0;
+            last_progress = made;
+        }
+        if stalled_windows >= STALL_WINDOWS || started.elapsed() >= ceiling {
+            return Waited::GaveUp(made, stalled_windows, started.elapsed());
+        }
+    }
+}
+
+/// The positive control for the anti-hang guard.
+///
+/// The guard the test above relies on exits the process, so nothing it does
+/// in a passing run says it can fire at all. Here the channel never reports
+/// and the counter never moves, which is what a parked vacuum looks like:
+/// [`STALL_WINDOWS`] windows later the guard must give up. Its companion --
+/// a counter that advances every window -- must not, and that is what tells
+/// "it can say stop" apart from "it only says stop".
+#[test]
+fn the_guard_gives_up_when_nothing_advances() {
+    const WINDOW: Duration = Duration::from_millis(20);
+    // Far beyond what either case needs: this control is about the stall
+    // count, not about the backstop.
+    const CEILING: Duration = Duration::from_secs(30);
+
+    let (_keep_open, never_reports) = mpsc::channel::<()>();
+    let frozen = AtomicU64::new(0);
+    let started = Instant::now();
+    match wait_for_the_vacuum(&never_reports, &frozen, WINDOW, CEILING) {
+        Waited::GaveUp(made, windows, _) => {
+            assert_eq!(
+                (made, windows),
+                (0, STALL_WINDOWS),
+                "(writes made, windows)"
+            );
+        }
+        other => panic!("a frozen counter must make the guard give up, got {other:?}"),
+    }
+    assert!(
+        started.elapsed() >= STALL_WINDOWS * WINDOW,
+        "the guard gave up before waiting {STALL_WINDOWS} windows"
+    );
+
+    // The control: a writer that keeps advancing is never called parked, so
+    // the guard reaches its backstop instead of its stall count.
+    let (_keep_open, never_reports) = mpsc::channel::<()>();
+    let advancing = Arc::new(AtomicU64::new(0));
+    let stop = Arc::new(AtomicBool::new(false));
+    let writer = {
+        let (advancing, stop) = (Arc::clone(&advancing), Arc::clone(&stop));
+        thread::spawn(move || {
+            while !stop.load(Ordering::Acquire) {
+                advancing.fetch_add(1, Ordering::AcqRel);
+                thread::sleep(WINDOW / 4);
+            }
+        })
+    };
+    let waited = wait_for_the_vacuum(&never_reports, &advancing, WINDOW, 10 * WINDOW);
+    stop.store(true, Ordering::Release);
+    writer.join().expect("test: the advancing writer panicked");
+    match waited {
+        Waited::GaveUp(made, windows, _) => {
+            assert!(made > 0, "the advancing counter never moved");
+            assert!(
+                windows < STALL_WINDOWS,
+                "a counter advancing every window reached {windows} stalled windows"
+            );
+        }
+        other => panic!("the backstop must still end the wait, got {other:?}"),
+    }
+}
+
+/// Reports a vacuum the guard gave up on, after the vacuums whose racing
+/// writes `raced` holds, and exits the process.
+fn report_hang(
+    raced: &[u64],
+    made: u64,
+    stalled_windows: u32,
+    window: Duration,
+    elapsed: Duration,
+) -> ! {
     // Straight to the process's stderr: libtest captures `eprintln!` on the
     // test thread and the threads it spawns, and `exit` drops what it holds.
     let _ = writeln!(
         std::io::stderr(),
-        "HANG: vacuum {} did not finish within {hang_bound:?} ({HANG_FACTOR}x one \
-         unraced vacuum of this index) beside batch searches on a {}-thread rayon \
-         pool; the vacuums before it finished with these writes racing each: {raced:?}",
+        "HANG: vacuum {} has run {elapsed:?} beside batch searches on a {}-thread \
+         rayon pool and has not ended; the writer completed {made} writes and has \
+         completed none for {stalled_windows} window(s) of {window:?}; the vacuums \
+         before it finished with these writes racing each: {raced:?}",
         raced.len(),
         rayon::current_num_threads(),
     );

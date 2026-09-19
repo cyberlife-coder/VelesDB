@@ -20,7 +20,7 @@ use crate::distance::DistanceMetric;
 use crate::index::VectorIndex;
 use crate::scored_result::ScoredResult;
 use crate::validation::validate_dimension_match;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 
 /// Native HNSW index for efficient approximate nearest neighbor search.
 ///
@@ -41,6 +41,14 @@ pub struct NativeHnswIndex {
     pub(crate) enable_vector_storage: bool,
     #[allow(dead_code)] // Retained for future vacuum/rebuild operations
     pub(crate) params: HnswParams,
+    /// Serializes saves of this index (#2262), as `HnswIndex::saving` does
+    /// for the other one. A save rewrites its vectors and graph files in
+    /// place and stamps every file with the generation after the one it read
+    /// from the directory, so two saves into one directory at once read that
+    /// generation together and stamp it twice: the load then took one save's
+    /// mappings beside the other's graph, and a crash between two renames
+    /// stopped being detectable. Taken before `inner`.
+    pub(crate) saving: Mutex<()>,
 }
 
 impl NativeHnswIndex {
@@ -80,6 +88,7 @@ impl NativeHnswIndex {
             mappings: ShardedMappings::new(),
             enable_vector_storage: true,
             params,
+            saving: Mutex::new(()),
         })
     }
 

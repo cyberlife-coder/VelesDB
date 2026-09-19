@@ -1004,7 +1004,12 @@ persists, each holding the vector of the id that names it (#2262). `save`
 copies the mappings under the read guard it dumps the graph under, before the
 dump (`persistence::dump_graph`): every slot they name already holds its
 vector, the arena only grows while the guard is held, and a renumber needs the
-write guard. The copy reads the forward map once and derives the reverse map
+write guard. That ordering is not left to timing to test: the dump carries a
+window on its far side, and
+`a_write_in_the_save_window_never_names_a_slot_the_graph_lacks` writes into
+it. With the copy first the write is named by nobody; with the copy moved
+after the dump the same write is named by the mappings and absent from the
+graph, and the reload refuses it. The copy reads the forward map once and derives the reverse map
 from it, so the two agree while writers run. The persisted `next_idx` is the
 slot count the dump wrote, so a slot placed after the copy, which no saved id
 names, reloads as a tombstone. The graph's own dump holds the arena's read
@@ -1012,11 +1017,16 @@ guard across its vectors file and its graph file, in the declared order
 (vectors, then layers): no node is pushed in between, so the graph file names
 no node the vectors file lacks. Saves of one index run one at a time, under
 a lock of their own that `vacuum` never takes: two at once into one
-directory rewrote the same files under one generation. Tests:
+directory read the same generation and stamped it over each other's files.
+`HnswIndex` and `NativeHnswIndex` each hold that lock -- the second was
+missed at first, and the invariant is stated of saves, not of one of the two
+wrappers over the same files. Tests:
 `writes_racing_a_save_reload_consistent`,
+`a_write_in_the_save_window_never_names_a_slot_the_graph_lacks`,
 `batch_inserts_racing_a_save_reload_consistent`,
-`a_save_racing_a_vacuum_reloads_consistent` and
-`saves_racing_into_one_directory_reload_consistent`.
+`a_save_racing_a_vacuum_reloads_consistent`,
+`saves_racing_into_one_directory_reload_consistent` and
+`native_saves_racing_into_one_directory_reload_consistent`.
 
 **Invariant**: a refused vector or batch maps nothing, so there is nothing
 to roll back. A batch the graph refuses part-way leaves the nodes it already

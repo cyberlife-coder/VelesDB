@@ -3921,6 +3921,80 @@ fn check_reload(
     Ok((graph.with_contiguous_vectors(misresolved), counts))
 }
 
+/// A write landing between a save's mappings copy and its graph dump never
+/// makes the save name a slot the saved graph lacks (#2262).
+///
+/// `writes_racing_a_save_reload_consistent` above writes throughout a save
+/// and relies on one landing in that window by timing. On a 1200-vector
+/// index of four dimensions the dump takes microseconds, so none does: moving
+/// the copy after the dump leaves that test green eight runs out of eight.
+/// This one puts the write there instead of hoping for it, through the seam
+/// `persistence::dump_counted_through_the_window` opens, and is the only test
+/// that fails when the two are swapped.
+///
+/// With the copy first, the injected id is absent from the saved mappings and
+/// its slot is in the dumped graph, unnamed: a tombstone, which is consistent.
+/// With the dump first, the id is in the mappings and its slot is not in the
+/// graph, which is the torn directory the ordering exists to prevent.
+#[test]
+fn a_write_in_the_save_window_never_names_a_slot_the_graph_lacks() {
+    const BASE: u64 = 400;
+    const INJECTED: u64 = BASE + 1;
+    let dir = tempfile::tempdir().unwrap();
+    let index = std::sync::Arc::new(HnswIndex::new(4, DistanceMetric::Euclidean).unwrap());
+    for id in 0..BASE {
+        index.insert(id, &racing_vector(id, 0));
+    }
+
+    let injected = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(INJECTED));
+    let window = {
+        let (index, injected) = (
+            std::sync::Arc::clone(&index),
+            std::sync::Arc::clone(&injected),
+        );
+        crate::index::hnsw::persistence::save_window::install(dir.path(), move || {
+            // On a thread of its own: the saving thread is inside its read
+            // guard, and a second `read()` on that same thread is what #2343
+            // was about. A separate thread takes a reader beside it, which is
+            // what a real concurrent write does.
+            let id = injected.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            let index = std::sync::Arc::clone(&index);
+            std::thread::spawn(move || index.insert(id, &racing_vector(id, 0)))
+                .join()
+                .expect("test: the injected write panicked");
+        })
+    };
+
+    index.save(dir.path()).expect("test: the save");
+    drop(window);
+
+    // The ids present before the save must resolve to their own vector; the
+    // injected ones may be absent (the save did not name them) but never
+    // resolve to something that is not theirs.
+    let last_injected = injected.load(std::sync::atomic::Ordering::Acquire);
+    let own = |id, stored: Option<&[f32]>| {
+        let is_own = stored == Some(racing_vector(id, 0).as_slice());
+        if id < BASE {
+            is_own
+        } else {
+            stored.is_none() || is_own
+        }
+    };
+    let (misresolved, (tombstones, dead)) =
+        check_reload(dir.path(), 0..last_injected, own).expect("test: the reload");
+    assert!(
+        misresolved.is_empty(),
+        "{} ids resolve to a vector that is not theirs after a write in the save \
+         window (first {:?})",
+        misresolved.len(),
+        misresolved.first()
+    );
+    assert_eq!(
+        tombstones, dead,
+        "the reloaded index counts {tombstones} tombstones over {dead} slots no id names"
+    );
+}
+
 /// A save never straddles a vacuum's swap (#2262): the swap renumbers under
 /// the write guard, and a save copies the mappings and dumps the graph under
 /// one read guard, so it persists the old numbering or the new, never the one

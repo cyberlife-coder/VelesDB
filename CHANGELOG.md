@@ -150,6 +150,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   load call alone reports the cost as gone when it has only moved.
 
 ### Fixed
+- **`NativeHnswIndex::save` now serializes with itself, as `HnswIndex::save`
+  already did (#2262).** A save stamps every artefact with the generation
+  after the one it reads from the directory, so two into one directory read
+  that generation together and stamped it twice over each other's files, and
+  a crash between two renames stopped being detectable. `HnswIndex` took a
+  `saving` lock for exactly this; the other public wrapper over the same
+  files did not. Measured before the fix: twelve rounds of two concurrent
+  saves advanced the directory's generation by one each time instead of two.
 - **Every velesdb-core feature that gates code is now linted and mutated
   (#2348).** `cargo clippy --features a,b` lints what those features switch
   on and nothing else, and the two workspace passes between them named four

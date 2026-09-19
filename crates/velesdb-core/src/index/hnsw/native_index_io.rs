@@ -18,6 +18,8 @@ impl NativeHnswIndex {
     ///
     /// Returns an error if file operations fail.
     pub fn save<P: AsRef<Path>>(&self, path: P) -> std::io::Result<()> {
+        // Held to the end: see `saving`.
+        let _saving = self.saving.lock();
         let path = path.as_ref();
         std::fs::create_dir_all(path)?;
 
@@ -100,6 +102,7 @@ impl NativeHnswIndex {
             mappings,
             enable_vector_storage: meta.enable_vector_storage,
             params: HnswParams::auto(meta.dimension),
+            saving: parking_lot::Mutex::new(()),
         })
     }
 }

@@ -363,6 +363,29 @@ pub(crate) fn load_graph_generation(path: &Path) -> std::io::Result<u64> {
     }
 }
 
+/// Dumps the graph, then runs the test window if one is installed for `path`.
+///
+/// The window sits **after** the dump, and attached to it rather than written
+/// as a line of `dump_graph`. That position is what makes the ordering
+/// testable at all. With the copy first, as it is, a write landing here is
+/// after both: no saved id names its slot and the saved graph does not hold
+/// it, which is consistent. Move the copy after the dump and the very same
+/// write lands *between* the two: the copy then names a slot the dump never
+/// wrote, which is the torn directory the order exists to prevent. A window
+/// placed before the dump cannot tell the two arrangements apart -- the
+/// injected write is visible to both operations either way -- which is why
+/// there is none there (#2262).
+fn dump_counted_through_the_window(
+    graph: &NativeHnswInner,
+    path: &Path,
+    basename: &str,
+) -> std::io::Result<usize> {
+    let next_idx = graph.file_dump_counted(path, basename)?;
+    #[cfg(test)]
+    save_window::pause(path);
+    Ok(next_idx)
+}
+
 /// Dumps `graph` into `path` as `basename`, and returns what a save writes
 /// beside it: the mappings, and the graph's storage mode.
 ///
@@ -392,7 +415,7 @@ pub(crate) fn dump_graph(
 ) -> std::io::Result<(HnswMappingsData, crate::StorageMode)> {
     let id_to_idx: HashMap<u64, usize> = mappings.iter().collect();
     let idx_to_id = id_to_idx.iter().map(|(&id, &idx)| (idx, id)).collect();
-    let next_idx = graph.file_dump_counted(path, basename)?;
+    let next_idx = dump_counted_through_the_window(graph, path, basename)?;
     let mappings = HnswMappingsData {
         id_to_idx,
         idx_to_id,
@@ -678,5 +701,50 @@ const fn storage_mode_from_u8(value: u8) -> crate::StorageMode {
         4 => crate::StorageMode::RaBitQ,
         // 0 and unknown values default to Full
         _ => crate::StorageMode::Full,
+    }
+}
+
+/// A seam in the window between a save's mappings copy and its graph dump,
+/// so a test can put a write there instead of hoping one lands by timing.
+///
+/// Keyed by the directory being saved into: the hook fires only for that
+/// path, so a save any other test makes meanwhile runs untouched and this
+/// needs no process-wide serialization.
+#[cfg(test)]
+pub(crate) mod save_window {
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    type Hook = Box<dyn Fn() + Send + Sync>;
+
+    static INSTALLED: Mutex<Option<(PathBuf, Hook)>> = Mutex::new(None);
+
+    /// Clears the installed window when dropped, including on a panic.
+    pub(crate) struct Installed;
+
+    impl Drop for Installed {
+        fn drop(&mut self) {
+            *INSTALLED.lock().expect("the save window is never poisoned") = None;
+        }
+    }
+
+    /// Runs `hook` in the window of every save into `path` until the returned
+    /// guard is dropped.
+    pub(crate) fn install(path: &Path, hook: impl Fn() + Send + Sync + 'static) -> Installed {
+        *INSTALLED.lock().expect("the save window is never poisoned") =
+            Some((path.to_path_buf(), Box::new(hook)));
+        Installed
+    }
+
+    /// Runs the installed hook if it was installed for `path`.
+    pub(crate) fn pause(path: &Path) {
+        // The hook is called under the lock: it never installs another, and
+        // holding it keeps `Installed::drop` from freeing it mid-call.
+        let installed = INSTALLED.lock().expect("the save window is never poisoned");
+        if let Some((wanted, hook)) = installed.as_ref() {
+            if wanted == path {
+                hook();
+            }
+        }
     }
 }

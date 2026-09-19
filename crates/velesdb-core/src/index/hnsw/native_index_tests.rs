@@ -466,3 +466,158 @@ fn test_native_index_default_alpha_search_works() {
         "nearest neighbor of vector[0] should be node 0 with default alpha"
     );
 }
+
+/// Two saves of one `NativeHnswIndex` into one directory never mix their
+/// files (#2262).
+///
+/// A save rewrites its graph file in place and stamps every artefact with the
+/// generation after the one it reads from the directory, so two at once write
+/// one graph file at the same offsets, each from its own reading of neighbor
+/// lists a writer is still changing, under one generation. `HnswIndex` takes
+/// a `saving` lock of its own for exactly this; `NativeHnswIndex` is the same
+/// public type over the same files, and the invariant in `docs/SOUNDNESS.md`
+/// is stated of saves, not of one wrapper.
+///
+/// Each round inserts a batch on a thread of its own while two threads save,
+/// and the directory is reloaded after every round: a reload that errors, or
+/// that resolves an id to a vector that is not its own, is a torn directory.
+#[test]
+fn native_saves_racing_into_one_directory_reload_consistent() {
+    use std::sync::Arc;
+
+    const DIMENSION: usize = 16;
+    const BASE: u64 = 400;
+    // At least 100: the batch path pushes every vector, then links them. The
+    // saves are fired once the push is visible, so they run while it links.
+    const BATCH: u64 = 200;
+    const ROUNDS: u64 = 12;
+
+    let vector = |id: u64| -> Vec<f32> {
+        (0..DIMENSION)
+            .map(|i| ((id as f32) * 0.37 + (i as f32) * 0.11).sin())
+            .collect()
+    };
+
+    let dir = tempdir().unwrap();
+    let dir_path = dir.path().to_path_buf();
+    let index = Arc::new(NativeHnswIndex::new(DIMENSION, DistanceMetric::Euclidean).expect("test"));
+    for id in 0..BASE {
+        index.insert(id, &vector(id)).expect("test");
+    }
+
+    let mut torn = Vec::new();
+    let mut unseen = 0;
+    let mut previous_generation = 0_u64;
+    for round in 0..ROUNDS {
+        let first = BASE + round * BATCH;
+        let items: Vec<(u64, Vec<f32>)> =
+            (first..first + BATCH).map(|id| (id, vector(id))).collect();
+        let (seen, saved) = two_saves_while_a_batch_links(&index, &dir_path, items);
+        unseen += usize::from(!seen);
+        if let Some(err) = saved.into_iter().find_map(Result::err) {
+            torn.push(format!("round {round}: save failed: {err}"));
+            continue;
+        }
+
+        // The mechanism, not only its consequence. Each save stamps the
+        // generation after the one it reads from the directory, so two that
+        // run one at a time advance it by two. Two that overlap read the
+        // same one and both stamp the same value: the directory advances by
+        // one, and its files were written twice at the same offsets under
+        // that one generation, which is what makes a crash between renames
+        // undetectable.
+        let generation = crate::index::hnsw::persistence::load_graph_generation(dir.path())
+            .expect("test: read the graph generation");
+        if generation != previous_generation + 2 {
+            torn.push(format!(
+                "round {round}: two saves advanced the generation from \
+                 {previous_generation} to {generation}, not by two: they read it at the \
+                 same time and stamped one value over each other's files"
+            ));
+        }
+        previous_generation = generation;
+
+        match NativeHnswIndex::load(dir.path(), DIMENSION, DistanceMetric::Euclidean) {
+            Err(err) => torn.push(format!("round {round}: reload failed: {err}")),
+            Ok(loaded) => {
+                // The ids inserted before any racing write are in every save
+                // either way, so each must still be its own nearest
+                // neighbour after the reload. A slot holding another id's
+                // vector -- what two saves writing one graph file at the
+                // same offsets produce -- breaks exactly that.
+                let wrong: Vec<u64> = (0..BASE)
+                    .step_by(8)
+                    .filter(|&id| {
+                        loaded
+                            .brute_force_search_parallel(&vector(id), 1)
+                            .first()
+                            .is_none_or(|hit| hit.id != id)
+                    })
+                    .collect();
+                if !wrong.is_empty() {
+                    torn.push(format!(
+                        "round {round}: {} of the {} ids sampled are no longer their own \
+                         nearest neighbour (first {:?})",
+                        wrong.len(),
+                        BASE / 8,
+                        wrong.first()
+                    ));
+                }
+            }
+        }
+    }
+
+    // The positive control: rounds whose saves did not run during a linking
+    // batch prove nothing about two saves racing one.
+    assert_eq!(
+        unseen, 0,
+        "{unseen} of the {ROUNDS} rounds fired their saves after the batch had ended"
+    );
+    assert!(
+        torn.is_empty(),
+        "{} of the {ROUNDS} rounds left a directory two saves had torn: {torn:?}",
+        torn.len()
+    );
+}
+
+/// Inserts `items` as one batch on a thread of its own and, once its vectors
+/// are in the arena, saves `index` into `dir` from two threads at once while
+/// it links them. Returns whether the push was seen and the two outcomes.
+fn two_saves_while_a_batch_links(
+    index: &std::sync::Arc<NativeHnswIndex>,
+    dir: &std::path::Path,
+    items: Vec<(u64, Vec<f32>)>,
+) -> (bool, [std::io::Result<()>; 2]) {
+    let before = index.len();
+    std::thread::scope(|scope| {
+        let batch = scope.spawn(|| index.insert_batch_parallel(items));
+        // Fire the saves only once the batch's vectors are in the arena, so
+        // both run while it is still linking them -- the window in which one
+        // graph file is rewritten at the same offsets twice.
+        let seen = loop {
+            // Read before the count: whatever the batch did, it did before
+            // it ended.
+            let ended = batch.is_finished();
+            if index.len() > before {
+                break true;
+            }
+            if ended {
+                break false;
+            }
+            std::thread::yield_now();
+        };
+        let save = || {
+            let (index, dir) = (std::sync::Arc::clone(index), dir.to_path_buf());
+            scope.spawn(move || index.save(&dir))
+        };
+        let (a, b) = (save(), save());
+        batch.join().expect("test: the batch thread panicked");
+        (
+            seen,
+            [
+                a.join().expect("test: a saving thread panicked"),
+                b.join().expect("test: a saving thread panicked"),
+            ],
+        )
+    })
+}

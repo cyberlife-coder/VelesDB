@@ -194,7 +194,10 @@ of AI/RAG applications:
 `vacuum` and `reorder_for_locality` also hold a maintenance lock for their
 whole run, so each waits for the other; searches, writes and saves never take
 it. Saves of one index hold a save lock of their own for their whole run, so
-two saves wait for each other and never for a vacuum. A save made during a vacuum's rebuild saves the old graph, and the swap
+two saves wait for each other and never for a vacuum. `HnswIndex` and
+`NativeHnswIndex` each hold one: they are two wrappers over the same files,
+and a lock on only one of them leaves the other pair of saves reading one
+generation and stamping it twice. A save made during a vacuum's rebuild saves the old graph, and the swap
 waits for its dump like for any read. A save holds the graph's vector read
 lock from the start of its vectors file to the end of its graph file, so an
 insert waits for both files, and since `parking_lot` locks are task-fair, a
