@@ -160,11 +160,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hangs in six runs on an idle machine.
   The place phase now runs on the dedicated pool the bulk drain already used,
   and only at or above `PARALLEL_BATCH_MIN`, below which it enters no pool at
-  all. No search path changed, and no public API. **Debug builds gain one
-  panic**: calling `insert_batch_parallel` or `link_placed` from a rayon
-  worker is refused, because such a caller keeps running its own pool's jobs
-  while it waits and can re-close the same cycle by stealing. Release builds
-  carry no check.
+  all. No search path changed, and no public API. **Debug builds gain two
+  assertions**: `link_placed` refuses a call from a rayon worker, and
+  `insert_batch_parallel` refuses one *for a batch at or above that
+  threshold* — below it no pool is installed, so nothing is refused. Such a
+  caller keeps running its own pool's jobs while it waits and can re-close the
+  same cycle by stealing. Release builds carry no check.
 - **The agent hooks remind a conversation of the working context it uses.** The
   SessionStart, PreCompact and Stop hooks of the Claude Code and Codex
   integrations named the session set in `.velesdb-hooks.json` (else `rolling`),

@@ -223,7 +223,12 @@ def scan_native_index_writer(root: Path) -> list[str]:
 
     It holds `NativeHnswIndex::inner.read()` across a global-pool join, which
     cannot deadlock only because that lock has no writer. The field is
-    `pub(crate)`, so the whole crate is scanned rather than its own file.
+    `pub(crate)`, so its own file is not the only risk and `index/hnsw/` is
+    scanned rather than that one file — but NOT the whole crate, for the
+    reason NATIVE_INDEX_SCAN_DIR gives: `inner` is a common field name and a
+    crate-wide scan reported six writers on unrelated locks. A writer added
+    from outside `index/hnsw/` escapes this check; that blind spot is declared
+    here and in `guards.json`.
     """
     scan_dir = root / NATIVE_INDEX_SCAN_DIR
     if not scan_dir.is_dir():

@@ -158,6 +158,14 @@ fn insert_batch_parallel_places_while_every_global_rayon_worker_is_parked() {
 /// This file replaces `link_pool_tests.rs`, which asserted the same thing for
 /// the drain alone: the rule is one rule over both holders, and the pool it
 /// names is no longer the drain's own.
+/// `link_placed` is `#[cfg(feature = "persistence")]`, so this test carries
+/// the same gate. The module moved to a plain `cfg(test)` when it stopped
+/// being about the drain alone; without this line the file would name a
+/// method that does not exist in a build without that feature. Inert today —
+/// `batch.rs` imports `rayon` unconditionally and `rayon` is `optional`, so
+/// the crate never builds without `persistence` — but a gate gap that only
+/// stays closed by accident is one nobody will notice closing.
+#[cfg(feature = "persistence")]
 #[test]
 #[serial]
 fn link_placed_links_while_every_global_rayon_worker_is_parked() {
