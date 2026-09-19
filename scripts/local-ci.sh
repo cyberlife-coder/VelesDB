@@ -108,8 +108,18 @@ cargo() {
       echo "cargo $sub: this cargo has no such subcommand" >&2
       return 127
     fi
-    proxy=$(command -v "cargo-$sub" 2>/dev/null)
-    rustup_bin=$(command -v rustup 2>/dev/null)
+    # `|| proxy=` is not defensive noise. A step whose `run` begins with
+    # `set -e` runs this shim under that setting, and `command -v cargo-build`
+    # exits 1 for every subcommand cargo implements itself -- build, check,
+    # clean, metadata, test. Assigning from a failing command substitution
+    # then ends the shell HERE, before `command cargo` ever runs, and the
+    # replay prints FAILED with an empty output because the step produced
+    # none. Two gates read red that way for weeks while passing by hand
+    # (#2346): `Drop cached workspace fingerprints` and `Check each
+    # velesdb-memory feature in isolation`, the only two lint steps that both
+    # enable `set -e` and call a shimless subcommand.
+    proxy=$(command -v "cargo-$sub" 2>/dev/null) || proxy=""
+    rustup_bin=$(command -v rustup 2>/dev/null) || rustup_bin=""
     if [ -n "$proxy" ] && [ -n "$rustup_bin" ] && [ "$proxy" -ef "$rustup_bin" ] \
       && ! rustup which ${toolchain:+--toolchain "$toolchain"} "cargo-$sub" >/dev/null 2>&1; then
       echo "cargo $sub: the toolchain lacks the rustup component behind cargo-$sub" >&2
@@ -148,8 +158,19 @@ while IFS=$'\t' read -r job name run; do
     printf '%s\n' "$out" | head -2 | sed 's/^/       /'
   else
     failed=$((failed+1)); failures+=("$name")
-    printf 'FAILED\n'
-    printf '%s\n' "$out" | tail -15 | sed 's/^/       /'
+    # The exit code is printed, not just the output. A step can die without
+    # writing a line -- `set -e` on a failed assignment does exactly that --
+    # and "FAILED" followed by a blank line tells the operator nothing to act
+    # on, which is the mirror image of this script's own rule that a gate it
+    # cannot replay is announced rather than dropped in silence. The code
+    # names the culprit: 127 is a missing command, 101 a cargo error, 1 a
+    # shell that stopped. Silence is called out as silence (#2346).
+    printf 'FAILED (exit %s)\n' "$rc"
+    if [ -z "$out" ]; then
+      printf '       (the step wrote nothing before exiting %s)\n' "$rc"
+    else
+      printf '%s\n' "$out" | tail -15 | sed 's/^/       /'
+    fi
   fi
 done < <(printf '%s' "$steps_json" | python3 -c '
 import base64, json, sys
