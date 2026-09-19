@@ -233,6 +233,39 @@ class HnswRayonPoolGuard(unittest.TestCase):
         # name, or it sends them to write an entry that would not match.
         self.assertIn("index/newfile.rs::brute_force_search_parallel", result.stdout)
 
+    def test_an_exemption_that_exempts_nothing_is_refused(self):
+        """A dead key is a trap armed for the next author, not dead weight.
+
+        `index/batch.rs::brute_force_search_parallel` shipped with a reason
+        written for a different function: that body only delegates and submits
+        nothing. The key granted no exemption, and would have granted one
+        silently to whatever was written into that function later — in the
+        file #2343 came from. The table now refuses a key it never used.
+        """
+        holder = tree({str(HNSW / "quiet.rs"): "impl H { fn f(&self) {} }\n"})
+        with holder:
+            root = Path(holder.name)
+            script = root / "guard.py"
+            body = SCRIPT.read_text(encoding="utf-8").replace(
+                '    "native_index.rs::brute_force_search_parallel": (',
+                '    "index/batch.rs::nonexistent_submitter": (\n'
+                '        "a reason for code that submits nothing"\n'
+                '    ),\n'
+                '    "native_index.rs::brute_force_search_parallel": (',
+                1,
+            )
+            script.write_text(body, encoding="utf-8")
+            # No `--root`: liveness is only meaningful against the tree the
+            # guard calls its own, so the check runs in that mode alone. Here
+            # the probe tree IS that tree, reached through `cwd`.
+            result = subprocess.run(
+                [sys.executable, str(script)],
+                cwd=root, capture_output=True, text=True, check=False,
+            )
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("exempts no submission", result.stdout)
+        self.assertIn("index/batch.rs::nonexistent_submitter", result.stdout)
+
     def test_the_real_repository_passes(self):
         result = run_guard(REPO)
         self.assertEqual(result.returncode, 0, result.stdout)

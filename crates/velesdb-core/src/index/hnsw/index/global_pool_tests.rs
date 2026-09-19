@@ -27,8 +27,8 @@
 //!
 //! `#[serial]` is what fixes that, and only that: as
 //! `alloc_guard_tests.rs` records for the allocation ceiling, it excludes
-//! other `#[serial]` tests and nothing else. It is enough here because one of
-//! these tests holds the parking for milliseconds (0.05 s for all three) --
+//! other `#[serial]` tests and nothing else. It is enough here because each
+//! of these tests holds the parking for milliseconds (0.05 s for all three) --
 //! the 60-second stall came from two of them deadlocking, not from the
 //! parking itself. `link_pool_tests.rs`, the single test this file replaces,
 //! needed no annotation for exactly that reason: there was nothing for it to

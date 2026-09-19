@@ -1420,7 +1420,7 @@
       "self_test_required": true,
       "blind_spot": {
         "issue": null,
-        "summary": "Two, both declared. (1) It cannot decide whether a submission runs under a held guard: the one that deadlocked reached par_iter three calls down, in another file. It does not try -- it requires every submission to be on the dedicated pool or listed in ALLOWED with a reason, so a new one is refused until someone writes that reason down. (2) Its companion check for a writer on NativeHnswIndex::inner scans index/hnsw/ only, not the whole crate: `inner` is a common field name and a crate-wide scan reported six writers on unrelated locks (cache::lru, velesql::cache). The field is pub(crate), so a writer added from outside index/hnsw/ escapes it; narrowing that field to its module would let the compiler enforce it instead. The behavioural half of the rule is crates/velesdb-core/src/index/hnsw/index/global_pool_tests.rs, which parks every global rayon worker and requires each guard holder to finish anyway."
+        "summary": "Two, both declared. (1) It cannot decide whether a submission runs under a held guard: the one that deadlocked reached par_iter three calls down, in another file. It does not try -- it requires every submission to be on the dedicated pool or listed in ALLOWED with a reason, so a new one is refused until someone writes that reason down. (2) Its companion check for a writer on NativeHnswIndex::inner scans index/hnsw/ only, not the whole crate: `inner` is a common field name and a crate-wide scan reported six writers on unrelated locks (cache::lru, velesql::cache). The field is pub(crate), so a writer added from outside index/hnsw/ escapes it; narrowing that field to its module would let the compiler enforce it instead. The behavioural half of the rule is crates/velesdb-core/src/index/hnsw/index/global_pool_tests.rs, which parks every global rayon worker and requires each guard holder to finish anyway. Two scope exclusions, named so the promise is not read as wider than the check: `*_tests.rs` files are skipped (a test submitting on the global pool starves nothing a vacuum waits on), and any receiver's `.install(` is accepted, not only `graph_pool()` (every non-global pool breaks the cycle). Neither is checked against what the jobs inside actually take."
       },
       "must_refuse": [
         {
@@ -1493,5 +1493,5 @@
       "reason": "A measurement harness, not a gate: manual-dispatch probe for #1944 whose exit 1 means 'a case scored fatal' - a result to record, which is why the workflow runs it with `|| true` and fails only on a missing result file. It refuses nothing on any merge path and sits outside CI Success by design."
     }
   ],
-  "last_updated": "2026-09-18"
+  "last_updated": "2026-09-19"
 }

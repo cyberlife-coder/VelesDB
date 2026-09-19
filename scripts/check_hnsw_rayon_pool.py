@@ -13,10 +13,18 @@ submission runs under a guard — the one that deadlocked reached `par_iter` thr
 calls down, in another file — so this guard does not try to decide it. It
 requires instead that each submission be one of:
 
-  * lexically inside an `.install(` closure (the dedicated pool), or
+  * lexically inside an `.install(` closure, or
   * listed in ALLOWED below, with the reason it cannot close the cycle.
 
-A new submission is refused until its author picks one. That turns the
+A new submission is refused until its author picks one.
+
+Two exclusions, stated because a guard's promise must not be wider than what
+it checks. It skips `*_tests.rs`: a test submitting on the global pool starves
+nothing a `vacuum` is waiting on. And it accepts ANY receiver's `.install(`,
+not only `graph_pool()`: every pool that is not the global one breaks the
+cycle, so requiring that exact call would refuse a legitimate second pool
+while proving nothing more. What it does NOT check either way is whether the
+jobs inside take `inner` -- that is the blind spot above. That turns the
 invariant from something review must notice into something someone must write
 down.
 
@@ -79,10 +87,6 @@ ALLOWED: dict[str, str] = {
     "index/batch.rs::brute_force_search_rayon": (
         "copies the slab out and drops the guard before submitting "
         "(`as_flat_slice().to_vec()`), so nothing is held across the join."
-    ),
-    "index/batch.rs::brute_force_search_parallel": (
-        "on `HnswIndex`, and it drops the guard before submitting — the slab "
-        "is copied out first, exactly as `brute_force_search_rayon` does."
     ),
     "native_index.rs::brute_force_search_parallel": (
         "on `NativeHnswIndex`. It DOES hold a read guard across the join, and "
@@ -215,6 +219,14 @@ def installed_at(lines: list[str], index: int) -> bool:
     return False
 
 
+#: Keys of ALLOWED that a scan actually used. A key matching nothing is not
+#: harmless: it pre-exempts whatever is written into that function later, on a
+#: reason nobody re-read. One such key shipped — `index/batch.rs::
+#: brute_force_search_parallel`, whose body only delegates — and it would have
+#: waved through a submission added to it in the file \#2343 came from.
+USED_KEYS: set[str] = set()
+
+
 def scan_file(path: Path, root: Path) -> list[str]:
     lines = path.read_text(encoding="utf-8").splitlines()
     violations: list[str] = []
@@ -230,6 +242,7 @@ def scan_file(path: Path, root: Path) -> list[str]:
         # on two different types cannot share one exemption.
         key = f"{relative.relative_to(SCAN_DIR).as_posix()}::{name}"
         if key in ALLOWED:
+            USED_KEYS.add(key)
             continue
         violations.append(
             f"{relative}:{index + 1}: `{name}` submits to the global rayon "
@@ -286,6 +299,9 @@ def main() -> int:
     parser.add_argument("--root", default=".", help="repository root to scan")
     args = parser.parse_args()
     root = Path(args.root)
+    # No `--root` means the real repository: that is the only tree whose
+    # ALLOWED table can meaningfully be called complete or stale.
+    scanning_the_repository = args.root == parser.get_default("root")
 
     scan_dir = root / SCAN_DIR
     if not scan_dir.is_dir():
@@ -300,6 +316,22 @@ def main() -> int:
         files += 1
         violations.extend(scan_file(path, root))
     violations.extend(scan_native_index_writer(root))
+
+    # An exemption that exempts nothing is a trap armed for the next author --
+    # but only against the REAL tree. A probe root holds one synthetic file, so
+    # every key is legitimately unused there; checking liveness against a
+    # fixture would fail every refusal vector in `guards.json` and every
+    # positive control below. The first version of this check did exactly that.
+    for key in sorted(set(ALLOWED) - USED_KEYS) if scanning_the_repository else []:
+        violations.append(
+            f"ALLOWED carries `{key}`, which exempts no submission in this "
+            f"tree.\n"
+            f"    Either the function no longer submits to rayon — then delete "
+            f"the entry, because it now pre-exempts whatever is written into "
+            f"that function later — or the key names a path or a function that "
+            f"does not exist, and the exemption it was meant to grant is not "
+            f"being granted."
+        )
 
     if violations:
         print("FAILED: HNSW rayon submissions reaching the global pool unexplained:")

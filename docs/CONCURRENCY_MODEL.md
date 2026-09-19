@@ -260,8 +260,9 @@ Two checks hold the rule, because neither is sufficient alone:
   whatever the machine's timing. Before the fix it timed out at 60 s; after it,
   both holders finish in 0.05 s.
 - `scripts/check_hnsw_rayon_pool.py` (CI job `lint`) refuses a *new* rayon
-  submission anywhere under `index/hnsw/` that is neither on the dedicated pool
-  nor listed with the reason it cannot close the cycle. It cannot decide by
+  submission in any non-test file under `index/hnsw/` that is neither inside an
+  `.install(` closure — on any dedicated pool, not only `graph_pool` — nor
+  listed with the reason it cannot close the cycle. It cannot decide by
   itself whether a submission runs under a held guard — the one that deadlocked
   reached `par_iter` three calls down, in another file — so it requires the
   reason to be written rather than inferred.
