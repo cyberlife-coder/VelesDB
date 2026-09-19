@@ -234,8 +234,10 @@ tokio = { workspace = true }
 criterion = { workspace = true }
 # session_limit_tests.rs implements rmcp's `EventStore` trait (an
 # `#[async_trait]` trait) for a test double proving `BoundedSessionManager`
-# forwards `event_store()` (#2331). Same version rmcp itself resolves to.
-async-trait = "0.1"
+# forwards `event_store()` (#2331). Floor matches rmcp's own (`^0.1.89`) so
+# `-Z direct-minimal-versions` resolves one shared version instead of
+# conflicting with it over two different ones of the same crate.
+async-trait = "0.1.89"
 # Integration tests use scratch stores even when `persistence` is not one of
 # the features under test. Keep the production dependency optional while
 # making the test harness feature-independent.
