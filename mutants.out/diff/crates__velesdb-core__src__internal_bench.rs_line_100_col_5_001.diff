@@ -1,0 +1,21 @@
+--- crates/velesdb-core/src/internal_bench.rs
++++ replace sparse_linear_scan_search -> Vec<crate::index::sparse::ScoredDoc> with vec![Default::default()]
+@@ -92,17 +92,17 @@
+ /// not part of the stable API, and the router stays the only way in for
+ /// application code.
+ #[must_use]
+ pub fn sparse_linear_scan_search(
+     index: &SparseInvertedIndex,
+     query: &SparseVector,
+     k: usize,
+ ) -> Vec<crate::index::sparse::ScoredDoc> {
+-    crate::sparse_index::search::linear_scan_search_for_bench(index, query, k)
++    vec![Default::default()] /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// Runs the `MaxScore` DAAT strategy directly, bypassing the router.
+ ///
+ /// See [`sparse_linear_scan_search`] for why this seam exists.
+ #[must_use]
+ pub fn sparse_maxscore_search(
+     index: &SparseInvertedIndex,

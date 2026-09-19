@@ -1,0 +1,21 @@
+--- crates/velesdb-core/src/internal_bench.rs
++++ replace sparse_scoring_ops -> u64 with 0
+@@ -113,17 +113,17 @@
+ }
+ 
+ /// Returns the sparse posting inspections counted since the last reset.
+ ///
+ /// See `sparse_index::op_count` for what one inspection is, and for why a
+ /// wall-clock figure taken under this feature is not a benchmark.
+ #[must_use]
+ pub fn sparse_scoring_ops() -> u64 {
+-    crate::sparse_index::op_count::scoring_ops()
++    0 /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// Resets the sparse posting-inspection counter to zero.
+ pub fn reset_sparse_scoring_ops() {
+     crate::sparse_index::op_count::reset_scoring_ops();
+ }
+ 
+ /// Parses a query through the cache without recording stats.

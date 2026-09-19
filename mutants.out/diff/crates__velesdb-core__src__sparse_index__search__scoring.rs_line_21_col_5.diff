@@ -1,0 +1,24 @@
+--- crates/velesdb-core/src/sparse_index/search/scoring.rs
++++ replace count_ops with ()
+@@ -13,20 +13,17 @@
+ 
+ /// Records `n` posting inspections when the bench counter is compiled in.
+ ///
+ /// One call site per counted loop instead of a `#[cfg]` inside each: with the
+ /// feature off this is an empty inline function and the argument expression
+ /// is the only thing left, which LLVM drops.
+ #[inline]
+ pub(crate) fn count_ops(n: u64) {
+-    #[cfg(feature = "internal-bench")]
+-    super::super::op_count::record_ops(n);
+-    #[cfg(not(feature = "internal-bench"))]
+-    let _ = n;
++    () /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// Records the probes a `binary_search` over `len` entries performs.
+ #[inline]
+ pub(crate) fn count_binary_search(len: usize) {
+     #[cfg(feature = "internal-bench")]
+     super::super::op_count::record_binary_search(len);
+     #[cfg(not(feature = "internal-bench"))]

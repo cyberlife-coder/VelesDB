@@ -1,0 +1,29 @@
+crates/velesdb-core/src/internal_bench.rs:100:5: replace sparse_linear_scan_search -> Vec<crate::index::sparse::ScoredDoc> with vec![]
+crates/velesdb-core/src/internal_bench.rs:100:5: replace sparse_linear_scan_search -> Vec<crate::index::sparse::ScoredDoc> with vec![Default::default()]
+crates/velesdb-core/src/internal_bench.rs:112:5: replace sparse_maxscore_search -> Vec<crate::index::sparse::ScoredDoc> with vec![]
+crates/velesdb-core/src/internal_bench.rs:112:5: replace sparse_maxscore_search -> Vec<crate::index::sparse::ScoredDoc> with vec![Default::default()]
+crates/velesdb-core/src/internal_bench.rs:121:5: replace sparse_scoring_ops -> u64 with 0
+crates/velesdb-core/src/internal_bench.rs:121:5: replace sparse_scoring_ops -> u64 with 1
+crates/velesdb-core/src/internal_bench.rs:126:5: replace reset_sparse_scoring_ops with ()
+crates/velesdb-core/src/internal_bench_tests.rs:62:5: replace tiny_sparse_index -> crate::index::sparse::SparseInvertedIndex with Default::default()
+crates/velesdb-core/src/sparse_index/op_count.rs:47:5: replace record_ops with ()
+crates/velesdb-core/src/sparse_index/op_count.rs:56:5: replace record_binary_search with ()
+crates/velesdb-core/src/sparse_index/op_count.rs:57:16: replace > with == in record_binary_search
+crates/velesdb-core/src/sparse_index/op_count.rs:57:16: replace > with < in record_binary_search
+crates/velesdb-core/src/sparse_index/op_count.rs:57:16: replace > with >= in record_binary_search
+crates/velesdb-core/src/sparse_index/op_count.rs:58:47: replace + with - in record_binary_search
+crates/velesdb-core/src/sparse_index/op_count.rs:58:47: replace + with * in record_binary_search
+crates/velesdb-core/src/sparse_index/op_count.rs:66:5: replace scoring_ops -> u64 with 0
+crates/velesdb-core/src/sparse_index/op_count.rs:66:5: replace scoring_ops -> u64 with 1
+crates/velesdb-core/src/sparse_index/op_count.rs:71:5: replace reset_scoring_ops with ()
+crates/velesdb-core/src/sparse_index/op_count_tests.rs:28:5: replace counted -> u64 with 0
+crates/velesdb-core/src/sparse_index/op_count_tests.rs:28:5: replace counted -> u64 with 1
+crates/velesdb-core/src/sparse_index/search/mod.rs:198:5: replace linear_scan_search_for_bench -> Vec<ScoredDoc> with vec![]
+crates/velesdb-core/src/sparse_index/search/mod.rs:198:5: replace linear_scan_search_for_bench -> Vec<ScoredDoc> with vec![Default::default()]
+crates/velesdb-core/src/sparse_index/search/mod.rs:209:5: replace maxscore_search_for_bench -> Vec<ScoredDoc> with vec![]
+crates/velesdb-core/src/sparse_index/search/mod.rs:209:5: replace maxscore_search_for_bench -> Vec<ScoredDoc> with vec![Default::default()]
+crates/velesdb-core/src/sparse_index/search/scoring.rs:21:5: replace count_ops with ()
+crates/velesdb-core/src/sparse_index/search/scoring.rs:107:32: replace - with / in score_document
+crates/velesdb-core/src/sparse_index/search/scoring.rs:136:5: replace find_min_essential_doc_id -> Option<u64> with None
+crates/velesdb-core/src/sparse_index/search/strategy.rs:112:5: replace linear_scan_dense -> Vec<ScoredDoc> with vec![]
+crates/velesdb-core/src/sparse_index/search/strategy.rs:148:5: replace linear_scan_hashmap -> Vec<ScoredDoc> with vec![]

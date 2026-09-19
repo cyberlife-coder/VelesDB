@@ -11,6 +11,28 @@ use std::collections::BinaryHeap;
 use super::super::inverted_index::SparseInvertedIndex;
 use super::super::types::{PostingEntry, ScoredDoc, SparseVector};
 
+/// Records `n` posting inspections when the bench counter is compiled in.
+///
+/// One call site per counted loop instead of a `#[cfg]` inside each: with the
+/// feature off this is an empty inline function and the argument expression
+/// is the only thing left, which LLVM drops.
+#[inline]
+pub(crate) fn count_ops(n: u64) {
+    #[cfg(feature = "internal-bench")]
+    super::super::op_count::record_ops(n);
+    #[cfg(not(feature = "internal-bench"))]
+    let _ = n;
+}
+
+/// Records the probes a `binary_search` over `len` entries performs.
+#[inline]
+pub(crate) fn count_binary_search(len: usize) {
+    #[cfg(feature = "internal-bench")]
+    super::super::op_count::record_binary_search(len);
+    #[cfg(not(feature = "internal-bench"))]
+    let _ = len;
+}
+
 /// Collects posting lists for each query term, along with query weight and
 /// the global max document weight for that term.
 pub(crate) struct TermPostings {
@@ -82,6 +104,7 @@ pub(crate) fn score_document(
     let mut score = 0.0_f32;
 
     // Essential terms: advance cursors that match doc_id
+    count_ops((term_data.len() - split) as u64);
     for i in split..term_data.len() {
         if cursors[i] < term_data[i].postings.len()
             && term_data[i].postings[cursors[i]].doc_id == doc_id
@@ -91,8 +114,11 @@ pub(crate) fn score_document(
         }
     }
 
-    // Non-essential terms: binary search for doc_id
+    // Non-essential terms: binary search for doc_id. This is the work #2177
+    // names as MaxScore's differentiator: O(terms x log postings) per
+    // candidate where the linear scan pays O(1) per posting.
     for td in &term_data[..split] {
+        count_binary_search(td.postings.len());
         if let Ok(pos) = td.postings.binary_search_by_key(&doc_id, |e| e.doc_id) {
             score += td.query_weight * td.postings[pos].weight;
         }
@@ -108,6 +134,7 @@ pub(crate) fn find_min_essential_doc_id(
     split: usize,
 ) -> Option<u64> {
     let mut min_doc_id: Option<u64> = None;
+    count_ops((term_data.len().saturating_sub(split)) as u64);
     for i in split..term_data.len() {
         if cursors[i] < term_data[i].postings.len() {
             let did = term_data[i].postings[cursors[i]].doc_id;

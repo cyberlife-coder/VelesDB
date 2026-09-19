@@ -39,3 +39,128 @@ fn test_internal_bench_distance_engine_matches_public_engine() {
         assert!((internal - public).abs() <= 1e-5, "dim={dim}");
     }
 }
+
+// ===========================================================================
+// #2177's measurement seam, covered where `cargo mutants` can see it.
+//
+// `sparse_linear_scan_search` and `sparse_maxscore_search` were exercised only
+// by `tests/sparse_strategy_crossover.rs`. The mutants job runs
+// `cargo mutants -- --lib --`, so an integration test is invisible to it and
+// both seams' mutants survived: `replace … with vec![]` and
+// `with vec![Default::default()]` were reported MISSED on a real run. A seam
+// nothing pins can be emptied without a test noticing — and a seam that
+// returns nothing would make the crossover harness compare two empty results
+// and call them equal.
+//
+// These live here rather than beside the harness precisely because `--lib` is
+// what the mutation job reads.
+// ===========================================================================
+
+/// Three documents whose term overlap is known, so the expected top-1 is not
+/// a matter of opinion.
+fn tiny_sparse_index() -> crate::index::sparse::SparseInvertedIndex {
+    use crate::index::sparse::{SparseInvertedIndex, SparseVector};
+    let index = SparseInvertedIndex::new();
+    index.insert_batch_chunk(&[
+        (1, SparseVector::new(vec![(1, 1.0), (2, 1.0)])),
+        (2, SparseVector::new(vec![(2, 2.0), (3, 1.0)])),
+        (3, SparseVector::new(vec![(4, 5.0)])),
+    ]);
+    index
+}
+
+#[test]
+fn both_sparse_seams_return_the_documents_the_query_matches() {
+    use crate::index::sparse::SparseVector;
+    let index = tiny_sparse_index();
+    let query = SparseVector::new(vec![(2, 1.0)]);
+
+    for (name, hits) in [
+        (
+            "linear",
+            internal_bench::sparse_linear_scan_search(&index, &query, 10),
+        ),
+        (
+            "maxscore",
+            internal_bench::sparse_maxscore_search(&index, &query, 10),
+        ),
+    ] {
+        // `vec![]` and `vec![Default::default()]` both die here: the first on
+        // the count, the second on the ids, which a default `ScoredDoc` cannot
+        // carry.
+        assert_eq!(hits.len(), 2, "{name}: term 2 is in documents 1 and 2");
+        let ids: Vec<u64> = hits.iter().map(|h| h.doc_id).collect();
+        assert!(ids.contains(&1) && ids.contains(&2), "{name}: got {ids:?}");
+        assert!(
+            !ids.contains(&3),
+            "{name}: document 3 shares no term with the query"
+        );
+        // Document 2 weighs 2.0 against document 1's 1.0 on the only query
+        // term, so the order is a fact about the data, not about the strategy.
+        assert_eq!(hits[0].doc_id, 2, "{name}: highest weight ranks first");
+        assert!(hits[0].score > hits[1].score, "{name}: scores are distinct");
+    }
+}
+
+#[test]
+#[serial_test::serial]
+fn the_sparse_scoring_counter_moves_and_resets() {
+    use crate::index::sparse::SparseVector;
+    let index = tiny_sparse_index();
+    let query = SparseVector::new(vec![(2, 1.0)]);
+
+    internal_bench::reset_sparse_scoring_ops();
+    assert_eq!(internal_bench::sparse_scoring_ops(), 0, "reset means zero");
+    let _ = internal_bench::sparse_linear_scan_search(&index, &query, 10);
+    let after = internal_bench::sparse_scoring_ops();
+    assert!(
+        after > 0,
+        "a scan that scored two documents counted no work"
+    );
+
+    internal_bench::reset_sparse_scoring_ops();
+    assert_eq!(
+        internal_bench::sparse_scoring_ops(),
+        0,
+        "the counter did not reset, so a second measurement would carry the first"
+    );
+}
+
+/// The counts MaxScore records, asserted exactly, on shapes that reach its
+/// non-essential path.
+///
+/// Two mutants survived the first pass here — `count_binary_search` turned
+/// into a no-op, and `count_ops((term_data.len() - split))` with its `-`
+/// turned into `+`. Both need `split > 0` to be observable at all: with
+/// `k = 10` on three documents the heap never fills, the threshold stays at
+/// zero, `find_split` returns 0, and `len - split` equals `len + split`. So
+/// the cases below use `k = 1` and `k = 2` with several query terms, which is
+/// what makes a term non-essential and sends it through the binary search
+/// these two lines count.
+///
+/// Exact values rather than a range: this counter carries #2177's answer, and
+/// the harness calls itself reproducible bit for bit. A legitimate change to
+/// the scoring path SHOULD move these numbers — that is the point of a work
+/// measure — and updating them is how the change gets noticed.
+#[test]
+#[serial_test::serial]
+fn maxscore_records_the_work_its_non_essential_path_costs() {
+    use crate::index::sparse::SparseVector;
+    let index = tiny_sparse_index();
+
+    for (k, terms, expected) in [
+        (1usize, vec![(1u32, 1.0f32), (2, 1.0), (3, 1.0)], 12u64),
+        (1, vec![(2, 3.0), (4, 1.0)], 9),
+        (2, vec![(1, 1.0), (2, 2.0), (3, 1.0), (4, 1.0)], 24),
+    ] {
+        let query = SparseVector::new(terms.clone());
+        internal_bench::reset_sparse_scoring_ops();
+        let _ = internal_bench::sparse_maxscore_search(&index, &query, k);
+        assert_eq!(
+            internal_bench::sparse_scoring_ops(),
+            expected,
+            "k={k}, {} query terms: the recorded work changed",
+            terms.len()
+        );
+    }
+}

@@ -3719,6 +3719,38 @@ async fn test_bad_mode_is_refused_on_every_search_shape() {
             "uri={uri} body={text}"
         );
     }
+
+    // Precedence inside the pre-check `/search` and `/search/ids` share: a
+    // request carrying BOTH a bad `mode` and a bad `ef_search` answers the
+    // `mode` error, because `mode` is parsed first. Without this case the
+    // order of the two validations is pinned by nothing and either one may
+    // answer, changing the 400 body a client reads.
+    let both_bad = json!({
+        "vector": dense.clone(),
+        "top_k": 2,
+        "mode": "acurate",
+        "ef_search": 0
+    });
+    for uri in [
+        "/collections/mode_shapes/search",
+        "/collections/mode_shapes/search/ids",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(post(uri, &both_bad))
+            .await
+            .expect("Request failed");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "uri={uri}");
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("Failed to read body");
+        let json: Value = serde_json::from_slice(&bytes).expect("Invalid JSON");
+        let error = json["error"].as_str().expect("error is string");
+        assert!(
+            error.starts_with("Unknown search mode"),
+            "uri={uri}: mode must be refused before ef_search, got {error}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -5405,6 +5437,97 @@ async fn test_create_with_invalid_hnsw_alpha_returns_422() {
 /// the collection via `Database::delete_collection` so the client
 /// can retry without hitting `CollectionExists`.
 ///
+/// The `POST /collections` request every step of
+/// `test_advanced_config_failure_rolls_back_collection` sends. Writing it
+/// once is what keeps that test under the line budget, and what makes the
+/// fault-injected create and the retry demonstrably the same call.
+#[cfg(feature = "test-fault-injection")]
+fn create_collection_request(body: &Value) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri("/collections")
+        .header("Content-Type", "application/json")
+        .body(Body::from(body.to_string()))
+        .expect("test: build create request")
+}
+
+/// The body the rollback test creates twice: once against the injected fault,
+/// once as the retry that must succeed. One literal, so "the same POST" in
+/// that test's own comment is a fact about the code, not a claim about it.
+#[cfg(feature = "test-fault-injection")]
+fn rollback_cfg_body() -> Value {
+    json!({
+        "name": "rollback_cfg",
+        "dimension": 16,
+        "metric": "cosine",
+        "pq_rescore_oversampling": 8
+    })
+}
+
+/// How many `save_config()` calls a plain create makes.
+///
+/// Probed on a throw-away collection so the counter state is realistic, then
+/// deleted so the retry assertion starts clean without relying on collection
+/// name uniqueness. The count is the zero-based index of the first Phase 2
+/// call, which is where the fault has to fire.
+#[cfg(feature = "test-fault-injection")]
+async fn probe_phase1_save_config_calls(app: &axum::Router) -> usize {
+    use std::sync::atomic::Ordering;
+    use velesdb_core::fault_injection::SAVE_CONFIG_CALL_COUNT;
+
+    SAVE_CONFIG_CALL_COUNT.store(0, Ordering::SeqCst);
+    let probe_response = app
+        .clone()
+        .oneshot(create_collection_request(&json!({
+            "name": "rollback_probe",
+            "dimension": 16,
+            "metric": "cosine"
+        })))
+        .await
+        .expect("test: probe request failed");
+    assert_eq!(probe_response.status(), StatusCode::CREATED);
+    let phase1_save_calls = SAVE_CONFIG_CALL_COUNT.load(Ordering::SeqCst);
+
+    let _ = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/collections/rollback_probe")
+                .body(Body::empty())
+                .expect("test: build delete request"),
+        )
+        .await;
+    phase1_save_calls
+}
+
+/// The collection names `GET /collections` reports.
+#[cfg(feature = "test-fault-injection")]
+async fn listed_collection_names(app: &axum::Router) -> Vec<String> {
+    let list_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/collections")
+                .body(Body::empty())
+                .expect("test: build list request"),
+        )
+        .await
+        .expect("test: list request failed");
+    let list_body = axum::body::to_bytes(list_response.into_body(), usize::MAX)
+        .await
+        .expect("test: read list body");
+    let list_json: Value = serde_json::from_slice(&list_body).expect("test: parse list json");
+    list_json["collections"]
+        .as_array()
+        .expect("collections must be an array")
+        .iter()
+        .filter_map(|entry| entry.get("name").and_then(Value::as_str))
+        .map(str::to_owned)
+        .collect()
+}
+
 /// The only realistic failure mode of `apply_advanced_config` is a
 /// disk I/O error in `save_config()`. Sprint 1.5 item S1.5-05
 /// introduced the `SaveConfigFaultGuard` seam in
@@ -5423,87 +5546,31 @@ async fn test_create_with_invalid_hnsw_alpha_returns_422() {
 #[cfg(feature = "test-fault-injection")]
 #[tokio::test]
 async fn test_advanced_config_failure_rolls_back_collection() {
-    use std::sync::atomic::Ordering;
-    use velesdb_core::fault_injection::{SaveConfigFaultGuard, SAVE_CONFIG_CALL_COUNT};
+    use velesdb_core::fault_injection::SaveConfigFaultGuard;
 
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let app = create_test_app(&temp_dir);
 
-    // Step 1: probe how many `save_config()` calls a normal Phase 1
-    // (create_vector_collection) makes so we can configure the
-    // fault to fire exactly on the first Phase 2 call. We do this
-    // on a throw-away collection so the counter state is realistic.
-    SAVE_CONFIG_CALL_COUNT.store(0, Ordering::SeqCst);
-    let probe_response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/collections")
-                .header("Content-Type", "application/json")
-                .body(Body::from(
-                    json!({
-                        "name": "rollback_probe",
-                        "dimension": 16,
-                        "metric": "cosine"
-                    })
-                    .to_string(),
-                ))
-                .expect("test: build probe request"),
-        )
-        .await
-        .expect("test: probe request failed");
-    assert_eq!(probe_response.status(), StatusCode::CREATED);
-    let phase1_save_calls = SAVE_CONFIG_CALL_COUNT.load(Ordering::SeqCst);
+    let phase1_save_calls = probe_phase1_save_config_calls(&app).await;
 
-    // Delete the probe so the retry assertion below starts from a
-    // clean state without relying on collection name uniqueness.
-    let _ = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("DELETE")
-                .uri("/collections/rollback_probe")
-                .body(Body::empty())
-                .expect("test: build delete request"),
-        )
-        .await;
-
-    // Step 2: GIVEN Phase 2 `save_config()` is scheduled to fail on
-    // the call immediately after Phase 1 completes (phase1_save_calls
-    // is the zero-based index of the first Phase 2 call).
+    // GIVEN Phase 2 `save_config()` is scheduled to fail on the call
+    // immediately after Phase 1 completes.
     {
         let _guard = SaveConfigFaultGuard::activate(phase1_save_calls);
 
-        // WHEN: POST with advanced config → Phase 1 completes
-        // normally (probe calls reproduced), then Phase 2's
-        // apply_advanced_config hits the injected save_config error.
+        // WHEN: POST with advanced config -> Phase 1 completes normally (probe
+        // calls reproduced), then Phase 2's apply_advanced_config hits the
+        // injected save_config error.
         let response = app
             .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/collections")
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(
-                        json!({
-                            "name": "rollback_cfg",
-                            "dimension": 16,
-                            "metric": "cosine",
-                            "pq_rescore_oversampling": 8
-                        })
-                        .to_string(),
-                    ))
-                    .expect("test: build create request"),
-            )
+            .oneshot(create_collection_request(&rollback_cfg_body()))
             .await
             .expect("test: create request failed");
 
         // THEN: the handler surfaces a 400/500 depending on how the
-        // core::Error::Io variant maps through core_error_response.
-        // What matters is the downstream invariant verified below:
-        // the collection must be absent from the registry so retry
-        // succeeds.
+        // core::Error::Io variant maps through core_error_response. What
+        // matters is the downstream invariant verified below: the collection
+        // must be absent from the registry so retry succeeds.
         assert!(
             response.status() == StatusCode::BAD_REQUEST
                 || response.status() == StatusCode::INTERNAL_SERVER_ERROR,
@@ -5511,53 +5578,19 @@ async fn test_advanced_config_failure_rolls_back_collection() {
             response.status()
         );
     }
-    // Guard dropped here — save_config() returns to normal operation.
+    // Guard dropped here -- save_config() returns to normal operation.
 
     // Invariant 1: the collection must be absent from the list.
-    let list_response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/collections")
-                .body(Body::empty())
-                .expect("test: build list request"),
-        )
-        .await
-        .expect("test: list request failed");
-    let list_body = axum::body::to_bytes(list_response.into_body(), usize::MAX)
-        .await
-        .expect("test: read list body");
-    let list_json: Value = serde_json::from_slice(&list_body).expect("test: parse list json");
-    let collections_array = list_json["collections"]
-        .as_array()
-        .expect("collections must be an array");
+    let names = listed_collection_names(&app).await;
     assert!(
-        !collections_array
-            .iter()
-            .any(|v| v.get("name").and_then(Value::as_str) == Some("rollback_cfg")),
-        "rollback_cfg must be absent after Phase 2 failure rollback, got: {collections_array:?}"
+        !names.iter().any(|name| name == "rollback_cfg"),
+        "rollback_cfg must be absent after Phase 2 failure rollback, got: {names:?}"
     );
 
-    // Invariant 2: retrying the same POST without fault injection
-    // must succeed — no CollectionExists error from orphaned state.
+    // Invariant 2: retrying the same POST without fault injection must
+    // succeed -- no CollectionExists error from orphaned state.
     let retry_response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/collections")
-                .header("Content-Type", "application/json")
-                .body(Body::from(
-                    json!({
-                        "name": "rollback_cfg",
-                        "dimension": 16,
-                        "metric": "cosine",
-                        "pq_rescore_oversampling": 8
-                    })
-                    .to_string(),
-                ))
-                .expect("test: build retry request"),
-        )
+        .oneshot(create_collection_request(&rollback_cfg_body()))
         .await
         .expect("test: retry request failed");
     assert_eq!(

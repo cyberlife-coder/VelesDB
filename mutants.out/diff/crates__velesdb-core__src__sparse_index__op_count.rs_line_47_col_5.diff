@@ -1,0 +1,21 @@
+--- crates/velesdb-core/src/sparse_index/op_count.rs
++++ replace record_ops with ()
+@@ -39,17 +39,17 @@
+ use std::sync::atomic::{AtomicU64, Ordering};
+ 
+ /// Total posting inspections since the last reset.
+ static SCORING_OPS: AtomicU64 = AtomicU64::new(0);
+ 
+ /// Records `n` posting inspections.
+ #[inline]
+ pub(crate) fn record_ops(n: u64) {
+-    SCORING_OPS.fetch_add(n, Ordering::Relaxed);
++    () /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// Records the probes `binary_search` performs over `len` entries.
+ ///
+ /// `ilog2(len) + 1` for a non-empty list, and nothing for an empty one, which
+ /// `binary_search` answers without a probe.
+ #[inline]
+ pub(crate) fn record_binary_search(len: usize) {

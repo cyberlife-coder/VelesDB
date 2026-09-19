@@ -113,6 +113,28 @@ a `scripts/check-*.py` (or `verify-`/`gate-`) without an entry there fails
 `scripts/tests/test_ci_gate_reachability.py` — the registry is checked against the
 workflows *and* against the filesystem, so it cannot quietly shrink.
 
+Some of those guards need a Python package — `check-figure-sources.py` parses
+Markdown with a real parser rather than by regex, and the CI-wiring suites read
+the workflows with PyYAML. Every one of them, with its pin, is declared in
+[`scripts/requirements-guards.txt`](scripts/requirements-guards.txt):
+
+```bash
+python3 -m venv .venv-guards
+.venv-guards/bin/pip install -r scripts/requirements-guards.txt
+```
+
+Then run the guards with `.venv-guards/bin/python`. A virtualenv rather than a
+plain `pip install --user`, because a system Python that follows PEP 668 —
+Homebrew's, Debian's, and the CI runners' — refuses to install into itself;
+`ci.yml` builds a venv for the same reason. If your Python is not managed that
+way, `python3 -m pip install -r scripts/requirements-guards.txt` is enough.
+
+Without them a guard exits **2**, which means *it could not run* — not that it
+passed, and not that it refused. The workflows install from that same file, and
+`scripts/check_guard_python_pins.py` refuses a workflow that pins those packages
+inline again: the pins used to be repeated across `ci.yml` and
+`gate-contracts.yml`, where nothing kept them in step.
+
 ### Concurrency Rules
 
 - Use `parking_lot::RwLock` / `Mutex` (never `std::sync` — no poisoning, no `.unwrap()` on locks)

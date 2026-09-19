@@ -150,6 +150,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   load call alone reports the cost as gone when it has only moved.
 
 ### Fixed
+- **Every velesdb-core feature that gates code is now linted and mutated
+  (#2348).** `cargo clippy --features a,b` lints what those features switch
+  on and nothing else, and the two workspace passes between them named four
+  of the ten features the crate declares. `internal-bench` (29 `cfg` sites),
+  `openapi` (128) and `test-fault-injection` were compiled by no pedantic
+  pass at all — they had `cargo check` jobs, which do not lint — and three
+  `clippy::pedantic` violations reached a review through that hole. The two
+  passes now cover both states of every feature between them, the SIFT1M job
+  runs clippy instead of check (same build, stricter verdict), and
+  `scripts/check_feature_lint_coverage.py` refuses a feature that gates code
+  no pedantic pass compiles. One violation surfaced immediately and is
+  fixed: a 113-line fault-injection test in `velesdb-server`, now three
+  helpers and an 80-line body.
+  `cargo-mutants` had the same blind spot for a different reason: it picks
+  mutants from the source text, with no knowledge of `cfg`. The mutant list
+  is byte-identical with and without `--features internal-bench`, but
+  without it the mutated code is compiled out, so no test can observe the
+  mutation. Measured on #2347's own diff, over the six mutants in
+  `sparse_index::op_count::record_binary_search`: **six MISSED without the
+  feature, six caught with it** — the job now passes it, at no extra mutant
+  and no extra run.
+- **A batch insert no longer deadlocks the index against a concurrent
+  `vacuum` (#2343).** `HnswIndex::insert_batch_parallel` held the index read
+  guard across a rayon join on the **global** pool. A `vacuum` asking for the
+  write guard blocks every new reader, so the global workers that take the
+  read guard — the per-query search and SIMD reranking — parked; the insert's
+  own jobs never got a worker, and the guard the vacuum waited on was never
+  released. Nothing advanced, on an index serving reads: reproduced as three
+  hangs in six runs on an idle machine.
+  The place phase now runs on the dedicated pool the bulk drain already used,
+  and only at or above `PARALLEL_BATCH_MIN`, below which it enters no pool at
+  all. No search path changed, and no public API. **Debug builds gain two
+  assertions**: `link_placed` refuses a call from a rayon worker, and
+  `insert_batch_parallel` refuses one *for a batch at or above that
+  threshold* — below it no pool is installed, so nothing is refused. Such a
+  caller keeps running its own pool's jobs while it waits and can re-close the
+  same cycle by stealing. Release builds carry no check.
 - **The agent hooks remind a conversation of the working context it uses.** The
   SessionStart, PreCompact and Stop hooks of the Claude Code and Codex
   integrations named the session set in `.velesdb-hooks.json` (else `rolling`),
@@ -463,6 +500,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   minutes, a time in a table row labelled by a config word, and a figure drawn
   in an image pass unseen, as its docstring lists. The register, not the
   guard, is what binds a figure to its run.
+
+- **`upsert_bulk` with an async index builder wrote every vector into the
+  graph twice (#2264).** Its direct writer places each vector in the graph's
+  arena and maps its id there, so brute force sees it at once; the builder's
+  drain then inserted the copy it had queued, which placed the vector again at
+  a new slot and moved the id to it. The arena held two slots per bulk-loaded
+  point until a vacuum, so `reorder_for_locality`, and with it
+  `POST /collections/{name}/locality/reorder`, refused every collection loaded
+  this way. The same drain mapped again a point deleted after its bulk load,
+  and gave a point upserted in between back the vector it had been
+  bulk-loaded with. The builder now queues ids, not vectors: its drain
+  resolves each id to its slot under the index read guard, skips an id
+  deleted since and a slot already linked, links an id queued twice once, and
+  places nothing. An index with its exact-distance features off gives the
+  direct writer no slot to fill, so for it the builder still places the
+  vectors. The bulk load also stops copying each vector into the queue. The
+  drain connects on a rayon pool of its own, never the global one: it links
+  under the index read guard, and a global worker that takes that same guard
+  under a pending `vacuum` writer would deadlock (#2343). A drain whose link
+  fails puts its ids back on the queue, and `trigger_build_async`, which
+  drains the vector buffer only, refuses while placed ids wait.
 
 - **The REST OpenAPI document shows no rustdoc link syntax (#2263).** utoipa
   copies doc comments into the OpenAPI document (`docs/openapi.{json,yaml}`,

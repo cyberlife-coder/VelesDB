@@ -10,7 +10,7 @@ use rustc_hash::FxHashMap;
 use super::super::inverted_index::SparseInvertedIndex;
 use super::super::types::{PostingEntry, ScoredDoc, SparseVector};
 use super::scoring::{
-    extract_sorted_results, find_min_essential_doc_id, find_split, prepare_term_data,
+    count_ops, extract_sorted_results, find_min_essential_doc_id, find_split, prepare_term_data,
     score_document, PreparedTerms,
 };
 use super::MAX_DENSE_ACCUMULATOR;
@@ -120,6 +120,9 @@ fn linear_scan_dense(
     let mut touched: Vec<u64> = Vec::new();
 
     for (qw, postings) in term_postings {
+        // The whole of this strategy's scoring cost: one inspection per
+        // posting, against MaxScore's terms x log(postings) per candidate.
+        count_ops(postings.len() as u64);
         for entry in postings {
             #[allow(clippy::cast_possible_truncation)]
             let idx = entry.doc_id as usize;
@@ -145,6 +148,7 @@ fn linear_scan_hashmap(k: usize, term_postings: &[(f32, Vec<PostingEntry>)]) -> 
     let mut scores: FxHashMap<u64, f32> = FxHashMap::default();
 
     for (qw, postings) in term_postings {
+        count_ops(postings.len() as u64);
         for entry in postings {
             *scores.entry(entry.doc_id).or_insert(0.0) += qw * entry.weight;
         }

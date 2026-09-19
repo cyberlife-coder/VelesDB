@@ -1,0 +1,19 @@
+--- crates/velesdb-core/src/sparse_index/op_count.rs
++++ replace scoring_ops -> u64 with 1
+@@ -58,15 +58,15 @@
+             record_ops(u64::from(len.ilog2()) + 1);
+         }
+     }
+ }
+ 
+ /// Returns the posting inspections counted since the last reset.
+ #[must_use]
+ pub(crate) fn scoring_ops() -> u64 {
+-    SCORING_OPS.load(Ordering::Relaxed)
++    1 /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// Resets the inspection counter to zero.
+ pub(crate) fn reset_scoring_ops() {
+     SCORING_OPS.store(0, Ordering::Relaxed);
+ }

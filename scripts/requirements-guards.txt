@@ -1,0 +1,30 @@
+# The Python packages the guard scripts in scripts/ need, and their pins.
+#
+# ONE source. These pins used to be written inline in three `pip install`
+# lines across two workflows -- ci.yml twice, gate-contracts.yml once -- with
+# each package pinned in at least two of them. Both workflows said so in a
+# comment ("pinned here and in gate-contracts.yml", "installed here at
+# gate-contracts.yml's pin") and neither could enforce it: nothing failed if
+# one moved and the others did not.
+#
+# It also left a contributor with no way to run the guards locally. A guard
+# whose parser is missing exits 2 -- "could not run", which is not a refusal --
+# and the only place that said which wheel to install was a workflow file.
+#
+# Install them with:
+#
+#     python3 -m pip install -r scripts/requirements-guards.txt
+#
+# On a system Python that refuses to install into itself (PEP 668), use a
+# virtualenv, as ci.yml does.
+#
+# `scripts/check_guard_python_pins.py` refuses a workflow that pins any of
+# these packages inline again.
+
+# scripts/local-ci.sh and the CI-wiring suites read the workflows with it.
+pyyaml==6.0.3
+
+# scripts/check-figure-sources.py parses Markdown with a real parser rather
+# than by regex; mdurl is its dependency, pinned so the parse cannot shift.
+markdown-it-py==4.2.0
+mdurl==0.1.2

@@ -280,3 +280,7 @@ impl Drop for HnswIndex {
 #[cfg(test)]
 #[path = "safety_tests.rs"]
 mod safety_tests;
+
+#[cfg(test)]
+#[path = "global_pool_tests.rs"]
+mod global_pool_tests;

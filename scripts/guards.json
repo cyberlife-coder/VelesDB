@@ -1363,6 +1363,160 @@
           ]
         }
       ]
+    },
+    {
+      "script": "scripts/check_guard_python_pins.py",
+      "purpose": "The guards' Python pins live only in scripts/requirements-guards.txt; no workflow pins them inline.",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "lint",
+      "required": true,
+      "mode": "strict",
+      "self_test": "scripts.tests.test_check_guard_python_pins",
+      "self_test_required": true,
+      "blind_spot": {
+        "issue": null,
+        "summary": "It polices only the packages requirements-guards.txt declares, and only `pip install` lines in .github/workflows/*.yml. A pin moved into a shell script the workflow calls would escape it. It does refuse a deleted or empty requirements file, so removing the single source cannot make it vacuously green."
+      },
+      "must_refuse": [
+        {
+          "vector": "the line gate-contracts.yml actually carried before requirements-guards.txt existed: three pins inline, repeated in ci.yml, with nothing keeping them in step",
+          "files": {
+            ".github/workflows/gate-contracts.yml": "      - name: Install the guard suites' Python dependencies\n        run: python -m pip install --disable-pip-version-check pyyaml==6.0.3 markdown-it-py==4.2.0 mdurl==0.1.2\n",
+            "scripts/requirements-guards.txt": "pyyaml==6.0.3\nmarkdown-it-py==4.2.0\nmdurl==0.1.2\n"
+          },
+          "accepts": {
+            ".github/workflows/gate-contracts.yml": "      - name: Install the guard suites' Python dependencies\n        run: python -m pip install --disable-pip-version-check -r scripts/requirements-guards.txt\n",
+            "scripts/requirements-guards.txt": "pyyaml==6.0.3\nmarkdown-it-py==4.2.0\nmdurl==0.1.2\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        },
+        {
+          "vector": "the single source deleted, which must fail rather than leave the guard with nothing to check",
+          "files": {
+            ".github/workflows/gate-contracts.yml": "      - name: Install the guard suites' Python dependencies\n        run: python -m pip install --disable-pip-version-check -r scripts/requirements-guards.txt\n"
+          },
+          "accepts": {
+            ".github/workflows/gate-contracts.yml": "      - name: Install the guard suites' Python dependencies\n        run: python -m pip install --disable-pip-version-check -r scripts/requirements-guards.txt\n",
+            "scripts/requirements-guards.txt": "pyyaml==6.0.3\nmarkdown-it-py==4.2.0\nmdurl==0.1.2\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        }
+      ]
+    },
+    {
+      "script": "scripts/check_hnsw_rayon_pool.py",
+      "purpose": "No HNSW rayon submission reaches the GLOBAL pool without a written reason (#2343): a holder of HnswIndex::inner that joins on the global pool closes a deadlock cycle with a pending vacuum writer.",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "lint",
+      "required": true,
+      "mode": "strict",
+      "self_test": "scripts.tests.test_check_hnsw_rayon_pool",
+      "self_test_required": true,
+      "blind_spot": {
+        "issue": null,
+        "summary": "Two, both declared. (1) It cannot decide whether a submission runs under a held guard: the one that deadlocked reached par_iter three calls down, in another file. It does not try -- it requires every submission to be on the dedicated pool or listed in ALLOWED with a reason, so a new one is refused until someone writes that reason down. (2) Its companion check for a writer on NativeHnswIndex::inner scans index/hnsw/ only, not the whole crate: `inner` is a common field name and a crate-wide scan reported six writers on unrelated locks (cache::lru, velesql::cache). The field is pub(crate), so a writer added from outside index/hnsw/ escapes it; narrowing that field to its module would let the compiler enforce it instead. The behavioural half of the rule is crates/velesdb-core/src/index/hnsw/index/global_pool_tests.rs, which parks every global rayon worker and requires each guard holder to finish anyway. Two scope exclusions, named so the promise is not read as wider than the check: `*_tests.rs` files are skipped (a test submitting on the global pool starves nothing a vacuum waits on), and any receiver's `.install(` is accepted, not only `graph_pool()` (every non-global pool breaks the cycle). Neither is checked against what the jobs inside actually take."
+      },
+      "must_refuse": [
+        {
+          "vector": "a new HNSW function that joins on the global pool while holding inner.read() - the shape of #2343",
+          "files": {
+            "crates/velesdb-core/src/index/hnsw/newcomer.rs": "impl HnswIndex {\n    fn a_new_holder(&self) -> usize {\n        let inner = self.inner.read();\n        self.items.par_iter().map(|x| inner.score(x)).count()\n    }\n}\n"
+          },
+          "accepts": {
+            "crates/velesdb-core/src/index/hnsw/newcomer.rs": "impl HnswIndex {\n    fn a_new_holder(&self) -> usize {\n        let inner = self.inner.read();\n        graph_pool()?.install(|| {\n            self.items.par_iter().map(|x| inner.score(x)).count()\n        })\n    }\n}\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        },
+        {
+          "vector": "a writer appearing on NativeHnswIndex::inner, which voids the allowance brute_force_search_parallel rests on",
+          "files": {
+            "crates/velesdb-core/src/index/hnsw/native_index.rs": "impl NativeHnswIndex {\n    pub fn compact(&self) {\n        let mut inner = self.inner.write();\n        inner.compact();\n    }\n}\n"
+          },
+          "accepts": {
+            "crates/velesdb-core/src/index/hnsw/native_index.rs": "impl NativeHnswIndex {\n    pub fn peek(&self) {\n        let inner = self.inner.read();\n        inner.len();\n    }\n}\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        }
+      ]
+    },
+    {
+      "script": "scripts/check_feature_lint_coverage.py",
+      "purpose": "Every velesdb-core feature that gates code is named by a pedantic cargo clippy pass in ci.yml.",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "lint",
+      "required": true,
+      "mode": "strict",
+      "self_test": "scripts.tests.test_check_feature_lint_coverage",
+      "self_test_required": true,
+      "blind_spot": {
+        "issue": null,
+        "summary": "It reads velesdb-core alone: a feature of velesdb-server or velesdb-memory gating unlinted code escapes it. It matches feature names literally in --features, so a feature reached only through Cargo's graph (gpu = [\"wgpu\"]) counts as uncovered until it is named -- deliberate, since a pass that relies on the graph stops saying what it lints. It measures coverage, not cleanliness: naming a feature in a clippy line the job never runs would satisfy it, which is why ci_gate_reachability keeps the lint job itself required."
+      },
+      "must_refuse": [
+        {
+          "vector": "ci.yml's two workspace clippy passes as they stood before #2348: internal-bench gates a module and no pedantic pass compiles it, while a cargo check job builds it and hides the gap",
+          "files": {
+            "crates/velesdb-core/Cargo.toml": "[package]\nname = \"velesdb-core\"\n\n[features]\ndefault = [\"persistence\"]\ngpu = [\"wgpu\"]\ninternal-bench = []\npersistence = [\"dep:rayon\"]\nupdate-check = [\"dep:reqwest\"]\n",
+            "crates/velesdb-core/src/lib.rs": "#[cfg(feature = \"persistence\")]\npub mod storage;\n#[cfg(feature = \"gpu\")]\npub mod gpu;\n#[cfg(feature = \"internal-bench\")]\npub mod internal_bench;\n#[cfg(feature = \"update-check\")]\npub mod update;\n",
+            ".github/workflows/ci.yml": "jobs:\n  lint:\n    steps:\n      - name: Run Clippy (strict)\n        run: |\n          cargo clippy --workspace --all-targets --features persistence,gpu,update-check \\\n            -- -D warnings -D clippy::pedantic\n      - name: Run Clippy (strict, no gpu)\n        run: |\n          cargo clippy --workspace --all-targets --features persistence,update-check \\\n            -- -D warnings -D clippy::pedantic\n  internal-bench-check:\n    steps:\n      - name: Library and benches under internal-bench\n        run: cargo check -p velesdb-core --benches --features persistence,internal-bench\n"
+          },
+          "accepts": {
+            "crates/velesdb-core/Cargo.toml": "[package]\nname = \"velesdb-core\"\n\n[features]\ndefault = [\"persistence\"]\ngpu = [\"wgpu\"]\ninternal-bench = []\npersistence = [\"dep:rayon\"]\nupdate-check = [\"dep:reqwest\"]\n",
+            "crates/velesdb-core/src/lib.rs": "#[cfg(feature = \"persistence\")]\npub mod storage;\n#[cfg(feature = \"gpu\")]\npub mod gpu;\n#[cfg(feature = \"internal-bench\")]\npub mod internal_bench;\n#[cfg(feature = \"update-check\")]\npub mod update;\n",
+            ".github/workflows/ci.yml": "jobs:\n  lint:\n    steps:\n      - name: Run Clippy (strict)\n        run: |\n          cargo clippy --workspace --all-targets --features persistence,gpu,update-check \\\n            -- -D warnings -D clippy::pedantic\n      - name: Run Clippy (strict, no gpu)\n        run: |\n          cargo clippy --workspace --all-targets --features persistence,update-check,internal-bench \\\n            -- -D warnings -D clippy::pedantic\n  internal-bench-check:\n    steps:\n      - name: Library and benches under internal-bench\n        run: cargo check -p velesdb-core --benches --features persistence,internal-bench\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        },
+        {
+          "vector": "every pedantic pass downgraded to plain -D warnings, which would leave the guard measuring against a bar nobody enforces",
+          "files": {
+            "crates/velesdb-core/Cargo.toml": "[package]\nname = \"velesdb-core\"\n\n[features]\ndefault = [\"persistence\"]\ngpu = [\"wgpu\"]\ninternal-bench = []\npersistence = [\"dep:rayon\"]\nupdate-check = [\"dep:reqwest\"]\n",
+            "crates/velesdb-core/src/lib.rs": "#[cfg(feature = \"persistence\")]\npub mod storage;\n#[cfg(feature = \"gpu\")]\npub mod gpu;\n#[cfg(feature = \"internal-bench\")]\npub mod internal_bench;\n#[cfg(feature = \"update-check\")]\npub mod update;\n",
+            ".github/workflows/ci.yml": "jobs:\n  lint:\n    steps:\n      - name: Run Clippy (strict)\n        run: |\n          cargo clippy --workspace --all-targets --features persistence,gpu,update-check \\\n            -- -D warnings\n      - name: Run Clippy (strict, no gpu)\n        run: |\n          cargo clippy --workspace --all-targets --features persistence,update-check \\\n            -- -D warnings\n  internal-bench-check:\n    steps:\n      - name: Library and benches under internal-bench\n        run: cargo check -p velesdb-core --benches --features persistence,internal-bench\n"
+          },
+          "accepts": {
+            "crates/velesdb-core/Cargo.toml": "[package]\nname = \"velesdb-core\"\n\n[features]\ndefault = [\"persistence\"]\ngpu = [\"wgpu\"]\ninternal-bench = []\npersistence = [\"dep:rayon\"]\nupdate-check = [\"dep:reqwest\"]\n",
+            "crates/velesdb-core/src/lib.rs": "#[cfg(feature = \"persistence\")]\npub mod storage;\n#[cfg(feature = \"gpu\")]\npub mod gpu;\n#[cfg(feature = \"internal-bench\")]\npub mod internal_bench;\n#[cfg(feature = \"update-check\")]\npub mod update;\n",
+            ".github/workflows/ci.yml": "jobs:\n  lint:\n    steps:\n      - name: Run Clippy (strict)\n        run: |\n          cargo clippy --workspace --all-targets --features persistence,gpu,update-check \\\n            -- -D warnings -D clippy::pedantic\n      - name: Run Clippy (strict, no gpu)\n        run: |\n          cargo clippy --workspace --all-targets --features persistence,update-check,internal-bench \\\n            -- -D warnings -D clippy::pedantic\n  internal-bench-check:\n    steps:\n      - name: Library and benches under internal-bench\n        run: cargo check -p velesdb-core --benches --features persistence,internal-bench\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        },
+        {
+          "vector": "the crate's sources gone, so no cfg site is found and the guard would otherwise pass vacuously",
+          "files": {
+            "crates/velesdb-core/Cargo.toml": "[package]\nname = \"velesdb-core\"\n\n[features]\ndefault = [\"persistence\"]\ngpu = [\"wgpu\"]\ninternal-bench = []\npersistence = [\"dep:rayon\"]\nupdate-check = [\"dep:reqwest\"]\n",
+            "crates/velesdb-core/src/lib.rs": "pub mod storage;\n",
+            ".github/workflows/ci.yml": "jobs:\n  lint:\n    steps:\n      - name: Run Clippy (strict)\n        run: |\n          cargo clippy --workspace --all-targets --features persistence,gpu,update-check \\\n            -- -D warnings -D clippy::pedantic\n      - name: Run Clippy (strict, no gpu)\n        run: |\n          cargo clippy --workspace --all-targets --features persistence,update-check,internal-bench \\\n            -- -D warnings -D clippy::pedantic\n  internal-bench-check:\n    steps:\n      - name: Library and benches under internal-bench\n        run: cargo check -p velesdb-core --benches --features persistence,internal-bench\n"
+          },
+          "accepts": {
+            "crates/velesdb-core/Cargo.toml": "[package]\nname = \"velesdb-core\"\n\n[features]\ndefault = [\"persistence\"]\ngpu = [\"wgpu\"]\ninternal-bench = []\npersistence = [\"dep:rayon\"]\nupdate-check = [\"dep:reqwest\"]\n",
+            "crates/velesdb-core/src/lib.rs": "#[cfg(feature = \"persistence\")]\npub mod storage;\n#[cfg(feature = \"gpu\")]\npub mod gpu;\n#[cfg(feature = \"internal-bench\")]\npub mod internal_bench;\n#[cfg(feature = \"update-check\")]\npub mod update;\n",
+            ".github/workflows/ci.yml": "jobs:\n  lint:\n    steps:\n      - name: Run Clippy (strict)\n        run: |\n          cargo clippy --workspace --all-targets --features persistence,gpu,update-check \\\n            -- -D warnings -D clippy::pedantic\n      - name: Run Clippy (strict, no gpu)\n        run: |\n          cargo clippy --workspace --all-targets --features persistence,update-check,internal-bench \\\n            -- -D warnings -D clippy::pedantic\n  internal-bench-check:\n    steps:\n      - name: Library and benches under internal-bench\n        run: cargo check -p velesdb-core --benches --features persistence,internal-bench\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        }
+      ]
     }
   ],
   "unwired": [
@@ -1405,5 +1559,6 @@
       "job": "probe",
       "reason": "A measurement harness, not a gate: manual-dispatch probe for #1944 whose exit 1 means 'a case scored fatal' - a result to record, which is why the workflow runs it with `|| true` and fails only on a missing result file. It refuses nothing on any merge path and sits outside CI Success by design."
     }
-  ]
+  ],
+  "last_updated": "2026-09-19"
 }

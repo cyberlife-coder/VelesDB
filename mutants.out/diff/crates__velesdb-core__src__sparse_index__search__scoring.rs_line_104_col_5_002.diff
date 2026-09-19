@@ -1,0 +1,44 @@
+--- crates/velesdb-core/src/sparse_index/search/scoring.rs
++++ replace score_document -> f32 with -1.0
+@@ -96,40 +96,17 @@
+ /// cursor positions matching `doc_id`) and non-essential term contributions
+ /// (via binary search).
+ pub(crate) fn score_document(
+     term_data: &[TermPostings],
+     cursors: &mut [usize],
+     split: usize,
+     doc_id: u64,
+ ) -> f32 {
+-    let mut score = 0.0_f32;
+-
+-    // Essential terms: advance cursors that match doc_id
+-    count_ops((term_data.len() - split) as u64);
+-    for i in split..term_data.len() {
+-        if cursors[i] < term_data[i].postings.len()
+-            && term_data[i].postings[cursors[i]].doc_id == doc_id
+-        {
+-            score += term_data[i].query_weight * term_data[i].postings[cursors[i]].weight;
+-            cursors[i] += 1;
+-        }
+-    }
+-
+-    // Non-essential terms: binary search for doc_id. This is the work #2177
+-    // names as MaxScore's differentiator: O(terms x log postings) per
+-    // candidate where the linear scan pays O(1) per posting.
+-    for td in &term_data[..split] {
+-        count_binary_search(td.postings.len());
+-        if let Ok(pos) = td.postings.binary_search_by_key(&doc_id, |e| e.doc_id) {
+-            score += td.query_weight * td.postings[pos].weight;
+-        }
+-    }
+-
+-    score
++    -1.0 /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// Finds the smallest `doc_id` among essential posting lists (from `split..n_terms`).
+ pub(crate) fn find_min_essential_doc_id(
+     term_data: &[TermPostings],
+     cursors: &[usize],
+     split: usize,
+ ) -> Option<u64> {

@@ -42,9 +42,11 @@ pub use multi::{multi_query_search, multi_query_search_ids};
 
 /// Shared search preamble: record onboarding metric and resolve collection.
 ///
-/// Does NOT check guard rails — each handler inlines `apply_pre_check`
-/// after recording its query-type counter so that rate-limited requests
-/// are visible in metrics with `status="rate_limited"`.
+/// Does NOT check guard rails — `text_search` and `hybrid_search` inline
+/// `apply_pre_check` after recording their query-type counter so that
+/// rate-limited requests are visible in metrics with `status="rate_limited"`;
+/// `search` and `search_ids` get the same guard-rail check, plus the vector
+/// counter and `mode`/`ef_search` parsing, from [`search_request_pre_check`].
 ///
 /// Does NOT record the query-type counter (vector / hybrid / text) — each
 /// handler calls the appropriate `record_*_query()` method itself so that
@@ -58,6 +60,32 @@ fn search_preamble(
 ) -> Result<VectorCollection, axum::response::Response> {
     state.onboarding_metrics.record_search_request();
     get_vector_collection_or_404(state, name)
+}
+
+/// Shared pre-check for `/search` and `/search/ids` (both accept
+/// `SearchRequest`): resolves the collection, records the vector-query
+/// counter, applies guard rails, and parses `mode` and `ef_search`.
+///
+/// Returns `Ok((collection, quality_mode))` or `Err(response)` on failure.
+#[allow(clippy::result_large_err)]
+fn search_request_pre_check(
+    state: &AppState,
+    name: &str,
+    headers: &axum::http::HeaderMap,
+    req: &SearchRequest,
+) -> Result<(VectorCollection, Option<velesdb_core::SearchQuality>), axum::response::Response> {
+    let collection = search_preamble(state, name)?;
+    state.operational_metrics.record_vector_query();
+
+    let client_id = extract_client_id(headers);
+    if let Err(resp) = apply_pre_check(collection.guard_rails(), &client_id) {
+        state.operational_metrics.inc_rate_limited();
+        return Err(resp);
+    }
+    let quality_mode = parse_mode_or_400(state, req.mode.as_deref())?;
+    validate_ef_search_or_400(state, req.ef_search)?;
+
+    Ok((collection, quality_mode))
 }
 
 /// Executes the full search pipeline and records circuit-breaker on failure.
@@ -114,24 +142,10 @@ pub async fn search(
 ) -> impl IntoResponse {
     let start = std::time::Instant::now();
 
-    let collection = match search_preamble(&state, &name) {
-        Ok(c) => c,
+    let (collection, quality_mode) = match search_request_pre_check(&state, &name, &headers, &req) {
+        Ok(v) => v,
         Err(resp) => return resp,
     };
-    state.operational_metrics.record_vector_query();
-
-    let client_id = extract_client_id(&headers);
-    if let Err(resp) = apply_pre_check(collection.guard_rails(), &client_id) {
-        state.operational_metrics.inc_rate_limited();
-        return resp;
-    }
-    let quality_mode = match parse_mode_or_400(&state, req.mode.as_deref()) {
-        Ok(quality_mode) => quality_mode,
-        Err(resp) => return resp,
-    };
-    if let Err(resp) = validate_ef_search_or_400(&state, req.ef_search) {
-        return resp;
-    }
 
     // F-03: honour the per-request `timeout_ms` budget. The synchronous
     // search runs on a blocking worker so the async runtime stays
@@ -406,24 +420,10 @@ pub async fn search_ids(
 ) -> impl IntoResponse {
     let start = std::time::Instant::now();
 
-    let collection = match search_preamble(&state, &name) {
-        Ok(c) => c,
+    let (collection, quality_mode) = match search_request_pre_check(&state, &name, &headers, &req) {
+        Ok(v) => v,
         Err(resp) => return resp,
     };
-    state.operational_metrics.record_vector_query();
-
-    let client_id = extract_client_id(&headers);
-    if let Err(resp) = apply_pre_check(collection.guard_rails(), &client_id) {
-        state.operational_metrics.inc_rate_limited();
-        return resp;
-    }
-    let quality_mode = match parse_mode_or_400(&state, req.mode.as_deref()) {
-        Ok(quality_mode) => quality_mode,
-        Err(resp) => return resp,
-    };
-    if let Err(resp) = validate_ef_search_or_400(&state, req.ef_search) {
-        return resp;
-    }
 
     // F-03: honour the per-request `timeout_ms` budget and run the
     // CPU-bound search on a blocking worker so the async runtime stays

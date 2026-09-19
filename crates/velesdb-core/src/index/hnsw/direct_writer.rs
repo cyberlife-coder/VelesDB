@@ -13,8 +13,9 @@ use crate::validation::validate_dimension_match;
 /// Writes vectors directly to the graph's `ContiguousVectors`.
 ///
 /// Used exclusively during `upsert_bulk` so vectors are immediately
-/// available for SIMD re-ranking and brute-force search while HNSW graph
-/// construction is deferred to `AsyncIndexBuilder`.
+/// available for SIMD re-ranking and brute-force search while linking them
+/// into the graph is deferred to `AsyncIndexBuilder`, which links each slot
+/// placed here where it is (#2264).
 // Reason: only the persistence-gated bulk path (collection::core::crud_bulk)
 // writes directly.
 #[cfg_attr(not(feature = "persistence"), allow(dead_code))]
@@ -42,9 +43,10 @@ impl<'a> DirectVectorWriter<'a> {
     /// batch writes, nor this batch overwrite a vector the graph placed.
     ///
     /// When `enable_vector_storage` is `false` (the index's exact-distance
-    /// features are off) this writer places no vector, so it has no slot to
-    /// map: nothing is written or registered here, and the deferred HNSW
-    /// insert places each vector and maps its id.
+    /// features are off) this writer places no vector and returns `None`: it
+    /// has no slot to map, nothing is written or registered here, and the
+    /// caller leaves the deferred HNSW insert to place each vector and map
+    /// its id.
     ///
     /// # Errors
     ///
@@ -59,14 +61,17 @@ impl<'a> DirectVectorWriter<'a> {
     pub(crate) fn write_batch_direct(
         &self,
         vectors: &[(u64, &[f32])],
-    ) -> crate::error::Result<Vec<UpsertResult>> {
+    ) -> crate::error::Result<Option<Vec<UpsertResult>>> {
         // Every dimension is checked before any mutation, whatever the
         // index's features: `# Errors` promises it.
         for (_, vector) in vectors {
             validate_dimension_match(self.hnsw_index.dimension, vector.len())?;
         }
-        if vectors.is_empty() || !self.hnsw_index.enable_vector_storage {
-            return Ok(Vec::new());
+        if !self.hnsw_index.enable_vector_storage {
+            return Ok(None);
+        }
+        if vectors.is_empty() {
+            return Ok(Some(Vec::new()));
         }
 
         let refs: Vec<&[f32]> = vectors.iter().map(|&(_, vector)| vector).collect();
@@ -84,6 +89,6 @@ impl<'a> DirectVectorWriter<'a> {
             })
             .collect();
         drop(inner);
-        Ok(results)
+        Ok(Some(results))
     }
 }

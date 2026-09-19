@@ -11,6 +11,8 @@ mod bm25_durability_tests;
 mod bulk_import;
 mod crud;
 mod crud_bulk;
+#[cfg(all(test, feature = "persistence"))]
+mod crud_bulk_tests;
 mod crud_helpers;
 mod crud_histogram;
 mod crud_indexing;

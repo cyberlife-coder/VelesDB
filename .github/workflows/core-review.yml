@@ -114,8 +114,21 @@ jobs:
   # the budget reaches a couple. It is therefore bounded and its report partial
   # by construction: only the changed code is mutated, only the `--lib` tests
   # run (this repository keeps its unit tests beside each module), and the run
-  # is cut at 45 minutes with whatever it has. The report, `mutants.out/` with
-  # `missed.txt` listing the survivors *among the mutants reached*, is uploaded
+  # is cut at 45 minutes with whatever it has.
+  #
+  # `--features internal-bench` because cargo-mutants selects mutants
+  # syntactically, from the source text, with no knowledge of `cfg`. Code the
+  # feature gates is mutated either way — the mutant list is byte-identical
+  # with and without the flag — but without it that code is compiled out, so
+  # no test can observe the mutation and every one of those mutants is
+  # reported MISSED. Measured on #2347's own diff, over the six mutants in
+  # `sparse_index::op_count::record_binary_search`: six MISSED without the
+  # flag, six caught with it. It therefore adds no mutant and no test run; it
+  # turns survivors that mean nothing into a verdict that means something
+  # (#2348).
+  #
+  # The report, `mutants.out/` with `missed.txt` listing the survivors *among
+  # the mutants reached*, is uploaded
   # whenever a mutant was reached; when the filter selects none, `cargo mutants`
   # writes no `mutants.out/` and the upload step skips with "No files were
   # found". A survivor is real; an empty or absent `missed.txt` is not a clean
@@ -154,7 +167,9 @@ jobs:
       # instead of being tested.
       - name: Mutate the changed code
         timeout-minutes: 45
-        run: cargo mutants -p velesdb-core --in-diff "$RUNNER_TEMP/core-src.diff" -- --lib -- --test-threads=1
+        run: |
+          cargo mutants -p velesdb-core --features internal-bench \
+            --in-diff "$RUNNER_TEMP/core-src.diff" -- --lib -- --test-threads=1
 
       - name: Upload the report
         if: always()

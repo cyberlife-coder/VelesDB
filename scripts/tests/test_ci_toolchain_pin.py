@@ -1466,7 +1466,13 @@ CD_FORMS = {
 # A documented loom command: a line that starts, past a comment marker or a
 # `Run with:` label, with optional VAR=value words and then `cargo test`.
 DOC_COMMAND_RE = re.compile(r"^\s*(?://[!/]?\s*|##\s+Run with:\s*`)?((?:[A-Z_]+=(?:\"[^\"]*\"|'[^']*'|\S+)\s+)*cargo test\b.*)$")
-PYYAML_RE = re.compile(r"pip\s+install\b[^\n]*\bpyyaml==([\w.]+)", re.IGNORECASE)
+# The guards' Python dependencies now come from one file rather than from a
+# pin repeated in each job's `pip install`. Matching the file is what keeps the
+# assertion below honest: a job that installs nothing still fails.
+GUARD_REQUIREMENTS_RE = re.compile(
+    r"pip\s+install\b[^\n]*-r\s+(\S*requirements-guards\.txt)", re.IGNORECASE
+)
+PYYAML_PIN_RE = re.compile(r"^\s*pyyaml==([\w.]+)\s*$", re.IGNORECASE | re.MULTILINE)
 RUNS_THIS_GUARD_RE = re.compile(r"test_ci_toolchain_pin|unittest\s+discover\s+-s\s+scripts/tests")
 
 
@@ -2031,20 +2037,41 @@ class RealWorkflowTests(unittest.TestCase):
         self.assertNotIn(channel, (REPO_ROOT / "scripts" / "dx-timing" / "Dockerfile.rust").read_text(encoding="utf-8"))
 
     # Round 4: every job that runs this guard installs PyYAML first, at one pin.
+    # The pin moved out of the workflows into scripts/requirements-guards.txt:
+    # it used to be written inline in three `pip install` lines across two
+    # workflows, and "exactly one distinct value" was the only thing keeping
+    # them in step. One file makes drift impossible by construction, so what is
+    # asserted here is that every job installs FROM that file -- a job that
+    # installs nothing still fails -- and that the file pins PyYAML once.
+    # `scripts/check_guard_python_pins.py` refuses a workflow that pins it
+    # inline again.
     def test_every_job_that_runs_this_guard_installs_pyyaml_at_one_pin(self) -> None:
-        pins, runners = set(), set()
+        requirements, runners = set(), set()
         for path in workflow_files():
             for name, job in parse(path.read_text(encoding="utf-8")).jobs.items():
                 for index, step in enumerate(job.steps):
                     if not RUNS_THIS_GUARD_RE.search(step.run):
                         continue
                     runners.add(f"{path.name}::{name}")
-                    found = [m.group(1) for s in job.steps[:index] if (m := PYYAML_RE.search(s.run))]
+                    found = [
+                        m.group(1)
+                        for s in job.steps[:index]
+                        if (m := GUARD_REQUIREMENTS_RE.search(s.run))
+                    ]
                     with self.subTest(job=f"{path.name}::{name}"):
-                        self.assertTrue(found, "runs this guard without installing pyyaml==<pin> first")
-                    pins.update(found)
+                        self.assertTrue(
+                            found,
+                            "runs this guard without installing the guards' Python "
+                            "dependencies first (pip install -r "
+                            "scripts/requirements-guards.txt)",
+                        )
+                    requirements.update(found)
         self.assertLessEqual({"gate-contracts.yml::script-gates", "ci.yml::mcp-doc-contract"}, runners)
-        self.assertEqual(1, len(pins), pins)
+        self.assertEqual(1, len(requirements), requirements)
+
+        declared = (REPO_ROOT / "scripts" / "requirements-guards.txt").read_text(encoding="utf-8")
+        pins = PYYAML_PIN_RE.findall(declared)
+        self.assertEqual(1, len(pins), f"requirements-guards.txt pins PyYAML {len(pins)} times")
 
     def test_the_toolchain_file_names_a_channel_and_components(self) -> None:
         channel, components = toolchain_file()

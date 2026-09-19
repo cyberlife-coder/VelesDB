@@ -1,0 +1,2 @@
+crates/velesdb-core/src/sparse_index/search/strategy.rs:112:5: replace linear_scan_dense -> Vec<ScoredDoc> with vec![Default::default()]
+crates/velesdb-core/src/sparse_index/search/strategy.rs:148:5: replace linear_scan_hashmap -> Vec<ScoredDoc> with vec![Default::default()]

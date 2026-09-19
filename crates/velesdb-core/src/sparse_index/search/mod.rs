@@ -182,3 +182,29 @@ pub(crate) fn brute_force_search(
 #[cfg(test)]
 #[path = "search_tests.rs"]
 mod tests;
+
+/// [`strategy::linear_scan_search`] for the bench seam (#2177).
+///
+/// `pub(crate)` and `internal-bench`-only: `internal_bench` re-exports it so a
+/// harness can score a corpus both ways at one size. The router remains the
+/// only entry point application code has.
+#[cfg(feature = "internal-bench")]
+#[must_use]
+pub(crate) fn linear_scan_search_for_bench(
+    index: &SparseInvertedIndex,
+    query: &SparseVector,
+    k: usize,
+) -> Vec<ScoredDoc> {
+    linear_scan_search(index, query, k)
+}
+
+/// [`strategy::maxscore_search`] for the bench seam (#2177).
+#[cfg(feature = "internal-bench")]
+#[must_use]
+pub(crate) fn maxscore_search_for_bench(
+    index: &SparseInvertedIndex,
+    query: &SparseVector,
+    k: usize,
+) -> Vec<ScoredDoc> {
+    maxscore_search(index, query, k)
+}
