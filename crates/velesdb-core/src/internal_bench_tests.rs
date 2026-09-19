@@ -103,6 +103,7 @@ fn both_sparse_seams_return_the_documents_the_query_matches() {
 }
 
 #[test]
+#[serial_test::serial]
 fn the_sparse_scoring_counter_moves_and_resets() {
     use crate::index::sparse::SparseVector;
     let index = tiny_sparse_index();

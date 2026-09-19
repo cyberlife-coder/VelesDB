@@ -9,6 +9,10 @@ mod merge;
 #[cfg(feature = "internal-bench")]
 pub(crate) mod op_count;
 
+#[cfg(all(test, feature = "internal-bench"))]
+#[path = "op_count_tests.rs"]
+mod op_count_tests;
+
 mod mutable_segment;
 pub mod search;
 pub mod types;
