@@ -5,6 +5,10 @@
 
 pub mod inverted_index;
 mod merge;
+/// Bench-only scoring-work counter (#2177): compiled out by default.
+#[cfg(feature = "internal-bench")]
+pub(crate) mod op_count;
+
 mod mutable_segment;
 pub mod search;
 pub mod types;

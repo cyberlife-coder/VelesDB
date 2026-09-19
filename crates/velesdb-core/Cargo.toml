@@ -480,6 +480,13 @@ harness = false
 name = "adaptive_resume_evals"
 required-features = ["internal-bench", "persistence"]
 
+# #2177's crossover harness: scores one corpus with both sparse strategies and
+# compares the work in posting inspections. `internal-bench` compiles in the
+# counter and the seam that reaches each strategy past the router.
+[[test]]
+name = "sparse_strategy_crossover"
+required-features = ["internal-bench"]
+
 [[bench]]
 name = "scalability_quick"
 harness = false
