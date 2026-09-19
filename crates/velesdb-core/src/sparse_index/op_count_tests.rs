@@ -4,9 +4,12 @@
 //! `record_binary_search` a no-op, turning its `len > 0` into `==`, `<` or
 //! `>=`, and its `+ 1` into `* 1` all left every test green. That matters more
 //! than an ordinary coverage gap: this counter IS #2177's measurement. A
-//! no-op version turns the 78x it reports at 1.1M documents into nothing at
-//! all, silently, and the retirement decision would rest on a number no test
-//! defends.
+//! no-op version turns the ratio it reports above a million documents into
+//! nothing at all, silently, and the retirement decision would rest on a
+//! number no test defends. The figures themselves are deliberately absent
+//! from this comment: `tests/sparse_strategy_crossover.rs` produces them at
+//! run time, and a copy sitting in a doc comment is exactly the stale
+//! duplicate that cost #2344 four review findings.
 //!
 //! So the values below are asserted exactly rather than as "greater than
 //! zero". An exact count is also what the harness promises — it calls itself
