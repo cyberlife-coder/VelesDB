@@ -480,6 +480,11 @@ harness = false
 name = "adaptive_resume_evals"
 required-features = ["internal-bench", "persistence"]
 
+# #2335: asserts the swap holds the write guard for a bounded remainder.
+[[test]]
+name = "vacuum_swap_bounded"
+required-features = ["internal-bench", "persistence"]
+
 # #2177's crossover harness: scores one corpus with both sparse strategies and
 # compares the work in posting inspections. `internal-bench` compiles in the
 # counter and the seam that reaches each strategy past the router.

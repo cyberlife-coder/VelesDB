@@ -75,6 +75,10 @@ impl<'a> DirectVectorWriter<'a> {
         }
 
         let refs: Vec<&[f32]> = vectors.iter().map(|&(_, vector)| vector).collect();
+        // The third mapping publication site, sealed like the other two: a
+        // sealed `vacuum` settles a remainder no write can grow (#2335).
+        // Taken before `inner`, always.
+        let _publishing = self.hnsw_index.publishing.read();
         // Held until every id is mapped: `reorder_for_locality` and `vacuum`
         // renumber slots under the write lock, so each slot placed here is still
         // its vector's when the mapping names it.

@@ -164,6 +164,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the directory is ignored.
 
 ### Fixed
+- **A vacuum's swap no longer copies an unbounded remainder under the index
+  write guard (#2335).** `catch_up` copies the writes made during the rebuild
+  without that guard, but a write landing between its last round and the
+  grant of the guard was copied by the swap **under** it, with searches and
+  writes waiting. Measured before the fix, eight vacuums against a writer
+  upserting 2 000-id batches over an 8 000-id window: **60 000 ids copied
+  under the guard, 8 000 in a single swap** — the whole working set, not the
+  one batch the issue described.
+  The replacement graph is the vacuum's own and invisible until the swap, so
+  inserting into it never needed the index write guard; only the mappings had
+  to hold still. A `publishing` lock now holds them: every mapping
+  publication takes it shared, before the index lock, and `vacuum` seals it
+  exclusively for a last catch-up whose remainder therefore cannot grow. That
+  settle runs outside the graph guard, on the dedicated graph pool, and the
+  guard is held for the mapping rebuild alone. After: **60 000 settled under
+  the seal, 0 under the guard**. Searches never take the new lock.
 - **`NativeHnswIndex::save` now serializes with itself, as `HnswIndex::save`
   already did (#2262).** A save stamps every artefact with the generation
   after the one it reads from the directory, so two into one directory read

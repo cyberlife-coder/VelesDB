@@ -652,6 +652,14 @@ for neighbor in neighbors {
    - Saves of one index wait for each other on a lock of their own, never on
      the maintenance lock: two saves into one directory rewrote the same
      files under one generation
+   - The swap holds the index write lock for the mapping rebuild only, never
+     for a copy: a **publishing** lock, taken shared by every mapping
+     publication and exclusively by the vacuum for its last catch-up, freezes
+     the remainder so it is settled outside the graph guard. Taken before the
+     index lock, always, so the orders cannot cross; searches never take it.
+     Unsealed, a write landing between the last catch-up round and the grant
+     of the write guard was copied under that guard with no upper bound —
+     measured at a whole 8 000-id working set in one swap (#2335)
    - The rebuild uses the index's own M, `ef_construction` and alpha, read
      from its graph, not the defaults for its dimension
    - A save holds the graph's vector read lock across its vectors file and its

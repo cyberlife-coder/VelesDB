@@ -39,7 +39,7 @@ use rayon::prelude::*;
 ///
 /// `index/hnsw/index/global_pool_tests.rs` holds the rule: it parks every
 /// global worker and requires each of those operations to finish anyway.
-fn graph_pool() -> crate::error::Result<&'static rayon::ThreadPool> {
+pub(super) fn graph_pool() -> crate::error::Result<&'static rayon::ThreadPool> {
     static POOL: std::sync::OnceLock<Option<rayon::ThreadPool>> = std::sync::OnceLock::new();
     POOL.get_or_init(|| {
         rayon::ThreadPoolBuilder::new()
@@ -177,6 +177,11 @@ impl HnswIndex {
         };
 
         let vectors: Vec<&[f32]> = items.iter().map(|(_, vector)| *vector).collect();
+        // Held across the placement and the mappings: a sealed `vacuum` is
+        // settling a frozen remainder, and this batch must land either wholly
+        // before its seal or wholly after (#2335). Taken before `inner`,
+        // always.
+        let _publishing = self.publishing.read();
         // Held until every id is mapped: `reorder_for_locality` and `vacuum`
         // renumber slots under the write lock, so each slot placed here is still
         // its vector's when the mapping names it.

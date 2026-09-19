@@ -225,7 +225,19 @@ impl HnswIndex {
         // without the write guard, until few are left (#2262).
         let carried = self.catch_up(&new_inner, live, slots)?;
 
-        // 6-7. Swap in the new graph and rebuild the mappings under one write
+        // 6. Seal the mappings. Writers publish under `publishing.read()`, so
+        // from here no new id can be mapped and the remainder is frozen:
+        // whatever `settle_under_seal` finds is all `reconcile` will see.
+        // Unsealed, a batch in flight mapped its ids after the last catch-up
+        // round looked and before the write guard was granted, and
+        // `reconcile` copied them all **under** that guard — measured at a
+        // whole 8,000-id working set in one swap (#2335).
+        //
+        // Searches are untouched: this seals the mappings, not the graph.
+        let _seal = self.publishing.write();
+        let carried = self.settle_under_seal(&new_inner, carried)?;
+
+        // 7-8. Swap in the new graph and rebuild the mappings under one write
         // lock: until the rebuild they name the old graph's slots, and a
         // search in between would resolve ids against the wrong vectors
         // (#2246). They are rebuilt from what is mapped now, not from the
@@ -348,6 +360,56 @@ impl HnswIndex {
         Ok(carried)
     }
 
+    /// The last catch-up round, run under the seal, so the remainder it
+    /// copies is frozen and [`Self::reconcile`] finds nothing left.
+    ///
+    /// This is the round that used to happen under the graph write guard, in
+    /// `reconcile`, with no bound on its size. Under the seal it runs with a
+    /// read guard only: `new` is this vacuum's own graph, which no one else
+    /// can see until the swap, so inserting into it never needed the write
+    /// guard — only the mappings had to hold still, and the seal is what
+    /// holds them.
+    ///
+    /// Inserts go through the dedicated graph pool, never the global one. The
+    /// seal is held here, and a global worker parked on `publishing.read()`
+    /// while this join waits on that same worker is #2343's cycle with a
+    /// different lock.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::catch_up`].
+    fn settle_under_seal(
+        &self,
+        new: &HnswInner,
+        mut carried: Carried,
+    ) -> Result<Carried, VacuumError> {
+        let old = self.inner.read();
+        let written = self.written_since(&carried);
+        if written.is_empty() {
+            return Ok(carried);
+        }
+        // The work the racing writes caused, moved off the graph guard rather
+        // than removed: the control the bound needs (see `swap_count`).
+        #[cfg(feature = "internal-bench")]
+        super::swap_count::record_settled(written.len());
+        let vectors = copy_vectors(&old, &written)?;
+        drop(old);
+        let refs: Vec<&[f32]> = vectors.iter().map(Vec::as_slice).collect();
+        let pool =
+            super::batch::graph_pool().map_err(|e| VacuumError::RebuildFailed(e.to_string()))?;
+        let slots = pool
+            .install(|| new.parallel_insert(&refs))
+            .map_err(|e| VacuumError::RebuildFailed(e.to_string()))?;
+        let slots = one_slot_each(slots, refs.len())?;
+        carried.extend(
+            written
+                .into_iter()
+                .zip(slots)
+                .map(|((id, seen), slot)| (id, (seen, slot))),
+        );
+        Ok(carried)
+    }
+
     /// Each id mapped now whose vector `carried` does not hold as it is now,
     /// with its slot: inserted since, or upserted onto another slot.
     fn written_since(&self, carried: &Carried) -> Vec<(u64, usize)> {
@@ -388,6 +450,10 @@ impl HnswIndex {
                 None => written.push((id, slot)),
             }
         }
+        // What #2335 is about: this list has no upper bound, and every id in
+        // it is a vector copied and inserted while the write guard is held.
+        #[cfg(feature = "internal-bench")]
+        super::swap_count::record_reconciled(written.len());
         let vectors = copy_vectors(old, &written)?;
         for ((id, _), vector) in written.into_iter().zip(&vectors) {
             let slot = new

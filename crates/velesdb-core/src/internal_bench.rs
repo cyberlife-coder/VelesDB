@@ -163,3 +163,29 @@ pub fn hnsw_distance_evals() -> u64 {
 pub fn reset_hnsw_distance_evals() {
     crate::index::hnsw::eval_count::reset_distance_evals();
 }
+
+/// Ids a vacuum's swap copied under the write guard since the last reset.
+///
+/// See `index::hnsw::index::swap_count` for the unit and why it exists
+/// (#2335).
+#[must_use]
+pub fn vacuum_reconciled_under_guard() -> u64 {
+    crate::index::hnsw::index::swap_count::reconciled_under_guard()
+}
+
+/// The largest single swap's count since the last reset.
+#[must_use]
+pub fn vacuum_peak_reconciled_under_guard() -> u64 {
+    crate::index::hnsw::index::swap_count::peak_reconciled_under_guard()
+}
+
+/// Ids a vacuum settled under its seal, outside the graph guard.
+#[must_use]
+pub fn vacuum_settled_under_seal() -> u64 {
+    crate::index::hnsw::index::swap_count::settled_under_seal()
+}
+
+/// Resets every vacuum swap counter.
+pub fn reset_vacuum_reconciled_under_guard() {
+    crate::index::hnsw::index::swap_count::reset_reconciled_under_guard();
+}

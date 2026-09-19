@@ -31,6 +31,8 @@ mod brute_force;
 mod constructors;
 mod rerank;
 mod search;
+#[cfg(feature = "internal-bench")]
+pub(crate) mod swap_count;
 mod trait_impl;
 mod vacuum;
 
@@ -110,6 +112,22 @@ pub struct HnswIndex {
     /// beside the other's graph. Taken before `inner`, and never with
     /// `maintenance`, so a save made during a vacuum's rebuild still saves the
     /// old graph.
+    /// Sealed by `vacuum` for its final settle, and held shared by every
+    /// writer while it publishes a mapping (#2335).
+    ///
+    /// Taken **before** `inner`, never the other way round: a writer holds
+    /// `publishing.read()` across `inner.read()` + `place` + `assign`, and
+    /// `vacuum` holds `publishing.write()` across its last catch-up and its
+    /// swap. One order, so no cycle.
+    ///
+    /// Why it exists: `catch_up` copies the writes made during the rebuild
+    /// without the graph guard, but a write landing between its last look and
+    /// the grant of `inner.write()` was copied by `reconcile` **under** that
+    /// guard, with no upper bound — measured at a whole 8,000-id working set
+    /// in one swap, while searches and writes waited on it. Sealed, the
+    /// remainder cannot grow, so the last catch-up settles a frozen set
+    /// outside the graph guard and the guard is held only for the swap.
+    pub(in crate::index::hnsw) publishing: RwLock<()>,
     saving: Mutex<()>,
     /// Whether exact-distance features are enabled: the automatic two-stage
     /// re-rank (`search_with_quality`, `search_batch_parallel`), the exact
@@ -161,6 +179,9 @@ impl HnswIndex {
     /// be handed to two ids. Returns `false` when the graph refused the vector:
     /// no mapping was touched, so there is nothing to roll back.
     pub(crate) fn insert_and_assign(&self, id: u64, vector: &[f32]) -> bool {
+        // See `publishing`: taken before `inner`, so a sealed `vacuum`
+        // settles a remainder this write cannot grow (#2335).
+        let _publishing = self.publishing.read();
         // Held until the id is mapped: `reorder_for_locality` and `vacuum`
         // renumber slots under the write lock, so the slot placed here is still
         // its vector's when the mapping names it.
