@@ -6985,6 +6985,7 @@ dependencies = [
 name = "velesdb-memory"
 version = "0.14.2"
 dependencies = [
+ "async-trait",
  "atomicwrites",
  "axum",
  "criterion",

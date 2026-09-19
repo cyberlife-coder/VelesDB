@@ -232,6 +232,10 @@ extract = ["extractor-http"]
 serde_json = { workspace = true }
 tokio = { workspace = true }
 criterion = { workspace = true }
+# session_limit_tests.rs implements rmcp's `EventStore` trait (an
+# `#[async_trait]` trait) for a test double proving `BoundedSessionManager`
+# forwards `event_store()` (#2331). Same version rmcp itself resolves to.
+async-trait = "0.1"
 # Integration tests use scratch stores even when `persistence` is not one of
 # the features under test. Keep the production dependency optional while
 # making the test harness feature-independent.

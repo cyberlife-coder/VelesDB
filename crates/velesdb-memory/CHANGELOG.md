@@ -20,6 +20,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`BoundedSessionManager` dropped the inner session manager's event store.**
+  It wraps `rmcp`'s `SessionManager` to cap concurrent MCP HTTP sessions but
+  did not forward `event_store()`, so it reported the trait's default
+  (`None`) whatever the inner manager was configured with. Harmless today,
+  since `velesdb-memory` configures no event store on its
+  `LocalSessionManager` — but as soon as one is configured for resumable SSE
+  streams (`Last-Event-ID` replay), resumption would silently stop working
+  behind the cap wrapper, with no error. `event_store()` is now forwarded to
+  `inner` like every other method the wrapper does not deliberately override
+  (#2331).
+
 - **At its session cap, the HTTP daemon locked every new client out for up to
   an hour instead of evicting an idle one.** A client that dies without
   sending `DELETE` (a killed agent, a crashed process, a host restart) left

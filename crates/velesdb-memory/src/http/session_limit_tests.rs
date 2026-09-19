@@ -3,6 +3,7 @@ use futures::FutureExt;
 use rmcp::model::{
     ClientNotification, EmptyResult, InitializedNotification, NumberOrString, ServerResult,
 };
+use rmcp::transport::streamable_http_server::session::{EventId, EventStoreError, EventStream};
 use rmcp::transport::Transport;
 use rmcp::RoleServer;
 use std::sync::Mutex;
@@ -73,6 +74,31 @@ impl Transport<RoleServer> for FakeTransport {
     }
 }
 
+/// A trait-default-defeating sentinel: distinct from `None`, so a wrapper
+/// that forwards `event_store()` is distinguishable from one that silently
+/// falls back to the trait's default (`Store::event_store` returning `None`
+/// either way would hide exactly the bug #2331 reports).
+#[derive(Debug, Default)]
+struct FakeEventStore;
+
+#[async_trait::async_trait]
+impl EventStore for FakeEventStore {
+    async fn store_event(
+        &self,
+        _stream_id: &str,
+        _event: &ServerSseMessage,
+    ) -> Result<EventId, EventStoreError> {
+        Ok("fake-event-id".to_string())
+    }
+
+    async fn replay_events_after(
+        &self,
+        _last_event_id: &str,
+    ) -> Result<EventStream, EventStoreError> {
+        Ok(Box::pin(futures::stream::empty()))
+    }
+}
+
 /// A tiny in-memory `SessionManager` fake: just enough surface to drive
 /// `BoundedSessionManager`'s own logic without pulling in
 /// `LocalSessionManager`'s full worker/channel machinery. Each "session"
@@ -90,6 +116,9 @@ struct FakeSessionManager {
     /// When set, `close_session` waits for a permit before closing, so a test
     /// can act while an eviction's close is still in progress.
     close_gate: Option<Arc<tokio::sync::Semaphore>>,
+    /// What `event_store()` answers; `None` reproduces the trait's own
+    /// default, `Some` proves the wrapper forwards a configured store.
+    event_store: Option<Arc<dyn EventStore>>,
 }
 
 /// How [`FakeSessionManager::initialize_session`] answers.
@@ -195,6 +224,10 @@ impl SessionManager for FakeSessionManager {
         }
         self.sessions.lock().expect("lock").push(id);
         Ok(RestoreOutcome::Restored(FakeTransport))
+    }
+
+    fn event_store(&self) -> Option<Arc<dyn EventStore>> {
+        self.event_store.clone()
     }
 }
 
@@ -820,6 +853,33 @@ async fn closing_an_unknown_session_frees_nothing() {
         .expect_err("an unknown id must not free the live, busy session's slot");
 
     drop(stream);
+}
+
+/// `BoundedSessionManager::event_store()` must forward to `inner`, not fall
+/// back to the trait's own default (`None`): otherwise a caller that
+/// configured an event store for resumable SSE streams would see it silently
+/// disappear behind the wrapper (#2331).
+#[tokio::test]
+async fn event_store_is_forwarded_to_the_inner_manager() {
+    let (manager, _clock) = bounded(1);
+    assert!(
+        manager.event_store().is_none(),
+        "an inner manager with no event store must still forward None, not synthesize one"
+    );
+
+    let store: Arc<dyn EventStore> = Arc::new(FakeEventStore);
+    let inner = FakeSessionManager {
+        event_store: Some(Arc::clone(&store)),
+        ..FakeSessionManager::default()
+    };
+    let (manager, _clock) = bounded_over(inner, 1);
+    let forwarded = manager
+        .event_store()
+        .expect("the wrapper must forward the inner manager's configured event store");
+    assert!(
+        Arc::ptr_eq(&forwarded, &store),
+        "the wrapper must forward the SAME store, not a different one"
+    );
 }
 
 #[tokio::test]
