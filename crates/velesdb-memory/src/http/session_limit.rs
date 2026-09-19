@@ -156,7 +156,7 @@ use std::time::{Duration, Instant};
 use futures::Stream;
 use rmcp::model::{ClientJsonRpcMessage, ServerJsonRpcMessage};
 use rmcp::transport::streamable_http_server::session::{
-    RestoreOutcome, ServerSseMessage, SessionId, SessionManager,
+    EventStore, RestoreOutcome, ServerSseMessage, SessionId, SessionManager,
 };
 use thiserror::Error;
 
@@ -637,6 +637,13 @@ where
         }
         self.live().insert(id, self.activity.new_session());
         Ok(outcome)
+    }
+
+    /// Forwarded to `inner`: the cap this wrapper enforces has nothing to say
+    /// about resumable-stream storage, so whatever event store `inner` was
+    /// configured with must be visible through the wrapper unchanged.
+    fn event_store(&self) -> Option<Arc<dyn EventStore>> {
+        self.inner.event_store()
     }
 }
 

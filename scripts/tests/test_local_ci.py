@@ -108,6 +108,26 @@ class RefusalTests(unittest.TestCase):
             self.assertEqual(result.returncode, 1)
             self.assertIn("Gate that fails", result.stderr)
 
+    def test_a_silent_failure_is_reported_with_its_exit_code(self) -> None:
+        """"FAILED" followed by a blank line is not something to act on."""
+        with tempfile.TemporaryDirectory() as tmp:
+            wf = Path(tmp) / "ci.yml"
+            wf.write_text(workflow_with("Silent", "'exit 3'"), encoding="utf-8")
+            result = run(wf)
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn("FAILED (exit 3)", result.stdout)
+            self.assertIn("wrote nothing before exiting 3", result.stdout)
+
+    def test_a_loud_failure_still_shows_its_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            wf = Path(tmp) / "ci.yml"
+            wf.write_text(workflow_with("Loud", "'echo the-reason-it-refused; exit 4'"), encoding="utf-8")
+            result = run(wf)
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn("FAILED (exit 4)", result.stdout)
+            self.assertIn("the-reason-it-refused", result.stdout)
+            self.assertNotIn("wrote nothing", result.stdout)
+
     def test_a_missing_workflow_answers_2_not_1(self) -> None:
         # 2 is "cannot read", 1 is "refused". A tree this cannot read must not
         # wear the exit code of a refusal it never made.
@@ -247,6 +267,60 @@ class MissingToolTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                     self.assertIn("FAILED", result.stdout)
                     self.assertNotIn("TOOL MISSING", result.stdout)
+
+    def test_a_step_that_enables_set_e_still_runs_a_shimless_subcommand(self) -> None:
+        """The shim must not abort the step it is only meant to classify.
+
+        `command -v cargo-build` exits 1 when no such binary exists, which is
+        the normal case for every built-in subcommand. Assigning from it under
+        a step that enabled `set -e` killed the shell before the real cargo
+        ran, and the replay reported FAILED with an empty output -- a false red
+        on `Drop cached workspace fingerprints` and on `Check each
+        velesdb-memory feature in isolation`, both of which pass when run by
+        hand (#2346).
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            env = fake_rust_toolchain(Path(tmp) / "bin")
+            wf = Path(tmp) / "ci.yml"
+            wf.write_text(
+                "name: synthetic\njobs:\n  lint:\n    steps:\n"
+                "      - name: Strict step\n        run: |\n"
+                "          set -euo pipefail\n"
+                "          cargo build --offline\n",
+                encoding="utf-8",
+            )
+            result = run(wf, env_extra=env)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("ok", result.stdout)
+            self.assertNotIn("FAILED", result.stdout)
+
+    def test_a_missing_rustup_does_not_abort_a_strict_step_either(self) -> None:
+        """Same defect on the next line: `command -v rustup` on a box without it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            bin_dir = Path(tmp) / "bin"
+            bin_dir.mkdir()
+            cargo = bin_dir / "cargo"
+            cargo.write_text(
+                "#!/usr/bin/env bash\n"
+                "for a in \"$@\"; do [ \"$a\" = --list ] && "
+                "{ printf 'Installed Commands:\\n    build\\n'; exit 0; }; done\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            cargo.chmod(0o755)
+            # A PATH with cargo and the shell's own tools, but no rustup.
+            env = {"PATH": f"{bin_dir}{os.pathsep}/usr/bin{os.pathsep}/bin"}
+            wf = Path(tmp) / "ci.yml"
+            wf.write_text(
+                "name: synthetic\njobs:\n  lint:\n    steps:\n"
+                "      - name: Strict step\n        run: |\n"
+                "          set -euo pipefail\n"
+                "          cargo build --offline\n",
+                encoding="utf-8",
+            )
+            result = run(wf, env_extra=env)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("ok", result.stdout)
 
     def test_a_red_gate_whose_output_names_a_missing_tool_stays_red(self) -> None:
         # "Missing tool" is decided by the exit code, never by the output: a
