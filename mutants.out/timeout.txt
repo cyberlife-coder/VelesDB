@@ -1,5 +1,0 @@
-crates/velesdb-core/src/sparse_index/search/scoring.rs:104:5: replace score_document -> f32 with 0.0
-crates/velesdb-core/src/sparse_index/search/scoring.rs:104:5: replace score_document -> f32 with 1.0
-crates/velesdb-core/src/sparse_index/search/scoring.rs:104:5: replace score_document -> f32 with -1.0
-crates/velesdb-core/src/sparse_index/search/scoring.rs:136:5: replace find_min_essential_doc_id -> Option<u64> with Some(0)
-crates/velesdb-core/src/sparse_index/search/scoring.rs:136:5: replace find_min_essential_doc_id -> Option<u64> with Some(1)
