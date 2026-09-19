@@ -125,3 +125,42 @@ fn the_sparse_scoring_counter_moves_and_resets() {
         "the counter did not reset, so a second measurement would carry the first"
     );
 }
+
+/// The counts MaxScore records, asserted exactly, on shapes that reach its
+/// non-essential path.
+///
+/// Two mutants survived the first pass here — `count_binary_search` turned
+/// into a no-op, and `count_ops((term_data.len() - split))` with its `-`
+/// turned into `+`. Both need `split > 0` to be observable at all: with
+/// `k = 10` on three documents the heap never fills, the threshold stays at
+/// zero, `find_split` returns 0, and `len - split` equals `len + split`. So
+/// the cases below use `k = 1` and `k = 2` with several query terms, which is
+/// what makes a term non-essential and sends it through the binary search
+/// these two lines count.
+///
+/// Exact values rather than a range: this counter carries #2177's answer, and
+/// the harness calls itself reproducible bit for bit. A legitimate change to
+/// the scoring path SHOULD move these numbers — that is the point of a work
+/// measure — and updating them is how the change gets noticed.
+#[test]
+#[serial_test::serial]
+fn maxscore_records_the_work_its_non_essential_path_costs() {
+    use crate::index::sparse::SparseVector;
+    let index = tiny_sparse_index();
+
+    for (k, terms, expected) in [
+        (1usize, vec![(1u32, 1.0f32), (2, 1.0), (3, 1.0)], 12u64),
+        (1, vec![(2, 3.0), (4, 1.0)], 9),
+        (2, vec![(1, 1.0), (2, 2.0), (3, 1.0), (4, 1.0)], 24),
+    ] {
+        let query = SparseVector::new(terms.clone());
+        internal_bench::reset_sparse_scoring_ops();
+        let _ = internal_bench::sparse_maxscore_search(&index, &query, k);
+        assert_eq!(
+            internal_bench::sparse_scoring_ops(),
+            expected,
+            "k={k}, {} query terms: the recorded work changed",
+            terms.len()
+        );
+    }
+}

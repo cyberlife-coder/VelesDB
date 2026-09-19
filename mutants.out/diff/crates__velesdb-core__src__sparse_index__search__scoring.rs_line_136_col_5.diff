@@ -1,0 +1,29 @@
+--- crates/velesdb-core/src/sparse_index/search/scoring.rs
++++ replace find_min_essential_doc_id -> Option<u64> with None
+@@ -128,25 +128,17 @@
+ }
+ 
+ /// Finds the smallest `doc_id` among essential posting lists (from `split..n_terms`).
+ pub(crate) fn find_min_essential_doc_id(
+     term_data: &[TermPostings],
+     cursors: &[usize],
+     split: usize,
+ ) -> Option<u64> {
+-    let mut min_doc_id: Option<u64> = None;
+-    count_ops((term_data.len().saturating_sub(split)) as u64);
+-    for i in split..term_data.len() {
+-        if cursors[i] < term_data[i].postings.len() {
+-            let did = term_data[i].postings[cursors[i]].doc_id;
+-            min_doc_id = Some(min_doc_id.map_or(did, |m: u64| m.min(did)));
+-        }
+-    }
+-    min_doc_id
++    None /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// Finds the split index: smallest i where `upper_bound[i] >= threshold`.
+ /// Returns `upper_bound.len()` if no such index exists (all terms are non-essential).
+ pub(crate) fn find_split(upper_bound: &[f32], threshold: f32) -> usize {
+     for (i, &ub) in upper_bound.iter().enumerate() {
+         if ub >= threshold {
+             return i;

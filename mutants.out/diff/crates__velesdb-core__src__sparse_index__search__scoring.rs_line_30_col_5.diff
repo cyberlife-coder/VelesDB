@@ -1,0 +1,24 @@
+--- crates/velesdb-core/src/sparse_index/search/scoring.rs
++++ replace count_binary_search with ()
+@@ -22,20 +22,17 @@
+     super::super::op_count::record_ops(n);
+     #[cfg(not(feature = "internal-bench"))]
+     let _ = n;
+ }
+ 
+ /// Records the probes a `binary_search` over `len` entries performs.
+ #[inline]
+ pub(crate) fn count_binary_search(len: usize) {
+-    #[cfg(feature = "internal-bench")]
+-    super::super::op_count::record_binary_search(len);
+-    #[cfg(not(feature = "internal-bench"))]
+-    let _ = len;
++    () /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// Collects posting lists for each query term, along with query weight and
+ /// the global max document weight for that term.
+ pub(crate) struct TermPostings {
+     pub query_weight: f32,
+     pub max_doc_weight: f32,
+     pub postings: Vec<PostingEntry>,

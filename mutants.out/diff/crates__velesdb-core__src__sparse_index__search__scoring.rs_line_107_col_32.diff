@@ -1,0 +1,21 @@
+--- crates/velesdb-core/src/sparse_index/search/scoring.rs
++++ replace - with + in score_document
+@@ -99,17 +99,17 @@
+     term_data: &[TermPostings],
+     cursors: &mut [usize],
+     split: usize,
+     doc_id: u64,
+ ) -> f32 {
+     let mut score = 0.0_f32;
+ 
+     // Essential terms: advance cursors that match doc_id
+-    count_ops((term_data.len() - split) as u64);
++    count_ops((term_data.len() + /* ~ changed by cargo-mutants ~ */ split) as u64);
+     for i in split..term_data.len() {
+         if cursors[i] < term_data[i].postings.len()
+             && term_data[i].postings[cursors[i]].doc_id == doc_id
+         {
+             score += term_data[i].query_weight * term_data[i].postings[cursors[i]].weight;
+             cursors[i] += 1;
+         }
+     }

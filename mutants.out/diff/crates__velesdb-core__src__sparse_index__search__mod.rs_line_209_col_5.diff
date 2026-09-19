@@ -1,0 +1,14 @@
+--- crates/velesdb-core/src/sparse_index/search/mod.rs
++++ replace maxscore_search_for_bench -> Vec<ScoredDoc> with vec![]
+@@ -201,10 +201,10 @@
+ /// [`strategy::maxscore_search`] for the bench seam (#2177).
+ #[cfg(feature = "internal-bench")]
+ #[must_use]
+ pub(crate) fn maxscore_search_for_bench(
+     index: &SparseInvertedIndex,
+     query: &SparseVector,
+     k: usize,
+ ) -> Vec<ScoredDoc> {
+-    maxscore_search(index, query, k)
++    vec![] /* ~ changed by cargo-mutants ~ */
+ }

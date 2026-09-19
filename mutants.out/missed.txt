@@ -1,0 +1,2 @@
+crates/velesdb-core/src/sparse_index/search/scoring.rs:30:5: replace count_binary_search with ()
+crates/velesdb-core/src/sparse_index/search/scoring.rs:107:32: replace - with + in score_document
