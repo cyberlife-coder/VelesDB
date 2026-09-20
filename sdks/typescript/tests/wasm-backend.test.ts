@@ -310,11 +310,11 @@ describe('WasmBackend', () => {
     });
 
     it.each([
-      ['first', [{ id: '1', vector: [1.0, 0.0] }, { id: '2', vector: [0.0, 1.0, 0.0, 0.0] }]],
-      ['last', [{ id: '1', vector: [1.0, 0.0, 0.0, 0.0] }, { id: '2', vector: [0.0, 1.0] }]],
+      ['first', [{ id: '1', vector: [1.0, 0.0] }, { id: '2', vector: [0.0, 1.0, 0.0, 0.0] }], '1'],
+      ['last', [{ id: '1', vector: [1.0, 0.0, 0.0, 0.0] }, { id: '2', vector: [0.0, 1.0] }], '2'],
     ])(
       'tags a dimension mismatch on upsertBatch with DIMENSION_MISMATCH when the bad vector is %s, refusing before any insert',
-      async (_position, docs) => {
+      async (_position, docs, badDocId) => {
         const collections = (backend as any).collections;
         const store = collections.get('vectors').store as MockVectorStore;
 
@@ -322,7 +322,9 @@ describe('WasmBackend', () => {
 
         expect(outcome).toBeInstanceOf(VelesDBError);
         expect((outcome as VelesDBError).code).toBe('DIMENSION_MISMATCH');
-        expect((outcome as VelesDBError).message).toMatch(/dimension mismatch for doc/i);
+        expect((outcome as VelesDBError).message).toBe(
+          `Vector dimension mismatch for doc ${badDocId}: expected 4, got 2`,
+        );
         expect(store.insert_batch).not.toHaveBeenCalled();
         expect(store.insert_with_payload).not.toHaveBeenCalled();
       },
