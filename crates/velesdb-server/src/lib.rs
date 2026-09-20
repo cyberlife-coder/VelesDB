@@ -272,7 +272,8 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
             handlers::points::relations::RelationEdge,
             handlers::points::relations::RelationsResponse,
             handlers::points::relations::SetTtlRequest
-        )
+        ),
+        responses(crate::types::MalformedBody)
     )
 )]
 struct ApiDocBase;

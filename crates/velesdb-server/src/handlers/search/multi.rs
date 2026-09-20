@@ -146,12 +146,7 @@ fn prepare_multi_query(
         (status = 200, description = "Multi-query search results", body = SearchResponse),
         (status = 404, description = "Collection not found", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse),
-        (
-            status = 422,
-            description = "A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum's extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.",
-            body = String,
-            content_type = "text/plain"
-        )
+        (status = 422, response = crate::types::MalformedBody)
     )
 )]
 #[allow(clippy::result_large_err)]
@@ -252,12 +247,7 @@ pub async fn multi_query_search(
         (status = 200, description = "Multi-query ids-only results", body = SearchIdsResponse),
         (status = 400, description = "Invalid request", body = ErrorResponse),
         (status = 404, description = "Collection not found", body = ErrorResponse),
-        (
-            status = 422,
-            description = "A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum's extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.",
-            body = String,
-            content_type = "text/plain"
-        )
+        (status = 422, response = crate::types::MalformedBody)
     )
 )]
 #[allow(clippy::result_large_err)]

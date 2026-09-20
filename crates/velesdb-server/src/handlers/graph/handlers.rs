@@ -199,12 +199,7 @@ fn created_or_core_error<T>(
         (status = 400, description = "Invalid request", body = ErrorResponse),
         (status = 404, description = "Collection not found, or source/target node has no stored payload (VELES-022 NodeNotFound)", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse),
-        (
-            status = 422,
-            description = "A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum's extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.",
-            body = String,
-            content_type = "text/plain"
-        )
+        (status = 422, response = crate::types::MalformedBody)
     ),
     tag = "graph"
 )]
@@ -275,12 +270,7 @@ fn build_edge(request: AddEdgeRequest) -> Result<GraphEdge, (StatusCode, Json<Er
         (status = 400, description = "Invalid request", body = ErrorResponse),
         (status = 404, description = "Collection not found, or a source/target node has no stored payload (VELES-022 NodeNotFound) — the whole batch is rejected", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse),
-        (
-            status = 422,
-            description = "A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum's extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.",
-            body = String,
-            content_type = "text/plain"
-        )
+        (status = 422, response = crate::types::MalformedBody)
     ),
     tag = "graph"
 )]
@@ -323,12 +313,7 @@ pub async fn add_edges_batch(
         (status = 400, description = "Invalid request", body = ErrorResponse),
         (status = 404, description = "Collection not found", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse),
-        (
-            status = 422,
-            description = "A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum's extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.",
-            body = String,
-            content_type = "text/plain"
-        )
+        (status = 422, response = crate::types::MalformedBody)
     ),
     tag = "graph"
 )]

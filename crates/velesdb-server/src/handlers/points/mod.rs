@@ -109,12 +109,7 @@ const MAX_UPSERT_BATCH_SIZE: usize = 100_000;
         (status = 200, description = "Points upserted", body = Object),
         (status = 404, description = "Collection not found", body = ErrorResponse),
         (status = 400, description = "Invalid request or batch too large", body = ErrorResponse),
-        (
-            status = 422,
-            description = "A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum's extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.",
-            body = String,
-            content_type = "text/plain"
-        )
+        (status = 422, response = crate::types::MalformedBody)
     )
 )]
 pub async fn upsert_points(
@@ -290,12 +285,7 @@ const MAX_SCROLL_BATCH_SIZE: u32 = 10_000;
         (status = 200, description = "Scroll batch", body = ScrollResponse),
         (status = 400, description = "Invalid request", body = ErrorResponse),
         (status = 404, description = "Collection not found", body = ErrorResponse),
-        (
-            status = 422,
-            description = "A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum's extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.",
-            body = String,
-            content_type = "text/plain"
-        )
+        (status = 422, response = crate::types::MalformedBody)
     )
 )]
 pub async fn scroll_points(
@@ -415,12 +405,7 @@ pub struct BulkDeleteRequest {
         (status = 400, description = "Batch too large", body = ErrorResponse),
         (status = 404, description = "Collection not found", body = ErrorResponse),
         (status = 500, description = "Delete failed", body = ErrorResponse),
-        (
-            status = 422,
-            description = "A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum's extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.",
-            body = String,
-            content_type = "text/plain"
-        )
+        (status = 422, response = crate::types::MalformedBody)
     )
 )]
 pub async fn bulk_delete_points(

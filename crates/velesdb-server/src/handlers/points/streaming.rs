@@ -256,12 +256,7 @@ fn should_flush(batch: &[Point], last_flush: Instant) -> bool {
         (status = 503, description = "Streaming drain task has exited — collection must be reconfigured", body = ErrorResponse),
         (status = 404, description = "Collection not found", body = ErrorResponse),
         (status = 409, description = "Streaming not configured", body = ErrorResponse),
-        (
-            status = 422,
-            description = "A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum's extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.",
-            body = String,
-            content_type = "text/plain"
-        )
+        (status = 422, response = crate::types::MalformedBody)
     )
 )]
 pub async fn stream_insert(
@@ -356,12 +351,7 @@ fn stream_insert_result_to_response(
     responses(
         (status = 200, description = "Streaming enabled", body = Object),
         (status = 404, description = "Collection not found", body = ErrorResponse),
-        (
-            status = 422,
-            description = "A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum's extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.",
-            body = String,
-            content_type = "text/plain"
-        )
+        (status = 422, response = crate::types::MalformedBody)
     )
 )]
 pub async fn enable_streaming(

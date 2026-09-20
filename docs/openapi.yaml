@@ -89,11 +89,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
-          description: 'A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum''s extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.'
-          content:
-            text/plain:
-              schema:
-                type: string
+          $ref: '#/components/responses/MalformedBody'
   /collections/{name}:
     get:
       tags:
@@ -404,11 +400,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
-          description: 'A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum''s extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.'
-          content:
-            text/plain:
-              schema:
-                type: string
+          $ref: '#/components/responses/MalformedBody'
         '500':
           description: Internal server error
           content:
@@ -453,11 +445,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
-          description: 'A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum''s extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.'
-          content:
-            text/plain:
-              schema:
-                type: string
+          $ref: '#/components/responses/MalformedBody'
         '500':
           description: Internal server error
           content:
@@ -713,11 +701,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
-          description: 'A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum''s extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.'
-          content:
-            text/plain:
-              schema:
-                type: string
+          $ref: '#/components/responses/MalformedBody'
         '500':
           description: Internal server error
           content:
@@ -762,11 +746,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
-          description: 'A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum''s extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.'
-          content:
-            text/plain:
-              schema:
-                type: string
+          $ref: '#/components/responses/MalformedBody'
         '500':
           description: Internal server error
           content:
@@ -811,11 +791,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
-          description: 'A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum''s extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.'
-          content:
-            text/plain:
-              schema:
-                type: string
+          $ref: '#/components/responses/MalformedBody'
         '500':
           description: Internal server error
           content:
@@ -860,11 +836,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
-          description: 'A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum''s extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.'
-          content:
-            text/plain:
-              schema:
-                type: string
+          $ref: '#/components/responses/MalformedBody'
   /collections/{name}/graph/traverse/stream:
     get:
       tags:
@@ -1031,11 +1003,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
-          description: 'A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum''s extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.'
-          content:
-            text/plain:
-              schema:
-                type: string
+          $ref: '#/components/responses/MalformedBody'
   /collections/{name}/indexes/{label}/{property}:
     delete:
       tags:
@@ -1180,11 +1148,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
-          description: 'A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum''s extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.'
-          content:
-            text/plain:
-              schema:
-                type: string
+          $ref: '#/components/responses/MalformedBody'
         '500':
           description: Internal server error
           content:
@@ -1236,11 +1200,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
-          description: 'A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum''s extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.'
-          content:
-            text/plain:
-              schema:
-                type: string
+          $ref: '#/components/responses/MalformedBody'
   /collections/{name}/points/delete:
     post:
       tags:
@@ -1299,11 +1259,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
-          description: 'A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum''s extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.'
-          content:
-            text/plain:
-              schema:
-                type: string
+          $ref: '#/components/responses/MalformedBody'
         '500':
           description: Delete failed
           content:
@@ -1394,11 +1350,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
-          description: 'A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum''s extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.'
-          content:
-            text/plain:
-              schema:
-                type: string
+          $ref: '#/components/responses/MalformedBody'
   /collections/{name}/points/stream:
     post:
       tags:
@@ -1593,11 +1545,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
-          description: 'A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum''s extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.'
-          content:
-            text/plain:
-              schema:
-                type: string
+          $ref: '#/components/responses/MalformedBody'
         '500':
           description: Internal server error
           content:
@@ -1646,11 +1594,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
-          description: 'A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum''s extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.'
-          content:
-            text/plain:
-              schema:
-                type: string
+          $ref: '#/components/responses/MalformedBody'
         '500':
           description: Internal server error
           content:
@@ -1850,11 +1794,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
-          description: 'A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum''s extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.'
-          content:
-            text/plain:
-              schema:
-                type: string
+          $ref: '#/components/responses/MalformedBody'
   /collections/{name}/search/ids:
     post:
       tags:
@@ -1937,11 +1877,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
-          description: 'A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum''s extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.'
-          content:
-            text/plain:
-              schema:
-                type: string
+          $ref: '#/components/responses/MalformedBody'
         '500':
           description: Internal server error
           content:
@@ -1991,11 +1927,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
-          description: 'A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum''s extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.'
-          content:
-            text/plain:
-              schema:
-                type: string
+          $ref: '#/components/responses/MalformedBody'
   /collections/{name}/search/text:
     post:
       tags:
@@ -2029,11 +1961,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
-          description: 'A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum''s extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.'
-          content:
-            text/plain:
-              schema:
-                type: string
+          $ref: '#/components/responses/MalformedBody'
   /collections/{name}/stats:
     get:
       tags:
@@ -2108,11 +2036,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
-          description: 'A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum''s extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.'
-          content:
-            text/plain:
-              schema:
-                type: string
+          $ref: '#/components/responses/MalformedBody'
   /collections/{name}/stream/insert:
     post:
       tags:
@@ -2155,11 +2079,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
-          description: 'A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum''s extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.'
-          content:
-            text/plain:
-              schema:
-                type: string
+          $ref: '#/components/responses/MalformedBody'
         '429':
           description: Streaming buffer full — retry after 1 second
           content:
@@ -2244,11 +2164,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/GuardRailsConfigResponse'
         '422':
-          description: 'A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum''s extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.'
-          content:
-            text/plain:
-              schema:
-                type: string
+          $ref: '#/components/responses/MalformedBody'
   /health:
     get:
       tags:
@@ -4510,6 +4426,13 @@ components:
         error:
           $ref: '#/components/schemas/VelesqlErrorDetail'
           description: Error details.
+  responses:
+    MalformedBody:
+      description: 'A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema.'
+      content:
+        text/plain:
+          schema:
+            type: string
   securitySchemes:
     bearer_auth:
       type: http

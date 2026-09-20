@@ -406,12 +406,7 @@ pub async fn get_guardrails(State(state): State<Arc<AppState>>) -> impl IntoResp
     request_body = GuardRailsConfigRequest,
     responses(
         (status = 200, description = "Updated guard-rails config", body = GuardRailsConfigResponse),
-        (
-            status = 422,
-            description = "A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum's extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.",
-            body = String,
-            content_type = "text/plain"
-        )
+        (status = 422, response = crate::types::MalformedBody)
     )
 )]
 pub async fn update_guardrails(
