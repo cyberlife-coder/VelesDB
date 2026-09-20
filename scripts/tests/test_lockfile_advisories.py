@@ -124,6 +124,59 @@ class EveryTrackedLockfileIsAuditedTests(unittest.TestCase):
         )
 
 
+class ABrokenGateDoesNotReadAsAFindingTests(unittest.TestCase):
+    """cargo-deny exits 1 when it refuses and 2 when it could not run.
+
+    The first CI run of this very step proved the distinction is not
+    academic: CI installs a newer cargo-deny than a developer machine is
+    likely to have, `--config` is a top-level flag there and a subcommand
+    flag in 0.19, and each version rejects the other's spelling. The step
+    reported six `advisories found in: ...` for what was a usage error, so a
+    completely broken gate read exactly like a failing one.
+    """
+
+    def setUp(self) -> None:
+        self.job = security_job(CI_WORKFLOW.read_text(encoding="utf-8"))
+
+    def test_the_step_tells_a_refusal_from_a_breakage(self) -> None:
+        self.assertIn(
+            "could not run on:",
+            self.job,
+            "the step reports every non-zero exit as an advisory, so a broken "
+            "cargo-deny invocation reads as a finding",
+        )
+        self.assertRegex(
+            self.job,
+            r"\n\s+1\) failed=",
+            "only exit 1 may be counted as advisories found; every other code means "
+            "the guard did not run",
+        )
+
+    def test_the_call_survives_bash_e(self) -> None:
+        """GitHub runs `run:` blocks under `bash -e`.
+
+        An unguarded failing call aborts the step before the first verdict is
+        recorded, and the remaining lockfiles go unaudited while the log looks
+        like a normal failure.
+        """
+        self.assertIn(
+            "|| rc=$?",
+            self.job,
+            "the cargo-deny call is unguarded, so `bash -e` aborts the loop at the "
+            "first non-clean lockfile",
+        )
+
+    def test_the_tool_version_is_pinned(self) -> None:
+        """A floating install moves the argument grammar under the gate."""
+        self.assertRegex(
+            self.job,
+            r"cargo install cargo-deny@\d+\.\d+\.\d+ --locked",
+            "cargo-deny is installed unpinned; 0.19 and 0.20 disagree on where "
+            "`--config` goes, so the next release can break this step with no "
+            "change to the repository",
+        )
+
+
 class TheCheckRefusesTheShapeThisReplacedTests(unittest.TestCase):
     """The positive control, on the two shapes that would reopen the gap."""
 

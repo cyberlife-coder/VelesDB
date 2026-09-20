@@ -776,7 +776,10 @@ jobs:
         run: rustup toolchain install --no-self-update --profile minimal
 
       - name: Install cargo-deny
-        run: cargo install cargo-deny --locked
+        # Pinned, not floating: 0.19 and 0.20 disagree on where `--config`
+        # goes, each rejecting the other's spelling, so an unpinned install
+        # moves the argument grammar under a gate nobody touched (#2322).
+        run: cargo install cargo-deny@0.20.2 --locked
 
       - name: Run security audit (advisories, licenses, bans, sources)
         run: cargo deny check advisories licenses bans sources
@@ -809,17 +812,37 @@ jobs:
             exit 1
           fi
           failed=""
+          broken=""
           while IFS= read -r lock; do
             dir=$(dirname "$lock")
             echo "::group::cargo deny check advisories -- $lock"
-            if cargo deny --manifest-path "$dir/Cargo.toml" check advisories \
-                 --config "$GITHUB_WORKSPACE/deny.toml"; then
-              echo "clean: $lock"
-            else
-              failed="$failed $lock"
-            fi
+            # `--config` is a TOP-LEVEL flag, not one `check` accepts, and the
+            # two spellings are not interchangeable across versions: 0.19
+            # wants it on the subcommand and 0.20 at the top level, each
+            # rejecting the other. The install above is pinned for that
+            # reason -- a gate whose argument grammar moves under it is a gate
+            # that breaks on a day nobody touched the repository.
+            # `|| rc=$?` and not a bare call: the step runs under `bash -e`,
+            # so an unguarded failure would abort before the first verdict is
+            # recorded and the remaining lockfiles would go unaudited.
+            rc=0
+            cargo deny --manifest-path "$dir/Cargo.toml" \
+              --config "$GITHUB_WORKSPACE/deny.toml" check advisories || rc=$?
+            case "$rc" in
+              0) echo "clean: $lock" ;;
+              # cargo-deny exits 1 when it REFUSES, and 2 (clap) when it could
+              # not run at all. Reporting a usage error as "advisories found"
+              # is how a broken guard reads like a failing one -- which is
+              # exactly what this step did on its own first run.
+              1) failed="$failed $lock" ;;
+              *) broken="$broken $lock(exit $rc)" ;;
+            esac
             echo "::endgroup::"
           done <<< "$locks"
+          if [ -n "$broken" ]; then
+            echo "::error::cargo deny could not run on:$broken -- this is a broken gate, not a finding"
+            exit 1
+          fi
           if [ -n "$failed" ]; then
             echo "::error::advisories found in:$failed"
             exit 1
