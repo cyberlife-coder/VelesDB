@@ -58,9 +58,29 @@ Bias toward caution over speed. For trivial tasks, use judgment.
 
 ## Pre-push validation (CI runs on every PR — run this locally before every push to avoid red pipelines)
 
+**Run `bash scripts/local-ci.sh` first.** It does not reproduce the commands
+below from memory: it *reads* `.github/workflows/ci.yml` and replays the steps
+of the `lint` and `hygiene` jobs as written, reporting each one, and telling a
+missing tool (exit 127) apart from a refusal. 44 of the 48 declared gates run
+on a developer machine; the rest need the runner.
+
+The listing that follows is a reading aid — what the replay covers, and what to
+run in isolation while iterating on one thing. **It is a copy, and a copy
+drifts**: it had, measurably, until #2350 — its single clippy line was missing
+a whole second pass and four features CI lints, so a contributor following it
+ran a *weaker* check than CI and shipped red pipelines. Where the two disagree,
+`ci.yml` wins and this listing is the defect.
+
 ```bash
 cargo fmt --all
-cargo clippy --workspace --all-targets --features persistence,gpu,update-check \
+# Two workspace passes, and the pair is the point: between them they lint both
+# states of every feature that gates code. `scripts/check_feature_lint_coverage.py`
+# fails the build if a feature gating code is named by neither (#2348).
+cargo clippy --workspace --all-targets \
+  --features persistence,gpu,update-check,openapi,test-fault-injection \
+  --exclude velesdb-python --exclude velesdb-node -- -D warnings -D clippy::pedantic
+cargo clippy --workspace --all-targets \
+  --features persistence,update-check,internal-bench \
   --exclude velesdb-python --exclude velesdb-node -- -D warnings -D clippy::pedantic
 cargo clippy -p velesdb-node --lib -- -D warnings   # node is excluded above (N-API link), linted separately
 PYO3_PYTHON=python3 cargo clippy -p velesdb-python --lib -- -D warnings   # excluded above too (PyO3 link)
@@ -126,7 +146,7 @@ cargo deny check advisories licenses bans sources
 # Shipping a new surface? grep the READMEs/CHANGELOG for now-stale availability caveats.
 ```
 
-Shortcut: `.\scripts\local-ci.ps1` (full) or `-Quick` (fmt + clippy). Git hooks: `git config core.hooksPath .githooks`.
+Shortcut: `bash scripts/local-ci.sh` (derived from `ci.yml`, preferred) or `.\scripts\local-ci.ps1` on Windows. Git hooks: `git config core.hooksPath .githooks`.
 Benchmarks: `cargo bench -p velesdb-core --bench hnsw_benchmark` (also `simd_benchmark`, `sparse_benchmark`); end-to-end perf/recall via `python benchmarks/velesdb_benchmark.py --recall`.
 
 ---
@@ -182,9 +202,15 @@ typo fixtures, identifier tokenization). Configure the tool to the repo's
 reality (audited allowlist, the repo's own format style), pin its version so
 a dictionary update cannot flip the verdict, and only then wire the gate.
 
-**10. Local checks mirror CI flags exactly.** `cargo clippy --all-targets
---all-features` (a `--lib`-only run missed `-D pedantic` on test targets and
-shipped two red pipelines), `cargo fmt --check`, the guard scripts, and
+**10. Local checks mirror CI flags exactly — and the only way to be sure is
+to read `ci.yml`, not to remember it.** A `--lib`-only clippy run missed
+`-D pedantic` on test targets and shipped two red pipelines, which is why
+`--all-targets` is not optional. Do **not** substitute `--all-features`: this
+workspace has features CI never enables together (`loom` needs `--cfg loom`,
+`bench-sift1m` links a TLS stack), so `--all-features` answers a question CI
+never asks — this very rule said to use it until #2350, contradicting the
+block above and the workflow both. `bash scripts/local-ci.sh` exists so the
+flags come from the file rather than from anyone's memory; run it, and check
 `git branch --show-current` before trusting any validation run. For a new
 dependency advisory, bump the lockfile surgically (edit version+checksum,
 verify with `cargo metadata --locked`) — a full `cargo update -p` re-resolves
@@ -208,6 +234,60 @@ PR to not be behind `develop` *at CI time*. Merging PR A to develop invalidates
 PR B's freshness mid-run — so order the queue: land the independent PRs first,
 refresh the dependent one **once, last** (union-merge CHANGELOG conflicts),
 and never chase develop with repeated refresh pushes.
+
+**14. A positive control must survive the fix it accompanies.** Anchor it to
+the *cause*, never to the symptom being removed. `vacuum_swap_bounded`'s
+control was "ids copied under the write guard > 0" — proof that writes raced
+the vacuum. The fix moved that copy off the guard, so the count became 0 by
+design, indistinguishable from a run where nothing raced, and the control
+failed on correct code. It took a second counter, "ids settled under the
+seal", measuring the work the race actually caused rather than where it was
+paid: 60 000 before and after. A control a success can break was never a
+control.
+
+**15. Assert that the phenomenon happened before asserting anything about
+it.** `adaptive_resume_evals` printed `saved=62.5%` while escalating on
+**0 of 40** queries — a flattering number comparing a path that never
+escalates against a restart that never had to happen. Only a corpus guard
+placed *before* the result assertions stood between it and a green run
+measuring nothing. Every A/B harness asserts first that both arms were
+exercised, and that assertion is the first to fail. When it does, read why the
+phenomenon disappeared; never relax the threshold to get green — in that case
+the cause was a heuristic unreachable on the metric under test, and relaxing
+would have frozen the lie.
+
+**16. A scheduled job carries a manual trigger, or its fixes ship on credit.**
+`quality-deep` was red on `develop` for at least six consecutive weekly runs,
+invisible because none of its jobs is in `CI Success`. Two of the three causes
+were in the jobs, not the code: `cargo install` without `--locked` re-resolved
+a tool's dependencies onto an MSRV the pinned stable cannot build (identical
+failure six weeks apart), and a job running `--no-default-features` compiled
+doctests that include the README, which documents the default build. Every
+`cargo install` in CI takes `--locked`. Every scheduled job gets a
+`workflow_dispatch` input: `careful` was the only one without, so a repair to
+it could not be verified without waiting a week — which is how it stayed
+broken.
+
+**17. A gate that has never returned a verdict is decoration; audit before
+keeping, as method 9 audits before adding.** The `mutants` job ran on every
+`velesdb-core` pull request and was cut at the 45-minute limit on both runs
+that ever met a real diff — 2 of 22 mutants tested, then 0 of 59 after 105 s
+of build and 981 s of unmutated baseline. Meanwhile `QUALITY_BAR.md` described
+the partial report as coverage. It was removed (#2339) and the tool documented
+as what it had actually been worth: a reviewer aiming it at one area by hand.
+Before defending a gate's cost, read its last runs and ask what verdict it has
+ever produced.
+
+**18. A worktree isolates files, not the branch.** Several agents and sessions
+work this repository at once. Before starting a subject: `git fetch --prune`,
+then check whether the branch already exists on the remote and who is pushing
+to it. Two actors on one branch duplicate work silently — it cost a full
+commit and its hooks on #2293, where the same defect was fixed twice within
+minutes. On a branch someone else pushes, `git fetch` before *every* push and
+read the remote SHA before merging, not the local one. Develop subjects in
+parallel if their file sets are disjoint (`comm -13` the two
+`git diff --name-only`), but push one at a time: method 13's freshness gate
+means every merge costs each other open PR a full CI cycle.
 
 ---
 
