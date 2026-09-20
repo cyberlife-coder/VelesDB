@@ -1206,6 +1206,57 @@ jobs:
   # push instead of surfacing the next time someone tries to run the bench.
   # No dataset download, no benchmark execution, no test execution.
   # ===========================================================================
+  # Compiling the fuzz targets is a PR gate because nothing else made it one.
+  # The three targets are built only by quality-deep.yml's Fuzzing job, which
+  # runs on a schedule or a manual dispatch, so a change in velesdb-core that
+  # stops a target from compiling passed every PR gate and surfaced later as a
+  # failed scheduled run. That is how #2298 stayed hidden (#2311).
+  #
+  # Measured on develop@0be2edd90, narrowing the fuzzing-only entry in
+  # storage/mod.rs from `#[cfg(any(fuzzing, test))]` to `#[cfg(test)]`:
+  # `cargo test -p velesdb-core --lib -- storage::snapshot_tests` still exits
+  # 0, and this job exits 101 with
+  # `error[E0425]: cannot find function 'parse_payload_snapshot'`.
+  fuzz-compile:
+    name: Fuzz Targets Compile Check
+    if: github.event.action != 'edited' || github.event.changes.base != null
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install --no-self-update --profile minimal
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: fuzz
+          shared-key: "velesdb-fuzz-compile"
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
+
+      # No nightly and no `cargo install cargo-fuzz`: both are what the
+      # Fuzzing job needs to RUN the targets under a sanitizer, and neither is
+      # needed to compile them. Measured: this command succeeds on the stable
+      # toolchain rust-toolchain.toml pins. Keeping the tool out also keeps
+      # this job clear of #2292, where `cargo install cargo-fuzz` re-resolved
+      # to a crate requiring a newer rustc and failed three scheduled runs
+      # before a single target ran.
+      #
+      # `--cfg fuzzing` because the targets reach entry points gated on it,
+      # which is the whole point: without the flag this job would compile a
+      # different crate from the one being fuzzed.
+      #
+      # clippy rather than check: same build, stricter verdict. `-D warnings`
+      # and not pedantic -- `fuzz/` is a workspace of its own (cargo-fuzz
+      # requires it), so it does not inherit `[workspace.lints]`, and turning
+      # pedantic on here would apply a DIFFERENT policy from the rest of the
+      # repository rather than a stricter one.
+      - name: cargo clippy (all fuzz targets, under --cfg fuzzing)
+        env:
+          RUSTFLAGS: "--cfg fuzzing"
+        run: |
+          cargo clippy --locked --manifest-path fuzz/Cargo.toml --bins \
+            -- -D warnings
+
   bench-sift1m-compile:
     name: Bench SIFT1M Compile Check
     if: github.event.action != 'edited' || github.event.changes.base != null
@@ -2133,7 +2184,7 @@ jobs:
   ci-success:
     name: CI Success
     runs-on: ubuntu-latest
-    needs: [lint, test, security, semver-checks, hygiene, wasm-check, memory-feature-matrix, internal-bench-check, drop-tightening-check, openapi-drift, mcp-doc-contract, velesql-conformance, perf-smoke, bench-sift1m-compile, perf-gate-e2e, python-sdk-tests, python-integrations, node-binding-tests, node-binding-tests-windows, gate-contracts, doc-contract, promise-contract, production-gates, propagation-guard, binary-size, pr-governance, sonarcloud]
+    needs: [lint, test, security, semver-checks, hygiene, wasm-check, memory-feature-matrix, internal-bench-check, drop-tightening-check, openapi-drift, mcp-doc-contract, velesql-conformance, perf-smoke, fuzz-compile, bench-sift1m-compile, perf-gate-e2e, python-sdk-tests, python-integrations, node-binding-tests, node-binding-tests-windows, gate-contracts, doc-contract, promise-contract, production-gates, propagation-guard, binary-size, pr-governance, sonarcloud]
     # The ONE job that must not carry the title/body-edit guard, and #2232 is
     # why. Guarded, it skipped on a body edit -- and branch protection accepts a
     # `skipped` required check, so the PR read CLEAN with no gate having run on
@@ -2220,6 +2271,7 @@ jobs:
           [[ "${{ needs.mcp-doc-contract.result }}" == "success" ]] && \
           [[ "${{ needs.velesql-conformance.result }}" == "success" ]] && \
           [[ "${{ needs.perf-smoke.result }}" == "success" ]] && \
+          [[ "${{ needs.fuzz-compile.result }}" == "success" ]] && \
           [[ "${{ needs.bench-sift1m-compile.result }}" == "success" ]] && \
           [[ "${{ needs.perf-gate-e2e.result }}" == "success" ]] && \
           [[ "${{ needs.python-sdk-tests.result }}" == "success" ]] && \

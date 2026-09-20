@@ -98,7 +98,7 @@ cargo +nightly fuzz run fuzz_velesql_parser -- -workers=4 -jobs=4
 ### With Specific Corpus
 
 ```bash
-cargo +nightly fuzz run fuzz_velesql_parser fuzz/corpus/velesql_parser/
+cargo +nightly fuzz run fuzz_velesql_parser fuzz/corpus/fuzz_velesql_parser/
 ```
 
 ## Reproducing Crashes
@@ -141,12 +141,12 @@ The corpus directory contains seed inputs that guide fuzzing:
 ```
 fuzz/
 ├── corpus/
-│   ├── velesql_parser/     # SQL query seeds
+│   ├── fuzz_velesql_parser/    # SQL query seeds
 │   │   ├── valid_select_01
 │   │   ├── valid_match_01
 │   │   └── edge_case_empty
-│   ├── distance_metrics/   # Vector pair seeds
-│   └── fuzz_snapshot_parser/  # Payload-snapshot seeds
+│   ├── fuzz_distance_metrics/  # Vector pair seeds
+│   └── fuzz_snapshot_parser/   # Payload-snapshot seeds
 ```
 
 ### Adding Seeds
@@ -155,10 +155,10 @@ Add interesting inputs that exercise different code paths:
 
 ```bash
 # Add a valid query
-echo 'SELECT * FROM docs WHERE vector NEAR $v LIMIT 10' > fuzz/corpus/velesql_parser/valid_near_query
+echo 'SELECT * FROM docs WHERE vector NEAR $v LIMIT 10' > fuzz/corpus/fuzz_velesql_parser/valid_near_query
 
 # Add edge case
-echo '' > fuzz/corpus/velesql_parser/empty_input
+echo '' > fuzz/corpus/fuzz_velesql_parser/empty_input
 ```
 
 ### Minimizing Corpus
@@ -166,7 +166,7 @@ echo '' > fuzz/corpus/velesql_parser/empty_input
 Remove redundant inputs:
 
 ```bash
-cargo +nightly fuzz cmin fuzz_velesql_parser fuzz/corpus/velesql_parser/
+cargo +nightly fuzz cmin fuzz_velesql_parser fuzz/corpus/fuzz_velesql_parser/
 ```
 
 ## CI Integration
@@ -245,8 +245,10 @@ bench = false
 ### 3. Create Initial Corpus
 
 ```bash
-mkdir -p fuzz/corpus/new_component
-echo 'valid input' > fuzz/corpus/new_component/seed_01
+# cargo-fuzz reads the corpus at fuzz/corpus/<target name>, so the directory
+# is named after the TARGET, `fuzz_` prefix included -- not after the component.
+mkdir -p fuzz/corpus/fuzz_new_component
+echo 'valid input' > fuzz/corpus/fuzz_new_component/seed_01
 ```
 
 ### 4. Document in this Guide
