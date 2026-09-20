@@ -98,12 +98,47 @@ use velesdb_core::FusionStrategy;
 let strategy = FusionStrategy::relative_score(0.7, 0.3)?;
 ```
 
+## Fusion strategies, and where each one is reachable
+
+`FusionStrategy` has six variants. Five of them are reachable from every
+surface this project ships. **`WeightedRRF` is reachable only from the Rust
+embedding API**, and that asymmetry is not a design decision anyone recorded —
+it is measured here so nobody discovers it by grepping (#2095).
+
+| Variant | Rust embedding | REST | VelesQL | Python | Swift / Kotlin | WASM / TS SDK | Tauri |
+|---|---|---|---|---|---|---|---|
+| `Average` | yes | `average` | `AVERAGE` | `FusionStrategy.average()` | yes | `average` | `average` |
+| `Maximum` | yes | `maximum` | `MAXIMUM` | `FusionStrategy.maximum()` | yes | `maximum` | `maximum` |
+| `RRF { k }` | yes | `rrf` | `RRF` | `FusionStrategy.rrf()` | yes | `rrf` | `rrf` |
+| `Weighted { .. }` | yes | `weighted` | `WEIGHTED` | `FusionStrategy.weighted()` | yes | `weighted` | `weighted` |
+| `RelativeScore { .. }` | yes | `relative_score` | `RSF` | `FusionStrategy.relative_score()` | yes | `relative_score` / `rsf` | `relative_score` / `rsf` |
+| `WeightedRRF { weights, k }` | **yes** | **no** | **no** | **no** | **no** | **no** | **no** |
+
+That last row matters more than a missing enum arm usually would. `WeightedRRF`
+is the variant the engine's own documentation calls *"the correct strategy for
+hybrid dense + text search where branches carry different retrieval precision
+characteristics"* — which is the subject of this very guide. Unlike
+[`RRF`](#hybrid-dense--sparse-with-rrf-fusion) it takes per-branch weights and
+0-based ranks, so a caller who needs one branch to count for more than another
+cannot express it outside Rust.
+
+An embedder writes it directly:
+
+```rust
+use velesdb_core::FusionStrategy;
+
+// Dense retrieval trusted twice as much as the text branch, k = 60.
+let strategy = FusionStrategy::WeightedRRF { weights: vec![2.0, 1.0], k: 60.0 };
+```
+
+Everyone else has `RRF { k }`, which weights every branch equally.
+
 ## Types and methods
 
 | Type | Path | Description |
 |------|------|-------------|
 | `SparseVector` | `velesdb_core::sparse_index` | Sorted `(u32 index, f32 weight)` pairs; deduplicates and drops zeros on construction |
-| `FusionStrategy` | `velesdb_core` | `RRF { k }`, `RelativeScore { dense_weight, sparse_weight }` |
+| `FusionStrategy` | `velesdb_core` | Six variants — see [Fusion strategies, and where each one is reachable](#fusion-strategies-and-where-each-one-is-reachable) |
 | `ScoredDoc` | `velesdb_core::sparse_index` | Raw sparse result: `doc_id: u64`, `score: f32` |
 
 | Method | On | Description |
