@@ -1661,6 +1661,19 @@ def scratch_checkout():
         (root / "cases.json").write_text("{}\n", encoding="utf-8")
         (root / "notes.txt").write_text("notes\n", encoding="utf-8")
         git_answer(root, "init", "--quiet")
+        # Git may run maintenance in the background after a commit (`gc.auto`
+        # since 2.29, `maintenance.auto` since 2.31). That child writes into
+        # `.git` while `TemporaryDirectory.__exit__` is deleting it, and the
+        # deletion then fails with `OSError: [Errno 39] Directory not empty:
+        # .../.git` — the suite errors on cleanup, not on an assertion, on a
+        # test whose subject is what git *answers*. Seen on a runner while the
+        # same suite passed locally and on develop.
+        #
+        # Disabled rather than tolerated with `ignore_cleanup_errors=True`:
+        # that would hide the race, and a background git in a scratch repo has
+        # nothing to do here in the first place.
+        git_answer(root, "config", "gc.auto", "0")
+        git_answer(root, "config", "maintenance.auto", "false")
         git_commit(root, "cases.json", "notes.txt")
         with mock.patch.object(bench, "ROOT", root):
             yield root
@@ -1831,6 +1844,24 @@ def terminated_inside_the_scratch_index(test: unittest.TestCase, *, filter_gone:
         after = sorted(path.name for path in scratch.iterdir())
         gone = writers_gone(held_end, FILTER_DEATH_PATIENCE_S) if filter_gone else None
     return during, code, after, gone
+
+
+class ScratchRepoMaintenanceTest(unittest.TestCase):
+    """The scratch repo runs no background git, which is why cleanup is safe.
+
+    The race this guards against — a `gc.auto` child writing into `.git` while
+    `TemporaryDirectory.__exit__` deletes it — is timing-dependent and did not
+    reproduce locally; only a runner showed it. So the assertion is on the
+    *mechanism*, not on the absence of the symptom: a future edit dropping
+    either config line is caught here rather than by an intermittent red.
+    """
+
+    def test_the_scratch_checkout_disables_background_maintenance(self):
+        with scratch_checkout() as root:
+            self.assertEqual(git_answer(root, "config", "--get", "gc.auto").strip(), "0")
+            self.assertEqual(
+                git_answer(root, "config", "--get", "maintenance.auto").strip(), "false"
+            )
 
 
 class CheckoutOriginTest(unittest.TestCase):
