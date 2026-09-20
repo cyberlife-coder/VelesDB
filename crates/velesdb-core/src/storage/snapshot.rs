@@ -135,7 +135,16 @@ fn validate_snapshot_header(data: &[u8]) -> io::Result<(u64, usize)> {
 /// be read; and `InvalidData` (see [`parse_snapshot`]) if it is corrupt or has
 /// an invalid format.
 pub(crate) fn load_snapshot(snapshot_path: &Path) -> io::Result<(FxHashMap<u64, u64>, u64)> {
-    if !snapshot_path.exists() {
+    // `try_exists`, not `exists`: the latter answers `false` when the metadata
+    // cannot be read at all -- "e.g. because of a permission error or broken
+    // symbolic links" (std 1.90) -- and the caller reads `NotFound` as the
+    // cold-start case, replaying the WAL with no log line at all. A snapshot
+    // on a path this process cannot reach was therefore skipped in silence:
+    // no data lost, since the replay rebuilds the index, but no signal either,
+    // and the full replay paid on every boot until someone noticed (#2325).
+    // Here the reachability error propagates, and `load_or_replay` warns
+    // before falling back, as it already does for a corrupt one.
+    if !snapshot_path.try_exists()? {
         return Err(io::Error::new(io::ErrorKind::NotFound, "No snapshot"));
     }
 
