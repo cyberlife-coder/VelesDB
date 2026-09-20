@@ -166,6 +166,13 @@ VERSION_CLAIMS: "tuple[VersionClaim, ...]" = (
         description="`Applies to: velesdb-memory X.Y.Z` doc stamp",
     ),
     VersionClaim(
+        "workspace-version-stamp",
+        "velesdb-core",
+        re.compile(r"workspace\s+(\d+\.\d+\.\d+)"),
+        exact=True,
+        description="`workspace X.Y.Z` doc stamp",
+    ),
+    VersionClaim(
         "cargo-pin-core",
         "velesdb-core",
         re.compile(
@@ -313,7 +320,18 @@ def scanned_doc_files(root: Path) -> "list[Path]":
     """Every markdown file the version guard sweeps."""
     excluded_dirs = tuple((root / d).resolve() for d in VERSION_SCAN_EXCLUDED_DIRS)
     out: "list[Path]" = []
-    for path in sorted((root / DOCS_DIRNAME).rglob("*.md")):
+    # The repository root, then `docs/`. The root used to contribute README.md
+    # alone, so every other page a newcomer or an agent opens first --
+    # ARCHITECTURE.md, QUALITY_BAR.md, CONTRIBUTING.md, ROADMAP.md, AGENTS.md
+    # -- claimed versions nothing compared against the manifests. Measured on
+    # 6.0.0: ARCHITECTURE.md still stamped `workspace 4.3.0`, two majors
+    # behind, while every guard was green. Sweeping the root as a whole rather
+    # than naming pages keeps the next file added there inside the guard, and
+    # the exclusions below already handle what is historical by construction:
+    # CHANGELOG.md matches VERSION_SCAN_EXCLUDED_NAMES, which is the only one
+    # the widened sweep reports (13 entries, all of them past releases).
+    candidates = sorted(root.glob("*.md")) + sorted((root / DOCS_DIRNAME).rglob("*.md"))
+    for path in candidates:
         relative = path.relative_to(root).as_posix()
         if relative in VERSION_SCAN_EXCLUDED_FILES:
             continue
@@ -323,9 +341,6 @@ def scanned_doc_files(root: Path) -> "list[Path]":
         if VERSION_SCAN_EXCLUDED_NAMES.match(path.name):
             continue
         out.append(path)
-    root_readme = root / "README.md"
-    if root_readme.is_file():
-        out.append(root_readme)
     # A crate's own README is the page a user lands on from crates.io, npm or
     # PyPI — its version claim is the FIRST one anybody reads, and it was
     # outside every sweep. Measured on 4.2.0: seven of the nine stamped READMEs

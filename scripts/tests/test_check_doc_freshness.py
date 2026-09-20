@@ -438,3 +438,80 @@ class ManifestReaderTests(FreshnessGuardTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RepositoryRootIsSweptTests(FreshnessGuardTestCase):
+    """The root used to contribute `README.md` and nothing else.
+
+    Every other page a newcomer or an agent opens first — `ARCHITECTURE.md`,
+    `QUALITY_BAR.md`, `CONTRIBUTING.md`, `ROADMAP.md`, `AGENTS.md` — sat
+    outside the sweep, so a version claim there was compared against nothing.
+    Measured on 6.0.0: `ARCHITECTURE.md` still stamped `workspace 4.3.0`, two
+    majors behind, with every guard green.
+
+    The same lesson is already recorded one directory over, in the comment
+    that added `crates/*/README.md` to this sweep: "its version claim is the
+    FIRST one anybody reads, and it was outside every sweep".
+    """
+
+    def test_a_stale_claim_at_the_root_is_refused(self) -> None:
+        self.write(
+            "ARCHITECTURE.md",
+            "# Architecture\n\n> **Last updated:** 2026-08-08 — applies to v4.x "
+            "(workspace 1.2.3).\n",
+        )
+        self.assertGuardFails("versions", "ARCHITECTURE.md", "1.2.3", WORKSPACE_VERSION)
+
+    def test_the_sweep_names_no_page(self) -> None:
+        """A file added to the root tomorrow must be inside the guard.
+
+        Listing the pages is what left five of them out; the sweep globs.
+        """
+        self.write("BRAND_NEW_PAGE.md", f"Applies to: velesdb-core {WORKSPACE_VERSION}\n")
+        swept = {p.name for p in cdf.scanned_doc_files(self.tmp)}
+        self.assertIn("BRAND_NEW_PAGE.md", swept)
+
+    def test_a_changelog_is_historical_by_construction(self) -> None:
+        """13 findings, all of them past releases — measured on the real tree.
+
+        Sweeping it would bury the one finding that matters under a decade of
+        correct history, which is how a guard gets ignored.
+        """
+        self.write("CHANGELOG.md", "## 0.8.12\n\n```toml\nvelesdb-core = \"0.8.12\"\n```\n")
+        self.assertGuardPasses("versions")
+        self.assertNotIn("CHANGELOG.md", {p.name for p in cdf.scanned_doc_files(self.tmp)})
+
+
+class WorkspaceStampClaimTests(FreshnessGuardTestCase):
+    """`workspace X.Y.Z` is a claim shape the guard did not know.
+
+    Widening the sweep alone would not have caught `ARCHITECTURE.md`: its
+    stamp reads `applies to v4.x (workspace 4.3.0)`, which matches none of
+    the `Applies to: velesdb-core X.Y.Z` / cargo-pin / git-tag patterns.
+    Both halves are needed, and a test that only proved the sweep would have
+    shipped a wider gate that still missed the thing that motivated it.
+    """
+
+    def test_a_disagreeing_workspace_stamp_is_refused(self) -> None:
+        self.write("QUALITY_BAR.md", "# Bar\n\n> Applies to workspace 9.9.9.\n")
+        self.assertGuardFails("versions", "QUALITY_BAR.md", "9.9.9", "workspace")
+
+    def test_a_matching_workspace_stamp_passes(self) -> None:
+        """The positive control: a shape that refuses everything is not a check."""
+        self.write("QUALITY_BAR.md", f"# Bar\n\n> Applies to workspace {WORKSPACE_VERSION}.\n")
+        self.assertGuardPasses("versions")
+
+    def test_the_shape_matches_something_real(self) -> None:
+        """A pattern nothing in the repository matches polices nothing.
+
+        Asserted against the tracked files, not the fixture: both pages that
+        carry this stamp today must be readable by it.
+        """
+        claim = next(c for c in cdf.VERSION_CLAIMS if c.name == "workspace-version-stamp")
+        repo_root = SCRIPT_PATH.parent.parent
+        seen = {
+            name: claim.pattern.findall((repo_root / name).read_text(encoding="utf-8"))
+            for name in ("ARCHITECTURE.md", "QUALITY_BAR.md")
+        }
+        for name, found in seen.items():
+            self.assertTrue(found, f"{name} carries no `workspace X.Y.Z` stamp the guard can read")
