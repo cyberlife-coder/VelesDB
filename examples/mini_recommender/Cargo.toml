@@ -14,3 +14,5 @@ path = "main.rs"
 velesdb-core = { path = "../../crates/velesdb-core" }
 serde_json = "1.0"
 tempfile = "3.10"
+
+[workspace]

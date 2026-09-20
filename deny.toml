@@ -38,6 +38,19 @@ ignore = [
     # migration as the ignores above. If cargo-deny starts erroring on
     # unsound advisories, add: { id = "RUSTSEC-2024-0429", ... } here.
 
+    # ── Demo-only transitives (demos/tauri-rag-app) ───────────────────
+    # First audited when #2322 extended the gate past the root lockfile.
+    # All three are `unmaintained`, not vulnerabilities, and NONE of them
+    # appears in the root `Cargo.lock` (verified: `grep -c '^name = "<c>"$'`
+    # returns 0 for each), so these entries can only ever match the demo.
+    # Everything the demo could fix by a version bump was fixed rather than
+    # ignored: crossbeam-epoch 0.9.18 -> 0.9.21 and h2 0.4.13 -> 0.4.19.
+    #
+    # Last reviewed: 2026-09-20
+    { id = "RUSTSEC-2024-0436", reason = "paste: proc-macro transitive of the demo's Tauri stack, unmaintained, no successor" },
+    { id = "RUSTSEC-2025-0119", reason = "number_prefix: indicatif transitive in the demo, unmaintained" },
+    { id = "RUSTSEC-2026-0105", reason = "core2: demo transitive, unmaintained and all versions yanked" },
+
     # ── Tauri non-GTK3 transitives ────────────────────────────────────
     { id = "RUSTSEC-2024-0370", reason = "proc-macro-error: tauri build-time transitive, unmaintained" },
     { id = "RUSTSEC-2025-0075", reason = "unic-char-range: tauri transitive, unmaintained" },

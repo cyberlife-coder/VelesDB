@@ -781,6 +781,51 @@ jobs:
       - name: Run security audit (advisories, licenses, bans, sources)
         run: cargo deny check advisories licenses bans sources
 
+      # The step above reads the ROOT lockfile and nothing else, so the six
+      # other tracked `Cargo.lock` files escaped every advisory. Measured when
+      # #2321 bumped rustls for RUSTSEC-2026-0285: the gate failed on the root
+      # lock while the Tauri demo's lock pinned a vulnerable rustls and nothing
+      # said so. Six of the six carried `crossbeam-epoch 0.9.18`
+      # (RUSTSEC-2026-0204) at the time this was written (#2322).
+      #
+      # The list is DERIVED, never written down: a hard-coded one is what let
+      # six files escape in the first place, and a seventh would escape the
+      # fix. `scripts/tests/test_lockfile_advisories.py` refuses a literal
+      # list here.
+      #
+      # Advisories only. Licences, bans and sources stay the root's policy,
+      # audited where they already are: an example's dependency tree is not a
+      # shipping surface and its licence set is not ours to police.
+      #
+      # Every lockfile is audited before the step decides, so one failure does
+      # not hide the next, and an empty list fails: a loop over nothing exits 0
+      # and would read exactly like a clean audit.
+      - name: Audit every other tracked lockfile (advisories)
+        run: |
+          set -uo pipefail
+          locks=$(git ls-files '*Cargo.lock' | grep -v '^Cargo.lock$')
+          if [ -z "$locks" ]; then
+            echo "::error::git tracks no non-root lockfile -- this step would pass by auditing nothing"
+            exit 1
+          fi
+          failed=""
+          while IFS= read -r lock; do
+            dir=$(dirname "$lock")
+            echo "::group::cargo deny check advisories -- $lock"
+            if cargo deny --manifest-path "$dir/Cargo.toml" check advisories \
+                 --config "$GITHUB_WORKSPACE/deny.toml"; then
+              echo "clean: $lock"
+            else
+              failed="$failed $lock"
+            fi
+            echo "::endgroup::"
+          done <<< "$locks"
+          if [ -n "$failed" ]; then
+            echo "::error::advisories found in:$failed"
+            exit 1
+          fi
+          echo "every tracked lockfile is clean"
+
   # ===========================================================================
   # Public API stability: cargo-semver-checks diffs each published library's
   # current API against its last crates.io release and fails if a breaking
