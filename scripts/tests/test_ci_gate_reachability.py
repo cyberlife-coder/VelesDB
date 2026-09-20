@@ -1885,6 +1885,107 @@ class NoOpRunCannotCancelRealCiTests(unittest.TestCase):
                 )
 
 
+CONCURRENCY_GROUP_RE = re.compile(r"^\s*group:\s*(.+?)\s*$", re.MULTILINE)
+
+
+def concurrency_group(text: str) -> str:
+    """The workflow-level `group:` value, verbatim."""
+    match = CONCURRENCY_GROUP_RE.search(text)
+    return "" if match is None else match.group(1)
+
+
+def group_separates_no_op_runs(group: str) -> bool:
+    """True when the group keys a no-op run apart from a real one.
+
+    Structural, not evaluated: the value must carry the no-op predicate AND
+    `github.run_id`, so that a no-op edit lands in a group of its own while
+    every real run keeps sharing one. Checking only for the predicate would
+    accept a group that merely *mentions* it.
+    """
+    return bool(RETARGET_GUARD_RE.search(group)) and "github.run_id" in group
+
+
+class NoOpRunCannotDisplaceAPendingRealRunTests(unittest.TestCase):
+    """`cancel-in-progress` was necessary and not sufficient.
+
+    It governs a run already in flight and says nothing about a run still
+    PENDING. GitHub keeps at most one pending run per concurrency group and a
+    third arrival evicts the queued one regardless. Measured in production on
+    #2316 after `@dependabot rebase`, which pushes the rebased commit and
+    edits the body in the same second: run 35197905615 (`synchronize`) was
+    created 08:06:20Z and `cancelled` at 08:06:21Z having run 0 jobs, while
+    run 35197906019 (`edited`) skipped every gate. `ci-success` refused
+    correctly, so nothing merged on a false green -- but the pull request was
+    left with no CI at all and only a new commit brings it back (#2327).
+
+    The fix is the group, not the predicate: a no-op edit gets one of its own.
+    """
+
+    def setUp(self) -> None:
+        self.ci = CI_WORKFLOW.read_text(encoding="utf-8")
+
+    def test_the_group_keys_a_no_op_run_apart_from_the_real_one(self) -> None:
+        group = concurrency_group(self.ci)
+        self.assertTrue(group, "ci.yml declares no `group:` -- parser or workflow broke")
+        self.assertTrue(
+            group_separates_no_op_runs(group),
+            "a no-op edit shares the real run's concurrency group, so it can evict the "
+            "queued real run whatever `cancel-in-progress` says: key it by "
+            "`github.run_id` when the no-op predicate holds",
+        )
+
+    def test_the_group_predicate_is_spelled_like_every_job_guard(self) -> None:
+        found = RETARGET_GUARD_RE.search(concurrency_group(self.ci))
+        self.assertIsNotNone(found, "the concurrency group lost the no-op predicate")
+        guarded, _unguarded = jobs_with_guard(self.ci)
+        self.assertGreater(len(guarded), 20, "job discovery looks broken, not the guard")
+        for job in sorted(guarded):
+            with self.subTest(job=job):
+                in_job = RETARGET_GUARD_RE.search(job_block(self.ci, job))
+                self.assertIsNotNone(in_job, f"`{job}` reads as guarded but the regex finds nothing")
+                self.assertEqual(found.group(0), in_job.group(0))
+
+    def test_the_check_refuses_the_shape_this_replaced(self) -> None:
+        """The positive control: the previous group must not pass.
+
+        A test that only ever sees the fixed file proves the file, not the
+        check.
+        """
+        self.assertFalse(
+            group_separates_no_op_runs("${{ github.workflow }}-${{ github.ref }}"),
+            "the pre-#2327 group is accepted, so this check would not have caught it",
+        )
+        self.assertFalse(
+            group_separates_no_op_runs(
+                "${{ github.workflow }}-${{ github.ref }}-"
+                "${{ github.event.action != 'edited' || github.event.changes.base != null }}"
+            ),
+            "a group that splits no-op from real but reuses ONE key for every no-op run "
+            "still lets the next body edit evict a queued one",
+        )
+        self.assertTrue(
+            group_separates_no_op_runs(concurrency_group(self.ci)),
+            "the shipped group must pass the same check that refuses those two",
+        )
+
+
+class ConcurrencyGroupParserTests(unittest.TestCase):
+    """RED-then-GREEN on synthetic text, per this module's parser contract."""
+
+    def test_parser_reads_a_literal_and_an_expression(self) -> None:
+        self.assertEqual(
+            concurrency_group("concurrency:\n  group: plain\n  cancel-in-progress: true\n"),
+            "plain",
+        )
+        self.assertEqual(
+            concurrency_group("concurrency:\n  group: ${{ a }}-${{ b }}\n"),
+            "${{ a }}-${{ b }}",
+        )
+
+    def test_parser_returns_empty_when_there_is_no_group(self) -> None:
+        self.assertEqual(concurrency_group("on:\n  push:\n"), "")
+
+
 class CancelInProgressParserTests(unittest.TestCase):
     """RED-then-GREEN on synthetic text, per this module's parser contract."""
 

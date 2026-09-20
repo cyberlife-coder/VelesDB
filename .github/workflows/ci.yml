@@ -91,10 +91,27 @@ on:
 # two spellings of "this run is a no-op" is how the two drift apart and the
 # hole reopens. Pinned by scripts/tests/test_ci_gate_reachability.py.
 #
-# A no-op run does not cancel; it queues behind the real run and finishes in
-# seconds. A real run still cancels whatever is stale, no-op or not.
+# `cancel-in-progress` was necessary and not sufficient: it stops a no-op run
+# from cancelling a run already in flight, but says nothing about a run still
+# PENDING. GitHub keeps at most one pending run per concurrency group, and a
+# third arrival evicts the queued one whatever `cancel-in-progress` says. Hit
+# in production on #2316 after `@dependabot rebase`, which pushes the rebased
+# commit and edits the body in the same second: run 35197905615
+# (`synchronize`, the real CI) was created 08:06:20Z and `cancelled` at
+# 08:06:21Z having run 0 jobs, while run 35197906019 (`edited`) skipped every
+# gate. The mirror step in `ci-success` then refused correctly -- nothing
+# merges on a false green -- but the pull request was left with no CI at all,
+# and only a new commit gets it back (#2327).
+#
+# So the group itself carries the predicate: a run that does real work joins
+# the shared group and may cancel a stale sibling; a no-op edit gets a group
+# of its own, keyed by its run id, where it can neither displace a real run
+# nor be displaced by the next body edit. The predicate stays spelled exactly
+# as every job guard spells it -- two spellings of "this run is a no-op" is
+# how the two drift apart and the hole reopens. Pinned by
+# scripts/tests/test_ci_gate_reachability.py.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ (github.event.action != 'edited' || github.event.changes.base != null) && 'work' || github.run_id }}
   cancel-in-progress: ${{ github.event.action != 'edited' || github.event.changes.base != null }}
 
 permissions:
