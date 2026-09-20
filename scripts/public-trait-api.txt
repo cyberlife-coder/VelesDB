@@ -1,0 +1,83 @@
+pub fn velesdb_core::DatabaseObserver::on_collection_created(&self, &str, &velesdb_core::CollectionType)
+pub fn velesdb_core::DatabaseObserver::on_collection_deleted(&self, &str)
+pub fn velesdb_core::DatabaseObserver::on_ddl_request(&self, &str, &str) -> velesdb_core::error::Result<()>
+pub fn velesdb_core::DatabaseObserver::on_dml_mutation_request(&self, &str, &str) -> velesdb_core::error::Result<()>
+pub fn velesdb_core::DatabaseObserver::on_query(&self, &str, u64)
+pub fn velesdb_core::DatabaseObserver::on_query_request(&self, &velesdb_core::observer::context::QueryAccessContext<'_>) -> velesdb_core::error::Result<velesdb_core::observer::context::AccessDecision>
+pub fn velesdb_core::DatabaseObserver::on_upsert(&self, &str, usize)
+pub fn velesdb_core::QuantizationCodec::from_bytes(&[u8]) -> core::io::error::Result<Self>
+pub fn velesdb_core::QuantizationCodec::to_bytes(&self) -> alloc::vec::Vec<u8>
+pub fn velesdb_core::VectorIndex::dimension(&self) -> usize
+pub fn velesdb_core::VectorIndex::insert(&self, u64, &[f32])
+pub fn velesdb_core::VectorIndex::is_empty(&self) -> bool
+pub fn velesdb_core::VectorIndex::len(&self) -> usize
+pub fn velesdb_core::VectorIndex::metric(&self) -> velesdb_core::distance::DistanceMetric
+pub fn velesdb_core::VectorIndex::remove(&self, u64) -> bool
+pub fn velesdb_core::VectorIndex::search(&self, &[f32], usize) -> alloc::vec::Vec<velesdb_core::scored_result::ScoredResult>
+pub fn velesdb_core::agent::ReinforcementStrategy::name(&self) -> &'static str
+pub fn velesdb_core::agent::ReinforcementStrategy::update_confidence(&self, f32, bool, &velesdb_core::agent::reinforcement::ReinforcementContext) -> f32
+pub fn velesdb_core::agent::reinforcement::ReinforcementStrategy::name(&self) -> &'static str
+pub fn velesdb_core::agent::reinforcement::ReinforcementStrategy::update_confidence(&self, f32, bool, &velesdb_core::agent::reinforcement::ReinforcementContext) -> f32
+pub fn velesdb_core::collection::graph::AdjacencySource::neighbors(&self, u64) -> alloc::vec::Vec<u64>
+pub fn velesdb_core::collection::graph::EdgePredicate::matches(&self, u64, u64, velesdb_core::collection::graph::LabelId) -> bool
+pub fn velesdb_core::index::VectorIndex::dimension(&self) -> usize
+pub fn velesdb_core::index::VectorIndex::insert(&self, u64, &[f32])
+pub fn velesdb_core::index::VectorIndex::is_empty(&self) -> bool
+pub fn velesdb_core::index::VectorIndex::len(&self) -> usize
+pub fn velesdb_core::index::VectorIndex::metric(&self) -> velesdb_core::distance::DistanceMetric
+pub fn velesdb_core::index::VectorIndex::remove(&self, u64) -> bool
+pub fn velesdb_core::index::VectorIndex::search(&self, &[f32], usize) -> alloc::vec::Vec<velesdb_core::scored_result::ScoredResult>
+pub fn velesdb_core::index::hnsw::native::DistanceEngine::batch_distance(&self, &[f32], &[&[f32]]) -> alloc::vec::Vec<f32>
+pub fn velesdb_core::index::hnsw::native::DistanceEngine::distance(&self, &[f32], &[f32]) -> f32
+pub fn velesdb_core::index::hnsw::native::DistanceEngine::is_pre_normalized(&self) -> bool
+pub fn velesdb_core::index::hnsw::native::DistanceEngine::metric(&self) -> velesdb_core::distance::DistanceMetric
+pub fn velesdb_core::index::hnsw::native::NativeHnswBackend::file_dump(&self, &std::path::Path, &str) -> core::io::error::Result<()>
+pub fn velesdb_core::index::hnsw::native::NativeHnswBackend::insert(&self, (&[f32], usize)) -> velesdb_core::error::Result<()>
+pub fn velesdb_core::index::hnsw::native::NativeHnswBackend::is_empty(&self) -> bool
+pub fn velesdb_core::index::hnsw::native::NativeHnswBackend::len(&self) -> usize
+pub fn velesdb_core::index::hnsw::native::NativeHnswBackend::parallel_insert(&self, &[(&[f32], usize)]) -> velesdb_core::error::Result<alloc::vec::Vec<usize>>
+pub fn velesdb_core::index::hnsw::native::NativeHnswBackend::search(&self, &[f32], usize, usize) -> alloc::vec::Vec<velesdb_core::index::hnsw::native::NativeNeighbour>
+pub fn velesdb_core::index::hnsw::native::NativeHnswBackend::set_searching_mode(&mut self, bool)
+pub fn velesdb_core::index::hnsw::native::NativeHnswBackend::transform_score(&self, f32) -> f32
+pub fn velesdb_core::index::hnsw::native::TraversalCodec::can_train() -> bool
+pub fn velesdb_core::index::hnsw::native::TraversalCodec::distance(&Self::Quantizer, &Self::Store, &Self::Prepared, velesdb_core::index::hnsw::native::NodeId) -> core::option::Option<Self::Dist>
+pub fn velesdb_core::index::hnsw::native::TraversalCodec::encode_push(&Self::Quantizer, &[f32], &mut Self::Store) -> velesdb_core::error::Result<()>
+pub fn velesdb_core::index::hnsw::native::TraversalCodec::new_store(&alloc::sync::Arc<Self::Quantizer>, usize, usize) -> Self::Store
+pub fn velesdb_core::index::hnsw::native::TraversalCodec::prepare(&Self::Quantizer, &[f32], &[f32]) -> core::option::Option<Self::Prepared>
+pub fn velesdb_core::index::hnsw::native::TraversalCodec::supports_metric(velesdb_core::distance::DistanceMetric) -> bool
+pub fn velesdb_core::index::hnsw::native::TraversalCodec::train(&[alloc::vec::Vec<f32>]) -> velesdb_core::error::Result<Self::Quantizer>
+pub fn velesdb_core::observer::DatabaseObserver::on_collection_created(&self, &str, &velesdb_core::CollectionType)
+pub fn velesdb_core::observer::DatabaseObserver::on_collection_deleted(&self, &str)
+pub fn velesdb_core::observer::DatabaseObserver::on_ddl_request(&self, &str, &str) -> velesdb_core::error::Result<()>
+pub fn velesdb_core::observer::DatabaseObserver::on_dml_mutation_request(&self, &str, &str) -> velesdb_core::error::Result<()>
+pub fn velesdb_core::observer::DatabaseObserver::on_query(&self, &str, u64)
+pub fn velesdb_core::observer::DatabaseObserver::on_query_request(&self, &velesdb_core::observer::context::QueryAccessContext<'_>) -> velesdb_core::error::Result<velesdb_core::observer::context::AccessDecision>
+pub fn velesdb_core::observer::DatabaseObserver::on_upsert(&self, &str, usize)
+pub fn velesdb_core::quantization::QuantizationCodec::from_bytes(&[u8]) -> core::io::error::Result<Self>
+pub fn velesdb_core::quantization::QuantizationCodec::to_bytes(&self) -> alloc::vec::Vec<u8>
+pub fn velesdb_core::storage::PayloadStorage::delete(&mut self, u64) -> core::io::error::Result<()>
+pub fn velesdb_core::storage::PayloadStorage::flush(&mut self) -> core::io::error::Result<()>
+pub fn velesdb_core::storage::PayloadStorage::ids(&self) -> alloc::vec::Vec<u64>
+pub fn velesdb_core::storage::PayloadStorage::retrieve(&self, u64) -> core::io::error::Result<core::option::Option<serde_json::value::Value>>
+pub fn velesdb_core::storage::PayloadStorage::store(&mut self, u64, &serde_json::value::Value) -> core::io::error::Result<()>
+pub fn velesdb_core::storage::VectorStorage::delete(&mut self, u64) -> core::io::error::Result<()>
+pub fn velesdb_core::storage::VectorStorage::flush(&mut self) -> core::io::error::Result<()>
+pub fn velesdb_core::storage::VectorStorage::ids(&self) -> alloc::vec::Vec<u64>
+pub fn velesdb_core::storage::VectorStorage::is_empty(&self) -> bool
+pub fn velesdb_core::storage::VectorStorage::len(&self) -> usize
+pub fn velesdb_core::storage::VectorStorage::retrieve(&self, u64) -> core::io::error::Result<core::option::Option<alloc::vec::Vec<f32>>>
+pub fn velesdb_core::storage::VectorStorage::store(&mut self, u64, &[f32]) -> core::io::error::Result<()>
+pub fn velesdb_core::storage::VectorStorage::store_batch(&mut self, &[(u64, &[f32])]) -> core::io::error::Result<usize>
+pub fn velesdb_core::storage::WalCursor::advance_low_watermark(&self, velesdb_core::storage::wal_cursor::WalConsumerId, velesdb_core::storage::wal_cursor::WalPosition)
+pub fn velesdb_core::storage::WalCursor::deregister_consumer(&self, velesdb_core::storage::wal_cursor::WalConsumerId)
+pub fn velesdb_core::storage::WalCursor::read_from(&self, velesdb_core::storage::wal_cursor::WalPosition, usize) -> velesdb_core::error::Result<alloc::vec::Vec<velesdb_core::storage::wal_cursor::WalRecord>>
+pub fn velesdb_core::storage::WalCursor::register_consumer(&self) -> velesdb_core::storage::wal_cursor::WalConsumerId
+pub fn velesdb_core::storage::WalCursor::tail_position(&self) -> velesdb_core::storage::wal_cursor::WalPosition
+pub fn velesdb_core::storage::wal_cursor::WalCursor::advance_low_watermark(&self, velesdb_core::storage::wal_cursor::WalConsumerId, velesdb_core::storage::wal_cursor::WalPosition)
+pub fn velesdb_core::storage::wal_cursor::WalCursor::deregister_consumer(&self, velesdb_core::storage::wal_cursor::WalConsumerId)
+pub fn velesdb_core::storage::wal_cursor::WalCursor::read_from(&self, velesdb_core::storage::wal_cursor::WalPosition, usize) -> velesdb_core::error::Result<alloc::vec::Vec<velesdb_core::storage::wal_cursor::WalRecord>>
+pub fn velesdb_core::storage::wal_cursor::WalCursor::register_consumer(&self) -> velesdb_core::storage::wal_cursor::WalConsumerId
+pub fn velesdb_core::storage::wal_cursor::WalCursor::tail_position(&self) -> velesdb_core::storage::wal_cursor::WalPosition
+pub fn velesdb_core::vector_ref::VectorRef::as_slice(&self) -> &[f32]
+pub fn velesdb_core::vector_ref::VectorRef::dimension(&self) -> usize
+pub fn velesdb_core::vector_ref::VectorRef::is_empty(&self) -> bool

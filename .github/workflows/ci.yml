@@ -1285,6 +1285,54 @@ jobs:
   # `cargo test -p velesdb-core --lib -- storage::snapshot_tests` still exits
   # 0, and this job exits 101 with
   # `error[E0425]: cannot find function 'parse_payload_snapshot'`.
+  # The public trait surface, recorded and diffed, because the semver gate
+  # cannot see this class of break. Measured with cargo-semver-checks 0.46.0
+  # -- the version the job above pins -- on the exact change #2293 shipped,
+  # `NativeHnswBackend::file_dump` from `io::Result<()>` to
+  # `io::Result<usize>`: `196 checks: 196 pass, 49 skip`, exit 0. The harness
+  # is sound, proved by the opposite change to `()`, which exits 1 on
+  # `trait_method_now_returns_unit`. Of 246 lints, the seven that mention
+  # return types are all about the unit / non-unit boundary, so a change
+  # between two non-unit types falls between them (#2329).
+  #
+  # Scoped to TRAIT methods on purpose. The whole public API is 54 718 items
+  # and 5.26 MB: that diff is not read, it is regenerated. The trait surface
+  # is 83 lines across 18 traits, and it is the surface that matters -- an
+  # unsealed public trait's signature change breaks every downstream
+  # IMPLEMENTOR, who has no recourse, while an inherent method breaks callers,
+  # whom the semver gate already covers far better.
+  public-trait-api:
+    name: Public Trait Surface
+    if: github.event.action != 'edited' || github.event.changes.base != null
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install --no-self-update --profile minimal
+
+      # Installed on a step of its own, so the stable toolchain
+      # rust-toolchain.toml pins stays the default for everything else here.
+      # nightly: cargo-public-api reads rustdoc JSON, which is nightly-only.
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # nightly
+        with:
+          toolchain: nightly
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: "velesdb-public-trait-api"
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
+
+      # Pinned and `--locked`, both for the same reason: #2292, where an
+      # unpinned `cargo install cargo-fuzz` re-resolved to a crate needing a
+      # newer rustc and failed three scheduled runs before a single target
+      # ran. A tool whose version floats moves the gate under the repository.
+      - name: Install cargo-public-api
+        run: cargo install cargo-public-api@0.52.0 --locked
+
+      - name: The public trait surface matches what is recorded
+        run: python3 scripts/check-public-trait-api.py
+
   fuzz-compile:
     name: Fuzz Targets Compile Check
     if: github.event.action != 'edited' || github.event.changes.base != null
@@ -2252,7 +2300,7 @@ jobs:
   ci-success:
     name: CI Success
     runs-on: ubuntu-latest
-    needs: [lint, test, security, semver-checks, hygiene, wasm-check, memory-feature-matrix, internal-bench-check, drop-tightening-check, openapi-drift, mcp-doc-contract, velesql-conformance, perf-smoke, fuzz-compile, bench-sift1m-compile, perf-gate-e2e, python-sdk-tests, python-integrations, node-binding-tests, node-binding-tests-windows, gate-contracts, doc-contract, promise-contract, production-gates, propagation-guard, binary-size, pr-governance, sonarcloud]
+    needs: [lint, test, security, semver-checks, hygiene, wasm-check, memory-feature-matrix, internal-bench-check, drop-tightening-check, openapi-drift, mcp-doc-contract, velesql-conformance, perf-smoke, fuzz-compile, public-trait-api, bench-sift1m-compile, perf-gate-e2e, python-sdk-tests, python-integrations, node-binding-tests, node-binding-tests-windows, gate-contracts, doc-contract, promise-contract, production-gates, propagation-guard, binary-size, pr-governance, sonarcloud]
     # The ONE job that must not carry the title/body-edit guard, and #2232 is
     # why. Guarded, it skipped on a body edit -- and branch protection accepts a
     # `skipped` required check, so the PR read CLEAN with no gate having run on
@@ -2340,6 +2388,7 @@ jobs:
           [[ "${{ needs.velesql-conformance.result }}" == "success" ]] && \
           [[ "${{ needs.perf-smoke.result }}" == "success" ]] && \
           [[ "${{ needs.fuzz-compile.result }}" == "success" ]] && \
+          [[ "${{ needs.public-trait-api.result }}" == "success" ]] && \
           [[ "${{ needs.bench-sift1m-compile.result }}" == "success" ]] && \
           [[ "${{ needs.perf-gate-e2e.result }}" == "success" ]] && \
           [[ "${{ needs.python-sdk-tests.result }}" == "success" ]] && \

@@ -1517,6 +1517,41 @@
           ]
         }
       ]
+    },
+    {
+      "script": "scripts/check-public-trait-api.py",
+      "purpose": "The public trait method surface matches what is recorded, so a signature change an implementor is written against cannot ship unread. Closes the class cargo-semver-checks cannot see: a return type changing between two NON-UNIT types (#2329, shipped in #2293 as io::Result<()> -> io::Result<usize>).",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "public-trait-api",
+      "required": true,
+      "mode": "strict",
+      "self_test": "scripts.tests.test_check_public_trait_api",
+      "self_test_required": true,
+      "must_refuse": [
+        {
+          "vector": "a public trait method whose return type changes between two non-unit types, the shape cargo-semver-checks reports as clean",
+          "files": {
+            "api.txt": "pub trait velesdb_core::Widget: core::marker::Send\npub fn velesdb_core::Widget::dump(&self, &str) -> core::io::error::Result<usize>\n",
+            "surface.txt": "pub fn velesdb_core::Widget::dump(&self, &str) -> core::io::error::Result<()>\n"
+          },
+          "accepts": {
+            "api.txt": "pub trait velesdb_core::Widget: core::marker::Send\npub fn velesdb_core::Widget::dump(&self, &str) -> core::io::error::Result<()>\n",
+            "surface.txt": "pub fn velesdb_core::Widget::dump(&self, &str) -> core::io::error::Result<()>\n"
+          },
+          "argv": [
+            "--root",
+            "{root}",
+            "--snapshot",
+            "surface.txt",
+            "--api-file",
+            "{root}/api.txt"
+          ]
+        }
+      ],
+      "blind_spot": {
+        "issue": null,
+        "summary": "Trait methods only. An inherent method's signature is not recorded here: changing one breaks CALLERS, who adapt, and cargo-semver-checks covers that surface far better than it covers traits. The whole public API was measured at 54718 items and 5.26 MB, a diff nobody reads and everybody regenerates, against 83 lines here. The snapshot is keyed on the path, so a trait re-exported under two paths is recorded twice, which is correct: breaking either path breaks someone. It records SIGNATURES, not semantics -- a method that keeps its shape and changes its contract passes. cargo-public-api needs a nightly rustdoc build, so this runs in its own job rather than inside `lint`."
+      }
     }
   ],
   "unwired": [

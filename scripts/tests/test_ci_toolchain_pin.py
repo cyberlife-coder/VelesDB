@@ -164,7 +164,13 @@ TOOLCHAIN_PATHS_RE = re.compile(r"\.rustup\b|\.cargo/bin\b")
 VALUE_FLAGS = frozenset({"--profile", "-c", "--component", "-t", "--target"})
 NIGHTLY_REASON_RE = re.compile(r"^\s*#\s*nightly:\s*\S")
 # What needs nightly, as a reason names it and a job runs it.
-NIGHTLY_NEED_RE = re.compile(r"-Z\s*([A-Za-z][\w-]*)|\b(miri|fuzz|careful)\b", re.IGNORECASE)
+# `public-api` joined the list when the public trait surface guard did:
+# cargo-public-api reads rustdoc JSON, which is nightly-only, and a tool the
+# checker does not know makes its own job's nightly pin read as unexplained
+# however carefully the comment is written (#2329).
+NIGHTLY_NEED_RE = re.compile(
+    r"-Z\s*([A-Za-z][\w-]*)|\b(miri|fuzz|careful|public-api)\b", re.IGNORECASE
+)
 FROM_VERSION_RE = re.compile(r"^(?:[\w.-]+/)*rust:(\d[\w.-]*)$", re.IGNORECASE)
 DOCKERFILE_NAME_RE = re.compile(r"(?:^|/)(?:Dockerfile(?:\.[\w.-]+)?|[\w.-]+\.Dockerfile)$")
 DOC_SUFFIXES = frozenset({".md", ".rs", ".toml", ".yml", ".yaml", ".txt", ".py", ".sh", ".ps1"})
