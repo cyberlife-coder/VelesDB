@@ -78,11 +78,19 @@ jobs:
             --source-ref "$SOURCE_REF" \
             --base-ref "$BASE_REF"
 
+      # No `--depth`: the checkout above is already complete, and a depth
+      # fetch does not merely skip work on a full clone -- it GRAFTS it.
+      # Measured on a five-commit repository: after `git fetch --depth=1` the
+      # clone carries `.git/shallow`, an older commit is still present
+      # (`cat-file -e` succeeds) and `merge-base --is-ancestor` nevertheless
+      # answers "no", because the graft cuts the parent links. Every guard
+      # below reads this graph, so a depth flag here buys nothing and makes
+      # ancestry lie (#2336).
       - name: Fetch latest base branch
         if: ${{ github.event_name == 'pull_request' }}
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
-        run: git fetch origin "${BASE_REF}" --depth=1
+        run: git fetch origin "${BASE_REF}"
 
       - name: Verify branch includes latest base branch
         if: ${{ github.event_name == 'pull_request' }}
@@ -104,10 +112,12 @@ jobs:
           # maintainer, with no AI/assistant identity or attribution trailers.
           # The rule lives in ONE place, tested: the two inline copies knew
           # `claude|anthropic` and nothing else, so Codex, Copilot, Cursor
-          # and unlisted bots walked through (#1699). Infrastructure
-          # automation is admitted by name there, never by a wildcard —
-          # dependabot[bot] has 149 legitimate commits here.
-          git fetch origin "${BASE_REF}" --depth=200
+          # and unlisted bots walked through (#1699). NO identity is admitted
+          # by name, bots included — a dependency bot's pull request is
+          # reviewed and its diff taken as a maintainer-authored commit. What
+          # is already published is forgiven by one pinned commit inside the
+          # guard, which is why the fetch below must reach it (#2336).
+          git fetch origin "${BASE_REF}"
           python3 scripts/check-ai-attribution.py "origin/${BASE_REF}..HEAD"
 
       - name: Reject an AI-attributed pull request title or body

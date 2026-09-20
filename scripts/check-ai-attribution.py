@@ -37,11 +37,16 @@ of the rule, not several that drift:
   * ``--tree`` audits the repository's own tracked content, which covers the
     "code, comments, docs" half of the rule and was guarded by nothing at all.
 
-``--tree`` needs one admission, for the same reason ``ADMITTED_AUTOMATION``
-exists: a handful of files must CONTAIN these patterns to define, test or
-document the rule, and a guard that refuses its own hook and its own tests is
-a guard that gets switched off. They are admitted by exact path, never by a
-directory wildcard, and the list is short enough to read.
+``--tree`` needs one admission: a handful of files must CONTAIN these patterns
+to define, test or document the rule, and a guard that refuses its own hook and
+its own tests is a guard that gets switched off. They are admitted by exact
+path, never by a directory wildcard, and the list is short enough to read.
+
+No IDENTITY is admitted, bots included. The commit range is the one surface
+where that is not the whole story, because 174 commits already published here
+were authored by a bot: the amnesty is pinned to a single commit,
+``GRANDFATHERED_THROUGH``, so it covers what is written and nothing written
+after (#2336).
 
 Exit 0 = clean, 1 = attribution was found, 2 = the guard could not run (which is not a refusal — see scripts/tests/test_guard_refusal_vectors.py).
 """
@@ -72,17 +77,23 @@ ASSISTANT_IDENTITIES = (
     "assistant",
 )
 
-#: Automation admitted to author commits. Matched on the WHOLE identity, not
-#: as a substring: `evil-dependabot[bot]` is not `dependabot[bot]`.
-ADMITTED_AUTOMATION = (
-    "dependabot[bot]",
-    "dependabot-preview[bot]",
-    "github-actions[bot]",
-    "renovate[bot]",
-)
+#: The commit through which bot authorship is forgiven, and not one commit
+#: further. 173 commits reachable from `develop` are authored by
+#: `dependabot[bot]` and one by `github-actions[bot]`; five of those are not
+#: on `main` yet, so a guard that simply
+#: refused every `[bot]` would fail the next back-merge pull request and block
+#: the release. Rewriting that history is not proposed -- the same situation
+#: with the historical assistant identity was settled with `.mailmap` plus a
+#: forward-looking guard (#1122). The amnesty is therefore pinned to one SHA
+#: rather than left to grow with the branch: every commit written after this
+#: one is judged, whoever wrote it (#2336).
+GRANDFATHERED_THROUGH = "3a4d42cd01741c9b51a1003f9db1e02f099f214c"
 
-#: Any other `[bot]` identity is refused: a bot that authors commits here is
-#: either infrastructure we listed above, or something nobody decided on.
+#: Every `[bot]` identity is refused. The contributor rule admits no exception:
+#: the author and committer of a commit are the human maintainer, so a
+#: dependency bot's pull request is reviewed and its diff taken as a
+#: maintainer-authored commit (the flow used for #2326), never squash-merged
+#: from the bot branch -- a GitHub squash keeps the bot as the author.
 BOT_SUFFIX_RE = re.compile(r"\[bot\]", re.IGNORECASE)
 
 #: Files `--tree` admits, because they must contain the patterns to define,
@@ -133,27 +144,57 @@ def _assistant_alternation() -> str:
     return "|".join(re.escape(name) for name in ASSISTANT_IDENTITIES)
 
 
-def identity_is_admitted(identity: str) -> bool:
-    """True when `identity` is automation this repository decided to admit."""
-    lowered = identity.lower()
-    return any(admitted in lowered for admitted in ADMITTED_AUTOMATION)
-
-
 def identity_is_refused(identity: str) -> "str | None":
     """The reason `identity` is refused, or None when it passes.
 
-    Admission is checked FIRST: `github-actions[bot]` must not be refused by
-    the `[bot]` rule it is explicitly exempt from.
+    No identity is admitted by name. A `[bot]` suffix is refused whatever the
+    bot is for: the repository's rule is that a commit's author and committer
+    are the human maintainer, without exception. What published history holds
+    is handled by `GRANDFATHERED_THROUGH`, one commit wide, not by a standing
+    exemption that would also cover tomorrow's commits.
     """
-    if identity_is_admitted(identity):
-        return None
     lowered = identity.lower()
     for name in ASSISTANT_IDENTITIES:
         if re.search(rf"(?<![a-z0-9]){re.escape(name)}(?![a-z0-9])", lowered):
             return f"assistant identity `{name}`"
     if BOT_SUFFIX_RE.search(identity):
-        return "an unlisted `[bot]` identity"
+        return "a `[bot]` identity; commits are authored by the maintainer"
     return None
+
+
+def commit_is_grandfathered(sha: str, cwd: "str | None" = None) -> bool:
+    """True when `sha` is published history the amnesty forgives.
+
+    Ancestry of a single pinned commit, asked of the graph directly -- not
+    "is this branch merged", which a squash-merge answers wrongly.
+
+    When the boundary is not in the repository at all, nothing is forgiven.
+    That covers both cases honestly: a clone too shallow to tell published
+    history from new commits must not forgive a fresh violation, and a
+    repository that is not this one -- the synthetic tree a refusal vector
+    builds -- has no history of ours to forgive. The cost of being wrong is a
+    loud refusal on a back-merge, never a silent admission; `pr-governance`
+    checks out with `fetch-depth: 0`, so the boundary is there.
+    """
+    if (
+        subprocess.run(  # noqa: S603 - fixed argv, no shell
+            ["git", "cat-file", "-e", f"{GRANDFATHERED_THROUGH}^{{commit}}"],
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+        ).returncode
+        != 0
+    ):
+        return False
+    return (
+        subprocess.run(  # noqa: S603 - fixed argv, no shell
+            ["git", "merge-base", "--is-ancestor", sha, GRANDFATHERED_THROUGH],
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+        ).returncode
+        == 0
+    )
 
 
 def message_is_refused(message: str) -> "str | None":
@@ -203,13 +244,21 @@ def audit(commit_range: str, cwd: "str | None" = None) -> "list[str]":
     """Every violation in `commit_range`, as printable lines."""
     violations = []
     for sha, identity, message in commits_in_range(commit_range, cwd):
+        reasons = []
         for part in identity.split(" | "):
             reason = identity_is_refused(part.strip())
             if reason:
-                violations.append(f"{sha[:12]}: {reason} in `{part.strip()}`")
+                reasons.append(f"{reason} in `{part.strip()}`")
         reason = message_is_refused(message)
         if reason:
-            violations.append(f"{sha[:12]}: {reason}")
+            reasons.append(reason)
+        if not reasons:
+            continue
+        # The boundary is consulted only once a commit is already refused,
+        # so a clean range never pays for the two git calls.
+        if commit_is_grandfathered(sha, cwd):
+            continue
+        violations.extend(f"{sha[:12]}: {reason}" for reason in reasons)
     return violations
 
 
@@ -384,9 +433,12 @@ def main(argv: "list[str] | None" = None) -> int:
             return 2
         subject = "audited range"
         remedy = (
-            "\nRe-author as the maintainer and strip the trailer. "
-            "Infrastructure automation is admitted by name in "
-            "ADMITTED_AUTOMATION, never by a wildcard."
+            "\nRe-author as the maintainer and strip the trailer "
+            "(`git commit --amend --reset-author`, or a cherry-pick chain for "
+            "several). No identity is admitted by name, bots included: review "
+            "a dependency bot's pull request, take its diff as a "
+            "maintainer-authored commit, and close the bot pull request as "
+            "superseded -- a GitHub squash would keep the bot as the author."
         )
 
     if violations:

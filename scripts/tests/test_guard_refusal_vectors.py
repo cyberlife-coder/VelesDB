@@ -22,9 +22,10 @@ missing, which is exactly the shape a careless vector would produce.
 
 **The accepted control is not optional.** A guard that refuses everything
 passes the refusal half perfectly, and would break the build on every PR. The
-control is what tells "it can say no" apart from "it can only say no". Same
-reason ``dependabot[bot]`` has to keep passing the attribution guard of #1699:
-149 legitimate commits are the positive control there.
+control is what tells "it can say no" apart from "it can only say no". The
+attribution guard of #1699 carries its own version of that control: it refuses
+every ``[bot]`` identity, so what keeps it from refusing the repository's own
+published history is a single pinned commit, tested on both sides (#2336).
 
 A vector may also declare ``repo``, which turns the materialised tree into a
 git work tree and tracks the paths it names — ``{"files": [...], "accepts":

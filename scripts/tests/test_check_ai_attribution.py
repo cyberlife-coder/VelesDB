@@ -7,12 +7,15 @@ lived twice as inline shell — `.githooks/commit-msg` and
 `claude|anthropic`. Codex, Copilot, Cursor, Devin and any `[bot]` walked
 straight through (#1699).
 
-The refusals are the easy half. The ADMISSIONS are what makes this guard
-survivable: `dependabot[bot]` authors 149 legitimate commits in this
-repository, and a guard that refused every `[bot]` would reject the whole
-dependency flow — which is how a guard gets switched off for good. Every
-admitted identity below is therefore a test in its own right, not an
-afterthought.
+The guard then admitted four bot identities by name, which the contributor
+rule forbids outright: the author and committer of a commit are the human
+maintainer, without exception (#2336). What makes the guard survivable is not
+an admission list but a boundary — 174 commits already published here were
+authored by a bot, five of them on `develop` and not yet on `main`, so
+`GRANDFATHERED_THROUGH` forgives what is written and judges
+everything written after. Both halves are tested below: the amnesty must hold
+(or the next back-merge is blocked) and it must not stretch (or the rule is
+the old exemption under a new name).
 """
 
 from __future__ import annotations
@@ -61,25 +64,36 @@ class AdmittedIdentityTests(unittest.TestCase):
     """The positive controls. A guard that refuses these breaks the repo."""
 
     ADMITTED = (
-        "dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
-        "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>",
-        "renovate[bot] <bot@renovateapp.com>",
         "cyberlife-coder <174732281+cyberlife-coder@users.noreply.github.com>",
         "Wiscale <174732281+cyberlife-coder@users.noreply.github.com>",
     )
 
-    def test_infrastructure_automation_and_humans_pass(self) -> None:
+    def test_humans_pass(self) -> None:
         for identity in self.ADMITTED:
             with self.subTest(identity=identity):
                 self.assertIsNone(caa.identity_is_refused(identity))
+
+    def test_no_bot_is_admitted_by_name(self) -> None:
+        # The four identities the guard used to list. The contributor rule
+        # names `github-actions[bot]` explicitly among what must never author
+        # a commit here, so an exemption for it was the guard contradicting
+        # the contract it enforces (#2336).
+        for identity in (
+            "dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+            "dependabot-preview[bot] <support@dependabot.com>",
+            "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>",
+            "renovate[bot] <bot@renovateapp.com>",
+        ):
+            with self.subTest(identity=identity):
+                self.assertIsNotNone(caa.identity_is_refused(identity))
 
     def test_a_person_whose_name_contains_an_assistant_name_passes(self) -> None:
         # Whole-word matching: `Claudette` is a person. A substring match
         # here would refuse a real contributor by their own name.
         self.assertIsNone(caa.identity_is_refused("Claudette Dupont <c@example.org>"))
 
-    def test_an_impostor_of_an_admitted_bot_is_refused(self) -> None:
-        # Admission is by whole identity, so a lookalike does not inherit it.
+    def test_a_bot_lookalike_is_refused_too(self) -> None:
+        # Nothing to inherit any more, but the `[bot]` rule must still see it.
         self.assertIsNotNone(caa.identity_is_refused("evil-copilot[bot] <x@y.z>"))
 
 
@@ -404,3 +418,202 @@ class SingleSourceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GrandfatheringTests(unittest.TestCase):
+    """The amnesty must hold, and must not stretch.
+
+    174 commits published in this repository were authored by a bot — 173 by
+    `dependabot[bot]` — and five of them are on `develop` but not yet on
+    `main`: a guard that refused every `[bot]` with no boundary would fail
+    the next back-merge pull request and block the release. So the boundary
+    is a positive control in its own right — but one that a single commit
+    bounds, or it is the old exemption wearing a date.
+
+    The fixture is a repository of its own, so the verdicts do not depend on
+    which commits this clone happens to carry.
+    """
+
+    def setUp(self) -> None:
+        import subprocess
+        import tempfile
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self._git("init", "-q", "-b", "main")
+        # Background maintenance in a scratch repository can still be running
+        # when the temp dir is removed, and the test then dies while tidying
+        # up rather than on its subject (#2356).
+        self._git("config", "gc.auto", "0")
+        self._git("config", "maintenance.auto", "false")
+        self._git("config", "commit.gpgsign", "false")
+
+        self.published = self._commit("published.txt", "dependabot[bot] <b@b.io>")
+        self.boundary = self._commit("boundary.txt", "Wiscale <w@example.org>")
+        self.fresh = self._commit("fresh.txt", "dependabot[bot] <b@b.io>")
+
+        self._real_boundary = caa.GRANDFATHERED_THROUGH
+        caa.GRANDFATHERED_THROUGH = self.boundary
+
+    def tearDown(self) -> None:
+        caa.GRANDFATHERED_THROUGH = self._real_boundary
+        self._tmp.cleanup()
+
+    def _git(self, *args: str) -> str:
+        import subprocess
+
+        return subprocess.run(
+            ["git", *args],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+    def _commit(self, name: str, identity: str) -> str:
+        who, email = identity.split(" <")
+        email = email.rstrip(">")
+        (self.root / name).write_text("x\n")
+        self._git("add", name)
+        self._git(
+            "-c",
+            f"user.name={who}",
+            "-c",
+            f"user.email={email}",
+            "commit",
+            "-q",
+            "-m",
+            f"chore: {name}",
+        )
+        return self._git("rev-parse", "HEAD")
+
+    def test_a_bot_commit_at_or_before_the_boundary_is_forgiven(self) -> None:
+        self.assertTrue(caa.commit_is_grandfathered(self.published, str(self.root)))
+        self.assertEqual([], caa.audit(self.boundary, str(self.root)))
+
+    def test_a_bot_commit_after_the_boundary_is_refused(self) -> None:
+        self.assertFalse(caa.commit_is_grandfathered(self.fresh, str(self.root)))
+        violations = caa.audit(f"{self.boundary}..{self.fresh}", str(self.root))
+        self.assertEqual(1 * 2, len(violations), violations)  # author and committer
+        self.assertIn("`[bot]` identity", violations[0])
+
+    def test_an_absent_boundary_forgives_nothing(self) -> None:
+        # A clone too shallow to carry the boundary, and any repository that
+        # is not this one: the guard must judge, not admit. `audit` would
+        # otherwise return [] here and the refusal vectors would read exit 0.
+        caa.GRANDFATHERED_THROUGH = "0" * 40
+        self.assertFalse(caa.commit_is_grandfathered(self.published, str(self.root)))
+        self.assertNotEqual([], caa.audit(self.published, str(self.root)))
+
+    def test_the_pinned_boundary_is_a_commit_in_this_repository(self) -> None:
+        # A boundary nothing resolves forgives nothing, silently: the amnesty
+        # would be gone and the next back-merge would fail with no trace of
+        # why. Asserted against the real repository, not the fixture.
+        caa.GRANDFATHERED_THROUGH = self._real_boundary
+        self.assertRegex(self._real_boundary, r"^[0-9a-f]{40}$")
+        self.assertTrue(
+            caa.commit_is_grandfathered(self._real_boundary, str(REPO_ROOT)),
+            f"{self._real_boundary[:12]} is not a commit in this clone",
+        )
+
+
+class ShallowGraftTests(unittest.TestCase):
+    """A depth fetch grafts a complete clone, and ancestry then lies.
+
+    `commit_is_grandfathered` asks the graph a question only a complete graph
+    can answer. `pr-governance.yml` checks out with `fetch-depth: 0` and then
+    fetched the base branch again with `--depth`, which reads like a harmless
+    optimisation and is not: the flag writes `.git/shallow`, and git stops
+    following parent links past the graft even though the older objects are
+    still in the clone. The mechanism test below is the control — the day git
+    stops behaving this way, the YAML assertion that follows can be relaxed
+    rather than obeyed out of superstition.
+    """
+
+    def setUp(self) -> None:
+        import tempfile
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _git(self, cwd: Path, *args: str) -> str:
+        import subprocess
+
+        return subprocess.run(
+            ["git", *args], cwd=cwd, capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+    def test_a_depth_fetch_makes_a_complete_clone_answer_ancestry_wrongly(self) -> None:
+        import subprocess
+
+        src = self.root / "src"
+        src.mkdir()
+        self._git(src, "init", "-q", "-b", "main")
+        self._git(src, "config", "gc.auto", "0")
+        self._git(src, "config", "maintenance.auto", "false")
+        for i in range(5):
+            (src / f"f{i}").write_text("x\n")
+            self._git(src, "add", f"f{i}")
+            self._git(
+                src, "-c", "user.name=U", "-c", "user.email=u@e", "commit", "-q", "-m", f"c{i}"
+            )
+        old = self._git(src, "rev-parse", "HEAD~4")
+
+        clone = self.root / "clone"
+        self._git(self.root, "clone", "-q", str(src), str(clone))
+        self.assertEqual(
+            0,
+            subprocess.run(
+                ["git", "merge-base", "--is-ancestor", old, "HEAD"], cwd=clone
+            ).returncode,
+            "a complete clone must answer ancestry correctly",
+        )
+
+        self._git(clone, "fetch", "-q", "origin", "main", "--depth=3")
+        self.assertEqual(
+            0,
+            subprocess.run(
+                ["git", "cat-file", "-e", f"{old}^{{commit}}"],
+                cwd=clone,
+                capture_output=True,
+            ).returncode,
+            "the object is still there -- which is what makes this silent",
+        )
+        self.assertNotEqual(
+            0,
+            subprocess.run(
+                ["git", "merge-base", "--is-ancestor", old, "HEAD"],
+                cwd=clone,
+                capture_output=True,
+            ).returncode,
+            "git no longer grafts on a depth fetch: the YAML gate below may be relaxed",
+        )
+
+    def test_pr_governance_never_depth_fetches(self) -> None:
+        import re
+
+        text = (REPO_ROOT / ".github" / "workflows" / "pr-governance.yml").read_text()
+        offenders = [
+            line.strip()
+            for line in text.splitlines()
+            if re.search(r"^\s*git fetch\b.*--depth", line)
+        ]
+        self.assertEqual(
+            [],
+            offenders,
+            "a depth fetch grafts the complete checkout, so every guard in this "
+            "workflow reads a graph whose ancestry is cut",
+        )
+
+    def test_the_guard_suites_are_run_on_a_complete_checkout(self) -> None:
+        text = (REPO_ROOT / ".github" / "workflows" / "gate-contracts.yml").read_text()
+        head = text.split("npm-audit:")[0]
+        self.assertIn(
+            "fetch-depth: 0",
+            head,
+            "the attribution suite asserts the amnesty boundary is really in "
+            "the clone, which a default depth-1 checkout does not carry",
+        )

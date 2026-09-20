@@ -31,7 +31,14 @@ jobs:
     name: Repository guard contracts
     runs-on: ubuntu-latest
     steps:
+      # Full history, not the default depth of 1: the attribution guard pins
+      # the commit through which bot authorship is forgiven, and its suite
+      # asserts that commit is really there -- a boundary nothing resolves
+      # forgives nothing, silently, and the next back-merge would fail with
+      # no trace of why (#2336).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
