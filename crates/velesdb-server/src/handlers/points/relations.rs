@@ -128,7 +128,13 @@ fn relation_properties(
         (status = 201, description = "Relation created", body = RelateResponse),
         (status = 400, description = "Invalid request", body = ErrorResponse),
         (status = 404, description = "Collection not found, or source/target point has no stored payload (VELES-022 NodeNotFound)", body = ErrorResponse),
-        (status = 500, description = "Internal server error", body = ErrorResponse)
+        (status = 500, description = "Internal server error", body = ErrorResponse),
+        (
+            status = 422,
+            description = "A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum's extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.",
+            body = String,
+            content_type = "text/plain"
+        )
     ),
     tag = "graph"
 )]
@@ -307,7 +313,13 @@ pub async fn get_point_relations(
         (status = 204, description = "TTL set successfully"),
         (status = 400, description = "Non-object payload", body = ErrorResponse),
         (status = 404, description = "Collection or point not found", body = ErrorResponse),
-        (status = 500, description = "Internal server error", body = ErrorResponse)
+        (status = 500, description = "Internal server error", body = ErrorResponse),
+        (
+            status = 422,
+            description = "A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum's extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.",
+            body = String,
+            content_type = "text/plain"
+        )
     ),
     tag = "points"
 )]

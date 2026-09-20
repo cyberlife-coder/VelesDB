@@ -179,7 +179,13 @@ pub async fn get_node_edges(
     responses(
         (status = 204, description = "Payload stored successfully"),
         (status = 404, description = "Collection not found", body = ErrorResponse),
-        (status = 500, description = "Internal server error", body = ErrorResponse)
+        (status = 500, description = "Internal server error", body = ErrorResponse),
+        (
+            status = 422,
+            description = "A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum's extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.",
+            body = String,
+            content_type = "text/plain"
+        )
     ),
     tag = "graph"
 )]
@@ -247,7 +253,13 @@ pub async fn get_node_payload(
     responses(
         (status = 200, description = "Parallel traversal completed", body = TraverseResponse),
         (status = 400, description = "Invalid request", body = ErrorResponse),
-        (status = 404, description = "Collection not found", body = ErrorResponse)
+        (status = 404, description = "Collection not found", body = ErrorResponse),
+        (
+            status = 422,
+            description = "A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum's extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.",
+            body = String,
+            content_type = "text/plain"
+        )
     ),
     tag = "graph"
 )]
@@ -311,7 +323,13 @@ pub async fn traverse_parallel(
         (status = 200, description = "Graph search results", body = GraphSearchResponse),
         (status = 400, description = "Invalid request", body = ErrorResponse),
         (status = 404, description = "Collection not found", body = ErrorResponse),
-        (status = 500, description = "Internal server error", body = ErrorResponse)
+        (status = 500, description = "Internal server error", body = ErrorResponse),
+        (
+            status = 422,
+            description = "A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema. Axum's extractor answers before the handler runs, so the payload is plain text, not an ErrorResponse.",
+            body = String,
+            content_type = "text/plain"
+        )
     ),
     tag = "graph"
 )]

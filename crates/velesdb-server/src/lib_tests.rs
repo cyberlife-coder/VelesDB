@@ -88,29 +88,7 @@ fn openapi_json() -> Value {
     serde_json::from_str(&json).expect("the spec is JSON")
 }
 
-/// The schema `schema` names through a `$ref`, or `schema` itself.
-fn resolve_ref<'a>(schemas: &'a Value, schema: &'a Value) -> &'a Value {
-    schema["$ref"]
-        .as_str()
-        .and_then(|name| name.strip_prefix("#/components/schemas/"))
-        .map_or(schema, |name| &schemas[name])
-}
-
 /// Whether a request body `schema` carries an `ef_search`: as its own
-/// property, or through one of its properties, an array's items included.
-fn carries_ef_search(schemas: &Value, schema: &Value) -> bool {
-    let has_ef = |schema: &Value| {
-        resolve_ref(schemas, schema)["properties"]
-            .get("ef_search")
-            .is_some()
-    };
-    let body = resolve_ref(schemas, schema);
-    has_ef(body)
-        || body["properties"]
-            .as_object()
-            .is_some_and(|props| props.values().any(|p| has_ef(p) || has_ef(&p["items"])))
-}
-
 /// The bounds the document publishes for `ef_search`, in every schema that
 /// carries one, are the validator's. utoipa's `minimum` and `maximum` take
 /// only a literal, so this pins the literals to
@@ -144,13 +122,22 @@ fn test_openapi_ef_search_bounds_are_the_validators() {
     }
 }
 
-/// Every path whose request body carries an `ef_search` documents the `422`
-/// a mistyped one gets, axum's plain-text JSON rejection, besides the `400`
-/// an out-of-range one gets (#2274).
+/// Every path taking a JSON body documents the `422` axum answers for one it
+/// cannot deserialise.
+///
+/// The filter used to be "carries an `ef_search`", which was the right scope
+/// for #2274 and too narrow from the day it merged: axum's `Json<T>` extractor
+/// rejects a malformed body before the handler runs, whatever fields the body
+/// declares. Measured on develop@a5098d3bb, 21 of the 27 operations taking an
+/// `application/json` body documented no 422, so a generated client had no type
+/// for a response those endpoints can return (#2291).
+///
+/// Derived from the spec rather than from a list of paths: a list is what let
+/// twenty-one of them sit outside the check, and a new endpoint would have sat
+/// outside it too.
 #[test]
-fn test_openapi_paths_taking_an_ef_search_document_422() {
+fn test_openapi_paths_taking_a_json_body_document_422() {
     let spec = openapi_json();
-    let schemas = &spec["components"]["schemas"];
     let taking: Vec<(&String, &Value)> = spec["paths"]
         .as_object()
         .expect("paths")
@@ -160,25 +147,40 @@ fn test_openapi_paths_taking_an_ef_search_document_422() {
             ops.values().map(move |op| (path, op))
         })
         .filter(|(_, op)| {
-            let body = &op["requestBody"]["content"]["application/json"]["schema"];
-            carries_ef_search(schemas, body)
+            op["requestBody"]["content"]
+                .get("application/json")
+                .is_some()
         })
         .collect();
+    assert!(
+        taking.len() > 20,
+        "only {} operations take a JSON body — the spec or this filter broke, \
+         not the declarations",
+        taking.len()
+    );
+    // The two #2274 pinned by name, kept so a filter that silently stopped
+    // matching would be caught by something other than a shrinking count.
     for known in [
         "/collections/{name}/search",
         "/collections/{name}/search/batch",
     ] {
         assert!(
             taking.iter().any(|(path, _)| path.as_str() == known),
-            "{known} takes an ef_search"
+            "{known} takes a JSON body"
         );
     }
-    for (path, op) in taking {
-        assert!(
-            op["responses"].get("422").is_some(),
-            "{path} documents no 422"
-        );
-    }
+    let undocumented: Vec<&str> = taking
+        .iter()
+        .filter(|(_, op)| op["responses"].get("422").is_none())
+        .map(|(path, _)| path.as_str())
+        .collect();
+    assert!(
+        undocumented.is_empty(),
+        "{} of {} operations taking a JSON body document no 422: {undocumented:?}. \
+         A client generated from this document has no type for a response they answer.",
+        undocumented.len(),
+        taking.len()
+    );
 }
 
 /// Regenerates `docs/openapi.{json,yaml}` in place instead of only
