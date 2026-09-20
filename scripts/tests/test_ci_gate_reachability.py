@@ -2405,3 +2405,97 @@ class CheckoutReachabilityRealWorkflowTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+PROPAGATION_GUARD = WORKFLOW_DIR / "propagation-guard.yml"
+TS_SDK_PACKAGE = REPO_ROOT / "sdks" / "typescript" / "package.json"
+
+
+def npm_scripts_run_by(workflow_text: str, job_name: str) -> set[str]:
+    """The `npm run <script>` names a named job invokes.
+
+    Scoped to one job so a step in a neighbouring job cannot stand in for a
+    missing one here -- the failure this pins is a step absent from THIS job
+    while three others run npm in the same file.
+    """
+    block = job_block(workflow_text, job_name)
+    return set(re.findall(r"npm run ([A-Za-z0-9:_-]+)", block))
+
+
+class TypeScriptSdkIsLintedTests(unittest.TestCase):
+    """`npm run lint` is a step, and `lint` still means eslint.
+
+    `git grep -n eslint .github/` finds nothing in this repository and always
+    will: the workflow calls the package script, and the script calls eslint.
+    Reading the absence of the word as an absence of the gate is what #2328
+    reported -- correctly at the time it was written, since the SDK job ran
+    only typecheck and vitest, so eslint, typescript-eslint and @types/node
+    bumps were never exercised and a lint error merged green. #2282 added the
+    step. Nothing pinned it, which is the half that outlives the fix: a step
+    no test names can be dropped by the next person to tidy the job.
+
+    Two assertions, because either alone is satisfiable without linting
+    anything: the job must run the script, and the script must run eslint.
+    `"lint": "echo ok"` passes the first and fails the second.
+    """
+
+    JOB = "typescript-sdk"
+
+    def setUp(self) -> None:
+        self.workflow = PROPAGATION_GUARD.read_text(encoding="utf-8")
+        self.package = json.loads(TS_SDK_PACKAGE.read_text(encoding="utf-8"))
+
+    def test_the_sdk_job_runs_the_lint_script(self) -> None:
+        run = npm_scripts_run_by(self.workflow, self.JOB)
+        self.assertTrue(
+            run,
+            f"no `npm run` found in `{self.JOB}` -- the job was renamed or the parser broke",
+        )
+        self.assertIn(
+            "lint",
+            run,
+            "the TypeScript SDK job installs the SDK and never lints it, so an eslint "
+            "or typescript-eslint bump is never exercised and a lint error merges green "
+            f"(#2328). Steps found: {sorted(run)}",
+        )
+
+    def test_the_lint_script_still_runs_eslint(self) -> None:
+        script = self.package.get("scripts", {}).get("lint", "")
+        self.assertTrue(script, "sdks/typescript/package.json defines no `lint` script")
+        self.assertIn(
+            "eslint",
+            script,
+            f"`npm run lint` no longer runs eslint ({script!r}), so the workflow step "
+            "above passes while nothing is linted",
+        )
+
+    def test_the_job_s_other_two_gates_are_named_here_too(self) -> None:
+        """Typecheck and the vitest suite, equally unnamed by any test before.
+
+        Not scope creep: all three sit in one job and none was pinned. They
+        are asserted differently because the workflow spells them
+        differently -- `npm run typecheck` against `npm test`, npm's builtin
+        alias, which no `npm run` parser can see. A single parser that
+        appeared to cover all three would be the illusion, not the coverage.
+        """
+        run = npm_scripts_run_by(self.workflow, self.JOB)
+        self.assertLessEqual({"typecheck", "lint"}, run, f"steps found: {sorted(run)}")
+        self.assertRegex(
+            job_block(self.workflow, self.JOB),
+            r"run:\s*npm test\b",
+            "the SDK job no longer runs its vitest suite",
+        )
+
+    def test_the_parser_refuses_a_job_that_lost_the_step(self) -> None:
+        """The positive control, on the shape this replaces."""
+        without_lint = self.workflow.replace(
+            "      - name: Lint\n"
+            "        working-directory: sdks/typescript\n"
+            "        run: npm run lint\n",
+            "",
+        )
+        self.assertNotEqual(
+            without_lint, self.workflow, "the Lint step was not found verbatim -- fixture drift"
+        )
+        self.assertNotIn("lint", npm_scripts_run_by(without_lint, self.JOB))
+        self.assertIn("lint", npm_scripts_run_by(self.workflow, self.JOB))
