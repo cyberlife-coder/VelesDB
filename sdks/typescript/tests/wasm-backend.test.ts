@@ -250,6 +250,20 @@ describe('WasmBackend', () => {
       })).rejects.toThrow('dimension mismatch');
     });
 
+    // A mutant of either code literal below leaves the rest of the suite
+    // green (#2341): only asserting `.code` pins the promised error code
+    // against a silent rename or copy-paste drift.
+    it('tags a dimension mismatch on upsert with DIMENSION_MISMATCH', async () => {
+      const outcome = await backend.upsert('vectors', {
+        id: '1',
+        vector: [1.0, 0.0],
+      }).catch((err) => err);
+
+      expect(outcome).toBeInstanceOf(VelesDBError);
+      expect((outcome as VelesDBError).code).toBe('DIMENSION_MISMATCH');
+      expect((outcome as VelesDBError).message).toMatch(/expected 4, got 2/);
+    });
+
     it('should throw on non-existent collection', async () => {
       await expect(backend.upsert('nonexistent', {
         id: '1',
@@ -294,6 +308,25 @@ describe('WasmBackend', () => {
         [BigInt(2), [0.0, 1.0, 0.0, 0.0]],
       ]);
     });
+
+    it.each([
+      ['first', [{ id: '1', vector: [1.0, 0.0] }, { id: '2', vector: [0.0, 1.0, 0.0, 0.0] }]],
+      ['last', [{ id: '1', vector: [1.0, 0.0, 0.0, 0.0] }, { id: '2', vector: [0.0, 1.0] }]],
+    ])(
+      'tags a dimension mismatch on upsertBatch with DIMENSION_MISMATCH when the bad vector is %s, refusing before any insert',
+      async (_position, docs) => {
+        const collections = (backend as any).collections;
+        const store = collections.get('vectors').store as MockVectorStore;
+
+        const outcome = await backend.upsertBatch('vectors', docs).catch((err) => err);
+
+        expect(outcome).toBeInstanceOf(VelesDBError);
+        expect((outcome as VelesDBError).code).toBe('DIMENSION_MISMATCH');
+        expect((outcome as VelesDBError).message).toMatch(/dimension mismatch for doc/i);
+        expect(store.insert_batch).not.toHaveBeenCalled();
+        expect(store.insert_with_payload).not.toHaveBeenCalled();
+      },
+    );
 
     it('should search vectors', async () => {
       const results = await backend.search('vectors', [1.0, 0.0, 0.0, 0.0], { k: 2 });
