@@ -561,6 +561,21 @@ fn test_parse_with_clause_float_value() {
     assert_eq!(value.as_float(), Some(0.95));
 }
 
+/// An integer literal past `u64::MAX` parses as a float, like every other
+/// numeric literal this large, instead of failing with a generic parse
+/// error before the `ef_search` range check ever runs (#2304).
+#[test]
+fn test_parse_with_clause_ef_search_past_u64_max_parses_as_float() {
+    let query =
+        Parser::parse("SELECT * FROM docs LIMIT 10 WITH (ef_search = 18446744073709551616)")
+            .expect(
+            "a literal past u64::MAX should parse, like every other overflowing numeric literal",
+        );
+    let with = query.select.with_clause.expect("Expected WITH clause");
+    let value = with.get("ef_search").expect("Expected ef_search option");
+    assert!(value.as_float().is_some(), "{value:?}");
+}
+
 // ========== JOIN clause tests (EPIC-031 US-004) ==========
 
 #[test]

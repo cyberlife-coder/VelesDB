@@ -561,6 +561,24 @@ fn test_ef_search_negative_is_rejected() {
     assert!(err.to_string().contains("V014"), "{err}");
 }
 
+/// An `ef_search` literal past `u64::MAX` now parses (as a float, #2304)
+/// instead of failing the query with a generic "Invalid integer" parse
+/// error, so it reaches the same V014 out-of-range check every other bad
+/// `ef_search` value gets.
+#[test]
+fn test_ef_search_integer_overflow_gets_v014() {
+    let (_dir, col) = setup_with_options_collection();
+    let mut params = HashMap::new();
+    params.insert("v".to_string(), serde_json::json!([0.5, 0.5, 0.5, 0.3]));
+    let err = col
+        .execute_query_str(
+            "SELECT * FROM docs WHERE vector NEAR $v LIMIT 5 WITH (ef_search = 18446744073709551616)",
+            &params,
+        )
+        .expect_err("an ef_search literal past u64::MAX should be rejected");
+    assert!(err.to_string().contains("V014"), "{err}");
+}
+
 /// A non-integer `ef_search` is ignored today; it must fail instead (#2274).
 #[test]
 fn test_ef_search_non_integer_is_rejected() {

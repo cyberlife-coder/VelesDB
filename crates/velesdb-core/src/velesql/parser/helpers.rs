@@ -106,9 +106,20 @@ fn parse_parameter_value(raw: &str) -> Value {
 /// Parses an integer literal string into [`Value::Integer`] or [`Value::UnsignedInteger`].
 ///
 /// Tries `i64` first (covers most integers). Falls back to `u64` for values
-/// in the range `(i64::MAX, u64::MAX]` (issue #486).
+/// in the range `(i64::MAX, u64::MAX]` (issue #486), then to `f64` past
+/// `u64::MAX`, mirroring [`parse_numeric_value`]'s fallback for the same
+/// literal read as a string. Without this, a `WITH (ef_search = ...)` value
+/// this large reached its caller as a generic "Invalid integer" parse error
+/// instead of the V014 out-of-range message every other bad `ef_search`
+/// gets, since the range check never runs on a value that fails to parse at
+/// all (#2304).
 fn parse_integer_literal(s: &str) -> Result<Value, ParseError> {
-    try_parse_integer(s).ok_or_else(|| ParseError::syntax(0, s, "Invalid integer"))
+    if let Some(int_val) = try_parse_integer(s) {
+        return Ok(int_val);
+    }
+    s.parse::<f64>()
+        .map(Value::Float)
+        .map_err(|_| ParseError::syntax(0, s, "Invalid integer"))
 }
 
 /// Parses a float literal string into a [`Value::Float`].
