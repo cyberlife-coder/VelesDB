@@ -21,7 +21,7 @@
 
 use std::net::SocketAddr;
 
-use rmcp::model::{CallToolRequestParams, ClientInfo};
+use rmcp::model::{CallToolRequestParams, InitializeRequestParams};
 use rmcp::service::RunningService;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::StreamableHttpClientTransport;
@@ -178,11 +178,11 @@ async fn spawn_configured(config: TestServerConfig) -> TestServer {
 /// and return the connected client. `ServiceExt::serve` performs
 /// `initialize` as part of establishing the session, so a successful
 /// `connect` IS the initialize round trip.
-async fn connect(addr: SocketAddr) -> RunningService<RoleClient, ClientInfo> {
+async fn connect(addr: SocketAddr) -> RunningService<RoleClient, InitializeRequestParams> {
     let transport = StreamableHttpClientTransport::from_config(
         StreamableHttpClientTransportConfig::with_uri(format!("http://{addr}/mcp")),
     );
-    ClientInfo::default()
+    InitializeRequestParams::default()
         .serve(transport)
         .await
         .expect("MCP initialize handshake over HTTP")
@@ -196,7 +196,10 @@ fn as_args(value: Value) -> Map<String, Value> {
 }
 
 /// Call `remember` over HTTP and return the fact's `id_str`.
-async fn remember(client: &RunningService<RoleClient, ClientInfo>, fact: &str) -> String {
+async fn remember(
+    client: &RunningService<RoleClient, InitializeRequestParams>,
+    fact: &str,
+) -> String {
     let result = client
         .call_tool(
             CallToolRequestParams::new("remember").with_arguments(as_args(json!({ "fact": fact }))),
@@ -215,7 +218,7 @@ async fn remember(client: &RunningService<RoleClient, ClientInfo>, fact: &str) -
 /// Call `recall` over HTTP and return whether any hit's `content` exactly
 /// matches `needle`.
 async fn recall_contains(
-    client: &RunningService<RoleClient, ClientInfo>,
+    client: &RunningService<RoleClient, InitializeRequestParams>,
     query: &str,
     needle: &str,
 ) -> bool {
@@ -437,7 +440,7 @@ async fn session_beyond_the_configured_cap_is_refused() {
     let transport = StreamableHttpClientTransport::from_config(
         StreamableHttpClientTransportConfig::with_uri(format!("http://{}/mcp", server.addr)),
     );
-    let second_attempt = ClientInfo::default().serve(transport).await;
+    let second_attempt = InitializeRequestParams::default().serve(transport).await;
     assert!(
         second_attempt.is_err(),
         "a second session must be refused while the first (the only slot, max_sessions=1) is open"

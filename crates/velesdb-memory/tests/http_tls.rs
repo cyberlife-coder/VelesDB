@@ -17,7 +17,7 @@
 
 use std::net::SocketAddr;
 
-use rmcp::model::{CallToolRequestParams, ClientInfo};
+use rmcp::model::{CallToolRequestParams, InitializeRequestParams};
 use rmcp::service::RunningService;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::StreamableHttpClientTransport;
@@ -116,12 +116,12 @@ fn client_trusting_ca(ca_cert_path: &std::path::Path) -> reqwest::Client {
 async fn connect_https(
     addr: SocketAddr,
     client: reqwest::Client,
-) -> RunningService<RoleClient, ClientInfo> {
+) -> RunningService<RoleClient, InitializeRequestParams> {
     let transport = StreamableHttpClientTransport::with_client(
         client,
         StreamableHttpClientTransportConfig::with_uri(format!("https://{addr}/mcp")),
     );
-    ClientInfo::default()
+    InitializeRequestParams::default()
         .serve(transport)
         .await
         .expect("MCP initialize handshake over HTTPS")
@@ -134,7 +134,10 @@ fn as_args(value: Value) -> Map<String, Value> {
     }
 }
 
-async fn remember(client: &RunningService<RoleClient, ClientInfo>, fact: &str) -> String {
+async fn remember(
+    client: &RunningService<RoleClient, InitializeRequestParams>,
+    fact: &str,
+) -> String {
     let result = client
         .call_tool(
             CallToolRequestParams::new("remember").with_arguments(as_args(json!({ "fact": fact }))),
@@ -151,7 +154,7 @@ async fn remember(client: &RunningService<RoleClient, ClientInfo>, fact: &str) -
 }
 
 async fn recall_contains(
-    client: &RunningService<RoleClient, ClientInfo>,
+    client: &RunningService<RoleClient, InitializeRequestParams>,
     query: &str,
     needle: &str,
 ) -> bool {

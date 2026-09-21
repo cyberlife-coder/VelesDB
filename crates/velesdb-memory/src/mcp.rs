@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::{Json, Parameters};
-use rmcp::model::{ErrorCode, Implementation, ServerCapabilities, ServerInfo};
+use rmcp::model::{ErrorCode, Implementation, InitializeResult, ServerCapabilities};
 use rmcp::{tool, tool_handler, tool_router, ErrorData, ServerHandler};
 
 use crate::limits::MAX_RECALL_LIMIT;
@@ -536,10 +536,13 @@ const SERVER_INSTRUCTIONS: &str = "Local-first memory for AI agents: remember fa
      graph size — audit the store page by page with list_memories, and control daemon-owned \
      online embedding migration with migration_start/status/cancel/recover.";
 
+// `InitializeResult` is the type both of rmcp's aliases name: `ServerInfo`
+// is deprecated from 3.4, and `ServerConfig` only exists from 3.4, above
+// the 3.1 floor this crate declares.
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for McpServer {
-    fn get_info(&self) -> ServerInfo {
-        let mut info = ServerInfo::default();
+    fn get_info(&self) -> InitializeResult {
+        let mut info = InitializeResult::default();
         info.server_info = Implementation::new(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         let mut instructions = SERVER_INSTRUCTIONS.to_owned();

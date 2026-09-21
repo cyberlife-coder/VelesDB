@@ -45,7 +45,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
-use rmcp::model::{CallToolRequestParams, ClientInfo};
+use rmcp::model::{CallToolRequestParams, InitializeRequestParams};
 use rmcp::service::RunningService;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::StreamableHttpClientTransport;
@@ -192,11 +192,11 @@ async fn shutdown(server: TestServer) {
         .expect("http server task must not panic");
 }
 
-async fn connect(addr: SocketAddr) -> RunningService<RoleClient, ClientInfo> {
+async fn connect(addr: SocketAddr) -> RunningService<RoleClient, InitializeRequestParams> {
     let transport = StreamableHttpClientTransport::from_config(
         StreamableHttpClientTransportConfig::with_uri(format!("http://{addr}/mcp")),
     );
-    ClientInfo::default()
+    InitializeRequestParams::default()
         .serve(transport)
         .await
         .expect("MCP initialize handshake over HTTP")
