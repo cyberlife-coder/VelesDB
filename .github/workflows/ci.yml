@@ -1508,6 +1508,11 @@ jobs:
           pip install -e "integrations/langgraph[dev]"
           python -m pytest integrations/langgraph/tests/ -v --tb=short
 
+      # velesdb-common's own suite. No job ran it before #2275, so its
+      # mirror of core's ef_search bounds could drift with CI green.
+      - name: Test velesdb-common (shared package)
+        run: python -m pytest integrations/common/tests/ -v --tb=short
+
   # ===========================================================================
   # Python SDK Tests — velesdb-python (PyO3) binding functional suite.
   #

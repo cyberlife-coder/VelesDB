@@ -304,7 +304,8 @@ class TestSearchQualityEfRange:
 
         for mode in ["custom:8", "custom:4097", "custom:99999999",
                      "adaptive:0:512", "adaptive:32:4097", "adaptive:5000:32",
-                     "custom:\u0661\u0666"]:
+                     "custom:\u0661\u0666", "custom:16\n",
+                     "custom:" + "9" * 5000, "adaptive:16:" + "9" * 5000]:
             with pytest.raises(SecurityError):
                 validate_search_quality(mode)
 
