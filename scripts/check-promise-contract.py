@@ -32,7 +32,11 @@ Five independent gates run here:
    measurement (``cargo bench``, a release build, a published-package
    download) stay ``"executable": false`` — documentary only — and are
    explicitly skipped with a visible message naming the claim and the
-   unverified command, rather than being silently ignored.
+   unverified command, rather than being silently ignored. Running is not
+   re-measuring: only a claim marked ``"re_derives": true``, whose command
+   recomputes its figure, escapes the staleness checks. A command that only
+   ``grep``s for the figure proves it is still written, and its claim ages
+   like a documentary one (#2309).
 4. Release-asset gate (issue #1885) — every documented
    ``releases/latest/download/<asset>`` URL must resolve to HTTP 200. A release
    train can otherwise take over ``latest`` without carrying assets promised
@@ -217,6 +221,50 @@ def check_provenance(claims: list[dict]) -> list[str]:
     return failed
 
 
+# One `grep -q` for a literal in one file: a check that a figure is still
+# written somewhere, which re-measures nothing.
+_TEXT_PRESENCE_CHECK = re.compile(r"""grep\s+-qF?\s+('[^']*'|"[^"]*")\s+\S+""")
+
+
+def re_derives(claim: dict) -> bool:
+    """Whether the claim's own ``validation_command`` recomputes its figure
+    on every run, which is what exempts it from the staleness checks.
+
+    Declared, not inferred: ``"re_derives": true`` on an executable claim.
+    ``executable`` alone only says the command runs, and five of the six
+    executable claims ran a ``grep`` for their own figure, which proves the
+    sentence is still written, not that it still holds (#2309)."""
+    return claim.get("executable", False) is True and claim.get("re_derives", False) is True
+
+
+def _only_finds_text(command: str) -> bool:
+    segments = [segment.strip() for segment in command.split("&&")]
+    return all(_TEXT_PRESENCE_CHECK.fullmatch(segment) for segment in segments)
+
+
+def re_derives_failures(claims: list[dict]) -> list[str]:
+    """Claims whose ``re_derives`` is not true of their command.
+
+    The field exempts a claim from ageing, so a wrong one silently hides a
+    figure measured on a release nobody ships: it needs an executable claim,
+    and a command that does more than find the figure's text."""
+    failures = []
+    for claim in claims:
+        if claim.get("re_derives", False) is not True:
+            continue
+        claim_id = claim.get("id", "<unknown>")
+        command = str(claim.get("validation_command", ""))
+        if claim.get("executable", False) is not True:
+            failures.append(f"[{claim_id}] re_derives, but is not executable: nothing runs its command")
+        elif _only_finds_text(command):
+            failures.append(
+                f"[{claim_id}] re_derives, but its command only checks that the figure is "
+                f"written ({command!r}); it re-measures nothing, so the claim ages "
+                f"like a documentary one"
+            )
+    return failures
+
+
 def stale_claims(claims: list[dict], workspace_version: str) -> list[str]:
     """Claims last measured on a release older than the one being shipped.
 
@@ -233,10 +281,11 @@ def stale_claims(claims: list[dict], workspace_version: str) -> list[str]:
     """
     stale = []
     for claim in claims:
-        # An executable claim re-derives itself on every run, so it cannot be
-        # stale by construction — the version it was first taken on is history,
-        # not a liability.
-        if claim.get("executable", False):
+        # A claim whose command re-derives the figure on every run cannot be
+        # stale — the version it was first taken on is history, not a
+        # liability. One whose command only finds the figure's text ages like
+        # any documentary claim (#2309).
+        if re_derives(claim):
             continue
         measured = str(claim.get("measured_version", "")).strip()
         if not measured or measured.lower() in {"unknown", "n/a"}:
@@ -284,7 +333,7 @@ def stale_major_failures(
     fatal: "list[str]" = []
     accepted: "list[str]" = []
     for claim in claims:
-        if claim.get("executable", False):
+        if re_derives(claim):
             continue
         measured = str(claim.get("measured_version", "")).strip()
         if not measured or measured.lower() in {"unknown", "n/a"}:
@@ -326,13 +375,18 @@ def workspace_version(root: pathlib.Path) -> str:
 def unsourced_claims(claims: list[dict]) -> list[str]:
     """Claims whose provenance is recorded as ``unknown`` — visible debt. A
     reason may follow the word ("unknown (commit abc names none)"): the value
-    is still unknown, and the claim still counts."""
+    is still unknown, and the claim still counts. The version counts as much
+    as the date and the machine: without it, nothing says which build
+    produced the figure (#2300)."""
     return [
         f"[{claim.get('id', '<unknown>')}] measured_on={claim.get('measured_on')!r} "
-        f"machine={claim.get('measured_machine')!r}"
+        f"machine={claim.get('measured_machine')!r} "
+        f"version={claim.get('measured_version')!r}"
         for claim in claims
-        if str(claim.get("measured_on")).lower().startswith("unknown")
-        or str(claim.get("measured_machine")).lower().startswith("unknown")
+        if any(
+            str(claim.get(field)).lower().startswith("unknown")
+            for field in PROVENANCE_FIELDS
+        )
     ]
 
 
@@ -512,6 +566,7 @@ def run(root: pathlib.Path) -> int:
     provenance_failures = check_provenance(claims)
     family_failures = check_claim_families(data, root)
     executed, skipped, execution_failures = run_validation_commands(claims, root)
+    re_derive_failures = re_derives_failures(claims)
 
     _report("Provenance check failed — every claim must record its measurement:", provenance_failures)
     _report("Promise contract check failed:", registry_failures)
@@ -520,6 +575,7 @@ def run(root: pathlib.Path) -> int:
     _report("Latest-release asset check failed:", release_asset_failures)
     _report("MCPB release-train check failed:", mcpb_link_failures)
     _report("Executable validation_command check failed:", execution_failures)
+    _report("re_derives check failed:", re_derive_failures)
     _report("Documentary claims not auto-verified:", skipped)
 
     unsourced = unsourced_claims(claims)
@@ -544,6 +600,7 @@ def run(root: pathlib.Path) -> int:
         release_asset_failures,
         mcpb_link_failures,
         execution_failures,
+        re_derive_failures,
         provenance_failures,
         stale_fatal,
     )

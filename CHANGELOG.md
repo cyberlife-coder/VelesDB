@@ -164,6 +164,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the directory is ignored.
 
 ### Fixed
+- **The promise contract no longer counts a figure as sourced, or as
+  fresh, on the strength of a `grep` (#2300, #2309).** `check-promise-contract`
+  exempted every `executable` claim from its staleness checks, but five of
+  the six only `grep` for their own figure, which proves the sentence is
+  still written, not that it still holds. Only a claim marked
+  `"re_derives": true` is exempt now, and the checker refuses that mark on
+  a command that only finds text. A `measured_version` of `unknown` now
+  counts as unsourced, like an unknown date or machine. The six claims that
+  had one get the version their own record gives, each with a dated waiver: the four billed-campaign figures take 3.12.0 from
+  commit 0d461a502, which records their logs, and the two 2026-07-20
+  benchmark figures take 3.12.0 from their date, since develop carried no
+  other version that week. The 82.5 % context-savings figure, measured on
+  4.0.0 and only grepped since, is re-measured on 6.0.0.
 - **A vacuum's swap no longer copies an unbounded remainder under the index
   write guard (#2335).** `catch_up` copies the writes made during the rebuild
   without that guard, but a write landing between its last round and the

@@ -402,14 +402,29 @@ class StaleMajorTests(unittest.TestCase):
         )
         self.assertEqual((fatal, waived), ([], []))
 
-    def test_executable_and_unknown_claims_are_ignored(self) -> None:
+    def test_re_deriving_and_unknown_claims_are_ignored(self) -> None:
         claims = [
-            self._claim(executable=True),
+            self._claim(executable=True, re_derives=True),
             self._claim(measured_version="unknown"),
             self._claim(measured_version=""),
         ]
         fatal, waived = cpc.stale_major_failures(claims, "5.1.0")
         self.assertEqual((fatal, waived), ([], []))
+
+    def test_an_executable_claim_that_only_finds_its_text_is_stale(self) -> None:
+        # Running `grep` on the figure proves it is still written, not that it
+        # still holds: such a claim ages like a documentary one (#2309).
+        claim = self._claim(
+            executable=True, validation_command="grep -qF '82.5 %' README.md"
+        )
+        fatal, _ = cpc.stale_major_failures([claim], "6.0.0")
+        self.assertEqual(len(fatal), 1)
+        self.assertEqual(len(cpc.stale_claims([claim], "4.1.0")), 1)
+
+    def test_a_re_deriving_claim_is_not_stale(self) -> None:
+        claim = self._claim(executable=True, re_derives=True)
+        self.assertEqual(cpc.stale_major_failures([claim], "6.0.0"), ([], []))
+        self.assertEqual(cpc.stale_claims([claim], "4.1.0"), [])
 
     def test_real_registry_has_no_unwaived_major_stale_claim(self) -> None:
         import json
@@ -466,6 +481,45 @@ class UnsourcedClaimTests(unittest.TestCase):
         ]
         found = cpc.unsourced_claims(claims)
         self.assertEqual([entry.split("]")[0] + "]" for entry in found], ["[a]", "[b]"])
+
+    def test_an_unknown_version_counts_as_unsourced(self):
+        # A date and a machine do not say which build produced the figure
+        # (#2300); a claim its command re-derives has no version to record.
+        claims = [
+            {"id": "a", "measured_on": "2026-07-20", "measured_machine": "Apple M5 Pro", "measured_version": "unknown"},
+            {"id": "b", "measured_on": "2026-07-20", "measured_machine": "Apple M5 Pro", "measured_version": "3.12.0"},
+            {"id": "c", "measured_on": "2026-07-20", "measured_machine": "n/a", "measured_version": "re-derived on every run", "executable": True, "re_derives": True},
+        ]
+        found = cpc.unsourced_claims(claims)
+        self.assertEqual([entry.split("]")[0] + "]" for entry in found], ["[a]"])
+
+
+class ReDerivesTests(unittest.TestCase):
+    """``re_derives`` is what exempts a claim from ageing, so it must be true
+    of the command, not merely asserted (#2309)."""
+
+    def test_re_derives_needs_an_executable_claim(self):
+        claims = [{"id": "a", "executable": False, "re_derives": True, "validation_command": "cargo bench"}]
+        self.assertEqual(len(cpc.re_derives_failures(claims)), 1)
+
+    def test_a_command_that_only_finds_text_cannot_re_derive(self):
+        command = "grep -qF '10.9 %' README.md && grep -qF '10.9%' examples/x/README.md"
+        claims = [{"id": "a", "executable": True, "re_derives": True, "validation_command": command}]
+        failures = cpc.re_derives_failures(claims)
+        self.assertEqual(len(failures), 1)
+        self.assertIn("only checks that the figure is written", failures[0])
+
+    def test_a_command_that_computes_the_figure_re_derives(self):
+        command = "test \"$(grep -cE '^  /' docs/openapi.yaml)\" -eq 54"
+        claims = [{"id": "a", "executable": True, "re_derives": True, "validation_command": command}]
+        self.assertEqual(cpc.re_derives_failures(claims), [])
+
+    def test_the_real_registry_holds(self):
+        import json
+
+        claims = json.loads(cpc.registry_path(cpc.ROOT).read_text(encoding="utf-8"))["claims"]
+        self.assertEqual(cpc.re_derives_failures(claims), [])
+        self.assertTrue(any(c.get("re_derives") for c in claims), "no claim re-derives: the exemption tests nothing")
 
 
 if __name__ == "__main__":
