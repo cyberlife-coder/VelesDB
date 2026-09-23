@@ -133,3 +133,13 @@ fn test_set_mode_invalid() {
     // min_ef above max_ef: every query would refuse it, so `\set` does (#2267).
     assert!(session.set("mode", "adaptive:512:32").is_err());
 }
+
+#[test]
+fn test_set_mode_custom_out_of_range_is_rejected() {
+    // An unbounded ef would reach the same uncapped HNSW traversal #2274
+    // closes for the dedicated `ef_search` option — `\set mode custom:<ef>`
+    // must refuse it the same way (#2275).
+    let mut session = SessionSettings::new();
+    assert!(session.set("mode", "custom:99999999").is_err());
+    assert!(session.set("mode", "adaptive:32:99999999").is_err());
+}

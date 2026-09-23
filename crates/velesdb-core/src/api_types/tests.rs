@@ -543,6 +543,48 @@ fn test_mode_to_search_quality_invalid_adaptive() {
     assert!(mode_to_search_quality("adaptive:512:32").is_none());
 }
 
+// `custom:<ef>` and `adaptive:<min_ef>:<max_ef>` reach the same ef_search
+// bound the dedicated `ef_search` `WITH` option enforces (#2275): an ef
+// outside `[MIN_EF_SEARCH, MAX_EF_SEARCH]` must not silently pass through
+// this alternate spelling of the option.
+#[cfg(feature = "persistence")]
+#[test]
+fn test_mode_to_search_quality_custom_out_of_range_is_rejected() {
+    use super::mode_to_search_quality;
+    assert!(mode_to_search_quality("custom:0").is_none());
+    assert!(mode_to_search_quality(&format!("custom:{}", MAX_EF_SEARCH + 1)).is_none());
+    assert!(mode_to_search_quality("custom:18446744073709551615").is_none());
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn test_mode_to_search_quality_custom_in_range_boundaries() {
+    use super::mode_to_search_quality;
+    assert!(matches!(
+        mode_to_search_quality(&format!("custom:{MIN_EF_SEARCH}")),
+        Some(crate::SearchQuality::Custom(ef)) if ef == MIN_EF_SEARCH
+    ));
+    assert!(matches!(
+        mode_to_search_quality(&format!("custom:{MAX_EF_SEARCH}")),
+        Some(crate::SearchQuality::Custom(ef)) if ef == MAX_EF_SEARCH
+    ));
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn test_mode_to_search_quality_adaptive_out_of_range_is_rejected() {
+    use super::mode_to_search_quality;
+    // min_ef below the accepted range.
+    assert!(mode_to_search_quality(&format!("adaptive:0:{MAX_EF_SEARCH}")).is_none());
+    // max_ef above the accepted range, even though min_ef <= max_ef holds.
+    assert!(
+        mode_to_search_quality(&format!("adaptive:{MIN_EF_SEARCH}:{}", MAX_EF_SEARCH + 1))
+            .is_none()
+    );
+    // The unbounded shape #2275 was filed for.
+    assert!(mode_to_search_quality("adaptive:32:18446744073709551615").is_none());
+}
+
 #[cfg(feature = "persistence")]
 #[test]
 fn test_mode_to_search_quality_unknown() {

@@ -174,22 +174,41 @@ pub enum SearchQuality {
     AutoTune,
 }
 
-impl From<SearchQuality> for velesdb_core::SearchQuality {
-    fn from(quality: SearchQuality) -> Self {
-        match quality {
+impl TryFrom<SearchQuality> for velesdb_core::SearchQuality {
+    type Error = VelesError;
+
+    /// Fallible: `Custom`'s `ef` and `Adaptive`'s `min_ef`/`max_ef` are
+    /// checked against the same `[16, 4096]` range the `ef_search` `WITH`
+    /// option enforces elsewhere, so a Swift/Kotlin caller cannot reach the
+    /// HNSW traversal with an unbounded `ef` through this FFI boundary
+    /// (#2275).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VelesError::Database`] when `ef`, `min_ef` or `max_ef` falls
+    /// outside the accepted range.
+    fn try_from(quality: SearchQuality) -> Result<Self, Self::Error> {
+        Ok(match quality {
             SearchQuality::Fast => velesdb_core::SearchQuality::Fast,
             SearchQuality::Balanced => velesdb_core::SearchQuality::Balanced,
             SearchQuality::Accurate => velesdb_core::SearchQuality::Accurate,
             SearchQuality::Perfect => velesdb_core::SearchQuality::Perfect,
             SearchQuality::Custom { ef } => {
-                velesdb_core::SearchQuality::Custom(usize::try_from(ef).unwrap_or(usize::MAX))
+                let ef = usize::try_from(ef).unwrap_or(usize::MAX);
+                velesdb_core::api_types::validate_ef_search(ef).map_err(VelesError::database)?;
+                velesdb_core::SearchQuality::Custom(ef)
             }
-            SearchQuality::Adaptive { min_ef, max_ef } => velesdb_core::SearchQuality::Adaptive {
-                min_ef: usize::try_from(min_ef).unwrap_or(usize::MAX),
-                max_ef: usize::try_from(max_ef).unwrap_or(usize::MAX),
-            },
+            SearchQuality::Adaptive { min_ef, max_ef } => {
+                let min_ef = usize::try_from(min_ef).unwrap_or(usize::MAX);
+                let max_ef = usize::try_from(max_ef).unwrap_or(usize::MAX);
+                velesdb_core::api_types::validate_ef_search(min_ef)
+                    .map_err(VelesError::database)?;
+                velesdb_core::api_types::validate_ef_search(max_ef)
+                    .map_err(VelesError::database)?;
+                velesdb_core::SearchQuality::Adaptive { min_ef, max_ef }
+            }
             SearchQuality::AutoTune => velesdb_core::SearchQuality::AutoTune,
-        }
+        })
     }
 }
 

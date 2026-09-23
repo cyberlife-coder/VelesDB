@@ -132,10 +132,16 @@ pub fn mode_to_search_quality(mode: &str) -> Option<crate::SearchQuality> {
 }
 
 /// Parses advanced search quality modes: `custom:<ef>` and `adaptive:<min_ef>:<max_ef>`.
+///
+/// `ef`, `min_ef` and `max_ef` are each checked against
+/// [`validate_ef_search`]'s `[MIN_EF_SEARCH, MAX_EF_SEARCH]` range — the same
+/// bound the dedicated `ef_search` option enforces — so this spelling of the
+/// option cannot reach the search path with an unbounded `ef` (#2275).
 #[cfg(feature = "persistence")]
 fn parse_advanced_quality(mode: &str) -> Option<crate::SearchQuality> {
     if let Some(ef_str) = mode.strip_prefix("custom:") {
         let ef = ef_str.parse::<usize>().ok()?;
+        validate_ef_search(ef).ok()?;
         return Some(crate::SearchQuality::Custom(ef));
     }
     if let Some(params) = mode.strip_prefix("adaptive:") {
@@ -144,6 +150,8 @@ fn parse_advanced_quality(mode: &str) -> Option<crate::SearchQuality> {
             let min_ef = parts[0].parse::<usize>().ok()?;
             let max_ef = parts[1].parse::<usize>().ok()?;
             if min_ef <= max_ef {
+                validate_ef_search(min_ef).ok()?;
+                validate_ef_search(max_ef).ok()?;
                 return Some(crate::SearchQuality::Adaptive { min_ef, max_ef });
             }
         }
@@ -156,7 +164,7 @@ fn parse_advanced_quality(mode: &str) -> Option<crate::SearchQuality> {
 pub(crate) const SEARCH_MODE_FORMS: &str = concat!(
     "Valid values: 'fast', 'balanced', 'accurate', 'perfect', ",
     "'autotune' (aliases: 'auto_tune', 'auto'), 'custom:<ef>', ",
-    "'adaptive:<min_ef>:<max_ef>' (min_ef <= max_ef)"
+    "'adaptive:<min_ef>:<max_ef>' (min_ef <= max_ef, both in the ef_search range)"
 );
 
 /// Parses a search mode string into a [`crate::SearchQuality`], or an error

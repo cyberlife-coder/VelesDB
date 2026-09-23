@@ -131,7 +131,7 @@ impl VelesCollection {
                 query: &vector,
                 k: usize::try_from(limit).unwrap_or(usize::MAX),
                 ef: None,
-                quality: Some(quality.into()),
+                quality: Some(quality.try_into()?),
                 filter: None,
             },
         )?;

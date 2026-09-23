@@ -49,36 +49,43 @@ fn test_distance_metric_jaccard_conversion() {
 #[test]
 fn test_search_quality_fast_conversion() {
     let q = SearchQuality::Fast;
-    let core: CoreSearchQuality = q.into();
+    let core: CoreSearchQuality = q.try_into().unwrap();
     assert!(matches!(core, CoreSearchQuality::Fast));
 }
 
 #[test]
 fn test_search_quality_balanced_conversion() {
     let q = SearchQuality::Balanced;
-    let core: CoreSearchQuality = q.into();
+    let core: CoreSearchQuality = q.try_into().unwrap();
     assert!(matches!(core, CoreSearchQuality::Balanced));
 }
 
 #[test]
 fn test_search_quality_accurate_conversion() {
     let q = SearchQuality::Accurate;
-    let core: CoreSearchQuality = q.into();
+    let core: CoreSearchQuality = q.try_into().unwrap();
     assert!(matches!(core, CoreSearchQuality::Accurate));
 }
 
 #[test]
 fn test_search_quality_perfect_conversion() {
     let q = SearchQuality::Perfect;
-    let core: CoreSearchQuality = q.into();
+    let core: CoreSearchQuality = q.try_into().unwrap();
     assert!(matches!(core, CoreSearchQuality::Perfect));
 }
 
 #[test]
 fn test_search_quality_custom_conversion() {
     let q = SearchQuality::Custom { ef: 256 };
-    let core: CoreSearchQuality = q.into();
+    let core: CoreSearchQuality = q.try_into().unwrap();
     assert!(matches!(core, CoreSearchQuality::Custom(256)));
+}
+
+#[test]
+fn test_search_quality_custom_out_of_range_is_rejected() {
+    let q = SearchQuality::Custom { ef: u32::MAX };
+    let err: Result<CoreSearchQuality, _> = q.try_into();
+    assert!(err.is_err(), "an unbounded ef must not reach core");
 }
 
 #[test]
@@ -87,7 +94,7 @@ fn test_search_quality_adaptive_conversion() {
         min_ef: 32,
         max_ef: 512,
     };
-    let core: CoreSearchQuality = q.into();
+    let core: CoreSearchQuality = q.try_into().unwrap();
     assert!(matches!(
         core,
         CoreSearchQuality::Adaptive {
@@ -98,9 +105,19 @@ fn test_search_quality_adaptive_conversion() {
 }
 
 #[test]
+fn test_search_quality_adaptive_out_of_range_is_rejected() {
+    let q = SearchQuality::Adaptive {
+        min_ef: 32,
+        max_ef: u32::MAX,
+    };
+    let err: Result<CoreSearchQuality, _> = q.try_into();
+    assert!(err.is_err(), "an unbounded max_ef must not reach core");
+}
+
+#[test]
 fn test_search_quality_autotune_conversion() {
     let q = SearchQuality::AutoTune;
-    let core: CoreSearchQuality = q.into();
+    let core: CoreSearchQuality = q.try_into().unwrap();
     assert!(matches!(core, CoreSearchQuality::AutoTune));
 }
 

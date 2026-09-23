@@ -717,6 +717,10 @@ fn parse_search_quality(mode: &str) -> PyResult<velesdb_core::SearchQuality> {
 }
 
 /// Parse advanced quality modes: `custom:<ef>` and `adaptive:<min_ef>:<max_ef>`.
+///
+/// `ef` is checked against the same `[16, 4096]` range as `search_with_ef`'s
+/// dedicated `ef_search` argument, so this spelling of the option cannot
+/// reach the search path with an unbounded `ef` (#2275).
 fn parse_advanced_quality(mode: &str) -> PyResult<velesdb_core::SearchQuality> {
     if let Some(ef_str) = mode.strip_prefix("custom:") {
         let ef = ef_str.parse::<usize>().map_err(|_| {
@@ -725,6 +729,7 @@ fn parse_advanced_quality(mode: &str) -> PyResult<velesdb_core::SearchQuality> {
                  e.g. 'custom:256'"
             ))
         })?;
+        velesdb_core::api_types::validate_ef_search(ef).map_err(PyValueError::new_err)?;
         return Ok(velesdb_core::SearchQuality::Custom(ef));
     }
     if let Some(params) = mode.strip_prefix("adaptive:") {
@@ -737,6 +742,9 @@ fn parse_advanced_quality(mode: &str) -> PyResult<velesdb_core::SearchQuality> {
 }
 
 /// Parse `<min_ef>:<max_ef>` for the adaptive quality mode.
+///
+/// `min_ef` and `max_ef` are each checked against the same `[16, 4096]`
+/// range `custom:<ef>` enforces (#2275).
 fn parse_adaptive_params(params: &str) -> PyResult<velesdb_core::SearchQuality> {
     let parts: Vec<&str> = params.split(':').collect();
     if parts.len() != 2 {
@@ -756,6 +764,8 @@ fn parse_adaptive_params(params: &str) -> PyResult<velesdb_core::SearchQuality> 
             "Adaptive min_ef ({min_ef}) must be <= max_ef ({max_ef})"
         )));
     }
+    velesdb_core::api_types::validate_ef_search(min_ef).map_err(PyValueError::new_err)?;
+    velesdb_core::api_types::validate_ef_search(max_ef).map_err(PyValueError::new_err)?;
     Ok(velesdb_core::SearchQuality::Adaptive { min_ef, max_ef })
 }
 
