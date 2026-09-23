@@ -11,7 +11,12 @@
       "last_updated": "2026-04-27",
       "measured_on": "2026-07-20",
       "measured_machine": "Apple M5 Pro (quiet re-run, 53.2 us)",
-      "measured_version": "unknown"
+      "measured_version": "3.12.0",
+      "stale_accepted": {
+        "reason": "Measured 2026-07-20: develop carried workspace 3.12.0 from v3.12.0 (2026-07-15) until the 4.0.0 bump (2026-07-24), so any build of that day reports 3.12.0; the run itself names no commit. Re-measuring belongs on the idle Apple M5 Pro it was taken on, not done in this change.",
+        "granted": "2026-09-23",
+        "for_workspace_major": 6
+      }
     },
     {
       "id": "root_readme_simd_dot",
@@ -333,9 +338,14 @@
       "executable": false,
       "source": "README.md ColumnStore 130x speedup baseline. Footnote *¹ scopes the claim: filtering-API micro-benchmark, integer equality, 130x at 100K rows / 55x at 10K rows (docs/BENCHMARKS.md section 6); no 1M-row measurement exists. The filtering API serves SELECT WHERE via the adaptive payload mirror (collection/payload_mirror).",
       "last_updated": "2026-06-10",
-      "measured_on": "2026-07-20",
+      "measured_on": "2026-03-19",
       "measured_machine": "Intel Core i9-14900KF (x86_64, AVX2) — docs/BENCHMARKS.md reference machine",
-      "measured_version": "unknown"
+      "measured_version": "1.6.0",
+      "stale_accepted": {
+        "reason": "Published with its date in docs/BENCHMARKS.md section 6 (filter_eq_int, measured 2026-03-19, 1.6.0, as the sibling readme_columnstore_130x_claim records); the 2026-07-20 run was the Apple M5 Pro cross-check, not this figure. The ratio is hardware-dependent and re-measuring it belongs on the idle i9-14900KF reference machine.",
+        "granted": "2026-09-23",
+        "for_workspace_major": 6
+      }
     },
     {
       "id": "readme_binary_size_9mb",
@@ -371,7 +381,8 @@
       "last_updated": "2026-07-10",
       "measured_on": "re-derived on every run",
       "measured_machine": "platform-independent (derived from docs/openapi.yaml)",
-      "measured_version": "re-derived on every run"
+      "measured_version": "re-derived on every run",
+      "re_derives": true
     },
     {
       "id": "readme_economics_cropped_dollars_saved",
@@ -383,7 +394,12 @@
       "last_updated": "2026-07-19",
       "measured_on": "2026-07-19",
       "measured_machine": "billed API campaign (Claude Code cli runner / direct Messages API) — not CPU-bound",
-      "measured_version": "unknown"
+      "measured_version": "3.12.0",
+      "stale_accepted": {
+        "reason": "Dated by commit 0d461a502, which records the billed campaign's vibe-cli raw logs (2026-07-19, workspace 3.12.0); the logs name no version, so the version is that commit's. Re-measuring means re-running the billed API campaign, not done in this change.",
+        "granted": "2026-09-23",
+        "for_workspace_major": 6
+      }
     },
     {
       "id": "readme_economics_retina_dollars_and_tokens_saved",
@@ -395,7 +411,12 @@
       "last_updated": "2026-07-19",
       "measured_on": "2026-07-19",
       "measured_machine": "billed API campaign (Claude Code cli runner / direct Messages API) — not CPU-bound",
-      "measured_version": "unknown"
+      "measured_version": "3.12.0",
+      "stale_accepted": {
+        "reason": "Dated by commit cf4e14f7d, which records the billed campaign's day-scale raw logs (2026-07-19, workspace 3.12.0); the logs name no version, so the version is that commit's. Re-measuring means re-running the billed API campaign, not done in this change.",
+        "granted": "2026-09-23",
+        "for_workspace_major": 6
+      }
     },
     {
       "id": "readme_economics_day_scale_dollars_saved",
@@ -407,7 +428,12 @@
       "last_updated": "2026-07-19",
       "measured_on": "2026-07-19",
       "measured_machine": "billed API campaign (Claude Code cli runner / direct Messages API) — not CPU-bound",
-      "measured_version": "unknown"
+      "measured_version": "3.12.0",
+      "stale_accepted": {
+        "reason": "Dated by commit cf4e14f7d, which records the billed campaign's day-scale raw logs (2026-07-19, workspace 3.12.0); the logs name no version, so the version is that commit's. Re-measuring means re-running the billed API campaign, not done in this change.",
+        "granted": "2026-09-23",
+        "for_workspace_major": 6
+      }
     },
     {
       "id": "readme_economics_api_input_tokens_saved",
@@ -419,7 +445,12 @@
       "last_updated": "2026-07-19",
       "measured_on": "2026-07-19",
       "measured_machine": "billed API campaign (Claude Code cli runner / direct Messages API) — not CPU-bound",
-      "measured_version": "unknown"
+      "measured_version": "3.12.0",
+      "stale_accepted": {
+        "reason": "Dated by commit cf4e14f7d, which records the billed campaign's day-scale raw logs (2026-07-19, workspace 3.12.0); the logs name no version, so the version is that commit's. Re-measuring means re-running the billed API campaign, not done in this change.",
+        "granted": "2026-09-23",
+        "for_workspace_major": 6
+      }
     },
     {
       "id": "readme_economics_context_savings_corpus",
@@ -427,11 +458,11 @@
       "must_contain": "**82.5 %**",
       "validation_command": "grep -qF '82.5 %' README.md && grep -qF '82.5% saved' crates/velesdb-memory/examples/context_savings/README.md && grep -qF '26533 raw -> 4647 compiled' crates/velesdb-memory/examples/context_savings/README.md",
       "executable": true,
-      "source": "crates/velesdb-memory/examples/context_savings/README.md:58 (committed 12-turn agent-session corpus, real cl100k BPE: 26533 raw -> 4647 compiled tokens = 82.5% saved) — consistency check only, no live re-run.",
-      "last_updated": "2026-07-19",
-      "measured_on": "2026-07-26",
+      "source": "crates/velesdb-memory/examples/context_savings/README.md:58 (committed 12-turn agent-session corpus, real cl100k BPE: 26533 raw -> 4647 compiled tokens = 82.5% saved). Re-measured 2026-09-23 on 6.0.0 with real_measures/agent_session.mjs (velesdb-node built from the tree, gpt-tokenizer 4.0.0 installed --no-save as the harness prescribes): the same 26533 -> 4647, every turn compiled twice byte-identical. The validation_command only greps the figure, so the claim ages like a documentary one.",
+      "last_updated": "2026-09-23",
+      "measured_on": "2026-09-23",
       "measured_machine": "platform-independent (committed corpus, deterministic tokenizer)",
-      "measured_version": "4.0.0"
+      "measured_version": "6.0.0"
     },
     {
       "id": "mcp_same_named_scalar_wire_tolerance",

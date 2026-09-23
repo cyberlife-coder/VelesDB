@@ -179,6 +179,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nodes' links on that layer were lost. Every layer now covers the published
   capacity, which only grows: a smaller `pre_expand_layers` no longer
   lowered it either.
+- **The promise contract no longer counts a figure as sourced, or as
+  fresh, on the strength of a `grep` (#2300, #2309).** `check-promise-contract`
+  exempted every `executable` claim from its staleness checks, but five of
+  the six only `grep` for their own figure, which proves the sentence is
+  still written, not that it still holds. Only a claim marked
+  `"re_derives": true` is exempt now. The checker refuses that mark on a
+  claim that is not executable, and on a command every stage of which only
+  finds or shows text (`grep`, `rg`, `cat`, `head`, `tail`, `echo`, whatever
+  the flags, pipes or shell wrapping, though a counting `grep -c` piped
+  onward computes); a command with a substitution or a second line is left
+  to review, since it may compute the figure. A
+  refusal vector proves the refusal fails the run.
+  A `measured_version` of `unknown` now counts as unsourced, like an
+  unknown date or machine. The six claims that had one get the version
+  their own record gives, each with a dated waiver: the four
+  billed-campaign figures take 3.12.0 from the commits that record their
+  raw logs (0d461a502 for the vibe-cli session, cf4e14f7d for the
+  day-scale ones), the HNSW latency taken on the M5 Pro on 2026-07-20
+  takes 3.12.0 from its date, since develop carried no other version that
+  week, and the ColumnStore baseline takes the date and version of the i9
+  run it comes from (2026-03-19, 1.6.0), which the registry had misdated.
+  The 82.5 % context-savings figure, measured on 4.0.0 and only grepped
+  since, is re-measured on 6.0.0: unchanged.
+
 - **A vacuum's swap no longer copies an unbounded remainder under the index
   write guard (#2335).** `catch_up` copies the writes made during the rebuild
   without that guard, but a write landing between its last round and the

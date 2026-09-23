@@ -32,7 +32,11 @@ Five independent gates run here:
    measurement (``cargo bench``, a release build, a published-package
    download) stay ``"executable": false`` — documentary only — and are
    explicitly skipped with a visible message naming the claim and the
-   unverified command, rather than being silently ignored.
+   unverified command, rather than being silently ignored. Running is not
+   re-measuring: only a claim marked ``"re_derives": true``, whose command
+   recomputes its figure, escapes the staleness checks. A command that only
+   ``grep``s for the figure proves it is still written, and its claim ages
+   like a documentary one (#2309).
 4. Release-asset gate (issue #1885) — every documented
    ``releases/latest/download/<asset>`` URL must resolve to HTTP 200. A release
    train can otherwise take over ``latest`` without carrying assets promised
@@ -48,6 +52,7 @@ import argparse
 import json
 import pathlib
 import re
+import shlex
 import subprocess
 import sys
 from urllib.error import HTTPError, URLError
@@ -217,6 +222,141 @@ def check_provenance(claims: list[dict]) -> list[str]:
     return failed
 
 
+# Programs that can only find or show text. A command every stage of which
+# runs one of these checks that a figure is written somewhere; it computes
+# nothing, whatever its flags, quoting or plumbing (`grep -Fq`, `rg -q`,
+# `cat f | grep -q`, `grep -c`, `|| true`).
+_TEXT_ONLY_PROGRAMS = frozenset(
+    {"grep", "egrep", "fgrep", "rg", "cat", "head", "tail", "true", "false", "echo", "printf", ":"}
+)
+_SHELL_SEPARATORS = frozenset({"&&", "||", "|", "|&", ";", "&"})
+# Searches whose count flag, piped onward, turns them into a computation.
+_COUNTING_SEARCHES = frozenset({"grep", "egrep", "fgrep", "rg"})
+_COUNTING = "a counting search"
+# Words that precede or wrap a program without being one: a stage's program
+# is the first token after them.
+_SHELL_PREFIXES = frozenset(
+    {"(", ")", "{", "}", "!", "command", "time", "exec", "if", "then", "elif", "else", "fi"}
+)
+_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*")
+# shlex groups a run of operator characters into one token (`;(`, `|&`):
+# this splits such a run back into the operators it holds.
+_OPERATOR = re.compile(r"&&|\|\||\|&|>>|[;|&()<>]")
+_REDIRECTS = frozenset({"<", ">", ">>"})
+
+
+def _has_hidden_computation(command: str) -> bool:
+    """Whether ``command`` can compute something the stage walk cannot see:
+    a substitution (`$(`, a backtick, `<(`, `>(`) or a second line, read as
+    the shell reads them. Inside single quotes every character is literal,
+    so a pattern holding a backtick is not a substitution; inside double
+    quotes `$(` and backticks still run, and a newline is literal."""
+    in_single = in_double = False
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if in_single:
+            in_single = char != "'"
+        elif char == "\\":
+            index += 1
+        elif char == "'" and not in_double:
+            in_single = True
+        elif char == '"':
+            in_double = not in_double
+        elif char == "`" or command.startswith("$(", index):
+            return True
+        elif not in_double and (command.startswith(("<(", ">("), index) or char == "\n"):
+            return True
+        index += 1
+    return False
+
+
+def re_derives(claim: dict) -> bool:
+    """Whether the claim's own ``validation_command`` recomputes its figure
+    on every run, which is what exempts it from the staleness checks.
+
+    Declared, not inferred: ``"re_derives": true`` on an executable claim.
+    ``executable`` alone only says the command runs, and five of the six
+    executable claims ran a ``grep`` for their own figure, which proves the
+    sentence is still written, not that it still holds (#2309)."""
+    return claim.get("executable", False) is True and claim.get("re_derives", False) is True
+
+
+def _only_finds_text(command: str) -> bool:
+    """Whether every stage of ``command`` runs a program of
+    ``_TEXT_ONLY_PROGRAMS``. A command with a substitution or a second line,
+    or one shlex cannot read, counts as one that may compute its figure, so
+    the mark stays the author's to justify in review: a false refusal would
+    fail a claim that really re-derives."""
+    if _has_hidden_computation(command):
+        return False
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        raw_tokens = list(lexer)
+    except ValueError:
+        return False
+    tokens = []
+    for token in raw_tokens:
+        operators = _OPERATOR.findall(token)
+        tokens.extend(operators if "".join(operators) == token else [token])
+    programs, expect_program, skip_next = [], True, False
+    for token in tokens:
+        if skip_next:
+            skip_next = False
+        elif token in _REDIRECTS:
+            skip_next = True
+        elif token in _SHELL_SEPARATORS:
+            _settle_count(programs, piped=token in {"|", "|&"})
+            expect_program = True
+        elif expect_program and (token in _SHELL_PREFIXES or _ASSIGNMENT.fullmatch(token)):
+            continue
+        elif expect_program:
+            programs.append(pathlib.PurePath(token).name)
+            expect_program = False
+        elif programs[-1] in _COUNTING_SEARCHES and _is_count_flag(token):
+            programs[-1] = _COUNTING
+    _settle_count(programs, piped=False)
+    return bool(programs) and all(program in _TEXT_ONLY_PROGRAMS for program in programs)
+
+
+def _settle_count(programs: list, piped: bool) -> None:
+    """A `grep -c` whose count feeds the next stage computes the figure
+    (`grep -cE '^  /' spec.yaml | grep -qx 54`); one whose count goes
+    nowhere only checks that the text is there, like any grep."""
+    if programs and programs[-1] == _COUNTING and not piped:
+        programs[-1] = "grep"
+
+
+def _is_count_flag(token: str) -> bool:
+    return token == "--count" or (
+        token.startswith("-") and not token.startswith("--") and "c" in token[1:]
+    )
+
+
+def re_derives_failures(claims: list[dict]) -> list[str]:
+    """Claims whose ``re_derives`` is not true of their command.
+
+    The field exempts a claim from ageing, so a wrong one silently hides a
+    figure measured on a release nobody ships: it needs an executable claim,
+    and a command that does more than find the figure's text."""
+    failures = []
+    for claim in claims:
+        if claim.get("re_derives", False) is not True:
+            continue
+        claim_id = claim.get("id", "<unknown>")
+        command = str(claim.get("validation_command", ""))
+        if claim.get("executable", False) is not True:
+            failures.append(f"[{claim_id}] re_derives, but is not executable: nothing runs its command")
+        elif _only_finds_text(command):
+            failures.append(
+                f"[{claim_id}] re_derives, but its command only finds or shows text "
+                f"({command!r}); it re-measures nothing, so the claim ages like a "
+                f"documentary one"
+            )
+    return failures
+
+
 def stale_claims(claims: list[dict], workspace_version: str) -> list[str]:
     """Claims last measured on a release older than the one being shipped.
 
@@ -233,10 +373,11 @@ def stale_claims(claims: list[dict], workspace_version: str) -> list[str]:
     """
     stale = []
     for claim in claims:
-        # An executable claim re-derives itself on every run, so it cannot be
-        # stale by construction — the version it was first taken on is history,
-        # not a liability.
-        if claim.get("executable", False):
+        # A claim whose command re-derives the figure on every run cannot be
+        # stale — the version it was first taken on is history, not a
+        # liability. One whose command only finds the figure's text ages like
+        # any documentary claim (#2309).
+        if re_derives(claim):
             continue
         measured = str(claim.get("measured_version", "")).strip()
         if not measured or measured.lower() in {"unknown", "n/a"}:
@@ -284,7 +425,7 @@ def stale_major_failures(
     fatal: "list[str]" = []
     accepted: "list[str]" = []
     for claim in claims:
-        if claim.get("executable", False):
+        if re_derives(claim):
             continue
         measured = str(claim.get("measured_version", "")).strip()
         if not measured or measured.lower() in {"unknown", "n/a"}:
@@ -326,13 +467,18 @@ def workspace_version(root: pathlib.Path) -> str:
 def unsourced_claims(claims: list[dict]) -> list[str]:
     """Claims whose provenance is recorded as ``unknown`` — visible debt. A
     reason may follow the word ("unknown (commit abc names none)"): the value
-    is still unknown, and the claim still counts."""
+    is still unknown, and the claim still counts. The version counts as much
+    as the date and the machine: without it, nothing says which build
+    produced the figure (#2300)."""
     return [
         f"[{claim.get('id', '<unknown>')}] measured_on={claim.get('measured_on')!r} "
-        f"machine={claim.get('measured_machine')!r}"
+        f"machine={claim.get('measured_machine')!r} "
+        f"version={claim.get('measured_version')!r}"
         for claim in claims
-        if str(claim.get("measured_on")).lower().startswith("unknown")
-        or str(claim.get("measured_machine")).lower().startswith("unknown")
+        if any(
+            str(claim.get(field)).lower().startswith("unknown")
+            for field in PROVENANCE_FIELDS
+        )
     ]
 
 
@@ -512,6 +658,7 @@ def run(root: pathlib.Path) -> int:
     provenance_failures = check_provenance(claims)
     family_failures = check_claim_families(data, root)
     executed, skipped, execution_failures = run_validation_commands(claims, root)
+    re_derive_failures = re_derives_failures(claims)
 
     _report("Provenance check failed — every claim must record its measurement:", provenance_failures)
     _report("Promise contract check failed:", registry_failures)
@@ -520,6 +667,7 @@ def run(root: pathlib.Path) -> int:
     _report("Latest-release asset check failed:", release_asset_failures)
     _report("MCPB release-train check failed:", mcpb_link_failures)
     _report("Executable validation_command check failed:", execution_failures)
+    _report("re_derives check failed:", re_derive_failures)
     _report("Documentary claims not auto-verified:", skipped)
 
     unsourced = unsourced_claims(claims)
@@ -544,6 +692,7 @@ def run(root: pathlib.Path) -> int:
         release_asset_failures,
         mcpb_link_failures,
         execution_failures,
+        re_derive_failures,
         provenance_failures,
         stale_fatal,
     )
