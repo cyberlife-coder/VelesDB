@@ -409,11 +409,6 @@ impl FusionStrategy {
         doc_scores
     }
 
-    /// Sorts a fused result set by score descending.
-    fn sort_descending(fused: &mut [(u64, f32)]) {
-        fused.sort_unstable_by(|a, b| b.1.total_cmp(&a.1));
-    }
-
     /// Average fusion: mean of scores for each document.
     #[allow(clippy::cast_precision_loss)]
     // Reason: scores.len() is the number of queries a document appeared in;
@@ -427,7 +422,7 @@ impl FusionStrategy {
             })
             .collect();
 
-        Self::sort_descending(&mut fused);
+        sort_fused_results(&mut fused);
         Ok(fused)
     }
 
@@ -445,7 +440,7 @@ impl FusionStrategy {
         }
 
         let mut fused: Vec<(u64, f32)> = doc_max.into_iter().collect();
-        Self::sort_descending(&mut fused);
+        sort_fused_results(&mut fused);
         Ok(fused)
     }
 
@@ -474,7 +469,7 @@ impl FusionStrategy {
         }
 
         let mut fused: Vec<(u64, f32)> = doc_rrf.into_iter().collect();
-        Self::sort_descending(&mut fused);
+        sort_fused_results(&mut fused);
         Ok(fused)
     }
 
@@ -513,7 +508,7 @@ impl FusionStrategy {
             })
             .collect();
 
-        Self::sort_descending(&mut fused);
+        sort_fused_results(&mut fused);
         Ok(fused)
     }
 
@@ -566,7 +561,7 @@ impl FusionStrategy {
         }
 
         let mut fused: Vec<(u64, f32)> = all_ids.into_iter().collect();
-        Self::sort_descending(&mut fused);
+        sort_fused_results(&mut fused);
         Ok(fused)
     }
 
@@ -614,7 +609,7 @@ impl FusionStrategy {
         }
 
         let mut fused: Vec<(u64, f32)> = doc_scores.into_iter().collect();
-        Self::sort_descending(&mut fused);
+        sort_fused_results(&mut fused);
         Ok(fused)
     }
 }
@@ -666,6 +661,19 @@ fn validate_weight_sum(sum: f32) -> Result<(), FusionError> {
         return Err(FusionError::InvalidWeightSum { sum });
     }
     Ok(())
+}
+
+/// Orders fused `(id, score)` pairs: score descending, then id ascending.
+///
+/// The id is what makes the order a total one. A fused set is gathered in a
+/// hash map, whose iteration order changes from one map to the next, so
+/// sorting by score alone returned equal scores in a different order from
+/// one identical call to the next (#2297). Every fusion path follows this
+/// rule, core's strategies, its hybrid search and `velesdb-wasm`'s
+/// relative-score fusion alike, so every surface returns ties in the same
+/// order.
+pub fn sort_fused_results(fused: &mut [(u64, f32)]) {
+    fused.sort_unstable_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
 }
 
 /// Min-max normalize a branch of `(id, score)` pairs to the `[0, 1]` range.

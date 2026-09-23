@@ -29,6 +29,6 @@ mod strategy_tests;
 mod weight_validation_tests;
 
 pub use strategy::{
-    min_max_normalize, FusionError, FusionStrategy, ScoreDirection, DEFAULT_WEIGHTED_AVG_WEIGHT,
-    DEFAULT_WEIGHTED_HIT_WEIGHT, DEFAULT_WEIGHTED_MAX_WEIGHT,
+    min_max_normalize, sort_fused_results, FusionError, FusionStrategy, ScoreDirection,
+    DEFAULT_WEIGHTED_AVG_WEIGHT, DEFAULT_WEIGHTED_HIT_WEIGHT, DEFAULT_WEIGHTED_MAX_WEIGHT,
 };

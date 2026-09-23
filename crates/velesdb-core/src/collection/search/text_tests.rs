@@ -235,3 +235,15 @@ fn test_top_k_from_scores_respects_small_k() {
         vec![9, 8, 7]
     );
 }
+
+/// Equal fused scores: the ids a cut by `k` keeps, and their order, follow
+/// `sort_fused_results`, ascending id, not the hash map's iteration (#2297).
+#[test]
+fn test_top_k_from_scores_breaks_ties_by_ascending_id() {
+    let fused: rustc_hash::FxHashMap<u64, f32> = (0..10u64).rev().map(|id| (id, 1.0)).collect();
+    let out = Collection::top_k_from_scores(fused, 3);
+    assert_eq!(
+        out.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+        vec![0, 1, 2]
+    );
+}

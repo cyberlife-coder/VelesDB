@@ -165,6 +165,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the directory is ignored.
 
 ### Fixed
+- **Equal fused scores come back in one order, ascending id, on every
+  surface (#2297).** Every fusion strategy gathers its scores in a hash map,
+  whose iteration order changes from one map to the next, then sorted by
+  score alone: two identical multi-query searches returned tied documents
+  in different orders, in core and through the WASM binding and the TS
+  SDK on top of it. `fusion::sort_fused_results` now orders fused results
+  by score descending, then id ascending, and every fusion path uses it:
+  core's six strategies, hybrid dense + text search (whose top-k heap also
+  keeps, when `k` cuts through a tie, the ids that order puts first, not
+  the highest ones), and `velesdb-wasm`'s own relative-score fusion.
 - **The promise contract no longer counts a figure as sourced, or as
   fresh, on the strength of a `grep` (#2300, #2309).** `check-promise-contract`
   exempted every `executable` claim from its staleness checks, but five of

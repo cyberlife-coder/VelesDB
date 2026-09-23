@@ -988,3 +988,56 @@ fn test_weighted_rrf_unequal_weights_change_ranking() {
     // Biased toward branch 1 where doc2 is rank-0 → doc2 wins.
     assert_eq!(fused_biased[0].0, 2, "biased toward branch 1 → doc2 wins");
 }
+
+// =============================================================================
+// Tie order (#2297): equal fused scores come back by ascending id, whatever
+// order the hash map gathering them iterates, which changes from one map to
+// the next.
+// =============================================================================
+
+const TIED: u64 = 32;
+
+fn ascending_ids() -> Vec<u64> {
+    (0..TIED).collect()
+}
+
+fn ids(fused: &[(u64, f32)]) -> Vec<u64> {
+    fused.iter().map(|&(id, _)| id).collect()
+}
+
+#[test]
+fn test_score_strategies_order_ties_by_ascending_id() {
+    // Every id scores the same in both branches, listed highest id first.
+    let branch: Vec<(u64, f32)> = (0..TIED).rev().map(|id| (id, 0.5)).collect();
+    for strategy in [
+        FusionStrategy::Average,
+        FusionStrategy::Maximum,
+        FusionStrategy::weighted_default(),
+        FusionStrategy::RelativeScore {
+            dense_weight: 0.5,
+            sparse_weight: 0.5,
+        },
+    ] {
+        let fused = strategy
+            .fuse(vec![branch.clone(), branch.clone()])
+            .expect("fuse");
+        assert_eq!(ids(&fused), ascending_ids(), "{strategy:?}");
+    }
+}
+
+#[test]
+fn test_rank_strategies_order_ties_by_ascending_id() {
+    // One branch per id, each id first in its own: every id has the same rank.
+    let branches: Vec<Vec<(u64, f32)>> = (0..TIED).rev().map(|id| vec![(id, 1.0)]).collect();
+    let branch_count = branches.len();
+    for strategy in [
+        FusionStrategy::RRF { k: 60 },
+        FusionStrategy::WeightedRRF {
+            weights: vec![1.0; branch_count],
+            k: 60.0,
+        },
+    ] {
+        let fused = strategy.fuse(branches.clone()).expect("fuse");
+        assert_eq!(ids(&fused), ascending_ids(), "{strategy:?}");
+    }
+}

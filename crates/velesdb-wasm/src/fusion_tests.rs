@@ -333,3 +333,18 @@ fn test_relative_score_normalization_delegates_to_core_min_max_normalize() {
         }
     }
 }
+
+/// Equal fused scores come back by ascending id, the rule core's fusion
+/// follows, on both the core-delegated strategies and the WASM-only
+/// relative-score fusion (#2297).
+#[test]
+fn test_fused_ties_are_ordered_by_ascending_id() {
+    let branch: Vec<(u64, f32)> = (0..32u64).rev().map(|id| (id, 0.5)).collect();
+    let results = vec![branch.clone(), branch];
+    let ascending: Vec<u64> = (0..32).collect();
+    for strategy in ["average", "maximum", "relative_score"] {
+        let fused = fuse_results(&results, strategy, 60, None).unwrap();
+        let ids: Vec<u64> = fused.iter().map(|(id, _)| *id).collect();
+        assert_eq!(ids, ascending, "{strategy}");
+    }
+}
