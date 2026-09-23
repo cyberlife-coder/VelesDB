@@ -164,6 +164,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the directory is ignored.
 
 ### Fixed
+- **An HNSW insert past the pre-allocated capacity no longer takes the
+  layers' write lock for good, and a layer added late no longer drops
+  neighbour writes (#2306).** `expand_layers`' slow path grew the layers to
+  the one node that needed it and never raised `pre_allocated_capacity`, so
+  once an index outgrew it, a loaded index from its first insert, every
+  insert took `layers.write` and waited out whatever held the layers, a save
+  included. It now grows the capacity by an eighth (256 slots at least), and
+  the inserts that follow return to the lock-free fast path. The same path
+  created a layer above the pre-expanded top sized to the node that created
+  it, while the fast path went on sending later, higher node ids to it;
+  `Layer`'s accessors skip an id past a layer's end without a word, so those
+  nodes' links on that layer were lost. Every layer now covers the published
+  capacity, which only grows: a smaller `pre_expand_layers` no longer
+  lowered it either.
 - **A vacuum's swap no longer copies an unbounded remainder under the index
   write guard (#2335).** `catch_up` copies the writes made during the rebuild
   without that guard, but a write landing between its last round and the
