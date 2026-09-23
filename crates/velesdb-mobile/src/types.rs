@@ -178,10 +178,10 @@ impl TryFrom<SearchQuality> for velesdb_core::SearchQuality {
     type Error = VelesError;
 
     /// Fallible: `Custom`'s `ef` and `Adaptive`'s `min_ef`/`max_ef` are
-    /// checked against the same `[16, 4096]` range the `ef_search` `WITH`
-    /// option enforces elsewhere, so a Swift/Kotlin caller cannot reach the
-    /// HNSW traversal with an unbounded `ef` through this FFI boundary
-    /// (#2275).
+    /// checked against the range the `ef_search` `WITH` option enforces
+    /// elsewhere, [`velesdb_core::api_types::validate_ef_search`]'s, so a
+    /// Swift/Kotlin caller cannot reach the HNSW traversal with an unbounded
+    /// `ef` through this FFI boundary (#2275).
     ///
     /// # Errors
     ///

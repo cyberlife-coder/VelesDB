@@ -285,7 +285,9 @@ curl -X POST http://localhost:8080/collections/docs/search \
 ```
 
 This complements the existing named presets (`fast`, `balanced`, `accurate`,
-`perfect`, `autotune`) with fine-grained control over `ef_search`.
+`perfect`, `autotune`) with fine-grained control over `ef_search`. Each ef, and
+both adaptive bounds, must lie in the same 16–4096 range as the `ef_search`
+field; a value outside it answers `400`, naming the value (#2275).
 
 ### SearchMode (Collection-level)
 

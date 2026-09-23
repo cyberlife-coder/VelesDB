@@ -8,10 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 > **Note for the next release**: this train contains **breaking** behaviour
-> changes (#2267 and #2274, the first two entries under `### Changed`): a
-> search `mode` VelesQL or REST cannot parse, and an `ef_search` outside
-> `[16, 4096]`, now fail instead of running at the default quality or an
-> uncapped traversal, and a collection's own `execute_aggregate` refuses a
+> changes (#2267, #2274 and #2275, the `BREAKING (REST, VelesQL, bindings)`
+> entries under `### Changed`): a search `mode` VelesQL or REST cannot parse,
+> and an `ef_search` outside `[16, 4096]` — given as the option or as a
+> `custom:`/`adaptive:` mode — now fail instead of running at the default
+> quality or an uncapped traversal, and a collection's own `execute_aggregate` refuses a
 > query the validator rejects. The declared SemVer policy (`docs/FAQ.md`)
 > makes a breaking change a major bump: tag the next release accordingly.
 
@@ -1117,6 +1118,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (Python), each naming the accepted range. The CLI's `\set ef_search` and the
   config file already refused such a value in v6.0.0. The note at the top of
   `[Unreleased]` covers this alongside #2267.
+
+- **BREAKING (REST, VelesQL, bindings) — a `custom:<ef>` or
+  `adaptive:<min_ef>:<max_ef>` mode with an ef outside `[16, 4096]` now fails
+  (#2275).** #2274 bounded the `ef_search` option; these two spellings of the
+  same knob still reached the HNSW traversal unbounded, `custom:99999999` as
+  surely as `ef_search = 99999999` did. Every surface that turns such a mode
+  into a `SearchQuality` now checks each ef, and both adaptive bounds, against
+  `api_types::validate_ef_search`:
+  - `api_types::parse_search_mode`, which REST, VelesQL's `WITH (mode = ...)`,
+    the CLI's `\set mode` and the Tauri plugin all call, names the value —
+    `Search mode 'custom:5000': ef_search must be an integer between 16 and
+    4096, got 5000` — instead of calling a well-formed mode unknown; an
+    integer past `usize::MAX` is out of range too, not malformed.
+    `mode_to_search_quality` is now `parse_search_mode(..).ok()`, one
+    implementation instead of two;
+  - `velesdb-python`'s own mode parser raises `ValueError` with the message
+    `search_with_ef` already gives;
+  - `velesdb-mobile`'s conversion to the core `SearchQuality` is now
+    `TryFrom` instead of `From`, and `search_with_quality` throws
+    `VelesError.Database` where `Custom { ef: u32::MAX }` used to run an
+    uncapped traversal. The Swift and Kotlin signatures are unchanged; a Rust
+    caller of the `From` impl moves to `try_from`.
+
+  Breaking for a client that sent such a mode and got results: it now gets a
+  `400` (REST), a `422` with `V013` (VelesQL over `/query`), a `ValueError`
+  (Python) or a thrown `VelesError` (mobile). The WASM executor reads no
+  `WITH` option, so it neither applies nor checks these modes.
 
 - **`.vectors` now has a v2 format: the payload starts page-aligned at byte
   4096 instead of byte 16.** The header fields are unchanged and at the same

@@ -116,47 +116,13 @@ pub fn default_index_type() -> String {
 /// - `"custom:<ef>"` for a custom `ef_search` value
 /// - `"adaptive:<min_ef>:<max_ef>"` for two-phase adaptive search
 ///
-/// Returns `None` for a mode it cannot read. An entry point that must refuse
-/// such a mode rather than fall back uses [`parse_search_mode`].
+/// Returns `None` for a mode it cannot read, or whose ef falls outside the
+/// `ef_search` range. An entry point that must refuse such a mode rather than
+/// fall back uses [`parse_search_mode`], which says why.
 #[cfg(feature = "persistence")]
 #[must_use]
 pub fn mode_to_search_quality(mode: &str) -> Option<crate::SearchQuality> {
-    match mode.to_lowercase().as_str() {
-        "fast" => Some(crate::SearchQuality::Fast),
-        "balanced" => Some(crate::SearchQuality::Balanced),
-        "accurate" => Some(crate::SearchQuality::Accurate),
-        "perfect" => Some(crate::SearchQuality::Perfect),
-        "autotune" | "auto_tune" | "auto" => Some(crate::SearchQuality::AutoTune),
-        other => parse_advanced_quality(other),
-    }
-}
-
-/// Parses advanced search quality modes: `custom:<ef>` and `adaptive:<min_ef>:<max_ef>`.
-///
-/// `ef`, `min_ef` and `max_ef` are each checked against
-/// [`validate_ef_search`]'s `[MIN_EF_SEARCH, MAX_EF_SEARCH]` range — the same
-/// bound the dedicated `ef_search` option enforces — so this spelling of the
-/// option cannot reach the search path with an unbounded `ef` (#2275).
-#[cfg(feature = "persistence")]
-fn parse_advanced_quality(mode: &str) -> Option<crate::SearchQuality> {
-    if let Some(ef_str) = mode.strip_prefix("custom:") {
-        let ef = ef_str.parse::<usize>().ok()?;
-        validate_ef_search(ef).ok()?;
-        return Some(crate::SearchQuality::Custom(ef));
-    }
-    if let Some(params) = mode.strip_prefix("adaptive:") {
-        let parts: Vec<&str> = params.split(':').collect();
-        if parts.len() == 2 {
-            let min_ef = parts[0].parse::<usize>().ok()?;
-            let max_ef = parts[1].parse::<usize>().ok()?;
-            if min_ef <= max_ef {
-                validate_ef_search(min_ef).ok()?;
-                validate_ef_search(max_ef).ok()?;
-                return Some(crate::SearchQuality::Adaptive { min_ef, max_ef });
-            }
-        }
-    }
-    None
+    parse_search_mode(mode).ok()
 }
 
 /// The accepted search mode forms, as every mode error names them.
@@ -164,27 +130,75 @@ fn parse_advanced_quality(mode: &str) -> Option<crate::SearchQuality> {
 pub(crate) const SEARCH_MODE_FORMS: &str = concat!(
     "Valid values: 'fast', 'balanced', 'accurate', 'perfect', ",
     "'autotune' (aliases: 'auto_tune', 'auto'), 'custom:<ef>', ",
-    "'adaptive:<min_ef>:<max_ef>' (min_ef <= max_ef, both in the ef_search range)"
+    "'adaptive:<min_ef>:<max_ef>' (min_ef <= max_ef), each ef in the ef_search range"
 );
 
 /// Parses a search mode string into a [`crate::SearchQuality`], or an error
-/// naming the accepted forms when it cannot be parsed.
+/// saying why it cannot be used.
 ///
-/// Delegates to [`mode_to_search_quality`] for the parsing itself; unlike
-/// that function, an unparseable mode is a distinct `Err` here rather than a
-/// `None` a caller might mistake for "no mode given". Use this at entry
-/// points where the caller should reject a typo instead of silently falling
-/// back to the default quality (#2267).
+/// Unlike [`mode_to_search_quality`], an unusable mode is a distinct `Err`
+/// here rather than a `None` a caller might mistake for "no mode given". Use
+/// this at entry points where the caller should reject a typo instead of
+/// silently falling back to the default quality (#2267).
 ///
 /// # Errors
 ///
 /// Returns a message naming the accepted forms when `mode` matches none of
 /// them (an unknown name, or `custom:`/`adaptive:` with a malformed or
-/// out-of-order argument).
+/// out-of-order argument), and one naming the value when a `custom:` or
+/// `adaptive:` ef is an integer outside `[MIN_EF_SEARCH, MAX_EF_SEARCH]`,
+/// the range the dedicated `ef_search` option enforces (#2275).
 #[cfg(feature = "persistence")]
 pub fn parse_search_mode(mode: &str) -> Result<crate::SearchQuality, String> {
-    mode_to_search_quality(mode)
-        .ok_or_else(|| format!("Unknown search mode '{mode}'. {SEARCH_MODE_FORMS}"))
+    let quality = match mode.to_lowercase().as_str() {
+        "fast" => Some(crate::SearchQuality::Fast),
+        "balanced" => Some(crate::SearchQuality::Balanced),
+        "accurate" => Some(crate::SearchQuality::Accurate),
+        "perfect" => Some(crate::SearchQuality::Perfect),
+        "autotune" | "auto_tune" | "auto" => Some(crate::SearchQuality::AutoTune),
+        other => parse_advanced_quality(other)
+            .map_err(|out_of_range| format!("Search mode '{mode}': {out_of_range}"))?,
+    };
+    quality.ok_or_else(|| format!("Unknown search mode '{mode}'. {SEARCH_MODE_FORMS}"))
+}
+
+/// Parses the advanced search quality modes, `custom:<ef>` and
+/// `adaptive:<min_ef>:<max_ef>`: `Ok(None)` for a malformed or out-of-order
+/// one, `Err` for a well-formed one whose ef is out of range.
+#[cfg(feature = "persistence")]
+fn parse_advanced_quality(mode: &str) -> Result<Option<crate::SearchQuality>, String> {
+    if let Some(ef) = mode.strip_prefix("custom:") {
+        return Ok(parse_mode_ef(ef)
+            .transpose()?
+            .map(crate::SearchQuality::Custom));
+    }
+    let Some((min_ef, max_ef)) = mode
+        .strip_prefix("adaptive:")
+        .and_then(|bounds| bounds.split_once(':'))
+    else {
+        return Ok(None);
+    };
+    // Both must be integers before either range is checked: a malformed mode
+    // is an unknown one, whatever its other bound holds.
+    let (Some(min_ef), Some(max_ef)) = (parse_mode_ef(min_ef), parse_mode_ef(max_ef)) else {
+        return Ok(None);
+    };
+    let (min_ef, max_ef) = (min_ef?, max_ef?);
+    Ok((min_ef <= max_ef).then_some(crate::SearchQuality::Adaptive { min_ef, max_ef }))
+}
+
+/// Reads one ef of an advanced search mode: `None` when `raw` is not an
+/// integer, `Some(Err)` when it is one outside the `ef_search` range, one
+/// past `usize::MAX` included.
+#[cfg(feature = "persistence")]
+fn parse_mode_ef(raw: &str) -> Option<Result<usize, String>> {
+    match raw.parse::<usize>() {
+        Ok(ef) => Some(validate_ef_search(ef).map(|()| ef)),
+        Err(e) if *e.kind() == std::num::IntErrorKind::PosOverflow => {
+            Some(Err(ef_search_out_of_range(raw)))
+        }
+        Err(_) => None,
+    }
 }
 
 /// Minimum accepted `ef_search`, per `docs/VELESQL_SPEC.md`.

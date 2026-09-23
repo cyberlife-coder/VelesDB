@@ -3023,37 +3023,45 @@ async fn test_search_unknown_mode_returns_400() {
         .expect("Request failed");
     assert_eq!(response.status(), StatusCode::OK);
 
-    for uri in [
-        "/collections/unknown_mode/search",
-        "/collections/unknown_mode/search/ids",
-    ] {
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(uri)
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(
-                        json!({
-                            "vector": [1.0, 0.0, 0.0, 0.0],
-                            "top_k": 2,
-                            "mode": "acurate"
-                        })
-                        .to_string(),
-                    ))
-                    .expect("Failed to build request"),
-            )
-            .await
-            .expect("Request failed");
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "uri={uri}");
+    // A well-formed `custom:` mode whose ef is out of range is refused as
+    // well, naming the value rather than calling the mode unknown (#2275).
+    for (mode, named) in [("acurate", "acurate"), ("custom:5000", "got 5000")] {
+        for uri in [
+            "/collections/unknown_mode/search",
+            "/collections/unknown_mode/search/ids",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(uri)
+                        .header("Content-Type", "application/json")
+                        .body(Body::from(
+                            json!({
+                                "vector": [1.0, 0.0, 0.0, 0.0],
+                                "top_k": 2,
+                                "mode": mode
+                            })
+                            .to_string(),
+                        ))
+                        .expect("Failed to build request"),
+                )
+                .await
+                .expect("Request failed");
+            assert_eq!(
+                response.status(),
+                StatusCode::BAD_REQUEST,
+                "uri={uri} mode={mode}"
+            );
 
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("Failed to read body");
-        let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
-        let error = json["error"].as_str().expect("error is string");
-        assert!(error.contains("acurate"), "uri={uri} error={error}");
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("Failed to read body");
+            let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+            let error = json["error"].as_str().expect("error is string");
+            assert!(error.contains(named), "uri={uri} error={error}");
+        }
     }
 }
 

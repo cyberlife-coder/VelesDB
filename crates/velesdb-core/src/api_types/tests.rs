@@ -669,6 +669,47 @@ fn test_parse_search_mode_rejects_bare_adaptive() {
     assert!(parse_search_mode("adaptive").is_err());
 }
 
+/// A well-formed `custom:`/`adaptive:` mode whose ef falls outside the
+/// `ef_search` range is not an unknown mode: the error names the value, as
+/// `ef_search`'s own does, instead of listing `custom:<ef>` among the valid
+/// forms the caller just used (#2275).
+#[cfg(feature = "persistence")]
+#[test]
+fn test_parse_search_mode_names_the_out_of_range_ef() {
+    use super::{ef_search_out_of_range, parse_search_mode};
+    let too_big = (MAX_EF_SEARCH + 1).to_string();
+    // One more than `u64::MAX`: still an integer, so still out of range
+    // rather than malformed, as #2304 reads such an `ef_search` literal.
+    let past_u64 = "18446744073709551616".to_string();
+    for (mode, shown) in [
+        (format!("custom:{too_big}"), too_big.clone()),
+        (format!("CUSTOM:{past_u64}"), past_u64),
+        (format!("adaptive:0:{MAX_EF_SEARCH}"), "0".to_string()),
+        (format!("adaptive:{MIN_EF_SEARCH}:{too_big}"), too_big),
+    ] {
+        let err = parse_search_mode(&mode).expect_err(&mode);
+        let expected = format!("Search mode '{mode}': {}", ef_search_out_of_range(shown));
+        assert_eq!(err, expected);
+    }
+}
+
+/// An out-of-range bound does not turn a malformed or out-of-order
+/// `adaptive:` mode into a range error: it stays an unknown mode (#2275).
+#[cfg(feature = "persistence")]
+#[test]
+fn test_parse_search_mode_malformed_adaptive_stays_unknown() {
+    use super::parse_search_mode;
+    for mode in [
+        "adaptive:0:x",
+        "adaptive:x:0",
+        "adaptive:0",
+        "adaptive:4096:16",
+    ] {
+        let err = parse_search_mode(mode).expect_err(mode);
+        assert!(err.starts_with("Unknown search mode"), "{mode}: {err}");
+    }
+}
+
 // ============================================================================
 // F. validate_ef_search / parse_with_ef_search (#2274)
 // ============================================================================

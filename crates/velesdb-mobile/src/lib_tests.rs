@@ -115,6 +115,39 @@ fn test_search_quality_adaptive_out_of_range_is_rejected() {
 }
 
 #[test]
+fn test_search_quality_adaptive_min_ef_below_range_is_rejected() {
+    let q = SearchQuality::Adaptive {
+        min_ef: 0,
+        max_ef: 512,
+    };
+    let converted: Result<CoreSearchQuality, _> = q.try_into();
+    assert!(
+        converted.is_err(),
+        "min_ef below the range must not reach core"
+    );
+}
+
+#[test]
+fn test_search_quality_range_bounds_are_accepted() {
+    use velesdb_core::api_types::{MAX_EF_SEARCH, MIN_EF_SEARCH};
+    let (min, max) = (
+        u32::try_from(MIN_EF_SEARCH).unwrap(),
+        u32::try_from(MAX_EF_SEARCH).unwrap(),
+    );
+    for q in [
+        SearchQuality::Custom { ef: min },
+        SearchQuality::Custom { ef: max },
+        SearchQuality::Adaptive {
+            min_ef: min,
+            max_ef: max,
+        },
+    ] {
+        let converted: Result<CoreSearchQuality, _> = q.try_into();
+        assert!(converted.is_ok());
+    }
+}
+
+#[test]
 fn test_search_quality_autotune_conversion() {
     let q = SearchQuality::AutoTune;
     let core: CoreSearchQuality = q.try_into().unwrap();
