@@ -69,9 +69,11 @@ impl Database {
 
     /// Resolves the collection referenced by a TRAIN statement.
     ///
-    /// Uses `resolve_writable_collection` (not `resolve_collection`) because
-    /// training a quantizer on a metadata-only collection is nonsensical —
-    /// metadata collections have no vectors to train on.
+    /// Uses `resolve_writable_collection` for call-site clarity (training is
+    /// a write-path operation); it resolves the same collections as
+    /// `resolve_collection`. The actual "no vectors" guard for metadata-only
+    /// collections lives in `extract_training_vectors`, which filters out
+    /// points with an empty vector before training.
     fn resolve_train_collection(
         &self,
         stmt: &crate::velesql::TrainStatement,

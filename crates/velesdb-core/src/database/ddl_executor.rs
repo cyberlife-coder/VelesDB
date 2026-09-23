@@ -177,9 +177,6 @@ impl Database {
     /// with the count of deleted points. Returns success with
     /// `deleted_count: 0` if the collection is already empty.
     ///
-    /// Checks vector/legacy collections first, then falls back to
-    /// metadata collections (which `resolve_writable_collection` skips).
-    ///
     /// # Errors
     ///
     /// Returns an error if the collection does not exist or deletion fails.
@@ -188,10 +185,8 @@ impl Database {
         if let Some(gc) = self.get_graph_collection(&stmt.collection) {
             return Self::truncate_graph(&gc);
         }
-        // Vector/legacy + metadata fallback.
-        let collection = self
-            .resolve_writable_collection(&stmt.collection)
-            .or_else(|_| self.resolve_collection(&stmt.collection))?;
+        // Vector/legacy + metadata.
+        let collection = self.resolve_writable_collection(&stmt.collection)?;
         let ids = collection.all_point_ids();
         let count = ids.len();
         if !ids.is_empty() {
