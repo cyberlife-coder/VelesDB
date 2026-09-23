@@ -13,7 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > and an `ef_search` outside `[16, 4096]` — given as the option or as a
 > `custom:`/`adaptive:` mode — now fail instead of running at the default
 > quality or an uncapped traversal, and a collection's own `execute_aggregate` refuses a
-> query the validator rejects. The declared SemVer policy (`docs/FAQ.md`)
+> query the validator rejects. It also removes a public module, the aarch64-only
+> `velesdb_core::simd_neon` (#1965, under `### Removed`). The declared SemVer policy (`docs/FAQ.md`)
 > makes a breaking change a major bump: tag the next release accordingly.
 
 ### Security
@@ -149,6 +150,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   load call alone reports the cost as gone when it has only moved.
 
 ### Removed
+- **BREAKING (Rust API, aarch64 only) — `velesdb_core::simd_neon` (#1965).**
+  A public module nothing called: a standalone duplicate of the NEON kernels
+  `simd_native` dispatches to at runtime (`dot_product_neon`,
+  `euclidean_squared_neon`, `cosine_neon`, `cosine_normalized_neon`). Two
+  guides said mobile computed its distances through it; it computes them
+  through `simd_native`, as every aarch64 build does. A direct caller moves
+  to `velesdb_core::simd_native`'s `dot_product_native`, `squared_l2_native`,
+  `cosine_similarity_native` and `cosine_normalized_native`. `cargo
+  semver-checks` runs on x86_64 and cannot see an aarch64-only module, hence
+  this entry. `simd_neon_prefetch` stays: `simd_native`'s prefetch uses it.
 - **The `mutants` job in `core-review.yml` (#2339).** It ran on every pull
   request touching `velesdb-core` and never once returned a verdict on a real
   diff: both runs that met one were cut at the 45-minute action limit — the
@@ -165,6 +176,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the directory is ignored.
 
 ### Fixed
+- **`velesdb simd info` names the SIMD level it detects (#1965).** It
+  printed a fixed summary of the design, whose thresholds the code no longer
+  applies (AVX2 switching at 1024 dimensions where the dispatcher switches at
+  256, AVX-512 with 4/2/1 accumulators where it runs an 8-accumulator kernel
+  from 1024 dimensions), and nothing
+  about the machine. It now prints `simd_native::simd_level()`, named by
+  `SimdLevel`'s new `Display`, e.g. `Detected level: NEON (aarch64)`.
 - **An HNSW insert past the pre-allocated capacity no longer takes the
   layers' write lock for good, and a layer added late no longer drops
   neighbour writes (#2306).** `expand_layers`' slow path grew the layers to

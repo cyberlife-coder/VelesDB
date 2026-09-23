@@ -119,12 +119,6 @@ let vb = vld1q_f32(b.as_ptr().add(offset));
 sum = vfmaq_f32(sum, va, vb);
 ```
 
-### Module: `crates/velesdb-core/src/simd_neon.rs`
-
-Standalone NEON implementations (same pattern as `simd_native/neon.rs`).
-Contains `dot_product_neon`, `euclidean_squared_neon`, `cosine_neon`,
-`cosine_normalized_neon` with identical invariant structure.
-
 ### Module: `crates/velesdb-core/src/simd_native/dispatch/` (5 files)
 
 **Files**:

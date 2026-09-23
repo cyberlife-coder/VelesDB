@@ -12,19 +12,18 @@ use crate::license;
 pub fn handle_simd(action: SimdAction) {
     match action {
         SimdAction::Info => {
-            println!("\n{}", "SIMD Native Configuration".bold().underline());
-            println!("  Using simd_native with tiered dispatch:");
-            println!("  - AVX-512: 4/2/1 accumulators based on vector size");
-            println!("  - AVX2: 4-acc (>1024D), 2-acc (64-1023D), 1-acc (<64D)");
-            println!("  - ARM NEON: 128-bit SIMD");
-            println!("  - Scalar: fallback for small vectors");
-            println!("\n{}", "Available Functions:".cyan());
-            println!("  - dot_product_native()");
-            println!("  - cosine_similarity_native()");
-            println!("  - euclidean_native()");
-            println!("  - hamming_distance_native()");
-            println!("  - jaccard_similarity_native()");
-            println!("  - batch_dot_product_native() (with prefetching)");
+            // What the dispatcher detected on this machine, read from core:
+            // a fixed summary here described the design, not the machine, and
+            // drifted from the thresholds the code applies (#1965).
+            println!("\n{}", "SIMD".bold().underline());
+            println!(
+                "  Detected level: {}",
+                velesdb_core::simd_native::simd_level()
+            );
+            println!(
+                "  Distance kernels (dot product, cosine, Euclidean, Hamming, Jaccard,\n  \
+                 and their batch forms) dispatch to this level at runtime."
+            );
             println!();
         }
         SimdAction::Benchmark => {

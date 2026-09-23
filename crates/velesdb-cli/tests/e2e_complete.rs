@@ -19,6 +19,29 @@ fn temp_db_dir() -> TempDir {
 }
 
 // ============================================================================
+// SIMD diagnostics (#1965)
+// ============================================================================
+
+mod simd_commands {
+    use super::*;
+
+    /// `simd info` names the level core's dispatcher detects on this machine,
+    /// instead of a fixed summary whose thresholds the code contradicts (it
+    /// printed AVX2 switching at 1024 dimensions; the dispatcher switches at
+    /// 256).
+    #[test]
+    fn test_simd_info_names_the_detected_level() {
+        let detected = velesdb_core::simd_native::simd_level().to_string();
+        cli()
+            .args(["simd", "info"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(detected))
+            .stdout(predicate::str::contains("1024D").not());
+    }
+}
+
+// ============================================================================
 // Info & List Commands E2E Tests
 // ============================================================================
 
