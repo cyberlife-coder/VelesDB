@@ -217,16 +217,13 @@ mod graph_commands {
             .success();
     }
 
-    #[test]
-    fn test_graph_traverse_bfs() {
+    /// A graph `g` holding one edge, `1: 10 -[REL]-> 20`, for the traversal tests.
+    fn graph_with_one_edge() -> TempDir {
         let temp = temp_db_dir();
         create_graph(&temp, "g");
-
         for node_id in ["10", "20"] {
             store_payload(&temp, "g", node_id);
         }
-
-        // Add an edge so traversal has something to find
         cli()
             .args([
                 "graph",
@@ -240,7 +237,15 @@ mod graph_commands {
             ])
             .assert()
             .success();
+        temp
+    }
 
+    /// `graph traverse` from node 10 of [`graph_with_one_edge`].
+    fn traverse_from_10(
+        temp: &TempDir,
+        algorithm: &str,
+        max_depth: &str,
+    ) -> assert_cmd::assert::Assert {
         cli()
             .args([
                 "graph",
@@ -249,51 +254,25 @@ mod graph_commands {
                 "g",
                 "10",
                 "--algorithm",
-                "bfs",
+                algorithm,
                 "--max-depth",
-                "3",
+                max_depth,
             ])
             .assert()
+    }
+
+    #[test]
+    fn test_graph_traverse_bfs() {
+        let temp = graph_with_one_edge();
+        traverse_from_10(&temp, "bfs", "3")
             .success()
             .stdout(predicate::str::contains("Traversal Results"));
     }
 
     #[test]
     fn test_graph_traverse_dfs() {
-        let temp = temp_db_dir();
-        create_graph(&temp, "g");
-
-        for node_id in ["10", "20"] {
-            store_payload(&temp, "g", node_id);
-        }
-
-        cli()
-            .args([
-                "graph",
-                "add-edge",
-                temp.path().to_str().unwrap(),
-                "g",
-                "1",
-                "10",
-                "20",
-                "REL",
-            ])
-            .assert()
-            .success();
-
-        cli()
-            .args([
-                "graph",
-                "traverse",
-                temp.path().to_str().unwrap(),
-                "g",
-                "10",
-                "--algorithm",
-                "dfs",
-                "--max-depth",
-                "5",
-            ])
-            .assert()
+        let temp = graph_with_one_edge();
+        traverse_from_10(&temp, "dfs", "5")
             .success()
             .stdout(predicate::str::contains("DFS"));
     }
