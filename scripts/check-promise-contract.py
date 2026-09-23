@@ -230,6 +230,9 @@ _TEXT_ONLY_PROGRAMS = frozenset(
     {"grep", "egrep", "fgrep", "rg", "cat", "head", "tail", "true", "false", "echo", "printf", ":"}
 )
 _SHELL_SEPARATORS = frozenset({"&&", "||", "|", "|&", ";", "&"})
+# Searches whose count flag, piped onward, turns them into a computation.
+_COUNTING_SEARCHES = frozenset({"grep", "egrep", "fgrep", "rg"})
+_COUNTING = "a counting search"
 # Words that precede or wrap a program without being one: a stage's program
 # is the first token after them.
 _SHELL_PREFIXES = frozenset(
@@ -304,13 +307,31 @@ def _only_finds_text(command: str) -> bool:
         elif token in _REDIRECTS:
             skip_next = True
         elif token in _SHELL_SEPARATORS:
+            _settle_count(programs, piped=token in {"|", "|&"})
             expect_program = True
         elif expect_program and (token in _SHELL_PREFIXES or _ASSIGNMENT.fullmatch(token)):
             continue
         elif expect_program:
             programs.append(pathlib.PurePath(token).name)
             expect_program = False
+        elif programs[-1] in _COUNTING_SEARCHES and _is_count_flag(token):
+            programs[-1] = _COUNTING
+    _settle_count(programs, piped=False)
     return bool(programs) and all(program in _TEXT_ONLY_PROGRAMS for program in programs)
+
+
+def _settle_count(programs: list, piped: bool) -> None:
+    """A `grep -c` whose count feeds the next stage computes the figure
+    (`grep -cE '^  /' spec.yaml | grep -qx 54`); one whose count goes
+    nowhere only checks that the text is there, like any grep."""
+    if programs and programs[-1] == _COUNTING and not piped:
+        programs[-1] = "grep"
+
+
+def _is_count_flag(token: str) -> bool:
+    return token == "--count" or (
+        token.startswith("-") and not token.startswith("--") and "c" in token[1:]
+    )
 
 
 def re_derives_failures(claims: list[dict]) -> list[str]:
@@ -329,9 +350,9 @@ def re_derives_failures(claims: list[dict]) -> list[str]:
             failures.append(f"[{claim_id}] re_derives, but is not executable: nothing runs its command")
         elif _only_finds_text(command):
             failures.append(
-                f"[{claim_id}] re_derives, but its command only checks that the figure is "
-                f"written ({command!r}); it re-measures nothing, so the claim ages "
-                f"like a documentary one"
+                f"[{claim_id}] re_derives, but its command only finds or shows text "
+                f"({command!r}); it re-measures nothing, so the claim ages like a "
+                f"documentary one"
             )
     return failures
 

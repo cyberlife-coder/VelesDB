@@ -507,7 +507,7 @@ class ReDerivesTests(unittest.TestCase):
         claims = [{"id": "a", "executable": True, "re_derives": True, "validation_command": command}]
         failures = cpc.re_derives_failures(claims)
         self.assertEqual(len(failures), 1)
-        self.assertIn("only checks that the figure is written", failures[0])
+        self.assertIn("only finds or shows text", failures[0])
 
     def test_every_spelling_of_a_text_search_is_refused(self):
         # The review of #2389 found each of these passing as re-deriving
@@ -555,6 +555,9 @@ class ReDerivesTests(unittest.TestCase):
             # Operator runs shlex keeps together: the stage after them runs.
             "grep -q x f;(cargo bench)",
             "cat f |& python3 x.py",
+            # Round 4: a count piped onward computes the figure.
+            "grep -cE '^  /' docs/openapi.yaml | grep -qx 54",
+            "rg --count x f | grep -qx 3",
         ]:
             claims = [{"id": "a", "executable": True, "re_derives": True, "validation_command": command}]
             self.assertEqual(cpc.re_derives_failures(claims), [], command)

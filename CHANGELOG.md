@@ -172,8 +172,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `"re_derives": true` is exempt now. The checker refuses that mark on a
   claim that is not executable, and on a command every stage of which only
   finds or shows text (`grep`, `rg`, `cat`, `head`, `tail`, `echo`, whatever
-  the flags, pipes or shell wrapping); a command with a substitution or a
-  second line is left to review, since it may compute the figure. A
+  the flags, pipes or shell wrapping, though a counting `grep -c` piped
+  onward computes); a command with a substitution or a second line is left
+  to review, since it may compute the figure. A
   refusal vector proves the refusal fails the run.
   A `measured_version` of `unknown` now counts as unsourced, like an
   unknown date or machine. The six claims that had one get the version
