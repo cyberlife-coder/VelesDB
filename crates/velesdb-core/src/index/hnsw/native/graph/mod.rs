@@ -433,8 +433,10 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             // The prior ef/4 caused premature termination at 100K+ vectors,
             // contributing to recall degradation (97% at 10K → 64% at 100K).
             stagnation_limit: ef_construction / 2,
-            // The one layer there is holds `max_elements` slots already.
-            pre_allocated_capacity: AtomicUsize::new(max_elements),
+            // Not `max_elements`, although the base layer holds that many
+            // slots: every layer added later is grown to this capacity, so
+            // seeding it would make each upper layer as long as the base.
+            pre_allocated_capacity: AtomicUsize::new(0),
             #[cfg(feature = "gpu")]
             gpu_csr_cache: crate::gpu::gpu_csr::CsrCache::new(),
             #[cfg(feature = "gpu")]

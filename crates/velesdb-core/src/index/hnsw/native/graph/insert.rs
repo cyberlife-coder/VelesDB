@@ -9,7 +9,8 @@ use std::sync::atomic::Ordering;
 /// Headroom the slow path of `expand_layers` adds past the node that needs
 /// it, as a fraction of the capacity already covered: growing by an eighth
 /// keeps the number of `layers.write` growths logarithmic in the index size,
-/// and the slots no node uses yet under 12.5 % of them.
+/// and the slots it adds that no node uses yet to an eighth of them, or
+/// `MIN_CAPACITY_GROWTH`.
 const CAPACITY_GROWTH_DIVISOR: usize = 8;
 
 /// Floor of that headroom, so a small index does not take `layers.write`
