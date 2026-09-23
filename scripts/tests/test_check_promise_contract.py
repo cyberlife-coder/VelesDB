@@ -520,9 +520,30 @@ class ReDerivesTests(unittest.TestCase):
             "grep -c 82.5 README.md docs/x.md",
             "grep -qF '82.5 %' README.md || true",
             "/usr/bin/grep -qF '82.5 %' README.md; head -1 README.md",
+            # Round 2: shell wrapping around the same search.
+            "FOO=1 grep -q x f",
+            "(grep -q x f)",
+            "{ grep -q x f; }",
+            "! grep -q x f",
+            "command grep -q x f",
+            "time grep -q x f",
+            "if grep -q x f; then true; fi",
+            "grep -q x f; echo done",
         ]:
             claims = [{"id": "a", "executable": True, "re_derives": True, "validation_command": command}]
             self.assertEqual(len(cpc.re_derives_failures(claims)), 1, command)
+
+    def test_a_computation_the_splitter_cannot_see_is_not_refused(self):
+        # A substitution or a second line may compute the figure: refusing
+        # it would fail a claim that really re-derives.
+        for command in [
+            "grep -qF \"$(python3 -c 'print(54)')\" docs/x.md",
+            "grep -qx 54 <(python3 count.py)",
+            "grep -q `python3 c.py` f",
+            "grep -q x f\npython3 count.py",
+        ]:
+            claims = [{"id": "a", "executable": True, "re_derives": True, "validation_command": command}]
+            self.assertEqual(cpc.re_derives_failures(claims), [], command)
 
     def test_a_command_that_computes_the_figure_re_derives(self):
         command = "test \"$(grep -cE '^  /' docs/openapi.yaml)\" -eq 54"

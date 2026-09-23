@@ -226,8 +226,19 @@ def check_provenance(claims: list[dict]) -> list[str]:
 # runs one of these checks that a figure is written somewhere; it computes
 # nothing, whatever its flags, quoting or plumbing (`grep -Fq`, `rg -q`,
 # `cat f | grep -q`, `grep -c`, `|| true`).
-_TEXT_ONLY_PROGRAMS = frozenset({"grep", "egrep", "fgrep", "rg", "cat", "head", "tail", "true"})
+_TEXT_ONLY_PROGRAMS = frozenset(
+    {"grep", "egrep", "fgrep", "rg", "cat", "head", "tail", "true", "echo", "printf", ":"}
+)
 _SHELL_SEPARATORS = frozenset({"&&", "||", "|", ";", "&"})
+# Words that precede or wrap a program without being one: a stage's program
+# is the first token after them.
+_SHELL_PREFIXES = frozenset(
+    {"(", ")", "{", "}", "!", "command", "time", "exec", "if", "then", "elif", "else", "fi"}
+)
+# Where a command can compute something the stage splitter cannot see: a
+# substitution, or a second line.
+_OPAQUE_SHELL = ("$(", "`", "<(", ">(", "\n")
+_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*")
 
 
 def re_derives(claim: dict) -> bool:
@@ -243,8 +254,12 @@ def re_derives(claim: dict) -> bool:
 
 def _only_finds_text(command: str) -> bool:
     """Whether every stage of ``command`` runs a program of
-    ``_TEXT_ONLY_PROGRAMS``. A command shlex cannot read counts as one that
-    does more, so the mark stays the author's to justify in review."""
+    ``_TEXT_ONLY_PROGRAMS``. A command with a substitution or a second line,
+    or one shlex cannot read, counts as one that may compute its figure, so
+    the mark stays the author's to justify in review: a false refusal would
+    fail a claim that really re-derives."""
+    if any(marker in command for marker in _OPAQUE_SHELL):
+        return False
     lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
     try:
@@ -255,6 +270,8 @@ def _only_finds_text(command: str) -> bool:
     for token in tokens:
         if token in _SHELL_SEPARATORS:
             expect_program = True
+        elif expect_program and (token in _SHELL_PREFIXES or _ASSIGNMENT.fullmatch(token)):
+            continue
         elif expect_program:
             programs.append(pathlib.PurePath(token).name)
             expect_program = False
