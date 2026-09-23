@@ -293,3 +293,35 @@ def test_validate_named_sparse_vector_rejects_named_inner_bad_entry():
 def test_validate_named_sparse_vector_empty_dict_is_flat():
     """An empty dict has no string keys, so it is treated as a flat vector."""
     assert validate_named_sparse_vector({}) == {}
+
+
+class TestSearchQualityEfRange:
+    """custom/adaptive ef bounded as the binding bounds it (#2275)."""
+
+    def test_out_of_range_efs_are_refused(self):
+        import pytest
+        from velesdb_common.security import SecurityError, validate_search_quality
+
+        for mode in ["custom:8", "custom:4097", "custom:99999999",
+                     "adaptive:0:512", "adaptive:32:4097", "adaptive:5000:32",
+                     "custom:\u0661\u0666"]:
+            with pytest.raises(SecurityError):
+                validate_search_quality(mode)
+
+    def test_the_bounds_are_accepted(self):
+        from velesdb_common.security import validate_search_quality
+
+        for mode in ["custom:16", "custom:4096", "adaptive:16:4096"]:
+            assert validate_search_quality(mode) == mode
+
+    def test_the_mirror_matches_core(self):
+        import pathlib
+        import re as _re
+        from velesdb_common import security
+
+        core = (pathlib.Path(__file__).resolve().parents[3]
+                / "crates/velesdb-core/src/api_types/mod.rs").read_text(encoding="utf-8")
+        for name in ("MIN_EF_SEARCH", "MAX_EF_SEARCH"):
+            found = _re.search(rf"pub const {name}: usize = (\d+);", core)
+            assert found, f"{name} not found in core"
+            assert int(found.group(1)) == getattr(security, name), name

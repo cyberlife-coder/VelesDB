@@ -1040,7 +1040,8 @@ class TestSearchQualityLlamaIndex:
         """validate_search_quality raises SecurityError for unknown strings."""
         from llamaindex_velesdb.security import validate_search_quality, SecurityError
 
-        for bad in ("turbo", "custom:", "custom:abc", "adaptive:32", "adaptive:a:b"):
+        for bad in ("turbo", "custom:", "custom:abc", "adaptive:32", "adaptive:a:b",
+                    "custom:8", "custom:4097", "adaptive:0:512"):
             with pytest.raises(SecurityError):
                 validate_search_quality(bad)
 

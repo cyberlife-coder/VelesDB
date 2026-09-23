@@ -194,7 +194,9 @@ Passed as `metric` on `create_collection`.
 ## Search quality
 
 `search` and `search_ids` accept an optional `quality` string: `fast`,
-`balanced`, `accurate`, `perfect`, `auto`, or `custom:<ef>`. It is honoured
+`balanced`, `accurate`, `perfect`, `auto`, `custom:<ef>` or
+`adaptive:<min_ef>:<max_ef>`, each ef in 16–4096 (#2275); any other value is
+refused, as the server refuses it. It is honoured
 only on the persistence path, and it is **ignored when a `filter` is also
 supplied** (known limitation #457). See the
 [search modes guide](./SEARCH_MODES.md).

@@ -457,8 +457,23 @@ _SIMPLE_QUALITIES = frozenset({
     "fast", "balanced", "accurate", "perfect",
     "autotune", "auto_tune", "auto",  # aliases for consistency with WASM/Rust
 })
-_CUSTOM_QUALITY_RE = re.compile(r"^custom:\d+$")
-_ADAPTIVE_QUALITY_RE = re.compile(r"^adaptive:\d+:\d+$")
+_CUSTOM_QUALITY_RE = re.compile(r"^custom:\d+$", re.ASCII)
+_ADAPTIVE_QUALITY_RE = re.compile(r"^adaptive:\d+:\d+$", re.ASCII)
+# The range every ef of a custom/adaptive mode must lie in, mirroring
+# velesdb-core's `api_types::{MIN_EF_SEARCH, MAX_EF_SEARCH}`: the binding
+# refuses any other ef, so a store built with one would fail every search
+# (#2275). tests/test_security.py pins the mirror to core's source.
+MIN_EF_SEARCH = 16
+MAX_EF_SEARCH = 4096
+
+
+def _check_ef_range(quality: str, *efs: int) -> None:
+    for ef in efs:
+        if not MIN_EF_SEARCH <= ef <= MAX_EF_SEARCH:
+            raise SecurityError(
+                f"Invalid search_quality '{quality}': ef_search must be an integer "
+                f"between {MIN_EF_SEARCH} and {MAX_EF_SEARCH}, got {ef}"
+            )
 
 
 def validate_search_quality(quality: str) -> str:
@@ -467,8 +482,9 @@ def validate_search_quality(quality: str) -> str:
     Accepted forms:
     - Simple presets: ``'fast'``, ``'balanced'``, ``'accurate'``,
       ``'perfect'``, ``'autotune'``
-    - Custom ef: ``'custom:N'`` where N is a positive integer (e.g. ``'custom:256'``)
-    - Adaptive range: ``'adaptive:MIN:MAX'`` (e.g. ``'adaptive:32:512'``)
+    - Custom ef: ``'custom:N'`` where N is an integer in 16-4096 (e.g. ``'custom:256'``)
+    - Adaptive range: ``'adaptive:MIN:MAX'``, both in 16-4096 and
+      ``MIN <= MAX`` (e.g. ``'adaptive:32:512'``)
 
     Args:
         quality: Search quality preset or custom/adaptive string.
@@ -487,11 +503,14 @@ def validate_search_quality(quality: str) -> str:
     if quality_lower in _SIMPLE_QUALITIES:
         return quality_lower
     if _CUSTOM_QUALITY_RE.match(quality_lower):
+        _check_ef_range(quality, int(quality_lower.split(":")[1]))
         return quality_lower
     adaptive_match = _ADAPTIVE_QUALITY_RE.match(quality_lower)
     if adaptive_match:
         parts = quality_lower.split(":")
         min_ef, max_ef = int(parts[1]), int(parts[2])
+        # The range first, as core checks it: `adaptive:5000:32` names 5000.
+        _check_ef_range(quality, min_ef, max_ef)
         if min_ef > max_ef:
             raise SecurityError(
                 f"Invalid adaptive range: min_ef ({min_ef}) > max_ef ({max_ef})"

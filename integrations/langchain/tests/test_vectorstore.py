@@ -1123,7 +1123,8 @@ class TestSearchQualityLangChain:
         """validate_search_quality raises SecurityError for unknown strings."""
         from langchain_velesdb.security import validate_search_quality, SecurityError
 
-        for bad in ("turbo", "custom:", "custom:abc", "adaptive:32", "adaptive:a:b", 42):
+        for bad in ("turbo", "custom:", "custom:abc", "adaptive:32", "adaptive:a:b", 42,
+                    "custom:8", "custom:4097", "adaptive:0:512"):
             with pytest.raises((SecurityError, AttributeError)):
                 validate_search_quality(bad)  # type: ignore[arg-type]
 

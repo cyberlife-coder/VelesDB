@@ -133,7 +133,7 @@ export interface SearchRequest {
   topK?: number;
   /** Optional metadata filter. */
   filter?: Record<string, unknown>;
-  /** Search quality: 'fast', 'balanced', 'accurate', 'perfect', 'auto', or 'custom:<ef>'. */
+  /** Search quality: 'fast', 'balanced', 'accurate', 'perfect', 'auto', 'custom:<ef>' or 'adaptive:<min_ef>:<max_ef>', each ef in 16-4096; any other value is refused. */
   quality?: string;
 }
 
@@ -197,7 +197,7 @@ export interface IndividualSearchRequest {
   topK?: number;
   /** Optional metadata filter. */
   filter?: Record<string, unknown>;
-  /** Search quality: 'fast', 'balanced', 'accurate', 'perfect', 'auto', or 'custom:<ef>'. */
+  /** Search quality: 'fast', 'balanced', 'accurate', 'perfect', 'auto', 'custom:<ef>' or 'adaptive:<min_ef>:<max_ef>', each ef in 16-4096; any other value is refused. */
   quality?: string;
 }
 

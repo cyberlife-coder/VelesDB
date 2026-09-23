@@ -118,6 +118,12 @@ fn test_parse_search_quality_invalid() {
     assert!(parse_search_quality(&Some(String::new())).is_err());
     assert!(parse_search_quality(&Some("custom:abc".to_string())).is_err());
     assert!(parse_search_quality(&Some("adaptive:512:32".to_string())).is_err());
+    // An ef outside the ef_search range, as the server refuses it (#2275).
+    let err = parse_search_quality(&Some("custom:5000".to_string())).expect_err("out of range");
+    assert!(
+        err.to_string().contains("got 5000"),
+        "names the value: {err}"
+    );
     let err = parse_search_quality(&Some("acurate".to_string())).expect_err("typo");
     assert!(
         err.to_string().contains("balanced"),

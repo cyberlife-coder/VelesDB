@@ -411,11 +411,15 @@ class Collection:
             vector: Query vector (list or numpy array).
             quality: One of 'fast', 'balanced', 'accurate', 'perfect', 'autotune',
                      'custom:<ef>' (e.g. 'custom:256'), or 'adaptive:<min>:<max>'
-                     (e.g. 'adaptive:32:512').
+                     (e.g. 'adaptive:32:512'), each ef in 16-4096.
             top_k: Number of results (default: 10).
 
         Returns:
             List of dicts with id, score, and payload.
+
+        Raises:
+            ValueError: If ``quality`` names no mode, or gives an ef outside
+                16-4096.
         """
         return self._inner.search_with_quality(vector, quality, top_k)
 

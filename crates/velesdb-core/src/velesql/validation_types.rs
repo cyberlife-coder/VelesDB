@@ -131,8 +131,9 @@ pub enum ValidationErrorKind {
     /// strategy not allowed for the query shape (e.g. weighted/rsf on
     /// NEAR_FUSED).
     FusionMisconfigured,
-    /// `WITH (mode = ...)`, or its alias `quality`, is not a string or names
-    /// none of the accepted search modes (#2267).
+    /// `WITH (mode = ...)`, or its alias `quality`, is not a string, names
+    /// none of the accepted search modes (#2267), or gives a `custom:` or
+    /// `adaptive:` ef outside the `ef_search` range (#2275).
     InvalidSearchMode,
     /// `WITH (ef_search = ...)` is not an integer, or is outside the
     /// documented `[16, 4096]` range (#2274).

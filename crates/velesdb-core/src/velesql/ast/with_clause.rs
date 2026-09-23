@@ -118,8 +118,9 @@ impl WithClause {
     /// value the clause gives the mode is checked, even one another value
     /// shadows: a value that is not a string, or a string that
     /// [`crate::api_types::parse_search_mode`] cannot read, is an error naming
-    /// the accepted forms, never a silent fall-back to the default quality or
-    /// to another value (#2267).
+    /// the accepted forms, and a `custom:`/`adaptive:` ef outside the
+    /// `ef_search` range one naming the value (#2275), never a silent
+    /// fall-back to the default quality or to another value (#2267).
     ///
     /// # Errors
     ///
