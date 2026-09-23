@@ -450,10 +450,11 @@ velesdb index drop ./data my_vectors Person name
 ## SIMD diagnostics
 
 ```bash
-# Show SIMD dispatch configuration
+# Show the SIMD level detected on this machine
 velesdb simd info
 
-# Force re-benchmark of all SIMD backends
+# Measures nothing: points to the micro-benchmarks, which run with
+# `cargo bench -p velesdb-core --bench simd_benchmark`
 velesdb simd benchmark
 ```
 

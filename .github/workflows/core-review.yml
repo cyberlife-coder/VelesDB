@@ -59,7 +59,7 @@ jobs:
   # summary.
   #
   # Blind spot shared with `semver-checks`: both build on x86_64 Linux, so a
-  # public item that only compiles for aarch64 (`simd_neon`) or wasm32 is in
+  # public item that only compiles for aarch64 (`simd_neon_prefetch`) or wasm32 is in
   # neither report.
   # ===========================================================================
   public-api:

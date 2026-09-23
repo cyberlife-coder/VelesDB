@@ -152,12 +152,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 - **BREAKING (Rust API, aarch64 only) — `velesdb_core::simd_neon` (#1965).**
   A public module nothing called: a standalone duplicate of the NEON kernels
-  `simd_native` dispatches to at runtime (`dot_product_neon`,
-  `euclidean_squared_neon`, `cosine_neon`, `cosine_normalized_neon`). Two
-  guides said mobile computed its distances through it; it computes them
-  through `simd_native`, as every aarch64 build does. A direct caller moves
-  to `velesdb_core::simd_native`'s `dot_product_native`, `squared_l2_native`,
-  `cosine_similarity_native` and `cosine_normalized_native`. `cargo
+  `simd_native` dispatches to at runtime. Two guides said mobile computed its
+  distances through it; it computes them through `simd_native`, as every
+  aarch64 build does. A direct caller moves to the safe, runtime-dispatched
+  functions of `velesdb_core::simd_native`:
+
+  | Removed (`simd_neon::`) | Replacement (`simd_native::`) |
+  |---|---|
+  | `dot_product_neon_safe`, `unsafe dot_product_neon` | `dot_product_native` |
+  | `euclidean_neon_safe`, `unsafe euclidean_neon` | `euclidean_native` |
+  | `unsafe euclidean_squared_neon` | `squared_l2_native` |
+  | `cosine_neon_safe`, `unsafe cosine_neon` | `cosine_similarity_native` |
+  | `cosine_normalized_neon_safe`, `unsafe cosine_normalized_neon` | `cosine_normalized_native` |
+
+  `cargo
   semver-checks` runs on x86_64 and cannot see an aarch64-only module, hence
   this entry. `simd_neon_prefetch` stays: `simd_native`'s prefetch uses it.
 - **The `mutants` job in `core-review.yml` (#2339).** It ran on every pull

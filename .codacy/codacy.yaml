@@ -22,7 +22,6 @@ exclude_paths:
     - crates/velesdb-core/src/contiguous_resize.rs
     - crates/velesdb-core/src/storage/mmap_capacity.rs
     - crates/velesdb-core/src/simd_native/**
-    - crates/velesdb-core/src/simd_neon.rs
     - crates/velesdb-core/src/simd_neon_prefetch.rs
     - crates/velesdb-core/src/perf_optimizations.rs
     - crates/velesdb-core/src/alloc_guard.rs
