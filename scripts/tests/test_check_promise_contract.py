@@ -509,6 +509,21 @@ class ReDerivesTests(unittest.TestCase):
         self.assertEqual(len(failures), 1)
         self.assertIn("only checks that the figure is written", failures[0])
 
+    def test_every_spelling_of_a_text_search_is_refused(self):
+        # The review of #2389 found each of these passing as re-deriving
+        # against the first, single-spelling check.
+        for command in [
+            "grep -Fq '82.5 %' README.md",
+            "grep -q -F -- '82.5 %' README.md",
+            "rg -qF '82.5 %' README.md",
+            "cat README.md | grep -qF '82.5 %'",
+            "grep -c 82.5 README.md docs/x.md",
+            "grep -qF '82.5 %' README.md || true",
+            "/usr/bin/grep -qF '82.5 %' README.md; head -1 README.md",
+        ]:
+            claims = [{"id": "a", "executable": True, "re_derives": True, "validation_command": command}]
+            self.assertEqual(len(cpc.re_derives_failures(claims)), 1, command)
+
     def test_a_command_that_computes_the_figure_re_derives(self):
         command = "test \"$(grep -cE '^  /' docs/openapi.yaml)\" -eq 54"
         claims = [{"id": "a", "executable": True, "re_derives": True, "validation_command": command}]

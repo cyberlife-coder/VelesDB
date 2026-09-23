@@ -52,6 +52,7 @@ import argparse
 import json
 import pathlib
 import re
+import shlex
 import subprocess
 import sys
 from urllib.error import HTTPError, URLError
@@ -221,9 +222,12 @@ def check_provenance(claims: list[dict]) -> list[str]:
     return failed
 
 
-# One `grep -q` for a literal in one file: a check that a figure is still
-# written somewhere, which re-measures nothing.
-_TEXT_PRESENCE_CHECK = re.compile(r"""grep\s+-qF?\s+('[^']*'|"[^"]*")\s+\S+""")
+# Programs that can only find or show text. A command every stage of which
+# runs one of these checks that a figure is written somewhere; it computes
+# nothing, whatever its flags, quoting or plumbing (`grep -Fq`, `rg -q`,
+# `cat f | grep -q`, `grep -c`, `|| true`).
+_TEXT_ONLY_PROGRAMS = frozenset({"grep", "egrep", "fgrep", "rg", "cat", "head", "tail", "true"})
+_SHELL_SEPARATORS = frozenset({"&&", "||", "|", ";", "&"})
 
 
 def re_derives(claim: dict) -> bool:
@@ -238,8 +242,23 @@ def re_derives(claim: dict) -> bool:
 
 
 def _only_finds_text(command: str) -> bool:
-    segments = [segment.strip() for segment in command.split("&&")]
-    return all(_TEXT_PRESENCE_CHECK.fullmatch(segment) for segment in segments)
+    """Whether every stage of ``command`` runs a program of
+    ``_TEXT_ONLY_PROGRAMS``. A command shlex cannot read counts as one that
+    does more, so the mark stays the author's to justify in review."""
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        return False
+    programs, expect_program = [], True
+    for token in tokens:
+        if token in _SHELL_SEPARATORS:
+            expect_program = True
+        elif expect_program:
+            programs.append(pathlib.PurePath(token).name)
+            expect_program = False
+    return bool(programs) and all(program in _TEXT_ONLY_PROGRAMS for program in programs)
 
 
 def re_derives_failures(claims: list[dict]) -> list[str]:

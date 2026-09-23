@@ -338,11 +338,11 @@
       "executable": false,
       "source": "README.md ColumnStore 130x speedup baseline. Footnote *¹ scopes the claim: filtering-API micro-benchmark, integer equality, 130x at 100K rows / 55x at 10K rows (docs/BENCHMARKS.md section 6); no 1M-row measurement exists. The filtering API serves SELECT WHERE via the adaptive payload mirror (collection/payload_mirror).",
       "last_updated": "2026-06-10",
-      "measured_on": "2026-07-20",
+      "measured_on": "2026-03-19",
       "measured_machine": "Intel Core i9-14900KF (x86_64, AVX2) — docs/BENCHMARKS.md reference machine",
-      "measured_version": "3.12.0",
+      "measured_version": "1.6.0",
       "stale_accepted": {
-        "reason": "Measured 2026-07-20: develop carried workspace 3.12.0 from v3.12.0 (2026-07-15) until the 4.0.0 bump (2026-07-24), so any build of that day reports 3.12.0; the run itself names no commit. Re-measuring belongs on the idle i9-14900KF reference machine, not done in this change.",
+        "reason": "Published with its date in docs/BENCHMARKS.md section 6 (filter_eq_int, measured 2026-03-19, 1.6.0, as the sibling readme_columnstore_130x_claim records); the 2026-07-20 run was the Apple M5 Pro cross-check, not this figure. The ratio is hardware-dependent and re-measuring it belongs on the idle i9-14900KF reference machine.",
         "granted": "2026-09-23",
         "for_workspace_major": 6
       }
@@ -396,7 +396,7 @@
       "measured_machine": "billed API campaign (Claude Code cli runner / direct Messages API) — not CPU-bound",
       "measured_version": "3.12.0",
       "stale_accepted": {
-        "reason": "Dated by commit 0d461a502, which records the billed campaign's raw logs (2026-07-19, workspace 3.12.0); the logs name no version, so the version is that commit's. Re-measuring means re-running the billed API campaign, not done in this change.",
+        "reason": "Dated by commit 0d461a502, which records the billed campaign's vibe-cli raw logs (2026-07-19, workspace 3.12.0); the logs name no version, so the version is that commit's. Re-measuring means re-running the billed API campaign, not done in this change.",
         "granted": "2026-09-23",
         "for_workspace_major": 6
       }
@@ -413,7 +413,7 @@
       "measured_machine": "billed API campaign (Claude Code cli runner / direct Messages API) — not CPU-bound",
       "measured_version": "3.12.0",
       "stale_accepted": {
-        "reason": "Dated by commit 0d461a502, which records the billed campaign's raw logs (2026-07-19, workspace 3.12.0); the logs name no version, so the version is that commit's. Re-measuring means re-running the billed API campaign, not done in this change.",
+        "reason": "Dated by commit cf4e14f7d, which records the billed campaign's day-scale raw logs (2026-07-19, workspace 3.12.0); the logs name no version, so the version is that commit's. Re-measuring means re-running the billed API campaign, not done in this change.",
         "granted": "2026-09-23",
         "for_workspace_major": 6
       }
@@ -430,7 +430,7 @@
       "measured_machine": "billed API campaign (Claude Code cli runner / direct Messages API) — not CPU-bound",
       "measured_version": "3.12.0",
       "stale_accepted": {
-        "reason": "Dated by commit 0d461a502, which records the billed campaign's raw logs (2026-07-19, workspace 3.12.0); the logs name no version, so the version is that commit's. Re-measuring means re-running the billed API campaign, not done in this change.",
+        "reason": "Dated by commit cf4e14f7d, which records the billed campaign's day-scale raw logs (2026-07-19, workspace 3.12.0); the logs name no version, so the version is that commit's. Re-measuring means re-running the billed API campaign, not done in this change.",
         "granted": "2026-09-23",
         "for_workspace_major": 6
       }
@@ -447,7 +447,7 @@
       "measured_machine": "billed API campaign (Claude Code cli runner / direct Messages API) — not CPU-bound",
       "measured_version": "3.12.0",
       "stale_accepted": {
-        "reason": "Dated by commit 0d461a502, which records the billed campaign's raw logs (2026-07-19, workspace 3.12.0); the logs name no version, so the version is that commit's. Re-measuring means re-running the billed API campaign, not done in this change.",
+        "reason": "Dated by commit cf4e14f7d, which records the billed campaign's day-scale raw logs (2026-07-19, workspace 3.12.0); the logs name no version, so the version is that commit's. Re-measuring means re-running the billed API campaign, not done in this change.",
         "granted": "2026-09-23",
         "for_workspace_major": 6
       }
