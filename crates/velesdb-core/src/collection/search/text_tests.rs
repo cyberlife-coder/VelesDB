@@ -247,3 +247,54 @@ fn test_top_k_from_scores_breaks_ties_by_ascending_id() {
         vec![0, 1, 2]
     );
 }
+
+/// Two documents whose vector and BM25 ranks are swapped fuse to the same
+/// RRF score; the filtered hybrid search returns them by ascending id,
+/// whichever id wins which branch (#2297).
+#[test]
+fn test_filtered_hybrid_search_breaks_ties_by_ascending_id() {
+    let filter = Filter::new(Condition::eq("category", "t"));
+    for (vector_winner, text_winner) in [
+        (1, 3),
+        (3, 1),
+        (1, 9),
+        (9, 1),
+        (1, 64),
+        (64, 1),
+        (2, 3),
+        (3, 2),
+    ] {
+        let (_dir, col) = setup_collection(4);
+        col.upsert(vec![
+            // Nearest the query vector, but the longer title: BM25 ranks it second.
+            make_point_with_payload(
+                vector_winner,
+                vec![1.0, 0.0, 0.0, 0.0],
+                serde_json::json!({"title": "alpha beta gamma delta", "category": "t"}),
+            ),
+            make_point_with_payload(
+                text_winner,
+                vec![0.6, 0.8, 0.0, 0.0],
+                serde_json::json!({"title": "alpha", "category": "t"}),
+            ),
+        ])
+        .expect("test: upsert");
+
+        let results = col
+            .hybrid_search_with_filter(&[1.0, 0.0, 0.0, 0.0], "alpha", 2, None, &filter, None)
+            .expect("filtered hybrid search");
+        let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+        let scores: Vec<f32> = results.iter().map(|r| r.score).collect();
+        assert_eq!(scores.len(), 2, "both documents match: {ids:?}");
+        assert!(
+            scores[0].to_bits() == scores[1].to_bits(),
+            "the fixture must tie: {ids:?} {scores:?}"
+        );
+        let mut ascending = ids.clone();
+        ascending.sort_unstable();
+        assert_eq!(
+            ids, ascending,
+            "vector winner {vector_winner}, text winner {text_winner}"
+        );
+    }
+}

@@ -672,6 +672,11 @@ fn validate_weight_sum(sum: f32) -> Result<(), FusionError> {
 /// rule, core's strategies, its hybrid search and `velesdb-wasm`'s
 /// relative-score fusion alike, so every surface returns ties in the same
 /// order.
+///
+/// Scores compare with [`f32::total_cmp`], as core's strategies always did: a
+/// positive NaN sorts first and a negative NaN last. That is the opposite of
+/// `metric_score_order`, which ranks a NaN worst; a fused NaN comes only from
+/// a NaN input score.
 pub fn sort_fused_results(fused: &mut [(u64, f32)]) {
     fused.sort_unstable_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
 }
